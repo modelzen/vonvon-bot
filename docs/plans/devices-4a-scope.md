@@ -225,3 +225,19 @@ Mac 后验：U2 的维护子集界面；本片无专项。Windows：无。
     - **测试和没有 `host` 的调用方：** 会话照旧只带 `'1'` 这个标记，CLI 会以 `session_token_missing` 拒绝。这是安全的失败方向。
 11. **`withDaemon` 的 negotiate。** 发的是 `capabilities: ['cli']`。被拒时报的就是 daemon 的原话（不加"核对范围失败："前缀），退出码按 `rpcErrorKind` 算（`scope_required` → 4）。`--scope` 是挂在 `program` 上的全局选项，写在子命令前后都行。`command-error.ts` 把 `session_token_invalid` 和 `not-group` 加进了 exit 4 那组。
 12. **令牌握手：** 令牌查不到、对不上或闲置超时，都用 4401 `invalid_session_token` 关闭。令牌对、但 hello 里是别的协议，用 4001 `protocol_mismatch` 关闭：会话里跑的是这台 daemon 自己的 CLI，不给维护子集。
+
+## 审查后改了什么
+
+两位审查者的 13 条（2026-11-02），逐条复核代码，能复现的复现了。
+
+- **D4a-SEC-1 / D4A-R5（令牌作废后已开的连接还能用）→ 接受。** `SessionTokens` 加了 `active(sessionId, use)` 和 `onEnd`；作废、替换、闲置超时都通知，`http.ts` 收到后用 4401 `invalid_session_token` 关掉用这个令牌开的连接。`authorize` 每条请求先查 `sessionActive`（顺手记一次使用），不在了回 `session_token_invalid`；推快照前也查。测试：`session-tokens.test.ts` 新一条，`authz-session.test.ts` 的单元和端到端各一条。
+- **D4a-SEC-2（会话里 `service status` 读 `local-credential`）→ 接受。** `getServiceAdapter({ trustLock })`：会话里 systemd 和 launchd 都不验 owner，照锁报运行。`cli-bot-session.test.ts` 在凭据 0000 时断言 `running: true`。
+- **D4a-SEC-3（会话能改、删别人的记忆）→ 接受。** `memory.edit/archive` 对会话改成 deny，等 D4b 逐条跑 `decideEdit`，D4b 计划补了 4.5a。
+- **D4a-SEC-4 / D4A-R6（群令牌读设置多给了字段）→ 部分接受。** 判断提示词、Skill 和路径、`botProfile`、成员名单的姓名、`decisionModels` 都去掉了。`identity` 和 `members.openIds` 保留：协议 `projectViewSchema` 要求这两项，只回 `{scope, sections}` 的话 CLI 解析回复就会失败，`settings get` 和 `settings set --group` 在群里都会坏掉。留下的都属于本群：本群的群号、后端、会话自己的工作目录，以及本群的响应名单。
+- **D4a-SEC-5（`usage` 对会话放行）→ 接受。** `collaboration.usage` 单独一行，会话一律 deny，`providerModels` 照旧。
+- **D4a-SEC-6 / D4A-R2（私聊令牌的私聊记忆不核 openId；`session{threadId}` 不受 `group=` 缩小）→ 接受。** 会话的 `kind:'dm'` 记忆先一律拒（`DM_MEMORY_FROM_SESSION`），D4b 计划写明要核 openId。范围缩成一个群时（群令牌，或私聊带 `group=`），请求里点名的会话必须是那个群的（`AuthzDeps.threadsOf` 读 `listSessions`），设置读写和 `models` 的 `threadId` 都核。
+- **D4A-R1（群里改 Bot 级设置先读视图，拿到的是通用拒绝）→ 接受。** `settings.read.agent/read.session` 在群和评论里改成 `not-dm`，评论里的 `read.project/models/sessions` 也是。`cli-bot-session.test.ts` 补了 `settings set cards.showToolCalls=…`、`settings act admin add`、`settings act comment-instructions` 三条。
+- **D4A-R3（host 自己起的子进程被 `LOCAL_ONLY` 拒）→ 接受。** 加了 `withoutSessionMarkers`，supervisor 起 Bot、`__restart-after-exit`、重启时的 `daemon start`、`runStart` 起的 `daemon run` 都用它去掉 `VONVON_SESSION` 和 `FEISHU_CODEX_BRIDGE`。旧版本升级过来时，旧代码起的 helper 还带着这两个变量，所以 `__restart-after-exit`、`__daemon-control` 移出 `LOCAL_ONLY`；带 IPC 通道的 `daemon run`（supervisor 起的）也不拒。测试：supervisor 带着这两个变量起 Bot，子进程的 env 里没有；`FEISHU_CODEX_BRIDGE=1` 下 `__restart-after-exit` 走到自己的参数检查。
+- **D4A-R4（`memoryAction` 不用 actor，按 cli 记成可信）→ 接受。** 有 `deps.actor` 时按它记角色和 openId，只有 owner/admin 的那一轮记成 trusted。会话写 Bot 记忆先拒（`BOT_MEMORY_FROM_SESSION`），等 D4b 的落点规则。4.6 里“以成员身份放行”现在和代码一致了：会话写的记忆记成 member、不可信。
+- **D4A-R7（主人带的 `--scope` 不生效）→ 接受。** 按设计 5.3“给了就同样生效”：主人带 `--scope` 时，用 `scopedOwner(scope)` 做和会话一样的范围核对和快照、回复过滤（`filterSnapshot`、`listBot` 裁到那个群），但不套地方规则：主人照样能写本群设置、读完整视图。请求里没有点名 Bot 的（环境、机器、host 设置、`installCodex`）不受限。
+

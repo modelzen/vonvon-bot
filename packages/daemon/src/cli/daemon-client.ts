@@ -3,7 +3,7 @@ import { connectLocal, ConnectionError, RpcError, type VonvonClient } from '@von
 import { backendLabel, conversationCopy, PROTOCOL_VERSION, requestSchema, type Agent, type Membership, type Scope, type ServerInfo } from '@vonvon/protocol';
 import { paths } from '../config/paths';
 import { inBotSession, SESSION_ENV } from '../config/session-env';
-import { looksLikeSessionToken } from '../host/session-tokens';
+import { looksLikeSessionToken, SESSION_TOKEN_INVALID } from '../host/session-tokens';
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { PidLockError, readRunningPidLock } from '../server/pid-lock';
 
@@ -31,7 +31,6 @@ export const printable = (text: string): string => text.replace(CONTROL, '');
 
 /** devices 15. */
 const SESSION_TOKEN_MISSING = '这是 Bot 会话，但没有有效的会话令牌，不能以主人身份运行。';
-const SESSION_TOKEN_INVALID = '会话令牌已失效（会话结束或超过 24 小时没用）。';
 
 /** What every command's connection carries (devices-4a 4.9): the global `--scope`, and the environment it runs in. */
 const context: { scope?: Scope; env: NodeJS.ProcessEnv } = { env: process.env };

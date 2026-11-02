@@ -87,9 +87,15 @@ describe('a Bot session\'s command line', () => {
       expect(wider).toMatchObject({ code: 4, json: { error: { reason: 'scope_required' } } });
       expect(wider.json.error?.message).toContain('范围超过了这条会话');
       // a settings write from a group: the tools' sentence
-      const write = await run(d.fixture.home, d.home, ['settings', 'act', 'voice', 'test', '--scope', `bot=${BOT},group=${GROUP}`], { VONVON_SESSION: d.token });
-      expect(write).toMatchObject({ code: 4, json: { error: { kind: 'refused', reason: 'not-dm' } } });
-      expect(write.json.error?.message).toContain('设置只能在私聊里改。请对方去私聊里跟我说。');
+      // D4a review R1: also those that read the bot's settings before they write
+      for (const args of [['settings', 'act', 'voice', 'test'], ['settings', 'set', 'cards.showToolCalls=true'], ['settings', 'act', 'admin', 'add', 'ou_0123456789abcdef'], ['settings', 'act', 'comment-instructions', '--default']]) {
+        const write = await run(d.fixture.home, d.home, [...args, '--scope', `bot=${BOT},group=${GROUP}`], { VONVON_SESSION: d.token });
+        expect(write, args.join(' ')).toMatchObject({ code: 4, json: { error: { kind: 'refused', reason: 'not-dm' } } });
+        expect(write.json.error?.message).toMatch(/：设置只能在私聊里改。请对方去私聊里跟我说。$/);
+      }
+      // D4a review SEC-2: service status takes the lock as it is, never asking the daemon with local-credential (unreadable here)
+      const service = await run(d.fixture.home, d.home, ['service', 'status'], { VONVON_SESSION: d.token });
+      expect(service, service.stderr).toMatchObject({ code: 0, json: { ok: true, running: true } });
       // daemon status answers from the lock in a session, token or not
       for (const session of [{ VONVON_SESSION: d.token }, { FEISHU_CODEX_BRIDGE: '1' }]) {
         expect(await run(d.fixture.home, d.home, ['daemon', 'status'], session)).toMatchObject({ code: 0, json: { ok: true, running: true, listen: d.fixture.api.listen, source: 'files' } });
@@ -115,7 +121,21 @@ describe('a Bot session\'s command line', () => {
     const localOnly = await loadLocalOnly();
     const commands = new Set((await loadCommands()).map(command => command.path.replace(/ [<[].*$/, '')));
     expect(localOnly.filter(path => !commands.has(path))).toEqual(['update', 'remote status', 'remote enable', 'remote disable', 'remote port']);
-    for (const allowed of ['daemon status', 'service status', 'secrets get', 'schedule list', 'memory add']) expect(localOnly).not.toContain(allowed);
+    for (const allowed of ['daemon status', 'service status', 'secrets get', 'schedule list', 'memory add', '__restart-after-exit', '__daemon-control']) expect(localOnly).not.toContain(allowed);
+  }, 60_000);
+
+  // D4a review R3: a host started inside a session (an older daemon) hands its environment to the helpers it starts
+  it('leaves the host\'s own helpers to a host that carries a session marker', async () => {
+    const { home, root } = await emptyHome();
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, VONVON_HOME: root, VONVON_SESSION: '', FEISHU_CODEX_BRIDGE: '1' };
+    // an identity no restart can take: the helper itself refuses it, after the session check
+    const child = spawn(process.execPath, [entry, '__restart-after-exit', '0', '1', '2026-11-01T00:00:00.000Z'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', data => { stderr += String(data); });
+    const code = await new Promise<number | null>(done => child.once('close', done));
+    expect(code).not.toBe(4);
+    expect(stderr).toContain('Invalid restart identity');
+    expect(stderr).not.toContain('不能在 Bot 会话里运行');
   }, 60_000);
 
   it('takes --scope only as bot=<appId>[,group=<chatId>]', async () => {

@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { paths } from '../config/paths';
+import { withoutSessionMarkers } from '../config/session-env';
 import { getPidLockInfo, isPidLockOwnerRunning, type PidLockInfo } from '../server/pid-lock';
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { finishOwnedUpdate, type UpdateStatus } from '../service/update';
@@ -31,7 +32,7 @@ export async function runSamePortRestartHelper(options: { port: number; oldPid: 
     if (!next || !isPidLockOwnerRunning(next)) {
       await new Promise<void>((resolve, reject) => {
         const child = spawn(process.execPath, [cliEntry, 'daemon', 'start', '--port', String(options.port)], {
-          stdio: 'ignore', env: { ...process.env, VONVON_HOME: paths.appDir },
+          stdio: 'ignore', env: { ...withoutSessionMarkers(process.env), VONVON_HOME: paths.appDir },
         });
         child.once('error', reject);
         child.once('exit', code => code === 0 ? resolve() : reject(new Error(`Restart start command exited ${code}.`)));

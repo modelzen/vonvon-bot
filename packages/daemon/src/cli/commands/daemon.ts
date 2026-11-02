@@ -5,7 +5,7 @@ import { ConnectionError, type VonvonClient } from '@vonvon/client';
 import { crashText } from '@vonvon/protocol';
 import { join } from 'node:path';
 import { paths } from '../../config/paths';
-import { inBotSession } from '../../config/session-env';
+import { inBotSession, withoutSessionMarkers } from '../../config/session-env';
 import { readRecentLogs } from '../../core/logger';
 import { stopVerifiedOwner, verifyPidLockOwner } from '../../server/owner-verification';
 import { getPidLockInfo, isPidLockOwnerRunning, PidLockError, readRunningPidLock, type PidLockInfo } from '../../server/pid-lock';
@@ -84,7 +84,7 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
   const cliEntry = process.argv[1];
   if (!cliEntry) throw new Error('Cannot locate the daemon CLI entry.');
   const log = await open(join(paths.appDir, 'daemon.log'), 'a', 0o600);
-  const env: NodeJS.ProcessEnv = { ...process.env, VONVON_HOME: paths.appDir };
+  const env: NodeJS.ProcessEnv = { ...withoutSessionMarkers(process.env), VONVON_HOME: paths.appDir };
   delete env.VONVON_SERVICE;
   let child;
   try {

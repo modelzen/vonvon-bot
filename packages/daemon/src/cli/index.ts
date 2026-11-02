@@ -53,11 +53,14 @@ const LEASED = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon res
 /**
  * devices 8.3 and 5.3: what only the person at this computer runs (the trust root, file locks, the service manager,
  * remote access, pairing), refused in a Bot's session before anything runs. `update` and `remote …` come with I3 and D3.
- * `secrets get` is not here: the session's lark-cli resolves its App Secret through it (secrets-get.test.ts).
+ * `secrets get` is not here: the session's lark-cli resolves its App Secret through it (secrets-get.test.ts). Nor are the
+ * hidden `__restart-after-exit` and `__daemon-control`: the host starts them with its own environment, which an older
+ * daemon started inside a session still carries the markers in; refusing them there would leave a restart or an update
+ * with no daemon. For the same reason a `daemon run` the supervisor starts (its IPC channel) is not refused.
  */
 export const LOCAL_ONLY: ReadonlySet<string> = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'service install', 'service uninstall',
   'update', 'remote status', 'remote enable', 'remote disable', 'remote port', 'pair', 'clients ls', 'clients rename', 'clients revoke', 'device rename',
-  'bot repair-dir', 'open', '__daemon-control', '__restart-after-exit']);
+  'bot repair-dir', 'open']);
 /** A command's full name without `vonvon`: `daemon restart`, `pair`. */
 const commandPath = (command: Command): string => {
   const names: string[] = [];
@@ -81,7 +84,8 @@ export function parseScope(spec: string): Scope {
 program.option('--scope <spec>', "The Bot session's scope, bot=<appId>[,group=<chatId>]; a Bot session's commands must carry it");
 program.hook('preAction', async (_command, action) => {
   const path = commandPath(action);
-  if (inBotSession(process.env) && LOCAL_ONLY.has(path)) {
+  const supervised = path === 'daemon run' && typeof process.send === 'function';
+  if (inBotSession(process.env) && LOCAL_ONLY.has(path) && !supervised) {
     throw new CommandError('refused', `这条命令（\`vonvon ${path}\`）不能在 Bot 会话里运行。告诉用户去设备上或桌面端里做。`, { reason: 'not_in_session' });
   }
   const spec = program.opts<{ scope?: string }>().scope;

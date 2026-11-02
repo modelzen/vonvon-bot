@@ -15,6 +15,14 @@ export function sessionGroups(principal: BotSessionPrincipal, scope: Scope | nul
 }
 
 /**
+ * The reach an owner's `--scope` stands for (devices 5.3): its bot, and its one group if it names one, as a session of
+ * that bot in that group (or a private chat of it) would reach. No session stands behind it: the place rules do not apply.
+ */
+export function scopedOwner(scope: Scope): BotSessionPrincipal {
+  return { kind: 'bot-session', sessionId: '', appId: scope.bot, ...(scope.group === undefined ? { place: 'dm' as const } : { place: 'group' as const, chatId: scope.group }) };
+}
+
+/**
  * devices-4a 4.7: what a Bot session sees of the daemon's state: its own bot and the groups it reaches, none of the
  * diagnostics; the host, platform and version as they are.
  */

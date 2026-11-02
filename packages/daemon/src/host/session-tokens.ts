@@ -13,6 +13,13 @@ export interface SessionTokens {
   revoke(sessionId: string): void;
   /** A bot process exited: all its sessions end with it. */
   revokeAll(appId: string): void;
+  /**
+   * Whether a session still stands: not revoked, replaced or idle (an idle one is dropped here). `use` notes a use, as a
+   * request on a connection made with its token is one; a snapshot pushed to that connection is not.
+   */
+  active(sessionId: string, use?: boolean): boolean;
+  /** Told each session that ends (revoked, replaced, its bot's process gone, found idle): the connections made with its token close. */
+  onEnd(listener: (sessionId: string) => void): () => void;
   size(): number;
 }
 
@@ -24,6 +31,8 @@ export function looksLikeSessionToken(value: string | undefined): value is strin
   return value !== undefined && SESSION_TOKEN_RE.test(value);
 }
 export const SESSION_IDLE_MS = 86_400_000;
+/** What a Bot session's command line reads when its token no longer stands (devices-4a 4.9). */
+export const SESSION_TOKEN_INVALID = '会话令牌已失效（会话结束或超过 24 小时没用）。';
 
 const digest = (secret: string): Buffer => createHash('sha256').update(secret).digest();
 
@@ -35,13 +44,29 @@ export function createSessionTokens(opts: { now?: () => number; idleMs?: number 
   const now = opts.now ?? Date.now;
   const idleMs = opts.idleMs ?? SESSION_IDLE_MS;
   const records = new Map<string, { record: SessionRecord; secret: Buffer }>();
+  const listeners = new Set<(sessionId: string) => void>();
+  const end = (sessionId: string): void => {
+    if (!records.delete(sessionId)) return;
+    for (const listener of [...listeners]) listener(sessionId);
+  };
+  /** The live record, its use noted if asked; an idle one ends here. */
+  const live = (sessionId: string, use: boolean): SessionRecord | undefined => {
+    const entry = records.get(sessionId);
+    if (!entry) return undefined;
+    const at = now();
+    if (at - entry.record.lastUsedAt > idleMs) { end(sessionId); return undefined; }
+    if (use) entry.record.lastUsedAt = at;
+    return entry.record;
+  };
   return {
     issue(input) {
       if (!SESSION_ID_RE.test(input.sessionId)) throw new Error('Invalid session id');
       const secret = randomBytes(32).toString('base64url');
       const at = now();
       // A revoke lost with its IPC message would leave a record behind: the idle ones go as new ones come.
-      for (const [id, entry] of records) if (at - entry.record.lastUsedAt > idleMs) records.delete(id);
+      for (const [id, entry] of records) if (at - entry.record.lastUsedAt > idleMs) end(id);
+      // A new token for the session: what the old one opened closes with it.
+      end(input.sessionId);
       records.set(input.sessionId, { record: { ...input, issuedAt: at, lastUsedAt: at }, secret: digest(secret) });
       return `${SESSION_TOKEN_PREFIX}${input.sessionId}.${secret}`;
     },
@@ -51,13 +76,13 @@ export function createSessionTokens(opts: { now?: () => number; idleMs?: number 
       const [, sessionId, secret] = match as unknown as [string, string, string];
       const entry = records.get(sessionId);
       if (!entry || !timingSafeEqual(entry.secret, digest(secret))) return undefined;
-      const at = now();
-      if (at - entry.record.lastUsedAt > idleMs) { records.delete(sessionId); return undefined; }
-      entry.record.lastUsedAt = at;
-      return { ...entry.record };
+      const record = live(sessionId, true);
+      return record && { ...record };
     },
-    revoke(sessionId) { records.delete(sessionId); },
-    revokeAll(appId) { for (const [id, entry] of records) if (entry.record.appId === appId) records.delete(id); },
+    revoke(sessionId) { end(sessionId); },
+    revokeAll(appId) { for (const [id, entry] of [...records]) if (entry.record.appId === appId) end(id); },
+    active(sessionId, use = false) { return live(sessionId, use) !== undefined; },
+    onEnd(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     size() { return records.size; },
   };
 }

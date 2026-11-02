@@ -4,6 +4,7 @@ import { CHILD_SHUTDOWN_GRACE_MS, closeOwnedProviders, observeShutdown, settleOw
 import type { ChildProcess } from 'node:child_process';
 import { spawnProcess } from '../platform/spawn';
 import { log } from '../core/logger';
+import { withoutSessionMarkers } from '../config/session-env';
 import { loadBots, type BotEntry } from '../config/bots';
 import { createAdminIpcCaller, createHostIpcResponder, type AdminIpcCaller } from '../admin/ipc';
 import { createSessionTokens } from '../host/session-tokens';
@@ -90,7 +91,8 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   // An untracked host (no run marker) still gets its bots' records, under ids of its own.
   const runId = options.crash?.runId ?? randomUUID();
   const chainId = options.crash?.chainId ?? randomUUID();
-  const childEnv: NodeJS.ProcessEnv = { ...process.env, VONVON_HOME: paths.appDir, VONVON_HOST_RUN_ID: runId, VONVON_HOST_CHAIN_ID: chainId };
+  // Not a session's: a host started inside one carries its markers, which would refuse `daemon run --bot` (devices-4a 4.9).
+  const childEnv: NodeJS.ProcessEnv = { ...withoutSessionMarkers(process.env), VONVON_HOME: paths.appDir, VONVON_HOST_RUN_ID: runId, VONVON_HOST_CHAIN_ID: chainId };
   const migration = bridgeImportRuntime();
   const importCodex = new Map<string, string>();
   let bridgeTimer: ReturnType<typeof setTimeout> | undefined;
