@@ -183,6 +183,9 @@ export function installBridge(
   let localGen = 0;
   /** The local connection was lost while a remote device was shown: reported once the page is back here. */
   let localLostPending = false;
+  /** The last snapshot of this computer's connection. A page built again for this computer while its daemon is stopped
+   * or lost gets it, as the one page kept it before devices, with 启动 daemon still there (Codex 审查 235-1). */
+  let localSnapshot: DesktopSnapshot | undefined;
   const localOwnerListeners = new Set<(owner: AttachedDaemon) => void>();
 
   function currentDocument(): boolean {
@@ -247,6 +250,11 @@ export function installBridge(
     return () => { offError(); offDevice(); };
   }
 
+  /** Stopped here, lost, or between two connections: nothing to ask for a snapshot. */
+  function localDown(): boolean {
+    return !localDaemon || stoppedStatus !== undefined || connectionLost || localLostPending;
+  }
+
   function viewId(): ViewId {
     return view.kind === 'local' ? LOCAL_VIEW : view.kind === 'remote' ? view.session.id : view.id;
   }
@@ -285,6 +293,7 @@ export function installBridge(
         latest = undefined;
         revision = value.revision;
         paused = false;
+        if (target.view === LOCAL_VIEW) localSnapshot = value;
         send({ type: 'snapshot', view: target.view, value });
       },
     };
@@ -292,6 +301,7 @@ export function installBridge(
       removers.push(target.client.watchSnapshots(value => {
         if (!bound || value.revision < revision) return;
         revision = value.revision;
+        if (target.view === LOCAL_VIEW) localSnapshot = value;
         // A paused binding is the candidate of a replacement or a switch: it keeps the newest until activated.
         if (paused) latest = value;
         else if (viewBinding === binding) send({ type: 'snapshot', view: target.view, value });
@@ -320,9 +330,11 @@ export function installBridge(
       // The replacement in flight binds its connection itself once it sees this view.
       if (replacing) return;
       const current = localDaemon;
-      // Lost while another device was shown: the connection is still set but dead, so it is reported now, as here.
-      if (!current || localLostPending) {
+      // Stopped, or lost while another device was shown: the connection is still set but dead. The page gets the last
+      // snapshot to stand on; a loss is reported now, as here.
+      if (!current || localDown()) {
         send({ type: 'reattached', view: LOCAL_VIEW });
+        if (localSnapshot) send({ type: 'snapshot', view: LOCAL_VIEW, value: localSnapshot });
         if (localLostPending) { localLostPending = false; lost(); }
         return;
       }
@@ -386,7 +398,8 @@ export function installBridge(
   const noArg = (_: unknown): undefined => undefined;
   const onNavigation = (): void => { subscribed = false; };
   try {
-    registerClient(desktopChannels.snapshot, 0, noArg, () => client().snapshot());
+    registerClient(desktopChannels.snapshot, 0, noArg, () =>
+      view.kind === 'local' && localDown() && localSnapshot ? Promise.resolve(localSnapshot) : client().snapshot());
     registerClient(desktopChannels.run, 1, value => commandSchema.parse(value), value => {
       if (value.type !== 'restartHost') return client().run(value);
       if (view.kind !== 'local') {
