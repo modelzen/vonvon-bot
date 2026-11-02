@@ -2,7 +2,7 @@
 
 依据 `docs/plans/devices.md` §7.5（升级引擎）、§6.5（升级按钮）、§4.7（排空期间放行）、§12（共享契约）、§13 的 I3 行。I2、I4a、I4b、I5 四片引用本文 §4.1 的契约，不各自重写。本文的缩写同 `devices.md`：`D/` = `packages/daemon/src`，`P/` = `packages/protocol/src`，`CL/` = `packages/client/src`，`DT/` = `packages/desktop/src`，`U/` = `packages/ui/src`。
 
-**2026-11-01 改动**（owner："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"；`devices.md` 第 19 节）：`standalone` 只在 Linux 上有，服务端包和签名清单只有 `linux-x64`、`linux-arm64`，托管时的服务管理器只有 systemd。I4a、I4b、I2b 取消。所以本文下面为 Windows、macOS 写的部分都用不上：C1 的四个 darwin、win 目标和 `.zip`，C5 的 `current.txt`，C6、§4.6 里的 I4b 监督进程和 launchd，C7 的 Windows 计划任务名，§4.3 的 `extractZip`，§4.10 的 Windows 占用目录。I3 不再为它们写新代码；I3a、I3b 已经写好的（`current-release.ts` 的 `current.txt` 分支、`archive.ts` 的 `extractZip`、win32 下助手只写 `error` 的分支）先留着，I3 合入后由清理片 I6 一起删。清单不等 I6：I2a 的 `install.sh` 已经只认 `linux-x64`、`linux-arm64` 两项（多一项、少一项都 exit 4），I3 在自己的片里把 `standalone-manifest.ts` 的 `SERVER_TARGETS` 连同 `fake-cdn` 和测试改成同样两项，否则脚本认的清单 daemon 不认、daemon 认的脚本不认；万一 I3 按六项合入，I6 先改它，I5 发第一份 stable 清单之前两边必须一致。下文原样留着，读的时候按这一段。
+**2026-11-01 改动**（owner："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"；`devices.md` 第 19 节）：`standalone` 只在 Linux 上有，服务端包和签名清单只有 `linux-x64`、`linux-arm64`，托管时的服务管理器只有 systemd。I4a、I4b、I2b 取消。所以本文下面为 Windows、macOS 写的部分都用不上：C1 的四个 darwin、win 目标和 `.zip`，C5 的 `current.txt`，C6、§4.6 里的 I4b 监督进程和 launchd，C7 的 Windows 计划任务名，§4.3 的 `extractZip`，§4.10 的 Windows 占用目录。I3 不再为它们写新代码；I3a、I3b 已经写好的（`current-release.ts` 的 `current.txt` 分支、`archive.ts` 的 `extractZip`、win32 下助手只写 `error` 的分支）I3 合入后由清理片 I6 一起删了（`server-6-linux-only.md`）。清单不等 I6：I2a 的 `install.sh` 已经只认 `linux-x64`、`linux-arm64` 两项（多一项、少一项都 exit 4），I3 在自己的片里把 `standalone-manifest.ts` 的 `SERVER_TARGETS` 连同 `fake-cdn` 和测试改成同样两项，否则脚本认的清单 daemon 不认、daemon 认的脚本不认；万一 I3 按六项合入，I6 先改它，I5 发第一份 stable 清单之前两边必须一致。下文原样留着，读的时候按这一段。
 
 ## 1. 做什么
 
@@ -70,7 +70,7 @@
 - 接受一份清单的条件：`publishedAt >= lastPublishedAt` 且 `version >= highestSeen`（相等允许：同一份清单重读、上次没升成功）。接受后更新 `highestSeen = max(highestSeen, version)`、`lastPublishedAt = max(…)`。拒绝时回 `latest: null`、`refused: 'rollback'` 并记事件 `update-manifest-refused { reason }`。
 - 和总设计不一样：§7.5 说记进 `standalone.json`。那个文件在版本目录里，每版一份、随版本目录删，升级切过去就"忘了"历史；放在安装根只有一份。见 §4.11。
 
-**C5 `current` 和 `current.txt`，`D/service/current-release.ts`**（Windows 的 `current.txt` 2026-11-01 起用不上，I6 删）
+**C5 `current` 和 `current.txt`，`D/service/current-release.ts`**（Windows 的 `current.txt` 2026-11-01 起用不上，I6 已删）
 - POSIX：`<installRoot>/current` 是**相对**符号链接 `releases/<version>`。切换：`unlink(current.next)`（忽略 ENOENT）→ `symlink('releases/<v>', 'current.next')` → `rename('current.next', 'current')`。`rename` 覆盖符号链接是原子的；任何一步崩掉，`current` 要么还是旧的要么已是新的。
 - Windows：`<installRoot>\current.txt`，两行，LF 结尾：第 1 行当前版本，第 2 行上一版本（第一次安装时第 2 行是空行）。切换：写 `current.txt.tmp`（第 1 行新版本、第 2 行原第 1 行）→ `rename` 覆盖（Node 在 Windows 上用 `MoveFileExW` + `MOVEFILE_REPLACE_EXISTING`）。启动器 `bin\vonvon*.cmd` 读第 1 行，`releases\<v>\standalone.json` 不存在就用第 2 行（I4a）。和总设计不一样：§7.2 说退回 `standalone.json` 里记的上一版，但那个文件就在可能缺失的目录里；上一版写在 `current.txt` 第 2 行。见 §4.11。
 - 模块 `D/service/current-release.ts`：`readCurrent(installRoot): Promise<{ version: string; previous?: string } | null>`（POSIX 读 `readlink`，必须匹配 `^releases/(\d+\.\d+\.\d+)$`，否则 `null`；Windows 读 `current.txt`）；`switchCurrent(installRoot, version): Promise<{ previous: string | null }>`（先 `stat(releases/<v>/standalone.json)` 且其 `version === v`，否则抛 `ReleaseIncomplete`；再按上面两段切；返回切之前的版本）。两个函数都收 `platform` 参数（默认 `process.platform`），测试里在 Linux 上跑 Windows 分支。

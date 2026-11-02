@@ -1,17 +1,17 @@
 // Builds the standalone server packages (docs/plans/devices.md 7.1, 7.2; docs/plans/server-1-standalone.md).
 // Each archive unpacks into releases/<version>/: app/ (the daemon, minified, with the web UI), node/ (official Node and
-// its npm), standalone.json and build-manifest.json. Nothing is uploaded. By default only the Linux packages are built:
-// a script-installed server exists only on Linux (owner 2026-11-01; Mac and Windows get theirs inside the desktop app).
+// its npm), standalone.json and build-manifest.json. Nothing is uploaded. Only Linux has a script-installed server
+// (owner 2026-11-01): Mac and Windows get theirs inside the desktop app, so no package is built for them.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { chmod, copyFile, cp, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
-import { crc32, createGzip, deflateRawSync, inflateRawSync } from 'node:zlib';
+import { createGzip } from 'node:zlib';
 import { createPublicKey } from 'node:crypto';
 import { assertNoBundledClaude } from './desktop-backend-policy.mjs';
 import { fileEntries, listFiles, sha256 } from './package-tools.mjs';
@@ -19,25 +19,18 @@ import { checkedProductVersion } from './product-version.mjs';
 import { stageDaemon } from './stage-daemon.mjs';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
-export const TARGETS = ['linux-x64', 'linux-arm64', 'darwin-arm64', 'darwin-x64', 'win-x64', 'win-arm64'];
 /**
- * What is built by default and published: the server manifest lists these and nothing else. The macOS and Windows
- * targets can still be built with --targets until a later cleanup removes them with the rest of that standalone code.
+ * Every package there is, built by default and published: the server manifest (standalone-manifest.ts SERVER_TARGETS)
+ * and install.sh take exactly these two.
  */
 export const PUBLISHED_TARGETS = ['linux-x64', 'linux-arm64'];
-export const isWindowsTarget = target => target.startsWith('win-');
-export const archiveName = (version, target) => `vonvon-server-${version}-${target}.${isWindowsTarget(target) ? 'zip' : 'tar.gz'}`;
-// PowerShell 5.1 Expand-Archive is held to 260 characters. 100 covers
-// C:\Users\<20-character name>\AppData\Local\VonvonBot\server\releases\<version>.part\ with room to spare.
-export const WINDOWS_PREFIX = 100;
+export const archiveName = (version, target) => `vonvon-server-${version}-${target}.tar.gz`;
 /** TypeScript sources, declarations and source maps. */
 const SOURCE_FILE = /\.(?:[mc]?ts|map)$/;
 const APP_TOP = new Set(['package.json', 'bin', 'dist', 'ui', 'node_modules', 'NOTICE', 'LICENSE.bridge', 'LICENSE.paseo', 'PROVENANCE.md', 'import-core.json', 'server-update.json']);
-
-/** Where Node and its npm sit inside an official Node archive of `target`, and so inside the release's node/. */
-export function nodeLayout(target) {
-  return isWindowsTarget(target) ? { node: 'node.exe', npm: 'node_modules/npm' } : { node: 'bin/node', npm: 'lib/node_modules/npm' };
-}
+/** Where Node and its npm sit inside an official Linux Node archive, and so inside the release's node/. */
+const NODE = 'bin/node';
+const NPM = 'lib/node_modules/npm';
 
 /**
  * The manifest key and address each package carries as app/server-update.json (docs/plans/server-3-update-engine.md C2).
@@ -78,61 +71,26 @@ async function defaultFetch(url) {
   return Buffer.from(await response.arrayBuffer());
 }
 
-/**
- * Unpacks a zip read through its central directory: stored or deflated entries only, CRC checked, no ZIP64, encryption,
- * absolute paths, backslashes or `..`. Enough for the official Windows Node archive; nothing else is unpacked with it.
- */
-export async function unpackZip(archive, into) {
-  const bytes = await readFile(archive);
-  const end = bytes.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
-  if (end < 0 || end + 22 > bytes.length) throw new Error(`${archive} is not a zip`);
-  const count = bytes.readUInt16LE(end + 10);
-  let at = bytes.readUInt32LE(end + 16);
-  if (count === 0xffff || at === 0xffffffff) throw new Error(`${archive} needs ZIP64`);
-  for (let i = 0; i < count; i++) {
-    if (bytes.readUInt32LE(at) !== 0x02014b50) throw new Error(`${archive}: bad central directory`);
-    const u16 = field => bytes.readUInt16LE(at + field);
-    const u32 = field => bytes.readUInt32LE(at + field);
-    const [flags, method, crc, size, length, nameLength, extra, comment, offset] = [u16(8), u16(10), u32(16), u32(20), u32(24), u16(28), u16(30), u16(32), u32(42)];
-    const name = bytes.subarray(at + 46, at + 46 + nameLength).toString('utf8');
-    at += 46 + nameLength + extra + comment;
-    if (name.startsWith('/') || name.includes('\\') || /^[a-z]:/i.test(name) || name.split('/').includes('..')) throw new Error(`${archive}: unsafe entry ${name}`);
-    if (flags & 1 || ![0, 8].includes(method) || size === 0xffffffff || length === 0xffffffff) throw new Error(`${archive}: unsupported entry ${name}`);
-    const target = join(into, name);
-    if (name.endsWith('/')) { await mkdir(target, { recursive: true }); continue; }
-    if (bytes.readUInt32LE(offset) !== 0x04034b50) throw new Error(`${archive}: bad local header for ${name}`);
-    const start = offset + 30 + bytes.readUInt16LE(offset + 26) + bytes.readUInt16LE(offset + 28);
-    const body = bytes.subarray(start, start + size);
-    const data = method === 8 ? inflateRawSync(body) : body;
-    if (data.length !== length || crc32(data) !== crc) throw new Error(`${archive}: ${name} is damaged`);
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, data, { flag: 'wx' });
-  }
-}
-
-/** Unpacks an official Node archive (tar.gz, or zip for Windows) and returns its top directory. */
+/** Unpacks an official Node archive (tar.gz) and returns its top directory. */
 async function unpackNode(archive, into) {
   await mkdir(into, { recursive: true });
-  if (archive.endsWith('.zip')) await unpackZip(archive, into);
-  else execFileSync('tar', ['-xzf', archive, '-C', into]);
+  execFileSync('tar', ['-xzf', archive, '-C', into]);
   const [top, ...rest] = await readdir(into);
   if (!top || rest.length) throw new Error(`${archive} does not have one top directory`);
   return join(into, top);
 }
 
 /**
- * One release directory. `runtime` is the unpacked official Node archive of the target itself: Windows archives carry
- * npm with CRLF line ends and their own .cmd launchers, so no target borrows npm from another. Only Node, npm and
+ * One release directory. `runtime` is the unpacked official Node archive of the target itself. Only Node, npm and
  * LICENSE are taken; npx, corepack, include/ and share/ are left out, as nothing runs them and bin/npm is a symbolic link.
  */
 export async function assembleRelease({ app, runtime, target, version, nodeVersion }, release) {
-  const layout = nodeLayout(target);
   await cp(app, join(release, 'app'), { recursive: true });
-  await mkdir(dirname(join(release, 'node', layout.node)), { recursive: true });
-  await copyFile(join(runtime, layout.node), join(release, 'node', layout.node));
-  await chmod(join(release, 'node', layout.node), 0o755);
+  await mkdir(dirname(join(release, 'node', NODE)), { recursive: true });
+  await copyFile(join(runtime, NODE), join(release, 'node', NODE));
+  await chmod(join(release, 'node', NODE), 0o755);
   // npm ships a few type declarations; no file of that kind goes into a server package.
-  await cp(join(runtime, layout.npm), join(release, 'node', layout.npm), { recursive: true, filter: path => !SOURCE_FILE.test(path) });
+  await cp(join(runtime, NPM), join(release, 'node', NPM), { recursive: true, filter: path => !SOURCE_FILE.test(path) });
   await copyFile(join(runtime, 'LICENSE'), join(release, 'node/LICENSE'));
   await writeFile(join(release, 'standalone.json'), JSON.stringify({ v: 1, version, target, node: nodeVersion }, null, 2) + '\n');
 }
@@ -141,17 +99,9 @@ export async function assembleRelease({ app, runtime, target, version, nodeVersi
 export async function checkServerTree(release, target) {
   const files = await listFiles(release); // refuses symbolic links and special files
   const problems = [];
-  const layout = nodeLayout(target);
   const required = ['standalone.json', 'app/package.json', 'app/bin/vonvon.mjs', 'app/dist/cli.js', 'app/ui/dist/index.html', 'app/server-update.json',
-    'app/NOTICE', 'app/LICENSE.paseo', 'app/LICENSE.bridge', 'node/LICENSE', `node/${layout.node}`, `node/${layout.npm}/bin/npm-cli.js`];
+    'app/NOTICE', 'app/LICENSE.paseo', 'app/LICENSE.bridge', 'node/LICENSE', `node/${NODE}`, `node/${NPM}/bin/npm-cli.js`];
   for (const file of required) if (!files.includes(file)) problems.push(`missing ${file}`);
-  // Every directory and file name, folded: Windows and macOS see `Case/` and `case` as one path.
-  const folded = new Map();
-  const fold = (path, kind) => {
-    const seen = folded.get(path.toLowerCase());
-    if (!seen) folded.set(path.toLowerCase(), { path, kind });
-    else if (seen.path !== path || seen.kind !== kind) problems.push(`names differ only in case: ${seen.path} and ${path}`);
-  };
   for (const file of files) {
     if (SOURCE_FILE.test(file)) problems.push(`source, declaration or source map: ${file}`);
     // One app serves every target, so nothing in it may be built for one platform.
@@ -161,10 +111,6 @@ export async function checkServerTree(release, target) {
       if (!APP_TOP.has(top) || (top === 'dist' && file !== 'app/dist/cli.js') || (top === 'ui' && !file.startsWith('app/ui/dist/'))) problems.push(`unexpected app file: ${file}`);
     }
     if (file.startsWith('app/node_modules/@vonvon/')) problems.push(`workspace package shipped as files: ${file}`);
-    const parts = file.split('/');
-    for (let at = 1; at < parts.length; at++) fold(parts.slice(0, at).join('/'), 'directory');
-    fold(file, 'file');
-    if (isWindowsTarget(target) && WINDOWS_PREFIX + file.length >= 260) problems.push(`path too long for Windows: ${file}`);
   }
   if (files.includes('app/dist/cli.js')) {
     const cli = await readFile(join(release, 'app/dist/cli.js'), 'utf8');
@@ -220,43 +166,6 @@ export async function writeTarGz(root, entries, out, mtime) {
   await pipeline(Readable.from(blocks()), createGzip({ level: 9 }), createWriteStream(out));
 }
 
-/** A zip archive (deflate, UTF-8 names, no ZIP64) of `entries`, for PowerShell's Expand-Archive. */
-export async function writeZip(root, entries, out, mtime) {
-  if (entries.length >= 0xffff) throw new Error('too many files for a zip without ZIP64');
-  const when = new Date(mtime * 1000);
-  const dosTime = (when.getUTCHours() << 11) | (when.getUTCMinutes() << 5) | (when.getUTCSeconds() >> 1);
-  const dosDate = ((when.getUTCFullYear() - 1980) << 9) | ((when.getUTCMonth() + 1) << 5) | when.getUTCDate();
-  const file = await open(out, 'w');
-  const central = [];
-  let offset = 0;
-  try {
-    for (const entry of entries) {
-      const data = await readFile(join(root, entry.path));
-      const deflated = deflateRawSync(data, { level: 9 });
-      const stored = deflated.length >= data.length;
-      const body = stored ? data : deflated;
-      const name = Buffer.from(entry.path, 'utf8');
-      const fields = Buffer.alloc(26);
-      fields.writeUInt16LE(20, 0); fields.writeUInt16LE(0x0800, 2); fields.writeUInt16LE(stored ? 0 : 8, 4);
-      fields.writeUInt16LE(dosTime, 6); fields.writeUInt16LE(dosDate, 8); fields.writeUInt32LE(crc32(data), 10);
-      fields.writeUInt32LE(body.length, 14); fields.writeUInt32LE(data.length, 18); fields.writeUInt16LE(name.length, 22);
-      const local = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), fields, name]);
-      if (offset + local.length + body.length > 0xffffffff) throw new Error('archive too large for a zip without ZIP64');
-      await file.write(local); await file.write(body);
-      const record = Buffer.alloc(46);
-      record.writeUInt32LE(0x02014b50, 0); record.writeUInt16LE(20, 4); fields.copy(record, 6, 0, 26);
-      record.writeUInt32LE(offset, 42);
-      central.push(Buffer.concat([record, name]));
-      offset += local.length + body.length;
-    }
-    const directory = Buffer.concat(central);
-    const end = Buffer.alloc(22);
-    end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10);
-    end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16);
-    await file.write(directory); await file.write(end);
-  } finally { await file.close(); }
-}
-
 async function fileHashes(path) {
   const hashes = { sha256: createHash('sha256'), sha512: createHash('sha512') };
   let size = 0;
@@ -278,7 +187,7 @@ export function parseArguments(args) {
     i++;
   }
   if (!options.out) throw new Error('--out is required');
-  for (const target of options.targets) if (!TARGETS.includes(target)) throw new Error(`unknown target ${target}`);
+  for (const target of options.targets) if (!PUBLISHED_TARGETS.includes(target)) throw new Error(`unknown target ${target}`);
   return options;
 }
 
@@ -296,8 +205,7 @@ export async function buildServer({ out, targets, cache, allowDirty, publicKeyFi
   await outsideRepository(out);
   if (cache) await outsideRepository(cache);
   // A tar.gz takes its modes from the disk, and Windows keeps no execute bits; nor can it unpack the links in Node's tar.gz.
-  const posix = targets.filter(target => !isWindowsTarget(target));
-  if (platform === 'win32' && posix.length) throw new Error(`${posix.join(', ')}: build these on macOS or Linux; Windows builds the win-* targets only`);
+  if (platform === 'win32') throw new Error('the server packages are built on Linux or macOS, not on Windows');
   const git = args => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim();
   const sourceDirty = git(['status', '--porcelain']) !== '';
   if (sourceDirty && !allowDirty) throw new Error('the worktree has uncommitted changes; commit them or pass --allow-dirty (such a build must not be published)');
@@ -333,7 +241,7 @@ export async function buildServer({ out, targets, cache, allowDirty, publicKeyFi
       await writeFile(join(release, 'build-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
       const entries = [...manifest.files, { path: 'build-manifest.json', mode: '644' }].sort((a, b) => a.path < b.path ? -1 : 1);
       const name = archiveName(version, target);
-      await (isWindowsTarget(target) ? writeZip : writeTarGz)(release, entries, join(out, `${name}.tmp`), mtime);
+      await writeTarGz(release, entries, join(out, `${name}.tmp`), mtime);
       await rename(join(out, `${name}.tmp`), join(out, name));
       summary.files[target] = { name, ...await fileHashes(join(out, name)) };
       await rm(release, { recursive: true, force: true });
