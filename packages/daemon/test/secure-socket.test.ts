@@ -18,6 +18,7 @@ import type { Peer } from '../src/server/ws';
 import { Jobs } from '../src/server/jobs';
 import { LogFollowers } from '../src/server/logs';
 import { fakeService, socketClient, startFixture } from './server-fixture';
+import { RpcError } from '../src/server/errors';
 
 // devices-2 第 5 节: a real http.Server and real ws on 127.0.0.1:0. Timers are injected short, not faked: ws keeps its
 // own. main 必败: there was no secure socket server.
@@ -49,7 +50,8 @@ async function harness(overrides: Partial<SecureSocketServerOptions> = {}) {
       if (request.method === 'admin' && request.payload.type === 'daemonStatus') status(peer, request.id);
       else throw new Error('not in this harness');
     },
-    control: async (peer, request) => { if (request.method === 'admin') status(peer, request.id); },
+    // http.ts's control in small: the status, and `draining` for the rest (devices 4.7)
+    control: async (peer, request) => { if (request.method === 'admin') status(peer, request.id); else throw new RpcError('draining', 'draining'); },
     onHandshakeFailed: (_ip, reason, validInvite) => { failures.push([reason, validInvite]); },
     timers: { handshake: 300, pairing: 300, idle: 600 },
     ...overrides,
@@ -416,7 +418,9 @@ describe('closing the server', () => {
 });
 
 describe('draining', () => {
-  it('lets a remote peer ask only what a draining daemon answers, like the loopback', async () => {
+  // devices 4.7 / Codex review 248: drained, every request of a remote peer goes to `control`, as the loopback's, and what
+  // it refuses is answered with the connection kept; a frame with no id to answer is closed 1001.
+  it('hands a remote peer\'s requests to control while draining, like the loopback, and keeps the connection for a refusal', async () => {
     const h = await harness();
     const { clientKey } = await paired(h);
     void h.hub.beginDrain();
@@ -427,6 +431,11 @@ describe('draining', () => {
     client.json({ type: 'request', id: 's', method: 'admin', payload: { type: 'daemonStatus' } });
     expect(await client.read()).toMatchObject({ type: 'response', id: 's' });
     client.json({ type: 'request', id: 'r', method: 'command', payload: { type: 'refresh' } });
+    expect(await client.read()).toMatchObject({ type: 'error', id: 'r', code: 'draining' });
+    client.json({ type: 'request', id: 'f', method: 'future', payload: {} });
+    expect(await client.read()).toMatchObject({ type: 'error', id: 'f', code: 'draining' });
+    client.json({ type: 'request', method: 'admin', payload: { type: 'daemonStatus' } });
+    expect(await client.read()).toEqual({ close: { code: 1001, reason: 'server_shutdown' } });
     expect(await client.closed).toBe(1001);
     expect(h.requests).toHaveLength(0);
   });
@@ -483,7 +492,7 @@ describe('the daemon, with I3 and D4a', () => {
   }
   const closeOf = (socket: WebSocket) => new Promise<[number, string]>(resolve => socket.once('close', (code, reason) => resolve([code, reason.toString()])));
 
-  it('answers a remote peer\'s coreUpdateStatus while draining, through the shared message loop, and closes it 1001 for the rest', async () => {
+  it('answers a remote peer\'s coreUpdateStatus and snapshot while draining, through the shared message loop, refuses the rest and closes it 1001 at the release', async () => {
     let release = (): void => undefined;
     const held = new Promise<void>(resolve => { release = resolve; });
     const status = { phase: 'restarting' as const, to: '0.9.1', at: 1 };
@@ -500,6 +509,12 @@ describe('the daemon, with I3 and D4a', () => {
       client.json({ type: 'request', id: 'u', method: 'machine', payload: { type: 'coreUpdateStatus' } });
       expect(await client.read()).toEqual({ type: 'response', id: 'u', method: 'machine', payload: { type: 'coreUpdateStatus', status } });
       client.json({ type: 'request', id: 'c', method: 'machine', payload: { type: 'checkCoreUpdate' } });
+      expect(await client.read()).toMatchObject({ type: 'error', id: 'c', code: 'draining' });
+      client.json({ type: 'request', id: 'snap', method: 'snapshot', payload: { type: 'get' } });
+      expect(await client.read()).toMatchObject({ type: 'response', id: 'snap', method: 'snapshot', payload: { stale: true } });
+      release();
+      await draining;
+      await fixture.api.release();
       expect(await client.read()).toEqual({ close: { code: 1001, reason: 'server_shutdown' } });
       expect(await client.closed).toBe(1001);
     } finally { release(); await Promise.allSettled([draining]); }

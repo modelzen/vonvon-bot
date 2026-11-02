@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir, networkInterfaces } from 'node:os';
-import { CLOSE_CODES, PROTOCOL_VERSION, serverInfoV1Schema, serverInfoV2Schema, type Request, type Response } from '@vonvon/protocol';
+import { CLOSE_CODES, DRAIN_KINDS, PROTOCOL_VERSION, rpcKindOf, serverInfoV1Schema, serverInfoV2Schema, type Request, type Response } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
 import type { ShutdownControl } from '../host/lifecycle';
 import { createServiceActionLauncher } from '../host/service-action';
@@ -30,7 +30,7 @@ import { machineRpc } from './rpc/machine';
 import type {BridgeImporter} from '../import/bridge/transaction';
 import { settingsRpc } from './rpc/settings';
 import { createLocalIdentity } from './local-credential';
-import { errorEnvelope, RpcError } from './errors';
+import { drainingError, errorEnvelope, RpcError } from './errors';
 import { authorize, MAINTENANCE_STRIKES, type AuthzDeps } from './authz';
 import { filterSnapshot, scopedOwner } from './snapshot-filter';
 import { createSessionTokens, type SessionTokens } from '../host/session-tokens';
@@ -70,6 +70,9 @@ export interface DaemonApi extends ApiLifetime {
   /** devices-2 4.4: what a secure socket server needs of this daemon. D3's remote listeners take it; the manual probe too. */
   readonly secure?: SecureDeps;
 }
+
+/** devices 4.7: what a draining daemon still answers (`control`); the rest reads `draining`. */
+const DRAINING = new Set<string>(DRAIN_KINDS);
 
 /** Test seams for the login-time service: the platform and spawn of the helper launcher, and the manager read. */
 type ServiceSeams = Pick<Parameters<typeof createServiceActionLauncher>[0], 'platform' | 'spawn'> & Pick<Parameters<typeof createSnapshotStore>[0], 'readService'>;
@@ -278,21 +281,46 @@ export async function startApi(options: { service: AdminService; port?: number; 
         if ((strikes.get(peer) ?? 0) >= MAINTENANCE_STRIKES) peer.close(4001, 'protocol_mismatch');
       }
     }
-    /** A draining daemon still answers DRAIN_KINDS (devices 4.7), to whoever the table lets ask them. */
+    /**
+     * devices 4.7: a draining daemon answers DRAIN_KINDS, to whoever the table lets ask them, and every other request
+     * `draining`, the connection kept. Codex review 248: a client the drain closed reconnects to follow the update, and
+     * its first request is the snapshot (`watchSnapshots`): it gets the last one built, marked stale, without a rebuild or
+     * a word to a Bot process that is stopping; a negotiate only records on the connection. A connection of another
+     * protocol is refused what it may never ask as when open, and closed 4001 after 20 in a row; nothing else is checked
+     * for a request a draining daemon does not answer (a ★ row would ask a stopping Bot process).
+     */
     async function control(peer: Peer, request: Request): Promise<void> {
-      await admitted(peer, request);
-      if (request.method === 'machine' && request.payload.type === 'coreUpdateStatus') {
-        peer.send({ type: 'response', id: request.id, method: 'machine', payload: { type: 'coreUpdateStatus', status: options.service.updateStatus() } });
-      } else if (request.method === 'machine' && request.payload.type === 'stopHost') {
-        if (!options.control) throw new Error('Host control is unavailable');
-        options.control.requestStop();
-        peer.send({ type: 'response', id: request.id, method: 'machine', payload: { type: 'done', message: 'daemon 正在停止。' } });
-      } else if (request.method === 'admin' && request.payload.type === 'daemonStatus') {
-        const lock = await owner;
-        const own = lock?.pid === process.pid && lock.listen === `127.0.0.1:${port}`;
-        peer.send({ type: 'response', id: request.id, method: 'admin', payload: { kind: 'daemonStatus', status: {
-          installed: false, supported: false, selfHosted: true, running: own, version: bridgeVersion(), startedAt, ...(own ? { pid: lock.pid } : {}),
-        } } });
+      const answered = DRAINING.has(rpcKindOf(request));
+      try {
+        if (!answered && peer.principal.kind !== 'maintenance') throw drainingError();
+        const decision = await admitted(peer, request);
+        if (!answered) throw drainingError();
+        const { id } = request;
+        if (request.method === 'snapshot') {
+          if (!snapshots) throw new Error('Snapshot store is not ready');
+          const shown = decision.narrow ?? (<T>(payload: T): T => payload);
+          peer.send({ type: 'response', id, method: 'snapshot', payload: shown({ ...snapshots.current(), stale: true }) });
+        } else if (request.method === 'admin' && request.payload.type === 'negotiate') {
+          // A read: answered as it is, never through a snapshot rebuild
+          const outcome = await adminRpc(options.service, follow => logs.follow(peer, follow), request.payload, { startedAt, peer });
+          if (outcome.kind !== 'read') throw drainingError();
+          peer.send({ type: 'response', id, method: 'admin', payload: outcome.value });
+        } else if (request.method === 'machine' && request.payload.type === 'coreUpdateStatus') {
+          peer.send({ type: 'response', id, method: 'machine', payload: { type: 'coreUpdateStatus', status: options.service.updateStatus() } });
+        } else if (request.method === 'machine' && request.payload.type === 'stopHost') {
+          if (!options.control) throw new Error('Host control is unavailable');
+          options.control.requestStop();
+          peer.send({ type: 'response', id, method: 'machine', payload: { type: 'done', message: 'daemon 正在停止。' } });
+        } else if (request.method === 'admin' && request.payload.type === 'daemonStatus') {
+          const lock = await owner;
+          const own = lock?.pid === process.pid && lock.listen === `127.0.0.1:${port}`;
+          peer.send({ type: 'response', id, method: 'admin', payload: { kind: 'daemonStatus', status: {
+            installed: false, supported: false, selfHosted: true, running: own, version: bridgeVersion(), startedAt, ...(own ? { pid: lock.pid } : {}),
+          } } });
+        } else throw drainingError();
+      } catch (error) {
+        peer.send(errorEnvelope(request.id, error));
+        if ((strikes.get(peer) ?? 0) >= MAINTENANCE_STRIKES) peer.close(4001, 'protocol_mismatch');
       }
     }
     /** devices 4.5: what this daemon reports in a v2 server info: `remote` while an address is opened (D3); `session-scope`:

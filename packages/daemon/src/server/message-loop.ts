@@ -1,19 +1,19 @@
-import { DRAIN_KINDS, requestSchema, rpcKindOf, type Request } from '@vonvon/protocol';
-import { errorEnvelope } from './errors';
+import { requestSchema, type Request } from '@vonvon/protocol';
+import { drainingError, errorEnvelope } from './errors';
 import type { PeerHub } from './peer-hub';
 import type { Peer } from './ws';
 
-/** What a draining daemon still answers, through `control` (devices 4.7): the shared list, coreUpdateStatus included, so an
- * update's progress stays visible. */
-const DRAINING = new Set<string>(DRAIN_KINDS);
-
 export interface MessageLoopOptions {
   request(peer: Peer, request: Request): Promise<void>;
+  /** While the hub drains, every request goes here instead: it answers DRAIN_KINDS (devices 4.7: the status, the update's
+   * progress, the stop, the last snapshot) and refuses the rest with `draining`, the connection kept (http.ts). */
   control?(peer: Peer, request: Request): Promise<void>;
 }
 /** devices-2 4.4: one message from a connection past its hello, the same for the loopback socket and the secure channel:
- * `text` is the JSON text, undefined for a frame that is not one. Drained, only the drain kinds go on (to `control`). A
- * connection is closed with its own `close`: the secure channel says it inside the channel too. */
+ * `text` is the JSON text, undefined for a frame that is not one. Drained, a request goes to `control`, and one it cannot
+ * read is answered `draining` (Codex review 248: a client that reconnected to follow an update is not closed for what its
+ * page asks); a frame with no id to answer is closed 1001. A connection is closed with its own `close`: the secure channel
+ * says it inside the channel too. */
 export function handleMessage(hub: PeerHub, peer: Peer, text: string | undefined, options: MessageLoopOptions): void {
   if (hub.state === 'released') return;
   let raw: unknown;
@@ -26,12 +26,11 @@ export function handleMessage(hub: PeerHub, peer: Peer, text: string | undefined
     return;
   }
   if (hub.state === 'draining') {
+    const id = raw && typeof raw === 'object' && 'id' in raw && typeof raw.id === 'string' && raw.id ? raw.id : undefined;
+    if (id === undefined || !options.control) { peer.close(1001, 'server_shutdown'); return; }
     const parsed = requestSchema.safeParse(raw);
-    if (!parsed.success || !options.control || !DRAINING.has(rpcKindOf(parsed.data))) {
-      peer.close(1001, 'server_shutdown');
-      return;
-    }
-    void options.control(peer, parsed.data).catch(error => peer.send(errorEnvelope(parsed.data.id, error)));
+    if (!parsed.success) { peer.send(errorEnvelope(id, drainingError())); return; }
+    void options.control(peer, parsed.data).catch(error => peer.send(errorEnvelope(id, error)));
     return;
   }
   if (!raw || typeof raw !== 'object' || !('id' in raw) || typeof raw.id !== 'string' || !raw.id) { peer.close(1007, 'invalid_message'); return; }

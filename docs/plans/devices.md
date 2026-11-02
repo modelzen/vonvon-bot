@@ -166,7 +166,7 @@ owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的
 - **保活**：远程通道上客户端每 20 秒发一帧 `ping`（通道内的控制帧，不进 RPC），30 秒没回算断；服务端 60 秒没收到任何帧关 socket（1001）。loopback 不加保活，今天也没有。
 - **重连**：客户端按 `min(30s, 1s × 2^n)` 退避重连当前设备（非当前设备没有连接，SCOPE-1）。重连成功后比较 `serverInfo.machineId`、`daemonStatus.pid/startedAt`，变了就按"重启过"处理（6.4 最后一行）。
 - **关闭码**（服务端主动关时带上，客户端据此给文案）：`4001 protocol_mismatch`（维护子集外的请求太多，服务端关掉），`4002 unknown_client`（公钥不在 `clients.json`，也没有在 5 秒内带有效邀请配对），`4003 client_revoked`（墓碑命中），`4004 rate_limited`，`4005 handshake_failed`（通道校验失败），`4006 remote_disabled`（地址被关闭，所有该监听上的连接一起关），`4007 pairing_failed`（邀请无效、过期、已用）。今天的 `1001 server_shutdown`、`1008` 不变。4.3、4.7、第 15 节用同一张表。
-- **drain 期间**：服务端排空时远程连接和本机一样只收 `machine.stopHost`、`admin.daemonStatus`、**`machine.coreUpdateStatus`**（DRAIN-1：升级时 `vonvon update` 和界面都在轮询它，今天排空一开始就 `closePeers`、白名单只有前两个，`ws.ts:84-92,138-148`，进度就看不见了），其余回 `draining`。`http.ts` 的 `control()` 同步加这一条；4.5 的维护子集和这里的排空白名单写成同一个常量 `MAINTENANCE_KINDS`。
+- **drain 期间**：服务端排空时远程连接和本机一样只收 `machine.stopHost`、`admin.daemonStatus`、**`machine.coreUpdateStatus`**（DRAIN-1：升级时 `vonvon update` 和界面都在轮询它，今天排空一开始就 `closePeers`、白名单只有前两个，`ws.ts:84-92,138-148`，进度就看不见了），其余回 `draining`。`http.ts` 的 `control()` 同步加这一条；4.5 的维护子集和这里的排空白名单写成同一个常量 `MAINTENANCE_KINDS`。（2026-11-02 D3 复查 248 后改：白名单是 `P/handshake.ts` 的 `DRAIN_KINDS`，和维护子集分成两个常量，另加两条：**`snapshot.get`** 回最后一次建好的快照、`stale: true`，不重建、不问正在停的 Bot 进程，权限照表、Bot 会话照样裁到自己那部分；**`admin.negotiate`** 只记在这条连接上，会话和带 `--scope` 的命令行要先发它才能读快照。原因：排空一开始已有连接照旧 1001 关掉，客户端重连后头一个请求就是快照（`watchSnapshots` 自带一次，桌面 bridge 再要一次），快照不在白名单时又被 1001 关掉，桌面端一直"连上 → 要快照 → 断开 → 重连"，看不到升级进度。白名单外的请求回错误码 `draining`（"daemon 正在停止或重启（比如在升级），这个请求没有处理。等它重新启动后再试。"），**连接不关**；读不懂的请求只要带 id 也回 `draining`，没有 id 可回的帧才 1001 关；协议不同的连接问它本来就不能问的，照 4.5 回 `protocol_mismatch`、连续 20 条 4001 关。命令行把 `draining` 当连接类错误（exit 3），`daemon restart` 照旧报"正在停止或重启"。`release` 时所有连接 1001 关。本机和远程同一套，在共用的 `message-loop.ts` 和 `control()` 里。）
 
 ### 4.8 以后的中继和账号怎么接
 
@@ -607,6 +607,7 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 被更新的那台排空超时（U4） | 那台电脑上的后台 1 分钟内没停完，这次没有安装更新。稍后再试。 |
 | 别的连接报告更新进度（`forbidden`，U4） | 只有这台电脑上的桌面端能报告更新进度。 |
 | 远程更新的状态行（U4） | 在 <设备> 上 <`coreStatusLine` 的原文> |
+| 排空中不收的请求（错误码 `draining`，4.7，D3 复查 248） | daemon 正在停止或重启（比如在升级），这个请求没有处理。等它重新启动后再试。 |
 
 ## 16. 风险
 

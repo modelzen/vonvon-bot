@@ -309,7 +309,8 @@ export async function runRestart(home = paths.appDir, d: RestartDeps = restartDe
   try {
     await d.daemon(call => call('重启 daemon', async c => want('重启 daemon', await c.run({ type: 'restartHost' }), 'applied')));
   } catch (error) {
-    // A draining daemon answers only stopHost and daemonStatus and closes the connection on anything else.
+    // A draining daemon answers its few kinds and `draining` to the rest (devices 4.7); one stopping may close the connection.
+    if (error instanceof CommandError && error.reason === 'draining') throw new CommandError('connection', DRAINING, { reason: 'draining' });
     if (error instanceof Error && error.message.startsWith('和 daemon 的连接断了')) throw new CommandError('connection', DRAINING);
     throw error;
   }
