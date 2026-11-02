@@ -39,6 +39,16 @@ it('keeps an open address no interface has now, first and waiting; recommends th
   const failed = addressRows(status({candidates: candidates.slice(3, 4), addresses: [{host: '192.168.1.9', kind: 'lan', enabledAt: 1, state: 'failed', detail: 'EACCES'}]}));
   expect(stateText(failed[0]!)).toBe('开不了：EACCES');
 });
+// fixes-0-9-0: main 必败, a taken port showed only 等地址出现 and dropped the daemon's detail.
+it('says the port is taken, in the daemon\'s words, while the address is there', () => {
+  const busy = '端口 7767 被占用，每 15 秒重试；可用 `vonvon remote port <n>` 换端口';
+  const rows = addressRows(status({candidates: candidates.slice(3), addresses: [{host: '192.168.1.9', kind: 'lan', enabledAt: 1, state: 'waiting', detail: busy}]}));
+  expect(rows[0]).toMatchObject({host: '192.168.1.9', enabled: true, missing: false});
+  expect(stateText(rows[0]!)).toBe(busy);
+  expect(stateText({...rows[0]!, detail: '等待地址 192.168.1.9 出现'})).toBe('等待地址 192.168.1.9 出现');
+  const bare = addressRows(status({candidates: candidates.slice(3), addresses: [{host: '192.168.1.9', kind: 'lan', enabledAt: 1, state: 'waiting'}]}));
+  expect(stateText(bare[0]!)).toBe('等地址出现');
+});
 it('asks about the risk for CGNAT and public, about switching when others may be on the old one, and nothing else', () => {
   const rows = addressRows(status({candidates, addresses: [{host: '192.168.1.9', kind: 'lan', enabledAt: 1, state: 'listening'}]}));
   expect(enableStep(rows, '100.70.0.3', local, 0)).toEqual({confirm: {kind: 'risk', host: '100.70.0.3', text: expect.stringMatching(/^100\.70\.0\.3 不在 Tailscale.*CGNAT.*勾选「我了解风险」后再开启。$/)}});
@@ -105,6 +115,7 @@ it('names the device: 本机 on this computer, 「X」 on a remote one', () => {
   expect(panelTitle(local)).toBe('允许别的设备连接本机');
   expect(panelTitle(remote)).toBe('允许别的设备连接「机房 Linux」');
   expect(portHint(remote)).toBe('要改端口，在「机房 Linux」的终端运行 `vonvon remote port <端口>`；改完已配对的设备要粘一次新链接。');
+  expect(portHint({...remote, name: '办公室 Windows', platform: 'windows'})).toBe('Windows 上这一版改不了端口；端口被别的程序占着时，关掉那个程序后会自己开始。');
   expect(readErrorText('unsupported', 'x', remote)).toBe('「机房 Linux」上的 Vonvon Bot 太旧，不支持这里的设置。');
   expect(riskFromReply('100.70.0.3 不在 Tailscale…（CGNAT），开启后同一运营商的其他用户也可能连到这台设备。确定要开启请加 `--allow-public`。')).toBe('100.70.0.3 不在 Tailscale…（CGNAT），开启后同一运营商的其他用户也可能连到这台设备。勾选「我了解风险」后再开启。');
   expect(enableErrorText('internal', '磁盘满了')).toBe('开不了：磁盘满了');

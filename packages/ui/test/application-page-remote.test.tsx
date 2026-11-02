@@ -38,6 +38,8 @@ it('shows this computer\'s app with its own version, and the other device\'s ser
   expect(html).toContain('「验收设备 1」的服务端');
   expect(html).toContain('「验收设备 1」的后台服务');
   expect(html).toContain('退出这台电脑上的 Vonvon Bot 不影响「验收设备 1」。');
+  // fixes-0-9-0: main 必败, the remote 重启 did not say it interrupts the conversations, as this computer's does
+  expect(html).toContain('重新加载已保存的 Bot 设置，会中断正在进行的对话');
 });
 
 it('keeps this computer\'s app card as it was', () => {

@@ -13,8 +13,10 @@
 .remote-address__copy { display: grid; flex: 1; min-width: 0; }
 .remote-address__copy strong { font-size: 13px; font-weight: 500; }
 .remote-address__copy span { color: var(--text-secondary, #666); font-size: 12px; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
-.remote-address__state { flex: none; font-size: 12px; color: #15803d; }
+.remote-address__state { flex: 0 1 auto; max-width: 50%; font-size: 12px; color: #15803d; }
 .remote-address__state:not([data-state="listening"]) { color: #b45309; }
+/* The daemon's detail marks commands with backticks (`vonvon remote port <n>`); CopyText shows them as code. */
+.remote-address__state code { font-size: 12px; overflow-wrap: anywhere; }
 .remote-address__state[data-state="failed"] { color: #b91c1c; }
 .remote-address-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .remote-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: rgb(0 0 0 / 6%); font-size: 11px; font-weight: 500; line-height: 18px; vertical-align: 1px; }

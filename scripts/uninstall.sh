@@ -71,7 +71,7 @@ remove_install_root() {
   checked_install_root
   remove_leftover
   mv -- "$target" "$left" || fail 1 "安装目录 $target 没能改名，没删。看一下上面 mv 说的原因，解决后再运行一次卸载。"
-  rm -rf -- "$left" || fail 1 "安装目录已经改名成 $left，但没删完。看一下上面 rm 说的原因，解决后再运行一次卸载，会接着删。"
+  rm -rf -- "$left" || fail 1 "安装目录已经改名成 ${left}，但没删完。看一下上面 rm 说的原因，解决后再运行一次卸载，会接着删。"
 }
 
 # 能运行的 vonvon：先用 bin/vonvon；它坏了，就用 releases 里某个版本自带的 node 跑那个版本。
@@ -122,7 +122,7 @@ stop_service() {
       '{"ok":true'*) ;;
       *)
         show_output "$output" "$TMP/service.err"
-        fail 1 "后台服务没卸掉（退出码 $code），安装目录没动。"
+        fail 1 "后台服务没卸掉（退出码 ${code}），安装目录没动。"
         ;;
     esac
   fi
@@ -132,7 +132,7 @@ stop_service() {
     '{"ok":true'*|*'"kind":"connection"'*) ;;
     *)
       show_output "$output" "$TMP/stop.err"
-      fail 1 "服务端没停下来（退出码 $code），安装目录没动。"
+      fail 1 "服务端没停下来（退出码 ${code}），安装目录没动。"
       ;;
   esac
 }
@@ -141,7 +141,7 @@ remove_path_block() {
   output=$(vv __standalone-teardown --install-root "$ROOT" --json 2>"$TMP/teardown.err") && code=0 || code=$?
   case "$output" in
     '{"ok":true'*) ;;
-    *) say "没能从启动文件里去掉 PATH（退出码 $code）。$PATH_BY_HAND" ;;
+    *) say "没能从启动文件里去掉 PATH（退出码 ${code}）。$PATH_BY_HAND" ;;
   esac
 }
 
@@ -175,7 +175,7 @@ no_cli() {
   fi
   if daemon_alive; then
     if [ "$FROM_ROOT" = yes ]; then
-      fail 1 "安装目录里没有能运行的 vonvon，服务端还在运行（进程 $PID），什么都没删。先停掉它：\`kill $PID\`，等它退出后再运行一次卸载。"
+      fail 1 "安装目录里没有能运行的 vonvon，服务端还在运行（进程 ${PID}），什么都没删。先停掉它：\`kill $PID\`，等它退出后再运行一次卸载。"
     fi
     fail 1 "安装目录里没有能运行的 vonvon，数据目录里记的服务端进程 $PID 还在，看不出它是不是服务端，什么都没删。用 \`ps -p $PID -o args=\` 看一下：是 vonvon 的服务端就先停掉它（\`kill $PID\`），不是就删掉 \`~/.vonvon-bot/daemon.pid\`；再运行一次卸载。"
   fi
@@ -204,7 +204,7 @@ nothing_runs_from_root() {
     fi
   done
   if [ -n "$running" ]; then
-    fail 1 "还有程序在用安装目录里的文件运行（进程 $running），可能是用别的数据目录启动的服务端，安装目录没删。先停掉它们：\`kill $running\`，等它们退出后再运行一次卸载。"
+    fail 1 "还有程序在用安装目录里的文件运行（进程 ${running}），可能是用别的数据目录启动的服务端，安装目录没删。先停掉它们：\`kill $running\`，等它们退出后再运行一次卸载。"
   fi
 }
 
@@ -245,15 +245,15 @@ main() {
   ROOT="$HOME/.local/share/vonvon-bot/server"
   if [ "$(id -u 2>/dev/null || true)" = 0 ]; then
     # sudo 常留着原来用户的 HOME：那是别人的服务端
-    if [ ! -O "$HOME" ]; then fail 2 "HOME（$HOME）不是 root 的，什么都没删。卸载哪个用户的服务端，就用那个用户自己运行，不要 sudo。"; fi
-    say "你正在用 root 运行：卸载的是 root 这个账号下的服务端（$ROOT）。"
+    if [ ! -O "$HOME" ]; then fail 2 "HOME（${HOME}）不是 root 的，什么都没删。卸载哪个用户的服务端，就用那个用户自己运行，不要 sudo。"; fi
+    say "你正在用 root 运行：卸载的是 root 这个账号下的服务端（${ROOT}）。"
   fi
   checked_leftover
   if [ ! -e "$ROOT" ] && [ ! -L "$ROOT" ]; then
     # 改名之前服务已经停了，留下的只有文件
     if [ -d "$left" ]; then
       remove_leftover
-      say "已删完上次卸载没删完的 $left。数据目录 \`~/.vonvon-bot\`（Bot、记忆、设置）保留着；不要了就自己删。"
+      say "已删完上次卸载没删完的 ${left}。数据目录 \`~/.vonvon-bot\`（Bot、记忆、设置）保留着；不要了就自己删。"
       exit 0
     fi
     say "没有装过服务端（$ROOT 不存在）。"

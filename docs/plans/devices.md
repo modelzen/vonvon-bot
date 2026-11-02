@@ -307,7 +307,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 `install.sh`（POSIX sh）只在 Linux 上装。`install.ps1` 随 I2b 取消（owner 2026-11-01）。
 
 先看系统：`uname -s` 不是 `Linux` 就什么都不碰、退出非零（2）。是 `Darwin` 时打印第 15 节"安装脚本：在 Mac 上"那句，让用户到 https://vonvon.cc/get/ 下载安装包（里面带了服务端和 `vonvon` 命令）；别的系统（Windows 的 Git Bash 这类）打印"安装脚本：不是 Linux、也不是 Mac"那句。这一步在 root、已装过和公钥的检查之前，不联网、不写文件。然后：
-0. **root 检查**（SEC-13：大陆云服务器默认 root 登录，`curl | sh` 会把 daemon、Bot 和远程 owner 全变成 root，完全访问档被注入一次就是整机 root）：`id -u` 为 0 默认拒绝，打印 `useradd -m vonvon && su - vonvon` 这样的命令；坚持要用加 `--allow-root`（环境变量 `VONVON_ALLOW_ROOT=1`，因为 `| sh` 没法传参）并打印风险。`vonvon daemon run` 和 `service install` 在 root 下同样警告（Claude Code 以 root 运行时拒绝 bypassPermissions，完全访问档在 root 下可能起不来，未核实 SDK 下的行为）。owner 2026-10-31 确认默认拒绝。
+0. **root 检查**（SEC-13：大陆云服务器默认 root 登录，`curl | sh` 会把 daemon、Bot 和远程 owner 全变成 root，完全访问档被注入一次就是整机 root）：`id -u` 为 0 默认拒绝，打印第 15 节"安装脚本：root"那句：用 `useradd -m -s /bin/bash` 建一个普通账号，再用这个账号直接 SSH 登录、运行安装命令，不用 su 或 sudo 切过去（2026-11-02 改：原来打印 `useradd -m vonvon && su - vonvon`，su 过去没有这个账号的 systemd 用户实例，装好后不会开机自动启动）；坚持要用加 `--allow-root`（环境变量 `VONVON_ALLOW_ROOT=1`，因为 `| sh` 没法传参）并打印风险。`vonvon daemon run` 和 `service install` 在 root 下同样警告（Claude Code 以 root 运行时拒绝 bypassPermissions，完全访问档在 root 下可能起不来，未核实 SDK 下的行为）。owner 2026-10-31 确认默认拒绝。
 1. **已装过？**（REQ-3）任一命中就按第 15 节的文案跳过、退出 0、不动任何东西：
    - 数据目录里 `daemon.pid` 的进程活着；
    - systemd 的服务定义 `vonvon-bot*.service` 在（7.4 的命名）；
@@ -577,7 +577,7 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 版本不一致（客户端旧） | 这台电脑的 Vonvon Bot（0.8.0）比 <设备>（0.9.0）旧。先更新这台电脑上的应用。 |
 | 服务端太旧（v1） | <设备> 上的 Vonvon Bot（0.7.x）不支持远程管理，请在那台设备上升级一次。 |
 | 安装脚本：开始 | 正在安装 Vonvon Bot 服务端 0.9.0（linux-x64）… |
-| 安装脚本：root | 你正在用 root 运行。Vonvon Bot 会以这个账号运行 AI 代理，建议用普通用户：`useradd -m vonvon && su - vonvon`，再运行安装命令。坚持用 root：`VONVON_ALLOW_ROOT=1 sh -c "$(curl -fsSL …)"`。 |
+| 安装脚本：root（2026-11-02 改，su 过去装不成开机启动） | 你正在用 root 运行。Vonvon Bot 会以这个账号运行 AI 代理，建议用普通用户：先 `useradd -m -s /bin/bash vonvon`，给它设密码（`passwd vonvon`）或放好 SSH 公钥，再用这个账号直接 SSH 登录、运行安装命令；不要用 su 或 sudo 切过去，那样装好后不会开机自动启动。说明见 https://vonvon.cc/guide/remote/#no-root 。坚持用 root：`VONVON_ALLOW_ROOT=1 sh -c "$(curl -fsSL …)"`。 |
 | 安装脚本：已装过 | 这台机器已经装过 Vonvon Bot，不用再装。直接用：`vonvon --version`。 |
 | 安装脚本：在 Mac 上（退出非零，什么都不动） | Mac 请下载安装包：https://vonvon.cc/get/ ，安装包里已经带了服务端和 vonvon 命令。这个脚本只用于 Linux，什么都没动。 |
 | 安装脚本：不是 Linux、也不是 Mac（退出非零，什么都不动） | 这个安装脚本只支持 Linux（这台是 <`uname -s` 的结果>）。Mac、Windows 请下载 Vonvon Bot 桌面端安装包：https://vonvon.cc/get/ |

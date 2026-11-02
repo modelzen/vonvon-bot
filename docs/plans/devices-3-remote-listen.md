@@ -188,7 +188,7 @@ Mac 后验（整批，U1b/U3 的任务里）：Mac 桌面端或 Mac 上的通道
 8. **撤销断连的顺序**：断连的 `clients.onChange` 监听登记在 `followRevocations` 之前，被撤销的那条连接先断，收不到 `client-revoked` 事件；`jobs.detach`、`logs.detach` 经 hub 的 `detached` 调（`closeWhere` → 连接的 detach → `hub.remove`），没有另写一遍。`followRevocations` 挪到 hub 建好之后，经 hub 发事件。
 9. **IPv6 地址统一写法**：开、关地址时把 IPv6 写成小写短格式（`FD00:0::1` → `fd00::1`），客户端发的 Host 和它比较。
 10. **`--tailscale`**：取网卡上第一个算 Tailscale 的 IPv4，不取只在 `tailscale ip` 输出里、网卡上没有的地址（绑不上）。
-11. **设计第 15 节没写到的文字**（本片自定）：`enable` 同时给或都不给 IP 和 `--tailscale`："给一个 IP 地址，或者用 --tailscale，二选一。"；端口范围："端口要在 1024 到 65535 之间。"；`remote status` 的表头"地址  种类  状态  说明  端口"、种类名（Tailscale 地址、局域网地址、运营商地址、公网地址）、daemon 没运行时的状态"没在听"；`enable` 之后地址没在听时加一行"现在：<状态>，<说明>。"；`disable` 的"已关闭 <地址>，经这个地址的连接都已断开。"（没运行时"已关闭 <地址>。"）；`port` 的"远程端口改成了 <n>，已配对的设备要重新配对。"；没开任何地址时 `remote status` 用 D1 的"没开远程时 pair"那句。
+11. **设计第 15 节没写到的文字**（本片自定）：`enable` 同时给或都不给 IP 和 `--tailscale`："给一个 IP 地址，或者用 --tailscale，二选一。"；端口范围："端口要在 1024 到 65535 之间。"；`remote status` 的表头"地址  种类  状态  说明  端口"、种类名（Tailscale 地址、局域网地址、运营商地址、公网地址）、daemon 没运行时的状态"没在听"；`enable` 之后地址没在听时加一行"现在：<状态>，<说明>。"；`disable` 的"已关闭 <地址>，经这个地址的连接都已断开。"（没运行时"已关闭 <地址>。"）；`port` 的"远程端口改成了 <n>，已配对的设备要重新配对。"（A1 之后换端口只要粘新链接，0.9.0 发布前改成"远程端口改成了 <n>，已配对的设备要粘一次新链接（`vonvon pair` 生成），只会更新地址，不用重新配对。"，和面板的端口说明一致）；没开任何地址时 `remote status` 用 D1 的"没开远程时 pair"那句。
 12. **`device.status` 的端口**每次读 `remote.json`，地址的状态取监听器的。
 13. **`remote *` 四条进 `LEASED`**（数据租约），和 `clients *` 一样，daemon 没跑时它们自己写 `devices/`。
 14. **测试的接缝**：`startApi` 加 `remote?: RemoteSeams`（网卡、Tailscale、局域网网络、分类、计时），`startFixture` 第 4 个参数传它。`rpc-device-remote.test.ts` 里会真去绑的局域网地址用 `10.255.255.253`，不用 `192.168.1.9`：开发机上可能真有这个地址，测试就真在局域网上听了。`cli-remote.test.ts` 的"有 daemon"一路用夹具加手写的 pid 锁。

@@ -54,6 +54,13 @@ it('shows the open address\'s state, 换成这个地址 for another pick, and �
   expect(text(changed)).toContain('网络变了，要确认：这台设备所在的网络变了');
   expect(text(changed)).toContain('确认并重新开启');
   expect(text(changed)).not.toContain('换成这个地址');
+  // fixes-0-9-0: main 必败, a taken port said only 等地址出现
+  const busy = view({status: status([{host: '192.168.1.9', kind: 'lan', enabledAt: 1, state: 'waiting', detail: '端口 7767 被占用，每 15 秒重试；可用 `vonvon remote port <n>` 换端口'}]), picked: '192.168.1.9'});
+  expect(text(busy)).toContain('端口 7767 被占用，每 15 秒重试；可用 vonvon remote port &lt;n&gt; 换端口');
+  expect(text(busy)).not.toContain('等地址出现');
+  // fixes-0-9-0 审查 F4: the command shows as code, as in the footer below it, not with literal backticks (修之前必败)
+  expect(busy).toContain('<code>vonvon remote port &lt;n&gt;</code>');
+  expect(text(busy)).not.toContain('`');
 });
 it('asks about the risk with 开启 grey until 我了解风险 is ticked, and gives the reply\'s words for confirm_required', () => {
   const risk: Confirm = {kind: 'risk', host: '100.70.0.3', text: '100.70.0.3 不在 Tailscale 或别的组网工具的网卡上…勾选「我了解风险」后再开启。'};

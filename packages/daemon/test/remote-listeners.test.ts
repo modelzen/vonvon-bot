@@ -16,7 +16,7 @@ import { completePairing, createInviteBook } from '../src/remote/pairing';
 import { createRateLimiter } from '../src/remote/rate-limit';
 import { createPeerHub } from '../src/server/peer-hub';
 import { principalWire } from '../src/server/principal';
-import { createRemoteListeners, type RemoteListenerDeps } from '../src/server/remote-listeners';
+import { createRemoteListeners, portBusy, type RemoteListenerDeps } from '../src/server/remote-listeners';
 
 // D3 第 5 节: real http.Servers on 127.0.0.2, which Linux binds as any 127/8 address (the listeners never classify; the
 // config says "lan"). Elsewhere (the macOS runner) the address does not exist, and these skip. main 必败: no listeners.
@@ -179,7 +179,9 @@ describe.runIf(canBind)('remote listeners', () => {
     const squatter = createNetServer();
     await new Promise<void>(resolve => squatter.listen(port, ALIAS, resolve));
     await h.remote.sync(config(port, lan(ALIAS)));
-    expect(h.remote.status()).toEqual([{ host: ALIAS, kind: 'lan', enabledAt: 1, state: 'waiting', detail: `端口 ${port} 被占用，每 15 秒重试；可用 \`vonvon remote port <n>\` 换端口` }]);
+    expect(h.remote.status()).toEqual([{ host: ALIAS, kind: 'lan', enabledAt: 1, state: 'waiting', detail: portBusy(port) }]);
+    expect(portBusy(port, 'linux')).toBe(`端口 ${port} 被占用，每 15 秒重试；可用 \`vonvon remote port <n>\` 换端口`);
+    expect(portBusy(port, 'win32')).toBe(`端口 ${port} 被占用，每 15 秒重试；关掉占着它的程序后会自己开始`);
     expect(h.log.warn).toHaveBeenCalledWith('remote', 'remote-bind-failed', { host: ALIAS, port, code: 'EADDRINUSE' });
     await new Promise<void>(resolve => squatter.close(() => resolve()));
     await vi.waitFor(() => expect(h.remote.status()[0]?.state).toBe('listening'));
