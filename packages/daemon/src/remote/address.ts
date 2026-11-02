@@ -57,34 +57,50 @@ export function hasAddress(host: string, interfaces: Interfaces): boolean {
   return host === '0.0.0.0' || host === '::' || interfaceFor(host, interfaces) !== undefined;
 }
 
-/** devices 4.2, in this order: not a literal IP, loopback, the wildcards (public), Tailscale, LAN, CGNAT, public. */
+/**
+ * A1: the virtual interface another network tool than Tailscale makes, by its name; `tool` when the name says which
+ * one. ZeroTier: `zt…` (Linux), `feth…` (macOS), `ZeroTier One […]` (Windows); NetBird `wt0`; EasyTier `et_0`
+ * (Windows; elsewhere a plain tun); 蒲公英 `oray…`/`pgy…` (not checked on a machine); Hamachi `ham0`/`Hamachi`;
+ * WireGuard `wg…`. A plain `tun0`, `utun3` or `tap0` is a VPN or a network tool too, with no name to give.
+ */
+const OVERLAY_TOOLS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/^(zt|feth\d)|^zerotier/i, 'ZeroTier'], [/^wt\d+$/i, 'NetBird'], [/^et_\d+$/i, 'EasyTier'], [/^(oray|pgy)/i, '蒲公英'],
+  [/^ham\d+$|^hamachi/i, 'Hamachi'], [/^wg/i, 'WireGuard'],
+];
+const PLAIN_TUNNEL = /^(u?tun|tap)\d+$/i;
+export function overlayOf(iface: string | undefined): { tool?: string } | undefined {
+  if (!iface) return undefined;
+  const named = OVERLAY_TOOLS.find(([pattern]) => pattern.test(iface));
+  if (named) return { tool: named[1] };
+  return PLAIN_TUNNEL.test(iface) ? {} : undefined;
+}
+
+/** devices 4.2, in this order: not a literal IP, loopback, the wildcards (public), Tailscale, LAN, CGNAT, public. A1: a
+ * LAN address on a network tool's interface is `overlay`; a CGNAT one too, only when the interface names the tool (a
+ * plain tunnel with a 100.64/10 address stays CGNAT, confirmed). A public address stays public on any interface: a VPN
+ * may put a public IP on its tunnel, which strangers reach. */
 export function classifyAddress(host: string, ctx: AddressContext): AddressKind | 'invalid' {
   if (isIP(host) === 0) return 'invalid';
   if (inRange(LOOPBACK, host)) return 'loopback';
   if (host === '0.0.0.0' || host === '::') return 'public';
-  if (isTailscale(host, interfaceFor(host, ctx.interfaces)?.name, ctx.tailscale)) return 'tailscale';
-  if (inRange(LAN, host)) return 'lan';
-  if (inCgnatRange(host)) return 'cgnat';
+  const iface = interfaceFor(host, ctx.interfaces)?.name;
+  if (isTailscale(host, iface, ctx.tailscale)) return 'tailscale';
+  const overlay = overlayOf(iface);
+  if (inRange(LAN, host)) return overlay ? 'overlay' : 'lan';
+  if (inCgnatRange(host)) return overlay?.tool ? 'overlay' : 'cgnat';
   return 'public';
 }
 /** The Host header a client sends to this address: IPv6 in brackets. */
 export const hostHeader = (host: string, port: number): string => `${isIP(host) === 6 ? `[${host}]` : host}:${port}`;
 /** CGNAT and public addresses face strangers: they get the global handshake limit too (devices 4.3). */
 export const exposure = (kind: AddressKind): 'private' | 'exposed' => kind === 'cgnat' || kind === 'public' ? 'exposed' : 'private';
+/** These two face strangers, and are opened only with `--allow-public` or the desktop's risk confirmation. */
+export const needsConfirmation = (kind: AddressKind): boolean => exposure(kind) === 'exposed';
 /** `tailscale ip` is asked only for a 100.64/10 address that no interface name already shows to be Tailscale's. */
 export async function classify(host: string, deps: { interfaces: () => Interfaces; tailscale: () => Promise<TailscaleInfo> }): Promise<AddressKind | 'invalid'> {
   const interfaces = deps.interfaces();
   const ask = inCgnatRange(host) && !/^tailscale/i.test(interfaceFor(host, interfaces)?.name ?? '');
   return classifyAddress(host, { interfaces, tailscale: ask ? await deps.tailscale() : { installed: false, ips: [] } });
-}
-/** `remote enable --tailscale`: the first IPv4 on this machine's interfaces that is Tailscale's (devices 4.2: what
- * `tailscale ip` says, checked against the interfaces). */
-export function pickTailscaleAddress(ctx: AddressContext): string | undefined {
-  for (const [name, entries] of Object.entries(ctx.interfaces)) {
-    const found = entries?.find(entry => entry.family === 'IPv4' && isTailscale(entry.address, name, ctx.tailscale));
-    if (found) return found.address;
-  }
-  return undefined;
 }
 
 const RTF_GATEWAY = 0x2;
@@ -107,16 +123,19 @@ export async function networkIdentity(ifaceName: string, platform: NodeJS.Platfo
   } catch { return undefined; }
 }
 
-// devices 第 15 节
-export const TAILSCALE_HINT = '推荐用 Tailscale 这类安全网络把两台设备连起来：两边都装上并登录同一个账号，然后用 `tailscale ip -4` 看到的 100.x 地址运行 `vonvon remote enable`。不用 Tailscale 也可以：局域网内用这台设备的局域网地址。';
-export const cgnatWarning = (host: string): string => `${host} 不在 Tailscale 的网卡上，可能是运营商分配的地址（CGNAT），开启后同一运营商的其他用户也可能连到这台设备。确定要开启请加 \`--allow-public\`。`;
-export const PUBLIC_WARNING = '这是公网地址。开启后互联网上任何人都能尝试连接这台设备；虽然只有配对过的客户端能连上、内容加密，但你的服务端会直接暴露在扫描和攻击之下。建议改用 Tailscale 或局域网地址。确定要开启请加 `--allow-public`（桌面端：勾选"我了解风险"）。';
+// devices 第 15 节; A1: no --tailscale, one address picked from the ones `vonvon remote enable` lists
+export const TAILSCALE_HINT = '推荐用 Tailscale 这类组网工具把两台设备连起来：两边都装上、登录同一个账号，再运行 `vonvon remote enable` 选它的地址。不用组网工具也可以：两台在同一个局域网里时，选局域网地址。';
+export const ALLOW_PUBLIC = '确定要开启请加 `--allow-public`。';
+export const cgnatRisk = (host: string): string => `${host} 不在 Tailscale 或别的组网工具的网卡上，可能是运营商分配的地址（CGNAT），开启后同一运营商的其他用户也可能连到这台设备。`;
+export const cgnatWarning = (host: string): string => `${cgnatRisk(host)}${ALLOW_PUBLIC}`;
+export const PUBLIC_RISK = '这是公网地址。开启后互联网上任何人都能尝试连接这台设备；虽然只有配对过的客户端能连上、内容加密，但你的服务端会直接暴露在扫描和攻击之下。建议改用 Tailscale 或局域网地址。';
+export const PUBLIC_WARNING = `${PUBLIC_RISK}确定要开启请加 \`--allow-public\`（桌面端：勾选"我了解风险"）。`;
 export const NOT_AN_IP = '只接受 IP 地址，不接受主机名。';
 export const LOOPBACK_REFUSED = '回环地址不用开启，本机客户端一直能连。';
-export const ONE_TARGET = '给一个 IP 地址，或者用 --tailscale，二选一。';
+const PICK_ONE = '在终端里运行 `vonvon remote enable` 选一个这台设备的地址，或者 `vonvon remote candidates` 看有哪些。';
 // D3 plan 11.16 (Codex review 232-1, 234-1, 234-2): no wildcard and no link-local IPv6 address in this batch
-export const wildcardRefused = (host: string): string => `不能开启 ${host}：它代表这台设备的所有地址，别的设备拿它连不上。改用 \`vonvon remote enable --tailscale\`（推荐）或 \`vonvon remote enable <这台设备的 IP>\`。`;
-export const linkLocalRefused = (host: string): string => `不能开启 ${host}：现在还不支持链路本地的 IPv6 地址（fe80:: 开头）。改用 \`vonvon remote enable --tailscale\`（推荐）或 \`vonvon remote enable <这台设备的局域网 IP>\`。`;
+export const wildcardRefused = (host: string): string => `不能开启 ${host}：它代表这台设备的所有地址，别的设备拿它连不上。${PICK_ONE}`;
+export const linkLocalRefused = (host: string): string => `不能开启 ${host}：现在还不支持链路本地的 IPv6 地址（fe80:: 开头）。${PICK_ONE}`;
 
 export interface EnableDeps {
   interfaces: () => Interfaces;
@@ -127,16 +146,11 @@ export interface EnableDeps {
   now?: () => number;
 }
 /** `device.enable` and `vonvon remote enable` with no daemon (D3 4.7): the address to write, or the refusal. A LAN address
- * records its interface and network; the others are not checked against a network. */
-export async function resolveEnable(request: { host?: string; tailscale?: boolean; allowPublic?: boolean }, deps: EnableDeps): Promise<RemoteAddress> {
+ * records its interface and network; the others are not checked against a network (an overlay one only stays on a
+ * network tool's interface, remote-listeners). */
+export async function resolveEnable(request: { host: string; allowPublic?: boolean }, deps: EnableDeps): Promise<RemoteAddress> {
   const now = deps.now ?? Date.now;
-  if ((request.host === undefined) === (request.tailscale !== true)) throw new RpcError('invalid_request', ONE_TARGET);
-  if (request.tailscale) {
-    const host = pickTailscaleAddress({ interfaces: deps.interfaces(), tailscale: await deps.tailscale() });
-    if (!host) throw new RpcError('tailscale_unavailable', TAILSCALE_HINT);
-    return { host, enabledAt: now(), kind: 'tailscale' };
-  }
-  const host = canonicalHost(request.host ?? '');
+  const host = canonicalHost(request.host);
   // Neither is an address another computer can dial: a wildcard is every address (the link would carry it, and the Host a
   // client sends never matches it); a link-local one needs the client's own zone, which no link or URL here can carry.
   if (host === '0.0.0.0' || host === '::') throw new RpcError('invalid_request', wildcardRefused(host));

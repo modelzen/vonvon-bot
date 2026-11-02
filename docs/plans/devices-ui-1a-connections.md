@@ -710,7 +710,7 @@ U1a 和 U1b 是一个 PR，Mac 上只发一次验收，写在 U1b 第 6 节。U1
    根目录的 `vitest.config.ts` 只收 `*.test.ts`，`.tsx` 的界面测试要在 ui 包里跑（它用默认的 include）。
    然后在 `flock /tmp/vonvon-heavy.lock` 下跑 protocol、client、desktop、ui 的 `typecheck`、`lint`、`build`。最后 `rm -rf -- "${T:?}"`。
 2. 真通道探针 `packages/desktop/test/manual/devices-probe.ts`：进 git；`test/manual/` 不在 vitest include 里；跑法同 D2 的 `secure-probe.ts`。
-   - 环境：在 mktemp 的 HOME 和 VONVON_HOME 下起一个临时 daemon，`vonvon remote port 17767`，`vonvon remote enable --tailscale`。不碰 Paseo、验收数据目录、`~/.vonvon-bot`。
+   - 环境：在 mktemp 的 HOME 和 VONVON_HOME 下起一个临时 daemon，`vonvon remote port 17767`，`vonvon remote enable "$(tailscale ip -4)"`（A1 去掉了 `--tailscale`）。不碰 Paseo、验收数据目录、`~/.vonvon-bot`。
    - 探针用 `openDeviceRegistry`（临时目录，测试用的明文 `SecretBox`，只在 `test/helpers` 里）、`secureConnector()` 和 `createDeviceConnections`。依次：
      1. 用 `vonvon pair --json` 的链接 `add`。
      2. `switchTo` 后打印 `admin.daemonStatus` 和快照里 bot 数。
