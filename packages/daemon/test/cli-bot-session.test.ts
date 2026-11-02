@@ -57,7 +57,10 @@ function run(root: string, home: string, args: string[], session: NodeJS.Process
 /** A running daemon whose `local-credential` nobody can read any more: a command that reads it fails. */
 async function daemon() {
   const executeSchedule = vi.fn(async () => ({ kind: 'tasks' as const, tasks: [], now: 1, timeZone: 'UTC' }));
-  const fixture = await startFixture(fakeService({ listBots: async () => [bot], listProjects: async appId => appId === BOT ? [row('研发', GROUP), row('运营', 'oc_z')] : [], executeSchedule }));
+  // devices-4b: the group's Bot process says a member's turn is going
+  const actor = { kind: 'session' as const, openId: 'ou_m', role: 'member' as const, chatId: GROUP };
+  const fixture = await startFixture(fakeService({ listBots: async () => [bot], listProjects: async appId => appId === BOT ? [row('研发', GROUP), row('运营', 'oc_z')] : [], executeSchedule }),
+    undefined, undefined, async () => ({ ok: true, role: 'member', openId: 'ou_m', actor }));
   await writeFile(join(fixture.home, 'daemon.pid'), JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), listen: fixture.api.listen }));
   await chmod(join(fixture.home, 'local-credential'), 0o000);
   const home = (await emptyHome()).home;
@@ -79,7 +82,7 @@ describe('a Bot session\'s command line', () => {
     try {
       const ok = await run(d.fixture.home, d.home, ['schedule', 'list', '--group', GROUP, '--scope', `bot=${BOT},group=${GROUP}`], { VONVON_SESSION: d.token });
       expect(ok, ok.stderr).toMatchObject({ code: 0, json: { ok: true } });
-      expect(d.executeSchedule).toHaveBeenCalledWith(BOT, 'cli', { action: 'list', chatId: GROUP });
+      expect(d.executeSchedule).toHaveBeenCalledWith(BOT, { kind: 'session', openId: 'ou_m', role: 'member', chatId: GROUP }, { action: 'list', chatId: GROUP });
       // the global option goes anywhere on the line
       expect((await run(d.fixture.home, d.home, ['--scope', `bot=${BOT},group=${GROUP}`, 'schedule', 'list', '--group', GROUP], { VONVON_SESSION: d.token })).code).toBe(0);
       const missing = await run(d.fixture.home, d.home, ['schedule', 'list', '--group', GROUP], { VONVON_SESSION: d.token });
