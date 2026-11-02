@@ -21,7 +21,9 @@ import { stepLines } from '../src/cli/commands/bot';
 /** cli-8-machine: daemon status / logs over RPC, service skip, context show, secrets test, now and snapshot. */
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
-const T0 = Date.parse('2026-11-01T05:00:00.000Z');
+// Now, not a fixed day: a lock started before this machine booted counts as a dead daemon's (isPidLockOwnerRunning),
+// and a CI runner boots minutes before the tests.
+const T0 = Math.floor(Date.now() / 1000) * 1000;
 const agent = (id: string, name = 'Vonvon Bot', extra: Partial<Agent> = {}): Agent => ({ id: agentIdSchema.parse(id), name, enabled: true, running: true, connection: 'connected', activation: 'active', ...extra });
 const member = (agentId: string, groupId: string, name: string): Membership => ({
   id: membershipIdSchema.parse(JSON.stringify([agentId, groupId])), agentId: agentIdSchema.parse(agentId), groupId: groupIdSchema.parse(groupId), name, directory: `/work/${name}`,
