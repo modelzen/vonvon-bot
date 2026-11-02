@@ -14,7 +14,7 @@ vi.mock('../src/config/paths', async () => {
 });
 
 import { paths } from '../src/config/paths';
-import { linuxHelperReady, listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from '../src/host/lifecycle';
+import { armHostStopLimit, HOST_STOP_LIMIT_MS, linuxHelperReady, listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from '../src/host/lifecycle';
 import { ApiCleanupError } from '../src/server/http';
 import { readUpdateStatus, writeUpdateStatus, type UpdateStatus } from '../src/service/update';
 
@@ -110,9 +110,11 @@ it('keeps an empty drain pending until scope and exec proofs agree in one poll',
   await vi.advanceTimersByTimeAsync(30_000);
   expect(release).not.toHaveBeenCalled();
   expect(readProc).not.toHaveBeenCalled();
+  // owner 2026-11-02 (review 260): the stop starts at once, so the Bots are interrupted and the host's 30 s count from
+  // the request; only the release waits for the helper.
+  expect(awakened).toHaveBeenCalledOnce();
   child.emit('spawn');
   await vi.advanceTimersByTimeAsync(150);
-  expect(awakened).not.toHaveBeenCalled();
   cgroup = `0::/user.slice/${scope}`;
   await vi.advanceTimersByTimeAsync(100);
   expect(release).not.toHaveBeenCalled();
@@ -129,6 +131,21 @@ it('keeps an empty drain pending until scope and exec proofs agree in one poll',
   expect(child.kill).not.toHaveBeenCalled();
   expect(readUpdateStatus()).toEqual(record);
   expect(fixture.info).toHaveBeenCalledWith('daemon-shutdown', 'stop_after_commit', expect.any(Object));
+});
+
+// review 260: the host's 30 s count began only once the helper was ready, so a slow scope setup added up to 25 s to it.
+it('counts the host stop limit from the update restart request, the helper readiness wait included', async () => {
+  const owner = control();
+  const exit = vi.fn();
+  const disarm = armHostStopLimit(owner, { serviceManaged: true, exit });
+  owner.requestRestart(1234, record);
+  child.emit('spawn');
+  await vi.advanceTimersByTimeAsync(HOST_STOP_LIMIT_MS - 1);
+  expect(exit).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(exit).toHaveBeenCalledExactlyOnceWith(75);
+  disarm();
+  died();
 });
 
 it('treats proc read errors as pending and recovers on a later complete proof', async () => {

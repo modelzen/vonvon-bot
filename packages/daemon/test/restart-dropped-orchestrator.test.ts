@@ -10,6 +10,8 @@ import type { DiagnosticsEvent } from '../src/bot/diagnostics';
 import { writeNodeExecutable } from './helpers/node-executable';
 
 const fake = vi.hoisted(() => ({
+  /** Feishu's message resource API: an inbound image's download. */
+  resourceGet: vi.fn(),
   askCreate: vi.fn(async (_input: unknown): Promise<unknown> => ({ data: { card_id: 'ask-entity' } })),
   askUpdate: vi.fn(async (_input: unknown): Promise<unknown> => ({})),
   kind: 'multi' as 'single' | 'multi',
@@ -80,6 +82,7 @@ beforeEach(async () => {
   events = [];
   diagnostics.setDiagnosticsSink(event => events.push(event));
   file = join(root, 'dropped.json');
+  fake.resourceGet.mockReset();
   fake.askCreate.mockReset().mockResolvedValue({ data: { card_id: 'ask-entity' } });
   fake.askUpdate.mockReset().mockResolvedValue({});
   fake.kind = 'multi';
@@ -148,6 +151,7 @@ function setup(options: { droppedFile?: string | false; maxConcurrentRuns?: numb
   } };
   const channel = { send: fake.send, rawClient: { cardkit: { v1: { card: { create: fake.askCreate, update: fake.askUpdate } } }, im: { v1: {
     message: { get: async () => ({ data: { items: [{ thread_id: 'omt_new_topic' }] } }), reply: options.reply ?? fake.reply },
+    messageResource: { get: fake.resourceGet },
     messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) },
   } } } };
   const shutdownTiming = options.shutdownTiming ?? { interruptGraceMs: 50 };
@@ -489,10 +493,87 @@ describe('a stop cuts the turns in flight short', () => {
     expect(Date.now() - started).toBeLessThan(3_000);
     expect(fake.log.warn).toHaveBeenCalledWith('bridge', 'shutdown_drain_cut', expect.objectContaining({ runs: 1, limitMs: 400 }));
     expect(entries()).toMatchObject([{ messageId: first.messageId, count: 1 }]);
-    // Its card comes late and says it was cut short; the record stays, the sender may hear twice rather than never.
+    // review 259: its card comes late, before the process is gone, and says it was cut short: the record goes again.
     for (const turn of run.turns) turn.resolve();
     await until(() => expect(lastCard()).toContain('服务端重启了，这一轮被中断，请再发一次'));
+    await until(() => expect(entries()).toEqual([]));
+    expect(fake.log.info).toHaveBeenCalledWith('bridge', 'cut-short-card-late', { ref: first.messageId.slice(-6) });
+  });
+
+  // review 259: Feishu answered the card's write only after the drain stopped waiting; the sender was asked twice.
+  it('a card written after the drain stopped waiting takes its turn off the list again, and only it', async () => {
+    const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup({ shutdownTiming: { interruptGraceMs: 10, drainMs: 200 } });
+    const first = message('first');
+    await o.onMessage(first);
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const next = message('queued');
+    await o.onMessage(next); await queued(1);
+    const written = deferred<boolean>();
+    fake.final.mockReturnValue(written.promise);
+    await o.shutdown(() => 'restart');
+    // The queued message (kept as the shutdown began) and the cut-short turn whose card had no answer yet.
+    expect(entries()).toMatchObject([{ messageId: next.messageId, count: 2 }]);
+    written.resolve(true);
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('bridge', 'cut-short-card-late', { ref: first.messageId.slice(-6) }));
+    // The group's queued message is still asked for, once.
+    expect(entries()).toMatchObject([{ messageId: next.messageId, count: 1 }]);
+  });
+
+  // review 260: the drain stopped waiting for a first turn still being prepared (its session resumed, an image downloaded),
+  // and nothing kept its message.
+  it('a first turn still being prepared when the drain stops waiting is kept, once', async () => {
+    const resume = deferred<ReturnType<typeof thread>['t']>();
+    fake.backend.resumeThread.mockReturnValue(resume.promise);
+    const o = setup({ shutdownTiming: { interruptGraceMs: 10, drainMs: 100 } });
+    const first = message('first');
+    await o.onMessage(first);
+    await until(() => expect(fake.backend.resumeThread).toHaveBeenCalled());
+    await o.shutdown(() => 'restart');
+    expect(entries()).toMatchObject([{ messageId: first.messageId, count: 1, replyInThread: true, place: 'topic' }]);
+    // Its preparation ends after all and keeps it again: still once.
+    const late = thread();
+    resume.resolve(late.t);
+    await until(() => expect(late.t.close).toHaveBeenCalled());
     expect(entries()).toMatchObject([{ messageId: first.messageId, count: 1 }]);
+    expect(late.consumed).toEqual([]);
+  });
+
+  it('a message whose image is still downloading when the drain stops waiting is kept, once', async () => {
+    const download = deferred<never>();
+    fake.resourceGet.mockReturnValue(download.promise);
+    const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup({ shutdownTiming: { interruptGraceMs: 10, drainMs: 100 } });
+    const first = message('look at this', { resources: [{ type: 'image', fileKey: 'img_fixture' }] });
+    await o.onMessage(first);
+    await until(() => expect(fake.resourceGet).toHaveBeenCalled());
+    await o.shutdown(() => 'update');
+    expect(entries()).toMatchObject([{ messageId: first.messageId, count: 1 }]);
+    download.reject(new Error('the download ends late'));
+    // Closed by the shutdown, then by the run that does not start.
+    await until(() => expect(run.t.close).toHaveBeenCalledTimes(2));
+    expect(entries()).toMatchObject([{ messageId: first.messageId, count: 1 }]);
+    expect(run.consumed).toEqual([]);
+  });
+
+  // review 260: turn/start went out at once, but the stop entry came only once the card was created and the topic
+  // adopted; a stop meanwhile sent no interrupt, and the agent was closed after the grace with its turn running.
+  it('a stop while the turn\'s card is being created interrupts the turn before the agent is closed', async () => {
+    const created = deferred<string>();
+    fake.createCard.mockReturnValue(created.promise);
+    const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup({ shutdownTiming: { interruptGraceMs: 300 } });
+    await o.onMessage(message('first'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const closing = o.shutdown(() => 'restart');
+    await until(() => expect(run.t.abort).toHaveBeenCalledWith('turn-1'));
+    expect(run.t.close).not.toHaveBeenCalled();
+    created.resolve('card');
+    await closing;
+    // Sent once: the stop entry the card brings does not send it again.
+    expect(run.t.abort).toHaveBeenCalledOnce();
+    expect(run.t.abort.mock.invocationCallOrder[0]).toBeLessThan(run.t.close.mock.invocationCallOrder[0]!);
+    expect(lastCard()).toContain('服务端重启了，这一轮被中断，请再发一次');
   });
 
   it('a crash in the middle of the shutdown keeps the cut-short turns not answered yet, once', async () => {
@@ -507,7 +588,9 @@ describe('a stop cuts the turns in flight short', () => {
     expect(entries()).toMatchObject([{ messageId: first.messageId, count: 1 }]);
     for (const turn of run.turns) turn.resolve();
     await closing;
-    expect(entries()).toMatchObject([{ messageId: first.messageId, count: 1 }]);
+    // review 259: the process lived on and the turn's card said it was cut short, so its sender is not asked twice.
+    expect(lastCard()).toContain('服务端重启了，这一轮被中断，请再发一次');
+    expect(entries()).toEqual([]);
   });
 });
 
