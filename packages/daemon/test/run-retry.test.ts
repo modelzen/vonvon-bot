@@ -959,6 +959,8 @@ describe('session token', () => {
     const opts = fake.backend.resumeThread.mock.calls[0]![0] as { entry: AgentEntry; profile: { env: Record<string, string> } };
     expect(host.issueSessionToken).toHaveBeenCalledWith({ appId: 'app', place: 'group', chatId: 'chat', sessionId: opts.entry.sessionId });
     expect(opts.profile.env.VONVON_SESSION).toBe(TOKEN);
+    // skills-scope: the scope the builtin skills copy into --scope, this group's
+    expect(opts.profile.env.VONVON_SCOPE).toBe('bot=app,group=chat');
     expect(inBotSession(opts.profile.env)).toBe(true);
     expect(sessions.revoke).not.toHaveBeenCalled();
   });
