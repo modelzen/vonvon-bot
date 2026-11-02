@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { CLOSE_CODES, closeReasonSchema, decodePairingLink, deviceEventSchema, deviceReplySchema, encodePairingLink, eventSchema, PAIRING_LINK_PREFIX, type PairingLink } from "../src/index.js";
+import { CLOSE_CODES, closeReasonSchema, decodePairingLink, deviceEventSchema, deviceReplySchema, deviceRequestSchema, encodePairingLink, eventSchema, PAIRING_LINK_PREFIX, type PairingLink } from "../src/index.js";
 
 const link: PairingLink = {
   v: 1, device: { id: "00000000-0000-4000-8000-000000000000", name: "工作电脑", pk: "A".repeat(43) },
@@ -36,4 +36,13 @@ it("reads an address that failed to bind, with what failed", () => {
     clients: { total: 0, active: 0 },
   } };
   expect(deviceReplySchema.parse(reply)).toEqual(reply);
+});
+// A1: one address, given as an IP (no --tailscale), and an overlay network's address in a link. main 必败: enable took
+// `tailscale` and no host, and there was no `overlay` kind.
+it("enables one given address, and carries an overlay network's address in a link", () => {
+  expect(deviceRequestSchema.parse({ type: "enable", host: "10.147.17.5" })).toEqual({ type: "enable", host: "10.147.17.5" });
+  expect(() => deviceRequestSchema.parse({ type: "enable" })).toThrow();
+  expect(() => deviceRequestSchema.parse({ type: "enable", tailscale: true })).toThrow();
+  const overlay: PairingLink = { ...link, addresses: [{ host: "10.147.17.5", port: 7767, kind: "overlay" }] };
+  expect(decodePairingLink(encodePairingLink(overlay))).toEqual(overlay);
 });

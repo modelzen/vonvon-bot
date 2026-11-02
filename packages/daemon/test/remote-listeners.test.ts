@@ -248,6 +248,49 @@ describe.runIf(canBind)('remote listeners', () => {
       await expect(get(port, '/health')).rejects.toMatchObject({ code: 'ECONNREFUSED' });
     });
   });
+  // A1: a network tool's address is checked by its card, not a network: main 必败, it was "lan" and asked again whenever
+  // macOS numbered the tunnel anew; and a card that is no tunnel is another network, which waits for the owner.
+  describe('an overlay address', () => {
+    const leftText = `${ALIAS} 现在不在组网工具的网卡上了（可能是别的网络分到了同一个地址）。确认现在的网络是你信任的，再重新开启。`;
+    const on = (name: string): Interfaces => ({ [name]: aliasNic(ALIAS).lo ?? [] });
+    const overlay = (extra: Partial<RemoteAddress> = {}): RemoteAddress => ({ host: ALIAS, enabledAt: 1, kind: 'overlay', ...extra });
+    it('keeps listening when the tunnel comes back under another number, and stops when a LAN card carries the address', async () => {
+      let nics = on('utun3');
+      const h = await harness({ interfaces: () => nics, networkIdentity: async () => 'gw:11:22:33:44:55:66', timers: { watch: 50, retry: 60_000 } });
+      const port = await freePort();
+      await h.remote.sync(config(port, overlay()));
+      expect(h.remote.status()[0]?.state).toBe('listening');
+      const connection = await pairOver(h, port);
+      nics = on('utun5');
+      await new Promise(resolve => setTimeout(resolve, 200));
+      expect(h.remote.status()[0]?.state).toBe('listening');
+      expect((await get(port, '/health')).status).toBe(200);
+      nics = on('en0');
+      expect(await closeCode(connection.closed)).toBe('remote_disabled');
+      await vi.waitFor(() => expect(h.remote.status()[0]).toMatchObject({ state: 'needs-confirmation', detail: leftText }));
+      await expect(get(port, '/health')).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+    });
+    it('does not bind on a LAN card at a start', async () => {
+      const h = await harness({ interfaces: () => on('en0'), timers: { watch: 50, retry: 50 } });
+      const port = await freePort();
+      const { Server } = await import('node:net');
+      const listen = vi.spyOn(Server.prototype, 'listen');
+      await h.remote.sync(config(port, overlay()));
+      expect(h.remote.status()).toEqual([{ host: ALIAS, kind: 'overlay', enabledAt: 1, state: 'needs-confirmation', detail: leftText }]);
+      expect(listen).not.toHaveBeenCalled();
+    });
+  });
+  // A1: another address replaces the one listened on; the old one closes first, its connections with 4006
+  it('closes the old address when another one replaces it', async () => {
+    const h = await harness({ timers: { retry: 60_000 } });
+    const port = await freePort();
+    await h.remote.sync(config(port, lan(ALIAS)));
+    const before = await pairOver(h, port);
+    await h.remote.sync(config(port, lan('10.255.255.254', { enabledAt: 2 })));
+    expect(await closeCode(before.closed)).toBe('remote_disabled');
+    await expect(get(port, '/health')).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+    expect(h.remote.status()).toEqual([{ host: '10.255.255.254', kind: 'lan', enabledAt: 2, state: 'waiting', detail: '等待地址 10.255.255.254 出现' }]);
+  });
   // Codex review 232-2 / devices 4.7: draining keeps the address open for what a draining daemon answers; the release
   // closes it. The hub's drain decides about the connections, as on the loopback.
   it('keeps listening while draining, with no retry or watch, and closes at the release', async () => {
