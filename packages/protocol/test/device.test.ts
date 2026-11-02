@@ -46,3 +46,19 @@ it("enables one given address, and carries an overlay network's address in a lin
   const overlay: PairingLink = { ...link, addresses: [{ host: "10.147.17.5", port: 7767, kind: "overlay" }] };
   expect(decodePairingLink(encodePairingLink(overlay))).toEqual(overlay);
 });
+// devices-ui-3 4.1: what the 允许别的设备连接 panel reads: the addresses it could open, the one the caller came in on, the
+// caller's own client id, and a status read that skips the kept list. main 必败: none of them parsed.
+it("carries the candidates, the caller's address and its own id, all optional", () => {
+  const status = { kind: "deviceStatus", status: {
+    device: { id: "00000000-0000-4000-8000-000000000000", name: "工作电脑", publicKey: "A".repeat(43) },
+    remote: { port: 7767, addresses: [{ host: "100.64.0.10", kind: "tailscale", enabledAt: 1, state: "listening" }],
+      candidates: [{ host: "100.64.0.10", kind: "tailscale", iface: "utun4", tool: "Tailscale" }, { host: "10.147.17.5", kind: "overlay", iface: "feth2", tool: "ZeroTier" }, { host: "192.168.1.9", kind: "lan" }] },
+    clients: { total: 1, active: 1 }, via: "100.64.0.10",
+  } };
+  expect(deviceReplySchema.parse(status)).toEqual(status);
+  expect(() => deviceReplySchema.parse({ ...status, status: { ...status.status, remote: { ...status.status.remote, candidates: [{ host: "127.0.0.1", kind: "loopback" }] } } })).toThrow();
+  const clients = { kind: "clients", generation: 3, clients: [], self: "cl_0123456789abcdef" };
+  expect(deviceReplySchema.parse(clients)).toEqual(clients);
+  expect(deviceRequestSchema.parse({ type: "status", refresh: true })).toEqual({ type: "status", refresh: true });
+  expect(deviceRequestSchema.parse({ type: "status" })).toEqual({ type: "status" });
+});

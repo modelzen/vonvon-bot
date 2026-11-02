@@ -7,7 +7,8 @@ import { connectSecure, generateStaticKey, nodeBinarySocket } from '@vonvon/clie
 import { devicesPath } from '../src/remote/files';
 import { Jobs } from '../src/server/jobs';
 import { LogFollowers } from '../src/server/logs';
-import { startFixture, socketClient, type Frame } from './server-fixture';
+import type { AdminService } from '../src/admin/service';
+import { fakeService, startFixture, socketClient, type Frame } from './server-fixture';
 
 // D3 第 5 节: the device RPC on a real daemon API, this machine's interfaces and Tailscale injected. main 必败: the four
 // remote kinds answered unsupported, and a revoked client stayed connected until its next request.
@@ -35,7 +36,7 @@ const seams = (classify?: (host: string) => Promise<AddressKind | 'invalid'>) =>
 });
 const call = (id: string, payload: object) => ({ type: 'request', id, method: 'device', payload } as const);
 type Reply = Extract<Frame, { type: 'response' | 'error' }>;
-const payload = (frame: Frame) => (frame as Extract<Frame, { type: 'response' }>).payload as { kind: string; status?: { remote: { port: number; addresses: Array<{ host: string; kind: string; state: string }> }; clients: { total: number; active: number } } };
+const payload = (frame: Frame) => (frame as Extract<Frame, { type: 'response' }>).payload as { kind: string; self?: string; status?: { remote: { port: number; addresses: Array<{ host: string; kind: string; state: string }>; candidates?: unknown[] }; clients: { total: number; active: number }; via?: string } };
 
 it('opens only what enable may open, records a LAN address with its network, and reports remote once one is open', async () => {
   const fixture = await startFixture(undefined, undefined, undefined, seams());
@@ -87,6 +88,11 @@ it('disables, changes the port and counts the clients not revoked', async () => 
     const disabled = await client.call(call('x', { type: 'disable', host: LAN }) as never);
     expect(payload(disabled).status?.remote.addresses).toEqual([]);
     expect(payload(await client.call(call('s', { type: 'status' }) as never)).status).toMatchObject({ remote: { port: 17767, addresses: [] }, clients: { total: 1, active: 0 } });
+    // devices-ui-3: what could be opened, as `remote candidates` lists it; no `via` and no `self` on the loopback. main 必败
+    const status = payload(await client.call(call('c', { type: 'status', refresh: true }) as never)).status;
+    expect(status?.remote.candidates).toEqual([{ host: LAN, kind: 'lan', iface: 'eth0' }, { host: '100.70.1.1', kind: 'cgnat', iface: 'eth0' }]);
+    expect(status).not.toHaveProperty('via');
+    expect(payload(await client.call(call('l', { type: 'clients' }) as never))).not.toHaveProperty('self');
     await client.close();
   } finally { await fixture.close(); }
 });
@@ -125,6 +131,47 @@ it.runIf(canBind)('closes a revoked client within a second, its jobs and log fol
     expect(logs).toHaveBeenCalledWith(expect.objectContaining({ clientId }));
     expect(await owner.wait(frame => frame.type === 'event' && frame.event === 'device' && frame.payload.change === 'client-revoked')).toMatchObject({ payload: { clientId, name: '笔记本' } });
     ws.terminate();
+    await owner.close();
+  } finally { await fixture.close(); }
+});
+
+// devices-ui-3 4.2: a revoked client's scan ends at once, though its connection already dropped and its grace runs; a paired
+// client's status says the address it came in on, and the client list its own id. main 必败
+it.runIf(canBind)('cancels a revoked client\'s scan in its grace at once, and tells a paired client its address and its id', async () => {
+  const cancelOwner = vi.spyOn(Jobs.prototype, 'cancelOwner');
+  const detach = vi.spyOn(Jobs.prototype, 'detach');
+  const scanning: AdminService['registerBotByQr'] = callbacks => new Promise(resolve => {
+    callbacks.onQr({ url: 'https://example.com/qr', expireIn: 600 });
+    callbacks.signal.addEventListener('abort', () => resolve({ ok: false, code: 'abort', reason: '' }), { once: true });
+  });
+  const fixture = await startFixture(fakeService({ registerBotByQr: scanning }), undefined, undefined, seams(async host => host === ALIAS ? 'lan' : 'invalid'));
+  try {
+    const owner = await socketClient(fixture.api.port, fixture.credential);
+    await owner.ready();
+    await owner.call(call('port', { type: 'setPort', port: await freePort() }) as never);
+    await owner.call(call('on', { type: 'enable', host: ALIAS }) as never);
+    const link = decodePairingLink((payload(await owner.call(call('pair', { type: 'pair' }) as never)) as unknown as { link: string }).link);
+    const target = link.addresses[0];
+    if (!target) throw new Error('no address in the link');
+    const ws = new WebSocket(`ws://${target.host}:${target.port}/`, { perMessageDeflate: false });
+    await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    const paired = await connectSecure({ socket: nodeBinarySocket(ws), device: { id: link.device.id, pk: link.device.pk }, clientKey: generateStaticKey().key, clientKind: 'desktop',
+      pairing: { inviteId: link.invite.id, inviteSecret: link.invite.secret, clientName: '笔记本' } });
+    const clientId = paired.pairResult?.clientId ?? '';
+    const status = await paired.client.device({ type: 'status' });
+    expect(status.kind === 'deviceStatus' && status.status.via).toBe(ALIAS);
+    expect(await paired.client.device({ type: 'clients' })).toMatchObject({ kind: 'clients', self: clientId });
+    expect(await paired.client.run({ type: 'registerAgent' })).toMatchObject({ kind: 'started' });
+    await owner.wait(frame => frame.type === 'event' && frame.event === 'snapshot' && frame.payload.jobs.some(job => job.phase === 'qr'));
+    ws.terminate();
+    await vi.waitFor(() => expect(detach).toHaveBeenCalledWith(expect.objectContaining({ clientId })));
+    // in its grace: not cancelled by the drop
+    const now = await owner.call({ type: 'request', id: 'snap', method: 'snapshot', payload: { type: 'get' } });
+    expect((now as Extract<Frame, { type: 'response' }>).payload).toMatchObject({ jobs: [expect.objectContaining({ phase: 'qr' })] });
+    await owner.call(call('revoke', { type: 'revokeClient', clientId }) as never);
+    expect(cancelOwner).toHaveBeenCalledWith(`paired:${clientId}`);
+    // well before the 60 seconds: the owner's wait gives up after 3
+    await owner.wait(frame => frame.type === 'event' && frame.event === 'snapshot' && frame.payload.jobs.some(job => job.phase === 'cancelled'));
     await owner.close();
   } finally { await fixture.close(); }
 });

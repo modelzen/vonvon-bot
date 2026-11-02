@@ -122,8 +122,9 @@ type Scan = { start: Command; purpose: string; again: string };
 
 /**
  * Follows one registration job, started by `start` as the web page does (`registerAgent`, or `refreshAgentCredentials`
- * for a bot's new credentials), until it ends. Ctrl-C cancels the job (5 s at most), a second one or a dropped
- * connection leaves it to the daemon, which cancels a closed connection's registration.
+ * for a bot's new credentials), until it ends. Ctrl-C cancels the job (5 s at most); a second one or a dropped
+ * connection leaves it to the daemon, which keeps it 60 seconds after the connection drops: this client coming back
+ * goes on with it, else it is cancelled (devices 6.3).
  */
 function follow(c: VonvonClient, io: Io, d: AddDependencies, scan: Scan, onStop: (stop: () => void) => void): Promise<Registration> {
   return new Promise((resolve, reject) => {
@@ -191,7 +192,7 @@ function follow(c: VonvonClient, io: Io, d: AddDependencies, scan: Scan, onStop:
 /**
  * `vonvon bot add`: the web page's QR registration in a terminal (3.10 step 5). Exits 0 once the bot is saved, even
  * when its checklist cannot be read; 1 when the scan fails or is cancelled elsewhere, 3 when the connection drops before
- * the QR and 6 after it, 130 on Ctrl-C. --json (devices 8.1) prints JSON Lines: the steps, each QR link, then the result.
+ * the QR and 6 after it, 4 when another client is scanning (devices 6.3: `job_running`), 130 on Ctrl-C. --json (devices 8.1) prints JSON Lines: the steps, each QR link, then the result.
  */
 export async function runBotAdd(io: Io, daemon: Daemon = withDaemon, overrides: Partial<AddDependencies> = {}): Promise<void> {
   await runRegistration('add', undefined, io, daemon, overrides);
@@ -222,8 +223,10 @@ async function runRegistration(kind: 'add' | 'rescan', wanted: string | undefine
         case 'interrupted': throw new CommandError('interrupted', '已取消扫码。');
         case 'failed': throw new CommandError('failed', `${outcome.message}${outcome.code === 'expired_token' ? `重新运行 ${scan.again}。` : ''}`, outcome.code ? { reason: outcome.code } : {});
         case 'cancelled': throw new CommandError('failed', '扫码被取消了：可能在网页里又开了一次注册（同一时间只能有一个）。', { reason: 'cancelled' });
-        case 'refused': throw new CommandError('failed', outcome.message, { reason: outcome.code });
-        case 'lost': throw outcome.shown ? new CommandError('outcome-unknown', SCAN_UNKNOWN) : new CommandError('connection', `和 daemon 的连接断了，扫码已经取消。重新运行 ${scan.again}。`);
+        // Another client scanning is refused as the other `bot` subcommands are (4); `registration_busy` stays 1 (cli-2-bot).
+        case 'refused': throw new CommandError(outcome.code === 'job_running' ? 'refused' : 'failed', outcome.message, { reason: outcome.code });
+        // The scan may not have started yet; one that did is kept 60 seconds, and starting again starts over.
+        case 'lost': throw outcome.shown ? new CommandError('outcome-unknown', SCAN_UNKNOWN) : new CommandError('connection', `和 daemon 的连接断了。扫码任务要是已经开了，会再留 60 秒，之后自动取消；重新运行 ${scan.again} 会重新开始。`);
         case 'succeeded': break;
       }
       let agent: Agent | undefined;
