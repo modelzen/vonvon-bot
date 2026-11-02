@@ -71,12 +71,13 @@ const effortOptions = [
 ] as const;
 const effectText = (section: Section<unknown>) =>
   section.apply.map((item) => item.detail).join(" ");
-const errorText = (reply: SettingsReply): string | undefined => {
+export type SettingsFieldIssue = {field: string; message: string};
+const errorText = (reply: SettingsReply, labels?: Record<string, string>): string | undefined => {
   if (reply.kind === "refused") return reply.message;
   if (reply.kind === "saved") {
     if (reply.result.kind === "rejected")
       return reply.result.fields
-        .map((item) => `${item.field}：${item.message}`)
+        .map((item) => `${labels?.[item.field] ?? item.field}：${item.message}`)
         .join("；");
     if (reply.result.kind === "unavailable")
       return reply.result.reason.kind === "readonly"
@@ -115,10 +116,12 @@ export function Editor<T extends object>({
   autoSave = false,
   headerAction,
   hideEffects = false,
+  fieldLabels,
 }: {
   title: string;
   headerAction?: ReactNode;
   hideEffects?: boolean;
+  fieldLabels?: Record<string, string>;
   section: Section<T>;
   render: (
     draft: T,
@@ -127,6 +130,7 @@ export function Editor<T extends object>({
     commit: (patch: Partial<T>) => Promise<void>,
     resetKey: string,
     discard: () => void,
+    fieldIssues: SettingsFieldIssue[],
   ) => ReactNode;
   save: (patch: Partial<T>, revision: string) => Promise<SettingsReply>;
   validate?: (value: T) => string | undefined;
@@ -159,6 +163,7 @@ export function Editor<T extends object>({
   const priorRevision = useRef<string | undefined>(undefined);
   const autoSavePending = useRef(false);
   const [error, setError] = useState<string>();
+  const [fieldIssues, setFieldIssues] = useState<SettingsFieldIssue[]>([]);
   const [notice, setNotice] = useState<string>();
   useEffect(() => {
     if (section.revision === confirmed.revision || section.revision === priorRevision.current) return;
@@ -175,6 +180,7 @@ export function Editor<T extends object>({
   const value = { ...confirmed.stored, ...draft, ...(immediate.kind === 'idle' || autoSave && immediate.kind === 'failed' ? {} : immediate.patch) };
   function edit(next: T) {
     if (autoSave && (disabled || autoSavePending.current)) return;
+    setFieldIssues([]);
     const changed: Partial<T> = {};
     for (const key of Object.keys(next) as (keyof T)[]) {
       if (JSON.stringify(next[key]) !== JSON.stringify(value[key])) changed[key] = next[key];
@@ -249,6 +255,7 @@ export function Editor<T extends object>({
     }
   }
   async function submit(): Promise<boolean> {
+    setFieldIssues([]);
     const invalid = validate?.(value);
     if (invalid) { setError(invalid); return false; }
     let revision = confirmed.revision;
@@ -265,7 +272,8 @@ export function Editor<T extends object>({
     try {
       const result = await save(prepareSave ? prepareSave(patch, value) : patch, revision);
       noteConflict(result);
-      const failure = errorText(result);
+      const failure = errorText(result, fieldLabels);
+      if (result.kind === 'saved' && result.result.kind === 'rejected') setFieldIssues(result.result.fields);
       if (failure) { setError(failure); return false; }
       if (accept(result)) {
         setDraft({});
@@ -283,6 +291,7 @@ export function Editor<T extends object>({
     }
   }
   function discard() {
+    setFieldIssues([]);
     setDiscardVersion(version => version + 1);
     setDraft({});
     setImmediate({kind: 'idle'});
@@ -305,7 +314,7 @@ export function Editor<T extends object>({
           : hideEffects || effectText(section) === '下一条消息生效' ? undefined : effectText(section)
       }
     >
-      {render(value, edit, disabled, commit, `${confirmed.revision}:${discardVersion}`, discard)}
+      {render(value, edit, disabled, commit, `${confirmed.revision}:${discardVersion}`, discard, fieldIssues)}
       {!renderLayout && (dirty || allowUnchanged || showSave) && <div className="settings-edit-actions">
         {dirty && <Button
           size="sm"
@@ -453,18 +462,21 @@ function Switch({
     />
   );
 }
+export type CatalogControls = {loading: boolean; error?: string; refresh: () => void};
 export function Catalog({
   botId,
   backend,
   purpose,
   threadId,
   children,
+  showStatus = true,
 }: {
   botId: AgentId;
   backend: string;
   purpose: "project" | "session" | "comments" | "titles" | "judge";
   threadId?: string;
-  children: (catalog: ModelCatalog | undefined) => ReactNode;
+  children: (catalog: ModelCatalog | undefined, controls: CatalogControls) => ReactNode;
+  showStatus?: boolean;
 }) {
   const client = useClient();
   const [catalog, setCatalog] = useState<ModelCatalog>();
@@ -507,17 +519,22 @@ export function Catalog({
     };
   }, [client, botId, backend, purpose, threadId, queryKey, attempt]);
   const unavailable = catalog && catalog.state !== "ready";
+  const controls: CatalogControls = {
+    loading,
+    error: error || (unavailable ? catalog.error || '暂时无法读取模型，已保存的选择仍保留。' : undefined),
+    refresh: () => {setLoading(true); setAttempt(value => value + 1);},
+  };
   return (
     <>
-      {(error || unavailable) && (
+      {showStatus && (error || unavailable) && (
         <div className="gd-model-catalog-status" role="status">
           <span>{error || catalog?.error || '暂时无法读取模型，已保存的选择仍保留。'}</span>
-          <IconButton size="sm" variant="ghost" label="重新读取模型" title="重新读取模型" disabled={loading} onClick={() => setAttempt(value => value + 1)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
+          <IconButton size="sm" variant="ghost" label="重新读取模型" title="重新读取模型" disabled={loading} onClick={controls.refresh}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
         </div>
       )}
-      {!catalog && !error && <p className="gd-model-compact-note" role="status">正在读取模型…</p>}
-      {catalog?.state === 'ready' && <div className="gd-model-catalog-status"><span>可用模型</span><IconButton size="sm" variant="ghost" label="重新读取模型" title="重新检测模型" disabled={loading} onClick={() => setAttempt(value => value + 1)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>}
-      {children(catalog)}
+      {showStatus && !catalog && !error && <p className="gd-model-compact-note" role="status">正在读取模型…</p>}
+      {showStatus && catalog?.state === 'ready' && <div className="gd-model-catalog-status"><span>可用模型</span><IconButton size="sm" variant="ghost" label="重新读取模型" title="重新检测模型" disabled={loading} onClick={controls.refresh}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>}
+      {children(catalog, controls)}
 
     </>
   );
