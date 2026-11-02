@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ConnectionError, RpcError } from '@vonvon/client/browser';
 import type { DesktopUpdate, DesktopUpdateRequestPayload } from '@vonvon/protocol';
 import { REMOTE_UPDATE_TEXT, startRemoteSelfUpdate, type RemoteSelfUpdateDeps, type SelfUpdater } from '../src/remote-self-update.js';
 import { DesktopUpdateError } from '../src/updates.js';
@@ -11,12 +12,16 @@ const ID = 'dur_0123456789abcdef';
 
 function connection(negotiated = true) {
   const listeners = new Set<(payload: DesktopUpdateRequestPayload) => void>();
+  const errors = new Set<(error: Error) => void>();
   return {
-    listeners,
+    listeners, errors,
     admin: vi.fn(async () => (negotiated ? { kind: 'negotiated' as const, principal: 'owner:local' as const, scope: null } : { kind: 'refused' as const, code: 'invalid_request', message: 'x' })),
     machine: vi.fn(async () => ({ type: 'done' as const, message: '已收到。' })),
     onDesktopUpdateRequest: vi.fn((listener: (payload: DesktopUpdateRequestPayload) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; }),
+    onError: vi.fn((listener: (error: Error) => void) => { errors.add(listener); return () => { errors.delete(listener); }; }),
     ask(action: 'check' | 'apply', by = '「笔记本」', requestId = ID) { for (const listener of [...listeners]) listener({ requestId, action, by }); },
+    /** The daemon went away (a crash, a restart by hand): the client says so, as createClient does when its socket closes. */
+    drop() { for (const listener of [...errors]) listener(new ConnectionError(new Error('Daemon connection closed'))); },
   };
 }
 type Connection = ReturnType<typeof connection>;
@@ -57,9 +62,11 @@ describe('declaring the capability', () => {
     h.replaceOwner(next);
     expect(next.admin).toHaveBeenCalledOnce();
     expect(h.client.listeners.size).toBe(0);
+    expect(h.client.errors.size).toBe(0);
     expect(next.listeners.size).toBe(1);
     h.remote.dispose();
     expect(next.listeners.size).toBe(0);
+    expect(next.errors.size).toBe(0);
   });
 
   it('stops listening on a connection that refused it', async () => {
@@ -128,12 +135,13 @@ describe('an update from another device', () => {
     expect(install).toHaveBeenCalledTimes(2);
   });
 
-  it('installs a download that is already there without downloading again', async () => {
+  it('installs a download that is already there without downloading again, once the daemon took `downloaded`', async () => {
     const install = vi.fn<SelfUpdater['install']>(async () => update('downloaded'));
     const h = harness({ check: async () => update('downloaded'), install });
     h.client.ask('apply');
     await vi.waitFor(() => expect(install).toHaveBeenCalledOnce());
-    expect(states(h.client)).toEqual([]);
+    expect(states(h.client)).toEqual(['downloaded']);
+    expect(h.client.machine.mock.invocationCallOrder[0]).toBeLessThan(install.mock.invocationCallOrder[0]!);
     expect(h.state.logs.map(([event]) => event)).toContain('remote-update-installing');
   });
 
@@ -168,10 +176,25 @@ describe('an update from another device', () => {
     expect(h.state.notices).toEqual([]);
   });
 
+  it('keeps the download and does not restart when the app started quitting while it downloaded', async () => {
+    let downloaded!: (value: DesktopUpdate) => void;
+    const install = vi.fn<SelfUpdater['install']>().mockImplementationOnce(() => new Promise(resolve => { downloaded = resolve; }));
+    const h = harness({ check: async () => update('available'), install });
+    h.client.ask('apply');
+    await vi.waitFor(() => expect(install).toHaveBeenCalledOnce());
+    h.state.quitting = true;
+    downloaded(update('downloaded'));
+    await vi.waitFor(() => expect(h.remote.busy).toBe(false));
+    expect(install).toHaveBeenCalledOnce();
+    expect(states(h.client)).toEqual(['downloading', 'downloaded', 'error']);
+  });
+
+  // Codex 审查 265-2: the daemon there crashed or was restarted while it downloaded, and the download ended before the
+  // app had the next connection; or the next one came first. 修之前必败 (closed): the second install, quitAndInstall.
   it.each([
-    ['the app started quitting', (h: ReturnType<typeof harness>) => { h.state.quitting = true; }],
-    ['the connection that asked went away', (h: ReturnType<typeof harness>) => { h.replaceOwner(connection()); }],
-  ])('keeps the download and does not restart when %s while it downloaded', async (_name, meanwhile) => {
+    ['closed, with no other one yet', (h: ReturnType<typeof harness>) => { h.client.drop(); }],
+    ['replaced by another', (h: ReturnType<typeof harness>) => { h.replaceOwner(connection()); }],
+  ])('keeps the download and does not restart when the connection that asked is %s', async (_name, meanwhile) => {
     let downloaded!: (value: DesktopUpdate) => void;
     const install = vi.fn<SelfUpdater['install']>().mockImplementationOnce(() => new Promise(resolve => { downloaded = resolve; }));
     const h = harness({ check: async () => update('available'), install });
@@ -179,9 +202,32 @@ describe('an update from another device', () => {
     await vi.waitFor(() => expect(install).toHaveBeenCalledOnce());
     meanwhile(h);
     downloaded(update('downloaded'));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(install).toHaveBeenCalledOnce();
+    // nothing more on a connection that is gone; the menu bar and the window stop saying it restarts, at once
+    expect(states(h.client)).toEqual(['downloading']);
+    expect(h.state.notices).toEqual([REMOTE_UPDATE_TEXT.notice('「笔记本」'), undefined]);
+    expect(h.state.logs).toContainEqual(['remote-update-connection-lost', undefined]);
+    // this computer's own 重启升级 is free again, and the app's card shows the download for it
+    expect(h.remote.busy).toBe(false);
+    expect(h.state.published.at(-1)).toEqual(update('downloaded'));
+  });
+
+  // Codex 审查 265-2: `downloaded` is the last report before the restart. Not taken (the connection closed, or the update
+  // there ended meanwhile): no restart. 修之前必败: the failure was swallowed and the app went on to quitAndInstall.
+  it('keeps the download and does not restart when the daemon does not take `downloaded`', async () => {
+    let downloaded!: (value: DesktopUpdate) => void;
+    const install = vi.fn<SelfUpdater['install']>().mockImplementationOnce(() => new Promise(resolve => { downloaded = resolve; }));
+    const h = harness({ check: async () => update('available'), install });
+    h.client.ask('apply');
+    await vi.waitFor(() => expect(install).toHaveBeenCalledOnce());
+    h.client.machine.mockRejectedValue(new RpcError('invalid_request', '这次更新已经结束或不是发给你的。'));
+    downloaded(update('downloaded'));
     await vi.waitFor(() => expect(h.remote.busy).toBe(false));
     expect(install).toHaveBeenCalledOnce();
-    expect(states(h.client)).toEqual(['downloading', 'downloaded', 'error']);
+    expect(states(h.client)).toEqual(['downloading', 'downloaded']);
+    expect(h.state.notices).toEqual([REMOTE_UPDATE_TEXT.notice('「笔记本」'), undefined]);
+    expect(h.state.logs).toContainEqual(['remote-update-report-failed', { state: 'downloaded', code: 'invalid_request' }]);
   });
 
   it('waits a short while at most for the daemon to take the restart report', async () => {
@@ -193,6 +239,18 @@ describe('an update from another device', () => {
     const started = Date.now();
     await h.remote.aboutToRestart();
     expect(Date.now() - started).toBeLessThan(1000);
+    expect(states(h.client).at(-1)).toBe('restarting');
+  });
+
+  // Codex 审查 265-2: refused or closed, `restarting` stops the install before quitAndInstall (beforeUpdateInstall's first
+  // step throws); only a daemon slow to answer is not waited for. 修之前必败: it went on.
+  it('stops the restart when the daemon does not take `restarting`', async () => {
+    const install = vi.fn<SelfUpdater['install']>().mockResolvedValueOnce(update('downloaded')).mockImplementationOnce(() => new Promise(() => {}));
+    const h = harness({ check: async () => update('available'), install });
+    h.client.ask('apply');
+    await vi.waitFor(() => expect(install).toHaveBeenCalledTimes(2));
+    h.client.machine.mockRejectedValue(new Error('Daemon connection closed'));
+    await expect(h.remote.aboutToRestart()).rejects.toThrow(REMOTE_UPDATE_TEXT.notRestarting);
     expect(states(h.client).at(-1)).toBe('restarting');
   });
 

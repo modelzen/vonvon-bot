@@ -198,7 +198,9 @@ export function createBundledUpdate(deps: BundledUpdateDeps): BundledUpdate {
         log.info('update', 'update-bundled-reported', { state: report.state });
         const current = deps.version;
         const latest = report.latest ?? null;
-        if (report.state === 'available') settleCheck({ current, latest, hasUpdate: latest !== null, desktopShell: true }, true);
+        // A download already there (下载更新 pressed there, 重启升级 not yet) is an update too: the shell installs it. Its line
+        // (点击重启升级) is for the person there, so it does not come along (Codex 审查 264-1).
+        if (report.state === 'available' || report.state === 'downloaded') settleCheck({ current, latest, hasUpdate: latest !== null, desktopShell: true }, true);
         else if (report.state === 'current') settleCheck({ current, latest, hasUpdate: false, desktopShell: true }, true);
         else settleCheck({ current, latest, hasUpdate: false, desktopShell: true, ...(report.message ? { message: report.message } : {}) }, true);
         return;
