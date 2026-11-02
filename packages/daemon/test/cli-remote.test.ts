@@ -167,7 +167,7 @@ it('lets a person at a terminal pick one, Enter taking Tailscale, and asks befor
   const overlay = output(false);
   await runRemote('enable', {}, overlay.io, noDaemon, home, serverDeps, zt.terminal);
   expect(zt.questions).toEqual(['选一个 [1]: ', '选一个 [1]: ', '选一个 [1]: ']);
-  expect(overlay.text()).toContain('输入编号，1 到 4。\n');
+  expect(overlay.text()).toContain('输入编号 1 到 4，或者直接输入一个 IP。\n');
   expect(overlay.text()).toContain('已把远程地址从 100.101.7.12 换成 10.147.17.5，100.101.7.12 不再接受连接。\n已在 10.147.17.5:7767 接受连接（组网地址）。');
   // the public one: the risk, then yes
   const yes = person('4', 'y');
