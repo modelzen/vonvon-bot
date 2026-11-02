@@ -6,7 +6,7 @@ export type ClaudeLogin = BackendLogin;
 /** The `account` the SDK's CLI reports at initialize (`AccountInfo` in sdk.d.ts). */
 export type ClaudeAccount = { subscriptionType?: string; tokenSource?: string; apiKeySource?: string; apiProvider?: string };
 
-export const CLAUDE_SIGNED_OUT_MESSAGE = '未登录。在终端运行 `claude` 登录，或设置 ANTHROPIC_API_KEY。';
+export const CLAUDE_SIGNED_OUT_MESSAGE = '没配置好。在终端运行 `claude` 配置账号，或设置 ANTHROPIC_API_KEY 用自定义 API。';
 const CREDENTIAL_VARIABLES = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'] as const;
 
 /**
@@ -38,7 +38,7 @@ export function loginFromAccount(account: ClaudeAccount | undefined): ClaudeLogi
  * so under the LaunchAgent a signed-out answer is 无法确认, never 未登录. */
 export function loginUnderService(login: ClaudeLogin, env: NodeJS.ProcessEnv): ClaudeLogin {
   if (login.state !== 'signedOut' || env.VONVON_SERVICE !== 'launchd') return login;
-  return { state: 'unknown', message: '无法确认：后台服务里没查到 Claude 登录，可能是读不到钥匙串。在终端里运行 `claude` 看是否已登录，或设置 ANTHROPIC_API_KEY。' };
+  return { state: 'unknown', message: '无法确认：后台服务里没查到 Claude 的配置，可能是读不到钥匙串。在终端运行 `claude` 看能不能用，或设置 ANTHROPIC_API_KEY。' };
 }
 
 /** When the SDK cannot tell: a credential in the env counts as signed in (not
@@ -92,7 +92,7 @@ export function cachedClaudeLogin(): ClaudeLogin | undefined {
   return fresh();
 }
 
-export const CLAUDE_TURN_SIGNED_OUT_MESSAGE = '刚才有一轮因为没登录或登录过期失败了。在终端运行 `claude` 登录，再点「检查登录」。';
+export const CLAUDE_TURN_SIGNED_OUT_MESSAGE = '刚才有一轮因为 Claude 的配置不可用（没配置或已过期）失败了。在终端运行 `claude` 配置好，再点「检查配置」。';
 /** A Claude turn failed for its login (s19). The probe only reads local credentials and would still say
  * 已登录 for an expired one, so the cache says 未登录 for the usual 5 minutes instead of being cleared;
  * a probe started by 检查登录 after this writes as usual. */

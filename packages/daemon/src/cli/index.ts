@@ -316,7 +316,7 @@ covers(group.command('unbind <group>'), 'collaboration.removeProject').descripti
   .action(async (wanted: string, options: Json & { yes?: boolean; bot?: string }) => {
     await (await import('./commands/group')).runGroupUnbind(wanted, options, io(options));
   });
-const dir = program.command('dir').description("Browse folders on the daemon's computer, inside its user's home, as the web page's folder picker");
+const dir = program.command('dir').description("Browse folders on the daemon's computer, as the web page's folder picker");
 covers(dir.command('list [path]'), 'directory.list').description('List the folders in a folder; no path: the home folder')
   .option('--all', 'Also list hidden folders; --json always has them').option(...JSON_FLAG)
   .action(async (path: string | undefined, options: Json & { all?: boolean }) => {

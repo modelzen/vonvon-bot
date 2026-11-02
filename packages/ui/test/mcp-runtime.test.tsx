@@ -17,7 +17,10 @@ vi.mock('react', async original => {
     useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const index = harness.effectIndex++; const old = harness.effects[index]; if (old?.deps && deps && deps.every((value, at) => Object.is(value, old.deps![at]))) return; harness.pending.push(() => {old?.cleanup?.(); harness.effects[index] = {deps, cleanup: effect() || undefined};});},
   };
 });
-vi.mock('../src/client-context', () => ({useClient: () => harness.client}));
+vi.mock('../src/client-context', async original => {
+  const actual = await original<typeof import('../src/client-context')>();
+  return {...actual, useClient: () => harness.client, useActiveDevice: () => actual.LOCAL_ACTIVE_DEVICE};
+});
 vi.mock('../src/settings/DraftGuard', () => ({useDraftGuard: () => ({navigate: (action: () => void) => action()}), useDraft: (_dirty: boolean, draft: typeof harness.draft) => {harness.draft = draft;}}));
 const entry: McpReply['entries'][number] = {name: 'docs', transport: 'http', source: 'user', urlOrigin: 'https://docs.example', envNames: [], headerNames: [], enabled: true, authorization: 'not-checked'};
 const view: McpReply = {type: 'mcp', provider: 'codex', status: 'ready', cliAvailable: true, revision: 'r1', configPath: '/native/config', entries: [entry]};

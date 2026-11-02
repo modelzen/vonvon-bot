@@ -1,6 +1,8 @@
 import {useId, useState, type ReactNode} from 'react';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import type {Usage} from './usage-data';
+import {useActiveDevice} from '../client-context';
+import {whereName} from '../device-copy';
 import './usage.css';
 
 type Profile = Usage['profile'];
@@ -37,12 +39,13 @@ export function UsageAccount({data, provider = 'Codex', children}: {data?: Usage
   const profile = data?.profile;
   const primaryLabel = usageWindowLabel(data?.usage.main.primary?.windowSeconds, '主要限额');
   const secondaryLabel = usageWindowLabel(data?.usage.main.secondary?.windowSeconds, '额外限额');
+  const where = useActiveDevice();
   return <section className="usage-account" aria-label={`${provider} 当前用量`}>
       <header className="usage-account-heading">
         <div className="usage-account-identity"><strong>{provider}</strong><span>{profile?.displayName || '当前账号'}</span>{data?.usage.planType && <small>{data.usage.planType}</small>}</div>
         {data && <span className="usage-read-time" title={new Date(data.usage.fetchedAt).toLocaleString()}>读取于 {new Date(data.usage.fetchedAt).toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit', hour12: false})}</span>}
       </header>
-      <p className="usage-account-note">所有 Bot 共用本机 {provider} 账号的用量</p>
+      <p className="usage-account-note">所有 Bot 共用{where.isRemote ? `${whereName(where)}上` : '本机'} {provider} 账号的用量</p>
       {data ? <>
         <div className="usage-quota-grid">
           {data.usage.main.primary && <UsageQuota label={primaryLabel} window={data.usage.main.primary}/>}

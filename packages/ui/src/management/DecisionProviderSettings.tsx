@@ -1,7 +1,8 @@
 import {ChevronDown, RefreshCw} from 'lucide-react';
 import {useCallback, useEffect, useRef, useState, type ReactNode} from 'react';
 import {DECISION_API_PROVIDERS, JUDGE_PROVIDER_IDS, decisionApiProviderLabel, decisionEndpointProblem, type HostSettingsView, type SecretService, type SettingsReply} from '@vonvon/protocol';
-import {useClient} from '../client-context';
+import {useActiveDevice, useClient} from '../client-context';
+import {placeOf, updateServerText} from '../device-copy';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {IconButton, InlineNotice} from '../reference/components/ui';
 import {Editor} from '../settings/SettingsPanel';
@@ -48,9 +49,10 @@ function DecisionConnections({services, children, action}: {services?: SecretSer
   </details>;
 }
 
-/** A single default selection for newly created groups; existing groups keep their own choice. */
-export function DecisionProviderFields({value, defaults, catalogs, services, disabled, onChange, onOpenProviders, onManageKey, customKeyContent, keyContent, keyUses, keyAction, modelAction}: {
-  value: Configuration; defaults: Configuration; catalogs: DecisionCatalogs; services?: SecretService[]; disabled: boolean;
+/** A single default selection for newly created groups; existing groups keep their own choice. `place`: where the key
+ * is kept, 本机 or 「X」上 (`placeOf`). */
+export function DecisionProviderFields({value, defaults, catalogs, services, disabled, onChange, onOpenProviders, onManageKey, customKeyContent, keyContent, keyUses, keyAction, modelAction, place = '本机'}: {
+  value: Configuration; defaults: Configuration; catalogs: DecisionCatalogs; services?: SecretService[]; disabled: boolean; place?: string;
   onChange: (value: Configuration) => void; onOpenProviders?: () => void; onManageKey?: (provider?: string) => void;
   customKeyContent?: ReactNode; keyContent?: ReactNode; keyUses?: ReactNode; keyAction?: ReactNode; modelAction?: ReactNode;
 }) {
@@ -90,7 +92,7 @@ export function DecisionProviderFields({value, defaults, catalogs, services, dis
         trailing={<input key={`model:${customProfile.model}`} className="settings-field decision-connection-input" aria-label="自定义接口模型 ID" placeholder="jev-latest" defaultValue={customProfile.model} disabled={disabled}
           onBlur={event => {const model = event.currentTarget.value.trim(); if (model !== customProfile.model) changeCustom({model});}}/>}/>
       {customKeyContent}
-      <p className="decision-connection-note">此接口与密钥供本机使用该服务的 Bot 和群共用。</p>
+      <p className="decision-connection-note">此接口与密钥供{place}使用该服务的 Bot 和群共用。</p>
       </DecisionServiceDisclosure>
       {keyUses}
     </DecisionConnections>
@@ -99,6 +101,7 @@ export function DecisionProviderFields({value, defaults, catalogs, services, dis
 
 export function DecisionProviderSettings({services, onOpenProviders, onManageKey, customKeyContent, keyContent, keyUses, keyAction}: {services?: SecretService[]; onOpenProviders?: () => void; onManageKey?: (provider?: string) => void; customKeyContent?: ReactNode; keyContent?: ReactNode; keyUses?: ReactNode; keyAction?: ReactNode}) {
   const client = useClient();
+  const where = useActiveDevice();
   const [view, setView] = useState<HostSettingsView>();
   const {catalogs, refresh: refreshCatalogs} = useDecisionCatalogs();
   const [error, setError] = useState<string>();
@@ -137,7 +140,7 @@ export function DecisionProviderSettings({services, onOpenProviders, onManageKey
         return undefined;
       }}
       renderLayout={editor => <div className="decision-model-editor" data-writable={section.access.kind === 'writable'}>{editor.content}</div>}
-      render={(value, change, disabled) => <DecisionProviderFields value={value} defaults={section.effective} catalogs={catalogs} services={services} disabled={disabled} onChange={change} onOpenProviders={onOpenProviders} onManageKey={onManageKey} customKeyContent={customKeyContent} keyContent={keyContent} keyUses={keyUses} keyAction={keyAction} modelAction={modelAction}/>}/>
-      : <><SettingsGroup label="Provider 配置"><SettingsRow title={loading ? '正在读取配置…' : '当前服务暂不支持统一配置'} description={loading ? undefined : '请更新并重新连接本机服务。'}/></SettingsGroup><DecisionConnections services={services} action={keyAction}>{keyContent}{customKeyContent && <DecisionServiceDisclosure provider="custom" service={services?.find(service => service.provider === 'custom')}>{customKeyContent}</DecisionServiceDisclosure>}{keyUses}</DecisionConnections></>}
+      render={(value, change, disabled) => <DecisionProviderFields place={placeOf(where)} value={value} defaults={section.effective} catalogs={catalogs} services={services} disabled={disabled} onChange={change} onOpenProviders={onOpenProviders} onManageKey={onManageKey} customKeyContent={customKeyContent} keyContent={keyContent} keyUses={keyUses} keyAction={keyAction} modelAction={modelAction}/>}/>
+      : <><SettingsGroup label="Provider 配置"><SettingsRow title={loading ? '正在读取配置…' : '当前服务暂不支持统一配置'} description={loading ? undefined : updateServerText(where)}/></SettingsGroup><DecisionConnections services={services} action={keyAction}>{keyContent}{customKeyContent && <DecisionServiceDisclosure provider="custom" service={services?.find(service => service.provider === 'custom')}>{customKeyContent}</DecisionServiceDisclosure>}{keyUses}</DecisionConnections></>}
   </>;
 }

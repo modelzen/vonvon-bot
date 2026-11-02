@@ -50,9 +50,9 @@ const contextResult = z.object({
 const shareResult = z.object({ messageId: z.string().min(1) });
 
 const usageErrorMessages: Record<UsageErrorKind, string> = {
-  'no-auth': '请先登录 Codex，再查看用量。',
-  'api-key-mode': '当前 Codex 使用 API Key 登录，无法读取 ChatGPT 账号用量。',
-  'need-relogin': 'Codex 登录已失效，请重新登录。',
+  'no-auth': '这台设备上的 Codex 没有用 ChatGPT 账号，看不到账号用量。',
+  'api-key-mode': '当前 Codex 用的是 API Key，没有 ChatGPT 账号的用量可读。',
+  'need-relogin': 'Codex 的 ChatGPT 账号凭据过期了，在终端运行 `codex login` 后再看。',
   transient: '暂时无法读取 Codex 用量，请稍后重试。',
 };
 

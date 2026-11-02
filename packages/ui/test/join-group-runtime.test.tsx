@@ -45,7 +45,7 @@ vi.mock('react', async original => ({
   useEffect: (callback: () => void | (() => void), deps?: unknown[]) => {const index = harness.effectIndex++; const old = harness.effects[index]; if (old?.deps && deps && deps.every((item, at) => Object.is(item, old.deps![at]))) return; const run = () => {old?.cleanup?.(); const cleanup = callback(); harness.effects[index] = {deps, ...(typeof cleanup === 'function' ? {cleanup} : {})};}; if (harness.deferEffects) harness.pendingEffects.push(run); else run();},
   useMemo: (factory: () => unknown, deps?: unknown[]) => {const index = harness.memoIndex++; const old = harness.memos[index]; if (old?.deps && deps && deps.every((item, at) => Object.is(item, old.deps![at]))) return old.value; const value = factory(); harness.memos[index] = {value, deps}; return value;},
 }));
-vi.mock('../src/client-context', () => ({useClient: () => harness.client}));
+vi.mock('../src/client-context', async original => ({...await original<typeof import('../src/client-context')>(), useActiveDevice: () => ({id: 'local', isRemote: false, name: '这台电脑', mode: 'full', capabilities: []}), useClient: () => harness.client}));
 vi.mock('../src/directory-picker', () => ({useDirectoryPicker: () => async () => null}));
 vi.mock('../src/settings/GroupDesignSettings', () => ({useProviders: (tools: ToolState[]) => tools?.filter(item => item.installation === 'installed' && item.authentication === 'signedIn').map(item => ({id: item.tool === 'codex' ? 'codex-appserver' : 'claude-agent', displayName: item.tool})), DecisionFields: () => null}));
 vi.mock('../src/settings/DraftGuard', () => ({useDraftGuard: () => ({navigate: (action: () => void) => action()}), useDraft: (_dirty: boolean, draft: typeof harness.draft) => {harness.draft = draft;}}));

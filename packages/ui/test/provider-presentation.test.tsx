@@ -31,13 +31,13 @@ vi.mock('react', async original => ({
     harness.pending.push(effect);
   },
 }));
-vi.mock('../src/client-context', () => ({useShellCapabilities: () => undefined}));
+vi.mock('../src/client-context', async original => ({...await original<typeof import('../src/client-context')>(), useActiveDevice: () => ({id: 'local', isRemote: false, name: '这台电脑', mode: 'full', capabilities: []}), useShellCapabilities: () => undefined}));
 vi.mock('../src/setup/useProviderSetup', () => ({useProviderSetup: (provider: Provider, snapshot: DesktopSnapshot) => ({
   tool: snapshot.tools.find(item => item.tool === provider), tools: provider === 'claude' ? [harness.cli ?? {tool: 'claude', installation: 'managed', version: '1.0', latestVersion: '1.1', executable: '/managed/claude', canUninstall: true}] : harness.codex ? [harness.codex] : [],
   entry: {id: provider === 'claude' ? 'claude-agent' : 'codex-appserver', installedVersion: '0.3.296', depState: snapshot.tools.find(item => item.tool === provider)?.installation === 'missing' ? 'missing' : 'installed', canUninstall: snapshot.tools.find(item => item.tool === provider)?.installation !== 'missing'},
   check: harness.canContinue ? {state: 'ready', models: [{id: 'model-1', displayName: 'Model 1'}]} : harness.check,
   issue: harness.issue, working: false, activeInstall: harness.activeInstall, relevantToolInstall: undefined,
-  activeLogin: undefined, activeCodexJob: undefined, canContinue: harness.canContinue,
+  activeLogin: undefined, canContinue: harness.canContinue,
   installProvider: harness.installProvider, installTool: harness.installTool, connect: harness.connect, verify: harness.verify,
   read: harness.read, cancelInstall: harness.cancelInstall,
   request: harness.request,
@@ -96,7 +96,7 @@ it.each([
   ['missing', 'unknown'], ['installed', 'unknown'], ['installed', 'signedOut'],
 ] as const)('keeps scan unavailable while Provider is %s / %s', (installation, authentication) => {
   const data = snapshot([tool('codex', installation, authentication)]);
-  const first = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenEnvironment: () => {}, onNotice: () => {}, codexJobs: null}));
+  const first = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenEnvironment: () => {}, onNotice: () => {}}));
   expect(first.some(node => node.type === ProviderSetup)).toBe(true);
   expect(first.some(node => node.props.children === '添加 Bot')).toBe(false);
   expect(first.some(node => node.props['data-testid'] === 'bridge-import')).toBe(false); // nested BridgeImportPanel remains reachable
@@ -112,7 +112,7 @@ it.each([
 it('changes Provider explicitly, then Continue opens Bot creation with the same Provider', () => {
   const data = snapshot([tool('codex', 'installed', 'signedIn'), tool('claude', 'installed', 'signedIn')]);
   resetRender();
-  let welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenEnvironment: () => {}, onNotice: () => {}, codexJobs: null}));
+  let welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenEnvironment: () => {}, onNotice: () => {}}));
   const setup = welcome.find(node => node.type === ProviderSetup)!;
   expect(setup).toBeTruthy();
   resetRender();
@@ -128,7 +128,7 @@ it('changes Provider explicitly, then Continue opens Bot creation with the same 
   const card = nodes(ProviderPreparation({...setup.props, provider: 'claude'} as any));
   button(card, '继续').props.onClick();
   resetRender();
-  welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenEnvironment: () => {}, onNotice: () => {}, codexJobs: null}));
+  welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenEnvironment: () => {}, onNotice: () => {}}));
   expect(welcome.some(node => node.props.children === '添加 Bot')).toBe(true);
   button(welcome, '添加 Bot').props.onClick();
   expect(harness.onCreateBot).toHaveBeenCalledWith('claude');
@@ -138,7 +138,7 @@ it('changes Provider explicitly, then Continue opens Bot creation with the same 
 it('keeps existing Bot Feishu checks and group action after Provider is ready', () => {
   const data = snapshot([tool('codex', 'installed', 'signedIn')], [bot]);
   resetRender();
-  const welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onOpenGroups: () => {}, onOpenEnvironment: () => {}, onNotice: () => {}, codexJobs: null}));
+  const welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onOpenGroups: () => {}, onOpenEnvironment: () => {}, onNotice: () => {}}));
   expect(welcome.some(node => node.props.children === '选择群聊')).toBe(true);
   expect(welcome.some(node => node.type.name === 'SetupChecklist' && node.props.botsOnly)).toBe(true);
   expect(welcome.some(node => node.type.name === 'BridgeImportPanel')).toBe(true);

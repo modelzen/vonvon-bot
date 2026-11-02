@@ -47,6 +47,16 @@ export interface DaemonManagerOptions {
 
 const localListen = /^127\.0\.0\.1:(\d{1,5})$/;
 
+/** devices 第 15 节"本机服务端协议不同": which side is older, and what to do about it. */
+export function protocolMismatchMessage(input: { server: number; client: number; registration: Registration }): string {
+  if (input.server > input.client) return '正在运行的服务端比这个桌面端新。到 https://vonvon.cc/get/ 下载最新的 Vonvon Bot。';
+  if (input.registration.kind === 'ours' && input.registration.definition?.kind === 'npm') {
+    return '这台电脑上另外装的 Vonvon Bot 服务端（npm 版）比桌面端旧。运行 `npm i -g vonvon-bot@latest` 再 `vonvon daemon restart`；或者 `vonvon service uninstall` 去掉它，让桌面端用自带的。';
+  }
+  // On a Mac the startup repair replaces an older bundled server first; reaching here means it did not.
+  return '正在运行的服务端比桌面端旧，没能自动换掉。退出 Vonvon Bot 再打开一次；还不行就运行 `vonvon daemon stop` 后再打开。';
+}
+
 function checkPort(daemon: VerifiedDaemon, requestedPort: number): void {
   const match = localListen.exec(daemon.listen);
   const port = Number(match?.[1]);
@@ -69,7 +79,8 @@ export function createDaemonManager(dependencies: DaemonManagerDependencies, opt
     checkPort(daemon, requestedPort);
     const version = await dependencies.checkProtocol(daemon);
     if (version !== PROTOCOL_VERSION) {
-      throw new Error(`后台服务（PID ${daemon.pid}）的协议版本是 ${version}，桌面端要求 ${PROTOCOL_VERSION}。先别关它，把应用和后台更新到互相兼容的版本。`);
+      const registration = await dependencies.readRegistration().catch((): Registration => ({ kind: 'absent' }));
+      throw new Error(protocolMismatchMessage({ server: version, client: PROTOCOL_VERSION, registration }));
     }
     return daemon;
   }
