@@ -1,8 +1,10 @@
+import { selfEntry } from '../core/self-entry';
 import { spawn as spawnProcess } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
 import { join } from 'node:path';
 import { SERVICE_BUSY_MESSAGE } from '@vonvon/protocol';
 import { RpcError } from '../server/errors';
+import { withoutSessionMarkers } from '../config/session-env';
 import { liveServiceActionRecord, readServiceActionRecord, writeServiceActionRecord } from '../service/action-report';
 
 export type ServiceActionKind = 'install' | 'uninstall';
@@ -33,7 +35,7 @@ export function createServiceActionLauncher(options: {
       // Linux would need the helper moved out of the unit's cgroup, and linger first (s20a); the terminal works today.
       if (platform !== 'darwin') throw new RpcError('unsupported', LINUX_SERVICE_REFUSAL);
       if (slot || liveServiceActionRecord(root, now())?.phase === 'running') throw new RpcError('busy', SERVICE_BUSY_MESSAGE);
-      const cliEntry = options.cliEntry ?? process.argv[1];
+      const cliEntry = options.cliEntry ?? selfEntry();
       if (!cliEntry) throw new Error('Cannot locate the daemon CLI entry.');
       const reserved: RunningServiceAction = { action, startedAt: now() };
       slot = reserved;
@@ -72,7 +74,8 @@ export function createServiceActionLauncher(options: {
         start() {
           if (used) return;
           used = true;
-          const env: NodeJS.ProcessEnv = { ...process.env, VONVON_HOME: root };
+          // the host's own child (devices-4a R3): `service install|uninstall` is local-only in a session
+          const env: NodeJS.ProcessEnv = { ...withoutSessionMarkers(process.env), VONVON_HOME: root };
           delete env.VONVON_SERVICE;
           try {
             const log = openSync(join(root, 'daemon.log'), 'a', 0o600);

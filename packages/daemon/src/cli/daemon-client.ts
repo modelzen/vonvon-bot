@@ -1,3 +1,4 @@
+import { selfEntry } from '../core/self-entry';
 import { badArgs, CommandError, rpcErrorKind } from './command-error';
 import { connectLocal, ConnectionError, RpcError, type VonvonClient } from '@vonvon/client';
 import { backendLabel, conversationCopy, PROTOCOL_VERSION, requestSchema, type Agent, type Membership, type Scope, type ServerInfo } from '@vonvon/protocol';
@@ -44,7 +45,7 @@ export function setCliContext(next: { scope?: Scope | undefined; env?: NodeJS.Pr
  * In a Bot's session (devices 5.3) a command acts as the session, never as the owner: its token goes in the hello,
  * `local-credential` is not read, and without a valid token nothing connects at all.
  */
-export async function connectLocalDaemon(home = paths.appDir, cliEntry = process.argv[1], env: NodeJS.ProcessEnv = context.env): Promise<DaemonConnection> {
+export async function connectLocalDaemon(home = paths.appDir, cliEntry = selfEntry(), env: NodeJS.ProcessEnv = context.env): Promise<DaemonConnection> {
   const session = inBotSession(env);
   const token = env[SESSION_ENV];
   if (session && !looksLikeSessionToken(token)) throw new CommandError('refused', SESSION_TOKEN_MISSING, { reason: 'session_token_missing' });

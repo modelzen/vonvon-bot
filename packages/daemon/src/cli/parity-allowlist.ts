@@ -49,9 +49,6 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'machine.startHost': { reason: 'desktop-only', note: 'the shell starts the daemon (vonvon daemon start in a terminal)' },
   'machine.service.start': { reason: 'desktop-only', note: "the shell's 启动服务" },
   'machine.service.stop': { reason: 'desktop-only', note: "the shell's 停止服务" },
-  'machine.checkCoreUpdate': pending('I3', 'vonvon update --check'),
-  'machine.applyCoreUpdate': pending('I3', 'vonvon update'),
-  'machine.coreUpdateStatus': pending('I3', 'vonvon update (waits on it)'),
 
   // devices 4: the remote listeners and their commands come with D3
   'device.status': pending('D3', 'vonvon remote status'),
