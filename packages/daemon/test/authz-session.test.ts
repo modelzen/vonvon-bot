@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Request, Scope, SettingsReply } from '@vonvon/protocol';
+import type { Request, ScheduledTaskView, Scope, SettingsReply } from '@vonvon/protocol';
 
 const memory = vi.hoisted(() => ({ action: vi.fn() }));
 vi.mock('../src/admin/memory', async original => ({ ...await original<object>(), memoryAction: memory.action }));
 import { fakeService, socketClient, startFixture } from './server-fixture';
-import { authorize, BOT_MEMORY_FROM_SESSION, DM_MEMORY_FROM_SESSION, SCOPE_MISSING, SESSION_DENIED, scopeExceeded, type AuthzDeps } from '../src/server/authz';
+import { authorize, BOT_MEMORY_FROM_SESSION, DM_MEMORY_FROM_SESSION, ONE_GROUP_ONLY, SCOPE_MISSING, SESSION_DENIED, scopeExceeded, type AuthzDeps } from '../src/server/authz';
 import { SESSION_TOKEN_INVALID } from '../src/host/session-tokens';
 import { NOT_DM_MESSAGE } from '../src/agent/entry/registry';
 import { scheduleRefusalMessages } from '../src/admin/schedule-commands';
@@ -152,6 +152,64 @@ describe('the bot-session column (unit)', () => {
     expect(snapshot.ok && typeof snapshot.narrow).toBe('function');
   });
 
+  // Codex review 228-3 / 229-2: devices 5.3, a private chat narrowed to one group moves only that group, whoever's turn it is
+  it('keeps a reach of one group from the whole bot and from new groups, even on the owner\'s turn', async () => {
+    const owner = vi.fn(async () => ({ ok: true as const, role: 'owner' as const }));
+    const bound = { bot: BOT, group: GROUP };
+    const wide = [
+      request('settings', { type: 'save', edit: { scope: { kind: 'agent', botId: BOT }, section: 'cards', revision: 'r1', patch: { showToolCalls: true } } }),
+      request('settings', { type: 'act', action: { kind: 'voice', botId: BOT, action: { action: 'enable' } } }),
+      request('settings', { type: 'act', action: { kind: 'adminMember', botId: BOT, openId: 'ou_0123456789abcdef', membership: 'present', revision: 'r' } }),
+      request('settings', { type: 'act', action: { kind: 'commentInstructions', botId: BOT, revision: 'r', content: { kind: 'default' } } }),
+      request('collaboration', { action: 'createProject', agentId: BOT, name: 'New', folder: { kind: 'default' }, tool: 'codex', conversation: 'shared' }),
+    ];
+    for (const write of wide) {
+      for (const deps2 of [deps, { ...deps, askBot: owner }]) expect(await authorize(peer('dm', bound), write, deps2)).toEqual({ ok: false, code: 'permission_denied', message: ONE_GROUP_ONLY });
+      // the whole bot's private chat may (D4b asks whose turn it is)
+      expect(await authorize(peer('dm', { bot: BOT }), write, deps)).toMatchObject({ ok: true });
+    }
+    // what is that group's still is
+    expect(await authorize(peer('dm', bound), settingsSave('研发'), { ...deps, askBot: owner })).toMatchObject({ ok: true, grant: { role: 'owner' } });
+    expect(await authorize(peer('dm', bound), request('settings', { type: 'act', action: { kind: 'projectMember', botId: BOT, projectName: '研发', openId: 'ou_0123456789abcdef', membership: 'present', revision: 'r' } }), deps)).toMatchObject({ ok: true });
+  });
+
+  // Codex review 229-4: the owner's --scope binds no other group, and moves no other bot's or project's things
+  it('checks the owner\'s commands, admin and library requests against its --scope by their target', async () => {
+    const owner = (scope: Scope) => ({ principal: { kind: 'owner' as const, via: 'local' as const }, protocolVersion: 2, negotiated: true, scope });
+    const scoped = owner({ bot: BOT, group: GROUP });
+    const membership = (groupId: string) => JSON.stringify([BOT, groupId]);
+    const bind = (groupId: string) => request('command', { type: 'bindGroup', agentId: BOT, groupId, projectName: 'x', folder: { kind: 'default' }, tool: 'claude', conversation: 'shared' });
+    for (const outside of [
+      bind('oc_outside'),
+      request('command', { type: 'setPermission', membershipId: membership(OTHER), administrator: 'full' }),
+      request('command', { type: 'setResponse', membershipId: membership(OTHER), response: 'all' }),
+      request('command', { type: 'setAgentEnabled', agentId: BOT, enabled: false }),
+      request('command', { type: 'deleteAgent', agentId: BOT }),
+      request('command', { type: 'refreshAgentCredentials', agentId: 'cli_other' }),
+      request('command', { type: 'registerAgent' }),
+      request('admin', { type: 'switchBackend', agentId: 'cli_other', projectName: '研发', backend: 'claude-agent' }),
+      request('admin', { type: 'switchBackend', agentId: BOT, projectName: '运营', backend: 'claude-agent' }),
+      request('admin', { type: 'confirmCardCallback', agentId: 'cli_other', confirmed: true }),
+      request('library', { type: 'previous', agentId: BOT, groupId: OTHER }),
+      request('library', { type: 'rename', projectId: 'prj_0000000b', revision: 1, name: 'x' }),
+      request('library', { type: 'delete', projectId: 'prj_0000000c', revision: 1 }),
+    ]) expect(await authorize(scoped, outside, deps), JSON.stringify(outside.payload)).toMatchObject({ ok: false, code: 'permission_denied' });
+    for (const inside of [
+      bind(GROUP),
+      request('command', { type: 'setPermission', membershipId: membership(GROUP), administrator: 'full' }),
+      request('admin', { type: 'switchBackend', agentId: BOT, projectName: '研发', backend: 'claude-agent' }),
+      request('admin', { type: 'setupStatus', agentId: BOT }),
+      request('library', { type: 'previous', agentId: BOT, groupId: GROUP }),
+      request('library', { type: 'rename', projectId: 'prj_0000000a', revision: 1, name: 'x' }),
+      // what names no bot is the machine's
+      request('command', { type: 'restartHost' }), request('admin', { type: 'hostDoctor' }),
+    ]) expect(await authorize(scoped, inside, deps), JSON.stringify(inside.payload)).toMatchObject({ ok: true });
+    // a scope of the whole bot moves the whole bot, and still no other one
+    expect(await authorize(owner({ bot: BOT }), request('command', { type: 'setAgentEnabled', agentId: BOT, enabled: false }), deps)).toEqual({ ok: true });
+    expect(await authorize(owner({ bot: BOT }), bind('oc_outside'), deps)).toEqual({ ok: true });
+    expect(await authorize(owner({ bot: BOT }), request('command', { type: 'deleteAgent', agentId: 'cli_other' }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
+  });
+
   it('keeps a private chat to its bot\'s groups, narrowed by --scope group', async () => {
     expect(await authorize(peer('dm', { bot: BOT }), settingsSave('运营'), deps)).toMatchObject({ ok: true, grant: { role: 'member' } });
     expect(await authorize(peer('dm', { bot: BOT, group: GROUP }), settingsSave('运营'), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
@@ -242,6 +300,68 @@ describe('a Bot session against the daemon', () => {
       expect(memory.action).toHaveBeenCalledTimes(1);
       // a group session's settings write: the not-dm sentence, word for word
       expect(await client.call({ ...settingsSave('研发'), id: 'w' })).toMatchObject({ type: 'error', code: 'not-dm', message: NOT_DM_MESSAGE });
+      await client.close();
+    } finally { await fixture.close(); }
+  });
+
+  // Codex review 228-1 / 229-1. main 必败 (in this slice): history listed the provider's sessions of the whole directory
+  it('lists in a group\'s history only the native sessions bound to that group, unless the owner gave no --scope', async () => {
+    // Two groups share one folder, and the owner works in it from a terminal: the provider lists all three by folder.
+    const bound = { threadId: 'thread-y', chatId: GROUP, sessionId: 'native-a', summary: 'A', backend: 'codex-appserver', cwd: '/w', createdAt: 1, updatedAt: 1 };
+    const native = (sessionId: string, preview: string, name?: string) => ({ sessionId, preview, ...(name ? { name } : {}), createdAt: 1, updatedAt: 1 });
+    const collaboration = vi.fn(async () => ({ sessions: [bound], backend: 'codex-appserver',
+      threads: [native('native-a', 'A 群自己的会话'), native('native-b', 'B 群的发版计划'), native('native-owner', '主人终端里的草稿', '主人终端')] }));
+    const fixture = await startFixture(fakeService({ listBots: async () => [{ appId: BOT, name: 'X', tenant: 'feishu', active: true, current: true, running: true, completionReminder: { mode: 'failures', longTaskMinutes: 3 } }],
+      listProjects: async appId => appId === BOT ? projects : [], collaboration }));
+    try {
+      const history = { type: 'request', id: 'h', method: 'collaboration', payload: { action: 'history', agentId: BOT, projectName: '研发', groupId: GROUP } } as unknown as Request;
+      const ask = async (credential: string, scope?: Scope) => {
+        const client = await socketClient(fixture.api.port, credential);
+        await client.ready();
+        if (scope) expect(await client.call(negotiate(scope))).toMatchObject({ type: 'response' });
+        const reply = await client.call(history);
+        await client.close();
+        return reply;
+      };
+      const group = fixture.sessionTokens.issue({ appId: BOT, place: 'group', chatId: GROUP, sessionId: 'ses_0123456789abcdef' });
+      for (const reply of [await ask(group, { bot: BOT, group: GROUP }), await ask(fixture.credential, { bot: BOT, group: GROUP })]) {
+        expect(reply).toMatchObject({ type: 'response', payload: { kind: 'history', sessions: [bound], threads: [native('native-a', 'A 群自己的会话')] } });
+        for (const leak of ['native-b', 'B 群的发版计划', 'native-owner', '主人终端']) expect(JSON.stringify(reply)).not.toContain(leak);
+      }
+      const whole = await ask(fixture.credential);
+      expect(whole).toMatchObject({ type: 'response', payload: { kind: 'history' } });
+      expect((whole as { payload: { threads: unknown[] } }).payload.threads).toHaveLength(3);
+    } finally { await fixture.close(); }
+  });
+
+  // Codex review 228-2 / 229-3. main 必败: the schedule reply skipped the narrowing the table gave
+  it('cuts the owner\'s listBot to the one group of its --scope', async () => {
+    const task = (id: string, chatId: string): ScheduledTaskView => ({ id, botId: BOT, chatId, revision: 'r1', name: id, instruction: 'x', spec: { kind: 'every', minutes: 60 }, timeZone: 'UTC', placement: { kind: 'follow' },
+      state: 'active', createdBy: { via: 'cli' }, createdAt: 1, updatedAt: 1, nextRunAt: 2, running: false, counts: { runs: 0, missed: 0, skipped: 0, consecutiveFailures: 0 }, recent: [], describe: '每小时' });
+    const executeSchedule = vi.fn(async () => ({ kind: 'tasks' as const, tasks: [task('st_a', GROUP), task('st_b', OTHER)], now: 1, timeZone: 'UTC' }));
+    const fixture = await startFixture(fakeService({ listProjects: async appId => appId === BOT ? projects : [], executeSchedule }));
+    try {
+      const client = await socketClient(fixture.api.port, fixture.credential);
+      await client.ready();
+      await client.call(negotiate({ bot: BOT, group: GROUP }));
+      const reply = await client.call({ type: 'request', id: 'all', method: 'schedule', payload: { botId: BOT, request: { action: 'listBot' } } } as unknown as Request);
+      expect(reply).toMatchObject({ type: 'response', payload: { kind: 'tasks', tasks: [{ id: 'st_a', chatId: GROUP }] } });
+      expect((reply as { payload: { tasks: unknown[] } }).payload.tasks).toHaveLength(1);
+      await client.close();
+    } finally { await fixture.close(); }
+  });
+
+  // Codex review 228-3: the refusal comes before the handler, which would have made the group
+  it('makes no new group for a private chat narrowed to one', async () => {
+    const collaboration = vi.fn(async () => ({ ok: true }));
+    const fixture = await startFixture(fakeService({ listProjects: async appId => appId === BOT ? projects : [], collaboration }));
+    try {
+      const client = await socketClient(fixture.api.port, fixture.sessionTokens.issue({ appId: BOT, place: 'dm', chatId: 'oc_dm', sessionId: 'ses_0123456789abcdef' }));
+      await client.ready();
+      await client.call(negotiate({ bot: BOT, group: GROUP }));
+      const create = { type: 'request', id: 'c', method: 'collaboration', payload: { action: 'createProject', agentId: BOT, name: 'New', folder: { kind: 'default' }, tool: 'codex', conversation: 'shared' } } as unknown as Request;
+      expect(await client.call(create)).toMatchObject({ type: 'error', code: 'permission_denied', message: ONE_GROUP_ONLY });
+      expect(collaboration).not.toHaveBeenCalled();
       await client.close();
     } finally { await fixture.close(); }
   });
