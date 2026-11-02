@@ -3,8 +3,8 @@
 #   sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/uninstall.sh)"
 # 停后台服务、删服务定义、去掉启动文件里的 PATH 那几行、删安装根 ~/.local/share/vonvon-bot/server。
 # 数据目录 ~/.vonvon-bot（Bot、记忆、设置）留着。
-# 退出码：0 卸好了或没装过；1 后台服务或直接启动的服务端没停下来（或确认不了它停了），什么文件都没删，
-# 或者安装根没删完（再运行一次会接着删）；2 不是 Linux、HOME 或安装根不对，什么都没删。
+# 退出码：0 卸好了或没装过；1 后台服务或直接启动的服务端没停下来（或确认不了它停了），什么文件都没删，或者还有进程在跑
+# 安装根里的程序，安装根和 PATH 块都没动，或者安装根没删完（再运行一次会接着删）；2 不是 Linux、HOME 或安装根不对，什么都没删。
 # Mac、Windows 的服务端在桌面端安装包里，不由脚本装（owner 2026-11-01）：不是 Linux 就什么都不做。
 set -eu
 
@@ -179,7 +179,30 @@ no_cli() {
     fi
     fail 1 "安装目录里没有能运行的 vonvon，数据目录里记的服务端进程 $PID 还在，看不出它是不是服务端，什么都没删。用 \`ps -p $PID -o args=\` 看一下：是 vonvon 的服务端就先停掉它（\`kill $PID\`），不是就删掉 \`~/.vonvon-bot/daemon.pid\`；再运行一次卸载。"
   fi
+  nothing_runs_from_root
   say "安装目录里没有能运行的 vonvon。$PATH_BY_HAND"
+}
+
+# 上面只看得到 ~/.vonvon-bot 的服务端：用别的数据目录直接启动的（VONVON_HOME=… vonvon daemon start），daemon.pid
+# 读不出来的，`daemon stop` 答"没在跑"，没有 vonvon 时也看不到，删了安装目录它们还在跑。服务停完、去 PATH 块和删安装目录
+# 之前，看一遍 /proc：有进程跑的是安装目录里的程序就不删（启动器 exec 的是 <根>/current/node/bin/node，服务端一定是）。
+# 程序文件已经删了的，readlink 在路径后面加" (deleted)"；别的账号的进程读不到，不算；本脚本自己不算。
+# /proc 用不了时不看，照原来的做法。
+nothing_runs_from_root() {
+  readlink "/proc/$$/exe" >/dev/null 2>&1 || return 0
+  root_real=$(CDPATH= cd -- "$ROOT" 2>/dev/null && pwd -P) || root_real=$ROOT
+  running=''
+  for proc in /proc/[0-9]*; do
+    if [ "${proc#/proc/}" = "$$" ]; then continue; fi
+    exe=$(readlink "$proc/exe" 2>/dev/null) || continue
+    exe=${exe% (deleted)}
+    case "$exe" in
+      "$ROOT"/*|"$root_real"/*) running="${running:+$running }${proc#/proc/}" ;;
+    esac
+  done
+  if [ -n "$running" ]; then
+    fail 1 "还有程序在用安装目录里的文件运行（进程 $running），可能是用别的数据目录启动的服务端，安装目录没删。先停掉它们：\`kill $running\`，等它们退出后再运行一次卸载。"
+  fi
 }
 
 main() {
@@ -219,6 +242,7 @@ main() {
       fail 1 "后台服务 $DEFINED 还指着安装目录，什么都没删。先用它的数据目录卸掉它：\`VONVON_HOME=<这个文件里 VONVON_HOME 的值> vonvon service uninstall\`，再运行一次卸载。"
     fi
     stop_service
+    nothing_runs_from_root
     remove_path_block
   else
     no_cli
