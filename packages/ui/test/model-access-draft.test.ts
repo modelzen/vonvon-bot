@@ -83,3 +83,11 @@ it('toggles only native acceleration options and removes settings for a removed 
   expect(removed.modelServiceTiers?.alpha).toBeUndefined();
   expect(removed.models).toEqual(['gamma']);
 });
+
+it('drops old policies for unselected models without broadening selected permissions', () => {
+  const value: Value = {...initial(), modelEfforts: {alpha: ['low'], retired: ['high']}, modelServiceTiers: {alpha: ['fast'], retired: ['ultrafast']}};
+  const next = edit(value, {type: 'defaultModel', id: 'alpha'}).value!;
+  expect(next.modelEfforts).toEqual({alpha: ['low']});
+  expect(next.modelServiceTiers).toEqual({alpha: ['fast']});
+  expect(value.modelServiceTiers?.retired).toEqual(['ultrafast']);
+});

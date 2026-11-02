@@ -380,3 +380,76 @@ it('rejects new choices from a populated native cache after the provider becomes
   }
   expect(listModels).not.toHaveBeenCalled();
 });
+
+it('prunes explicit removed-model policies on save without discarding retained restrictions', async () => {
+  const catalog: ModelInfo[] = models.map(m => ({ ...m, serviceTiers: [{ id: 'fast', name: 'Fast', description: '' }] }));
+  const owner = createSettingsOwner({ ...deps(), backendFor: () => ({ ...backend, peekModels: () => catalog, listModels: async () => catalog }) });
+  await mutateProject('demo', p => { p.modelAccess = { backend: 'codex-appserver', models: ['a', 'b'], efforts: ['low', 'high'], modelEfforts: { a: ['low'], b: ['high'] }, modelServiceTiers: { b: ['fast'] }, defaultModel: 'b', defaultEffort: 'high' }; });
+  const before = await view(owner);
+  expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch: {
+    models: ['a'], modelEfforts: { a: ['low'], b: ['high'] }, modelServiceTiers: { a: ['fast'], b: ['fast'] },
+  } })).kind).toBe('saved');
+  const stored = (await getProjectByName('demo'))!;
+  expect(stored.modelAccess).toMatchObject({ models: ['a'], modelEfforts: { a: ['low'] }, modelServiceTiers: { a: ['fast'] }, defaultModel: 'a', defaultEffort: 'low' });
+  expect(Object.keys(stored.modelAccess!.modelEfforts!)).toEqual(['a']);
+  expect(Object.keys(stored.modelAccess!.modelServiceTiers!)).toEqual(['a']);
+  expect(projectModelAllowed(stored, 'codex-appserver', 'a', 'high', catalog)).toBe(false);
+  expect(projectModelAllowed(stored, 'codex-appserver', 'b', 'high', catalog)).toBe(false);
+  const next = await view(owner);
+  const disk = await readFile(paths.projectsFile, 'utf8');
+  for (const patch of [
+    { modelEfforts: { a: ['xhigh'], b: ['high'] } },
+    { modelServiceTiers: { a: ['ultrafast'], b: ['fast'] } },
+  ] satisfies Array<Partial<NonNullable<Project['modelAccess']>>>) {
+    expect((await owner.save({ scope, section: 'modelAccess', revision: next.sections.modelAccess!.revision, patch })).kind).toBe('rejected');
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(disk);
+  }
+});
+
+it.each([false, true])('clears provider-specific omitted policies and prunes explicit orphan maps on a provider switch (explicit=%s)', async explicit => {
+  await mutateProject('demo', p => { p.modelAccess = { backend: 'codex-appserver', models: ['a', 'b'], efforts: ['high'], modelEfforts: { a: ['high'], b: ['high'] }, modelServiceTiers: { a: ['fast'], b: ['fast'] }, defaultModel: 'b', defaultEffort: 'high' }; });
+  const targetModels: ModelInfo[] = models.map(m => ({ ...m, supportedEfforts: ['low'] }));
+  const listModels = vi.fn(async () => targetModels);
+  const owner = createSettingsOwner({ ...deps(), backendFor: id => id === 'claude-agent'
+    ? { ...backend, id, peekModels: () => targetModels, listModels }
+    : backend });
+  const before = await view(owner);
+  expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch: {
+    backend: 'claude-agent', models: ['a'], efforts: ['low'],
+    ...(explicit ? { modelEfforts: { a: ['low'], b: ['high'] }, modelServiceTiers: { b: ['fast'] } } : {}),
+  } })).kind).toBe('saved');
+  expect(listModels).toHaveBeenCalled();
+  const stored = (await getProjectByName('demo'))!;
+  expect(stored.modelAccess).toMatchObject({ backend: 'claude-agent', models: ['a'], defaultModel: 'a', defaultEffort: 'low' });
+  expect(stored.modelAccess?.modelEfforts).toEqual(explicit ? { a: ['low'] } : undefined);
+  expect(stored.modelAccess?.modelServiceTiers).toEqual(explicit ? {} : undefined);
+  expect(projectModelAllowed(stored, 'claude-agent', 'a', 'high', targetModels)).toBe(false);
+  expect(projectModelAllowed(stored, 'codex-appserver', 'a', 'low', models)).toBe(false);
+});
+
+it.each([
+  ['models', { models: ['a', 'a'] }],
+  ['models', { models: ['unknown'] }],
+  ['efforts', { models: ['b'], efforts: ['low'] }],
+  ['efforts', { efforts: ['low', 'low'] }],
+  ['modelEfforts', { modelEfforts: { a: ['xhigh'] } }],
+  ['modelEfforts', { modelEfforts: { a: ['low', 'low'] } }],
+  ['modelServiceTiers', { modelServiceTiers: { a: ['ultrafast'] } }],
+  ['modelServiceTiers', { modelServiceTiers: { a: ['fast', 'fast'] } }],
+  ['defaultModel', { defaultModel: 'b' }],
+  ['defaultEffort', { defaultEffort: 'xhigh' }],
+] satisfies Array<[string, Partial<NonNullable<Project['modelAccess']>>]>)('reports %s for invalid selected model policies (%j)', async (field, patch) => {
+  await mutateProject('demo', p => { p.modelAccess = { backend: 'codex-appserver', models: ['a'], efforts: ['low'], defaultModel: 'a', defaultEffort: 'low' }; });
+  const owner = createSettingsOwner(deps());
+  const before = await view(owner);
+  const disk = await readFile(paths.projectsFile, 'utf8');
+  expect(await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch })).toMatchObject({ kind: 'rejected', fields: [{ field, message: expect.any(String) }] });
+  expect(await readFile(paths.projectsFile, 'utf8')).toBe(disk);
+});
+
+it('keeps an unavailable model catalog as a general settings error', async () => {
+  await mutateProject('demo', p => { p.modelAccess = { backend: 'codex-appserver', models: ['a'], efforts: ['high'] }; });
+  const owner = createSettingsOwner({ ...deps(), backendFor: () => ({ ...backend, doctor: async () => ({ ok: false, version: null }) }) });
+  const before = await view(owner);
+  expect(await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch: { models: ['a', 'b'] } })).toMatchObject({ kind: 'rejected', fields: [{ field: 'settings', message: expect.stringContaining('目录暂不可用') }] });
+});

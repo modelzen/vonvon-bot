@@ -38,7 +38,7 @@ it('offers available Providers and clears dependent choices only for a valid dif
   control.props.onChange('codex-appserver'); control.props.onChange('unknown-provider');
   expect(changed).not.toHaveBeenCalled();
   control.props.onChange('claude-agent');
-  expect(changed).toHaveBeenCalledExactlyOnceWith({backend: 'claude-agent', models: [], efforts: []});
+  expect(changed).toHaveBeenCalledExactlyOnceWith({backend: 'claude-agent', models: [], efforts: [], modelEfforts: {}, modelServiceTiers: {}, defaultModel: undefined, defaultEffort: undefined});
 });
 
 it('disables readonly Provider changes without clearing saved model choices', () => {
@@ -50,7 +50,8 @@ it('disables readonly Provider changes without clearing saved model choices', ()
   const radios = html.match(/<input\b[^>]*type="radio"[^>]*>/g) ?? [];
   expect(radios).toHaveLength(2);
   expect(radios.every(radio => radio.includes('disabled=""'))).toBe(true);
-  expect(html).toContain('alpha');
+  expect(html).toContain('1 个模型');
+  expect(props.value.models).toEqual(['alpha']);
 });
 
 it('keeps saved unavailable Provider and model choices readable without offering unavailable Provider edits', () => {
@@ -59,7 +60,7 @@ it('keeps saved unavailable Provider and model choices readable without offering
   expect(html).toContain('role="combobox"');
   const control = selector({...providerProps, value: {backend: 'claude-agent', models: ['haiku'], efforts: []}, providers: []});
   expect(control.props.options).toEqual([{value: 'claude-agent', label: 'Claude（当前不可用）', disabled: true}]);
-  expect(html).toContain('haiku'); expect(html).toContain('aria-label="配置模型"');
+  expect(html).toContain('1 个模型'); expect(html).toContain('aria-label="配置可用模型"');
   expect(html).toContain('选择仍保留');
 });
 

@@ -37,7 +37,7 @@ export function editModelAccess(value: ModelAccess, catalog: CatalogModel[], act
   const models = catalog.filter(m => !m.hidden);
   const next: ModelAccess = {...value, models: [...value.models],
     modelEfforts: Object.fromEntries(value.models.map(id => [id, [...(value.modelEfforts?.[id] ?? value.efforts.filter(e => models.find(m => m.id === id)?.supportedEfforts.includes(e) || !models.some(m => m.supportedEfforts.includes(e))))]])),
-    modelServiceTiers: {...value.modelServiceTiers},
+    modelServiceTiers: Object.fromEntries(Object.entries(value.modelServiceTiers ?? {}).filter(([id]) => value.models.includes(id)).map(([id, tiers]) => [id, [...tiers]])),
   };
   const usable = (m: CatalogModel) => m.supportedEfforts.filter(e => allowedEfforts(next, m.id).includes(e));
   let notice: string | undefined;
