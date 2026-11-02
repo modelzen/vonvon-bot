@@ -153,3 +153,18 @@ Mac 后验：无专项。Windows：无。
 - `authorizeSessionCall` 和工具调用并发：都在 Bot 进程的事件循环里同步跑，`grant.turn` 不会在判定中途变；判定结果到 host 再到 handler 之间轮可能结束——窗口里的一次写入和工具的情况一样（工具也是先判后做），设计 5.2 接受。
 - `TurnAuth.facts.requesterOpenId` 为空的轮（bot 自己触发、定时运行）：`roleOf` 回 `'bot'`，`settingsWrite` 被 `not-human-turn`/`not-admin` 拒，memory 进项目记忆；和工具一致。
 - 真飞书验收里"成员账号"和"管理员账号"依赖测试环境有第二个 lark-cli profile；没有就只能验主人路径，其余靠单测，PR 里写明。
+
+## 实现时和计划不一样的地方
+
+- **记忆的落点由 Bot 进程定，不是 host 按角色定**（4.5、4.5a）。落点规则（`decideAdd`：主人/管理员亲手打、没被插话、原话里有、一轮一条才进 Bot 记忆，否则降到本群项目）要用这一轮打的原文、本群绑定的项目和这一轮已写的条数，这些只有 Bot 进程有；`memoryAction` 也没有落点规则。所以 `SessionAction` 的 `memory` 带 `op`（`read`/`add`/`edit`）、目标或条目、文字，Bot 进程跑 `decideAdd`/`decideEdit`，回 `memory: { scope, trust, actor, source }`；host 照它写（`MemoryAdminDeps.actor` 换成 `landing`）。会话的记忆写没有 `landing` 就拒，不按主人写。
+- **改、删记忆时条目由 host 读**（4.5a 第一条）：host 按请求的 scope 和 itemId 读出条目的 `scope`、`source` 一起发给 Bot 进程，Bot 进程不再读一次存储。没有这条 → "没有这条记忆。"，不问 Bot 进程。
+- **私聊记忆**按 4.5a 的第一种做法：Bot 进程用 `ownDm`（从 `decideEdit` 抽出来、两边共用）核目标 openId 是不是这一轮的人，不在 `SessionRecord` 里记对方。host 侧只放私聊令牌（和不带 `group=` 的主人）。
+- **Bot 记忆的一轮一条**：会话这边在判定时就记上（`botWrites++`），host 写失败也不退回；工具那边写失败会退回（见"已知限制"）。
+- **IPC 回复**直接是 `SessionAuthz`，不包 `{ kind:'sessionAuthz', result }`；host 用 zod 校验，形状不对（包括 `local` actor、多出来的字段）一律按"这一轮已结束"拒。
+- `isAdminTurn` 叫 `adminTurn(grant)`，工具的 `ctx.admin` 也改成用它，判定不变（看 `grant.turn`）。
+- **Bot 进程说 ok 但没给该给的**（任务没有 actor、记忆写没有落点）也拒，`http.ts` 和 `rpc/memory.ts` 再兜一次。
+- `not-group` 和 `not-dm` 一样按原错误码透传（`schedule` 在群里时 Bot 进程也可能回 `not-group`）。
+- **SEC-4 私聊令牌读设置**：agent 视图只留 `scope`、`sections`，以及协议必填的 `ownerOpenId`、`administrators.{openIds,revision}`、`voice`、`commentInstructions`；`administrators.feishu/scannerOpenId`、`roleInfo`、`smartPrompt`、`judgeByBackend`、`decisionModels` 去掉。项目视图同群令牌的裁法，但各节保持可写。session 视图原样。协议的只读原因里没有"开关关了"，私聊里开关关着读到的仍是可写，写时才拒。
+- **`ScheduleActor.session`** 不带 `topicId`（照计划的形状），`name` 取这一轮发起人的名字。
+- **测试文件**：registry 的放在 `agent-entry-session.test.ts`；`authz-bot` 的映射、透传、范围加轮的用例并进 `authz-session.test.ts`；`rpc-memory` 的落点并进 `memory-admin.test.ts` 和 `authz-session.test.ts` 的 wire 用例；supervisor 和单进程的 `askBot` 接线在 `schedule-rpc.test.ts`（那里已有 supervisor 和 `runRun` 的桩）。端到端的六条验收没写成 vitest 文件，改成手动探针 `packages/daemon/test/manual/bot-authz-probe.ts`：真打包的 CLI、真 fork 出的假 Bot 进程（真 `createAgentEntries`，真 admin/host IPC），输出写进 PR 描述。原因是 `vonvon memory` 在会话里到 C5 之前仍整体拒，记忆那条只能走 wire；设置那几条要协议校验过的完整视图，单测里已经逐条覆盖了判定。
+- D4a 留下的"★ 行在 D4b 之前按成员放行"的窗口已关：没有 `askBot` 时 ★ 行一律拒（`devices-4a-scope.md` 4.6 的偏差到此结束）。
