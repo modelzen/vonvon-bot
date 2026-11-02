@@ -809,6 +809,7 @@ export class CodexAppServerBackend implements AgentBackend {
   readonly id = 'codex-appserver';
   readonly displayName = 'Codex (app-server)';
   private modelCache: ModelInfo[] | null = null;
+  private modelReadGeneration = 0;
 
   async listSkills({ cwd }: { cwd: string; directories?: string[] }): Promise<AgentSkill[]> {
     const result = await utilityRequest<{ data: Array<{ cwd: string; skills: Array<{ path: string; name: string; description: string; scope: string; enabled: boolean }>; errors?: Array<{ message: string }> }> }>('skills/list', { cwds: [cwd], forceReload: true });
@@ -889,17 +890,20 @@ export class CodexAppServerBackend implements AgentBackend {
   }
 
   async listModels(opts?: { refresh?: boolean }): Promise<ModelInfo[]> {
+    // Start before resolution/version awaits: any older call can finish after a
+    // refresh, but must not erase the capabilities used by subsequently opened threads.
+    const generation = ++this.modelReadGeneration;
     const bin = await refreshCodexResolution();
-    if (!bin) { this.modelCache = null; return []; }
+    if (!bin) { if (generation === this.modelReadGeneration) this.modelCache = null; return []; }
     // Explicit paths skip candidate ranking. Establish their version evidence
     // before taking the catalog key, since discovery can read it for tier access.
     await codexVersionAsync(bin);
     try {
       const models = await codexCatalogCache.read(bin, opts?.refresh);
-      this.modelCache = models;
+      if (generation === this.modelReadGeneration) this.modelCache = models;
       return models;
     } catch {
-      this.modelCache = null;
+      if (generation === this.modelReadGeneration) this.modelCache = null;
       // Native config errors can quote lines containing private API settings.
       log.warn('agent', 'Codex model discovery failed', { phase: 'model/list' });
       return [];

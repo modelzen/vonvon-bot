@@ -1,11 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildNewProjectDoneCard,
   buildNewProjectFormCard,
   buildProjectSettingsCard,
   type BackendProbeRow,
 } from '../src/card/dm-cards';
-import { probeBackends, validateBackendSwitch } from '../src/bot/handle-message';
+import { BACKEND_PROBE_TIMEOUT_MS, probeBackends, validateBackendSwitch } from '../src/bot/handle-message';
 import { createBackend } from '../src/agent';
 import type { BackendProbe } from '../src/agent/types';
 
@@ -16,6 +16,38 @@ describe('probeBackends（并行 doctor + 单个超时兜底）', () => {
     displayName: id.toUpperCase(),
     supportedModes: undefined,
     doctor: async () => probe,
+  });
+
+  it('cold native discovery can finish after the former 3 s deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const backend = { ...fast('codex-appserver', { ok: true, version: '1' }), doctor: async () => {
+        // Candidate ranking can require multiple batches of bounded version probes.
+        await new Promise(resolve => setTimeout(resolve, 4_000));
+        return { ok: true, version: '1' };
+      } };
+      let settled = false;
+      const result = probeBackends([backend]).then(rows => { settled = true; return rows; });
+      await vi.advanceTimersByTimeAsync(3_001);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect((await result)[0]?.probe).toMatchObject({ ok: true });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('the default native discovery budget still rejects a hung doctor', async () => {
+    vi.useFakeTimers();
+    try {
+      const backend = { ...fast('codex-appserver', { ok: true, version: '1' }), doctor: () => new Promise<BackendProbe>(() => {}) };
+      let settled = false;
+      const result = probeBackends([backend]).then(rows => { settled = true; return rows; });
+      await vi.advanceTimersByTimeAsync(BACKEND_PROBE_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await result)[0]?.probe).toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
   });
 
   it('并行探测：每后端各成一行，带 id/displayName/supportedModes/probe，且 doctor 走 force（绕过缓存）', async () => {
