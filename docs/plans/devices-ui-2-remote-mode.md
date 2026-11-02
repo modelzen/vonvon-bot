@@ -2,7 +2,7 @@
 
 总设计见 `docs/plans/devices.md`（下文简称"设计"）4.5、6.4、6.5、7.4、第 15 节、第 19 节"Windows 的平台名"，本片对应第 13 节的 U2 行。单独一个 PR，分支 `claude/devices-ui-2-remote-mode`，从集成分支开、PR 回集成分支。产品行为以 `docs/product.md` 3.1、3.8、3.10、3.14 为准。
 
-缩写同 D1：`P/`、`CL/`、`D/`、`DT/`、`U/` 分别是 protocol、client、daemon、desktop、ui 的 `src/`。行号以 `origin/claude/devices-integration`（8051b03c，代码和 413d78d5 相同）为准；D1 的代码以 `origin/claude/devices-1-identity`（e8bbe267）为准，I3 的以 `origin/claude/server-3-update-engine`（4aca3777）为准，文中写明"D1 分支""I3 分支"。U1a、U1b 的接口以 `devices-ui-1a-connections.md`、`devices-ui-1b-devices-page.md` 为准。
+缩写同 D1：`P/`、`CL/`、`D/`、`DT/`、`U/` 分别是 protocol、client、daemon、desktop、ui 的 `src/`。行号以 `origin/claude/devices-integration`（8051b03c，代码和 413d78d5 相同）为准；D1 的代码以 `origin/claude/devices-1-identity`（147b2619）为准；I3 拆成了 I3a `server-3a-update-core`（#632）和叠在它上面的 I3b `server-3b-update-helper`（#633），I3 的以 `origin/claude/server-3b-update-helper`（83550082）为准，I3 合入集成分支后以集成分支为准。文中写明"D1 分支""I3 分支"。U1a、U1b 的接口以 `devices-ui-1a-connections.md`、`devices-ui-1b-devices-page.md` 为准。
 
 ## 1. 做什么
 
@@ -25,7 +25,7 @@
   - 私聊：权限卡和建群完成卡，私聊里把群改成完全访问后 bot 的回复；
   - 命令行：`settings set` 的输出；`group create` 今天已经有。
 
-依赖：U1a（`useActiveDevice`、`shellForDevice`、bridge 的远程路由和 `devices.expect`）、D1（`hostPlatform`、serverInfo 的 `capabilities`、`AttachError('protocol')`）。U1b 的维护视图改用本片的 `ServerUpdateCard`（4.4.2）。I3 已合入时 `ServerUpdateCard` 用它的 `coreUpdatable`、跟进度的写法；没合入时卡上只有版本和检查。
+依赖：U1a（`useActiveDevice`、`shellForDevice`、bridge 的远程路由和 `devices.expect`）、D1（`hostPlatform`、serverInfo 的 `capabilities`、`AttachError('protocol')`）。U1a 和 U1b 是一个 PR，所以 U1 一定先于本片合入；本片把 U1b 维护视图里服务端那一段换成 `ServerUpdateCard`（4.4.2）。I3 已合入时 `ServerUpdateCard` 用它的 `coreUpdatable`、跟进度的写法；没合入时卡上只有版本和检查。
 
 ## 2. 范围
 
@@ -46,7 +46,7 @@
   - 完全访问警示：`D/agent/permission/types.ts`、`D/admin/settings.ts`、`D/agent/entry/command-tools.ts`、`D/card/dm-cards.ts`、`D/bot/handle-message.ts`；
   - `D/cli/commands/settings.ts`、`D/cli/commands/env.ts`；
   - serverInfo 的 `update.*` 能力（4.11）；
-  - `D/server/ws.ts` 的 `send`：维护连接不发 `snapshot` 事件（4.5；D4a 先合入就不做）。
+  - 推快照那一处（`D/server/http.ts:148-158`，D2 后是 `peer-hub.ts` 的 `hub.publish(event, shape)`）：维护连接不发 `snapshot` 事件，用 `shape` 做，和 D4a 同一个办法（4.5；D4a 先合入就不做）。
 - protocol：`P/domain.ts`、`P/settings.ts`、`scripts/verify-built.mjs`。
 - desktop：`DT/quit-daemon.ts`、`DT/main.ts`、`DT/bridge.ts`、`DT/daemon-manager.ts`、`DT/daemon-dependencies.ts`、`DT/login-item.ts`。
 - 文档：设计 6.3、6.4、第 15 节的几处（已在本计划的 PR 里改，第 7 节）。
@@ -209,7 +209,7 @@ export const whereName: (where: Where) => string;
   - `version={devicesState.client.version}`：远程时快照的版本是对面的，不能用（U1a 的 `DevicesState.client.version`）；
   - `externalCoreAvailable={false}`；
   - `server={<ServerUpdateCard variant="remote" …/>}`。
-- 本机时 `server` 不传，"外部 Core / CLI"照旧在"高级运行设置"里，改由 `ServerUpdateCard variant="local-advanced"` 渲染（I3 分支 `UpdatePanel.tsx:99-109` 那一段原样搬过去）。
+- 本机时 `server` 不传，"外部 Core / CLI"照旧在"高级运行设置"里，改由 `ServerUpdateCard variant="local-advanced"` 渲染（I3 分支 `UpdatePanel.tsx:101` 起的那一组原样搬过去）。
 
 #### 4.4.2 `U/management/ServerUpdateCard.tsx`（新）
 
@@ -236,7 +236,7 @@ export const DISTRIBUTION_LABEL: Record<string, string>; // standalone 独立安
   - 进入页面时发一次 `checkCoreUpdate { fresh: false }`，读对面每天的检查结果，不另外打更新源。
 - bundled 且没有 `bundled` 渲染函数时，写一句"「X」的服务端是桌面端自带的，在那台电脑上的 Vonvon Bot 里更新。"
 - 对面没有 `checkCoreUpdate`（v1 或 I3 前的 daemon，回 `unsupported`）：只显示版本，写"「X」上的 Vonvon Bot 不支持远程更新，请在那台设备上升级一次。"
-- U1b 的 `MaintenanceView` 改成渲染 `ServerUpdateCard variant="remote"`，外面照旧包 `maintenanceRequest`（U1b 4.7）。哪片先合入都行：U1b 先合入时，本片顺手替换；本片先合入时，U1b 照这里写。U1b 计划 4.7 已加一句。
+- U1b 的 `MaintenanceView` 改成渲染 `ServerUpdateCard variant="remote"`，外面照旧包 `maintenanceRequest`（U1b 4.7）。顺序是定的：U1（U1a、U1b 一个 PR）先合入，本片依赖 U1a，合入时把维护视图里服务端那一段换掉。U1b 计划 4.7 已写明。
 
 #### 4.4.3 远程时的"后台服务"：`U/management/RemoteServiceGroup.tsx`（新）
 
@@ -249,7 +249,7 @@ export const DISTRIBUTION_LABEL: Record<string, string>; // standalone 独立安
 </SettingsGroup>
 ```
 
-- "重启"发 `restartHost`。bridge 在发之前已经 `devices.expect('restart')`（U1a），断开时提示条写"正在重启"。
+- "重启"发 `restartHost`：它是 `command`，`RemoteServiceGroup` 收 `App` 传的 `onRestart`（同 4.4.4），自己不发。bridge 在转发之前已经 `devices.expect('restart')`（U1a），断开时提示条写"正在重启"。
 - `RemoteLoginRow` 按 `application.platform`：
   - `macos`：同 `LoginServiceRow` 的开关；`onToggle` 调 `toggleService(enabled, client, undefined)`（远程时外壳没有 `setLoginItem`，就发 `machine.service install/uninstall`，bridge 按 U1a 4.5 转给对面，见 4.6）。成功后提示条由 bridge 里的 `expect('restart')` 接管。
   - `linux`：标题"登录时启动"，值取 `serviceStep(application).status`，下面写"在那台设备的终端运行 `vonvon service install`"。没开 linger 时（`application.service.linger`）接 `service.hint`。
@@ -258,10 +258,11 @@ export const DISTRIBUTION_LABEL: Record<string, string>; // standalone 独立安
 
 #### 4.4.4 `MachinePanel`（`U/management/MachinePanel.tsx`）
 
-- 新 prop `remote?: Pick<ActiveDevice, 'name'>`。
+- 新 prop `remote?: Pick<ActiveDevice, 'name'>`、`onRestart?: () => void`。
 - 有 `remote` 时：
   - 不渲染"启动 daemon"（71）、"服务运行"整行（80-83）、"仅运行指定 Bot"整行（86-93）；
-  - "daemon 服务"一行的按钮变成 [重启]（发 `restartHost`）在前、[停止]（`setConfirm({type:'stopHost'})`）在后；
+  - "daemon 服务"一行的按钮变成 [重启] 在前、[停止]（`setConfirm({type:'stopHost'})`）在后；
+  - [重启] 调新 prop `onRestart?: () => void`。`MachinePanel` 今天只拿到 `request`（`client.machine`），而 `restartHost` 是 `command`（`P/domain.ts:76`），`App` 自己用 `run` 发（`App.tsx:914`）。所以 `App` 传 `onRestart={() => void run({type: 'restartHost'})}`；没传就不显示 [重启]；
   - 确认框（101-104）的正文换成设计第 15 节"远程停止确认"："停止「X」的后台服务？停止后它不会自动重启，只能在那台设备上重新启动。要重新加载请用"重启"。"
   - 页脚（77）换成"这些设置作用在「X」上。"
 - 本机的确认框和页脚按 4.7 的退出规则二选一：
@@ -275,7 +276,7 @@ export const DISTRIBUTION_LABEL: Record<string, string>; // standalone 独立安
 - `P/domain.ts:267` 的 `application.platform` 枚举加 `'windows'`。
   - 旧客户端解析新服务端会失败吗？0.8 的客户端按严格 schema 解析快照，收到 `platform: 'windows'` 会失败，所以快照只能发给同协议的客户端。
     - 设计 4.5 和 PROTO-1 要求维护连接不推 `snapshot` 事件，D4a 计划 4.4 也写了，但 D1 分支还没做：`ws.ts:203` 的 `publish` 发给所有 peer，`forProtocol1`（24-29）只去掉 `device` 事件和 `daemonStatus.startedAt`。
-    - 所以本片在 `ws.ts` 的 `send` 里加一条：`principal.kind === 'maintenance'` 时丢掉 `type: 'event'`、`event: 'snapshot'` 的帧。D4a 先合入、已经有这一条时不重复。
+    - D2 把 `publish` 从 `ws.ts` 挪进 `D/server/peer-hub.ts`，签名是 `publish(event, shape?)`（D2 计划 4.3），D4a 用 `shape` 对维护连接回 `null`（D4a 计划 4.4）。所以本片在推快照的那一处（`http.ts:148-158`）给 `hub.publish` 传 `shape`：对 `principal.kind === 'maintenance'` 的 peer 回 `null`。不改 `ws.ts` 的 `send`，D2 之后 `publish` 不在那里。D4a 先合入、已经有这一条时不重复。
     - 有了它，快照只到同协议的客户端，而同协议的客户端都来自这一批，认得 `windows`。
 - 界面：
   - `DEVICE_TITLE` 换成 `hostTitle`（4.1），`windows` →"这台 Windows 电脑"；`GroupWorkspace.tsx:179` 经 `deviceTitle` 跟着变。
@@ -286,7 +287,7 @@ export const DISTRIBUTION_LABEL: Record<string, string>; // standalone 独立安
 
 路由归 U1a（U1a 4.5"各通道在远程时"的 `machine` 一条），本片用它：
 - 今天 `machine` 通道在转发之前就用 `desktopShellRequestSchema` 把 `service` 拦成 `Shell-owned machine action`（D1 分支 `bridge.ts:251-253`），4.4.3 的远程开关一点就报错。
-- U1a 改成：看远程时放行 `service` 的 `install`、`uninstall`，先 `devices.expect('restart')` 再转给对面；看本机照旧拦。daemon 回完就会被助手换掉（I3 分支 `rpc/machine.ts:75-82`），断开显示成"正在重启"，不算"连不上"。
+- U1a 改成：看远程时放行 `service` 的 `install`、`uninstall`，先 `devices.expect('restart')` 再转给对面；看本机照旧拦。daemon 回完就会被助手换掉（I3 分支 `rpc/machine.ts:75-81`），断开显示成"正在重启"，不算"连不上"。
 - `service start/stop` 远程时照旧被拦（U1a 4.5），远程页面上也没有入口。
 - 本片在 `bridge.ts` 里只加 4.7 的 `quitKeepsDaemon` 通道。
 
@@ -433,7 +434,7 @@ D1 分支 `D/server/http.ts:65` 的 `capabilities()` 加：`distribution.kind ==
 | 同上 | 跟进度 | 点更新回 `done` → 每秒发 `coreUpdateStatus`，到 `done` 停 |
 | `ui/test/application-page-remote.test.tsx`（新） | 应用卡 | 远程、`devicesState.client.version = 0.9.1`、快照版本 0.9.0 → 应用卡"这台电脑上的 Vonvon Bot 应用 … v0.9.1"；没有"外部 Core / CLI"；有"「X」的服务端"。main 必败 |
 | 同上 | 后台服务组 | macos → 开关；linux → "`vonvon service install`"；windows → "这一批 Windows 不做登录自启"；页脚"退出这台电脑上的 Vonvon Bot 不影响「X」" |
-| `ui/test/machine-panel.test.tsx`（改，或 `machine-restart.test.tsx`） | 远程 | `remote` 有值 → 没有"启动 daemon""启动服务""仅运行此 Bot"；按钮顺序 [重启][停止]；点停止 → 确认框是设计第 15 节那句 |
+| `ui/test/machine-panel.test.tsx`（改，或 `machine-restart.test.tsx`） | 远程 | `remote` 有值 → 没有"启动 daemon""启动服务""仅运行此 Bot"；按钮顺序 [重启][停止]；点重启 → `onRestart` 调一次、`request` 没收到东西；没传 `onRestart` → 没有 [重启]；点停止 → 确认框是设计第 15 节那句 |
 | `ui/test/machine-restart.test.tsx:83,92`（改） | 退出页脚 | `quitKeepsDaemon` 真 → "退出桌面应用不会停止后台"；假 → 原文 |
 | `ui/test/service-toggle.test.tsx`（改） | 远程开关 | `shell` 不带 `setLoginItem` → 发 `machine.service install` |
 | `desktop/test/bridge.test.ts`（U1a 的） | 服务开关 | 不改：U1a 的"远程的服务开关"一例已经覆盖（远程 `machine {service install}` 先 `devices.expect('restart')` 再到对面，本机照旧拦） |
@@ -451,7 +452,7 @@ D1 分支 `D/server/http.ts:65` 的 `capabilities()` 加：`distribution.kind ==
 | `daemon/test/dm-cards.test.ts`（改） | 卡片 | `buildPermissionCard` 含警示；`buildNewProjectDoneCard` 群是 `full` 时含，`write` 时不含 |
 | `ui/test/permission-fields.test.tsx`（新或改） | 界面 | 选项里 `full` 有 `warning` → 渲染出这句；当前是 `full` → `PermissionSummary` 有这句 |
 | `ui/test/join-group-dialog.test.tsx`（改） | 建群 | 建群模式 → "权限 完全访问" + 警示；绑定模式 → "只读（不联网）"、没有警示 |
-| `daemon/test/ws-maintenance-snapshot.test.ts`（新，D4a 先合入就并进它的 `authz-maintenance.test.ts`） | 维护连接不收快照 | protocol 1 和 protocol 2 的本机连接都连着时 `publish` 一条 `snapshot` 事件 → 只有 protocol 2 的收到；protocol 1 的 `admin.daemonStatus` 照常回。main 必败 |
+| `daemon/test/peer-hub-maintenance-snapshot.test.ts`（新，D4a 先合入就并进它的 `authz-maintenance.test.ts`） | 维护连接不收快照 | protocol 1 和 protocol 2 的本机连接都连着时 hub `publish` 一条 `snapshot` 事件 → 只有 protocol 2 的收到；protocol 1 的 `admin.daemonStatus` 照常回。main 必败 |
 | `daemon/test/server-info.test.ts`（D1 的，改） | 能力 | 注入 `standalone` → `capabilities` 含 `update.standalone`；`global-npm` → `update.npm`；`bundled` → 都没有 |
 
 ## 6. 自测和验收
@@ -560,3 +561,12 @@ Windows 的平台名和 4.8 的 Windows 启动修复，放进 U4 的 Windows 任
 - **`keepOnQuit` 多一次 attach：** 退出时多一次本机连接，最多几百毫秒。失败就当 `false`，退回今天的行为。
 - **Windows 启动修复**只在 Windows 真机上见效，靠单测 + U4 的 Windows 任务。修复失败的提示走已有的 `repairNotice`，不会让桌面端起不来。
 - **删旧任务面板：** 网页端早就不发这两个 command，CLI 也没有对应命令（白名单标 dead），所以没有现存用户受影响。旧网页端连新 daemon 发这两个，会得到 `invalid_request`。
+
+## 10. 审查后改了什么
+
+2026-11-02，#640 上 Sonnet 审查（读整个 diff 一位，读 U2–U4 一位）。下面每条都接受了：
+
+- 原来写"U1b、本片哪个先合入都行"，可本片依赖 U1a，U1a、U1b 又是一个 PR，"本片先合入"不会发生。改成定序：U1 先合入，本片把 U1b 维护视图里服务端那一段换成 `ServerUpdateCard variant="remote"`（第 1 节依赖、4.4.2）。
+- 维护连接不收快照原来写在 `ws.ts` 的 `send` 里，可 D2 把 `publish` 挪进了 `peer-hub.ts`，D4a 用它的 `shape` 做同一件事。改成在推快照那一处传 `shape`，D4a 已做就不重复（第 2 节、4.5、第 5 节测试名）。
+- `MachinePanel` 只拿到 `request`（`machine` 通道），可 `restartHost` 是 `command`，计划没说 [重启] 怎么发。加 `onRestart` prop，`RemoteServiceGroup` 同样收它（4.4.3、4.4.4、第 5 节）。
+- I3 拆成 I3a、I3b 后，计划里钉的 `server-3-update-engine`（4aca3777）和行号过期，D1 的 sha 也旧了。头部改成 I3b（83550082）和 D1（147b2619），`UpdatePanel` 那一组从 101 行起，`rpc/machine.ts` 的服务开关在 75-81。

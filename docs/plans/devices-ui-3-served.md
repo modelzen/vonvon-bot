@@ -2,7 +2,7 @@
 
 总设计见 `docs/plans/devices.md`（下文简称"设计"）4.2、4.3、6.2、6.3、第 15 节，本片对应第 13 节的 U3 行。单独一个 PR，分支 `claude/devices-ui-3-served`，从集成分支开、PR 回集成分支。产品行为以 `docs/product.md` 3.14 为准。
 
-缩写同 D1：`P/`、`CL/`、`D/`、`DT/`、`U/` 分别是 protocol、client、daemon、desktop、ui 的 `src/`。行号以 `origin/claude/devices-integration`（8051b03c，代码和 413d78d5 相同）为准；D1 的代码以 `origin/claude/devices-1-identity`（e8bbe267）为准，写"D1 分支"。D2、D3 还没有代码，按 `devices-2-secure-channel.md`、`devices-3-remote-listen.md` 的接口写。U1a、U1b 的接口以它们的计划为准。
+缩写同 D1：`P/`、`CL/`、`D/`、`DT/`、`U/` 分别是 protocol、client、daemon、desktop、ui 的 `src/`。行号以 `origin/claude/devices-integration`（8051b03c，代码和 413d78d5 相同）为准；D1 的代码以 `origin/claude/devices-1-identity`（147b2619）为准，写"D1 分支"。D2、D3 还没有代码，按 `devices-2-secure-channel.md`、`devices-3-remote-listen.md` 的接口写。U1a、U1b 的接口以它们的计划为准。
 
 ## 1. 做什么
 
@@ -30,7 +30,7 @@
 
 依赖：
 - D1：`device.*` RPC、`clients.json`、`client-paired` 事件。
-- D3：远程监听、`device.enable/disable/status`、撤销断连。
+- D3：远程监听、`device.enable/disable/status`、撤销断连；`remoteAddressStateSchema` 里的 `failed`（D3 计划 4.5，页面的"开不了"靠它）。
 - U1a：`useActiveDevice`、`shell.onLocalDeviceEvent`。
 - U1b：`DesktopRoot`、`TailscaleAdvice`。
 - U2：`device-copy.ts`；"应用与启动"页在远程时的结构。U2 后合入时，本片的面板照样能放，只是标题少一个设备名。
@@ -41,7 +41,7 @@
 - UI：
   - 新文件：`U/settings/RemoteAccessPanel.tsx`、`U/settings/remote-access-presentation.ts`、`U/devices/PairedToasts.tsx`、`U/settings/remote-access.css`；
   - 改：`U/App.tsx`（应用与启动页）、`U/main.tsx`（U1b 的 `DesktopRoot` 挂提示）、`U/search.ts`。
-- protocol `P/device.ts`：`deviceStatusSchema` 加 `candidates`、`via`；`clients` 回复加 `self`；`commandResultSchema` 不变（6.3 用已有的 `refused`）。
+- protocol `P/device.ts`：`deviceStatusSchema` 加 `candidates`、`via`；`clients` 回复加 `self`；`commandResultSchema` 不变（6.3 用已有的 `refused`）；D3 没给 `remoteAddressStateSchema` 加 `failed` 时由本片加（4.1）。
 - daemon：
   - `D/server/rpc/device.ts`、新文件 `D/remote/candidates.ts`；
   - `D/remote/tailscale.ts`：认 macOS、Windows 上 Tailscale 自带的命令行；`isTailscale` 认 Windows 的网卡（下面"Windows 的 Tailscale 地址"）；
@@ -49,7 +49,7 @@
   - `D/server/jobs.ts`、`D/server/rpc/command.ts`；
   - `D/server/peer-hub.ts`（D2）加 `attached` 回调；`D/server/http.ts` 接线；
   - D3 撤销处（`clients.onChange`）加 `jobs.cancelOwner`；
-  - `D/cli/commands/bot.ts` 注释。
+  - `D/cli/commands/bot.ts`：`job_running` 被拒时 exit 4、`lost` 的文字、注释。
 - 文档：设计 6.3、第 15 节（已在本计划的 PR 里改，第 7 节）。
 
 不做：
@@ -63,9 +63,10 @@
 - **`device` RPC**（D1 分支 `D/server/rpc/device.ts`）：
   - `pair`（25-37）用 `remote.json` 里开着的地址拼链接，`invitedBy` 是发起的那台的 `clientId`，本机是 `'local'`；没有地址时报 `no_remote_address`。
   - `clients`（38）回全部记录，包括已撤销的墓碑。
-  - `renameClient`（39-42）、`revokeClient`（44，`cascade` 按 `invitedBy` 链往下全撤）、`rename`（45-48）。
+  - `renameClient`（39-42）、`revokeClient`（44，`cascade` 按 `invitedBy` 链往下全撤）、`rename`（45，经 `holdDevice` 排队）。
   - `status/enable/disable/setPort` 由 D3 补（D3 计划 4.7）。
-- **D3 的 `status`** 回已开启的地址 `{ host, kind, enabledAt, state, detail? }`、端口、`clients.{total, active}`。**没有"这台设备有哪些地址可选"**，面板没法列候选；也不知道调用者是从哪个地址连进来的。
+- **D3 的 `status`** 回已开启的地址 `{ host, kind, enabledAt, state, detail? }`、端口、`clients.{total, active}`。**没有"这台设备有哪些地址可选"**，面板没法列候选；也不知道调用者是从哪个地址连进来的。`state` 的枚举（D1 分支 `P/device.ts:61` 的 `remoteAddressStateSchema`）只有 `listening`、`waiting`、`needs-confirmation`、`disabled`，可 D3 的监听器遇到别的绑定错误会记 `failed`（D3 计划 4.5）。
+- **CLI 被拒时的退出码**：`bot.ts:225` 把 `refused` 抛成 `CommandError('failed', …)`，退出码 1（`cli/command-error.ts:4`：`refused` 是 4，`failed` 是 1）。C2 计划把 `registration_busy` 定成 1（`docs/plans/cli-2-bot.md:54`，`cli-admin.test.ts:217` 在测），别的 `bot` 子命令被拒都是 4。
 - **Tailscale 判定**（D3 计划 4.3）：
   - 100.64/10 的地址要在 `tailscale*` 网卡上，或者在 `utun*` 网卡上**且**出现在 `tailscale ip` 的输出里。
   - `tailscale` 命令找不到就当没装。
@@ -92,13 +93,16 @@ const candidateSchema = z.object({ host: z.string(), kind: addressKindSchema.exc
 
 都是可选字段。这几个 schema 是 `.strict()` 的：旧客户端解析新服务端的回复会失败。但 `device.*` 不在维护子集里，只在协议相同时才会发，而协议 2 的客户端和服务端都出自这一批，所以没有旧客户端会碰到。
 
+`remoteAddressStateSchema` 要有 `'failed'`：D3 的监听器会给，页面的"开不了"也靠它，没有的话带一个 `failed` 地址的 `device.status` 整条回复解析失败，面板什么都显示不出来。D3 计划 4.5 已经写了这一步；D3 合入时没做，本片在 `P/device.ts` 加，连同一例解析测试（第 5 节）。
+
 ### 4.2 daemon
 
 **`D/remote/candidates.ts`（新）**
 
 ```ts
 export interface Candidate { host: string; kind: Exclude<AddressKind, 'loopback'>; iface?: string }
-export async function listCandidates(deps: { interfaces: () => NodeJS.Dict<os.NetworkInterfaceInfo[]>; tailscale: () => Promise<{ installed: boolean; ips: string[] }>; now?: () => number }): Promise<Candidate[]>;
+export interface Candidates { list(): Promise<Candidate[]>; clear(): void }
+export function createCandidates(deps: { interfaces: () => NodeJS.Dict<os.NetworkInterfaceInfo[]>; tailscale: () => Promise<{ installed: boolean; ips: string[] }>; now?: () => number }): Candidates;
 ```
 
 - 取全部网卡上 `internal: false` 的地址：
@@ -106,7 +110,8 @@ export async function listCandidates(deps: { interfaces: () => NodeJS.Dict<os.Ne
   - IPv6 只留 Tailscale 段 `fd7a:115c:a1e0::/48`（别的 IPv6 局域网地址会变，先不列）。
 - 每个用 D3 的 `classifyAddress(host, { interfaces, tailscale })` 分类，`iface` 取 `interfaceFor(host).name`，去掉 `invalid` 和 `loopback`。
 - 排序：tailscale、lan、cgnat、public，同类按网卡名。
-- 结果缓存 30 秒，`tailscale()` 最多 5 秒（D3 的超时）。缓存放在模块里，`device.enable/disable` 后清掉。
+- 结果缓存 30 秒，`tailscale()` 最多 5 秒（D3 的超时）。缓存挂在 `createCandidates` 建出的对象上，不放在模块里：`http.ts` 建一个放进 `rpc/device.ts` 的 deps，测试各建各的，同一个 vitest 进程里的用例不会互相串。`device.enable/disable` 后 `clear()`。
+- 取舍：Tailscale 刚启动时，新地址最多 30 秒后才出现在候选里（面板每 10 秒读一次，不用用户动手）。不加"跳过缓存"的参数：那要改 D1 定的 `device.status` 请求形状，30 秒可以接受。
 
 **`D/remote/tailscale.ts`（补 D3）**
 
@@ -129,51 +134,62 @@ D3 计划 4.3 原来的规则：100.64/10 要么在名字以 `tailscale` 开头�
 - 签名：`deviceRpc(deps, peer: Pick<Peer, 'principal' | 'listener'>, request)`。
 - `peer.listener`：D3 加的（D3 计划 4.5 末尾：D2 的 `SecureSocketServerOptions.listenerId` 记到 `Peer.listener`），是这条连接进来的那个监听地址；loopback 连接没有。
 - `status`：在 D3 的回复上加：
-  - `remote.candidates = await listCandidates(...)`；
+  - `remote.candidates = await deps.candidates.list()`；
   - `via: peer.listener`。
 - `clients`、`renameClient`：principal 是 `owner` 且 `via === 'paired'` 时加 `self: principal.clientId`。
-- `enable`、`disable` 成功后清候选缓存。
+- `enable`、`disable` 成功后 `deps.candidates.clear()`。
 
 **`D/server/peer-label.ts`（新）**
 
 ```ts
 export interface PeerOwner { key: string; label: string }
+/** "这台电脑上的桌面端 / 命令行 / 网页端"，不认识的 clientKind 是"这台电脑上的客户端"。U4 的 peerName 也用它。 */
+export function localPeerLabel(clientKind: string | undefined): string;
+/** 配对来的客户端的名字，找不到是"未知设备"。U4 的 peerName 也用它。 */
+export function pairedPeerName(clientId: string, clients: Pick<ClientRegistry, 'get'>): string;
 /** 扫码任务的归属（设计 6.3）：配对来的按 clientId，本机按 clientKind。bot 会话、维护连接没有。 */
 export function peerOwner(peer: Pick<Peer, 'principal' | 'clientKind'>, clients: Pick<ClientRegistry, 'get'>): PeerOwner | undefined;
-// 配对来的：{ key: `paired:${clientId}`, label: `另一台设备「${clients.get(clientId)?.name ?? '未知设备'}」` }
-// 本机：    { key: `local:${clientKind ?? 'unknown'}`, label: `这台电脑上的${{ desktop: '桌面端', cli: '命令行', web: '网页端' }[clientKind] ?? '客户端'}` }
+// 配对来的：{ key: `paired:${clientId}`, label: `另一台设备「${pairedPeerName(clientId, clients)}」` }
+// 本机：    { key: `local:${clientKind ?? 'unknown'}`, label: localPeerLabel(clientKind) }
 ```
+
+"这台电脑上的…"的对照表只在 `localPeerLabel` 里有一份。U4 在同一个文件里加 `peerName`（"「<名字>」"或 `localPeerLabel(...)`），本片先合入，U4 从合了本片的集成分支开（设计第 13 节 U4 行已加这条依赖）。
 
 **`D/server/jobs.ts`（设计 6.3）**
 
 ```ts
-interface Registration { /* 原有 */ owner: string; ownerKey?: string; ownerLabel?: string; grace?: NodeJS.Timeout; agentId?: string }
+interface Registration { /* 原有 */ owner: string; ownerKey?: string; ownerLabel?: string; holders?: Set<string>; grace?: NodeJS.Timeout; agentId?: string }
 startRegistration(peer: JobPeer, agentId?: string, owner?: PeerOwner): CommandResult;
 attach(peer: JobPeer, owner: PeerOwner | undefined): void;     // 新
 detach(peer: JobPeer): void;                                   // 签名不变，行为加宽限
 cancelOwner(ownerKey: string): void;                           // 新：撤销时用
 ```
 
+`holders` 是同一个 key 下现在连着的连接（peer id）。有 `ownerKey` 的任务按它判断"还有没有人在"，不再只看开任务的那一条连接；没有 `ownerKey` 的任务照今天只看 `owner`。
+
 - `startRegistration`（68 行那一句改掉）：已有未结束的注册任务 `current` 时：
   - `owner` 缺或 `current.ownerKey` 缺，或 `owner.key === current.ownerKey` → 照今天：取消旧的，开新的。同一台点两次"添加 Bot"就是重来。
   - 否则回 `{ kind: 'refused', code: 'job_running', message }`，不动旧任务。`message`：
     - 添加：`${current.ownerLabel}正在扫码添加 Bot，等它完成后再试。`
     - 重新扫码（`current.agentId` 有值）：`${current.ownerLabel}正在为一个 Bot 重新扫码，等它完成后再试。`
-- 新任务记 `ownerKey`、`ownerLabel`、`agentId`。
+- 新任务记 `ownerKey`、`ownerLabel`、`agentId`；有 `ownerKey` 时 `holders = new Set([peer.id])`。
 - `detach(peer)`（219-222）：
-  - 对 `owner === peer.id` 的未结束任务：
-    - 任务没有 `ownerKey` → 照今天立刻取消；
-    - 否则 `entry.grace = setTimeout(() => this.cancelRegistration(entry), 60_000)`，`unref()`。
+  - 对未结束的注册任务：
+    - 任务没有 `ownerKey` → `owner === peer.id` 时照今天立刻取消；
+    - 有 → `holders.delete(peer.id)`；删完空了，`entry.grace = setTimeout(() => this.cancelRegistration(entry), 60_000)`，`unref()`；还有别的持有者就什么都不做。
   - 后端安装的 peer 照旧移除。
 - `cancelOwner(ownerKey)`：`ownerKey` 相同的未结束注册任务立刻取消，不管它的连接还在、还是已经断开在宽限里；先 `clearTimeout(entry.grace)`。
-- `attach(peer, owner)`：有 `ownerKey === owner.key` 且正在宽限的任务 → `clearTimeout`，`entry.owner = peer.id`，`grace` 清掉。
+- `attach(peer, owner)`：`owner` 有值时，对每个 `ownerKey === owner.key` 的未结束注册任务：`holders.add(peer.id)`；有 `grace` 就 `clearTimeout`、清掉。**不管任务在不在宽限里都加。** 换网络时常见的顺序是新连接先连上、服务端过一会儿才发现旧连接断了；只在宽限里才接手的话，旧连接随后的 `detach` 会给一个同 key 客户端还连着的任务起 60 秒宽限，然后把它取消。
+- 取舍：同一个 key 下的任何连接都算持有者，包括本机 `vonvon bot list` 这类短命令（key 都是 `local:cli`）。任务的主人还连着时没有影响，短命令断开后还有别的持有者；任务已经在宽限里时，来一条短命令会把 60 秒重新算一次。上限是二维码自己的 10 分钟有效期，到了 SDK 照样让任务失败。不按连接用途区分：daemon 分不出一条连接是不是在看这个任务。
 - `cancelRegistration`（110-115）、`close`（223-237）：先 `clearTimeout(entry.grace)`。
 - 结束（`finally`，103-107）时也清。
 
 和设计的出入：设计写回新的 `{ kind: 'jobRunning', jobId, owner }`，本片用已有的 `refused` 加 `code: 'job_running'`。理由：
-- 网页端的 `run()`（`U/App.tsx:321-345`）和 CLI 的 `follow`（`bot.ts:198-199`）已经把 `refused` 的 `message` 显示出来，不用改两边；
+- 网页端的 `run()`（`U/App.tsx:321-345`）和 CLI 的 `follow`（`bot.ts:198-199`）已经把 `refused` 的 `message` 显示出来，不用改显示；
 - `jobId` 对拒绝方没有用（任务在快照里本来就看得到）。
 设计 6.3 已按这个改（第 7 节）。
+
+CLI 只改退出码：`bot.ts:225` 的 `case 'refused'` 改成 `code === 'job_running'` 时抛 `CommandError('refused', …)`（exit 4），和别的 `bot` 子命令被拒一致；其余的 `refused`（今天只有 `registration_busy`）照 C2 计划留在 `failed`（exit 1），`cli-admin.test.ts:217` 不用改。`runBotAdd` 的注释补一句"4 when another client is scanning"。
 
 **接线**
 
@@ -187,6 +203,7 @@ cancelOwner(ownerKey: string): void;                           // 新：撤销�
   - 先取消再 `detach`：`detach` 看到任务已经结束，不会再给它起宽限的定时器。
 - `D/server/rpc/command.ts` 的 `registerAgent`、`refreshAgentCredentials` 两个分支把 `peerOwner(peer, clients)` 传给 `startRegistration`。
 - `D/cli/commands/bot.ts:124-126` 的注释改成"连接断开后 daemon 留 60 秒，同一个客户端回来就接着，不回来就取消"。Ctrl-C 那一路（178）不变。
+- `bot.ts` 的 `case 'lost'`（二维码出来前断线，exit 3）原来写"和 daemon 的连接断了，扫码已经取消"，有了宽限就不对了。改成"和 daemon 的连接断了。扫码任务要是已经开了，会再留 60 秒，之后自动取消；重新运行 `<again>` 会重新开始。"（断在 `registerAgent` 回复之前时任务可能还没开；同一个 key 再开就是取消旧的、开新的。）
 
 ### 4.3 UI：`U/settings/remote-access-presentation.ts`（纯函数，全部文案）
 
@@ -297,7 +314,7 @@ export function RemoteAccessPanel(): JSX.Element
 | 文件 | 用例 | 输入 → 期望 |
 |---|---|---|
 | `daemon/test/remote-candidates.test.ts`（新） | 列候选 | 注入网卡：`en0` 192.168.1.9、`utun4` 100.64.0.10（`tailscale ip` 含它）、`eth1` 100.70.0.3（不在输出里）、`lo0` 127.0.0.1、`en1` 169.254.3.4、`en0` fe80::1 → `[{100.64.0.10, tailscale, utun4}, {192.168.1.9, lan, en0}, {100.70.0.3, cgnat, eth1}]`。main 必败 |
-| 同上 | 缓存 | 30 秒内第二次不调 `interfaces`；`enable` 后清掉 |
+| 同上 | 缓存 | 同一个 `createCandidates` 对象 30 秒内第二次不调 `interfaces`；`clear()` 后再调；两个对象互不影响 |
 | `daemon/test/remote-tailscale.test.ts`（D3 的，改） | 应用自带的命令 | 注入 `platform:'darwin'`，`tailscale` 回 ENOENT、应用包路径回 `100.64.0.10` → `installed: true, ips: ['100.64.0.10']`；win32 同理用 `ProgramFiles`；都 ENOENT → `installed: false`。main 必败 |
 | `daemon/test/remote-address.test.ts`（D3 的，改） | Windows 的网卡 | `100.100.1.1` 在 `Tailscale` 网卡上、`ts.ips` 为空 → `tailscale`；在 `Ethernet` 上、`ts.ips` 含它 → `tailscale`；在 `utun3` 上、`ts.ips` 含它 → `tailscale`；在 `eth0` 上、`ts.ips` 不含 → `cgnat`。main 必败 |
 | `daemon/test/remote-candidates.test.ts` | Windows | 按 Windows 的样子注入网卡：`Tailscale` 100.64.0.10（`ts.ips` 含它）、`Ethernet` 192.168.1.9 → 第一行 `{100.64.0.10, tailscale, Tailscale}`，"允许别的设备连接"里就有"Tailscale（推荐）"那一行 |
@@ -310,12 +327,17 @@ export function RemoteAccessPanel(): JSX.Element
 | 同上 | 重新扫码的文字 | A 用 `refreshAgentCredentials` 开 → B 开 → message 含"重新扫码" |
 | 同上 | 宽限 | 假时钟：A 开 → `detach(A)` → 59 秒仍是 `qr`；60 秒 → `cancelled`。main 必败 |
 | 同上 | 回来续上 | A 开 → `detach(A)` → 30 秒时 `attach(A2, 同 key)` → 再过 60 秒仍是 `qr`；`detach(A2)` 后 60 秒 `cancelled` |
+| 同上 | 先连上、后发现旧的断了 | A 开 → `attach(A2, 同 key)` → `detach(A)` → 60 秒后仍是 `qr`，没有宽限定时器；`detach(A2)` 后 60 秒 `cancelled`。main 必败 |
+| 同上 | 短命令 | A 开 → `attach(B, 同 key)` → `detach(B)` → 60 秒后仍是 `qr`（A 还连着）；`attach(C, 不同 key)` 不进持有者 |
 | 同上 | 撤销（连着） | A 开 → `cancelOwner('paired:A')` → 立刻 `cancelled`；之后 `detach(A)` 不起定时器（`vi.getTimerCount()` 为 0） |
 | 同上 | 撤销（宽限中） | A 开 → `detach(A)` → 10 秒后 `cancelOwner('paired:A')` → 立刻 `cancelled`，宽限的定时器清掉；`cancelOwner('paired:B')` 不动 A 的任务 |
 | 同上 | 没有 key | `startRegistration(peer)` 不传 owner（旧测试的写法）→ 行为同今天：后开的取消先开的，断开立刻取消 |
 | 同上 | 关闭 | 宽限中 `close()` → 定时器清掉，进程能退出（`vi.getTimerCount()` 为 0） |
 | `daemon/test/peer-hub.test.ts`（D2 的，改） | attached | `add(peer)` → `attached` 被调一次 |
-| `daemon/test/cli-bot.test.ts`（改） | 被拒 | `registerAgent` 回 `refused job_running` → 打印 message、exit 4，没有发 `cancelJob` |
+| `daemon/test/cli-bot.test.ts`（改） | 被拒 | `registerAgent` 回 `refused job_running` → 打印 message、exit 4（`CommandError('refused')`），没有发 `cancelJob`。main 必败（今天是 exit 1） |
+| 同上 | 断线的文字 | 二维码出来前断线 → exit 3，文字含"会再留 60 秒"，不再说"扫码已经取消" |
+| `daemon/test/cli-admin.test.ts:217` | 不改 | `registration_busy` 仍 exit 1 |
+| `protocol/test/device.test.ts`（改，D3 已加就不重复） | 地址状态 | `device.status` 带 `{ state: 'failed', detail: 'EACCES' }` 的地址往返解析通过。main 必败 |
 | `ui/test/remote-access-presentation.test.ts`（新） | 地址行 | 已开 tailscale（`listening`）+ 候选 lan、cgnat → 三行、tailscale 在前且勾上；已开但候选里没有的 → 仍列出、`state` 为 `waiting`；`via` 等于某行 → 那行 `current`。main 必败 |
 | 同上 | 级联数 | A（local）、B（A）、C（B）、D（A，已撤销）→ `cascadeCount(A) = 2`；`cascadeCount(C) = 0` |
 | 同上 | 带进来的 | `invitedBy: 'local'` → "在这台设备上生成的链接"；`invitedBy: A` → "由「A」带进来"；A 已不在 → "由一台已删除的设备带进来" |
@@ -344,8 +366,11 @@ export function RemoteAccessPanel(): JSX.Element
 1. 单测：`T=$(mktemp -d); HOME=$T/home VONVON_HOME=$T/vh flock /tmp/vonvon-heavy.lock npx vitest run <第 5 节列出的文件>`，然后在锁里跑 protocol、daemon、ui 的 `typecheck`、`lint`、`build`。最后 `rm -rf -- "${T:?}"`。
 2. 验收 daemon 上的真流程。先拿锁、切 sha，同 U1b 6.2 的准备 1、2 步。然后：
    - `vonvon remote status --json` 有 `candidates`，Tailscale 地址标 `tailscale`；
-   - 两个终端各跑 `VONVON_HOME=<验收数据目录> vonvon bot add --json`：第二个立刻 exit 4，输出含"正在扫码添加 Bot"；第一个的二维码链接还在刷新；
-   - 第一个 Ctrl-C → 任务 `cancelled`。
+   - 扫码归属要两个**不同的** key：两个终端里的 `vonvon bot add` 都是 `local:cli`，按 4.2 是同一个客户端，第二个会接手、不会被拒。所以：
+     - 用 U1a 的探针以配对客户端身份发 `registerAgent`（key `paired:<id>`），快照里任务到 `qr`；再在本机跑 `VONVON_HOME=<验收数据目录> vonvon bot add --json` → 立刻 exit 4，输出含"另一台设备「…」正在扫码添加 Bot"；探针的任务还是 `qr`。探针发 `cancelJob`。
+     - 反过来：本机先跑 `vonvon bot add --json`，探针再发 `registerAgent` → `refused`、`code: 'job_running'`，message 含"这台电脑上的命令行正在扫码添加 Bot"；本机的二维码链接还在刷新。
+     - 同一个 key 接手：另一个终端也跑 `vonvon bot add --json` → 第一个的任务 `cancelled`、第一个命令 exit 1（"扫码被取消了…"），第二个出新的二维码链接。
+   - 第二个 Ctrl-C → 任务 `cancelled`。
    - 宽限：用 U1a 的探针以配对客户端身份开注册任务，断开探针，35 秒内用同一份客户端密钥重连：快照里任务仍是 `qr`。再断开，70 秒后是 `cancelled`。
 3. 页面截图（可选，给审查者看）：用 U1b 的 `devices-fake-shell.ts` 注入假状态，截"允许别的设备连接"的三种状态（没开地址、开了 tailscale 并生成链接、cgnat 确认框）和配对提示。只用假名字和文档地址段。
 4. 收尾：验收 worktree 切回原来的 sha，重启验收 daemon，放锁。
@@ -356,7 +381,7 @@ export function RemoteAccessPanel(): JSX.Element
 
 **网页控制**（Mac 上的网页端连 Mac 上的隔离 daemon）能做的：
 1. 应用与启动 →"允许别的设备连接"：候选里 Tailscale 地址标"Tailscale（推荐）"。这一步验 4.2 对应用自带 Tailscale 命令的补丁：Mac 的 Tailscale 命令默认不在 PATH 里。
-2. 勾 Tailscale 地址 → "监听中"。
+2. 勾 Tailscale 地址 → "监听中"。第一次在非回环地址上监听时，如果 Mac 开了应用防火墙（系统设置 → 网络 → 防火墙），会问是否允许传入连接：点允许（这一下要用 Computer Use）。没开就不会问。结果里写防火墙开没开、问没问；后面 JP-VPS 配对超时时先看是不是这里挡了。
 3. 生成连接链接 → 有链接和倒数；复制按钮可用；再生成一个 → 换了一条。
 4. 隔离 daemon 所在的 Mac 有局域网地址时，勾它 → "局域网"，不弹确认框。有 100.x 的非 Tailscale 地址时才验确认框；没有就写"没有这种地址，靠单测"。
 
@@ -413,13 +438,15 @@ Claude 收尾：停助手；撤销验收中配对的客户端；验收 daemon �
 6. 扫码任务：
    - 不同客户端被拒，原任务不动；
    - 同一客户端重开就是重来；
-   - 断开留 60 秒，同一个 key 回来续上；
+   - 同一个 key 还有连接在（`holders` 不空）就不起宽限；全断了留 60 秒，同一个 key 回来续上，先连上后断开的顺序也一样；
    - 撤销立刻取消，连着的和已经断开在宽限里的都是（`clients.onChange` 里按 `ownerKey` 取消）；
    - 关闭时定时器清干净。
 7. 没传归属时 `jobs` 的行为和今天一样（旧测试不改也过）。
 8. Mac、Windows 上 Tailscale 自带的命令也能认出 Tailscale 地址；`ts.ips` 含的地址不看网卡名，网卡名按不区分大小写的 `tailscale` 前缀认（Windows 的 `Tailscale`）。
-9. 新字段都是可选的。
-10. diff 里没有真实 id、密钥、本机路径和地址；示例地址只用文档段（100.64.0.0/10 的示例、192.168.1.x）。
+9. 新字段都是可选的；`remoteAddressStateSchema` 有 `failed`。
+10. CLI 被别的客户端挡住（`job_running`）时 exit 4，`registration_busy` 仍是 1；二维码出来前断线的文字不再说"已经取消"。
+11. 候选地址的缓存挂在对象上，测试互不串；"这台电脑上的…"的称呼只有 `localPeerLabel` 一份。
+12. diff 里没有真实 id、密钥、本机路径和地址；示例地址只用文档段（100.64.0.0/10 的示例、192.168.1.x）。
 
 ## 9. 风险和行数
 
@@ -433,3 +460,18 @@ Claude 收尾：停助手；撤销验收中配对的客户端；验收 daemon �
 - **宽限期间别人点"添加 Bot"：** 会被拒 60 秒。文案写了是哪台；要马上开，可以在任何一台上点二维码旁的"取消"（`cancelJob` 不看是谁发的，这是今天的行为，本片不收紧）。
 - **Mac 上 Tailscale 命令的位置**按 Tailscale 文档写的应用包路径。Homebrew 装的开源版在 PATH 里，走原来的路径。Mac 验收第 1 步专门看这一条。
 - **10 秒轮询：** 只在页面显示时跑，读的是内存里的状态，加一次网卡枚举（有 30 秒缓存），开销可以忽略。
+- **防火墙：** 被连的那台第一次在非回环地址上监听时，macOS 的应用防火墙（开着时）和 Windows 防火墙会问要不要放行。不放行，表现是对面配对超时。真机验收里写了怎么点（6.2 第 2 步，Windows 在 U4 6.3 第 2 步）；给用户的提示归设计第 15 节"客户端连不上"那几句，本片不另加。
+
+## 10. 审查后改了什么
+
+2026-11-02，#640 上 Sonnet 审查（读整个 diff 一位，读 U2–U4 一位）。下面每条都接受了：
+
+- 验收里两个终端各跑一次 `vonvon bot add`、期望第二个被拒，做不出来：两个都是 `local:cli`，按本片的规则第二个会接手。改成探针（`paired:<id>`）和本机命令行互相挡，另加同 key 接手的一步（6.1 第 2 步）。
+- 计划和测试写 CLI 被拒时 exit 4，可 `bot.ts:225` 把 `refused` 抛成 `failed`（exit 1），计划又说 CLI 不用改。改成 `job_running` 时抛 `CommandError('refused')`，`registration_busy` 照 C2 计划留 1（4.2、第 5 节）。
+- `attach` 原来只接手正在宽限里的任务。换网络时常见的顺序是新连接先连上、旧连接后断开，旧连接的 `detach` 会给一个同 key 客户端还连着的任务起宽限并取消它。改成任务记同 key 的全部连接（`holders`），全断了才起宽限；`attach` 不管在不在宽限都加进去。另一位审查者指出"随手一条短命令会续 60 秒"：写成取舍，上限是二维码的 10 分钟（4.2）。加了两例测试。
+- `lost` 的文字说"扫码已经取消"，有了宽限不对，改了（4.2 接线）。
+- 页面有"开不了"（`failed`），D3 的监听器也会给 `failed`，可 D1 的 `remoteAddressStateSchema` 没有这个值，带它的 `device.status` 会整条解析失败。D3 计划 4.5 加了这一步；本片写明依赖，D3 没做就由本片加（4.1、第 5 节）。
+- 候选地址的 30 秒缓存放在模块里，同一个 vitest 进程的用例会互相串。改成挂在 `createCandidates` 建的对象上；没加"跳过缓存"的参数，理由写在 4.2。
+- `peer-label.ts` 和 hub 的 `attached` 回调原来写成 U3、U4 谁先合入谁建，"这台电脑上的…"对照表也写了两份。改成本片先合入、导出 `localPeerLabel` 和 `pairedPeerName`，U4 用它们（4.2）。
+- Mac 当被连的设备时没提应用防火墙，补了一句（6.2 第 2 步、第 9 节）。
+- D1 的 sha 更新到 147b2619。

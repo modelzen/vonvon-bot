@@ -26,12 +26,12 @@
   - 版本号不同、协议相同：顶部提示，不拦。
   - 协议不同：只留设备列表和升级面板（维护视图）。
 
-依赖：U1a（同 PR）。I3（`server-3-update-engine`）的 `UpdatePanel` 门控已合入时，维护视图里的升级用它；没合入时只显示文字。对面是桌面端自带服务端时的升级按钮归 U4。
+依赖：U1a（同 PR）。I3 已拆成 I3a（`server-3a-update-core`，#632，b55cc5d3）和 I3b（`server-3b-update-helper`，#633，83550082，叠在 I3a 上）；`UpdatePanel` 以 I3b 为准。I3 已合入时，维护视图里的升级用它；没合入时只显示文字。对面是桌面端自带服务端时的升级按钮归 U4。
 
 ## 2. 范围
 
 做：
-- `U/main.tsx`：`DesktopRoot`、`DeviceGate`。
+- `U/devices/DesktopRoot.tsx`（新）：`DesktopRoot`、`DesktopRootView`、`DeviceGate`、`OutsideWindow`（含订退出）和三个纯函数（`desktopPlatformMark`、`shouldMarkPlatform`、`quitOutsideApp`）；`U/main.tsx` 只改 97 行去 import 它。
 - `U/devices/`（新目录）：
   - `devices-presentation.ts`：纯函数和全部文案。
   - `DevicesPanel.tsx`、`AddDeviceDialog.tsx`、`DeviceSwitcher.tsx`、`DeviceConnectionView.tsx`、`MaintenanceView.tsx`、`DeviceStatusBanner.tsx`、`DeviceVersionNotice.tsx`、`TailscaleAdvice.tsx`。
@@ -60,7 +60,11 @@
 - `U/search.ts`：`searchEntries(snapshot, capabilities)` 89，页面表 90-103。
 - `U/settings/DraftGuard.tsx`：`navigate(action)` 29，自动保存的草稿先保存（34），再执行动作。
 - `U/desktop-update.tsx`：`DesktopUpdateProvider` 39、`useDesktopUpdate` 55。`U/DesktopUpdateButton.tsx:7`。
-- `U/conversation-time.ts:2`：`conversationTime(value, now)`，相对时间。
+- `U/conversation-time.ts:2`：`conversationTime(value, now)` 出的是当天的时刻、"昨天"或日期，不是"N 分钟前"；会话列表在用它，不改。本片在 4.9 自己写 `relativeTime`。
+- `U/main.tsx` 末尾在模块顶层 `createRoot(root).render(<Root/>)`，测试 import 它就会去找 `#root`；`test/connection.test.ts` 靠 `vi.mock` 掉 `App` 等模块才能 import。
+- 退出：`App.tsx:152` 是唯一订 `shell.onQuitRequested` 的地方。`DT/facade.ts:86` 在没有订阅者时把请求记成 `pendingQuit`，下一个订阅者一订上就补发（258）。
+- 窗口外框：`DT/preload.ts:8` 设 `data-desktop-chrome="silver"`；`desktop.css:85-116` 只给 `.today-window` 留 34px 的 `.desktop-titlebar` 一行（可拖动），控件 `no-drag`。`App` 以外的页面没有这一行。
+- 根目录 `vitest.config.ts` 只收 `*.test.ts`；ui 包的 `npm test` 是 `vitest run`，用默认的 include，`.tsx` 也收。ui 包没有 jsdom。
 - `U/setup/service-toggle.tsx:39`：`deviceTitle`。
 - `U/url-actions.ts:17`：`allowedExternalUrl(value, kind)` 按种类白名单；`DT/bridge.ts:19` 的 `externalKinds`。
 - UI 组件在 `U/reference/components/ui/`：`Dialog.tsx:22`、`index.tsx:201` 的 `InlineNotice`、`Button`。
@@ -70,26 +74,33 @@
 
 所有界面文字集中在 `devices-presentation.ts`（4.9），组件里不写散的中文。远程设备在句子里一律写成"「名字」"，这台电脑写"这台电脑"（U1a 的 `deviceCopyName`）。界面上叫"设备"，不叫"服务器"。
 
-### 4.1 `U/main.tsx`：`DesktopRoot` 和 `DeviceGate`
+### 4.1 `U/devices/DesktopRoot.tsx`：`DesktopRoot` 和 `DeviceGate`
 
-97 行改成 `return <DesktopRoot fallback={injected} shell={window.vonvonShell}/>;`。
+放在新文件里并导出，不放进 `main.tsx`：`main.tsx` 在模块顶层就 render（第 3 节），测试 import 不了它。`main.tsx` 97 行改成 `return <DesktopRoot fallback={injected} shell={window.vonvonShell}/>;`，`test/connection.test.ts` 加一行 `vi.mock("../src/devices/DesktopRoot", () => ({ DesktopRoot: () => null }))`。
 
 ```tsx
+export const desktopPlatformMark = (state?: DevicesState) => state?.devices[0]?.platform;   // 本机永远是第一行
+export const shouldMarkPlatform = (device: ActiveDevice) => !device.isRemote;              // App 的 effect 用
 export function DesktopRoot({ fallback, shell, renderApp = () => <App/> }: { fallback: VonvonClient; shell?: ShellCapabilities; renderApp?: () => ReactNode }) {
   const devicesShell = shell?.devices;
   const [state, setState] = useState<DevicesState>();
   useEffect(() => devicesShell?.onState(setState), [devicesShell]);
+  const localPlatform = desktopPlatformMark(state);
+  useEffect(() => { if (localPlatform) document.documentElement.dataset.desktopPlatform = localPlatform; }, [localPlatform]);
+  return <DesktopRootView state={state} fallback={fallback} shell={shell} renderApp={renderApp}/>;
+}
+// 没有 effect，测试用 renderToStaticMarkup 直接给 state。
+export function DesktopRootView({ state, fallback, shell, renderApp }: { state?: DevicesState; fallback: VonvonClient; shell?: ShellCapabilities; renderApp: () => ReactNode }) {
+  const devicesShell = shell?.devices;
   const device = state ? activeDeviceFrom(state) : LOCAL_ACTIVE_DEVICE;
   const client = useMemo(() => devicesShell ? devicesShell.clientFor(device.id) : fallback, [devicesShell, device.id, fallback]);
-  const localPlatform = state?.devices[0]?.platform;
-  useEffect(() => { if (localPlatform) document.documentElement.dataset.desktopPlatform = localPlatform; }, [localPlatform]);
   if (!devicesShell) return <ClientProvider client={fallback} shell={shell}><DirectoryPickerProvider>{renderApp()}</DirectoryPickerProvider></ClientProvider>;
-  if (!state) return <main className="app-connection-state" role="status"><h1>正在打开 Vonvon Bot…</h1></main>;
+  if (!state) return <OutsideWindow shell={shell}><h1>正在打开 Vonvon Bot…</h1></OutsideWindow>;
   return <ClientProvider client={client} shell={shellForDevice(shell, device)} device={device} devices={state}>
     <DeviceGate key={device.id} state={state} renderApp={renderApp}/>
   </ClientProvider>;
 }
-function DeviceGate({ state, renderApp }) {
+export function DeviceGate({ state, renderApp }) {
   const a = state.active;
   if (a.id === 'local') return <DirectoryPickerProvider>{renderApp()}</DirectoryPickerProvider>;
   if (a.phase === 'connecting' || a.phase === 'failed') return <DeviceConnectionView/>;
@@ -103,9 +114,31 @@ function DeviceGate({ state, renderApp }) {
 - 窗口外框的平台标记只按本机那一行设，不看正在看的设备。
 - `renderApp` 只给测试注入，生产里就是 `<App/>`。
 
+**`App` 以外的页面**（加载页、`DeviceConnectionView`、`MaintenanceView`）共用 `OutsideWindow`：
+
+```tsx
+export const quitOutsideApp = (shell: ShellCapabilities | undefined, onError: (message: string) => void) => () =>
+  void shell?.quit?.().catch(error => onError(error instanceof Error ? error.message : '后台服务尚未确认停止，请稍后再试。'));
+export function OutsideWindow({ shell, children }: { shell?: ShellCapabilities; children: ReactNode }) {
+  const [quitError, setQuitError] = useState<string>();
+  useEffect(() => shell?.onQuitRequested?.(quitOutsideApp(shell, setQuitError)), [shell]);
+  return <div className="device-outside-window">
+    <div className="desktop-titlebar" aria-hidden="true"/>
+    <main className="app-connection-state">{children}{quitError && <p role="alert">{quitError}</p>}</main>
+  </div>;
+}
+```
+
+- 退出：今天只有 `App` 订 `onQuitRequested`（第 3 节）。不在 `App` 里时按 Cmd+Q 或托盘"退出"没人接，请求还会被 facade 记成 `pendingQuit`，切回 `App` 时突然退出。`OutsideWindow` 里的 effect 订它：这里没有草稿，不经过 `DraftGuard`，直接 `shell.quit()`；失败的文字和 `App` 一样。`App` 和 `OutsideWindow` 不会同时挂着，订阅者总是一个。
+- 标题栏：`devices.css` 加
+  - `.device-outside-window { display: grid; grid-template-rows: minmax(0, 1fr); min-height: 100dvh; }`；
+  - `html[data-desktop-chrome="silver"] .device-outside-window { grid-template-rows: 34px minmax(0, 1fr); }`，全屏（`data-desktop-fullscreen="true"`）时回到一行；
+  - `html[data-desktop-chrome="silver"] .device-outside-window :is(button, a, input, textarea) { -webkit-app-region: no-drag; }`。
+  `.desktop-titlebar` 自己的样式（34px、可拖动、全屏隐藏）沿用 `desktop.css`。不这样，Mac 的红黄绿按钮压在连不上页的标题上，窗口也拖不动，而用户在连不上时停在这一页。
+
 ### 4.2 `U/App.tsx`
 
-- 285-295：effect 里先取 `const device = useActiveDevice()`。页面按设备重建，所以闭包里的值不会变。只在 `!device.isRemote` 时写 `dataset.desktopPlatform`，网页端照旧写。
+- 285-295：effect 里先取 `const device = useActiveDevice()`。页面按设备重建，所以闭包里的值不会变。只在 `shouldMarkPlatform(device)`（4.1）为真时写 `dataset.desktopPlatform`，网页端照旧写。
 - `Page` 加 `'devices'`（`collaboration-model.ts:2`）；`titles` 加 `devices: '设备'`；在设置页那一串条件渲染里加 `{page === 'devices' && <DevicesPanel/>}`。
 - `SettingsHome` 674 传 `devices={Boolean(shell?.devices)}`。
 - 643 `{feedback}` 之后插 `<DeviceStatusBanner/>` 和 `<DeviceVersionNotice onUpgrade={() => openPage('application')}/>`。两个都只在远程时有内容。
@@ -114,7 +147,9 @@ function DeviceGate({ state, renderApp }) {
 
 ### 4.3 `U/LocalShell.tsx`、`U/TodayHome.tsx`、`U/search.ts`
 
-- `AppShell` 的 props 加 `deviceSwitcher?: ReactNode`，渲染在 `</nav>`（21）之后。**放在 `!firstUse` 的条件外面**：远程那台还没有 bot 时也得能切回来。
+- `AppShell` 的 props 加 `deviceSwitcher?: ReactNode`，渲染在 `.today-header-actions`（22-26）里的第一个，搜索按钮前面。
+  - 不做成 `.today-app-header` 的第四个子元素：表头是三列的网格（`today.css:20` 把操作区放在第 3 列），多一个子元素会把右侧操作挤到第二行。
+  - `.today-header-actions` 本来就在 `!firstUse` 的条件外面，远程那台还没有 bot 时也能切回来；外框下它已是 `no-drag`（`desktop.css:97`）。
 - `settingsEntries`（今天 8 项，`SettingsHome` 按 `slice(0, 4)`"模型与工具"、`slice(4)`"连接与应用"分组）在下标 4 插 `{ page: 'devices', title: '设备', description: '加别的设备，切换着管理', icon: MonitorSmartphone }`，也就是 `setup`（飞书连接）前面。
   - 图标用 lucide 里现有的那个，名字以实现时为准。
   - `SettingsHome` 加 `devices?: boolean`，为假时在切分之前滤掉这一条，网页端没有这页。
@@ -183,7 +218,7 @@ function DeviceGate({ state, renderApp }) {
 
 ### 4.7 `U/devices/DeviceConnectionView.tsx` 和 `MaintenanceView.tsx`
 
-两者共用一个外框 `DeviceOutsideFrame`：
+两者共用一个外框 `DeviceOutsideFrame`，最外层是 4.1 的 `OutsideWindow`（`shell` 取 `useShellCapabilities()`），所以有标题栏、能拖动、能退出：
 - 顶部是设备名和状态。
 - 底部有"回到这台电脑"，以及"其他设备"的紧凑列表，可以直接切；也能"添加设备"。
 - 这时不在 `App` 里，没有草稿，切换不用经过 `DraftGuard`。
@@ -204,11 +239,12 @@ function DeviceGate({ state, renderApp }) {
 - 标题"「X」和这台电脑的版本不能一起工作"，正文 `versionNotice(...)` 的文字。
 - 服务端旧，`capabilities` 含 `update.standalone` 或 `update.npm`：
   - 显示 I3 的 `UpdatePanel`，外面包 `DraftGuardProvider` 和 `DesktopUpdateProvider`。
-  - U2 把服务端那一段抽成 `ServerUpdateCard`（U2 计划 4.4.2）：本片先合入时，U2 把这里换成 `<ServerUpdateCard variant="remote">`；U2 先合入时，本片直接用它。`request` 照样传 `maintenanceRequest(...)`。
+  - U2 把服务端那一段抽成 `ServerUpdateCard`（U2 计划 4.4.2）。顺序是定的：U2 依赖 U1a，U1a、U1b 是一个 PR，所以本片先合入，U2 再把这里换成 `<ServerUpdateCard variant="remote">`。`request` 照样传 `maintenanceRequest(...)`。
   - `request` 传 `maintenanceRequest(client.machine)`：请求不在 `MAINTENANCE_KINDS` 里就在本地拒绝，回"版本不一致时只能做升级"，不发出去。维护子集以外的请求，D1 的 `authz.ts` 回 `permission_denied`（D4a 换成 `protocol_mismatch`），连接不关，界面不该发这种请求；只有反复越界（D4a 计划 4.4：连续 20 条）服务端才以 4001 关掉连接。
   - 含 `update.bundled` 的按钮归 U4，本片只写文字。
   - I3 没合入时也只写文字。
 - 客户端旧：显示"这台电脑上的应用"的更新：`DesktopUpdateButton`，外面包 `DesktopUpdateProvider`。
+- 服务端旧，有 `capabilities` 但不含任何 `update.*`：只写 `versionNotice` 的文字，再接 4.9 的"不能远程升级"那句，没有按钮。D1 的 v2 daemon 只报 `['device']`，`update.standalone`、`update.npm` 要到 U2 才报（U2 计划 4.11），所以本片合入后、U2 合入前，对面服务端旧时走的都是这一条。
 - 没有 `capabilities`：只写"服务端太旧"的文案，没有按钮。
 
 ### 4.8 `U/devices/DeviceStatusBanner.tsx` 和 `DeviceVersionNotice.tsx`
@@ -219,7 +255,7 @@ function DeviceGate({ state, renderApp }) {
 1. `phase === 'reconnecting'`：
    - `expected === 'restart'` → 重启中。
    - `expected === 'stop'` → 已停止。
-   - `failure.code === 'remote_disabled'` → 对面关了远程连接。
+   - `active.disabledAt` 有值 → 对面关了远程连接。看 `disabledAt`，不看 `failure.code`：4006 之后的重连会得到 `refused`，`failure.code` 第一次失败就变了（U1a 4.4"断了"）。
    - 其余 → 正在重连，倒数到 `retryAt`；`attempt >= 3` 时下面接 `routeHints`。
    - 都带"现在重试"按钮，调 `devices.retry()`。
 2. `ready` 且有 `notice`：
@@ -234,7 +270,11 @@ function DeviceGate({ state, renderApp }) {
 
 ### 4.9 `U/devices/devices-presentation.ts`（纯函数，全部文案）
 
-导出：`rowView(row, now)`、`statusLabel`、`statusTone`、`platformLabel`、`routeKindLabel`、`routeHint(route, code, name)`、`routeHints(attempts, name)`、`failureCopy(code, name)`、`linkPreviewCopy(code, name)`、`registryNotice(state)`、`bannerCopy(active, name, now)`、`versionNotice({ serverVersion, serverProtocol, clientVersion, clientProtocol, capabilities, name })`、`compareVersions(a, b)`、`maintenanceRequest(machine)`。相对时间复用 `conversationTime`。`name` 一律已经是 `deviceCopyName` 的结果。
+导出：`rowView(row, now)`、`statusLabel`、`statusTone`、`platformLabel`、`routeKindLabel`、`routeHint(route, code, name)`、`routeHints(attempts, name)`、`failureCopy(code, name)`、`linkPreviewCopy(code, name)`、`registryNotice(state)`、`bannerCopy(active, name, now)`、`versionNotice({ serverVersion, serverProtocol, clientVersion, clientProtocol, capabilities, name })`、`compareVersions(a, b)`、`maintenanceRequest(machine)`、`relativeTime(at, now)`。`name` 一律已经是 `deviceCopyName` 的结果。
+
+**相对时间 `relativeTime`**：不复用 `conversationTime`（它出时刻和日期，第 3 节）。不到 1 分钟"刚刚"；不到 1 小时"N 分钟前"；不到 24 小时"N 小时前"；不到 7 天"N 天前"；再早写"M月D日"，不是今年的加"YYYY年"。`at` 比 `now` 晚（两台的钟不一样）也写"刚刚"。
+
+**系统 `platformLabel`**：`macos` → macOS，`windows` → Windows，`linux` → Linux。`unsupported` 和没有（v1 的对面不报这个字段）回空字符串，行上就不显示系统这一项，不写"未知"。
 
 **状态字**：
 
@@ -260,6 +300,7 @@ function DeviceGate({ state, renderApp }) {
 | `public` | 连不上「X」（x.x.x.x）。那台设备的防火墙放行了 <端口> 端口吗？ |
 | 码是 `forbidden` 时，不分类型 | 「X」在 <host:port> 上没有开放连接，它可能换了地址。在那台设备上重新生成连接链接，粘到"添加设备"里，会自动更新地址。 |
 | 码是 `refused` 时，接在类型那句后面 | 那台设备上的 Vonvon Bot 可能没在运行，或者没有允许别的设备连接。 |
+| 码是 `device_identity_changed` 时，不分类型 | <host:port> 上的 Vonvon Bot 不是「X」，可能是同一个网络里别的电脑换到了这个地址。会接着试别的地址；都不行就在「X」上重新生成连接链接，粘到"添加设备"里更新地址。 |
 
 **失败和问题 `failureCopy`**：
 
@@ -287,11 +328,13 @@ function DeviceGate({ state, renderApp }) {
 
 | 码 | 文字 |
 |---|---|
-| `invalid_link` | 这不是 Vonvon Bot 的连接链接。链接以 `vonvon://pair#` 开头，在要连接的设备上运行 `vonvon pair` 得到。 |
+| `invalid_link` | 这不是 Vonvon Bot 的连接链接。链接以 `vonvon://pair#` 开头：在要连接的电脑的 Vonvon Bot → 设置 → 应用与启动 →「允许别的设备连接」里点「生成连接链接」；Linux 主机上运行 `vonvon pair`。 |
 | `link_expired` | 同上表 |
 | `own_link` | 这是这台电脑自己的链接，不用添加。把它粘到另一台电脑的 Vonvon Bot 里。 |
 | `already_added` | 「X」已经在设备列表里了。（按钮：切换到「X」） |
-| `no_secure_storage` | 这台电脑的系统钥匙串现在用不了，没法安全地保存连接密钥，暂时不能添加设备。 |
+| `no_secure_storage` | 这台电脑的系统钥匙串现在用不了，没法安全地保存连接密钥，暂时不能添加设备，也不能重新配对。 |
+
+**不能远程升级**（维护视图，有 `capabilities` 但没有 `update.*`，4.7）："「X」上的这个版本还不能从这里升级，请在那台设备上升级 Vonvon Bot。"
 | `registry_newer` | 设备列表是更新版本的 Vonvon Bot 写的，这个版本只能看、不能改。先更新这台电脑上的应用。 |
 | `registry_unreadable` | 读不了设备列表文件，暂时不能添加设备。看一下 Vonvon Bot 的数据目录权限。 |
 | `too_many` | 最多加 32 台设备。先删掉不用的。 |
@@ -335,7 +378,7 @@ function DeviceGate({ state, renderApp }) {
 
 ## 5. 测试
 
-都在 `packages/ui/test/`，用 `renderToStaticMarkup` 和纯函数，沿用现有的写法。
+都在 `packages/ui/test/`，用 `renderToStaticMarkup` 和纯函数，沿用现有的写法。静态渲染不跑 effect，ui 包也没有 jsdom，所以靠 effect 的东西（设备状态的订阅、平台标记、退出订阅）都拆成纯函数或 `DesktopRootView` 来测。
 
 | 文件 | 用例 | 输入 → 期望 |
 |---|---|---|
@@ -344,6 +387,8 @@ function DeviceGate({ state, renderApp }) {
 | 同上 | 失败文案 | 失败表里每个码 → 非空，含"「X」"（`busy`、`aborted`、`registry_write_failed` 除外）；`link_used` 含 `vonvon clients ls` |
 | 同上 | 版本 | (0.9.0, 2) 对 (0.9.1, 2) → "建议升级服务端"、有升级动作；(0.9.2, 2) 对 (0.9.1, 2) → "先更新这台电脑"；(0.9.0, 2) 对 (0.10.0, 3) → "两边不能一起工作"、服务端旧；协议 3 对客户端 2 → 客户端旧、阻断；没有 `capabilities` → v1 那句、没有动作；相同版本 → `null` |
 | 同上 | 版本比较 | `0.10.0 > 0.9.9`；`0.9.0-beta.1 < 0.9.0`；`0.9.0 == 0.9.0` |
+| 同上 | 相对时间 | `now` 减 30 秒 → "刚刚"；减 5 分钟 → "5 分钟前"；减 3 小时 → "3 小时前"；减 2 天 → "2 天前"；减 10 天 → "M月D日"；去年 → 带年份；比 `now` 晚 → "刚刚" |
+| 同上 | 系统 | `macos`、`windows`、`linux` → 三个名字；`unsupported`、`undefined` → 空字符串，`rowView` 不出系统这一项 |
 | 同上 | 用词 | 导出的所有文案里没有"服务器"，没有"登录 Codex""登录 Claude""Vonvon 不代你登录" |
 | 同上 | 维护请求 | `maintenanceRequest(fake)({ type: 'status' })` 被拒、fake 没收到；`checkCoreUpdate` 转发 |
 | `devices-panel.test.tsx`（新） | 列表 | 状态里本机 + A（在线、当前）+ B（`revoked`）→ 第一行"这台电脑"且没有"删除"；A 的"切换到"灰掉；B 有"重新配对"、红点；页底有 Tailscale 建议。main 必败 |
@@ -352,17 +397,20 @@ function DeviceGate({ state, renderApp }) {
 | `add-device-dialog.test.tsx`（新） | reducer | 粘贴 → `inspect` 回 ok → 确认阶段带默认名字；`add` 回 `failed: link_used` → 失败阶段、按钮"粘贴新链接"；点它 → 回粘贴、链接清空 |
 | 同上 | 确认阶段 | 预览两条地址（tailscale、lan）→ "Tailscale（推荐）""局域网"各一行；`expiresAt` 已过 → 按钮灰掉 |
 | 同上 | 重新配对别的设备 | `repairOf: A`，链接是 B → 显示"这条链接是「B」的" |
-| `device-gate.test.tsx`（新，注入 `renderApp`） | 本机 | `active.id = 'local'` → 渲染 `renderApp` |
+| `device-gate.test.tsx`（新，从 `../src/devices/DesktopRoot` 直接 import `DeviceGate`、`DesktopRootView`，注入 `renderApp`） | 本机 | `active.id = 'local'` → 渲染 `renderApp` |
+| 同上 | 外框 | `DesktopRootView` 不给 `state` → 加载页；`connecting`、`failed`、`maintenance` 各一次 → 输出里都有 `device-outside-window` 和 `desktop-titlebar` |
 | 同上 | 连接中 | 远程 `connecting`，没有 `failure` → "正在连接「X」"；有 `failure`（`unreachable`、一条 tailscale 地址）→ "连不上「X」"、`tailscale ping`、"现在重试" |
 | 同上 | 已撤销 | `failed` + `client_revoked` → "已取消这台电脑的访问"、"重新配对"、"回到这台电脑"。main 必败 |
 | 同上 | 维护 | `ready` + `maintenance`、服务端旧 → 维护视图，没有渲染 `renderApp` |
 | 同上 | 重连中留着页面 | `reconnecting`、上次 `full` → 渲染 `renderApp` |
 | 同上 | 客户端绑定 | 切换前后 `clientFor` 被以 `'local'`、`A` 调用；`ClientProvider` 里的 client 是 `clientFor(A)` 的返回值 |
-| 同上 | 窗口外框 | 本机 `platform: 'macos'`、当前远程 `linux` → `document.documentElement.dataset.desktopPlatform === 'macos'`（用 jsdom 环境或直接测 effect 函数） |
+| `device-platform.test.ts`（新，纯函数） | 窗口外框 | 本机行 `platform: 'macos'`、当前远程 `linux` → `desktopPlatformMark(state) === 'macos'`；`shouldMarkPlatform(远程)` 为假、`shouldMarkPlatform(LOCAL_ACTIVE_DEVICE)` 为真。main 必败 |
+| 同上 | 不在 App 里退出 | 假 `shell.quit` → `quitOutsideApp(shell, onError)()` 调一次 `quit`；`quit` reject → `onError` 收到文字，不抛错；`shell` 没有 `quit` → 什么都不做 |
 | `device-switcher.test.tsx`（新） | 只有本机 | 不渲染 |
+| 同上 | 位置 | 渲染 `AppShell` 带 `deviceSwitcher` → 它在 `.today-header-actions` 里、搜索按钮前面；`firstUse` 时也在 |
 | 同上 | 有远程 | 显示当前名字和状态点；菜单列出全部设备，当前那台标"当前"，末尾"管理设备…" |
-| `app-device.test.tsx`（新，或并进现有 App 测试） | 远程快照不改外框 | `useActiveDevice` 为远程、快照 `application.platform: 'linux'` → `dataset.desktopPlatform` 没被改成 `linux`。main 必败 |
-| 同上 | 提示条 | 远程 `reconnecting`、`expected: 'restart'` → "正在重启"；`notice: updated` → "已更新到 0.9.1" |
+| `device-status-banner.test.tsx`（新） | 提示条 | 远程 `reconnecting`、`expected: 'restart'` → "正在重启"；`notice: updated` → "已更新到 0.9.1"；`disabledAt` 有值、`failure.code: 'refused'` → "关闭了远程连接"，不是"可能没在运行" |
+| `connection.test.ts`（改） | 不受影响 | 加 `vi.mock("../src/devices/DesktopRoot", …)`，原有用例照过 |
 | `search.test.ts`（改） | 设备页 | `devices: true` → 有 `id: 'devices'`；不传 → 没有 |
 | `settings-home` 相关测试（改，现有文件名以实现时为准） | 入口 | `devices` 为真 → "模型与工具"组仍是原来四项，"设备"在"连接与应用"组第一项、后面依次是飞书连接、导入 Bridge、应用与启动、状态与诊断；为假 → 两组和今天一样，没有"设备" |
 | `url-actions` 测试（改） | 白名单 | `https://tailscale.com/download` 在 `tailscale` 种类下通过；`https://tailscale.com/download?x=1`、`http://…`、`https://evil.com` 不过 |
@@ -376,8 +424,8 @@ function DeviceGate({ state, renderApp }) {
 
 ### 6.1 Claude 在 JP-VPS 上（无头）
 
-1. 单测：
-   `T=$(mktemp -d); HOME=$T/home VONVON_HOME=$T/vh flock /tmp/vonvon-heavy.lock npx vitest run packages/ui/test/devices-presentation.test.ts packages/ui/test/devices-panel.test.tsx packages/ui/test/add-device-dialog.test.tsx packages/ui/test/device-gate.test.tsx packages/ui/test/device-switcher.test.tsx packages/ui/test/app-device.test.tsx packages/ui/test/search.test.ts`
+1. 单测（根目录的 vitest 不收 `.tsx`，在 ui 包里跑）：
+   `T=$(mktemp -d); HOME=$T/home VONVON_HOME=$T/vh flock /tmp/vonvon-heavy.lock npm test -w packages/ui -- test/devices-presentation.test.ts test/devices-panel.test.tsx test/add-device-dialog.test.tsx test/device-gate.test.tsx test/device-platform.test.ts test/device-status-banner.test.tsx test/device-switcher.test.tsx test/connection.test.ts test/search.test.ts`
    再在锁里跑 U1a 第 6 节第 1 步的那组测试，然后 `flock /tmp/vonvon-heavy.lock` 跑 ui、desktop 的 `typecheck`、`lint`、`build`。最后 `rm -rf -- "${T:?}"`。
 2. U1a 第 6 节第 2 步的真通道探针：添加、切换、撤销 1 秒内、4006、重启、删除。
 3. 页面截图，可选，给审查者看：
@@ -413,26 +461,28 @@ Claude 先在 JP-VPS 上准备（不进提示词正文的真实地址和数据�
 - 上面三条删除规矩原样写进去。
 - 结果评论的标记；结果打码：不贴链接、地址、群名、完整 id。
 
-Mac 上的步骤（Computer Use 操作开发版桌面端；`curl` 在 Mac 终端里打 JP-VPS 的助手）：
+Mac 上的步骤（Computer Use 操作开发版桌面端；`curl` 在 Mac 终端里打 JP-VPS 的助手）。链接 10 分钟内有效，要再粘同一条链接的检查都紧跟在拿到它之后做：
 1. 设置 → 设备：只有"这台电脑"；顶部没有设备标签。
 2. `curl -fsS -X POST http://<JP-VPS 的 Tailscale 地址>:<助手端口>/link` 拿链接 → 设备 → 添加设备 → 粘贴。
    - 确认阶段：看到设备名，地址标"Tailscale（推荐）"，剩余时间不到 10 分钟。
    - 改名为"验收设备 1"，点"连接并添加" → "已添加"。
    - 弹出钥匙串授权（"Electron Safe Storage"）就点允许，并在结果里记一笔。
-3. 顶部设备标签 → 切到它：
+   - 马上把同一条链接再粘一次 → "已经在设备列表里了"，并有"切换到"按钮。
+3. 顶部设备标签（在右上角搜索按钮左边）→ 切到它：
    - Bot 列表里有 Bot 6，群组数和 JP-VPS 上 `vonvon` 看到的一致。数字由 Claude 在提示词里给。
    - 标签显示新名字。
    - 窗口左上角红黄绿按钮旁的留白和切换前一样，外框没变成别的系统样式。截图对比，结果里用文字描述。
 4. 切回"这台电脑"再切回去，用标签和设备页各两次。每次内容都对，没有报错条。
-5. 把第 2 步那条链接再粘一次 → "已经在设备列表里了"，并有"切换到"按钮。
-6. `POST /restart`：页面顶部先出"正在重连"或"正在重启"，30 秒内变成"重启过了，已重新连上"。
-7. `POST /remote/disable`：提示条写"关闭了远程连接"。`POST /remote/enable` 后 30 秒内自动连上，没有点任何按钮。
-8. 撤销计时：
-   - 先 `node -e 'console.log(Date.now())'` 记下 t0，紧接着 `POST /revoke`。
-   - 在 `<临时目录>/desk/userData/devices.log` 里找 `device-closed … code=client_revoked` 那一行，取它的毫秒时间 t1。
-   - **t1 − t0 < 1000**。
-   - 页面换成"已取消这台电脑的访问"，并有"重新配对""回到这台电脑"。
-9. 设备页 → 删除这台。不在线，所以确认框写的是"这台电脑会忘掉连接它的密钥…"。再把第 2 步的旧链接粘一次 → "这条链接已经被用掉了…`vonvon clients ls`…"。
+5. `POST /restart`：页面顶部先出"正在重连"或"正在重启"，45 秒内变成"重启过了，已重新连上"。
+6. `POST /remote/disable`：提示条写"关闭了远程连接"。等 15 秒（这期间至少重连失败一次）再看，提示条还是这句，没有变成"可能没在运行"。`POST /remote/enable` 后 45 秒内自动连上，没有点任何按钮。
+7. 撤销：
+   - `POST /revoke`，`curl` 一返回就截图：页面已经换成"已取消这台电脑的访问"，并有"重新配对""回到这台电脑"。Computer Use 截一次图本身要一两秒，这里只核"很快就换了"（2 秒内）；1 秒的判据由 U1a 第 6 节第 2 步的同机探针核。
+   - 参考值：回包里的 `revokedAt`（JP-VPS 的钟）和 `<临时目录>/desk/userData/devices.log` 里 `device-closed … code=client_revoked` 那一行的时间（Mac 的钟）相减，写进结果。两台的钟可能差几十毫秒，不拿它判对错。
+   - 这一页：顶部有 34px 的标题栏，红黄绿按钮不压字；拖标题栏能移动窗口；按 Cmd+Q 能退出。退出后用同一条命令再启动开发版桌面端，停在"这台电脑"，设备页里那台是"已撤销"。
+8. 设备页 → 删除这台。不在线，所以确认框写的是"这台电脑会忘掉连接它的密钥…"。
+9. 用过的链接：
+   - 再拿一条新链接，添加（不切过去）；设备页 → 删除它。
+   - 10 分钟内把这条链接再粘一次 → 预览通过，点"连接并添加" → "这条链接已经被用掉了…`vonvon clients ls`…"。
 10. 再拿一条新链接，添加，切过去，看到 Bot 6。
 11. 退出开发版桌面端（菜单或托盘的"退出"）。`GET /status` 显示 daemon 的 pid 和 `startedAt` 没变：退出桌面端不碰对面。
 12. 再启动开发版桌面端：
@@ -465,9 +515,12 @@ Claude 收尾：停助手；`remote disable`；撤销验收中配对的客户端
 3. 每台设备的页面用 `clientFor(device.id)` 的 client，测试里核过。
 4. 窗口外框的平台标记只按本机行设，`App` 在远程时不写。
 5. 切换都经过 `DraftGuard.navigate`（标签、设备页）；`DeviceOutsideFrame` 里的切换不经过，因为那里没有草稿。
-6. 维护视图只发 `MAINTENANCE_KINDS` 里的请求，别的在本地拒绝。
+   - 切换标签在 `.today-header-actions` 里第一个，不改表头网格。
+6. 维护视图只发 `MAINTENANCE_KINDS` 里的请求，别的在本地拒绝。有 `capabilities` 但没有 `update.*` 时只有文字。
+   - 加载页、连接页、维护视图都在 `OutsideWindow` 里：有 34px 标题栏、能拖动，Cmd+Q 和托盘"退出"能退出，不会攒成 `pendingQuit`。
 7. 版本提示：协议相同不拦，协议不同只留设备列表和升级面板（设计 4.6）；按钮只在 `capabilities` 有对应项时给。
-8. 非当前设备不显示"在线"，只显示上次的结果。
+8. 非当前设备不显示"在线"，只显示上次的结果；"上次在线"用本片自己的 `relativeTime`，`conversationTime` 不动。`unsupported` 和没有平台的设备不显示系统。
+   - "关闭了远程连接"的提示条看 `active.disabledAt`，后续重连失败不把它换掉。
 9. 链接文本只在对话框组件的 state 里，关闭即清。
 10. 外链只多了 `https://tailscale.com/download` 这一条确切地址。
 11. 验收助手只绑 Tailscale 地址、两小时自停、不记链接；在 PR 里写明它只为验收用。
@@ -482,4 +535,25 @@ Claude 收尾：停助手；`remote disable`；撤销验收中配对的客户端
 - I3 的 `UpdatePanel` 如果在请求里带了维护子集以外的东西，维护视图里它会显示"版本不一致时只能做升级"，不会把连接弄断。I3 合入后实现时再核一次。
 - Mac 能不能经 Tailscale 打到 JP-VPS 的助手端口，没有实测过。两台的 Paseo daemon 就是走 Tailscale 互通的，应该可以。不行就由 Claude 把链接经 `paseo send` 发给 Mac 上的 Codex 会话（要 owner 同意开 Paseo 会话），不经过 GitHub。
 - 开发版桌面端的 `safeStorage` 用的是"Electron Safe Storage"钥匙串项，第一次会弹授权框，Computer Use 点允许；锁屏会让 Computer Use 失败，按 #322 的规矩停下写"卡住了"。
-- 窗口外框的检查靠截图描述，比较主观。单测已经核了 `dataset` 不被改，真机只是补一眼。
+- 窗口外框的检查靠截图描述，比较主观。单测已经核了平台标记的纯函数，真机只是补一眼。
+- 撤销后多久换页，Mac 上只能用截图核"很快"，跨机计时只作参考；1 秒的判据靠 JP-VPS 上的同机探针（U1a 第 6 节第 2 步）。
+
+## 10. 审查后改了什么
+
+2026-11-02，#640 上 Sonnet 审查（读整个 diff 一位，读 U1a+U1b 一位）。下面每条都接受了：
+
+- 连接页、维护视图和加载页不在 `App` 里，没人订 `onQuitRequested`，Cmd+Q 和托盘"退出"无效，切回 `App` 时又突然退出。加 `OutsideWindow`，里面订退出、直接 `shell.quit()`（4.1、4.7、第 5 节、第 8 节第 6 条）。
+- 这几页也没有 34px 标题栏，红黄绿按钮压在内容上、窗口拖不动。`OutsideWindow` 带 `.desktop-titlebar`，`devices.css` 给它留一行（4.1）。
+- `conversationTime` 出的是时刻和日期，不是"N 分钟前"，测试过不了，改它还会动会话列表。改成本片自己的 `relativeTime`（第 3 节、4.9、第 5 节）。
+- 界面测试按原计划跑不起来：根目录 vitest 不收 `.tsx`；`DesktopRoot`、`DeviceGate` 放在模块顶层就 render 的 `main.tsx` 里，`DeviceGate` 没导出；状态和平台标记靠 effect，静态渲染不跑。挪到 `U/devices/DesktopRoot.tsx` 并导出，加 `DesktopRootView` 和两个纯函数，`connection.test.ts` 加 mock，命令改成在 ui 包里跑（4.1、第 5 节、6.1）。
+- 切换标签原来是表头的第四个子元素，会把右侧操作挤到第二行。改放进 `.today-header-actions` 第一个（4.3、第 8 节第 5 条）。
+- `platform` 可能是 `unsupported`，v1 的对面也没有它。`platformLabel` 对这两种回空，行上不显示（4.9、第 5 节）。
+- 维护视图没管"有 `capabilities` 但没有 `update.*`"。U2 之前的 v2 daemon 只报 `['device']`，正是这种。只写文字，加"不能远程升级"那句（4.7、4.9）。
+- 4006 之后的重连会把 `failure.code` 换成 `refused`，提示条留不住。改看 U1a 的 `active.disabledAt`（4.8、第 5 节、6.2 第 6 步）。
+- `invalid_link` 只提 `vonvon pair`，可 Windows 不注册 `vonvon` 命令（owner 2026-11-01）。加上桌面端里生成链接的路径（4.9）。
+- 单条地址上的 4005 不再整台终止（U1a 改），`routeHint` 加这一行的说法（4.9）。
+- 验收第 5、9 步粘第 2 步的旧链接，中间隔了重启和等待，链接多半已过 10 分钟，得到的是 `link_expired`。改成拿到链接马上再粘（第 2 步），用过的链接单独拿一条新的、10 分钟内做完（第 9 步）（6.2）。
+- 撤销计时 t1 − t0 < 1000 包含 Computer Use 的延迟和跨机的钟差，量不准。Mac 上只截图核"很快"，跨机差值只作参考，1 秒的判据交给 U1a 的同机探针；顺便在这一页核标题栏、拖动和 Cmd+Q（6.2 第 7 步、第 9 节）。
+- "30 秒内自动连上"等于退避上限，加一次连接超时可能偶发失败。改成 45 秒（6.2 第 5、6 步）。
+- 维护视图里"本片先合入或 U2 先合入"两种写法，后一种不会发生。改成定序（4.7）。
+- I3 拆成 I3a、I3b 后，开头钉的 `server-3-update-engine` 过期。改成 I3a（#632）、I3b（#633），`UpdatePanel` 以 I3b 为准（第 1 节依赖）。
