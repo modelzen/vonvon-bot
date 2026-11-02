@@ -94,8 +94,9 @@ export function envTool(value: string): EnvironmentTool {
 type Auth = { state: 'signedIn' | 'signedOut' | 'unknown'; message: string };
 type ScannedTool = EnvironmentToolState & { auth?: Auth };
 
-/** lark-cli really signs in to Feishu; Codex and Claude only need to be set up, an account or a custom API (devices-ui-2 4.2). */
-export function authText(tool: Pick<ScannedTool, 'tool' | 'auth'>): string {
+/** lark-cli really signs in to Feishu; Codex and Claude only need to be set up, an account or a custom API (devices-ui-2 4.2).
+ * A managed copy is on no PATH: its `command` is what starts it (0.9.0 Linux acceptance). */
+export function authText(tool: Pick<ScannedTool, 'tool' | 'auth' | 'command'>): string {
   if (tool.tool === 'lark-cli') {
     if (!tool.auth) return '登录状态查不到';
     if (tool.auth.state === 'signedIn') return '已登录';
@@ -106,7 +107,7 @@ export function authText(tool: Pick<ScannedTool, 'tool' | 'auth'>): string {
   if (tool.auth.state === 'signedIn') return '可用';
   if (tool.auth.state === 'unknown') return `确认不了：${tool.auth.message}`;
   // vonvon does not set up Codex or Claude for the user (docs/product.md 3.1, 2026-10-28)
-  return `没配置好：在终端里运行 ${tool.tool} 配置（账号或自定义 API 都行）`;
+  return `没配置好：在终端里运行 ${tool.command ?? tool.tool} 配置（账号或自定义 API 都行）`;
 }
 
 function toolLines(tool: ScannedTool): string[] {

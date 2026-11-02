@@ -82,6 +82,9 @@ export const environmentToolStateSchema = z.object({
   source: z.enum(["app", "npm", "homebrew", "standalone", "explicit", "managed", "unknown"]).optional(),
   updateInstructions: z.string().max(2000).optional(),
   compatibility: codexCompatibilitySchema.optional(),
+  /** A managed copy only: what to type in a terminal to start it, which is on no PATH (0.9.0 Linux acceptance); the texts
+   * that send someone to a terminal name it in place of the tool's name. Absent from a daemon from before it. */
+  command: z.string().max(4096).optional(),
 });
 export type EnvironmentToolState = z.infer<typeof environmentToolStateSchema>;
 const operationPurposeSchema = z.union([

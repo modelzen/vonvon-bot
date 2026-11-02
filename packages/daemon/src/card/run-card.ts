@@ -25,6 +25,7 @@ import { processPanel } from './process-panel';
 import { statusSymbol } from './process-status';
 import { buildProcessBody, currentAnswerIndex, processTitle, runElapsedMs } from './run-process';
 import { runCardMeter } from './context-gauge';
+import { toolCommand } from '../environment/tool-command';
 
 /** Action ids for the in-topic run card. */
 export const RC = {
@@ -433,8 +434,9 @@ export function idleLabel(seconds: number): string {
  */
 function errorAdvice(kind: AgentErrorKind | undefined, canRetry: boolean, backend?: string, scheduled?: { nextRun: boolean }): string | null {
   if (kind === 'auth') {
-    if (backend === 'codex-appserver') return '🔑 Codex 的登录可能失效了：在运行 bot 的电脑上运行 `codex login` 重新登录，再重试。';
-    if (backend === 'claude-agent') return '🔑 Claude 的登录可能失效了：在运行 bot 的电脑上运行 `claude`，用 `/login` 重新登录，再重试。';
+    // A managed copy is on no PATH: the command is what starts it (0.9.0 Linux acceptance).
+    if (backend === 'codex-appserver') return `🔑 Codex 的登录可能失效了：在运行 bot 的电脑上运行 \`${toolCommand('codex')} login\` 重新登录，再重试。`;
+    if (backend === 'claude-agent') return `🔑 Claude 的登录可能失效了：在运行 bot 的电脑上运行 \`${toolCommand('claude')}\`，用 \`/login\` 重新登录，再重试。`;
     return '🔑 登录可能失效了：在运行 bot 的电脑上重新登录，再重试。';
   }
   if (kind === 'version') return '⬆️ Codex 版本太旧，服务端不让它用这个模型：在 Vonvon 的本机环境里更新 Codex，再重试。';

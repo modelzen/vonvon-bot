@@ -4,6 +4,7 @@ import { createBackend } from '../agent';
 import { cachedClaudeLogin, type ClaudeLogin } from '../agent/claude-agent/login';
 import { probeClaudeSandbox } from '../agent/claude-agent/sandbox-probe';
 import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion } from '../agent/codex-appserver/version';
+import { managedCommand, managedToolCommand } from '../environment/tool-command';
 import type { AdminService } from '../admin/service';
 import { paths } from '../config/paths';
 import type { RunningServiceAction } from '../host/service-action';
@@ -118,9 +119,12 @@ export async function createSnapshotStore(options: {
     // The login is not probed here: the probe starts a ~250 MB Claude CLI, and this runs every
     // 60 s even when no window is open. build() lays the cached answer over it.
     const compatibility = codex?.installation === 'installed' ? { status: classifyCodexVersion(codex.version), minimum: CODEX_MIN_VERSION, verified: CODEX_VERIFIED_VERSION } : undefined;
+    // A managed copy is on no PATH: the setup steps name what starts it (0.9.0 Linux acceptance).
+    const codexCommand = codex && 'executable' in codex && codex.executable ? managedCommand(codex.executable, root) : undefined;
+    const claudeCommand = managedToolCommand('claude', root);
     return [
-      { tool: 'codex', installation: codex?.installation ?? 'unknown', authentication: codex?.authentication ?? 'unknown', version: codex?.version ?? null, ...(codex?.message ? { message: codex.message } : {}), ...(compatibility ? { compatibility } : {}) },
-      { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: 'unknown', version: claude?.version ?? null, ...(claude?.hint ? { message: claude.hint } : {}), ...(sandbox ? { sandbox } : {}) },
+      { tool: 'codex', installation: codex?.installation ?? 'unknown', authentication: codex?.authentication ?? 'unknown', version: codex?.version ?? null, ...(codex?.message ? { message: codex.message } : {}), ...(compatibility ? { compatibility } : {}), ...(codexCommand ? { command: codexCommand } : {}) },
+      { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: 'unknown', version: claude?.version ?? null, ...(claude?.hint ? { message: claude.hint } : {}), ...(sandbox ? { sandbox } : {}), ...(claudeCommand ? { command: claudeCommand } : {}) },
     ];
   });
   async function build(committed?: (snapshot: DesktopSnapshot) => void): Promise<void> {

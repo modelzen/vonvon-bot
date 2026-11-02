@@ -16,6 +16,7 @@ import { installBackendDep, uninstallBackendDep } from '../../agent';
 import { performCoreUpdate } from '../../service/update';
 import { startApi } from '../../server/http';
 import { noteClaudeLoginFailed } from '../../agent/claude-agent/login';
+import { toolCommand } from '../../environment/tool-command';
 import { createDiagnosticsStore, ipcDiagnosticsSink, setDiagnosticsSink } from '../../bot/diagnostics';
 import {bridgeImportRuntime} from '../../import/bridge/runtime';
 import { fallbackWorkingDirectory } from '../../platform/fallback-cwd';
@@ -113,7 +114,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
   const errors: unknown[] = [];
   // Supervised: the records go to the supervisor, which keeps them across this child's restarts.
   const ownAppId = cfg.accounts.app.id;
-  const diagnostics = process.send ? undefined : createDiagnosticsStore({ changed: () => api?.invalidate(), claudeSignedOut: noteClaudeLoginFailed });
+  const diagnostics = process.send ? undefined : createDiagnosticsStore({ changed: () => api?.invalidate(), claudeSignedOut: at => noteClaudeLoginFailed(at, toolCommand('claude')) });
   setDiagnosticsSink(diagnostics
     ? event => diagnostics.accept(ownAppId, event)
     : ipcDiagnosticsSink((message, callback) => { if (process.connected) process.send?.(message, undefined, undefined, callback); }));

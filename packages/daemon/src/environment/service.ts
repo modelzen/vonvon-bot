@@ -12,8 +12,10 @@ import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion, compar
 import { managedCodexBin } from "../agent/codex-appserver/managed-install";
 import { cachedCodexVersion } from '../agent/codex-appserver/locate';
 import { codexSource } from './codex-source';
+import { terminalCommand, toolCommand } from './tool-command';
 import { bundledNpmCli } from '../platform/npm';
 import { OwnedProviderProcess, ProviderProcessExitError } from '../agent/owned-process';
+import { passedEnv, SERVICE_ENV_FILE } from '../cli/service-env';
 import {
   environmentProfileSchema,
   type EnvironmentOperation,
@@ -36,6 +38,13 @@ const generationPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 // The legacy setup API and HTTP environment API own separate service instances.
 // Serialize the complete publish/verify/rollback transaction across both.
 const managedMutations = new Set<string>();
+/** A managed install's npm gets 10 minutes; a slow network or a missing proxy is the usual reason it needs more. */
+const INSTALL_LIMIT_MS = 10 * 60_000;
+
+/** The deadline of {@link EnvironmentService.command} passed: the tool was stopped. */
+class CommandTimeout extends Error {
+  constructor() { super("操作超时。"); }
+}
 
 type ManagedSelection =
   | { kind: "absent" | "disabled" | "invalid" }
@@ -52,6 +61,8 @@ export type EnvironmentServiceOptions = {
   fetchLatest?: (name: string) => Promise<string | null>;
   installSignal?: AbortSignal;
   requireTrustedNpm?: boolean;
+  /** Test seam: how long the npm of a managed install may run, {@link INSTALL_LIMIT_MS} by default. */
+  installTimeoutMs?: number;
 };
 
 type ActiveOperation = {
@@ -72,6 +83,7 @@ export class EnvironmentService {
   private readonly fetchLatest: (name: string) => Promise<string | null>;
   private readonly installSignal?: AbortSignal;
   private readonly requireTrustedNpm: boolean;
+  private readonly installTimeoutMs: number;
   private active?: ActiveOperation;
   private lastOperation: EnvironmentOperation | null = null;
   private mutation = false;
@@ -99,6 +111,7 @@ export class EnvironmentService {
     this.fetchLatest = options.fetchLatest ?? latestVersion;
     this.installSignal = options.installSignal;
     this.requireTrustedNpm = options.requireTrustedNpm ?? false;
+    this.installTimeoutMs = options.installTimeoutMs ?? INSTALL_LIMIT_MS;
   }
 
   run(request: EnvironmentRequest): Promise<EnvironmentReply> {
@@ -329,6 +342,7 @@ export class EnvironmentService {
       ...(tool === "claude" && resolved ? { runtimeStatus: result ? (result.exitCode === 0 ? "ready" as const : "failed" as const) : "unknown" as const } : {}),
       ...(compatibility ? { compatibility } : {}),
       ...(tool === 'codex' && resolved ? codexSource(resolved.executable, resolved.ownership === 'managed') : {}),
+      ...(resolved?.ownership === 'managed' ? { command: terminalCommand(resolved.executable, this.nodePath) } : {}),
     };
   }
 
@@ -417,7 +431,10 @@ export class EnvironmentService {
       await mkdir(release, { recursive: true, mode: 0o700 });
       // npm 11.19+ skips a global install's own postinstall unless the package is allowed;
       // lark-cli and Claude Code both have one. Older npm ignores the flag with a warning.
-      const result = await this.command(npm, ["install", "--global", "--prefix", release, `${tools[tool].package}@latest`, `--allow-scripts=${tools[tool].package}`, "--no-audit", "--no-fund"], 10 * 60_000, undefined, signal);
+      const result = await this.command(npm, ["install", "--global", "--prefix", release, `${tools[tool].package}@latest`, `--allow-scripts=${tools[tool].package}`, "--no-audit", "--no-fund"], this.installTimeoutMs, undefined, signal)
+        .catch((error: unknown) => { if (error instanceof CommandTimeout && !signal.aborted) return null; throw error; });
+      // The reason stays (0.9.0 Linux acceptance): the generic failure below would hide that it only ran out of time.
+      if (!result) return refused("install-failed", `安装 ${INSTALL_LIMIT_MS / 60_000} 分钟还没完成，已经停下，原工具仍可使用。可能是网络慢或连不上 npm：检查网络和代理后重试。要走代理的，把代理写进 ${join(this.getDataRoot(), SERVICE_ENV_FILE)}（一行一个，如 HTTPS_PROXY=http://127.0.0.1:7890），重启后台服务再装。`);
       if (result.exitCode !== 0) return refused("install-failed", "工具安装失败，请检查网络连接或 npm 配置。");
       signal.throwIfAborted();
       const file = join(release, process.platform === "win32" ? "node_modules" : join("lib", "node_modules"), tools[tool].package, "package.json");
@@ -493,9 +510,14 @@ export class EnvironmentService {
   }
 
   private async startLogin(tool: EnvironmentTool): Promise<EnvironmentReply> {
-    if (tool === "codex" || tool === "claude") return refused("provider-configuration-required", tool === "codex"
-      ? "先把 Codex 配置好（账号或自定义 API 都行，用 Codex App 或 `codex` 命令行），再回到 Vonvon 检测。"
-      : "先把 Claude 配置好（账号或自定义 API 都行，用 Claude Code 的 `claude` 命令行），再回到 Vonvon 检测。");
+    if (tool === "codex" || tool === "claude") {
+      // A managed copy is on no PATH: name what starts the copy in use, as the bots resolve it. That reads pointers and
+      // PATH only, so this answer starts no process.
+      const command = toolCommand(tool, this.getDataRoot());
+      return refused("provider-configuration-required", tool === "codex"
+        ? `先把 Codex 配置好（账号或自定义 API 都行，用 Codex App 或 \`${command}\` 命令行），再回到 Vonvon 检测。`
+        : `先把 Claude 配置好（账号或自定义 API 都行，用 Claude Code 的 \`${command}\` 命令行），再回到 Vonvon 检测。`);
+    }
     const resolved = await this.resolveTool(tool);
     if (!resolved) return refused("tool-missing", "请先安装工具。");
     const args = ["auth", "login", "--recommend", "--json"];
@@ -609,10 +631,13 @@ export class EnvironmentService {
   }
 
   /** `executablePath`'s own directory goes last on PATH: an nvm-installed tool's
-   * `#!/usr/bin/env node` launcher needs the `node` next to it. */
+   * `#!/usr/bin/env node` launcher needs the `node` next to it. Built anew, so this service's home and nothing of the
+   * daemon's own leaks in; the user's env file names and the proxy names do pass ({@link passedEnv}): npm, a version
+   * check and a sign-in reach the network the way the bots' Codex and Claude do. */
   private environment(executablePath?: string): NodeJS.ProcessEnv {
     const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows';
     return {
+      ...passedEnv(),
       ...(process.platform === "win32" ? { ComSpec: process.env.ComSpec ?? win32.join(systemRoot, "System32", "cmd.exe"), SystemRoot: systemRoot, WINDIR: systemRoot,
         PATHEXT: process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD', TEMP: process.env.TEMP, TMP: process.env.TMP } : {}),
       HOME: this.home, USERPROFILE: this.home,
@@ -639,7 +664,7 @@ export class EnvironmentService {
         void this.terminate(child).then(() => finish(error), () => finish(new Error("无法停止本机工具。")));
       };
       const onAbort = () => stop(new Error("已取消安装。"));
-      const timer = setTimeout(() => stop(new Error("操作超时。")), timeoutMs);
+      const timer = setTimeout(() => stop(new CommandTimeout()), timeoutMs);
       const finish = (error?: Error, exitCode?: number | null) => {
         if (settled) return;
         settled = true;

@@ -43,6 +43,7 @@ import { foldSessionMessages, mapSessionSummary } from './history';
 import { ClaudeAgentThread, NATIVE_MEMORY_OFF, NATIVE_SCHEDULING_ENV, type TranscriptMark } from './thread';
 import { claudeConfigDir, readConfiguredClaudeModel } from './configured-model';
 import { loginFromAccount, loginFromEnv, loginUnderService, readClaudeLogin } from './login';
+import { toolCommand } from '../../environment/tool-command';
 
 /** The on-demand npm package backing this backend. */
 const SDK_PKG = '@anthropic-ai/claude-agent-sdk';
@@ -408,7 +409,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       version: installedBackendVersion(SDK_PKG),
       location: SDK_PKG,
       depState: 'installed',
-      hint: '复用本机 Claude 登录态（未登录请先 `claude` 登录，或设置 ANTHROPIC_API_KEY）',
+      hint: `复用本机 Claude 登录态（未登录请先 \`${toolCommand('claude')}\` 登录，或设置 ANTHROPIC_API_KEY）`,
     };
   }
 
@@ -426,6 +427,8 @@ export class ClaudeAgentBackend implements AgentBackend {
    * `claude auth status` from a separate CLI would not say whether turns can run, so
    * only the env is checked. */
   private async probeLogin(): Promise<BackendLogin> {
+    // The Claude Code CLI a terminal starts: a managed copy is on no PATH (0.9.0 Linux acceptance).
+    const command = toolCommand('claude');
     let query: Query | undefined;
     const abortController = new AbortController();
     try {
@@ -440,14 +443,14 @@ export class ClaudeAgentBackend implements AgentBackend {
         LOGIN_PROBE_TIMEOUT_MS,
         'login probe',
       );
-      return loginUnderService(loginFromAccount(init.account) ?? loginFromEnv(process.env, 'Claude 没有报告账号信息。'), process.env);
+      return loginUnderService(loginFromAccount(init.account, command) ?? loginFromEnv(process.env, 'Claude 没有报告账号信息。'), process.env, command);
     } catch (err) {
       if (err instanceof BackendNotInstalledError) throw err;
       log.fail('agent', err, { backend: 'claude-agent', phase: 'loginStatus' });
       if (err instanceof Error && err.message.includes('Native CLI binary')) {
-        return { state: 'unknown', message: 'Claude Agent SDK 的运行程序缺失，请重新安装 SDK。也请在终端运行 `claude`，确认本机 Claude Code 可以使用。' };
+        return { state: 'unknown', message: `Claude Agent SDK 的运行程序缺失，请重新安装 SDK。也请在终端运行 \`${command}\`，确认本机 Claude Code 可以使用。` };
       }
-      return { state: 'unknown', message: 'Claude Agent SDK 无法启动。请在终端运行 `claude`，确认本机 Claude Code 可以使用，然后重新检测。' };
+      return { state: 'unknown', message: `Claude Agent SDK 无法启动。请在终端运行 \`${command}\`，确认本机 Claude Code 可以使用，然后重新检测。` };
     } finally {
       abortController.abort();
       query?.close();

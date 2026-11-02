@@ -16,6 +16,7 @@ import { installBackendDep, uninstallBackendDep } from '../agent';
 import { performCoreUpdate } from '../service/update';
 import { startApi } from '../server/http';
 import { noteClaudeLoginFailed } from '../agent/claude-agent/login';
+import { toolCommand } from '../environment/tool-command';
 import { createDiagnosticsStore, parseDiagnosticsIpc } from './diagnostics';
 import { bridgeVersion } from '../core/version';
 import {
@@ -145,7 +146,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   const sessionTokens = createSessionTokens();
   const children = new Map<string, Child>(bots.map((bot) => [bot.appId, newChild(bot, true)]));
   // Lives here, not in the child: a bot's records survive its restarts and go with the daemon's.
-  const diagnostics = createDiagnosticsStore({ changed: () => api?.invalidate(), claudeSignedOut: noteClaudeLoginFailed });
+  const diagnostics = createDiagnosticsStore({ changed: () => api?.invalidate(), claudeSignedOut: at => noteClaudeLoginFailed(at, toolCommand('claude')) });
   const records = createCrashRecordCache(root);
   const notifier = options.notifier ?? createCrashNotifier({ root, clock, log });
 
