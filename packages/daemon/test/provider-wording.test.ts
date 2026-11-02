@@ -12,6 +12,9 @@ describe('Provider words without 登录', () => {
       for (const auth of states) expect(authText({ tool, auth }), `${tool} ${auth?.state}`).not.toContain('登录');
     }
     expect(authText({ tool: 'codex', auth: { state: 'signedOut', message: '' } })).toBe('没配置好：在终端里运行 codex 配置（账号或自定义 API 都行）');
+    // 0.9.0 Linux acceptance (task 287): a managed copy is on no PATH
+    expect(authText({ tool: 'claude', auth: { state: 'signedOut', message: '' }, command: '/d/managed-tools/claude/releases/g/bin/claude' }))
+      .toBe('没配置好：在终端里运行 /d/managed-tools/claude/releases/g/bin/claude 配置（账号或自定义 API 都行）');
   });
 
   it('keeps lark-cli, which does sign in to Feishu, word for word', () => {

@@ -62,3 +62,18 @@ it('leaves this computer\'s Provider details as they were', () => {
   expect(html).toContain('本机已有');
   expect(html).not.toContain('Linux 服务器');
 });
+
+// 0.9.0 Linux acceptance (task 287): a managed Codex or Claude Code is on no PATH; the page named a bare codex or claude
+it('names what starts a managed copy in the device\'s terminal, and keeps the name for one found on PATH', () => {
+  const codex = '/srv/vonvon/node/bin/node /srv/vonvon-data/managed-tools/codex/releases/g/bin/codex';
+  h.tools = [external('codex', {installation: 'managed', source: 'managed', canUninstall: true, command: codex})];
+  const managed = page('codex', [tool('codex', 'signedOut')], remote);
+  expect(managed).toContain(`可以用 Codex App 或 <code>${codex}</code> 命令行配置。`);
+  const claude = '/srv/vonvon-data/managed-tools/claude/releases/g/bin/claude';
+  h.tools = [external('claude', {installation: 'managed', runtimeStatus: 'failed', canUninstall: true, command: claude})];
+  const failed = page('claude', [tool('claude', 'signedOut')], remote);
+  expect(failed).toContain(`可以用 Claude Code（<code>${claude}</code>）配置。`);
+  expect(failed).toContain(`请先在「Linux 服务器」的终端运行 <code>${claude}</code>，修复问题并确认可以使用`);
+  h.tools = [external('codex', {})];
+  expect(page('codex', [tool('codex', 'signedOut')], remote)).toContain('可以用 Codex App 或 <code>codex</code> 命令行配置。');
+});
