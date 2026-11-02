@@ -1,7 +1,8 @@
+import { selfEntry } from '../core/self-entry';
 import { randomBytes } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { log } from '../core/logger';
-import { finishOwnedUpdate, type UpdateStatus } from '../service/update';
+import { abandonOwnedUpdate, type UpdateStatus } from '../service/update';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -86,6 +87,8 @@ interface ShutdownOptions {
   setTimeout?: typeof setTimeout;
   clearTimeout?: typeof clearTimeout;
   readProc?: (pid: number, file: 'cgroup' | 'cmdline') => string;
+  /** Where a standalone server is installed; the default asks the running distribution. */
+  installRoot?: () => Promise<string | undefined>;
 }
 
 export function linuxHelperReady(cgroup: string, cmdline: string[], scope: string, helperArgs: string[]): boolean {
@@ -114,12 +117,21 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
   let wake: () => void = () => {};
   const pending = new Promise<void>(resolve => { wake = resolve; });
   const isStopping = (): boolean => intent === 'stop';
+  // A restart that will not happen ends its update record; a standalone one first switches `current` back, which
+  // completes before this process lets go (server-3 review F2).
+  let abandoning: Promise<void> | undefined;
+  const abandon = (update: UpdateStatus | undefined, reason: string): void => {
+    if (!update) return;
+    const step = abandonOwnedUpdate(update, reason, options.installRoot).catch(error => log.fail('daemon-restart', error, { phase: 'abandon-update' }));
+    // Other records end at once, inside the call; only a standalone switch back is waited for.
+    if (update.previous !== undefined) abandoning = Promise.all([abandoning, step]).then(() => undefined);
+  };
   const cancelHelper = (reason = '重启已被停止取消'): void => {
     if (!helper || helper.cancelled) return;
     const owned = helper;
     owned.cancelled = true;
     log.info('daemon-restart', 'cancelled', { pid: process.pid, helperPid: owned.child.pid });
-    finishOwnedUpdate(owned.update, 'error', reason);
+    abandon(owned.update, reason);
     unschedule(owned.poll);
     settleHelper();
     if (owned.dead) return;
@@ -167,6 +179,12 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
       if (intent === 'stop') cancelHelper();
       if (helper?.cancelled && !helper.dead) { await helper.death; continue; }
       if (helper && !helper.dead && helper.readiness.kind === 'pending') { await helper.settled; continue; }
+      if (abandoning) {
+        const abandoned = abandoning;
+        await abandoned;
+        if (abandoning === abandoned) abandoning = undefined;
+        continue;
+      }
       committed = true;
       if (serviceManaged && intent !== 'running') process.exitCode = 0;
       try { await release(); }
@@ -188,12 +206,12 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
     requestStop: request,
     completeShutdown(release) { return completion ??= complete(release); },
     requestRestart(port, update) {
-      if (intent === 'stop' || committed) { finishOwnedUpdate(update, 'error', '重启已被停止取消'); return; }
-      if (intent === 'restart') { finishOwnedUpdate(update, 'error', '已有重启正在进行'); return; }
+      if (intent === 'stop' || committed) { abandon(update, '重启已被停止取消'); return; }
+      if (intent === 'restart') { abandon(update, '已有重启正在进行'); return; }
       intent = 'restart';
       if (serviceManaged && !update) { setImmediate(wake); return; }
       try {
-        const cliEntry = process.argv[1];
+        const cliEntry = selfEntry();
         if (!cliEntry) throw new Error('Cannot locate daemon CLI for restart.');
         const identity = z.object({ pid: z.number().int().positive(), startedAt: z.string().datetime() })
           .parse(JSON.parse(readFileSync(join(paths.appDir, 'daemon.pid'), 'utf8')));
@@ -223,7 +241,7 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
           if (!committed && !owned.cancelled) {
             intent = 'stop';
             log.warn('daemon-restart', 'helper_lost', { pid: identity.pid, listen: `127.0.0.1:${port}`, helperPid: child.pid });
-            finishOwnedUpdate(update, 'error', 'helper_lost');
+            abandon(update, 'helper_lost');
             wake();
           }
         };
@@ -271,7 +289,7 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
         child.unref();
       } catch (error) {
         intent = 'stop';
-        finishOwnedUpdate(update, 'error', 'helper_lost');
+        abandon(update, 'helper_lost');
         log.fail('daemon-restart', error, { phase: 'helper-spawn' });
         wake();
       }

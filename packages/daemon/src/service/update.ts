@@ -1,11 +1,13 @@
-import {runtimeDistribution} from './distribution';
-import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import {runtimeDistribution, standaloneInstallRoot} from './distribution';
+import { readCurrent, switchCurrent } from './current-release';
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { paths } from '../config/paths';
 import { spawnProcess } from '../platform/spawn';
 import { SERVICE_UNAVAILABLE } from '../host/service';
 import { log } from '../core/logger';
+import { acquireFileLock, tryFileLock } from './update-lock';
 import { z } from 'zod';
 
 // `npm` via cross-spawn: on Windows it's an `npm.cmd` shim that a bare
@@ -168,89 +170,142 @@ function updateLockFile(): string {
   return join(paths.appDir, 'update.lock');
 }
 
-function livePid(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    // EPERM：进程在、只是本进程无权 signal → 仍算活。
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
-  }
+export { livePid, processStart } from './update-lock';
+
+/**
+ * `update.lock` of this data directory by default, or the lock `file` named (`releases.lock`, `update-state.lock`).
+ * The protocol and its invariants are in update-lock.ts: a live holder is never taken over, a stale lock is reclaimed
+ * by one process at a time, and the release removes only the lock it was given.
+ */
+export function acquireUpdateLock(file = updateLockFile()): (() => void) | null {
+  return acquireFileLock(file);
 }
 
-function isUpdateLockStale(file: string): boolean {
-  try {
-    const rec = JSON.parse(readFileSync(file, 'utf8')) as { pid?: number; at?: number };
-    if (typeof rec.pid !== 'number') return true; // 无 pid → 损坏，可回收
-    if (!livePid(rec.pid)) return true; // 持有者已死 → 优先回收（不受时钟影响）
-    return false;
-  } catch {
-    return true; // 损坏/读不出 → 可回收
-  }
+/** As acquireUpdateLock, but tells a lock that is held (`'busy'`) from a file system error, for a caller that waits. */
+export function tryUpdateLock(file = updateLockFile()): (() => void) | 'busy' | Error {
+  return tryFileLock(file);
 }
 
-/** A live update owns the lock until it exits or releases it, without an age limit. */
-export function acquireUpdateLock(): (() => void) | null {
-  const file = updateLockFile();
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const fd = openSync(file, 'wx'); // O_EXCL：创建即占有，创建失败即已存在
-      writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
-      closeSync(fd);
-      return releaseUpdateLock(file); // 只删「属于自己」的锁，绝不误删他人的
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'EEXIST') return null; // EACCES/ENOSPC/… → 当作拿不到锁，绝不 throw
-      if (!isUpdateLockStale(file)) return null;
-      try {
-        rmSync(file, { force: true }); // 回收陈旧锁后重试 wx 创建
-      } catch {
-        /* 可能被别人抢先回收，交给下一轮 */
-      }
-    }
-  }
-  return null; // 连续抢回收都输 → 当作进行中（安全：绝不并发 npm）
-}
-
-/** release：只在锁文件仍指向自己时删——避免删掉「回收了本进程陈旧锁后的新持有者」的锁。 */
-function releaseUpdateLock(file: string): () => void {
-  return () => {
-    try {
-      const rec = JSON.parse(readFileSync(file, 'utf8')) as { pid?: number };
-      if (rec.pid !== process.pid) return; // 不是自己的锁（已被回收/换主）→ 别动
-    } catch {
-      /* 损坏/已不存在 → 落到下面尽力删（force 对不存在无害） */
-    }
-    try {
-      rmSync(file, { force: true });
-    } catch {
-      /* best-effort */
-    }
-  };
-}
-
+/** What a standalone update is doing inside its phase (server-3 C3). */
+export const updateDetails = ['downloading', 'verifying', 'unpacking', 'switching', 'draining', 'waiting', 'rolled-back'] as const;
 export const updateStatusSchema = z.object({
   phase: z.enum(['installing', 'restarting', 'done', 'error']),
   ok: z.boolean().optional(), message: z.string().optional(),
   from: z.string().optional(), to: z.string().optional(), at: z.number(),
+  /** The release a standalone update switched `current` away from: the one a rollback goes back to. */
+  previous: z.string().optional(),
+  progress: z.object({ transferred: z.number().nonnegative(), total: z.number().nonnegative() }).strict().optional(),
+  detail: z.enum(updateDetails).optional(),
+  rolledBack: z.boolean().optional(),
 }).strict();
 export type UpdateStatus = Readonly<z.infer<typeof updateStatusSchema>>;
 export type UpdatePhase = UpdateStatus['phase'];
 
-export function finishOwnedUpdate(expected: UpdateStatus | undefined, outcome: 'done' | 'error', message?: string): void {
-  if (!expected) return;
+/** A Core update already holds `update.lock`, or a standalone restart has not ended yet. */
+export class UpdateBusyError extends Error {
+  constructor(message = '已有更新正在进行。') { super(message); }
+}
+
+const OWNED_FIELDS = ['phase', 'ok', 'message', 'from', 'to', 'at', 'previous', 'detail', 'rolledBack'] as const;
+const sameRecord = (current: UpdateStatus | null, expected: UpdateStatus): boolean => current !== null && OWNED_FIELDS.every(field => current[field] === expected[field]);
+
+/** Writes `expected` ended with `outcome`; the caller holds `update.lock` and has checked the file is still `expected`. */
+function writeOutcome(expected: UpdateStatus, outcome: 'done' | 'error', message?: string, extra: { rolledBack?: boolean } = {}): UpdateStatus {
+  // A rollback stays marked while the record goes on failing; a late success is not one.
+  const { progress: _progress, detail: _detail, rolledBack, ...kept } = expected;
+  const record: UpdateStatus = { ...kept, phase: outcome, ok: outcome === 'done', ...(message ? { message } : {}), ...(outcome === 'error' && rolledBack ? { rolledBack } : {}), ...extra, at: Date.now() };
+  writeUpdateStatus(record);
+  return record;
+}
+
+/** Ends `expected` only while the file is still that record; returns what it wrote. */
+export function finishOwnedUpdate(expected: UpdateStatus | undefined, outcome: 'done' | 'error', message?: string, extra: { rolledBack?: boolean } = {}): UpdateStatus | undefined {
+  if (!expected) return undefined;
   const release = acquireUpdateLock();
-  if (!release) { log.info('daemon-restart', 'update_record_ownership_lost', { reason: 'lock_busy' }); return; }
+  if (!release) { log.info('daemon-restart', 'update_record_ownership_lost', { reason: 'lock_busy' }); return undefined; }
   try {
-    const current = readUpdateStatus();
-    if (!current || current.phase !== expected.phase || current.ok !== expected.ok ||
-      current.message !== expected.message || current.from !== expected.from || current.to !== expected.to || current.at !== expected.at) {
+    if (!sameRecord(readUpdateStatus(), expected)) {
       log.info('daemon-restart', 'update_record_ownership_lost', { reason: 'record_changed' });
-      return;
+      return undefined;
     }
-    writeUpdateStatus({ ...expected, phase: outcome, ok: outcome === 'done', ...(message ? { message } : {}), at: Date.now() });
+    return writeOutcome(expected, outcome, message, extra);
   } finally { release(); }
 }
+
+/** `update.lock`, held by this process for a record it owns; every write goes through it. */
+export type HeldUpdate = {
+  /** The record as this holder last wrote it. */
+  readonly record: UpdateStatus;
+  write(next: UpdateStatus): UpdateStatus;
+  end(outcome: 'done' | 'error', message?: string, extra?: { rolledBack?: boolean }): UpdateStatus;
+  release(): void;
+};
+
+/**
+ * Takes `update.lock` while the file is still `expected` and keeps it until `release()` (server-3 4.6): the restart
+ * helper holds it from the old daemon's exit to the outcome, so no other update starts and the new daemon's own
+ * startup check leaves the record to it. A lock someone else holds is waited for up to `waitMs`; undefined when the
+ * record changed or the lock stayed busy.
+ */
+export async function holdOwnedUpdate(expected: UpdateStatus, waitMs = 10_000): Promise<HeldUpdate | undefined> {
+  const until = Date.now() + waitMs;
+  let release = acquireUpdateLock();
+  while (!release && Date.now() < until) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    release = acquireUpdateLock();
+  }
+  if (!release) { log.info('daemon-restart', 'update_record_ownership_lost', { reason: 'lock_busy' }); return undefined; }
+  if (!sameRecord(readUpdateStatus(), expected)) {
+    release();
+    log.info('daemon-restart', 'update_record_ownership_lost', { reason: 'record_changed' });
+    return undefined;
+  }
+  let record = expected;
+  return {
+    get record() { return record; },
+    write(next) { writeUpdateStatus(next); record = next; return next; },
+    end(outcome, message, extra) { record = writeOutcome(record, outcome, message, extra); return record; },
+    release,
+  };
+}
+
+/** `step` with the record held (holdOwnedUpdate), then the lock goes; undefined when it could not be held. */
+export async function whileOwned<T>(expected: UpdateStatus, step: (held: HeldUpdate) => Promise<T>, waitMs?: number): Promise<T | undefined> {
+  const held = await holdOwnedUpdate(expected, waitMs);
+  if (!held) return undefined;
+  try { return await step(held); } finally { held.release(); }
+}
+
+const ABANDON_TEXT: Record<string, string> = { helper_lost: '负责重启的助手进程没了' };
+
+/**
+ * The restart `update` asked for will not happen: a stop came first, the helper was lost, or another restart was
+ * already under way. A standalone update had switched `current` before asking (server-3 4.5 step 6), so `current`
+ * goes back to `previous` before the record says error: the next start runs the release that was running, and the
+ * page says so. Other updates only end with `reason`, at once.
+ */
+export async function abandonOwnedUpdate(update: UpdateStatus | undefined, reason: string, installRoot: () => Promise<string | undefined> = async () => standaloneInstallRoot()): Promise<void> {
+  if (!update) return;
+  const { previous, to } = update;
+  if (previous === undefined || to === undefined) { finishOwnedUpdate(update, 'error', reason); return; }
+  const root = await installRoot().catch(() => undefined);
+  if (!root) { finishOwnedUpdate(update, 'error', reason); return; }
+  const why = ABANDON_TEXT[reason] ?? reason;
+  await whileOwned(update, async held => {
+    try {
+      // `current` moved on meanwhile (the install script): it is not this update's to take back.
+      if ((await readCurrent(root))?.version !== to) { held.end('error', why); return; }
+      await switchCurrent(root, previous);
+    } catch (error) {
+      log.fail('daemon-restart', error, { phase: 'abandon-switch-back' });
+      held.end('error', `${why}；没能切回 ${previous}，下次启动的会是 ${to}`);
+      return;
+    }
+    log.warn('daemon-restart', 'update-standalone-abandoned', { reason, from: to, to: previous });
+    held.end('error', `${why}，已切回 ${previous}`, { rolledBack: true });
+  });
+}
+
 
 function updateStatusFile(): string {
   return join(paths.appDir, 'update-status.json');
@@ -261,8 +316,11 @@ function updateStatusFile(): string {
  * 网页端完全静默）。同步、尽力而为、绝不抛。
  */
 export function writeUpdateStatus(status: UpdateStatus): void {
+  const file = updateStatusFile();
   try {
-    writeFileSync(updateStatusFile(), JSON.stringify(status), 'utf8');
+    // Whole-file replace: a reader polling it never sees half a record. The name is this process's own.
+    writeFileSync(`${file}.${process.pid}.tmp`, JSON.stringify(status), 'utf8');
+    renameSync(`${file}.${process.pid}.tmp`, file);
   } catch {
     /* best-effort */
   }
