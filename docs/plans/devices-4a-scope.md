@@ -228,7 +228,7 @@ Mac 后验：U2 的维护子集界面；本片无专项。Windows：无。
 
 ## 审查后改了什么
 
-两位审查者的 13 条（2026-11-02），逐条复核代码，能复现的复现了。
+写作时 Claude 两路自查的 13 条（2026-11-02，不是独立审查；独立审查交给 Codex，见 PR），逐条复核代码，能复现的复现了。
 
 - **D4a-SEC-1 / D4A-R5（令牌作废后已开的连接还能用）→ 接受。** `SessionTokens` 加了 `active(sessionId, use)` 和 `onEnd`；作废、替换、闲置超时都通知，`http.ts` 收到后用 4401 `invalid_session_token` 关掉用这个令牌开的连接。`authorize` 每条请求先查 `sessionActive`（顺手记一次使用），不在了回 `session_token_invalid`；推快照前也查。测试：`session-tokens.test.ts` 新一条，`authz-session.test.ts` 的单元和端到端各一条。
 - **D4a-SEC-2（会话里 `service status` 读 `local-credential`）→ 接受。** `getServiceAdapter({ trustLock })`：会话里 systemd 和 launchd 都不验 owner，照锁报运行。`cli-bot-session.test.ts` 在凭据 0000 时断言 `running: true`。
