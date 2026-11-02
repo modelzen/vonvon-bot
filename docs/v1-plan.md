@@ -1663,6 +1663,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 
 | 项 | 默认值 | 理由 | 用在 |
 |---|---|---|---|
+| 桌面自动检查更新 | 启动完成后 2 分钟；之后每轮结束后固定 90 分钟，只在北京时间 05:00～次日 02:00 自动检查，无随机；夜间跳过保留相位，唤醒时补一次已到期检查；手动检查不限时 | owner 2026-11-02 确认，持续运行也可发现后来发布的版本 | desktop-update-cadence |
 | Claude 根上凭据读名单 | 挡 local-credential、旧 config.json、.keystore.salt；飞书 secrets.enc/master.key 先不挡 | lark-cli 的 bot 身份 getter 仍需凭据，M8 后问 owner 是否收紧 | s31b |
 | Claude 读名单的不存在路径 | 起会话时去掉 | 原生沙箱不挂不存在的目录；真实路径解析失败时 deny 保留、allow 去掉 | s31b |
 | Claude 多硬链接的普通文件 | 只读、工作区可写档的 Read 一律拒绝 | 路径身份不能识别另一个硬链接来自哪个目录 | s31b |
@@ -2076,3 +2077,7 @@ Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bo
 - 0.8.1 后续：按 [Windows Provider 检测与模型缓存计划](plans/windows-provider-latency.md) 修复真实 IPC 期限、重复探测及正式安装包验收缺口。普通读取使用成功缓存，用户重检才强刷；实际会话权限守卫保留。验收与发布证据分别绑定准确 source SHA 和安装包哈希。
 
 - 2026-11-02 Provider 同类修复：接续 #629，补齐 macOS/Linux 冷探测与 Bot IPC 的超时预算，Claude 模型跨实例缓存、身份失效和显式刷新，以及 Codex 普通发现期间的即时强刷。见 `docs/plans/provider-probe-parity.md`；自测、独立审查与最终 CI 证据记录在本次 PR。仅合入 dev，main 和公开发布另行安排。
+
+## 2026-11-02 桌面更新检查频率
+
+- [x] 按 owner 确认改为启动完成 2 分钟、此后固定 90 分钟，北京时间 05:00～次日 02:00 自动检查；夜间跳过保留各自节奏，唤醒时补一次已到期检查。首次失败也继续循环，手动检查不受时段限制。方案与验收要点见 `docs/plans/desktop-update-cadence.md`；本次自测、独立审查及三平台 CI 证据记录在 PR，仅合入 dev。
