@@ -557,3 +557,25 @@ Claude 收尾：停助手；`remote disable`；撤销验收中配对的客户端
 - "30 秒内自动连上"等于退避上限，加一次连接超时可能偶发失败。改成 45 秒（6.2 第 5、6 步）。
 - 维护视图里"本片先合入或 U2 先合入"两种写法，后一种不会发生。改成定序（4.7）。
 - I3 拆成 I3a、I3b 后，开头钉的 `server-3-update-engine` 过期。改成 I3a（#632）、I3b（#633），`UpdatePanel` 以 I3b 为准（第 1 节依赖）。
+
+## 11. 实现时和计划不一样的地方
+
+按本计划在 U1a 之上实现（同一分支 `claude/devices-ui-1`，基于 D2 的 318c1b1c）。和计划不一样的地方：
+
+1. **文件分法**：`TailscaleAdvice`、`OutsideWindow`、`quitOutsideApp` 和三个小件（`StatusDot`、把文案里反引号包的命令显示成 `<code>` 的 `CopyText`、每隔一段时间刷新的 `useNow`）放在 `U/devices/device-bits.tsx`；`DeviceVersionNotice` 和 `DeviceStatusBanner` 同在 `DeviceStatusBanner.tsx`；`desktopPlatformMark`、`shouldMarkPlatform` 写在 `devices-presentation.ts`。`DesktopRoot.tsx` 照计划把它们都再导出。原因：`DesktopRoot` 要 import `App` 和两个外部视图，它们又要用这些，放在 `DesktopRoot.tsx` 里会循环引用。
+2. **整体失败码是 `forbidden` 时**，`failureCopy` 写"连不上「X」。"再接每条地址的提示，和 `refused` 那一组一样，不走"其他"的"没能连上「X」（forbidden）。"。
+3. **提示条的重连倒数**：`retryAt` 没有或已过（正在连）时写"和「X」的连接断了，正在重连。"，不写"（0 秒后再试）"。
+4. **同一台设备、换了地址的链接**：预览回 `already_added` 且 `routesChanged` 时，对话框直接调 `add`（U1a 只更新地址、不用掉邀请），显示"「X」已经在列表里了，已按新链接更新了它的地址。"。这样 4.9 `forbidden` 那句"粘到"添加设备"里，会自动更新地址"才成立。地址没变时照计划写"已经在设备列表里了"并给"切换到「X」"。
+5. **重新配对的默认名字**：链接正是要修的那台时，名字框默认是列表里现在的名字，不是链接里的名字，免得重新配对顺手把用户起的名字改回去。
+6. **"配对中途断开、补连也没成功"** 的失败码是 U1a 的 `pairing_interrupted`。
+7. **维护视图的服务端升级**：I3（#632、#633）已合入集成分支，但本分支基于 D2 318c1b1c，没有 I3，`UpdatePanel` 还是旧的。所以服务端旧时照 4.7"I3 没合入时也只写文字"；`maintenanceRequest` 已写好并有测试，等 U2 的 `ServerUpdateCard` 接上。客户端旧时除了 `DesktopUpdateButton`，再给一个"检查更新"：`DesktopUpdateButton` 在没查到新版本前什么都不显示，只放它会没有按钮可按。
+8. **`failed` 的标题**也写"连不上「X」"，具体原因在正文；页顶那一行是设备名、状态点和状态字（"已撤销""需要重新配对"）。
+9. **"这台电脑"一行的副文字**：本机的名字只在正看这台电脑时有（设备状态里只有当前设备的 `serverInfo`），看远程时只写系统和版本。
+10. **连接页、维护视图能滚动**：标题栏下面单独一层 `.device-outside-scroll`，连不上页文字多时，底部的"回到这台电脑"等按钮能滚到。
+11. **验收助手 `packages/desktop/test/manual/devices-accept-helper.ts`（6.2 第 4 步）没写**：它要 D3 的 `vonvon remote enable`、`pair --json`，D3 还没合入；和 U1a 的探针一样，D3 合入后和 Mac 验收一起写。
+12. **测试**：几个界面测试共用 `test/devices-fixture.ts`（假名字、文档地址段）；设置首页的测试加在 `test/application-ui.test.tsx`。截图脚本 `test/manual/devices-fake-shell.ts` 用 Node 直接跑（`node packages/ui/test/manual/devices-fake-shell.ts <目录>`），只听 127.0.0.1。
+13. **行数**：U1b 约 1,400 行（界面 ~780、测试 ~490、截图脚本 ~90、文档 ~40），和估的 1,500 差不多；和 U1a 合起来整个 PR 不含 lockfile 约 5,200 行。
+
+已知限制（按真实用法不另做处理）：
+- 在设备页删掉正在看的那台：删完立刻回到这台电脑，页面整个重建，"删了但对面还记着"那条提示随旧页面一起没了。只在自撤销没成功时才会有这条提示。
+- 页面上"已撤销"多快出现完全取决于 U1a 推来的状态，界面这边不另计时。
