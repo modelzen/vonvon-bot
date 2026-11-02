@@ -186,23 +186,47 @@ no_cli() {
 # 上面只看得到 ~/.vonvon-bot 的服务端：用别的数据目录直接启动的（VONVON_HOME=… vonvon daemon start），daemon.pid
 # 读不出来的，`daemon stop` 答"没在跑"，没有 vonvon 时也看不到，删了安装目录它们还在跑。服务停完、去 PATH 块和删安装目录
 # 之前，看一遍 /proc：有进程跑的是安装目录里的程序就不删（启动器 exec 的是 <根>/current/node/bin/node，服务端一定是）。
-# 程序文件已经删了的，readlink 在路径后面加" (deleted)"；别的账号的进程读不到，不算；本脚本自己不算。
-# /proc 用不了时不看，照原来的做法。
+# 程序文件已经删了的，readlink 在路径后面加" (deleted)"；本脚本自己不算。/proc 用不了时不看，照原来的做法。
 nothing_runs_from_root() {
   readlink "/proc/$$/exe" >/dev/null 2>&1 || return 0
   root_real=$(CDPATH= cd -- "$ROOT" 2>/dev/null && pwd -P) || root_real=$ROOT
+  me=$(id -u 2>/dev/null) || me=''
   running=''
   for proc in /proc/[0-9]*; do
     if [ "${proc#/proc/}" = "$$" ]; then continue; fi
-    exe=$(readlink "$proc/exe" 2>/dev/null) || continue
-    exe=${exe% (deleted)}
-    case "$exe" in
-      "$ROOT"/*|"$root_real"/*) running="${running:+$running }${proc#/proc/}" ;;
-    esac
+    if exe=$(readlink "$proc/exe" 2>/dev/null); then
+      exe=${exe% (deleted)}
+      case "$exe" in
+        "$ROOT"/*|"$root_real"/*) running="${running:+$running }${proc#/proc/}" ;;
+      esac
+    elif runs_from_root_unreadable "$proc"; then
+      running="${running:+$running }${proc#/proc/}"
+    fi
   done
   if [ -n "$running" ]; then
     fail 1 "还有程序在用安装目录里的文件运行（进程 $running），可能是用别的数据目录启动的服务端，安装目录没删。先停掉它们：\`kill $running\`，等它们退出后再运行一次卸载。"
   fi
+}
+
+# exe 读不出来的进程：别的账号的（status 里的 Uid，实际和有效的都不是这个账号）不算；这个账号的读不出来，多半是自己设了
+# 不可转储（PR_SET_DUMPABLE 0，ssh-agent、gpg-agent 这类常这样），不能当成别的账号的放过，也不能一概不删（那样大多数人都
+# 卸不掉）：看还读得到的命令行（argv 用 NUL 隔开）和工作目录（读得到时），有一项在安装目录里（按 $ROOT 和 pwd -P 的真实
+# 路径各比一次）才算。读的时候进程已经退出了的，不算。
+runs_from_root_unreadable() {
+  uids=$(LC_ALL=C sed -n 's/^Uid:[[:space:]]*\([0-9][0-9]*\)[[:space:]][[:space:]]*\([0-9][0-9]*\).*/\1 \2/p' "$1/status" 2>/dev/null) || return 1
+  case " $uids " in *" $me "*) ;; *) return 1 ;; esac
+  args=$(tr '\0' '\n' 2>/dev/null <"$1/cmdline") || return 1
+  nl='
+'
+  case "$nl$args$nl" in
+    *"$nl$ROOT$nl"*|*"$nl$ROOT/"*|*"$nl$root_real$nl"*|*"$nl$root_real/"*) return 0 ;;
+  esac
+  dir=$(readlink "$1/cwd" 2>/dev/null) || return 1
+  dir=${dir% (deleted)}
+  case "$dir" in
+    "$ROOT"|"$ROOT"/*|"$root_real"|"$root_real"/*) return 0 ;;
+  esac
+  return 1
 }
 
 main() {

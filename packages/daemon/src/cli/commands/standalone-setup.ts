@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { everyStartupFile, removePathBlock, startupFiles, writePathBlock, type AddedBreaks } from '../../platform/shell-path';
@@ -30,11 +30,13 @@ export type StandaloneSetupResult = {
 };
 
 /**
- * What setup did to the startup files, for teardown: every file it put the PATH block in, across runs, and the line
- * breaks it put before the block (shell-path `AddedBreaks`). Kept in the install root, which uninstall deletes after
+ * What setup did to the startup files, for teardown: every file it put the PATH block in, across runs, the line breaks
+ * it put before the block (shell-path `AddedBreaks`), and each `bin` path the block named. The block names the install
+ * root as setup was given it, which is the home as it was then: a home reached through a link at one run and by its
+ * real path at another gives two texts for one install root. Kept in the install root, which uninstall deletes after
  * teardown.
  */
-type PathRecord = { files: string[]; breaks: AddedBreaks };
+type PathRecord = { files: string[]; breaks: AddedBreaks; bins: string[] };
 const recordFile = (installRoot: string): string => join(installRoot, 'path-block.json');
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
@@ -45,11 +47,13 @@ const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(v
 async function readRecord(installRoot: string): Promise<PathRecord> {
   let parsed: unknown;
   try { parsed = JSON.parse(await readFile(recordFile(installRoot), 'utf8')); }
-  catch { return { files: [], breaks: {} }; }
-  if (!isRecord(parsed)) return { files: [], breaks: {} };
+  catch { return { files: [], breaks: {}, bins: [] }; }
+  if (!isRecord(parsed)) return { files: [], breaks: {}, bins: [] };
+  const paths = (value: unknown): string[] => Array.isArray(value) ? value.filter((path): path is string => typeof path === 'string' && isAbsolute(path)) : [];
   return {
-    files: Array.isArray(parsed.files) ? parsed.files.filter((file): file is string => typeof file === 'string' && isAbsolute(file)) : [],
+    files: paths(parsed.files),
     breaks: isRecord(parsed.breaks) ? Object.fromEntries(Object.entries(parsed.breaks).filter((entry): entry is [string, number] => Number.isSafeInteger(entry[1]) && Number(entry[1]) >= 0)) : {},
+    bins: paths(parsed.bins),
   };
 }
 
@@ -85,6 +89,7 @@ export async function runStandaloneSetup(options: { installRoot: string; version
   const recorded = JSON.stringify(record);
   const written = await writePathBlock(await startupFiles(d.home, d.zdotdir), bin, record.breaks);
   for (const file of written.files) if (!record.files.includes(file)) record.files.push(file);
+  if (written.files.length && !record.bins.includes(bin)) record.bins.push(bin);
   if (JSON.stringify(record) !== recorded) {
     const file = recordFile(installRoot);
     try { await writeFile(`${file}.tmp`, `${JSON.stringify(record)}\n`, { mode: 0o644 }); await rename(`${file}.tmp`, file); }
@@ -111,15 +116,20 @@ export async function runStandaloneSetup(options: { installRoot: string; version
 }
 
 /**
- * Only the block that names this install root's `bin` is taken out; the desktop app's block stays. It is looked for in
- * every file that could hold it now and every file setup recorded, not only in the files setup would pick today.
+ * Only the blocks that name this install root's `bin` are taken out; the desktop app's block stays. Its `bin` is each
+ * path setup recorded, the one given now and the one under the install root's real path: the home may have been
+ * reached through a link at setup and not now, or the other way round. The block is looked for in every file that
+ * could hold it now and every file setup recorded, not only in the files setup would pick today.
  */
 export async function runStandaloneTeardown(options: { installRoot: string }, io: Io, overrides: Partial<StandaloneDependencies> = {}): Promise<{ pathFiles: string[]; pathNote?: string }> {
   const d = { ...defaults(), ...overrides };
   if (!isAbsolute(options.installRoot)) throw badArgs(`--install-root 要是绝对路径：${options.installRoot}`);
   const record = await readRecord(options.installRoot);
   const files = [...new Set([...everyStartupFile(d.home, d.zdotdir), ...record.files])];
-  const removed = await removePathBlock(files, join(options.installRoot, 'bin'), record.breaks);
+  const bin = join(options.installRoot, 'bin');
+  // the install root's real path, not `bin`'s: a `bin` that is a link names some other directory
+  const realBin = await realpath(options.installRoot).then(root => join(root, 'bin'), () => bin);
+  const removed = await removePathBlock(files, [...new Set([...record.bins, bin, realBin])], record.breaks);
   const result = { pathFiles: removed.files, ...removed.notes.length ? { pathNote: removed.notes.join('；') } : {} };
   if (io.json) io.write(`${JSON.stringify({ ok: true, ...result })}\n`);
   else io.write(`${removed.files.length ? `已从 ${removed.files.join('、')} 去掉 PATH` : '启动文件里没有服务端的 PATH'}\n${result.pathNote ? `${result.pathNote}\n` : ''}`);
