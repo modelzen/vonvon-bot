@@ -242,7 +242,7 @@ export async function startDesktop(): Promise<void> {
       // authenticated owner before releasing the desktop connection or installing.
       if (process.platform === 'win32' && await managerDependencies.readVerifiedDaemon()) {
         const attached = await attachExisting(root);
-        try { await stopHost(attached.identity, () => attached.client.machine({type:'stopHost'})); }
+        try { await stopHost(attached.identity, () => attached.client.machine({type:'stopHost', reason:'update'})); }
         finally { await attached.dispose(); }
       }
       await cleanup();
@@ -649,15 +649,9 @@ export async function startDesktop(): Promise<void> {
       retryDesktopUpdate: async () => noteUpdate(await updater.retry()),
       installDesktopUpdate: async () => {
         if (quitRequested) throw new StartHostRefusal('Vonvon Bot 正在退出，请稍后再更新。');
-        try {
-          if (process.platform === 'win32' && (await updater.check()).state === 'downloaded') {
-            const choice = await dialog.showMessageBox(current, {type:'question',title:'安装更新',
-              message:'安装并重启 Vonvon Bot？', detail:'更新会短暂中断 Bot 的后台连接，正在运行的任务可能会中断。你可以选择稍后，等任务结束再安装。',
-              buttons:['安装并重启','稍后'],defaultId:1,cancelId:1,noLink:true});
-            if (choice.response !== 0) return updater.check();
-          }
-          return await updater.install();
-        }
+        // No question first, as on macOS (owner 2026-11-02): the button itself says the restart interrupts the
+        // conversations in progress; a dialog on an unattended computer would wait forever.
+        try { return await updater.install(); }
         catch (error) {
           if (cleanupPromise) {
             terminating = true;

@@ -919,7 +919,7 @@ function DesktopApp() {
                 <SettingsGroup label="启动选项" id={settingAnchor('启动选项')} footer={snapshot.application.platform === 'macos' ? '关闭窗口会隐藏 Dock 图标，Bot 继续运行；可从状态栏恢复窗口。选择退出会停止后台和所有 Bot。' : '关闭桌面窗口后应用留在系统托盘，Bot 继续运行。选择退出会停止后台和所有 Bot。'}>
                   <SettingsRow title="后台运行"
                     description={host.kind === 'connected'
-                      ? `${host.ownership === 'owned' ? '由本机启动' : '已接续现有服务'} · 重新加载已保存的 Bot 设置`
+                      ? `${host.ownership === 'owned' ? '由本机启动' : '已接续现有服务'} · 重新加载已保存的 Bot 设置，会中断正在进行的对话`
                       : '尚未连接'}
                     trailing={<Button size="sm" disabled={busy || host.kind !== 'connected'} onClick={() => void run({type: 'restartHost'})}>重启后台</Button>}/>
                   <LoginServiceRow application={snapshot.application} busy={busy} onToggle={enabled => void runShell(async () => setNotice({message: await toggleService(enabled, client, shell), error: false}))}/>

@@ -22,6 +22,14 @@ it('accepts stop intent before producing the done reply', async () => {
   expect(owner.requestStop).toHaveBeenCalledTimes(1);
 });
 
+// owner 2026-11-02: a desktop update stops the server; the cut-short turns' cards then say it was updated
+it('passes a desktop update\'s stop reason on, and none for a plain stop', async () => {
+  const owner = control();
+  await machineRpc(fakeService(), owner, 43119, { type: 'stopHost', reason: 'update' });
+  await machineRpc(fakeService(), owner, 43119, { type: 'stopHost' });
+  expect(owner.requestStop.mock.calls).toEqual([['update'], [undefined]]);
+});
+
 it('interleaved update replies carry their own exact record into restart', async () => {
   const first = { phase: 'restarting', from: '1', to: '2', ok: true, at: 10 } satisfies UpdateStatus;
   const second = { phase: 'restarting', from: '2', to: '3', ok: true, at: 11 } satisfies UpdateStatus;

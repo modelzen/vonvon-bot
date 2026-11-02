@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const fixture = vi.hoisted(() => ({ api: vi.fn(), providers: vi.fn(), shutdown: vi.fn(), onboard: vi.fn() }));
 vi.mock('../src/core/logger', () => ({ log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() } }));
-vi.mock('../src/agent/owned-process', () => ({ closeOwnedProviderProcesses: fixture.providers, unconfirmedProviderPids: () => [] }));
+vi.mock('../src/agent/owned-process', () => ({ closeOwnedProviderProcesses: fixture.providers, unconfirmedProviderPids: () => [], registeredProviderPids: () => [] }));
 vi.mock('../src/bot/onboarding', () => ({ ensureOnboarded: fixture.onboard, announceEventsWhenLive: vi.fn() }));
 vi.mock('../src/bot/bridge', () => ({ startBridge: vi.fn(async () => ({ shutdown: fixture.shutdown })) }));
 vi.mock('../src/core/single-instance', () => ({ acquireSingleInstanceLock: () => () => {}, BridgeAlreadyRunningError: class extends Error {} }));
@@ -62,4 +62,30 @@ it.each(['supervisor', 'single Bot'] as const)('%s preserves failure semantics w
   fixture.api.mockRejectedValue(new Error('startup failed'));
   await expect(runRun(mode === 'single Bot' ? 'fixture' : undefined, { control })).rejects.toThrow('startup failed');
   expect(process.exitCode).toBeUndefined();
+});
+
+// owner 2026-11-02: the Bot's close is told why (its cards say so) and waited for at most BRIDGE_STOP_LIMIT_MS; the
+// agents are closed after it either way.
+it('tells the single Bot\'s close why it stops, and does not wait past the limit for a close that hangs', async () => {
+  const { BRIDGE_STOP_LIMIT_MS } = await import('../src/cli/commands/run');
+  vi.useFakeTimers();
+  try {
+    let reason: (() => string) | undefined;
+    fixture.shutdown.mockImplementation((why: () => string) => { reason = why; return new Promise(() => {}); });
+    fixture.providers.mockResolvedValue(undefined);
+    fixture.api.mockImplementation(async () => {
+      control.requestRestart(1234);
+      return { listen: '127.0.0.1:1234', beginDrain: async () => {}, release: async () => {} };
+    });
+    let ended = false;
+    const running = runRun('fixture', { control }).finally(() => { ended = true; });
+    await vi.advanceTimersByTimeAsync(BRIDGE_STOP_LIMIT_MS - 1);
+    expect(reason?.()).toBe('restart');
+    expect(fixture.providers).not.toHaveBeenCalled();
+    expect(ended).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await running;
+    expect(fixture.providers).toHaveBeenCalledOnce();
+    expect(process.exitCode).toBe(75);
+  } finally { vi.useRealTimers(); }
 });

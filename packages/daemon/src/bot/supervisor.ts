@@ -1,7 +1,7 @@
 import { selfEntry } from '../core/self-entry';
 import { readSingleInstanceHolder } from '../core/single-instance';
 import { botPaths, paths } from '../config/paths';
-import { CHILD_SHUTDOWN_GRACE_MS, closeOwnedProviders, observeShutdown, settleOwnedChild, type ShutdownControl } from '../host/lifecycle';
+import { CHILD_SHUTDOWN_GRACE_MS, closeOwnedProviders, observeShutdown, settleOwnedChild, type ShutdownControl, type StopReason } from '../host/lifecycle';
 import type { ChildProcess } from 'node:child_process';
 import { spawnProcess } from '../platform/spawn';
 import { log } from '../core/logger';
@@ -32,6 +32,8 @@ const ownedWorkSchema = z.object({
   fcb: z.literal('fcb.owned-work'),
   pids: z.array(z.number().int().positive()),
   settled: z.boolean(),
+  /** The provider process groups the child still has registered; absent from a child before 2026-11-02. */
+  registered: z.array(z.number().int().positive()).optional(),
 });
 type OwnedWorkReport = z.infer<typeof ownedWorkSchema>;
 type ChildOwnership = { report?: OwnedWorkReport };
@@ -46,6 +48,23 @@ const PAUSES_RETRY_MS = 30_000;
 const LOCK_RETRY_MS = 5_000;
 const LOCK_WARN_MS = 120_000;
 const LOCK_SLOW_MS = 30_000;
+/**
+ * The longest a Bot child takes to stop (owner 2026-11-02): it interrupts its turns, gives them 3 seconds, closes the
+ * agents and waits at most 8 seconds for the cards (handle-message.ts); past this it is killed, and so are the agent
+ * process groups it last reported (they run in groups of their own and would outlive it).
+ */
+export const BOT_STOP_LIMIT_MS = 15_000;
+
+/** SIGKILL to each reported agent process group still there; POSIX only (Windows ends a child's tree with its job). */
+export function reapReportedGroups(pids: readonly number[], kill: (pid: number, signal: NodeJS.Signals) => void = (pid, signal) => process.kill(pid, signal)): number[] {
+  if (process.platform === 'win32') return [];
+  const reaped: number[] = [];
+  for (const pid of new Set(pids)) {
+    try { kill(-pid, 'SIGKILL'); reaped.push(pid); }
+    catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) log.fail('daemon-shutdown', error, { phase: 'reap-agent-group', pid }); }
+  }
+  return reaped;
+}
 
 interface Child {
   bot: BotEntry;
@@ -83,7 +102,7 @@ const STATUS_IPC_TIMEOUT_MS = 2_000;
 const STDERR_TAIL_LINES = 64;
 export const HOST_PAUSED_ACTIVATION = 'daemon 已暂停（10 分钟内崩溃了 3 次），这个 Bot 恢复运行后才会启动。运行 vonvon daemon restart 恢复。';
 
-export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void>; paused?: boolean; crash?: SupervisorCrash; notifier?: CrashNotifier; registryUnreadable?: boolean; timing?: { lockRetryMs?: number; lockWarnMs?: number; lockSlowMs?: number } } = {}): Promise<void> {
+export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void>; paused?: boolean; crash?: SupervisorCrash; notifier?: CrashNotifier; registryUnreadable?: boolean; timing?: { lockRetryMs?: number; lockWarnMs?: number; lockSlowMs?: number; botStopLimitMs?: number } } = {}): Promise<void> {
   const control = options.control ?? observeShutdown();
   const supervisorStartedAt = Date.now();
   const cliEntry = selfEntry();
@@ -105,6 +124,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   const lockRetryMs = options.timing?.lockRetryMs ?? LOCK_RETRY_MS;
   const lockWarnMs = options.timing?.lockWarnMs ?? LOCK_WARN_MS;
   const lockSlowMs = options.timing?.lockSlowMs ?? LOCK_SLOW_MS;
+  const botStopLimitMs = options.timing?.botStopLimitMs ?? BOT_STOP_LIMIT_MS;
   // Same chain after a host crash: a paused bot stays paused. A new chain (restart, stop and start) starts them all, and
   // so does a damaged file, logged like a damaged run.json.
   const saved = readBotPauses(root, chainId, () => log.warn('daemon-crash', 'bot_pauses_corrupt', {}));
@@ -401,19 +421,32 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     }).finally(() => {child.bridgeChecking = false;});
   };
 
-  const stopBot = (child: Child): Promise<void> => {
+  const stopBot = (child: Child, reason?: StopReason): Promise<void> => {
     if (child.stopping) return child.stopping;
     const proc = child.proc;
     if (!proc) return Promise.resolve();
     const owned = ownership.get(proc);
-    const stopping = settleOwnedChild(proc, CHILD_SHUTDOWN_GRACE_MS, false, async () => {
-      const graceEnds = Date.now() + CHILD_SHUTDOWN_GRACE_MS;
-      while (proc.exitCode === null && proc.signalCode === null && !owned?.report?.settled) {
-        if (Date.now() >= graceEnds) {
-          log.warn('daemon-shutdown', 'owned_work_unconfirmed', { pid: proc.pid, pids: owned?.report?.pids ?? [] });
+    // One deadline for the whole stop: the child's own drain, then its exit; SIGKILL after it (stopChild).
+    const deadline = Date.now() + botStopLimitMs;
+    const left = (): number => Math.max(0, deadline - Date.now());
+    const alive = (): boolean => proc.exitCode === null && proc.signalCode === null;
+    const settling = settleOwnedChild(proc, () => Math.min(CHILD_SHUTDOWN_GRACE_MS, left()), false, async () => {
+      while (alive() && !owned?.report?.settled) {
+        if (left() <= 0) {
+          log.warn('daemon-shutdown', 'bot_stop_limit', { bot: child.bot.name, pid: proc.pid, limitMs: botStopLimitMs, pids: owned?.report?.pids ?? [] });
+          return;
         }
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, Math.min(1000, left())));
       }
+    }, reason);
+    // Killed past the deadline: the agents it had not closed run in their own groups and would outlive it.
+    const stopping = settling.catch(error => {
+      const report = owned?.report;
+      if (report && !report.settled) {
+        const reaped = reapReportedGroups([...report.pids, ...report.registered ?? []]);
+        if (reaped.length) log.warn('daemon-shutdown', 'agent_groups_reaped', { bot: child.bot.name, pid: proc.pid, pids: reaped });
+      }
+      throw error;
     });
     child.stopping = stopping;
     const finished = (): void => {
@@ -625,7 +658,8 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     if (pausesRetry) clearTimeout(pausesRetry);
     const cleanup = await Promise.allSettled([closeOwnedProviders(async () => {
       const drained = await Promise.allSettled([Promise.resolve().then(() => api?.beginDrain())]);
-      drained.push(...await Promise.allSettled([...children.values()].map(stopBot)));
+      // The Bots stop all at once, each told why: their cards say the server stopped, restarted or updated.
+      drained.push(...await Promise.allSettled([...children.values()].map(child => stopBot(child, control.reason))));
       errors.push(...drained.filter(result => result.status === 'rejected').map(result => result.reason));
     }), notices]);
     cleanup.push(...await Promise.allSettled([control.completeShutdown(() => api?.release() ?? Promise.resolve())]));

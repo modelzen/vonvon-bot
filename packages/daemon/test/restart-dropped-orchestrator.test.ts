@@ -140,7 +140,8 @@ function message(text: string, fields: Partial<NormalizedMessage> = {}): Normali
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: BASE + seq * 1000, rawContentType: 'text',
     resources: [], mentions: [], mentionAll: false, ...fields };
 }
-function setup(options: { droppedFile?: string | false; maxConcurrentRuns?: number; reply?: unknown } = {}) {
+/** A short interrupt grace by default: the fake thread ends a turn only once it is closed. */
+function setup(options: { droppedFile?: string | false; maxConcurrentRuns?: number; reply?: unknown; shutdownTiming?: { interruptGraceMs?: number; drainMs?: number } } = {}) {
   const cfg: AppConfig = { accounts: { app: { id: APP, secret: 'test', tenant: 'feishu' } }, preferences: {
     pendingPolicy: 'queue', access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' },
     ...(options.maxConcurrentRuns ? { maxConcurrentRuns: options.maxConcurrentRuns } : {}),
@@ -149,7 +150,8 @@ function setup(options: { droppedFile?: string | false; maxConcurrentRuns?: numb
     message: { get: async () => ({ data: { items: [{ thread_id: 'omt_new_topic' }] } }), reply: options.reply ?? fake.reply },
     messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) },
   } } } };
-  const o = createOrchestrator(channel as never, cfg, workspace, undefined, options.droppedFile === false ? undefined : { droppedFile: options.droppedFile ?? file });
+  const shutdownTiming = options.shutdownTiming ?? { interruptGraceMs: 50 };
+  const o = createOrchestrator(channel as never, cfg, workspace, undefined, options.droppedFile === false ? { shutdownTiming } : { droppedFile: options.droppedFile ?? file, shutdownTiming });
   opened.push(o);
   return o;
 }
@@ -373,10 +375,12 @@ describe('a shutdown keeps what it drops (s18c)', () => {
     const next = message('queued');
     await o.onMessage(next); await queued(1);
     o.saveDroppedSync('crash');
-    expect(entries()).toMatchObject([{ messageId: next.messageId, count: 1 }]);
+    // owner 2026-11-02: the turn a crash cuts short is asked again too; one line per group, under its newest message.
+    expect(entries()).toMatchObject([{ messageId: next.messageId, count: 2 }]);
+    // Saved once: neither the shutdown nor a second crash writes the group again.
     await o.shutdown();
     o.saveDroppedSync('crash');
-    expect(entries()).toMatchObject([{ messageId: next.messageId, count: 1 }]);
+    expect(entries()).toMatchObject([{ messageId: next.messageId, count: 2 }]);
   });
 
   it('⑫ a queued message the running turn\'s record block already carried is not kept', async () => {
@@ -418,6 +422,95 @@ describe('a shutdown keeps what it drops (s18c)', () => {
   });
 });
 
+// owner 2026-11-02: a stop, restart or update interrupts the turns at once instead of waiting for them, and says so.
+describe('a stop cuts the turns in flight short', () => {
+  const lastCard = (): string => JSON.stringify(fake.final.mock.calls.at(-1)?.[1] ?? null);
+
+  it.each([
+    ['restart', '服务端重启了，这一轮被中断，请再发一次'],
+    ['update', '服务端升级了，这一轮被中断，请再发一次'],
+    ['stop', 'Bot 停止运行了，这一轮被中断，等它恢复后请再发一次'],
+  ] as const)('a %s interrupts the turn first, closes the agent after the grace, and the card says why', async (reason, line) => {
+    const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup({ shutdownTiming: { interruptGraceMs: 200 } });
+    const first = message('first');
+    await o.onMessage(first);
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const started = Date.now();
+    await o.shutdown(() => reason);
+    // turn/interrupt went out at once; the agent was closed only once the grace was over, as the turn had not ended.
+    expect(run.t.abort).toHaveBeenCalledOnce();
+    expect(run.t.abort.mock.invocationCallOrder[0]).toBeLessThan(run.t.close.mock.invocationCallOrder[0]!);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(150);
+    expect(fake.log.info).toHaveBeenCalledWith('bridge', 'shutdown_grace_over', { runs: 1, graceMs: 200 });
+    expect(lastCard()).toContain(line);
+    // The card asked already: nobody is asked a second time once the bot is back.
+    expect(fake.log.info).toHaveBeenCalledWith('bridge', 'cut-short-card', { ref: first.messageId.slice(-6) });
+    expect(entries()).toEqual([]);
+  });
+
+  it('a turn that ends on the interrupt does not wait out the grace', async () => {
+    const run = thread();
+    run.t.abort.mockImplementation(async () => { for (const turn of run.turns) turn.resolve(); });
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup({ shutdownTiming: { interruptGraceMs: 10_000 } });
+    await o.onMessage(message('first'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const started = Date.now();
+    await o.shutdown(() => 'restart');
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(fake.log.info).not.toHaveBeenCalledWith('bridge', 'shutdown_grace_over', expect.anything());
+    expect(run.t.close).toHaveBeenCalledOnce();
+    expect(lastCard()).toContain('服务端重启了，这一轮被中断，请再发一次');
+  });
+
+  it('a cut-short turn whose card did not get through is asked again once the bot is back', async () => {
+    const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup();
+    const first = message('first');
+    await o.onMessage(first);
+    await until(() => expect(run.consumed).toHaveLength(1));
+    fake.final.mockResolvedValue(false);
+    await o.shutdown(() => 'update');
+    expect(fake.log.info).toHaveBeenCalledWith('bridge', 'cut-short-kept', { turns: 1 });
+    expect(entries()).toMatchObject([{ messageId: first.messageId, count: 1, replyInThread: true, place: 'topic' }]);
+  });
+
+  it('the drain stops waiting at its limit: a turn that never ends is kept, and the shutdown still ends', async () => {
+    const run = thread();
+    run.t.close.mockImplementation(async () => undefined);
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup({ shutdownTiming: { interruptGraceMs: 50, drainMs: 400 } });
+    const first = message('first');
+    await o.onMessage(first);
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const started = Date.now();
+    await o.shutdown(() => 'restart');
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(fake.log.warn).toHaveBeenCalledWith('bridge', 'shutdown_drain_cut', expect.objectContaining({ runs: 1, limitMs: 400 }));
+    expect(entries()).toMatchObject([{ messageId: first.messageId, count: 1 }]);
+    // Its card comes late and says it was cut short; the record stays, the sender may hear twice rather than never.
+    for (const turn of run.turns) turn.resolve();
+    await until(() => expect(lastCard()).toContain('服务端重启了，这一轮被中断，请再发一次'));
+    expect(entries()).toMatchObject([{ messageId: first.messageId, count: 1 }]);
+  });
+
+  it('a crash in the middle of the shutdown keeps the cut-short turns not answered yet, once', async () => {
+    const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup({ shutdownTiming: { interruptGraceMs: 5_000 } });
+    const first = message('first');
+    await o.onMessage(first);
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const closing = o.shutdown(() => 'restart');
+    o.saveDroppedSync('crash');
+    o.saveDroppedSync('crash');
+    expect(entries()).toMatchObject([{ messageId: first.messageId, count: 1 }]);
+    for (const turn of run.turns) turn.resolve();
+    await closing;
+    expect(entries()).toMatchObject([{ messageId: first.messageId, count: 1 }]);
+  });
+});
+
 describe('once back, each group hears once (s18c)', () => {
   it('⑤ replies under each group\'s newest message, settles the file, and tells the page the real count', async () => {
     seed([place('oc_group_a', 'om_a1', 1, { replyInThread: false, place: 'main' }), place('oc_group_a', 'om_a2_abcdef', 2, { replyInThread: false, place: 'main' }), place('oc_group_b', 'om_b1_123456', 3)]);
@@ -426,10 +519,10 @@ describe('once back, each group hears once (s18c)', () => {
     expect(fake.reply).toHaveBeenCalledTimes(2);
     const calls = fake.reply.mock.calls.map(call => call[0] as { path: { message_id: string }; data: { msg_type: string; content: string; reply_in_thread: boolean; uuid: string } });
     expect(calls.find(call => call.path.message_id === 'om_a2_abcdef')?.data).toEqual({
-      msg_type: 'text', content: JSON.stringify({ text: '刚才重启了，这条和这个群里另外 1 条都没处理，请再发一次。' }), reply_in_thread: false,
+      msg_type: 'text', content: JSON.stringify({ text: '刚才重启了，这条和这个群里另外 1 条都没处理完，请再发一次。' }), reply_in_thread: false,
       uuid: dropped.droppedUuid(APP, { chatId: 'oc_group_a', messageId: 'om_a2_abcdef', revision: 1 }),
     });
-    expect(calls.find(call => call.path.message_id === 'om_b1_123456')?.data).toMatchObject({ content: JSON.stringify({ text: '刚才重启了，这条没处理，请再发一次。' }), reply_in_thread: true });
+    expect(calls.find(call => call.path.message_id === 'om_b1_123456')?.data).toMatchObject({ content: JSON.stringify({ text: '刚才重启了，这条没处理完，请再发一次。' }), reply_in_thread: true });
     expect(notReplied()).toEqual(expect.arrayContaining([
       { at: 2, groupId: 'oc_group_a', place: 'main', reason: 'restarted', ref: 'abcdef', times: 2 },
       { at: 3, groupId: 'oc_group_b', place: 'topic', reason: 'restarted', ref: '123456', times: 1 },

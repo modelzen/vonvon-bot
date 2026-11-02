@@ -17,7 +17,8 @@ describe('systemd definition', () => {
     expect(unit).toContain('Type=simple');
     expect(unit).toContain('Restart=on-failure');
     expect(unit).toContain('RestartSec=5');
-    expect(unit).toContain('TimeoutStopSec=infinity');
+    expect(unit).toContain('TimeoutStopSec=45\n');
+    expect(unit).not.toContain('infinity');
     expect(unit).toContain('WantedBy=default.target');
     expect(unit).toContain('"/package/tools %%n/$$entry.mjs" daemon run --port 32123');
     expect(unit).toContain(`Environment="VONVON_HOME=${root}"`);

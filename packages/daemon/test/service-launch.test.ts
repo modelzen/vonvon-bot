@@ -168,11 +168,13 @@ it('expires at the spawn deadline before accepting a late proof and waits withou
   await vi.advanceTimersByTimeAsync(5000); expect(child.kill).toHaveBeenCalledWith('SIGKILL');
   await vi.advanceTimersByTimeAsync(100_000); expect(release).not.toHaveBeenCalled();
   died(); await completion;
-  expect(process.exitCode).toBe(0);
+  // owner 2026-11-02: a failed helper still ends in 75, so the manager starts the server again, on the release `current`
+  // names once the update is abandoned; the server does not stay down.
+  expect(process.exitCode).toBe(75);
   expect(release).toHaveBeenCalledOnce(); expect(vi.getTimerCount()).toBe(0);
 });
 
-it.each(['spawn failure', 'scope death', 'synchronous spawn failure'] as const)('%s records helper_lost and releases once', async failure => {
+it.each(['spawn failure', 'scope death', 'synchronous spawn failure'] as const)('%s records helper_lost, releases once and exits 75', async failure => {
   if (failure === 'spawn failure') Object.defineProperty(child, 'pid', { value: undefined, configurable: true });
   if (failure === 'synchronous spawn failure') fixture.spawn.mockImplementationOnce(() => { throw new Error('missing systemd-run'); });
   const owner = control(); owner.requestRestart(1234, record);
@@ -181,8 +183,47 @@ it.each(['spawn failure', 'scope death', 'synchronous spawn failure'] as const)(
   if (failure === 'scope death') { child.emit('spawn'); died(); }
   await completion;
   expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: 'helper_lost' });
-  expect(process.exitCode).toBe(0);
+  expect(process.exitCode).toBe(75);
+  expect(owner.intent).toBe('restart');
   expect(release).toHaveBeenCalledOnce(); expect(child.kill).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+});
+
+it('a server nobody manages stops when its helper cannot start: nothing would bring it back', async () => {
+  fixture.spawn.mockImplementationOnce(() => { throw new Error('spawn EAGAIN'); });
+  const owner = control({ serviceManaged: false });
+  owner.requestRestart(1234, record);
+  const release = vi.fn(async () => {}); await owner.completeShutdown(release);
+  expect(owner.intent).toBe('stop');
+  expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: 'helper_lost' });
+  expect(process.exitCode).toBeUndefined();
+  expect(release).toHaveBeenCalledOnce();
+});
+
+// owner 2026-11-02: the cards of the turns a stop cuts short say whether the server stopped, restarted or updated
+it('says why it stops: a restart, an update, a desktop update, and a stop that cancels a restart', () => {
+  const plain = control();
+  expect(plain.reason).toBe('stop');
+  plain.requestRestart(1234);
+  expect(plain.reason).toBe('restart');
+  const update = control();
+  update.requestRestart(1234, record);
+  expect(update.reason).toBe('update');
+  update.requestStop();
+  expect([update.intent, update.reason]).toEqual(['stop', 'stop']);
+  const desktop = control();
+  desktop.requestStop('update');
+  expect([desktop.intent, desktop.reason]).toEqual(['stop', 'update']);
+});
+
+it('a Bot child reads the reason its host sent, and ignores one it does not know', () => {
+  vi.stubGlobal('process', Object.assign(Object.create(process), { send: vi.fn(), exitCode: undefined }));
+  const bot = control({ serviceManaged: undefined });
+  process.emit('message', { type: 'bridge:shutdown', reason: 'restart' }, undefined);
+  expect([bot.requested, bot.reason]).toEqual([true, 'restart']);
+  const older = control({ serviceManaged: undefined });
+  bot.dispose();
+  process.emit('message', { type: 'bridge:shutdown', reason: 'reboot' }, undefined);
+  expect([older.requested, older.reason]).toEqual([true, 'stop']);
 });
 
 it('managed plain restart needs no owner file or child and leaves a stale record unchanged', async () => {

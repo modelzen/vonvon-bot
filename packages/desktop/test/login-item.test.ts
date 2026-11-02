@@ -296,7 +296,8 @@ describe('repairing the service when the app starts', () => {
     const { start, spawn } = children({ code: 0 }, { code: 0 });
     await writeReport(runtime, done(701, { kind: 'already-installed' }));
     await expect(repairServiceAtStartup(runtime, reads(ours(), running('0.1.0')), { stop: { spawn }, helper: { spawn }, exists: () => true })).resolves.toBeUndefined();
-    expect(start.mock.calls.map(call => (call[1] as string[]).slice(1))).toEqual([['daemon', 'stop'], ['service', 'install', '--keep-running']]);
+    // The older server is stopped for an update: its interrupted turns say so (owner 2026-11-02).
+    expect(start.mock.calls.map(call => (call[1] as string[]).slice(1))).toEqual([['daemon', 'stop', '--for-update'], ['service', 'install', '--keep-running']]);
   });
 
   const refused = (pid: number, reason: 'replace-running' | 'turned-off') => done(pid, { ok: false, kind: 'install_refused', reason, detail: reason });
@@ -344,7 +345,7 @@ describe('repairing the service when the app starts', () => {
     const { start, spawn } = children({ code: 0 });
     await expect(repairServiceAtStartup(runtime, reads({ kind: 'absent' }, running('0.1.0')), { stop: { spawn }, helper: { spawn } })).resolves.toBeUndefined();
     expect(start).toHaveBeenCalledOnce();
-    expect((start.mock.calls[0]?.[1] as string[]).slice(1)).toEqual(['daemon', 'stop']);
+    expect((start.mock.calls[0]?.[1] as string[]).slice(1)).toEqual(['daemon', 'stop', '--for-update']);
   });
 
   it('leaves startup to ensureReady when the state cannot be read', async () => {

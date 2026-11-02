@@ -123,7 +123,8 @@ import {
   type SessionTitleBackendConfig,
 } from '../config/schema';
 import { CardDispatcher, type CardActionHandler } from '../card/dispatcher';
-import { closeOwnedProviderProcesses } from '../agent/owned-process';
+import { closeOwnedProviderProcesses, stopAcceptingProviderProcesses } from '../agent/owned-process';
+import type { StopReason } from '../host/lifecycle';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { JUDGE_NAMED_TIMEOUT_MS, createJudge } from '../judge/judge';
 import { createJudgeUsage } from '../judge/usage';
@@ -659,6 +660,13 @@ type NotedMessage = Pick<NormalizedMessage, 'chatId' | 'messageId' | 'senderId' 
 
 /** How long a group's full-only explanation quiets 免@ and bot messages; a person's @ always gets one. */
 const FULL_ONLY_QUIET_MS = 10 * 60_000;
+/**
+ * A stop, restart or update interrupts every turn at once (owner 2026-11-02) and gives Codex and Claude this long to
+ * end them, and the shell commands they started, before their processes are closed. Codex answers within milliseconds.
+ */
+export const SHUTDOWN_INTERRUPT_GRACE_MS = 3_000;
+/** How long a shutdown waits for the interrupted turns' cards, the grace above included; the Bot child is killed at 15 s. */
+export const SHUTDOWN_DRAIN_MS = 8_000;
 const UNBOUND_QUIET_MS = 10 * 60_000;
 /** Each 三条底线 lookup's limit (s22): the group's later messages wait behind it. */
 const LOOKUP_DEADLINE_MS = 3000;
@@ -789,6 +797,8 @@ interface ActiveState {
   newAt?: number;
   /** The run's trigger while it waits for a global slot (acquireRunSlot), for a shutdown to keep (s18c). */
   waiting?: DroppedOrigin;
+  /** A person's turn in flight, from turn/start until its final card is written: what a shutdown or a crash cuts short. */
+  inFlight?: DroppedOrigin;
   /** A main-area run's trigger time: until {@link woven} is known, its record block will carry the unread
    * messages before it (a smart verdict to open a topic checks this, s25). */
   triggerAt?: number;
@@ -935,9 +945,9 @@ export interface Orchestrator {
   scheduleAs: (actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
   /** The scheduled-task tick (bot/schedule/scheduler.ts), outside admit; bridge.ts starts it once Feishu is connected. */
   scheduler: { start(): Promise<void>; stop(): void; drain(ms: number): Promise<void> };
-  /** Close every live codex session (SIGKILLs the app-server children) so a
-   *  graceful exit leaves no orphan processes. */
-  shutdown: () => Promise<void>;
+  /** Interrupts every turn, gives the agents a moment to end them, then closes every live session so a graceful exit
+   *  leaves no orphan processes (owner 2026-11-02). `reason` is read as each cut-short turn's card is written. */
+  shutdown: (reason?: () => StopReason) => Promise<void>;
   /** Persist queued messages before an uncaught failure exits the bot. */
   saveDroppedSync: (why: 'shutdown' | 'crash') => void;
   /** Once connected: ask the senders of what the last shutdown dropped to send again (s18c). Not after shutdown. */
@@ -1108,7 +1118,9 @@ export function createOrchestrator(
   // Only daemon run supplies judgeUsageFile; tests that omit it do not persist usage.
   options?: { entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
     /** devices-4a 4.3: where each new session's token comes from (the host, over IPC). Without it a session gets none (tests). */
-    host?: Pick<HostApi, 'issueSessionToken'> },
+    host?: Pick<HostApi, 'issueSessionToken'>;
+    /** A shutdown's two waits (owner 2026-11-02); tests shorten them. */
+    shutdownTiming?: { interruptGraceMs?: number; drainMs?: number } },
 ): Orchestrator {
   const entries = options?.entries;
   const host = options?.host;
@@ -1555,6 +1567,16 @@ export function createOrchestrator(
   let shuttingDown = false;
   attention.observe(publishAttention);
   let shutdownPromise: Promise<void> | undefined;
+  /** Why the shutdown came, read as each cut-short turn's card is written (the host's message may come after its SIGTERM). */
+  let shutdownReason: () => StopReason = () => 'stop';
+  /**
+   * The people's turns a shutdown cut short (owner 2026-11-02), by trigger message: each card says so and asks for the
+   * message again; one whose card is not confirmed when the shutdown stops waiting goes to dropped.json, so its sender
+   * hears once the bot is back.
+   */
+  const cutShort = new Map<string, DroppedOrigin>();
+  const interruptGraceMs = options?.shutdownTiming?.interruptGraceMs ?? SHUTDOWN_INTERRUPT_GRACE_MS;
+  const shutdownDrainMs = options?.shutdownTiming?.drainMs ?? SHUTDOWN_DRAIN_MS;
   const droppedReplies = options?.droppedFile ? createDroppedReplies({
     appId: cfg.accounts.app.id, file: options.droppedFile, log,
     // The raw API, not channel.send: with the message gone, that sends a new one to the main area instead.
@@ -7572,7 +7594,7 @@ export function createOrchestrator(
     const settleGone = (turn: QueuedTurn, target: string | undefined): boolean => {
       if (shuttingDown) {
         if (turn.scheduled) turn.scheduled.settle(scheduleStopped());
-        else if (turn.origin) droppedReplies?.appendSync(turn.origin);
+        else if (turn.origin) keepForResend(turn.origin);
         return true;
       }
       if (!state.evicted) return false;
@@ -7676,6 +7698,7 @@ export function createOrchestrator(
         // the closed thread. A person's first turn, evicted while it was prepared, still runs (T2 做法).
         if ((fromQueue || scheduled || shuttingDown) && settleGone(currentTurn, replyTo)) break;
         const run = opts.thread.runStreamed(turnInput, { model: turnModel, effort: turnEffort, serviceTier: turnServiceTier });
+        state.inFlight = currentTurn.origin;
         let unseen = currentTurn.seen;
         titleTurnAttempted = true;
         const turnStartAt = Date.now(); // turn/start 已在 runStreamed() 内发出（与下面的建卡并行）
@@ -8027,6 +8050,8 @@ export function createOrchestrator(
           procDead,
         });
         rc.rs = segmentSnapshot();
+        // owner 2026-11-02: a turn a stop, restart or update cut short says so, and asks a person for the message again.
+        if (interrupted && shuttingDown) rc.stopped = { reason: shutdownReason(), resend: currentTurn.origin !== undefined };
         // The final card promises a next run from the task as it is now: paused or deleted during the run, it has none.
         if (scheduled) rc.nextRun = scheduledNextRun(scheduled.job);
         if (interrupted) log.info('agent', 'interrupt', { graceful: !stopper.forced(), threadId: topicThreadId ?? null });
@@ -8114,6 +8139,11 @@ export function createOrchestrator(
           completionReminderRefreshers.delete(cardMsgId);
           const terminalCardUpdated = await stream.finalizeCard(channel, buildRunCard(rc));
           delivered = terminalCardUpdated;
+          // Its card has its last word (the answer, or that the shutdown cut it short): nothing to ask again after a restart.
+          if (terminalCardUpdated) {
+            cutShortAnswered(state.inFlight);
+            state.inFlight = undefined;
+          }
           if (confirmedDone && rc.rs.terminal === 'done' && answerText.trim() && terminalCardUpdated) reportLatestAction(opts.chatId, 'replied');
           // One-line per-turn timeline; all ms are relative to the turn's stream start.
           {
@@ -8178,6 +8208,7 @@ export function createOrchestrator(
         }
         // Settled as it ends, before any turn queued behind it runs (T2 4.1 第 5 条).
         scheduled?.settle(ranScheduled(scheduled, rc.rs, delivered, askFaulted, goneAt));
+        state.inFlight = undefined;
         retrySessionTitleAfterTurn();
         // Queued turns reply to the last card still there; a deleted one keeps the previous target.
         if (!gone) replyTo = finalMsgId;
@@ -8237,6 +8268,7 @@ export function createOrchestrator(
       askTurn?.close('turn-ended');
       // Detach before any await: new messages must not join a failed consumer.
       if (active.get(activeKey) === state) active.delete(activeKey);
+      state.inFlight = undefined;
       // The session went (the shutdown, a settings change): not this turn's failure, nor the queue's.
       const went = noted !== undefined && settleGone(noted, replyTo);
       const dropped = went ? 0 : askAgain(state.queue.splice(0), opts.chatId, opts.flat ? 'main' : 'topic', 'run-failed', '前一轮出错，排队的没跑');
@@ -8461,7 +8493,10 @@ export function createOrchestrator(
 
     /** Finalize a turn's card (terminal render). No-op for a render-only turn that
      * never produced content (no card was sent) — that's how empty turns vanish. */
+    /** Whether the last card finalizeCard wrote got through (a cut-short goal's last word, owner 2026-11-02). */
+    let lastCardUpdated = false;
     const finalizeCard = async (ctx: GoalTurnCtx | null, continues = false): Promise<void> => {
+      lastCardUpdated = false;
       if (!ctx) return;
       carried = ctx.render.snapshot().subagents.filter(row => row.status === 'running');
       ctx.rc.subagentsCarried = continues && carried.length ? true : undefined;
@@ -8482,6 +8517,7 @@ export function createOrchestrator(
       }, (elementId, element) => ctx.stream!.updateElement(channel, elementId, element));
       ctx.rc.images = await ctx.stream.settleImages(answerText);
       const terminalCardUpdated = await ctx.stream.updateCard(channel, buildRunCard(ctx.rc));
+      lastCardUpdated = terminalCardUpdated;
       if (confirmedDone && ctx.rc.rs.terminal === 'done' && answerText.trim() && terminalCardUpdated) reportLatestAction(opts.chatId, 'replied');
       runsByCard.delete(ctx.cardMsgId);
       promoteCard(ctx.cardMsgId, ctx.rc);
@@ -8590,6 +8626,7 @@ export function createOrchestrator(
       const run = opts.thread.runGoal(goalContext.text ? `${goalContext.text}\n\n目标：${objective}` : objective,
         { serviceTier: goalServiceTier });
       state.run = run;
+      state.inFlight = opts.origin;
       activity = createRunActivity(opts.chatId);
       // ⏹ 终止: clear the goal first (so it won't reactivate on resume), then end
       // the loop immediately — cutting the in-flight turn's output.
@@ -8752,8 +8789,14 @@ export function createOrchestrator(
         const subagents = cur.render.snapshot().subagents;
         cur.render.interrupt();
         logSubagentChanges(subagents, cur.render.snapshot().subagents);
+        // owner 2026-11-02: cut short by a stop, restart or update, the in-flight turn's card says so.
+        if (shuttingDown) cur.rc.stopped = { reason: shutdownReason(), resend: opts.origin !== undefined };
       }
+      const cutCard = interrupted && shuttingDown && cur !== null;
       await finalizeCard(cur);
+      // Only a card that said the goal was cut short settles it; between turns no card says so, and the sender hears later.
+      if (cutCard && lastCardUpdated) cutShortAnswered(opts.origin);
+      state.inFlight = undefined;
       if (!cur && finalized.last && carried.length) {
         const rs = { ...finalized.last.rc.rs, subagents: [...finalized.last.rc.rs.subagents.filter(row => !carried.some(latest => latest.id === row.id)), ...carried] };
         finalized.last.rc.rs = interrupted ? markInterrupted(rs) : rs;
@@ -9426,9 +9469,59 @@ export function createOrchestrator(
     return lost;
   }
 
-  function shutdown(): Promise<void> {
+  /** The people's turns in flight now (ActiveState.inFlight). */
+  function inFlightTurns(): DroppedOrigin[] {
+    return [...new Set(active.values())].flatMap(state => state.inFlight ? [state.inFlight] : []);
+  }
+
+  /** A cut-short turn whose card said so: its sender is not asked again once the bot is back. */
+  function cutShortAnswered(origin: DroppedOrigin | undefined): void {
+    if (origin && cutShort.delete(origin.messageId)) log.info('bridge', 'cut-short-card', { ref: origin.messageId.slice(-6) });
+  }
+
+  /** Keeps a person's turn the shutdown dropped or cut short in dropped.json, once. */
+  function keepForResend(origin: DroppedOrigin): void {
+    cutShort.delete(origin.messageId);
+    droppedReplies?.appendSync(origin);
+  }
+
+  /** The cut-short turns whose card did not say so in time (or at all): their senders hear once the bot is back. */
+  function keepCutShort(): void {
+    const left = [...cutShort.values()];
+    for (const origin of left) keepForResend(origin);
+    if (left.length) log.info('bridge', 'cut-short-kept', { turns: left.length });
+  }
+
+  /** Waits for the runs (and, with `accepted`, the other tracked tasks) for at most `ms`; true when they all ended. */
+  async function settleWithin(ms: number, accepted: boolean): Promise<boolean> {
+    const deadline = Date.now() + ms;
+    const pending = (): Promise<unknown>[] => accepted ? [...acceptedTasks, ...runTasks] : [...runTasks];
+    while (pending().length) {
+      const left = deadline - Date.now();
+      if (left <= 0) return false;
+      let timer: NodeJS.Timeout | undefined;
+      const results = await Promise.race([
+        Promise.allSettled(pending()),
+        new Promise<undefined>(resolve => { timer = setTimeout(resolve, left, undefined); }),
+      ]).finally(() => clearTimeout(timer));
+      if (!results) return false;
+      for (const result of results) if (result.status === 'rejected') shutdownErrors.add(result.reason);
+    }
+    return true;
+  }
+
+  /**
+   * Stops, restarts and updates cut the turns short at once (owner 2026-11-02): every turn is interrupted now, Codex and
+   * Claude get up to {@link SHUTDOWN_INTERRUPT_GRACE_MS} to end it, then their processes are closed. The cards of the
+   * cut-short turns say why and ask for the message again; the drain waits {@link SHUTDOWN_DRAIN_MS} at most for them,
+   * and what is not confirmed by then goes to dropped.json like the queued messages (s18c).
+   */
+  function shutdown(reason?: () => StopReason): Promise<void> {
     if (shutdownPromise) return shutdownPromise;
     shuttingDown = true;
+    if (reason) shutdownReason = reason;
+    // No new agent process from now on; the running ones are closed once the grace is over.
+    stopAcceptingProviderProcesses();
     entries?.closeAll('shutdown');
     if (attentionTimer !== undefined) time.clearTimer(attentionTimer);
     attentionTimer = undefined;
@@ -9436,6 +9529,7 @@ export function createOrchestrator(
     asks.shutdown();
     // Written at once, before anything is cleared below and long before the Codex processes end or the lock goes.
     droppedReplies?.saveSync(collectLost(), 'shutdown');
+    for (const origin of inFlightTurns()) cutShort.set(origin.messageId, origin);
     // After collectLost read the lanes, before the judge's processes go: nothing judged lands now, nor takes its THINKING off.
     for (const item of smartLanes.pending()) dropAck(item);
     smartLanes.shutdown();
@@ -9447,8 +9541,6 @@ export function createOrchestrator(
       try { cleanup.push(operation()); }
       catch (error) { shutdownErrors.add(error); }
     };
-    startCleanup(closeOwnedProviderProcesses);
-    startCleanup(shutdownResidentClients);
     const dropped = { queued: 0, held: 0, compacts: 0 };
     for (const state of active.values()) {
       state.intakeCancelled = true;
@@ -9474,13 +9566,21 @@ export function createOrchestrator(
     });
     const live = [...new Set(sessions.values())];
     sessions.clear();
-    for (const thread of live) startCleanup(() => thread.close());
+    // Interrupted above, closed once the turns ended or the grace is over: an agent that ends its turn itself also
+    // stops the commands it started, which the process group kill may not reach.
+    const graceOver = settleWithin(interruptGraceMs, false).then(ended => {
+      if (!ended) log.info('bridge', 'shutdown_grace_over', { runs: runTasks.size, graceMs: interruptGraceMs });
+    });
+    startCleanup(async () => { await graceOver; await closeOwnedProviderProcesses(); });
+    startCleanup(async () => { await graceOver; await shutdownResidentClients(); });
+    for (const thread of live) startCleanup(async () => { await graceOver; await thread.close(); });
     const cleanupResults = Promise.allSettled(cleanup);
     shutdownPromise = (async () => {
-      while (acceptedTasks.size || runTasks.size) {
-        const results = await Promise.allSettled([...acceptedTasks, ...runTasks]);
-        for (const result of results) if (result.status === 'rejected') shutdownErrors.add(result.reason);
+      // The cards of the cut-short turns get what is left of the drain; a Feishu call without an answer is not waited out.
+      if (!await settleWithin(shutdownDrainMs, true)) {
+        log.warn('bridge', 'shutdown_drain_cut', { runs: runTasks.size, tasks: acceptedTasks.size, limitMs: shutdownDrainMs });
       }
+      keepCutShort();
       for (const result of await cleanupResults) if (result.status === 'rejected') shutdownErrors.add(result.reason);
       // Whatever the drain left unsettled (a run never launched, input /new held): the scheduler waits on none of it.
       for (const hook of scheduledHooks) hook.settle({ status: 'interrupted', by: 'shutdown' });
@@ -9784,7 +9884,12 @@ export function createOrchestrator(
     scheduleAs: admittedScheduleAs,
     scheduler: { start: async () => scheduler.start(await loadStore()), stop: () => scheduler.stop(), drain: ms => scheduler.drain(ms) },
     shutdown,
-    saveDroppedSync: (why: 'shutdown' | 'crash') => droppedReplies?.saveSync(collectLost(), why),
+    // A crash before the shutdown also keeps the people's turns in flight: no card of theirs will say anything. One during
+    // the shutdown keeps the cut-short turns whose cards had not said so yet; the shutdown already saved the rest.
+    saveDroppedSync: (why: 'shutdown' | 'crash') => {
+      if (shuttingDown) keepCutShort();
+      else droppedReplies?.saveSync([...collectLost(), ...inFlightTurns()], why);
+    },
     replyDropped: () => { if (!shuttingDown) droppedReplies?.start(); },
   };
 }

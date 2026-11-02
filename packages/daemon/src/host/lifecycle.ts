@@ -9,14 +9,22 @@ import { z } from 'zod';
 import { paths } from '../config/paths';
 import { withoutSessionMarkers } from '../config/session-env';
 import { ApiCleanupError } from '../server/http';
-import { closeOwnedProviderProcesses, unconfirmedProviderPids } from '../agent/owned-process';
+import { closeOwnedProviderProcesses, registeredProviderPids, unconfirmedProviderPids } from '../agent/owned-process';
+
+/** Why the server stops, for the cards of the turns it cuts short (owner 2026-11-02): a stop, a restart, or an update's restart. */
+export type StopReason = 'stop' | 'restart' | 'update';
+export const STOP_REASONS: readonly StopReason[] = ['stop', 'restart', 'update'];
 
 export interface ShutdownControl {
   readonly requested: boolean;
   /** What was asked for; optional so a test's fake control still fits. The crash handler reads it. */
   readonly intent?: 'running' | 'restart' | 'stop';
+  /** Why the stop came: what the host was asked for, or what the host told this bot child (`bridge:shutdown`'s `reason`).
+   * `stop` until something else is known; optional so a test's fake control still fits. */
+  readonly reason?: StopReason;
   waitForRequest(): Promise<void>;
-  requestStop(): void;
+  /** `reason`: a stop for a desktop update; the cards then say the server was updated. */
+  requestStop(reason?: StopReason): void;
   requestRestart(port: number, update?: UpdateStatus): void;
   completeShutdown(release: () => Promise<void>): Promise<void>;
   dispose(): void;
@@ -44,8 +52,10 @@ export async function closeOwnedProviders(shutdown: () => Promise<void> = async 
     }
     if (!settled && pids.length) log.warn('daemon-shutdown', 'owned_work_unconfirmed', { pid: process.pid, pids });
     if (!process.send) return Promise.resolve();
+    // `registered`: what the host kills by group if it has to kill this process before the agents are closed (supervisor.ts).
+    const registered = settled ? [] : registeredProviderPids();
     return new Promise((resolve, reject) => {
-      process.send?.({ fcb: 'fcb.owned-work', pids, settled }, (error: Error | null) => error ? reject(error) : resolve());
+      process.send?.({ fcb: 'fcb.owned-work', pids, settled, registered }, (error: Error | null) => error ? reject(error) : resolve());
     });
   };
   const pendingReport = (): void => {
@@ -111,6 +121,7 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
   const readProc = options.readProc ?? ((pid, file) => readFileSync(`/proc/${pid}/${file}`, 'utf8'));
   let settleHelper: () => void = () => {};
   let intent: 'running' | 'restart' | 'stop' = 'running';
+  let stopReason: StopReason = 'stop';
   let committed = false;
   let helper: RestartHelper | undefined;
   let completion: Promise<void> | undefined;
@@ -144,12 +155,18 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
   };
   const request = (): void => {
     if (committed) { log.info('daemon-shutdown', 'stop_after_commit', { pid: process.pid }); return; }
+    // A stop that cancels a pending restart is a stop: the server does not come back.
+    if (intent === 'restart') stopReason = 'stop';
     intent = 'stop';
     cancelHelper();
     setImmediate(wake);
   };
   const message = (value: unknown): void => {
-    if (typeof value === 'object' && value !== null && 'type' in value && value.type === 'bridge:shutdown') request();
+    if (typeof value !== 'object' || value === null || !('type' in value) || value.type !== 'bridge:shutdown') return;
+    // The host's SIGTERM may come first: the reason the message carries still holds, the cards read it as they end.
+    const told = 'reason' in value ? STOP_REASONS.find(known => known === value.reason) : undefined;
+    if (told) stopReason = told;
+    request();
   };
   let input = '';
   const data = (chunk: Buffer): void => {
@@ -199,16 +216,34 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
       return;
     }
   };
+  /**
+   * A restart whose helper failed (owner 2026-11-02): under a service manager this process still exits 75 and the manager
+   * starts the server again, on the release `current` names once the update is abandoned (a standalone one switches it
+   * back first); a server nobody manages stops.
+   */
+  const helperFailed = (update: UpdateStatus | undefined, why: string, cancel: boolean): void => {
+    if (serviceManaged) log.warn('daemon-restart', 'helper_failed_service_restart', { pid: process.pid, why });
+    else intent = 'stop';
+    if (cancel) cancelHelper(why);
+    else abandon(update, why);
+    wake();
+  };
   return {
     get requested() { return intent !== 'running'; },
     get intent() { return intent; },
+    get reason() { return stopReason; },
     waitForRequest: () => pending,
-    requestStop: request,
+    requestStop(why?: StopReason) {
+      request();
+      // Not after a committed restart, which goes on as it is.
+      if (why && intent === 'stop' && !committed) stopReason = why;
+    },
     completeShutdown(release) { return completion ??= complete(release); },
     requestRestart(port, update) {
       if (intent === 'stop' || committed) { abandon(update, '重启已被停止取消'); return; }
       if (intent === 'restart') { abandon(update, '已有重启正在进行'); return; }
       intent = 'restart';
+      stopReason = update ? 'update' : 'restart';
       if (serviceManaged && !update) { setImmediate(wake); return; }
       try {
         const cliEntry = selfEntry();
@@ -239,18 +274,14 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
           settleHelper();
           markDead();
           if (!committed && !owned.cancelled) {
-            intent = 'stop';
             log.warn('daemon-restart', 'helper_lost', { pid: identity.pid, listen: `127.0.0.1:${port}`, helperPid: child.pid });
-            abandon(update, 'helper_lost');
-            wake();
+            helperFailed(update, 'helper_lost', false);
           }
         };
         const poll = (): void => {
           if (owned.dead || owned.cancelled || owned.readiness.kind !== 'pending') return;
           if (now() >= owned.readiness.deadlineAt) {
-            intent = 'stop';
-            cancelHelper('helper_lost');
-            wake();
+            helperFailed(update, 'helper_lost', true);
             return;
           }
           let ready = false;
@@ -288,10 +319,8 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
         if (isStopping()) cancelHelper();
         child.unref();
       } catch (error) {
-        intent = 'stop';
-        abandon(update, 'helper_lost');
         log.fail('daemon-restart', error, { phase: 'helper-spawn' });
-        wake();
+        helperFailed(update, 'helper_lost', false);
       }
     },
     dispose() {
@@ -303,6 +332,42 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
       }
     },
   };
+}
+
+/**
+ * The longest a requested stop, restart or update takes in the host (owner 2026-11-02): the Bot children stop all at
+ * once, BOT_STOP_LIMIT_MS each at most (supervisor.ts), and the rest is quick, so 3 to 8 seconds is usual. Past it the
+ * host exits anyway; systemd's TimeoutStopSec of 45 seconds is the backstop under it.
+ */
+export const HOST_STOP_LIMIT_MS = 30_000;
+
+/**
+ * Once a stop is requested, exits the host after `ms` if it is still there: a restart under a service manager with 75,
+ * so the manager starts it again; a stop under one with 0; otherwise 1. `beforeExit` ends the run's bookkeeping first, so
+ * the next start does not take it for a crash. Returns the disarm.
+ */
+export function armHostStopLimit(control: Pick<ShutdownControl, 'waitForRequest' | 'intent'>, options: {
+  ms?: number; serviceManaged?: boolean; exit?: (code: number) => void; beforeExit?: () => void; flush?: () => Promise<void>;
+} = {}): () => void {
+  const ms = options.ms ?? HOST_STOP_LIMIT_MS;
+  const serviceManaged = options.serviceManaged ?? (Boolean(process.env.VONVON_SERVICE) && !process.send);
+  let disarmed = false;
+  let timer: NodeJS.Timeout | undefined;
+  void control.waitForRequest().then(() => {
+    if (disarmed) return;
+    timer = setTimeout(() => {
+      const intent = control.intent ?? 'stop';
+      const code = serviceManaged ? (intent === 'restart' ? 75 : 0) : 1;
+      log.warn('daemon-shutdown', 'host_stop_limit', { pid: process.pid, limitMs: ms, intent, code });
+      try { options.beforeExit?.(); } catch (error) { log.fail('daemon-shutdown', error, { phase: 'stop-limit' }); }
+      let exited = false;
+      const exit = (): void => { if (exited) return; exited = true; (options.exit ?? process.exit)(code); };
+      const fallback = setTimeout(exit, 1500);
+      void Promise.resolve().then(() => options.flush?.()).then(exit, exit).finally(() => clearTimeout(fallback));
+    }, ms);
+    timer.unref?.();
+  });
+  return () => { disarmed = true; if (timer) clearTimeout(timer); };
 }
 
 export function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
@@ -344,26 +409,30 @@ async function reapGroup(pid: number): Promise<boolean> {
   return true;
 }
 
-export function stopChild(child: ChildProcess, graceMs = HOST_SHUTDOWN_GRACE_MS, ownsProcessGroup = false, beforeEscalation?: () => Promise<void>): Promise<void> {
+/** How long the exit is waited for once `beforeEscalation` is done; a function is read then, so one deadline can cover both. */
+export type GraceMs = number | (() => number);
+
+export function stopChild(child: ChildProcess, graceMs: GraceMs = HOST_SHUTDOWN_GRACE_MS, ownsProcessGroup = false, beforeEscalation?: () => Promise<void>, reason?: StopReason): Promise<void> {
   const existing = stops.get(child);
   if (existing) return existing;
-  const stopping = stop(child, graceMs, ownsProcessGroup, beforeEscalation);
+  const stopping = stop(child, graceMs, ownsProcessGroup, beforeEscalation, reason);
   stops.set(child, stopping);
   return stopping;
 }
 
-async function stop(child: ChildProcess, graceMs: number, ownsProcessGroup: boolean, beforeEscalation?: () => Promise<void>): Promise<void> {
+async function stop(child: ChildProcess, graceMs: GraceMs, ownsProcessGroup: boolean, beforeEscalation?: () => Promise<void>, reason?: StopReason): Promise<void> {
   let forced = false;
   if (child.exitCode === null && child.signalCode === null) {
     if (!child.pid) throw new Error('Cannot terminate a child without a process identity.');
     if (child.connected) {
-      child.send({ type: 'bridge:shutdown' }, () => {});
+      // The reason rides on the message, which goes before the SIGTERM: the child's cards say why their turns stopped.
+      child.send(reason ? { type: 'bridge:shutdown', reason } : { type: 'bridge:shutdown' }, () => {});
       if (process.platform !== 'win32') child.kill('SIGTERM');
     }
     else if (child.stdin && !child.stdin.destroyed) child.stdin.end('shutdown\n');
     else if (process.platform !== 'win32') child.kill('SIGTERM');
     await beforeEscalation?.();
-    if (!await waitForExit(child, graceMs)) {
+    if (!await waitForExit(child, Math.max(0, typeof graceMs === 'function' ? graceMs() : graceMs))) {
       forced = true;
       const forceDeadline = Date.now() + FORCE_EXIT_MS;
       if (process.platform === 'win32') {
@@ -390,13 +459,13 @@ async function stop(child: ChildProcess, graceMs: number, ownsProcessGroup: bool
   }
 }
 
-export async function settleOwnedChild(child: ChildProcess, graceMs = CHILD_SHUTDOWN_GRACE_MS, ownsProcessGroup = false, beforeEscalation?: () => Promise<void>): Promise<void> {
+export async function settleOwnedChild(child: ChildProcess, graceMs: GraceMs = CHILD_SHUTDOWN_GRACE_MS, ownsProcessGroup = false, beforeEscalation?: () => Promise<void>, reason?: StopReason): Promise<void> {
   let observed = child.exitCode !== null || child.signalCode !== null;
   const observe = (): void => { observed = true; };
   child.once('exit', observe);
   child.once('close', observe);
   try {
-    try { await stopChild(child, graceMs, ownsProcessGroup, beforeEscalation); }
+    try { await stopChild(child, graceMs, ownsProcessGroup, beforeEscalation, reason); }
     catch (error) {
       for (;;) {
         let groupAlive = false;
