@@ -208,24 +208,29 @@ nothing_runs_from_root() {
   fi
 }
 
-# exe 读不出来的进程：别的账号的（status 里的 Uid，实际和有效的都不是这个账号）不算；这个账号的读不出来，多半是自己设了
-# 不可转储（PR_SET_DUMPABLE 0，ssh-agent、gpg-agent 这类常这样），不能当成别的账号的放过，也不能一概不删（那样大多数人都
-# 卸不掉）：看还读得到的命令行（argv 用 NUL 隔开）和工作目录（读得到时），有一项在安装目录里（按 $ROOT 和 pwd -P 的真实
-# 路径各比一次）才算。读的时候进程已经退出了的，不算。
+# exe 读不出来的进程：别的账号的（status 里的 Uid，实际和有效的都不是这个账号）不算。这个账号的读不出来，是它不可转储
+# （PR_SET_DUMPABLE 0：ssh-agent、gpg-agent 自己设，systemd --user、ssh 登录会话这类换过账号起来的也是），工作目录、内存
+# 映射和 exe 一样读不出来，读得到的只有命令行（argv 用 NUL 隔开）。不能当成别的账号的放过，也不能一概不删（那样大多数人
+# 都卸不掉）：有一项参数指着安装目录才算。绝对路径按 $ROOT 和 pwd -P 的真实路径比，再用 readlink -f 解开符号链接比一次；
+# 相对路径不知道从哪个目录算起（工作目录读不到），只认写着安装目录名（vonvon-bot/server）的。别的相对路径不拦：ssh 登录
+# 会话的命令行是"sshd: <用户>@pts/0"，带斜杠，按"带斜杠的相对路径"拦，从 ssh 登录的人就都卸不掉了。读的时候进程已经退出了
+# 的，不算。启动器和服务 exec 的都是安装目录下的绝对路径，服务端一定拦得下。
 runs_from_root_unreadable() {
   uids=$(LC_ALL=C sed -n 's/^Uid:[[:space:]]*\([0-9][0-9]*\)[[:space:]][[:space:]]*\([0-9][0-9]*\).*/\1 \2/p' "$1/status" 2>/dev/null) || return 1
   case " $uids " in *" $me "*) ;; *) return 1 ;; esac
   args=$(tr '\0' '\n' 2>/dev/null <"$1/cmdline") || return 1
-  nl='
-'
-  case "$nl$args$nl" in
-    *"$nl$ROOT$nl"*|*"$nl$ROOT/"*|*"$nl$root_real$nl"*|*"$nl$root_real/"*) return 0 ;;
-  esac
-  dir=$(readlink "$1/cwd" 2>/dev/null) || return 1
-  dir=${dir% (deleted)}
-  case "$dir" in
-    "$ROOT"|"$ROOT"/*|"$root_real"|"$root_real"/*) return 0 ;;
-  esac
+  while IFS= read -r arg; do
+    case "$arg" in
+      "$ROOT"|"$ROOT"/*|"$root_real"|"$root_real"/*) return 0 ;;
+      /*)
+        arg=$(readlink -f "$arg" 2>/dev/null) || continue
+        case "$arg" in "$root_real"|"$root_real"/*) return 0 ;; esac
+        ;;
+      *vonvon-bot/server|*vonvon-bot/server/*) return 0 ;;
+    esac
+  done <<EOF
+$args
+EOF
   return 1
 }
 
