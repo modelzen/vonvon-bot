@@ -24,6 +24,7 @@ import { setTierMergePending, splitTierChats } from '../project/registry';
 import type { PermissionMode } from '../agent/types';
 import { onCrashSync } from '../host/crash-guard';
 import { createCardCallbackRecorder } from '../config/card-callback';
+import type { HostApi } from '../admin/ipc';
 
 export interface BridgeOptions {
   identity: BotIdentity;
@@ -37,6 +38,9 @@ export interface BridgeOptions {
   droppedFile?: string;
   /** Per-bot daily judgement counts; omitted by callers that do not persist usage. */
   judgeUsageFile?: string;
+  /** devices-4a 4.2: the host's session tokens; each session gets one when it starts and gives it up when it ends. Without it
+   * (tests) a session's shell carries only the marker, which `vonvon` refuses to run as the owner with. */
+  host?: HostApi;
 }
 
 export interface BridgeHandle {
@@ -80,7 +84,10 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   // 咖啡一下 (the local Claude Code / Codex hook relay) left v1 in s02b: no
   // service and no socket; s02c deleted D/cli-bridge. Since s02c2 the installed
   // hooks run an empty `vonvon hook`, and the tools ask in the terminal.
-  const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), isOwner: id => resolveOwner(opts.cfg) === id, tools: createCommandTools({
+  const host = opts.host;
+  // A revoke lost at shutdown is fine: the host drops all of this bot's tokens when its process exits.
+  const sessions = host ? { revoke: (sessionId: string) => { void host.revokeSessionToken(sessionId).catch(() => undefined); } } : undefined;
+  const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), isOwner: id => resolveOwner(opts.cfg) === id, ...(sessions ? { sessions } : {}), tools: createCommandTools({
     appId: app.id, memory,
     schedule: { execute: (actor, request) => orchestrator.scheduleAs(actor, request) },
     settings: { read: scope => orchestrator.settings.read(scope), save: (edit, options) => orchestrator.settings.save(edit, options), models: query => orchestrator.settings.models(query), act: action => orchestrator.settings.act(action) },
@@ -97,7 +104,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     },
   }) });
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
-    { entries, memory, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity });
+    { entries, memory, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}) });
   const roles = createAppRoleRefresher(app, opts.appSecret);
   await roles.refresh();
   let rolesStopped = false;

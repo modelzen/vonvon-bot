@@ -76,19 +76,31 @@ describe('daemon status', () => {
   });
 
   // main 必败: there was no RPC to fall back from, and a session read the files
-  it('falls back to the files when the daemon does not answer, except in a session; the discovery always reads them', async () => {
+  it('falls back to the files when the daemon does not answer; the discovery always reads them', async () => {
     const root = home();
     const files = harness({});
     await runStatus(files.io(true), { home: root, now: () => T0, env: {}, daemon: offline });
     expect(JSON.parse(files.out())).toMatchObject({ ok: true, running: true, source: 'files', crashes: [] });
-    expect(await caught(runStatus(files.io(true), { home: root, now: () => T0, env: { VONVON_SESSION: '1' }, daemon: offline }))).toMatchObject({ kind: 'connection' });
-    const stopped = mkdtempSync(join(tmpdir(), 'vonvon-c8-')); roots.push(stopped);
-    expect(await caught(runStatus(files.io(true), { home: stopped, now: () => T0, env: { VONVON_SESSION: '1' }, daemon: offline }))).toMatchObject({ kind: 'connection', message: 'daemon 没有运行。先运行 vonvon daemon start。' });
     // connectLocal runs `daemon status --json` to find the daemon: that one must not ask it
     const h = running();
-    files.clear(); await runStatus(files.io(true), { home: root, now: () => T0, env: { VONVON_STATUS_FROM_FILES: '1', VONVON_SESSION: '1' }, daemon: h.daemon });
+    files.clear(); await runStatus(files.io(true), { home: root, now: () => T0, env: { VONVON_STATUS_FROM_FILES: '1' }, daemon: h.daemon });
     expect(h.connect).not.toHaveBeenCalled();
     expect(JSON.parse(files.out())).toMatchObject({ running: true, listen: '127.0.0.1:43119', source: 'files' });
+  });
+
+  // devices-4a 4.9 (main 必败: a session asked the daemon, with the owner's credential): in a Bot's session, token or not,
+  // only the lock answers: no connection, no crash files, which name the other bots
+  it('answers from the lock alone in a Bot session', async () => {
+    const root = home();
+    for (const env of [{ VONVON_SESSION: '1' }, { FEISHU_CODEX_BRIDGE: '1' }, { VONVON_SESSION: `vs1.ses_0123456789abcdef.${'a'.repeat(43)}` }, { VONVON_SESSION: '1', VONVON_STATUS_FROM_FILES: '1' }]) {
+      const h = running();
+      await runStatus(h.io(true), { home: root, now: () => T0, env, daemon: h.daemon });
+      expect(h.connect).not.toHaveBeenCalled();
+      expect(JSON.parse(h.out())).toEqual({ ok: true, running: true, pid: process.pid, listen: '127.0.0.1:43119', version: '0.8.0', startedAt: new Date(T0 - 1000).toISOString(), source: 'files' });
+    }
+    const stopped = mkdtempSync(join(tmpdir(), 'vonvon-c8-')); roots.push(stopped);
+    const files = harness({});
+    expect(await caught(runStatus(files.io(true), { home: stopped, now: () => T0, env: { VONVON_SESSION: '1' }, daemon: offline }))).toMatchObject({ kind: 'connection', message: 'daemon 没有运行。先运行 vonvon daemon start。' });
   });
 });
 

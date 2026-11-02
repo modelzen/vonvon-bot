@@ -7,9 +7,11 @@ import { readRunningPidLock, type PidLockInfo } from '../../server/pid-lock';
 import { classifyServiceFailure, serviceActionPath, writeServiceActionRecord, type ServiceActionRecord } from '../../service/action-report';
 import type { ServiceAdapter, ServiceTransactionOutcome } from '../../service/adapter';
 import { describeServiceExits } from '../../service/exits';
-import { enableFailed, enableLinger, lingerLine, readLinger, userManagerHint, type Linger } from '../../service/linux-session';
+import { enableFailed, enableLinger, lingerLine, readLinger, userManagerProblem, type Linger, type UserManagerProblem } from '../../service/linux-session';
+import { inBotSession } from '../../config/session-env';
 import { CommandError } from '../command-error';
 import { print, withDaemon, type Daemon, type Io } from '../daemon-client';
+import { rootWarning } from '../root-warning';
 
 const STATE_TEXT = {
   'not-installed': 'not installed', running: 'running', stopped: 'installed, stopped', disabled: 'turned off',
@@ -24,14 +26,23 @@ export type ServiceCommandDependencies = {
   now: () => number;
   /** Linux only (s20a): what follows a finished install or uninstall, and why the user manager cannot be asked. */
   linux: LinuxServiceSteps | undefined;
+  /** 0 is root, which gets a warning (server-2 4.3); undefined on Windows. */
+  getuid: () => number | undefined;
 };
 export type LingerChoice = 'ask' | 'on' | 'off';
+/** server-2 4.4: `on` when linger was on or was just turned on; `unsupported` off Linux. */
+export type LingerState = 'on' | 'off' | 'unsupported';
 type LinuxServiceSteps = {
-  /** False when `--linger` was given and linger is still off. With `notes` (--json) nothing is asked and the lines go there. */
-  afterInstall: (linger: LingerChoice, notes?: string[]) => Promise<boolean>;
+  /** Whether linger is on afterwards. With `notes` (--json) nothing is asked and the lines go there. */
+  afterInstall: (linger: LingerChoice, notes?: string[]) => Promise<'on' | 'off'>;
   afterUninstall: () => Promise<string | undefined>;
-  hint: () => Promise<string | undefined>;
+  /** Why the user manager cannot be asked, given what systemctl answered, when it is one of the common causes. */
+  problem: (detail: string) => Promise<UserManagerProblem | undefined>;
+  /** For `sudo loginctl enable-linger <user>`. */
+  user: string;
 };
+/** The user names a script can paste into `sudo loginctl enable-linger` as they are. */
+const SAFE_USER = /^[A-Za-z0-9._-]+$/;
 
 const detailOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
 const TEXT: Io = { json: false, write: text => { process.stdout.write(text); } };
@@ -51,7 +62,7 @@ async function exists(path: string): Promise<boolean> {
 export async function runServiceCommand(action: 'install' | 'uninstall', adapter?: Pick<ServiceAdapter, 'install' | 'uninstall'>, options: { port?: number; keepRunning?: boolean; linger?: LingerChoice } = {}, overrides: Partial<ServiceCommandDependencies> = {}, io: Io = TEXT): Promise<void> {
   const service = adapter ?? (await import('../../service/adapter')).getServiceAdapter();
   const d: ServiceCommandDependencies = {
-    root: paths.appDir, readOwner: readRunningPidLock, now: Date.now, linux: process.platform === 'linux' ? linuxServiceSteps() : undefined,
+    root: paths.appDir, readOwner: readRunningPidLock, now: Date.now, linux: process.platform === 'linux' ? linuxServiceSteps() : undefined, getuid: () => process.getuid?.(),
     start: async port => {
       const status = await (await import('./daemon')).runStart(port);
       if (!status.running) throw new Error('Daemon did not start.');
@@ -59,6 +70,8 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
     },
     ...overrides,
   };
+  const warning = action === 'install' ? rootWarning(d.getuid) : undefined;
+  if (warning && !io.json) process.stderr.write(`${warning}\n`);
   // A fresh machine has no data root yet: install creates it, and nothing else can be running there.
   let mutex: Mutex | null = null;
   if (await exists(d.root)) {
@@ -113,11 +126,12 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
     if (result.retained !== null) lines.push(`Daemon PID ${result.retained.pid} is running under the service.`);
     if (!io.json) io.write(`${lines.join('\n')}\n`);
     // After the mutex: asking about linger can wait on the user.
-    const notes: string[] = [];
-    if (d.linux && !(await (io.json ? d.linux.afterInstall(options.linger ?? 'ask', notes) : d.linux.afterInstall(options.linger ?? 'ask')))) {
-      throw new CommandError('failed', '服务已经装好，只是 linger 没开成。', { reason: 'linger_failed', partial: { ...outcome, notes } });
-    }
-    if (io.json) io.write(`${JSON.stringify({ ok: true, ...outcome, notes })}\n`);
+    const notes: string[] = warning ? [warning] : [];
+    let linger: LingerState = 'unsupported';
+    // A linger that did not take is not a failed install (LINGER-1): the line printed says what to run with sudo.
+    if (d.linux) linger = await (io.json ? d.linux.afterInstall(options.linger ?? 'ask', notes) : d.linux.afterInstall(options.linger ?? 'ask'));
+    const lingerUser = linger === 'off' && d.linux && SAFE_USER.test(d.linux.user) ? d.linux.user : undefined;
+    if (io.json) io.write(`${JSON.stringify({ ok: true, ...outcome, linger, ...lingerUser ? { lingerUser } : {}, notes })}\n`);
     return;
   }
   if (result.retained !== null) lines.push(`Daemon PID ${result.retained.pid} is still running.`);
@@ -135,13 +149,17 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
     case 'install_incomplete':
     case 'uninstall_refused':
     case 'uninstall_rolled_back':
-    case 'uninstall_incomplete':
+    case 'uninstall_incomplete': {
       if (result.detail.includes('stop_unconfirmed')) lines.push('Next step: vonvon service uninstall');
+      const partial = { ...outcome, leftovers: result.leftovers, ...warning ? { notes: [warning] } : {} };
       if (result.detail.includes('User manager unavailable')) {
-        const hint = await d.linux?.hint();
-        if (hint) lines.push(hint);
+        const problem = await d.linux?.problem(result.detail);
+        if (problem) lines.push(problem.hint);
+        // This machine or this login cannot run a user service: the Linux install script starts the daemon detached instead.
+        if (problem && result.kind === 'install_refused') throw new CommandError('refused', lines.join('\n'), { reason: problem.reason, fallback: 'detached', hint: problem.hint, partial });
       }
-      throw new CommandError('failed', lines.join('\n'), { reason: result.kind, partial: { ...outcome, leftovers: result.leftovers } });
+      throw new CommandError('failed', lines.join('\n'), { reason: result.kind, partial });
+    }
     default: {
       const exhaustive: never = result.kind;
       throw new Error(`Unknown service result: ${String(exhaustive)}`);
@@ -165,20 +183,21 @@ export const LINGER_QUESTION = 'linger 没开：退出最后一个登录会话�
 
 /**
  * After a Linux install (3.10): linger, then how to open the web page. Enter or y agrees; n, EOF, Ctrl-C and a
- * non-terminal do not. Without an answer nothing is turned on. Returns false only for `--linger` that did not take.
+ * non-terminal do not. Without an answer nothing is turned on. Returns whether linger is on now; a state that cannot
+ * be read counts as off.
  */
-export async function afterLinuxInstall(choice: LingerChoice, d: AfterInstallDependencies): Promise<boolean> {
+export async function afterLinuxInstall(choice: LingerChoice, d: AfterInstallDependencies): Promise<'on' | 'off'> {
   const linger = await d.readLinger();
   const enable = linger.state !== 'on'
     && (choice === 'on' || (choice === 'ask' && linger.state === 'off' && d.interactive && await d.ask(LINGER_QUESTION)));
-  let ok = true;
+  let state: 'on' | 'off' = linger.state === 'on' ? 'on' : 'off';
   if (enable) {
     const enabled = await d.enableLinger();
     d.write(`${enabled.ok ? '已开 linger。' : enableFailed(enabled.detail, d.user)}\n`);
-    ok = enabled.ok || choice !== 'on';
+    if (enabled.ok) state = 'on';
   } else d.write(`${lingerLine(linger, d.user)}\n`);
   d.write(`${(await d.guide()).join('\n')}\n`);
-  return ok;
+  return state;
 }
 
 /** Enter or y; n, EOF and Ctrl-C answer no. */
@@ -206,12 +225,14 @@ function linuxServiceSteps(): LinuxServiceSteps {
     },
     // linger belongs to the account and other user services may need it, so uninstall leaves it on.
     afterUninstall: async () => (await readLinger()).state === 'on' ? 'linger 没关：这个账号上别的用户服务可能也要它。不需要的话运行 loginctl disable-linger。' : undefined,
-    hint: userManagerHint,
+    problem: detail => userManagerProblem(detail),
+    user,
   };
 }
 
-export async function runServiceStatus(json: boolean, adapter?: Pick<ServiceAdapter, 'status'>): Promise<void> {
-  const status = await (adapter ?? (await import('../../service/adapter')).getServiceAdapter()).status();
+/** In a Bot's session the daemon in the lock counts as running unasked: asking it who it is sends `local-credential` (devices-4a 4.9). */
+export async function runServiceStatus(json: boolean, adapter?: Pick<ServiceAdapter, 'status'>, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const status = await (adapter ?? (await import('../../service/adapter')).getServiceAdapter({ trustLock: inBotSession(env) })).status();
   if (json) {
     process.stdout.write(`${JSON.stringify({ ok: true, ...status })}\n`);
     return;

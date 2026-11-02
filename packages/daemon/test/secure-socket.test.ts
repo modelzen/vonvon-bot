@@ -446,7 +446,7 @@ describe('the daemon', () => {
     const jobs = vi.spyOn(Jobs.prototype, 'detach');
     const logs = vi.spyOn(LogFollowers.prototype, 'detach');
     const connection = await connect({ port, device }, { pairing: { inviteId: invite.id, inviteSecret: invite.secret, clientName: '探针' } });
-    expect(connection.serverInfo).toMatchObject({ principal: 'owner:paired', capabilities: ['device'] });
+    expect(connection.serverInfo).toMatchObject({ principal: 'owner:paired', capabilities: ['device', 'session-scope'] });
     expect(await connection.client.admin({ type: 'daemonStatus' })).toMatchObject({ kind: 'daemonStatus', status: { startedAt: expect.any(Number) } });
     expect(await connection.client.device({ type: 'clients' })).toMatchObject({ kind: 'clients', clients: [{ name: '探针', invitedBy: 'local' }] });
     connection.close();

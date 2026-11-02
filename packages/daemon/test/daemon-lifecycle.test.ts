@@ -359,7 +359,7 @@ describe('service actions outside the CLI', () => {
 
 it('an aged live update lock remains owned and its bytes stay unchanged', () => {
   const file = join(paths.appDir, 'update.lock');
-  const record = JSON.stringify({ pid: process.pid, at: Date.now() - 31 * 60_000 });
+  const record = JSON.stringify({ pid: process.ppid, at: Date.now() - 31 * 60_000 });
   writeFileSync(file, record);
   const release = acquireUpdateLock();
   try {
