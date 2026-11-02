@@ -49,8 +49,11 @@ export interface AgentEntries {
 }
 type Failure = Extract<AgentToolReply, { ok: false }>;
 type Reason = NonNullable<Failure['reason']>;
-/** A settings write outside a private chat: the tools' refusal, and the daemon's to a Bot session's command line (devices 5.2). */
-export const NOT_DM_MESSAGE = '设置只能在私聊里改。请对方去私聊里跟我说。';
+/**
+ * A settings write outside a private chat: the tools' refusal, and the daemon's to a Bot session's command line (devices
+ * 5.2). The owner's words (2026-11-02, settings-dm-only).
+ */
+export const NOT_DM_MESSAGE = '群里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。';
 /** devices 15, 这一轮已结束: a Bot session's command line called when no turn of its session is going (or its Bot process is gone). */
 export const SESSION_TURN_ENDED = '这次调用对应的那一轮对话已经结束，不能再改设置。';
 /** devices 3.7: only the owner's turn changes this machine's administrators (devices-4b 4.2). */
@@ -126,6 +129,8 @@ interface Grant {
   queue: Array<() => void>;
 }
 const PRUNED_IDS = 1024;
+/** A tool kept to some places (the settings reads, a private chat's) is neither listed nor called elsewhere. */
+const placed = (tool: AgentTool, place: AgentPlace): boolean => !tool.places || tool.places.includes(place.kind);
 export function createAgentEntries(opts: {
   appId: string;
   isAdmin(openId: string): boolean;
@@ -280,7 +285,7 @@ export function createAgentEntries(opts: {
       if (grant.phase === 'revoked') return finishLog(failure('revoked'));
       if (grant.phase !== 'attached') return finishLog(failure('not-ready'));
       const tool = table.get(name);
-      if (!tool) return finishLog(failure('unknown-tool'));
+      if (!tool || !placed(tool, grant.place)) return finishLog(failure('unknown-tool'));
       const runTool = tool.run.bind(tool);
       const settings = tool.class === 'settings';
       const memory = tool.class === 'memory';
@@ -378,8 +383,10 @@ export function createAgentEntries(opts: {
           try {
             let result: unknown;
             if (name === 'session_info') {
-              const refusal = grant.turn ? authorizeNow(grant, grant.turn) : grant.place.kind === 'p2p' ? refused('not-human-turn') : refused('not-dm');
-              result = { v: 1, place: place.kind, turn: !grant.turn?.active ? 'none' : grant.turn.human ? 'person' : 'other', settings: refusal ? { allowed: false, reason: refusal.reason ?? refusal.code } : { allowed: true } };
+              const turn = !grant.turn?.active ? 'none' : grant.turn.human ? 'person' : 'other';
+              // Only a private chat changes settings, so only there it says whether this turn may (settings-dm-only).
+              const refusal = grant.place.kind !== 'p2p' ? undefined : grant.turn ? authorizeNow(grant, grant.turn) : refused('not-human-turn');
+              result = { v: 1, place: place.kind, turn, ...(grant.place.kind !== 'p2p' ? {} : { settings: refusal ? { allowed: false, reason: refusal.reason ?? refusal.code } : { allowed: true } }) };
             } else result = await runTool(parsed.data, ctx);
             if (committed && Date.now() > deadline) log.warn('agent', 'late-commit', { tool: name });
             const json = JSON.stringify(result);
@@ -416,9 +423,9 @@ export function createAgentEntries(opts: {
         if (grant.thread && !grant.thread.isAlive()) revoke(grant);
         if (grant.phase === 'revoked') throw new ToolRefusal(failure('revoked'));
         if (grant.phase === 'capacity') return [];
-        // 评论会话（doc）只给读类工具；写记忆的在群和私聊里给，任务的只在群里给
-        return tools.filter(tool => tool.class === 'read' || (tool.class === 'memory' ? grant.place.kind !== 'doc'
-          : grant.place.kind === (tool.class === 'schedule' ? 'group' : 'p2p')))
+        // 评论会话（doc）只给读类工具；写记忆的在群和私聊里给，任务的只在群里给；只为设置服务的读工具只在私聊里给
+        return tools.filter(tool => placed(tool, grant.place) && (tool.class === 'read' || (tool.class === 'memory' ? grant.place.kind !== 'doc'
+          : grant.place.kind === (tool.class === 'schedule' ? 'group' : 'p2p'))))
           .map(({ name, description, input }) => ({ name, description, input }));
       },
       call,

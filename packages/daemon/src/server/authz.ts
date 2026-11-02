@@ -48,9 +48,12 @@ export interface AuthzDeps {
   memoryItem?(scope: MemoryScopeRef, itemId: string): Promise<Pick<MemoryItem, 'scope' | 'source'> | undefined>;
 }
 
-/** devices 15: the sentences a Bot session's command line reads. */
-export const SCOPE_MISSING = '这次调用来自 Bot 会话，必须带 `--scope bot=<appId>[,group=<chatId>]`，而且不能比会话本身的范围大。';
-export const scopeExceeded = (bot: string, group: string): string => `范围超过了这条会话（只能是 bot=${bot}, group=${group}）。不要重试更大的范围。`;
+/**
+ * devices 15: the sentences a Bot session's command line reads. No skill teaches the command line (settings-dm-only), so
+ * the refusal of a call without `--scope` says what to add: the `VONVON_SCOPE` the session was given, as it is.
+ */
+export const SCOPE_MISSING = '这次调用来自 Bot 会话，要带上 `--scope "$VONVON_SCOPE"`（vonvon 给这条会话设好的范围，照抄，不要自己拼），不能比会话本身的范围大。';
+export const scopeExceeded = (bot: string, group: string): string => `范围超过了这条会话（只能是 bot=${bot}, group=${group}）。改用 \`--scope "$VONVON_SCOPE"\`，不要重试更大的范围。`;
 export const SESSION_DENIED = '这个操作不能从 Bot 会话里做。';
 const MAINTENANCE = new Set<string>(MAINTENANCE_KINDS);
 const PLACES = ['dm', 'group', 'comment'] as const;
@@ -77,10 +80,11 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
   // The desktop's older permission and reply switches: settings writes, which the command line makes as settings set.
   ...rows('command', 'setResponse setPermission', { dm: 'deny', group: 'not-dm', comment: 'not-dm' }),
   ...rows('settings', 'read.host save.host'),
-  // A group reads no more than its own group's settings and a comment none: `settings set` and `settings act` read before
-  // they write, so these reads answer with the write's sentence (a private chat's turn may do both).
-  ...rows('settings', 'read.agent read.session', WRITE),
-  ...rows('settings', 'read.project models sessions', { dm: 'bot', group: 'host', comment: 'not-dm' }),
+  // Settings are a private chat's, read and written (settings-dm-only: no group session has settings_get either). A group
+  // and a comment read none: `settings set` and `settings act` read before they write, so these reads answer with the
+  // write's sentence (a private chat's turn may do both).
+  ...rows('settings', 'read.agent read.session read.project', WRITE),
+  ...rows('settings', 'models sessions', { dm: 'bot', group: 'host', comment: 'not-dm' }),
   ...rows('settings', 'save.agent save.project save.session act.voice act.adminMember act.projectMember act.projectAudience act.commentInstructions', WRITE),
   ...rows('collaboration', 'history context project providerModels', { dm: 'host', group: 'host', comment: 'deny' }),
   // The owner's whole provider account (plan, daily use, use outside vonvon), which no tool shows a session.
@@ -376,24 +380,20 @@ function membershipOf(id: string): { agentId: string; groupId: string } | undefi
 }
 
 /**
- * A session reads settings as settings_get does: its sections, and nothing the tool leaves out but what the view's schema
- * requires. A group's, its own group's only, every part read-only with the reason the tools give. The judge prompt, the
- * skills and their paths, the bot's profile, the roster's names, which decision models have a key (the keystore's), the
- * role draft and who of the administrators Feishu or the scan made stay out: the command line reaches no further than
- * the tools (devices 5; for a private chat devices-4b 4.5a, SEC-4).
+ * A session reads settings as settings_get does, in a private chat only: its sections, and nothing the tool leaves out
+ * but what the view's schema requires. The judge prompt, the skills and their paths, the bot's profile, the roster's
+ * names, which decision models have a key (the keystore's), the role draft and who of the administrators Feishu or the
+ * scan made stay out: the command line reaches no further than the tools (devices 5; devices-4b 4.5a, SEC-4).
  */
 function sessionView(view: SettingsView, group: boolean): SettingsView {
+  // A group session reads no settings (settings-dm-only: read.* and act are refused before): fail closed if one comes.
+  if (group || view.scope.kind === 'host') throw new RpcError('permission_denied', OUT_OF_REACH);
   if (view.scope.kind === 'project') {
     const project = view as ProjectSettingsView;
-    const access = { kind: 'readonly' as const, reason: 'not-dm' as const, message: NOT_DM_MESSAGE };
-    const sections = !group ? project.sections
-      : Object.fromEntries(Object.entries(project.sections).map(([name, section]) => [name, section && { ...section, access }])) as ProjectSettingsView['sections'];
     const { roster: _names, ...members } = project.members;
-    const shown: ProjectSettingsView = { scope: project.scope, sections, identity: project.identity, members };
+    const shown: ProjectSettingsView = { scope: project.scope, sections: project.sections, identity: project.identity, members };
     return shown;
   }
-  // A group session reaches no other view (read.agent and read.session are refused before): fail closed if one comes.
-  if (group || view.scope.kind === 'host') throw new RpcError('permission_denied', OUT_OF_REACH);
   if (view.scope.kind === 'session') return view;
   const agent = view as AgentSettingsView;
   const { openIds, revision } = agent.administrators;

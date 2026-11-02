@@ -716,7 +716,7 @@ describe('agent entry orchestration', () => {
     await o.onMessage(first);
     await until(() => expect(run.consumed).toHaveLength(1));
     const grant: AgentEntry = fake.backend.resumeThread.mock.calls[0]![0].entry;
-    await expect(grant.call('session_info', {})).resolves.toMatchObject({ ok: true, result: { place: 'group', turn: 'person', settings: { allowed: false, reason: 'not-dm' } } });
+    await expect(grant.call('session_info', {})).resolves.toEqual({ ok: true, result: { v: 1, place: 'group', turn: 'person' } });
     expect(open).toHaveBeenCalledWith(run.t, expect.objectContaining({ requesterOpenId: 'owner', triggerMessageId: first.messageId, retry: false }));
     const second = { ...human('second'), senderId: 'other' };
     await o.onMessage(second);

@@ -167,7 +167,7 @@ async function host(cli: string | undefined): Promise<number> {
   const groupScope = ['--scope', `bot=${APP_ID},group=${GROUP_A}`];
   const groupMember = await turn('group', MEMBER, '记住 周四发版');
   check('群里，成员这一轮：settings set --group oc_probe_a permission.mode=full', await run(cli, groupMember.token, ['settings', 'set', '--group', GROUP_A, 'permission.mode=full', ...groupScope]),
-    { code: 4, reason: 'not-dm', text: '设置只能在私聊里改。' });
+    { code: 4, reason: 'not-dm', text: '群里不能改设置。' });
   // The fake schedule echoes the actor it was given as the task's creator: shown alone, the rest of the task is the fake's.
   const added = await run(cli, groupMember.token, ['schedule', 'add', '看一下构建', '--name', '构建', '--every', '30m', '--group', GROUP_A, ...groupScope]);
   const creator = added.code === 0 ? JSON.stringify((JSON.parse(added.full) as { task?: { createdBy?: unknown } }).task?.createdBy) : added.full;
