@@ -21,6 +21,7 @@ export * from "./context-preview.js";
 export * from "./setup-steps.js";
 export * from "./diagnostics.js";
 export * from "./crash.js";
+export * from "./cli-path-block.js";
 export * from "./display.js";
 
 export * from "./group-decision.js";
