@@ -38,7 +38,7 @@ it('shows this machine, and 检查中 for Claude before its first login check', 
   expect(html).toContain('0.9.0');
   expect(html).toContain('可用 · 0.156.1');
   expect(html).toContain('检查中 · 0.3.296');
-  expect(html).not.toContain('登录状态无法确认');
+  expect(html).not.toContain('无法确认配置');
   expect(html).toContain('/tmp/vonvon-home');
   expect(html).toContain('后台日志');
   expect(html).toContain(`id="${settingAnchor('daemon 日志')}"`);
@@ -99,12 +99,12 @@ it('lists a bot\'s not-replied messages newest first, with the group, place, sen
   ]}}]);
   expect(html).toContain(`id="${settingAnchor(diagnosticsSection(agent.id))}"`);
   expect(html).toContain('11 条未回复记录');
-  expect(html).toContain('Claude 没登录或登录过期了');
+  expect(html).toContain('Claude 没配置好或配置过期了');
   expect(html).toContain('10 次');
   expect(html).toContain('发布群 · 话题 · 某同事 · 消息尾号 a1b2c3');
-  expect(html).toContain('用 /login 登录');
+  expect(html).toContain('在终端运行 claude 配置好');
   expect(html).toContain('没绑定的群（尾号 9f8e7d） · 主区');
-  expect(html.indexOf('Claude 没登录')).toBeLessThan(html.indexOf('没绑定的群'));
+  expect(html.indexOf('Claude 没配置好')).toBeLessThan(html.indexOf('没绑定的群'));
   expect(html).toContain('Codex 可用 · 0.156.1（1 个群）');
 });
 

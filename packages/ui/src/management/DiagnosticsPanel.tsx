@@ -243,7 +243,7 @@ export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpe
     </header>
     <CrashBars snapshot={snapshot} ready={ready} busy={busy} run={run}/>
     <SettingsGroup label="这台电脑" id={settingAnchor('这台电脑')} className="diag-machine"
-      footer="Provider 每分钟检查一次；Claude 登录可单独检查。">
+      footer="Provider 每分钟检查一次；Claude 的配置可以单独检查。">
       {tools.map(step => <SettingsRow key={step.id} title={step.title} description={stepDescription(step)} trailing={<span className="setup-step-trailing">{badge(step.status, step.tone)}{toolAction(step)}</span>}/>)}
       <KeyDiagnosticsRows read={secrets.read} onOpenSecrets={onOpenSecrets} onShowLog={showLog}/>
       <details className="diag-runtime"><summary>运行详情<ChevronDown size={13} aria-hidden="true"/></summary><div>

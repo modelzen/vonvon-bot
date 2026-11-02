@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import type {ToolState} from '@vonvon/protocol';
-import {useClient} from '../client-context';
+import {useActiveDevice, useClient} from '../client-context';
+import {configureProvider} from '../device-copy';
 import {providerBackends, providerInstalled, providerUsable} from '../setup/provider-state';
 
 export type DiscoveredProvider = {id: string; displayName: string};
@@ -10,6 +11,10 @@ const failureText = (error: unknown) => error instanceof Error ? error.message :
 /** Snapshot authentication is cached; an installed Claude needs the SDK login probe on first discovery. */
 export function useProviderDiscovery(tools?: readonly ToolState[]) {
   const client = useClient();
+  // The page is built again per device, so the words are read when the check ends.
+  const device = useActiveDevice();
+  const where = useRef(device);
+  where.current = device;
   const readiness = tools?.map(tool => `${tool.tool}:${tool.installation}:${tool.compatibility?.status}:${tool.authentication}`).join('|') ?? 'snapshot';
   const [attempt, setAttempt] = useState(0);
   const key = readiness;
@@ -40,20 +45,20 @@ export function useProviderDiscovery(tools?: readonly ToolState[]) {
         if (active) setResult({key, providers: usableProviders(states), checking: true});
         try {
           pending.current ??= client.environment({type: 'backendLogin', id: 'claude-agent', refresh: force}).then(answer => {
-            if (answer.kind !== 'backendLogin' || answer.id !== 'claude-agent') throw new Error(answer.kind === 'refused' ? answer.message : 'Claude 登录状态读取失败。');
+            if (answer.kind !== 'backendLogin' || answer.id !== 'claude-agent') throw new Error(answer.kind === 'refused' ? answer.message : 'Claude 的配置读取失败。');
             return {state: answer.state, message: answer.message};
           });
           let answer: {state: ToolState['authentication']; message: string};
           try {answer = await pending.current;} finally {pending.current = undefined;}
           states = states.map(tool => tool.tool === 'claude' ? {...tool, authentication: answer.state} : tool);
-          if (answer.state === 'signedOut') message = 'Claude 尚未登录，请在 Provider 页面登录后重新检查。';
-          else if (answer.state === 'unknown') message = answer.message || '暂时无法确认 Claude 登录状态，请重新检查。';
+          if (answer.state === 'signedOut') message = `Claude 还没配置好。${configureProvider(where.current, 'claude')}`;
+          else if (answer.state === 'unknown') message = answer.message || '暂时无法确认 Claude 的配置，请重新检查。';
         } catch (error) {
           states = states.map(tool => tool.tool === 'claude' ? {...tool, authentication: 'unknown'} : tool);
-          message = `Claude 登录检查失败：${failureText(error)}`;
+          message = `Claude 的配置检查失败：${failureText(error)}`;
         }
       } else if (providerInstalled(claude) && claude?.authentication === 'signedOut') {
-        message = 'Claude 尚未登录，请在 Provider 页面登录后重新检查。';
+        message = `Claude 还没配置好。${configureProvider(where.current, 'claude')}`;
       }
       const providers = usableProviders(states);
       if (active) setResult({key, providers, checking: false, message});

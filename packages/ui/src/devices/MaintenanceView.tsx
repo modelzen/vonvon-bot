@@ -1,9 +1,11 @@
-import {deviceCopyName, useActiveDevice, useDevicesState, useShellCapabilities} from '../client-context';
+import {useMemo} from 'react';
+import {deviceCopyName, useActiveDevice, useClient, useDevicesState, useShellCapabilities} from '../client-context';
 import {DesktopUpdateButton} from '../DesktopUpdateButton';
 import {DesktopUpdateProvider, useDesktopUpdate, useDesktopUpdateOperation} from '../desktop-update';
 import {Button} from '../reference/components/ui';
 import {DraftGuardProvider} from '../settings/DraftGuard';
-import {cannotUpgradeRemotely, versionNotice} from './devices-presentation';
+import {ServerUpdateCard} from '../management/ServerUpdateCard';
+import {cannotUpgradeRemotely, maintenanceRequest, versionNotice} from './devices-presentation';
 import {DeviceOutsideFrame} from './DeviceConnectionView';
 
 function ClientUpdateAction() {
@@ -16,12 +18,14 @@ function ClientUpdateAction() {
   </div>;
 }
 
-/** devices-ui-1b 4.7: another protocol, so only the device list and the upgrade stay. The server's own upgrade card is
- * U2's (`ServerUpdateCard`, with `maintenanceRequest`); until then an old server gets the words only. */
+/** devices-ui-1b 4.7: another protocol, so only the device list and the upgrade stay. An old server that can update
+ * itself gets U2's `ServerUpdateCard`, sending only the maintenance requests (`maintenanceRequest`). */
 export function MaintenanceView() {
   const state = useDevicesState();
   const device = useActiveDevice();
   const name = deviceCopyName(device);
+  const client = useClient();
+  const request = useMemo(() => maintenanceRequest(client.machine), [client]);
   const info = state?.active.serverInfo;
   const notice = state && info ? versionNotice({
     serverVersion: info.version, serverProtocol: info.protocolVersion, clientVersion: state.client.version, clientProtocol: state.client.protocolVersion,
@@ -31,5 +35,6 @@ export function MaintenanceView() {
     <p>{notice.text}</p>
     {notice.side === 'client' && <DraftGuardProvider><DesktopUpdateProvider><ClientUpdateAction/></DesktopUpdateProvider></DraftGuardProvider>}
     {notice.side === 'server' && info?.capabilities && !notice.action && <p>{cannotUpgradeRemotely(name)}</p>}
+    {notice.side === 'server' && notice.action === 'upgrade-server' && <ServerUpdateCard variant="remote" request={request} where={device}/>}
   </>}</DeviceOutsideFrame>;
 }

@@ -1,0 +1,57 @@
+import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {expect, it} from 'vitest';
+import {LOCAL_ACTIVE_DEVICE} from '../src/client-context';
+import {configureProvider, hostTitle, onDevice, remoteServiceFooter, remoteStopConfirm, remoteToolsNote} from '../src/device-copy';
+import {looksLikePath} from '../src/directory-picker';
+import {browseQuery} from '../src/DirectorySearchStep';
+
+const remote = {isRemote: true, name: 'Linux 主机'};
+
+// main 必败: device-copy is new (devices-ui-2 4.1)
+it('names the remote device in Provider words and leaves this computer as it was', () => {
+  expect(configureProvider(LOCAL_ACTIVE_DEVICE, 'codex')).toBe('把 Codex 配置好（账号或自定义 API 都行），然后点「重新检测」。');
+  expect(configureProvider(LOCAL_ACTIVE_DEVICE, 'codex')).not.toContain('在');
+  expect(configureProvider(remote, 'codex')).toContain('在「Linux 主机」上把 Codex 配置好（账号或自定义 API 都行）');
+  expect(configureProvider(remote, 'claude')).toContain('在「Linux 主机」上把 Claude 配置好');
+  expect(onDevice(remote, '安装')).toBe('在「Linux 主机」上安装');
+  expect(onDevice(LOCAL_ACTIVE_DEVICE, '安装')).toBe('安装');
+  expect(remoteToolsNote(remote)).toBe('这里装的、检查的都是「Linux 主机」上的 Codex、Claude 和 lark-cli。');
+});
+
+it('titles the device by platform, Windows included (devices 第 19 节)', () => {
+  expect(hostTitle('windows')).toBe('这台 Windows 电脑');
+  expect(hostTitle('macos')).toBe('这台 Mac');
+  expect(hostTitle('linux')).toBe('这台 Linux 主机');
+  expect(hostTitle('unsupported')).toBe('这台电脑');
+});
+
+it('uses the design 第 15 节 words for the remote service', () => {
+  expect(remoteStopConfirm(remote)).toBe('停止「Linux 主机」的后台服务？停止后它不会自动重启，只能在那台设备上重新启动。要重新加载请用"重启"。');
+  expect(remoteServiceFooter(remote)).toBe('退出这台电脑上的 Vonvon Bot 不影响「Linux 主机」。');
+});
+
+// main 必败: Windows and remote paths were not recognized (devices-ui-2 4.3)
+it('tells paths from search words, Windows paths included', () => {
+  for (const path of ['/srv', '~/a', '~', 'C:\\x', 'c:/x', '\\\\host\\share']) expect(looksLikePath(path), path).toBe(true);
+  for (const word of ['srv', '~a', 'C:']) expect(looksLikePath(word), word).toBe(false);
+  expect(browseQuery('/srv/')).toBe('/srv/');
+  expect(browseQuery('C:\\work')).toBe('C:\\work\\');
+});
+
+const UI = join(__dirname, '..', 'src');
+/** The files of devices-ui-2 4.2's first table. Lines about Feishu sign-in, and the OS login item, keep 登录. */
+const PROVIDER_FILES = ['JoinGroupDialog.tsx', 'settings/useProviderDiscovery.ts', 'settings/DecisionFields.tsx', 'settings/GroupDesignSettings.tsx',
+  'management/EnvironmentPanel.tsx', 'management/environmentPresentation.ts', 'setup/ProviderSetup.tsx', 'setup/useClaudeLoginCheck.ts',
+  'management/UsagePanel.tsx', 'management/DiagnosticsPanel.tsx'];
+const loginLines = (file: string) => readFileSync(join(UI, file), 'utf8').split('\n')
+  .filter(line => line.includes('登录') && !/lark|飞书|登录电脑时启动/.test(line));
+
+// main 必败: Provider pages said 登录 for what is an account or a custom API (devices 6.4)
+it('says 配置 rather than 登录 for Codex and Claude on every Provider page', () => {
+  for (const file of PROVIDER_FILES) expect(loginLines(file), file).toEqual([]);
+  // Only the search alias stays, so typing 登录 still finds the Provider page.
+  const search = loginLines('search.ts');
+  expect(search).toHaveLength(1);
+  expect(search[0]).toContain('aliases');
+});

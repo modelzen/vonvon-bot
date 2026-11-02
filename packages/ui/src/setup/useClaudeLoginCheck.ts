@@ -18,7 +18,7 @@ export function useClaudeLoginCheck(tools: readonly ToolState[], onError: (messa
     setChecks(count => count + 1);
     // The daemon rebuilds the snapshot before it replies, so the row follows it.
     try { await client.environment({type: 'backendLogin', id: 'claude-agent', refresh}); }
-    catch (error) { onError(error instanceof Error ? error.message : '暂时无法检查 Claude 登录。'); }
+    catch (error) { onError(error instanceof Error ? error.message : '暂时无法检查 Claude 的配置。'); }
     finally { setChecks(count => count - 1); }
   }
   useEffect(() => {

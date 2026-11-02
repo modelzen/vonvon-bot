@@ -7,13 +7,14 @@ type Effect = {deps?: unknown[]; cleanup?: () => void};
 const harness = vi.hoisted(() => ({
   state: [] as unknown[], refs: [] as Array<{current: unknown}>, effects: [] as Effect[],
   stateIndex: 0, refIndex: 0, effectIndex: 0, pending: [] as Array<() => void>, client: {directory: vi.fn()},
+  device: {id: 'local', isRemote: false, name: '这台电脑', mode: 'full', capabilities: [] as string[]},
 }));
 vi.mock('react', async original => ({...await original<typeof import('react')>(),
   useState: (initial: unknown) => {const index = harness.stateIndex++; if (!(index in harness.state)) harness.state[index] = typeof initial === 'function' ? initial() : initial; return [harness.state[index], (next: unknown) => {harness.state[index] = typeof next === 'function' ? next(harness.state[index]) : next;}];},
   useRef: (initial: unknown) => harness.refs[harness.refIndex++] ??= {current: initial},
   useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const index = harness.effectIndex++; const old = harness.effects[index]; if (old?.deps && deps && deps.length === old.deps.length && deps.every((value, at) => Object.is(value, old.deps![at]))) return; harness.pending.push(() => {old?.cleanup?.(); harness.effects[index] = {deps, cleanup: effect() || undefined};});},
 }));
-vi.mock('../src/client-context', () => ({useClient: () => harness.client, useShellCapabilities: () => undefined}));
+vi.mock('../src/client-context', async original => ({...await original<typeof import('../src/client-context')>(), useActiveDevice: () => harness.device, useClient: () => harness.client, useShellCapabilities: () => undefined}));
 type Element = ReactElement<Record<string, any>>;
 function nodes(node: ReactNode): Element[] {if (Array.isArray(node)) return node.flatMap(nodes); if (!isValidElement<Record<string, any>>(node)) return []; return [node, ...nodes(node.props.children), ...nodes(node.props.footer)];}
 function render() {
@@ -36,8 +37,24 @@ const chosen = (path: string) => ({kind: 'folderChosen', folder: {token: '000000
 beforeEach(() => {
   for (const effect of harness.effects) effect.cleanup?.();
   harness.state = []; harness.refs = []; harness.effects = []; harness.pending = []; vi.clearAllMocks();
+  harness.device = {id: 'local', isRemote: false, name: '这台电脑', mode: 'full', capabilities: []};
   harness.client.directory.mockImplementation(async (request: DirectoryRequest) => request.type === 'choose' ? chosen(request.path)
     : request.path === '/root/b' ? listing('/root/b', ['child'], '/root') : listing('/root', ['a', 'b']));
+});
+// devices-ui-2 4.3: the title says whose folders these are.
+it('names the remote device in the title, and keeps this computer\'s title as it was', async () => {
+  const title = () => render().all.find(node => node.props.open && typeof node.props.title === 'string')?.props.title;
+  void render().pickers.multiple(); await settle();
+  expect(title()).toBe('添加目录');
+  for (const effect of harness.effects) effect.cleanup?.();
+  harness.state = []; harness.refs = []; harness.effects = []; harness.pending = [];
+  harness.device = {id: 'a', isRemote: true, name: 'Linux 主机', mode: 'full', capabilities: []};
+  void render().pickers.multiple(); await settle();
+  expect(title()).toBe('添加「Linux 主机」上的文件夹');
+  for (const effect of harness.effects) effect.cleanup?.();
+  harness.state = []; harness.refs = []; harness.effects = []; harness.pending = [];
+  void render().pickers.single(); await settle();
+  expect(title()).toBe('选择「Linux 主机」上的文件夹');
 });
 it('keeps multi-selection across browsing and admits exactly the selected directories', async () => {
   const result = render().pickers.multiple(); render(); let ui = await settle();
