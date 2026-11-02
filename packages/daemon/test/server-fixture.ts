@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { vi } from 'vitest';
-import { eventSchema, replyEnvelopeSchema, serverInfoSchema, type Request, type Event, type ReplyEnvelope, type ServerInfo } from '@vonvon/protocol';
+import { eventSchema, PROTOCOL_VERSION, replyEnvelopeSchema, serverInfoSchema, type Request, type Event, type ReplyEnvelope, type ServerInfo } from '@vonvon/protocol';
 import type { AdminService } from '../src/admin/service';
 import type { ShutdownControl } from '../src/host/lifecycle';
 import type { EnvironmentServiceOptions } from '../src/environment/service';
@@ -40,17 +40,19 @@ export function fakeService(overrides: Partial<AdminService> = {}): AdminService
     ...overrides,
   };
 }
+/** The daemon start every fixture reports in daemonStatus (devices 4.7). */
+export const FIXTURE_STARTED_AT = 1_700_000_000_000;
 export async function startFixture(service = fakeService(), environmentOptions?: EnvironmentServiceOptions, serviceActions: StartApiOptions['serviceActions'] = noServiceManager) {
   const home = await mkdtemp(join(tmpdir(), 'vonvon-api-'));
   testHome.current = home;
   const { startApi } = await import('../src/server/http');
   const control: ShutdownControl = { requested: false, waitForRequest: () => new Promise<void>(() => {}), dispose: () => {}, requestStop: vi.fn(), requestRestart: vi.fn(), completeShutdown: release => release() };
-  const api = await startApi({ service, port: 0, control, environmentOptions, serviceActions });
+  const api = await startApi({ service, port: 0, control, environmentOptions, serviceActions, startedAt: FIXTURE_STARTED_AT });
   const credential = (await readFile(join(home, 'local-credential'), 'utf8')).trim();
   return { api, home, credential, control, close: async () => { await api.close(); await rm(home, { recursive: true, force: true }); } };
 }
 export type Frame = Event | ReplyEnvelope | ServerInfo;
-export async function socketClient(port: number, credential?: string, version = 1, timeoutMs = 3000) {
+export async function socketClient(port: number, credential?: string, version: number = PROTOCOL_VERSION, timeoutMs = 3000) {
   const socket = new WebSocket(`ws://127.0.0.1:${port}`);
   const frames: Frame[] = [];
   const waiters = new Set<() => void>();
@@ -58,7 +60,9 @@ export async function socketClient(port: number, credential?: string, version = 
     const raw: unknown = JSON.parse(bytes.toString());
     const hello = serverInfoSchema.safeParse(raw);
     const event = eventSchema.safeParse(raw);
-    frames.push(hello.success ? hello.data : event.success ? event.data : replyEnvelopeSchema.parse(raw));
+    // A protocol 1 peer gets the old shapes (devices 4.5), which today's strict schemas may refuse: kept raw for the test to look at.
+    const reply = hello.success || event.success ? undefined : version === 1 ? replyEnvelopeSchema.safeParse(raw).data ?? raw as ReplyEnvelope : replyEnvelopeSchema.parse(raw);
+    frames.push(hello.success ? hello.data : event.success ? event.data : reply as ReplyEnvelope);
     for (const wake of waiters) wake();
   });
   await new Promise<void>((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });

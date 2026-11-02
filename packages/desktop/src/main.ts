@@ -42,7 +42,7 @@ export function desktopResources(appPath: string, packaged: boolean): DesktopRes
 }
 
 function startupMessage(error: unknown): string {
-  if (error instanceof AttachError) return `${error.message}请先启动 daemon，再重新打开 Vonvon Bot。`;
+  if (error instanceof AttachError) return error.reason === 'protocol' ? error.message : `${error.message}请先启动 daemon，再重新打开 Vonvon Bot。`;
   if (error instanceof Error) return error.message;
   return 'Vonvon Bot 没能打开桌面窗口。请检查 daemon，再重新打开应用。';
 }
@@ -509,7 +509,7 @@ export async function startDesktop(): Promise<void> {
             throw error;
           }
           if (!(error instanceof AttachError) ||
-              (error.reason !== 'owner' && error.reason !== 'connection' && error.reason !== 'identity')) throw error;
+              (error.reason !== 'owner' && error.reason !== 'connection' && error.reason !== 'identity' && error.reason !== 'protocol')) throw error;
           await unlessStopped(new Promise(resolve => setTimeout(resolve, 250)));
           continue;
         }

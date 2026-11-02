@@ -1,14 +1,31 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import type { Server } from 'node:http';
+import type { IncomingMessage, Server } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
-import { helloSchema, requestSchema, type ErrorEnvelope, type Event, type Hello, type Request, type Response, type ServerInfo } from '@vonvon/protocol';
+import { helloSchema, PROTOCOL_VERSION, requestSchema, type ErrorEnvelope, type Event, type Hello, type Request, type Response, type Scope, type ServerInfo } from '@vonvon/protocol';
 import { getRpcErrorCode } from './errors';
 import type { JobPeer } from './jobs';
+import type { Principal } from './principal';
 
 export interface Peer extends JobPeer {
   /** What the client said it is in its hello; every request comes after it. */
   readonly clientKind?: Hello['clientKind'];
+  /** Who the connection acts as (devices 5.1), set by the hello; `protocolVersion` is the hello's, not the daemon's. */
+  readonly principal: Principal; readonly protocolVersion: number;
+  /** What admin.negotiate recorded, empty and null until then; `negotiate` answers false when this connection already did. */
+  readonly capabilities: readonly string[]; readonly scope: Scope | null; readonly negotiated: boolean;
+  negotiate(capabilities: readonly string[], scope: Scope | null): boolean;
+  /** The remote end, `ip:port` (`[ip]:port` for IPv6). */
+  readonly address: string;
   send(value: Response | ErrorEnvelope): void;
+}
+export const formatAddress = (host: string | undefined, port: number | undefined): string =>
+  `${host?.includes(':') ? `[${host}]` : host ?? 'unknown'}:${port ?? 0}`;
+/** devices 4.5: a 0.8 client parses strictly, so it does not get the startedAt protocol 2 added, nor the device event it has no schema for. */
+function forProtocol1(value: Response | ErrorEnvelope | Event | ServerInfo): unknown {
+  if (value.type === 'event' && value.event === 'device') return undefined;
+  if (value.type !== 'response' || value.method !== 'admin' || value.payload.kind !== 'daemonStatus') return value;
+  const { startedAt: _added, ...status } = value.payload.status;
+  return { ...value, payload: { ...value.payload, status } };
 }
 function loopbackHost(host: string | undefined): boolean {
   return !!host && /^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i.test(host);
@@ -18,7 +35,8 @@ function loopbackOrigin(origin: string | undefined): boolean {
   try { const url = new URL(origin); return (url.protocol === 'http:' || url.protocol === 'https:') && loopbackHost(url.host); }
   catch { return false; }
 }
-export function createSocketServer(options: { server: Server; credential: string; info: ServerInfo; request: (peer: Peer, request: Request) => Promise<void>; control?: (peer: Peer, request: Request) => Promise<void>; detached: (peer: Peer) => void }) {
+/** `info` answers the hello: the server info shape that peer's protocol reads (devices 4.5). */
+export function createSocketServer(options: { server: Server; credential: string; info: (peer: Peer) => ServerInfo; request: (peer: Peer, request: Request) => Promise<void>; control?: (peer: Peer, request: Request) => Promise<void>; detached: (peer: Peer) => void }) {
   const sockets = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 4_000_000 });
   const peers = new Set<Peer>();
   const accepted = new Set<Promise<void>>();
@@ -32,19 +50,35 @@ export function createSocketServer(options: { server: Server; credential: string
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
     }
-    sockets.handleUpgrade(request, socket, head, ws => sockets.emit('connection', ws));
+    sockets.handleUpgrade(request, socket, head, ws => sockets.emit('connection', ws, request));
   });
-  sockets.on('connection', socket => {
+  sockets.on('connection', (socket: WebSocket, upgrade?: IncomingMessage) => {
     if (state === 'released') { socket.close(1001, 'server_shutdown'); return; }
     let authenticated = false;
     let detached = false;
     let clientKind: Hello['clientKind'] | undefined;
+    let principal: Principal = { kind: 'unpaired' };
+    let protocolVersion = 0;
+    let negotiated: { capabilities: readonly string[]; scope: Scope | null } | undefined;
     const send = (value: Response | ErrorEnvelope | Event | ServerInfo): void => {
       if (socket.readyState !== WebSocket.OPEN) return;
       if (socket.bufferedAmount > 8_000_000) { socket.close(1013, 'slow_consumer'); detach(); return; }
-      socket.send(JSON.stringify(value), error => { if (error) { socket.terminate(); detach(); } });
+      const frame = protocolVersion === 1 ? forProtocol1(value) : value;
+      if (frame === undefined) return;
+      socket.send(JSON.stringify(frame), error => { if (error) { socket.terminate(); detach(); } });
     };
-    const peer: Peer = { id: randomUUID(), get open() { return authenticated && !detached && socket.readyState === WebSocket.OPEN; }, get clientKind() { return clientKind; }, send, event: send };
+    const peer: Peer = {
+      id: randomUUID(), get open() { return authenticated && !detached && socket.readyState === WebSocket.OPEN; }, get clientKind() { return clientKind; },
+      get principal() { return principal; }, get protocolVersion() { return protocolVersion; },
+      get capabilities() { return negotiated?.capabilities ?? []; }, get scope() { return negotiated?.scope ?? null; }, get negotiated() { return negotiated !== undefined; },
+      address: formatAddress(upgrade?.socket.remoteAddress, upgrade?.socket.remotePort),
+      negotiate(capabilities, scope) {
+        if (negotiated) return false;
+        negotiated = { capabilities: [...capabilities], scope };
+        return true;
+      },
+      send, event: send,
+    };
     const detach = (): void => {
       if (detached) return;
       detached = true;
@@ -76,9 +110,11 @@ export function createSocketServer(options: { server: Server; credential: string
         if (!hello.success || supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) { socket.close(4401, 'unauthorized'); return; }
         authenticated = true;
         clientKind = hello.data.clientKind;
+        protocolVersion = hello.data.protocolVersion;
+        principal = protocolVersion === PROTOCOL_VERSION ? { kind: 'owner', via: 'local' } : { kind: 'maintenance', protocolVersion, inner: 'owner:local' };
         clearTimeout(deadline);
         peers.add(peer);
-        send(options.info);
+        send(options.info(peer));
         return;
       }
       if (state === 'draining') {
