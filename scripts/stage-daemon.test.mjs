@@ -284,7 +284,14 @@ test('stageDaemon ships a minified CLI with the workspace packages bundled from 
     try {
       assert.equal(started.status, 0, started.stdout + started.stderr);
       for (const query of ['vonvon-stage', '~/Projects/', ...process.platform === 'win32' ? ['~\\Projects\\'] : []]) {
-        const found = vonvon('dir', 'suggest', query, '--json');
+        // A loaded CI runner can take longer than the 1.5 s search budget just to start the worker's node: that comes back
+        // empty and truncated, or as a timeout. The bug this guards failed every attempt with directory_unreadable.
+        let found;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          found = vonvon('dir', 'suggest', query, '--json');
+          const slow = found.status === 0 ? (({entries, truncated}) => truncated && !entries.length)(JSON.parse(found.stdout)) : /超时|directory_timeout/.test(found.stdout + found.stderr);
+          if (!slow) break;
+        }
         assert.equal(found.status, 0, `${query}: ${found.stdout}${found.stderr}`);
         assert.ok(JSON.parse(found.stdout).entries.some(entry => entry.name === 'vonvon-stage-target'), `${query}: ${found.stdout}`);
       }
