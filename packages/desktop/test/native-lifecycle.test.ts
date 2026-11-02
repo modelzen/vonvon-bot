@@ -10,7 +10,8 @@ import type { Registration, VerifiedDaemon } from '../src/daemon-manager.js';
 const fake = vi.hoisted(() => ({
   app: undefined as unknown,
   window: undefined as unknown,
-  bridge: { requestQuit: vi.fn(), publishUpdate: vi.fn(), replaceOwner: vi.fn(async () => {}), dispose: vi.fn(async () => {}) },
+  // deferLocalLost: false while the page shows this computer, as in the real bridge (devices-ui-1a 4.5).
+  bridge: { requestQuit: vi.fn(), publishUpdate: vi.fn(), replaceOwner: vi.fn(async () => {}), dispose: vi.fn(async () => {}), deferLocalLost: vi.fn(() => false) },
   owner: { dispose: vi.fn(async () => {}) },
   attach: vi.fn(),
   ready: vi.fn(async (): Promise<VerifiedDaemon> => ({ pid: 42, startedAt: 'initial', listen: '127.0.0.1:42345' })),
@@ -83,6 +84,13 @@ vi.mock('electron', async () => {
   return {
     app,
     autoUpdater: new MockUpdater(),
+    // devices-ui-1a 4.8: main.ts seals device keys with safeStorage and wakes remote connections on resume.
+    powerMonitor: new EventEmitter(),
+    safeStorage: {
+      isEncryptionAvailable: () => true,
+      encryptString: (plain: string) => Buffer.from(`sealed:${plain}`),
+      decryptString: (sealed: Buffer) => sealed.toString().replace(/^sealed:/, ''),
+    },
     BrowserWindow: MockWindow,
     dialog: { showErrorBox: vi.fn(), showMessageBoxSync: vi.fn(), showMessageBox: vi.fn(async () => ({ response: 0 })) },
     Menu: { buildFromTemplate: vi.fn((items: unknown) => items), setApplicationMenu: vi.fn() },
@@ -121,7 +129,8 @@ import { desktopFullScreenChannel } from '../src/ipc-contract.js';
 import { changeLoginItem, repairServiceAtStartup } from '../src/login-item.js';
 import { AttachError } from '../src/attach.js';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
-import { autoUpdater, dialog, Menu, net } from 'electron';
+import { autoUpdater, dialog, Menu, net, powerMonitor } from 'electron';
+import type { DeviceConnections } from '../src/connections.js';
 import { createDesktopTray } from '../src/tray.js';
 
 type MockApp = EventEmitter & { dock: typeof fake.dock | undefined; requestSingleInstanceLock: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; getAppPath: ReturnType<typeof vi.fn> };
@@ -147,6 +156,7 @@ beforeEach(async () => {
   vi.mocked(autoUpdater.checkForUpdates).mockReset();
   vi.mocked(autoUpdater.quitAndInstall).mockReset();
   autoUpdater.removeAllListeners();
+  powerMonitor.removeAllListeners();
   vi.mocked(dialog.showErrorBox).mockClear();
   vi.mocked(dialog.showMessageBox).mockClear();
   vi.mocked(dialog.showMessageBoxSync).mockClear();
@@ -180,6 +190,7 @@ beforeEach(async () => {
   fake.bridge.requestQuit.mockClear();
   fake.bridge.dispose.mockClear().mockResolvedValue(undefined);
   fake.bridge.replaceOwner.mockClear().mockResolvedValue(undefined);
+  fake.bridge.deferLocalLost.mockReset().mockReturnValue(false);
   fake.owner.dispose.mockClear();
   fake.tray.destroy.mockClear();
   fake.tray.setUpdate.mockClear();
@@ -1309,5 +1320,39 @@ describe('automatic update checks and a stalled install', () => {
       expect(fake.bridge.publishUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'available', latest: '0.6.0' }));
       expect(fake.tray.setUpdate).toHaveBeenLastCalledWith('有新版本 0.6.0');
     } finally { vi.useRealTimers(); }
+  });
+});
+
+describe('remote devices (devices-ui-1a 4.8)', () => {
+  const previous = { pid: 42, startedAt: 'initial', listen: '127.0.0.1:42345' };
+  const devices = (): DeviceConnections => fake.install.mock.lastCall?.[4] as DeviceConnections;
+
+  it("hands the bridge this computer's device list, wakes it on resume and closes it before the bridge on quit", async () => {
+    expect(devices().state()).toMatchObject({
+      registry: 'ok', secureStorage: true, client: { version: '0.1.0' },
+      active: { id: 'local', phase: 'ready' }, devices: [{ id: 'local', current: true, status: 'online' }],
+    });
+    const wake = vi.spyOn(devices(), 'wake');
+    powerMonitor.emit('resume');
+    expect(wake).toHaveBeenCalledOnce();
+    const order: string[] = [];
+    const close = devices().dispose;
+    vi.spyOn(devices(), 'dispose').mockImplementation(async () => { order.push('devices'); await close(); });
+    fake.bridge.dispose.mockImplementationOnce(async () => { order.push('bridge'); });
+    await actions.confirmQuit();
+    expect(order).toEqual(['devices', 'bridge']);
+    // Nothing reconnects after quit.
+    powerMonitor.emit('resume');
+    expect(wake).toHaveBeenCalledOnce();
+    expect(powerMonitor.listenerCount('resume')).toBe(0);
+  });
+
+  it('leaves a lost local connection for the switch back while a remote device is shown, instead of a dialog', async () => {
+    fake.bridge.deferLocalLost.mockReturnValue(true);
+    fake.attach.mockRejectedValue(new AttachError('root'));
+    expect(actions.recoverConnection(previous)).toBe(true);
+    await vi.waitFor(() => expect(fake.bridge.deferLocalLost).toHaveBeenCalledOnce());
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+    expect(window.destroyed).toBe(false);
   });
 });

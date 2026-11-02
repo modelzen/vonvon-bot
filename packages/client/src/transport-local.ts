@@ -5,28 +5,32 @@ import { promisify } from "node:util";
 import WebSocket from "ws";
 import { helloSchema, PROTOCOL_VERSION, serverInfoSchema, type ServerInfo } from "@vonvon/protocol";
 import { z } from "zod";
-import { createClient, type ClientConnection, type VonvonClient } from "./client.js";
+import { ConnectionError, createClient, type ClientConnection, type VonvonClient } from "./client.js";
 
 const run = promisify(execFile);
 const statusSchema = z.object({
   running: z.literal(true), listen: z.string().regex(/^127\.0\.0\.1:\d{1,5}$/),
 });
 
-/** devices 4.1: the daemon's server info comes back too; a different protocol is the caller's to judge (devices 4.5). */
-export async function connectLocal(options: { home: string; cliEntry: string }): Promise<{ client: VonvonClient; serverInfo: ServerInfo }> {
+/**
+ * devices 4.1: the daemon's server info comes back too; a different protocol is the caller's to judge (devices 4.5).
+ * `credential`: what the hello carries instead of `local-credential`, which is then not read: a Bot session's token (devices 5.3).
+ * A daemon that closes the socket during the handshake rejects with a ConnectionError that has its close code and reason.
+ */
+export async function connectLocal(options: { home: string; cliEntry: string; credential?: string }): Promise<{ client: VonvonClient; serverInfo: ServerInfo }> {
   const { stdout } = await run(process.execPath, [options.cliEntry, "daemon", "status", "--json"], {
     // The discovery reads the files: `daemon status` asks a running daemon otherwise, through this very function (cli-8-machine).
     env: { ...process.env, VONVON_HOME: options.home, VONVON_STATUS_FROM_FILES: "1" }, timeout: 10_000,
   });
   const status = statusSchema.parse(JSON.parse(stdout));
-  const credential = (await readFile(join(options.home, "local-credential"), "utf8")).trim();
-  if (!/^[a-f0-9]{64}$/i.test(credential)) throw new Error("Invalid local daemon credential");
+  const credential = options.credential ?? (await readFile(join(options.home, "local-credential"), "utf8")).trim();
+  if (options.credential === undefined && !/^[a-f0-9]{64}$/i.test(credential)) throw new Error("Invalid local daemon credential");
   const socket = new WebSocket(`ws://${status.listen}`, { perMessageDeflate: false });
   try {
     const serverInfo = await new Promise<ServerInfo>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("Daemon handshake timed out")), 5_000);
       const fail = (error: Error) => { clearTimeout(timer); reject(error); };
-      const closed = () => fail(new Error("Daemon closed during handshake"));
+      const closed = (code: number, reason: Buffer) => fail(new ConnectionError(new Error("Daemon closed during handshake"), { code, reason: reason.toString() }));
       socket.once("error", fail);
       socket.once("close", closed);
       socket.once("open", () => {

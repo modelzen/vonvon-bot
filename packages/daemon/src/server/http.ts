@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { PROTOCOL_VERSION, serverInfoV1Schema, serverInfoV2Schema, type Event, type Request, type Response } from '@vonvon/protocol';
+import { PROTOCOL_VERSION, serverInfoV1Schema, serverInfoV2Schema, type Request, type Response } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
 import type { ShutdownControl } from '../host/lifecycle';
 import { createServiceActionLauncher } from '../host/service-action';
@@ -10,12 +10,14 @@ import { paths } from '../config/paths';
 import { bridgeVersion } from '../core/version';
 import { createDirectoryBrowser } from './directory-browser';
 import { memoryRpc } from './rpc/memory';
+import { memoryStoreFor } from '../admin/memory';
+import { SESSION_TURN_ENDED } from '../agent/entry/registry';
 import { contextPreviewRpc } from './rpc/context-preview';
 import { scheduleRpc } from './rpc/schedule';
 import { Jobs } from './jobs';
 import { LogFollowers } from './logs';
 import { createSnapshotStore, hostPlatform, type SnapshotStore } from './snapshot';
-import { createSocketServer, type Peer } from './ws';
+import { createSocketServer, type Peer, type PeerView } from './ws';
 import { createPeerHub } from './peer-hub';
 import type { SecureDeps } from './secure-socket';
 import type { RpcOutcome } from './rpc';
@@ -28,8 +30,10 @@ import { machineRpc } from './rpc/machine';
 import type {BridgeImporter} from '../import/bridge/transaction';
 import { settingsRpc } from './rpc/settings';
 import { createLocalIdentity } from './local-credential';
-import { getRpcErrorCode, RpcError } from './errors';
-import { authorize } from './authz';
+import { errorEnvelope, RpcError } from './errors';
+import { authorize, MAINTENANCE_STRIKES, type AuthzDeps } from './authz';
+import { filterSnapshot, scopedOwner } from './snapshot-filter';
+import { createSessionTokens, type SessionTokens } from '../host/session-tokens';
 import { principalWire } from './principal';
 import { deviceRpc } from './rpc/device';
 import { deviceKeyPair, holdDevice, loadOrCreateDevice } from '../remote/device';
@@ -66,20 +70,53 @@ export interface DaemonApi extends ApiLifetime {
 /** Test seams for the login-time service: the platform and spawn of the helper launcher, and the manager read. */
 type ServiceSeams = Pick<Parameters<typeof createServiceActionLauncher>[0], 'platform' | 'spawn'> & Pick<Parameters<typeof createSnapshotStore>[0], 'readService'>;
 
-/** devices 4.5: what this daemon reports in a v2 server info; D3 adds `remote`, D4a `session-scope`. A daemon that updates
- * itself says so (devices 6.5, devices-ui-2 4.11); `update.bundled` is U4's. */
-/** devices 4.5: a connection of another protocol (a maintenance one) gets no snapshot; it parses it strictly. */
-export const snapshotShape = (event: Event) => (peer: Pick<Peer, 'principal'>): Event | null => peer.principal.kind === 'maintenance' ? null : event;
+/**
+ * devices 4.5: what this daemon reports in a v2 server info; D3 adds `remote`. `session-scope`: Bot sessions' tokens and
+ * `--scope` (D4a). A daemon that updates itself says so (devices 6.5, devices-ui-2 4.11); `update.bundled` is U4's.
+ */
 export const capabilities = (distribution?: string): string[] => [
-  'device', ...distribution === 'standalone' ? ['update.standalone'] : distribution === 'global-npm' ? ['update.npm'] : [],
+  'device', 'session-scope', ...distribution === 'standalone' ? ['update.standalone'] : distribution === 'global-npm' ? ['update.npm'] : [],
 ];
 
-/** `startedAt`: when this daemon process started (epoch ms), in every daemonStatus reply (devices 4.7). */
-export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number; distribution?: () => Promise<{ kind: string }> }): Promise<DaemonApi> {
+/**
+ * devices-4a 4.7: what each connection gets of a published event. The owner all of it, its snapshot cut to its `--scope`
+ * if it gave one; a Bot session whose token still stands, once it negotiated its scope, its own part of the snapshot and
+ * nothing else; a connection of another protocol (the maintenance subset) none: a protocol 1 client parses a snapshot
+ * strictly, and a `windows` platform would break it (devices-ui-2 4.5).
+ */
+export const viewFor = (tokens: Pick<SessionTokens, 'active'>): PeerView => (peer, event) => {
+  const principal = peer.principal;
+  if (principal.kind === 'owner') return peer.scope && event.event === 'snapshot' ? { ...event, payload: filterSnapshot(event.payload, scopedOwner(peer.scope), peer.scope) } : event;
+  if (principal.kind !== 'bot-session' || !tokens.active(principal.sessionId)) return null;
+  if (peer.negotiated && event.event === 'snapshot') return { ...event, payload: filterSnapshot(event.payload, principal, peer.scope) };
+  return null;
+};
+
+/**
+ * `startedAt`: when this daemon process started (epoch ms), in every daemonStatus reply (devices 4.7). `sessionTokens`: the
+ * Bot sessions' tokens the host issues to its bots (devices-4a 4.1), which a session's hello is checked against.
+ * `askBot`: a session's Bot process, asked about a ★ request (devices-4b 4.3); without it those are refused. `distribution`:
+ * how this daemon was installed, for serverInfo's `update.*` (devices-ui-2 4.11).
+ */
+export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number; sessionTokens?: SessionTokens; askBot?: AuthzDeps['askBot']; distribution?: () => Promise<{ kind: string }> }): Promise<DaemonApi> {
   const startedAt = options.startedAt ?? Math.round(performance.timeOrigin);
   // How this daemon was installed, read once (it may ask npm) and kept; until it is known the server info says nothing of updates.
   let distribution: string | undefined;
   void (options.distribution ?? runtimeDistribution)().then(found => { distribution = found.kind; }, () => undefined);
+  const sessionTokens = options.sessionTokens ?? createSessionTokens();
+  /** What the bot-session checks read: a bot's bound groups and their sessions, from its files (the snapshot can be 5 s old). */
+  const authzDeps: AuthzDeps = {
+    groupsOf: async appId => (await options.service.listProjects(appId))
+      .map(project => ({ name: project.name, chatId: project.chatId, ...(project.projectId ? { projectId: project.projectId } : {}) })),
+    threadsOf: async (appId, projectName) => (await options.service.listSessions(appId, projectName)).map(session => session.threadId),
+    sessionActive: sessionId => sessionTokens.active(sessionId, true),
+    ...(options.askBot ? { askBot: options.askBot } : {}),
+    memoryItem: async (scope, itemId) => (await memoryStoreFor(scope)).get(itemId),
+  };
+  /** devices 5.3: a session that ends (revoked, its bot's process gone, idle) closes the connections made with its token. */
+  let stopEnding: (() => void) | undefined;
+  /** Requests refused in a row to a connection of another protocol (devices 4.7: 20 close it). */
+  const strikes = new WeakMap<Peer, number>();
   let acquiredServer: ReturnType<typeof createServer> | undefined;
   let acquiredJobs: Jobs | undefined;
   let acquiredLogs: LogFollowers | undefined;
@@ -124,6 +161,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
     if (released) return released;
     let socketCleanup: Promise<void>;
     let listenerClosed: Promise<void>;
+    stopEnding?.();
     released = Promise.resolve().then(async () => {
       await listenerClosed;
       const results = await Promise.allSettled([socketCleanup, Promise.resolve().then(() => acquiredClients?.close())]);
@@ -187,25 +225,40 @@ export async function startApi(options: { service: AdminService; port?: number; 
         });
       } finally { if (outcome.kind === 'shutdown' && !acted) outcome.cancel?.(); }
     }
+    async function admitted(peer: Peer, request: Request) {
+      const decision = await authorize(peer, request, authzDeps);
+      if (peer.principal.kind === 'maintenance') strikes.set(peer, decision.ok ? 0 : (strikes.get(peer) ?? 0) + 1);
+      if (!decision.ok) throw new RpcError(decision.code, decision.message, decision.details);
+      return decision;
+    }
     async function dispatch(peer: Peer, request: Request): Promise<void> {
       if (!snapshots) throw new Error('Snapshot store is not ready');
-      const decision = await authorize(peer, request);
-      if (!decision.ok) throw new RpcError(decision.code, decision.message);
+      const decision = await admitted(peer, request);
+      // A Bot session's reply holds only its bot and its groups (devices-4a 4.5, 4.7).
+      const shown = decision.narrow ?? (<T>(payload: T): T => payload);
       const { id } = request;
       switch (request.method) {
-        case 'snapshot': peer.send({ type: 'response', id, method: 'snapshot', payload: snapshots.current() }); return;
+        case 'snapshot': peer.send({ type: 'response', id, method: 'snapshot', payload: shown(snapshots.current()) }); return;
         case 'admin': return finish(peer, await adminRpc(options.service, follow => logs.follow(peer, follow), request.payload, { startedAt, peer }), payload => ({ type: 'response', id, method: 'admin', payload }));
         case 'device': return finish(peer, await deviceRpc({ home, identity, clients, invites }, peer, request.payload), payload => ({ type: 'response', id, method: 'device', payload }));
-        case 'settings': return finish(peer, await settingsRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'settings', payload }));
-        case 'collaboration': return finish(peer, await collaborationRpc(options.service, directory, request.payload), payload => ({ type: 'response', id, method: 'collaboration', payload }));
+        case 'settings': return finish(peer, await settingsRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'settings', payload: shown(payload) }));
+        case 'collaboration': return finish(peer, await collaborationRpc(options.service, directory, request.payload), payload => ({ type: 'response', id, method: 'collaboration', payload: shown(payload) }));
         case 'environment': return finish(peer, await environmentRpc(options.service, jobs, peer, request.payload, environment), payload => ({ type: 'response', id, method: 'environment', payload }));
         case 'machine': return finish(peer, await machineRpc(options.service, options.control, port, request.payload, { launcher: serviceActions, snapshots, root: home, bridgeImport: options.bridgeImport, environment }), payload => ({ type: 'response', id, method: 'machine', payload }));
-        case 'command': return finish(peer, await commandRpc({ service: options.service, jobs, peer, directory, snapshots, control: options.control, port }, request.payload), payload => ({ type: 'response', id, method: 'command', payload }));
-        case 'library': return finish(peer, await libraryRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'library', payload }));
-        case 'memory': return finish(peer, await memoryRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'memory', payload }));
+        case 'command': return finish(peer, await commandRpc({ service: options.service, jobs, peer, directory, snapshots, control: options.control, port }, request.payload), payload => ({ type: 'response', id, method: 'command', payload: shown(payload) }));
+        case 'library': return finish(peer, await libraryRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'library', payload: shown(payload) }));
+        // devices-4b 4.5: a Bot session's write lands where its Bot process said, as its turn's person.
+        case 'memory': return finish(peer, await memoryRpc(options.service, request.payload, {
+          origin: peer.clientKind === 'cli' ? 'cli' : 'ui', session: peer.principal.kind === 'bot-session', ...(decision.grant?.memory ? { landing: decision.grant.memory } : {}),
+        }), payload => ({ type: 'response', id, method: 'memory', payload }));
         case 'contextPreview': return finish(peer, await contextPreviewRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'contextPreview', payload }));
-        // The client's hello says who asks: the task records it as made from the desktop or the terminal.
-        case 'schedule': return finish(peer, await scheduleRpc(options.service, peer.clientKind, request.payload), payload => ({ type: 'response', id, method: 'schedule', payload }));
+        // The owner's hello says who asks: the task records it as made from the desktop or the terminal. A Bot session's
+        // runs as the turn its Bot process named (devices-4b 4.4), and never as the owner.
+        case 'schedule': {
+          const who = peer.principal.kind !== 'bot-session' ? peer.clientKind : decision.grant?.actor;
+          if (!who) throw new RpcError('permission_denied', SESSION_TURN_ENDED);
+          return finish(peer, await scheduleRpc(options.service, who, request.payload), payload => ({ type: 'response', id, method: 'schedule', payload: shown(payload) }));
+        }
         case 'directory': {
           if (request.payload.type === 'list') { peer.send({ type: 'response', id, method: 'directory', payload: await directory.list(request.payload.path) }); return; }
           if (request.payload.type === 'suggest') { peer.send({ type: 'response', id, method: 'directory', payload: await directory.suggest(request.payload.query) }); return; }
@@ -219,16 +272,20 @@ export async function startApi(options: { service: AdminService; port?: number; 
       try { await dispatch(peer, request); }
       catch (error) {
         if (!snapshots) throw error;
-        await snapshots.rebuild(() => peer.send({ type: 'error', id: request.id, code: getRpcErrorCode(error), message: error instanceof Error ? error.message : '操作失败。' }));
+        await snapshots.rebuild(() => peer.send(errorEnvelope(request.id, error)));
+        // devices 4.7: a client of another protocol that keeps asking for what it cannot have is closed.
+        if ((strikes.get(peer) ?? 0) >= MAINTENANCE_STRIKES) peer.close(4001, 'protocol_mismatch');
       }
     }
+    /** A draining daemon still answers DRAIN_KINDS (devices 4.7), to whoever the table lets ask them. */
     async function control(peer: Peer, request: Request): Promise<void> {
-      if (request.method === 'machine' && request.payload.type === 'stopHost') {
+      await admitted(peer, request);
+      if (request.method === 'machine' && request.payload.type === 'coreUpdateStatus') {
+        peer.send({ type: 'response', id: request.id, method: 'machine', payload: { type: 'coreUpdateStatus', status: options.service.updateStatus() } });
+      } else if (request.method === 'machine' && request.payload.type === 'stopHost') {
         if (!options.control) throw new Error('Host control is unavailable');
         options.control.requestStop();
         peer.send({ type: 'response', id: request.id, method: 'machine', payload: { type: 'done', message: 'daemon 正在停止。' } });
-      } else if (request.method === 'machine' && request.payload.type === 'coreUpdateStatus') {
-        peer.send({ type: 'response', id: request.id, method: 'machine', payload: { type: 'coreUpdateStatus', status: options.service.updateStatus() } });
       } else if (request.method === 'admin' && request.payload.type === 'daemonStatus') {
         const lock = await owner;
         const own = lock?.pid === process.pid && lock.listen === `127.0.0.1:${port}`;
@@ -242,15 +299,13 @@ export async function startApi(options: { service: AdminService; port?: number; 
       ? serverInfoV1Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: 1 })
       : serverInfoV2Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION,
         deviceName: identity.current.name, platform: hostPlatform(), capabilities: capabilities(distribution), principal: principalWire(peer.principal) });
-    // devices-2 4.3: every server's connections in one hub, so a publish, a drain or a release reaches all of them.
-    const hub = createPeerHub({ detached: peer => { jobs.detach(peer); logs.detach(peer); } });
-    acquiredSockets = createSocketServer({ server, credential, info, request, control, hub });
+    // devices-2 4.3: every server's connections in one hub, so a publish, a drain or a release reaches all of them; its
+    // view gives each connection its part of an event whoever publishes it (devices-4a 4.7).
+    const hub = createPeerHub({ detached: peer => { jobs.detach(peer); logs.detach(peer); }, view: viewFor(sessionTokens) });
+    const sockets = acquiredSockets = createSocketServer({ server, credential, sessions: sessionTokens, info, request, control, hub });
     const secure: SecureDeps = { hub, device: deviceKeyPair(identity.current), deviceName: () => identity.current.name, clients, invites, completePairing, info, request, control };
-    snapshots = await createSnapshotStore({ service: options.service, jobs: () => jobs.snapshot(), serviceAction: () => serviceActions.current(), ...(readService ? { readService } : {}), ...(options.diagnostics ? { diagnostics: options.diagnostics } : {}), ...(options.crashes ? { crashes: options.crashes } : {}), publish: snapshot => {
-      // devices 4.5: a connection of another protocol parses the snapshot it may not know (a `windows` platform); it gets none.
-      const event = { type: 'event', event: 'snapshot', payload: snapshot } as const;
-      hub.publish(event, snapshotShape(event));
-    } });
+    stopEnding = sessionTokens.onEnd(sessionId => hub.closeWhere(peer => peer.principal.kind === 'bot-session' && peer.principal.sessionId === sessionId, 4401, 'invalid_session_token'));
+    snapshots = await createSnapshotStore({ service: options.service, jobs: () => jobs.snapshot(), serviceAction: () => serviceActions.current(), ...(readService ? { readService } : {}), ...(options.diagnostics ? { diagnostics: options.diagnostics } : {}), ...(options.crashes ? { crashes: options.crashes } : {}), publish: snapshot => sockets.publish({ type: 'event', event: 'snapshot', payload: snapshot }) });
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', () => { server.off('error', reject); resolve(); }); });
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('API did not bind a TCP port');

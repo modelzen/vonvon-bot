@@ -17,7 +17,7 @@ import { createSecureSocketServer, type SecureSocketServerOptions } from '../src
 import type { Peer } from '../src/server/ws';
 import { Jobs } from '../src/server/jobs';
 import { LogFollowers } from '../src/server/logs';
-import { startFixture } from './server-fixture';
+import { fakeService, socketClient, startFixture } from './server-fixture';
 
 // devices-2 第 5 节: a real http.Server and real ws on 127.0.0.1:0. Timers are injected short, not faked: ws keeps its
 // own. main 必败: there was no secure socket server.
@@ -446,11 +446,106 @@ describe('the daemon', () => {
     const jobs = vi.spyOn(Jobs.prototype, 'detach');
     const logs = vi.spyOn(LogFollowers.prototype, 'detach');
     const connection = await connect({ port, device }, { pairing: { inviteId: invite.id, inviteSecret: invite.secret, clientName: '探针' } });
-    expect(connection.serverInfo).toMatchObject({ principal: 'owner:paired', capabilities: ['device'] });
+    expect(connection.serverInfo).toMatchObject({ principal: 'owner:paired', capabilities: ['device', 'session-scope'] });
     expect(await connection.client.admin({ type: 'daemonStatus' })).toMatchObject({ kind: 'daemonStatus', status: { startedAt: expect.any(Number) } });
     expect(await connection.client.device({ type: 'clients' })).toMatchObject({ kind: 'clients', clients: [{ name: '探针', invitedBy: 'local' }] });
     connection.close();
     await connection.closed;
     await vi.waitFor(() => { expect(jobs).toHaveBeenCalled(); expect(logs).toHaveBeenCalled(); });
+  });
+});
+
+// Merging I3 and D4a (2026-11-02): their loopback behaviour now lives in the hub and the message loop both servers share.
+describe('the daemon, with I3 and D4a', () => {
+  const SESSION = 'ses_0123456789abcdef';
+  async function daemon(service = fakeService()) {
+    const fixture = await startFixture(service);
+    const server = createServer();
+    const secure = fixture.api.secure;
+    if (!secure) throw new Error('startApi gives no secure deps');
+    const remote = createSecureSocketServer({ ...secure, server });
+    const port = await listen(server);
+    cleanup.push(async () => { await remote.close(); await fixture.close(); await new Promise<void>(resolve => server.close(() => resolve())); });
+    const target = { port, device: { publicKeyBase64url: secure.device.publicKey.toString('base64url'), key: secure.device } };
+    const pair = async () => {
+      const clientKey = generateStaticKey().key;
+      const invite = secure.invites.create({ invitedBy: 'local' });
+      return { clientKey, connection: await connect(target, { clientKey, pairing: { inviteId: invite.id, inviteSecret: invite.secret, clientName: '探针' } }) };
+    };
+    const loopback = async (credential: string) => {
+      const client = await socketClient(fixture.api.port, credential);
+      cleanup.push(() => client.close());
+      await client.ready();
+      return client;
+    };
+    const session = () => loopback(fixture.sessionTokens.issue({ appId: 'cli_x', place: 'group', chatId: 'oc_y', sessionId: SESSION }));
+    return { fixture, target, pair, owner: () => loopback(fixture.credential), session };
+  }
+  const closeOf = (socket: WebSocket) => new Promise<[number, string]>(resolve => socket.once('close', (code, reason) => resolve([code, reason.toString()])));
+
+  it('answers a remote peer\'s coreUpdateStatus while draining, through the shared message loop, and closes it 1001 for the rest', async () => {
+    let release = (): void => undefined;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const status = { phase: 'restarting' as const, to: '0.9.1', at: 1 };
+    const { fixture, target, pair } = await daemon(fakeService({ close: () => held, updateStatus: () => status }));
+    const { clientKey, connection } = await pair();
+    const draining = fixture.api.beginDrain();
+    void draining.catch(() => undefined);
+    try {
+      await connection.closed;
+      const client = await raw(target, clientKey);
+      await client.handshake();
+      client.json(hello);
+      expect(await client.read()).toMatchObject({ type: 'serverInfo', principal: 'owner:paired' });
+      client.json({ type: 'request', id: 'u', method: 'machine', payload: { type: 'coreUpdateStatus' } });
+      expect(await client.read()).toEqual({ type: 'response', id: 'u', method: 'machine', payload: { type: 'coreUpdateStatus', status } });
+      client.json({ type: 'request', id: 'c', method: 'machine', payload: { type: 'checkCoreUpdate' } });
+      expect(await client.read()).toEqual({ close: { code: 1001, reason: 'server_shutdown' } });
+      expect(await client.closed).toBe(1001);
+    } finally { release(); await Promise.allSettled([draining]); }
+  });
+
+  it('closes a Bot session\'s connection 4401 through the hub when its token ends, detached at once, and leaves the owner\'s', async () => {
+    const { fixture, pair, owner, session } = await daemon();
+    const { connection } = await pair();
+    const local = await owner();
+    const bot = await session();
+    const jobs = vi.spyOn(Jobs.prototype, 'detach');
+    const closed = closeOf(bot.socket);
+    fixture.sessionTokens.revoke(SESSION);
+    // hub.closeWhere detaches before it closes: no job or log line reaches it while its close frame is on the way
+    expect(jobs).toHaveBeenCalledTimes(1);
+    expect(jobs.mock.calls[0]?.[0]).toMatchObject({ principal: { kind: 'bot-session', sessionId: SESSION } });
+    expect(await closed).toEqual([4401, 'invalid_session_token']);
+    expect(await local.call({ type: 'request', id: 's', method: 'admin', payload: { type: 'daemonStatus' } })).toMatchObject({ type: 'response' });
+    expect(await connection.client.admin({ type: 'daemonStatus' })).toMatchObject({ kind: 'daemonStatus' });
+  });
+
+  it('refuses a Bot session\'s token in a remote hello with 4401: on the channel only the key authorizes', async () => {
+    const { fixture, target, pair } = await daemon();
+    const { clientKey, connection } = await pair();
+    connection.close();
+    await connection.closed;
+    const token = fixture.sessionTokens.issue({ appId: 'cli_x', place: 'group', chatId: 'oc_y', sessionId: SESSION });
+    const client = await raw(target, clientKey);
+    await client.handshake();
+    client.json({ ...hello, credential: token });
+    expect(await client.read()).toEqual({ close: { code: 4401, reason: 'unauthorized' } });
+    expect(await client.closed).toBe(4401);
+    // the token itself is good: the loopback takes it
+    expect(fixture.sessionTokens.resolve(token)).toMatchObject({ sessionId: SESSION });
+  });
+
+  it('gives a pairing\'s device event to the owner and none of it to a Bot session: the hub\'s view, whoever publishes', async () => {
+    const { pair, owner, session } = await daemon();
+    const local = await owner();
+    const bot = await session();
+    const negotiate = { type: 'request', id: 'n', method: 'admin', payload: { type: 'negotiate', capabilities: ['cli'], scope: { bot: 'cli_x', group: 'oc_y' } } } as unknown as Request;
+    expect(await bot.call(negotiate)).toMatchObject({ type: 'response' });
+    await pair();
+    await local.wait(frame => frame.type === 'event' && frame.event === 'device');
+    // replies keep their order on a socket: a device event published to it before this request would be there by now
+    await bot.call({ type: 'request', id: 'after', method: 'admin', payload: { type: 'daemonStatus' } });
+    expect(bot.frames.filter(frame => frame.type === 'event' && frame.event === 'device')).toEqual([]);
   });
 });
