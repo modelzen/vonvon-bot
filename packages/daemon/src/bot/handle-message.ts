@@ -928,9 +928,10 @@ export interface Orchestrator {
   /** The host changed a library project's workspace: this bot's rows of it follow, their groups' sessions archived (admin/library.ts). */
   libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
-  /** Scheduled tasks from the desktop and the terminal, run as the local owner (admin/schedule-commands.ts). */
-  schedule: (via: 'desktop' | 'cli', request: ScheduleRequest) => Promise<ScheduleReply>;
-  /** The same command core for the agent tools (agent/entry/schedule-tools.ts): the actor comes from the turn's grant. */
+  /**
+   * Scheduled tasks through the command core (admin/schedule-commands.ts): the agent tools' actor comes from the turn's
+   * grant (agent/entry/schedule-tools.ts), the wire's is the local owner's or a Bot session's turn.
+   */
   scheduleAs: (actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
   /** The scheduled-task tick (bot/schedule/scheduler.ts), outside admit; bridge.ts starts it once Feishu is connected. */
   scheduler: { start(): Promise<void>; stop(): void; drain(ms: number): Promise<void> };
@@ -9738,18 +9739,11 @@ export function createOrchestrator(
   const scheduleCommands = createScheduleCommands({ store: scheduleStore, scheduler, botId: cfg.accounts.app.id, now: () => Date.now(), hostTimeZone });
   let storeLoaded: ReturnType<typeof scheduleStore.load> | undefined;
   const loadStore = (): ReturnType<typeof scheduleStore.load> => (storeLoaded ??= scheduleStore.load());
-  const schedule = async (via: 'desktop' | 'cli', request: ScheduleRequest): Promise<ScheduleReply> => {
-    await loadStore();
-    return scheduleCommands.execute({ kind: 'local', via }, request);
-  };
   const scheduleAs = async (actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply> => {
     await loadStore();
     return scheduleCommands.execute(actor, request);
   };
   /** Not admit: a stopping bot did nothing, so it says so as a refusal, not as a rejection the terminal reads as a result not known. */
-  const admittedSchedule = (via: 'desktop' | 'cli', request: ScheduleRequest): Promise<ScheduleReply> => (
-    shuttingDown ? Promise.resolve(botNotRunning()) : trackTask(schedule(via, request))
-  );
   const admittedScheduleAs = (actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply> => (
     shuttingDown ? Promise.resolve(botNotRunning()) : trackTask(scheduleAs(actor, request))
   );
@@ -9783,7 +9777,6 @@ export function createOrchestrator(
     adminExecute: admit(adminExecute),
     libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
-    schedule: admittedSchedule,
     scheduleAs: admittedScheduleAs,
     scheduler: { start: async () => scheduler.start(await loadStore()), stop: () => scheduler.stop(), drain: ms => scheduler.drain(ms) },
     shutdown,
