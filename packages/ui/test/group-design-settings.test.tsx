@@ -121,13 +121,16 @@ it('shows matching model and Effort count triggers without inline option lists',
   const html = renderToStaticMarkup(<ModelAccessChoices value={{backend: catalog.backend, models: ['actual-a', 'actual-b'], efforts: ['low']}} catalog={catalog} disabled={false} onChange={() => {}}/>);
   expect(html).toContain('思考强度');
   expect(html).toContain('aria-label="配置模型"'); expect(html).toContain('aria-label="配置允许的思考强度"');
-  expect(html).toContain('2 个模型'); expect(html).toContain('新话题默认：实际模型 A');
-  expect(html).toContain('已自定义 · 2 组'); expect(html).toContain('新话题默认：low');
+  expect(html).toContain('2 个模型');
+  expect(html).toContain('已自定义 · 2 组');
   expect(html.match(/gd-model-selection-control/g)).toHaveLength(2);
   expect(html).not.toContain('type="checkbox"');
   expect(html).not.toContain('>实际模型 A<'); expect(html).not.toContain('>实际模型 B<');
   expect(html).not.toContain('无 Effort 模型');
   expect(html).toContain('请选择 实际模型 B 支持的思考强度');
+  const valid = renderToStaticMarkup(<ModelAccessChoices value={{backend: catalog.backend, models: ['actual-a'], efforts: ['low']}} catalog={catalog} disabled={false} onChange={() => {}}/>);
+  expect(valid).toContain('群内通过 /model 切换；新话题默认：实际模型 A · low。');
+  expect(valid).not.toContain('<small>'); expect(valid).not.toContain('普通速度');
 });
 it('rejects missing catalogs and model/Effort combinations with no intersection', () => {
   const value = {backend: catalog.backend, models: ['actual-a', 'actual-b'], efforts: ['low'] as ('low' | 'high')[]};

@@ -16,6 +16,7 @@ import {DecisionFields, providerDecisionProblem} from './DecisionFields';
 export {DecisionFields} from './DecisionFields';
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
 import {CompactModelSelection} from './CompactModelSelection';
+import {modelAccessDefault} from './model-access-draft';
 import {useDecisionCatalogs} from './useDecisionCatalogs';
 import './group-design-settings.css';
 
@@ -200,9 +201,11 @@ export function ModelAccessChoices({value, onChange, catalog, catalogControls, d
   useEffect(() => {onCatalog?.(catalogControls?.loading ? undefined : catalog);}, [catalog, catalogControls?.loading, onCatalog]);
   const problem = modelAccessProblem(value, catalog);
   const status = catalogControls?.loading ? '正在刷新模型和思考强度，已保存的选择仍保留。' : catalogControls?.error;
+  const {id, model, effort} = modelAccessDefault(value, catalog?.backend === value.backend ? catalog.models : []);
+  const defaults = `${model?.displayName ?? id ?? '请选择'}${model?.supportedEfforts.length && effort ? ` · ${effort}` : ''}`;
   return <>
     <CompactModelSelection value={value} onChange={onChange} catalog={catalog} catalogControls={catalogControls} disabled={disabled}/>
-    {status ? <p className="gd-model-compact-note" role="status">{status}</p> : problem && catalog?.state === 'ready' ? <p className="gd-model-compact-note" role="status">{problem}</p> : !problem && <p className="gd-model-compact-note">群内通过 /model 切换；新话题使用默认模型与强度，默认不开启加速。</p>}
+    {status ? <p className="gd-model-compact-note" role="status">{status}</p> : problem && catalog?.state === 'ready' ? <p className="gd-model-compact-note" role="status">{problem}</p> : !problem && <p className="gd-model-compact-note">{`群内通过 /model 切换；新话题默认：${defaults}。`}</p>}
   </>;
 }
 

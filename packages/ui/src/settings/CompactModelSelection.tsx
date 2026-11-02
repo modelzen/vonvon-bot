@@ -3,7 +3,7 @@ import {Popover} from '@base-ui/react/popover';
 import {Check, ChevronDown, RefreshCw, Search, Star, Zap} from 'lucide-react';
 import type {ModelCatalog} from '@vonvon/protocol';
 import type {CatalogControls} from './SettingsPanel';
-import {allowedEfforts, editModelAccess, effortGroups, type ModelAccess, type ModelAccessAction} from './model-access-draft';
+import {allowedEfforts, editModelAccess, effortGroups, modelAccessDefault, type ModelAccess, type ModelAccessAction} from './model-access-draft';
 import './compact-model-selection.css';
 
 function DefaultBadge() {
@@ -29,9 +29,7 @@ export function CompactModelSelection({value, onChange, catalog, catalogControls
   const missing = value.models.filter(id => !models.some(m => m.id === id));
   const rows: ModelCatalog['models'] = [...models, ...missing.map(id => ({id, displayName: id, description: '', hidden: false, isDefault: false, supportedEfforts: [], defaultEffort: ''}))];
   const groups = effortGroups(value, models);
-  const defaultId = value.defaultModel ?? value.models[0];
-  const defaultModel = models.find(m => m.id === defaultId);
-  const defaultEffort = value.defaultEffort ?? defaultModel?.supportedEfforts.find(e => e === defaultModel.defaultEffort && allowedEfforts(value, defaultId!).includes(e)) ?? defaultModel?.supportedEfforts.find(e => allowedEfforts(value, defaultId!).includes(e));
+  const {id: defaultId, effort: defaultEffort} = modelAccessDefault(value, models);
   const limited = models.some(m => value.models.includes(m.id) && m.supportedEfforts.some(e => !allowedEfforts(value, m.id).includes(e)));
   const status = catalogControls?.loading ? '正在刷新，原选择仍保留…' : catalogControls?.error ?? (!ready ? current?.error || '当前仅可查看，已保存的选择仍保留。' : undefined);
   const edit = (action: ModelAccessAction) => {
@@ -42,17 +40,17 @@ export function CompactModelSelection({value, onChange, catalog, catalogControls
   };
   const refresh = (kind: 'models' | 'efforts') => catalogControls && <button type="button" className="gd-model-icon-button" aria-label={kind === 'models' ? '刷新模型' : '刷新思考强度'} title="刷新模型及其支持的能力" disabled={catalogControls.loading} onClick={catalogControls.refresh}><RefreshCw size={15} className={catalogControls.loading ? 'gd-model-refreshing' : ''} aria-hidden="true"/></button>;
   const messages = <>{status && <p className="gd-model-menu-note" role="status">{status}</p>}{notice && <p className="gd-model-menu-notice" role="status">{notice}</p>}</>;
-  const menu = (kind: 'models' | 'efforts', label: string, summary: string, detail: string, children: ReactNode) => <div className="gd-model-summary-row" key={kind}>
+  const menu = (kind: 'models' | 'efforts', label: string, summary: string, children: ReactNode) => <div className="gd-model-summary-row" key={kind}>
     <span className="gd-model-summary-label">{label}</span>
     <Popover.Root open={picker?.id === kind && picker.backend === value.backend} onOpenChange={open => {setPicker(open ? {id: kind, backend: value.backend} : undefined); setQuery(''); setNotice(undefined);}}>
-      <Popover.Trigger className="gd-model-selection-control" aria-label={kind === 'models' ? '配置模型' : '配置允许的思考强度'}><span className="gd-model-selection-copy"><strong>{summary}</strong><small>{detail}</small></span><ChevronDown size={14} aria-hidden="true"/></Popover.Trigger>
+      <Popover.Trigger className="gd-model-selection-control" aria-label={kind === 'models' ? '配置模型' : '配置允许的思考强度'}><span className="gd-model-selection-copy">{summary}</span><ChevronDown size={14} aria-hidden="true"/></Popover.Trigger>
       <Popover.Portal><Popover.Positioner side="bottom" align="start" sideOffset={7} collisionPadding={12} className="gd-model-menu-positioner"><Popover.Popup className="gd-model-menu" aria-label={label}>
         {children}{messages}<div className="gd-model-menu-footer"><span><Star size={11} aria-hidden="true"/>默认仅用于新话题</span></div>
       </Popover.Popup></Popover.Positioner></Popover.Portal>
     </Popover.Root>
   </div>;
   return <>
-    {menu('models', '允许的模型', `${value.models.length} 个模型${ready && missing.length ? ` · ${missing.length} 个已不可用` : ''}`, `新话题默认：${defaultModel?.displayName ?? defaultId ?? '请选择'}`, <>
+    {menu('models', '允许的模型', `${value.models.length} 个模型${ready && missing.length ? ` · ${missing.length} 个已不可用` : ''}`, <>
       <div className="gd-model-menu-heading"><label className="gd-model-menu-search"><Search size={14} aria-hidden="true"/><input type="search" aria-label="搜索模型" placeholder="搜索模型" value={query} onChange={e => setQuery(e.target.value)}/></label>{refresh('models')}</div>
       <div className="gd-model-menu-list" role="group" aria-label="允许使用的模型">{rows.filter(m => `${m.displayName} ${m.id}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).map(model => {
         const checked = value.models.includes(model.id);
@@ -74,7 +72,7 @@ export function CompactModelSelection({value, onChange, catalog, catalogControls
       })}{!rows.some(m => `${m.displayName} ${m.id}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) && <p className="gd-model-menu-empty">{query ? '没有匹配的模型。' : '当前没有可选模型。'}</p>}</div>
       {ready && models.some(m => m.serviceTiers?.some(t => t.id === 'fast' || t.id === 'ultrafast')) && <p className="gd-model-menu-legend"><Zap size={11} aria-hidden="true"/>允许加速 · 默认关闭</p>}
     </>)}
-    {menu('efforts', '允许的思考强度', groups.length ? `${limited ? '已自定义' : '全部允许'}${groups.length > 1 ? ` · ${groups.length} 组` : ''}` : '暂无可配置项', `新话题默认：${defaultModel ? defaultModel.supportedEfforts.length ? defaultEffort ?? '请选择' : '无需设置' : '当前无法核对'}`, <>
+    {menu('efforts', '允许的思考强度', groups.length ? `${limited ? '已自定义' : '全部允许'}${groups.length > 1 ? ` · ${groups.length} 组` : ''}` : '暂无可配置项', <>
       <div className="gd-model-menu-heading"><strong>允许的思考强度</strong>{refresh('efforts')}</div>
       <div className="gd-model-effort-list">{groups.map(group => {
         const defaultGroup = group.models.some(m => m.id === defaultId);
