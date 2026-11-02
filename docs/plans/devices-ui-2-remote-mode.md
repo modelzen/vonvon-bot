@@ -570,3 +570,91 @@ Windows 的平台名和 4.8 的 Windows 启动修复，放进 U4 的 Windows 任
 - 维护连接不收快照原来写在 `ws.ts` 的 `send` 里，可 D2 把 `publish` 挪进了 `peer-hub.ts`，D4a 用它的 `shape` 做同一件事。改成在推快照那一处传 `shape`，D4a 已做就不重复（第 2 节、4.5、第 5 节测试名）。
 - `MachinePanel` 只拿到 `request`（`machine` 通道），可 `restartHost` 是 `command`，计划没说 [重启] 怎么发。加 `onRestart` prop，`RemoteServiceGroup` 同样收它（4.4.3、4.4.4、第 5 节）。
 - I3 拆成 I3a、I3b 后，计划里钉的 `server-3-update-engine`（4aca3777）和行号过期，D1 的 sha 也旧了。头部改成 I3b（83550082）和 D1（147b2619），`UpdatePanel` 那一组从 101 行起，`rpc/machine.ts` 的服务开关在 75-81。
+
+## 11. 实现时和计划不一样的地方
+
+2026-11-02 实现时（Claude，JP-VPS）。基线是 U1（`claude/devices-ui-1` 3ed5f8b6）合上 `claude/devices-integration`（含 I3）。
+
+**文案和目录**
+- 4.2 的表以外，`P/setup-steps.ts`、`P/diagnostics.ts` 里 Codex、Claude 的"登录"也改成"配置好""可用"：这两处的字由网页端的设置清单和诊断页显示，不改的话第 8 节第 2 条做不到。
+- `search.ts` 里留下的"登录"有两处：别名那一行，和"登录电脑时启动"。后者说的是系统登录项，不是 Provider 登录，用词测试把它也放过。
+- 表外 `GroupDesignSettings` 可用模型那一栏的校验提示也改了："这个 Provider 现在不可用，先（在「X」上）安装并配置好。"原来写"请先安装并登录"。
+- `DirectorySearchStep` 不自己判断是不是路径，交给 `directory-picker` 导出的 `browseQuery`，和选目录对话框同一条规则。
+
+**删除（4.9）**
+- `JobPanel` 整个删掉，不留"飞书扫码注册"的标题：基线上它只在环境页给 `installCodex` 任务用，删了任务就没有别的地方渲染它。
+- `installManagedCodex` 这个导出留着：删掉任务后它没有调用方了，但同一模块的 `managedCodexBin`、`runSetupChild` 还在用，它自己也有测试。删不删留给以后清理。
+
+**应用与启动页（4.4）**
+- 抽出 `appCardFor(device, application, clientVersion)`，远程和本机的应用卡标题、设备名、版本都由它算，页面接线才测得到。计划里整页渲染的测试改成渲染 `UpdatePanel` + `RemoteServiceGroup`。
+- `RemoteServiceGroup` 不另外读 `machine.status`，用快照里的 `application`（平台、`service`、linger），和本机的"启动选项"同一份数据。
+- `ServerUpdateCard` 远程时打开就读一次 `checkCoreUpdate {fresh: false}`（只读那台设备每天检查的结果，不重新问更新源）；回 `unsupported` 或 `invalid_request`（I3 以前的服务端）就显示"不支持远程更新"那句。
+- 页面上"退出桌面应用不会停止后台"那句的命令用 `<code>` 显示，文字拆成 `QUIT_KEEPS_DAEMON` 的前、命令、后三段，字和第 15 节一样。
+
+**退出规则（4.7）**
+- `keepOnQuit` 的判断写成 `quit-daemon.ts` 导出的 `daemonKeptOnQuit(owner, {readRegistration, attach})`，`main.ts` 只组装依赖。原因是要注入依赖测它；计划里的 `quit-keep.test.ts` 并进了 `quit-daemon.test.ts`。
+- 页面用的 `quitKeepsDaemon` 通道：主进程读已验证的 owner（`readVerifiedDaemon`），读不到回 `false`。
+
+**协议提示和 Windows 修复（4.8）**
+- `startupMessage` 遇到 `AttachError('protocol')`（带对面的协议号）时也用 `protocolMismatchMessage`。这条路上拿不到注册信息，按 `absent` 算，所以服务端旧时显示"退出再打开"那句，不是 npm 那句。
+- Windows 修复不经命令行停：`stopOwnerDirectly` 调 `stopVerifiedOwner`，再用读进来的 `ownerRunning` 等它退出，最多 60 秒。
+
+**完全访问警示（4.10）**
+- 私聊建群完成卡：群的实际权限是完全访问就显示（新建的群就是），不另看是不是刚改的。
+- 私聊权限卡：选项里有完全访问时，在表单下面加一条 `note`，写"完全访问："加这句，不放在选项旁边。
+- 私聊里保存权限后多发的那条 markdown，只在从别的档改成完全访问时发；本来就是完全访问再保存一次不发。
+- 命令行逐行打印 `warnings`，不加反引号。
+
+**能力（4.11）**
+- 安装方式在启动时不等它读完：读完前 `serverInfo` 不带 `update.*`，读完后缓存。启动后最初那一下连上来的客户端看不到升级按钮，重连就有（写进已知限制）。
+- 测试夹具 `startFixture` 多一个 `distribution` 参数，默认 `unknown`，免得每个用例都去跑 `npm root -g`。
+
+**维护连接不收快照**
+- 在 `http.ts` 推快照那一处传 `snapshotShape`：维护连接的 peer 回 `null`。测试写成对 `snapshotShape` 的单测，放进 `peer-hub.test.ts`，没有另起两条真连接。
+
+**测试文件名**
+- 第 5 节的几个新文件并进了已有的：`no-login-wording` → `device-copy.test.ts`；`settings-permission-warning` → `settings-owner.test.ts`；`command-tools` → `s47-tools.test.ts`；`cli-settings` → `cli-admin.test.ts`；`dm-cards` → `permissions.test.ts`；`permission-fields` → `permission-tiers.test.tsx`；`join-group-dialog` → `join-group.test.ts`；`server-info` → `server-handshake.test.ts`；`snapshot` → `server-snapshot.test.ts`；`domain` → `protocol.test.ts`；`machine-panel` → 新的 `machine-panel-remote.test.tsx`（退出页脚的两种也在这里）；`directory-picker` → `directory-picker-runtime.test.tsx`（远程标题）和 `device-copy.test.ts`（`looksLikePath`）。
+- U1 已有的 `bot-schedules-app.test.tsx` 在合上 U1 后就挂了（它 mock 的 `client-context` 没有 `useActiveDevice`），本片顺手补上。
+
+**没做的自测**
+- 6.1 第 2、3、5 步（验收 daemon 上的目录、lark-cli 私聊 Bot 6 看警示）这次没做：这次的任务不碰验收 daemon、不发飞书消息。换成无头截图（`packages/ui/test/manual/remote-mode-fake-shell.ts`，假外壳）和单测。第 4 步的 `git grep` 做了，只剩测试里断言"已经没有了"的几处。
+
+## 12. Codex 审查后改了什么（任务 244–246）
+
+2026-11-02，Codex 在 JP-VPS 上审了 head 95e21996：任务 244 通读 U2 全部改动，245 看 desktop，246 看 ui。245 通过；244、246 的三条 P2 都接受了：
+
+- **244-1 远程设备的「状态与诊断」页仍把工具说成这台电脑的。** 那一组叫「这台电脑」，按钮「查看本机环境」，说明是「在终端运行 codex 配置好……」「在本机环境里安装 Claude Agent SDK」，用户会去桌面所在的电脑上配。`P/setup-steps.ts` 的 `toolSteps` 不动（它不知道在看哪台设备），由页面读 `useActiveDevice()` 改写：`U/device-copy.ts` 加 `onDeviceText`（本机环境 → 「X」的「工具与连接」，本机的 → 「X」上的，在终端运行 → 在「X」的终端运行，一遍替换，设备名里有"本机"也不会再换）和 `toolStepsOn`（每步的说明和去工具页的按钮「查看「X」的工具」）；`DiagnosticsPanel` 的组名用 `whereName`，页脚写「「X」上的 Provider 每分钟检查一次……」。daemon 自己给的 Claude 提示（`login.ts` 的"在终端运行 `claude` ……"）也经它带上设备名。本机一字不改。测试：`diagnostics-panel.test.tsx` 的 `the tools of a remote device` 三例（signedOut/missing、Codex 缺失和太旧加 daemon 的 Claude 提示、本机原样），`device-copy.test.ts` 把 `toolSteps` 每种状态在远程时都过一遍，不许出现"本机"。
+- **246-1 远程升级卡片重新挂载后不恢复进度。** 离开再回来、或者另一个客户端已经发起了升级，卡片只查 `checkCoreUpdate`，`following` 从 false 开始，进度没了、「更新「X」」又能点。`ServerUpdateCard` 远程时打开就同时读一次 `coreUpdateStatus`：没结束就接着每秒跟、进度条和状态行照旧、更新按钮不可点；已结束就显示结果（更新完成和版本，或者失败的原因）；没有记录什么都不显示。回滚的原因里没写"已切回"时，状态行补"（已切回 X）"，和 `vonvon update` 一样。测试：新的 `server-update-card-lifecycle.test.tsx`，它的 hook 替身照 React 的规则只在依赖变了时重跑 effect、先跑清理，四例：同一张卡跟到结束、离开再回来接着跟到结束（离开后不再轮询）、连上别人已经在升级的设备并看到回滚原因、打开时更新已结束只显示结果不轮询。原来 `server-update-card.test.tsx` 里"每秒跟到结束"那一例的替身每次渲染都重跑所有 effect，开头这次读会被重复，挪进了新文件。
+- **246-2 远程 Provider 详情仍写本机配置和本机的修复办法。** `ProviderSetup` 远程时：「「X」上的配置」「已读取「X」上的配置」「「X」上的 Claude Code 无法启动。请先在「X」的终端运行 `claude`……Vonvon 会复用「X」上 Claude 的认证或 API 配置」、安装来源「「X」上已有」、卸载确认「「X」上的其他安装不受影响」；daemon 给的问题提示、Codex 的更新办法（如"请在终端运行 brew upgrade codex"）和操作结果也经 `onDeviceText`。同类的一起改了，都只在远程时换字：`EnvironmentPanel` 的「本机工具」组名、重新检测的提示、"正在检测本机工具…"和页面通知；`UsagePanel` 错误分支「检测本机配置」；`UsageContent`「所有 Bot 共用本机 Codex 账号的用量」；设置首页 Provider 一项的说明；MCP 授权「在本机终端运行命令」和移除确认「只移除本机配置」；工作区目录「移除引用，保留本机文件」和解除绑定的「本地目录和文件保留」。测试：新的 `provider-remote.test.tsx` 三例（远程 Claude Code 起不来、远程的 daemon 提示和 Homebrew 更新办法、本机原样），用真 React 渲染，只把发 RPC 的 `useProviderSetup` 换成固定数据。`mcp-runtime.test.tsx` 的 `client-context` mock 补上 `useActiveDevice`（MCP 面板现在读当前设备）。
+
+## 13. 合入 U1 和集成分支
+
+2026-11-02 先合 `claude/devices-ui-1`（5d0404ce，带 D2、D4a、D4b、I3 和 U1 补的两个测试），再合 `claude/devices-integration`（63ab38a6，多了 K1 内置 Skill 的 `--scope`，没有冲突）。冲突照两边的意思合：
+- `D/server/http.ts`：D4a 按连接给事件（`viewFor`）已经不给维护连接任何东西，U2 的 `snapshotShape` 去掉；第 11 节"维护连接不收快照"的单测改成用 `viewFor` 建 hub。`capabilities()` 保留 D4a 的 `session-scope`，再按安装方式加 `update.standalone`、`update.npm`。
+- `D/server/authz.ts`：用 D4a 的按场合的表，去掉 U2 删了的 `installCodex`、`startCodexLogin`（表里的行和 `commandInReach` 里的分支）；`authz-session.test.ts` 用 `restartHost` 代替 `installCodex` 当"整台机器的命令"。
+- `D/test/server-fixture.ts`：`askBot` 仍是第 4 个参数，`distribution` 挪到第 5 个；握手测试期望 `['device', 'session-scope', ...update]`。
+- `D/server/message-loop.ts` 用 D4a 的 `errorEnvelope`（同一份 `DRAIN_KINDS`）；`U/test/bot-schedules-app.test.tsx` 用 U1 的 mock（真模块上只换 hook）。
+- 合完 desktop、ui 的测试都过，没有 U1 那样的语义冲突要修：U2 的退出规则（`quit-daemon.ts`）和 U1 在 `main.ts` 接的设备连接、退出顺序各管各的。
+
+## 14. 合入集成分支前同步，本机页面写"本机"
+
+2026-11-02 合 `claude/devices-integration`（eb6d55a6，多了 D3 #646 远程监听、U1 #647、C5 #651 记忆走 daemon）。冲突照两边的意思合：
+- `D/server/http.ts`：D3 把 `capabilities()` 挪进 `startApi`，按有没有开远程地址加 `remote`；U2 的在模块里，按安装方式加 `update.*`。合成一个导出的 `capabilities(distribution, remoteOpen)`：`device`、`session-scope`，开着远程地址时 `remote`，再按安装方式 `update.standalone` 或 `update.npm`。`startApi` 两个参数都收。
+- `D/test/server-fixture.ts`：D3 的 `remote` 是第 4 个参数，`askBot` 第 5 个，`distribution` 挪到第 6 个；握手测试跟着改。
+- `P/test/rpc-kinds.test.ts`：C5 加了 `memory.branchDelete`（152），减去 U2 删的两个 Codex 命令，是 150。
+
+D3 的排空规则（排空时 `snapshot.get`、`admin.negotiate`、`machine.coreUpdateStatus` 等照答，其余回 `draining`、不断开）和 U2 对得上：桌面重连后要快照、远程升级卡片每秒读 `coreUpdateStatus` 都在白名单里；退出时问 `daemonStatus` 也在，排空中的回复不带安装方式，`daemonKeptOnQuit` 就按"拿不准"处理，照旧停。只有一处要改：远程升级卡片打开时自己查一次 `checkCoreUpdate`，排空中会被回 `draining`，以前当成错误显示一行"daemon 正在停止或重启…"。现在这一次不显示，状态行已经在说正在升级；手动点"检查更新"仍照常显示。
+
+**本机页面写"本机"（owner 2026-11-02）。** 第 1 节写的"本机照旧，不带设备名"改了：看远程设备时写"「X」"，看这台电脑时写"本机"。
+- `U/device-copy.ts`：`whereName` 本机时是"本机"（设备列表里这台照旧叫"这台电脑"，那是 U1 的 `deviceCopyName`）；`onDevice` 两边都是"在 … 上"，`configureProvider` 本机是"在本机上把 Codex 配置好（账号或自定义 API 都行），然后点「重新检测」。"；新加 `placeOf`（本机 /「X」上）和 `updateServerText`。用到它们的地方本机都跟着写"本机"：选目录标题"选择本机上的文件夹"、建群时的"本机上的目录"、解除绑定的"本机上的目录和文件保留"、诊断页的组名"本机"和页脚"本机上的 Provider 每分钟检查一次…"、更新托管副本的确认框"Vonvon 将在本机安装并验证新版本…"、各处"先在本机上安装并配置好"。
+- 原来写死"本机"、看远程时也这么说的，改成远程写「X」：
+  - 决策模型：填 key 的对话框"密钥仅保存在「X」上"，删除确认"只删「X」上存的这一份"，诊断页"「X」上还没填它的 key"（`secretsModel` 的 `removalCopy`、`keyDiagnosis` 加 `place` 参数），自定义接口说明"供「X」上使用该服务的 Bot 和群共用"，服务端太旧时"请更新并重新连接「X」上的服务"（群设置里也是这句）；
+  - 判断次数页脚"按「X」的日期统计"；上下文面板"智能判断交给「X」上的决策模型"；
+  - 主页面连上前"正在读取「X」的运行状态"；导入 Bridge"正在检查 Bot、群和「X」上的数据"；
+  - MCP 的连接方式"「X」上的命令"（本机照旧"本机命令"），daemon 回的 MCP 错误经 `onDeviceText`；
+  - "工具与连接"页的区域名，工具卡的无障碍名；
+  - "连接与设置"页的工具步骤（"去本机环境"那些）和诊断页"最近没回的消息"的下一步（"在本机环境里更新 Codex"）经 `toolStepsOn`、`onDeviceText`，和状态与诊断页的工具一样；
+  - 远程升级卡片的状态行和提示经 `onDeviceText`（服务端说"本机没有 0.9.1"说的是它自己）。
+- 不跟设备的：通用确认框的默认说明改成"请确认后再继续；取消不会做任何修改。"；搜索里"重新检测"那一组从"本机环境"改叫"工具与连接"（锚点跟着改），"本机环境"留作搜索词。
+- 没改的：`main.tsx` 没凭证时的"需要本机访问凭证"（那时还没连任何设备）；搜索里状态与诊断那一组仍叫"这台电脑"（静态索引，不跟当前设备）；daemon 自己的其他提示（模型目录说明"使用本机保存的模型目录"等）原样显示，远程时也写"本机"，指的是那台设备自己。
+- 测试：`device-copy.test.ts`（本机的说法和新函数）、`diagnostics-panel.test.tsx`（本机组名和页脚；远程"没回的消息"的下一步）、`setup-presentation.test.tsx`（远程的工具步骤）、`secrets-page.test.tsx`（远程的填、删、诊断）、`decision-provider-settings.test.tsx`、`judge-usage.test.tsx`、`mcp-presentation.test.tsx`、`memory-new-marks.test.tsx`、`directory-picker-runtime.test.tsx`（本机标题），`server-update-card-lifecycle.test.tsx` 加"排空中打开卡片"一例。`decision-provider-autosave.test.tsx` 的 `client-context` mock 改成在真模块上只换 hook。

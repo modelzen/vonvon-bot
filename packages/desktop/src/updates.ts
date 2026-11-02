@@ -53,7 +53,7 @@ export class DesktopUpdater {
   /** 正在下载：这时不再发起自动检查。 */
   get busy():boolean { return this.pending !== undefined; }
   /**
-   * 上次点了"安装并重启"记下的预期版本。当前版本已经到了（或记录读不懂）就删掉记录，
+   * 上次点了"重启升级"（原来叫"安装并重启"）记下的预期版本。当前版本已经到了（或记录读不懂）就删掉记录，
    * 否则一次没装成功的更新会让以后每次检查都被拦住。返回仍未生效的预期版本。
    */
   private async unsettledInstall():Promise<string|undefined> {

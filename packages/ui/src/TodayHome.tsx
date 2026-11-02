@@ -5,6 +5,8 @@ import {NowActivity} from './NowActivity';
 import {NowUsage} from './NowUsage';
 import {uiFeatures} from './features';
 import type {Page} from './collaboration-model';
+import {useActiveDevice} from './client-context';
+import {whereName} from './device-copy';
 
 export function TodayHome({snapshot, onSetup, onRegister, onOpenUsage, disabled}: {snapshot: DesktopSnapshot; onSetup: () => void; onRegister: () => void; onOpenUsage: () => void; disabled: boolean}) {
   const attention = snapshot.agents.filter(bot => bot.readError || (bot.enabled && (!bot.running || bot.connection !== 'connected')));
@@ -31,7 +33,10 @@ const settingsEntries: {page: Page; title: string; description: string; icon: Lu
 ];
 /** `devices`: only the desktop has the devices page. */
 export function SettingsHome({onNavigate, onFeature, updateNotice, devices}: {onNavigate: (page: Page) => void; onFeature: (id: string) => void; updateNotice?: string; devices?: boolean}) {
-  const entries = settingsEntries.filter(item => devices || item.page !== 'devices');
+  const where = useActiveDevice();
+  // The Provider page is the shown device's: 「X」's configuration on a remote one.
+  const entries = settingsEntries.filter(item => devices || item.page !== 'devices')
+    .map(item => item.page === 'providers' && where.isRemote ? {...item, description: `Codex 与 Claude 的安装、${whereName(where)}上的配置和模型`} : item);
   return <section className="today-settings-home"><header className="today-page-heading"><h1>设置</h1></header>
     {[{label: '模型与工具', entries: entries.slice(0, 4)}, {label: '连接与应用', entries: entries.slice(4)}].map(section => <section className="today-settings-section" aria-label={section.label} key={section.label}><h2>{section.label}</h2><div className="today-list-surface">{section.entries.map(item => <button type="button" className="today-settings-row" key={item.page} onClick={() => onNavigate(item.page)}>
       <span className="today-setting-icon" data-page={item.page}><item.icon size={17} strokeWidth={1.7}/></span><span className="today-entity-copy"><strong>{item.title}</strong><small>{item.page === 'application' && updateNotice ? updateNotice : item.description}</small></span>{item.page === 'application' && updateNotice && <span className="today-update-dot" aria-hidden="true"/>}<ChevronRight size={14}/>

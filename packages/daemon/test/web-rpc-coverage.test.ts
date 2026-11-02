@@ -132,8 +132,6 @@ else process.exit(0);
     joinedGroups: async () => ({ groups: [] }),
     groupMembers,
     bindGroup: async () => ({ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }),
-    startCodexJob: () => ({ id: operationId }),
-    codexJob: () => ({ id: operationId, type: 'install', state: 'succeeded' }),
     collaboration: async (_agent, request) => {
       if (request.action === 'project') return { project };
       if (request.action === 'history') return { sessions: [], threads: [], backend: 'codex-appserver' };
@@ -166,7 +164,7 @@ else process.exit(0);
     const cases = {
       command: [
         { type: 'refresh' }, { type: 'listPendingGroups', agentId },
-        { type: 'registerAgent' }, { type: 'refreshAgentCredentials', agentId }, { type: 'installCodex' }, { type: 'startCodexLogin' }, { type: 'restartHost' },
+        { type: 'registerAgent' }, { type: 'refreshAgentCredentials', agentId }, { type: 'restartHost' },
         { type: 'listJoinedGroups', agentId }, { type: 'listGroupMembers', agentId, groupId, cursor: 'members-page' }, { type: 'bindGroup', agentId, groupId, projectName, folder: { kind: 'existing', folderToken }, tool: 'codex', conversation: 'threads' },
         { type: 'setResponse', membershipId: JSON.stringify([agentId, groupId]), response: 'all' },
         { type: 'setPermission', membershipId: JSON.stringify([agentId, groupId]), administrator: 'write', network: true },

@@ -12,9 +12,9 @@ import { createDesktopTray, type DesktopTray } from './tray.js';
 import { DesktopUpdater, scheduleUpdateChecks } from './updates.js';
 import { WindowsDesktopUpdater, windowsUpdateConfiguration, createWindowsUpdateDriver } from './windows-updates.js';
 import { desktopUpdateConfiguration } from './update-configuration.js';
-import { createDaemonManager, StartHostRefusal } from './daemon-manager.js';
+import { createDaemonManager, protocolMismatchMessage, StartHostRefusal, type VerifiedDaemon } from './daemon-manager.js';
 import { createDaemonDependencies, prepareDesktopRoot } from './daemon-dependencies.js';
-import { stopDaemonForQuit } from './quit-daemon.js';
+import { daemonKeptOnQuit, stopDaemonForQuit } from './quit-daemon.js';
 import { stopVerifiedOwner } from '../../daemon/src/server/owner-verification.js';
 import { desktopCliOptions, observeCli, registerCli } from './cli-registration.js';
 import { liveServiceActionRecord } from '../../daemon/src/service/action-report.js';
@@ -46,6 +46,11 @@ export function desktopResources(appPath: string, packaged: boolean): DesktopRes
 }
 
 function startupMessage(error: unknown): string {
+  // Another protocol says which side is older (devices 4.5). `ensureReady` already says it with the registration; a
+  // daemon swapped in before the attach gets the same words without it.
+  if (error instanceof AttachError && error.reason === 'protocol' && error.serverProtocol !== undefined) {
+    return protocolMismatchMessage({ server: error.serverProtocol, client: PROTOCOL_VERSION, registration: { kind: 'absent' } });
+  }
   if (error instanceof AttachError) return error.reason === 'protocol' ? error.message : `${error.message}请先启动 daemon，再重新打开 Vonvon Bot。`;
   if (error instanceof Error) return error.message;
   return 'Vonvon Bot 没能打开桌面窗口。请检查 daemon，再重新打开应用。';
@@ -276,7 +281,11 @@ export async function startDesktop(): Promise<void> {
     };
     const managerDependencies = createDaemonDependencies(serviceRuntime);
     const manager = createDaemonManager(managerDependencies);
+    // devices 7.4: a server installed and registered on its own, and not the one this app carries, stays on quit.
+    const keepOnQuit = (owner: VerifiedDaemon): Promise<boolean> =>
+      daemonKeptOnQuit(owner, { readRegistration: () => managerDependencies.readRegistration(), attach: () => attachExisting(root) });
     stopBeforeQuit = () => stopDaemonForQuit({
+      keep: keepOnQuit,
       readVerifiedDaemon: () => managerDependencies.readVerifiedDaemon(),
       requestStop: daemon => stopVerifiedOwner(root, daemon),
       ownerRunning: daemon => managerDependencies.ownerRunning(daemon),
@@ -664,6 +673,10 @@ export async function startDesktop(): Promise<void> {
       },
       hide,
       confirmQuit,
+      quitKeepsDaemon: async () => {
+        const verified = await managerDependencies.readVerifiedDaemon().catch(() => null);
+        return verified ? keepOnQuit(verified) : false;
+      },
       connectionLost: showConnectionLost,
     }, devices);
     tray = createDesktopTray(icon, show, requestQuit);

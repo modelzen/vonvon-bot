@@ -85,7 +85,6 @@ it('keeps the new bot only for a first registration that succeeded', () => {
   expect(registeredAgentId(succeeded, undefined)).toBe(agentId);
   expect(registeredAgentId(succeeded, true)).toBeUndefined();
   expect(registeredAgentId({id: jobId, type: 'registerAgent', phase: 'failed', message: 'x'}, false)).toBeUndefined();
-  expect(registeredAgentId({id: jobId, type: 'loginCodex', phase: 'succeeded', message: 'x', agentId}, false)).toBeUndefined();
   expect(registeredAgentId(undefined, false)).toBeUndefined();
 });
 

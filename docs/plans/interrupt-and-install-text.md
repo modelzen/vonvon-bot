@@ -55,7 +55,7 @@
 - `D/host/lifecycle.ts` 加 `StopReason = 'stop' | 'restart' | 'update'`，`ShutdownControl.reason` 读当前原因。`requestRestart` 是 `restart`，升级的重启是 `update`，`requestStop(reason?)` 只接受 `update`（桌面端升级前停旧服务端）。重启之后又来的停止改回 `stop`。
 - 原因经 IPC `{ type: 'bridge:shutdown', reason }` 和 SIGTERM 一起发给 Bot 子进程，子进程的 `observeShutdown` 读它，传给 `bridge.shutdown(reason)` → `orchestrator.shutdown(reason)`。
 - `P/machine.ts` 的 `stopHost` 加可选 `reason: 'update'`；HTTP 和 RPC 两处 `requestStop(payload.reason)`；`stopVerifiedOwner(home, lock, reason?)` 只在给了时才发。0.8 的 daemon 不认这个字段，按普通停止处理。
-- 桌面端：Windows `beforeUpdateInstall` 发 `{ type: 'stopHost', reason: 'update' }`；Mac 升级后启动修复停旧服务端时加 `--for-update`（隐藏选项），挪了 app 位置重装的那次不加。
+- 桌面端：Windows `beforeUpdateInstall` 发 `{ type: 'stopHost', reason: 'update' }`；Mac 升级后启动修复停旧服务端时加 `--for-update`（隐藏选项），挪了 app 位置重装的那次不加；U2（#649）加的 Windows 启动修复直接停旧服务端，也带 `reason: 'update'`。
 
 ### 4.2 Bot 进程里：先中断，3 秒后关进程
 
@@ -87,7 +87,7 @@
 - `D/card/run-card.ts` `stoppedLine`，`D/bot/restart-dropped.ts` `droppedText` 改成"没处理完"。
 - `D/cli/commands/update.ts` `UPDATE_INTERRUPTS`，只在文字模式、真要升级时打一次；npm 路径的重启那句也说会中断。
 - `D/cli/index.ts` `daemon stop`、`restart`、`update` 的说明。
-- `U/DesktopUpdateButton.tsx` 导出 `INTERRUPTS`，按钮"重启升级"/"正在重启升级"；`U/management/UpdatePanel.tsx`、`U/search.ts`、`U/management/MachinePanel.tsx`、`U/App.tsx` 跟着改；`DT/updates.ts`、`DT/windows-updates.ts` 的状态文字。
+- `U/DesktopUpdateButton.tsx` 导出 `INTERRUPTS`，按钮"重启升级"/"正在重启升级"；`U/management/UpdatePanel.tsx`、`U/management/ServerUpdateCard.tsx`（U2 后"更新外部 Core"和远程"更新"在这里，旁边写会中断）、`U/search.ts`、`U/management/MachinePanel.tsx`（本机、远程两种停止说明和确认框）、`U/App.tsx` 跟着改；`DT/updates.ts`、`DT/windows-updates.ts` 的状态文字。
 - `DT/main.ts` 去掉 Windows 确认框。
 - 安装：`scripts/install.sh` 完成时分三种（直接启动一次 / 开机自动启动 / 开不了开机自动启动多一句可选提示）；`vonvon service install` 用 `installedLine(running, bootStart)` 一句话，linger 的提示只在开不了时出现，问句改成"要让 Vonvon Bot 开机自动启动、退出登录后也继续运行吗？[Y/n]"。
 

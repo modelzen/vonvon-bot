@@ -49,6 +49,10 @@ it('dir list says when there is nothing to show and when the list was cut', asyn
 it('dir list: a folder that is not there is an argument error in the daemon\'s words', async () => {
   const h = harness(async () => { throw new RpcError('invalid_directory', '找不到这个目录，请检查路径。'); });
   await expect(runDirList('nope', {}, h.io(), h.daemon, host)).rejects.toMatchObject({ kind: 'bad-args', reason: 'invalid_directory', message: '读取目录失败：找不到这个目录，请检查路径。' });
+});
+
+// devices-ui-2 4.3: the daemon no longer keeps to home; an older one still says outside_home.
+it('dir list: an older daemon answering outside_home exits 4', async () => {
   const outside = harness(async () => { throw new RpcError('outside_home', '目录必须位于用户主目录内。'); });
   await expect(runDirList('/etc', {}, outside.io(), outside.daemon, host)).rejects.toMatchObject({ kind: 'bad-args', reason: 'outside_home' });
 });

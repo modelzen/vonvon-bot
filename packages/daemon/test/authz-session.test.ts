@@ -173,7 +173,7 @@ describe('the bot-session column (unit)', () => {
     expect(await authorize(scoped, settingsSave('研发'), deps)).toEqual({ ok: true });
     const read = await authorize(scoped, request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: '研发' } }), deps);
     expect(read).toEqual({ ok: true });
-    for (const free of [request('environment', { type: 'scan' }), request('machine', { type: 'stopHost' }), request('settings', { type: 'read', scope: { kind: 'host' } }), request('command', { type: 'installCodex' })]) {
+    for (const free of [request('environment', { type: 'scan' }), request('machine', { type: 'stopHost' }), request('settings', { type: 'read', scope: { kind: 'host' } }), request('command', { type: 'restartHost' })]) {
       expect(await authorize(scoped, free, deps)).toEqual({ ok: true });
     }
     expect(await authorize(owner({ bot: BOT }), request('memory', { type: 'list', scope: { kind: 'dm', botId: BOT, openId: 'ou_a' } }), deps)).toEqual({ ok: true });

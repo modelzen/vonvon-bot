@@ -79,7 +79,7 @@ export async function attachExisting(root: string): Promise<AttachedDaemon> {
   } catch (cause) {
     throw new AttachError('connection', cause);
   }
-  // Another protocol still fails the attach here, so startup repairs as before; U2 lets it in for maintenance (devices 4.5).
+  // 不同协议在本机启动时是致命的，由 `daemon-manager` 说清楚哪边旧（设计 4.5）。
   if (serverInfo.protocolVersion !== PROTOCOL_VERSION) {
     const rejection = new AttachError('protocol', undefined, serverInfo.protocolVersion);
     try { await client.close(); }

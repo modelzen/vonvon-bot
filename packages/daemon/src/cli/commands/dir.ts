@@ -3,7 +3,7 @@ import { folderPath, thisHost, type Host } from './group';
 
 /**
  * `vonvon dir list` (cli-3-groups 4.2): the folders under a path on the daemon's computer, as the web page's folder
- * picker browses them, inside the daemon user's home. No path is that home. Hidden folders only with --all; --json
+ * picker browses them, any folder that user can read (devices-ui-2 4.3). No path is the home folder. Hidden folders only with --all; --json
  * always has them all.
  */
 export async function runDirList(raw: string | undefined, options: { all?: boolean }, io: Io, daemon: Daemon = withDaemon, host: Host = thisHost()): Promise<void> {

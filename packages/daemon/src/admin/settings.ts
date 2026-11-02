@@ -2,7 +2,7 @@ import { getAppRoleSnapshot } from '../config/app-roles';
 import { ToolRefusal } from '../agent/entry/tools';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { JUDGE_SELECTION_KINDS, decisionEndpointProblem } from '@vonvon/protocol';
+import { FULL_ACCESS_WARNING, JUDGE_SELECTION_KINDS, decisionEndpointProblem } from '@vonvon/protocol';
 import type { AgentBackend, ModelInfo, ReasoningEffort } from '../agent/types';
 import { backendIds } from '../agent';
 import { parseModelId } from '../agent/model-id';
@@ -203,7 +203,7 @@ function agentRaw(p: AppPreferences, section: keyof T.AgentSections): unknown {
 function projectData(p: Project, backend: AgentBackend): T.ProjectSections {
   const perm = groupPermission(p);
   const table = permissionTable(groupBackendId(p));
-  const env = tableEnv(backend);
+  const env = { ...tableEnv(backend), group: true };
   return {
     profile: p.profile ?? { persona: '', memory: '', inheritPersona: true, inheritMemory: true },
     role: { supplement: p.supplement ?? '' },
@@ -371,7 +371,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           ...base,
           models: [],
           state: 'unavailable',
-          error: '后端当前不可用，请检查安装或登录状态'
+          error: '后端现在不可用，请检查安装和配置'
         };
       const listed = target?.cwd && backend.listModelsForCwd
         ? await backend.listModelsForCwd(target.cwd)
@@ -799,6 +799,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       if (project) await deps.backendFor(groupBackendId(project)).refreshPermissions?.();
     }
     let additionalEffects: T.ApplyEffect[] = [];
+    let turnedFull = false;
     try {
       if (edit.scope.kind === 'agent') {
         const e = edit as Extract<T.BotSettingsEdit, {
@@ -944,6 +945,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               }
               const backendId = groupBackendId(p);
               const table = permissionTable(backendId);
+              const wasFull = groupPermission(p).effect.mode === 'full';
               let mode = e.patch.mode ?? effectiveMode(p);
               let effectMode = mode;
               let network = TIER_NETWORK[mode];
@@ -969,6 +971,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               p.network = network;
               if (custom) p.custom = custom;
               else delete p.custom;
+              // devices 第 15 节：给群选完全访问的地方都带这句。
+              turnedFull = effectMode === 'full' && !wasFull;
               break;
             }
             case 'response':
@@ -1069,7 +1073,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       return {
         kind: 'saved',
         section,
-        effects: [...section.value.apply.filter(item => item.fields.some(field => Object.hasOwn(edit.patch, field))), ...additionalEffects, ...(keyless ? effect(['selection'], 'next-message', keyless) : [])]
+        effects: [...section.value.apply.filter(item => item.fields.some(field => Object.hasOwn(edit.patch, field))), ...additionalEffects, ...(keyless ? effect(['selection'], 'next-message', keyless) : [])],
+        ...(turnedFull ? { warnings: [FULL_ACCESS_WARNING] } : {}),
       };
     }
     catch (error) {

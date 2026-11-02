@@ -37,6 +37,7 @@ export const desktopChannels = {
   installDesktopUpdate: 'desktop:shell:installDesktopUpdate',
   hide: 'desktop:shell:hide',
   quit: 'desktop:shell:quit',
+  quitKeepsDaemon: 'desktop:quit-keeps-daemon',
   devicesState: 'desktop:devices:state',
   devicesInspect: 'desktop:devices:inspect',
   devicesAdd: 'desktop:devices:add',
@@ -98,7 +99,7 @@ export type DesktopEvent =
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
   'openExternal' | 'chooseExecutablePath' | 'chooseDirectoryPaths' | 'checkDesktopUpdate' | 'retryDesktopUpdate' | 'installDesktopUpdate' | 'onDesktopUpdate' |
-  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent'>>;
+  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent' | 'quitKeepsDaemon'>>;
 
 export interface DesktopResources {
   uiIndex: string;
@@ -152,5 +153,7 @@ export interface ShellActions {
   installDesktopUpdate(): Promise<DesktopUpdate>;
   hide(): void;
   confirmQuit(): Promise<void>;
+  /** devices 7.4: whether quitting leaves this computer's verified daemon running. No daemon or unsure is false. */
+  quitKeepsDaemon(): Promise<boolean>;
   connectionLost(): void;
 }

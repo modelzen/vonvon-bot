@@ -48,6 +48,7 @@ it('keeps external Core controls available when the installation supports them',
   expect(html).toContain('外部 Core / CLI');
   expect(html).toContain('检查 Core 更新');
   expect(html).toContain('更新外部 Core');
+  expect(html).toContain('更新会重启服务端，正在进行的对话会被中断。');
   expect(html).toContain('查看 Core 更新进度');
 });
 

@@ -2,7 +2,8 @@ import {useEffect, useRef, useState} from 'react';
 import {ArrowUpRight, BookOpen, Check, ChevronDown, MessageSquare, MoreHorizontal} from 'lucide-react';
 import {Select} from '@base-ui/react/select';
 import {modeToConversation, type Agent, type Conversation, type DesktopSnapshot, type Group, type Membership, type ProjectId, type ProjectRecord} from '@vonvon/protocol';
-import {useClient, useShellCapabilities} from './client-context';
+import {useActiveDevice, useClient, useShellCapabilities} from './client-context';
+import {whereName} from './device-copy';
 import {AgentAvatar} from './AgentAvatar';
 import {GroupAvatar} from './GroupAvatar';
 import {NavigationIndicator} from './NavigationIndicator';
@@ -64,6 +65,7 @@ type Props = {member: Membership; agent: Agent; group: Group; snapshot: DesktopS
 export function GroupWorkspace({member, agent, group, snapshot, initialTab, focusNew, newMemoryCount, revealHistory, onTabChange, onBot, onBotProfile, onOpenTools, onOpenProviders, onOpenSecrets, onChanged}: Props) {
   const client = useClient();
   const shell = useShellCapabilities();
+  const where = useActiveDevice();
   const guard = useDraftGuard();
   const [tab, setTab] = useState<GroupDesignTab>(initialTab === 'role' ? 'memory' : initialTab === 'permission' ? 'model' : initialTab ?? 'model');
   const [project, setProject] = useState<ProjectRecord>();
@@ -180,6 +182,6 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, focu
     : <GroupDesignSettings key={member.id} refreshVersion={version} scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab={tab} tools={snapshot.tools} botName={agent.name} groupName={group.name} onOpenTools={onOpenTools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} responseHeader={conversationControl}/>}
     <Dialog open={dialog === 'history'} title={<span className="conversation-dialog-title">对话记录</span>} description={`${group.name} · ${agent.name}`} onClose={() => setDialog(null)}><div id={settingAnchor("会话管理")}>{agent.running ? <ConversationPanel agentId={agent.id} groupId={group.id} projectName={member.name} conversation={conversation} request={client.collaboration}/> : <p>Bot 运行后可查看对话记录。</p>}</div></Dialog>
     <Dialog open={dialog === 'help'} title="在群里使用" onClose={() => setDialog(null)}><GroupUsage conversation={conversation} botName={agent.name}/></Dialog>
-    <ConfirmDialog open={dialog === 'remove'} title="解除这个群的绑定？" confirmLabel="解除绑定" tone="danger" pending={busy} onCancel={() => setDialog(null)} onConfirm={() => {setDialog(null); void update({},true);}} description={`解除 ${agent.name} 与「${group.name}」的关联。Bot 加入的群会退出；Bot 创建的群会尝试转交群主。本地目录和文件保留。`}/>
+    <ConfirmDialog open={dialog === 'remove'} title="解除这个群的绑定？" confirmLabel="解除绑定" tone="danger" pending={busy} onCancel={() => setDialog(null)} onConfirm={() => {setDialog(null); void update({},true);}} description={`解除 ${agent.name} 与「${group.name}」的关联。Bot 加入的群会退出；Bot 创建的群会尝试转交群主。${whereName(where)}上的目录和文件保留。`}/>
   </div>;
 }

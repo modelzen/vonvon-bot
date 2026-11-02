@@ -144,8 +144,8 @@ function codexStep(tool: ToolState | undefined): SetupStep {
   if (tool.installation === 'missing') return {...base, status: '未安装', tone: 'neutral', done: false, detail: '可以在本机环境里装托管副本（要用本机的 Node.js 和 npm）。没装 Node.js 的话，装 ChatGPT 或 Codex 桌面应用，或者用 Homebrew 装 Codex。', actions: [{kind: 'environment', label: '去本机环境'}]};
   const compatibility = tool.compatibility;
   if (compatibility?.status === 'tooOld') return {...base, status: `版本太旧${version}`, tone: 'warning', done: false, detail: `最低要 ${compatibility.minimum}，请在本机环境更新。`, actions: [{kind: 'environment', label: '去本机环境'}]};
-  if (tool.authentication === 'signedOut') return {...base, status: `未登录${version}`, tone: 'warning', done: false, detail: '在终端运行 codex，完成登录后重新检测。', actions: [{kind: 'environment', label: '查看本机环境'}]};
-  if (tool.authentication === 'unknown') return {...base, status: `登录状态无法确认${version}`, tone: 'neutral', done: false, detail: tool.message, actions: [{kind: 'environment', label: '去本机环境'}]};
+  if (tool.authentication === 'signedOut') return {...base, status: `没配置好${version}`, tone: 'warning', done: false, detail: '在终端运行 codex 配置好（账号或自定义 API 都行），然后重新检测。', actions: [{kind: 'environment', label: '查看本机环境'}]};
+  if (tool.authentication === 'unknown') return {...base, status: `无法确认配置${version}`, tone: 'neutral', done: false, detail: tool.message, actions: [{kind: 'environment', label: '去本机环境'}]};
   const newer = compatibility?.status === 'newer' ? `比验证过的 ${compatibility.verified} 新，一般能用。` : undefined;
   return {...base, status: `可用${version}`, tone: 'success', done: true, detail: newer, actions: []};
 }
@@ -155,10 +155,10 @@ function claudeStep(tool: ToolState | undefined, checking = false): SetupStep {
   const version = tool?.version ? ` · ${tool.version}` : '';
   if (!tool || tool.installation === 'unknown') return {...base, status: '无法确认', tone: 'neutral', done: false, detail: tool?.message, actions: [{kind: 'environment', label: '去本机环境'}]};
   if (tool.installation === 'missing') return {...base, status: '未安装', tone: 'neutral', done: false, detail: '要用 Claude，在本机环境里安装 Claude Agent SDK。', actions: [{kind: 'environment', label: '去本机环境'}]};
-  if (tool.authentication === 'signedIn' || tool.authentication === 'notRequired') return {...base, status: `已登录${version}`, tone: 'success', done: true, detail: tool.message, actions: [{kind: 'claudeLogin', label: '检查登录'}]};
-  if (checking && tool.authentication === 'unknown') return {...base, status: `检查中${version}`, tone: 'neutral', done: false, detail: '正在检查 Claude 的登录。', actions: [{kind: 'claudeLogin', label: '检查登录'}]};
-  const status = tool.authentication === 'signedOut' ? '未登录' : '登录状态无法确认';
-  return {...base, status: `${status}${version}`, tone: tool.authentication === 'signedOut' ? 'warning' : 'neutral', done: false, detail: tool.message ?? '在终端运行 claude 并登录，然后点"检查登录"。', actions: [{kind: 'claudeLogin', label: '检查登录'}]};
+  if (tool.authentication === 'signedIn' || tool.authentication === 'notRequired') return {...base, status: `可用${version}`, tone: 'success', done: true, detail: tool.message, actions: [{kind: 'claudeLogin', label: '检查配置'}]};
+  if (checking && tool.authentication === 'unknown') return {...base, status: `检查中${version}`, tone: 'neutral', done: false, detail: '正在检查 Claude 的配置。', actions: [{kind: 'claudeLogin', label: '检查配置'}]};
+  const status = tool.authentication === 'signedOut' ? '没配置好' : '无法确认配置';
+  return {...base, status: `${status}${version}`, tone: tool.authentication === 'signedOut' ? 'warning' : 'neutral', done: false, detail: tool.message ?? '在终端运行 claude 配置好（账号或自定义 API 都行），然后点"检查配置"。', actions: [{kind: 'claudeLogin', label: '检查配置'}]};
 }
 
 /** Linux only (s20a): what the qa and write modes need, under the tools. Neither step counts toward 还差几步 or 可以用了,
