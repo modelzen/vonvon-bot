@@ -2,7 +2,7 @@ import { mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, autoUpdater, BrowserWindow, dialog, Menu, net, type WebContents } from 'electron';
+import { app, autoUpdater, BrowserWindow, dialog, Menu, net, powerMonitor, type WebContents } from 'electron';
 import { resolveDataRoot } from '../../daemon/src/config/data-root.js';
 import { attachExisting, AttachError } from './attach.js';
 import { installBridge, openAllowedExternal } from './bridge.js';
@@ -660,14 +660,19 @@ export async function startDesktop(): Promise<void> {
       // macOS routes editing shortcuts, including Cmd+V in password fields, through native menu roles.
       { role: 'editMenu', label: '编辑' },
     ]));
-    // 只在打包版配好了签名更新源时自动检查；检查只发现新版本，下载和安装仍由用户点。
+    await current.loadFile(uiIndex);
+    // 页面加载完后再开始计时；只发现新版本，下载和安装仍由用户点。
     if (updater.enabled && !terminating && !cleanupPromise) {
       stopUpdateChecks = scheduleUpdateChecks(updater, update => {
         if (terminating || cleanupPromise || !bridge) return;
         bridge.publishUpdate(noteUpdate(update));
+      }, {
+        onResume: listener => {
+          powerMonitor.on('resume', listener);
+          return () => { powerMonitor.removeListener('resume', listener); };
+        },
       });
     }
-    await current.loadFile(uiIndex);
     if (repairNotice) void dialog.showMessageBox(current, { type: 'warning', title: 'Vonvon Bot', message: repairNotice, buttons: ['好'] }).catch(() => {});
     if (focusWhenReady) show();
     if (quitWhenReady) requestQuit();
