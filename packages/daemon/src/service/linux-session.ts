@@ -77,6 +77,8 @@ export function lingerLine(linger: Linger, user: string): string {
 export type UserManagerProblem = { reason: 'no_systemd' | 'user_instance_down' | 'no_runtime_dir'; hint: string };
 /** What systemctl says without systemd as PID 1, or when it is not installed at all. */
 const NO_SYSTEMD = /has not been booted with systemd|spawn systemctl ENOENT/;
+/** What systemctl says when it cannot connect to the user manager: systemd 255 "Failed to connect to bus: …", 256 and later "Failed to connect to user scope bus …". */
+const NO_CONNECTION = /Failed to connect to (?:user scope )?bus/;
 
 /**
  * Why `systemctl --user` cannot be asked, when it is one of the three common cases; undefined otherwise. `detail` is
@@ -87,10 +89,16 @@ export async function userManagerProblem(detail = '', d: SessionDependencies = s
     return { reason: 'no_systemd', hint: '这台机器不是用 systemd 启动的（容器里常见），装不了 systemd 用户服务。用 vonvon daemon start 起一个分离的 daemon；它崩溃后不会自动重启。' };
   }
   const runtime = `/run/user/${d.uid}`;
-  if (d.xdgRuntimeDir !== runtime && await d.exists(`${runtime}/bus`)) {
+  // The user manager's own socket; the D-Bus one is there only with dbus-user-session.
+  const socket = await d.exists(`${runtime}/systemd/private`) || await d.exists(`${runtime}/bus`);
+  if (d.xdgRuntimeDir !== runtime && socket) {
     return { reason: 'no_runtime_dir', hint: `当前终端没有 XDG_RUNTIME_DIR（用 sudo -u 或 su 切到这个账号时常见），连不上这个账号的 systemd。运行 export XDG_RUNTIME_DIR=${runtime} 再试，或者直接用这个账号 SSH 登录。` };
   }
   if (!(await d.exists(runtime))) return { reason: 'user_instance_down', hint: `这个账号的 systemd 用户实例没在运行：没有登录会话，也没开 linger。用这个账号 SSH 登录后再试；或者先开 linger：loginctl enable-linger（不行就 ${sudoLinger(d.user)}）。` };
+  // The directory outlives a user manager that failed to start or has exited: no socket in it, or one nobody answers.
+  if (!socket || NO_CONNECTION.test(detail)) {
+    return { reason: 'user_instance_down', hint: `这个账号的 systemd 用户实例没在运行：${runtime} 还在，但里面的用户实例连不上（没起来，或者已经退出）。用这个账号重新 SSH 登录后再试；还不行，用管理员权限看 systemctl status user@${d.uid}。` };
+  }
   return undefined;
 }
 
