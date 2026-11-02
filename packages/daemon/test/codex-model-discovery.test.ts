@@ -179,7 +179,7 @@ describe('Codex model discovery preserves the native picker directory', () => {
     writeFileSync(join(directory,'auth.json'),'{"changed":true}');expect(backend.peekModels()).toBeUndefined();
     await backend.listModels();
     const now=Date.now();const clock=vi.spyOn(Date,'now').mockReturnValue(now+301_000);
-    try{expect(backend.peekModels()).toBeUndefined();}finally{clock.mockRestore();}
+    try{expect(backend.peekModels()?.[0]?.id).toBe('native-a');expect(backend.peekModels()?.[0]?.serviceTiers).toBeUndefined();}finally{clock.mockRestore();}
   });
 
   it('constrains account tiers by the actual session cwd configuration', async () => {
@@ -295,6 +295,43 @@ describe('Codex model discovery preserves the native picker directory', () => {
       expect(turnCalls[0]!.params.model).toBe('local-no-effort-metadata');
       expect(turnCalls[0]!.params).not.toHaveProperty('effort');
     } finally { await thread.close(); }
+  });
+
+  it.each(['failure', 'success'] as const)('keeps refreshed effort capabilities after an older discovery finishes with %s', async outcome => {
+    state.config = { model: 'local-no-effort-metadata', model_provider: 'local-proxy' };
+    state.pages.first.data = [{ ...native('local-no-effort-metadata', true), supportedReasoningEfforts: [] }];
+    save();
+    const { codexCatalogCache } = await import('../src/agent/codex-appserver/models');
+    let finishOld!: (models: Awaited<ReturnType<typeof codexCatalogCache.read>>) => void;
+    let failOld!: (error: Error) => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const read = vi.spyOn(codexCatalogCache, 'read').mockImplementationOnce(() => new Promise((resolve, reject) => {
+      finishOld = resolve;
+      failOld = reject;
+      entered();
+    }));
+    try {
+      const backend = new CodexAppServerBackend();
+      const old = backend.listModels();
+      // Windows performs a real owned --version probe before entering the cache;
+      // synchronize on that entry, not waitFor's unrelated one-second default.
+      await Promise.race([started, old.then(() => { throw new Error('Initial model discovery ended before entering the cache'); })]);
+      expect(read).toHaveBeenCalledOnce();
+      const fresh = await backend.listModels({ refresh: true });
+      expect(fresh[0]?.supportedEfforts).toEqual([]);
+      if (outcome === 'failure') failOld(new Error('Codex model discovery was superseded'));
+      else finishOld(fresh.map(model => ({ ...model, supportedEfforts: ['medium'] })));
+      await old;
+      expect(backend.peekModels()).toEqual(fresh);
+      const thread = await backend.startThread({ cwd: directory, mode: 'full', model: 'local-no-effort-metadata', effort: 'medium' });
+      try {
+        for await (const _ of thread.runStreamed({ text: 'fixture turn after refresh' }).events) { /* drain */ }
+        const turns = calls().filter(call => call.method === 'turn/start');
+        expect(turns).toHaveLength(1);
+        expect(turns[0]!.params).not.toHaveProperty('effort');
+      } finally { await thread.close(); }
+    } finally { read.mockRestore(); }
   });
 
   it('keeps an existing native model’s effort behavior after the discovered directory changes', async () => {

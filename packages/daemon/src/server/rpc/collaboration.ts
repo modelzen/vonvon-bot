@@ -58,7 +58,7 @@ const usageErrorMessages: Record<UsageErrorKind, string> = {
 
 export async function collaborationRpc(service: AdminService, directory: DirectoryBrowser, request: CollaborationRequest): Promise<RpcOutcome<CollaborationReply>> {
   if (request.action === 'providerModels') {
-    const result = await discoverProviderModels(request.backend);
+    const result = await discoverProviderModels(request.backend, undefined, request.refresh);
     return { kind: 'read', value: collaborationReplySchema.parse({ kind: 'providerModels', backend: request.backend, state: result.models.length ? 'ready' : 'unavailable', models: result.models, ...(result.message ? { message: result.message } : {}) }) };
   }
   if (request.action === 'usage') {

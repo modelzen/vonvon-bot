@@ -473,18 +473,17 @@ export function Catalog({
   const [loading, setLoading] = useState(true);
   const queryKey = JSON.stringify([botId, backend, purpose, threadId]);
   const previousQuery = useRef<string | undefined>(undefined);
-  const lastRefresh = useRef(0);
-  const inFlight = useRef(false);
+  const readAttempt = useRef(0);
   useEffect(() => {
     let active = true;
     if (previousQuery.current !== queryKey) setCatalog(undefined);
     previousQuery.current = queryKey;
     setError(undefined);
     setLoading(true);
-    inFlight.current = true;
-    lastRefresh.current = Date.now();
+    const refresh = attempt > readAttempt.current;
+    readAttempt.current = attempt;
     void client
-      .settings({ type: "models", query: { botId, backend, purpose, ...(threadId ? {threadId} : {}) } })
+      .settings({ type: "models", query: { botId, backend, purpose, ...(refresh ? {refresh: true} : {}), ...(threadId ? {threadId} : {}) } })
       .then((reply) => {
         if (!active) return;
         if (reply.kind === "models") setCatalog(reply.catalog);
@@ -502,29 +501,11 @@ export function Catalog({
             failure instanceof Error ? failure.message : "模型目录暂不可用。",
           );
         }
-      }).finally(() => { if (active) {setLoading(false); inFlight.current = false;} });
+      }).finally(() => { if (active) setLoading(false); });
     return () => {
       active = false;
     };
   }, [client, botId, backend, purpose, threadId, queryKey, attempt]);
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof document === 'undefined') return;
-    const refresh = () => {
-      if (document.visibilityState !== 'visible' || inFlight.current || Date.now() - lastRefresh.current < 1000) return;
-      setAttempt(value => value + 1);
-    };
-    const onVisible = () => {if (document.visibilityState === 'visible') refresh();};
-    window.addEventListener('focus', refresh);
-    document.addEventListener('visibilitychange', onVisible);
-    const timer = window.setInterval(() => {
-      if (Date.now() - lastRefresh.current >= 5 * 60_000) refresh();
-    }, 60_000);
-    return () => {
-      window.removeEventListener('focus', refresh);
-      document.removeEventListener('visibilitychange', onVisible);
-      window.clearInterval(timer);
-    };
-  }, [queryKey]);
   const unavailable = catalog && catalog.state !== "ready";
   return (
     <>
@@ -535,6 +516,7 @@ export function Catalog({
         </div>
       )}
       {!catalog && !error && <p className="gd-model-compact-note" role="status">正在读取模型…</p>}
+      {catalog?.state === 'ready' && <div className="gd-model-catalog-status"><span>可用模型</span><IconButton size="sm" variant="ghost" label="重新读取模型" title="重新检测模型" disabled={loading} onClick={() => setAttempt(value => value + 1)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>}
       {children(catalog)}
 
     </>

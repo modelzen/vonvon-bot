@@ -2071,3 +2071,8 @@ Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bo
 ## 2026-10-30 Codex 程序与模型刷新
 
 - [x] 统一 Codex 托管安装入口，复用 App / CLI 并按兼容版本选择，Provider 增加来源 / 版本 / 更新说明与模型刷新。当前任务完成后下轮恢复使用新程序，不重启 Vonvon；Claude 本轮不改。实现见 `docs/plans/codex-runtime-refresh.md`，研究与后续 Claude 参考见 `docs/research/2026-10-30-codex-runtime-refresh/report.md`。自动检查与隔离页面验收随 PR 记录，真实 Windows 与 owner 验收单独确认。
+# Windows Provider 后续修复
+
+- 0.8.1 后续：按 [Windows Provider 检测与模型缓存计划](plans/windows-provider-latency.md) 修复真实 IPC 期限、重复探测及正式安装包验收缺口。普通读取使用成功缓存，用户重检才强刷；实际会话权限守卫保留。验收与发布证据分别绑定准确 source SHA 和安装包哈希。
+
+- 2026-11-02 Provider 同类修复：接续 #629，补齐 macOS/Linux 冷探测与 Bot IPC 的超时预算，Claude 模型跨实例缓存、身份失效和显式刷新，以及 Codex 普通发现期间的即时强刷。见 `docs/plans/provider-probe-parity.md`；自测、独立审查与最终 CI 证据记录在本次 PR。仅合入 dev，main 和公开发布另行安排。

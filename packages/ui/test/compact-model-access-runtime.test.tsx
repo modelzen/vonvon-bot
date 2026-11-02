@@ -194,8 +194,8 @@ it.each(['fallback', 'failed'] as const)('retries the same Provider after a %s c
   expect(button(ui.choices, '查看模型')).toBeDefined();
   button(ui.all, '重新读取模型').props.onClick(); ui = render(); await flush(); ui = render();
   expect(h.client.settings).toHaveBeenCalledTimes(2);
-  expect(h.client.settings).toHaveBeenLastCalledWith({type: 'models', query: {botId: 'cli_retry', backend: value.backend, purpose: 'project'}});
-  expect(button(ui.all, '重新读取模型')).toBeUndefined();
+  expect(h.client.settings).toHaveBeenLastCalledWith({type: 'models', query: {botId: 'cli_retry', backend: value.backend, purpose: 'project', refresh: true}});
+  expect(button(ui.all, '重新读取模型').props.disabled).toBe(false);
   picker(ui.choices, 'models').props.onOpenChange(true); ui = render();
   expect(picker(ui.choices, 'models').props.value).toEqual(['alpha', 'beta']);
   expect(item(ui.choices, '允许本群使用 Beta').props.disabled).toBe(false);
