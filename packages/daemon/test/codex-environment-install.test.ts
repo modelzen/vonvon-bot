@@ -158,6 +158,8 @@ it('says an install that ran out of time did, and where a server\'s proxy goes',
   expect(reply).toEqual({ kind: 'refused', code: 'install-failed', message });
   expect(await f.service.run({ type: 'toolInstallStatus' })).toMatchObject({ kind: 'toolInstall', operation: { kind: 'failed', message } });
   expect(existsSync(f.pointer)).toBe(false);
-  writeFileSync(f.control, 'fail');
-  expect(await f.service.run({ type: 'install', tool: 'codex' })).toEqual({ kind: 'refused', code: 'install-failed', message: '工具安装失败，请检查网络连接或 npm 配置。' });
+  // npm failing on its own keeps the old text; on the normal limit, as a busy machine can take 300 ms just to start npm
+  const g = fixture();
+  writeFileSync(g.control, 'fail');
+  expect(await g.service.run({ type: 'install', tool: 'codex' })).toEqual({ kind: 'refused', code: 'install-failed', message: '工具安装失败，请检查网络连接或 npm 配置。' });
 });
