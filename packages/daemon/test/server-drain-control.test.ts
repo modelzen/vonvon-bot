@@ -5,7 +5,8 @@ import { readFile, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
-import type { Request } from '@vonvon/protocol';
+import { decodePairingLink, type Request } from '@vonvon/protocol';
+import { connectSecure, generateStaticKey, nodeBinarySocket } from '@vonvon/client/secure';
 import { getPidLockInfo, releasePidLock, type PidLockInfo } from '../src/server/pid-lock';
 
 function gate() {
@@ -376,6 +377,71 @@ it('retains successful peer release until the real WSS callback is forwarded', a
     vi.restoreAllMocks();
     client.socket.terminate();
     await releasing;
+    await fixture.close();
+  }
+});
+
+// Codex review 232-2 / devices 4.7: a remote client sees a draining daemon as the loopback one does. The listener stays
+// open until the release, so a client whose connection the drain closed reconnects through the same channel and limits
+// and asks the status and the update's progress; after the release the address takes nothing. main 必败: the drain
+// closed the remote listener at once, before the work and the release.
+const ALIAS = '127.0.0.2';
+const canBindAlias = await new Promise<boolean>(resolve => {
+  const probe = createServer();
+  probe.once('error', () => resolve(false));
+  probe.listen(0, ALIAS, () => probe.close(() => resolve(true)));
+});
+it.runIf(canBindAlias)('answers status and update progress over a remote address while draining, and closes it at the release', async () => {
+  const port = await new Promise<number>((resolve, reject) => {
+    const probe = createServer();
+    probe.once('error', reject);
+    probe.listen(0, ALIAS, () => { const bound = probe.address(); probe.close(() => (bound && typeof bound !== 'string' ? resolve(bound.port) : reject(new Error('no port')))); });
+  });
+  const work = gate();
+  const updating = { phase: 'restarting' as const, to: '0.9.1', at: 1 };
+  const fixture = await startFixture(fakeService({ close: () => work.promise, updateStatus: () => updating }), undefined, undefined, {
+    interfaces: () => ({ lo: [{ address: ALIAS, netmask: '255.0.0.0', family: 'IPv4', mac: '00:00:00:00:00:00', internal: true, cidr: `${ALIAS}/8` }] }),
+    tailscale: async () => ({ installed: false, ips: [] }), networkIdentity: async () => undefined, classify: async host => (host === ALIAS ? 'lan' : 'invalid'),
+  });
+  const owner = await recordOwner(fixture);
+  const local = await socketClient(fixture.api.port, fixture.credential);
+  const sockets: WebSocket[] = [];
+  let draining: Promise<void> | undefined;
+  try {
+    await local.ready();
+    await local.call({ type: 'request', id: 'port', method: 'device', payload: { type: 'setPort', port } });
+    await local.call({ type: 'request', id: 'on', method: 'device', payload: { type: 'enable', host: ALIAS } });
+    const pairing = await local.call({ type: 'request', id: 'pair', method: 'device', payload: { type: 'pair' } }) as { payload: { link: string } };
+    const link = decodePairingLink(pairing.payload.link);
+    const clientKey = generateStaticKey().key;
+    const open = async (pairing?: { inviteId: string; inviteSecret: string; clientName: string }) => {
+      const ws = new WebSocket(`ws://${ALIAS}:${port}/`, { perMessageDeflate: false });
+      sockets.push(ws);
+      await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+      return connectSecure({ socket: nodeBinarySocket(ws), device: { id: link.device.id, pk: link.device.pk }, clientKey, clientKind: 'desktop', ...(pairing ? { pairing } : {}) });
+    };
+    const paired = await open({ inviteId: link.invite.id, inviteSecret: link.invite.secret, clientName: '笔记本' });
+    draining = fixture.api.beginDrain();
+    void draining.catch(() => undefined);
+    // the drain closes the connections it found, remote or not (the loopback's rule)
+    expect((await paired.closed).closeCode).toBe(1001);
+    const again = await open();
+    expect(again.serverInfo.principal).toBe('owner:paired');
+    expect(await again.client.admin({ type: 'daemonStatus' })).toMatchObject({ kind: 'daemonStatus', status: { running: true, pid: owner.pid } });
+    expect(await again.client.machine({ type: 'coreUpdateStatus' })).toEqual({ type: 'coreUpdateStatus', status: updating });
+    work.release();
+    await draining;
+    const closing = again.closed;
+    await fixture.api.release();
+    expect((await closing).closeCode).toBe(1001);
+    const refused = new WebSocket(`ws://${ALIAS}:${port}/`);
+    sockets.push(refused);
+    expect(await new Promise(resolve => { refused.once('open', () => resolve('open')); refused.once('error', error => resolve((error as NodeJS.ErrnoException).code)); })).toBe('ECONNREFUSED');
+  } finally {
+    work.release();
+    await Promise.allSettled([draining]);
+    for (const socket of sockets) socket.terminate();
+    await local.close();
     await fixture.close();
   }
 });

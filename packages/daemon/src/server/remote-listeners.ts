@@ -15,9 +15,10 @@ export interface RemoteListeners {
   sync(config: RemoteConfig): Promise<void>;
   /** The addresses of the last `sync`, each with what its listener does now. */
   status(): RemoteAddressStatus[];
-  /** No more binding or retrying: every listener closes (the hub drains their connections). */
+  /** No more binding, retrying or watching. The listeners stay open (devices 4.7: a draining daemon answers DRAIN_KINDS
+   * remotely as on the loopback, to connections that pass the same channel and limits); the hub drains the connections. */
   beginDrain(): Promise<void>;
-  /** Settles once every remote server has closed; no timer is left. */
+  /** Closes every remote server, its connections with 1001, and settles once each has closed; no timer is left. */
   release(): Promise<void>;
   onChange(listener: () => void): () => void;
 }
@@ -65,7 +66,8 @@ export function createRemoteListeners(deps: RemoteListenerDeps): RemoteListeners
   const listeners = new Set<() => void>();
   let latest: RemoteConfig | undefined;
   let turn: Promise<void> = Promise.resolve();
-  let draining: Promise<void> | undefined;
+  let drained = false;
+  let releasing: Promise<void> | undefined;
   /** Addresses being closed, those a sync took out of `entries` too: the release waits for them. */
   const stopping = new Set<Promise<void>>();
   const changed = (): void => { for (const listener of listeners) { try { listener(); } catch { /* the listener's own */ } } };
@@ -76,6 +78,7 @@ export function createRemoteListeners(deps: RemoteListenerDeps): RemoteListeners
   };
   const later = (entry: Entry, ms: number, step: () => Promise<void>): void => {
     clearTimeout(entry.timer);
+    if (!live(entry)) return;
     entry.timer = setTimeout(() => { entry.timer = undefined; void queue(entry, step); }, ms);
     entry.timer.unref();
   };
@@ -92,7 +95,7 @@ export function createRemoteListeners(deps: RemoteListenerDeps): RemoteListeners
     else if (state === 'failed') deps.log.warn('remote', 'remote-bind-failed', { host, port: entry.port, code });
     changed();
   }
-  const live = (entry: Entry): boolean => !entry.stopped && !draining;
+  function live(entry: Entry): boolean { return !entry.stopped && !drained; }
 
   /** A LAN address opened with a network binds only on that network: another one waits for the owner, one not known
    * yet (no route or gateway seen) waits like a missing address. */
@@ -175,7 +178,8 @@ export function createRemoteListeners(deps: RemoteListenerDeps): RemoteListeners
         resolve();
         const bound = server.address();
         if (bound && typeof bound !== 'string') port = bound.port;
-        if (!live(entry)) return;
+        // A bind that ends while draining listens too, until the release; it is not watched.
+        if (entry.stopped) return;
         set(entry, 'listening');
         later(entry, watchMs, () => watch(entry));
       });
@@ -237,16 +241,19 @@ export function createRemoteListeners(deps: RemoteListenerDeps): RemoteListeners
     return entry;
   }
 
+  /** Codex review 232-2: draining only stops what would bind or close an address later; the release closes them. */
   function beginDrain(): Promise<void> {
-    draining ??= Promise.all([...entries.values()].map(entry => stop(entry, 'server_shutdown'))).then(() => undefined);
-    return draining;
+    if (drained) return Promise.resolve();
+    drained = true;
+    for (const entry of entries.values()) { clearTimeout(entry.timer); entry.timer = undefined; }
+    return Promise.resolve();
   }
 
   return {
     sync(config) {
       latest = config;
       const run = turn.then(async () => {
-        if (draining) return;
+        if (drained) return;
         const work: Promise<void>[] = [];
         const wanted = new Map(config.addresses.map(address => [address.host, address]));
         for (const [host, entry] of entries) {
@@ -261,7 +268,7 @@ export function createRemoteListeners(deps: RemoteListenerDeps): RemoteListeners
           work.push(stop(entry, 'remote_disabled'));
         }
         await Promise.all(work);
-        if (draining) return;
+        if (drained) return;
         const started = [...wanted.values()].map(address => start(address, config.port));
         changed();
         await Promise.all(started.map(entry => entry.turn));
@@ -276,9 +283,13 @@ export function createRemoteListeners(deps: RemoteListenerDeps): RemoteListeners
       });
     },
     beginDrain,
-    release: async () => {
-      await beginDrain();
-      while (stopping.size) await Promise.all(stopping);
+    release() {
+      releasing ??= (async () => {
+        await beginDrain();
+        for (const entry of entries.values()) void stop(entry, 'server_shutdown');
+        while (stopping.size) await Promise.all(stopping);
+      })();
+      return releasing;
     },
     onChange(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
   };
