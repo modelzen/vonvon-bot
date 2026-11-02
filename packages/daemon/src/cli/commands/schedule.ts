@@ -144,10 +144,14 @@ function groupLines(tasks: readonly ScheduledTaskView[], names: ReadonlyMap<stri
 
 /** These also take the raw id of a group no longer bound, whose tasks list --all still shows; the rest would act in it. */
 const UNBOUND = new Set<ScheduleAction>(['list', 'runs', 'delete', 'pause']);
-function chatOf(memberships: readonly Membership[], bot: Agent, group: string, action: ScheduleAction): string {
+/**
+ * `session`: a Bot session's snapshot is cut to what it reaches (a comment's to no group), so a group id it does not
+ * show goes as it is and the daemon says why not (`not-group` outside a group, out of reach elsewhere; Codex review 230-3).
+ */
+function chatOf(memberships: readonly Membership[], bot: Agent, group: string, action: ScheduleAction, session: boolean): string {
   const bound = memberships.some(m => m.agentId === bot.id && (m.groupId === group || m.name === group));
   // The bot process still checks the scope: an id it has no such task under is not-found.
-  return !bound && UNBOUND.has(action) && /^oc_/.test(group) ? group : pickGroup(memberships, bot, group).groupId;
+  return !bound && (session || UNBOUND.has(action)) && /^oc_/.test(group) ? group : pickGroup(memberships, bot, group).groupId;
 }
 
 /** In a Bot's session the connection carries the session's token and `--scope`, and the daemon judges (devices-4a 4.9). */
@@ -170,7 +174,7 @@ export async function runSchedule(action: ScheduleAction, target: ScheduleTarget
   const taskId = target.taskId ?? '';
   const { what, kind } = ACTIONS[action];
 
-  const { reply, names } = await daemon(async (call): Promise<{ reply: ScheduleReply; names?: ReadonlyMap<string, string> }> => {
+  const { reply, names } = await daemon(async (call, info): Promise<{ reply: ScheduleReply; names?: ReadonlyMap<string, string> }> => {
     const snapshot = await call('读取快照', c => c.snapshot());
     const bot = pickBot(snapshot.agents, target.bot);
     // Checked outside the call, whose own errors all become connection, failed or outcome-unknown.
@@ -179,7 +183,8 @@ export async function runSchedule(action: ScheduleAction, target: ScheduleTarget
       return call(as.what, c => c.schedule(bot.id, valid), as.unknown ? { unknown: as.unknown } : {});
     };
     if (all) return { reply: await send({ action: 'listBot' }), names: new Map(snapshot.memberships.filter(m => m.agentId === bot.id).map(m => [m.groupId, m.name])) };
-    const chatId = chatOf(snapshot.memberships, bot, target.group!, action);
+    const session = info !== undefined && 'principal' in info && info.principal?.startsWith('bot-session:') === true;
+    const chatId = chatOf(snapshot.memberships, bot, target.group!, action, session);
     // A list before the change itself is only a read: a lost reply to it changed nothing.
     const list = async () => want(ACTIONS.list.what, await send({ action: 'list', chatId }, ACTIONS.list), 'tasks');
     const find = async () => {

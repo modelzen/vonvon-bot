@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { build } from 'esbuild';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { VonvonClient } from '@vonvon/client';
-import type { AdminBot, AdminProject } from '../src/admin/service';
+import { connectLocal, type VonvonClient } from '@vonvon/client';
+import type { ScheduledTaskView } from '@vonvon/protocol';
+import type { AdminBot, AdminProject, AdminService } from '../src/admin/service';
 import { setCliContext, withDaemon } from '../src/cli/daemon-client';
 import { loadCommands, loadLocalOnly } from './helpers/cli-commands';
 import { fakeService, startFixture } from './server-fixture';
@@ -16,6 +17,7 @@ import { fakeService, startFixture } from './server-fixture';
  */
 const BOT = 'cli_x';
 const GROUP = 'oc_y';
+const OTHER = 'oc_z';
 const bot: AdminBot = { appId: BOT, name: 'X', tenant: 'feishu', active: true, current: true, running: true, completionReminder: { mode: 'failures', longTaskMinutes: 3 } };
 const row = (name: string, chatId: string): AdminProject => ({ name, chatId, cwd: '/w', blank: false, kind: 'multi', origin: 'joined', noMention: false, mode: 'qa', guestMode: 'qa',
   network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 });
@@ -100,6 +102,10 @@ describe('a Bot session\'s command line', () => {
       for (const session of [{ VONVON_SESSION: d.token }, { FEISHU_CODEX_BRIDGE: '1' }]) {
         expect(await run(d.fixture.home, d.home, ['daemon', 'status'], session)).toMatchObject({ code: 0, json: { ok: true, running: true, listen: d.fixture.api.listen, source: 'files' } });
       }
+      // Codex review 230-3: a comment session's task is refused for its place (exit 4), not as a group it cannot see (exit 2)
+      const comment = d.fixture.sessionTokens.issue({ appId: BOT, place: 'comment', sessionId: 'ses_2222222222222222' });
+      const add = await run(d.fixture.home, d.home, ['schedule', 'add', '巡检', '--group', GROUP, '--name', 'probe', '--every', '1h', '--scope', `bot=${BOT}`], { VONVON_SESSION: comment });
+      expect(add, add.stderr).toMatchObject({ code: 4, json: { error: { kind: 'refused', reason: 'not-group' } } });
       d.fixture.sessionTokens.revoke('ses_0123456789abcdef');
       expect(await run(d.fixture.home, d.home, ['schedule', 'list', '--group', GROUP, '--scope', `bot=${BOT},group=${GROUP}`], { VONVON_SESSION: d.token }))
         .toMatchObject({ code: 4, json: { error: { kind: 'refused', reason: 'session_token_invalid', message: '会话令牌已失效（会话结束或超过 24 小时没用）。' } } });
@@ -145,6 +151,55 @@ describe('a Bot session\'s command line', () => {
         .toMatchObject({ code: 2, json: { error: { kind: 'bad-args', message: '--scope 的写法是 bot=<appId>[,group=<chatId>]。' } } });
     }
   });
+});
+
+/** A running daemon the owner reaches as usual, its bot bound to two groups. */
+async function ownerDaemon(overrides: Partial<AdminService> = {}) {
+  const fixture = await startFixture(fakeService({ listBots: async () => [bot], listProjects: async appId => appId === BOT ? [row('研发', GROUP), row('运营', OTHER)] : [],
+    getDaemonStatus: async () => ({ installed: false, running: true, selfHosted: true, version: 'test', supported: true, pid: process.pid }), ...overrides }));
+  await writeFile(join(fixture.home, 'daemon.pid'), JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), listen: fixture.api.listen }));
+  return { fixture, home: (await emptyHome()).home };
+}
+const task = (id: string, chatId: string): ScheduledTaskView => ({ id, botId: BOT, chatId, revision: 'r1', name: id, instruction: 'x', spec: { kind: 'every', minutes: 60 }, timeZone: 'UTC',
+  placement: { kind: 'follow' }, state: 'active', createdBy: { via: 'cli' }, createdAt: 1, updatedAt: 1, running: false, counts: { runs: 0, missed: 0, skipped: 0, consecutiveFailures: 0 }, recent: [], describe: '每小时' });
+
+describe('the owner\'s --scope on the command line', () => {
+  // Codex review 228-2 / 229-3. main 必败: the reply kept the other group's tasks
+  it('lists only the scoped group\'s tasks with --all', async () => {
+    const executeSchedule = vi.fn(async () => ({ kind: 'tasks' as const, tasks: [task('st_a', GROUP), task('st_b', OTHER)], now: 1, timeZone: 'UTC' }));
+    const d = await ownerDaemon({ executeSchedule });
+    try {
+      const all = await run(d.fixture.home, d.home, ['schedule', 'list', '--all', '--scope', `bot=${BOT},group=${GROUP}`], {});
+      expect(all, all.stderr).toMatchObject({ code: 0, json: { ok: true, kind: 'tasks' } });
+      expect((all.json.tasks as ScheduledTaskView[]).map(item => item.chatId)).toEqual([GROUP]);
+      // without --scope the owner sees the whole bot
+      expect(((await run(d.fixture.home, d.home, ['schedule', 'list', '--all'], {})).json.tasks as ScheduledTaskView[]).map(item => item.chatId)).toEqual([GROUP, OTHER]);
+    } finally { await d.fixture.close(); }
+  }, 60_000);
+
+  // Codex review 229-4. main 必败: the other group was bound
+  it('binds no group outside the scope', async () => {
+    const bindGroup = vi.fn<NonNullable<AdminService['bindGroup']>>(async () => { throw new Error('not reached'); });
+    const d = await ownerDaemon({ bindGroup });
+    try {
+      const outside = await run(d.fixture.home, d.home, ['group', 'bind', 'oc_outside', '--name', 'outside', '--tool', 'claude', '--conversation', 'threads', '--scope', `bot=${BOT},group=${GROUP}`], {});
+      expect(outside, outside.stderr).toMatchObject({ code: 4, json: { ok: false, error: { kind: 'refused', reason: 'permission_denied' } } });
+      expect(bindGroup).not.toHaveBeenCalled();
+    } finally { await d.fixture.close(); }
+  }, 60_000);
+});
+
+describe('a session\'s token given to connectLocal', () => {
+  // Codex review 230-2. main 必败: the discovery child checked the owner with local-credential (unreadable here) and failed
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('finds the daemon from the lock alone, with the real discovery command', async () => {
+    vi.stubEnv('VONVON_SESSION', ''); vi.stubEnv('FEISHU_CODEX_BRIDGE', '');
+    const d = await daemon();
+    try {
+      const { client, serverInfo } = await connectLocal({ home: d.fixture.home, cliEntry: entry, credential: d.token });
+      expect(serverInfo).toMatchObject({ principal: 'bot-session:group' });
+      await client.close();
+    } finally { vi.unstubAllEnvs(); await d.close(); }
+  }, 60_000);
 });
 
 describe('negotiate outside a session', () => {
