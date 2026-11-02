@@ -255,11 +255,18 @@ export async function publishServerObjects({ dir, plan, config, client, env = pr
   } finally { await lock.close(); await unlink(lockPath); }
 }
 
+/** The live stable manifest is still the snapshot the owner reviewed in the plan, or (`candidateSHA256`) already this one. */
+async function liveManifestAsReviewed(plan, fetchImpl, candidateSHA256) {
+  const live = await stableSnapshot(fetchImpl, plan.publicKey);
+  return JSON.stringify(live) === JSON.stringify(plan.previousManifest) || (candidateSHA256 !== undefined && live.status === 200 && live.sha256 === candidateSHA256);
+}
+
 /**
  * Switches the server's stable: install.sh, uninstall.sh, then stable/manifest.json, each only when its live bytes differ
  * from the plan. Called only from release-publish promote, with the reviewed plan (its hash checked there) and the
- * owner's confirmation; without the confirmation nothing is written. The live manifest must still be the one in the
- * plan right before it is replaced. An already switched stable is only checked again.
+ * owner's confirmation; without the confirmation nothing is written. Before the first write the live manifest must still
+ * be the one in the plan (or already this candidate's, on a rerun), so a stable that moved on gets none of the three; it
+ * is read again right before the manifest replaces it. An already switched stable is only checked again.
  */
 export async function promoteServerStable({ dir, plan, config, client, env = process.env, ownerConfirmation, planSHA256, cancelFile, readSource, fetchImpl = fetch, log = console.log }) {
   if (!/^[a-f0-9]{64}$/.test(planSHA256 ?? '')) throw new Error('切服务端 stable 要带 owner 看过的计划哈希');
@@ -281,13 +288,14 @@ export async function promoteServerStable({ dir, plan, config, client, env = pro
   const receipt = { version: plan.version, sourceSha: plan.sourceSha, planSHA256, ownerConfirmation: ownerConfirmation ?? null };
   if (pending.length) {
     if (!ownerConfirmation?.trim()) throw new Error('切服务端 stable 要 owner 对这份候选的确认（--owner-confirmation）；什么都没写');
+    // The scripts carry the key and address of the manifest they come with: none is written over a stable that moved on.
+    const candidate = plan.stable.find(object => object.file === SIGNED_MANIFEST).sha256;
+    if (!(await liveManifestAsReviewed(plan, fetchImpl, candidate))) throw new Error('线上的服务端 stable 清单在 owner 看过计划之后变了；服务端 stable 一个对象都没写');
     for (const object of pending) {
       await assertNotCancelled(cancelFile);
       const manifest = object.file === SIGNED_MANIFEST;
-      // Read right before replacing it, as for Mac and Windows stable.
-      if (manifest && JSON.stringify(await stableSnapshot(fetchImpl, plan.publicKey)) !== JSON.stringify(plan.previousManifest)) {
-        throw new Error('线上的服务端 stable 清单在 owner 看过计划之后变了；清单没覆盖');
-      }
+      // Read again right before replacing it, as for Mac and Windows stable.
+      if (manifest && !(await liveManifestAsReviewed(plan, fetchImpl))) throw new Error('线上的服务端 stable 清单在 owner 看过计划之后变了；清单没覆盖');
       await atomic(join(dir, STABLE_RECEIPT), { ...receipt, status: 'write-started' });
       client ??= await serverCosClient(config, env);
       const body = bodies[object.file];
