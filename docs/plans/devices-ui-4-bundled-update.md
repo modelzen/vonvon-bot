@@ -222,7 +222,7 @@ export function createBundledUpdate(deps: BundledUpdateDeps): BundledUpdate;
   - `checkCoreUpdate`：`bundled` → `{ type: 'coreUpdate', distribution, dev: false, ...await bundled.check(by, request.fresh !== false) }`。
   - `applyCoreUpdate`：`bundled` → 先照 71 行拒 `version`/`allowDowngrade`，再 `{ kind: 'read', value: { type: 'done', message: await bundled.apply(by) } }`。
   - `desktopUpdateReport`：调用者不是"本机 owner + `clientKind: 'desktop'` + 声明了 `DESKTOP_SELF_UPDATE_CAPABILITY`" → `RpcError('forbidden', '只有这台电脑上的桌面端能报告更新进度。')`；是 → `bundled.report(peer, request)`，回 `done`。
-  - `by` 用 `peerName(peer, clients)`：配对来的是"「<名字>」"，本机是"这台电脑上的<桌面端|命令行|网页端>"。加在 U3 建的 `D/server/peer-label.ts` 里，用 U3 导出的 `pairedPeerName`、`localPeerLabel`，不再写一份"这台电脑上的…"对照表。
+  - `by` 用 `peerName(peer, clients)`：配对来的是"「<名字>」"，名单里没有的配对连接是"另一台设备"，本机是 U3 `localPeerLabel` 的"本机的<桌面端|命令行|网页端>"（实现时，见第 11 节）。加在 U3 建的 `D/server/peer-label.ts` 里，用 U3 导出的 `pairedPeerName`、`localPeerLabel`，不再写一份"这台电脑上的…"对照表。
   - `machineRpc` 的参数加 `peer` 和 `bundled`：`MachineServiceContext` 里加 `bundled?: BundledUpdate`，`peer` 由 `http.ts` 的分发处传进来。今天 `rpc.ts` 已经把 peer 传给 `command`，照抄。
 - **`D/server/http.ts`：**
   - `createBundledUpdate({ shells: () => [...hub.peers].filter(isDesktopShell), version: bridgeVersion(), log })`；
@@ -585,7 +585,7 @@ Windows 只有这一个任务，等 U2、U3、U4 都合入集成分支后发。C
 **停止、重启、升级直接中断对话（R1，owner 2026-11-02）。** 远程更新不排空，也不等对话结束。确认框、按钮旁和被更新那台的提示，都写"正在进行的对话会被中断"。`restarting` 的状态行照旧用 `draining`，显示"正在中断进行中的对话"。
 
 **U3 还没合入。**
-- `D/server/peer-label.ts` 由本片新建，里面有 `pairedPeerName`、`localPeerLabel` 和 `peerName`。U3 合入时用这一份，不再建第二份。
+- `D/server/peer-label.ts` 本片和 U3 各建了一份。U3 合入集成分支时（U3 的合并提交 `d8f5fd2a`）以 U3 的为准，`peerName` 加进 U3 的文件：配对的「<名字>」由 `peerName` 自己加书名号，本机的称呼用 U3 的 `localPeerLabel`（"本机的命令行"这类，不是原来写的"这台电脑上的…"），名单里没有的配对连接是"另一台设备"。
 - hub 没有 `attached` 回调。改成在 `admin.negotiate` 成功、这条连接认得出是外壳时调 `shellAttached`。外壳要声明以后才认得出，所以效果一样。
 
 **UI。**
