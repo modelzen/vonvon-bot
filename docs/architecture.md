@@ -282,6 +282,7 @@ vonvon-platform 只有约 1170 行，数据存在一个 JSON 文件里，只能�
 - 升级：清单 `bot/server/stable/manifest.json` 用单独的 Ed25519 密钥签名，签名内容含 `product`、`channel`、`version`、`linux-x64` 和 `linux-arm64` 两个包的 URL 和 sha512；只接受比当前和历史最高都新的版本，`publishedAt` 不倒退。`machine.applyCoreUpdate` 在 `update.lock` 里下载、核对、改名到 `releases/<v>/`，**先原子切 `current` 再请求重启**（排空、退 75、管理器拉起的就是新版本）；重启助手核对新进程的 `serverInfo.version`，不对或超时就切回上一版。`vonvon update` 发同一个 RPC，并在 daemon 重启的那一刻改读本机 `update-status.json`。
 - 桌面端自带的服务端（`bundled`）不自己换文件：daemon 发事件 `desktopUpdateRequest` 给本机声明了 `desktop.self-update` 能力的外壳连接，外壳跑它已有的应用更新（macOS Squirrel、Windows electron-updater），用 `machine.desktopUpdateReport` 回进度，daemon 映射到 `coreUpdateStatus`；排空沿用现有的 `beforeUpdateInstall` 和启动修复。外壳没连着就回 `desktop_not_running`。
 - 安装脚本（`install.sh`，只在 Linux）只做下载、核对、解包和调 `vonvon`，逻辑尽量放在 `vonvon` 里（`service install`、`remote`）。先看系统，不是 Linux 就退出；再看 root，是 root 默认拒绝。
+- 安装脚本解包到 `releases/<v>.part`，核对完改名成 `releases/<v>/`，再用包里的 Node 跑隐藏命令 `vonvon __standalone-setup`：它调升级引擎同一个 `switchCurrent`（`D/service/current-release.ts`，[server-3](plans/server-3-update-engine.md) §4.1 的 C5）切 `current`，写跟着 `current` 走的 `bin/vonvon` 和 PATH 块。PATH 块的文本和拼接在 `@vonvon/protocol` 的 `cli-path-block.ts`，桌面端和 daemon 共用（[server-2](plans/server-2-install-scripts.md) §4.3、§4.6）。
 
 ## 核心数据形状
 
