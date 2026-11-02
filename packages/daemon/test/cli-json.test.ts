@@ -11,9 +11,11 @@ import { loadCommands } from './helpers/cli-commands';
  * `{ ok: true, … }` on exit 0 and `{ ok: false, error: { kind, message }, exitCode }` with the same exit code
  * otherwise. No daemon runs and the data root is a temporary one, so the RPC commands answer 3 (or 2 for bad input).
  */
+/** No background service on Windows (owner 2026-11-01: Mac and Windows run the desktop app only), so the service commands fail there. */
+const WINDOWS = process.platform === 'win32';
 const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['daemon', 'start', '--port', '70000'], 2], [['daemon', 'stop'], 0], [['daemon', 'status'], 0], [['daemon', 'logs'], 0], [['daemon', 'logs', '--follow'], 3],
-  [['service', 'install'], 1], [['service', 'uninstall'], 0], [['service', 'status'], 0], [['service', 'skip'], 3],
+  [['service', 'install'], 1], [['service', 'uninstall'], WINDOWS ? 1 : 0], [['service', 'status'], WINDOWS ? 1 : 0], [['service', 'skip'], 3],
   [['bot', 'add'], 3], [['bot', 'list'], 3], [['bot', 'status'], 3], [['bot', 'repair-dir', 'nope'], 1],
   [['bot', 'enable'], 3], [['bot', 'disable'], 3], [['bot', 'remove', 'x'], 3], [['bot', 'rescan'], 3],
   [['bot', 'callback', 'status'], 3], [['bot', 'callback', 'confirm'], 3], [['bot', 'callback', 'unconfirm'], 3],

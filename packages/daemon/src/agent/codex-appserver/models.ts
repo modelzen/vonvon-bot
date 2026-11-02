@@ -1,6 +1,7 @@
 import { closeSync, constants, fstatSync, openSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { expandHome } from '../../platform/home-path';
 import type { ModelInfo, ReasoningEffort } from '../types';
 import { binFingerprint, withModelDiscoveryClient } from './client-pool';
 import { codexVersionAsync } from './locate';
@@ -134,7 +135,7 @@ export async function discoverCodexModels(bin: string): Promise<{ models: ModelI
     const reply = await client.request<{ config?: ModelConfig }>('config/read', { includeLayers: false, cwd: homedir() });
     const config = reply.config ?? {};
     const path = config.model_catalog_json;
-    const catalogPath = path ? path.startsWith('~/') ? join(homedir(), path.slice(2)) : resolve(codexHome(), path) : undefined;
+    const catalogPath = path ? resolve(codexHome(), expandHome(path, homedir())) : undefined;
     const catalogVersion = catalogPath ? fileVersion(catalogPath) : undefined;
     const rawModels: RawModel[] = [];
     const cursors = new Set<string>();

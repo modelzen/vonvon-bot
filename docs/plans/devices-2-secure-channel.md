@@ -95,6 +95,16 @@ export type SecureChannelErrorCode = 'device_identity_changed' | 'handshake_fail
 
 关闭码到错误（握手阶段、配对阶段、hello 阶段都用这张表；`CLOSE_CODES` 的键名就是 reason）：4005 在**消息 2 到来之前**关 → `device_identity_changed`（那个地址上有 vonvon，但它的静态公钥解不开我们用链接里 `pk` 加密的消息 1；IK 下服务端换了钥匙只能这样表现，设计 4.4 "不同即 `device_identity_changed`" 在 IK 里就是这条）；消息 2 到了但 `finish` 失败 → `handshake_failed`；4002 → `unknown_client`；4003 → `client_revoked`；4007 → `pairing_failed`；4004 → `rate_limited`；4006 → `remote_disabled`；4001 → `protocol_mismatch`；其他 → `closed`。
 
+**U1a 要用的补充**（2026-11-01，见 `devices-ui-1a-connections.md` 4.3；D2 实现时一起做）：
+1. `SecureConnection` 加 `closed: Promise<SecureChannelError>`：已建立的连接结束时 resolve 一次，码按上面这张表映射（4003 → `client_revoked`，4006 → `remote_disabled`，1001 → `closed`，保活超时 → `timeout`）；调用方自己 `close()` 时是 `closed`。桌面端靠它在 1 秒内认出"被撤销"，`ConnectionError` 里没有关闭码。
+2. `SecureChannelError` 加 `stage: 'handshake' | 'pairing' | 'hello' | 'open'`。桌面端靠它判断配对是不是在半路断的。
+3. 导出走子路径：
+   - `@vonvon/client/secure` → `transport-secure.js`。它的 client 用 `client.js` 的 `createClient`，所以 `ConnectionError` 和 `@vonvon/client/browser` 的是同一个类。
+   - `@vonvon/protocol/secure-channel` → `secure-channel.js`，**不从 `P/index.ts` 导出**。界面打浏览器包时会 import `@vonvon/protocol`，不能把 `node:crypto` 带进去。
+   - 两个子路径都要登记进各自的 `package.json` `exports`，不登记，import 时 Node 报 `ERR_PACKAGE_PATH_NOT_EXPORTED`（今天 client 只有 `.` 和 `./browser`，protocol 只有 `.`）：
+     - `packages/client/package.json`：`"./secure": { "types": "./dist/transport-secure.d.ts", "import": "./dist/transport-secure.js" }`；
+     - `packages/protocol/package.json`：`"./secure-channel": { "types": "./dist/secure-channel.d.ts", "import": "./dist/secure-channel.js" }`。
+
 ### 4.3 `D/server/peer-hub.ts`（从 `ws.ts` 抽出）
 
 ```ts
@@ -206,3 +216,9 @@ Mac 后验（整批）：U1a 的桌面端用 `webBinarySocket`/`nodeBinarySocket
 - IK 下服务端换钥匙的表现只能是 4005（它读不出消息 1）；把它映成 `device_identity_changed` 是本片定的，和设计 4.4 的意图一致，但"同地址上换成别的非 vonvon 服务"也会落到这里（那种情况多半没有 4005，而是 1006/升级失败，映到 `closed`）。
 - 撤销瞬间的主动断连在 D3（本片只在下一条 RPC 时关），设计 13 节已把撤销验收挪到 D3。
 - Electron 侧 `webBinarySocket` 未在本片真机验证（U1a 用它），只有假 socket 单测。
+
+## 10. 审查后改了什么
+
+2026-11-02，#640 上 Sonnet 审查 U1a–U4 计划时，提到本片的一条，接受：
+
+- U1a 要用的两个子路径 `@vonvon/client/secure`、`@vonvon/protocol/secure-channel` 没说要登记进 `package.json` 的 `exports`，不登记 import 就失败。4.2"U1a 要用的补充"第 3 条补上两条 `exports`。

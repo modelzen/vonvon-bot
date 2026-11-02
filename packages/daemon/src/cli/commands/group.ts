@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
 import {
   commandSchema, conversationCopy, FULL_ACCESS_WARNING, groupIdSchema, modeToConversation, replyModeSchema, toolSchema,
   type AgentId, type CollaborationReply, type Conversation, type FolderChoice, type LibraryProject, type Membership, type ProjectRecord,
@@ -9,6 +8,7 @@ import {
   conversationLabel, localTime, pickBot, pickGroup, print, runningBot, toolLabel, want, withDaemon, withoutAvatar, type Call, type Daemon, type Io,
 } from '../daemon-client';
 import { badArgs, CommandError } from '../command-error';
+import { expandHome, pathFor } from '../../platform/home-path';
 
 /** One Feishu page holds 50 groups, so this is 1000 groups. */
 const MAX_PAGES = 20;
@@ -72,12 +72,12 @@ export const thisHost = (): Host => ({ cwd: process.cwd(), home: homedir(), plat
 
 /**
  * A folder as typed, made absolute on this computer (cli-3-groups 4.5): bash leaves --folder=~/x alone, and the daemon
- * resolves relative paths against its own working directory. Whether it is a folder is the daemon's to say (devices
- * 8.3); a folder that is not there comes back as `invalid_directory`, exit 2.
+ * resolves relative paths against its own working directory. `~\x` counts on Windows only, and the path rules are the
+ * host's own. Whether it is a folder is the daemon's to say (devices 8.3); a folder that is not there comes back as
+ * `invalid_directory`, exit 2.
  */
 export function folderPath(raw: string, host: Host): string {
-  const expanded = raw === '~' || raw.startsWith('~/') ? join(host.home, raw.slice(1)) : raw;
-  return resolve(host.cwd, expanded);
+  return pathFor(host.platform).resolve(host.cwd, expandHome(raw, host.home, host.platform));
 }
 
 /** `--folder default`, or none: the folder the daemon makes for the group. */

@@ -1,5 +1,7 @@
 # I4b `server-4b-windows-supervise`：`__win-supervise` 监督进程
 
+> 已取消（owner 2026-11-01：Mac、Windows 只用安装包装全部软件，不做命令行只装服务端）
+
 依据 `docs/plans/devices.md` §7.4 的"监督进程"一段、§13 的 I4b 行、`docs/architecture.md` 55-65 的退出码规则。契约 C5（`current.txt`）、C6（退出码）、C3（`update-status.json`）在 `docs/plans/server-3-update-engine.md` §4.1；任务 XML 和启动器在 `docs/plans/server-4a-windows-task.md`。I3 §4.6 把 Windows 的升级回滚交给本文，这里把它写全。缩写同 `devices.md`。
 
 代码由 Claude 在 Linux 上写；监督逻辑全部是平台无关的进程管理（`spawn`、退出码、定时器、文件），单元测试在 Linux 上用假子进程跑；真 Windows 的行为按 §6 的清单由 Windows Codex 验收，和 I4a、I2b 同一个任务发。

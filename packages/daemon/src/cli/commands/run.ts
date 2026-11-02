@@ -18,6 +18,7 @@ import { startApi } from '../../server/http';
 import { noteClaudeLoginFailed } from '../../agent/claude-agent/login';
 import { createDiagnosticsStore, ipcDiagnosticsSink, setDiagnosticsSink } from '../../bot/diagnostics';
 import {bridgeImportRuntime} from '../../import/bridge/runtime';
+import { fallbackWorkingDirectory } from '../../platform/fallback-cwd';
 
 interface RunOptions {
   control?: ShutdownControl;
@@ -104,7 +105,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
     throw err;
   }
 
-  const fallbackCwd = process.env.FEISHU_CODEX_CWD || process.cwd();
+  const fallbackCwd = fallbackWorkingDirectory();
   console.log('\n正在启动 Bot 的长连接…');
   console.log('私聊我 `/new <名>` 建项目；在项目群里 @我 干活。Ctrl+C 退出。\n');
   let api: Awaited<ReturnType<typeof startApi>> | undefined;
