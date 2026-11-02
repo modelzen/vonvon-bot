@@ -218,6 +218,8 @@ export async function startApi(options: { service: AdminService; port?: number; 
         if (!options.control) throw new Error('Host control is unavailable');
         options.control.requestStop();
         peer.send({ type: 'response', id: request.id, method: 'machine', payload: { type: 'done', message: 'daemon 正在停止。' } });
+      } else if (request.method === 'machine' && request.payload.type === 'coreUpdateStatus') {
+        peer.send({ type: 'response', id: request.id, method: 'machine', payload: { type: 'coreUpdateStatus', status: options.service.updateStatus() } });
       } else if (request.method === 'admin' && request.payload.type === 'daemonStatus') {
         const lock = await owner;
         const own = lock?.pid === process.pid && lock.listen === `127.0.0.1:${port}`;

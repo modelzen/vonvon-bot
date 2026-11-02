@@ -1,11 +1,11 @@
-import { requestSchema, rpcKindOf, type Request } from '@vonvon/protocol';
+import { DRAIN_KINDS, requestSchema, rpcKindOf, type Request } from '@vonvon/protocol';
 import { getRpcErrorCode } from './errors';
 import type { PeerHub } from './peer-hub';
 import type { Peer } from './ws';
 
-/** What a draining daemon still answers, through `control` (devices 4.7). D4a swaps in `DRAIN_KINDS`, with `control`
- * answering `machine.coreUpdateStatus` too. */
-const DRAINING = new Set(['admin.daemonStatus', 'machine.stopHost']);
+/** What a draining daemon still answers, through `control` (devices 4.7): `DRAIN_KINDS`, with `control` answering
+ * `machine.coreUpdateStatus` too (server-3a). */
+const DRAINING: ReadonlySet<string> = new Set(DRAIN_KINDS);
 
 export interface MessageLoopOptions {
   request(peer: Peer, request: Request): Promise<void>;
