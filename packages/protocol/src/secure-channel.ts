@@ -47,13 +47,15 @@ const base64urlKey = (text: string, what: string): Buffer => {
   if (bytes.length !== DHLEN) throw new Error(`${what} must be 32 bytes, base64url`);
   return bytes;
 };
-/** As `device.json` keeps it (D1 `deviceKeyPair`): JWK `x` and `d`. A pair whose halves do not belong together is refused. */
+/**
+ * As `device.json` keeps it (D1 `deviceKeyPair`): JWK `x` and `d`. A pair whose halves do not belong together is refused.
+ * `d` is imported alone and compared here: some Node builds refuse a mismatched JWK at import with their own message.
+ */
 export function staticKeyFromBase64url(publicKey: string, privateKey: string): StaticKey {
   const x = base64urlKey(publicKey, "public key");
-  base64urlKey(privateKey, "private key");
-  const key = createPrivateKey({ key: { kty: "OKP", crv: "X25519", x: publicKey, d: privateKey }, format: "jwk" });
-  if (!timingSafeEqual(rawPublic(createPublicKey(key)), x)) throw new Error("public key does not belong to the private key");
-  return { publicKey: x, privateKey: key };
+  const key = staticKeyFromPrivateKey(base64urlKey(privateKey, "private key"));
+  if (!timingSafeEqual(key.publicKey, x)) throw new Error("public key does not belong to the private key");
+  return key;
 }
 /** From the raw 32-byte private key alone (the test vectors give only that). */
 export function staticKeyFromPrivateKey(privateKey: Buffer): StaticKey {
