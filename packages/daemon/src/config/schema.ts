@@ -162,6 +162,12 @@ export function getSessionTitleEfforts(backendId: string): readonly ReasoningEff
   return REASONING_EFFORTS;
 }
 
+/** Claude has a finite SDK effort protocol; Codex accepts native provider IDs. */
+export function acceptsBackendEffort(backendId: string, effort: unknown): effort is ReasoningEffort {
+  return typeof effort === 'string' && effort.length > 0 && effort.length <= 1000 && effort === effort.trim()
+    && (backendId !== 'claude-agent' || getSessionTitleEfforts(backendId).includes(effort));
+}
+
 /** 消费侧可以直接使用的完整联合：关闭时绝不携带模型参数。 */
 export type ResolvedSessionTitleBackendConfig =
   | { enabled: false }
@@ -395,7 +401,7 @@ export function getSessionTitleConfig(cfg: AppConfig, _sessionBackend?: string):
   const titles = cfg.preferences?.sessionTitles;
   const resolve = (raw: SessionTitleBackendConfig | undefined, backend: string): GlobalSessionTitlePolicy => {
     if (raw?.enabled !== true || typeof raw.model !== 'string' || !raw.model.trim() ||
-      !getSessionTitleEfforts(backend).includes(raw.effort)) return { enabled: false };
+      !acceptsBackendEffort(backend, raw.effort)) return { enabled: false };
     return { enabled: true, backend, model: raw.model.trim(), effort: raw.effort };
   };
   const known = ['codex-appserver', 'claude-agent'];

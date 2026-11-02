@@ -156,10 +156,11 @@ export function validateBackendSwitch(opts: {
   return null;
 }
 
-/** Windows doctor starts Job Object supervisors for version and sandbox probes.
- * Their bounded startup can exceed 3 s even for a healthy installed CLI. Keep
- * the outer budget above those probes; a hung/failed doctor still cannot pass. */
-export const BACKEND_PROBE_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 3_000;
+/** Native CLI discovery ranks candidates in batches of bounded version probes,
+ * so even macOS/Linux can take more than one 3 s probe. Windows additionally
+ * starts Job Object supervisors and sandbox checks. Keep the outer budget above
+ * normal cold discovery; a hung/failed doctor still cannot pass. */
+export const BACKEND_PROBE_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 30_000;
 
 /**
  * 🧠 后端检测的纯探测（exported for tests）：并行对全部后端 doctor({force})，
@@ -170,6 +171,7 @@ export const BACKEND_PROBE_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 
 export async function probeBackends(
   backends: readonly Pick<AgentBackend, 'id' | 'displayName' | 'supportedModes' | 'doctor'>[],
   timeoutMs = BACKEND_PROBE_TIMEOUT_MS,
+  options: { force?: boolean; permissions?: boolean } = { force: true },
 ): Promise<BackendProbeRow[]> {
   return Promise.all(
     backends.map(async (be) => {
@@ -177,7 +179,7 @@ export async function probeBackends(
       const timeout = new Promise<undefined>((resolve) => {
         timer = setTimeout(() => resolve(undefined), timeoutMs);
       });
-      const probe = await Promise.race([be.doctor({ force: true }).catch(() => undefined), timeout]).finally(() =>
+      const probe = await Promise.race([be.doctor(options).catch(() => undefined), timeout]).finally(() =>
         clearTimeout(timer),
       );
       return { id: be.id, name: be.displayName, probe, supportedModes: be.supportedModes };

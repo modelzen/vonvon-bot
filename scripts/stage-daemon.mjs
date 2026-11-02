@@ -3,6 +3,7 @@ import { access, cp, mkdir, readFile, realpath, symlink, writeFile } from 'node:
 import { basename, dirname, join, relative, sep } from 'node:path';
 import { createRequire, isBuiltin } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { buildWindowsSupervisor } from './build-windows-supervisor.mjs';
 
 const source = fileURLToPath(new URL('../packages/daemon/', import.meta.url));
 const assets = ['LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md', 'import-core.json'];
@@ -192,6 +193,7 @@ export async function stageDaemon(destination, metadata, options = {}) {
   const runtime = new Set(Object.keys({ ...dependencies, ...runtimeMetadata.optionalDependencies }));
   const bundled = new Set();
   await mkdir(join(destination, 'dist'), { recursive: true });
+  const supervisorHash = process.platform === 'win32' ? await buildWindowsSupervisor(join(destination, 'dist')) : undefined;
   const result = await build({
     absWorkingDir: source,
     entryPoints: ['src/cli/index.ts'],
@@ -206,6 +208,7 @@ export async function stageDaemon(destination, metadata, options = {}) {
     sourcemap: false,
     metafile: true,
     plugins: [runtimePlugin(runtime, bundled)],
+    define: { __VONVON_SUPERVISOR_SHA256__: supervisorHash ? JSON.stringify(supervisorHash) : 'undefined' },
   });
   const external = new Set();
   for (const output of Object.values(result.metafile.outputs)) {

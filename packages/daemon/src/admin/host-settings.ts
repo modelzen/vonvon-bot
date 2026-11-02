@@ -5,7 +5,7 @@ import { isAbsolute } from 'node:path';
 import { paths } from '../config/paths';
 import { acquireMutex, closeMutex } from '../config/data-access';
 import { parseModelId } from '../agent/model-id';
-import { getSessionTitleEfforts } from '../config/schema';
+import { acceptsBackendEffort } from '../config/schema';
 import { discoverProviderModels } from './model-catalog';
 import { decisionProvider } from '../judge/decision';
 import { JUDGE_PROVIDERS, effectiveJudgeModels, readJudgeModels, writeJudgeModels, type JudgeModels } from '../judge/global-models';
@@ -88,7 +88,7 @@ export function createHostSettings(options: {
         if (provider === 'typesafe' && !choice.custom && !api.models.some(model => model.id === choice.model)) return 'TypeSafe 没有这个模型；手填模型请启用 custom';
         continue;
       }
-      if (choice.effort && !getSessionTitleEfforts(provider).includes(choice.effort)) return `${provider} 不支持这个 Effort`;
+      if (choice.effort && !acceptsBackendEffort(provider, choice.effort)) return `${provider} 不支持这个 Effort`;
       if (choice.custom) continue;
       const catalog = await discoverProviderModels(provider as 'codex-appserver' | 'claude-agent');
       if (!catalog.models.length) return `${provider} 的实时模型列表不可用；手填模型请启用 custom`;

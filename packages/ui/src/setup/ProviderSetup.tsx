@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 import {ArrowRight, Check, ChevronRight, RefreshCw, Package, KeyRound} from 'lucide-react';
 import type {CollaborationReply, Command, CommandResult, DesktopSnapshot, ToolState} from '@vonvon/protocol';
 import {backendInstallProgress} from '@vonvon/protocol';
@@ -63,11 +63,14 @@ function ProviderModelPreview({provider, tool, ready}: {provider: SetupProvider;
   const signature = providerSignature(tool);
   const available = ready && providerInstalled(tool) && providerAuthenticated(tool);
   const [retry, setRetry] = useState(0);
+  const readRetry = useRef(0);
   const [catalog, setCatalog] = useState<{signature: string; reply?: Extract<CollaborationReply, {kind: 'providerModels'}>; stale?: boolean; refreshing?: boolean}>();
   useEffect(() => {
     let current = true;
     setCatalog(previous => provider === 'codex' && previous?.signature === signature ? {...previous, refreshing: true} : undefined);
-    if (available) void client.collaboration({action: 'providerModels', backend: providerBackends[provider]}).then(reply => {
+    const refresh = retry > readRetry.current;
+    readRetry.current = retry;
+    if (available) void client.collaboration({action: 'providerModels', backend: providerBackends[provider], ...(refresh ? {refresh: true} : {})}).then(reply => {
       if (current) setCatalog(previous => provider === 'claude'
         ? {signature, ...(reply.kind === 'providerModels' ? {reply} : {})}
         : reply.kind === 'providerModels' && reply.state === 'ready' && reply.models.length
@@ -79,7 +82,7 @@ function ProviderModelPreview({provider, tool, ready}: {provider: SetupProvider;
   const result = catalog?.signature === signature ? catalog : undefined;
   const models = result?.reply?.state === 'ready' ? result.reply.models : undefined;
   return <div className="provider-list-models" aria-label={`${providerNames[provider]} 可用模型`}>
-    <span className="provider-list-models__label">可用模型{provider === 'codex' ? result?.stale ? ' · 上次读取，刷新失败' : result?.refreshing ? ' · 正在刷新…' : '' : ''}{provider === 'codex' && <IconButton size="sm" variant="ghost" label="刷新 Codex 模型" title="刷新 Codex 模型" disabled={Boolean(result?.refreshing)} onClick={() => setRetry(value => value + 1)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}</span>
+    <span className="provider-list-models__label">可用模型{provider === 'codex' ? result?.refreshing ? ' · 正在刷新…' : result?.stale ? ' · 上次读取，刷新失败' : '' : ''}{provider === 'codex' && <IconButton size="sm" variant="ghost" label="刷新 Codex 模型" title="刷新 Codex 模型" disabled={Boolean(result?.refreshing)} onClick={() => setRetry(value => value + 1)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}</span>
     {models?.length ? <ul>{models.map(model => <li key={model.id} title={model.id}>{model.displayName || model.id}</li>)}</ul>
       : <span className="provider-list-models__state" role="status">{result ? '暂时无法读取' : '正在读取…'}{result && <IconButton size="sm" variant="ghost" label="重试" title="重新读取可用模型" onClick={() => setRetry(value => value + 1)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}</span>}
   </div>;
@@ -169,7 +172,7 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
     {management && <>
       {provider === 'codex' && installed && <div className="provider-models-heading"><span>可用模型{state.check?.stale ? ' · 上次读取' : ''}</span><Button size="sm" disabled={disabled || state.check?.state === 'checking'} onClick={() => void state.verify()}>刷新模型</Button></div>}
       {state.check?.models?.length && (provider === 'codex' || state.check.state === 'ready') ? <details className="provider-models" open><summary><span>可用模型</span><span>{state.check.models.length}</span></summary><div className="provider-models__list">{state.check.models.map(model => <div key={model.id}><strong title={model.id}>{model.displayName || model.id}</strong></div>)}</div></details> : null}
-      {provider === 'codex' && state.check?.stale && <p className="provider-check" role="status">模型列表是上次读取的结果；本次刷新失败，请稍后重试。</p>}
+      {provider === 'codex' && state.check?.state === 'unavailable' && state.check.stale && <p className="provider-check" role="status">模型列表是上次读取的结果；本次刷新失败，请稍后重试。</p>}
       <div className="provider-meta"><h2>{provider === 'claude' ? 'Agent SDK 安装信息' : '安装信息'}</h2><dl><div><dt>安装来源</dt><dd>{detectionUnknown ? checking ? '正在检测…' : '暂时无法确认' : provider === 'claude' ? !state.entry ? '正在检测…' : state.entry.depState === 'installed' ? 'Vonvon 管理' : '未安装' : !source ? '正在检测…' : codexSourceLabel}</dd></div>{provider === 'codex' && <>
         <div><dt>当前版本</dt><dd>{currentVersion ?? (state.tool?.installation === 'missing' ? '未安装' : '暂时无法确认')}</dd></div>
         <div><dt>最新版本</dt><dd>{latestVersion ?? (!source ? '正在检测…' : '暂时无法查询')}</dd></div>

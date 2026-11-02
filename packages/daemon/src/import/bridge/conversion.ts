@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { isAbsolute } from 'node:path';
-import { REASONING_EFFORTS } from '../../agent/types';
 import { secretKeyForApp, isSecretRef, type AppConfig } from '../../config/schema';
 import { activeBots } from '../../config/bots';
 import type { Project } from '../../project/registry';
@@ -14,7 +13,7 @@ import { sessionTitleJobKey, type SessionRecord, type SessionTitleJob } from '..
 const text = z.string().min(1).max(65536);
 const path = text.refine(value => isAbsolute(value) && !value.includes('\0'));
 const tier = z.enum(['qa', 'write', 'full']);
-const effort = z.enum(REASONING_EFFORTS);
+const effort = z.string().trim().min(1).max(1000);
 const backend = z.enum(['codex-appserver', 'claude-agent']);
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const time = z.number().finite().nonnegative();

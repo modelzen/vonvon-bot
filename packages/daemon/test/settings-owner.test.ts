@@ -239,8 +239,10 @@ it('session catalog and speed saves use the session cwd capability', async () =>
   const listModelsForCwd = vi.fn(async (_cwd: string) => local);
   const { owner } = await fixture({ backendFor: () => ({ ...backend, listModelsForCwd }) });
   const catalog = await owner.models({ botId, backend: 'codex-appserver', purpose: 'session', threadId: session.threadId });
-  expect(listModelsForCwd).toHaveBeenCalledWith('/tmp/demo');
+  expect(listModelsForCwd).toHaveBeenCalledWith('/tmp/demo', { refresh: undefined });
   expect(catalog).toMatchObject({ state: 'ready', models: local });
+  await owner.models({ botId, backend: 'codex-appserver', purpose: 'session', threadId: session.threadId, refresh: true });
+  expect(listModelsForCwd).toHaveBeenLastCalledWith('/tmp/demo', { refresh: true });
   expect(() => parseModelQuery({ botId, backend: 'codex-appserver', purpose: 'project', threadId: session.threadId })).toThrow();
   const view = await owner.read(session) as SessionSettingsView;
   expect((await owner.save({ scope: session, section: 'speed', revision: view.sections.speed!.revision, patch: { tier: 'fast' } })).kind).toBe('rejected');
@@ -640,10 +642,13 @@ describe('model catalog availability', () => {
     await rememberModelCatalog(query.backend, native, '2026-10-01T00:00:00.000Z');
     const doctor = vi.fn();
     const listModels = vi.fn();
-    const { owner } = await fixture({ offline: true, backendFor: () => ({ ...backend, doctor, listModels, peekModels: () => native }) });
+    const refreshPermissions = vi.fn();
+    const { owner } = await fixture({ offline: true, backendFor: () => ({ ...backend, doctor, listModels, refreshPermissions, peekModels: () => native }) });
     expect(await owner.models(query)).toMatchObject({ state: 'fallback', models: native });
     expect(doctor).not.toHaveBeenCalled();
     expect(listModels).not.toHaveBeenCalled();
+    await owner.read(project);
+    expect(refreshPermissions).not.toHaveBeenCalled();
   });
 
   it('does not treat an old native cache as ready when the backend probe fails', async () => {

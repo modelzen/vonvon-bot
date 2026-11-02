@@ -10,6 +10,7 @@ import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, win3
 import { spawnProcess } from "../platform/spawn";
 import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion, compareCodexVersions } from "../agent/codex-appserver/version";
 import { managedCodexBin } from "../agent/codex-appserver/managed-install";
+import { cachedCodexVersion } from '../agent/codex-appserver/locate';
 import { codexSource } from './codex-source';
 import { bundledNpmCli } from '../platform/npm';
 import { OwnedProviderProcess, ProviderProcessExitError } from '../agent/owned-process';
@@ -79,6 +80,7 @@ export class EnvironmentService {
   private installCompletion?: Promise<EnvironmentReply>;
   private closing = false;
   private closePromise?: Promise<void>;
+  private readonly publishedVersions = new Map<string, { expires: number; value: Promise<string | null> }>();
   /** Each launched tool process, with a promise that settles when its pipes close. */
   private readonly children = new Map<ChildProcess, Promise<void>>();
   private readonly windowsChildren = new Map<ChildProcess, OwnedProviderProcess>();
@@ -302,10 +304,19 @@ export class EnvironmentService {
   private async inspect(tool: EnvironmentTool): Promise<EnvironmentToolState> {
     const resolved = await this.resolveTool(tool);
     const managedVersion = await this.managedVersion(tool);
-    const result = resolved ? await this.command(resolved.executable, ["--version"], process.platform === 'win32' ? 20_000 : 5_000).catch(() => null) : null;
+    const evidence = tool === 'codex' && resolved ? cachedCodexVersion(resolved.executable) : undefined;
+    const result = resolved ? typeof evidence === 'string'
+      ? { exitCode: 0, stdout: evidence }
+      : await this.command(resolved.executable, ["--version"], process.platform === 'win32' ? 20_000 : 5_000).catch(() => null) : null;
     const version = result?.exitCode === 0 ? result.stdout.match(/\b\d+\.\d+\.\d+(?:[-+][\w.-]+)?\b/)?.[0] ?? null : null;
     const compatibility = tool === "codex" && resolved ? { status: classifyCodexVersion(version), minimum: CODEX_MIN_VERSION, verified: CODEX_VERIFIED_VERSION } : undefined;
-    const latest = await this.fetchLatest(tools[tool].package).catch(() => null);
+    const packageName = tools[tool].package;
+    let published = this.publishedVersions.get(packageName);
+    if (!published || published.expires <= Date.now()) {
+      published = { expires: Date.now() + 300_000, value: this.fetchLatest(packageName).catch(() => null) };
+      this.publishedVersions.set(packageName, published);
+    }
+    const latest = await published.value;
     return {
       tool,
       installation: resolved?.ownership ?? "missing",
@@ -436,7 +447,11 @@ export class EnvironmentService {
         // Automatic discovery may prefer a newer external install. Keep the verified
         // managed release as a fallback without claiming that it replaced that CLI.
         if (!signal.aborted && !selected && tool === 'codex' && after?.ownership === 'external' && !process.env.CODEX_BIN) {
-          const probe = await this.command(after.executable, ['--version'], 5_000, undefined, signal);
+          // The shared resolver already version-probed its selection. Repeating
+          // that process here used a shorter deadline and could undo a valid install.
+          const evidence = cachedCodexVersion(after.executable);
+          const probe = typeof evidence === 'string' ? {exitCode: 0, stdout: evidence}
+            : await this.command(after.executable, ['--version'], process.platform === 'win32' ? 20_000 : 5_000, undefined, signal);
           const activeVersion = probe.exitCode === 0 ? probe.stdout.match(/^codex-cli (\d+\.\d+\.\d+(?:-[\w.-]+)?)/)?.[1] : undefined;
           selected = Boolean(activeVersion && compareCodexVersions(activeVersion, manifest.version) >= 0);
         }

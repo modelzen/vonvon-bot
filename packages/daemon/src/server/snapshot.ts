@@ -35,7 +35,7 @@ export async function createSnapshotStore(options: {
   service: Pick<AdminService, 'listBots' | 'listProjects' | 'codexSetup'>;
   jobs: () => Job[];
   publish: (snapshot: DesktopSnapshot) => void;
-  readTools?: () => Promise<ToolState[]>;
+  readTools?: (refresh?: boolean) => Promise<ToolState[]>;
   /** The background service as its manager reports it (3.10); read at startup, with the tools every 60 s, and on refreshService(). */
   readService?: () => Promise<DesktopServiceStatus>;
   /** Read once: a development checkout or a translocated app cannot install the service. An unrecognized layout (`npm root -g`
@@ -103,10 +103,11 @@ export async function createSnapshotStore(options: {
   let queue = Promise.resolve();
   let refreshing: Promise<void> | undefined;
   let followUp: Promise<void> | undefined;
+  let forceFollowUp = false;
   let closed = false;
-  const readTools = options.readTools ?? (async (): Promise<ToolState[]> => {
+  const readTools = options.readTools ?? (async (refresh = false): Promise<ToolState[]> => {
     const [codex, claude, sandbox] = await Promise.all([
-      Promise.resolve().then(() => options.service.codexSetup?.()).catch((error: unknown) => ({
+      Promise.resolve().then(() => options.service.codexSetup?.({ refresh })).catch((error: unknown) => ({
         installation: 'unknown' as const, authentication: 'unknown' as const, version: null,
         message: error instanceof Error ? error.message : 'Codex 状态检测失败，请重新检测。',
       })),
@@ -161,12 +162,15 @@ export async function createSnapshotStore(options: {
     queue = pending.catch(() => undefined);
     return pending;
   }
-  function refreshTools(): Promise<void> {
+  function refreshTools(refresh = true): Promise<void> {
     if (closed) return Promise.resolve();
     // A read already running may have looked before the caller's change (a login check
     // that just finished), so callers during it share one more read after it.
-    if (refreshing) return followUp ??= refreshing.catch(() => undefined).then(() => { followUp = undefined; return refreshTools(); });
-    refreshing = Promise.all([readTools(), readManager(readService()).catch(() => undefined)]).then(async ([values]) => {
+    if (refreshing) {
+      forceFollowUp ||= refresh;
+      return followUp ??= refreshing.catch(() => undefined).then(() => { const force = forceFollowUp; forceFollowUp = false; followUp = undefined; return refreshTools(force); });
+    }
+    refreshing = Promise.all([readTools(refresh), readManager(readService()).catch(() => undefined)]).then(async ([values]) => {
       tools = values;
       if (!closed) await rebuild();
     }).finally(() => { refreshing = undefined; });
@@ -187,7 +191,7 @@ export async function createSnapshotStore(options: {
     if (blocked && !closed) return rebuild();
   }).catch(() => undefined);
   const poll = setInterval(() => { void rebuild().catch(() => undefined); }, 5_000);
-  const toolPoll = setInterval(() => { void refreshTools().catch(() => undefined); }, 60_000);
+  const toolPoll = setInterval(() => { void refreshTools(false).catch(() => undefined); }, 60_000);
   poll.unref();
   toolPoll.unref();
   return {

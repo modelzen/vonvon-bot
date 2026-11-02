@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { defaultCodexDecisionEffort, defaultCodexDecisionModel } from '@vonvon/protocol';
 import { claudeConfigDir, readClaudeUserSettings } from '../agent/claude-agent/configured-model';
 import { parseModelId } from '../agent/model-id';
-import { getSessionTitleEfforts } from '../config/schema';
+import { acceptsBackendEffort } from '../config/schema';
 import { REASONING_EFFORTS, type ModelInfo, type ReasoningEffort } from '../agent/types';
 import { decisionProvider } from './decision';
 import type { JudgeResult, JudgeSelectionStored } from './types';
@@ -110,7 +110,8 @@ export const DECISION_PROVIDER_ID = /^[a-z][a-z0-9-]{0,39}$/;
 export function fitJudgeEffort(model: string, effort: ReasoningEffort, models: ModelInfo[] | undefined, custom = false): ReasoningEffort | undefined {
   const info = custom ? undefined : models?.find((m) => m.id === model);
   if (!info || info.supportedEfforts.includes(effort)) return effort;
-  const at = REASONING_EFFORTS.indexOf(effort);
+  const at = (REASONING_EFFORTS as readonly string[]).indexOf(effort);
+  if (at < 0) return info.supportedEfforts[0];
   const fits = (level: ReasoningEffort): boolean => info.supportedEfforts.includes(level);
   return REASONING_EFFORTS.slice(0, at).reverse().find(fits) ?? REASONING_EFFORTS.slice(at + 1).find(fits);
 }
@@ -140,7 +141,7 @@ export function parseStoredJudge(value: unknown, backends: readonly string[]): {
   const id = typeof v.model === 'string' ? parseModelId(v.model) : undefined;
   if (!id?.ok) return { why: '模型 id 不对' };
   // per backend, as the settings command checks a hand-typed id: Claude takes only low to max
-  if (v.effort !== undefined && !(getSessionTitleEfforts(v.backend) as readonly unknown[]).includes(v.effort)) return { why: '推理强度这个后端不收' };
+  if (v.effort !== undefined && !acceptsBackendEffort(v.backend, v.effort)) return { why: '推理强度这个后端不收' };
   if (v.custom !== undefined && typeof v.custom !== 'boolean') return { why: 'custom 不是 true 或 false' };
   return {
     value: {

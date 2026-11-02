@@ -6,14 +6,23 @@ import { z } from 'zod';
 import { paths } from '../config/paths';
 import { acquireMutex, closeMutex, holdMutexRole } from '../config/data-access';
 import { syncDirectory } from '../config/bot-namespace';
-import { REASONING_EFFORTS, type PermissionMode, type ReasoningEffort } from '../agent/types';
+import { type PermissionMode, type ReasoningEffort } from '../agent/types';
 import { admitDirectoryChanges, parseDirectorySettings, type DirectorySettings } from '../config/directories';
 import type { JudgeSelectionStored } from '../judge/types';
 import { isProjectId } from './library';
 
 export interface BotProfile { persona: string; memory: string }
 export interface GroupProfile extends BotProfile { inheritPersona: boolean; inheritMemory: boolean }
-export interface ProjectModelAccess { backend: string; models: string[]; efforts: ReasoningEffort[] }
+export interface ProjectModelAccess {
+  backend: string;
+  models: string[];
+  /** Legacy aggregate, used when a model has no explicit entry. */
+  efforts: ReasoningEffort[];
+  modelEfforts?: Record<string, ReasoningEffort[]>;
+  modelServiceTiers?: Record<string, ('fast' | 'ultrafast')[]>;
+  defaultModel?: string;
+  defaultEffort?: ReasoningEffort;
+}
 export interface ProjectWorkspace { primary: string; directories: string[]; repositories: string[] }
 export interface ProjectSmartRules { respond: string; newTopic: string }
 export interface ProjectSkills { disabledPaths: string[] }
@@ -322,7 +331,10 @@ const foldersOf = (row: Record<string, unknown>): string => {
  */
 const storedSectionSchemas = {
   profile: z.object({ persona: z.string().max(30000), memory: z.string().max(30000), inheritPersona: z.boolean(), inheritMemory: z.boolean() }),
-  modelAccess: z.object({ backend: z.string().min(1).max(1000), models: z.array(z.string().trim().min(1).max(1000)).max(1000), efforts: z.array(z.enum(REASONING_EFFORTS)).max(8) }),
+  modelAccess: z.object({ backend: z.string().min(1).max(1000), models: z.array(z.string().trim().min(1).max(1000)).max(1000), efforts: z.array(z.string().trim().min(1).max(1000)).max(1000),
+    modelEfforts: z.record(z.string(), z.array(z.string().trim().min(1).max(1000)).max(1000)).optional(),
+    modelServiceTiers: z.record(z.string(), z.array(z.enum(['fast', 'ultrafast'])).max(2)).optional(),
+    defaultModel: z.string().min(1).max(1000).optional(), defaultEffort: z.string().min(1).max(1000).optional() }),
   smartRules: z.object({ respond: z.string().max(30000), newTopic: z.string().max(30000) }),
   skills: z.object({ disabledPaths: z.array(z.string().min(1).max(4096)).max(1000) }),
   presentation: z.object({ voiceEnabled: z.boolean(), showToolCalls: z.boolean(), showModel: z.enum(['off', 'running', 'always']).optional(),
@@ -335,7 +347,9 @@ function validateGroupSettings(row: Record<string, unknown>): void {
     if (row[key] !== undefined && !storedSectionSchemas[key].safeParse(row[key]).success) throw new Error(`Invalid group settings: ${key}`);
   }
   const access = row.modelAccess as ProjectModelAccess | undefined;
-  if (access && (!access.models.length || new Set(access.models).size !== access.models.length || new Set(access.efforts).size !== access.efforts.length)) throw new Error('Invalid group settings: modelAccess');
+  if (access && (!access.models.length || new Set(access.models).size !== access.models.length || new Set(access.efforts).size !== access.efforts.length
+    || Object.entries(access.modelEfforts ?? {}).some(([model, efforts]) => !access.models.includes(model) || new Set(efforts).size !== efforts.length)
+    || Object.entries(access.modelServiceTiers ?? {}).some(([model, tiers]) => !access.models.includes(model) || new Set(tiers).size !== tiers.length))) throw new Error('Invalid group settings: modelAccess');
 }
 
 async function writeStored(location: RegistryLocation, body: Record<string, unknown>, previous: Record<string, unknown>, beforeCommit?: () => void, durable = false, mirror = false): Promise<void> {
