@@ -206,3 +206,24 @@ Mac 后验（整批）：U1a 的桌面端用 `webBinarySocket`/`nodeBinarySocket
 - IK 下服务端换钥匙的表现只能是 4005（它读不出消息 1）；把它映成 `device_identity_changed` 是本片定的，和设计 4.4 的意图一致，但"同地址上换成别的非 vonvon 服务"也会落到这里（那种情况多半没有 4005，而是 1006/升级失败，映到 `closed`）。
 - 撤销瞬间的主动断连在 D3（本片只在下一条 RPC 时关），设计 13 节已把撤销验收挪到 D3。
 - Electron 侧 `webBinarySocket` 未在本片真机验证（U1a 用它），只有假 socket 单测。
+
+## 实现时和计划不一样的地方
+
+按 PR #640（计划补充，已合入 `claude/devices-integration`）更新后的本计划实现，本分支上这份计划是从 D1 分出来的旧版，没带那几条，留给合并（含 4.2 末尾"U1a 要用的补充"三条：`SecureConnection.closed`、`SecureChannelError.stage`、两个子路径导出，都做了）。和计划不一样的地方：
+
+1. **`PeerHub` 的接口**：计划的 `add(peer, detach)` 改成三步：`attach(socket, detach)`（连接一建立就登记，握手没完成的也在里面，`closePeers`/`release` 关它们，直到 socket 的 close 事件）、`add(peer, socket)`（hello 通过后才进 `peers`，收 `publish`）、`remove(peer)`（连接自己的 detach 调一次，hub 再调 `detached(peer)`）。原因：今天的 `closePeers` 关的是 `WebSocketServer.clients`，包括还没认证的 socket；hub 不拥有 `WebSocketServer`，只能自己记 socket；`closeWhere` 也要从 peer 找到 socket。`beginDrain()` 返回 Promise（`http.ts` 的排空要等它），等的是 `track` 的请求和关 socket；`release()` 不等 `track` 的请求，和今天一样（计划第 5 节写"`release` 等 `track`"，按"行为不变"没改）。
+2. **`createSocketServer` 的 `hub` 可选**：不给就自己建一个（`detached` 也变成可选），返回值形状不变（`publish/beginDrain/release/close`）。这样直接调它的五个旧测试一行不用改。`http.ts` 建一个 hub 传进去。
+3. **排空白名单仍是两条**（`admin.daemonStatus`、`machine.stopHost`），写在 `message-loop.ts` 一处，用 `rpcKindOf` 比较。没换成 `DRAIN_KINDS`：`http.ts` 的 `control()` 还不回 `machine.coreUpdateStatus`，换了排空时这条请求会没有回复。D1 已把这一步留给 D4a（`DRAIN_KINDS` 和 `control()` 一起换）。
+4. **`createSecureSocketServer` 用自己的 `upgrade` 监听**（`noServer`），没用 `verifyClient`：和 `ws.ts` 同一个写法，`admit` 在升级前问；hub 已 `released` 或这个 server 在关时回 503。`close(reason?)` 多一个可选的关闭原因（默认 `server_shutdown`），D3 关地址时传 `remote_disabled`，不用另外 `closeWhere`。
+5. **`onHandshake`/`onHandshakeFailed` 拿的是对方 IP**（不带端口）：D3 的限流按 IP 计。3 秒内没收到第一帧也算一次 `handshake_failed`（慢连接占着名额也该计数）。
+6. **计划没写到的几种帧**：`unpaired` 阶段超过 4096 字节或解不开的帧，按"别的"处理（4002 + `onHandshakeFailed('unknown_client')`）；`hello` 阶段的超长、解不开的帧 1008，不是 hello 的 JSON 4401（和 loopback 一样）；收到消息 2 或 `pairResult` 之后 5 秒（`timers.pairing`）还没 hello 就 4005；配对正在写盘时又来一帧 1008（`unpaired` 只收一帧）。
+7. **配对写盘失败**（`completePairing` 抛的不是 `pairing_failed`，比如磁盘满）：关 1011 `internal_error`，`log.warn('device','pairing-write-failed',{ address, error })`，**邀请不放回**（D1 留给 D2 定）：链接仍是一次性的，客户端拿到 `closed`（stage `pairing`），按 U1a 4.4 的做法不带邀请再连一次会得到 `unknown_client`，要重新生成链接。`clients.add` 抛 `client_revoked`（撤销和配对撞在一起）就关 4003。
+8. **撤销在 hello 时也核对一次**，不只在每条请求前。
+9. **客户端**：通道解不开的帧、配对或 hello 阶段收到不认识的帧，都关 1008，错误码是 `closed`（带 `closeCode: 1008`），因为 4.2 的码表里没有"篡改"；握手、配对、hello 三段共用一个 5 秒的 `timers.handshake`，到点关 1001，错误码 `timeout`、`stage` 是当时的阶段。`device.pk` 不是 32 字节 base64url、`pairing` 不合 `pairRequestSchema`（比如名字超 40 字）时，不发任何东西，关 socket（1000）并抛普通 Error。已建立的连接结束时，`closed` 先 resolve，再把同一个 `SecureChannelError` 作为 `ConnectionError.cause` 交给 `client.onError`，U1a 从两条路都能拿到码。
+10. **`secure-channel.ts` 多导出了几样**：`staticKeyFromPrivateKey`（官方向量只给私钥）、`HandshakeOptions.prologue`（只给向量测试用）、`MESSAGE1_MIN`/`MESSAGE2_MIN`/`FRAME_OVERHEAD` 常量。`staticKeyFromBase64url` 会核对公钥和私钥是不是一对，不是就抛。`@vonvon/client/secure` 顺带转出 `ConnectionError`、`RpcError`、`generateStaticKey`、`staticKeyFromBase64url` 和几个类型。
+11. **`DaemonApi` 多一个可选的 `secure: SecureDeps`**：计划说"装进一个 `secureDeps` 对象供 D3 传给 `createSecureSocketServer`"；放在 `startApi` 的返回值上，探针和 `secure-socket.test.ts` 的"daemon 自己分发"一条也用它。
+12. **向量夹具只有 1 条**：cacophony 里 `Noise_IK_25519_AESGCM_SHA256` 只有一条（带 prologue，2 条握手消息 + 4 条传输消息），全部抽出。snow 的 `snow.txt` 也有一条，但没有 `handshake_hash`、许可是 Apache-2.0，没收。
+13. **测试的计时**：`secure-socket.test.ts` 用真 `http.Server` 和真 `ws`，超时用注入的短时间（握手 300 ms、配对 300 ms、空闲 600 ms），不用假时钟（`ws` 自己也用定时器）；默认值 3/5/60 秒写在代码里。客户端的保活测试用假时钟和进程内假 socket。
+14. **探针的撤销步骤**：`secure-probe.ts` 用通道里的 `device.revokeClient` 撤销自己再连，不是改 `clients.json`：daemon 在跑时名单在它内存里，改文件不生效（D1：daemon 在跑时只有 daemon 写）。探针用 esbuild 打成一个文件再跑，跑法写在文件开头。
+15. **客户端拿到的 socket 可以已经在关**：服务端在读第一帧之前就关（4004 限流、D3 的 4006），客户端的 `open` 事件和关闭帧可能挨着到，`connectSecure` 开始时 socket 已是 CLOSING。这时不发消息 1、不抛，等它的 close 事件按码表给错误（stage `handshake`）；1 秒内没等到（早已关掉）就给 `closed`。
+16. **被撤销的钥匙在哪一段被告知**：服务端先回消息 2 再关 4003，客户端收到消息 2 就接着发 `pairRequest` 或 hello，所以它看到的 `client_revoked` 的 stage 是 `pairing` 或 `hello`，不是 `handshake`（探针第 3 步打印 `client_revoked at hello, close 4003`）。

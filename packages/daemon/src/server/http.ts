@@ -16,6 +16,8 @@ import { Jobs } from './jobs';
 import { LogFollowers } from './logs';
 import { createSnapshotStore, hostPlatform, type SnapshotStore } from './snapshot';
 import { createSocketServer, type Peer } from './ws';
+import { createPeerHub } from './peer-hub';
+import type { SecureDeps } from './secure-socket';
 import type { RpcOutcome } from './rpc';
 import { adminRpc } from './rpc/admin';
 import { commandRpc } from './rpc/command';
@@ -30,9 +32,9 @@ import { getRpcErrorCode, RpcError } from './errors';
 import { authorize } from './authz';
 import { principalWire } from './principal';
 import { deviceRpc } from './rpc/device';
-import { holdDevice, loadOrCreateDevice } from '../remote/device';
+import { deviceKeyPair, holdDevice, loadOrCreateDevice } from '../remote/device';
 import { createClientRegistry, type ClientRegistry } from '../remote/clients';
-import { followRevocations, createInviteBook } from '../remote/pairing';
+import { completePairing, followRevocations, createInviteBook } from '../remote/pairing';
 import { log } from '../core/logger';
 import { serveWebUi } from './web-ui';
 import { getPidLockInfo, type PidLockInfo } from './pid-lock';
@@ -56,6 +58,8 @@ export interface DaemonApi extends ApiLifetime {
   listen: string;
   invalidate(): void;
   close(): Promise<void>;
+  /** devices-2 4.4: what a secure socket server needs of this daemon. D3's remote listeners take it; the manual probe too. */
+  readonly secure?: SecureDeps;
 }
 
 /** Test seams for the login-time service: the platform and spawn of the helper launcher, and the manager read. */
@@ -227,7 +231,10 @@ export async function startApi(options: { service: AdminService; port?: number; 
       ? serverInfoV1Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: 1 })
       : serverInfoV2Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION,
         deviceName: identity.current.name, platform: hostPlatform(), capabilities: capabilities(), principal: principalWire(peer.principal) });
-    const sockets = acquiredSockets = createSocketServer({ server, credential, info, request, control, detached: peer => { jobs.detach(peer); logs.detach(peer); } });
+    // devices-2 4.3: every server's connections in one hub, so a publish, a drain or a release reaches all of them.
+    const hub = createPeerHub({ detached: peer => { jobs.detach(peer); logs.detach(peer); } });
+    const sockets = acquiredSockets = createSocketServer({ server, credential, info, request, control, hub });
+    const secure: SecureDeps = { hub, device: deviceKeyPair(identity.current), deviceName: () => identity.current.name, clients, invites, completePairing, info, request, control };
     snapshots = await createSnapshotStore({ service: options.service, jobs: () => jobs.snapshot(), serviceAction: () => serviceActions.current(), ...(readService ? { readService } : {}), ...(options.diagnostics ? { diagnostics: options.diagnostics } : {}), ...(options.crashes ? { crashes: options.crashes } : {}), publish: snapshot => sockets.publish({ type: 'event', event: 'snapshot', payload: snapshot }) });
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', () => { server.off('error', reject); resolve(); }); });
     const address = server.address();
@@ -235,7 +242,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
     port = address.port;
     return {
       port, listen: `127.0.0.1:${port}`, invalidate, close,
-      beginDrain, release,
+      beginDrain, release, secure,
     };
   } catch (error) {
     try { await close(); }
