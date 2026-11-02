@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { fetchManifest, ManifestError, parseSignedManifest, readServerUpdateConfig, SERVER_TARGETS, serverTarget } from '../src/service/standalone-manifest';
 import { BASE, fakeCdn, manifestPayload, signManifest, testKeys } from './helpers/fake-cdn';
@@ -52,6 +53,15 @@ describe('parseSignedManifest', () => {
     expect(reason(() => parse(signed(manifestPayload('1.0.1', 1, { 'linux-x64': { url: `${BASE}/1.0.0/vonvon-server-1.0.1-linux-x64.tar.gz` } }))))).toBe('url');
     expect(reason(() => parse(signed(manifestPayload('1.0.1', 1, { 'linux-x64': { sha512: 'AB'.repeat(64) } }))))).toBe('schema');
     expect(reason(() => parseSignedManifest(Buffer.alloc(65_537, 32), keys.config))).toBe('too_large');
+  });
+  // The release scripts check payloads with their own copy (scripts/server-manifest.mjs); both read these samples.
+  it('agrees with the release scripts on every shared sample', () => {
+    const fixture = JSON.parse(readFileSync(new URL('../../../scripts/fixtures/server-manifest-cases.json', import.meta.url), 'utf8')) as {
+      baseURL: string; cases: { name: string; expect: string; payload: unknown }[];
+    };
+    const config = { ...keys.config, baseURL: fixture.baseURL };
+    expect(fixture.cases.length).toBeGreaterThan(8);
+    for (const sample of fixture.cases) expect([sample.name, reason(() => parse(signed(sample.payload), config))]).toEqual([sample.name, sample.expect]);
   });
   it('reads the packaged key and address, and nothing that is not one', () => {
     expect(readServerUpdateConfig(new URL('../server-update.json', import.meta.url).pathname)).toBeNull(); // the placeholder until the signing key exists
