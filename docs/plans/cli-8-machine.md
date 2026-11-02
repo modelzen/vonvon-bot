@@ -175,7 +175,7 @@
 
 **Mac**：导入只在 Mac 上有东西可导。集成分支验收时，请 Mac 上的 Codex 在隔离的 HOME 和数据目录里，照 `T/import-bridge-preflight.test.ts` 的做法摆一份假的旧版 bridge 目录，跑 `import detect / preflight / start --accept / status / rollback`。**不碰 owner 的 bridge 和它的数据**，提示词里原样写明。`service skip` 在隔离的数据目录里跑一次，`service status` 显示已跳过。
 
-**Windows**：`daemon logs --follow`、`service skip` 归 D 线的 Windows 验收。
+**Windows**：`daemon logs --follow`、`service skip` 归 D 线的 Windows 验收。（owner 2026-11-01：Windows 上不做只装服务端，这一批 Windows 上没有注册的 `vonvon`，这条不做；发给 Windows 的任务只有 U4 和 Windows 桌面端当被连的设备的检查，见 `devices.md` 第 19 节。）
 
 ## 7. 文档
 
