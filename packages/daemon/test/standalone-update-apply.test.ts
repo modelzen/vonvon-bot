@@ -1,7 +1,9 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { cp, mkdir, readdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { constants, gzipSync } from 'node:zlib';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../src/config/paths', async () => {
@@ -20,7 +22,7 @@ import { observeShutdown } from '../src/host/lifecycle';
 import { RESTART_PENDING_MS, settleUpdateAtStartup, startStandaloneUpdate, type ApplyDeps } from '../src/service/standalone-update';
 import { abandonOwnedUpdate, acquireUpdateLock, processStart, readUpdateStatus, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from '../src/service/update';
 import { BASE, fakeCdn, manifestPayload, signManifest, testKeys } from './helpers/fake-cdn';
-import { packRelease } from './helpers/fake-release';
+import { buildTools, packRelease } from './helpers/fake-release';
 
 // main 必败: applyCoreUpdate refused every install but global npm (server-3 4.5)
 afterAll(() => rmSync(paths.appDir, { recursive: true, force: true }));
@@ -154,16 +156,30 @@ describe('startStandaloneUpdate', () => {
     expect(restarts).toHaveLength(1);
     expect(await readlink(join(installRoot, 'current'))).toBe('releases/0.9.0');
   });
-  it('leaves a half-unpacked release after a crash, and the next run clears it before downloading again', async () => {
+  // review 220 (P3): only a refusal of ours cleared `releases/<v>.part`; an error thrown by the unpacker left it half full
+  it('removes the half-unpacked .part when unpacking fails, and the next run downloads again', async () => {
     const { installRoot, deps, cdn } = await setup();
     const crashed = await startStandaloneUpdate({}, { ...deps, extract: async (_archive, into) => { await writeFile(join(into, 'half'), ''); throw new Error('power cut'); } }).done;
-    expect(crashed).toMatchObject({ phase: 'error' });
-    expect(await readdir(join(installRoot, 'releases', '1.0.1.part'))).toContain('half');
+    expect(crashed).toMatchObject({ phase: 'error', to: '1.0.1', message: '更新失败：power cut' });
+    expect(await readdir(join(installRoot, 'releases'))).toEqual(['1.0.0']);
     expect(await readlink(join(installRoot, 'current'))).toBe('releases/1.0.0');
     await startStandaloneUpdate({}, deps).done;
     expect(cdn.requests.filter(url => url === URL_1_0_1)).toHaveLength(2);
-    expect(existsSync(join(installRoot, 'releases', '1.0.1.part'))).toBe(false);
+    expect(await readdir(join(installRoot, 'releases'))).toEqual(['1.0.0', '1.0.1']);
     expect(existsSync(join(installRoot, 'releases', '1.0.1', 'half'))).toBe(false);
+  });
+  it('removes the .part when the real unpacker stops on a read error in the package the manifest vouches for', async () => {
+    const { installRoot, deps, cdn } = await setup();
+    const { tarHeader } = await buildTools();
+    // The gzip stream ends inside the first member: half.txt is written, then the read fails (not a refusal of ours).
+    const bytes = gzipSync(Buffer.concat([tarHeader('half.txt', 100_000, 0o644, 1), Buffer.alloc(4096, 65)]), { finishFlush: constants.Z_SYNC_FLUSH });
+    cdn.routes.set(`${BASE}/stable/manifest.json`, { body: signManifest(manifestPayload('1.0.1', 10, { 'linux-x64': { sha512: createHash('sha512').update(bytes).digest('hex'), size: bytes.length } }), keys.privateKey) });
+    cdn.routes.set(URL_1_0_1, { body: bytes });
+    const ended = await startStandaloneUpdate({}, deps).done;
+    expect(ended).toMatchObject({ phase: 'error', to: '1.0.1' });
+    expect(ended.message).toMatch(/^更新失败：/);
+    expect(await readdir(join(installRoot, 'releases'))).toEqual(['1.0.0']);
+    expect(await readlink(join(installRoot, 'current'))).toBe('releases/1.0.0');
   });
   it('ends at the switch when no daemon restarts it (the CLI with the daemon stopped)', async () => {
     const { deps } = await setup();
