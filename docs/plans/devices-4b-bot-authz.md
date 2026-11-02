@@ -74,6 +74,16 @@ export type AdminIpcOp = … | { kind: 'authorizeSessionCall'; sessionId: string
 
 - `rpc/memory.ts`：`memoryAction(request, { origin: clientKind==='cli' ? 'cli' : 'ui', actor: decision ? { openId: decision.openId, role: decision.role } : undefined })`；`admin/memory.ts:84` 的 `deps` 加 `actor?: MemoryActor`，有就用它当 `MemoryActor` 传进 `memory-store`/`memory-authority`（落点规则照旧：role 是 owner/admin 且 openId 有值才进 bot 记忆，member/bot 进项目记忆），没有照今天的本地角色。
 
+### 4.5a D4a 审查后留给本片的（2026-11-02）
+
+D4a 在 host 先拒了几样它核对不了的，本片接上 `askBot` 后按下面打开，每一条都要有测试：
+
+- **记忆的改和删**（D4a 审查 SEC-3）：D4a 把会话的 `memory.edit/archive` 标成 deny。要打开，`SessionAction` 的 `memory` 带上 `op` 和 `itemId`，Bot 进程读出条目后跑 `memory-authority.ts` 的 `decideEdit`（Bot 记忆只有主人/管理员亲手打的那一轮能改；项目记忆只能改自己写的，或者主人/管理员；私聊记忆只能改本人的），过了才回 ok。测试：成员那一轮 archive Bot 记忆被拒，改别人写的项目条目被拒。
+- **写 Bot 记忆**（R4）：D4a 拒会话的 `memory.add {kind:'bot'}`（`BOT_MEMORY_FROM_SESSION`）。本片按 4.5 的落点规则放开：主人/管理员亲手打的那一轮进 Bot 记忆，其余落到本群的项目记忆。`memoryAction` 已经按 `deps.actor` 记角色，只有 owner/admin 记成 trusted。
+- **私聊记忆**（SEC-6、R2）：D4a 拒会话的 `kind:'dm'` 记忆（`DM_MEMORY_FROM_SESSION`）。要打开，`askBot` 回的 `openId` 必须等于 `scope.openId`（和 `decideAdd/decideEdit` 只给本轮请求者自己的一样）；或者私聊令牌发出时把对方 openId 记进 `SessionRecord`。测试：管理员 A 的私聊会话读写主人和 Bot 的私聊记忆被拒。
+- **私聊令牌读设置**（SEC-4）：私聊里 `settings_get` 只回 `{ scope, sections }`。私聊令牌的 `settings.read` 也要裁：agent 视图不带 `administrators`、`decisionModels`、`ownerOpenId` 的多余部分，`schema` 必填的字段按 D4a 的 `readOnlyInGroup` 那样只留必需的。
+- D4a 已经做了的不用再做：`--scope group=` 缩小后 `session{threadId}` 必须是那个群的会话（`threadsOf`）；令牌作废后已开的连接被关（4401）、下一条请求得到 `session_token_invalid`。
+
 ### 4.6 顺序
 
 4.1 → 4.2（先单测 registry）→ 4.3 → 4.4 → 4.5 → 集成测试。
@@ -143,3 +153,25 @@ Mac 后验：无专项。Windows：无。
 - `authorizeSessionCall` 和工具调用并发：都在 Bot 进程的事件循环里同步跑，`grant.turn` 不会在判定中途变；判定结果到 host 再到 handler 之间轮可能结束——窗口里的一次写入和工具的情况一样（工具也是先判后做），设计 5.2 接受。
 - `TurnAuth.facts.requesterOpenId` 为空的轮（bot 自己触发、定时运行）：`roleOf` 回 `'bot'`，`settingsWrite` 被 `not-human-turn`/`not-admin` 拒，memory 进项目记忆；和工具一致。
 - 真飞书验收里"成员账号"和"管理员账号"依赖测试环境有第二个 lark-cli profile；没有就只能验主人路径，其余靠单测，PR 里写明。
+
+## 实现时和计划不一样的地方
+
+- **记忆的落点由 Bot 进程定，不是 host 按角色定**（4.5、4.5a）。落点规则（`decideAdd`：主人/管理员亲手打、没被插话、原话里有、一轮一条才进 Bot 记忆，否则降到本群项目）要用这一轮打的原文、本群绑定的项目和这一轮已写的条数，这些只有 Bot 进程有；`memoryAction` 也没有落点规则。所以 `SessionAction` 的 `memory` 带 `op`（`read`/`add`/`edit`）、目标或条目、文字，Bot 进程跑 `decideAdd`/`decideEdit`，回 `memory: { scope, trust, actor, source }`；host 照它写（`MemoryAdminDeps.actor` 换成 `landing`）。会话的记忆写没有 `landing` 就拒，不按主人写。
+- **改、删记忆时条目由 host 读**（4.5a 第一条）：host 按请求的 scope 和 itemId 读出条目的 `scope`、`source` 一起发给 Bot 进程，Bot 进程不再读一次存储。没有这条 → "没有这条记忆。"，不问 Bot 进程。
+- **私聊记忆**按 4.5a 的第一种做法：Bot 进程用 `ownDm`（从 `decideEdit` 抽出来、两边共用）核目标 openId 是不是这一轮的人，不在 `SessionRecord` 里记对方。host 侧只放私聊令牌（和不带 `group=` 的主人）。
+- **Bot 记忆的一轮一条**：会话这边在判定时就记上（`botWrites++`），host 写失败也不退回；工具那边写失败会退回（见"已知限制"）。
+- **IPC 回复**直接是 `SessionAuthz`，不包 `{ kind:'sessionAuthz', result }`；host 用 zod 校验，形状不对（包括 `local` actor、多出来的字段）一律按"这一轮已结束"拒。
+- `isAdminTurn` 叫 `adminTurn(grant)`，工具的 `ctx.admin` 也改成用它，判定不变（看 `grant.turn`）。
+- **Bot 进程说 ok 但没给该给的**（任务没有 actor、记忆写没有落点）也拒，`http.ts` 和 `rpc/memory.ts` 再兜一次。
+- `not-group` 和 `not-dm` 一样按原错误码透传（`schedule` 在群里时 Bot 进程也可能回 `not-group`）。
+- **SEC-4 私聊令牌读设置**：agent 视图只留 `scope`、`sections`，以及协议必填的 `ownerOpenId`、`administrators.{openIds,revision}`、`voice`、`commentInstructions`；`administrators.feishu/scannerOpenId`、`roleInfo`、`smartPrompt`、`judgeByBackend`、`decisionModels` 去掉。项目视图同群令牌的裁法，但各节保持可写。session 视图原样。协议的只读原因里没有"开关关了"，私聊里开关关着读到的仍是可写，写时才拒。
+- **`ScheduleActor.session`** 不带 `topicId`（照计划的形状），`name` 取这一轮发起人的名字。
+- **测试文件**：registry 的放在 `agent-entry-session.test.ts`；`authz-bot` 的映射、透传、范围加轮的用例并进 `authz-session.test.ts`；`rpc-memory` 的落点并进 `memory-admin.test.ts` 和 `authz-session.test.ts` 的 wire 用例；supervisor 和单进程的 `askBot` 接线在 `schedule-rpc.test.ts`（那里已有 supervisor 和 `runRun` 的桩）。端到端的六条验收没写成 vitest 文件，改成手动探针 `packages/daemon/test/manual/bot-authz-probe.ts`：真打包的 CLI、真 fork 出的假 Bot 进程（真 `createAgentEntries`，真 admin/host IPC），输出写进 PR 描述。原因是 `vonvon memory` 在会话里到 C5 之前仍整体拒，记忆那条只能走 wire；设置那几条要协议校验过的完整视图，单测里已经逐条覆盖了判定。
+- D4a 留下的"★ 行在 D4b 之前按成员放行"的窗口已关：没有 `askBot` 时 ★ 行一律拒（`devices-4a-scope.md` 4.6 的偏差到此结束）。
+
+## Codex 审查后改了什么（任务 239–241）
+
+JP-VPS 上 Codex 的三份独立审查（239 通读全部 diff，240 安全和权限，241 Bot 进程、IPC、接线），去重后 2 条，全部接受。每条先写测试，在原代码上确认失败，再改。
+
+- **240-1 / 239-2（私聊会话读设置时裁掉的东西，`settings.act` 的回复又原样带回）→ 接受。** `authz.ts` 的裁剪拆成 `sessionView`（一个视图）和 `sessionReply`（一个回复里的所有视图）：`read` 的 `view`，以及 `act` 回 `saved`、`conflict` 时 `result.view` 的 Bot 视图和项目视图，都按 SEC-4 的同一裁法；允许的会话 `act` 路径附上 narrowing，主人终端（不在会话里）仍拿完整视图。测试：`authz-session.test.ts` 经真实 wire，私聊令牌的 `adminMember` 成功和 `projectMember` 冲突两种回复都不再带 `administrators.feishu/scannerOpenId`、`roleInfo`、`decisionModels`、`judgeByBackend`、成员 roster、skills，裁后的回复过 `settingsReplySchema`，主人连接拿到的仍完整；`cli-bot-session.test.ts` 用打包的 CLI 在私聊令牌下跑 `settings act admin add … --json`，输出的 `administrators` 只有 `openIds`、`revision`。
+- **241-1 / 239-1（生产 bridge 建记忆写入时没给 `botProjectIds`，私聊写本 Bot 已绑定项目的记忆被拒）→ 接受。** `bot/bridge.ts` 给 `createMemoryWriter` 接上 `botProjectIds`：每次现读本 Bot 的项目表，只取有效的项目 id（`isProjectId`），去重。私聊里工具和会话命令行用的是同一个写入器，两边都好了。测试：新文件 `bridge-session-memory.test.ts` 起真的 `startBridge`（只换掉飞书连接、编排器和这里用不到的存储），项目表写在临时目录，host 的 `authorize` 在前面问这个 bridge 的 `authorizeSessionCall`：主人私聊这一轮对已绑定项目的记忆 add、edit、archive 都放行并给出落点；两个群绑同一个项目只算一个（成员的 `--bot` 落到这唯一的项目），没迁移的行和坏 id 不算；没绑的项目被拒，绑上之后同一个会话就能写。

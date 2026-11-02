@@ -86,7 +86,7 @@ import {createRegistrationRetry} from './setup/registration-retry';
 import {MachinePanel} from './management/MachinePanel';
 import {DiagnosticsPanel} from './management/DiagnosticsPanel';
 import {SecretsPanel} from './management/SecretsPanel';
-import {UpdatePanel} from './management/UpdatePanel';
+import {coreUpdatable, UpdatePanel} from './management/UpdatePanel';
 import {DesktopUpdateProvider, useDesktopUpdate} from './desktop-update';
 import {DesktopUpdateButton} from './DesktopUpdateButton';
 
@@ -175,7 +175,7 @@ function DesktopApp() {
     void (async () => {
       try {
         const reply = await client.admin({type: 'daemonStatus'});
-        if (active) setExternalCoreAvailable(reply.kind === 'daemonStatus' && reply.status.distribution?.kind === 'global-npm');
+        if (active) setExternalCoreAvailable(reply.kind === 'daemonStatus' && coreUpdatable(reply.status.distribution?.kind));
       } catch { if (active) setExternalCoreAvailable(false); }
     })();
     return () => {active = false;};

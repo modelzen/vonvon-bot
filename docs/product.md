@@ -165,6 +165,7 @@ Vonvon Bot 是一个 macOS 桌面应用（2026-10-28 起也有 Windows 桌面端
 - 定义文件都是 markdown 和 json，不进用户的代码仓库。只有角色设定（`SOUL.md`）主人可以直接用编辑器改；记忆条目库和项目表由 vonvon 读写，在桌面端改。主工作区（会话的 cwd）里的 `AGENTS.md`、`CLAUDE.md` 照旧由 agent 自己读；Claude 默认只在 cwd 和上级目录都没有 `CLAUDE.md` 时才读 `AGENTS.md`，按会话的开关能让它两份都读（Claude Code 2.1.296 实测，`docs/research/2026-10-16-bot-home/multi-workspace.md` 4.2、4.4）。其余工作区和代码仓库里的，两家默认都不读，vonvon 在指令里让 agent 先读（3.6）。
 - vonvon 不往工作区写任何文件。角色设定、名单和 bot 自己的 skill 都只在 `bots/<appId>/` 下，项目和项目记忆在 `library/` 下，都由 vonvon 交给会话（3.6）。所以工作区里已有的文件不会被覆盖，工作区只读也不影响 bot 记东西。
 - 会话照旧从工作区起，不从 bot 自己的目录起（owner 2026-10-16 定）。这样主工作区里的 `CLAUDE.md`、`AGENTS.md`、skill 和 MCP 由两家原生加载，Codex 一侧还要看 vonvon 传的信任设置（3.6）。原生加载只限主工作区：其余工作区和代码仓库在哪种做法下都是附加目录，那里的 MCP 和 `AGENTS.md` 两家都不加载，Claude 默认也不读那里的 `CLAUDE.md`，只加载 `.claude/skills`，Codex 连 skill 也不读（Claude Code 2.1.296、Codex 0.163.0 实测）。新群的主工作区默认是 vonvon 建的空目录，代码仓库作为附加目录接上（3.2，`docs/v1-plan.md` s36），所以默认情况下仓库自己的 `CLAUDE.md`、MCP 和 Codex 的 skill 都不会原生加载。从 bot 的目录起的话，连主工作区也成了附加目录；今天的代码里，只读档、能发哪些文件也只按会话目录判断。调研见 `docs/research/2026-10-16-bot-home/`。
+- Linux 上只装服务端时（3.10"只装服务端"；Mac、Windows 的服务端在桌面端安装包里，owner 2026-11-01），程序在数据目录之外：`~/.local/share/vonvon-bot/server/` 下 `releases/<版本>/` 每个版本一份（`app/`、自带的 `node/`、`standalone.json`），`current` 指向在用的那一版，`bin/vonvon` 是命令，它每次跟着 `current` 走。启动文件里加 PATH 的那几行和 Mac 桌面端写的是同一段文本（`# >>> Vonvon Bot CLI >>>` 到 `# <<< Vonvon Bot CLI <<<`），只是路径指向安装根的 `bin`；卸载只去掉指向安装根的那一段，服务停不下来时什么文件都不删。安装根整个删掉也不丢 Bot、记忆和设置，它们都在 `~/.vonvon-bot`。
 
 ### 3.4 群：智能模式和规则模式
 
@@ -745,6 +746,13 @@ owner 说过"崩溃报错就好了"，让 Claude 斟酌。自动重启是 Claude
 - Linux 上不显示"登录时启动"开关。
 - 第一版不做 Linux 上从 bridge 自动导入。Linux 上 Codex 0.163.0 以上可用只读、工作区可写（3.8）。
 
+**只装服务端的升级（standalone，server-3）。** 不自动升级：daemon 每天查一次签名的发布清单，只在界面和 `vonvon update --check` 上提示有新版本，主人点"更新"或运行 `vonvon update` 才装。
+- 先换文件再重启：下载、核对清单里的 sha512、解包到 `releases/<版本>`、把 `current` 切过去，再排空重启（Bot 做完手上的活）。下载和解包期间 Bot 照常回复；任何一步失败，`current` 不动，还是原来的版本。
+- 新版本起不来，或者起来的不是新版本：60 秒后切回上一版再启动，结果写"新版本 x 没有起来，已切回 y"。新版本已经在启动、只是慢（比如第一次启动迁移数据），最多再等 4 分钟，不在它启动中途切回。上一版 25 秒内也没起来，再提示运行 `vonvon daemon start`。本机只留当前和上一版。
+- 排空期间停止服务端或关机，这次升级取消，`current` 切回原来的版本，结果写"重启已被停止取消，已切回 y"。一次升级在等重启结果时，或者同一个安装目录上另一个数据目录的服务端正在更新时，再点更新或运行 `vonvon update` 回"已有更新在进行"。
+- 降级只能到本机还留着的上一版：`vonvon update --allow-downgrade --to <版本>`，不下载旧包。
+- `vonvon update` 的退出码：0 已更新或已是最新；1 没更新成（已切回或原样没动）；4 在 Bot 的会话里运行（不能用）；5 已有更新在进行；6 daemon 已重启但还看不到结果，稍后用 `vonvon update --check` 或 `vonvon daemon status` 查。daemon 没在跑时，`vonvon update` 只换文件，下次 `vonvon daemon start` 才用新版本。
+
 **暂停的 PR。** 都关闭，有用的代码搬进新的后台服务 PR：
 - #285（V5 的启动路由：拿锁前检查，`daemon start` 改走服务管理器）：它的约 120 行源码和测试搬过去，删掉 Windows 的部分，修好 issue #287（持锁的进程崩溃后，PID 被无关进程复用，会被误判成"已经有 daemon 在跑"，服务从此不再重试）。
 - issue #288（Windows 每次启动都要读注册表）：以"第一版不做 Windows"关闭。
@@ -761,6 +769,8 @@ owner 说过"崩溃报错就好了"，让 Claude 斟酌。自动重启是 Claude
 - Claude 用 Claude Agent SDK，复用用户本机 Claude 的登录，和 Paseo 的 claude provider 一样。SDK 锁定一个验证过的版本。桌面 App 和独立 CLI 均不携带 SDK 或 Claude 原生运行程序；用户选择安装后，由 Vonvon 下载到用户托管目录，并提供更新和卸载。打开页面、检测 Provider 或启动 App 不自动安装。Claude Code CLI 独立检测和管理，不把 CLI 是否安装当作 SDK 的安装状态。登录政策见第 8 节。（owner 2026-10-25 要求恢复按需托管安装）
 - 修模型列表的兜底，允许手填模型 id。DeepSeek、Kimi 走 Claude 的设置（bridge issue #37、#38、#40、#41，都是模型列表兜底的问题）。
 - 远程时（3.14）：Codex 和 Claude 装在、配置在服务端所在的那台设备上，用户自己在那台上配好；托管安装也装在那台上，从远程客户端点一样能装。检测逻辑和本机一样。文案不说"登录"，写成"在 <设备> 上把 <Codex / Claude> 配置好（账号或自定义 API 都行），然后点「重新检测」"；界面上现有带"登录"的文案一起改成"配置好""可用""检查配置"（owner 2026-10-31）。
+
+**服务端的发布清单**（只装服务端时，server-3）：清单用服务端自己的 Ed25519 密钥签名，公钥随包带着；签名不对、产品或通道不对、下载地址不是约定的那个，都不用。只接受比当前和见过的最高版本都新、发布时间不倒退的清单，防止有人把旧版本的合法清单放回去。不自动升级。查不到时用户看到的四句话：`没查到新版本：发布清单的签名不对，没有应用`、`没查到新版本：发布清单比上次看到的旧，没有应用`、`没查到新版本：连不上 dl.vonvon.cc`、`没查到新版本：读写不了本机的更新记录 update-state.json，没有应用`。
 
 **飞书权限**：
 

@@ -7,7 +7,7 @@ import {DesktopUpdateContext} from '../src/desktop-update';
 import type {UpdatePhase} from '../src/desktop-update';
 import {AppShell} from '../src/LocalShell';
 import {SettingsHome} from '../src/TodayHome';
-import {UpdatePanel} from '../src/management/UpdatePanel';
+import {canApplyCoreUpdate, coreStatusLine, coreUpdatable, UpdatePanel} from '../src/management/UpdatePanel';
 import {DraftGuardProvider} from '../src/settings/DraftGuard';
 
 const client = createClient({
@@ -49,6 +49,21 @@ it('keeps external Core controls available when the installation supports them',
   expect(html).toContain('检查 Core 更新');
   expect(html).toContain('更新外部 Core');
   expect(html).toContain('查看 Core 更新进度');
+});
+
+// main 必败: the panel offered the Core update to global npm only, and only when attached (server-3 4.9)
+it('offers the Core update to a standalone server too, and follows its steps in words', () => {
+  const core = (kind: string, hasUpdate: boolean) => ({type: 'coreUpdate' as const, distribution: {kind, cliPath: '/x'}, current: '1.0.0', latest: hasUpdate ? '1.0.1' : '1.0.0', hasUpdate, dev: false});
+  expect([coreUpdatable('standalone'), coreUpdatable('global-npm'), coreUpdatable('bundled'), coreUpdatable(undefined)]).toEqual([true, true, false, false]);
+  expect(canApplyCoreUpdate(core('standalone', true))).toBe(true);
+  expect(canApplyCoreUpdate(core('standalone', false))).toBe(false);
+  expect(canApplyCoreUpdate(core('bundled', true))).toBe(false);
+  expect(canApplyCoreUpdate(undefined)).toBe(false);
+  expect(coreStatusLine({phase: 'restarting', from: '1.0.0', to: '1.0.1', at: 1, detail: 'draining'})).toBe('等 Bot 做完手上的活 · 1.0.0 → 1.0.1');
+  expect(coreStatusLine({phase: 'installing', from: '1.0.0', at: 1, detail: 'downloading', progress: {transferred: 3, total: 4}})).toBe('下载中 75%');
+  expect(coreStatusLine({phase: 'error', ok: false, from: '1.0.0', to: '1.0.1', at: 1, detail: 'waiting', rolledBack: true, message: '新版本 1.0.1 没有起来，已切回 1.0.0'})).toBe('更新失败：新版本 1.0.1 没有起来，已切回 1.0.0 · 1.0.0 → 1.0.1');
+  expect(coreStatusLine({phase: 'a-phase-from-a-newer-daemon', at: 1})).toBe('进行中');
+  expect(coreStatusLine(null)).toBe('尚无更新记录');
 });
 
 const renderWith = (update?: DesktopUpdate, shell: ShellCapabilities = {checkDesktopUpdate: async () => ({state: 'current', current: '0.7.0', message: ''}), retryDesktopUpdate: async () => ({state: 'current', current: '0.7.0', message: ''}), installDesktopUpdate: async () => ({state: 'downloaded', current: '0.7.0', message: ''})}, phase?: UpdatePhase) => renderToStaticMarkup(

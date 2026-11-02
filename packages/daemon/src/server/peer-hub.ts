@@ -1,6 +1,6 @@
 import { WebSocket } from 'ws';
 import type { Event } from '@vonvon/protocol';
-import type { Peer } from './ws';
+import type { Peer, PeerView } from './ws';
 
 export type HubState = 'open' | 'draining' | 'released';
 /** devices-2 4.3: the daemon's connections, whichever server took them (loopback today, the remote listeners from D3):
@@ -16,19 +16,21 @@ export interface PeerHub {
   add(peer: Peer, socket: WebSocket): void;
   /** The connection ended (the connection's detach calls it once): out of `peers`, and `detached(peer)`. */
   remove(peer: Peer): void;
-  /** To the open peers; `shape` may give a peer its own version of the event, or nothing (D4a's filterSnapshot). */
-  publish(event: Event, shape?: (peer: Peer) => Event | null): void;
+  /** To the open peers, each in the hub's `view` of it, or not at all (D4a's filterSnapshot): whoever publishes, the
+   * snapshot store, a revocation or a pairing. */
+  publish(event: Event): void;
   /** A request still being answered: draining waits for it. */
   track(promise: Promise<unknown>): void;
   /** Stops publishing, closes every socket and settles once the tracked requests have. */
   beginDrain(): Promise<void>;
   closePeers(code?: number, reason?: string): Promise<void>;
-  /** D3: a revoked client's or a disabled address's connections. */
+  /** D3: a revoked client's or a disabled address's connections; D4a: those made with a session token that ended. */
   closeWhere(pred: (peer: Peer) => boolean, code: number, reason: string): void;
   release(): Promise<void>;
 }
 
-export function createPeerHub(options: { detached(peer: Peer): void }): PeerHub {
+/** `view`: what each peer gets of a published event (devices-4a 4.7); without one, the event as it is. */
+export function createPeerHub(options: { detached(peer: Peer): void; view?: PeerView }): PeerHub {
   let state: HubState = 'open';
   const peers = new Set<Peer>();
   const sockets = new Map<Peer, WebSocket>();
@@ -79,12 +81,12 @@ export function createPeerHub(options: { detached(peer: Peer): void }): PeerHub 
       sockets.delete(peer);
       options.detached(peer);
     },
-    publish(event, shape) {
+    publish(event) {
       if (state !== 'open') return;
       for (const peer of peers) {
         if (!peer.open) continue;
-        const shaped = shape ? shape(peer) : event;
-        if (shaped) peer.event(shaped);
+        const shown = options.view ? options.view(peer, event) : event;
+        if (shown) peer.event(shown);
       }
     },
     track(promise) {

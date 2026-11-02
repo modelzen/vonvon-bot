@@ -322,6 +322,8 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 - 脚本自身只做下载、解包、调 `vonvon`，逻辑尽量放在 `vonvon` 里（`service install`、`remote`），脚本好测、好升级。`uninstall.sh` 一并提供（停服务、删服务定义、删安装根、保留数据目录并说明），同样只在 Linux 上动手，第一步就看系统：在 macOS 上打印第 15 节"卸载脚本：在 Mac 上"那句，别的系统打印"卸载脚本：不是 Linux、也不是 Mac"那句，退出非零。
 - **脚本里的删除**（SCRIPT-1：第 1 版"不对变量拼的家目录路径用 rm -rf"和 uninstall 要删安装根本身冲突）：`install.sh` 只删自己刚建的 `releases/<version>.part`；`uninstall.sh` 删安装根只走一个受保护的函数：`${HOME:?}` 非空、目标是 `$HOME/.local/share/vonvon-bot/server` 这个字面拼法、不是符号链接、目录里有 `releases/*/standalone.json` 标记，四条都满足才 `rm -rf -- "$target"`；不删数据目录。脚本测试：`HOME` 为空或指向没有标记的目录时拒绝。
 
+> 实现时和本节不一样的地方（PATH 块搬进 protocol、`releases/<v>` 已存在时复用）见 `docs/plans/server-2-install-scripts.md` §4.6；2026-11-01 起安装脚本只支持 Linux（owner），见同一文件"只支持 Linux"一节。
+
 ### 7.4 后台服务和共存
 
 - **Linux** systemd 用户服务：现有（`D/service/systemd.ts`），只加 `standalone` 种类和 7.2 的不解析 realpath。
@@ -334,6 +336,8 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 - **共存，脚本一侧**：7.3 第 1 步（只在 Linux）。
 
 ### 7.5 升级引擎和 `vonvon update`
+
+> 实现时和本节不一样的地方（状态文件、降级、看门狗、`applyCoreUpdate` 先回复）见 `docs/plans/server-3-update-engine.md` §4.11 和文末。
 
 - **清单** `https://dl.vonvon.cc/bot/server/stable/manifest.json`，Ed25519 签名（复用 Windows 清单的签名和校验代码 `DT/windows-update-manifest.mjs`、`scripts/windows-update-signing.mjs`，**用一把单独的服务端密钥**，公钥编进 daemon 和安装脚本）。签名内容照 Windows 的 `validateWindowsUpdatePayload` 那样严格（SEC-9：第 1 版只有 `{version, publishedAt, files}`，每个版本的签名清单又公开放在 `bot/server/<version>/manifest.json`，谁拿到 COS 写权限或配错了就能把旧版本的合法清单放到 stable 回滚所有人）：`{ schemaVersion: 1, product: 'vonvon-bot-server', channel: 'stable', version, publishedAt, files: { 'linux-x64': { url, sha512, size }, … } }`，`url` 必须等于 `https://dl.vonvon.cc/bot/server/<version>/vonvon-server-<version>-<os>-<arch>.<ext>`，`version` 必须是语义版本。`files` 只有 `linux-x64`、`linux-arm64` 两项，`<ext>` 是 `tar.gz`（owner 2026-11-01；I3 计划的 C1 原来写六项，按那里的说明改）。
 - **检查**：`machine.checkCoreUpdate` 对 `standalone` 读清单（对 `global-npm` 照旧 `npm view`，`D/service/update.ts:68-91`）；回复加 `distribution.kind: 'standalone'`、`channel`。**只接受比当前和历史最高都新的版本**（`newer()`，照 `windows-updates.ts:108-110`），历史最高和上次见到的 `publishedAt` 记进 `standalone.json`，`publishedAt` 倒退的清单拒绝（防冻结）；降级只能在本机 `vonvon update --allow-downgrade --to <v>` 显式要求。默认不自动升级（升级一节）；daemon 每 24 小时查一次只为了在界面上标"有新版本"。
@@ -554,6 +558,9 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 设备身份变了 | <设备> 的身份和配对时不一样了（可能重装过，或换了数据目录）。为安全起见已断开。确认是你自己的设备后，重新配对。 |
 | 被撤销 | <设备> 已取消这台电脑的访问。要再连，请在那台设备上重新生成连接链接。 |
 | 在远程设备上配 Provider | 在 <设备> 上把 <Codex / Claude> 配置好（账号或自定义 API 都行），然后点「重新检测」。 |
+| 查更新：清单签名不对（`refused: signature`） | 没查到新版本：发布清单的签名不对，没有应用 |
+| 查更新：清单比上次看到的旧（`refused: rollback`） | 没查到新版本：发布清单比上次看到的旧，没有应用 |
+| 查更新：连不上（`refused: network`） | 没查到新版本：连不上 dl.vonvon.cc |
 | 版本不一致（服务端旧，协议相同） | <设备> 的服务端是 0.9.0，这台电脑是 0.9.1。可以继续用；建议升级服务端。[升级 <设备>] |
 | 版本不一致（协议不同，服务端旧） | <设备> 的服务端是 0.8.0，这台电脑是 0.9.0，两边不能一起工作。升级服务端后才能继续管理。[升级 <设备>] |
 | 版本不一致（协议不同，对面是 0.8 及更早的桌面端自带服务端） | <设备> 的服务端是桌面端自带的（0.8.0），要先在那台电脑上更新一次 Vonvon Bot；之后就能从这里更新。 |
