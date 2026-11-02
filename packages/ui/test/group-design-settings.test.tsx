@@ -83,8 +83,8 @@ it('orders five group tabs, keeps compact model and permission settings together
   for (const section of ['记忆', '项目记忆']) expect(groupTabForSection(section)).toBe('memory');
   const html = render('model');
   expect(html).toContain('模型设置'); expect(html).toContain('执行权限');
-  expect(html).toContain('aria-label="配置模型"');
-  expect(html).toContain('aria-label="配置允许的思考强度"');
+  expect(html).toContain('aria-label="配置可用模型"');
+  expect(html).toContain('aria-label="配置可用思考强度"');
   expect(html).not.toContain('<summary>话题模型</summary>');
   expect(html).toContain('修改权限');
   expect(html).not.toContain('role="radiogroup" aria-label="权限"');
@@ -120,7 +120,7 @@ it('keeps one primary among peer directories and no primary repository', () => {
 it('shows matching model and Effort count triggers without inline option lists', () => {
   const html = renderToStaticMarkup(<ModelAccessChoices value={{backend: catalog.backend, models: ['actual-a', 'actual-b'], efforts: ['low']}} catalog={catalog} disabled={false} onChange={() => {}}/>);
   expect(html).toContain('思考强度');
-  expect(html).toContain('aria-label="配置模型"'); expect(html).toContain('aria-label="配置允许的思考强度"');
+  expect(html).toContain('aria-label="配置可用模型"'); expect(html).toContain('aria-label="配置可用思考强度"');
   expect(html).toContain('2 个模型');
   expect(html).toContain('已自定义 · 2 组');
   expect(html.match(/gd-model-selection-control/g)).toHaveLength(2);

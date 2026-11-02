@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({slots: {} as Record<string, Slot>, active: '', pend
 vi.mock('react', async original => ({...await original<typeof import('react')>(),
   useState: (initial: unknown) => {const slot = h.slots[h.active]!; const i = slot.si++; if (!(i in slot.state)) slot.state[i] = typeof initial === 'function' ? initial() : initial; return [slot.state[i], (next: unknown) => {slot.state[i] = typeof next === 'function' ? next(slot.state[i]) : next;}];},
   useRef: (initial: unknown) => {const slot = h.slots[h.active]!; return slot.refs[slot.ri++] ??= {current: initial};},
+  useId: () => `${h.active}-id`,
   useContext: () => [], useCallback: (fn: unknown) => fn,
   useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const slot = h.slots[h.active]!; const i = slot.ei++; const old = slot.effects[i]; if (old?.deps && deps && deps.length === old.deps.length && deps.every((value, at) => Object.is(value, old.deps![at]))) return; h.pending.push(() => {old?.cleanup?.(); slot.effects[i] = {deps, cleanup: effect() || undefined};});},
   useMemo: (make: () => unknown) => make(),
@@ -64,7 +65,7 @@ it('checks a model, chooses a new default, and keeps edits in the page draft', (
   let value = initial(); const changed = vi.fn((next: Value) => {value = next;});
   const render = () => choices({value, catalog, disabled: false, onChange: changed});
   let all = render();
-  expect(button(all, '配置模型')).toBeDefined();
+  expect(button(all, '配置可用模型')).toBeDefined();
   expect(checkbox(all, '允许 Beta').props.checked).toBe(false);
   checkbox(all, '允许 Beta').props.onChange(); all = render();
   expect(value.models).toEqual(['alpha', 'beta']);
@@ -84,8 +85,8 @@ it('groups equal Effort capabilities and edits them together without touching an
   const changed = vi.fn((next: Value) => {value = next;});
   const render = () => choices({value, catalog: current, disabled: false, onChange: changed});
   let all = render();
-  expect(button(all, '配置允许的思考强度')).toBeDefined();
-  expect(all.filter(node => node.type === 'section' && node.props['aria-label'] === 'Alpha、Another 允许的思考强度')).toHaveLength(1);
+  expect(button(all, '配置可用思考强度')).toBeDefined();
+  expect(all.filter(node => node.type === 'section' && node.props['aria-label'] === 'Alpha、Another 可用思考强度')).toHaveLength(1);
   checkbox(all, '允许 low').props.onChange(); all = render();
   expect(value.modelEfforts?.alpha).toEqual(['high']);
   expect(value.modelEfforts?.another).toEqual(['high']);
@@ -242,4 +243,58 @@ it('clears dependent choices when switching Providers', () => {
   selector.props.onChange('claude-agent');
   expect(changed).toHaveBeenCalledOnce();
   expect(changed.mock.calls[0]?.[0]).toMatchObject({backend: 'claude-agent', models: [], efforts: []});
+});
+
+it('clears provider-specific policies through the sparse Editor draft when switching away and back', () => {
+  const value: Value = {...initial(), modelEfforts: {alpha: ['low']}, modelServiceTiers: {alpha: ['fast']}, defaultModel: 'alpha', defaultEffort: 'low'};
+  const section = {stored: value, effective: value, revision: 'r1', access: {kind: 'writable' as const}, apply: []};
+  const render = () => {
+    const editor = at('provider-editor', () => Editor({title: '模型设置', section, save: vi.fn(),
+      render: (draft, onChange, disabled) => <ModelAccessFields botId={agentIdSchema.parse('cli_switch')} providers={[{id: 'codex-appserver', displayName: 'Codex'}, {id: 'claude-agent', displayName: 'Claude'}]} value={draft} onChange={onChange} disabled={disabled}/> }));
+    const fields = editor.find(node => node.type === ModelAccessFields)!;
+    const all = at('provider-fields', () => ModelAccessFields(fields.props as any));
+    return {value: fields.props.value as Value, selector: all.find(node => node.type === SelectControl)!};
+  };
+  let ui = render(); ui.selector.props.onChange('claude-agent'); ui = render();
+  expect(ui.value).toEqual({backend: 'claude-agent', models: [], efforts: [], modelEfforts: {}, modelServiceTiers: {}, defaultModel: undefined, defaultEffort: undefined});
+  ui.selector.props.onChange('codex-appserver'); ui = render();
+  expect(ui.value.modelServiceTiers).toEqual({}); expect(ui.value.modelEfforts).toEqual({});
+  expect(ui.value.defaultModel).toBeUndefined(); expect(ui.value.defaultEffort).toBeUndefined();
+});
+
+it('marks only the affected controls, links the specific reason, and clears resolved problems', () => {
+  const bad: Value = {...initial(), models: ['alpha', 'retired'], modelEfforts: {alpha: ['low', 'obsolete']}};
+  let all = choices({value: bad, catalog, disabled: false, onChange: vi.fn()});
+  for (const label of ['配置可用模型', '配置可用思考强度']) {
+    const control = button(all, label);
+    expect(control.props['aria-invalid']).toBe(true);
+    const message = all.find(node => node.props.id === control.props['aria-describedby']);
+    expect(message?.props.role).toBe('alert');
+    expect(text(message)).toContain(label === '配置可用模型' ? 'retired' : 'Alpha · obsolete');
+  }
+  all = choices({value: {...initial(), modelEfforts: {alpha: ['low']}}, catalog, disabled: false, onChange: vi.fn()});
+  expect(button(all, '配置可用模型').props['aria-invalid']).toBe(false);
+  expect(button(all, '配置可用思考强度').props['aria-invalid']).toBe(false);
+  all = choices({value: bad, catalog, catalogControls: {loading: true, refresh: vi.fn()}, disabled: false, onChange: vi.fn()});
+  expect(button(all, '配置可用模型').props['aria-invalid']).toBe(false);
+  expect(button(all, '配置可用思考强度').props['aria-invalid']).toBe(false);
+});
+
+it('localizes a server rejection to its field, preserves the draft, and clears it after editing', async () => {
+  const value = initial(); const section = {stored: value, effective: value, revision: 'r1', access: {kind: 'writable' as const}, apply: []};
+  const save = vi.fn(async () => ({kind: 'saved', result: {kind: 'rejected', fields: [{field: 'modelEfforts', message: 'Beta 的 high 已不可用，请刷新后重新选择。'}]}} as any));
+  const render = () => {
+    const editor = at('field-editor', () => Editor({title: '模型设置', section, save, fieldLabels: {modelEfforts: '可用思考强度'},
+      render: (draft, onChange, disabled, _commit, _key, _discard, fieldIssues) => <ModelAccessChoices value={draft} onChange={onChange} disabled={disabled} catalog={catalog} fieldIssues={fieldIssues}/> }));
+    const component = editor.find(node => node.type === ModelAccessChoices)!;
+    return {editor, value: component.props.value as Value, choices: choices(component.props as any)};
+  };
+  let ui = render(); checkbox(ui.choices, '允许 Beta').props.onChange(); ui = render();
+  button(ui.editor, '保存').props.onClick(); await flush(); ui = render();
+  expect(ui.value.models).toEqual(['alpha', 'beta']);
+  expect(button(ui.choices, '配置可用模型').props['aria-invalid']).toBe(false);
+  expect(button(ui.choices, '配置可用思考强度').props['aria-invalid']).toBe(true);
+  expect(text(ui.editor)).toContain('可用思考强度：Beta 的 high');
+  checkbox(ui.choices, '允许 Beta').props.onChange(); ui = render();
+  expect(button(ui.choices, '配置可用思考强度').props['aria-invalid']).toBe(false);
 });

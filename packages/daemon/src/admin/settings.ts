@@ -295,6 +295,11 @@ function storeJudge(target: { judge?: JudgeSelectionStored }, prepared: Prepared
   else
     delete target.judge;
 }
+class ModelAccessInputError extends SettingsInputError {
+  constructor(readonly field: keyof T.ProjectSections['modelAccess'], message: string) {
+    super(message);
+  }
+}
 function rejected(error: unknown): {
   kind: 'rejected';
   fields: T.SettingsFieldError[];
@@ -302,7 +307,7 @@ function rejected(error: unknown): {
   return {
     kind: 'rejected',
     fields: [{
-        field: 'settings',
+        field: error instanceof ModelAccessInputError ? error.field : 'settings',
         message: error instanceof SettingsInputError ? error.message : '保存失败，请刷新设置后重试；若配置被其他进程修改，请重启 daemon'
       }]
   };
@@ -589,38 +594,45 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     return [botId, projectRaw(p, section)];
   }
   async function validateModelAccess(value: T.ProjectSections['modelAccess'], previous: T.ProjectSections['modelAccess']): Promise<ModelInfo[]> {
-    if (!backendIds().includes(value.backend)) throw new SettingsInputError('请选择支持的 Provider');
-    if (!value.models.length || new Set(value.models).size !== value.models.length || new Set(value.efforts).size !== value.efforts.length) throw new SettingsInputError('至少选择一个模型，模型和 Effort 不能重复');
+    if (!backendIds().includes(value.backend)) throw new ModelAccessInputError('backend', '请选择支持的 Provider');
+    if (!value.models.length || new Set(value.models).size !== value.models.length) throw new ModelAccessInputError('models', '至少选择一个模型，模型不能重复');
+    if (new Set(value.efforts).size !== value.efforts.length) throw new ModelAccessInputError('efforts', 'Effort 不能重复');
     const discovered = await models({ botId, backend: value.backend, purpose: 'project' });
     // Fallback metadata cannot authorize new models, efforts, or a provider
     // switch. An empty trusted catalog retains the existing subset-only path.
     const catalog = discovered.state === 'ready' ? discovered.models : [];
     const previousEfforts = (id: string) => previous.modelEfforts?.[id] ?? previous.efforts;
     const efforts = (id: string) => value.modelEfforts?.[id] ?? value.efforts;
-    if (Object.keys(value.modelEfforts ?? {}).some(id => !value.models.includes(id)) || Object.keys(value.modelServiceTiers ?? {}).some(id => !value.models.includes(id))) throw new SettingsInputError('模型策略包含未选择的模型');
+    if (Object.keys(value.modelEfforts ?? {}).some(id => !value.models.includes(id))) throw new ModelAccessInputError('modelEfforts', 'Effort 策略包含未选择的模型');
+    if (Object.keys(value.modelServiceTiers ?? {}).some(id => !value.models.includes(id))) throw new ModelAccessInputError('modelServiceTiers', '速度档位策略包含未选择的模型');
     for (const id of value.models) {
-      if (!parseModelId(id).ok) throw new SettingsInputError('模型 ID 无效');
+      if (!parseModelId(id).ok) throw new ModelAccessInputError('models', `模型 ID ${id} 无效`);
       const model = catalog.find(m => m.id === id && !m.hidden);
       const selectedEfforts = efforts(id);
       const selectedTiers = value.modelServiceTiers?.[id] ?? [];
-      if (new Set(selectedEfforts).size !== selectedEfforts.length || new Set(selectedTiers).size !== selectedTiers.length) throw new SettingsInputError('模型的 Effort 或速度档位不能重复');
+      const effortField = value.modelEfforts?.[id] ? 'modelEfforts' : 'efforts';
+      if (new Set(selectedEfforts).size !== selectedEfforts.length) throw new ModelAccessInputError(effortField, `模型 ${id} 的 Effort 不能重复`);
+      if (new Set(selectedTiers).size !== selectedTiers.length) throw new ModelAccessInputError('modelServiceTiers', `模型 ${id} 的速度档位不能重复`);
       if (!model) {
-        if (value.backend !== previous.backend || !previous.models.includes(id)) throw new SettingsInputError('模型目录暂不可用或没有此模型，请启动 Bot 并刷新目录');
+        if (value.backend !== previous.backend || !previous.models.includes(id)) {
+          if (discovered.state === 'ready') throw new ModelAccessInputError('models', `当前 Provider 的目录中没有模型 ${id}，请刷新目录后重新选择`);
+          throw new SettingsInputError('模型目录暂不可用，请启动 Bot 并刷新目录');
+        }
         if (selectedEfforts.some(e => !previousEfforts(id).includes(e))) throw new SettingsInputError('无法验证新增 Effort，请刷新模型目录');
         if (selectedTiers.some(t => !(previous.modelServiceTiers?.[id] ?? []).includes(t))) throw new SettingsInputError('无法验证新增速度档位，请刷新模型目录');
       } else {
-        if (model.supportedEfforts.length && (!selectedEfforts.some(e => model.supportedEfforts.includes(e)) || (value.modelEfforts?.[id] && selectedEfforts.some(e => !model.supportedEfforts.includes(e))))) throw new SettingsInputError(`模型 ${id} 至少需要一个支持的 Effort`);
-        if (!model.supportedEfforts.length && value.modelEfforts?.[id]?.length) throw new SettingsInputError(`模型 ${id} 不支持 Effort`);
-        if (selectedTiers.some(t => !model.serviceTiers?.some(s => s.id === t))) throw new SettingsInputError(`模型 ${id} 不支持所选速度档位`);
+        if (model.supportedEfforts.length && (!selectedEfforts.some(e => model.supportedEfforts.includes(e)) || (value.modelEfforts?.[id] && selectedEfforts.some(e => !model.supportedEfforts.includes(e))))) throw new ModelAccessInputError(effortField, `模型 ${id} 的 Effort 选择无效，请从支持的值中选择：${model.supportedEfforts.join('、')}`);
+        if (!model.supportedEfforts.length && value.modelEfforts?.[id]?.length) throw new ModelAccessInputError('modelEfforts', `模型 ${id} 不支持 Effort`);
+        if (selectedTiers.some(t => !model.serviceTiers?.some(s => s.id === t))) throw new ModelAccessInputError('modelServiceTiers', `模型 ${id} 不支持所选速度档位：${selectedTiers.filter(t => !model.serviceTiers?.some(s => s.id === t)).join('、')}`);
       }
     }
     const defaultModel = value.defaultModel ?? value.models[0];
-    if (!defaultModel || !value.models.includes(defaultModel)) throw new SettingsInputError('默认模型必须在本群允许列表中');
+    if (!defaultModel || !value.models.includes(defaultModel)) throw new ModelAccessInputError('defaultModel', '默认模型必须在本群允许列表中');
     const defaultEfforts = efforts(defaultModel);
     const nativeDefault = catalog.find(m => m.id === defaultModel);
-    if (nativeDefault?.supportedEfforts.length && value.defaultEffort && (!defaultEfforts.includes(value.defaultEffort) || !nativeDefault.supportedEfforts.includes(value.defaultEffort))) throw new SettingsInputError('默认 Effort 必须在默认模型允许列表中');
-    if (nativeDefault && !nativeDefault.supportedEfforts.length && value.defaultEffort) throw new SettingsInputError('默认模型不支持 Effort');
-    if (!nativeDefault && value.defaultEffort && !defaultEfforts.includes(value.defaultEffort)) throw new SettingsInputError('默认 Effort 必须在默认模型允许列表中');
+    if (nativeDefault?.supportedEfforts.length && value.defaultEffort && (!defaultEfforts.includes(value.defaultEffort) || !nativeDefault.supportedEfforts.includes(value.defaultEffort))) throw new ModelAccessInputError('defaultEffort', '默认 Effort 必须在默认模型允许列表中');
+    if (nativeDefault && !nativeDefault.supportedEfforts.length && value.defaultEffort) throw new ModelAccessInputError('defaultEffort', '默认模型不支持 Effort');
+    if (!nativeDefault && value.defaultEffort && !defaultEfforts.includes(value.defaultEffort)) throw new ModelAccessInputError('defaultEffort', '默认 Effort 必须在默认模型允许列表中');
     return catalog;
   }
   async function read(scope: T.SettingsScope): Promise<T.SettingsView> {
@@ -908,8 +920,20 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         const original = await projectSettings(initial);
         let admittedWorkspace: ProjectWorkspace | undefined;
         const proposedAccess = e.section === 'modelAccess' ? { ...original.modelAccess, ...e.patch } : undefined;
-        if (proposedAccess && !('modelEfforts' in e.patch) && proposedAccess.modelEfforts) proposedAccess.modelEfforts = Object.fromEntries(Object.entries(proposedAccess.modelEfforts).filter(([id]) => proposedAccess.models.includes(id)));
-        if (proposedAccess && !('modelServiceTiers' in e.patch) && proposedAccess.modelServiceTiers) proposedAccess.modelServiceTiers = Object.fromEntries(Object.entries(proposedAccess.modelServiceTiers).filter(([id]) => proposedAccess.models.includes(id)));
+        if (proposedAccess) {
+          // Optional policies and defaults belong to a provider, even when two
+          // providers happen to expose the same model ID.
+          if (proposedAccess.backend !== original.modelAccess.backend) {
+            if (!('modelEfforts' in e.patch)) delete proposedAccess.modelEfforts;
+            if (!('modelServiceTiers' in e.patch)) delete proposedAccess.modelServiceTiers;
+            if (!('defaultModel' in e.patch)) proposedAccess.defaultModel = proposedAccess.models[0];
+            if (!('defaultEffort' in e.patch)) delete proposedAccess.defaultEffort;
+          }
+          // Editors can submit full maps containing removed-model residue.
+          // Drop only unselected keys; selected policies still need validation.
+          if (proposedAccess.modelEfforts) proposedAccess.modelEfforts = Object.fromEntries(Object.entries(proposedAccess.modelEfforts).filter(([id]) => proposedAccess.models.includes(id)));
+          if (proposedAccess.modelServiceTiers) proposedAccess.modelServiceTiers = Object.fromEntries(Object.entries(proposedAccess.modelServiceTiers).filter(([id]) => proposedAccess.models.includes(id)));
+        }
         if (proposedAccess && !('defaultModel' in e.patch) && !proposedAccess.models.includes(proposedAccess.defaultModel ?? '')) {
           proposedAccess.defaultModel = proposedAccess.models[0];
           proposedAccess.defaultEffort = undefined;
