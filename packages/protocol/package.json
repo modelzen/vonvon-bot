@@ -4,7 +4,10 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./secure-channel": { "types": "./dist/secure-channel.d.ts", "import": "./dist/secure-channel.js" }
+  },
   "files": ["dist"],
   "scripts": {
     "build": "tsc -p tsconfig.json",

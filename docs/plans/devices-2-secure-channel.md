@@ -222,3 +222,62 @@ Mac 后验（整批）：U1a 的桌面端用 `webBinarySocket`/`nodeBinarySocket
 2026-11-02，#640 上 Sonnet 审查 U1a–U4 计划时，提到本片的一条，接受：
 
 - U1a 要用的两个子路径 `@vonvon/client/secure`、`@vonvon/protocol/secure-channel` 没说要登记进 `package.json` 的 `exports`，不登记 import 就失败。4.2"U1a 要用的补充"第 3 条补上两条 `exports`。
+
+## 11. 实现时和计划不一样的地方
+
+按 PR #640（计划补充，已合入 `claude/devices-integration`，本分支已合并进来）更新后的本计划实现（含 4.2 末尾"U1a 要用的补充"三条：`SecureConnection.closed`、`SecureChannelError.stage`、两个子路径导出，都做了）。和计划不一样的地方：
+
+1. **`PeerHub` 的接口**：计划的 `add(peer, detach)` 改成三步：`attach(socket, detach)`（连接一建立就登记，握手没完成的也在里面，`closePeers`/`release` 关它们，直到 socket 的 close 事件）、`add(peer, socket)`（hello 通过后才进 `peers`，收 `publish`）、`remove(peer)`（连接自己的 detach 调一次，hub 再调 `detached(peer)`）。原因：今天的 `closePeers` 关的是 `WebSocketServer.clients`，包括还没认证的 socket；hub 不拥有 `WebSocketServer`，只能自己记 socket；`closeWhere` 也要从 peer 找到 socket。`beginDrain()` 返回 Promise（`http.ts` 的排空要等它），等的是 `track` 的请求和关 socket；`release()` 不等 `track` 的请求，和今天一样（计划第 5 节写"`release` 等 `track`"，按"行为不变"没改）。
+2. **`createSocketServer` 的 `hub` 可选**：不给就自己建一个（`detached` 也变成可选），返回值形状不变（`publish/beginDrain/release/close`）。这样直接调它的五个旧测试一行不用改。`http.ts` 建一个 hub 传进去。
+3. **排空白名单仍是两条**（`admin.daemonStatus`、`machine.stopHost`），写在 `message-loop.ts` 一处，用 `rpcKindOf` 比较。没换成 `DRAIN_KINDS`：`http.ts` 的 `control()` 还不回 `machine.coreUpdateStatus`，换了排空时这条请求会没有回复。D1 已把这一步留给 D4a（`DRAIN_KINDS` 和 `control()` 一起换）。
+4. **`createSecureSocketServer` 用自己的 `upgrade` 监听**（`noServer`），没用 `verifyClient`：和 `ws.ts` 同一个写法，`admit` 在升级前问；hub 已 `released` 或这个 server 在关时回 503。`close(reason?)` 多一个可选的关闭原因（默认 `server_shutdown`），D3 关地址时传 `remote_disabled`，不用另外 `closeWhere`。
+5. **`onHandshake`/`onHandshakeFailed` 拿的是对方 IP**（不带端口）：D3 的限流按 IP 计。3 秒内没收到第一帧也算一次 `handshake_failed`（慢连接占着名额也该计数）。
+6. **计划没写到的几种帧**：`unpaired` 阶段超过 4096 字节或解不开的帧，按"别的"处理（4002 + `onHandshakeFailed('unknown_client')`）；`hello` 阶段的超长、解不开的帧 1008，不是 hello 的 JSON 4401（和 loopback 一样）；收到消息 2 或 `pairResult` 之后 5 秒（`timers.pairing`）还没 hello 就 4005；配对正在写盘时又来一帧 1008（`unpaired` 只收一帧）。
+7. **配对写盘失败**（`completePairing` 抛的不是 `pairing_failed`，比如磁盘满）：关 1011 `internal_error`，`log.warn('device','pairing-write-failed',{ address, error })`，**邀请不放回**（D1 留给 D2 定）：链接仍是一次性的，客户端拿到 `closed`（stage `pairing`），按 U1a 4.4 的做法不带邀请再连一次会得到 `unknown_client`，要重新生成链接。`clients.add` 抛 `client_revoked`（撤销和配对撞在一起）就关 4003。
+8. **撤销在 hello 时也核对一次**，不只在每条请求前。
+9. **客户端**：通道解不开的帧、配对或 hello 阶段收到不认识的帧，都关 1008，错误码是 `closed`（带 `closeCode: 1008`），因为 4.2 的码表里没有"篡改"；握手、配对、hello 三段共用一个 5 秒的 `timers.handshake`，到点关 1001，错误码 `timeout`、`stage` 是当时的阶段。`device.pk` 不是 32 字节 base64url、`pairing` 不合 `pairRequestSchema`（比如名字超 40 字）时，不发任何东西，关 socket（1000）并抛普通 Error。已建立的连接结束时，`closed` 先 resolve，再把同一个 `SecureChannelError` 作为 `ConnectionError.cause` 交给 `client.onError`，U1a 从两条路都能拿到码。
+10. **`secure-channel.ts` 多导出了几样**：`staticKeyFromPrivateKey`（官方向量只给私钥）、`HandshakeOptions.prologue`（只给向量测试用）、`MESSAGE1_MIN`/`MESSAGE2_MIN`/`FRAME_OVERHEAD` 常量。`staticKeyFromBase64url` 会核对公钥和私钥是不是一对，不是就抛。`@vonvon/client/secure` 顺带转出 `ConnectionError`、`RpcError`、`generateStaticKey`、`staticKeyFromBase64url` 和几个类型。
+11. **`DaemonApi` 多一个可选的 `secure: SecureDeps`**：计划说"装进一个 `secureDeps` 对象供 D3 传给 `createSecureSocketServer`"；放在 `startApi` 的返回值上，探针和 `secure-socket.test.ts` 的"daemon 自己分发"一条也用它。
+12. **向量夹具只有 1 条**：cacophony 里 `Noise_IK_25519_AESGCM_SHA256` 只有一条（带 prologue，2 条握手消息 + 4 条传输消息），全部抽出。snow 的 `snow.txt` 也有一条，但没有 `handshake_hash`、许可是 Apache-2.0，没收。
+13. **测试的计时**：`secure-socket.test.ts` 用真 `http.Server` 和真 `ws`，超时用注入的短时间（握手 300 ms、配对 300 ms、空闲 600 ms），不用假时钟（`ws` 自己也用定时器）；默认值 3/5/60 秒写在代码里。客户端的保活测试用假时钟和进程内假 socket。
+14. **探针的撤销步骤**：`secure-probe.ts` 用通道里的 `device.revokeClient` 撤销自己再连，不是改 `clients.json`：daemon 在跑时名单在它内存里，改文件不生效（D1：daemon 在跑时只有 daemon 写）。探针用 esbuild 打成一个文件再跑，跑法写在文件开头。
+15. **客户端拿到的 socket 可以已经在关**：服务端在读第一帧之前就关（4004 限流、D3 的 4006），客户端的 `open` 事件和关闭帧可能挨着到，`connectSecure` 开始时 socket 已是 CLOSING。这时不发消息 1、不抛，等它的 close 事件按码表给错误（stage `handshake`）；1 秒内没等到（早已关掉）就给 `closed`。
+16. **被撤销的钥匙在哪一段被告知**：服务端先回消息 2 再关 4003，客户端收到消息 2 就接着发 `pairRequest` 或 hello，所以它看到的 `client_revoked` 的 stage 是 `pairing` 或 `hello`，不是 `handshake`（探针第 3 步打印 `client_revoked at hello, close 4003`）。
+
+## 12. 代码审查后改了什么
+
+写作时 Claude 两路自查（加密、健壮性）的 9 条，全部接受（不是独立审查；独立审查交给 Codex，见 PR）：
+
+1. D2-CRYPTO-1 → 接受。消息 2 之后的关闭在通道里认证：新增 `FRAME.close = 0x03`，正文是 2 字节关闭码加 UTF-8 原因（`closeBody`/`readCloseBody`）。服务端有通道时每次关闭都先发这一帧，hub 的 `closePeers`/`closeWhere` 也发（经 `attach` 的第三个参数 `announce`）；客户端收到就按它结束。消息 2 之后只有明文 WS 关闭码的，一律给 `closed`（可重试）；消息 2 之前只认设备那时会发的 4001/4004/4005/4006，4002/4003/4007 给 `closed`。测试：经中继注入 `88 02 0f a3` → `closed`，名单上仍是已配对。消息 2 之前的关闭在 IK 下没法认证，`device_identity_changed`、`rate_limited`、`remote_disabled`、`protocol_mismatch` 仍可能是路径上的人伪造的；U1a 把 `device_identity_changed` 当终止态时要考虑这一点。
+2. D2-CRYPTO-2 → 接受。`clients.touch` 从消息 1 挪到 hello 通过之后；hello 超时也报 `onHandshakeFailed('handshake_failed')`。测试：重放截下的消息 1，`lastAddress`、`lastSeenAt` 不变，真连一次才变。D3 的 `connectionAuthenticated` 挂在 hello 通过（`hub.add`）那一步，不挂在消息 1 之后。重放仍能看出这把钥匙是已撤销（立刻 4003）、已配对（超时 4005）还是未知（超时 4002）：真客户端被拒时，明文关闭码本来就看得见，这里不另外处理。
+3. D2-CRYPTO-3 → 接受，加测试：两次握手的 e 互不相同，也不等于静态公钥（两侧都测）。
+4. D2-CRYPTO-4 → 接受，加测试：不传 options 的一侧只能和用 `PROLOGUE` 的另一侧握手成功；换成空 prologue 或去掉版本字节都失败（两侧都测）。
+5. R4 → 接受。已配对连接在 hello、ready 阶段收到任何帧（包括 ping/pong），都先核对撤销。`Peer` 加 `clientId`，因为 maintenance 的 principal 不带 clientId。D3 撤销断连（含 jobs/logs 的 detach）按 `peer.clientId` 匹配，不按 `principal.clientId`。测试：protocolVersion 1 的已配对连接，撤销后发 ping → 4003。
+6. R2 → 接受。服务端：首字节版本不对 → 4001 `protocol_mismatch`；首帧超时、hello 超时 → 4005，原因是 `handshake_timeout`（`HANDSHAKE_TIMEOUT_REASON`）；其余 4005 的原因仍是 `handshake_failed`。客户端只在消息 2 之前收到 4005 `handshake_failed` 时给 `device_identity_changed`；原因是 `handshake_timeout` 时给 `timeout`，其他原因给 `handshake_failed`。测试：消息 1 晚到 500 ms → `timeout`；版本字节 0x02 → 4001。验收要点 7 按这条理解。
+7. R1 → 接受。`own` 里的条目留到 socket 的 close 事件。已经被拒、对端又不回关闭帧的连接，`close()` 也会在 250 ms 后 terminate。测试：有这样一条连接时，`close()` 1 秒内完成。
+8. R5 → 接受，和 D2-CRYPTO-2 一起改。
+9. R3 → 接受。`webBinarySocket.close` 收到 1000 和 3000–4999 以外的码时改用 1000，原因不变。测试：用 Node 全局 WebSocket 连一个回坏消息 2 的假设备，服务端收到 1000，socket 关掉。
+
+另外：`secure-probe.ts` 的跑法补了 `mkdir -p`，不建 `$T/home`，`startApi` 会报 ENOENT。
+
+## 合入集成分支（带 I3、D4a）
+
+2026-11-02 把 `claude/devices-integration`（新合入 I3a #632、I3b #633 的升级引擎和 D4a #645 的会话令牌）merge 进本分支。两处冲突，都在本片抽走了代码的地方：I3 和 D4a 改的是原来 `ws.ts` 里的连接登记、publish、排空和消息处理，合并时把它们的行为移进抽出来的模块，两边的行为都保留：
+
+- **`D/server/ws.ts`**：结构取本片的（hello 之后交给 `handleMessage`，连接登记在 hub）。loopback 的 hello 带上 D4a 的会话令牌：`credential` 以 `vs1.` 开头时查 `sessions`，查不到 4401 `invalid_session_token`，协议不同 4001 `protocol_mismatch`，否则 principal 是 `bot-session`；不是令牌的照旧比本机凭据。`Peer` 两边的字段都要：本片的 `clientId`，D4a 的 `close(code, reason)`。D4a 加在这里的 `view` 参数和 `disconnect()` 不要了，改到 hub 上（下面两条）；`forProtocol1` 去掉错误的 `details` 留着。
+- **`D/server/http.ts`**：hub 建的时候给 `view: viewFor(sessionTokens)`；`createSocketServer` 传 `sessions` 和 `hub`；令牌作废时 `hub.closeWhere(…bot-session 且 sessionId 相同…, 4401, 'invalid_session_token')`，代替 D4a 的 `sockets.disconnect`。`secure` 照旧。
+
+移到抽出来的模块里的行为：
+
+- **`message-loop.ts`**：排空白名单换成 D1 的 `DRAIN_KINDS`（多了 `machine.coreUpdateStatus`，I3 的 `control()` 会回它），第 11 节第 3 条的限制就此没有了；出错的回复用 D4a 的 `errorEnvelope`（带 `details`）。关连接改用 `peer.close`，`MessageLoopOptions.close` 去掉：loopback 的 `peer.close` 就是关 socket，安全连接的是 `shut`（先在通道里说，再关）。
+- **`peer-hub.ts`**：`publish(event, shape?)` 改成 hub 建的时候给 `view`（第 4 节写的 `shape`）。原因：配对写完 `completePairing` 直接 `hub.publish` 设备事件，view 若只在 `createSocketServer.publish` 上，Bot 会话的连接会收到设备事件。现在不管谁发（快照、撤销、配对），每条连接拿到的都是 D4a 的 `filterSnapshot` 那一份，或者没有。
+- **`secure-socket.ts`**：peer 加 `close`，D4a 的维护子集连续 20 条被拒关 4001 在远程连接上也在通道里说。
+
+没冲突、但要对上的：D4a 的每条请求前核令牌、`admin.negotiate` 核 `--scope`、`authorize()` 的 `narrow`/`shown(payload)`、维护子集计数都在 `http.ts` 的 `request`/`control` 里，两种连接共用，不用动。远程 hello 带任何 `credential` 都 4401 `unauthorized`，会话令牌也一样：会话令牌只在 loopback 的 hello 上认。`capabilities` 成了 `['device', 'session-scope']`，`secure-socket.test.ts` 的断言跟着改。
+
+另起提交补的测试（`secure-socket.test.ts` 的"the daemon, with I3 and D4a"）：
+
+- 排空时远程连接问 `machine.coreUpdateStatus` 拿到回复，问 `checkCoreUpdate` 在通道里收到 1001 `server_shutdown`。
+- 会话令牌作废：用它开的 loopback 连接 4401 `invalid_session_token`，关之前就从 jobs/logs 摘掉（`closeWhere` 先 detach）；主人的 loopback 和远程连接照旧能用。
+- 远程 hello 带一个有效的 `vs1.` 令牌，4401 `unauthorized`。
+- 远程配对发出的设备事件，主人的连接收到，已协商的 Bot 会话连接收不到。
