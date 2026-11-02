@@ -1,9 +1,9 @@
-import {useState} from 'react';
+import {useMemo, useRef, useState} from 'react';
 import {deviceAliasSchema, type DeviceRow} from '@vonvon/protocol';
 import {useDevicesState, useShellCapabilities} from '../client-context';
 import {Button, InlineNotice} from '../reference/components/ui';
 import {ConfirmDialog} from '../reference/components/ui/Dialog';
-import {useDraftGuard} from '../settings/DraftGuard';
+import {useDraft, useDraftGuard} from '../settings/DraftGuard';
 import {addBlockedReason, copy, registryNotices, removeCopy, rowView} from './devices-presentation';
 import {CopyText, StatusDot, TailscaleAdvice, useNow} from './device-bits';
 import {AddDeviceDialog} from './AddDeviceDialog';
@@ -11,15 +11,23 @@ import {AddDeviceDialog} from './AddDeviceDialog';
 const reportSwitchFailure = (error: unknown) => console.error('Device switch failed', error);
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-function RenameRow({row, onDone}: {row: DeviceRow; onDone: () => void}) {
+/** A name typed and not saved is a draft: switching devices or leaving the page asks first (Codex 审查 237-1). */
+export function RenameRow({row, onDone}: {row: DeviceRow; onDone: () => void}) {
   const devices = useShellCapabilities()?.devices;
   const [name, setName] = useState(row.name);
   const [error, setError] = useState<string>();
-  const save = () => {
-    if (!deviceAliasSchema.safeParse(name).success) { setError(copy.invalidName); return; }
-    void devices?.rename(row.id, name.trim()).then(onDone, failure => setError(message(failure)));
+  const save = async (): Promise<boolean> => {
+    if (!deviceAliasSchema.safeParse(name).success) { setError(copy.invalidName); return false; }
+    try { await devices?.rename(row.id, name.trim()); }
+    catch (failure) { setError(message(failure)); return false; }
+    onDone();
+    return true;
   };
-  return <form className="device-rename" onSubmit={event => { event.preventDefault(); save(); }}>
+  const latest = useRef({save, onDone});
+  latest.current = {save, onDone};
+  const draft = useMemo(() => ({title: '设备名字', save: () => latest.current.save(), discard: () => latest.current.onDone()}), []);
+  useDraft(name.trim() !== row.name, draft);
+  return <form className="device-rename" onSubmit={event => { event.preventDefault(); void save(); }}>
     <input aria-label="设备名字" value={name} maxLength={60} onChange={event => { setName(event.target.value); setError(undefined); }}/>
     <Button size="sm" type="submit" variant="primary">保存</Button><Button size="sm" type="button" onClick={onDone}>取消</Button>
     {error && <p className="device-problem" role="alert">{error}</p>}
