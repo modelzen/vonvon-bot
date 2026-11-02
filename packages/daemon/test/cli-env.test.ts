@@ -98,6 +98,24 @@ it('env scan reads the sign-in of each installed tool, and one failing read leav
     'lark-cli  1.2.3（系统里的，npm）  没登录：运行 vonvon env login lark-cli', '    npm install -g @larksuite/cli', ''].join('\n'));
 });
 
+// 0.9.0 Linux acceptance (task 287): a managed copy is on no PATH, and `codex` was "command not found" on a new server
+it('env scan names what starts a managed copy in a terminal, and a tool found on PATH by its name', async () => {
+  const codex = '/home/u/.local/share/vonvon-bot/releases/0.9.0/node/bin/node /home/u/.vonvon-bot/managed-tools/codex/releases/g/bin/codex';
+  const claude = '/home/u/.vonvon-bot/managed-tools/claude/releases/g/bin/claude';
+  const tools = [
+    tool('codex', { installation: 'managed', executable: '/home/u/.vonvon-bot/managed-tools/codex/releases/g/bin/codex', version: '0.166.0', managedVersion: '0.166.0', latestVersion: '0.166.0', updateAvailable: false, canUninstall: true, command: codex }),
+    tool('claude', { installation: 'managed', executable: claude, version: '2.1.316', managedVersion: '2.1.316', latestVersion: '2.1.316', updateAvailable: false, canUninstall: true, command: claude }),
+    tool('lark-cli'),
+  ];
+  const h = envHarness(request => request.type === 'scan' ? { kind: 'tools', tools }
+    : { kind: 'auth', tool: (request as { tool: string }).tool, state: 'signedOut', message: '尚未授权' });
+  await runEnvScan(h.io(), h.daemon);
+  expect(h.out()).toBe([
+    `Codex  0.166.0（托管）  没配置好：在终端里运行 ${codex} 配置（账号或自定义 API 都行）`,
+    `Claude  2.1.316（托管）  没配置好：在终端里运行 ${claude} 配置（账号或自定义 API 都行）`,
+    'lark-cli  没装', ''].join('\n'));
+});
+
 const running = (id: string, extra: object = {}) => ({ kind: 'running', id, tool: 'codex', update: false, startedAt: 1, ...extra });
 /** a running install this command's request started: its state carries the request id */
 const mine = (id: string, extra: object = {}) => running(id, { requestId: REQ, ...extra });

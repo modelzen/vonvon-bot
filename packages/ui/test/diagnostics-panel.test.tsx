@@ -284,6 +284,22 @@ describe('the tools of a remote device', () => {
     expect(panel()).toContain('在本机环境里更新 Codex。');
   });
 
+  // 0.9.0 Linux acceptance (task 287): a managed Codex is on no PATH, so `codex` was a command not found there
+  it('names what starts a managed copy where it says to run Codex or Claude in a terminal', () => {
+    const codex = '/srv/vonvon/node/bin/node /srv/vonvon-data/managed-tools/codex/releases/g/bin/codex';
+    const claude = '/srv/vonvon-data/managed-tools/claude/releases/g/bin/claude';
+    const tools: ToolState[] = [{...signedOut[0]!, command: codex}, {tool: 'claude', installation: 'installed', authentication: 'signedOut', version: '2.1.0', command: claude}];
+    const records = [record({reason: 'signed-out', backend: 'codex'}), record({reason: 'signed-out', backend: 'claude', ref: 'b2c3d4'})];
+    const html = renderToStaticMarkup(<ClientProvider client={client} device={{...remote, capabilities: [...remote.capabilities]}}>
+      <DiagnosticsPanel snapshot={{...snapshot([{...agent, diagnostics: {deniedScopes: [], notReplied: records}}]), tools}} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onOpenSecrets={() => {}} onNotice={() => {}}/>
+    </ClientProvider>);
+    expect(html).toContain(`在「测试远程设备」的终端运行 ${codex} 配置好（账号或自定义 API 都行），然后重新检测。`);
+    expect(html).toContain(`在「测试远程设备」的终端运行 ${claude} 配置好（账号或自定义 API 都行），然后点&quot;检查配置&quot;。`);
+    expect(html).toContain(`先把 Codex 配置好（账号或自定义 API 都行，用 Codex App 或 \`${codex}\` 命令行），再回到 Vonvon 检测。`);
+    expect(html).toContain(`在「测试远程设备」的终端运行 ${claude} 配置好（账号或自定义 API 都行），再点「检查配置」。`);
+    expect(html).not.toContain('运行 codex');
+  });
+
   // owner 2026-11-02: this computer's page says 本机 where the remote one says 「X」
   it('says 本机 for this computer, the tool steps as they were', () => {
     const html = view(signedOut);

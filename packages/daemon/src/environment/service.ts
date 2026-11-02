@@ -12,6 +12,7 @@ import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion, compar
 import { managedCodexBin } from "../agent/codex-appserver/managed-install";
 import { cachedCodexVersion } from '../agent/codex-appserver/locate';
 import { codexSource } from './codex-source';
+import { terminalCommand } from './tool-command';
 import { bundledNpmCli } from '../platform/npm';
 import { OwnedProviderProcess, ProviderProcessExitError } from '../agent/owned-process';
 import { passedEnv, SERVICE_ENV_FILE } from '../cli/service-env';
@@ -341,6 +342,7 @@ export class EnvironmentService {
       ...(tool === "claude" && resolved ? { runtimeStatus: result ? (result.exitCode === 0 ? "ready" as const : "failed" as const) : "unknown" as const } : {}),
       ...(compatibility ? { compatibility } : {}),
       ...(tool === 'codex' && resolved ? codexSource(resolved.executable, resolved.ownership === 'managed') : {}),
+      ...(resolved?.ownership === 'managed' ? { command: terminalCommand(resolved.executable, this.nodePath) } : {}),
     };
   }
 
@@ -508,9 +510,14 @@ export class EnvironmentService {
   }
 
   private async startLogin(tool: EnvironmentTool): Promise<EnvironmentReply> {
-    if (tool === "codex" || tool === "claude") return refused("provider-configuration-required", tool === "codex"
-      ? "先把 Codex 配置好（账号或自定义 API 都行，用 Codex App 或 `codex` 命令行），再回到 Vonvon 检测。"
-      : "先把 Claude 配置好（账号或自定义 API 都行，用 Claude Code 的 `claude` 命令行），再回到 Vonvon 检测。");
+    if (tool === "codex" || tool === "claude") {
+      // A managed copy is on no PATH: name what starts it. Read from its pointer only, so this answer starts no process.
+      const managed = await this.managedSelection(tool);
+      const command = managed.kind === "active" ? terminalCommand(managed.executable, this.nodePath) : tool;
+      return refused("provider-configuration-required", tool === "codex"
+        ? `先把 Codex 配置好（账号或自定义 API 都行，用 Codex App 或 \`${command}\` 命令行），再回到 Vonvon 检测。`
+        : `先把 Claude 配置好（账号或自定义 API 都行，用 Claude Code 的 \`${command}\` 命令行），再回到 Vonvon 检测。`);
+    }
     const resolved = await this.resolveTool(tool);
     if (!resolved) return refused("tool-missing", "请先安装工具。");
     const args = ["auth", "login", "--recommend", "--json"];

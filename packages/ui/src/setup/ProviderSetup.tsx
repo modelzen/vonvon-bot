@@ -106,6 +106,8 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
   const connecting = Boolean(state.activeLogin);
   const disabled = !ready || busy || state.working;
   const source = state.tools.find(item => item.tool === provider);
+  // A managed copy is on no PATH: the terminal steps name what starts it (0.9.0 Linux acceptance).
+  const command = source?.command ?? provider;
   const codexSource = provider === 'codex' ? source : undefined;
   const managedCodex = codexSource?.installation === 'managed' && codexSource.source !== 'explicit';
   const externalCodex = codexSource?.installation === 'external' || codexSource?.source === 'explicit';
@@ -161,10 +163,10 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
       </div>
     </div>
     {externalCodex && needsUpdate && !management && <p className="provider-check">{onDeviceText(where, codexSource?.updateInstructions || '请通过原安装方式更新 Codex，完成后点「重新检测」。')}</p>}
-    <p className="provider-config-guide">{configureProvider(where, provider)}{provider === 'codex' ? <>可以用 Codex App 或 <code>codex</code> 命令行配置。</> : <>可以用 Claude Code（<code>claude</code>）配置。</>}</p>
+    <p className="provider-config-guide">{configureProvider(where, provider)}{provider === 'codex' ? <>可以用 Codex App 或 <code>{command}</code> 命令行配置。</> : <>可以用 Claude Code（<code>{command}</code>）配置。</>}</p>
     {cliFailed && <div className="provider-problem" role="status">{where.isRemote
-      ? <>{here}上的 Claude Code 无法启动。请先在{here}的终端运行 <code>claude</code>，修复问题并确认可以使用，再回来重新检测。Vonvon 会复用{here}上 Claude 的认证或 API 配置。</>
-      : <>本机 Claude Code 无法启动。请先在终端运行 <code>claude</code>，修复问题并确认可以使用，再回来重新检测。Vonvon 会复用本机 Claude 的认证或 API 配置。</>}</div>}
+      ? <>{here}上的 Claude Code 无法启动。请先在{here}的终端运行 <code>{command}</code>，修复问题并确认可以使用，再回来重新检测。Vonvon 会复用{here}上 Claude 的认证或 API 配置。</>
+      : <>本机 Claude Code 无法启动。请先在终端运行 <code>{command}</code>，修复问题并确认可以使用，再回来重新检测。Vonvon 会复用本机 Claude 的认证或 API 配置。</>}</div>}
     {state.check?.state === 'checking' && installed && auth && <p className="provider-check"><OperationActivity label="正在读取可用模型…" state="connecting"/></p>}
     {state.canContinue && !compact && <p className="provider-check provider-check--ready" role="status"><Check size={14}/>{name} 已准备好<span>· {state.check?.models?.length ?? 0} 个模型</span></p>}
     {!installing && (state.issue || state.check?.message) && <div className="provider-problem" role="status"><p>{onDeviceText(where, state.issue || state.check?.message || '')}</p>{!detectionUnknown && <IconButton size="sm" variant="ghost" label="重新检测" title="重新检测" disabled={disabled || state.check?.state === 'checking'} onClick={() => {void state.read().catch(() => {}); void state.verify();}}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}</div>}

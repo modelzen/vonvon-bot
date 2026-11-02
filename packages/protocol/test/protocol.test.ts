@@ -12,6 +12,7 @@ import {
   applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema, notRepliedSchema, KEY_FAILURE, keyFailureOf, keyProblem,
   isKnownJudgeSelection, type JudgeSelectionView,
   adminProjectSchema, collaborationRequestSchema, collaborationReplySchema, topicConversationCopy, conversationCopy, conversationSchema, conversationToMode, modeToConversation, projectRecordSchema,
+  toolSteps, environmentToolStateSchema,
 } from "../src/index.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -439,6 +440,26 @@ it("preserves optional pending group topic flags", () => {
   const group = { chatId: "oc_pending", name: "Pending", addedAt: 1 };
   expect(pendingGroupsSchema.parse({ groups: [group, { ...group, topic: true }, { ...group, topic: false }] }).groups).toEqual([group, { ...group, topic: true }, { ...group, topic: false }]);
   expect(pendingGroupsSchema.safeParse({ groups: [{ ...group, topic: "x" }] }).success).toBe(false);
+});
+
+// 0.9.0 Linux acceptance (task 287): a managed Codex or Claude Code is on no PATH, so a bare `codex` was not found
+it("names what starts a managed copy where a step says to run Codex or Claude in a terminal", () => {
+  const codex = "/srv/node/bin/node /srv/data/managed-tools/codex/releases/g/bin/codex";
+  const claude = "/srv/data/managed-tools/claude/releases/g/bin/claude";
+  const [codexStep, claudeStep] = toolSteps([
+    { tool: "codex", installation: "installed", authentication: "signedOut", version: "0.166.0", command: codex },
+    { tool: "claude", installation: "installed", authentication: "signedOut", version: "2.1.0", command: claude },
+  ]).steps;
+  expect(codexStep?.detail).toBe(`在终端运行 ${codex} 配置好（账号或自定义 API 都行），然后重新检测。`);
+  expect(claudeStep?.detail).toBe(`在终端运行 ${claude} 配置好（账号或自定义 API 都行），然后点"检查配置"。`);
+  expect(toolSteps([{ tool: "codex", installation: "installed", authentication: "signedOut", version: null }]).steps[0]?.detail).toBe("在终端运行 codex 配置好（账号或自定义 API 都行），然后重新检测。");
+  const record = { at: 1, count: 1, groupId: "oc_fixture_group", place: "main" as const, reason: "signed-out" as const };
+  expect(NOT_REPLIED_TEXT["signed-out"].next({ ...record, backend: "codex" }, undefined, codex)).toBe(`先把 Codex 配置好（账号或自定义 API 都行，用 Codex App 或 \`${codex}\` 命令行），再回到 Vonvon 检测。`);
+  expect(NOT_REPLIED_TEXT["signed-out"].next({ ...record, backend: "claude" })).toBe("在终端运行 claude 配置好（账号或自定义 API 都行），再点「检查配置」。");
+  // a daemon from before the field sends none; a client from before it drops it
+  const state = { tool: "codex", installation: "managed", executable: "/x/codex", version: "1.0.0", managedVersion: "1.0.0", latestVersion: null, updateAvailable: null, canUninstall: true };
+  expect(environmentToolStateSchema.parse({ ...state, command: codex }).command).toBe(codex);
+  expect(environmentToolStateSchema.parse(state).command).toBeUndefined();
 });
 
 it("explains unbound reply throttling and both setup routes", () => {
