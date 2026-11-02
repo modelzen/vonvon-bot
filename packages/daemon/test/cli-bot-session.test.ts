@@ -12,7 +12,7 @@ import { loadCommands, loadLocalOnly } from './helpers/cli-commands';
 import { fakeService, startFixture } from './server-fixture';
 import type { AuthzDeps } from '../src/server/authz';
 import agentFixture from '../../protocol/test/fixtures/agent-settings.json';
-import { NOT_DM_MESSAGE } from '../src/agent/entry/registry';
+import { NOT_DM_COMMENT_MESSAGE, NOT_DM_MESSAGE } from '../src/agent/entry/registry';
 
 /**
  * devices-4a 4.9, run as a Bot session's shell would: the CLI bundle against a daemon in this process. A session's
@@ -114,15 +114,24 @@ describe('a Bot session\'s command line', () => {
         expect(JSON.stringify(read.json), args.join(' ')).not.toContain('运营');
         expect(JSON.stringify(read.json), args.join(' ')).not.toContain('/w');
       }
-      // D4a review SEC-2: service status takes the lock as it is, never asking the daemon with local-credential (unreadable here)
-      const service = await run(d.fixture.home, d.home, ['service', 'status'], { VONVON_SESSION: d.token });
-      expect(service, service.stderr).toMatchObject({ code: 0, json: { ok: true, running: true } });
-      // daemon status answers from the lock in a session, token or not
-      for (const session of [{ VONVON_SESSION: d.token }, { FEISHU_CODEX_BRIDGE: '1' }]) {
-        expect(await run(d.fixture.home, d.home, ['daemon', 'status'], session)).toMatchObject({ code: 0, json: { ok: true, running: true, listen: d.fixture.api.listen, source: 'files' } });
+      // Codex review 256-1 / 257-1. main 必败: service status ran from the files (exit 0, the service's definition and log
+      // paths); it is the service manager's, refused in a session as the rest of `service`. daemon status answers from the
+      // lock in a session, token or not, with what connectLocal reads and nothing else (no PID, start time or version).
+      const comment = d.fixture.sessionTokens.issue({ appId: BOT, place: 'comment', sessionId: 'ses_2222222222222222' });
+      for (const session of [{ VONVON_SESSION: d.token }, { VONVON_SESSION: comment }, { FEISHU_CODEX_BRIDGE: '1' }]) {
+        const service = await run(d.fixture.home, d.home, ['service', 'status'], session);
+        expect(service, service.stderr).toMatchObject({ code: 4, json: { ok: false, error: { kind: 'refused', reason: 'not_in_session' } } });
+        expect(JSON.stringify(service.json)).not.toContain(d.fixture.home);
+        const status = await run(d.fixture.home, d.home, ['daemon', 'status'], session);
+        expect(status, status.stderr).toMatchObject({ code: 0 });
+        expect(status.json).toEqual({ ok: true, running: true, listen: d.fixture.api.listen, source: 'files' });
+      }
+      // Codex review 256-3 / 257-2. main 必败: the group's own id never reached the daemon (bindings hidden), and read 这个操作不能从 Bot 会话里做
+      for (const [token, scope, sentence] of [[d.token, `bot=${BOT},group=${GROUP}`, NOT_DM_MESSAGE], [comment, `bot=${BOT}`, NOT_DM_COMMENT_MESSAGE]] as const) {
+        const set = await run(d.fixture.home, d.home, ['group', 'set', GROUP, '--disable', '--scope', scope], { VONVON_SESSION: token });
+        expect(set, set.stderr).toMatchObject({ code: 4, json: { ok: false, error: { kind: 'refused', reason: 'not-dm', message: sentence } } });
       }
       // Codex review 230-3: a comment session's task is refused for its place (exit 4), not as a group it cannot see (exit 2)
-      const comment = d.fixture.sessionTokens.issue({ appId: BOT, place: 'comment', sessionId: 'ses_2222222222222222' });
       const add = await run(d.fixture.home, d.home, ['schedule', 'add', '巡检', '--group', GROUP, '--name', 'probe', '--every', '1h', '--scope', `bot=${BOT}`], { VONVON_SESSION: comment });
       expect(add, add.stderr).toMatchObject({ code: 4, json: { error: { kind: 'refused', reason: 'not-group' } } });
       d.fixture.sessionTokens.revoke('ses_0123456789abcdef');
@@ -152,7 +161,7 @@ describe('a Bot session\'s command line', () => {
   it('refuses the local-only commands in a session, naming them, and runs the rest', async () => {
     const { home, root } = await emptyHome();
     const session = { VONVON_SESSION: `vs1.ses_0123456789abcdef.${'a'.repeat(43)}` };
-    for (const [path, ...args] of [['daemon restart'], ['daemon start'], ['daemon stop'], ['service install'], ['service uninstall'], ['pair'], ['clients ls'],
+    for (const [path, ...args] of [['daemon restart'], ['daemon start'], ['daemon stop'], ['service install'], ['service uninstall'], ['service status'], ['pair'], ['clients ls'],
       ['clients revoke', 'cl_0000000000000000'], ['device rename', 'x'], ['bot repair-dir', 'x'], ['open'],
       // D3: remote access is the owner's at this computer (devices 8.3), refused before it reads or writes remote.json
       ['remote status'], ['remote enable', '192.168.1.10'], ['remote enable', '--tailscale'], ['remote disable', '192.168.1.10'], ['remote port', '7767'],
@@ -162,13 +171,12 @@ describe('a Bot session\'s command line', () => {
       const result = await run(root, home, [...path.split(' '), ...args], session);
       expect(result, path).toMatchObject({ code: 4, json: { ok: false, error: { kind: 'refused', reason: 'not_in_session', message: `这条命令（\`vonvon ${path}\`）不能在 Bot 会话里运行。告诉用户去设备上或桌面端里做。` } } });
     }
-    expect(await run(root, home, ['service', 'status'], session)).toMatchObject({ code: 0 });
     expect(await run(root, home, ['daemon', 'status'], session)).toMatchObject({ code: 3, json: { error: { kind: 'connection' } } });
     // devices 8.3's list: each one a command of this CLI
     const localOnly = await loadLocalOnly();
     const commands = new Set((await loadCommands()).map(command => command.path.replace(/ [<[].*$/, '')));
     expect(localOnly.filter(path => !commands.has(path))).toEqual([]);
-    for (const allowed of ['daemon status', 'service status', 'secrets get', 'schedule list', 'memory add', '__restart-after-exit', '__daemon-control']) expect(localOnly).not.toContain(allowed);
+    for (const allowed of ['daemon status', 'secrets get', 'schedule list', 'memory add', '__restart-after-exit', '__daemon-control']) expect(localOnly).not.toContain(allowed);
   }, 60_000);
 
   // D4a review R3: a host started inside a session (an older daemon) hands its environment to the helpers it starts
@@ -238,6 +246,8 @@ describe('a session\'s token given to connectLocal', () => {
     try {
       const { client, serverInfo } = await connectLocal({ home: d.fixture.home, cliEntry: entry, credential: d.token });
       expect(serverInfo).toMatchObject({ principal: 'bot-session:group' });
+      // Codex review 256-2. main 必败: the hello named the device and its machine id to a group's token
+      expect(Object.keys(serverInfo).sort()).toEqual(['principal', 'protocolVersion', 'type', 'version']);
       await client.close();
     } finally { vi.unstubAllEnvs(); await d.close(); }
   }, 60_000);

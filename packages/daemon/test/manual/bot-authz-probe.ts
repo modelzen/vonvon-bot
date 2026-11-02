@@ -12,7 +12,7 @@
  *   HOME="${T:?}/home" VONVON_HOME="${T:?}/vh" node "${B:?}/probe.mjs" "${B:?}/cli.mjs"
  *   rm -rf -- "${B:?}" "${T:?}"
  *
- * It prints two lines a step and exits 0 when every step came out as devices-4b's acceptance says, 1 otherwise.
+ * It prints two lines a step and exits 0 when every step came out as devices-4b's acceptance (and S1b's, Codex review 256–257) says, 1 otherwise.
  */
 import { spawn, fork, type ChildProcess } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -168,6 +168,22 @@ async function host(cli: string | undefined): Promise<number> {
   const groupMember = await turn('group', MEMBER, '记住 周四发版');
   check('群里，成员这一轮：settings set --group oc_probe_a permission.mode=full', await run(cli, groupMember.token, ['settings', 'set', '--group', GROUP_A, 'permission.mode=full', ...groupScope]),
     { code: 4, reason: 'not-dm', text: '群里不能改设置。' });
+  // Codex review 256 / 257: the group's own project by its right name, and its id; a comment's session with its own sentence
+  check('群里，成员这一轮：group set a --disable（本群项目的名字）', await run(cli, groupMember.token, ['group', 'set', 'a', '--disable', ...groupScope]),
+    { code: 4, reason: 'not-dm', text: '群里不能改设置。私聊我可以改' });
+  check('群里，成员这一轮：group set oc_probe_a --disable', await run(cli, groupMember.token, ['group', 'set', GROUP_A, '--disable', ...groupScope]),
+    { code: 4, reason: 'not-dm', text: '群里不能改设置。私聊我可以改' });
+  const comment = tokens.issue({ appId: APP_ID, place: 'comment', sessionId: 'ses_00000000000000c0' });
+  check('评论会话：group set oc_probe_a --disable', await run(cli, comment, ['group', 'set', GROUP_A, '--disable', '--scope', `bot=${APP_ID}`]),
+    { code: 4, reason: 'not-dm', text: '评论里不能改设置。私聊我可以改' });
+  for (const [who, token] of [['群里，成员这一轮', groupMember.token], ['评论会话', comment]] as const) {
+    check(`${who}：service status（服务管理器的，会话里不能用）`, await run(cli, token, ['service', 'status']), { code: 4, reason: 'not_in_session', text: '不能在 Bot 会话里运行' });
+    const status = await run(cli, token, ['daemon', 'status']);
+    check(`${who}：daemon status（只有在不在跑和端口）`, fields(status), { code: 0, text: 'fields listen,running,source' });
+    const { client, serverInfo } = await connectLocal({ home: paths.appDir, cliEntry: cli, credential: token });
+    await client.close();
+    check(`${who}：握手（不带设备名、机器标识）`, result(0, `fields ${Object.keys(serverInfo).sort().join(',')}`), { code: 0, text: 'fields principal,protocolVersion,type,version' });
+  }
   // The fake schedule echoes the actor it was given as the task's creator: shown alone, the rest of the task is the fake's.
   const added = await run(cli, groupMember.token, ['schedule', 'add', '看一下构建', '--name', '构建', '--every', '30m', '--group', GROUP_A, ...groupScope]);
   const creator = added.code === 0 ? JSON.stringify((JSON.parse(added.full) as { task?: { createdBy?: unknown } }).task?.createdBy) : added.full;
@@ -194,6 +210,11 @@ async function host(cli: string | undefined): Promise<number> {
 /** `text` is what a step shows (cut at 300 characters), `full` what it is checked against. */
 interface Result { code: number | null; reason?: string; text: string; full: string }
 const result = (code: number | null, full: string, reason?: string): Result => ({ code, full, text: full.length > 300 ? `${full.slice(0, 300)}…` : full, ...(reason ? { reason } : {}) });
+/** A successful --json reply as the names of its fields (besides `ok`), so a step checks nothing more came. */
+const fields = (step: Result): Result => {
+  try { return result(step.code, `fields ${Object.keys(JSON.parse(step.full) as object).filter(key => key !== 'ok').sort().join(',')}`, step.reason); }
+  catch { return step; }
+};
 /** The bundled CLI as the Bot's shell runs it: the token in front of the command, the owner's credential never read. */
 function run(cli: string, token: string, args: string[]): Promise<Result> {
   const child = spawn(process.execPath, [cli, ...args, '--json'], { env: { ...process.env, VONVON_SESSION: token, FEISHU_CODEX_BRIDGE: '' }, stdio: ['ignore', 'pipe', 'pipe'] });

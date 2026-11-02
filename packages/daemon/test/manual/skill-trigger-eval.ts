@@ -6,7 +6,13 @@
  * call (or a Read of the SKILL.md); for Codex it is a `skills.read` of the package (often inside a code-mode `exec`,
  * which the run's events do not show) or a command that reads the SKILL.md, both found in the thread's rollout under
  * `~/.codex/sessions` after the turn. A Claude session stops at the first skill it opens; either stops at its turn's
- * end, after a few tool calls or after 4 minutes. Not a vitest file, not run in CI.
+ * end, after a few tool calls or after 4 minutes. Not run in CI (test/skill-trigger-eval.test.ts checks how it judges).
+ *
+ * Each case comes out OK, MISS or INVALID (Codex review 258-1). A case is judged only from a run that was seen through:
+ * a start that failed, an error that ended the turn, a timeout, a Codex rollout not found or not readable, or a Claude
+ * run whose messages never came is INVALID, and counts neither way. A skill seen opened still counts (a want met, or a
+ * negative case missed), whatever came after. The summary lists the three apart; the exit code is 1 when any case is
+ * not OK.
  *
  * The logged-in Claude Code and Codex accounts are read from the real HOME, so HOME stays as it is; only the data root
  * is a temporary one, given in front of the one command:
@@ -33,8 +39,8 @@ import { createCommandTools } from '../../src/agent/entry/command-tools';
 import type { SessionProfile } from '../../src/agent/session-profile';
 import type { AgentBackend, AgentEntry, AgentThread } from '../../src/agent/types';
 
-type Skill = 'vonvon-schedule' | 'vonvon-feishu-message';
-interface Case { id: string; text: string; want: Skill | null }
+export type Skill = 'vonvon-schedule' | 'vonvon-feishu-message';
+export interface Case { id: string; text: string; want: Skill | null }
 
 /** The messages: 9 for each skill, 5 that open neither (two of them near a skill's words). */
 const CASES: Case[] = [
@@ -68,7 +74,20 @@ const SKILLS: Skill[] = ['vonvon-schedule', 'vonvon-feishu-message'];
 /** A group turn as vonvon hands it over (bot/context-weave.ts): the record block, then the message. */
 const turnText = (text: string) => `[飞书 · 群「研发群」· 主区 · 你是「小码」]\n09:58 李四：下午三点发版\n[/飞书]\n${text}`;
 
-interface Outcome { id: string; provider: 'claude' | 'codex'; want: Skill | null; opened: Skill[]; tools: string[]; ended: string; ms: number; hit: boolean }
+export type Verdict = 'ok' | 'miss' | 'invalid';
+interface Outcome { id: string; provider: 'claude' | 'codex'; want: Skill | null; opened: Skill[]; tools: string[]; ended: string; observed: boolean; ms: number; verdict: Verdict }
+
+/**
+ * `ended`: how the run stopped; `done`, `stopped-after-skill` and `stopped-after-tools` are runs seen through, the rest
+ * (`failed: …`, `error: …`, `timeout`) are not. `observed`: whether what the run called could be read at all (Codex: its
+ * rollout; Claude: the SDK's messages). What was seen opened decides when it can; nothing seen proves nothing unless
+ * the run was seen through.
+ */
+export function verdictOf(want: Skill | null, opened: readonly Skill[], ended: string, observed: boolean): Verdict {
+  const seenThrough = observed && (ended === 'done' || ended === 'stopped-after-skill' || ended === 'stopped-after-tools');
+  if (want) return opened.includes(want) ? 'ok' : seenThrough ? 'miss' : 'invalid';
+  return opened.length ? 'miss' : seenThrough ? 'ok' : 'invalid';
+}
 
 /** The tools a group's session lists (registry `places`), each call refused: nothing runs. */
 function fakeEntry(calls: string[]): AgentEntry {
@@ -95,7 +114,8 @@ function fakeEntry(calls: string[]): AgentEntry {
  * Codex: what the thread's rollout says it called. The skill's body comes through `skills.read` with
  * `{package: "e0/skills/<dir>"}`, as a namespaced function call or from a code-mode `exec` script.
  */
-async function codexCalls(threadId: string): Promise<{ opened: Skill[]; tools: string[] }> {
+export type RolloutRead = { found: boolean; opened: Skill[]; tools: string[] };
+async function codexCalls(threadId: string): Promise<RolloutRead> {
   const root = join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'sessions');
   const newest = async (dir: string) => (await readdir(dir).catch(() => [] as string[])).sort().reverse();
   let file: string | undefined;
@@ -103,7 +123,7 @@ async function codexCalls(threadId: string): Promise<{ opened: Skill[]; tools: s
     const found = (await newest(join(root, year, month, day))).find(name => name.includes(threadId) && name.endsWith('.jsonl'));
     if (found) { file = join(root, year, month, day, found); break search; }
   }
-  if (!file) return { opened: [], tools: ['(no rollout)'] };
+  if (!file) return { found: false, opened: [], tools: ['(no rollout)'] };
   const opened = new Set<Skill>();
   const tools: string[] = [];
   for (const line of (await readFile(file, 'utf8')).split('\n')) {
@@ -116,7 +136,7 @@ async function codexCalls(threadId: string): Promise<{ opened: Skill[]; tools: s
     if (!/skills__read|"namespace":"skills"|SKILL\.md/.test(text)) continue;
     for (const skill of SKILLS) if (text.includes(`skills/${skill}`) || text.includes(`${skill}/SKILL.md`)) opened.add(skill);
   }
-  return { opened: [...opened], tools };
+  return { found: true, opened: [...opened], tools };
 }
 
 const skillIn = (text: string): Skill | undefined => SKILLS.find(skill => text.includes(`${skill}/SKILL.md`) || text.includes(`vonvon:${skill}`) || text === skill);
@@ -146,18 +166,22 @@ function watchingFacade(sdk: ClaudeSdkFacade, seen: (message: SDKMessage) => voi
   } };
 }
 
-async function runCase(provider: 'claude' | 'codex', backend: AgentBackend, profile: SessionProfile, item: Case, seen: { messages?: (handler: (message: SDKMessage) => void) => void }): Promise<Outcome> {
+/** `readRollout`: Codex's calls after the turn, from its rollout (a test gives its own). */
+export async function runCase(provider: 'claude' | 'codex', backend: AgentBackend, profile: SessionProfile, item: Case, seen: { messages?: (handler: (message: SDKMessage) => void) => void },
+  readRollout: (threadId: string) => Promise<RolloutRead> = codexCalls): Promise<Outcome> {
   const cwd = await mkdtemp(join(tmpdir(), 'skill-eval-'));
   const calls: string[] = [];
   const opened = new Set<Skill>();
   const tools: string[] = [];
   let codexTools = 0;
+  let messages = 0;
   const started = Date.now();
   let ended = 'done';
   let thread: AgentThread | undefined;
   let threadId: string | undefined;
   try {
     seen.messages?.(message => {
+      messages++;
       if (message.type !== 'assistant') return;
       for (const block of message.message.content as Array<{ type: string; name?: string; input?: Record<string, unknown> }>) {
         if (block.type !== 'tool_use') continue;
@@ -187,14 +211,17 @@ async function runCase(provider: 'claude' | 'codex', backend: AgentBackend, prof
     await thread?.close().catch(() => undefined);
     await rm(cwd, { recursive: true, force: true });
   }
+  // Claude's calls come in its messages; Codex's from the rollout, which a thread that never started has none of.
+  let observed = provider === 'claude' ? messages > 0 : false;
   if (provider === 'codex' && threadId) {
-    const read = await codexCalls(threadId).catch((error: unknown) => ({ opened: [] as Skill[], tools: [`(rollout unreadable: ${String(error).slice(0, 80)})`] }));
+    const read = await readRollout(threadId).catch((error: unknown): RolloutRead => ({ found: false, opened: [], tools: [`(rollout unreadable: ${String(error).slice(0, 80)})`] }));
     for (const skill of read.opened) opened.add(skill);
     tools.push(...read.tools);
+    observed = read.found;
   }
   const list = [...opened];
-  const hit = item.want ? list.includes(item.want) : list.length === 0;
-  return { id: item.id, provider, want: item.want, opened: list, tools: [...tools, ...calls.map(name => `called ${name}`)], ended, ms: Date.now() - started, hit };
+  return { id: item.id, provider, want: item.want, opened: list, tools: [...tools, ...calls.map(name => `called ${name}`)], ended, observed, ms: Date.now() - started,
+    verdict: verdictOf(item.want, list, ended, observed) };
 }
 
 async function main(): Promise<number> {
@@ -220,14 +247,16 @@ async function main(): Promise<number> {
       const result = await runCase(provider, backend, profile, item, provider === 'claude' ? { messages: next => { handler = next; } } : {});
       handler = undefined;
       results.push(result);
-      process.stdout.write(`${provider}\t${item.id}\twant=${item.want ?? '-'}\topened=${result.opened.join('+') || '-'}\t${result.hit ? 'OK' : 'MISS'}\t${result.ended}\t${result.ms}ms\t${result.tools.join(' | ').slice(0, 300)}\n`);
+      process.stdout.write(`${provider}\t${item.id}\twant=${item.want ?? '-'}\topened=${result.opened.join('+') || '-'}\t${result.verdict.toUpperCase()}\t${result.ended}${result.observed ? '' : ' (not observed)'}\t${result.ms}ms\t${result.tools.join(' | ').slice(0, 300)}\n`);
       await writeFile(out, JSON.stringify(results, null, 2));
     }
   }
   await shutdownResidentClients().catch(() => undefined);
-  const misses = results.filter(result => !result.hit);
-  process.stdout.write(`${results.length} calls, ${misses.length} misses: ${misses.map(miss => `${miss.provider}/${miss.id}`).join(' ') || 'none'}\n`);
-  return 0;
+  const named = (verdict: Verdict) => results.filter(result => result.verdict === verdict).map(result => `${result.provider}/${result.id}`);
+  const [ok, misses, invalid] = [named('ok'), named('miss'), named('invalid')];
+  process.stdout.write(`${results.length} calls: ${ok.length} ok, ${misses.length} misses (${misses.join(' ') || 'none'}), ${invalid.length} invalid, not counted (${invalid.join(' ') || 'none'})\n`);
+  return misses.length || invalid.length ? 1 : 0;
 }
 
-main().then(code => process.exit(code), (error: unknown) => { process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`); process.exit(1); });
+// Run as a script; test/skill-trigger-eval.test.ts imports it for runCase and verdictOf.
+if (!process.env.VITEST) main().then(code => process.exit(code), (error: unknown) => { process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`); process.exit(1); });

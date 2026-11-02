@@ -198,15 +198,19 @@ const NOT_RUNNING = 'daemon 没有运行。先运行 vonvon daemon start。';
  * owner's read for it, and the owner's callers check the owner themselves before they connect (Codex review 230-2).
  * With the owner's `--scope` the files do not answer either: their crashes name every bot, which the daemon leaves out
  * under a scope (Codex review 251-1).
+ * A session gets of the lock only what connectLocal reads, `running` and `listen` (Codex review 256-1: no PID, start time
+ * or version), discovery or not: the session can ask either way.
  */
 export async function runStatus(io: Io, overrides: Partial<StatusDeps> = {}): Promise<void> {
   const d = { ...statusDeps(), ...overrides };
   const discovery = d.env.VONVON_STATUS_FROM_FILES === '1';
-  const lockOnly = discovery || inBotSession(d.env);
+  const session = inBotSession(d.env);
+  const lockOnly = discovery || session;
   const status = await daemonStatus(d.home, d.env, !lockOnly);
   if (lockOnly) {
     if (!status.running && !discovery) throw new CommandError('connection', NOT_RUNNING);
-    print(io, [status.running ? `running PID ${status.pid} at ${status.listen}` : 'stopped'], { ...status, source: 'files' });
+    if (session) print(io, [status.running ? `running at ${status.listen}` : 'stopped'], { ...status.running ? { running: true, listen: status.listen } : { running: false }, source: 'files' });
+    else print(io, [status.running ? `running PID ${status.pid} at ${status.listen}` : 'stopped'], { ...status, source: 'files' });
     return;
   }
   if (status.running) {

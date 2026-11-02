@@ -282,3 +282,40 @@ S1 做完、送审查之前，owner 又定了几条，在同一个分支上接�
 3. 群里 `/settings` 只回那句话、不发卡；旧群设置卡被点后，设置不落盘；私聊 `/settings` 照旧。
 4. 群会话的内置 skill 是 `vonvon-schedule`、`vonvon-feishu-message`，文件是 0444；开场说明里没有卡片的写法，有交付文件那一句。
 5. 触发测试的结果写在 PR 里。
+
+## Codex 审查后改了什么（任务 256–258）
+
+三份审查都审的 `417216b2`：[任务 256](https://github.com/modelzen/vonvon-bot/pull/656#issuecomment-6575457973)（整个 diff，P2 两条、P3 两条）、[任务 257](https://github.com/modelzen/vonvon-bot/pull/656#issuecomment-6575478310)（群白名单和会话工具，P2、P3 各一条）、[任务 258](https://github.com/modelzen/vonvon-bot/pull/656#issuecomment-6575567049)（skill、开场说明、触发测试、权限修正，P2、P3 各一条）。去掉重复的，一共五条，都接受。每条先照审查里的复现确认，再写一个在原代码上失败的测试，再改。
+
+1. **本地状态命令绕过白名单（256-1、257-1，P2）。** 复现：群令牌、评论令牌下 `vonvon service status --json` exit 0，带服务定义和日志文件的路径；`vonvon daemon status --json` exit 0，带进程号、启动时间、版本。两条都不经 daemon，`LOCAL_ONLY` 也没拦。改法：
+   - `service status` 进 `LOCAL_ONLY`。它读的是服务管理器和本机文件，对应的 `machine.status` 本来哪种会话都拒；会话里和 `service install` 一样 exit 4 `not_in_session`，那句话不带任何内容。
+   - `daemon status` 不能拒：`connectLocal` 就是靠它（带 `VONVON_STATUS_FROM_FILES=1`）找 daemon 的，会话自己也能带上这个变量。所以会话里不管是不是在找 daemon，都只回 `running`、`listen`（加 `source: 'files'`），不带进程号、启动时间、版本；给人看的一行是 `running at 127.0.0.1:<端口>`。私聊会话一样（现在没有私聊会话）。本机终端和桌面端的发现照旧。
+   - 同类的、不经 daemon 直接读文件的命令都核对过：`daemon logs`、`project list`、`memory *` 在会话里只走 daemon，连不上也不退回读文件；`secrets list/set/remove/test` 在会话里拒；`daemon start/stop/restart/run`、`service install/uninstall`、`update`、`remote *`、`pair`、`clients *`、`device rename`、`bot repair-dir`、`open` 在 `LOCAL_ONLY` 里；`hook` 什么都不打，`__daemon-control` 直接报错，`__restart-after-exit` 是主机自己的助手（D4a R3 留的）。其余命令都经 daemon，按权限表判。`secrets get` 见下面"没改的"。
+   - 测试：`cli-bot-session` 里群令牌、评论令牌、只有会话标记三种都跑 `service status`（exit 4）和 `daemon status`（JSON 只有那几个字段），本地专用那一组加了 `service status`；`cli-machine` 测会话里的 JSON 和给人看的那一行，以及本机的发现照旧。原来断言这两条在会话里成功的旧测试（D4a 的约定）一起改了。
+
+2. **握手向会话的令牌发设备信息（256-2，P2）。** 复现：群令牌、评论令牌经 `connectLocal` 拿到的 `serverInfo` 带 `deviceName`、`machineId`、`platform`、`capabilities`。会话的命令行只用 `protocolVersion`（版本核对）和 `principal`（`schedule` 据此判断是不是会话）。改法：
+   - 协议加 `serverInfoSessionSchema`：`type`、`version`、`protocolVersion`、`principal`，严格解析。Bot 会话的连接（群、评论、私聊三种）都回这个形状。留 `version` 是因为客户端解析要它，它是产品版本，不是设备信息。
+   - 客户端解析用的 `serverInfoSchema` 里 `machineId` 改成可选。桌面端拿它比设备 id 的几处，没有时按"不是这台"处理。
+   - 本机终端、桌面端、远程客户端照旧是 v1、v2 的形状。`admin.negotiate` 的回包只有 `principal`、`scope`，不用改。
+   - 测试：协议 `handshake.test.ts`；daemon `server-handshake`（三种令牌的第一帧只有那四个字段）、`cli-bot-session`（真的 `connectLocal`）。桌面端、网页的 typecheck 和用到 `serverInfo` 的桌面端测试都过了。`test/manual/secure-probe.ts` 打码 `machineId` 时允许它没有。
+
+3. **触发测试把没跑完的负样例算成通过（258-1，P2）。** 复现：照审查的重放，`startThread` 抛错、流里来 `error` 事件、找不到 rollout 的 n1 都是 `hit: true`。改法：
+   - 每条结果是 `ok`、`miss`、`invalid` 三种之一。没看完的一次运行记 `invalid`，不算通过也不算没通过：起不来、出错结束、超时、Codex 找不到或读不了 rollout、Claude 一条 SDK 消息都没收到。看到打开了 skill 的照样算数：正样例打开了要的那个是 `ok`，负样例打开了就是 `miss`。
+   - 汇总分三栏列；有 `miss` 或 `invalid` 时退出码是 1。
+   - `runCase` 和新的 `verdictOf` 导出给 `test/skill-trigger-eval.test.ts`，在 vitest 里脚本不自己跑。
+   - **只重跑了负样例**（n1–n5，Claude、Codex 各一次，共 10 次调用；跑法照文件开头：JP-VPS 上已登录的账号，HOME 不改，只在命令前给临时 `VONVON_HOME`，工作目录 `mktemp`，后端默认模型）。结果 10 条都是 `ok`：都正常跑完（`done`），调用都看得到，两家都没打开 `vonvon-schedule` 和 `vonvon-feishu-message`。旁注：Claude 在 n2 跑了一次 `Bash`；Codex 在 n2 列了工作目录、调了 `skills.list` 和联网搜索，没读 vonvon 的 skill；Codex 在 n3 反问用户在哪个城市。正样例没有重跑，第一轮的结果照旧。
+
+4. **本群正确名字的 `group set` 回通用句（256-3、257-2，P3）。** 复现：群令牌 `group set <本群项目名或群 id> --disable` exit 4，回"这个操作不能从 Bot 会话里做。"。它在 `pickGroup` 就停了，没到 daemon。改法：
+   - 会话的快照里看不到绑定时（群会话、评论会话），`group set` 照 `schedule` 的 `chatOf` 认群：本群项目的名字，或者 `oc_` 开头的群 id。
+   - 认出来就直接把 `editProject` 发给 daemon，daemon 在读群之前按位置回 `not-dm` 那句（群里"群里不能改设置。……"，评论里"评论里不能改设置。……"）。文件夹、项目库、群的版本号都不先读，这些会话本来也读不到。没给 `--revision` 时发 `-` 占位，daemon 在这一步之前就拒了。
+   - 认不出的名字照旧回通用句。被禁的普通读取照旧是通用句，`pickGroup` 没动。
+   - 测试：`cli-group` 测群会话里三种写法（项目名、群 id 加 `--folder`、只给 `--project`）都只发一次 `editProject`、回那句，别的名字回通用句；`cli-bot-session` 测群令牌和评论令牌的 `group set oc_y`；`bot-authz-probe` 加了项目名、群 id、评论三步。
+
+5. **总设计第 20 节还写着 S1 的旧规则（256-4、258-2，P3）。** `docs/plans/devices.md` 第 20 节的表改成 S1b 和这次审查之后的做法：白名单、两个 skill、`feishu_groups` 只在私聊、群里 `/settings` 去掉、会话里的本地命令、握手、拒绝文字。开头写明 S1 的旧表已被取代。5.3 里"`service status` 放行"那句注明后来改了。`product.md` 3.7 和"会话里的命令行"、`architecture.md` 握手那一条也跟着改了。claude-work 里的 `devices.md` 第 20 节同样改了，不进仓库。
+
+**没改的。** `secrets get`（隐藏命令）不经 daemon，按 id 取这台机器上存的 App Secret（决策模型的 key 不给）。会话里的 lark-cli 取 App Secret 要用它，D4a 起有意不拦（`cli/index.ts` 的注释和 `cli-bot-session` 的断言）。但 `product.md`"会话里的命令行"和 `devices.md` 5.3 都写着它在会话里被拒，和代码不一致。这是 D4a 的事，不在这三份审查里，这次没动，留给复查一起看。
+
+**跑过的。**
+- protocol、client 重 build；protocol、client、daemon、desktop、ui 的 typecheck 通过；protocol 的 lint 通过；`git diff --check` 干净。
+- 相关测试：daemon 21 个文件 333 条（`authz`、`authz-session`、`cli-bot-session`、`cli-json`、`snapshot-filter`、`server-handshake`、`admin-ipc`、`cli-group`、`cli-machine`、`skill-trigger-eval`、`service-cli`、`daemon-cli`、`schedule-cli`、`memory-cli`、`cli-parity`、`secure-socket`、`remote-listeners`、`server-drain-control`、`owner-verification`、`server-snapshot`、`schedule-rpc`）；protocol 全部 114 条；client 全部 40 条；desktop 用到 `serverInfo` 的 4 个文件 128 条。都过了。
+- `test/manual/bot-authz-probe.ts`（临时数据目录）：原来 15 步加上新的 9 步，24 步全部符合。

@@ -106,7 +106,7 @@ V2 先复制 `446b2a4` 的完整 `src/` 和 `test/`，包括 `src/web`，保留�
 
 **协议版本 2 和维护子集（0.9.0）。** `PROTOCOL_VERSION` 升到 2，但不能让 0.8 的桌面端和 daemon 互相卡死：今天两边的握手 schema 都是 strict，`owner-verification` 还要求版本相等，新桌面端会停不掉旧 daemon。所以：
 - `hello` 的形状不变（`{ type, protocolVersion, clientKind, credential? }`）；bot 会话令牌也放在 `credential` 里，靠 `vs1.` 前缀认出。
-- daemon 按 `hello.protocolVersion` 选 `serverInfo` 的形状：v1 回原来的三个字段，v2 加 `deviceName`、`platform`、`capabilities`、`principal`。客户端一律宽松解析 `serverInfo`，枚举按开放字符串解析。客户端的能力和范围放在握手后的第一条请求 `admin.negotiate { capabilities, scope? }` 里。`capabilities` 是功能开关的唯一来源，客户端不按版本号猜。
+- daemon 按 `hello.protocolVersion` 选 `serverInfo` 的形状：v1 回原来的三个字段，v2 加 `deviceName`、`platform`、`capabilities`、`principal`。Bot 会话的连接（会话令牌，总是 v2）只回 `version`、`protocolVersion`、`principal`，不给设备名、`machineId`、平台和能力（S1b）；客户端解析时 `machineId` 可以没有。客户端一律宽松解析 `serverInfo`，枚举按开放字符串解析。客户端的能力和范围放在握手后的第一条请求 `admin.negotiate { capabilities, scope? }` 里。`capabilities` 是功能开关的唯一来源，客户端不按版本号猜。
 - 版本不再要求相等。协议相同、版本号不同只提示；协议不同，连接进入**维护子集**：只收 `admin.daemonStatus`、`machine.checkCoreUpdate`、`machine.applyCoreUpdate`、`machine.coreUpdateStatus`、`command.restartHost`，别的回 `protocol_mismatch`，不推 `snapshot`。这几个请求和回复的形状从 v2 起冻结，`daemonStatus` 加 `startedAt`。排空期间的白名单（`stopHost`、`daemonStatus`，加上 `coreUpdateStatus`，升级时要看进度）和维护子集写成同一个常量 `MAINTENANCE_KINDS`。
 - `owner-verification` 的核实和停止不再比版本：宽松解析 `serverInfo`，只取 pid，再 `stopHost`。本机 daemon 是桌面端自带的（`bundled`）且协议不同，就照旧换成自己带的。原来"本机是独立安装的服务端（`standalone`）就按维护子集连上、显示升级条"一条，2026-11-01 起 Mac、Windows 上没有 `standalone`，不做。
 
