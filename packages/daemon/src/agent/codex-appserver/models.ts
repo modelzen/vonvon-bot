@@ -49,12 +49,58 @@ export function codexModelCacheKey(bin: string, catalogPath?: string): string {
   const home = codexHome();
   return JSON.stringify([bin, binFingerprint(bin), home,
     fileVersion(join(home, 'config.toml')), fileVersion(join(home, 'auth.json')),
+    fileVersion(join(home, 'requirements.toml')),
+    process.env.ProgramData ? fileVersion(join(process.env.ProgramData, 'OpenAI', 'Codex', 'requirements.toml')) : '',
     catalogPath, catalogPath ? fileVersion(catalogPath) : '']);
 }
 
 export function codexRemoteCacheKey(): string {
   return fileVersion(join(codexHome(), 'models_cache.json'));
 }
+
+type Catalog = Awaited<ReturnType<typeof discoverCodexModels>>;
+/** Process-wide metadata, shared by Provider details and the Bot's pickers.
+ * Keep discovered model identities until explicit refresh or input changes.
+ * Expired account evidence only removes speed tiers; it never starts a process. */
+export function createCodexCatalogCache(discover: typeof discoverCodexModels = discoverCodexModels) {
+  let cached: { bin: string; key: string; remote: string; value: Catalog } | undefined;
+  let knownCatalogPath: string | undefined;
+  let flight: { bin: string; key: string; remote: string; refresh: boolean; promise: Promise<ModelInfo[]> } | undefined;
+  const currentKey = (bin: string, catalogPath?: string) => codexModelCacheKey(bin, catalogPath);
+  const peek = (bin: string): ModelInfo[] | undefined => {
+    if (!cached || cached.bin !== bin || cached.key !== currentKey(bin, cached.value.catalogPath) || cached.remote !== codexRemoteCacheKey()) return;
+    return cached.value.expiresAt > Date.now() ? cached.value.models : cached.value.models.map(({serviceTiers: _tiers, ...model}) => model);
+  };
+  return {
+    peek,
+    async read(bin: string, refresh = false): Promise<ModelInfo[]> {
+      const hit = peek(bin);
+      if (!refresh && hit) return hit;
+      const priorPath = knownCatalogPath;
+      const key = currentKey(bin, priorPath);
+      const remote = codexRemoteCacheKey();
+      if (flight?.bin === bin && flight.key === key && flight.remote === remote) {
+        if (!refresh || flight.refresh) return flight.promise;
+        // A manual refresh starts now rather than waiting for a slow ordinary
+        // discovery. Its result owns the cache even if the old read finishes last.
+      }
+      cached = undefined;
+      const entry = { bin, key, remote, refresh, promise: Promise.resolve([] as ModelInfo[]) };
+      entry.promise = (async () => {
+        const value = await discover(bin);
+        if (key !== currentKey(bin, priorPath)) throw new Error('Codex configuration changed during discovery');
+        if (flight !== entry) throw new Error('Codex model discovery was superseded');
+        cached = { bin, key: currentKey(bin, value.catalogPath), remote: codexRemoteCacheKey(), value };
+        knownCatalogPath = value.catalogPath;
+        return peek(bin) ?? [];
+      })().finally(() => { if (flight === entry) flight = undefined; });
+      flight = entry;
+      return entry.promise;
+    },
+  };
+}
+
+export const codexCatalogCache = createCodexCatalogCache();
 
 function officialRouting(config: ModelConfig): boolean {
   const provider = config.model_provider ?? 'openai';
@@ -114,7 +160,14 @@ function normalizedTiers(model: Pick<RawModel, 'serviceTiers' | 'additionalSpeed
     : tier.id === 'ultrafast' ? [{ ...tier, name: 'Ultrafast' }] : []);
 }
 
+function nativeEffort(value: unknown): value is ReasoningEffort {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= 1000;
+}
+
 function mapModel(model: RawModel): ModelInfo {
+  const supportedEfforts = (model.supportedReasoningEfforts ?? [])
+    .map(effort => effort.reasoningEffort)
+    .filter(nativeEffort);
   return {
     // Native picker IDs and the model sent to inference need not be identical.
     id: model.model || model.id,
@@ -122,8 +175,8 @@ function mapModel(model: RawModel): ModelInfo {
     description: model.description ?? '',
     hidden: model.hidden ?? false,
     isDefault: model.isDefault ?? false,
-    supportedEfforts: (model.supportedReasoningEfforts ?? []).map(effort => effort.reasoningEffort),
-    defaultEffort: model.defaultReasoningEffort ?? 'medium',
+    supportedEfforts,
+    defaultEffort: nativeEffort(model.defaultReasoningEffort) ? model.defaultReasoningEffort : supportedEfforts[0] ?? 'medium',
   };
 }
 
@@ -169,6 +222,7 @@ export async function discoverCodexModels(bin: string): Promise<{ models: ModelI
         && requirements && enabledTier(tier.id, config, requirements));
       return model;
     });
+    if (catalogPath && fileVersion(catalogPath) !== catalogVersion) throw new Error('Codex model catalog changed during discovery');
     return { models, ...(catalogPath ? { catalogPath } : {}), expiresAt: cache
       ? Date.parse(cache.fetched_at) + MODEL_CATALOG_TTL_MS : Date.now() + 30_000 };
   });

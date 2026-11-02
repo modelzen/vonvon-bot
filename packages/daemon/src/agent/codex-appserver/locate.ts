@@ -7,7 +7,7 @@ import { delimiter, extname, isAbsolute, join, relative, sep } from 'node:path';
 import { paths } from '../../config/paths';
 import { spawnProcessSync } from '../../platform/spawn';
 import { binChildEnv, toolDirectories } from '../../platform/tool-path';
-import { ProviderProcessCleanupError, ProviderProcessStoppedError } from '../owned-process';
+import { ProviderProcessCleanupError, ProviderProcessExitError } from '../owned-process';
 import {committedBridgeCodex} from '../../import/bridge/markers';
 
 const IS_WIN = process.platform === 'win32';
@@ -225,12 +225,13 @@ async function probeCodexVersion(bin: string, before: string | null): Promise<st
   let out: string | null;
   try {
     out = await runSetupChild(bin, ['--version'], {
-      // Windows starts the Job Object supervisor (PowerShell + C#) before the CLI.
+      // Allow the Windows Job Object supervisor to start before the CLI.
       cwd: homedir(), env: binChildEnv(bin), signal: new AbortController().signal, timeoutMs: IS_WIN ? 20_000 : 3_000,
     });
   } catch (error) {
-    // Unknown process death must not permit a replacement probe to start.
-    if (error instanceof ProviderProcessCleanupError && !(error instanceof ProviderProcessStoppedError)) throw error;
+    // Preserve cleanup failures even after confirmed death. A plain nonzero
+    // exit only marks an unusable candidate and can fall through to another.
+    if (error instanceof ProviderProcessCleanupError && !(error instanceof ProviderProcessExitError)) throw error;
     out = null;
   }
   if (before !== fingerprint(bin)) return null;

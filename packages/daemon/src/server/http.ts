@@ -222,7 +222,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
     await mkdir(paths.appDir, { recursive: true });
     const environment = acquiredEnvironment = new EnvironmentService(options.environmentOptions ?? {
       home: homedir(), getDataRoot: () => paths.appDir,
-      resolveCodex: () => refreshCodexResolution({ force: true }), nodePath: process.execPath,
+      resolveCodex: () => refreshCodexResolution(), nodePath: process.execPath,
     });
     const { credential, machineId } = await createLocalIdentity(paths.appDir);
     const identity = holdDevice(paths.appDir, await loadOrCreateDevice(paths.appDir, machineId));

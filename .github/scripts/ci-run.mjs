@@ -7,14 +7,14 @@ export const packages = Object.freeze(['protocol', 'client', 'daemon', 'ui', 'de
 const packageSet = new Set(packages);
 const scripts = ['typecheck', 'test', 'lint'];
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const windowsRootTests = ['stage-daemon', 'package-windows', 'windows-runtime-smoke', 'publish-windows']
+const windowsRootTests = ['stage-daemon', 'package-windows', 'windows-runtime-smoke', 'windows-supervisor-runtime', 'publish-windows']
   .map(name => `scripts/${name}.test.mjs`);
 const windowsPackageTests = {
   daemon: ['environment-windows-launch', 'provider/windows-command-line', 'provider/windows-supervisor',
     'windows-owned-process', 'data-compatibility', 'register-bot', 'locate', 'codex-version',
     'codex-managed-install', 'codex-source', 'appserver-pool', 'environment-rpc',
-    'codex-environment-install', 'codex-windows-backend'].map(name => `test/${name}.test.ts`),
-  desktop: ['windows-updates', 'tray', 'daemon-dependencies'].map(name => `test/${name}.test.ts`),
+    'codex-environment-install', 'codex-windows-backend', 'admin-ipc', 'codex-catalog-cache', 'claude-model-discovery', 'codex-setup', 'provider-model-discovery', 'provider-models-rpc', 'codex-model-discovery', 'server-snapshot'].map(name => `test/${name}.test.ts`),
+  desktop: ['windows-updates', 'updates', 'tray', 'daemon-dependencies'].map(name => `test/${name}.test.ts`),
 };
 
 /**

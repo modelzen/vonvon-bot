@@ -33,6 +33,8 @@ const fake = vi.hoisted(() => ({
     setIcon: vi.fn(),
   },
   openExternal: vi.fn(async () => {}),
+  loadPage: vi.fn(async () => {}),
+  updateStops: [] as Array<() => void>,
   updateConfiguration: vi.fn(async () => ({ signed: true, manifestURL: 'https://updates.example.test/manifest.json' })),
   root: '/tmp/vonvon-native-test-root',
 }));
@@ -61,6 +63,7 @@ vi.mock('electron', async () => {
     isDestroyed = () => this.destroyed;
     destroy = vi.fn(() => { this.destroyed = true; });
     loadFile = vi.fn(async (path: string) => {
+      await fake.loadPage();
       this.webContents.mainFrame.url = pathToFileURL(path).href;
       this.emit('ready-to-show');
     });
@@ -106,6 +109,17 @@ vi.mock('../src/attach.js', async importOriginal => ({
 vi.mock('../src/bridge.js', () => ({ installBridge: fake.install, openAllowedExternal: fake.openExternal }));
 vi.mock('../src/tray.js', () => ({ createDesktopTray: vi.fn(() => fake.tray) }));
 vi.mock('../src/update-configuration.js', () => ({ desktopUpdateConfiguration: fake.updateConfiguration }));
+vi.mock('../src/updates.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/updates.js')>();
+  return {
+    ...actual,
+    scheduleUpdateChecks: (...args: Parameters<typeof actual.scheduleUpdateChecks>) => {
+      const stop = actual.scheduleUpdateChecks(...args);
+      fake.updateStops.push(stop);
+      return stop;
+    },
+  };
+});
 vi.mock('../src/quit-daemon.js', () => ({ stopDaemonForQuit: fake.stopDaemonForQuit }));
 vi.mock('../src/daemon-dependencies.js', () => ({
   prepareDesktopRoot: vi.fn(async () => fake.root),
@@ -211,12 +225,14 @@ beforeEach(async () => {
   fake.stopDaemonForQuit.mockReset().mockResolvedValue(undefined);
   fake.install.mockReset().mockReturnValue(fake.bridge);
   fake.openExternal.mockClear();
+  fake.loadPage.mockReset().mockResolvedValue(undefined);
   await startDesktop();
   window = fake.window as MockWindow;
   actions = fake.install.mock.lastCall?.[3];
 });
 
 afterEach(async () => {
+  for (const stop of fake.updateStops.splice(0)) stop();
   vi.unstubAllGlobals();
   await rm(temp, { recursive: true, force: true });
 });
@@ -1313,44 +1329,145 @@ describe('native window lifecycle', () => {
 describe('automatic update checks and a stalled install', () => {
   const record = () => join(temp, 'desktop-update-expected-version');
   const minute = 60_000, hour = 60 * minute;
-  /** The outer beforeEach already started one desktop under real timers; this one starts under fake time. */
-  async function startUnderFakeTime(): Promise<void> {
+  /** Close the outer beforeEach's desktop before starting an isolated scheduler under fake time. */
+  async function startUnderFakeTime(at = '2026-11-02T09:00:00+08:00'): Promise<void> {
+    await actions.confirmQuit();
+    expect(powerMonitor.listenerCount('resume')).toBe(0);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.setSystemTime(new Date(at));
     vi.mocked(net.fetch).mockClear();
     fake.tray.setUpdate.mockClear();
     fake.bridge.publishUpdate.mockClear();
     await startDesktop();
+    window = fake.window as MockWindow;
     actions = fake.install.mock.lastCall?.[3];
   }
 
-  it('checks a minute after start, tells the window and the tray, and stops checking on quit', async () => {
+  async function stopUnderFakeTime(): Promise<void> {
+    await actions.confirmQuit();
+    expect(powerMonitor.listenerCount('resume')).toBe(0);
+    vi.useRealTimers();
+  }
+
+  it('checks two minutes after startup, then finds a later release without restarting or checking manually', async () => {
     try {
       await startUnderFakeTime();
-      await vi.advanceTimersByTimeAsync(minute - 1);
+      // The remote devices' wake (devices-ui-1a 4.8) and the update scheduler each listen once.
+      expect(powerMonitor.listenerCount('resume')).toBe(2);
+      vi.mocked(net.fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+        version: '0.1.0', feedURL: 'https://updates.example.test/feed',
+      })));
+      await vi.advanceTimersByTimeAsync(2 * minute - 1);
       expect(net.fetch).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       // The check reads the install record from disk first, which fake timers do not wait for.
       await vi.waitFor(() => expect(fake.bridge.publishUpdate).toHaveBeenCalledOnce());
       expect(net.fetch).toHaveBeenCalledExactlyOnceWith('https://updates.example.test/manifest.json', expect.objectContaining({ redirect: 'error' }));
-      expect(fake.bridge.publishUpdate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ state: 'available', latest: '0.2.0' }));
+      expect(fake.bridge.publishUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'current' }));
+      expect(fake.tray.setUpdate).toHaveBeenLastCalledWith(undefined);
+      // The server now offers 0.2.0; no app restart or settings action occurs.
+      await vi.advanceTimersByTimeAsync(90 * minute);
+      await vi.waitFor(() => expect(fake.bridge.publishUpdate).toHaveBeenCalledTimes(2));
+      expect(net.fetch).toHaveBeenCalledTimes(2);
+      expect(fake.bridge.publishUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'available', latest: '0.2.0' }));
       expect(fake.tray.setUpdate).toHaveBeenLastCalledWith('有新版本 0.2.0');
       expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(25 * hour);
-      await vi.waitFor(() => expect(net.fetch).toHaveBeenCalledTimes(2));
       await actions.confirmQuit();
+      expect(powerMonitor.listenerCount('resume')).toBe(0);
+      powerMonitor.emit('resume');
       await vi.advanceTimersByTimeAsync(72 * hour);
       expect(net.fetch).toHaveBeenCalledTimes(2);
-    } finally { vi.useRealTimers(); }
+    } finally { await stopUnderFakeTime(); }
   });
 
-  it('does not check on its own without a signed update source', async () => {
+  it('starts the initial delay only after the window has loaded', async () => {
+    let loaded!: () => void;
+    fake.loadPage.mockImplementationOnce(() => new Promise<void>(resolve => { loaded = resolve; }));
+    try {
+      const starting = startUnderFakeTime();
+      await vi.waitFor(() => expect(loaded).toBeTypeOf('function'));
+      expect(powerMonitor.listenerCount('resume')).toBe(0);
+      await vi.advanceTimersByTimeAsync(5 * minute);
+      expect(net.fetch).not.toHaveBeenCalled();
+      loaded();
+      await starting;
+      await vi.advanceTimersByTimeAsync(2 * minute - 1);
+      expect(net.fetch).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(fake.bridge.publishUpdate).toHaveBeenCalledOnce());
+    } finally { loaded?.(); await stopUnderFakeTime(); }
+  });
+
+  it('skips the quiet hours, allows manual checks, and resumes the original cadence after 05:00', async () => {
+    try {
+      await startUnderFakeTime('2026-11-02T02:13:00+08:00');
+      await vi.advanceTimersByTimeAsync(2 * minute);
+      expect(net.fetch).not.toHaveBeenCalled();
+      await expect(actions.checkDesktopUpdate()).resolves.toMatchObject({ state: 'available', latest: '0.2.0' });
+      expect(net.fetch).toHaveBeenCalledOnce();
+      expect(fake.tray.setUpdate).toHaveBeenLastCalledWith('有新版本 0.2.0');
+      await vi.advanceTimersByTimeAsync(90 * minute);
+      expect(net.fetch).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(75 * minute);
+      expect(net.fetch).toHaveBeenCalledOnce(); // 05:00 is not a shared restart time.
+      await vi.advanceTimersByTimeAsync(15 * minute); // This instance's own next slot is 05:15.
+      await vi.waitFor(() => expect(fake.bridge.publishUpdate).toHaveBeenCalledOnce());
+      expect(net.fetch).toHaveBeenCalledTimes(2);
+      expect(fake.bridge.publishUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'available', latest: '0.2.0' }));
+    } finally { await stopUnderFakeTime(); }
+  });
+
+  it('catches up an overdue check on resume without duplicating the timer or an in-flight request', async () => {
+    let answer!: (value: Response) => void;
+    try {
+      await startUnderFakeTime();
+      vi.setSystemTime(new Date('2026-11-02T09:01:00+08:00'));
+      powerMonitor.emit('resume');
+      expect(net.fetch).not.toHaveBeenCalled();
+      vi.mocked(net.fetch).mockImplementationOnce(() => new Promise<Response>(resolve => { answer = resolve; }));
+      vi.setSystemTime(new Date('2026-11-02T10:00:00+08:00'));
+      powerMonitor.emit('resume');
+      powerMonitor.emit('resume');
+      await vi.waitFor(() => expect(net.fetch).toHaveBeenCalledOnce());
+      powerMonitor.emit('resume');
+      expect(net.fetch).toHaveBeenCalledOnce();
+      answer(new Response(JSON.stringify({ version: '0.2.0', feedURL: 'https://updates.example.test/feed' })));
+      await vi.waitFor(() => expect(fake.bridge.publishUpdate).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(90 * minute);
+      await vi.waitFor(() => expect(fake.bridge.publishUpdate).toHaveBeenCalledTimes(2));
+      expect(net.fetch).toHaveBeenCalledTimes(2);
+    } finally { await stopUnderFakeTime(); }
+  });
+
+  it('does not check on its own or subscribe to resume without a signed update source', async () => {
     try {
       fake.updateConfiguration.mockResolvedValueOnce({ signed: false } as never);
       await startUnderFakeTime();
+      expect(powerMonitor.listenerCount('resume')).toBe(0);
+      powerMonitor.emit('resume');
       await vi.advanceTimersByTimeAsync(72 * hour);
       expect(net.fetch).not.toHaveBeenCalled();
       expect(fake.bridge.publishUpdate).not.toHaveBeenCalled();
-    } finally { vi.useRealTimers(); }
+    } finally { await stopUnderFakeTime(); }
+  });
+
+  it('does not publish an in-flight automatic result or re-arm after quitting', async () => {
+    let answer!: (value: Response) => void;
+    try {
+      await startUnderFakeTime();
+      vi.mocked(net.fetch).mockImplementationOnce(() => new Promise<Response>(resolve => { answer = resolve; }));
+      await vi.advanceTimersByTimeAsync(2 * minute);
+      await vi.waitFor(() => expect(net.fetch).toHaveBeenCalledOnce());
+      await actions.confirmQuit();
+      expect(powerMonitor.listenerCount('resume')).toBe(0);
+      answer(new Response(JSON.stringify({ version: '0.2.0', feedURL: 'https://updates.example.test/feed' })));
+      await new Promise(resolve => setImmediate(resolve));
+      powerMonitor.emit('resume');
+      await vi.advanceTimersByTimeAsync(90 * minute);
+      expect(fake.bridge.publishUpdate).not.toHaveBeenCalled();
+      expect(fake.tray.setUpdate).not.toHaveBeenCalled();
+      expect(net.fetch).toHaveBeenCalledOnce();
+    } finally { await stopUnderFakeTime(); }
   });
 
   it('drops an expected-version record the running version already reached when it starts', async () => {
@@ -1358,7 +1475,7 @@ describe('automatic update checks and a stalled install', () => {
       await writeFile(record(), '0.1.0');
       await startUnderFakeTime();
       await expect(readFile(record(), 'utf8')).rejects.toThrow();
-    } finally { vi.useRealTimers(); }
+    } finally { await stopUnderFakeTime(); }
   });
 
   it('keeps asking for a retry, not refusing for good, while the expected version is still ahead', async () => {
@@ -1373,23 +1490,23 @@ describe('automatic update checks and a stalled install', () => {
       await expect(actions.retryDesktopUpdate()).resolves.toMatchObject({ state: 'available', latest: '0.2.0' });
       expect(fake.tray.setUpdate).toHaveBeenLastCalledWith('有新版本 0.2.0');
       await expect(readFile(record(), 'utf8')).rejects.toThrow();
-    } finally { vi.useRealTimers(); }
+    } finally { await stopUnderFakeTime(); }
   });
 
   it('marks a failed install in the tray from the automatic check, and offers a newer release instead when there is one', async () => {
     try {
       await writeFile(record(), '0.5.0');
       await startUnderFakeTime();
-      await vi.advanceTimersByTimeAsync(minute);
+      await vi.advanceTimersByTimeAsync(2 * minute);
       await vi.waitFor(() => expect(fake.bridge.publishUpdate).toHaveBeenCalledOnce());
       expect(fake.bridge.publishUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'install-pending' }));
       expect(fake.tray.setUpdate).toHaveBeenLastCalledWith('上次更新没装上');
       vi.mocked(net.fetch).mockResolvedValueOnce(new Response(JSON.stringify({ version: '0.6.0', feedURL: 'https://updates.example.test/feed' })));
-      await vi.advanceTimersByTimeAsync(26 * hour);
+      await vi.advanceTimersByTimeAsync(90 * minute);
       await vi.waitFor(() => expect(fake.bridge.publishUpdate).toHaveBeenCalledTimes(2));
       expect(fake.bridge.publishUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'available', latest: '0.6.0' }));
       expect(fake.tray.setUpdate).toHaveBeenLastCalledWith('有新版本 0.6.0');
-    } finally { vi.useRealTimers(); }
+    } finally { await stopUnderFakeTime(); }
   });
 });
 
