@@ -270,12 +270,10 @@ describe('the bot process', () => {
     const host = control();
     const running = m.runRun('cli_a', { control: host });
     try {
-      let respond: ((message: unknown) => void) | undefined;
-      await vi.waitFor(() => {
-        respond = process.listeners('message').find(listener => !before.has(listener)) as typeof respond;
-        expect(respond).toBeDefined();
-      });
-      respond!({ fcb: 'fcb.admin.req', id: 7, op: { kind: 'schedule', via: 'cli', request: list } });
+      // devices-4a: the child listens on two channels, the host one (its sessions' tokens) first, then the admin one
+      const added = () => process.listeners('message').filter(listener => !before.has(listener)) as Array<(message: unknown) => void>;
+      await vi.waitFor(() => expect(added()).toHaveLength(2));
+      for (const listener of added()) listener({ fcb: 'fcb.admin.req', id: 7, op: { kind: 'schedule', via: 'cli', request: list } });
       await vi.waitFor(() => expect(sent).toContainEqual({ fcb: 'fcb.admin.res', id: 7, ok: true, result: tasks }));
       expect(f.bridgeSchedule).toHaveBeenCalledExactlyOnceWith('cli', list);
     } finally {

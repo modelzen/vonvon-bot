@@ -131,6 +131,17 @@ const seedRecord = (fields: Partial<CrashRecord> = {}): CrashRecord => ({
 });
 const seed = (fields: Partial<CrashRecord> = {}): void => { writeCrashRecordSync(f.root, seedRecord(fields)); };
 
+// D4a review R3: a host started inside a session carries its markers; its bots' `daemon run --bot` must not inherit them
+it('starts its bots without the session markers of the environment it was started in', async () => {
+  vi.stubEnv('FEISHU_CODEX_BRIDGE', '1');
+  vi.stubEnv('VONVON_SESSION', `vs1.ses_0123456789abcdef.${'a'.repeat(43)}`);
+  try {
+    await start([A]);
+    const env = vi.mocked(spawnProcess).mock.calls[0]?.[2]?.env ?? {};
+    expect([env.FEISHU_CODEX_BRIDGE, env.VONVON_SESSION, env.VONVON_HOST_RUN_ID]).toEqual([undefined, undefined, RUN]);
+  } finally { vi.unstubAllEnvs(); }
+});
+
 it('records what the child could not, once each, and the third crash stops only that bot', async () => {
   const deps = await start([A, B]);
   await crash('kill');
