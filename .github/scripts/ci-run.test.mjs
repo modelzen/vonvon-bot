@@ -79,6 +79,7 @@ test('Windows affected scope runs only selected package tests, with targeted dae
   assert.deepEqual(packageTests.map(command => command.args[1]), ['packages/daemon', 'packages/desktop']);
   assert.equal(packageTests[0].args.includes('test/windows-owned-process.test.ts'), true);
   assert.equal(packageTests[1].args.includes('test/windows-updates.test.ts'), true);
+  assert.equal(packageTests[1].args.includes('test/updates.test.ts'), true);
   const ordinary = createPlan('affected', ['protocol', 'client', 'ui'], sourceRoot, 'win32');
   assert.deepEqual(ordinary.filter(command => command.args.includes('--workspace') && command.args.includes('test'))
     .map(command => command.args), ['protocol', 'client', 'ui']

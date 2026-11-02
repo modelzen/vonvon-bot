@@ -14,7 +14,7 @@ const windowsPackageTests = {
     'windows-owned-process', 'data-compatibility', 'register-bot', 'locate', 'codex-version',
     'codex-managed-install', 'codex-source', 'appserver-pool', 'environment-rpc',
     'codex-environment-install', 'codex-windows-backend', 'admin-ipc', 'codex-catalog-cache', 'claude-model-discovery', 'codex-setup', 'provider-model-discovery', 'provider-models-rpc', 'codex-model-discovery', 'server-snapshot'].map(name => `test/${name}.test.ts`),
-  desktop: ['windows-updates', 'tray', 'daemon-dependencies'].map(name => `test/${name}.test.ts`),
+  desktop: ['windows-updates', 'updates', 'tray', 'daemon-dependencies'].map(name => `test/${name}.test.ts`),
 };
 
 export function parseInputs(scope, rawPackages) {
