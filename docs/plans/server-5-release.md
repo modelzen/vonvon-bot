@@ -170,7 +170,7 @@ JP-VPS：
 实现时（2026-11-02）照代码改了这些，理由写在每条后面。
 
 - **plan 的两个函数合成一个** `planServerPublication`：版本化对象和 stable 三个对象一次算好，签名清单在 plan 时签一次、用 `wx` 写到 `OUT/server/stable-manifest.json`，之后的 upload、promote 复用这份字节，不在 promote 时重签。再跑 plan 时已签的那份和这次的包或说明不一样，就停（"候选变了"）。Ed25519 本身是确定的，重签也能得到同样的字节，但存一份字节更好查。
-- **线上 stable 快照在 plan 时读**，写进统一计划（`previousManifest`）；线上比这次新、同版本却是另一份、`publishedAt` 不比这次早、或者用这把公钥验不过，plan 就拒。promote 写清单前再读一次，必须和计划里的一样，不一样就停（计划写的是 promote 时才读、比版本）。这样 owner 看计划时就知道线上是什么，和 macOS、Windows 的做法一致。
+- **线上 stable 快照在 plan 时读**，写进统一计划（`previousManifest`）；线上比这次新、同版本却是另一份、`publishedAt` 不比这次早、或者用这把公钥验不过，plan 就拒。promote 写任何 stable 对象之前读一次，必须还是计划里的那份（重跑时也可以已经是这次的），不是就三个对象一个都不写；写清单前再读一次，必须和计划里的一样（计划写的是 promote 时才读、比版本）。这样 owner 看计划时就知道线上是什么，和 macOS、Windows 的做法一致；线上已经被别的版本切走时，两个脚本也不会先被覆盖（Codex 审查 270 的 P3）。
 - **两个脚本不从 `state.source` 读**，用 `git show <发布 SHA>:scripts/install.sh` 从 `release-all` 开始时那个仓库读（`state.seedRepo`）。skill 要求发布完就删源码 worktree，promote 可能在那之后；按 SHA 取的字节和那个 worktree 里的一样。
 - **桶的版本控制**：计划的对象表写 stable 对象"允许覆盖（版本控制 bucket 留历史）"。实际上 `x-cos-forbid-overwrite` 只在桶从没开过版本控制时生效，所以 upload 先查 `getBucketVersioning`，开过就停（和 Mac、Windows 同一条）。stable 的历史不靠桶：旧清单的版本、`publishedAt` 和 sha256 在统一计划里。线上原来没有清单时，写清单也带禁止覆盖。
 - **409 和已存在的对象**：不用 `getObject` 读回，改成先 `headObject`，已存在或 409 就按公网地址整份下载、核 sha256 和 sha512，一样才算已经发过。和 Windows 的做法一致，也不需要给写入的 key 读权限。

@@ -41,6 +41,15 @@ function fakeCos() {
   return { objects, calls, hooks, client, fetchImpl, puts };
 }
 
+/** A stable manifest for `liveVersion` signed with the fixture's key, put on the fake public address. */
+function putLiveManifest(f, liveVersion, publishedAt) {
+  const payload = { schemaVersion: 1, product: 'vonvon-bot-server', channel: 'stable', version: liveVersion, publishedAt,
+    files: Object.fromEntries(PUBLISHED_TARGETS.map(target => [target, { url: `${SERVER_BASE_URL}/${liveVersion}/${archiveName(liveVersion, target)}`, sha512: 'e'.repeat(128), size: 5 }])) };
+  const body = signServerManifest(payload, f.privatePem);
+  f.cos.objects.set('bot/server/stable/manifest.json', { body, contentType: 'application/json', cacheControl: 'no-cache' });
+  return body;
+}
+
 async function fixture(t, { updateKey = 'release', targets = PUBLISHED_TARGETS, sourceHead = sha, scriptKey, committedKey } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'vonvon-publish-server-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -115,11 +124,7 @@ test('plan lists two packages, the build report and the unsigned manifest, then 
 
 test('plan refuses a live stable that is newer, the same version signed differently, or published later', async t => {
   const f = await fixture(t);
-  const live = (liveVersion, publishedAt) => {
-    const payload = { schemaVersion: 1, product: 'vonvon-bot-server', channel: 'stable', version: liveVersion, publishedAt,
-      files: Object.fromEntries(PUBLISHED_TARGETS.map(target => [target, { url: `${SERVER_BASE_URL}/${liveVersion}/${archiveName(liveVersion, target)}`, sha512: 'e'.repeat(128), size: 5 }])) };
-    f.cos.objects.set('bot/server/stable/manifest.json', { body: signServerManifest(payload, f.privatePem), contentType: 'application/json', cacheControl: 'no-cache' });
-  };
+  const live = (liveVersion, publishedAt) => putLiveManifest(f, liveVersion, publishedAt);
   live('9.9.9', 1);
   await assert.rejects(f.plan(), /已经是更新的版本 9\.9\.9/);
   live(version, 1);
@@ -215,14 +220,46 @@ test('promote needs the owner confirmation and the plan hash, writes the scripts
   assert.equal(JSON.parse(await readFile(join(f.dir, STABLE_RECEIPT), 'utf8')).status, 'published');
 });
 
-test('promote leaves the manifest alone when stable changed since review or CANCEL appears, and refuses scripts not from the release source', async t => {
-  const f = await fixture(t);
-  const plan = await f.plan();
-  await f.upload(plan);
-  f.cos.objects.set('bot/server/stable/manifest.json', { body: Buffer.from('someone else'), contentType: 'application/json', cacheControl: 'no-cache' });
-  await assert.rejects(f.promote(plan, { ownerConfirmation: 'ok' }), /owner 看过计划之后变了/);
-  assert.equal(f.cos.objects.get('bot/server/stable/manifest.json').body.toString(), 'someone else');
-  assert.ok(f.cos.objects.has('bot/server/install.sh'));
+test('promote writes no stable object at all when the live manifest is no longer the one the owner reviewed', async t => {
+  const MANIFEST = 'bot/server/stable/manifest.json', newerScript = Buffer.from('#!/bin/sh\necho 0.9.1\n');
+  // A newer server published with the same key (its install.sh with it), or bytes that do not verify.
+  for (const live of [f => putLiveManifest(f, '0.9.1', 1_850_000_000_000), f => {
+    const body = Buffer.from('someone else');
+    f.cos.objects.set(MANIFEST, { body, contentType: 'application/json', cacheControl: 'no-cache' });
+    return body;
+  }]) {
+    const f = await fixture(t);
+    const plan = await f.plan();
+    await f.upload(plan);
+    const body = live(f);
+    f.cos.objects.set('bot/server/install.sh', { body: newerScript, contentType: 'text/plain; charset=utf-8', cacheControl: 'no-cache' });
+    const before = f.cos.puts().length;
+    await assert.rejects(f.promote(plan, { ownerConfirmation: 'ok' }), /owner 看过计划之后变了；服务端 stable 一个对象都没写/);
+    assert.equal(f.cos.puts().length, before, 'not one stable object written');
+    assert.deepEqual(f.cos.objects.get(MANIFEST).body, body);
+    assert.deepEqual(f.cos.objects.get('bot/server/install.sh').body, newerScript);
+    assert.equal(f.cos.objects.has('bot/server/uninstall.sh'), false);
+    await assert.rejects(stat(join(f.dir, STABLE_RECEIPT)), { code: 'ENOENT' });
+  }
+  // The manifest is still read again right before its own write: a change after the scripts leaves it alone.
+  const g = await fixture(t), other = await g.plan();
+  await g.upload(other);
+  g.cos.hooks.beforePut = params => { if (params.Key === 'bot/server/uninstall.sh') g.cos.objects.set(MANIFEST, { body: Buffer.from('raced'), contentType: 'application/json', cacheControl: 'no-cache' }); };
+  await assert.rejects(g.promote(other, { ownerConfirmation: 'ok' }), /owner 看过计划之后变了；清单没覆盖/);
+  assert.equal(g.cos.objects.get(MANIFEST).body.toString(), 'raced');
+  assert.deepEqual(g.cos.puts().filter(call => STABLE_KEYS.includes(call[1])).map(call => call[1]), STABLE_KEYS.slice(0, 2));
+  // A rerun that finds the manifest already this candidate's still repairs a script.
+  const h = await fixture(t), third = await h.plan();
+  await h.upload(third);
+  await h.promote(third, { ownerConfirmation: 'ok' });
+  h.cos.objects.set('bot/server/install.sh', { body: newerScript, contentType: 'text/plain; charset=utf-8', cacheControl: 'no-cache' });
+  const written = h.cos.puts().length;
+  await h.promote(third, { ownerConfirmation: 'ok' });
+  assert.deepEqual(h.cos.puts().slice(written).map(call => call[1]), ['bot/server/install.sh']);
+  assert.deepEqual(h.cos.objects.get('bot/server/install.sh').body, h.sources['scripts/install.sh']);
+});
+
+test('promote stops at CANCEL before the manifest and refuses scripts not from the release source', async t => {
   const g = await fixture(t), other = await g.plan(), cancel = join(g.root, 'CANCEL');
   await g.upload(other);
   g.cos.hooks.beforePut = params => { if (params.Key === 'bot/server/uninstall.sh') writeFileSync(cancel, 'stop'); };

@@ -77,7 +77,7 @@ node scripts/release-publish.mjs status --out "$OUT"
 - `build`：两个 Mac 架构之后，用 `scripts/build-server.mjs --targets linux-x64,linux-arm64` 打进 `OUT/server/`，Node 缓存在 `OUT/node-cache`；`product-version.mjs` 核对构建记录的版本。`status` 列出两个包。构建失败或被打断，`resume` 只重打服务端包，Mac 的公证不重做；构建之后包被改过直接失败。
 - `plan`：服务端的候选（两个包、构建记录、未签名清单、签好的 stable 清单、两个脚本和线上 stable 快照）写进统一计划，和 macOS、Windows 用同一个计划哈希。构建记录的 `updateKey` 不是 `release`（测试钥匙打的包，或者仓库里还没有发布公钥）就拒绝。
 - `upload`：服务端是和 macOS、Windows 并行的第三个分支，各自保留回执；失败的那个在报错里点名，重跑只补它。
-- `promote`：顺序是 macOS、Windows、服务端。服务端没切成时，macOS 和 Windows 已经是新版本，报错写明"用同一个计划哈希重跑 promote，只补服务端"；重跑时已经切好的只复核。
+- `promote`：顺序是 macOS、Windows、服务端。服务端写第一个 stable 对象之前先读线上清单，必须还是计划里的那份（重跑时也可以已经是这次的），不是就三个对象一个都不写；写清单之前再读一次。服务端没切成时，macOS 和 Windows 已经是新版本，报错写明"用同一个计划哈希重跑 promote，只补服务端"；重跑时已经切好的只复核。
 
 | 对象 | COS 键 | 写入 | 缓存 |
 | --- | --- | --- | --- |

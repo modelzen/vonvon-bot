@@ -72,7 +72,7 @@ manifest 使用 `Cache-Control: no-cache` 和 `application/json`，如果启用�
 - 构建：`release-all.mjs build` 在两个 Mac 架构之后把两个包打进 `OUT/server/`（`vonvon-server-<v>-linux-x64.tar.gz`、`…-linux-arm64.tar.gz` 和构建记录 `vonvon-server-<v>-build.json`），Node 按 `scripts/server-node.json` 的钉值核过才用，缓存在 `OUT/node-cache`。构建记录的 `updateKey` 必须是 `release`：带 `--update-public-key` 打的测试包（`test`）和仓库里还没有公钥时打的包（`none`），`plan` 一律拒绝。
 - `plan`：签一份 stable 清单（`OUT/server/stable-manifest.json`，只签一次，之后复用），核对私钥、`server-update.json`、包里的公钥和 `install.sh` 里的公钥是同一把，读一次线上的 stable 快照；线上比这次新、同版本却是另一份、或者 `publishedAt` 不比这次早，都拒绝。给 owner 看的除了 macOS、Windows 的对象，还有服务端两个包的 sha512 和大小、未签名的 `<v>/manifest.json`、签名清单的 `publishedAt` 和要切的三个 stable 对象，都在同一个计划哈希里。
 - `upload`：两个包、构建记录和未签名清单写到 `bot/server/<v>/`，禁止覆盖，逐个公网复核，回执是 `OUT/server/server-publish-receipt.json`。经 #322／Paseo 的发布任务做到这里就停。
-- `promote`：排在 macOS、Windows 之后，先写 `install.sh`、`uninstall.sh`，最后写签名清单 `bot/server/stable/manifest.json`，都是 `no-cache`；写清单前重读线上快照，和 `plan` 时不同就停。切 stable 的确认规则和本文开头那条一样。只有服务端没切成时，用同一个计划哈希重跑 `promote`：已经切好的 macOS、Windows 只复核、不再写。回执是 `OUT/server/server-stable-receipt.json`；`release-handoff.json` 的 `server` 一项带安装命令和两个包。
+- `promote`：排在 macOS、Windows 之后，先写 `install.sh`、`uninstall.sh`，最后写签名清单 `bot/server/stable/manifest.json`，都是 `no-cache`。写第一个对象之前读一次线上清单，必须还是 `plan` 时的那份（重跑时也可以已经是这次的），不是就三个对象一个都不写；写清单之前再读一次，和 `plan` 时不同就停。切 stable 的确认规则和本文开头那条一样。只有服务端没切成时，用同一个计划哈希重跑 `promote`：已经切好的 macOS、Windows 只复核、不再写。回执是 `OUT/server/server-stable-receipt.json`；`release-handoff.json` 的 `server` 一项带安装命令和两个包。
 - 回退：装好的服务端不接受比自己见过的更低的版本，所以 stable 不能指回旧版本；有问题就发一个版本号更高的修复版。
 - 证据：两个包的 sha512 和大小、未签名清单、签名清单的 `publishedAt`、两份回执。
 
