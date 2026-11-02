@@ -14,8 +14,6 @@ const samples = [
   {type:"listPendingGroups",agentId},
   {type:"registerAgent"},
   {type:"refreshAgentCredentials",agentId},
-  {type:"installCodex"},
-  {type:"startCodexLogin"},
   {type:"restartHost"},
   {type:"listJoinedGroups",agentId},
   {type:"listGroupMembers",agentId,groupId},

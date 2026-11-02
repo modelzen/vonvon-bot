@@ -142,7 +142,7 @@ export function validateBackendSwitch(opts: {
     return `未知后端「${opts.target}」（可用：${opts.registered.join('、')}）`;
   }
   if (!opts.probe?.ok) {
-    return `后端「${opts.target}」当前不可用：${opts.probe?.hint ?? '环境探测失败（未安装或未登录）'}`;
+    return `后端「${opts.target}」当前不可用：${opts.probe?.hint ?? '环境探测失败（没装或没配置好）'}`;
   }
   if (opts.supportedModes) {
     const tier = effectiveMode(opts.project);

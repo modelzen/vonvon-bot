@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { FULL_ACCESS_WARNING } from '@vonvon/protocol';
 import { createCommandTools } from '../src/agent/entry/command-tools';
 import { createAgentEntries, type AgentPlace, type TurnFacts } from '../src/agent/entry/registry';
 import type { AgentThread } from '../src/agent/types';
@@ -149,6 +150,13 @@ describe('s47 MCP authorization and structured commands', () => {
     });
     expect(await f.call('settings_set', { edit, reason: 'owner request' })).toEqual({ ok: true, result: { ...saved, reason: 'owner request' } });
     expect(f.save).toHaveBeenCalledTimes(1);
+  });
+  // devices-ui-2 4.10: the 完全访问 warning reaches the bot, which repeats it to the user.
+  it('passes the saved warnings on to the bot', async () => {
+    const f = fixture();
+    const saved: SettingsSave = { kind: 'saved', section: { scope: projectScope, section: 'permission', value: { stored: {}, effective: {}, revision: 'r2', access: { kind: 'writable' }, apply: [] } }, effects: [], warnings: [FULL_ACCESS_WARNING] } as unknown as SettingsSave;
+    f.save.mockImplementationOnce(async (_edit, options) => { options?.beforeCommit?.(); return saved; });
+    expect(await f.call('settings_set', { edit })).toMatchObject({ ok: true, result: { warnings: [FULL_ACCESS_WARNING] } });
   });
 
   it('conceals absent settings and forbidden targets with the same access result for a DM administrator', async () => {

@@ -50,6 +50,18 @@ describe('local WebSocket handshake', () => {
     } finally { await fixture.close(); }
   });
 
+  // main 必败: serverInfo said only `device`, so no client offered a remote update (devices-ui-2 4.11).
+  it.each([['standalone', ['update.standalone']], ['global-npm', ['update.npm']], ['bundled', []]] as const)('reports what a %s install can update', async (kind, update) => {
+    const fixture = await startFixture(undefined, undefined, undefined, async () => ({ kind }));
+    try {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const client = await socketClient(fixture.api.port, fixture.credential);
+      await client.ready();
+      expect((client.frames[0] as { capabilities: string[] }).capabilities).toEqual(['device', ...update]);
+      await client.close();
+    } finally { await fixture.close(); }
+  });
+
   it.each([undefined, 'bad'])('rejects credential %s with 4401', async credential => {
     const fixture = await startFixture();
     try {
