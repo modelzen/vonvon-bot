@@ -3,7 +3,9 @@ import type { WebSocket as NodeWebSocket } from "ws";
 import {
   CLOSE_CODES, helloSchema, pairRequestSchema, pairResultSchema, PROTOCOL_VERSION, serverInfoSchema, type PairResult, type ServerInfo,
 } from "@vonvon/protocol";
-import { createInitiator, decodeFrame, encodeFrame, FRAME, type Channel, type FrameType, type StaticKey } from "@vonvon/protocol/secure-channel";
+import {
+  createInitiator, decodeFrame, encodeFrame, FRAME, HANDSHAKE_TIMEOUT_REASON, readCloseBody, type Channel, type FrameType, type StaticKey,
+} from "@vonvon/protocol/secure-channel";
 import { createClient, type ClientConnection, type VonvonClient } from "./client.js";
 
 export { ConnectionError, RpcError, type VonvonClient } from "./client.js";
@@ -37,11 +39,15 @@ export function nodeBinarySocket(ws: NodeWebSocket): BinarySocket {
     isOpen: () => ws.readyState === OPEN,
   };
 }
+/** A WHATWG close takes only 1000 and 3000–4999 and throws for the rest (1001, 1008, 1011 here), which would leave the
+ * socket open: those go out as 1000 with their reason (审查 R3). */
+const webCloseCode = (code: number | undefined): number | undefined =>
+  code === undefined || code === 1000 || (code >= 3000 && code <= 4999) ? code : 1000;
 export function webBinarySocket(ws: WebSocket): BinarySocket {
   ws.binaryType = "arraybuffer";
   return {
     send: bytes => ws.send(bytes),
-    close: (code, reason) => ws.close(code, reason),
+    close: (code, reason) => { const sent = webCloseCode(code); if (sent === undefined) ws.close(); else ws.close(sent, reason); },
     onMessage: listener => {
       ws.addEventListener("message", event => listener(typeof event.data === "string" ? new TextEncoder().encode(event.data) : new Uint8Array(event.data as ArrayBuffer)));
     },
@@ -66,10 +72,24 @@ const BY_CLOSE_CODE = new Map<number, SecureChannelErrorCode>([
   [CLOSE_CODES.unknown_client, "unknown_client"], [CLOSE_CODES.client_revoked, "client_revoked"], [CLOSE_CODES.pairing_failed, "pairing_failed"],
   [CLOSE_CODES.rate_limited, "rate_limited"], [CLOSE_CODES.remote_disabled, "remote_disabled"], [CLOSE_CODES.protocol_mismatch, "protocol_mismatch"],
 ]);
-/** devices-2 4.2. Under IK a device whose key is not the link's cannot read message 1 and closes 4005 before answering:
- * that is the only way "this is not the device you paired" shows (devices 4.4). After message 2, 4005 is a plain failure. */
-function closeCodeError(code: number, stage: SecureChannelStage, message2: boolean): SecureChannelError {
-  const mapped = code === CLOSE_CODES.handshake_failed ? (message2 ? "handshake_failed" : "device_identity_changed") : BY_CLOSE_CODE.get(code) ?? "closed";
+/** What a device closes with before message 2, all it can say then: rate limited or turned off before a frame, another
+ * channel version, and 4005. */
+const BEFORE_MESSAGE2 = new Set<number>([CLOSE_CODES.rate_limited, CLOSE_CODES.remote_disabled, CLOSE_CODES.protocol_mismatch]);
+/** devices-2 4.2, and 审查 D2-CRYPTO-1 and R2. `told`: the close came inside the channel (`FRAME.close`), so the device said
+ * it. Past message 2 nothing else is believed: a bare WebSocket close carries no authentication, and anyone on the path
+ * can write one, so it is `closed`, which a caller retries, never a revocation. Before message 2 nothing can be
+ * authenticated (IK): what a device sends then is read as it comes, and a forged one there is possible too. Under IK a
+ * device whose key is not the link's cannot read message 1 and closes 4005 `handshake_failed` before answering: the only
+ * way "this is not the device you paired" shows (devices 4.4); its 4005 for a message 1 that came late is a timeout. */
+function closeError(code: number, reason: string, stage: SecureChannelStage, how: "before-message2" | "told" | "bare"): SecureChannelError {
+  let mapped: SecureChannelErrorCode = "closed";
+  if (how === "before-message2") {
+    if (code === CLOSE_CODES.handshake_failed) mapped = reason === HANDSHAKE_TIMEOUT_REASON ? "timeout" : reason === "handshake_failed" ? "device_identity_changed" : "handshake_failed";
+    else if (BEFORE_MESSAGE2.has(code)) mapped = BY_CLOSE_CODE.get(code) ?? "closed";
+  } else if (how === "told") {
+    if (code === CLOSE_CODES.handshake_failed) mapped = reason === HANDSHAKE_TIMEOUT_REASON ? "timeout" : "handshake_failed";
+    else mapped = BY_CLOSE_CODE.get(code) ?? "closed";
+  }
   return new SecureChannelError(mapped, stage, code);
 }
 
@@ -89,8 +109,9 @@ export interface SecureConnection {
   client: VonvonClient;
   serverInfo: ServerInfo;
   pairResult?: PairResult;
-  /** Resolves once, when the connection ends: the server's close code mapped as during setup (4003 client_revoked, 4006
-   * remote_disabled, 1001 closed), `timeout` when the keepalive gave up, `closed` when the caller closed it. */
+  /** Resolves once, when the connection ends: the close the device said inside the channel, mapped as during setup (4003
+   * client_revoked, 4006 remote_disabled, 1001 closed); `closed` for a bare WebSocket close, whatever its code (anyone on
+   * the path can send one), and when the caller closed it; `timeout` when the keepalive gave up. */
   closed: Promise<SecureChannelError>;
   close(): void;
 }
@@ -211,6 +232,13 @@ export async function connectSecure(options: SecureConnectOptions): Promise<Secu
     try { frame = decodeFrame(channel.decrypt(data)); }
     catch { end(new SecureChannelError("closed", stage, 1008), 1008, "policy_violation"); return; }
     if (stage === "open") armSilence();
+    if (frame.type === FRAME.close) {
+      let told: { code: number; reason: string };
+      try { told = readCloseBody(frame.body); }
+      catch { end(new SecureChannelError("closed", stage, 1008), 1008, "policy_violation"); return; }
+      end(closeError(told.code, told.reason, stage, "told"), 1000, "");
+      return;
+    }
     if (frame.type === FRAME.ping) { sendFrame(FRAME.pong); return; }
     if (frame.type === FRAME.pong) return;
     const text = frame.body.toString("utf8");
@@ -239,11 +267,11 @@ export async function connectSecure(options: SecureConnectOptions): Promise<Secu
         if (!ended) end(new SecureChannelError("closed", stage), 1011, "error");
       }
     });
-    socket.onClose(code => {
+    socket.onClose((code, reason) => {
       socketClosed = true;
       for (const done of closeWaiters) done();
       closeWaiters.clear();
-      finish(ending ?? closeCodeError(code, stage, message2));
+      finish(ending ?? closeError(code, reason, stage, message2 ? "bare" : "before-message2"));
     });
     socket.onError(() => {
       if (!ended && stage !== "open") end(new SecureChannelError("closed", stage), 1011, "socket_error");

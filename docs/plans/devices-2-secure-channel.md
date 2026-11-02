@@ -227,3 +227,19 @@ Mac 后验（整批）：U1a 的桌面端用 `webBinarySocket`/`nodeBinarySocket
 14. **探针的撤销步骤**：`secure-probe.ts` 用通道里的 `device.revokeClient` 撤销自己再连，不是改 `clients.json`：daemon 在跑时名单在它内存里，改文件不生效（D1：daemon 在跑时只有 daemon 写）。探针用 esbuild 打成一个文件再跑，跑法写在文件开头。
 15. **客户端拿到的 socket 可以已经在关**：服务端在读第一帧之前就关（4004 限流、D3 的 4006），客户端的 `open` 事件和关闭帧可能挨着到，`connectSecure` 开始时 socket 已是 CLOSING。这时不发消息 1、不抛，等它的 close 事件按码表给错误（stage `handshake`）；1 秒内没等到（早已关掉）就给 `closed`。
 16. **被撤销的钥匙在哪一段被告知**：服务端先回消息 2 再关 4003，客户端收到消息 2 就接着发 `pairRequest` 或 hello，所以它看到的 `client_revoked` 的 stage 是 `pairing` 或 `hello`，不是 `handshake`（探针第 3 步打印 `client_revoked at hello, close 4003`）。
+
+## 审查后改了什么
+
+Codex 两位审查者的 9 条，全部接受：
+
+1. D2-CRYPTO-1 → 接受。消息 2 之后的关闭在通道里认证：新增 `FRAME.close = 0x03`，正文是 2 字节关闭码加 UTF-8 原因（`closeBody`/`readCloseBody`）。服务端有通道时每次关闭都先发这一帧，hub 的 `closePeers`/`closeWhere` 也发（经 `attach` 的第三个参数 `announce`）；客户端收到就按它结束。消息 2 之后只有明文 WS 关闭码的，一律给 `closed`（可重试）；消息 2 之前只认设备那时会发的 4001/4004/4005/4006，4002/4003/4007 给 `closed`。测试：经中继注入 `88 02 0f a3` → `closed`，名单上仍是已配对。消息 2 之前的关闭在 IK 下没法认证，`device_identity_changed`、`rate_limited`、`remote_disabled`、`protocol_mismatch` 仍可能是路径上的人伪造的；U1a 把 `device_identity_changed` 当终止态时要考虑这一点。
+2. D2-CRYPTO-2 → 接受。`clients.touch` 从消息 1 挪到 hello 通过之后；hello 超时也报 `onHandshakeFailed('handshake_failed')`。测试：重放截下的消息 1，`lastAddress`、`lastSeenAt` 不变，真连一次才变。D3 的 `connectionAuthenticated` 挂在 hello 通过（`hub.add`）那一步，不挂在消息 1 之后。重放仍能看出这把钥匙是已撤销（立刻 4003）、已配对（超时 4005）还是未知（超时 4002）：真客户端被拒时，明文关闭码本来就看得见，这里不另外处理。
+3. D2-CRYPTO-3 → 接受，加测试：两次握手的 e 互不相同，也不等于静态公钥（两侧都测）。
+4. D2-CRYPTO-4 → 接受，加测试：不传 options 的一侧只能和用 `PROLOGUE` 的另一侧握手成功；换成空 prologue 或去掉版本字节都失败（两侧都测）。
+5. R4 → 接受。已配对连接在 hello、ready 阶段收到任何帧（包括 ping/pong），都先核对撤销。`Peer` 加 `clientId`，因为 maintenance 的 principal 不带 clientId。D3 撤销断连（含 jobs/logs 的 detach）按 `peer.clientId` 匹配，不按 `principal.clientId`。测试：protocolVersion 1 的已配对连接，撤销后发 ping → 4003。
+6. R2 → 接受。服务端：首字节版本不对 → 4001 `protocol_mismatch`；首帧超时、hello 超时 → 4005，原因是 `handshake_timeout`（`HANDSHAKE_TIMEOUT_REASON`）；其余 4005 的原因仍是 `handshake_failed`。客户端只在消息 2 之前收到 4005 `handshake_failed` 时给 `device_identity_changed`；原因是 `handshake_timeout` 时给 `timeout`，其他原因给 `handshake_failed`。测试：消息 1 晚到 500 ms → `timeout`；版本字节 0x02 → 4001。验收要点 7 按这条理解。
+7. R1 → 接受。`own` 里的条目留到 socket 的 close 事件。已经被拒、对端又不回关闭帧的连接，`close()` 也会在 250 ms 后 terminate。测试：有这样一条连接时，`close()` 1 秒内完成。
+8. R5 → 接受，和 D2-CRYPTO-2 一起改。
+9. R3 → 接受。`webBinarySocket.close` 收到 1000 和 3000–4999 以外的码时改用 1000，原因不变。测试：用 Node 全局 WebSocket 连一个回坏消息 2 的假设备，服务端收到 1000，socket 关掉。
+
+另外：`secure-probe.ts` 的跑法补了 `mkdir -p`，不建 `$T/home`，`startApi` 会报 ENOENT。

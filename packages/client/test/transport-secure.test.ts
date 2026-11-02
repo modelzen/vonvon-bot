@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PROTOCOL_VERSION } from "@vonvon/protocol";
-import { createResponder, decodeFrame, encodeFrame, FRAME, generateStaticKey, type Channel, type StaticKey } from "@vonvon/protocol/secure-channel";
+import { WebSocketServer } from "ws";
+import { CLOSE_CODES, PROTOCOL_VERSION } from "@vonvon/protocol";
+import {
+  closeBody, createResponder, decodeFrame, encodeFrame, FRAME, generateStaticKey, HANDSHAKE_TIMEOUT_REASON, type Channel, type StaticKey,
+} from "@vonvon/protocol/secure-channel";
 import { ConnectionError } from "../src/client.js";
-import { connectSecure, SecureChannelError, type BinarySocket, type SecureChannelErrorCode } from "../src/transport-secure.js";
+import { connectSecure, SecureChannelError, webBinarySocket, type BinarySocket, type SecureChannelErrorCode } from "../src/transport-secure.js";
 
 // devices-2 第 5 节, in process: a pair of fake binary sockets, and a fake device built from the protocol's responder.
 // main 必败: there was no secure transport.
@@ -42,15 +45,19 @@ const socketPair = (): [End, End] => {
   return [client, device];
 };
 
+/** The reason the daemon gives with a code, as `CLOSE_CODES` names it. */
+const reasonOf = (code: number): string => Object.entries(CLOSE_CODES).find(([, value]) => value === code)?.[0] ?? "x";
 interface DeviceScript {
-  /** Close instead of answering message 1 (a device whose key is not the link's closes 4005 here). */
+  /** Close instead of answering message 1 (a device whose key is not the link's closes 4005 here), with the code's reason. */
   closeOnMessage1?: number;
+  closeReason?: string;
   /** Never answer message 1. */
   ignoreMessage1?: boolean;
   /** Answer message 1 with a broken message 2. */
   badMessage2?: boolean;
-  /** Close as soon as this JSON frame type arrives (pairRequest, hello) instead of answering it. */
-  closeOn?: { type: string; code: number };
+  /** Close as soon as this JSON frame type arrives (pairRequest, hello) instead of answering it: said inside the channel
+   * first, as the daemon does, unless `bare` (a close frame only, what anyone on the path could write). */
+  closeOn?: { type: string; code: number; reason?: string; bare?: boolean };
   /** RPC requests after the hello. */
   request?(frame: { id: string; method: string; payload: unknown }, reply: (value: unknown) => void): void;
 }
@@ -62,10 +69,11 @@ function fakeDevice(end: End, key: StaticKey, script: DeviceScript = {}) {
   const state = { muted: false };
   const sendFrame = (type: number, body?: Buffer) => { if (channel && !state.muted) end.send(channel.encrypt(encodeFrame(type as 0, body))); };
   const reply = (value: unknown) => sendFrame(FRAME.json, Buffer.from(JSON.stringify(value)));
+  const closeTold = (code: number, reason = reasonOf(code)) => { sendFrame(FRAME.close, closeBody(code, reason)); end.close(code, reason); };
   end.onMessage(bytes => {
     const data = Buffer.from(bytes);
     if (!channel) {
-      if (script.closeOnMessage1 !== undefined) { end.close(script.closeOnMessage1, "x"); return; }
+      if (script.closeOnMessage1 !== undefined) { end.close(script.closeOnMessage1, script.closeReason ?? reasonOf(script.closeOnMessage1)); return; }
       if (script.ignoreMessage1) return;
       const responder = createResponder(key);
       // As the daemon does: a message 1 it cannot read (sealed to another key) is closed 4005 before any answer.
@@ -84,12 +92,16 @@ function fakeDevice(end: End, key: StaticKey, script: DeviceScript = {}) {
     }
     const value = JSON.parse(frame.body.toString()) as Record<string, unknown>;
     received.push(value);
-    if (script.closeOn && value.type === script.closeOn.type) { end.close(script.closeOn.code, "x"); return; }
+    if (script.closeOn && value.type === script.closeOn.type) {
+      const { code, reason = reasonOf(code), bare } = script.closeOn;
+      if (bare) end.close(code, reason); else closeTold(code, reason);
+      return;
+    }
     if (value.type === "pairRequest") reply({ type: "pairResult", clientId: "cl_0123456789abcdef", deviceName: "服务器" });
     else if (value.type === "hello") reply(serverInfo);
     else if (value.type === "request") script.request?.(value as { id: string; method: string; payload: unknown }, reply);
   });
-  return { received, controls, reply, sendFrame, state, get channel() { return channel; } };
+  return { received, controls, reply, sendFrame, closeTold, state, get channel() { return channel; } };
 }
 const setup = (script?: DeviceScript, wrongKey = false) => {
   const [client, device] = socketPair();
@@ -146,15 +158,33 @@ describe("connectSecure", () => {
   it.each([
     [4002, "unknown_client", "hello"], [4003, "client_revoked", "hello"], [4004, "rate_limited", "hello"], [4006, "remote_disabled", "hello"],
     [4001, "protocol_mismatch", "hello"], [4007, "pairing_failed", "pairing"], [4005, "handshake_failed", "pairing"], [1001, "closed", "hello"], [4401, "closed", "hello"],
-  ] as Array<[number, SecureChannelErrorCode, "hello" | "pairing"]>)("maps close %i to %s", async (code, expected, stage) => {
+  ] as Array<[number, SecureChannelErrorCode, "hello" | "pairing"]>)("maps close %i, said inside the channel, to %s", async (code, expected, stage) => {
     const { options } = setup({ closeOn: { type: stage === "pairing" ? "pairRequest" : "hello", code } });
     const pairing = stage === "pairing" ? { pairing: { inviteId: "inv_0123456789abcdef", inviteSecret: "x", clientName: "n" } } : {};
     expect(await failure(connectSecure({ ...options, ...pairing }))).toMatchObject({ code: expected, stage, closeCode: code });
   });
 
-  it("maps 4004 and 4006 before message 2 too", async () => {
+  it("reads the device's hello timeout inside the channel as a timeout", async () => {
+    const { options } = setup({ closeOn: { type: "hello", code: 4005, reason: HANDSHAKE_TIMEOUT_REASON } });
+    expect(await failure(connectSecure(options))).toMatchObject({ code: "timeout", stage: "hello", closeCode: 4005 });
+  });
+
+  // 审查 D2-CRYPTO-1: a WebSocket close frame is not authenticated, so past message 2 a bare one is never a revocation.
+  it.each([4002, 4003, 4006, 4007])("reads a bare close %i after message 2 as closed, which a caller retries", async code => {
+    const { options } = setup({ closeOn: { type: "hello", code, bare: true } });
+    expect(await failure(connectSecure(options))).toMatchObject({ code: "closed", stage: "hello", closeCode: code });
+  });
+
+  it("reads what a device can say before message 2: rate limited, turned off, another version, a late message 1", async () => {
     expect(await failure(connectSecure(setup({ closeOnMessage1: 4004 }).options))).toMatchObject({ code: "rate_limited", stage: "handshake" });
     expect(await failure(connectSecure(setup({ closeOnMessage1: 4006 }).options))).toMatchObject({ code: "remote_disabled", stage: "handshake" });
+    expect(await failure(connectSecure(setup({ closeOnMessage1: 4001 }).options))).toMatchObject({ code: "protocol_mismatch", stage: "handshake", closeCode: 4001 });
+    // 审查 R2: the device's 4005 for a message 1 that came late is no reason to think it is another device.
+    expect(await failure(connectSecure(setup({ closeOnMessage1: 4005, closeReason: HANDSHAKE_TIMEOUT_REASON }).options))).toMatchObject({ code: "timeout", stage: "handshake", closeCode: 4005 });
+    expect(await failure(connectSecure(setup({ closeOnMessage1: 4005, closeReason: "" }).options))).toMatchObject({ code: "handshake_failed", stage: "handshake", closeCode: 4005 });
+    // A device never sends these before message 2: only someone on the path could.
+    expect(await failure(connectSecure(setup({ closeOnMessage1: 4003 }).options))).toMatchObject({ code: "closed", stage: "handshake", closeCode: 4003 });
+    expect(await failure(connectSecure(setup({ closeOnMessage1: 4002 }).options))).toMatchObject({ code: "closed", stage: "handshake", closeCode: 4002 });
   });
 
   it("refuses a malformed device key before sending anything", async () => {
@@ -165,16 +195,23 @@ describe("connectSecure", () => {
 });
 
 describe("an open connection", () => {
-  it("resolves closed with the code the device closed with, and fails the client with it as the cause", async () => {
-    const { options, device } = setup();
+  it("resolves closed with the close the device said inside the channel, and fails the client with it as the cause", async () => {
+    const { options, served } = setup();
     const connection = await connectSecure(options);
     const errors: Error[] = [];
     connection.client.onError(error => errors.push(error));
-    device.close(4003, "client_revoked");
+    served.closeTold(4003);
     expect(await connection.closed).toMatchObject({ code: "client_revoked", stage: "open", closeCode: 4003 });
     expect(errors[0]).toBeInstanceOf(ConnectionError);
     expect(errors[0]?.cause).toMatchObject({ code: "client_revoked" });
     await expect(connection.client.snapshot()).rejects.toThrow();
+  });
+
+  it("resolves closed with closed for a bare 4003: anyone on the path can write one", async () => {
+    const { options, device } = setup();
+    const connection = await connectSecure(options);
+    device.close(4003, "client_revoked");
+    expect(await connection.closed).toMatchObject({ code: "closed", stage: "open", closeCode: 4003 });
   });
 
   it("closes 1008 on a frame that does not decrypt", async () => {
@@ -214,5 +251,32 @@ describe("an open connection", () => {
     served.sendFrame(FRAME.ping);
     await vi.waitFor(() => expect(served.controls).toContain(FRAME.pong));
     connection.close();
+  });
+});
+
+// 审查 R3: a WHATWG WebSocket throws for 1001, 1008 and 1011, which connectSecure closes with; the socket must close anyway.
+describe.skipIf(typeof globalThis.WebSocket === "undefined")("webBinarySocket", () => {
+  it("closes a WHATWG socket for a broken message 2, with 1000 for the 1008 a browser refuses", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise<void>(resolve => server.once("listening", () => resolve()));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    const closedWith = new Promise<number>(resolve => server.once("connection", socket => {
+      socket.once("message", () => socket.send(Buffer.alloc(48, 7)));
+      socket.once("close", code => resolve(code));
+    }));
+    const ws = new globalThis.WebSocket(`ws://127.0.0.1:${address.port}/`);
+    try {
+      await new Promise<void>((resolve, reject) => { ws.addEventListener("open", () => resolve()); ws.addEventListener("error", () => reject(new Error("no open"))); });
+      expect(() => ws.close(1008, "x")).toThrow();
+      const device = generateStaticKey();
+      const pending = connectSecure({ socket: webBinarySocket(ws), device: { id: "d", pk: device.publicKeyBase64url }, clientKey: generateStaticKey().key, clientKind: "desktop" });
+      expect(await failure(pending)).toMatchObject({ code: "handshake_failed", stage: "handshake" });
+      expect(await closedWith).toBe(1000);
+      await vi.waitFor(() => expect(ws.readyState).toBe(3));
+    } finally {
+      ws.close();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
   });
 });

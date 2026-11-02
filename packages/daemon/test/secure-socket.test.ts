@@ -1,13 +1,14 @@
-import { randomUUID } from 'node:crypto';
-import { createServer, type Server } from 'node:http';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
+import { connect as netConnect, createServer as createNetServer, type Server, type Socket } from 'node:net';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { PROTOCOL_VERSION, serverInfoV2Schema, type Request } from '@vonvon/protocol';
-import { createInitiator, decodeFrame, encodeFrame, FRAME, generateStaticKey, type Channel, type StaticKey } from '@vonvon/protocol/secure-channel';
-import { connectSecure, nodeBinarySocket, SecureChannelError, type SecureConnection } from '@vonvon/client/secure';
+import { createInitiator, decodeFrame, encodeFrame, FRAME, generateStaticKey, readCloseBody, type Channel, type StaticKey } from '@vonvon/protocol/secure-channel';
+import { connectSecure, nodeBinarySocket, SecureChannelError, type BinarySocket, type SecureConnection } from '@vonvon/client/secure';
 import { createClientRegistry } from '../src/remote/clients';
 import { completePairing, createInviteBook } from '../src/remote/pairing';
 import { createPeerHub } from '../src/server/peer-hub';
@@ -114,11 +115,39 @@ async function raw(h: Target, clientKey: StaticKey = generateStaticKey().key) {
     async read() {
       if (!channel) throw new Error('no channel');
       const plain = decodeFrame(channel.decrypt(await next()));
+      if (plain.type === FRAME.close) return { close: readCloseBody(plain.body) };
       return plain.type === FRAME.json ? JSON.parse(plain.body.toString()) as Record<string, unknown> : { control: plain.type };
     },
   };
 }
 const hello = { type: 'hello', protocolVersion: PROTOCOL_VERSION, clientKind: 'cli' };
+
+/** A TCP relay in front of the server, as anyone on the path is: it passes everything, and can write to the client. */
+async function relay(target: number) {
+  const ends: Socket[] = [];
+  const toClient: Socket[] = [];
+  const server = createNetServer(client => {
+    const upstream = netConnect(target, '127.0.0.1');
+    for (const end of [client, upstream]) { end.on('error', () => undefined); ends.push(end); }
+    client.pipe(upstream);
+    upstream.pipe(client);
+    toClient.push(client);
+  });
+  const port = await listen(server);
+  cleanup.push(async () => { for (const end of ends) end.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); });
+  return { port, inject: (bytes: Buffer) => { toClient[0]?.write(bytes); } };
+}
+/** An upgrade by hand that then never writes again, not even the answer to a close frame. */
+async function mute(port: number): Promise<{ received: () => Buffer }> {
+  const socket = netConnect(port, '127.0.0.1');
+  socket.on('error', () => undefined);
+  cleanup.push(async () => { socket.destroy(); });
+  const chunks: Buffer[] = [];
+  socket.on('data', chunk => chunks.push(chunk));
+  await new Promise<void>(resolve => socket.once('connect', () => resolve()));
+  socket.write(`GET / HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${randomBytes(16).toString('base64')}\r\nSec-WebSocket-Version: 13\r\n\r\n`);
+  return { received: () => Buffer.concat(chunks) };
+}
 
 describe('an unknown key', () => {
   it('gets message 2 and nothing else, and is closed 4002 when no pairing request comes', async () => {
@@ -127,7 +156,9 @@ describe('an unknown key', () => {
     await client.handshake();
     h.hub.publish({ type: 'event', event: 'log', payload: { line: 'x' } } as never);
     expect(await client.closed).toBe(4002);
-    expect(client.inbox).toHaveLength(0);
+    // Only the close, said inside the channel.
+    expect(client.inbox).toHaveLength(1);
+    expect(await client.read()).toEqual({ close: { code: 4002, reason: 'unknown_client' } });
     expect(h.failures).toEqual([['unknown_client', false]]);
     expect(h.hub.peers.size).toBe(0);
   });
@@ -265,6 +296,55 @@ describe('a paired key', () => {
     original(sent[0] as Buffer);
     expect(await client.closed).toBe(1008);
   });
+
+  // 审查 D2-CRYPTO-2 and R5: IK's message 1 can be sent again by anyone who recorded it, with no key at all.
+  it('is not seen for a replayed message 1, only for a hello', async () => {
+    const h = await harness();
+    const { clientKey, clientId } = await paired(h);
+    const before = h.clients.get(clientId);
+    expect(before?.lastAddress).toMatch(/^127\.0\.0\.1:\d+$/);
+    const recorded = createInitiator(clientKey, h.device.key.publicKey).message1();
+    const replayer = await raw(h);
+    replayer.ws.send(recorded);
+    expect(await replayer.closed).toBe(4005);
+    expect(replayer.inbox[0]).toHaveLength(48);
+    expect(h.clients.get(clientId)).toMatchObject({ lastAddress: before?.lastAddress, lastSeenAt: before?.lastSeenAt });
+    // The hello timed out: counted as a failed handshake, for D3's rate limit.
+    expect(h.failures).toEqual([['handshake_failed', false]]);
+    const client = await raw(h, clientKey);
+    await client.handshake();
+    client.json(hello);
+    await client.read();
+    expect(h.clients.get(clientId)?.lastAddress).not.toBe(before?.lastAddress);
+  });
+
+  // 审查 R4: a ping is checked too, and a maintenance connection still says which client it is.
+  it('is closed 4003 at its next frame once revoked, a ping as well, also when the hello made it a maintenance connection', async () => {
+    const h = await harness();
+    const { clientKey, clientId } = await paired(h);
+    const client = await raw(h, clientKey);
+    await client.handshake();
+    client.json({ ...hello, protocolVersion: 1 });
+    expect(await client.read()).toMatchObject({ type: 'serverInfo', principal: 'maintenance' });
+    const peer = [...h.hub.peers].find(each => each.principal.kind === 'maintenance');
+    expect(peer?.clientId).toBe(clientId);
+    await h.clients.revoke(clientId);
+    client.frame(FRAME.ping);
+    expect(await client.read()).toEqual({ close: { code: 4003, reason: 'client_revoked' } });
+    expect(await client.closed).toBe(4003);
+    expect(h.hub.peers.has(peer as Peer)).toBe(false);
+  });
+
+  // 审查 D2-CRYPTO-1: the close code of a WebSocket is not authenticated; only the one inside the channel is believed.
+  it('is not revoked by a close frame someone on the path writes, and its client sees it as a plain close', async () => {
+    const h = await harness();
+    const { clientKey, clientId } = await paired(h);
+    const path = await relay(h.port);
+    const connection = await connect({ port: path.port, device: h.device }, { clientKey });
+    path.inject(Buffer.from([0x88, 0x02, 0x0f, 0xa3]));
+    expect(await connection.closed).toMatchObject({ code: 'closed', closeCode: 4003 });
+    expect(h.clients.get(clientId)?.revokedAt).toBeUndefined();
+  });
 });
 
 describe('the handshake', () => {
@@ -287,6 +367,24 @@ describe('the handshake', () => {
     expect(h.failures).toEqual([['handshake_failed', false], ['handshake_failed', false], ['handshake_failed', false]]);
   });
 
+  // 审查 R2: only a message 1 this device cannot read says "another device"; a late one is a timeout, another version 4001.
+  it('tells a message 1 that came late, and another channel version, from another key', async () => {
+    const h = await harness();
+    const ws = await opened(h.port);
+    cleanup.push(async () => { ws.terminate(); });
+    const socket = nodeBinarySocket(ws);
+    const late: BinarySocket = { ...socket, send: bytes => { setTimeout(() => { if (socket.isOpen()) socket.send(bytes); }, 500); } };
+    expect(await refused(connectSecure({ socket: late, device: { id: 'd', pk: h.device.publicKeyBase64url }, clientKey: generateStaticKey().key, clientKind: 'cli' })))
+      .toMatchObject({ code: 'timeout', stage: 'handshake', closeCode: 4005 });
+    const later = await raw(h);
+    const message1 = createInitiator(generateStaticKey().key, h.device.key.publicKey).message1();
+    message1[0] = 0x02;
+    later.ws.send(message1);
+    expect(await later.closed).toBe(4001);
+    expect(later.inbox).toHaveLength(0);
+    expect(h.failures).toEqual([['handshake_failed', false], ['handshake_failed', false]]);
+  });
+
   it('asks admit before the upgrade, and the rate limit before reading a frame', async () => {
     const onHandshake = vi.fn(() => 'ok' as const);
     const forbidden = await harness({ admit: () => ({ ok: false, status: 403 }), onHandshake });
@@ -301,6 +399,19 @@ describe('the handshake', () => {
     expect(await client.closed).toBe(4004);
     expect(client.inbox).toHaveLength(0);
     expect(await refused(connect(limited))).toMatchObject({ code: 'rate_limited', stage: 'handshake', closeCode: 4004 });
+  });
+});
+
+describe('closing the server', () => {
+  // 审查 R1: a refused socket stays in ws's own list until it closes; one whose peer never answers would hold close() 30 s.
+  it('does not wait on a refused socket whose peer never answers its close frame', async () => {
+    const h = await harness();
+    const peer = await mute(h.port);
+    // Refused for no first frame: 4005 went out (a close frame starts with 0x88), and no answer comes.
+    await vi.waitFor(() => expect(peer.received().includes(0x88)).toBe(true), { timeout: 2_000 });
+    const started = Date.now();
+    await h.secure.close();
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 });
 
