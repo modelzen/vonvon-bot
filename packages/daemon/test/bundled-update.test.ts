@@ -39,7 +39,7 @@ it('with no shell, checks say so and the update is refused in the design words',
   const { update } = harness([]);
   expect(await update.check('「笔记本」', true)).toEqual({ current: '0.9.0', latest: null, hasUpdate: false, desktopShell: false });
   expect(thrown(() => update.apply('「笔记本」', false))).toMatchObject({ code: 'desktop_not_running', message: BUNDLED_TEXT.notRunning('Mac mini') });
-  expect(thrown(() => update.apply('这台电脑上的命令行', true))).toMatchObject({ code: 'desktop_not_running', message: BUNDLED_TEXT.notRunningHere });
+  expect(thrown(() => update.apply('本机的命令行', true))).toMatchObject({ code: 'desktop_not_running', message: BUNDLED_TEXT.notRunningHere });
   expect(readUpdateStatus()).toBeNull();
 });
 

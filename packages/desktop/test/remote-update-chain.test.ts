@@ -83,8 +83,8 @@ function rig() {
   const out: string[] = [];
   const machine = async (request: MachineRequest): Promise<MachineReply> => {
     out.push(`→ ${request.type}`);
-    if (request.type === 'checkCoreUpdate') return { type: 'coreUpdate', distribution: { kind: 'bundled', cliPath: '/x' }, dev: false, ...await server.check('这台电脑上的命令行', request.fresh !== false) };
-    if (request.type === 'applyCoreUpdate') return { type: 'done', message: server.apply('这台电脑上的命令行', true) };
+    if (request.type === 'checkCoreUpdate') return { type: 'coreUpdate', distribution: { kind: 'bundled', cliPath: '/x' }, dev: false, ...await server.check('本机的命令行', request.fresh !== false) };
+    if (request.type === 'applyCoreUpdate') return { type: 'done', message: server.apply('本机的命令行', true) };
     if (request.type === 'coreUpdateStatus') return { type: 'coreUpdateStatus', status: readUpdateStatus() };
     throw new Error(`unexpected ${request.type}`);
   };

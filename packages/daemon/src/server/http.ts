@@ -44,6 +44,8 @@ import { networkIdentity, type EnableDeps } from '../remote/address';
 import { readRemoteConfig, type RemoteConfig } from '../remote/config';
 import { createRateLimiter } from '../remote/rate-limit';
 import { tailscaleIps } from '../remote/tailscale';
+import { createCandidates } from '../remote/candidates';
+import { peerOwner } from './peer-label';
 import { createRemoteListeners, type RemoteListenerDeps, type RemoteListeners } from './remote-listeners';
 import { log } from '../core/logger';
 import { serveWebUi } from './web-ui';
@@ -271,13 +273,13 @@ export async function startApi(options: { service: AdminService; port?: number; 
           if (request.payload.type === 'negotiate' && isDesktopShell(peer)) bundled.shellAttached(peer);
           return finish(peer, outcome, payload => ({ type: 'response', id, method: 'admin', payload }));
         }
-        case 'device': return finish(peer, await deviceRpc({ home, identity, clients, invites, remote: { listeners: remote, enable, active } }, peer, request.payload), payload => ({ type: 'response', id, method: 'device', payload }));
+        case 'device': return finish(peer, await deviceRpc({ home, identity, clients, invites, remote: { listeners: remote, enable, active, candidates } }, peer, request.payload), payload => ({ type: 'response', id, method: 'device', payload }));
         case 'settings': return finish(peer, await settingsRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'settings', payload: shown(payload) }));
         case 'collaboration': return finish(peer, await collaborationRpc(options.service, directory, request.payload), payload => ({ type: 'response', id, method: 'collaboration', payload: shown(payload) }));
         case 'environment': return finish(peer, await environmentRpc(options.service, jobs, peer, request.payload, environment), payload => ({ type: 'response', id, method: 'environment', payload }));
         case 'machine': return finish(peer, await machineRpc(options.service, options.control, port, request.payload, { launcher: serviceActions, snapshots, root: home, bridgeImport: options.bridgeImport, environment,
           bundled: { peer, update: bundled, distribution: () => installed, clients } }), payload => ({ type: 'response', id, method: 'machine', payload }));
-        case 'command': return finish(peer, await commandRpc({ service: options.service, jobs, peer, directory, snapshots, control: options.control, port }, request.payload), payload => ({ type: 'response', id, method: 'command', payload: shown(payload) }));
+        case 'command': return finish(peer, await commandRpc({ service: options.service, jobs, peer, owner: ownerOf(peer), directory, snapshots, control: options.control, port }, request.payload), payload => ({ type: 'response', id, method: 'command', payload: shown(payload) }));
         case 'library': return finish(peer, await libraryRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'library', payload: shown(payload) }));
         // devices-4b 4.5: a Bot session's write lands where its Bot process said, as its turn's person.
         case 'memory': return finish(peer, await memoryRpc(options.service, request.payload, {
@@ -361,14 +363,22 @@ export async function startApi(options: { service: AdminService; port?: number; 
         deviceName: identity.current.name, platform: hostPlatform(), capabilities: capabilities(distribution, remote.status().length > 0), principal: principalWire(peer.principal) });
     // devices-2 4.3: every server's connections in one hub, so a publish, a drain or a release reaches all of them; its
     // view gives each connection its part of an event whoever publishes it (devices-4a 4.7).
-    const hub = createPeerHub({ detached: peer => { jobs.detach(peer); logs.detach(peer); if (hub.state === 'open') bundled.shellDetached(peer); }, view: viewFor(sessionTokens) });
+    // devices-ui-3 4.2: whose a scan is, so the same client coming back on a new connection keeps it (`attached`).
+    const ownerOf = (peer: Peer) => peerOwner(peer, clients, identity.current.name);
+    const hub = createPeerHub({
+      detached: peer => { jobs.detach(peer); logs.detach(peer); if (hub.state === 'open') bundled.shellDetached(peer); },
+      attached: peer => { jobs.attach(peer, ownerOf(peer)); },
+      view: viewFor(sessionTokens),
+    });
     // U4: the update of a server the desktop app carries, run by this computer's desktop shell.
     const bundled = acquiredBundled = createBundledUpdate({
       shells: () => [...hub.peers].filter(isDesktopShell), version: bridgeVersion(), deviceName: () => identity.current.name, log,
     });
     // devices 4.3 (SEC-16): a revoked client's connections end now, with 4003; the hub's detach cancels its jobs and log
-    // follows. Before the owner hears of it (followRevocations), so the revoked one does not get that event.
+    // follows. Before the owner hears of it (followRevocations), so the revoked one does not get that event. Its scans
+    // end first (devices-ui-3): one in its grace has no connection left to close.
     clients.onChange((_generation, revoked) => {
+      for (const id of revoked) jobs.cancelOwner(`paired:${id}`);
       if (revoked.length) hub.closeWhere(peer => peer.clientId !== undefined && revoked.includes(peer.clientId), CLOSE_CODES.client_revoked, 'client_revoked');
     });
     followRevocations({ clients, invites, publish: event => hub.publish(event), log });
@@ -381,6 +391,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
       interfaces, tailscale: seams.tailscale ?? (() => tailscaleIps()), networkIdentity: seams.networkIdentity ?? (iface => networkIdentity(iface)),
       ...(seams.classify ? { classify: seams.classify } : {}),
     };
+    const candidates = createCandidates({ interfaces, tailscale: enable.tailscale });
     const remote = acquiredRemote = createRemoteListeners({
       secure, interfaces, networkIdentity: enable.networkIdentity, log, ...(seams.timers ? { timers: seams.timers } : {}), ...(seams.secureTimers ? { secureTimers: seams.secureTimers } : {}),
       limiter: createRateLimiter({ onBan: ip => { log.warn('remote', 'rate-limited', { ip }); } }),

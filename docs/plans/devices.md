@@ -121,7 +121,7 @@ owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的
   - 公网/cgnat 地址再加全局每秒 10 次握手的上限。
   - 未认证阶段 `maxPayload` 降到 4 KB（今天 4 MB，`ws.ts:22`），握手超时 3 秒（今天 5 秒，`ws.ts:56`）。
   - 封禁只在内存里，重启清零。
-- **面板要用的三个字段**（U3 计划，2026-11-01）：`device.status` 加 `remote.candidates[{ host, kind, iface? }]`（这台设备此刻能开的地址，已开的也在里面）和 `via`（调用者连进来的那个监听地址，本机连接没有）；`device.clients` 的回复加 `self`（调用者自己的 `clientId`，本机连接没有）。都是可选字段。D3 的 `tailscale ip` 在 macOS、Windows 上找不到命令时，再试 Tailscale 应用自带的命令（Mac 的应用默认不把命令放进 PATH），由 U3 补。
+- **面板要用的三个字段**（U3 计划，2026-11-01）：`device.status` 加 `remote.candidates[{ host, kind, iface?, tool? }]`（这台设备此刻能开的地址，已开的也在里面；daemon 缓存 30 秒，请求带 `refresh: true` 时重列，U3 实现时加，给面板的刷新按钮）和 `via`（调用者连进来的那个监听地址，本机连接没有）；`device.clients` 的回复加 `self`（调用者自己的 `clientId`，本机连接没有）。都是可选字段。D3 的 `tailscale ip` 在 macOS、Windows 上找不到命令时，再试 Tailscale 应用自带的命令（Mac 的应用默认不把命令放进 PATH），由 U3 补。
 
 ### 4.4 传输安全：加一层应用层加密，远程一律走它
 
@@ -592,7 +592,7 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 安装脚本：没有 systemd | 这台机器没有 systemd（可能是容器）。已改为直接启动，崩溃后不会自动重启；需要时运行 `vonvon daemon start`。 |
 | 安装脚本：用户实例不可用 | 连不上这个账号的 systemd（用 sudo 切过来时常见）。已直接启动一次；用这个账号 SSH 登录后运行 `vonvon service install` 装成后台服务。 |
 | 撤销确认（桌面端） | 取消「Clay 的 MacBook」的访问？它会立刻断开，要再连得重新配对。[同时撤销它带进来的 2 台] |
-| 另一台正在扫码（`refused`、`job_running`，U3） | 另一台设备「<客户端名>」正在扫码添加 Bot，等它完成后再试。/ 这台电脑上的<桌面端/命令行/网页端>正在扫码添加 Bot，等它完成后再试。/ 重新扫码时：…正在为一个 Bot 重新扫码，等它完成后再试。 |
+| 另一台正在扫码（`refused`、`job_running`，U3） | 另一台设备「<客户端名>」正在扫码添加 Bot，等它完成后再试。/ 本机的<桌面端/命令行/网页端/客户端>正在扫码添加 Bot，等它完成后再试（被拒的是另一台设备时写「<设备名>」上的<…>，U3 实现时改：远程页面不说"本机"）。/ 重新扫码时：…正在为一个 Bot 重新扫码，等它完成后再试。 |
 | `--scope` 缺失 | 这次调用来自 Bot 会话，必须带 `--scope bot=<appId>[,group=<chatId>]`，而且不能比会话本身的范围大。 |
 | `--scope` 超范围 | 范围超过了这条会话（只能是 bot=<X>, group=<Y>）。不要重试更大的范围。 |
 | 会话里跑运维命令 | 这条命令（`vonvon daemon restart`）不能在 Bot 会话里运行。告诉用户去设备上或桌面端里做。 |
@@ -606,7 +606,7 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 退出桌面端不停另外装的后台服务（"应用与启动"页脚和确认框，U2） | 退出桌面应用不会停止后台：它是另外装的、注册成后台服务的 Vonvon Bot。要停请运行 `vonvon daemon stop`。 |
 | 本机服务端协议不同（桌面端启动时，U2） | npm 版旧：这台电脑上另外装的 Vonvon Bot 服务端（npm 版）比桌面端旧。运行 `npm i -g vonvon-bot@latest` 再 `vonvon daemon restart`；或者 `vonvon service uninstall` 去掉它，让桌面端用自带的。/ 其他旧：正在运行的服务端比桌面端旧，没能自动换掉。退出 Vonvon Bot 再打开一次；还不行就运行 `vonvon daemon stop` 后再打开。/ 服务端新：正在运行的服务端比这个桌面端新。到 https://vonvon.cc/get/ 下载最新的 Vonvon Bot。 |
 | 关掉当前连着的地址（确认，U3） | 你现在就是通过这个地址连着 <设备> 的。关掉后这台电脑会马上断开，要到那台设备上重新开启。 |
-| 改端口（面板里的说明，U3） | 要改端口，在终端运行 `vonvon remote port <端口>`；已配对的设备要重新配对。 |
+| 改端口（面板里的说明，U3） | 要改端口，在终端运行 `vonvon remote port <端口>`；改完已配对的设备要粘一次新链接。（远程时"在「X」的终端运行"；A1 之后换地址、换端口都只要粘新链接，不用重新配对，U3 实现时改） |
 | 远程更新失败（发起的客户端，U4） | 那台电脑上的 Vonvon Bot 没有回应更新请求。/ 下载桌面端更新超时。/ 那台电脑上的 Vonvon Bot 在更新完成前关掉了。/ 桌面端重启后没有换上新版本。在那台电脑上退出 Vonvon Bot 再打开一次。 |
 | 被远程更新的那台，本机点安装（U4） | 正在按另一台设备的请求更新，下载好后会自动安装并重启。 |
 | 远程检查没回应（发起的客户端，U4） | 那台电脑上的 Vonvon Bot 没有回应，稍后再试。 |
@@ -776,4 +776,4 @@ owner 2026-11-02 定：远程连接的体验和能力和 Orca、Paseo 差不多�
 | 组网（新分类 `overlay`） | Tailscale 以外的组网工具，按网卡名认：ZeroTier（`zt…`、macOS 的 `feth…`、Windows 的 `ZeroTier One […]`）、NetBird（`wt0`）、EasyTier（Windows 的 `et_0`）、蒲公英（`oray…`/`pgy…`，没在真机上核实）、Hamachi、WireGuard（`wg…`），另外 `tun0`、`utun3`、`tap0` 这类普通隧道算没有名字的组网。私有段的地址在这些网卡上就是组网；100.64/10 的只有网卡名认得出工具时才算组网，普通隧道上的照旧算运营商地址、要确认；公网段的地址在什么网卡上都算公网。认不出的照旧按段分 |
 | 组网地址的"网络变了" | 不比网卡名、不比网关，只看它还在不在组网工具的网卡上（macOS 的 utun 编号重启后会变）；跑到普通网卡上进"需要确认"，文案"<地址> 现在不在组网工具的网卡上了（可能是别的网络分到了同一个地址）。确认现在的网络是你信任的，再重新开启。" |
 | 协议 | `addressKindSchema` 加 `overlay`（配对链接、设备状态、桌面端记的地址都跟着认）；`device.enable` 只收 `{ host, allowPublic? }`，`tailscale` 字段去掉。桌面端的地址标签加"组网"，连不上的提示加组网那句 |
-| 桌面端"允许别的设备连接"（U3，还没做） | 地址改成单选，候选和 `remote candidates` 同一套（U3 的 `createCandidates` 包一层 `D/remote/candidates.ts` 的 `listCandidates` 加缓存），不再有"用 Tailscale 地址"按钮。U3 计划文首记了要改的地方 |
+| 桌面端"允许别的设备连接"（U3） | 地址改成单选，候选和 `remote candidates` 同一套（U3 的 `createCandidates` 包一层 `D/remote/candidates.ts` 的 `listCandidates` 加缓存），不再有"用 Tailscale 地址"按钮。U3 计划文首记了要改的地方，实现时的出入在 U3 计划第 11 节 |

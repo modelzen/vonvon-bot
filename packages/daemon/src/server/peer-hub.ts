@@ -29,8 +29,9 @@ export interface PeerHub {
   release(): Promise<void>;
 }
 
-/** `view`: what each peer gets of a published event (devices-4a 4.7); without one, the event as it is. */
-export function createPeerHub(options: { detached(peer: Peer): void; view?: PeerView }): PeerHub {
+/** `view`: what each peer gets of a published event (devices-4a 4.7); without one, the event as it is. `attached`: a
+ * connection whose hello was accepted, once it is in `peers` (devices-ui-3: a client coming back to its scan). */
+export function createPeerHub(options: { detached(peer: Peer): void; attached?(peer: Peer): void; view?: PeerView }): PeerHub {
   let state: HubState = 'open';
   const peers = new Set<Peer>();
   const sockets = new Map<Peer, WebSocket>();
@@ -75,7 +76,7 @@ export function createPeerHub(options: { detached(peer: Peer): void; view?: Peer
       attached.set(socket, { detach, announce });
       socket.once('close', () => { attached.delete(socket); });
     },
-    add(peer, socket) { peers.add(peer); sockets.set(peer, socket); },
+    add(peer, socket) { peers.add(peer); sockets.set(peer, socket); options.attached?.(peer); },
     remove(peer) {
       peers.delete(peer);
       sockets.delete(peer);

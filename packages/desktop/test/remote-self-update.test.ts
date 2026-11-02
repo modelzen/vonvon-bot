@@ -130,7 +130,7 @@ describe('an update from another device', () => {
     await h.remote.aboutToRestart();
     expect(reports(h.client).at(-1)).toEqual({ type: 'desktopUpdateReport', requestId: ID, state: 'restarting', latest: '0.9.1', message: REMOTE_UPDATE_TEXT.restarting });
     // a second update asked meanwhile is refused, and does not touch the first
-    h.client.ask('apply', '这台电脑上的命令行', 'dur_fedcba9876543210');
+    h.client.ask('apply', '本机的命令行', 'dur_fedcba9876543210');
     await vi.waitFor(() => expect(reports(h.client).at(-1)).toMatchObject({ requestId: 'dur_fedcba9876543210', state: 'error' }));
     expect(install).toHaveBeenCalledTimes(2);
   });

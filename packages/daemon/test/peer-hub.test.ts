@@ -123,3 +123,16 @@ it('publishes snapshots to current connections only, never to a maintenance one'
   expect(current.received).toEqual([snapshot]);
   expect(maintenance.received).toEqual([]);
 });
+
+// devices-ui-3 4.2: a connection whose hello was accepted is told once it is a peer, so its client's scan goes on. main 必败
+it('says each added peer to `attached`, once, after it is in `peers`', async () => {
+  const seen: number[] = [];
+  const hub = createPeerHub({ detached: () => undefined, attached: () => { seen.push(hub.peers.size); } });
+  const connect = await sockets();
+  const one = fakePeer();
+  const { socket } = await connect();
+  hub.attach(socket, once(() => hub.remove(one.peer)));
+  expect(seen).toEqual([]);
+  hub.add(one.peer, socket);
+  expect(seen).toEqual([1]);
+});

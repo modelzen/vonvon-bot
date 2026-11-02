@@ -8,6 +8,7 @@ import {desktopPlatformMark} from './devices-presentation';
 import {OutsideWindow} from './device-bits';
 import {DeviceConnectionView} from './DeviceConnectionView';
 import {MaintenanceView} from './MaintenanceView';
+import {PairedToasts} from './PairedToasts';
 import './devices.css';
 
 export {desktopPlatformMark, shouldMarkPlatform} from './devices-presentation';
@@ -34,6 +35,8 @@ export function DesktopRootView({state, fallback, shell, renderApp}: {state?: De
   if (!state) return <OutsideWindow shell={shell}><h1>正在打开 Vonvon Bot…</h1></OutsideWindow>;
   return <ClientProvider client={client} shell={deviceShell} device={device} devices={state}>
     <DeviceGate key={device.id} state={state} renderApp={renderApp}/>
+    {/* devices-ui-3 4.5: beside the gate, so a pairing with this computer shows whichever device is looked at */}
+    <PairedToasts shell={shell} local={!device.isRemote}/>
   </ClientProvider>;
 }
 
