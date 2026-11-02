@@ -14,6 +14,7 @@ import { cachedCodexVersion } from '../agent/codex-appserver/locate';
 import { codexSource } from './codex-source';
 import { bundledNpmCli } from '../platform/npm';
 import { OwnedProviderProcess, ProviderProcessExitError } from '../agent/owned-process';
+import { passedEnv } from '../cli/service-env';
 import {
   environmentProfileSchema,
   type EnvironmentOperation,
@@ -609,10 +610,13 @@ export class EnvironmentService {
   }
 
   /** `executablePath`'s own directory goes last on PATH: an nvm-installed tool's
-   * `#!/usr/bin/env node` launcher needs the `node` next to it. */
+   * `#!/usr/bin/env node` launcher needs the `node` next to it. Built anew, so this service's home and nothing of the
+   * daemon's own leaks in; the user's env file names and the proxy names do pass ({@link passedEnv}): npm, a version
+   * check and a sign-in reach the network the way the bots' Codex and Claude do. */
   private environment(executablePath?: string): NodeJS.ProcessEnv {
     const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows';
     return {
+      ...passedEnv(),
       ...(process.platform === "win32" ? { ComSpec: process.env.ComSpec ?? win32.join(systemRoot, "System32", "cmd.exe"), SystemRoot: systemRoot, WINDIR: systemRoot,
         PATHEXT: process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD', TEMP: process.env.TEMP, TMP: process.env.TMP } : {}),
       HOME: this.home, USERPROFILE: this.home,

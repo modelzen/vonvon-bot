@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyServiceEnv, parseServiceEnv, SERVICE_ENV_MARKER } from '../src/cli/service-env';
+import { applyServiceEnv, parseServiceEnv, passedEnv, SERVICE_ENV_MARKER } from '../src/cli/service-env';
 
 describe('<data dir>/env (owner 2026-11-02: a server behind a proxy)', () => {
   const roots: string[] = [];
@@ -51,6 +51,16 @@ describe('<data dir>/env (owner 2026-11-02: a server behind a proxy)', () => {
     const own: NodeJS.ProcessEnv = { PATH: '/usr/bin', VONVON_HOME: dir, [SERVICE_ENV_MARKER]: 'PATH,VONVON_HOME' };
     applyServiceEnv(root(), own);
     expect(own).toEqual({ PATH: '/usr/bin', VONVON_HOME: dir });
+  });
+
+  // 0.9.0 Linux acceptance (task 287): the 本机环境's npm got no HTTPS_PROXY, so installs failed behind a proxy
+  it('passes the file\'s names and the proxy names on to a child built anew, never the service\'s own or a session marker', () => {
+    const dir = root('OPENAI_BASE_URL=https://a.example/v1\nFEISHU_CODEX_BRIDGE=1\nHOME=/elsewhere\n');
+    const env: NodeJS.ProcessEnv = { https_proxy: 'http://terminal:1', NO_PROXY: 'localhost', All_Proxy: 'socks5://p:2', HOME: '/home/u', PATH: '/usr/bin',
+      VONVON_HOME: dir, VONVON_SESSION: 's', VONVON_SCOPE: 'bot=x', SECRET_OF_THE_DAEMON: 'x', HTTP_PROXY_EXTRA: 'x' };
+    applyServiceEnv(dir, env);
+    expect(passedEnv(env)).toEqual({ https_proxy: 'http://terminal:1', NO_PROXY: 'localhost', All_Proxy: 'socks5://p:2', OPENAI_BASE_URL: 'https://a.example/v1', HOME: '/elsewhere' });
+    expect(passedEnv({})).toEqual({});
   });
 
   it('no file: nothing changes and nothing is said; an unreadable one is said', () => {
