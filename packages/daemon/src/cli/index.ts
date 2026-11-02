@@ -72,6 +72,8 @@ daemon.command('run').description('Run in the foreground')
   .option('--parent-control', 'Accept shutdown through stdin', false)
   .option('--port <port>', 'Loopback API port', (value) => Number(value), 0)
   .action(async (options: { bot?: string; port: number; parentControl?: boolean }) => {
+    const warning = (await import('./root-warning')).rootWarning();
+    if (warning) process.stderr.write(`${warning}\n`);
     await (await import('../host/bootstrap')).runHostRuntime({ bot: options.bot, port: options.port, managed: false, control });
   });
 daemon.command('start').description('Start a detached daemon')
@@ -569,6 +571,15 @@ Exit codes: 0 updated (or already current), 1 failed (the server stays on or goe
   });
 program.command('__daemon-control <action>', { hidden: true }).action(async (action: string) => {
   await (await import('./commands/daemon-control')).runDaemonControl(action);
+});
+// server-2 4.3: what the install scripts run from a release before `current` points at it. `--release`, not `--version`:
+// the program's own --version would answer first.
+program.command('__standalone-setup', { hidden: true }).requiredOption('--install-root <root>').requiredOption('--release <version>').option(...JSON_FLAG)
+  .action(async (options: Json & { installRoot: string; release: string }) => {
+    await (await import('./commands/standalone-setup')).runStandaloneSetup({ installRoot: options.installRoot, version: options.release }, io(options));
+  });
+program.command('__standalone-teardown', { hidden: true }).requiredOption('--install-root <root>').option(...JSON_FLAG).action(async (options: Json & { installRoot: string }) => {
+  await (await import('./commands/standalone-setup')).runStandaloneTeardown({ installRoot: options.installRoot }, io(options));
 });
 program.command('__restart-after-exit <port> <oldPid> <oldStartedAt> [update]', { hidden: true }).action(async (port: string, oldPid: string, oldStartedAt: string, update?: string) => {
   const { updateStatusSchema } = await import('../service/update');
