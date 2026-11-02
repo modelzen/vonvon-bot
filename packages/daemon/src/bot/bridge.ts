@@ -9,10 +9,12 @@ import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { AdminWriteOp } from '../admin/ops';
 import type { AdminLibraryOp } from '../admin/library';
 import type { ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
+import type { ScheduleActor } from '../admin/schedule-commands';
 import { isAdmin, resolveOwner, type AppConfig } from '../config/schema';
 import { createCommandTools } from '../agent/entry/command-tools';
 import { createMemoryWriter } from './memory-writer';
 import { listProjects } from '../project/registry';
+import { isProjectId } from '../project/library';
 import { createAgentEntries, type AgentEntries } from '../agent/entry/registry';
 import { log } from '../core/logger';
 import { createOrchestrator } from './handle-message';
@@ -52,8 +54,8 @@ export interface BridgeHandle {
   /** The host's workspace fan-out for this bot (admin/library.ts `AdminLibraryOp`). */
   libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
-  /** Scheduled tasks from the desktop and the terminal (admin/ipc.ts `AdminScheduleOp`), run as the local owner. */
-  schedule: (via: 'desktop' | 'cli', request: ScheduleRequest) => Promise<ScheduleReply>;
+  /** Scheduled tasks over the wire (admin/ipc.ts `AdminScheduleOp`), run as the local owner or a Bot session's turn. */
+  schedule: (actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
   /** Graceful teardown: drop the long connection first, then close every codex
    *  session (no orphan app-servers). Idempotent enough for a signal handler. */
   shutdown: () => Promise<void>;
@@ -76,10 +78,12 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     onError: error => log.fail('setup', error, { phase: 'card-callback-verification', appId: app.id }),
   });
 
-  // 记忆写入（工具和隐藏块共用）：群绑定的项目取自绑定行，Bot 记忆在 bots/<appId>/ 下
+  // 记忆写入（工具、隐藏块和 Bot 会话的命令行共用）：群绑定的项目取自绑定行，Bot 记忆在 bots/<appId>/ 下。私聊不对应
+  // 群，它的项目是本 Bot 现在绑定的全部项目，每次现读、去重（Codex 审查 239-1 / 241-1：缺了它，私聊写项目记忆全被拒）
   const memory = createMemoryWriter({
     botId: app.id,
     projectIdOf: async chatId => (await listProjects()).find(project => project.chatId === chatId)?.projectId,
+    botProjectIds: async () => [...new Set((await listProjects()).flatMap(project => isProjectId(project.projectId) ? [project.projectId] : []))],
   });
   // 咖啡一下 (the local Claude Code / Codex hook relay) left v1 in s02b: no
   // service and no socket; s02c deleted D/cli-bridge. Since s02c2 the installed
@@ -87,7 +91,8 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   const host = opts.host;
   // A revoke lost at shutdown is fine: the host drops all of this bot's tokens when its process exits.
   const sessions = host ? { revoke: (sessionId: string) => { void host.revokeSessionToken(sessionId).catch(() => undefined); } } : undefined;
-  const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), isOwner: id => resolveOwner(opts.cfg) === id, ...(sessions ? { sessions } : {}), tools: createCommandTools({
+  const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), isOwner: id => resolveOwner(opts.cfg) === id, ...(sessions ? { sessions } : {}),
+    memoryPlace: turn => memory.placeOf(turn), tools: createCommandTools({
     appId: app.id, memory,
     schedule: { execute: (actor, request) => orchestrator.scheduleAs(actor, request) },
     settings: { read: scope => orchestrator.settings.read(scope), save: (edit, options) => orchestrator.settings.save(edit, options), models: query => orchestrator.settings.models(query), act: action => orchestrator.settings.act(action) },
@@ -233,7 +238,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       void task.then(() => groupTasks.delete(task), () => groupTasks.delete(task));
       return task;
     };
-    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.schedule, shutdown };
+    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, shutdown };
   } catch (error) {
     try { await shutdown(); }
     catch (cleanupError) {

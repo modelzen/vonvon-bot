@@ -20,6 +20,7 @@ import { botIdentity, loadBots, setBotActivation, removeBot } from '../config/bo
 import { botPaths, botDir } from '../config/paths';
 import { configuredProjectsRoots, directoryContext, legacyDirectoryProblems } from '../project/directory-audit';
 import type { DirectoryProblem, ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
+import type { ScheduleActor } from './schedule-commands';
 import { removeSecret } from '../config/keystore';
 import {
   getCompletionReminderConfig,
@@ -119,8 +120,8 @@ export interface AdminService {
   /** true only in the read-only preview process: it refuses every write, memory writes included */
   readonlyPreview?: boolean;
   collaboration?(botId: string, request: CollaborationRequest): Promise<unknown>;
-  /** Scheduled tasks of one bot; the bot process checks scope and roles (admin/schedule-commands.ts). Refusals are replies, not errors. */
-  executeSchedule?(botId: string, via: 'desktop' | 'cli', request: ScheduleRequest): Promise<ScheduleReply>;
+  /** Scheduled tasks of one bot, as `actor`; the bot process checks scope and roles (admin/schedule-commands.ts). Refusals are replies, not errors. */
+  executeSchedule?(botId: string, actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply>;
   /** The project library (admin/library.ts): its workspace is changed only through here. */
   library?: HostLibrary;
   accountUsage(force: boolean): Promise<AccountUsageBundle>;
@@ -461,7 +462,7 @@ export interface AdminServiceDeps {
   /** Asks a running bot process to follow a project's new workspace (admin/library.ts `AdminLibraryOp`). */
   executeLibrary?: (botId: string, op: AdminLibraryOp) => Promise<unknown>;
   /** Forwards a scheduled-task request to the bot process; a bot that is not running replies `refused bot-not-running`. */
-  executeSchedule?: (botId: string, via: 'desktop' | 'cli', request: ScheduleRequest) => Promise<ScheduleReply>;
+  executeSchedule?: (botId: string, actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
   /** 实时运行状态（daemon 进程内：本进程 channel / 子进程 IPC）。返回 undefined
    * 或缺省 → 回退锁文件探测（该 bot 不归本 daemon 管，如未激活的 bot）。 */
   liveStatus?: (botId: string) => Promise<BotLiveStatus | undefined>;
@@ -673,9 +674,9 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       }
       return deps.executeCollaboration(botId, request);
     },
-    async executeSchedule(botId, via, request) {
+    async executeSchedule(botId, actor, request) {
       if (!deps.executeSchedule) throw new NotWiredYetError('定时任务');
-      return deps.executeSchedule(botId, via, request);
+      return deps.executeSchedule(botId, actor, request);
     },
     async pendingGroups(botId) {
       const registry = await loadBots();

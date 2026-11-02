@@ -10,6 +10,8 @@ import type { AdminBot, AdminProject, AdminService } from '../src/admin/service'
 import { setCliContext, withDaemon } from '../src/cli/daemon-client';
 import { loadCommands, loadLocalOnly } from './helpers/cli-commands';
 import { fakeService, startFixture } from './server-fixture';
+import type { AuthzDeps } from '../src/server/authz';
+import agentFixture from '../../protocol/test/fixtures/agent-settings.json';
 
 /**
  * devices-4a 4.9, run as a Bot session's shell would: the CLI bundle against a daemon in this process. A session's
@@ -55,9 +57,12 @@ function run(root: string, home: string, args: string[], session: NodeJS.Process
   });
 }
 /** A running daemon whose `local-credential` nobody can read any more: a command that reads it fails. */
-async function daemon() {
+async function daemon(overrides: Partial<AdminService> = {}, askBot?: AuthzDeps['askBot']) {
   const executeSchedule = vi.fn(async () => ({ kind: 'tasks' as const, tasks: [], now: 1, timeZone: 'UTC' }));
-  const fixture = await startFixture(fakeService({ listBots: async () => [bot], listProjects: async appId => appId === BOT ? [row('研发', GROUP), row('运营', 'oc_z')] : [], executeSchedule }));
+  // devices-4b: the group's Bot process says a member's turn is going
+  const actor = { kind: 'session' as const, openId: 'ou_m', role: 'member' as const, chatId: GROUP };
+  const fixture = await startFixture(fakeService({ listBots: async () => [bot], listProjects: async appId => appId === BOT ? [row('研发', GROUP), row('运营', 'oc_z')] : [], executeSchedule, ...overrides }),
+    undefined, undefined, askBot ?? (async () => ({ ok: true, role: 'member', openId: 'ou_m', actor })));
   await writeFile(join(fixture.home, 'daemon.pid'), JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), listen: fixture.api.listen }));
   await chmod(join(fixture.home, 'local-credential'), 0o000);
   const home = (await emptyHome()).home;
@@ -79,7 +84,7 @@ describe('a Bot session\'s command line', () => {
     try {
       const ok = await run(d.fixture.home, d.home, ['schedule', 'list', '--group', GROUP, '--scope', `bot=${BOT},group=${GROUP}`], { VONVON_SESSION: d.token });
       expect(ok, ok.stderr).toMatchObject({ code: 0, json: { ok: true } });
-      expect(d.executeSchedule).toHaveBeenCalledWith(BOT, 'cli', { action: 'list', chatId: GROUP });
+      expect(d.executeSchedule).toHaveBeenCalledWith(BOT, { kind: 'session', openId: 'ou_m', role: 'member', chatId: GROUP }, { action: 'list', chatId: GROUP });
       // the global option goes anywhere on the line
       expect((await run(d.fixture.home, d.home, ['--scope', `bot=${BOT},group=${GROUP}`, 'schedule', 'list', '--group', GROUP], { VONVON_SESSION: d.token })).code).toBe(0);
       const missing = await run(d.fixture.home, d.home, ['schedule', 'list', '--group', GROUP], { VONVON_SESSION: d.token });
@@ -109,6 +114,23 @@ describe('a Bot session\'s command line', () => {
       d.fixture.sessionTokens.revoke('ses_0123456789abcdef');
       expect(await run(d.fixture.home, d.home, ['schedule', 'list', '--group', GROUP, '--scope', `bot=${BOT},group=${GROUP}`], { VONVON_SESSION: d.token }))
         .toMatchObject({ code: 4, json: { error: { kind: 'refused', reason: 'session_token_invalid', message: '会话令牌已失效（会话结束或超过 24 小时没用）。' } } });
+    } finally { await d.close(); }
+  }, 60_000);
+
+  // Codex review 239-2 / 240-1. main 必败 (in this slice): settings get left them out, the act's --json printed them again
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('prints a private chat\'s administrators after settings act admin add as settings get shows them', async () => {
+    const view = (openIds: string[], revision: string) => ({ ...agentFixture, scope: { kind: 'agent', botId: BOT },
+      administrators: { feishu: { ownerOpenId: 'ou_owner', adminOpenIds: ['ou_fs'] }, scannerOpenId: 'ou_scan', openIds, revision } });
+    const act = vi.fn(async () => ({ kind: 'saved', view: view(['ou_local', 'ou_0123456789abcdef'], 'a2'), effects: [], warnings: [] }));
+    const settings = { act, read: async () => view(['ou_local'], 'a1'), save: async () => { throw new Error('unused'); }, models: async () => { throw new Error('unused'); } };
+    // the owner's own private-chat turn, as its Bot process says
+    const d = await daemon({ settings } as unknown as Partial<AdminService>, async () => ({ ok: true, role: 'owner', openId: 'ou_owner' }));
+    try {
+      const token = d.fixture.sessionTokens.issue({ appId: BOT, place: 'dm', chatId: 'oc_dm', sessionId: 'ses_1111111111111111' });
+      const added = await run(d.fixture.home, d.home, ['settings', 'act', 'admin', 'add', 'ou_0123456789abcdef', '--scope', `bot=${BOT}`], { VONVON_SESSION: token });
+      expect(added, added.stderr).toMatchObject({ code: 0, json: { ok: true, result: 'saved' } });
+      expect(added.json.administrators).toEqual({ openIds: ['ou_local', 'ou_0123456789abcdef'], revision: 'a2' });
+      expect(act).toHaveBeenCalledExactlyOnceWith({ kind: 'adminMember', botId: BOT, openId: 'ou_0123456789abcdef', membership: 'present', revision: 'a1' });
     } finally { await d.close(); }
   }, 60_000);
 

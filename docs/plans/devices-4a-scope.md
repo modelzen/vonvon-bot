@@ -186,7 +186,7 @@ Mac 后验：U2 的维护子集界面；本片无专项。Windows：无。
 ## 9. 风险和行数
 
 - 估计约 1,250 行（session-tokens 120、IPC 泛化 + host api 150、bot 端 80、服务端认令牌/negotiate/维护 200、authz 表和 host 判定 250、filterSnapshot 120、CLI 200、测试 400 压缩后）。超过就把"维护子集 + DRAIN_KINDS + authz-maintenance 测试"拆成 D4a-2。
-- ★ 行临时放行（4.6）是集成分支上的一个窗口，不发布；D4b 必须在同一批合入。
+- ★ 行临时放行（4.6）是集成分支上的一个窗口，不发布；D4b 必须在同一批合入。D4b 已接上 `askBot`，没有它时 ★ 行一律拒，窗口关了（`devices-4b-bot-authz.md` 末尾）。
 - `handle-message.ts` 四处 `profileOf` 只在一个 `create` 汇合这一判断要实现时核实；若有别的线程创建路径（例如评论/doc 的），同样注入令牌，否则那条路径的 CLI 会以 `session_token_missing` 被拒——这是安全的失败方向。
 - `verifyPidLockOwner` 在会话里不跑：会话里连的是 pid 锁里的端口，没有 owner 校验；端口被抢占时最坏是令牌发给了抢占者，令牌只代表这条会话、24 小时失效、不能做运维，和设计 16.3 一致。
 - 群令牌的只读 `settings.read` 复用 `settings_get` 在群里的只读标法，具体字段要看 `admin/service.ts` 里它怎么标；若没有现成的"只读 + reason"结构，加一个 `readOnly?: { reason: 'not-dm' }`，行数 +40。
