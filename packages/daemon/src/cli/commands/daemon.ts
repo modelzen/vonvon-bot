@@ -23,11 +23,14 @@ export type DaemonStatus = { running: false } | {
   startedAt: string;
 };
 
-/** In a Bot's session the lock is taken as it is: the owner check reads `local-credential`, which a session never does (devices-4a 4.9). */
-export async function daemonStatus(home = paths.appDir, env: NodeJS.ProcessEnv = process.env): Promise<DaemonStatus> {
+/**
+ * In a Bot's session the lock is taken as it is: the owner check reads `local-credential`, which a session never does
+ * (devices-4a 4.9). `checkOwner: false` takes it so outside a session too (the discovery child, see runStatus).
+ */
+export async function daemonStatus(home = paths.appDir, env: NodeJS.ProcessEnv = process.env, checkOwner = !inBotSession(env)): Promise<DaemonStatus> {
   const lock = await readRunningPidLock(home);
   if (!lock?.listen) return { running: false };
-  if (!inBotSession(env)) await verifyPidLockOwner(home, lock);
+  if (checkOwner) await verifyPidLockOwner(home, lock);
   return { running: true, pid: lock.pid, listen: lock.listen, ...(lock.version ? { version: lock.version } : {}), startedAt: lock.startedAt };
 }
 
@@ -186,22 +189,23 @@ const statusDeps = (): StatusDeps => ({ home: paths.appDir, now: Date.now, env: 
  * devices 8.3: a running daemon answers, with how it was installed and its data root (`source: 'daemon'`); otherwise
  * the files do (`source: 'files'`). Both shapes keep `running`, `pid` and `listen`, which `connectLocal` reads.
  * In a Bot's session (devices-4a 4.9) only the lock answers, token or not: the daemon would need the session's
- * `--scope` for its snapshot, and the crash files name the other bots.
+ * `--scope` for its snapshot, and the crash files name the other bots. So it does for `connectLocal`'s discovery
+ * (`VONVON_STATUS_FROM_FILES=1`): a caller that hands it a credential of its own (a session's token) must not have the
+ * owner's read for it, and the owner's callers check the owner themselves before they connect (Codex review 230-2).
  */
 export async function runStatus(io: Io, overrides: Partial<StatusDeps> = {}): Promise<void> {
   const d = { ...statusDeps(), ...overrides };
-  const status = await daemonStatus(d.home, d.env);
-  const session = inBotSession(d.env);
-  if (session) {
-    if (!status.running && d.env.VONVON_STATUS_FROM_FILES !== '1') throw new CommandError('connection', 'daemon 没有运行。先运行 vonvon daemon start。');
+  const discovery = d.env.VONVON_STATUS_FROM_FILES === '1';
+  const lockOnly = discovery || inBotSession(d.env);
+  const status = await daemonStatus(d.home, d.env, !lockOnly);
+  if (lockOnly) {
+    if (!status.running && !discovery) throw new CommandError('connection', 'daemon 没有运行。先运行 vonvon daemon start。');
     print(io, [status.running ? `running PID ${status.pid} at ${status.listen}` : 'stopped'], { ...status, source: 'files' });
     return;
   }
-  if (d.env.VONVON_STATUS_FROM_FILES !== '1') {
-    if (status.running) {
-      try { await statusFromDaemon(status, io, d.daemon); return; }
-      catch (error) { if (!(error instanceof CommandError && error.kind === 'connection')) throw error; }
-    }
+  if (status.running) {
+    try { await statusFromDaemon(status, io, d.daemon); return; }
+    catch (error) { if (!(error instanceof CommandError && error.kind === 'connection')) throw error; }
   }
   const summary = readCrashSummary(d.home, { running: status.running, ...(status.running ? { ownerPid: status.pid } : {}), now: d.now() });
   const crashes = summary.crashes.map(({ at, kind, scope, appId, version, uptimeMs, paused, reason }) => ({ at, kind, scope, ...(appId ? { appId } : {}), version, ...(uptimeMs !== undefined ? { uptimeMs } : {}), ...(paused ? { paused } : {}), reason }));
