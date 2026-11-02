@@ -19,7 +19,8 @@ const BASE = 'https://dl.vonvon.cc/bot/server';
 const SH = '/bin/sh';
 /** The launcher __standalone-setup writes (packages/daemon/src/cli/commands/standalone-setup.ts), checked below. */
 const LAUNCHER = '#!/bin/sh\n# Vonvon Bot server CLI v1\nroot="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"\nPATH="$root/current/node/bin:$PATH"\nexport PATH\nexec "$root/current/node/bin/node" "$root/current/app/bin/vonvon.mjs" "$@"\n';
-const openssl3 = (() => { try { return /^OpenSSL [3-9]/.test(execFileSync('openssl', ['version'], { encoding: 'utf8' })); } catch { return false; } })();
+/** Whether install.sh, run with the fixture's PATH below, finds OpenSSL 3: macOS has LibreSSL in /usr/bin, Homebrew's is elsewhere. */
+const openssl3 = (() => { try { return /^OpenSSL [3-9]/.test(execFileSync('openssl', ['version'], { encoding: 'utf8', env: { ...process.env, PATH: '/usr/bin:/bin' } })); } catch { return false; } })();
 
 /**
  * The fake app/bin/vonvon.mjs: records its arguments; setup switches `current` and writes the launcher for real. A
@@ -295,8 +296,9 @@ test('root is refused before the network, unless VONVON_ALLOW_ROOT=1', async t =
   await shim(f.shims, 'id', `case "$1" in -u) echo 0 ;; *) echo root ;; esac`);
   let run = await f.run('install.sh');
   assert.equal(run.code, 2);
-  // devices.md §15「安装脚本：root」, with the script's own address in place of …
-  assert.equal(run.stderr, '你正在用 root 运行。Vonvon Bot 会以这个账号运行 AI 代理，建议用普通用户：`useradd -m vonvon && su - vonvon`，再运行安装命令。坚持用 root：`VONVON_ALLOW_ROOT=1 sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/install.sh)"`。\n');
+  // devices.md §15「安装脚本：root」, with the script's own address in place of …; a direct SSH login, not su or sudo, so
+  // the account's systemd is there and the service starts at boot (fixes-0-9-0)
+  assert.equal(run.stderr, '你正在用 root 运行。Vonvon Bot 会以这个账号运行 AI 代理，建议用普通用户：先 `useradd -m -s /bin/bash vonvon`，给它设密码（`passwd vonvon`）或放好 SSH 公钥，再用这个账号直接 SSH 登录、运行安装命令；不要用 su 或 sudo 切过去，那样装好后不会开机自动启动。说明见 https://vonvon.cc/guide/remote/#no-root 。坚持用 root：`VONVON_ALLOW_ROOT=1 sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/install.sh)"`。\n');
   assert.deepEqual(await f.curls(), []);
   run = await f.run('install.sh', { VONVON_ALLOW_ROOT: '1' });
   assert.equal(run.code, 0, run.stderr);

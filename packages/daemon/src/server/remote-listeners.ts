@@ -36,7 +36,10 @@ export interface RemoteListenerDeps {
 
 // devices 第 15 节 and D3 4.5
 const waitingFor = (host: string): string => `等待地址 ${host} 出现`;
-const portBusy = (port: number): string => `端口 ${port} 被占用，每 15 秒重试；可用 \`vonvon remote port <n>\` 换端口`;
+/** Windows has no `vonvon` on PATH (the desktop registers the command on macOS only), so the port cannot be changed there. */
+export const portBusy = (port: number, platform: NodeJS.Platform = process.platform): string => platform === 'win32'
+  ? `端口 ${port} 被占用，每 15 秒重试；关掉占着它的程序后会自己开始`
+  : `端口 ${port} 被占用，每 15 秒重试；可用 \`vonvon remote port <n>\` 换端口`;
 const networkChanged = (host: string): string => `这台设备所在的网络变了（之前在另一个局域网开启了 ${host}）。确认现在的网络是你信任的，再重新开启。`;
 const overlayLeft = (host: string): string => `${host} 现在不在组网工具的网卡上了（可能是别的网络分到了同一个地址）。确认现在的网络是你信任的，再重新开启。`;
 const HEALTH = JSON.stringify({ ok: true, protocolVersion: PROTOCOL_VERSION });

@@ -116,6 +116,9 @@ daemon.command('run').description('Run in the foreground')
   .action(async (options: { bot?: string; port: number; parentControl?: boolean }) => {
     const warning = (await import('./root-warning')).rootWarning();
     if (warning) process.stderr.write(`${warning}\n`);
+    // The host reads <data dir>/env before any bot starts; a bot child inherits it. The note reaches `vonvon daemon logs`.
+    const envNote = options.bot ? undefined : (await import('./service-env')).applyServiceEnv(paths.appDir);
+    if (envNote) (await import('../core/logger')).log.info('host', 'env_file', { note: envNote });
     // owner 2026-11-02: a host's stop, restart or update ends within 30 s, whatever a Bot or Feishu does meanwhile; a Bot
     // child has its own, shorter limit (bot/supervisor.ts). Ended this way, the run is not taken for a crash.
     const runControl = control;
@@ -582,7 +585,7 @@ remote.command('candidates').description('List the addresses other computers cou
   .action(async (options: Json & { all?: boolean }) => { await (await remotes()).runRemote('candidates', { all: Boolean(options.all) }, io(options)); });
 covers(remote.command('disable [ip]'), 'device.disable').description('Stop accepting connections on this address, or the open one; its connections end').option(...JSON_FLAG)
   .action(async (ip: string | undefined, options: Json) => { await (await remotes()).runRemote('disable', ip === undefined ? {} : { host: ip }, io(options)); });
-covers(remote.command('port <port>'), 'device.setPort').description('Change the remote port (default 7767); paired clients pair again').option(...JSON_FLAG)
+covers(remote.command('port <port>'), 'device.setPort').description('Change the remote port (default 7767); paired clients paste a new link once, no pairing again').option(...JSON_FLAG)
   .action(async (port: string, options: Json) => { await (await remotes()).runRemote('port', { port }, io(options)); });
 const feishu = program.command('feishu').description('Read Feishu groups and members');
 covers(feishu.command('groups'), 'command.listJoinedGroups').description('List joined groups, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
