@@ -479,8 +479,8 @@ export class EnvironmentService {
 
   private async startLogin(tool: EnvironmentTool): Promise<EnvironmentReply> {
     if (tool === "codex" || tool === "claude") return refused("provider-configuration-required", tool === "codex"
-      ? "请先在 Codex App 或 Codex CLI 中完成登录或自定义模型配置，再回到 Vonvon 检测。"
-      : "请先在 Claude Code 中完成登录或自定义 API、模型配置，再回到 Vonvon 检测。");
+      ? "先把 Codex 配置好（账号或自定义 API 都行，用 Codex App 或 `codex` 命令行），再回到 Vonvon 检测。"
+      : "先把 Claude 配置好（账号或自定义 API 都行，用 Claude Code 的 `claude` 命令行），再回到 Vonvon 检测。");
     const resolved = await this.resolveTool(tool);
     if (!resolved) return refused("tool-missing", "请先安装工具。");
     const args = ["auth", "login", "--recommend", "--json"];

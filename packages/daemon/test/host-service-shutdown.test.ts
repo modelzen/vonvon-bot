@@ -37,8 +37,9 @@ it('holds PID and mutex through usage then Codex cleanup despite a rejecting Job
   const usageCleanup = gate();
   const installCleanup = gate();
   const closingStarted = gate();
-  let signal: AbortSignal | undefined;
-  const tools = new CodexSetupService({ install: cancellation => { signal = cancellation; return installCleanup.promise; } });
+  // The Codex probe's cleanup, held open: the service closes it only after usage (devices-ui-2 4.9: no install job any more).
+  let toolsClosing = false;
+  const tools = { close: () => { toolsClosing = true; return installCleanup.promise; } } as unknown as CodexSetupService;
   const owner = createAdminService({ codexTools: tools, daemonStartedAt: 1, fetchAccountUsage: async () => {
     await usageCleanup.promise;
     return { profile: { topInvocations: [], dailyBuckets: [] }, usage: { main: {}, extras: [], fetchedAt: 1 } };
@@ -46,7 +47,7 @@ it('holds PID and mutex through usage then Codex cleanup despite a rejecting Job
   const failure = new Error('independent Jobs cleanup failed');
   const original = Jobs.prototype.close;
   const jobsClose = vi.spyOn(Jobs.prototype, 'close').mockImplementation(async function (this: Jobs) { await original.call(this); throw failure; });
-  const fixture = await startFixture(fakeService({ startCodexJob: owner.startCodexJob, codexJob: owner.codexJob, close: owner.close }));
+  const fixture = await startFixture(fakeService({ close: owner.close }));
   let client: Awaited<ReturnType<typeof socketClient>> | undefined;
   let usage: ReturnType<typeof owner.accountUsage> | undefined;
   let host: Promise<unknown> | undefined;
@@ -56,7 +57,6 @@ it('holds PID and mutex through usage then Codex cleanup despite a rejecting Job
       await options.onListening?.(fixture.api.listen);
       client = await socketClient(fixture.api.port, fixture.credential);
       await client.ready();
-      expect(await client.call({ type: 'request', id: 'install', method: 'command', payload: { type: 'installCodex' } })).toMatchObject({ type: 'response', payload: { kind: 'started' } });
       expect(JSON.parse(await readFile(join(fixture.home, 'daemon.pid'), 'utf8'))).toMatchObject({ pid: process.pid });
       usage = owner.accountUsage(false);
       const closing = fixture.api.close();
@@ -70,7 +70,7 @@ it('holds PID and mutex through usage then Codex cleanup despite a rejecting Job
     await Promise.race([closingStarted.promise, host.then(error => { throw error; })]);
     await vi.waitFor(() => expect(client?.socket.readyState).toBe(WebSocket.CLOSED));
     await tick();
-    expect(signal?.aborted).toBe(false);
+    expect(toolsClosing).toBe(false);
     expect(settled).toBe(false);
     expect(await readFile(join(fixture.home, 'daemon.pid'), 'utf8').then(text => JSON.parse(text), () => undefined)).toMatchObject({ pid: process.pid, listen: fixture.api.listen });
     const held = await acquireMutex(fixture.home, 'host', 0).then(async mutex => { await closeMutex(mutex); return false; }, () => true);
@@ -78,7 +78,7 @@ it('holds PID and mutex through usage then Codex cleanup despite a rejecting Job
     usageCleanup.release();
     await usage;
     await tick();
-    expect(signal?.aborted).toBe(true);
+    expect(toolsClosing).toBe(true);
     expect(settled).toBe(false);
     expect(JSON.parse(await readFile(join(fixture.home, 'daemon.pid'), 'utf8'))).toMatchObject({ pid: process.pid });
     const stillHeld = await acquireMutex(fixture.home, 'host', 0).then(async mutex => { await closeMutex(mutex); return false; }, () => true);

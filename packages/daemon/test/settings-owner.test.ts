@@ -14,7 +14,8 @@ import { createAdminIpcCaller, createAdminIpcResponder } from '../src/admin/ipc'
 import type { AppConfig } from '../src/config/schema';
 import type { AgentBackend } from '../src/agent/types';
 import { offlineModelCatalog, rememberModelCatalog } from '../src/admin/model-catalog';
-import { permissionTable } from '../src/agent/permission';
+import { permissionTable, permissionTiers } from '../src/agent/permission';
+import { FULL_ACCESS_WARNING } from '@vonvon/protocol';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
@@ -304,6 +305,28 @@ it('s31c: a full-only backend refuses unavailable tiers and custom, while unrela
   expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { mode: 'full' } })).kind).toBe('saved');
   expect((await getProjectByName('demo'))?.mode).toBe('full');
 });
+// main 必败: choosing 完全访问 for a group said nothing about group members (devices 第 15 节, devices-ui-2 4.10)
+describe('完全访问 group warning', () => {
+  it('only a group\'s full tier carries the warning', () => {
+    expect(permissionTiers({ platform: 'linux', group: true }).map(tier => tier.warning)).toEqual([undefined, undefined, FULL_ACCESS_WARNING]);
+    expect(permissionTiers({ platform: 'linux' }).some(tier => tier.warning)).toBe(false);
+  });
+  it('warns when a group turns 完全访问, not when it already was', async () => {
+    await updateProject('demo', { mode: 'write', network: true });
+    const { owner } = await fixture();
+    let view = await owner.read(project) as ProjectSettingsView;
+    expect(view.sections.permission.stored.options.tiers.find(tier => tier.tier === 'full')?.warning).toBe(FULL_ACCESS_WARNING);
+    expect(await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { mode: 'full' } }))
+      .toMatchObject({ kind: 'saved', warnings: [FULL_ACCESS_WARNING] });
+    view = await owner.read(project) as ProjectSettingsView;
+    const again = await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { mode: 'full' } });
+    expect(again.kind).toBe('saved');
+    expect(again).not.toHaveProperty('warnings');
+    view = await owner.read(project) as ProjectSettingsView;
+    expect(await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { mode: 'qa' } })).not.toHaveProperty('warnings');
+  });
+});
+
 describe('s31c permission settings', () => {
   const custom = { backend: 'codex-appserver', settings: { sandbox: 'read-only', network: true } };
   it.each([

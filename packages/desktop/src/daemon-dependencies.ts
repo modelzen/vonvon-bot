@@ -79,7 +79,7 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
       if (!lock.listen) throw new Error(`后台服务（PID ${lock.pid}）还没有公布监听地址。先别关它，稍后再试。`);
       try { await verifyPidLockOwner(runtime.root, lock); }
       catch (cause) {
-        throw new Error(`无法验证后台服务（PID ${lock.pid}）与桌面协议 ${PROTOCOL_VERSION} 是否匹配。先别关它，检查应用和后台的版本是否兼容，以及本机凭据。`, { cause });
+        throw new Error(`无法确认正在运行的后台服务（PID ${lock.pid}）属于这个数据目录。先别关它，检查本机凭据；详情在 daemon.log。`, { cause });
       }
       return { pid: lock.pid, startedAt: lock.startedAt, listen: lock.listen, ...(lock.version === undefined ? {} : { version: lock.version }) };
     },

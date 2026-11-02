@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, expect, it, vi } from 'vitest';
 import { ConnectionError, RpcError, type VonvonClient } from '@vonvon/client';
 import {
-  agentIdSchema, groupIdSchema, jobIdSchema, membershipIdSchema, settingsReplySchema,
+  agentIdSchema, FULL_ACCESS_WARNING, groupIdSchema, jobIdSchema, membershipIdSchema, settingsReplySchema,
   type AdminSetupStatus, type Agent, type DesktopSnapshot, type Job, type Membership, type SettingsReply, type ToolState,
 } from '@vonvon/protocol';
 import { pickBot, withDaemon, type Daemon } from '../src/cli/daemon-client';
@@ -420,11 +420,18 @@ it('settings set saves with the section revision and explains each refusal', asy
   expect(settings).toHaveBeenNthCalledWith(1, { type: 'read', scope });
   expect(settings).toHaveBeenNthCalledWith(2, { type: 'save', edit: { scope, section: 'permission', revision: 'rev-mode', patch: { mode: 'full' } } });
   expect(h.out()).toBe('已保存 permission.mode = full。\n下一轮生效。\n');
+  // devices-ui-2 4.10: a group turned 完全访问 prints the warning after the effects, and keeps it in --json.
+  results.unshift({ kind: 'saved', section: { scope, section: 'permission', value: section({ mode: 'full' }) }, effects: [], warnings: [FULL_ACCESS_WARNING] });
+  h.clear(); await runSettingsSet(['permission.mode=full'], { group: 'oc_pay' }, h.io(), h.daemon);
+  expect(h.out()).toBe(`已保存 permission.mode = full。\n${FULL_ACCESS_WARNING}\n`);
+  results.unshift({ kind: 'saved', section: { scope, section: 'permission', value: section({ mode: 'full' }) }, effects: [], warnings: [FULL_ACCESS_WARNING] });
+  h.clear(); await runSettingsSet(['permission.mode=full'], { group: 'oc_pay' }, h.io(true), h.daemon);
+  expect(JSON.parse(h.out())).toMatchObject({ warnings: [FULL_ACCESS_WARNING] });
   for (const message of ['这项设置刚在别处改过，没有保存。先读取当前版本再修改。', '没有保存：mode：后端不支持此权限档位', '这个 Bot 没在运行，运行起来后才能改设置']) {
     await expect(runSettingsSet(['permission.mode=full'], { group: 'pay' }, h.io(), h.daemon)).rejects.toThrow(message);
   }
   await expect(runSettingsSet(['permission.mode=full'], { group: 'pay', session: 'omt_x' }, h.io(), h.daemon)).rejects.toThrow('--group 和 --session 只能选一个。');
-  expect(h.connect).toHaveBeenCalledTimes(4);
+  expect(h.connect).toHaveBeenCalledTimes(6);
 });
 
 it('a blank --session is an input error, a bad request is never sent, and only an unreadable reply blames the version', async () => {

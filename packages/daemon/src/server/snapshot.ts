@@ -28,7 +28,9 @@ export interface SnapshotStore {
 }
 
 /** The platform the snapshot and the server info report (devices 4.5). */
-export const hostPlatform = (): 'macos' | 'linux' | 'unsupported' => process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : 'unsupported';
+/** The snapshot's and serverInfo's platform name (devices 第 19 节: win32 is `windows`, only the name; services stay unsupported there). */
+export const hostPlatform = (platform: NodeJS.Platform = process.platform): 'macos' | 'linux' | 'windows' | 'unsupported' =>
+  platform === 'darwin' ? 'macos' : platform === 'linux' ? 'linux' : platform === 'win32' ? 'windows' : 'unsupported';
 export async function createSnapshotStore(options: {
   service: Pick<AdminService, 'listBots' | 'listProjects' | 'codexSetup'>;
   jobs: () => Job[];

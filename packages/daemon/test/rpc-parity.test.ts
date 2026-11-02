@@ -40,8 +40,6 @@ function inventory(folderToken: string) {
     ['GET joined-groups', 'command', { type: 'listJoinedGroups', agentId: bot.appId }],
     ['POST bind-group', 'command', { type: 'bindGroup', agentId: bot.appId, groupId: project.chatId, projectName: project.name, folder: { kind: 'existing', folderToken }, tool: 'codex', conversation: 'threads' }],
     ['GET codex/setup', 'admin', { type: 'codexSetup' }],
-    ['POST codex/install', 'command', { type: 'installCodex' }],
-    ['POST codex/login', 'command', { type: 'startCodexLogin' }],
     ['GET codex/jobs/:id and register-qr status', 'snapshot', { type: 'get' }],
     ['DELETE codex/jobs/:id and register-qr', 'command', { type: 'cancelJob', jobId: 'fixture-job' }],
     ['GET register-qr/stream', 'command', { type: 'registerAgent' }],
@@ -73,7 +71,6 @@ describe('route inventory parity', () => {
     const service = fakeService({ setPermissionMode, listBots: async () => [{ ...bot, active }], listProjects: async () => [project], setBotEnabled: async (_id, enabled) => { active = enabled; return { ok: true, activation: 'applied', message: '' }; },
       pendingGroups: async () => ({ groups: [] }), joinedGroups: async () => ({ groups: [] }), bindGroup: async () => project,
       collaboration: async () => ({ project: { name: project.name, chatId: project.chatId, cwd: project.cwd, kind: project.kind, backend: project.backend, enabled: true, revision: 'project-token' } }),
-      startCodexJob: () => ({ id: 'fixture-job' }), codexJob: () => ({ id: 'fixture-job', type: 'install', state: 'succeeded' }),
       settings: { read: async () => host, save: async () => ({ kind: 'saved', section: { scope: { kind: 'host' }, section: 'execution', value: host.sections.execution }, effects: [] }), act: async () => ({ kind: 'unavailable', reason: { kind: 'readonly', reason: 'owner-offline', message: 'fixture' } }), models: async query => ({ backend: query.backend, models: [], state: 'unavailable', source: 'backend-provided', observedAt: new Date().toISOString(), titleEfforts: [] }) },
     });
     const fixture = await startFixture(service);

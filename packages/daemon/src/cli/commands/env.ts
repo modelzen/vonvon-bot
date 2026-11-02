@@ -94,13 +94,19 @@ export function envTool(value: string): EnvironmentTool {
 type Auth = { state: 'signedIn' | 'signedOut' | 'unknown'; message: string };
 type ScannedTool = EnvironmentToolState & { auth?: Auth };
 
-function authText(tool: ScannedTool): string {
-  if (!tool.auth) return '登录状态查不到';
-  if (tool.auth.state === 'signedIn') return '已登录';
-  if (tool.auth.state === 'unknown') return `登录状态不确定：${tool.auth.message}`;
-  // vonvon does not start Codex's or Claude's sign-in (docs/product.md 3.1, 2026-10-28)
-  if (tool.tool === 'lark-cli') return '没登录：运行 vonvon env login lark-cli';
-  return `没登录：在终端里运行 ${tool.tool === 'codex' ? 'codex login' : 'claude 登录'}`;
+/** lark-cli really signs in to Feishu; Codex and Claude only need to be set up, an account or a custom API (devices-ui-2 4.2). */
+export function authText(tool: Pick<ScannedTool, 'tool' | 'auth'>): string {
+  if (tool.tool === 'lark-cli') {
+    if (!tool.auth) return '登录状态查不到';
+    if (tool.auth.state === 'signedIn') return '已登录';
+    if (tool.auth.state === 'unknown') return `登录状态不确定：${tool.auth.message}`;
+    return '没登录：运行 vonvon env login lark-cli';
+  }
+  if (!tool.auth) return '配置状态查不到';
+  if (tool.auth.state === 'signedIn') return '可用';
+  if (tool.auth.state === 'unknown') return `确认不了：${tool.auth.message}`;
+  // vonvon does not set up Codex or Claude for the user (docs/product.md 3.1, 2026-10-28)
+  return `没配置好：在终端里运行 ${tool.tool} 配置（账号或自定义 API 都行）`;
 }
 
 function toolLines(tool: ScannedTool): string[] {
@@ -122,7 +128,7 @@ export async function runEnvScan(io: Io, daemon: Daemon = withDaemon): Promise<v
   const tools = await daemon(async call => {
     const { tools } = answer('读取本机环境', await environment(call, '读取本机环境', { type: 'scan' }), 'tools');
     const auths = await Promise.allSettled(tools.map(tool => tool.installation === 'missing' ? Promise.resolve(undefined)
-      : environment(call, `检查 ${LABEL[tool.tool]} 的登录`, { type: 'authStatus', tool: tool.tool })));
+      : environment(call, `检查 ${LABEL[tool.tool]} 的${tool.tool === 'lark-cli' ? '登录' : '配置'}`, { type: 'authStatus', tool: tool.tool })));
     return tools.map((tool, index): ScannedTool => {
       const read = auths[index];
       const auth = read?.status === 'fulfilled' && read.value?.kind === 'auth' ? { state: read.value.state, message: read.value.message } : undefined;
@@ -492,15 +498,15 @@ export async function runEnvBackendUninstall(id: string, io: Io, daemon: Daemon 
   print(io, [`✓ ${message}`], { message });
 }
 
-const LOGIN_STATE: Record<Reply<'backendLogin'>['state'], string> = { signedIn: '已登录', signedOut: '没登录', notRequired: '不用登录', unknown: '登录状态不确定' };
+export const LOGIN_STATE: Record<Reply<'backendLogin'>['state'], string> = { signedIn: '可用', signedOut: '没配置好', notRequired: '可用', unknown: '确认不了' };
 function accountText(account: BackendAccount): string {
   if (account.kind === 'subscription') return `订阅${account.planType ? ` ${account.planType}` : ''}`;
   if (account.kind === 'api') return `API${account.apiProvider ? `（${account.apiProvider}）` : ''}`;
   return account.kind === 'free' ? '免费' : '';
 }
-/** `vonvon env backend check <id> [--refresh]`: the web page's 检查登录; --refresh is 重新检测, else the daemon's last check. */
+/** `vonvon env backend check <id> [--refresh]`: the web page's 检查配置; --refresh is 重新检测, else the daemon's last check. */
 export async function runEnvBackendCheck(id: string, refresh: boolean, io: Io, daemon: Daemon = withDaemon): Promise<void> {
-  const reply = await daemon(async call => answer('检查登录', await environment(call, '检查登录', { type: 'backendLogin', id, refresh }, LONG), 'backendLogin'));
+  const reply = await daemon(async call => answer('检查配置', await environment(call, '检查配置', { type: 'backendLogin', id, refresh }, LONG), 'backendLogin'));
   const account = reply.account ? accountText(reply.account) : '';
   const human = [`${reply.id}  ${LOGIN_STATE[reply.state]}${account ? ` · ${account}` : ''}`, ...reply.message ? [`    ${reply.message}`] : []];
   print(io, human, { id: reply.id, state: reply.state, message: reply.message, ...(reply.account ? { account: reply.account } : {}) });
