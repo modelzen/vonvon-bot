@@ -1572,4 +1572,10 @@ it('launchd refusals the login-time switch can meet classify to their reasons', 
   await withLaunchd(async f => {
     expect(classifyServiceFailure((await f.service.install()).detail)).toBe('distribution');
   }, { distribution: async () => ({ kind: 'development', cliPath: '/src/packages/daemon/bin/vonvon.mjs' }) });
+  // Only Linux has a script-installed server (owner 2026-11-01, I6): launchd never writes a standalone plist.
+  await withLaunchd(async f => {
+    const result = await f.service.install();
+    expect(result).toMatchObject({ kind: 'install_refused', detail: 'Distribution cannot install a service' });
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  }, { distribution: async () => ({ kind: 'standalone', cliPath: '/srv/vonvon/releases/0.9.0/app/bin/vonvon.mjs', installRoot: '/srv/vonvon' }) });
 });
