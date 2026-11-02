@@ -1,4 +1,4 @@
-import { scheduleRequestSchema, type Agent, type Membership, type ScheduleReply, type ScheduleRequest, type ScheduleRunRecord, type ScheduleSpec, type ScheduledTaskView } from '@vonvon/protocol';
+import { scheduleRequestSchema, type Agent, type DesktopSnapshot, type ScheduleReply, type ScheduleRequest, type ScheduleRunRecord, type ScheduleSpec, type ScheduledTaskView } from '@vonvon/protocol';
 import { badArgs, CommandError } from '../command-error';
 import { formatAt, normalizeTimeZone, parseCron, parseLocal } from '../../bot/schedule/time';
 import { pickBot, pickGroup, print, want, withDaemon, type Daemon, type Io } from '../daemon-client';
@@ -148,8 +148,12 @@ const UNBOUND = new Set<ScheduleAction>(['list', 'runs', 'delete', 'pause']);
  * `session`: a Bot session's snapshot is cut to what it reaches (a comment's to no group), so a group id it does not
  * show goes as it is and the daemon says why not (`not-group` outside a group, out of reach elsewhere; Codex review 230-3).
  */
-function chatOf(memberships: readonly Membership[], bot: Agent, group: string, action: ScheduleAction, session: boolean): string {
+function chatOf(snapshot: Pick<DesktopSnapshot, 'memberships' | 'projects'>, bot: Agent, group: string, action: ScheduleAction, session: boolean): string {
+  const { memberships } = snapshot;
   const bound = memberships.some(m => m.agentId === bot.id && (m.groupId === group || m.name === group));
+  // A group session's snapshot lists no bindings (s1b), only its group's project: its name stands for the group.
+  const project = !bound && session ? snapshot.projects?.find(each => each.name === group)?.bindings.find(binding => binding.agentId === bot.id) : undefined;
+  if (project) return project.groupId;
   // The bot process still checks the scope: an id it has no such task under is not-found.
   return !bound && (session || UNBOUND.has(action)) && /^oc_/.test(group) ? group : pickGroup(memberships, bot, group).groupId;
 }
@@ -184,7 +188,7 @@ export async function runSchedule(action: ScheduleAction, target: ScheduleTarget
     };
     if (all) return { reply: await send({ action: 'listBot' }), names: new Map(snapshot.memberships.filter(m => m.agentId === bot.id).map(m => [m.groupId, m.name])) };
     const session = info !== undefined && 'principal' in info && info.principal?.startsWith('bot-session:') === true;
-    const chatId = chatOf(snapshot.memberships, bot, target.group!, action, session);
+    const chatId = chatOf(snapshot, bot, target.group!, action, session);
     // A list before the change itself is only a read: a lost reply to it changed nothing.
     const list = async () => want(ACTIONS.list.what, await send({ action: 'list', chatId }, ACTIONS.list), 'tasks');
     const find = async () => {

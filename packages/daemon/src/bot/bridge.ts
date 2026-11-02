@@ -1,5 +1,5 @@
 import { createBridgeChannel } from './bridge-channel';
-import { APP_ROLE_CACHE_MS, createAppRoleRefresher, getAppRoleSnapshot } from '../config/app-roles';
+import { APP_ROLE_CACHE_MS, APP_ROLE_RETRY_MS, createAppRoleRefresher, getAppRoleSnapshot } from '../config/app-roles';
 import type { CollaborationRequest } from '../admin/collaboration';
 import type { HostSettings } from '../admin/settings-types';
 import type { AdminWriteResult } from '../admin/ops';
@@ -121,9 +121,10 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   const scheduleRoles = (): void => {
     const cached = getAppRoleSnapshot(app.id, app.tenant);
     const remaining = cached ? cached.fetchedAt + APP_ROLE_CACHE_MS - Date.now() : 0;
+    // No fresh result (the last refresh failed, or none ever came): try again sooner, within the trust window (252-4).
     rolesTimer = setTimeout(() => {
       void roles.refresh().then(() => { if (!rolesStopped) scheduleRoles(); });
-    }, remaining > 0 && remaining <= APP_ROLE_CACHE_MS ? remaining : APP_ROLE_CACHE_MS);
+    }, remaining > 0 && remaining <= APP_ROLE_CACHE_MS ? remaining : APP_ROLE_RETRY_MS);
     rolesTimer.unref();
   };
   scheduleRoles();

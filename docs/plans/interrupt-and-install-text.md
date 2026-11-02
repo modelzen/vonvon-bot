@@ -134,3 +134,31 @@ JP-VPS 上跑 daemon、desktop、ui 的 typecheck 和上面的测试文件。不
 6. `RestartSec` 没从 5 改成 2：和本片的时限无关，留给以后。
 7. `vonvon service install` 的输出整理成一句"已在后台运行，开机自动启动。"，linger 的问句和开不了时的提示改成人话；原来那几行 systemd、linger 细节只留在 `vonvon service status` 和 `--json` 里。
 8. `provider-lock-retention` 原来"停不下来就一直占着锁"的断言改成：30 秒内照旧占着，到 30 秒退出（退出码 1，进程结束由系统放锁），另加一条测试；它的就绪等待放宽了，这个测试在 JP-VPS 上单独跑时，集成分支上原来就会卡在就绪那一步。
+
+## Codex 审查后改了什么（任务 259、260）
+
+两份审查都在 `4b942f19` 上做：任务 259 审整个 diff、权限和文字（[评论](https://github.com/modelzen/vonvon-bot/pull/657#issuecomment-6576027721)），任务 260 审子进程、时间上限和退出码（[评论](https://github.com/modelzen/vonvon-bot/pull/657#issuecomment-6575975355)）。一共 5 条 P2，没有 P1、P3。每条都先照审查里的复现写了测试，测试在原代码上失败，改完通过。按真实用法看，5 条都会出错，都接受。
+
+1. **任务 259 第 1 条：`vonvon update` 的"会中断"提示晚于重启请求，或者根本不打。** 接受。全局 npm 的服务端要等 `npm install -g` 装完才回 `applyCoreUpdate`，回完马上重启，原来这句要等第一次读到进度才打；第一次读到的已经是"完成"时就不打了。改法：
+   - 文字模式下，发 `applyCoreUpdate` 之前先问服务端 `checkCoreUpdate`（全局 npm 的本来就问过，直接用）。
+   - 真要升级才在请求之前打一次：有新版本，而且没给 `--to` 或者 `--to` 就是这个新版本；或者降到正在跑的以外的版本。已是最新、`--to` 和发布清单对不上的都不打。
+   - 读进度时不再管这句。`--json` 不多问、不打，输出不变。
+   - 测试：`cli-update.test.ts` 的 "says the conversations will be interrupted before it asks the server to update, once, when it does update"；已有测试的夹具改成服务端回答 `checkCoreUpdate`。
+2. **任务 259 第 2 条：8 秒到点以后卡片才写成功，下次启动还会补问一次。** 接受。`dropped.json` 每个群只有一条（最新那条消息和条数），不能整群删。改法：
+   - `restart-dropped.ts` 的 `appendSync` 按群记下追加前的那条，以及之后每次追加的消息和时间。
+   - 新的 `retractSync`：卡片晚到、写成功时，把这条消息拿掉，用"追加前的那条 + 剩下追加的"重算这个群。什么都不剩就恢复原样；原来没有这个群就删掉。重算出的新内容换一个 revision，回复用新的 uuid。
+   - 只撤这个进程在关停开始后追加的；关停开始时存的（排队没开始的）不动，同群别的消息照旧补问。
+   - 测试：`restart-dropped-orchestrator.test.ts` 新增 "a card written after the drain stopped waiting takes its turn off the list again, and only it"；原来 "the drain stops waiting at its limit" 的最后一段改成卡片晚到后名单清空；`restart-dropped.test.ts` 新增 "takes an appended message back out"。
+3. **任务 260 第 1 条：首轮还在准备时到的消息可能漏记。** 接受。图片下载、会话 resume 慢过 8 秒时，原来要等准备做完走到 `launchRun` 或 catch 才补记，进程先退出就没人记了。改法：
+   - 预留会话时就把触发消息记进 `inFlight`；排队的那一轮从出队起就记，不再等 turn/start 发出。
+   - 关停开始时它进 `cutShort`，8 秒到点还没结果就写进 `dropped.json`。
+   - 准备做完以后再补记时按消息 id 去重：`resendKept` 记着每条消息是关停开始时存的、后来追加的、还是卡片已经说过的，同一条只记一次，卡片说过的不记。等槽位的那一轮同时在 `waiting` 和 `inFlight` 里，也只记一次；崩溃时的保存同样去重。
+   - 测试："a first turn still being prepared when the drain stops waiting is kept, once"、"a message whose image is still downloading when the drain stops waiting is kept, once"。
+4. **任务 260 第 2 条：初始卡片还没建好时，3 秒宽限前没有先发 interrupt。** 接受。turn/start 在 `runStreamed` 里就发出了，⏹ 入口要等建卡、adopt 话题这几个飞书请求做完才装上，这期间的停止什么也不发。改法：
+   - `watchdog.ts` 新增 `createEarlyInterrupt`，`runStreamed` 之后马上装成这一轮的停止入口。停止时立即对这一轮发 turn/interrupt；turn id 还没到（Codex 的在 turn/start 的应答里，毫秒级）就每 25 毫秒看一次，最多 5 秒。
+   - 卡片建好、⏹ 入口装上时，已经有停止的就接着走 ⏹ 的中断：同一轮不再重复发，卡片写上原因。建卡失败的路径也不重复发。
+   - 测试："a stop while the turn's card is being created interrupts the turn before the agent is closed"；`watchdog.test.ts` 的 "createEarlyInterrupt"。
+5. **任务 260 第 3 条：升级助手的就绪等待不算在 host 的 30 秒里。** 接受。Linux 服务管理下升级时，原来要等助手进了自己的 scope（最多 25 秒）才开始收尾，30 秒从那时才开始算，最坏约 55 秒，Bot 的中断也跟着晚。改法：
+   - `requestRestart` 起了助手就开始收尾，Bot 马上中断，30 秒从请求算起。
+   - 助手就绪只挡释放和退出：Gate L 本来就在 `complete()` 里挡着，计划 Gate L 一节也写的是挡释放。
+   - 测试：`service-launch.test.ts` 新增 "counts the host stop limit from the update restart request, the helper readiness wait included"；"keeps an empty drain pending until scope and exec proofs agree in one poll" 改成收尾马上开始、释放仍等就绪。

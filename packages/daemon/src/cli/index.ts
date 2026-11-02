@@ -54,7 +54,10 @@ const LEASED = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon res
   'update']);
 /**
  * devices 8.3 and 5.3: what only the person at this computer runs (the trust root, file locks, the service manager,
- * remote access, pairing), refused in a Bot's session before anything runs. `update` refuses in
+ * remote access, pairing), refused in a Bot's session before anything runs. `service status` too (Codex review 256-1):
+ * it reads the service manager and the files, not the daemon, so its definition and log paths went round a group's
+ * whitelist (`machine.status` is no session's). `daemon status` stays: connectLocal finds the daemon through it, and in a
+ * session it says only whether one runs and where (runStatus). `update` refuses in
  * runUpdateCommand too (I3-SEC-3); `__standalone-setup` and `__standalone-teardown` are the install scripts' (server-2 4.3):
  * the first switches `current` to a kept release, an update by another name.
  * `secrets get` is not here: the session's lark-cli resolves its App Secret through it (secrets-get.test.ts). Nor are the
@@ -62,8 +65,8 @@ const LEASED = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon res
  * daemon started inside a session still carries the markers in; refusing them there would leave a restart or an update
  * with no daemon. For the same reason a `daemon run` the supervisor starts (its IPC channel) is not refused.
  */
-export const LOCAL_ONLY: ReadonlySet<string> = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'service install', 'service uninstall',
-  'update', 'remote status', 'remote enable', 'remote disable', 'remote port', 'pair', 'clients ls', 'clients rename', 'clients revoke', 'device rename',
+export const LOCAL_ONLY: ReadonlySet<string> = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'service install', 'service uninstall', 'service status',
+  'update', 'remote status', 'remote enable', 'remote disable', 'remote port', 'remote candidates', 'pair', 'clients ls', 'clients rename', 'clients revoke', 'device rename',
   'bot repair-dir', 'open', '__standalone-setup', '__standalone-teardown']);
 /** A command's full name without `vonvon`: `daemon restart`, `pair`. */
 const commandPath = (command: Command): string => {
@@ -85,7 +88,7 @@ export function parseScope(spec: string): Scope {
   if (!scope.bot) throw wrong();
   return { bot: scope.bot, ...(scope.group ? { group: scope.group } : {}) };
 }
-program.option('--scope <spec>', "The Bot session's scope, bot=<appId>[,group=<chatId>]; a Bot session's commands must carry it");
+program.option('--scope <spec>', "The Bot session's scope, bot=<appId>[,group=<chatId>]; a Bot session's commands must carry it: --scope \"$VONVON_SCOPE\"");
 program.hook('preAction', async (_command, action) => {
   const path = commandPath(action);
   const supervised = path === 'daemon run' && typeof process.send === 'function';
@@ -559,18 +562,26 @@ covers(clients.command('revoke <clientId>'), 'device.revokeClient').description(
 const device = program.command('device').description("This computer's device identity");
 covers(device.command('rename <name>'), 'device.rename').description('Rename this computer as paired clients see it').option(...JSON_FLAG)
   .action(async (name: string, options: Json) => { await (await devices()).runDeviceRename(name, io(options)); });
-// devices 4.2 and D3 4.8: the addresses other computers reach this one on, and the port
+// devices 4.2, D3 4.8 and A1: the one address other computers reach this one on, and the port
 const remotes = async () => import('./commands/remote');
-const remote = program.command('remote').description('Let other computers connect to this one: the addresses and the port');
-covers(remote.command('status'), 'device.status').description('Show the opened addresses, whether each is listened on, and the clients').option(...JSON_FLAG)
+const remote = program.command('remote').description('Let other computers connect to this one: the address and the port');
+covers(remote.command('status'), 'device.status').description('Show the opened address, whether it is listened on, and the clients').option(...JSON_FLAG)
   .action(async (options: Json) => { await (await remotes()).runRemote('status', {}, io(options)); });
-covers(remote.command('enable [ip]'), 'device.enable').description("Accept paired clients on this address (a literal IP), or this machine's Tailscale address")
-  .option('--tailscale', "Use this machine's Tailscale address").option('--allow-public', 'Confirm a public or carrier (CGNAT) address').option(...JSON_FLAG)
-  .action(async (ip: string | undefined, options: Json & { tailscale?: boolean; allowPublic?: boolean }) => {
-    await (await remotes()).runRemote('enable', { ...(ip === undefined ? {} : { host: ip }), tailscale: Boolean(options.tailscale), allowPublic: Boolean(options.allowPublic) }, io(options));
+covers(remote.command('enable [ip]'), 'device.enable').description('Accept paired clients on this address (a literal IP); one address only, another one replaces it. With no address, pick one in a terminal')
+  .option('--allow-public', 'Confirm a public or carrier (CGNAT) address').addOption(new Option('--tailscale').hideHelp()).option(...JSON_FLAG)
+  .addHelpText('after', `
+Examples:
+  vonvon remote enable                      # in a terminal: pick from this computer's addresses
+  vonvon remote enable "$(tailscale ip -4)"
+  vonvon remote enable 192.168.1.23`)
+  .action(async (ip: string | undefined, options: Json & { allowPublic?: boolean; tailscale?: boolean }) => {
+    await (await remotes()).runRemote('enable', { ...(ip === undefined ? {} : { host: ip }), allowPublic: Boolean(options.allowPublic), tailscale: Boolean(options.tailscale) }, io(options));
   });
-covers(remote.command('disable <ip>'), 'device.disable').description('Stop accepting connections on this address; its connections end').option(...JSON_FLAG)
-  .action(async (ip: string, options: Json) => { await (await remotes()).runRemote('disable', { host: ip }, io(options)); });
+remote.command('candidates').description('List the addresses other computers could reach this one on, the same list `remote enable` picks from')
+  .option('--all', 'Also list virtual bridges, proxy fake IPs and self-assigned addresses').option(...JSON_FLAG)
+  .action(async (options: Json & { all?: boolean }) => { await (await remotes()).runRemote('candidates', { all: Boolean(options.all) }, io(options)); });
+covers(remote.command('disable [ip]'), 'device.disable').description('Stop accepting connections on this address, or the open one; its connections end').option(...JSON_FLAG)
+  .action(async (ip: string | undefined, options: Json) => { await (await remotes()).runRemote('disable', ip === undefined ? {} : { host: ip }, io(options)); });
 covers(remote.command('port <port>'), 'device.setPort').description('Change the remote port (default 7767); paired clients pair again').option(...JSON_FLAG)
   .action(async (port: string, options: Json) => { await (await remotes()).runRemote('port', { port }, io(options)); });
 const feishu = program.command('feishu').description('Read Feishu groups and members');

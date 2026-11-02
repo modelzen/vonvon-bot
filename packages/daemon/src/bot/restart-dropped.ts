@@ -72,13 +72,27 @@ function write(file: string, entries: readonly DroppedEntry[]): void {
   writeAtomicSync(dirname(file), basename(file), JSON.stringify({ v: 1, entries }));
 }
 
+/** A dropped message as a group's entry of its own, or nothing when it does not fit the file's shape. */
+function freshEntry(item: DroppedOrigin, droppedAt: number): DroppedEntry | undefined {
+  const entry = entrySchema.safeParse({ ...item, count: 1, droppedAt });
+  return entry.success ? entry.data : undefined;
+}
+/** Two entries of one group as one: the newer message's id and place, the counts added up, a new revision. */
+function merged(had: DroppedEntry, entry: DroppedEntry): DroppedEntry {
+  const newer = entry.at >= had.at ? entry : had;
+  return { ...newer, count: Math.min(DROPPED_MAX_COUNT, had.count + entry.count), droppedAt: Math.max(had.droppedAt, entry.droppedAt), revision: (had.revision ?? 0) + 1 };
+}
+/** Newest first, and past 200 groups the newest are kept. */
+const newestGroups = (entries: readonly DroppedEntry[]): DroppedEntry[] =>
+  [...entries].sort((a, b) => b.droppedAt - a.droppedAt || b.at - a.at).slice(0, DROPPED_MAX_GROUPS);
+
 /**
  * Merge `items` (what this shutdown dropped) into the file, one entry per group: the newest message's id and place stay,
  * counts add up. Entries older than a day go, and past 200 groups the newest are kept. Nothing is touched when `items`
  * is empty; a damaged file is overwritten. Returns how many groups `items` had.
  */
 export function recordDroppedSync(file: string, items: readonly DroppedOrigin[], now: number, onCorrupt?: () => void): number {
-  const fresh = items.flatMap(item => { const entry = entrySchema.safeParse({ ...item, count: 1, droppedAt: now }); return entry.success ? [entry.data] : []; });
+  const fresh = items.flatMap(item => freshEntry(item, now) ?? []);
   if (!fresh.length) return 0;
   const loaded = load(file);
   if (loaded === 'corrupt') onCorrupt?.();
@@ -86,13 +100,36 @@ export function recordDroppedSync(file: string, items: readonly DroppedOrigin[],
   const groups = new Map<string, DroppedEntry>();
   for (const entry of [...old, ...fresh]) {
     const had = groups.get(entry.chatId);
-    if (!had) { groups.set(entry.chatId, entry); continue; }
-    const newer = entry.at >= had.at ? entry : had;
-    groups.set(entry.chatId, { ...newer, count: Math.min(DROPPED_MAX_COUNT, had.count + entry.count), droppedAt: Math.max(had.droppedAt, entry.droppedAt), revision: (had.revision ?? 0) + 1 });
+    groups.set(entry.chatId, had ? merged(had, entry) : entry);
   }
-  const kept = [...groups.values()].sort((a, b) => b.droppedAt - a.droppedAt || b.at - a.at).slice(0, DROPPED_MAX_GROUPS);
-  write(file, kept);
+  write(file, newestGroups([...groups.values()]));
   return new Set(fresh.map(entry => entry.chatId)).size;
+}
+
+/** A group's entry in the file, if it has one. */
+function groupEntry(file: string, chatId: string): DroppedEntry | undefined {
+  const loaded = load(file);
+  return typeof loaded === 'object' ? loaded.entries.find(entry => entry.chatId === chatId) : undefined;
+}
+
+/**
+ * Puts a group's entry back together from `before`, the entry it had, and `items`, what was merged into it since, each
+ * with when (review 259): what {@link recordDroppedSync} would have written without the messages taken out. With
+ * neither, the group leaves the file; with only `before`, it is that again, word for word. Another rebuilt entry gets a
+ * revision past the file's, so its reply is a new one (droppedUuid). A missing or damaged file is left as it is.
+ */
+function rebuildGroupSync(file: string, chatId: string, before: DroppedEntry | undefined, items: ReadonlyArray<{ origin: DroppedOrigin; at: number }>, now: number): void {
+  const loaded = load(file);
+  if (typeof loaded !== 'object') return;
+  const current = loaded.entries.find(entry => entry.chatId === chatId);
+  let entry = before && now - before.droppedAt <= DROPPED_MAX_AGE_MS ? before : undefined;
+  for (const item of items) {
+    const fresh = freshEntry(item.origin, item.at);
+    if (fresh) entry = entry ? merged(entry, fresh) : fresh;
+  }
+  if (entry && entry !== before) entry = { ...entry, revision: (current?.revision ?? 0) + 1 };
+  const others = loaded.entries.filter(other => other.chatId !== chatId);
+  write(file, entry ? newestGroups([...others, entry]) : others);
 }
 
 /** The entries of the last day, left in the file; older ones are taken out of it and counted as `stale`. A damaged file
@@ -184,8 +221,13 @@ export interface DroppedReplies {
   start(): void;
   /** At shutdown: merge what is lost into the file, synchronously, and start no more replies. Once only. */
   saveSync(lost: readonly DroppedOrigin[], why: 'shutdown' | 'crash'): void;
-  /** A first turn that was still preparing when shutdown saved the queues. */
+  /** After {@link saveSync}: a first turn that was still preparing, or a cut-short turn whose card did not say so in time. */
   appendSync(origin: DroppedOrigin): void;
+  /**
+   * A message {@link appendSync} kept whose turn's card got through after all (review 259): it leaves the file again, and
+   * the other messages of its group stay. False when this process did not append it.
+   */
+  retractSync(origin: DroppedOrigin): boolean;
 }
 
 /**
@@ -209,7 +251,9 @@ export function createDroppedReplies(deps: {
   const timers = new Set<NodeJS.Timeout>();
   let started = false;
   let saved = false;
-  const chat = (entry: DroppedEntry): string => entry.chatId.slice(-6);
+  /** What appendSync merged into each group, each with when, and the group's entry before the first of it (retractSync). */
+  const appended = new Map<string, { before: DroppedEntry | undefined; items: Array<{ origin: DroppedOrigin; at: number }> }>();
+  const chat = (entry: Pick<DroppedEntry, 'chatId'>): string => entry.chatId.slice(-6);
   const corrupt = (): void => log.warn('bridge', 'dropped-corrupt', {});
   const settle = (entry: DroppedEntry): void => {
     try { settleDroppedSync(file, entry); }
@@ -280,9 +324,25 @@ export function createDroppedReplies(deps: {
     appendSync(origin) {
       if (!saved) return;
       try {
-        const groups = recordDroppedSync(file, [origin], now(), corrupt);
-        if (groups) log.info('bridge', 'dropped-appended', { groups });
+        const group = appended.get(origin.chatId) ?? { before: groupEntry(file, origin.chatId), items: [] };
+        const at = now();
+        const groups = recordDroppedSync(file, [origin], at, corrupt);
+        if (!groups) return;
+        group.items.push({ origin, at });
+        appended.set(origin.chatId, group);
+        log.info('bridge', 'dropped-appended', { groups });
       } catch (error) { log.fail('bridge', error, { phase: 'dropped-append' }); }
+    },
+    retractSync(origin) {
+      const group = appended.get(origin.chatId);
+      const index = group ? group.items.findIndex(item => item.origin.messageId === origin.messageId) : -1;
+      if (!group || index < 0) return false;
+      group.items.splice(index, 1);
+      try {
+        rebuildGroupSync(file, origin.chatId, group.before, group.items, now());
+        log.info('bridge', 'dropped-retracted', { chat: chat(origin), left: group.items.length });
+      } catch (error) { log.fail('bridge', error, { phase: 'dropped-retract' }); }
+      return true;
     },
   };
 }

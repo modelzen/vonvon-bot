@@ -7,6 +7,14 @@ import type { AppCredentials } from './schema';
 import { log } from '../core/logger';
 
 export const APP_ROLE_CACHE_MS = 10 * 60_000;
+/** A refresh that failed is tried again this much later, so one failure still leaves a second try within the trust window. */
+export const APP_ROLE_RETRY_MS = APP_ROLE_CACHE_MS / 2;
+/**
+ * How long a successful refresh vouches for the administrators Feishu named: two refresh intervals (audit 252-4). Past it,
+ * with every refresh since failing, they are no longer taken as administrators; the owner, the scanner and this machine's
+ * own list stay as they are.
+ */
+export const APP_ROLE_TRUST_MS = 2 * APP_ROLE_CACHE_MS;
 const snapshotSchema = z.object({
   appId: z.string().min(1), tenant: z.enum(['feishu', 'lark']),
   fetchedAt: z.number().finite().nonnegative(), ownerOpenId: z.string().min(1).optional(),
@@ -21,6 +29,16 @@ export function getAppRoleSnapshot(appId: string, tenant?: AppCredentials['tenan
     const value = snapshotSchema.parse(JSON.parse(readFileSync(fileFor(appId), 'utf8')));
     return value.appId === appId && (!tenant || value.tenant === tenant) ? value : undefined;
   } catch { return undefined; }
+}
+
+/**
+ * The administrators and developers Feishu named, while the refresh that read them is recent enough to vouch for them (a
+ * snapshot read at start-up included). Its age counts both ways: a clock set back makes it look from the future.
+ */
+export function trustedFeishuAdmins(snapshot: AppRoleSnapshot | undefined, now = Date.now()): readonly string[] {
+  if (!snapshot) return [];
+  const age = now - snapshot.fetchedAt;
+  return age < APP_ROLE_TRUST_MS && age > -APP_ROLE_TRUST_MS ? snapshot.admins : [];
 }
 
 const tokenSchema = z.object({ code: z.literal(0), tenant_access_token: z.string().min(1) });
@@ -53,7 +71,10 @@ export async function fetchAppRoles(app: AppCredentials, secret: string, signal:
   };
 }
 
-/** One refresh at a time; failures preserve the complete previous result. */
+/**
+ * One refresh at a time; failures keep the previous result on disk, which {@link trustedFeishuAdmins} stops vouching for
+ * once it is {@link APP_ROLE_TRUST_MS} old.
+ */
 export function createAppRoleRefresher(app: AppCredentials, secret: string,
   read = fetchAppRoles,
 ): { refresh: () => Promise<void>; stop: () => Promise<void> } {
@@ -67,7 +88,7 @@ export function createAppRoleRefresher(app: AppCredentials, secret: string,
     const now = Date.now();
     const cached = getAppRoleSnapshot(app.id, app.tenant);
     if ((cached && now >= cached.fetchedAt && now - cached.fetchedAt < APP_ROLE_CACHE_MS)
-      || (lastAttempt && now - lastAttempt < APP_ROLE_CACHE_MS)) return Promise.resolve();
+      || (lastAttempt && now - lastAttempt < APP_ROLE_RETRY_MS)) return Promise.resolve();
     lastAttempt = now;
     pending = (async () => {
       try {

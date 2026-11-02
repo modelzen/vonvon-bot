@@ -96,6 +96,15 @@ describe('local WebSocket handshake', () => {
       await client.ready();
       expect(client.frames[0]).toMatchObject({ protocolVersion: PROTOCOL_VERSION, principal: 'bot-session:group' });
       await client.close();
+      // Codex review 256-2. main 必败: a session's hello named the device, its machine id, platform and capabilities.
+      // Its command line reads the protocol (a version check) and who it is; a group's, a comment's and a private chat's alike.
+      for (const [place, chatId, sessionId] of [['group', 'oc_y', 'ses_1111111111111111'], ['comment', undefined, 'ses_2222222222222222'], ['dm', 'oc_dm', 'ses_3333333333333333']] as const) {
+        const issued = fixture.sessionTokens.issue({ appId: 'cli_x', place, ...(chatId ? { chatId } : {}), sessionId });
+        const session = await socketClient(fixture.api.port, issued);
+        await session.ready();
+        expect(session.frames[0]).toEqual({ type: 'serverInfo', version: expect.any(String), protocolVersion: PROTOCOL_VERSION, principal: `bot-session:${place}` });
+        await session.close();
+      }
       const forged = `${token.slice(0, -1)}${token.endsWith('A') ? 'B' : 'A'}`;
       for (const credential of [forged, 'vs1.ses_0123456789abcdef.short', `vs1.ses_ffffffffffffffff.${'a'.repeat(43)}`]) {
         const bad = await socketClient(fixture.api.port, credential);

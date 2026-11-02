@@ -46,8 +46,9 @@ describe('entry lifecycle and authorization', () => {
     const b = entries.issue({ kind: 'p2p', chatId: 'private-dm' });
     const ta = thread(); a.attach(ta); b.attach(thread()); entries.openTurn(ta, person);
     const aa = await a.call('session_info', {}), bb = await b.call('session_info', {});
-    expect(aa).toMatchObject({ ok: true, result: { v: 1, place: 'group', turn: 'person', settings: { allowed: false, reason: 'not-dm' } } });
-    expect(bb).toMatchObject({ ok: true, result: { place: 'p2p', turn: 'none' } });
+    // settings-dm-only: only a private chat's session_info says anything about settings
+    expect(aa).toEqual({ ok: true, result: { v: 1, place: 'group', turn: 'person' } });
+    expect(bb).toEqual({ ok: true, result: { v: 1, place: 'p2p', turn: 'none', settings: { allowed: false, reason: 'not-human-turn' } } });
     expect(JSON.stringify([aa, bb])).not.toMatch(/private-chat|private-dm|admin|m1/);
     entries.closeAll('shutdown');
   });
@@ -64,6 +65,18 @@ describe('entry lifecycle and authorization', () => {
     expect(write).not.toHaveBeenCalled();
     f.entry.revoke('closed');
     expect(() => names()).toThrow();
+  });
+  // settings-dm-only: a read kept to private chats (settings_get, settings_access) is neither listed nor called elsewhere
+  it.each(['group', 'doc', 'p2p'] as const)('lists and calls a private chat\'s read only there: %s', async kind => {
+    const run = vi.fn(async () => 'dm read');
+    const dmRead: AgentTool = { name: 't_dm_read', class: 'read', places: ['p2p'], description: 'fixture dm read', input: z.object({}), run };
+    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => false, tools: [read, dmRead] });
+    const entry = entries.issue({ kind, ...(kind === 'group' ? { chatId: 'oc_a' } : {}) });
+    const t = thread(); entry.attach(t); entries.openTurn(t, person);
+    expect(entry.tools().map(spec => spec.name)).toEqual(kind === 'p2p' ? ['t_read', 't_dm_read'] : ['t_read']);
+    expect(await entry.call('t_dm_read', {})).toEqual(kind === 'p2p' ? { ok: true, result: 'dm read' } : { ok: false, code: 'unknown-tool', message: '没有这个工具。' });
+    expect(run).toHaveBeenCalledTimes(kind === 'p2p' ? 1 : 0);
+    entries.closeAll('shutdown');
   });
   it('permits static discovery pending attach, but no calls', async () => {
     const run = vi.fn(async () => 'ok'); const f = setup({ attached: false, open: false, run });

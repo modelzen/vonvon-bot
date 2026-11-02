@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Socket } from 'node:net';
 import { PROTOCOL_VERSION, type AddressKind, type CloseReason } from '@vonvon/protocol';
 import type { log as logger } from '../core/logger';
-import { exposure, hasAddress, hostHeader, interfaceFor, type Interfaces } from '../remote/address';
+import { exposure, hasAddress, hostHeader, interfaceFor, overlayOf, type Interfaces } from '../remote/address';
 import type { RemoteAddress, RemoteConfig } from '../remote/config';
 import type { RateLimiter } from '../remote/rate-limit';
 import { createSecureSocketServer, type SecureDeps, type SecureSocketServerOptions } from './secure-socket';
@@ -38,6 +38,7 @@ export interface RemoteListenerDeps {
 const waitingFor = (host: string): string => `等待地址 ${host} 出现`;
 const portBusy = (port: number): string => `端口 ${port} 被占用，每 15 秒重试；可用 \`vonvon remote port <n>\` 换端口`;
 const networkChanged = (host: string): string => `这台设备所在的网络变了（之前在另一个局域网开启了 ${host}）。确认现在的网络是你信任的，再重新开启。`;
+const overlayLeft = (host: string): string => `${host} 现在不在组网工具的网卡上了（可能是别的网络分到了同一个地址）。确认现在的网络是你信任的，再重新开启。`;
 const HEALTH = JSON.stringify({ ok: true, protocolVersion: PROTOCOL_VERSION });
 
 interface Entry {
@@ -111,11 +112,23 @@ export function createRemoteListeners(deps: RemoteListenerDeps): RemoteListeners
     const network = await deps.networkIdentity(current);
     return network === undefined ? 'unknown' : network === address.network ? 'same' : 'changed';
   }
+  /**
+   * A1: an overlay address stays one only on a network tool's interface (address.ts `overlayOf`). Which one does not
+   * matter: macOS numbers its tunnels anew (utun3 one day, utun5 the next), so the name is not compared and the owner is
+   * not asked after every restart. The same IP on Wi-Fi or a cable is another network handing it out, as with a LAN.
+   */
+  function overlayCheck(address: RemoteAddress): 'absent' | 'same' | 'changed' {
+    const current = interfaceFor(address.host, deps.interfaces())?.name;
+    if (current === undefined) return 'absent';
+    return overlayOf(current) ? 'same' : 'changed';
+  }
   /** A LAN address binds only on the network it was opened on: another one waits for the owner, one not known yet (no
-   * route or gateway seen) waits like a missing address; a missing address tries, and waits. */
+   * route or gateway seen) waits like a missing address; a missing address tries, and waits. An overlay address binds
+   * only on a network tool's interface. */
   async function ensure(entry: Entry): Promise<void> {
     if (!live(entry)) return;
     const { address } = entry;
+    if (address.kind === 'overlay' && overlayCheck(address) === 'changed') { set(entry, 'needs-confirmation', overlayLeft(address.host)); return; }
     if (address.kind === 'lan') {
       const check = await lanCheck(address);
       if (!live(entry)) return;
@@ -201,13 +214,15 @@ export function createRemoteListeners(deps: RemoteListenerDeps): RemoteListeners
     });
     return entry.binding;
   }
-  /** An address that left this machine (devices 4.2) goes back to waiting; a LAN address on another interface or network
-   * now waits for the owner. Either way its connections end with 4006. A network not seen for a moment keeps it. */
+  /** An address that left this machine (devices 4.2) goes back to waiting; a LAN address on another interface or network,
+   * or an overlay one off a network tool's interface, now waits for the owner. Either way its connections end with 4006.
+   * A network not seen for a moment keeps it. */
   async function watch(entry: Entry): Promise<void> {
     if (!live(entry) || entry.state !== 'listening') return;
     const { address } = entry;
     let next: { state: RemoteAddressState; detail: string } | undefined;
     if (!hasAddress(address.host, deps.interfaces())) next = { state: 'waiting', detail: waitingFor(address.host) };
+    else if (address.kind === 'overlay' && overlayCheck(address) === 'changed') next = { state: 'needs-confirmation', detail: overlayLeft(address.host) };
     else if (address.kind === 'lan' && await lanCheck(address) === 'changed') next = { state: 'needs-confirmation', detail: networkChanged(address.host) };
     if (!live(entry)) return;
     if (!next) { later(entry, watchMs, () => watch(entry)); return; }
