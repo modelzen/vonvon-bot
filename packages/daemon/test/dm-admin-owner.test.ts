@@ -66,7 +66,7 @@ describe('the private chat\'s administrators card', () => {
     try {
       await orchestrator.dispatcher.handle(click(ADMIN, { a: DM.admins }));
       const readOnly = await patched();
-      expect(readOnly).toContain('本机管理员名单只有主人能改。');
+      expect(readOnly).toContain('本机管理员名单只有飞书应用的拥有者能改。');
       expect(readOnly).not.toContain(DM.rmAdmin);
       expect(readOnly).not.toContain(DM.addAdminForm);
       fixture.update.mockClear();
@@ -81,7 +81,7 @@ describe('the private chat\'s administrators card', () => {
     const orchestrator = app();
     try {
       await orchestrator.dispatcher.handle(click(ADMIN, { a: DM.rmAdmin, u: OTHER_ADMIN }));
-      expect(await patched()).toContain('本机管理员名单只有主人能改。');
+      expect(await patched()).toContain('本机管理员名单只有飞书应用的拥有者能改。');
       expect(await saved()).toEqual([ADMIN, OTHER_ADMIN]);
       expect(cfg.preferences?.access?.admins).toEqual([ADMIN, OTHER_ADMIN]);
       fixture.update.mockClear();
@@ -97,7 +97,7 @@ describe('the private chat\'s administrators card', () => {
       await orchestrator.dispatcher.handle(click(ADMIN, { a: DM.addAdminForm }));
       expect(await patched()).not.toContain(DM.addAdminSubmit);
       await orchestrator.dispatcher.handle(click(ADMIN, { a: DM.addAdminSubmit }, { open_id: NEWCOMER }));
-      expect(await sent()).toContain('本机管理员名单只有主人能改。');
+      expect(await sent()).toContain('本机管理员名单只有飞书应用的拥有者能改。');
       expect(await saved()).toEqual([ADMIN, OTHER_ADMIN]);
       fixture.send.mockClear();
       await orchestrator.dispatcher.handle(click(OWNER, { a: DM.addAdminSubmit }, { open_id: NEWCOMER }));

@@ -372,8 +372,8 @@ describe('the bot-session column (unit)', () => {
     // a task the Bot process let through without an actor does not run
     expect((await asked('group', request('schedule', { botId: BOT, request: { action: 'list', chatId: GROUP } }), ownerTurn)).decision).toEqual(ended);
     // its refusals: the sentence word for word, the code the command line knows for its place
-    const notOwner = await asked('dm', act({ kind: 'adminMember', botId: BOT, openId: 'ou_0123456789abcdef', membership: 'present', revision: 'r' }), { ok: false, reason: 'not-owner', message: '本机管理员名单只有主人能改。' });
-    expect(notOwner.decision).toEqual({ ok: false, code: 'permission_denied', message: '本机管理员名单只有主人能改。', details: { reason: 'not-owner' } });
+    const notOwner = await asked('dm', act({ kind: 'adminMember', botId: BOT, openId: 'ou_0123456789abcdef', membership: 'present', revision: 'r' }), { ok: false, reason: 'not-owner', message: '本机管理员名单只有飞书应用的拥有者能改。' });
+    expect(notOwner.decision).toEqual({ ok: false, code: 'permission_denied', message: '本机管理员名单只有飞书应用的拥有者能改。', details: { reason: 'not-owner' } });
     const notGroup = await asked('group', request('schedule', { botId: BOT, request: { action: 'list', chatId: GROUP } }), { ok: false, reason: 'not-group', message: scheduleRefusalMessages['not-group'] });
     expect(notGroup.decision).toMatchObject({ ok: false, code: 'not-group' });
     const switchOff = await asked('dm', settingsSave('研发'), { ok: false, reason: 'switch-off', message: '关了' });

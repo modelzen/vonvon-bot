@@ -150,7 +150,7 @@ async function host(cli: string | undefined): Promise<number> {
     { code: 4, reason: 'permission_denied', text: '主人关了私聊里的“聊天改设置”' });
   await control({ probe: 'switch', on: true });
   check('私聊，管理员这一轮：settings act admin add ou_probe_new', await run(cli, admin.token, ['settings', 'act', 'admin', 'add', 'ou_probe_new', ...dmScope]),
-    { code: 4, reason: 'permission_denied', text: '本机管理员名单只有主人能改。' });
+    { code: 4, reason: 'permission_denied', text: '本机管理员名单只有飞书应用的拥有者能改。' });
   check('私聊，管理员这一轮：settings set cards.showToolCalls=false', await run(cli, admin.token, ['settings', 'set', 'cards.showToolCalls=false', ...dmScope]), { code: 0, text: '"kind":"saved"' });
 
   const owner = await turn('dm', OWNER);

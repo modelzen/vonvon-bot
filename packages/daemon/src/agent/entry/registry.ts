@@ -61,7 +61,7 @@ export const notDmMessage = (place: 'group' | 'dm' | 'comment' | AgentPlace['kin
 /** devices 15, 这一轮已结束: a Bot session's command line called when no turn of its session is going (or its Bot process is gone). */
 export const SESSION_TURN_ENDED = '这次调用对应的那一轮对话已经结束，不能再改设置。';
 /** devices 3.7: only the owner's turn changes this machine's administrators (devices-4b 4.2). */
-export const NOT_OWNER_MESSAGE = '本机管理员名单只有主人能改。';
+export const NOT_OWNER_MESSAGE = '本机管理员名单只有飞书应用的拥有者能改。';
 /** A session's call is not tied to a tool use: a turn not known, ended or a session gone all read as the turn having ended. */
 const ENDED = new Set(['revoked', 'unknown-origin', 'turn-ended']);
 const messages = {
