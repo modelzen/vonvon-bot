@@ -197,6 +197,30 @@ describe.runIf(canBind)('remote listeners', () => {
     await h.remote.sync(config(port, lan(ALIAS, { iface: 'lo', network: 'gw:11:22:33:44:55:66', enabledAt: 2 })));
     expect(h.remote.status()[0]?.state).toBe('listening');
   });
+  // Codex review 232-2 / devices 4.7: draining keeps the address open for what a draining daemon answers; the release
+  // closes it. The hub's drain decides about the connections, as on the loopback.
+  it('keeps listening while draining, with no retry or watch, and closes at the release', async () => {
+    let nics = aliasNic(ALIAS);
+    const h = await harness({ interfaces: () => nics, timers: { watch: 50, retry: 50 } });
+    const port = await freePort();
+    await h.remote.sync(config(port, lan(ALIAS)));
+    const before = await pairOver(h, port);
+    await h.remote.beginDrain();
+    expect(h.remote.status()[0]?.state).toBe('listening');
+    expect((await get(port, '/health')).status).toBe(200);
+    const during = await pairOver(h, port);
+    expect(during.serverInfo.principal).toBe('owner:paired');
+    // no watch while draining: the address leaving does not close it
+    nics = {};
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(h.remote.status()[0]?.state).toBe('listening');
+    expect((await get(port, '/health')).status).toBe(200);
+    // 1001 server_shutdown, said inside the channel (a client takes 1001 as `closed`, and reconnects)
+    const ends = Promise.all([before.closed, during.closed]);
+    await h.remote.release();
+    expect((await ends).map(end => end.closeCode)).toEqual([1001, 1001]);
+    await expect(get(port, '/health')).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+  });
   it('goes back to waiting when the address leaves, and its connections end with 4006', async () => {
     const h = await harness({ timers: { watch: 100, retry: 60_000 } });
     const port = await freePort();
