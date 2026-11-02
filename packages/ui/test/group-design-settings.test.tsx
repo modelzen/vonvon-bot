@@ -82,9 +82,10 @@ it('orders five group tabs, keeps compact model and permission settings together
   for (const section of ['沟通方式', '回复规则', '聊天方式']) expect(groupTabForSection(section)).toBe('response');
   for (const section of ['记忆', '项目记忆']) expect(groupTabForSection(section)).toBe('memory');
   const html = render('model');
-  expect(html).toContain('可用模型'); expect(html).toContain('执行权限');
-  expect(html).toContain('<summary>话题模型</summary>');
-  expect(html).toContain('aria-label="选择话题"');
+  expect(html).toContain('模型设置'); expect(html).toContain('执行权限');
+  expect(html).toContain('aria-label="配置可用模型"');
+  expect(html).toContain('aria-label="配置可用思考强度"');
+  expect(html).not.toContain('<summary>话题模型</summary>');
   expect(html).toContain('修改权限');
   expect(html).not.toContain('role="radiogroup" aria-label="权限"');
   expect(html).not.toContain('<h3>代码仓库</h3>');
@@ -119,18 +120,25 @@ it('keeps one primary among peer directories and no primary repository', () => {
 it('shows matching model and Effort count triggers without inline option lists', () => {
   const html = renderToStaticMarkup(<ModelAccessChoices value={{backend: catalog.backend, models: ['actual-a', 'actual-b'], efforts: ['low']}} catalog={catalog} disabled={false} onChange={() => {}}/>);
   expect(html).toContain('思考强度');
-  expect(html).toContain('选择模型'); expect(html).toContain('选择强度');
-  expect(html).toContain('已选择 2 个'); expect(html).toContain('已选择 1 个');
+  expect(html).toContain('aria-label="配置可用模型"'); expect(html).toContain('aria-label="配置可用思考强度"');
+  expect(html).toContain('2 个模型');
+  expect(html).toContain('已自定义 · 2 组');
   expect(html.match(/gd-model-selection-control/g)).toHaveLength(2);
   expect(html).not.toContain('type="checkbox"');
   expect(html).not.toContain('>实际模型 A<'); expect(html).not.toContain('>实际模型 B<');
   expect(html).not.toContain('无 Effort 模型');
-  expect(html).toContain('请选择 实际模型 B 支持的 Effort');
+  expect(html).toContain('请选择 实际模型 B 支持的思考强度');
+  const valid = renderToStaticMarkup(<ModelAccessChoices value={{backend: catalog.backend, models: ['actual-a'], efforts: ['low']}} catalog={catalog} disabled={false} onChange={() => {}}/>);
+  expect(valid).toContain('群内通过 /model 切换；新话题默认：实际模型 A · low。');
+  expect(valid).not.toContain('<small>'); expect(valid).not.toContain('普通速度');
 });
 it('rejects missing catalogs and model/Effort combinations with no intersection', () => {
   const value = {backend: catalog.backend, models: ['actual-a', 'actual-b'], efforts: ['low'] as ('low' | 'high')[]};
   expect(modelAccessProblem(value, catalog)).toContain('实际模型 B');
   expect(modelAccessProblem({...value, efforts: ['low', 'high']}, catalog)).toBeUndefined();
+  // Old global allowsets can contain a native effort used only by an unselected model.
+  expect(modelAccessProblem({...value, models: ['actual-a'], efforts: ['low', 'high']}, catalog)).toBeUndefined();
+  expect(modelAccessProblem({...value, models: ['actual-a'], modelEfforts: {'actual-a': ['low', 'high']}}, catalog)).toContain('已不可用');
   expect(modelAccessProblem({...value, models: ['no-effort'], efforts: []}, catalog)).toBeUndefined();
   expect(modelAccessProblem({...value, models: []}, catalog)).toContain('至少');
   expect(modelAccessProblem(value)).toContain('暂不可用');

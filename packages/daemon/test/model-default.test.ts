@@ -95,6 +95,12 @@ describe('pickDefault · 项目默认对实时列表自愈校验', () => {
 const json = (...args: Parameters<typeof buildModelDefaultCard>): string => JSON.stringify(buildModelDefaultCard(...args));
 
 describe('buildModelDefaultCard · 按后端能力自适应 + ctx 路由', () => {
+  it('offers and saves an unknown native effort from the live catalog', () => {
+    const future = [{ ...codex[0]!, supportedEfforts: ['future-adaptive'], defaultEffort: 'future-adaptive' }];
+    expect(json({ name: 'p' }, future, 'dm')).toContain('future-adaptive');
+    expect(parseModelDefaultFormValue({ model: future[0]!.id, effort: 'future-adaptive' }, future, 'codex-appserver'))
+      .toMatchObject({ ok: true, effort: 'future-adaptive' });
+  });
   it('codex（多模型 + effort）→ 模型下拉 + 强度下拉，dm 提交/返回 action', () => {
     const j = json({ name: 'p' }, codex, 'dm');
     expect(j).toContain('model'); // 模型 selectMenu name
