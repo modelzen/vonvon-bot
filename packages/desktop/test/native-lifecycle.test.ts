@@ -382,6 +382,7 @@ describe('an update another device asks for', () => {
       admin: vi.fn(async () => ({ kind: 'negotiated', principal: 'owner:local', scope: null })),
       machine: vi.fn(async () => ({ type: 'done', message: '已收到。' })),
       onDesktopUpdateRequest: vi.fn((listener: (payload: { requestId: string; action: 'check' | 'apply'; by: string }) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; }),
+      onError: vi.fn((_listener: (error: Error) => void) => () => {}),
     };
     const ask = (action: 'check' | 'apply') => { for (const listener of [...listeners]) listener({ requestId: 'dur_0123456789abcdef', action, by: '「笔记本」' }); };
     const states = () => client.machine.mock.calls.map(call => ((call as unknown[])[0] as { state: string }).state);

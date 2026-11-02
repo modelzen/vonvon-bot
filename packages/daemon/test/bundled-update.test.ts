@@ -73,6 +73,18 @@ it('asks the shell to check, keeps the answer for fresh: false, and says when it
   expect(thrown(() => report(shell, 'current', {}, shell.events[1]!.requestId))).toMatchObject({ code: 'invalid_request' });
 });
 
+// Codex 审查 264-1、265-1: the app there has the update downloaded and was not restarted yet (下载更新 pressed there, or a
+// remote update that did not install). It is an update to install, as the shell installs a download that is there; the
+// app's own 点击重启升级 is for the person there. 修之前必败: `hasUpdate: false`, with that line.
+it('takes a download already there as an update to install, without the words for the person there', async () => {
+  const shell = shellPeer();
+  const { update, report } = harness([shell]);
+  const checking = update.check('「笔记本」', true);
+  report(shell, 'downloaded', { latest: '0.9.1', message: '更新已下载，点击重启升级' });
+  expect(await checking).toEqual({ current: '0.9.0', latest: '0.9.1', hasUpdate: true, desktopShell: true });
+  expect(await update.check('「笔记本」', false)).toEqual(await checking);
+});
+
 it('passes on what the updater says when it cannot update', async () => {
   const shell = shellPeer();
   const { update, report } = harness([shell]);
