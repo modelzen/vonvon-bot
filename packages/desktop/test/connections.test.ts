@@ -558,11 +558,11 @@ describe('adding', () => {
     expect(h.registry.list()).toEqual([]);
   });
 
-  it('finds its client id when the pairing answer was lost', async () => {
+  it.each(['pairing', 'hello'] as const)('finds its client id when cut off at %s, the answer to the pairing lost or past it (Codex 审查 235-3)', async stage => {
     const h = harness();
     const id = randomUUID();
     const adding = h.devices.add({ link: pairingLink(id) });
-    h.calls[0]!.reject(failWith('closed', 'pairing'));
+    h.calls[0]!.reject(failWith('closed', stage));
     await flush();
     const again = h.calls[1]!;
     expect(again.options.pairing).toBeUndefined();
