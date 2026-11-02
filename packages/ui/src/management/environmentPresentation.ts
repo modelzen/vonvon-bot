@@ -27,7 +27,7 @@ export function profileTokenLabel(status: string | undefined): string {
   if (status === "valid") return "凭据有效";
   if (status === "needs_refresh") return "需要刷新凭据";
   if (status === "expired") return "凭据已过期";
-  if (status === "missing") return "尚未登录";
+  if (status === "missing") return "还没登录飞书";
   return "凭据状态未知";
 }
 

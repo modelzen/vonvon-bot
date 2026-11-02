@@ -3,10 +3,13 @@ import {ArrowUp, ChevronRight, Folder, X} from 'lucide-react';
 import type { DirectoryEntry, FolderChoice } from '@vonvon/protocol';
 import { Button, InlineNotice } from './reference/components/ui';
 import { Dialog } from './reference/components/ui/Dialog';
-import { useClient, useShellCapabilities } from './client-context';
+import { deviceCopyName, useActiveDevice, useClient, useShellCapabilities } from './client-context';
 import './directory-picker.css';
 
 type Picker = () => Promise<FolderChoice | null>;
+/** devices-ui-2 4.3: what to open as a path rather than search for. `/…`, `~` and `~/…` or `~\…`, `C:\…` or `C:/…`, and
+ * `\\server\share`; the daemon expands `~` by its own platform's rule. */
+export const looksLikePath = (text: string): boolean => /^(\/|~([\\/]|$)|[A-Za-z]:[\\/]|\\\\)/.test(text);
 type MultiPicker = () => Promise<FolderChoice[] | null>;
 const PickerContext = createContext<{single: Picker; multiple: MultiPicker} | null>(null);
 type Request = { multiple: boolean; resolve: (value: FolderChoice[] | null) => void };
@@ -26,6 +29,7 @@ export function useDirectoriesPicker(): MultiPicker {
 export function DirectoryPickerProvider({ children }: { children: ReactNode }) {
   const client = useClient();
   const shell = useShellCapabilities();
+  const where = useActiveDevice();
   const [request, setRequest] = useState<Request | null>(null);
   const pending = useRef<Promise<FolderChoice[] | null> | null>(null);
   const owner = useRef<Request | null>(null);
@@ -119,14 +123,14 @@ export function DirectoryPickerProvider({ children }: { children: ReactNode }) {
   const visible = entries.filter(entry => !entry.hidden && (!search || entry.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())));
   return <PickerContext.Provider value={{single: async () => (await pick(false))?.[0] ?? null, multiple: () => pick(true)}}>
     {children}
-    {request && <Dialog open title={request.multiple ? '添加目录' : '选择目录'} onClose={() => finish(null)} footer={<>
+    {request && <Dialog open title={where.isRemote ? `${request.multiple ? '添加' : '选择'}${deviceCopyName(where)}上的文件夹` : request.multiple ? '添加目录' : '选择目录'} onClose={() => finish(null)} footer={<>
       <span className="directory-selection-count">{request.multiple && `${selected.length} 个已选`}</span>
       <Button onClick={() => finish(null)}>取消</Button>
       <Button variant="primary" loading={choosing} disabled={loading || choosing || (request.multiple ? selected.length === 0 : !path)} onClick={() => void choose()}>{request.multiple ? '添加所选目录' : '选择此目录'}</Button>
     </>}>
       <div className="directory-browser">
         <div className="directory-browser-location"><Button size="sm" aria-label="上一级目录" disabled={!parent || loading || choosing} onClick={() => parent && browse(parent)}><ArrowUp size={16}/></Button><code title={path}>{path ?? '正在读取…'}</code></div>
-        <form className="directory-browser-search" onSubmit={event => {event.preventDefault(); if (search.startsWith('/')) browse(search);}}><input aria-label="搜索目录或输入路径" placeholder="搜索此处，或输入路径" value={search} onChange={event => setSearch(event.target.value)}/>{search.startsWith('/') && <Button size="sm" type="submit" disabled={loading || choosing}>前往</Button>}</form>
+        <form className="directory-browser-search" onSubmit={event => {event.preventDefault(); if (looksLikePath(search)) browse(search);}}><input aria-label="搜索目录或输入路径" placeholder={'搜索此处，或输入路径（如 /srv/app、C:\\work）'} value={search} onChange={event => setSearch(event.target.value)}/>{looksLikePath(search) && <Button size="sm" type="submit" disabled={loading || choosing}>前往</Button>}</form>
         {error && <InlineNotice title="目录提示" tone="warning">{error}</InlineNotice>}
         {request.multiple && path && <label className="directory-current"><input type="checkbox" checked={selected.includes(path)} disabled={loading || choosing} onChange={() => toggle(path)}/>选择当前目录</label>}
         <div className="directory-browser-list" role="list" aria-label="目录列表" aria-busy={loading}>

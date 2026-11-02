@@ -243,9 +243,9 @@ it.each<Job>([qr(Date.now() + 60_000), activating, {...failed, phase: 'running'}
   expect(f.calls).toEqual([cancelCommand, 'snapshot']);
 });
 
-it('does not confuse a foreign Provider task or terminal registration with an active registration', async () => {
-  const provider: Job = {id: jobIdSchema.parse('job_provider'), type: 'loginCodex', phase: 'running', message: '等待登录'};
-  const f = fixture({after: snapshot([cancelled, {...failed, id: newJobId}, provider])});
+// devices-ui-2 4.9: registration is the only job left; the Provider tasks this also checked are gone.
+it('does not confuse a terminal registration with an active registration', async () => {
+  const f = fixture({after: snapshot([cancelled, {...failed, id: newJobId}])});
   expect(await f.retry()).toEqual({kind: 'ready', modal: {...f.modal, jobId: newJobId}});
   expect(f.calls).toEqual([cancelCommand, 'snapshot', startCommand]);
 });

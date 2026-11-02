@@ -4,7 +4,8 @@ import type {CollaborationReply, Command, CommandResult, DesktopSnapshot, ToolSt
 import {backendInstallProgress} from '@vonvon/protocol';
 import {ConfirmDialog} from '../reference/components/ui/Dialog';
 import {Button, IconButton} from '../reference/components/ui';
-import {useClient} from '../client-context';
+import {useActiveDevice, useClient} from '../client-context';
+import {configureProvider, remoteToolsNote, whereName} from '../device-copy';
 import {settingAnchor} from '../search';
 import {OperationActivity} from '../management/OperationActivity';
 import {preferredProvider, providerBackends, providerIcons, providerInstalled, providerAuthenticated, providerNames, providerSignature, type SetupProvider} from './provider-state';
@@ -34,15 +35,19 @@ export function ProviderSetup(props: Props) {
   </section>;
 }
 export function ProviderManager(props: Props & {reveal?: 'codex' | 'claude'}) {
+  const where = useActiveDevice();
+  const remoteNote = where.isRemote && <p className="provider-check" role="note">{remoteToolsNote(where)}</p>;
   const [selected, setSelected] = useState<SetupProvider | null>();
   useEffect(() => {if (props.reveal) setSelected(props.reveal);}, [props.reveal]);
   const provider = selected === undefined ? props.reveal : selected;
   if (provider) return <section className="provider-setup provider-detail--compact" aria-label="Provider" id={settingAnchor(providerNames[provider])}>
     <header className="provider-detail-heading"><img src={providerIcons[provider]} alt=""/><div><nav className="provider-breadcrumb" aria-label="Provider 路径"><button type="button" onClick={() => setSelected(null)}>Provider</button><ChevronRight size={14} aria-hidden="true"/><h1 aria-current="page">{providerNames[provider]}</h1></nav><p>{provider === 'codex' ? 'OpenAI' : 'Anthropic'}</p></div></header>
+    {remoteNote}
     <ProviderPreparation key={provider} {...props} provider={provider} management/>
   </section>;
   return <section className="provider-setup" aria-label="Provider" id={settingAnchor('Provider')}>
     <header className="provider-heading"><h1>Provider</h1></header>
+    {remoteNote}
     <div className="provider-list">{(['codex', 'claude'] as const).map(id => {
       const tool = props.snapshot.tools.find(item => item.tool === id);
       const status = tool?.installation === 'missing' ? (id === 'claude' ? '缺少运行组件' : '未安装') : !providerInstalled(tool) ? '需要检查' : providerAuthenticated(tool) ? '已就绪' : tool?.authentication === 'signedOut' ? '待配置' : '待检查';
@@ -82,6 +87,7 @@ function ProviderModelPreview({provider, tool, ready}: {provider: SetupProvider;
 
 export function ProviderPreparation({provider, snapshot, ready, busy, run, onContinue, management = false}: Props & {provider: SetupProvider; management?: boolean}) {
   const compact = management;
+  const where = useActiveDevice();
   const state = useProviderSetup(provider, snapshot, ready, run);
   const [uninstallOpen, setUninstallOpen] = useState(false);
   const [cliUninstall, setCliUninstall] = useState(false);
@@ -94,7 +100,7 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
   const needsUpdate = !detectionUnknown && state.tool?.compatibility?.status === 'tooOld';
   const checking = state.check?.state === 'checking';
   const installing = Boolean(state.activeInstall || state.relevantToolInstall);
-  const connecting = Boolean(state.activeLogin || state.activeCodexJob);
+  const connecting = Boolean(state.activeLogin);
   const disabled = !ready || busy || state.working;
   const source = state.tools.find(item => item.tool === provider);
   const codexSource = provider === 'codex' ? source : undefined;
@@ -149,7 +155,7 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
       </div>
     </div>
     {externalCodex && needsUpdate && !management && <p className="provider-check">{codexSource?.updateInstructions || '请通过原安装方式更新 Codex，完成后点「重新检测」。'}</p>}
-    <p className="provider-config-guide">{provider === 'codex' ? <>请先在 Codex App 或 Codex CLI（<code>codex</code>）中完成登录或自定义模型配置，并确认可以使用。</> : <>请先在 Claude Code（<code>claude</code>）中完成登录或自定义 API、模型配置，并确认可以使用。</>} 返回这里点击「{auth ? '重新检测' : '检测配置'}」，Vonvon 会复用本机已有的认证与模型配置。</p>
+    <p className="provider-config-guide">{configureProvider(where, provider)}{provider === 'codex' ? <>可以用 Codex App 或 <code>codex</code> 命令行配置。</> : <>可以用 Claude Code（<code>claude</code>）配置。</>}</p>
     {cliFailed && <div className="provider-problem" role="status">本机 Claude Code 无法启动。请先在终端运行 <code>claude</code>，修复问题并确认可以使用，再回来重新检测。Vonvon 会复用本机 Claude 的认证或 API 配置。</div>}
     {state.check?.state === 'checking' && installed && auth && <p className="provider-check"><OperationActivity label="正在读取可用模型…" state="connecting"/></p>}
     {state.canContinue && !compact && <p className="provider-check provider-check--ready" role="status"><Check size={14}/>{name} 已准备好<span>· {state.check?.models?.length ?? 0} 个模型</span></p>}
@@ -172,7 +178,7 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
         {managedCodex && installed && <p className="provider-check">正在执行的任务不会中断；完成后，下一轮对话会使用更新的 Codex。</p>}
         {provider === 'claude' && <p className="provider-check">更新或重装 SDK 后，请到「应用与启动」重启后台服务，以加载新版本。</p>}
       </div>
-      {provider === 'claude' && <details className="provider-cli"><summary>Claude Code · {cliLabel}</summary><p>在 Claude Code 中完成登录或自定义 API、模型配置，Vonvon 复用本机已有配置。</p>
+      {provider === 'claude' && <details className="provider-cli"><summary>Claude Code · {cliLabel}</summary><p>在 Claude Code 里配置好账号或自定义 API，Vonvon 用{whereName(where)}上已有的配置。</p>
         <dl><div><dt>安装来源</dt><dd>{!source ? '正在检测…' : source.installation === 'managed' ? 'Vonvon 管理' : source?.installation === 'external' ? '本机已有' : '未检测到'}</dd></div>{source?.version && <div><dt>当前版本</dt><dd>{source.version}</dd></div>}{source?.executable && <div><dt>安装位置</dt><dd>{source.executable}</dd></div>}{source?.latestVersion && <div><dt>最新版本</dt><dd>{source.latestVersion}</dd></div>}</dl>
         <div className="provider-management-actions"><Button size="sm" disabled={disabled || installing || !source} onClick={() => void manageCli(source?.installation === 'missing' ? 'install' : 'update')}>{source?.installation === 'missing' ? '安装 Claude Code' : '更新 Claude Code'}</Button>
           <Button size="sm" disabled={disabled || source?.installation === 'missing'} onClick={() => void manageCli('authStatus')}>检查配置</Button>

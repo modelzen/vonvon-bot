@@ -34,12 +34,11 @@ export type SetupChecklistProps = {
   onRegister: (agentId?: AgentId) => void;
   onOpenEnvironment: () => void;
   onNotice: (message: string, error: boolean) => void;
-  codexJobs: ReactNode;
   compact?: boolean;
   botsOnly?: boolean;
 };
 
-export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEnvironment, onNotice, codexJobs, compact = false, botsOnly = false}: SetupChecklistProps) {
+export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEnvironment, onNotice, compact = false, botsOnly = false}: SetupChecklistProps) {
   const client = useClient();
   const shell = useShellCapabilities();
   const {reads, recheck} = useSetupStatus(snapshot.agents.map(agent => agent.id));
@@ -91,7 +90,6 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
       action={<StatusBadge tone={tools.ready ? 'success' : 'warning'} variant="pill">{tools.ready ? '可以用了' : compact ? '需要准备' : '还没有能用的后端'}</StatusBadge>}>
       {tools.steps.map((step, index) => stepRow(step, index))}
     </SettingsGroup>
-    {codexJobs}
     {linux.length ? <SettingsGroup label="Linux 上的权限">{linux.map((step, index) => stepRow(step, index))}</SettingsGroup> : null}
     <SettingsGroup label="后台运行" footer={SERVICE_FOOTER[snapshot.application.platform]}>
       {stepRow(serviceStep(snapshot.application), 0)}
