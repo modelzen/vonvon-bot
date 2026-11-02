@@ -577,7 +577,7 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 版本不一致（客户端旧） | 这台电脑的 Vonvon Bot（0.8.0）比 <设备>（0.9.0）旧。先更新这台电脑上的应用。 |
 | 服务端太旧（v1） | <设备> 上的 Vonvon Bot（0.7.x）不支持远程管理，请在那台设备上升级一次。 |
 | 安装脚本：开始 | 正在安装 Vonvon Bot 服务端 0.9.0（linux-x64）… |
-| 安装脚本：root | 你正在用 root 运行。Vonvon Bot 会以这个账号运行 AI 代理，建议用普通用户：`useradd -m vonvon && su - vonvon`，再运行安装命令。坚持用 root：`VONVON_ALLOW_ROOT=1 sh -c "$(curl -fsSL …)"`。 |
+| 安装脚本：root（2026-11-02 改，su 过去装不成开机启动） | 你正在用 root 运行。Vonvon Bot 会以这个账号运行 AI 代理，建议用普通用户：先 `useradd -m -s /bin/bash vonvon`，给它设密码（`passwd vonvon`）或放好 SSH 公钥，再用这个账号直接 SSH 登录、运行安装命令；不要用 su 或 sudo 切过去，那样装好后不会开机自动启动。说明见 https://vonvon.cc/guide/remote/#install 。坚持用 root：`VONVON_ALLOW_ROOT=1 sh -c "$(curl -fsSL …)"`。 |
 | 安装脚本：已装过 | 这台机器已经装过 Vonvon Bot，不用再装。直接用：`vonvon --version`。 |
 | 安装脚本：在 Mac 上（退出非零，什么都不动） | Mac 请下载安装包：https://vonvon.cc/get/ ，安装包里已经带了服务端和 vonvon 命令。这个脚本只用于 Linux，什么都没动。 |
 | 安装脚本：不是 Linux、也不是 Mac（退出非零，什么都不动） | 这个安装脚本只支持 Linux（这台是 <`uname -s` 的结果>）。Mac、Windows 请下载 Vonvon Bot 桌面端安装包：https://vonvon.cc/get/ |
