@@ -7,7 +7,7 @@ import {
   runMemoryAdd, runMemoryBranch, runMemoryBranchDelete, runMemoryEdit, runMemoryEvents, runMemoryExport, runMemoryItem, runMemoryList, runMemoryMove,
   runMemoryPromote, runMemoryPurge, runMemoryUndo, terminalMemoryContext, type MemoryContext, type MemoryKind, type MemoryTerminal,
 } from '../src/cli/commands/memory';
-import { connectLocalDaemon, withDaemon, type Io } from '../src/cli/daemon-client';
+import { connectLocalDaemon, setCliContext, withDaemon, type Io } from '../src/cli/daemon-client';
 
 const item = { id: 'p_prj_0a1b2c3d:abcdef', scope: { kind: 'project' as const, projectId: 'prj_0a1b2c3d' }, text: '周四发版', branch: '决定', state: 'active' as const, trust: 'trusted' as const,
   source: { via: 'cli' as const, botId: '', actorRole: 'cli' as const }, createdAt: 1, updatedAt: 1, revision: 1 };
@@ -259,5 +259,37 @@ describe('the terminal: the daemon, or the files for a read when none runs', () 
     await expect(runMemoryList({ project: '支付组' }, terminalMemoryContext(io(), { env: token, running: async () => false, daemon: withToken.daemon, files })))
       .rejects.toEqual(failure('connection', 'daemon 没有运行'));
     expect(run).not.toHaveBeenCalled();
+  });
+
+  // Codex review 251-1 (main 必败: with no daemon list, export and events read the files whatever --scope said, every
+  // project in reach): the owner's --scope is the daemon's to apply (devices 5.3), so given one a read wants the daemon
+  it('with --scope and no daemon a read exits 3 and reads no file; without --scope it reads them as before', async () => {
+    const run = vi.fn(async (request: MemoryRequest): Promise<MemoryReply> =>
+      request.type === 'list' ? list([item]) : request.type === 'export' ? { kind: 'exported', files: [] } : { kind: 'events', events: [] });
+    const files = vi.fn((at: Io): MemoryContext => ({ io: at, source: 'files', projects: async () => PROJECTS, bots: async () => BOTS, run }));
+    const { daemon } = await noDaemon({});
+    const open = (at: Io = io()) => terminalMemoryContext(at, { env: {}, running: async () => false, daemon, files });
+    const reads = [
+      (at?: Io) => runMemoryList({ project: '支付组' }, open(at)),
+      (at?: Io) => runMemoryExport({ project: '支付组' }, open(at)),
+      (at?: Io) => runMemoryEvents('i1', { project: '支付组' }, open(at)),
+    ];
+    for (const scope of [{ bot: 'cli_other' }, { bot: 'cli_a', group: 'oc_x' }]) {
+      setCliContext({ scope });
+      try {
+        for (const read of reads) {
+          await expect(read()).rejects.toMatchObject({ kind: 'connection', message: expect.stringMatching(/^daemon 没有运行。先运行 vonvon daemon start。\n给了 --scope 时要 daemon 在运行/) });
+        }
+      } finally { setCliContext({ scope: undefined }); }
+    }
+    expect(files).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+    for (const [i, read] of reads.entries()) {
+      const out = io();
+      await read(out);
+      expect(run).toHaveBeenCalledTimes(i + 1);
+      expect(JSON.parse(out.out.join(''))).toMatchObject({ ok: true, source: 'files' });
+    }
+    expect(run.mock.calls.map(([request]) => request.type)).toEqual(['list', 'export', 'events']);
   });
 });

@@ -229,3 +229,16 @@ export async function memoryRpc(service: AdminService, request: MemoryRequest, v
     - 会话那几步用新探针 `test/manual/memory-rpc-probe.ts`。照 D4b 的探针写：fork 一个假 Bot 进程，跑真 `createAgentEntries` 和真 IPC，再在同一个进程里起 `startApi`，用的是真的记忆文件。
     - 输出写进 PR 描述。
 14. **`docs/product.md` 不改**：里面没有写 `vonvon memory`、`forget`，也没有"命令行直接改文件"。
+
+## Codex 审查后改了什么（任务 250、251）
+
+JP-VPS 上 Codex 的两份独立审查：250 通读全部 diff、跨模块和数据安全，通过，没有发现；251 协议、store、权限和命令行，一条 P2，接受。
+
+- **251-1（没有 daemon 时读类回退读文件，忽略人类终端显式给的全局 `--scope`）→ 接受，取审查建议的第二种做法。** 回退到文件时，`projects()`、`bots()` 是整个本机的列表，`run()` 直接调 `memoryAction`；`--scope` 只在 daemon 的 negotiate 里生效，所以 daemon 一停，`--scope bot=X` 的 `list`、`export`、`events` 照样读到范围外的项目记忆、正文和修改历史。这和总设计 5.3"没有令牌的人类终端：`--scope` 可选，给了就同样生效"不符。本片不在命令行里离线核对范围（要按 Bot 和群的绑定证明目标属于范围，等于在命令行里再写一份 D4a 的判法），改成：
+  - 人类终端给了 `--scope` 时，读类不走文件回退，和写类一样要 daemon 在运行。连不上就 exit 3，文字是 `connectLocalDaemon` 原来那句（含 `vonvon daemon start`），再加一行"给了 --scope 时要 daemon 在运行：范围由 daemon 核对，命令行不读本机文件。"（`SCOPE_NEEDS_DAEMON`，放在 `daemon-client.ts`，几处共用）。daemon 在跑时照旧由 negotiate 和 D4a 的表判。
+  - 没给 `--scope` 时不变：没有 daemon 就读文件，输出标 `source: 'files'`。Bot 会话本来就不回退，也不变。
+  - 命令行里同样"没有 daemon 就读文件"的地方逐个查过，daemon 在 `--scope` 下会裁、文件回退却不裁的还有两处，一起改成同样的做法：
+    - `project list`：daemon 把 `library.list` 裁到范围里的群绑的项目，文件回退列出全部项目。
+    - `daemon status`：daemon 在范围下去掉崩溃记录、只留范围里的 Bot，文件回退读崩溃文件，里面有所有 Bot 的崩溃和名字。`connectLocal` 的发现子进程（`VONVON_STATUS_FROM_FILES=1`）不带 `--scope`、只看锁，不受影响。
+  - 查过但不用改的：`daemon logs`（`admin.logs`）、`secrets list`（`admin.secrets`）、`clients ls`、`remote status`、`device rename`（`device.*`）。主人带 `--scope` 时 daemon 对这几种请求不裁（`authz.ts` 的 `inReach` 里不点名 Bot 的 admin 请求和 `device` 都直接放行），文件回退读到的和 daemon 回的是同样的内容，没有绕过范围。
+  - 测试：`memory-cli.test.ts` 用真 `connectLocalDaemon` 连一个没有 daemon 的临时数据目录，经 `setCliContext` 给两种 `--scope`（只有 Bot、Bot 加群），`list`、`export`、`events` 都 exit 3、文字带两行、文件回退没被调；去掉 `--scope` 后三条照旧读文件、`source: 'files'`。`cli-project.test.ts`：带 `--scope` 时两种连接错误都 exit 3、不读文件，daemon 能连上时照常回答。`cli-machine.test.ts`：带 `--scope` 时 daemon 没跑、跑着但不应答都 exit 3、什么都不打印，daemon 应答时照常，发现子进程照旧只读锁。`cli-json.test.ts` 加 6 条样本，经真打包的命令行：带 `--scope` 的 `memory list / export / events`、`project list`、`daemon status` 没有 daemon 时 exit 3，不带 `--scope` 的 `memory list --project p` 仍是 2（读了文件，没有这个项目）。

@@ -2,7 +2,7 @@ import type { MemoryActorRole, MemoryEvent, MemoryEventKind, MemoryReply, Memory
 import { paths } from '../../config/paths';
 import { inBotSession } from '../../config/session-env';
 import { badArgs, CommandError } from '../command-error';
-import { localTime, pickBot, print, want, withDaemon, type Call, type Daemon, type Io } from '../daemon-client';
+import { cliScope, localTime, pickBot, print, scopeNeedsDaemon, want, withDaemon, type Call, type Daemon, type Io } from '../daemon-client';
 
 const SCOPE_REQUIRED = '要指定哪份记忆：--project <项目名或 prj_…>，或者 --bot <Bot 名字或 appId>（某个人和这个 Bot 的私聊记忆再加 --dm <openId>），二选一。';
 const DM_NEEDS_BOT = '--dm 要和 --bot 一起给：私聊记忆是某个 Bot 和某个人的。';
@@ -27,7 +27,7 @@ export interface MemoryContext {
   bots(): Promise<{ id: string; name: string }[]>;
   run(request: MemoryRequest): Promise<MemoryReply>;
 }
-/** `read` may fall back to the files when no daemon runs; `write` never does. */
+/** `read` may fall back to the files when no daemon runs and no `--scope` was given; `write` never does. */
 export type MemoryKind = 'read' | 'write';
 export interface MemoryTerminal { open<T>(kind: MemoryKind, fn: (ctx: MemoryContext) => Promise<T>): Promise<T> }
 export interface MemoryTerminalDeps {
@@ -54,7 +54,10 @@ function daemonContext(io: Io, call: Call): MemoryContext {
   };
 }
 
-/** No daemon, not a Bot session, a read: the files, as the owner's own terminal. Projects carry no bindings here (no write comes this way). */
+/**
+ * No daemon, not a Bot session, no `--scope`, a read: the files, as the owner's own terminal. Projects carry no bindings
+ * here (no write comes this way).
+ */
 function filesContext(io: Io): MemoryContext {
   return {
     io, source: 'files',
@@ -67,19 +70,26 @@ function filesContext(io: Io): MemoryContext {
 /**
  * devices 8.3 and 5.3: through the daemon, the web page's lock and records, `via: 'cli'`. In a Bot's session the
  * connection carries the session's token and `--scope`, and the daemon judges as it does the memory tools (D4a, D4b);
- * the files are never read there, which would go round what the daemon lets the session see.
+ * the files are never read there, which would go round what the daemon lets the session see. Nor with the owner's
+ * `--scope` (devices 5.3, "given, it applies the same"): the files list every project and bot, the daemon only those
+ * in the scope (Codex review 251-1).
  */
 export function terminalMemoryContext(io: Io, deps: MemoryTerminalDeps = {}): MemoryTerminal {
   const env = deps.env ?? process.env;
   const daemon: Daemon = deps.daemon ?? withDaemon;
   return {
     async open(kind, fn) {
-      if (kind === 'read' && !inBotSession(env) && !(await (deps.running ?? daemonRunning)())) return fn((deps.files ?? filesContext)(io));
+      const session = inBotSession(env);
+      const scoped = !session && cliScope() !== undefined;
+      if (kind === 'read' && !session && !scoped && !(await (deps.running ?? daemonRunning)())) return fn((deps.files ?? filesContext)(io));
       let reached = false;
       try {
         return await daemon(async call => { reached = true; return fn(daemonContext(io, call)); });
       } catch (error) {
-        if (!reached && kind === 'write' && error instanceof CommandError && error.kind === 'connection') throw new CommandError('connection', `${error.message}\n${WRITE_NEEDS_DAEMON}`, error);
+        if (!reached && error instanceof CommandError && error.kind === 'connection') {
+          if (kind === 'write') throw new CommandError('connection', `${error.message}\n${WRITE_NEEDS_DAEMON}`, error);
+          if (scoped) throw scopeNeedsDaemon(error);
+        }
         throw error;
       }
     },
