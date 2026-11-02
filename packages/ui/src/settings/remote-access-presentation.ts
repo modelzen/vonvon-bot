@@ -59,7 +59,11 @@ export function kindLabel(row: Pick<AddressRow, 'kind' | 'tool' | 'recommended'>
 }
 export function stateText(row: AddressRow): string | undefined {
   if (!row.state) return undefined;
-  if (row.state === 'waiting') return row.missing ? `等地址出现：这台设备现在没有 ${row.host}` : STATE_LABEL.waiting;
+  if (row.state === 'waiting') {
+    if (row.missing) return `等地址出现：这台设备现在没有 ${row.host}`;
+    // A taken port waits too (D3 4.5): its detail says so and how to change the port, where the label alone hid it.
+    return row.detail ?? STATE_LABEL.waiting;
+  }
   return row.detail && row.state !== 'listening' ? `${STATE_LABEL[row.state]}：${row.detail}` : STATE_LABEL[row.state];
 }
 /** The one picked when the panel opens or the list changes: the open one, else the recommended, else the first. */

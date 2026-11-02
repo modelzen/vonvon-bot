@@ -39,6 +39,16 @@ it('keeps an open address no interface has now, first and waiting; recommends th
   const failed = addressRows(status({candidates: candidates.slice(3, 4), addresses: [{host: '192.168.1.9', kind: 'lan', enabledAt: 1, state: 'failed', detail: 'EACCES'}]}));
   expect(stateText(failed[0]!)).toBe('开不了：EACCES');
 });
+// fixes-0-9-0: main 必败, a taken port showed only 等地址出现 and dropped the daemon's detail.
+it('says the port is taken, in the daemon\'s words, while the address is there', () => {
+  const busy = '端口 7767 被占用，每 15 秒重试；可用 `vonvon remote port <n>` 换端口';
+  const rows = addressRows(status({candidates: candidates.slice(3), addresses: [{host: '192.168.1.9', kind: 'lan', enabledAt: 1, state: 'waiting', detail: busy}]}));
+  expect(rows[0]).toMatchObject({host: '192.168.1.9', enabled: true, missing: false});
+  expect(stateText(rows[0]!)).toBe(busy);
+  expect(stateText({...rows[0]!, detail: '等待地址 192.168.1.9 出现'})).toBe('等待地址 192.168.1.9 出现');
+  const bare = addressRows(status({candidates: candidates.slice(3), addresses: [{host: '192.168.1.9', kind: 'lan', enabledAt: 1, state: 'waiting'}]}));
+  expect(stateText(bare[0]!)).toBe('等地址出现');
+});
 it('asks about the risk for CGNAT and public, about switching when others may be on the old one, and nothing else', () => {
   const rows = addressRows(status({candidates, addresses: [{host: '192.168.1.9', kind: 'lan', enabledAt: 1, state: 'listening'}]}));
   expect(enableStep(rows, '100.70.0.3', local, 0)).toEqual({confirm: {kind: 'risk', host: '100.70.0.3', text: expect.stringMatching(/^100\.70\.0\.3 不在 Tailscale.*CGNAT.*勾选「我了解风险」后再开启。$/)}});
