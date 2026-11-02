@@ -16,6 +16,16 @@ describe('Host child shutdown', () => {
     expect(Date.now() - start).toBeGreaterThanOrEqual(180);
     expect(child.exitCode).toBe(0);
   });
+  // owner 2026-11-02: the reason rides on the shutdown message, before the SIGTERM; the child's control reads it.
+  it('tells the child why it stops, and the child\'s control reads it after its SIGTERM too', async () => {
+    const child = spawn(process.execPath, ['-e', `let seen = []; process.on('SIGTERM',()=>{ seen.push('term'); }); process.on('message', m => { if (m.type === 'bridge:shutdown') { seen.push(m.reason ?? 'none'); setTimeout(() => { process.send(seen, () => process.exit(0)); }, 50); } }); process.send('ready');`], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+    await new Promise((resolve) => child.once('message', resolve));
+    const seen = new Promise(resolve => child.once('message', resolve));
+    await stopChild(child, 2000, false, undefined, 'update');
+    // Sent first; which the child handles first is up to it.
+    expect([...await seen as string[]].sort()).toEqual(['term', 'update']);
+    expect(child.exitCode).toBe(0);
+  });
   it('reports forced shutdown and waits for actual exit', async () => {
     const child = spawn(process.execPath, ['-e', `process.on('SIGTERM',()=>{}); process.on('message',()=>{}); process.send('ready');`], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
     try {

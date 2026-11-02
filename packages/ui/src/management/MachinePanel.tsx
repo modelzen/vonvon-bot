@@ -72,12 +72,12 @@ export function MachinePanel({request, agents, reveal, macos = false, remote, on
       <SettingsRow title="运行方式"
         description={status?.host?.ownership === 'attached' ? '当前由外部服务管理。' : '接收飞书消息并运行 Bot。'}
         value={!status ? '状态未知' : status.host ? (status.host.ownership === 'owned' ? '桌面管理' : '外部服务') : '已停止'} />
-      {remote ? <SettingsRow title="daemon 服务" description="停止服务可能中断正在进行的 Bot 任务。"
+      {remote ? <SettingsRow title="daemon 服务" description="停止服务会中断正在进行的对话。"
         trailing={<span className="settings-inline-actions">
           {onRestart && <Button size="sm" disabled={busy || !status?.host} onClick={onRestart}>重启</Button>}
           <Button size="sm" disabled={busy || !status?.host} onClick={() => setConfirm({type: 'stopHost'})}>停止</Button>
         </span>} />
-      : <SettingsRow title="daemon 服务" description={!shell?.startHost ? '启动功能由桌面版提供。停止服务可能中断正在进行的 Bot 任务。' : '停止服务可能中断正在进行的 Bot 任务。'}
+      : <SettingsRow title="daemon 服务" description={!shell?.startHost ? '启动功能由桌面版提供。停止服务会中断正在进行的对话。' : '停止服务会中断正在进行的对话。'}
         trailing={<span className="settings-inline-actions">
           <Button size="sm" disabled={busy || !!status?.host || !shell?.startHost} onClick={() => {if (shell?.startHost) void runShell(shell.startHost);}}>启动 daemon</Button>
           <Button size="sm" disabled={busy || status?.host?.ownership !== 'owned'} onClick={() => setConfirm({type: 'stopHost'})}>停止 daemon</Button>
@@ -114,7 +114,7 @@ export function MachinePanel({request, agents, reveal, macos = false, remote, on
     <Dialog open={!!confirm} title="确认更改 daemon 运行方式" onClose={() => setConfirm(undefined)} footer={<>
       <Button onClick={() => setConfirm(undefined)}>取消</Button>
       <Button variant="danger" onClick={() => { const operation = confirm; const service = shell?.service; setConfirm(undefined); if (operation?.type === 'service' && service) void runShell(() => service(operation.action)); else if (operation && operation.type !== 'service') void run(operation); }}>确认操作</Button>
-    </>}><p>{remote ? remoteStopConfirm(remote) : quitKeepsDaemon ? <>此操作可能停止正在进行的所有 Bot 任务。{quitKeepsText}</> : '此操作可能停止正在进行的所有 Bot 任务。关闭窗口不会停止后台；退出应用会停止后台和所有 Bot。'}</p></Dialog>
+    </>}><p>{remote ? remoteStopConfirm(remote) : quitKeepsDaemon ? <>停止服务会中断正在进行的对话。{quitKeepsText}</> : '停止服务会中断正在进行的对话。关闭窗口不会停止后台；退出应用会停止后台和所有 Bot。'}</p></Dialog>
     {message && <p className="settings-operation-message" role="status">{message}</p>}
   </>;
 }

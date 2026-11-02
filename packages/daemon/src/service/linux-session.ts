@@ -63,14 +63,15 @@ export async function enableLinger(d: SessionDependencies = sessionDefaults()): 
 }
 
 const sudoLinger = (user: string): string => `sudo loginctl enable-linger ${user}`;
-const lingerOffHint = (user: string): string => `要开就运行 loginctl enable-linger（不行再用 ${sudoLinger(user)}）。`;
-export const enableFailed = (detail: string, user: string): string => `没开成：${detail}。用管理员权限运行：${sudoLinger(user)}`;
+/** The optional line (owner 2026-11-02): the command first, sudo only when the account may not do it itself. */
+const lingerOffHint = (user: string): string => `需要的话运行一次 loginctl enable-linger（不行再用 ${sudoLinger(user)}）。`;
+export const enableFailed = (detail: string, user: string): string => `开机自动启动没开成（${detail}），退出登录后它会停。需要的话用管理员权限运行一次：${sudoLinger(user)}`;
 
-/** The linger line of `service status` and of an install that leaves it alone. */
+/** The boot-start line of `service status`, and the optional one of an install that leaves linger off. */
 export function lingerLine(linger: Linger, user: string): string {
-  if (linger.state === 'on') return 'linger 已开：开机就启动，退出 SSH 以后 Bot 也还在跑。';
-  if (linger.state === 'off') return `没开 linger：退出最后一个登录会话后 Bot 会停，开机也不启动。${lingerOffHint(user)}`;
-  return `查不到 linger 的状态：${linger.detail ?? '原因不明'}。${lingerOffHint(user)}`;
+  if (linger.state === 'on') return '开机自动启动，退出登录后也继续运行。';
+  if (linger.state === 'off') return `没开开机自动启动：退出登录后它会停。${lingerOffHint(user)}`;
+  return `查不到能不能开机自动启动：${linger.detail ?? '原因不明'}。${lingerOffHint(user)}`;
 }
 
 /** server-2 4.4: the three causes `service install --json` names in `reason`, for the install script's fallback. */

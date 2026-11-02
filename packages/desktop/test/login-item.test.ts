@@ -12,6 +12,10 @@ import {
 } from '../src/login-item.js';
 import type { Registration, VerifiedDaemon } from '../src/daemon-manager.js';
 
+// The verified stop a Windows repair sends by default; the other tests ask the bundled CLI instead.
+const ownerStop = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
+vi.mock('../../daemon/src/server/owner-verification.js', async original => ({ ...await original<object>(), stopVerifiedOwner: ownerStop }));
+
 const roots: string[] = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
@@ -304,12 +308,23 @@ describe('repairing the service when the app starts', () => {
     expect(start).not.toHaveBeenCalled();
   });
 
+  // owner 2026-11-02: the older server is stopped for this update, so the turns it cuts short say the server was updated.
+  it('on Windows asks the older owner to stop for an update', async () => {
+    const runtime = { ...await packagedRuntime({ executable: app }), platform: 'win32' as const };
+    ownerStop.mockClear();
+    const { start, spawn } = children({ code: 0 });
+    await expect(repairServiceAtStartup(runtime, reads({ kind: 'absent' }, running('0.1.0')), { stop: { spawn }, helper: { spawn }, exists: () => true })).resolves.toBeUndefined();
+    expect(ownerStop).toHaveBeenCalledExactlyOnceWith(runtime.root, running('0.1.0'), 'update');
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it('stops the older daemon, then installs the service for this app', async () => {
     const runtime = await packagedRuntime({ executable: app });
     const { start, spawn } = children({ code: 0 }, { code: 0 });
     await writeReport(runtime, done(701, { kind: 'already-installed' }));
     await expect(repairServiceAtStartup(runtime, reads(ours(), running('0.1.0')), { stop: { spawn }, helper: { spawn }, exists: () => true })).resolves.toBeUndefined();
-    expect(start.mock.calls.map(call => (call[1] as string[]).slice(1))).toEqual([['daemon', 'stop'], ['service', 'install', '--keep-running']]);
+    // The older server is stopped for an update: its interrupted turns say so (owner 2026-11-02).
+    expect(start.mock.calls.map(call => (call[1] as string[]).slice(1))).toEqual([['daemon', 'stop', '--for-update'], ['service', 'install', '--keep-running']]);
   });
 
   const refused = (pid: number, reason: 'replace-running' | 'turned-off') => done(pid, { ok: false, kind: 'install_refused', reason, detail: reason });
@@ -357,7 +372,7 @@ describe('repairing the service when the app starts', () => {
     const { start, spawn } = children({ code: 0 });
     await expect(repairServiceAtStartup(runtime, reads({ kind: 'absent' }, running('0.1.0')), { stop: { spawn }, helper: { spawn } })).resolves.toBeUndefined();
     expect(start).toHaveBeenCalledOnce();
-    expect((start.mock.calls[0]?.[1] as string[]).slice(1)).toEqual(['daemon', 'stop']);
+    expect((start.mock.calls[0]?.[1] as string[]).slice(1)).toEqual(['daemon', 'stop', '--for-update']);
   });
 
   it('leaves startup to ensureReady when the state cannot be read', async () => {

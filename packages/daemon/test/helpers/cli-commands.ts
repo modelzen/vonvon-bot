@@ -9,10 +9,6 @@ async function loadEntry(): Promise<typeof import('../../src/cli/index')> {
   try { return await import('../../src/cli/index'); }
   finally { process.argv = argv; write.mockRestore(); }
 }
-/** The command tree itself, to parse a command line against without running it (skills-scope). */
-export async function loadProgram(): Promise<typeof import('../../src/cli/index')['program']> {
-  return (await loadEntry()).program;
-}
 export async function loadCommands(): Promise<CommandInfo[]> {
   return (await loadEntry()).commandList();
 }

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { PROTOCOL_VERSION, serverInfoSchema, serverInfoV1Schema, serverInfoV2Schema } from "../src/index.js";
+import { PROTOCOL_VERSION, serverInfoSchema, serverInfoSessionSchema, serverInfoV1Schema, serverInfoV2Schema } from "../src/index.js";
 
 const v1 = { type: "serverInfo", machineId: "00000000-0000-4000-8000-000000000000", version: "0.9.0", protocolVersion: 1 };
 const v2 = { ...v1, protocolVersion: 2, deviceName: "工作电脑", platform: "linux", capabilities: ["device"], principal: "owner:local" };
@@ -19,4 +19,14 @@ it("lets a client read either shape and fields a later daemon adds, without comp
   expect(serverInfoSchema.parse(v2)).toEqual(v2);
   expect(serverInfoSchema.parse({ ...v2, protocolVersion: 3, later: { x: 1 } })).toMatchObject({ protocolVersion: 3, later: { x: 1 } });
   expect(serverInfoSchema.safeParse({ ...v1, type: "hello" }).success).toBe(false);
+});
+// Codex review 256-2. main 必败: a Bot session's hello had the v2 shape, the device's name and machine id in it.
+it("gives a Bot session's hello the protocol, the version and who it is, nothing of the device, and lets a client read it", () => {
+  const session = { type: "serverInfo", version: "0.9.0", protocolVersion: 2, principal: "bot-session:group" };
+  expect(serverInfoSessionSchema.parse(session)).toEqual(session);
+  for (const extra of [{ machineId: v1.machineId }, { deviceName: "工作电脑" }, { platform: "linux" }, { capabilities: ["device"] }]) {
+    expect(serverInfoSessionSchema.safeParse({ ...session, ...extra }).success).toBe(false);
+  }
+  expect(serverInfoSessionSchema.safeParse({ ...session, principal: "owner:local" }).success).toBe(false);
+  expect(serverInfoSchema.parse(session)).toEqual(session);
 });

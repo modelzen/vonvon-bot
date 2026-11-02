@@ -45,6 +45,8 @@ it.each([['standalone', '独立安装的服务端'], ['global-npm', '全局 npm 
   expect(text).toContain('0.9.1');
   const update = nodes(tree).find(node => node.props.children?.join?.('') === '更新「验收设备 1」');
   expect(update?.props.disabled).toBe(false);
+  // owner 2026-11-02: the update does not wait for the turns, and the row says so.
+  expect(nodes(tree).some(node => node.props.description === '更新会重启服务端，正在进行的对话会被中断。')).toBe(true);
 });
 
 it('only says where a bundled server is updated, with no update button', async () => {

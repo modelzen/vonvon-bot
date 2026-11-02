@@ -17,7 +17,7 @@ owner 2026-10-30 已认可 `docs/research/2026-10-30-windows-install-update/repo
 - 共享 `windows-update-manifest.mjs` 验证 Ed25519：签名覆盖原始 JSON UTF-8 字节，清单严格绑定产品、版本、架构、固定版本化 EXE URL、尺寸与 SHA-512，可包含纯文本更新说明。公钥随应用内置，私钥仅放外部发布配置指向的文件中。
 - 自定义 electron-updater provider 只返回从签名清单解出的元数据；不再次读取未验证 YAML。x64/ARM64 分别使用 `stable/<arch>/update.json`。保留 updater 独立网络分区的 HTTPS/域名/路径限制。
 - 下载和安装前分别核对最终 EXE 的尺寸/哈希；检查、下载、安装各自去重。校验失败不停止 daemon；状态文件写入成功后才调用原有停机清理。取消安装确认不退出；安装未生效继续提供重试。
-- 升级状态沿原桥推送实测百分比和已签名更新说明。安装前显示连接/任务可能中断的提示及“稍后”。现有快照没有对话执行状态，因此本片显示通用中断提示，不猜测正在运行的任务数。
+- 升级状态沿原桥推送实测百分比和已签名更新说明。安装前显示连接/任务可能中断的提示及“稍后”（2026-11-02 起去掉这个确认框，改成“重启升级”按钮旁说明会中断正在进行的对话，见 `docs/plans/interrupt-and-install-text.md`）。现有快照没有对话执行状态，因此本片显示通用中断提示，不猜测正在运行的任务数。
 - NSIS assisted 模式只提供当前用户安装，路径必须可写；升级用 `--updated` 跳过选择并按 `--force-run` 重新打开。保持原卸载兼容 hook，不删除用户数据。
 - 新 format2 inventory 只要求 EXE/blockmap/feed，绑定内置公钥及更新能力；历史 ZIP/manual inventory 仍可读取。新签名 JSON 在本地发布计划阶段生成，在原 owner 审阅和确认后的 stable 阶段才提升；公开 EXE 先全量复核，feed 最后提升并保存独立回执。官网只有匹配的成功回执才宣告应用内更新可用。
 
