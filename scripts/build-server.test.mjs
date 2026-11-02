@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { crc32, gunzipSync, inflateRawSync } from 'node:zlib';
-import { PUBLISHED_TARGETS, TARGETS, archiveName, assembleRelease, checkServerTree, parseArguments, pinnedNodeFile, serverUpdateConfig, tarHeader, unpackZip, writeTarGz, writeZip } from './build-server.mjs';
+import { gunzipSync } from 'node:zlib';
+import { PUBLISHED_TARGETS, archiveName, assembleRelease, checkServerTree, parseArguments, pinnedNodeFile, serverUpdateConfig, tarHeader, writeTarGz } from './build-server.mjs';
 import { fileEntries } from './package-tools.mjs';
 
 async function scratch(t) {
@@ -21,7 +21,7 @@ async function put(root, file, content = 'fixture') {
   await writeFile(join(root, file), content);
 }
 
-/** A staged app and unpacked official Node archives for Linux and Windows, all fake. */
+/** A staged app and an unpacked official Linux Node archive, all fake. */
 async function sources(root) {
   const app = join(root, 'app-source');
   await put(app, 'package.json', '{"name":"@vonvon/daemon","version":"0.9.0"}');
@@ -32,33 +32,27 @@ async function sources(root) {
   await put(app, 'node_modules/dep/src/index.js', 'module.exports = 1;');
   const linux = join(root, 'node-v0-linux-x64');
   for (const file of ['bin/node', 'bin/npx', 'LICENSE', 'include/node/node.h', 'lib/node_modules/npm/bin/npm-cli.js', 'lib/node_modules/npm/index.d.cts']) await put(linux, file);
-  const windows = join(root, 'node-v0-win-x64');
-  for (const file of ['node.exe', 'npm.cmd', 'LICENSE', 'node_modules/npm/bin/npm-cli.js', 'node_modules/npm/index.d.cts']) await put(windows, file);
-  await put(windows, 'node_modules/npm/bin/npm.cmd', '@ECHO off\r\n');
-  return { app, linux, windows };
+  return { app, linux };
 }
 
 async function release(t, target) {
   const root = await scratch(t);
-  const { app, linux, windows } = await sources(root);
+  const { app, linux } = await sources(root);
   const out = join(root, 'release');
-  await assembleRelease({ app, runtime: target.startsWith('win-') ? windows : linux, target, version: '0.9.0', nodeVersion: '24.0.0' }, out);
+  await assembleRelease({ app, runtime: linux, target, version: '0.9.0', nodeVersion: '24.0.0' }, out);
   return out;
 }
 
 test('a release has the app, the Node of its target with npm, and standalone.json', async t => {
-  for (const [target, node, npm] of [['linux-x64', 'node/bin/node', 'node/lib/node_modules/npm'], ['win-x64', 'node/node.exe', 'node/node_modules/npm']]) {
-    const root = await release(t, target);
-    const files = await checkServerTree(root, target);
-    for (const file of [node, `${npm}/bin/npm-cli.js`, 'node/LICENSE', 'app/dist/cli.js', 'app/node_modules/dep/src/index.js']) assert.ok(files.includes(file), `${target}: ${file}`);
-    assert.deepEqual(files.filter(file => file.startsWith('node/') && !file.startsWith(`${npm}/`)).sort(), ['node/LICENSE', node]);
-    assert.equal(files.some(file => file.endsWith('.d.cts')), false);
-    assert.deepEqual(JSON.parse(await readFile(join(root, 'standalone.json'), 'utf8')), { v: 1, version: '0.9.0', target, node: '24.0.0' });
-    // Windows keeps no execute bits; its own Node is node.exe, and POSIX targets are not built there.
-    if (process.platform !== 'win32') assert.equal((await stat(join(root, node))).mode & 0o111, 0o111);
-  }
-  // Windows npm keeps the CRLF launchers of the official Windows archive.
-  assert.equal(await readFile(join(await release(t, 'win-x64'), 'node/node_modules/npm/bin/npm.cmd'), 'utf8'), '@ECHO off\r\n');
+  const [target, node, npm] = ['linux-x64', 'node/bin/node', 'node/lib/node_modules/npm'];
+  const root = await release(t, target);
+  const files = await checkServerTree(root, target);
+  for (const file of [node, `${npm}/bin/npm-cli.js`, 'node/LICENSE', 'app/dist/cli.js', 'app/node_modules/dep/src/index.js']) assert.ok(files.includes(file), `${target}: ${file}`);
+  assert.deepEqual(files.filter(file => file.startsWith('node/') && !file.startsWith(`${npm}/`)).sort(), ['node/LICENSE', node]);
+  assert.equal(files.some(file => file.endsWith('.d.cts')), false);
+  assert.deepEqual(JSON.parse(await readFile(join(root, 'standalone.json'), 'utf8')), { v: 1, version: '0.9.0', target, node: '24.0.0' });
+  // Windows keeps no execute bits, and the packages are not built there.
+  if (process.platform !== 'win32') assert.equal((await stat(join(root, node))).mode & 0o111, 0o111);
 });
 
 // main 必败: packages carried no manifest key or address (server-3-update-engine C2)
@@ -80,11 +74,6 @@ test('server-update.json: the committed key makes a release build, a key or addr
   await assert.rejects(serverUpdateConfig({ publicKeyFile: join(root, 'bad.txt') }), /not an Ed25519 public key/);
 });
 
-const caseSensitive = async root => {
-  await put(root, 'Case');
-  try { await stat(join(root, 'case')); return false; } catch { return true; }
-};
-
 test('checkServerTree refuses what must not ship', async t => {
   const cases = [
     ['no manifest key file', root => rm(join(root, 'app/server-update.json')), /missing app\/server-update\.json/],
@@ -99,28 +88,11 @@ test('checkServerTree refuses what must not ship', async t => {
     ['a native module', root => put(root, 'app/node_modules/dep/addon.node'), /native module refused: app\/node_modules\/dep\/addon\.node/],
   ];
   if (process.platform !== 'win32') cases.push(['a symbolic link', root => symlink('node', join(root, 'node/bin/npm')), /symlink refused: node\/bin\/npm/]);
-  if (await caseSensitive(await scratch(t))) {
-    cases.push(
-      ['files that differ only in case', async root => { await put(root, 'app/node_modules/dep/README'); await put(root, 'app/node_modules/dep/readme'); }, /differ only in case/],
-      ['a file and a directory that differ only in case', async root => { await put(root, 'app/node_modules/Case/a.js'); await put(root, 'app/node_modules/case'); }, /differ only in case: app\/node_modules\/Case and app\/node_modules\/case/],
-      ['directories that differ only in case', async root => { await put(root, 'app/node_modules/Dep/a.js'); await put(root, 'app/node_modules/dep/b.js'); }, /differ only in case: app\/node_modules\/dep and app\/node_modules\/Dep|differ only in case: app\/node_modules\/Dep and app\/node_modules\/dep/],
-    );
-  }
   for (const [name, change, problem] of cases) {
     const root = await release(t, 'linux-x64');
     await change(root);
     await assert.rejects(checkServerTree(root, 'linux-x64'), problem, name);
   }
-});
-
-test('Windows packages keep every path inside the 260-character budget; other targets do not need to', async t => {
-  const long = `app/node_modules/dep/${'d'.repeat(150)}.js`;
-  const windows = await release(t, 'win-x64');
-  await put(windows, long);
-  await assert.rejects(checkServerTree(windows, 'win-x64'), /path too long for Windows/);
-  const linux = await release(t, 'linux-x64');
-  await put(linux, long);
-  await checkServerTree(linux, 'linux-x64');
 });
 
 test('tar.gz archives hold regular files only, with fixed owner, time and modes, and paths beyond 100 bytes', async t => {
@@ -150,100 +122,50 @@ test('tar.gz archives hold regular files only, with fixed owner, time and modes,
   assert.throws(() => tarHeader(`${'x'.repeat(160)}/${'y'.repeat(101)}`, 0, 0o644, 0), /does not fit a ustar header/);
 });
 
-/** Reads a zip through its central directory, as Expand-Archive does. */
-function readZip(bytes) {
-  const end = bytes.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
-  const count = bytes.readUInt16LE(end + 10);
-  let at = bytes.readUInt32LE(end + 16);
-  const files = new Map();
-  for (let i = 0; i < count; i++) {
-    assert.equal(bytes.readUInt32LE(at), 0x02014b50);
-    const [method, crc, size, nameLength, offset] = [bytes.readUInt16LE(at + 10), bytes.readUInt32LE(at + 16), bytes.readUInt32LE(at + 20), bytes.readUInt16LE(at + 28), bytes.readUInt32LE(at + 42)];
-    const name = bytes.subarray(at + 46, at + 46 + nameLength).toString('utf8');
-    const start = offset + 30 + bytes.readUInt16LE(offset + 26) + bytes.readUInt16LE(offset + 28);
-    const body = bytes.subarray(start, start + size);
-    const data = method === 8 ? inflateRawSync(body) : Buffer.from(body);
-    assert.equal(crc32(data), crc, name);
-    files.set(name, data.toString('utf8'));
-    at += 46 + nameLength;
-  }
-  return files;
-}
-
-test('zip archives list every file with its content', async t => {
-  const root = await scratch(t);
-  await put(root, 'tree/node/node.exe', 'MZ');
-  await put(root, 'tree/app/dist/cli.js', 'x'.repeat(5000));
-  await writeZip(join(root, 'tree'), await fileEntries(join(root, 'tree')), join(root, 'out.zip'), 1_700_000_000);
-  assert.deepEqual(readZip(await readFile(join(root, 'out.zip'))), new Map([['app/dist/cli.js', 'x'.repeat(5000)], ['node/node.exe', 'MZ']]));
-});
-
-test('unpackZip reads a zip back and refuses unsafe or damaged entries', async t => {
-  const root = await scratch(t);
-  await put(root, 'tree/node-v0-win-x64/node.exe', 'MZ');
-  await put(root, 'tree/node-v0-win-x64/node_modules/npm/bin/npm-cli.js', 'x'.repeat(5000));
-  await writeZip(join(root, 'tree'), await fileEntries(join(root, 'tree')), join(root, 'good.zip'), 1_700_000_000);
-  await unpackZip(join(root, 'good.zip'), join(root, 'good'));
-  assert.equal(await readFile(join(root, 'good/node-v0-win-x64/node.exe'), 'utf8'), 'MZ');
-  assert.equal(await readFile(join(root, 'good/node-v0-win-x64/node_modules/npm/bin/npm-cli.js'), 'utf8'), 'x'.repeat(5000));
-  await put(root, 'outside', 'kept');
-  await put(root, 'tree/etc/passwd', 'absolute');
-  const unsafe = [['parent', '../outside'], ['absolute', '/etc/passwd']];
-  if (process.platform !== 'win32') { await put(root, 'tree/a\\b', 'backslash'); unsafe.push(['backslash', 'a\\b']); }
-  for (const [name, path] of unsafe) {
-    await writeZip(join(root, 'tree'), [{ path, mode: '644' }], join(root, `${name}.zip`), 1_700_000_000);
-    await assert.rejects(unpackZip(join(root, `${name}.zip`), join(root, name)), /unsafe entry/, name);
-  }
-  assert.equal(await readFile(join(root, 'outside'), 'utf8'), 'kept');
-  const damaged = await readFile(join(root, 'good.zip'));
-  damaged[30 + 'node-v0-win-x64/node.exe'.length] ^= 1; // the first entry, stored
-  await writeFile(join(root, 'damaged.zip'), damaged);
-  await assert.rejects(unpackZip(join(root, 'damaged.zip'), join(root, 'damaged')), /node\.exe is damaged/);
-});
-
 test('pinned Node files are checked on download and on every reuse', async t => {
   const root = await scratch(t);
   const bytes = Buffer.from('official node');
-  const pins = { version: '24.0.0', files: { 'win-x64': { file: 'node-v24.0.0-win-x64.zip', sha256: createHash('sha256').update(bytes).digest('hex') } } };
+  const pins = { version: '24.0.0', files: { 'linux-arm64': { file: 'node-v24.0.0-linux-arm64.tar.gz', sha256: createHash('sha256').update(bytes).digest('hex') } } };
   const urls = [];
   const fetchBytes = async url => { urls.push(url); return bytes; };
-  const path = await pinnedNodeFile(pins, 'win-x64', root, fetchBytes);
-  assert.equal(await pinnedNodeFile(pins, 'win-x64', root, fetchBytes), path);
-  assert.deepEqual(urls, ['https://nodejs.org/dist/v24.0.0/node-v24.0.0-win-x64.zip']);
+  const path = await pinnedNodeFile(pins, 'linux-arm64', root, fetchBytes);
+  assert.equal(await pinnedNodeFile(pins, 'linux-arm64', root, fetchBytes), path);
+  assert.deepEqual(urls, ['https://nodejs.org/dist/v24.0.0/node-v24.0.0-linux-arm64.tar.gz']);
   await writeFile(path, 'tampered');
-  assert.equal(await readFile(await pinnedNodeFile(pins, 'win-x64', root, fetchBytes), 'utf8'), 'official node');
-  await assert.rejects(pinnedNodeFile(pins, 'win-x64', join(root, 'other'), async () => Buffer.from('not node')), /does not match its SHA-256/);
+  assert.equal(await readFile(await pinnedNodeFile(pins, 'linux-arm64', root, fetchBytes), 'utf8'), 'official node');
+  await assert.rejects(pinnedNodeFile(pins, 'linux-arm64', join(root, 'other'), async () => Buffer.from('not node')), /does not match its SHA-256/);
   await assert.rejects(pinnedNodeFile(pins, 'linux-x64', root, fetchBytes), /no pin for linux-x64/);
 });
 
 test('every target has a pinned Node file and an archive name', async () => {
   const pins = JSON.parse(await readFile(new URL('./server-node.json', import.meta.url), 'utf8'));
   assert.match(pins.version, /^24\.\d+\.\d+$/);
-  assert.deepEqual(Object.keys(pins.files).sort(), [...TARGETS].sort());
-  for (const target of TARGETS) {
+  assert.deepEqual(Object.keys(pins.files), PUBLISHED_TARGETS);
+  for (const target of PUBLISHED_TARGETS) {
     assert.match(pins.files[target].sha256, /^[0-9a-f]{64}$/, target);
-    assert.equal(pins.files[target].file, `node-v${pins.version}-${target}.${target.startsWith('win-') ? 'zip' : 'tar.gz'}`);
+    assert.equal(pins.files[target].file, `node-v${pins.version}-${target}.tar.gz`);
   }
   assert.equal(archiveName('0.9.0', 'linux-arm64'), 'vonvon-server-0.9.0-linux-arm64.tar.gz');
-  assert.equal(archiveName('0.9.0', 'win-arm64'), 'vonvon-server-0.9.0-win-arm64.zip');
 });
 
-// main 必败: every target was built and published by default
-test('the default build and the published list are the two Linux targets; the others still build when named', () => {
+// main 必败: four macOS and Windows targets were still built when named (owner 2026-11-01: Linux only, I6)
+test('the two Linux targets are the only ones: built by default, one of them when named, nothing else', () => {
   assert.deepEqual(PUBLISHED_TARGETS, ['linux-x64', 'linux-arm64']);
   assert.deepEqual(parseArguments(['--out', '/tmp/server-out']).targets, PUBLISHED_TARGETS);
-  assert.deepEqual(parseArguments(['--out', '/tmp/server-out', '--targets', 'win-x64,darwin-arm64']).targets, ['win-x64', 'darwin-arm64']);
-  assert.throws(() => parseArguments(['--out', '/tmp/server-out', '--targets', 'linux-x86']), /unknown target linux-x86/);
+  assert.deepEqual(parseArguments(['--out', '/tmp/server-out', '--targets', 'linux-arm64']).targets, ['linux-arm64']);
+  for (const target of ['linux-x86', 'darwin-arm64', 'win-x64']) {
+    assert.throws(() => parseArguments(['--out', '/tmp/server-out', '--targets', target]), new RegExp(`unknown target ${target}`));
+  }
 });
 
 // main 必败 on Windows: a URL's pathname there is /E:/…, which is not inside the repository, so the build went on to the
 // clean-tree check (Windows acceptance task 205). allowDirty keeps the answer from depending on the worktree.
-test('the build refuses an output or a Node cache inside the repository, and POSIX targets on Windows', async () => {
+test('the build refuses an output or a Node cache inside the repository, and any build on Windows', async () => {
   const { buildServer } = await import('./build-server.mjs');
   const inside = fileURLToPath(new URL('../.server-out', import.meta.url));
   await assert.rejects(buildServer({ out: inside, targets: ['linux-x64'], allowDirty: true }), /\.server-out must be outside the repository/);
   await assert.rejects(buildServer({ out: join(tmpdir(), 'vonvon-server-out'), cache: inside, targets: ['linux-x64'], allowDirty: true }), /\.server-out must be outside the repository/);
-  await assert.rejects(buildServer({ out: join(tmpdir(), 'vonvon-server-out'), targets: ['win-x64', 'linux-x64'], allowDirty: true, platform: 'win32' }), /^Error: linux-x64: build these on macOS or Linux/);
+  await assert.rejects(buildServer({ out: join(tmpdir(), 'vonvon-server-out'), targets: ['linux-x64'], allowDirty: true, platform: 'win32' }), /^Error: the server packages are built on Linux or macOS, not on Windows/);
 });
 
 // main 必败: npm ci rewrote the CRLF shebang line of a linked bin on a Windows checkout with core.autocrlf=true, and the

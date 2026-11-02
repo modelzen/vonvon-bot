@@ -85,9 +85,9 @@ export const installsService=(distribution:Distribution):boolean =>
   distribution.kind==='bundled' || distribution.kind==='global-npm' || distribution.kind==='standalone';
 
 /**
- * What a launchd or systemd definition runs. A standalone server goes through its stable `current` link with the Node it
- * ships, never the versioned realpath this process runs from, so an upgrade only moves `current` (devices 7.2). That Node
- * goes first on PATH for managed tools whose launcher is `#!/usr/bin/env node`.
+ * What a launchd or systemd definition runs. A standalone server (Linux only, so systemd) goes through its stable
+ * `current` link with the Node it ships, never the versioned realpath this process runs from, so an upgrade only moves
+ * `current` (devices 7.2). That Node goes first on PATH for managed tools whose launcher is `#!/usr/bin/env node`.
  */
 export function serviceProgram(distribution:Distribution, executable:string, capturedPath:string):{distribution:Definition['distribution'];capturedPath:string} {
   switch (distribution.kind) {
