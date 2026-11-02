@@ -100,6 +100,39 @@ describe('retained QR behavior over WebSocket', () => {
     } finally { persist.release(); await fixture.close(); }
   });
 
+  // Codex 审查 267-1、268-1 (修之前必败): two web pages of this computer were open before the scan; the one that started it
+  // is closed, the other stays connected, and the scan goes on past 60 seconds. The last of them closing starts the 60
+  // seconds; a command line connection (another client, local:cli) holds nothing. Real loopback sockets, the clock faked
+  // once they are connected.
+  it('keeps a scan while another web page of this computer that was open before it stays connected', async () => {
+    const fixture = await startFixture(fakeService({ registerBotByQr: options => new Promise(resolve => {
+      options.onQr({ url: 'https://example.com/qr', expireIn: 600 });
+      options.signal.addEventListener('abort', () => resolve({ ok: false, code: 'abort', reason: '' }), { once: true });
+    }) }));
+    const phase = async (client: Client, id: string, job: JobId) => (await snapshot(client, id)).jobs.find(each => each.id === job)?.phase;
+    try {
+      const pageA = await socketClient(fixture.api.port, fixture.credential, undefined, 3000, 'web');
+      const pageB = await socketClient(fixture.api.port, fixture.credential, undefined, 3000, 'web');
+      const terminal = await socketClient(fixture.api.port, fixture.credential, undefined, 3000, 'cli');
+      await pageA.ready(); await pageB.ready(); await terminal.ready();
+      const id = await start(pageA, 'start');
+      await pageB.wait(frame => frame.type === 'event' && frame.event === 'snapshot' && frame.payload.jobs.some(job => job.id === id && job.phase === 'qr'));
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      await pageA.close();
+      await delay(100);
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(await phase(pageB, 'after-a', id)).toBe('qr');
+      await pageB.close();
+      await delay(100);
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect(await phase(terminal, 'before-grace-ends', id)).toBe('qr');
+      await vi.advanceTimersByTimeAsync(1_000);
+      await terminal.wait(frame => frame.type === 'event' && frame.event === 'snapshot' && frame.payload.jobs.some(job => job.id === id && job.phase === 'cancelled'));
+      vi.useRealTimers();
+      await terminal.close();
+    } finally { vi.useRealTimers(); await fixture.close(); }
+  });
+
   it('projects refresh QR PNG, URL, expiry, status and successful agent identity without credentials', async () => {
     const persist = gate();
     let callbacks: Parameters<AdminService['registerBotByQr']>[0] | undefined;

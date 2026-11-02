@@ -16,6 +16,8 @@ export type ClientsReply = Extract<DeviceReply, {kind: 'clients'}>;
 export const SECTION = '允许别的设备连接';
 export const PAIRED_TOAST_TITLE = '有新设备配对到这台电脑';
 export const PAIRED_SECTION = '已配对的设备';
+/** The link's own group, with its own search anchor (Codex 审查 269-2). */
+export const LINK_SECTION = '连接链接';
 export const panelTitle = (where: Where): string => `${SECTION}${where.isRemote ? whereName(where) : '本机'}`;
 export const KIND_LABEL: Record<Kind, string> = {tailscale: 'Tailscale', overlay: '组网', lan: '局域网', cgnat: '运营商地址', public: '公网'};
 export const STATE_LABEL: Record<Opened['state'], string> = {listening: '监听中', waiting: '等地址出现', 'needs-confirmation': '网络变了，要确认', disabled: '已关闭', failed: '开不了'};
@@ -91,7 +93,15 @@ export const portHint = (where: Where): string => onDeviceText(where, '要改端
 export const NO_ADDRESS = '这台设备现在没有别的设备能连过来的地址。';
 export const LINK_HELP = '把这条链接粘到另一台电脑的 Vonvon Bot → 设置 → 设备 → 添加。10 分钟内有效，只能用一次，别发给别人。';
 export const LINK_EXPIRED = '链接过期了，再生成一个。';
-/** Why 生成连接链接 is grey, or nothing. */
+/** Codex 审查 267-2、269-1: the address or port the link was made on changed, or it stopped listening. */
+export const LINK_MOVED = '地址变了，刚才那条链接用不了了，再生成一个。';
+/** A link carries the address and port it was made on: it connects while that address is the open one, listening, on
+ * that port. Read again from the device (an operation's reply, 刷新, the 10-second read), whoever changed it. */
+export function linkUsable(made: {host: string; port: number}, rows: readonly AddressRow[], port: number | undefined): boolean {
+  const open = rows.find(row => row.enabled);
+  return open?.host === made.host && open.state === 'listening' && port === made.port;
+}
+/** Why 生成连接链接 (and 再生成一个) is grey, or nothing. */
 export function linkBlocked(rows: readonly AddressRow[]): string | undefined {
   const open = rows.find(row => row.enabled);
   if (!open) return '先在上面选一个地址并开启。';

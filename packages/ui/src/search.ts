@@ -65,7 +65,9 @@ const globalGroups: readonly {page: Page; section: string; fields: readonly Targ
   {page: 'application', section: 'daemon 运行', fields: [item('运行方式'), item('daemon 服务', ['启动 daemon', '停止 daemon']), item('临时运行 Bot', [], {guide: '仅运行指定 Bot 时显示当前临时运行状态。'})]},
   {page: 'application', section: '后台服务', fields: [item('系统服务'), item('服务运行', ['启动已安装服务']), item('仅运行指定 Bot', [], {reveal: 'machine-advanced'}), ...['进程 PID', '上次退出', '服务定义', '标准输出', '错误日志'].map(title => item(title, [], {reveal: 'machine-advanced'}))]},
   // devices-ui-3: 允许别的设备连接, on every device shown (the desktop and the web page alike)
-  {page: 'application', section: '允许别的设备连接', fields: [item('设备名字', ['这台设备的名字', '改设备名']), item('地址', ['远程连接', 'Tailscale', '局域网', '组网', '开启远程', '关闭远程连接'], {field: ''}), item('端口', ['改端口']), item('连接链接', ['生成连接链接', '配对链接', '配对'])]},
+  {page: 'application', section: '允许别的设备连接', fields: [item('设备名字', ['这台设备的名字', '改设备名']), item('地址', ['远程连接', 'Tailscale', '局域网', '组网', '开启远程', '关闭远程连接'], {field: ''}), item('端口', ['改端口'])]},
+  // The link is in its own group next to it, which App looks in (Codex 审查 269-2): its row, or the link once made
+  {page: 'application', section: '连接链接', fields: [item('连接链接', ['生成连接链接', '配对链接', '配对'])]},
   {page: 'application', section: '已配对的设备', fields: [item('已配对的设备', ['已配对的客户端', '撤销', '撤销设备', '客户端', '谁连着这台'], {field: ''})]},
   {page: 'application', section: '软件更新', fields: [item('桌面版', [], {field: ''}), item('更新状态', [], {field: ''}), item('可用版本', [], {field: ''}), item('检查更新', ['检查桌面更新']), item('下载更新', [], {guide: '有可用更新时显示下载操作。'}), item('重启升级', ['安装更新'], {field: '重启升级', guide: '下载完成后显示重启升级，会中断正在进行的对话。'}), item('发布说明')]},
   {page: 'application', section: '外部 Core / CLI', fields: [item('Core 来源'), item('当前版本'), item('可用版本'), item('检查 Core 更新'), item('更新外部 Core'), item('更新进度', ['查看 Core 更新进度'])]},

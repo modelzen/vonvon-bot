@@ -11,13 +11,16 @@ import {settingAnchor} from '../search';
 import {useDraft} from './DraftGuard';
 import {
   addressRows, cascadeCount, CLIENT_KIND_LABEL, confirmedRequest, defaultPick, disableStep, enableErrorText, enableStep, hostOf, invitedByText,
-  isRecent, kindLabel, LINK_EXPIRED, LINK_HELP, linkBlocked, linkCountdown, liveClients, NO_ADDRESS, PAIRED_SECTION, panelTitle, portHint, readErrorText,
+  isRecent, kindLabel, LINK_EXPIRED, LINK_HELP, LINK_MOVED, LINK_SECTION, linkBlocked, linkCountdown, linkUsable, liveClients, NO_ADDRESS, PAIRED_SECTION, panelTitle, portHint, readErrorText,
   revokeConfirmText, riskFromReply, SECTION, SELF_TAG, selfText, stateText, type AddressRow, type ClientsReply, type Confirm, type Step,
 } from './remote-access-presentation';
 import './remote-access.css';
 
 type Where = Pick<ActiveDevice, 'isRemote' | 'name'>;
-type Link = {text: string; expiresAt: number};
+/** `host`, `port`: the open address and port it was made on (Codex 审查 267-2、269-1). */
+type Link = {text: string; expiresAt: number; host: string; port: number};
+/** Why the last link is gone: it expired, or its address or port changed. */
+type Gone = 'expired' | 'moved';
 const codeOf = (error: unknown): string | undefined => error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
 const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
 const validName = (name: string): boolean => name.trim().length >= 1 && name.trim().length <= 40;
@@ -55,7 +58,7 @@ export function RemoteAccessPanel() {
   const [readError, setReadError] = useState<string>();
   const [picked, setPicked] = useState<string>();
   const [link, setLink] = useState<Link>();
-  const [expired, setExpired] = useState(false);
+  const [gone, setGone] = useState<Gone>();
   const [confirm, setConfirm] = useState<Confirm>();
   const [ticked, setTicked] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -89,7 +92,10 @@ export function RemoteAccessPanel() {
   const rows = useMemo(() => status ? addressRows(status) : [], [status]);
   useEffect(() => { if (!picked || !rows.some(row => row.host === picked)) setPicked(defaultPick(rows)); }, [rows, picked]);
   const now = useNow(link ? 1_000 : 60_000);
-  useEffect(() => { if (link && now >= link.expiresAt) { setLink(undefined); setExpired(true); } }, [link, now]);
+  useEffect(() => { if (link && now >= link.expiresAt) { setLink(undefined); setGone('expired'); } }, [link, now]);
+  // A link made on an address that was replaced, closed or moved to another port cannot connect, whoever changed it.
+  const port = status?.remote.port;
+  useEffect(() => { if (link && !linkUsable(link, rows, port)) { setLink(undefined); setGone('moved'); } }, [link, rows, port]);
 
   async function send(request: DeviceRequest): Promise<DeviceReply | undefined> {
     setBusy(true);
@@ -118,9 +124,11 @@ export function RemoteAccessPanel() {
     if (reply.kind === 'revoked') { setNotice({text: `已撤销 ${reply.revoked.length} 台。`}); void read(); }
   }
   async function pair() {
-    setExpired(false);
+    const open = rows.find(row => row.enabled);
+    if (linkBlocked(rows) || !open || port === undefined) return;
+    setGone(undefined);
     const reply = await send({type: 'pair'});
-    if (reply?.kind === 'pairingLink') setLink({text: reply.link, expiresAt: reply.expiresAt});
+    if (reply?.kind === 'pairingLink') setLink({text: reply.link, expiresAt: reply.expiresAt, host: open.host, port});
   }
   const rename = async (request: DeviceRequest) => {
     const reply = await client.device(request);
@@ -128,7 +136,7 @@ export function RemoteAccessPanel() {
     if (reply.kind === 'clients') setClients(reply);
   };
   const confirmed = confirm ? confirmedRequest(confirm, ticked) : undefined;
-  return <RemoteAccessView where={where} status={status} clients={clients} rows={rows} picked={picked} link={link} expired={expired} now={now}
+  return <RemoteAccessView where={where} status={status} clients={clients} rows={rows} picked={picked} link={link} gone={gone} now={now}
     busy={busy} notice={notice} readError={readError} renaming={renaming}
     onPick={setPicked} onRefresh={() => void read(true)}
     onEnable={() => picked && void act(enableStep(rows, picked, where, status?.clients.total ?? 0))}
@@ -161,7 +169,7 @@ export function ConfirmPanel({confirm, ticked, busy, ready, onTick, onCancel, on
 }
 
 type ViewProps = {
-  where: Where; status?: DeviceStatus; clients?: ClientsReply; rows: AddressRow[]; picked?: string; link?: Link; expired: boolean; now: number;
+  where: Where; status?: DeviceStatus; clients?: ClientsReply; rows: AddressRow[]; picked?: string; link?: Pick<Link, 'text' | 'expiresAt'>; gone?: Gone; now: number;
   busy: boolean; notice?: {text: string; error?: boolean}; readError?: string; renaming?: string; dialog?: ReactNode;
   onPick: (host: string) => void; onRefresh: () => void; onEnable: () => void; onDisable: (row: AddressRow) => void; onReconfirm: (row: AddressRow) => void;
   onPair: () => void; onCopy: () => void; onRename: (target: string) => void; renameForm: (target: string) => ReactNode; onRevoke: (client: ClientRecord) => void;
@@ -204,15 +212,15 @@ export function RemoteAccessView(props: ViewProps) {
       <SettingsRow title="端口" value={String(status.remote.port)}/>
     </SettingsGroup>
     {!rows.some(row => row.kind === 'tailscale') && <TailscaleAdvice/>}
-    <SettingsGroup label="连接链接" footer={LINK_HELP}>
+    <SettingsGroup label={LINK_SECTION} id={settingAnchor(LINK_SECTION)} footer={LINK_HELP}>
       {link ? <div className="remote-link">
         <input readOnly aria-label="连接链接" value={link.text} onFocus={event => event.currentTarget.select()} onClick={event => event.currentTarget.select()}/>
         <div className="remote-link__actions">
           <Button size="sm" variant="primary" onClick={props.onCopy}>复制</Button>
           <span>{linkCountdown(link.expiresAt, props.now)}</span>
-          <Button size="sm" variant="ghost" disabled={busy} onClick={props.onPair}>再生成一个</Button>
+          <Button size="sm" variant="ghost" disabled={busy || Boolean(blocked)} onClick={props.onPair}>再生成一个</Button>
         </div>
-      </div> : <SettingsRow title="连接链接" description={blocked ?? (props.expired ? LINK_EXPIRED : '生成后 10 分钟内有效。')}
+      </div> : <SettingsRow title="连接链接" description={blocked ?? (props.gone === 'moved' ? LINK_MOVED : props.gone === 'expired' ? LINK_EXPIRED : '生成后 10 分钟内有效。')}
         trailing={<Button size="sm" disabled={busy || Boolean(blocked)} onClick={props.onPair}>生成连接链接</Button>}/>}
     </SettingsGroup>
     <SettingsGroup label={PAIRED_SECTION} id={settingAnchor(PAIRED_SECTION)}>

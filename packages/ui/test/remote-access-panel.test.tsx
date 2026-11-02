@@ -4,6 +4,7 @@ import type {ClientRecord, DeviceStatus} from '@vonvon/protocol';
 import {ConfirmPanel, RemoteAccessView} from '../src/settings/RemoteAccessPanel';
 import {addressRows, type ClientsReply, type Confirm} from '../src/settings/remote-access-presentation';
 import {DraftGuardProvider} from '../src/settings/DraftGuard';
+import {searchEntries, settingAnchor} from '../src/search';
 
 // devices-ui-3 第 5 节 remote-access-panel. main 必败: there was no 允许别的设备连接.
 const now = 1_000_000_000_000;
@@ -18,7 +19,7 @@ const client = (id: string, name: string, extra: Partial<ClientRecord> = {}): Cl
 });
 const noop = () => {};
 const view = (props: Partial<Parameters<typeof RemoteAccessView>[0]> & {status?: DeviceStatus}) => renderToStaticMarkup(<DraftGuardProvider><RemoteAccessView
-  where={local} rows={props.status ? addressRows(props.status) : []} expired={false} now={now} busy={false}
+  where={local} rows={props.status ? addressRows(props.status) : []} now={now} busy={false}
   onPick={noop} onRefresh={noop} onEnable={noop} onDisable={noop} onReconfirm={noop} onPair={noop} onCopy={noop} onRename={noop} renameForm={() => null} onRevoke={noop}
   {...props}/></DraftGuardProvider>);
 const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
@@ -78,9 +79,15 @@ it('shows the link with its countdown, and says when it ran out', () => {
   expect(text(html)).toContain('还剩 9 分 12 秒');
   expect(text(html)).toContain('再生成一个');
   expect(text(html)).toContain('复制');
-  const gone = view({status: st, expired: true});
+  expect(html).toMatch(/<button[^>]*class="ui-button ui-button--ghost ui-button--sm"><span>再生成一个/);
+  const gone = view({status: st, gone: 'expired'});
   expect(text(gone)).toContain('链接过期了，再生成一个。');
   expect(gone).not.toContain('vonvon://pair#example');
+  // Codex 审查 267-2、269-1: its address changed; the panel drops the link (remote-access-link.test.tsx) and says so
+  expect(text(view({status: st, gone: 'moved'}))).toContain('地址变了，刚才那条链接用不了了，再生成一个。');
+  // 再生成一个 is grey as 生成连接链接 is while no address listens (修之前必败)
+  const waiting = view({status: status([{host: '100.64.0.10', kind: 'tailscale', enabledAt: 1, state: 'waiting'}]), link: {text: 'vonvon://pair#example', expiresAt: now + 552_000}});
+  expect(waiting).toMatch(/disabled=""[^>]*><span>再生成一个/);
 });
 it('lists the paired clients with who brought them, marks the new one and the caller, and gives no 撤销 for the caller', () => {
   const clients: ClientsReply = {kind: 'clients', generation: 4, self: 'cl_bbbbbbbbbbbbbbbb', clients: [
@@ -117,4 +124,28 @@ it('says why it has nothing to show, and gives the Tailscale advice without a Ta
   expect(text(view({status: bare}))).toContain('推荐用 Tailscale');
   const none: DeviceStatus = {...status([]), remote: {port: 7767, addresses: [], candidates: []}};
   expect(text(view({status: none}))).toContain('这台设备现在没有别的设备能连过来的地址。');
+});
+
+// Codex 审查 269-2 (修之前必败): App finds a search result's field only among the descendants of the section it names
+// (`App.tsx` focus: `[data-search-title]` rows, then controls by aria-label or text), and says 这项设置当前不可用 when it
+// is not there. Every entry of this panel, with and without a link: its section is on the page and holds its field.
+it('puts every search entry of this panel inside the section it names, with a link and without', () => {
+  const snapshot = {agents: [], groups: [], projects: [], memberships: []} as unknown as Parameters<typeof searchEntries>[0];
+  const sections = ['允许别的设备连接', '连接链接', '已配对的设备'];
+  const ours = searchEntries(snapshot).filter(entry => entry.destination.page === 'application' && sections.includes(entry.destination.section ?? ''));
+  expect(ours.map(entry => entry.title)).toEqual(expect.arrayContaining(['设备名字', '地址', '端口', '连接链接', '已配对的设备']));
+  const st = status([{host: '100.64.0.10', kind: 'tailscale', enabledAt: 1, state: 'listening'}]);
+  const clients: ClientsReply = {kind: 'clients', generation: 1, clients: [client('cl_aaaaaaaaaaaaaaaa', 'Clay 的 MacBook')]};
+  for (const html of [view({status: st, clients}), view({status: st, clients, link: {text: 'vonvon://pair#example', expiresAt: now + 552_000}})]) {
+    for (const entry of ours) {
+      const {section = '', field} = entry.destination;
+      const at = html.indexOf(`id="${settingAnchor(section)}"`);
+      expect(at, `${entry.title}: section ${section}`).toBeGreaterThan(-1);
+      const inside = html.slice(at, html.indexOf('</section>', at));
+      if (!field) continue;
+      const controls = [...inside.matchAll(/<(button|input|select|textarea|label|dt)\b[^>]*>(.*?)<\/\1>|<input\b[^>]*>/gs)];
+      const found = inside.includes(`data-search-title="${field}"`) || inside.includes(`aria-label="${field}"`) || controls.some(match => text(match[2] ?? '').trim() === field);
+      expect(found, `${entry.title}: field ${field} in ${section}`).toBe(true);
+    }
+  }
 });
