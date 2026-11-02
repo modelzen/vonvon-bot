@@ -1,7 +1,7 @@
 import type { NetworkInterfaceInfo } from 'node:os';
 import { expect, it, vi } from 'vitest';
 import type { Interfaces } from '../src/remote/address';
-import { candidateContext, candidateLabel, defaultCandidate, listCandidates } from '../src/remote/candidates';
+import { candidateContext, candidateLabel, createCandidates, defaultCandidate, listCandidates } from '../src/remote/candidates';
 
 // A1: the addresses `remote candidates` and `remote enable` offer, from injected interfaces only. main 必败: no list.
 const nic = (address: string, internal = false): NetworkInterfaceInfo => (address.includes(':')
@@ -77,4 +77,29 @@ it('runs `tailscale ip` only when a 100.64/10 address could be Tailscale\'s and 
   const ctx = await candidateContext({ interfaces: () => ({ utun4: [nic('100.101.7.12')] }), tailscale });
   expect(tailscale).toHaveBeenCalledOnce();
   expect(ctx.tailscale).toEqual(ts);
+});
+
+// devices-ui-3 4.2: device.status keeps the list 30 seconds, on the object, without the hidden ones. main 必败: no createCandidates
+it('keeps the list 30 seconds on its own object, and reads again after clear', async () => {
+  let now = 0;
+  const interfaces = vi.fn(() => mac);
+  const kept = createCandidates({ interfaces, tailscale: async () => ts, now: () => now });
+  const first = await kept.list();
+  expect(first.map(candidate => candidate.host)).toEqual(['100.101.7.12', 'fd7a:115c:a1e0::7', '10.147.17.5', '192.168.1.23', '100.70.0.3', '203.0.113.9']);
+  now = 29_999;
+  await kept.list();
+  expect(interfaces).toHaveBeenCalledOnce();
+  kept.clear();
+  await kept.list();
+  expect(interfaces).toHaveBeenCalledTimes(2);
+  now = 60_000;
+  await kept.list();
+  expect(interfaces).toHaveBeenCalledTimes(3);
+  const other = vi.fn(() => ({ eth0: [nic('192.168.1.9')] }));
+  expect((await createCandidates({ interfaces: other, tailscale: async () => none, now: () => now }).list()).map(candidate => candidate.host)).toEqual(['192.168.1.9']);
+  expect(interfaces).toHaveBeenCalledTimes(3);
+});
+it('puts a Windows Tailscale adapter first, as 允许别的设备连接 shows it', async () => {
+  const windows = createCandidates({ interfaces: () => ({ Tailscale: [nic('100.64.0.10')], Ethernet: [nic('192.168.1.9')] }), tailscale: async () => ({ installed: true, ips: ['100.64.0.10'] }) });
+  expect((await windows.list())[0]).toEqual({ host: '100.64.0.10', kind: 'tailscale', iface: 'Tailscale', tool: 'Tailscale' });
 });

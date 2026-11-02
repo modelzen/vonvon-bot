@@ -73,7 +73,7 @@ it('says what it can update, and checks and updates through the desktop shell, e
     // check: the shell is asked, and its answer is the reply
     const checking = cli.call(machine({ type: 'checkCoreUpdate' }));
     const check = await nextRequest(shell, 'check');
-    expect(check.by).toBe('这台电脑上的命令行');
+    expect(check.by).toBe('本机的命令行');
     await report(shell, check.requestId, 'available', { latest: '0.9.1' });
     expect(reply(await checking).payload).toMatchObject({ type: 'coreUpdate', distribution: { kind: 'bundled' }, current: expect.any(String), latest: '0.9.1', hasUpdate: true, desktopShell: true });
     // a version is the standalone server's only

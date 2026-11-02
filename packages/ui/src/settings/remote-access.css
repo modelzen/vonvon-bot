@@ -1,0 +1,32 @@
+/* devices-ui-3: 允许别的设备连接 and the paired toast. Plain layout, as the devices pages; the visual pass comes with the
+   final UI overhaul. */
+.remote-access { display: grid; gap: 16px; }
+.remote-address-block { display: grid; gap: 10px; padding: 12px 14px; }
+.remote-address-head { display: grid; gap: 2px; }
+.remote-address-head strong { font-size: 13px; font-weight: 500; }
+.remote-address-head span, .remote-address-empty, .remote-address-actions span { color: var(--text-secondary, #666); font-size: 12px; }
+.remote-address-empty { margin: 0; }
+.remote-address-list { display: grid; border: 1px solid rgb(0 0 0 / 8%); border-radius: 8px; }
+.remote-address { display: flex; align-items: center; gap: 10px; padding: 8px 10px; cursor: pointer; }
+.remote-address + .remote-address { border-top: 1px solid rgb(0 0 0 / 6%); }
+.remote-address:has(input:checked) { background: rgb(37 99 235 / 6%); }
+.remote-address__copy { display: grid; flex: 1; min-width: 0; }
+.remote-address__copy strong { font-size: 13px; font-weight: 500; }
+.remote-address__copy span { color: var(--text-secondary, #666); font-size: 12px; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.remote-address__state { flex: none; font-size: 12px; color: #15803d; }
+.remote-address__state:not([data-state="listening"]) { color: #b45309; }
+.remote-address__state[data-state="failed"] { color: #b91c1c; }
+.remote-address-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.remote-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: rgb(0 0 0 / 6%); font-size: 11px; font-weight: 500; line-height: 18px; vertical-align: 1px; }
+.remote-tag[data-tone="new"] { background: rgb(22 163 74 / 12%); color: #15803d; }
+.remote-link { display: grid; gap: 8px; padding: 12px 14px; }
+.remote-link input { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid rgb(0 0 0 / 15%); border-radius: 6px; font: 12px ui-monospace, monospace; }
+.remote-link__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary, #666); }
+.remote-rename { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.remote-rename input { font: inherit; padding: 4px 6px; }
+.remote-error { color: #b91c1c; font-size: 12px; }
+.remote-tick { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 13px; }
+.remote-dialog-text { margin: 0 0 10px; font-size: 13px; line-height: 1.6; }
+
+.paired-toasts { position: fixed; top: 96px; right: 24px; z-index: 100; display: grid; gap: 12px; width: min(420px, calc(100vw - 48px)); }
+.paired-toasts .ui-inline-notice { background: var(--surface, #fff); box-shadow: 0 8px 32px #0003; }

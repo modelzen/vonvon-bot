@@ -4,8 +4,8 @@ import { classifyAddress, inCgnatRange, needsConfirmation, overlayOf, type Addre
 
 /**
  * A1: the addresses another device could reach this one on, for `vonvon remote candidates`, the list `vonvon remote
- * enable` asks from in a terminal, and later U3's panel (which keeps them a while: `createCandidates` in its plan wraps
- * this). Only this machine's interfaces are read; nothing listens.
+ * enable` asks from in a terminal, and the desktop's 允许别的设备连接 (devices-ui-3: `createCandidates` keeps them a
+ * while). Only this machine's interfaces are read; nothing listens.
  */
 export type CandidateKind = Exclude<AddressKind, 'loopback'>;
 /** Left out unless asked for (`--all`): a virtual bridge for containers or VMs, a proxy's fake IP, a self-assigned address. */
@@ -86,4 +86,26 @@ export function candidateLabel(candidate: Candidate, recommended = false): strin
   if (candidate.kind === 'tailscale') return `Tailscale${recommended ? '（推荐）' : ' '}· ${candidate.host}`;
   const tool = candidate.kind === 'overlay' && candidate.tool ? ` · ${candidate.tool}` : '';
   return `${KIND_LABEL[candidate.kind]}${tool} · ${candidate.host}${needsConfirmation(candidate.kind) ? '（要确认）' : ''}`;
+}
+
+/** devices-ui-3 4.2: the list `device.status` carries, kept 30 seconds (the panel reads every 10, and `tailscale ip` may
+ * take up to 5). Kept on the object `createCandidates` makes, not in this module, so two daemons in one test process do
+ * not share it; `clear` after an address is opened or closed, and for the panel's 刷新. The hidden ones are left out. */
+export interface Candidates { list(): Promise<Candidate[]>; clear(): void }
+export const CANDIDATES_TTL_MS = 30_000;
+export function createCandidates(deps: { interfaces: () => Interfaces; tailscale: () => Promise<TailscaleInfo>; now?: () => number }): Candidates {
+  const now = deps.now ?? Date.now;
+  let kept: { at: number; list: Promise<Candidate[]> } | undefined;
+  return {
+    list() {
+      if (kept && now() - kept.at < CANDIDATES_TTL_MS) return kept.list;
+      const list = candidateContext(deps).then(ctx => listCandidates(ctx));
+      const entry = { at: now(), list };
+      kept = entry;
+      // One that failed is not kept: the next read tries again.
+      list.catch(() => { if (kept === entry) kept = undefined; });
+      return list;
+    },
+    clear() { kept = undefined; },
+  };
 }

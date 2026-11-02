@@ -217,6 +217,14 @@ it('bot add exits 1 for a failed, expired or busy scan and one cancelled elsewhe
   await expect(scanner([], { reply: { kind: 'refused', code: 'registration_busy', message: '已有注册正在保存，请稍后重试。' } }).add()).rejects.toEqual(failure('failed', '已有注册正在保存，请稍后重试。', { reason: 'registration_busy' }));
 });
 
+// devices 6.3 (devices-ui-3): another client scanning is refused as the other bot subcommands are, 4; nothing is cancelled. main 必败: 1
+it('bot add exits 4 while another client scans, and cancels nothing', async () => {
+  const message = '另一台设备「Clay 的 MacBook」正在扫码添加 Bot，等它完成后再试。';
+  const busy = scanner([], { reply: { kind: 'refused', code: 'job_running', message } });
+  await expect(busy.add()).rejects.toEqual(failure('refused', message, { reason: 'job_running' }));
+  expect(busy.run.mock.calls.map(([command]) => command)).toEqual([{ type: 'registerAgent' }]);
+});
+
 it('bot add cancels its scan on Ctrl-C, refuses a pipe, and tells a dropped connection before and after the QR', async () => {
   const s = scanner([qr('https://x')], { onQr: () => s.interrupt() });
   await expect(s.add()).rejects.toEqual(failure('interrupted', '已取消扫码。'));
@@ -227,7 +235,8 @@ it('bot add cancels its scan on Ctrl-C, refuses a pipe, and tells a dropped conn
   await expect(piped.add()).rejects.toEqual(failure('bad-args', 'vonvon bot add 要在终端里运行：二维码打进日志会被别人扫走。脚本里用 vonvon bot add --json（输出别进日志），或者用网页注册（vonvon open --print）。'));
   expect(piped.connect).not.toHaveBeenCalled();
   // main 必败: both exited 1; a drop before the QR is a lost connection (3), after it the scan may have finished (6)
-  await expect(scanner([qr('https://x')], { dropAt: 0 }).add()).rejects.toEqual(failure('connection', '和 daemon 的连接断了，扫码已经取消。重新运行 vonvon bot add。'));
+  // devices-ui-3: a scan that started is kept 60 seconds after the drop, so it is not said to be cancelled. main 必败
+  await expect(scanner([qr('https://x')], { dropAt: 0 }).add()).rejects.toEqual(failure('connection', '和 daemon 的连接断了。扫码任务要是已经开了，会再留 60 秒，之后自动取消；重新运行 vonvon bot add 会重新开始。'));
   await expect(scanner([qr('https://x'), qr('https://x')], { dropAt: 1 }).add()).rejects.toEqual(failure('outcome-unknown', '不知道扫码有没有完成：运行 vonvon bot list 看看。'));
 });
 
