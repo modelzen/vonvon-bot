@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { chmod, copyFile, link, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -8,7 +8,7 @@ import { extractTarGz, extractZip, removeStaging } from './archive';
 import { isCompleteRelease, readCurrent, switchCurrent, VERSION } from './current-release';
 import { nearestPackageRoot } from './distribution';
 import { fetchManifest, ManifestError, readServerUpdateConfig, serverTarget, type Fetch, type Manifest, type ServerUpdateConfig } from './standalone-manifest';
-import { acquireUpdateLock, isNewer, livePid, readUpdateStatus, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from './update';
+import { acquireUpdateLock, isNewer, readUpdateStatus, tryUpdateLock, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from './update';
 
 /**
  * The standalone server's update (server-3 4.4, 4.5): check the signed stable manifest, and apply it by downloading
@@ -85,34 +85,23 @@ function inTurn<T>(work: () => Promise<T>): Promise<T> {
   return run;
 }
 // Daemons of different data directories share the install root and so this record (review 206): the read, compare and
-// write also hold `update-state.lock` beside it, made with O_EXCL. A lock whose holder died or is older than 10 s is
-// moved aside under a name of its own, and goes back if what was moved is not the lock judged stale.
-const STATE_LOCK_STALE_MS = 10_000;
-const stateLockStale = async (file: string, held: string): Promise<boolean> => {
-  try { const { pid, at } = JSON.parse(held) as { pid: number; at: number }; return !livePid(pid) || Date.now() - at > STATE_LOCK_STALE_MS; }
-  catch { return stat(file).then(info => Date.now() - info.mtimeMs > STATE_LOCK_STALE_MS, () => false); } // still being written, or left empty
-};
+// write also hold `update-state.lock` beside it. The lock is update-lock.ts's (review 220): a live holder is never
+// taken over, however long it holds, so a check that cannot get it in time fails closed with `refused: 'state'`.
+const STATE_LOCK_WAIT_MS = 15_000;
 async function withStateLock<T>(installRoot: string, work: () => Promise<T>): Promise<T> {
   const file = join(installRoot, 'update-state.lock');
-  const token = randomBytes(8).toString('hex');
-  let mine = '';
-  for (const deadline = Date.now() + 1.5 * STATE_LOCK_STALE_MS; ;) {
-    mine = JSON.stringify({ pid: process.pid, at: Date.now(), token });
-    try { await writeFile(file, mine, { flag: 'wx' }); break; }
-    catch (error) {
-      if (errorCode(error) !== 'EEXIST' || Date.now() > deadline) { log.warn(EVENTS, 'update-state-unwritable', { code: errorCode(error) }); throw new StateUnusable(); }
+  let release: () => void;
+  for (const deadline = Date.now() + STATE_LOCK_WAIT_MS; ;) {
+    const attempt = tryUpdateLock(file);
+    if (typeof attempt === 'function') { release = attempt; break; }
+    if (attempt !== 'busy' || Date.now() > deadline) {
+      log.warn(EVENTS, 'update-state-unwritable', { code: attempt === 'busy' ? 'EBUSY' : errorCode(attempt) });
+      throw new StateUnusable();
     }
-    const held = await readFile(file, 'utf8').catch(() => null);
-    const aside = `${file}.${token}.stale`;
-    if (held === null || !await stateLockStale(file, held) || !await rename(file, aside).then(() => true, () => false)) {
-      await new Promise(resolve => setTimeout(resolve, 20));
-      continue;
-    }
-    if (await readFile(aside, 'utf8').catch(() => held) !== held) await link(aside, file).catch(() => undefined);
-    await rm(aside, { force: true }).catch(() => undefined);
+    await new Promise(resolve => setTimeout(resolve, 20));
   }
   try { return await work(); }
-  finally { if (await readFile(file, 'utf8').catch(() => '') === mine) await rm(file, { force: true }).catch(() => undefined); }
+  finally { release(); }
 }
 
 async function readManifest(deps: StandaloneDeps): Promise<{ check: StandaloneCheck; manifest?: Manifest }> {
@@ -184,9 +173,7 @@ export type ApplyDeps = StandaloneDeps & {
   /** Sees each record written, in order. */
   onStatus?: (status: UpdateStatus) => void;
 };
-class Failure extends Error {
-  constructor(message: string, readonly clearStaging = false) { super(message); }
-}
+class Failure extends Error {}
 
 /** How long a standalone `restarting` record nobody has taken yet still holds off another update. */
 export const RESTART_PENDING_MS = 10 * 60_000;
@@ -259,42 +246,49 @@ export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): {
     const zip = target.startsWith('win-');
     const staging = join(root, 'releases', `${version}.part`);
     await removeStaging(root, version);
-    await mkdir(staging, { recursive: true });
-    const archive = join(staging, `download.${zip ? 'zip' : 'tar.gz'}`);
-    let response: Response;
-    try { response = await fetcher(file.url, { signal: AbortSignal.timeout(600_000) }); }
-    catch (error) { throw new Failure(`下载失败：${error instanceof Error ? error.message : String(error)}`, true); }
-    const length = response.headers.get('content-length');
-    if (response.status !== 200 || !response.body || (length !== null && Number(length) !== file.size)) {
-      await response.body?.cancel().catch(() => undefined);
-      throw new Failure(response.status !== 200 ? `下载失败：HTTP ${response.status}` : '下载的大小和发布清单不一致', true);
-    }
-    const hash = createHash('sha512');
-    let transferred = 0;
-    let reported = 0;
-    const handle = await open(archive, 'wx', 0o600);
     try {
-      for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-        transferred += chunk.byteLength;
-        if (transferred > file.size) throw new Failure('下载的大小和发布清单不一致', true);
-        hash.update(chunk);
-        await handle.write(chunk);
-        if (transferred - reported >= 1024 * 1024) { reported = transferred; step('downloading', { progress: { transferred, total: file.size } }); }
+      await mkdir(staging, { recursive: true });
+      const archive = join(staging, `download.${zip ? 'zip' : 'tar.gz'}`);
+      let response: Response;
+      try { response = await fetcher(file.url, { signal: AbortSignal.timeout(600_000) }); }
+      catch (error) { throw new Failure(`下载失败：${error instanceof Error ? error.message : String(error)}`); }
+      const length = response.headers.get('content-length');
+      if (response.status !== 200 || !response.body || (length !== null && Number(length) !== file.size)) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new Failure(response.status !== 200 ? `下载失败：HTTP ${response.status}` : '下载的大小和发布清单不一致');
       }
+      const hash = createHash('sha512');
+      let transferred = 0;
+      let reported = 0;
+      const handle = await open(archive, 'wx', 0o600);
+      try {
+        for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+          transferred += chunk.byteLength;
+          if (transferred > file.size) throw new Failure('下载的大小和发布清单不一致');
+          hash.update(chunk);
+          await handle.write(chunk);
+          if (transferred - reported >= 1024 * 1024) { reported = transferred; step('downloading', { progress: { transferred, total: file.size } }); }
+        }
+      } catch (error) {
+        throw error instanceof Failure ? error : new Failure(`下载失败：${error instanceof Error ? error.message : String(error)}`);
+      } finally { await handle.close(); }
+      step('verifying', { progress: { transferred, total: file.size } });
+      if (transferred !== file.size || hash.digest('hex') !== file.sha512) throw new Failure('下载内容和发布清单不一致');
+      log.info(EVENTS, 'update-standalone-downloaded', { version, size: file.size });
+      step('unpacking');
+      await (deps.extract ?? ((source, into, isZip) => (isZip ? extractZip : extractTarGz)(source, into)))(archive, staging, zip);
+      await rm(archive, { force: true });
+      const node = join(staging, 'node', platform === 'win32' ? 'node.exe' : join('bin', 'node'));
+      const marker = await readFile(join(staging, 'standalone.json'), 'utf8').then(text => JSON.parse(text) as { version?: unknown }, () => ({}) as { version?: unknown });
+      if (marker.version !== version || !await isFile(join(staging, 'app', 'bin', 'vonvon.mjs')) || !await isFile(node)) throw new Failure('下载的服务端包不完整。');
+      await chmod(node, 0o755);
+      await rename(staging, join(root, 'releases', version));
     } catch (error) {
-      throw error instanceof Failure ? error : new Failure(`下载失败：${error instanceof Error ? error.message : String(error)}`, true);
-    } finally { await handle.close(); }
-    step('verifying', { progress: { transferred, total: file.size } });
-    if (transferred !== file.size || hash.digest('hex') !== file.sha512) throw new Failure('下载内容和发布清单不一致', true);
-    log.info(EVENTS, 'update-standalone-downloaded', { version, size: file.size });
-    step('unpacking');
-    await (deps.extract ?? ((source, into, isZip) => (isZip ? extractZip : extractTarGz)(source, into)))(archive, staging, zip);
-    await rm(archive, { force: true });
-    const node = join(staging, 'node', platform === 'win32' ? 'node.exe' : join('bin', 'node'));
-    const marker = await readFile(join(staging, 'standalone.json'), 'utf8').then(text => JSON.parse(text) as { version?: unknown }, () => ({}) as { version?: unknown });
-    if (marker.version !== version || !await isFile(join(staging, 'app', 'bin', 'vonvon.mjs')) || !await isFile(node)) throw new Failure('下载的服务端包不完整。');
-    await chmod(node, 0o755);
-    await rename(staging, join(root, 'releases', version));
+      // Whatever stopped it, a refusal of ours or an I/O error in the unpacker (review 220): the `.part` this run made
+      // goes, never a half release; the complete releases beside it are not touched (removeStaging names only `.part`).
+      await removeStaging(root, version).catch(() => undefined);
+      throw error;
+    }
   };
 
   const done = (async (): Promise<UpdateStatus> => {
@@ -335,7 +329,6 @@ export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): {
       deps.requestRestart(restarting);
       return restarting;
     } catch (error) {
-      if (error instanceof Failure && error.clearStaging && version) await removeStaging(root, version).catch(() => undefined);
       log.fail(EVENTS, error, { phase: 'apply', ...(version ? { to: version } : {}) });
       const message = error instanceof Failure ? error.message : failureText(error, root);
       return write({ phase: 'error', ok: false, from, ...(version ? { to: version } : {}), at, message: message.slice(0, 300) });
