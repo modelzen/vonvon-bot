@@ -89,15 +89,23 @@ describe('daemon status', () => {
   });
 
   // devices-4a 4.9 (main 必败: a session asked the daemon, with the owner's credential): in a Bot's session, token or not,
-  // only the lock answers: no connection, no crash files, which name the other bots
+  // only the lock answers: no connection, no crash files, which name the other bots. Codex review 256-1: and of the lock
+  // only what connectLocal reads (main 必败: the PID, the start time and the version went with it)
   it('answers from the lock alone in a Bot session', async () => {
     const root = home();
     for (const env of [{ VONVON_SESSION: '1' }, { FEISHU_CODEX_BRIDGE: '1' }, { VONVON_SESSION: `vs1.ses_0123456789abcdef.${'a'.repeat(43)}` }, { VONVON_SESSION: '1', VONVON_STATUS_FROM_FILES: '1' }]) {
       const h = running();
       await runStatus(h.io(true), { home: root, now: () => T0, env, daemon: h.daemon });
       expect(h.connect).not.toHaveBeenCalled();
-      expect(JSON.parse(h.out())).toEqual({ ok: true, running: true, pid: process.pid, listen: '127.0.0.1:43119', version: '0.8.0', startedAt: new Date(T0 - 1000).toISOString(), source: 'files' });
+      expect(JSON.parse(h.out())).toEqual({ ok: true, running: true, listen: '127.0.0.1:43119', source: 'files' });
     }
+    const human = running();
+    await runStatus(human.io(), { home: root, now: () => T0, env: { VONVON_SESSION: '1' }, daemon: human.daemon });
+    expect(human.out()).toBe('running at 127.0.0.1:43119\n');
+    // the owner's discovery keeps the lock as it is
+    const owner = running();
+    await runStatus(owner.io(true), { home: root, now: () => T0, env: { VONVON_STATUS_FROM_FILES: '1' }, daemon: owner.daemon });
+    expect(JSON.parse(owner.out())).toEqual({ ok: true, running: true, pid: process.pid, listen: '127.0.0.1:43119', version: '0.8.0', startedAt: new Date(T0 - 1000).toISOString(), source: 'files' });
     const stopped = mkdtempSync(join(tmpdir(), 'vonvon-c8-')); roots.push(stopped);
     const files = harness({});
     expect(await caught(runStatus(files.io(true), { home: stopped, now: () => T0, env: { VONVON_SESSION: '1' }, daemon: offline }))).toMatchObject({ kind: 'connection', message: 'daemon 没有运行。先运行 vonvon daemon start。' });

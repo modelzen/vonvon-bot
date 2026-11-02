@@ -11,7 +11,8 @@ export const machineRequestSchema = z.discriminatedUnion('type', [
   /** Remembers that the user chose a detached daemon over the login-time service, so the checklist stops asking. */
   z.object({type:z.literal('setServiceSkipped'), skipped:z.boolean()}),
   z.object({type:z.literal('startHost'), bot:agentIdSchema.unwrap().optional()}),
-  z.object({type:z.literal('stopHost')}),
+  /** `reason: 'update'`: a desktop update stops the server (owner 2026-11-02), and the cards of the cut-short turns say so. */
+  z.object({type:z.literal('stopHost'), reason:z.literal('update').optional()}),
   z.object({type:z.literal('logs')}),
   /** `fresh: false` answers with the standalone server's last daily check instead of reading the manifest again. */
   z.object({type:z.literal('checkCoreUpdate'), fresh:z.boolean().optional()}),
@@ -30,7 +31,7 @@ export const coreUpdateStatusSchema = z.object({phase:z.string(),ok:z.boolean().
 export type CoreUpdateStatus = NonNullable<z.infer<typeof coreUpdateStatusSchema>>;
 const CORE_UPDATE_DETAIL: Record<string, string> = {
   downloading: '下载中', verifying: '校验中', unpacking: '解包中', switching: '切换中',
-  draining: '等 Bot 做完手上的活', waiting: '等新版本启动', 'rolled-back': '已切回旧版',
+  draining: '正在中断进行中的对话', waiting: '等新版本启动', 'rolled-back': '已切回旧版',
 };
 const CORE_UPDATE_PHASE: Record<string, string> = { installing: '正在安装', restarting: '正在重启', done: '更新完成', error: '更新失败' };
 /** One line for an update's progress, the same on the page and in `vonvon update`; an unknown phase is "进行中". */

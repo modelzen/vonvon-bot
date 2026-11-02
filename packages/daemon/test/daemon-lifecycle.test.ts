@@ -126,7 +126,7 @@ import * as http from '../src/server/http';
 import { runRun } from '../src/cli/commands/run';
 import { runHostRuntime } from '../src/host/bootstrap';
 import { formatErrorTree } from '../src/core/error-parts';
-import { runSupervisor } from '../src/bot/supervisor';
+import { BOT_STOP_LIMIT_MS, runSupervisor } from '../src/bot/supervisor';
 import { acquireSingleInstanceLock } from '../src/core/single-instance';
 import { acquireMutex, closeMutex } from '../src/config/data-access';
 import { paths } from '../src/config/paths';
@@ -323,7 +323,7 @@ describe('CLI ownership', () => {
     const signal = vi.spyOn(process, 'kill').mockReturnValue(true);
     const done = observed(runStop());
     await vi.advanceTimersByTimeAsync(120_000);
-    expect.soft(fixture.stopVerified).toHaveBeenCalledWith(paths.appDir, old);
+    expect.soft(fixture.stopVerified).toHaveBeenCalledWith(paths.appDir, old, undefined);
     expect.soft(signal.mock.calls.filter(([, value]) => value !== 0)).toEqual([]);
     expect.soft(done.state()).toBe('pending');
     clearOwner(); await vi.advanceTimersByTimeAsync(1000); await done.settled;
@@ -632,10 +632,11 @@ describe('provider runner ownership', () => {
       expect.soft(running.state()).toBe('pending');
       const pending = sent.filter(value => typeof value === 'object' && value !== null && 'fcb' in value && value.fcb === 'fcb.owned-work' && 'settled' in value && value.settled === false);
       expect.soft(pending.length).toBeGreaterThanOrEqual(120);
-      expect.soft(pending[0]).toEqual({ fcb: 'fcb.owned-work', pids: [65432], settled: false });
+      // owner 2026-11-02: with the agent groups still registered, which the host kills if it has to kill this child
+      expect.soft(pending[0]).toEqual({ fcb: 'fcb.owned-work', pids: [65432], settled: false, registered: [65432] });
       registry.reject(new Error('fixture managed provider cleanup failed'));
       await vi.advanceTimersByTimeAsync(1000);
-      expect.soft(sent).toContainEqual({ fcb: 'fcb.owned-work', pids: [], settled: true });
+      expect.soft(sent).toContainEqual({ fcb: 'fcb.owned-work', pids: [], settled: true, registered: [] });
       expect.soft(callbacks.length).toBeGreaterThan(0);
       expect.soft(running.state()).toBe('pending');
       for (const callback of callbacks.splice(0)) callback();
@@ -649,38 +650,61 @@ describe('provider runner ownership', () => {
   });
 
   const unsettledReports = [
-    { name: 'no report', report: undefined },
-    { name: 'empty pending diagnostics', report: { fcb: 'fcb.owned-work', pids: [], settled: false } },
-    { name: 'retained providers', report: { fcb: 'fcb.owned-work', pids: [65432], settled: false } },
-    { name: 'negative pid', report: { fcb: 'fcb.owned-work', pids: [-1], settled: true } },
-    { name: 'fractional pid', report: { fcb: 'fcb.owned-work', pids: [1.5], settled: true } },
-    { name: 'zero pid', report: { fcb: 'fcb.owned-work', pids: [0], settled: true } },
-    { name: 'string settled', report: { fcb: 'fcb.owned-work', pids: [], settled: 'true' } },
+    { name: 'no report', report: undefined, reaped: [] },
+    { name: 'empty pending diagnostics', report: { fcb: 'fcb.owned-work', pids: [], settled: false }, reaped: [] },
+    { name: 'retained providers', report: { fcb: 'fcb.owned-work', pids: [65432], settled: false }, reaped: [65432] },
+    { name: 'registered agent groups', report: { fcb: 'fcb.owned-work', pids: [65432], settled: false, registered: [65432, 65433] }, reaped: [65432, 65433] },
+    { name: 'negative pid', report: { fcb: 'fcb.owned-work', pids: [-1], settled: true }, reaped: [] },
+    { name: 'fractional pid', report: { fcb: 'fcb.owned-work', pids: [1.5], settled: true }, reaped: [] },
+    { name: 'zero pid', report: { fcb: 'fcb.owned-work', pids: [0], settled: true }, reaped: [] },
+    { name: 'string settled', report: { fcb: 'fcb.owned-work', pids: [], settled: 'true' }, reaped: [] },
   ];
-  it.each(unsettledReports)('does not kill a Bot past grace for $name and permits escalation only after settlement', async ({ report }) => {
+  /** The agent process groups SIGKILLed through process.kill(-pid). */
+  const killedGroups = (signal: { mock: { calls: unknown[][] } }): number[] =>
+    signal.mock.calls.flatMap(([pid, value]) => typeof pid === 'number' && pid < 0 && value === 'SIGKILL' ? [-pid] : []);
+  // owner 2026-11-02: a stop ends within its limit. A Bot whose agents are not confirmed closed by then is killed, and so
+  // are the agent groups it last reported (they run in groups of their own); before the limit nothing is killed.
+  it.each(unsettledReports)('kills a Bot still unsettled at the stop limit ($name), then the agent groups it reported', async ({ report, reaped }) => {
     const shell = supervisorShell(); const owner = runnerControl();
+    const signal = vi.spyOn(process, 'kill').mockReturnValue(true);
     const running = observed(runSupervisor([botEntry], { control: owner }));
     try {
       await vi.advanceTimersByTimeAsync(0);
       if (report) shell.emit('message', report);
-      owner.requestStop(); await vi.advanceTimersByTimeAsync(121_000);
-      expect.soft(shell.send).toHaveBeenCalledWith({ type: 'bridge:shutdown' }, expect.any(Function));
+      owner.requestStop(); await vi.advanceTimersByTimeAsync(BOT_STOP_LIMIT_MS - 1000);
+      // The reason rides on the message: the Bot's cards say the server stopped.
+      expect.soft(shell.send).toHaveBeenCalledWith({ type: 'bridge:shutdown', reason: 'stop' }, expect.any(Function));
       expectNoForcedTreeTermination(shell);
-      const warnings = fixture.logWarn.mock.calls.filter(call => call[1] === 'owned_work_unconfirmed');
-      expect.soft(warnings.length).toBeGreaterThan(100);
-      expect.soft(JSON.stringify(warnings)).toContain('54321');
-      if (report && 'pids' in report && report.pids.some(pid => pid === 65432)) expect.soft(JSON.stringify(warnings)).toContain('65432');
       expect.soft(running.state()).toBe('pending');
-      expect.soft(fixture.apiRelease).not.toHaveBeenCalled();
-      shell.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
-      await vi.advanceTimersByTimeAsync(12_000);
+      await vi.advanceTimersByTimeAsync(2000);
       expectForcedTreeTermination(shell);
+      expect.soft(fixture.logWarn.mock.calls.filter(call => call[1] === 'bot_stop_limit')).toHaveLength(1);
+      expect.soft(killedGroups(signal)).toEqual([]);
       exitShell(shell, 1); await vi.advanceTimersByTimeAsync(1000); await running.settled;
       expect.soft(running.state()).toBe('rejected');
+      expect.soft(killedGroups(signal)).toEqual(reaped);
     } finally { exitShell(shell); owner.requestStop(); await vi.advanceTimersByTimeAsync(2000); await running.settled; }
   });
 
-  it('toggle-off waits for the same provider settlement before acknowledging', async () => {
+  it('a Bot that settles in time gets the rest of its limit to exit, and its groups are left alone', async () => {
+    const shell = supervisorShell(); const owner = runnerControl();
+    const signal = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const running = observed(runSupervisor([botEntry], { control: owner }));
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      shell.emit('message', { fcb: 'fcb.owned-work', pids: [65432], settled: false, registered: [65432] });
+      owner.requestStop(); await vi.advanceTimersByTimeAsync(4000);
+      shell.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true, registered: [] });
+      await vi.advanceTimersByTimeAsync(2000);
+      expectNoForcedTreeTermination(shell);
+      exitShell(shell); await vi.advanceTimersByTimeAsync(1000); await running.settled;
+      expect.soft(running.state()).toBe('fulfilled');
+      expect.soft(killedGroups(signal)).toEqual([]);
+      expect.soft(fixture.logWarn.mock.calls.filter(call => call[1] === 'bot_stop_limit')).toEqual([]);
+    } finally { exitShell(shell); owner.requestStop(); await vi.advanceTimersByTimeAsync(2000); await running.settled; }
+  });
+
+  it('toggle-off waits for the same provider settlement, up to the stop limit, before acknowledging', async () => {
     const shell = supervisorShell(); const owner = runnerControl();
     const running = observed(runSupervisor([botEntry], { control: owner }));
     try {
@@ -689,19 +713,19 @@ describe('provider runner ownership', () => {
       if (!apply) throw new Error('Missing activation boundary');
       shell.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: false });
       const disabling = observed(apply(botEntry.appId, false));
-      await vi.advanceTimersByTimeAsync(121_000);
+      await vi.advanceTimersByTimeAsync(BOT_STOP_LIMIT_MS - 1000);
+      // A disable is no stop of the server: no reason, the cards keep their plain "interrupted".
       expect.soft(shell.send).toHaveBeenCalledWith({ type: 'bridge:shutdown' }, expect.any(Function));
       expectNoForcedTreeTermination(shell);
       expect.soft(disabling.state()).toBe('pending');
-      shell.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
-      await vi.advanceTimersByTimeAsync(12_000);
+      await vi.advanceTimersByTimeAsync(2000);
       expectForcedTreeTermination(shell);
       exitShell(shell, 1); await vi.advanceTimersByTimeAsync(1000); await disabling.settled;
       expect.soft(disabling.state()).toBe('rejected');
     } finally { exitShell(shell); owner.requestStop(); await vi.advanceTimersByTimeAsync(2000); await running.settled; }
   });
 
-  it('a late settlement report from a dead generation cannot authorize killing its replacement', async () => {
+  it('a late settlement report from a dead generation cannot authorize killing its replacement early', async () => {
     const first = supervisorShell(); const owner = runnerControl();
     const running = observed(runSupervisor([botEntry], { control: owner }));
     let next = first;
@@ -712,11 +736,11 @@ describe('provider runner ownership', () => {
       await vi.advanceTimersByTimeAsync(1000);
       expect(fixture.spawn).toHaveBeenCalledTimes(2);
       first.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
-      owner.requestStop(); await vi.advanceTimersByTimeAsync(121_000);
+      // Settled, the 8 s exit grace would end at 8 s; the stale report must not start it.
+      owner.requestStop(); await vi.advanceTimersByTimeAsync(BOT_STOP_LIMIT_MS - 1000);
       expectNoForcedTreeTermination(next);
       expect.soft(running.state()).toBe('pending');
-      next.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
-      await vi.advanceTimersByTimeAsync(12_000);
+      await vi.advanceTimersByTimeAsync(2000);
       expectForcedTreeTermination(next);
     } finally { exitShell(next); owner.requestStop(); await vi.advanceTimersByTimeAsync(2000); await running.settled; }
   });

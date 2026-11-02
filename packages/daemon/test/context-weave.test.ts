@@ -360,8 +360,8 @@ describe('weaveRecordBlock', () => {
 
   it('says what was left out, counted or not', () => {
     const entries = [cm({ createTime: at(15, 9, 0) })];
-    expect(weaveRecordBlock('', { place: main, now, entries, earlier: 12 }).split('\n')[1]).toBe('（更早还有 12 条没带进来，需要时用 vonvon 飞书 skill 查）');
-    expect(weaveRecordBlock('', { place: main, now, entries, earlier: 'some' }).split('\n')[1]).toBe('（更早的消息没带进来，需要时用 vonvon 飞书 skill 查）');
+    expect(weaveRecordBlock('', { place: main, now, entries, earlier: 12 }).split('\n')[1]).toBe('（更早还有 12 条没带进来）');
+    expect(weaveRecordBlock('', { place: main, now, entries, earlier: 'some' }).split('\n')[1]).toBe('（更早的消息没带进来）');
   });
 
   it('returns text unchanged when there is nothing to show', () => {
@@ -402,7 +402,7 @@ describe('weaveRecordBlock · topics (s14b)', () => {
   const main = { group: '支付组', me: '小码' };
   const topic = { ...main, topic: { title: '订单接口 500' } };
   const zhang: Who = { kind: 'user', name: '张三' };
-  const rest = '主区的其他内容不在这里，需要时用 vonvon 飞书 skill 查。';
+  const rest = '主区的其他内容不在这里。';
   const q = (extra: Partial<TopicQuote> = {}): TopicQuote =>
     ({ topicId: 'omt_1', title: '订单接口 500', at: at(15, 10, 2), who: { kind: 'user', name: '李四' }, ...extra });
 
@@ -447,7 +447,7 @@ describe('weaveRecordBlock · topics (s14b)', () => {
       '09:59 〔话题〕你在上面这条下开了话题「订单接口 500」，在那边另有一条会话，这里不用接。（话题 id：omt_1，会话 id：sess-t）',
       '话题里：',
       '10:01 张三 → @你：订单接口一直报 500（话题第一条）',
-      '（更早还有 3 条没带进来，需要时用 vonvon 飞书 skill 查）',
+      '（更早还有 3 条没带进来）',
       '10:03 李四：是不是改了 token 过期时间？',
       '[/飞书]',
     ]);
@@ -493,8 +493,8 @@ describe('weaveRecordBlock · topics (s14b)', () => {
 
   it('says how many topics were left out, and quotes them when the pull brought no line', () => {
     expect(weaveRecordBlock('', { place: main, now, earlier: 'some', entries: [], quotes: [q()], moreTopics: 4 }).split('\n').slice(1)).toEqual([
-      '（还有 4 个话题没列，需要时用 vonvon 飞书 skill 列）',
-      '（更早的消息没带进来，需要时用 vonvon 飞书 skill 查）',
+      '（还有 4 个话题没列）',
+      '（更早的消息没带进来）',
       expect.stringMatching(/^10:02 〔话题〕李四开了话题/),
       '[/飞书]',
     ]);
@@ -507,7 +507,7 @@ describe('weaveRecordBlock · topics (s14b)', () => {
     ];
     expect(weaveRecordBlock('', { place: main, now, entries: [], table: rows }).split('\n')).toEqual([
       '[飞书 · 群「支付组」· 主区 · 你是「小码」]',
-      '〔本群最近 2 个活跃话题〕这条会话压缩过，前面的话题引用可能已经被摘要掉。更多话题用 vonvon 飞书 skill 列。',
+      '〔本群最近 2 个活跃话题〕这条会话压缩过，前面的话题引用可能已经被摘要掉。',
       '· 「订单接口 500」李四 10:02 开的，最近 10:30 有消息，你在那边有会话（话题 id：omt_1，会话 id：sess-1）',
       '· 一个话题，小P（bot）10:12 开的，最近 10:20 有消息，你在那边还没有会话（话题 id：omt_2）',
       '[/飞书]',
@@ -1248,12 +1248,12 @@ describe('wakeTriggerText', () => {
     expect(wakeTriggerText(msg('', 'interactive'), undefined)).toBe('（对方没有给出文字回答）');
     expect(wakeTriggerText(msg('字'.repeat(BOT_TRIGGER_MAX)), undefined)).toBe('字'.repeat(BOT_TRIGGER_MAX));
     const long = wakeTriggerText(msg('字'.repeat(BOT_TRIGGER_MAX + 1)), undefined);
-    expect(long).toBe(`${'字'.repeat(BOT_TRIGGER_MAX)}…（已截断，需要时用 vonvon 飞书 skill 查全文）`);
+    expect(long).toBe(`${'字'.repeat(BOT_TRIGGER_MAX)}…（已截断）`);
   });
 
   it('does not cut an emoji in two at the limit (E1)', () => {
     const out = wakeTriggerText(msg(`${'a'.repeat(BOT_TRIGGER_MAX - 1)}😀${'b'.repeat(50)}`), undefined);
-    expect(out).toBe(`${'a'.repeat(BOT_TRIGGER_MAX - 1)}…（已截断，需要时用 vonvon 飞书 skill 查全文）`);
+    expect(out).toBe(`${'a'.repeat(BOT_TRIGGER_MAX - 1)}…（已截断）`);
     expect(out).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/);
     // Ending right after the emoji keeps it whole.
     const whole = wakeTriggerText(msg(`${'a'.repeat(BOT_TRIGGER_MAX - 2)}😀${'b'.repeat(50)}`), undefined);

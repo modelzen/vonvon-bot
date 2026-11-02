@@ -63,8 +63,8 @@ V5 的系统服务设计要点如下。
 
 - 每个系统用户最多注册一个 Vonvon 服务。服务定义里写着它的 `VONVON_HOME`，这就是唯一的记录，不新增状态文件。其他数据目录的注册、认不出的定义，一律拒绝改动。
 - 注册了服务的数据目录只由系统服务管理器启动，`vonvon daemon start` 也交给管理器，失败就报错，不自己另起进程。
-- 管理器只在失败时重新拉起。停止退出 0，不会被拉起，注册保留。重启在排空后退出 75，由管理器按原端口拉起。崩溃或其他非零退出在 5 秒后拉起。Windows 没有服务管理器。原来为 Windows 只装服务端设计的计划任务和 `__win-supervise` 监督进程随 2026-11-01 的决定取消（[devices.md](plans/devices.md) 第 19 节）；Windows 桌面端这一批不做登录自启，`service/adapter.ts` 在 win32 照旧报不支持。
-- Vonvon 从不通过管理器停止正在运行的 daemon，停止只走 `stopHost`。所以排空没有时限，停止优先的规则和 V3 一样。
+- 管理器只在失败时重新拉起。停止退出 0，不会被拉起，注册保留。重启在排空后退出 75，由管理器按原端口拉起；重启助手起不来时，服务管理下的 daemon 同样退出 75，管理器拉起原来的版本（2026-11-02）。崩溃或其他非零退出在 5 秒后拉起。Windows 没有服务管理器。原来为 Windows 只装服务端设计的计划任务和 `__win-supervise` 监督进程随 2026-11-01 的决定取消（[devices.md](plans/devices.md) 第 19 节）；Windows 桌面端这一批不做登录自启，`service/adapter.ts` 在 win32 照旧报不支持。
+- Vonvon 从不通过管理器停止正在运行的 daemon，停止只走 `stopHost`，停止优先的规则和 V3 一样。2026-11-02 起排空有时限（owner：停止、重启、升级直接中断正在进行的对话）：每个 Bot 先中断所有进行中的一轮，等 3 秒让 Codex、Claude 自己收尾，再关它们的进程，卡片最多再等 8 秒；Bot 子进程关 bridge 最多 12 秒；host 等每个 Bot 最多 15 秒，到点强制结束它和它报过的 provider 进程组；`daemon run` 从收到停止起最多 30 秒，到点写下干净退出的记录、刷完日志就自己退出（重启、升级 75，停止 0，不在服务管理下 1）。systemd 单元的 `TimeoutStopSec=45` 只兜底，正常用不到；旧单元里的 `TimeoutStopSec=infinity` 照旧认作自己的。做法见 `docs/plans/interrupt-and-install-text.md`。
 - Core 更新后的重启仍由 V3 的重启助手确认新进程，并只完成它自己持有的那条更新记录。在 macOS 和 Windows 上，助手和 V3 一样另起进程组；macOS 的 `launchd.plist(5)` 文档支持这样做，但还要原生验收。Linux 上助手用 `systemd-run --user --scope` 放进单独的 scope。systemd 源码说明这一步不换 pid，但不会通知就绪，所以 daemon 自己查同一个 pid：它已经在这个 scope 里，命令行也已经换成助手，才提交并放锁（Gate L）。在这之前助手失败、超时或收到停止，都按 V3 的规则变成停止，那条更新记录写成 `error`。
 - 只装服务端（standalone）的升级（`docs/plans/server-3-update-engine.md`）先换文件再重启：安装根下 `releases/<版本>/{app,node,standalone.json}` 每版一个目录；POSIX 的 `current` 是指向 `releases/<版本>` 的相对符号链接，先建 `current.next` 再 `rename` 覆盖；Windows 没有 standalone（owner 2026-11-01），原来给它写的 `current.txt` 已由 I6 删掉。已经在跑的进程把自己的入口钉在启动时的真实路径上（`core/self-entry.ts`），切 `current` 以后它派生的子进程和重启助手仍是旧版的文件。
 - 安装根下的 `update-state.json` 记见过的最高版本和上一次清单的 `publishedAt`，原子写，跨版本只有一份，用来拒绝倒退的清单。数据目录下的 `update-status.json` 是一次更新的进度：`installing`（下载、校验、解包、切换）、`restarting`（带 `previous`，排空、等新版本）、`done`、`error`（`rolledBack` 表示已切回）；排空期间 `machine.coreUpdateStatus` 仍可读。重启助手按 pid 锁里的 `version` 判断新版本起来没有（listen 以后还要活过几秒），没有就切回 `previous`；托管时也是同一个助手（Linux 上在单独的 scope 里）。旧 daemon 退出以后，助手拿住 `update.lock` 直到写出结果，这期间不接新的更新，新进程启动时的收尾也让给它；旧 daemon 在请求重启以后停止、助手丢失或重启被拒，先把 `current` 切回 `previous` 再写 `error`。新进程启动后再核对一次，`current` 已经不指向自己就写"升级和回滚撞上了"。同一个安装根可以有几个数据目录的 daemon：下载、解包、切换和清理 `releases/` 还要拿安装根的 `releases.lock`，每个 daemon 把自己运行的版本登记在 `running/<pid>-<版本>`，清理时留着还活着的那些。
@@ -78,7 +78,7 @@ V5 的系统服务设计要点如下。
 
 具体设计和原生验收步骤见 [plan.md](plan.md) V5 一节的 *Service gate*。
 
-V3 的 daemon 都由 CLI 启动，没人会再拉起它。停止和重启都先等已经接受的操作做完，并确认它启动的子进程都已退出，才释放 pid 锁，不为赶时间提前放锁。这些子进程包括 Bot 子进程、npm，以及 Codex app-server 和它的进程组。确认不了子进程退出时宁可一直占着锁。关闭 Codex 进程的调用在确认进程退出之前不会返回，清理出错只在确认退出之后才报告，所以上层缓存或忽略这个错误也不会提前放锁。daemon 排空期间仍接受本机凭据认证的连接，但只回答状态查询和停止请求，所以新开的 CLI 能先核实身份再请求停止，不会按 pid 文件里的数字直接发信号。重启后端口不变：一个没有时限的重启助手等旧进程退出后在原端口拉起新进程。旧 daemon 放锁之前收到的停止请求会取消重启：daemon 立即结束重启助手，确认助手已退出后才放锁。具体规则见 [plan.md](plan.md) V3 一节的 *Lifecycle ownership*。
+V3 的 daemon 都由 CLI 启动，没人会再拉起它。停止和重启都先等已经接受的操作做完，并确认它启动的子进程都已退出，才释放 pid 锁，不为赶时间提前放锁。这些子进程包括 Bot 子进程、npm，以及 Codex app-server 和它的进程组。确认不了子进程退出时宁可一直占着锁。2026-11-02 起这条有上限：停止最多 30 秒（见上面"排空有时限"），到点强制结束 Bot 子进程和它报过的 provider 进程组后退出，没报上来的进程组可能留下。关闭 Codex 进程的调用在确认进程退出之前不会返回，清理出错只在确认退出之后才报告，所以上层缓存或忽略这个错误也不会提前放锁。daemon 排空期间仍接受本机凭据认证的连接，但只回答状态查询和停止请求，所以新开的 CLI 能先核实身份再请求停止，不会按 pid 文件里的数字直接发信号。重启后端口不变：一个没有时限的重启助手等旧进程退出后在原端口拉起新进程。旧 daemon 放锁之前收到的停止请求会取消重启：daemon 立即结束重启助手，确认助手已退出后才放锁。具体规则见 [plan.md](plan.md) V3 一节的 *Lifecycle ownership*。
 
 ### Bot 运行内核是 vonvon-bot 自己的源码
 
@@ -106,7 +106,7 @@ V2 先复制 `446b2a4` 的完整 `src/` 和 `test/`，包括 `src/web`，保留�
 
 **协议版本 2 和维护子集（0.9.0）。** `PROTOCOL_VERSION` 升到 2，但不能让 0.8 的桌面端和 daemon 互相卡死：今天两边的握手 schema 都是 strict，`owner-verification` 还要求版本相等，新桌面端会停不掉旧 daemon。所以：
 - `hello` 的形状不变（`{ type, protocolVersion, clientKind, credential? }`）；bot 会话令牌也放在 `credential` 里，靠 `vs1.` 前缀认出。
-- daemon 按 `hello.protocolVersion` 选 `serverInfo` 的形状：v1 回原来的三个字段，v2 加 `deviceName`、`platform`、`capabilities`、`principal`。客户端一律宽松解析 `serverInfo`，枚举按开放字符串解析。客户端的能力和范围放在握手后的第一条请求 `admin.negotiate { capabilities, scope? }` 里。`capabilities` 是功能开关的唯一来源，客户端不按版本号猜。
+- daemon 按 `hello.protocolVersion` 选 `serverInfo` 的形状：v1 回原来的三个字段，v2 加 `deviceName`、`platform`、`capabilities`、`principal`。Bot 会话的连接（会话令牌，总是 v2）只回 `version`、`protocolVersion`、`principal`，不给设备名、`machineId`、平台和能力（S1b）；客户端解析时 `machineId` 可以没有。客户端一律宽松解析 `serverInfo`，枚举按开放字符串解析。客户端的能力和范围放在握手后的第一条请求 `admin.negotiate { capabilities, scope? }` 里。`capabilities` 是功能开关的唯一来源，客户端不按版本号猜。
 - 版本不再要求相等。协议相同、版本号不同只提示；协议不同，连接进入**维护子集**：只收 `admin.daemonStatus`、`machine.checkCoreUpdate`、`machine.applyCoreUpdate`、`machine.coreUpdateStatus`、`command.restartHost`，别的回 `protocol_mismatch`，不推 `snapshot`。这几个请求和回复的形状从 v2 起冻结，`daemonStatus` 加 `startedAt`。排空期间的白名单（`stopHost`、`daemonStatus`，加上 `coreUpdateStatus`，升级时要看进度）和维护子集写成同一个常量 `MAINTENANCE_KINDS`。
 - `owner-verification` 的核实和停止不再比版本：宽松解析 `serverInfo`，只取 pid，再 `stopHost`。本机 daemon 是桌面端自带的（`bundled`）且协议不同，就照旧换成自己带的。原来"本机是独立安装的服务端（`standalone`）就按维护子集连上、显示升级条"一条，2026-11-01 起 Mac、Windows 上没有 `standalone`，不做。
 
@@ -162,7 +162,7 @@ V2 先复制 `446b2a4` 的完整 `src/` 和 `test/`，包括 `src/web`，保留�
 
 - 权限表是一个 `Map<'method.type', Rule>`，表里没有的一律拒绝（`permission_denied`），测试保证协议里的每个 kind 都在表里。bot 会话这一列分两类：daemon 自己能判的（只看令牌绑的 bot、地方、群和 `--scope`），和必须问 Bot 进程的。
 - 必须问 Bot 进程的那类，daemon 经 IPC `authorizeSessionCall(sessionId, action)` 交给所属 Bot 进程，由它按这条会话活着的那一轮跑和进程内工具完全相同的 `authorizeNow`、`authorizeMemory`、`authorizeSchedule`，回 `ok` 或 `refused(reason)`；没有活着的一轮就 `turn-ended`，挡住"一轮里起个后台进程过一小时再调"。记忆落点要的这一轮角色也由 Bot 进程在同一次 IPC 里回。
-- 群令牌和评论令牌的设置写、建群在 daemon 就拒，回 `not-dm`（文字复用进程内工具的"设置只能在私聊里改。请对方去私聊里跟我说。"），不问 Bot 进程，Bot 进程退了也照样拒。绑已有群、解绑、密钥、`environment.*`、`machine.*`、`admin.*`（只放 `daemonStatus`、`negotiate`）、`device.*` 对所有会话令牌都拒。群令牌的快照、群列表、成员和设置读只看得到本群；私聊令牌的读也要主人或管理员那一轮。
+- 群令牌和评论令牌的设置读写、建群在 daemon 就拒，回 `not-dm`（文字复用进程内工具的"群里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。"），不问 Bot 进程，Bot 进程退了也照样拒。群会话没有设置工具，也不读设置（2026-11-02，`docs/plans/settings-dm-only.md`）。绑已有群、解绑、密钥、`environment.*`、`machine.*`、`admin.*`（只放 `daemonStatus`、`negotiate`）、`device.*` 对所有会话令牌都拒。群令牌只给干活要用的（s1b，owner 2026-11-02，白名单）：本群定时任务、本群项目和 Bot 的记忆（`list / add / edit / archive`，读回的条目不带作者）、本群成员、`admin.negotiate`，加一份只剩本 bot 和本群名字的快照（`sessionSnapshot`）；群列表、待绑定的群、模型、会话、项目列表、群详情、记忆导出和历史、daemon 状态都拒。私聊令牌的读也要主人或管理员那一轮。
 - 会话令牌 `vs1.<sessionId>.<随机 32 字节>`：Bot 进程起会话时经 IPC `issueSessionToken` 向 daemon 要，daemon 在内存里记它绑的 bot、群、地方和会话，会话结束（`revokeSessionToken`）、Bot 进程退出或 24 小时没用就作废，不落盘。令牌放进会话的 `VONVON_SESSION`。会话里的 CLI 不读、不发 `local-credential`，只发令牌；看起来在会话里却没有有效令牌就退出 4（`session_token_missing`），绝不退回主人身份。
 - `--scope bot=<appId>[,group=<chatId>]` 经 `admin.negotiate` 送到，上限按会话算（群会话是本 bot 加本群，私聊会话是本 bot 加它的所有群），缺了或更大一律拒绝，只能缩小；范围不放宽地方的规则。运维和设备类的本地命令（`daemon run|start|stop|restart`、`service *`、`update`、`remote *`、`pair`、`clients *`、`device rename`、`bot repair-dir`、`secrets get`、`open`）在会话里由 CLI 先拒（`not_in_session`）。
 - 边界照实写：完全访问档的会话能读这个系统账号的任何文件，包括 `local-credential`、`device.json`、`clients.json`，拿到就是主人；客户端私钥靠 `safeStorage`，Windows 上同一用户的进程能解开，所以一台装了完全访问档 Bot 的电脑，它配对过的设备都在同一个信任范围里。令牌和范围挡的是失误和一般越权，不是完全访问档的安全边界；只读、读写档的沙箱本来连不上 daemon。彻底挡要让 Bot 换系统账号跑，以后再做（product.md 第 10 节）。

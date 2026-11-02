@@ -4,17 +4,19 @@
 
 缩写同 D1：`P/`、`CL/`、`D/`、`DT/`、`U/` 分别是 protocol、client、daemon、desktop、ui 的 `src/`。行号以 `origin/claude/devices-integration`（8051b03c，代码和 413d78d5 相同）为准。I3 拆成了 I3a `server-3a-update-core`（#632）和叠在它上面的 I3b `server-3b-update-helper`（#633），I3 的代码以 `origin/claude/server-3b-update-helper`（83550082）为准，写"I3 分支"；I3 合入集成分支后以集成分支为准，这里的行号只供参考。D1 的以 `origin/claude/devices-1-identity`（147b2619）为准，写"D1 分支"。U1a、U2、U3 的接口以它们的计划为准。
 
+**2026-11-02 改（owner，`docs/plans/interrupt-and-install-text.md`）：** 停止、重启、升级都直接中断正在进行的对话，不再等 Bot 做完手上的活，停止最多 30 秒；Windows 本机"重启升级"前的确认框整个去掉了，不只是远程触发时不弹。下文的文字已按这条改，"排空"指的就是这次停止。
+
 ## 1. 做什么
 
 用户能看到的：
 - **从别的设备更新一台 Mac 或 Windows 电脑上的 Vonvon Bot。** 那台的服务端是桌面端自带的。
   - 在"应用与启动"页"「X」的服务端"卡上：
     - 检查更新：看到那台能更新到哪个版本；
-    - 点"更新「X」上的 Vonvon Bot"，确认后，那台电脑上的桌面端自己下载更新、等 Bot 做完手上的活、重启；
+    - 点"更新「X」上的 Vonvon Bot"，确认后，那台电脑上的桌面端自己下载更新、重启（正在进行的对话会被中断）；
     - 发起的这台看得到进度（Windows 有下载百分比，macOS 只有阶段），断开一会儿后自动连上，提示"「X」已更新到 0.9.1"。
   - 命令行 `vonvon update` 连着那台时也一样。
 - **那台桌面端没开时：** 按钮旁写"要那台电脑上的 Vonvon Bot 桌面端开着才能远程更新…"。点了也是这句，不会卡住。
-- **被更新的那台：** 菜单栏 / 托盘和窗口顶部出一句"「X」正在更新这台电脑上的 Vonvon Bot。下载好后会等 Bot 做完手上的活再重启。"不弹确认框、不拦人。Windows 上本机点"安装"时的确认框，远程触发时不弹。
+- **被更新的那台：** 菜单栏 / 托盘和窗口顶部出一句"「X」正在更新这台电脑上的 Vonvon Bot。下载好后会直接重启，正在进行的对话会被中断。"不弹确认框、不拦人。Windows 上本机点"重启升级"也不再弹确认框（2026-11-02）。
 - **出问题时说清楚：**
   - 那台的安装包更新不了（开发版、没有可信更新源、查不到更新清单）：原样回它更新器的话；
   - 下载失败、超时、桌面端中途被关掉、重启后没换上新版本：各有一句；
@@ -111,7 +113,7 @@ z.object({ type: z.literal('desktopUpdateReport'), requestId: z.string().regex(/
 // coreUpdateStatusSchema 加：via: z.string().optional()
 // CORE_UPDATE_DETAIL 加：
 //   'desktop-checking': '正在检查桌面端更新', 'desktop-downloading': '正在下载桌面端更新',
-//   'desktop-downloaded': '下载好了，等 Bot 做完手上的活后重启'
+//   'desktop-downloaded': '下载好了，正在重启（会中断正在进行的对话）'
 export const DESKTOP_SELF_UPDATE_CAPABILITY = 'desktop.self-update';
 ```
 
@@ -284,7 +286,7 @@ export function startRemoteSelfUpdate(deps: RemoteSelfUpdateDeps): {
 
 **`apply` 请求：**
 1. `quitting()` → 报 `error`"那台电脑上的 Vonvon Bot 正在退出。"，结束。
-2. `notice(\`${by}正在更新这台电脑上的 Vonvon Bot。下载好后会等 Bot 做完手上的活再重启。\`)`，`busy = true`。
+2. `notice(\`${by}正在更新这台电脑上的 Vonvon Bot。下载好后会直接重启，正在进行的对话会被中断。\`)`，`busy = true`。
 3. `const found = await updater.check()`，`publish(found)`：
    - `current` / `unavailable` / `install-pending` → 原样报，清提示，结束。
    - `downloaded` → 跳到第 5 步。

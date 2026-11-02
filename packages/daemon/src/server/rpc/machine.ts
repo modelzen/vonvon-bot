@@ -54,7 +54,7 @@ export async function machineRpc(service: AdminService, control: ShutdownControl
     case 'coreUpdateStatus': return { kind: 'read', value: { type: 'coreUpdateStatus', status: service.updateStatus() } };
     case 'stopHost': {
       if (!control) return unsupported();
-      control.requestStop();
+      control.requestStop(request.reason);
       return { kind: 'read', value: { type: 'done', message: '正在停止 daemon。' } };
     }
     case 'applyCoreUpdate': {

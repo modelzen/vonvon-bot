@@ -1,5 +1,7 @@
 # K1 `skills-scope`：三个内置 Skill 配合新命令行，群里不改设置，带 `--scope`
 
+> 2026-11-02 作废（owner）：本片加的飞书 skill（`feishu.ts`）、设置 skill（`settings.ts`）和三个 skill 共用的开头（`session-rules.ts`）都由 S1 `settings-dm-only` 撤掉了，任务 skill 回到本片之前；群会话也不再有设置工具。见 `docs/plans/settings-dm-only.md` 和 `docs/plans/devices.md` 第 20 节。下面是本片当时的计划，留作记录。
+
 总设计见 `docs/plans/devices.md` 第 5 节开头（会话里的命令行和工具同一套规则）、5.2（★ 行）、5.3（范围参数和会话令牌）、第 9 节（内置 Skill）、第 14 节第 2–5 条（群会话不写设置、私聊照 3.7、会话以外全能改、会话里的命令行同一套规则）、第 15 节（文字）。命令行在会话里实际怎么拒，以 D4a（`devices-4a-scope.md`）、D4b（`devices-4b-bot-authz.md`）合入后的代码为准；C3、C4、C6 给了 `group show/set`、`session list`、`feishu groups/members`、`settings act`、`schedule edit --new-topic/--follow` 这些命令。缩写同 D1：`D/` 是 `packages/daemon/src/`，`P/` 是 `packages/protocol/src/`。
 
 ## 1. 做什么

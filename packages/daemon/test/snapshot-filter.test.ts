@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PROTOCOL_VERSION, type DesktopSnapshot } from '@vonvon/protocol';
-import { filterSnapshot } from '../src/server/snapshot-filter';
+import { filterSnapshot, sessionSnapshot } from '../src/server/snapshot-filter';
 import type { AdminBot } from '../src/admin/service';
 import { fakeService, socketClient, startFixture, type Frame } from './server-fixture';
 
@@ -23,7 +23,7 @@ const snapshot = {
 const ids = (list: Array<{ id: string }>) => list.map(item => item.id);
 
 describe('filterSnapshot', () => {
-  it('leaves a group session one bot and its own group', () => {
+  it('leaves a reach of one group (the owner\'s --scope group=) one bot and its own group', () => {
     const shown = filterSnapshot(snapshot, principal('group'), { bot: 'cli_x', group: 'oc_a' });
     expect(ids(shown.agents)).toEqual(['cli_x']);
     expect(shown.agents[0]).not.toHaveProperty('diagnostics');
@@ -41,6 +41,37 @@ describe('filterSnapshot', () => {
     expect(ids(filterSnapshot(snapshot, principal('dm'), { bot: 'cli_x', group: 'oc_b' }).groups)).toEqual(['oc_b']);
     const comment = filterSnapshot(snapshot, principal('comment'), { bot: 'cli_x' });
     expect([ids(comment.agents), comment.groups, comment.memberships, comment.projects]).toEqual([['cli_x'], [], [], []]);
+  });
+});
+
+// s1b: a group's session reads the least its command line resolves names with. main 必败: it read its group's folder,
+// tier, backend, jobs, recent conversations, tools and the data path.
+describe('sessionSnapshot', () => {
+  const full = {
+    ...snapshot,
+    host: { kind: 'blocked', message: '另一个 vonvon 在 /data 运行' },
+    agents: [{ id: 'cli_x', name: 'X', avatarDataUrl: 'data:x', enabled: true, running: true, connection: '已连接 · ws', activation: 'active', diagnostics: { secret: 1 }, lockHeld: { pid: 1 } }, { id: 'cli_z', name: 'Z' }],
+    groups: [{ id: 'oc_a', name: '研发群', avatarDataUrl: 'data:a' }, { id: 'oc_b', name: 'B' }],
+    memberships: [{ ...membership('cli_x', 'oc_a'), directory: '/w/secret', backend: 'claude-agent', permission: { administrator: 'full', member: 'full', network: true } }, membership('cli_x', 'oc_b')],
+    projects: [{ id: 'prj_0000000a', name: 'A', revision: 2, directory: '/w/secret', bindings: [{ agentId: 'cli_x', groupId: 'oc_a' }, { agentId: 'cli_z', groupId: 'oc_a' }] },
+      { id: 'prj_0000000b', name: 'B', revision: 1, directory: '/w/b', bindings: [{ agentId: 'cli_x', groupId: 'oc_b' }] }],
+    application: { platform: 'linux', version: '0.9.0', loginItem: true, dataPath: '/data', service: { state: 'running', skipped: false }, crashes: { records: [] } },
+  } as unknown as DesktopSnapshot;
+  it('gives a group its bot\'s and its group\'s names, its project\'s id and name, and blanks for the rest', () => {
+    const shown = sessionSnapshot(full, principal('group'), { bot: 'cli_x', group: 'oc_a' });
+    expect(shown).toEqual({
+      revision: 3, observedAt: 1, stale: false, host: { kind: 'blocked', message: '' },
+      agents: [{ id: 'cli_x', name: 'X', enabled: true, running: true, connection: '', activation: 'active' }],
+      groups: [{ id: 'oc_a', name: '研发群' }], memberships: [],
+      projects: [{ id: 'prj_0000000a', name: 'A', revision: 2, directory: '', bindings: [{ agentId: 'cli_x', groupId: 'oc_a' }] }],
+      tools: [], jobs: [], application: { platform: 'linux', version: '0.9.0', loginItem: false, dataPath: '' },
+    });
+    expect(JSON.stringify(shown)).not.toMatch(/\/w\/|\/data|full|claude-agent|oc_b|cli_z|data:/);
+  });
+  it('gives a comment its bot alone, and a private chat what filterSnapshot gives it', () => {
+    const comment = sessionSnapshot(full, principal('comment'), { bot: 'cli_x' });
+    expect([comment.agents.map(agent => agent.id), comment.groups, comment.memberships, comment.projects]).toEqual([['cli_x'], [], [], []]);
+    expect(sessionSnapshot(full, principal('dm'), { bot: 'cli_x' })).toEqual(filterSnapshot(full, principal('dm'), { bot: 'cli_x' }));
   });
 });
 
