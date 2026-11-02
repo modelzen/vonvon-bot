@@ -178,10 +178,10 @@ Mac 后验（整批，U1b/U3 的任务里）：Mac 桌面端或 Mac 上的通道
 
 ## 11. 实现时和计划不一样的地方
 
-1. **`createRemoteListeners` 的依赖**：不要 `classify`（监听器用 `remote.json` 里记下的 `kind`，不再分类一次）；`hub` 在 `secure` 里；多一个 `secureTimers`（测试把通道的超时调短）。`beginDrain()` 返回 Promise，直接把每个地址整个关掉（连接 1001），不只 `server.close()`：hub 的排空同一时刻也在关这些连接，效果一样，少一种中间状态。
+1. **`createRemoteListeners` 的依赖**：不要 `classify`（监听器用 `remote.json` 里记下的 `kind`，不再分类一次）；`hub` 在 `secure` 里；多一个 `secureTimers`（测试把通道的超时调短）。`beginDrain()` 返回 Promise，直接把每个地址整个关掉（连接 1001），不只 `server.close()`：hub 的排空同一时刻也在关这些连接，效果一样，少一种中间状态。（Codex 审查 232-2 后改掉了：排空时远程监听继续开，`release` 才关，见文末"Codex 审查后改了什么"第 2 条。）
 2. **关地址、换端口、地址消失**：用 D2 的 `secure.close('remote_disabled')`（D2 计划第 11 节第 4 条）关这个监听器自己的连接，没有另外 `hub.closeWhere(listener === host)`；`Peer.listener` 照计划加了（U3 的 `via` 用得上）。关完通道连接后，再把这个 server 剩下的 TCP 连接全部 `destroy`：升级过的 socket 不在 `closeAllConnections` 管的列表里，一个被拒了升级、自己不关的客户端会让 `server.close()` 一直等下去，关地址、换端口、`daemon stop` 都跟着卡住（写探针时发现，加了测试）。D2 的 `refuseUpgrade` 同理改成回完状态码 1 秒后还没关就 `destroy`。
 3. **未认证连接数**：D2 的 `SecureSocketServerOptions` 除了 `listenerId`，再加一个 `onAuthenticated(request)`（hello 通过、进 hub 时调）。计数按 TCP 连接：`admit` 放行时记一条，连接的 `close` 事件减掉，hello 通过时提前减掉。这样升级被 `ws` 自己拒掉（坏的 `Sec-WebSocket-Key`）的连接也不会把名额占住。
-4. **局域网地址的网络核对**：拿不到当前网络（没有默认路由、ARP 表里没有网关，比如开机时 DHCP 还没好）时照"等待地址出现"处理、15 秒后再试，不进 `needs-confirmation`；不然服务器开机就卡在"网络变了"，要人去重开。在听的时候 15 秒一次的 `watch` 也核对网络（笔记本睡醒换了网络、拿到同一个 IP 时，地址没有消失过）。
+4. **局域网地址的网络核对**：拿不到当前网络（没有默认路由、ARP 表里没有网关，比如开机时 DHCP 还没好）时照"等待地址出现"处理、15 秒后再试，不进 `needs-confirmation`；不然服务器开机就卡在"网络变了"，要人去重开。在听的时候 15 秒一次的 `watch` 也核对网络（笔记本睡醒换了网络、拿到同一个 IP 时，地址没有消失过）。（Codex 审查 233-1 后加：先核对当前承载这个地址的网卡，和记下的不同就算网络变了，见文末第 3 条。）
 5. **日志**：状态变了才记一行，15 秒一次的重试不重复记。多两个事件：`remote-server-error`（在听之后 server 出错，只记不处理），`remote-config-unreadable`（启动时读不了 `remote.json`：daemon 照常起，远程不开）。
 6. **限流的计法**：一次握手开始扣 1 个令牌，失败再扣 1 个（带有效邀请的 `unknown_client`/`pairing_failed` 不扣），所以同一 IP 一分钟内 20 次正常连接、或约 10 次失败就封 60 秒；桶空时的失败也会触发封禁。公网/CGNAT 的全局每秒 10 次只拒、不封 IP。
 7. **`/health` 的 server**：`headersTimeout`、`requestTimeout` 设成 10 秒。
@@ -193,3 +193,26 @@ Mac 后验（整批，U1b/U3 的任务里）：Mac 桌面端或 Mac 上的通道
 13. **`remote *` 四条进 `LEASED`**（数据租约），和 `clients *` 一样，daemon 没跑时它们自己写 `devices/`。
 14. **测试的接缝**：`startApi` 加 `remote?: RemoteSeams`（网卡、Tailscale、局域网网络、分类、计时），`startFixture` 第 4 个参数传它。`rpc-device-remote.test.ts` 里会真去绑的局域网地址用 `10.255.255.253`，不用 `192.168.1.9`：开发机上可能真有这个地址，测试就真在局域网上听了。`cli-remote.test.ts` 的"有 daemon"一路用夹具加手写的 pid 锁。
 15. **第 6 节第 2 步没在 Tailscale 地址上真开**：这片的规矩是不在这台机器的 Tailscale、公网地址上开监听，改用 `test/manual/remote-probe.ts` 在 `127.0.0.2:17767`（注入的分类把它当局域网地址）上跑同样的步骤；真开 Tailscale 地址留到真机验收。第 3 步（`10.255.255.254` 等待地址、`daemon stop` 很快退出）用真 daemon 跑了。
+16. **通配地址和链路本地 IPv6 开启时直接拒绝**（Codex 审查 232-1、234-1、234-2 后加）：设计 4.2 原写"`0.0.0.0`/`::` 按 `public` 处理"，第 6 节第 2 步也写了"`remote enable 0.0.0.0` → exit 4 公网文字"。可通配地址不是别的设备能拨的地址：配对链接里带的就是它，客户端用真实 IP 连时发的 Host 又对不上，403。链路本地 IPv6（`fe80::/10`，带不带 `%zone`）要客户端带上它自己的网卡名，现在的链接和 `ws://` URL 都装不下。这一批两种都不支持，在写配置之前拒绝（`invalid_request`，exit 2，和"只接受 IP 地址"同一类），RPC 和没有 daemon 时直接改文件两条路都在 `resolveEnable` 里拒。文字（本片自定，照第 15 节的写法）：通配地址"不能开启 <地址>：它代表这台设备的所有地址，别的设备拿它连不上。改用 `vonvon remote enable --tailscale`（推荐）或 `vonvon remote enable <这台设备的 IP>`。"；链路本地"不能开启 <地址>：现在还不支持链路本地的 IPv6 地址（fe80:: 开头）。改用 `vonvon remote enable --tailscale`（推荐）或 `vonvon remote enable <这台设备的局域网 IP>`。"。分类表（第 5 节）不变：`classifyAddress` 仍把它们分成 `public`、`lan`，拒绝在开启这一步。
+
+## 合入 D2（带集成分支）
+
+2026-11-02，D2（#644）合进了集成分支（I3 升级引擎、D4a 会话令牌），本片把新的 D2（`88e351af`）merge 进来，单独一个提交。冲突四处，两边的行为都留：
+
+- `cli/index.ts`：`LEASED` 两边合起来（`remote *` 和 `update` 都持数据租约）。D4a 的 `LOCAL_ONLY` 本来就列了 `remote status/enable/disable/port`，现在这四条命令有了，会话里一律 exit 4 `not_in_session`。`cli-bot-session.test.ts` 的会话拒绝清单加上这四条，"`LOCAL_ONLY` 里还没有的命令"从四条变成零条。
+- `server/http.ts`：用 D2 的写法（hub 带 `view`，`createSocketServer` 传 `sessions`，会话令牌作废经 `hub.closeWhere` 关 4401），再加回本片的撤销即断（`clients.onChange` 在 `followRevocations` 之前登记，两者都在 hub 建好之后）、远程监听和 `device` 的 `remote` 依赖；`settings`、`collaboration` 的回复照 D4a 过 `shown`。`capabilities` 合成 `device`、`session-scope`，开了地址时再加 `remote`。
+- `test/server-fixture.ts`：`startApi` 同时传 `sessionTokens` 和 `remote`。
+- `test/cli-json.test.ts`：两边的样例都留。
+
+另外核对了 D4a 的权限表：`device` 一行（`status enable disable setPort pair clients renameClient revokeClient rename`）没给会话写格子，Bot 会话一律拒；CLI 在会话里先由 `LOCAL_ONLY` 拒。`package-lock.json` 没变。排空白名单原来缺 `machine.coreUpdateStatus`（PR 描述的已知限制），D2 合入后远程连接也走共用的 `DRAIN_KINDS`，这条没了。
+
+## Codex 审查后改了什么（任务 232–234）
+
+2026-11-02，JP-VPS 上的 Codex 分三份审查本片（232 通读全部 diff，233 远程监听和撤销，234 地址、限流、配置、命令行），去重后 4 条，都复现了，都接受：
+
+1. **通配地址（232-1、234-1）→ 接受。** `remote enable 0.0.0.0`/`::` 成功，配对链接里也是通配地址，客户端用真实 IP 连时 Host 对不上，403。这一批不做完整的通配语义，`resolveEnable` 在写配置前拒绝（exit 2），RPC 和直接改文件两条路都拒，文字见第 11 节第 16 条。测试：`remote-address`、`rpc-device-remote`（拒了以后 `remote.json` 没写）、`cli-remote`（文件没变）、`cli-json`（真 CLI exit 2）。
+2. **排空一开始就销毁远程监听（232-2）→ 接受。** 原来 `beginDrain` 直接关掉每个远程 server，排空期间远程客户端连 TCP 都建不了，`admin.daemonStatus`、`machine.stopHost`、`machine.coreUpdateStatus` 都问不到，和设计 4.7"远程连接和本机一样"冲突。改成：`beginDrain` 只停绑定重试和地址巡检（之后不再绑新地址，`sync` 不动），远程 server 继续开，新连接照常走同一套 Host/Origin、限流和通道认证，进 message-loop 的排空分支（`DRAIN_KINDS`）；`release` 才关所有远程 server，连接 1001。排空开始时已有的连接照 hub 的排空处理，和本机一样 1001 关掉，客户端重连后能问那三样；排空期间连上的留到 `release`。没有另外让已有连接留着：那要改 hub 对本机连接也一样的排空规则，超出这条。测试：`remote-listeners` 的"排空时继续听、不巡检、`release` 才关"，`server-drain-control` 加远程版（真 daemon API 上开 `127.0.0.2`，排空中经安全通道问 `daemonStatus`、`coreUpdateStatus`，`release` 后连不上）。
+3. **局域网地址换了网卡（233-1）→ 接受。** 原来只在记下了 `network` 时用旧网卡名查网关，巡检也只看 IP 还在不在。改成绑定前和巡检时先查出当前承载这个地址的网卡：记下过 `iface` 而现在不同，就停监听、已有连接 4006、进 `needs-confirmation`（和"网络变了"同一个状态和文案）；地址不在照旧 `waiting`；同一块网卡再按网关标识判断（拿不到网关时，绑定前照旧等待、巡检中照旧保持）。测试：`remote-listeners` 加"只记了网卡名""网关已知、旧网卡没了""开机/地址回来时在另一块网卡上不重绑"三条。
+4. **带 zone 的 IPv6（234-2）→ 接受。** `fe80::1%eth0` 能开、进链接，客户端 `new URL('ws://[fe80::1%eth0]:7767/')` 直接报错，服务端的网卡名也不是客户端那边的 zone。这一批不支持链路本地 IPv6（`fe80::/10`，带不带 zone），开启时拒（exit 2），文字见第 11 节第 16 条，和第 1 条一起测。
+
+设计 `devices.md` 4.2 的两句（"`0.0.0.0`/`::` 按 `public` 处理"、LISTEN-1"排空时停止接受新连接"）加了改动说明。
