@@ -11,8 +11,10 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-/** The TypeScript that writes shell launchers; scanned whole. */
+/** The TypeScript that writes shell launchers, or the PATH block every interactive shell runs; scanned whole. */
 const LAUNCHER_SOURCES = [
+  // startupBlock(): written into ~/.bashrc, ~/.profile and ~/.zshrc (fixes-0-9-0 审查)
+  'packages/protocol/src/cli-path-block.ts',
   'packages/daemon/src/cli/commands/standalone-setup.ts',
   'packages/daemon/src/config/data-compatibility.ts',
   'packages/desktop/src/cli-registration.ts',

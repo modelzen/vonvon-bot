@@ -197,7 +197,7 @@ export function RemoteAccessView(props: ViewProps) {
           {rows.map(row => <label key={row.host} className="remote-address" data-enabled={row.enabled || undefined}>
             <input type="radio" name={radio} value={row.host} checked={picked === row.host} disabled={busy} onChange={() => props.onPick(row.host)}/>
             <span className="remote-address__copy"><strong>{kindLabel(row)}</strong><span>{row.host}{row.iface ? ` · ${row.iface}` : ''}</span></span>
-            {row.enabled && <span className="remote-address__state" data-state={row.state}>{stateText(row)}</span>}
+            {row.enabled && <span className="remote-address__state" data-state={row.state}><CopyText text={stateText(row) ?? ''}/></span>}
             {row.current && <span className="remote-tag">你正通过它连着</span>}
           </label>)}
         </div> : <p className="remote-address-empty">{NO_ADDRESS}</p>}
