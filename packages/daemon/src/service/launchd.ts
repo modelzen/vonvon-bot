@@ -9,7 +9,7 @@ import { isStaleOwner, readRunningPidLock, type StaleOwner } from '../server/pid
 import { stopVerifiedOwner, verifyPidLockOwner } from '../server/owner-verification';
 import { renderDefinition, type Definition } from './definitions';
 import { parseLaunchdExits } from './exits';
-import { installsService, isTranslocated, runtimeDistribution, serviceProgram } from './distribution';
+import { isTranslocated, runtimeDistribution, serviceProgram } from './distribution';
 import { createServiceDrain, type DrainFailure, type DrainScope, type OwnerIdentity } from './drain';
 import { resolveServiceRoot, serviceTarget, type CanonicalRoot } from './identity';
 import { readDefinitionBytes, readRegistration, type Registration } from './registration';
@@ -300,7 +300,8 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
         const domainResult = await d.run(['print', domain], 30_000);
         if (!domainResult.ok) throw new Error(`GUI domain unavailable${domainResult.stderr.trim() ? `: ${domainResult.stderr.trim()}` : ''}`);
         const distribution = await d.distribution();
-        if (!installsService(distribution)) throw new Error('Distribution cannot install a service');
+        // Not `standalone`: only Linux has a script-installed server (owner 2026-11-01); a Mac's comes with the app.
+        if (distribution.kind !== 'bundled' && distribution.kind !== 'global-npm') throw new Error('Distribution cannot install a service');
         const program = serviceProgram(distribution, d.executable, d.capturedPath);
         if (isTranslocated(program.distribution.executable) || isTranslocated(program.distribution.entry)) throw new Error(TRANSLOCATED_REFUSAL);
         const current = await registration(s);

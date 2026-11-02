@@ -2,7 +2,7 @@
 
 依据 `docs/plans/devices.md` §7.6（发布流水线）、§7.1 末尾（三平台同版本 0.9.0）、§13 的 I5 行、`AGENTS.md`"Mac 发布任务（owner 2026-10-26 定）"和"双平台发布版本（owner 2026-10-28 定）"。契约 C1（签名清单）、C2（服务端签名密钥、`server-update.json`、`updateKey: test`）在 `docs/plans/server-3-update-engine.md` §4.1。缩写同 `devices.md`。
 
-**2026-11-01 改动**（owner："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"；`devices.md` 第 19 节）：服务端包只发 `linux-x64`、`linux-arm64`，安装脚本只有 `install.sh`、`uninstall.sh`（I2b 的 `.ps1` 取消）。I1 已合入的 `build-server.mjs` 能打六个包，I2a 起不带 `--targets` 只打两个 Linux 包（`PUBLISHED_TARGETS`）；另外四个目标由清理片 I6 删，本片等 I6。签名清单的 `files` 只有两项：I2a 的脚本已经只认两项，I3 的 `SERVER_TARGETS` 在 I3 里改成两项，本片产出第一份清单时两边已经一致。下文已按两个包、两个脚本改过。
+**2026-11-01 改动**（owner："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"；`devices.md` 第 19 节）：服务端包只发 `linux-x64`、`linux-arm64`，安装脚本只有 `install.sh`、`uninstall.sh`（I2b 的 `.ps1` 取消）。I1 的 `build-server.mjs` 原来能打六个包，另外四个目标已由清理片 I6 删，现在只认两个 Linux 包（`PUBLISHED_TARGETS`）。签名清单的 `files` 只有两项：I2a 的脚本已经只认两项，I3 的 `SERVER_TARGETS` 在 I3 里改成两项，本片产出第一份清单时两边已经一致。下文已按两个包、两个脚本改过。
 
 ## 1. 做什么
 
@@ -29,7 +29,7 @@
 
 ## 3. 现在的代码
 
-- `scripts/build-server.mjs`（I1）：`buildServer({ out, targets, cache, allowDirty })` → 默认两个 Linux 包（I2a 的 `PUBLISHED_TARGETS`；另外四个目标 I6 删）+ `vonvon-server-<v>-build.json`（每个包的 sha256/sha512/size、`node`、`sha` 源码提交）；I3 加 `--update-public-key`、`--update-base-url`、`updateKey: 'test' | 'release'`。
+- `scripts/build-server.mjs`（I1）：`buildServer({ out, targets, cache, allowDirty })` → 两个 Linux 包（`PUBLISHED_TARGETS`，I6 起只有这两个）+ `vonvon-server-<v>-build.json`（每个包的 sha256/sha512/size、`node`、`sha` 源码提交）；I3 加 `--update-public-key`、`--update-base-url`、`updateKey: 'test' | 'release'`。
 - `scripts/release-all.mjs`：`prepareRelease`（版本门、源码 worktree、runner 检查）→ `buildRelease`（mac 两个架构 + Windows Actions 分发）→ `releaseStatus` → `collectRelease`；状态文件原子写（`atomicJSON`）、`CANCEL` 文件、`lock`。
 - `scripts/release-publish.mjs`：`planPublication` 打印统一计划的 SHA-256；`uploadPublication` 要 `--plan-sha256`，并发上传 mac 和 Windows 的版本化对象；`promotePublication` 要同一个哈希 + `--owner-confirmation`，切 stable、公网复核、写 website handoff；`publicationStatus`。配置路径 `~/.config/vonvon-release/cos-write.json`（mac）、`cos-windows.json`。
 - `scripts/release-cos-publish.mjs`：`planPublish`/`uploadRelease`/`promoteRelease`/`reverifyRelease`/`rollbackRelease`/`fixReleaseHeaders`；禁止覆盖（`x-cos-forbid-overwrite`）、bucket 版本控制检查、stable 最后切、台账 `appendLedger`。

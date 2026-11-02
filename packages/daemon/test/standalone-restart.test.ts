@@ -38,7 +38,6 @@ function helper(locks: (clock: number, starts: number) => PidLockInfo | null, fi
     installRoot: async () => ROOT,
     switchCurrent: async (_root, version) => { calls.switches.push(version); current = version; },
     readCurrentVersion: async () => current,
-    rollsBack: true,
     cleanup: async (_root, keep) => { calls.cleanups.push(keep); },
     note: async (_root, version) => { calls.notes.push(version); },
     ...fields,
@@ -121,13 +120,6 @@ describe('standalone update restart helper', () => {
     expect(after).not.toBeNull();
     after?.();
   });
-  it('does not switch current.txt under the Windows supervisor, which does it itself', async () => {
-    const { run, calls } = helper((_clock, starts) => (starts ? owner('1.0.0') : null), { rollsBack: false });
-    await run();
-    expect(calls.switches).toEqual([]);
-    expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: '重启后运行的是 1.0.0' });
-    expect(readUpdateStatus()?.rolledBack).toBeUndefined();
-  });
   it('keeps its own start command when this is no standalone server', async () => {
     const { run, calls } = helper((_clock, starts) => (starts ? owner('1.0.0') : null), { installRoot: async () => undefined });
     await run({ phase: 'restarting', ok: true, from: '1', to: '2', at: 3 });
@@ -191,9 +183,9 @@ describe('standalone update restart helper', () => {
   it('leaves the record to the helper when the new daemon dies within its first seconds', async () => {
     const root = join(paths.appDir, 'install');
     for (const version of ['1.0.0', '1.0.1']) await mkdir(join(root, 'releases', version), { recursive: true }).then(() => writeFile(join(root, 'releases', version, 'standalone.json'), JSON.stringify({ v: 1, version })));
-    await switchCurrent(root, '1.0.1', 'linux');
+    await switchCurrent(root, '1.0.1');
     let paused: () => void = () => {}, resume: () => void = () => {};
-    const settling = settleUpdateAtStartup({ version: '1.0.1', installRoot: root, platform: 'linux', alive: () => false, pause: () => new Promise(resolve => { resume = resolve; paused(); }) });
+    const settling = settleUpdateAtStartup({ version: '1.0.1', installRoot: root, alive: () => false, pause: () => new Promise(resolve => { resume = resolve; paused(); }) });
     await Promise.race([settling, new Promise<void>(resolve => { paused = resolve; })]);
     const { run, calls } = helper(() => null);
     await run();

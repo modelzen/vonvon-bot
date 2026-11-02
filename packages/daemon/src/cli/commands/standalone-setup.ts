@@ -72,7 +72,7 @@ export async function runStandaloneSetup(options: { installRoot: string; version
   if (d.platform !== 'linux') throw new CommandError('failed', '只有 Linux 用安装脚本装服务端；Mac、Windows 请下载安装包：https://vonvon.cc/get/', { reason: 'unsupported_platform' });
   let previous: string | null;
   // switchCurrent refuses a release without its standalone.json naming this version
-  try { ({ previous } = await switchCurrent(installRoot, version, d.platform)); }
+  try { ({ previous } = await switchCurrent(installRoot, version)); }
   catch (error) { throw new CommandError('failed', `没切成 ${version}：${detailOf(error)}`, { reason: 'release_incomplete' }); }
   const bin = join(installRoot, 'bin');
   const launcher = join(bin, 'vonvon');

@@ -24,8 +24,6 @@ export type RestartHelperDeps = {
   installRoot: () => Promise<string | undefined>;
   switchCurrent: (installRoot: string, version: string) => Promise<unknown>;
   readCurrentVersion: (installRoot: string) => Promise<string | undefined>;
-  /** Whether this helper switches back: not for Windows under a service, once left to I4b's supervisor. Windows has no standalone (owner 2026-11-01); I6 removes it. */
-  rollsBack: boolean;
   /** Clears `releases/` but for the given versions (standalone-update.ts cleanupReleases). */
   cleanup: (installRoot: string, keep: string[]) => Promise<void>;
   /** Keeps a release from other data directories' cleanups while this process lives (noteRunning). */
@@ -46,7 +44,6 @@ const realDeps = (): RestartHelperDeps => ({
   installRoot: async () => standaloneInstallRoot(),
   switchCurrent: (root, version) => switchCurrent(root, version),
   readCurrentVersion: async root => (await readCurrent(root))?.version,
-  rollsBack: !(process.platform === 'win32' && process.env.VONVON_SERVICE),
   cleanup: async (root, keep) => { await (await import('../service/standalone-update')).cleanupReleases(root, keep); },
   note: async (root, version) => { await (await import('../service/standalone-update')).noteRunning(root, version); },
 });
@@ -188,7 +185,6 @@ export async function runSamePortRestartHelper(options: { port: number; oldPid: 
       return;
     }
     const what = first.lock ? `重启后运行的是 ${first.lock.version ?? '未知版本'}` : `新版本 ${update.to} 没有起来`;
-    if (!deps.rollsBack) { held.end('error', what); return; }
     try { await deps.switchCurrent(root, update.previous); }
     catch (error) {
       log.fail('daemon-restart', error, { phase: 'switch-back' });

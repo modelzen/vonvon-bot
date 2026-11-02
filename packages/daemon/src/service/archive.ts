@@ -1,12 +1,12 @@
 import { createReadStream } from 'node:fs';
-import { lstat, mkdir, open, readFile, rm, type FileHandle } from 'node:fs/promises';
+import { lstat, mkdir, open, rm, type FileHandle } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { createGunzip, crc32, inflateRawSync } from 'node:zlib';
+import { createGunzip } from 'node:zlib';
 import { VERSION } from './current-release';
 
 /**
- * Unpacks a standalone server package (server-3 4.3) without a tar or zip library. Only regular files and directories
+ * Unpacks a standalone server package (server-3 4.3) without a tar library. Only regular files and directories
  * are taken: links, devices and anything else are refused, as are absolute paths, `..` and backslashes. A package is
  * built without links (scripts/build-server.mjs `checkServerTree`). Modes are 0755 when any execute bit is set, else 0644.
  */
@@ -107,39 +107,6 @@ export async function extractTarGz(file: string, into: string, limits: ArchiveLi
     });
   } finally { await entry?.handle.close(); }
   if (!ended || entry) throw new ArchiveError('corrupt', 'the tar archive ends early');
-}
-
-/** A zip read through its central directory: stored or deflated, CRC checked, no ZIP64 or encryption. */
-export async function extractZip(file: string, into: string, limits: ArchiveLimits = {}): Promise<void> {
-  const writer = new Writer(into, { ...DEFAULTS, ...limits });
-  await mkdir(into, { recursive: true });
-  const bytes = await readFile(file);
-  const end = bytes.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
-  if (end < 0 || end + 22 > bytes.length) throw new ArchiveError('corrupt', 'not a zip');
-  const count = bytes.readUInt16LE(end + 10);
-  let at = bytes.readUInt32LE(end + 16);
-  for (let i = 0; i < count; i++) {
-    if (at + 46 > bytes.length || bytes.readUInt32LE(at) !== 0x02014b50) throw new ArchiveError('corrupt', 'bad central directory');
-    const [flags, method, crc, size, length, nameLength, extra, comment] = [bytes.readUInt16LE(at + 8), bytes.readUInt16LE(at + 10), bytes.readUInt32LE(at + 16), bytes.readUInt32LE(at + 20), bytes.readUInt32LE(at + 24), bytes.readUInt16LE(at + 28), bytes.readUInt16LE(at + 30), bytes.readUInt16LE(at + 32)];
-    const attributes = bytes.readUInt32LE(at + 38);
-    const offset = bytes.readUInt32LE(at + 42);
-    const name = bytes.subarray(at + 46, at + 46 + nameLength).toString('utf8');
-    at += 46 + nameLength + extra + comment;
-    const kind = (attributes >>> 16) & 0o170000;
-    if (kind && kind !== 0o100000 && kind !== 0o040000) throw new ArchiveError('unsafe', `${JSON.stringify(name)} is not a regular file or directory`);
-    if (flags & 1 || ![0, 8].includes(method) || size === 0xffffffff || length === 0xffffffff) throw new ArchiveError('corrupt', `unsupported entry ${JSON.stringify(name)}`);
-    writer.count(length);
-    if (name.endsWith('/') || kind === 0o040000) { await writer.dir(memberPath(into, name)); continue; }
-    if (offset + 30 > bytes.length || bytes.readUInt32LE(offset) !== 0x04034b50) throw new ArchiveError('corrupt', `bad local header for ${JSON.stringify(name)}`);
-    const start = offset + 30 + bytes.readUInt16LE(offset + 26) + bytes.readUInt16LE(offset + 28);
-    const body = bytes.subarray(start, start + size);
-    let data: Buffer;
-    try { data = method === 8 ? inflateRawSync(body, { maxOutputLength: length + 1 }) : body; }
-    catch { throw new ArchiveError('corrupt', `${JSON.stringify(name)} does not inflate`); }
-    if (data.length !== length || crc32(data) !== crc) throw new ArchiveError('corrupt', `${JSON.stringify(name)} is damaged`);
-    const handle = await writer.file(name, (attributes >>> 16) & 0o777);
-    try { await handle.write(data); } finally { await handle.close(); }
-  }
 }
 
 /**
