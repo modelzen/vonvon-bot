@@ -78,6 +78,8 @@ export function createRemoteListeners(deps: {
 }): RemoteListeners;
 ```
 
+- `failed` 要进协议：D1 分支 `P/device.ts:61` 的 `remoteAddressStateSchema` 只有 `listening`、`waiting`、`needs-confirmation`、`disabled`。本片把它放宽成五个值（加 `failed`），`detail` 本来就是可选的。不加的话，绑定出了别的错误时 `device.status` 的回复过不了 schema，U3 的页面和 `remote status` 都拿不到状态，U3 写好的 `failed` 文案也用不上。
+
 每个地址一个 `Entry { address, state, detail?, server?: http.Server, secure?: { close() }, timer?: NodeJS.Timeout }`：
 - `ensure(address, port)`：`lan` 且 `address.network` 有值 → 先算当前 `networkIdentity(address.iface)`，不等 → `needs-confirmation`，`detail` = 设计 15 节"局域网换了"那句，`log.warn('remote','remote-network-changed')`，**不绑**，直到用户再 `enable` 一次（`enableAddress` 会刷新 `network`）。否则 `http.createServer(handler)`：有 `Origin` 头 → 403；`Host` ≠ `hostHeader(host, port)` → 403；`GET /health` → `200 {"ok":true,"protocolVersion":2}`（不回设备 id、版本、名字）；其余 404 空体。`createSecureSocketServer({ ...secure, server, listenerId: host, admit, onHandshake, onHandshakeFailed })`，其中 `admit(req)`：Origin 存在或 Host 不符 → `{ok:false,status:403}`，`limiter.connectionOpened(ip)` 回 `too_many` → `{ok:false,status:429}`；`onHandshake(ip)` → `limiter.handshakeStarted(ip, exposure(kind))`；`onHandshakeFailed` → `limiter.handshakeFailed` + `log.warn('remote', reason==='pairing_failed' ? 'pairing-refused' : 'handshake-rejected', { ip, reason })`。`server.listen(port, host)`：`listening` → 状态 `listening`、`log.info('remote','remote-listening',{ host, port, kind })`；`error`：`EADDRNOTAVAIL` → `waiting`，detail "等待地址 <host> 出现"，`log.info('remote','remote-bind-waiting')`，15 秒后重试；`EADDRINUSE` → `waiting`，detail "端口 <port> 被占用，每 15 秒重试；可用 `vonvon remote port <n>` 换端口"，`log.warn('remote','remote-bind-failed')`，15 秒重试；其他错误 → `failed`，detail 是错误码，不重试。
 - 在听时每 15 秒 `watch`：`host` 不在 `interfaces()` 里了 → 关 server（连接 4006）、回到 `waiting` 并重试（设计 4.2 "地址消失同样回到等待"）。
@@ -108,6 +110,7 @@ export function createRemoteListeners(deps: {
 |---|---|---|
 | `daemon/test/remote-address.test.ts`（新） | 分类表 | `127.0.0.1`→loopback；`::1`→loopback；`0.0.0.0`、`::`→public；`10.1.2.3`、`172.16.0.9`、`172.31.255.1`、`192.168.1.9`、`169.254.1.1`、`fd00::1`、`fe80::1`→lan；`172.32.0.1`→public；`100.100.1.1` 在 `tailscale0` 上→tailscale；同地址在 `eth0` 上且 ts.ips 不含→cgnat；在 `utun3` 且 ts.ips 含→tailscale；在 `Tailscale`（Windows 的网卡名）上、ts.ips 为空→tailscale；在 `Ethernet` 上且 ts.ips 含→tailscale；`fd7a:115c:a1e0::1`→tailscale；`8.8.8.8`→public；`example.com`、`192.168.1`→invalid。main 必败 |
 | 同上 | `hostHeader` | `('192.168.1.9',7767)`→`192.168.1.9:7767`；`('fd00::1',7767)`→`[fd00::1]:7767` |
+| `protocol/test/device.test.ts`（改） | 地址状态 `failed` | 带 `state: 'failed', detail: 'EACCES'` 的 `device.status` 回复能被 `deviceReplySchema` 解析，原样回来。main 必败 |
 | `daemon/test/remote-tailscale.test.ts`（新） | 命令缺失/超时 | 假 `exec` 抛 ENOENT → `installed:false, ips:[]`；5 s 不回 → `installed:true, ips:[]`；正常输出两行 → 两个 ip |
 | `daemon/test/remote-rate-limit.test.ts`（新，假时钟） | 未认证连接数 | 同 IP 第 5 条 `too_many`；`connectionClosed` 后第 5 条 ok；8 个 IP 各 4 条后第 33 条 `too_many` |
 | 同上 | 令牌桶和封禁 | 同 IP 1 分钟内第 21 次 `handshakeStarted` → `rate_limited`，`onBan` 调一次，60 s 内都拒，61 s 后 ok；`handshakeFailed(unknown_client, validInvite:true)` 不扣桶，`validInvite:false` 扣 |
@@ -166,3 +169,9 @@ Mac 后验（整批，U1b/U3 的任务里）：Mac 桌面端或 Mac 上的通道
 - `ws` 的 `verifyClient` 是同步/回调式；`admit` 保持同步。
 - 用 `127.0.0.2` 做测试地址依赖 Linux 的 127/8 全可绑；macOS 上这些测试会 `EADDRNOTAVAIL`（CI 的 macOS 任务）：测试里先 `try bind` 探测，不行就 `test.skip` 并在 Linux 上跑全量。
 - `nc` 压测只验证 daemon 的 `status` 不被拖慢；真实的 Bot IPC 不卡由整批验收在 Bot 6 上看一次。
+
+## 10. 审查后改了什么
+
+2026-11-02，#640 上 Sonnet 审查 U1a–U4 计划时，提到本片的一条，接受：
+
+- 监听器会把地址记成 `failed`，U3 也给它写了文案，可 D1 的协议枚举没有这个值，没有哪一片负责加。由本片加进 `remoteAddressStateSchema`，并加一条解析测试（4.5、第 5 节）。U3 计划写明：本片没加时由 U3 补。

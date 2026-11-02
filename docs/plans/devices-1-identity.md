@@ -60,7 +60,7 @@
 | `DRAIN_KINDS` | `['admin.daemonStatus','machine.stopHost','machine.coreUpdateStatus'] as const`：排空期间只放这些 | D1 定常量，D4a 把 `ws.ts` 写死的两条换成它 |
 | `admin.negotiate` | 请求 `{ type:'negotiate', capabilities: z.array(z.string().regex(/^[a-z][a-z0-9.-]{0,63}$/)).max(32), scope?: scopeSchema }`；回复 `{ kind:'negotiated', principal: principalWire, scope: Scope \| null }`。一条连接只认第一次，第二次回 `invalid_request`。daemon 记进 `peer.capabilities`、`peer.scope` | D1 请求/回复和记录，D4a 范围核对 |
 | `daemonStatusSchema` | 加 `startedAt: z.number().int()`（epoch ms，`deps.daemonStartedAt`）。**对 `protocolVersion === 1` 的 peer，`dispatch` 把 `startedAt` 删掉再回**（0.8 客户端严格解析） | D1 |
-| 能力名 | daemon 在 serverInfo v2 的 `capabilities` 里报：`'device'`（本片起恒有）、`'remote'`（D3，开了远程监听才报）、`'session-scope'`（D4a）、`update.*`（I3）。客户端在 `negotiate` 里报：`'desktop.selfUpdate'`（U4）。本片只定义命名空间规则：小写、点分，不按版本号猜功能 | D1 |
+| 能力名 | daemon 在 serverInfo v2 的 `capabilities` 里报：`'device'`（本片起恒有）、`'remote'`（D3，开了远程监听才报）、`'session-scope'`（D4a）、`update.*`（I3）。客户端在 `negotiate` 里报：`'desktop.self-update'`（U4；2026-11-02 #640 审查：原写 `desktop.selfUpdate`，过不了本片的正则）。本片只定义命名空间规则：小写、点分，不按版本号猜功能 | D1 |
 
 **`P/device.ts`**（新文件，全部 strict）。
 

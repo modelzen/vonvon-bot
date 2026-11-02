@@ -2,7 +2,7 @@
 
 总设计见 `docs/plans/devices.md`（下文简称"设计"）4.3–4.7、6.1、6.4 末行、第 15、16、19 节，本片对应第 13 节的 U1a 行。**U1a 和 U1b（`docs/plans/devices-ui-1b-devices-page.md`）合成一个 PR**，分支 `claude/devices-ui-1`：U1a 单独合入没有用户能看到的东西，Mac 验收也要两片一起才做得了。两份计划各管各的模块，审查也按模块分（第 9 节）。
 
-缩写同 D1：`P/` = `packages/protocol/src/`，`CL/` = `packages/client/src/`，`D/` = `packages/daemon/src/`，`DT/` = `packages/desktop/src/`，`U/` = `packages/ui/src/`。行号以 `origin/claude/devices-integration`（8051b03c；本片引用的 desktop、ui、client、protocol 文件和 a2577fb3 相同）为准；D1 还没合入，它的名字以 `origin/claude/devices-1-identity`（e8bbe267）为准，写作"D1 分支"。
+缩写同 D1：`P/` = `packages/protocol/src/`，`CL/` = `packages/client/src/`，`D/` = `packages/daemon/src/`，`DT/` = `packages/desktop/src/`，`U/` = `packages/ui/src/`。行号以 `origin/claude/devices-integration`（8051b03c；本片引用的 desktop、ui、client、protocol 文件和 a2577fb3 相同）为准；D1 还没合入，它的名字以 `origin/claude/devices-1-identity`（147b2619）为准，写作"D1 分支"。
 
 ## 1. 做什么
 
@@ -108,6 +108,7 @@ export const activeDeviceSchema = z.object({
   attempt: z.number().int().min(0), retryAt: z.number().int().optional(),
   failure: z.object({ code: z.string(), attempts: z.array(routeFailureSchema).max(8), at: z.number().int() }).strict().optional(),
   expected: z.enum(['restart', 'stop']).optional(),
+  disabledAt: z.number().int().optional(),                           // 对面以 4006 关了远程连接的时刻；下次连上或切换时才清，之后的 refused、unreachable 不覆盖它
   notice: z.object({ kind: z.enum(['restarted', 'updated']), from: z.string().optional(), to: z.string().optional(),
     at: z.number().int() }).strict().optional(),
 }).strict();
@@ -143,7 +144,7 @@ export const removeDeviceResultSchema = z.object({ revokedRemotely: z.boolean() 
   - `connecting` → `connecting`；`reconnecting` → `reconnecting`。
   - `failed`：`revoked` → `revoked`；其余问题 → `needs-pairing`。
 - 非当前的远程设备，按下面的顺序取第一条：
-  1. 存了问题：`revoked` → `revoked`，`identity_changed`、`unknown_client` → `needs-pairing`。
+  1. 有问题（连接管理器内存里的 `problems`，没有再看存下的 `problem`，4.4）：`revoked` → `revoked`，`identity_changed`、`unknown_client` → `needs-pairing`。
   2. 这次运行里最后一次连它失败了 → `offline`。
   3. `lastKnown.protocolVersion` 和本机不同 → `maintenance`。
   4. 其余 → `unknown`，界面显示"上次在线 <时间>"。
@@ -219,6 +220,7 @@ export function routeUrl(route: DeviceRoute): string;   // ws://host:port/，IPv
    - 主进程不用全局 WebSocket：它报不出 `ECONNREFUSED`、`EHOSTUNREACH` 这些系统码，而第 15 节的提示要按它们分。
 2. socket 阶段失败的归类：
    - `unexpected-response` 403 → `forbidden`。
+   - `unexpected-response` 429 → `rate_limited`：D3 的 `admit` 在未认证连接数超限时回 429（D3 计划 4.5），要按至少 60 秒退避，不能按 1 秒去撞。
    - `ECONNREFUSED` → `refused`。
    - `EHOSTUNREACH`、`ENETUNREACH`、`EADDRNOTAVAIL`、`ENOTFOUND` → `unreachable`。
    - `ETIMEDOUT` 或握手超时 → `timeout`。
@@ -228,8 +230,8 @@ export function routeUrl(route: DeviceRoute): string;   // ws://host:port/，IPv
 4. 整条路由最多 `routeTimeoutMs`（10 秒，socket 5 秒加握手 5 秒）。
 5. `signal` 触发时 `ws.terminate()`，拒绝为 `aborted`。socket 是调用方建的，自己关就行，`connectSecure` 不用认 `signal`。
 6. 成功后：
-   - `closed` 取 D2 的 `SecureConnection.closed`。
-   - 再订 `client.onError`，收到 `ConnectionError` 时也当作结束，`code` 用 D2 给的，没有就是 `closed`。两条路以先到的为准，只 resolve 一次。
+   - `closed` 只由 D2 的 `SecureConnection.closed` 决定。`ConnectionError` 是 `client.ts` 在 socket 关闭回调里同步发的，比 D2 的 Promise 早一个微任务，又不带关闭码；拿先到的定，4003 会被认成普通的 `closed`，走重连，而不是 1 秒内变"已撤销"。
+   - 兜底：`client.onError` 收到 `ConnectionError` 后，D2 的 `closed` 250 ms 内还没 settle，才以 `closed` 结束。只 resolve 一次。
    - `close()` 关通道，并把 `closed` 定为 `{ code: 'closed' }`。
 
 `packages/desktop/package.json` 加 `ws: 8.22.0`（和 client 同版本）和 `@types/ws`（devDependency）。构建时核对 esbuild 对 `ws` 里 `bufferutil`、`utf-8-validate` 的可选 require 只报警告，报错就把这两个加进 `build.mjs` 的 `external`。
@@ -240,6 +242,7 @@ export function routeUrl(route: DeviceRoute): string;   // ws://host:port/，IPv
 3. 导出走子路径：
    - `@vonvon/client/secure` → `transport-secure.js`。它的 client 用 `client.js` 的 `createClient`，所以 `ConnectionError` 和 `@vonvon/client/browser` 里的是同一个类，桌面主进程的 `instanceof` 才认得。
    - `@vonvon/protocol/secure-channel` → `secure-channel.js`，**不从 `P/index.ts` 导出**。界面打包浏览器端时会 import `@vonvon/protocol`，不能把 `node:crypto` 带进去。
+   - 两个包的 `package.json` 都要在 `exports` 里加这条子路径（今天 protocol 只有 `.`，client 只有 `.` 和 `./browser`），不加 import 就报 `ERR_PACKAGE_PATH_NOT_EXPORTED`。D2 计划 4.2 已补这一句。
 
 ### 4.4 `DT/connections.ts`（新，核心）
 
@@ -277,7 +280,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
 export type DeviceLogEvent = 'device-opened' | 'device-closed' | 'device-failed' | 'device-added' | 'device-removed';
 ```
 
-日志一行一件事，形如 `2026-11-01T08:00:00.123Z device-closed id=1a2b3c4d code=client_revoked`。`onClosed` 一进来就写 `device-closed`，Mac 验收用它算撤销到断开的毫秒数（U1b 6.2 第 8 步）。
+日志一行一件事，形如 `2026-11-01T08:00:00.123Z device-closed id=1a2b3c4d code=client_revoked`。`onClosed` 一进来就写 `device-closed`。U1b 6.2 第 7 步拿它和助手回的 `revokedAt` 相减，只作参考；1 秒的判据以第 6 节第 2 步的探针为准（同一台机器上计时）。
 
 常量：
 - 退避 `backoff(n) = min(30_000, 1_000 × 2^n)`，n 从 0 起，依次是 1、2、4、8、16、30、30… 秒。
@@ -288,11 +291,16 @@ export type DeviceLogEvent = 'device-opened' | 'device-closed' | 'device-failed'
 
 内部状态：
 - `viewId`；`gen`：每次 `switchTo`、`remove` 当前设备、`dispose` 都加一。
+- `seq`：每发起一次连接尝试加一。`open` 每一步都和 `gen` 一起核对，`retry()` 换掉进行中的尝试靠它。
 - `session?: { gen; link; route; info; mode; pid?; startedAt? }`。
-- `phase`、`attempt`、`retryTimer`、`connecting?: AbortController`。
+- `phase`、`attempt`、`retryTimer`、`connecting?: AbortController`、`failure?`。
+- `expected?` 和它两分钟的定时器；`notice?`；`disabledAt?`（4006 的时刻，见"断了"）。
+- `problems: Map<deviceId, 'revoked' | 'identity_changed' | 'unknown_client'>`：终止类问题的内存副本，同步写；`rowStatus`、`inspectLink`、`switchTo` 先看它。`registry` 的落盘异步跟上。4.2 的 `update` 写成才改内存，不能拿它当同步的真相。
 - `lastIdentity: Map<deviceId, { pid?; startedAt?; version }>`：这次运行里每台最后一次连上时的身份。
 - `lastFailure: Map<deviceId, code>`。
-- `pairing?: { abort: AbortController }`。
+- `pairing?: { abort: AbortController }`；`removing`：`remove` 当前设备、发了自撤销时为真，`onClosed` 见到 4003 时不记成被撤销。
+- `localMachineId`：`setLocal` 记下，`own_link` 用。
+- `switchTo` 换设备时清：`session`、`connecting`（abort）、`retryTimer`、`failure`、`expected` 和它的定时器、`notice`、`disabledAt`。`problems`、`lastIdentity`、`lastFailure` 按设备记，不清。
 
 任何时刻最多两条远程连接：当前设备一条，正在添加的一条。
 
@@ -302,17 +310,22 @@ export type DeviceLogEvent = 'device-opened' | 'device-closed' | 'device-failed'
    - 是 `failed` → 按 `retry()` 处理。
 2. 否则：
    - `gen++`，`connecting?.abort()`，清 `retryTimer`。
-   - 有 `session` 就 `session.link.close()` 并清掉，清 `expected` 和 `notice`。
+   - 有 `session` 就 `session.link.close()` 并清掉；清 `failure`、`expected`（连同定时器）、`notice`、`disabledAt`。不清 `failure` 的话，失败后切走再切回会先显示旧的"连不上"，而不是"正在连接"。
 3. `viewId = id`。
    - `local`：发 `{ kind: 'local' }`，发状态，结束。
    - 远程但不在列表里：抛 `unknown_device`。
-4. 有存下的 `problem` → `phase = 'failed'`，`failure.code` 等于问题码，发 `waiting`，不去连。
-5. 否则 `phase = 'connecting'`，`attempt = 0`，发 `waiting`，`void open(gen)`。
+4. 有问题（`problems` 或存下的 `problem`）→ `phase = 'failed'`，`failure.code` 等于问题码，发 `waiting`，不去连。
+5. 否则 `phase = 'connecting'`，`attempt = 0`，发 `waiting`，`seq++`，`void open(gen, seq)`。
 
-**连 `open(myGen)`**，每一步之后都核对 `gen === myGen`，不等就关掉手上的连接退出：
+**连 `open(myGen, mySeq)`**，每一步之后都核对 `gen === myGen && seq === mySeq`，不等就关掉手上的连接退出（`switchTo` 换设备、`retry()` 换掉旧尝试都会让它不等）：
 1. `key = registry.openKey(d)`。抛错 → `fail('key_unreadable', 终止, 不落盘)`。
-2. 路由顺序：`lastRoute` 在前，再按 `routes` 原顺序，去重。逐条 `connector.connect({ route, device: { id: d.deviceId, pk: d.pk }, clientKey: key, signal })`，每条失败记进 `attempts`。碰到终止码就不试下一条。
-3. 都失败 → `onFailure(myGen, 选出的码, attempts)`。终止码优先，其次是第一条路由的码。
+2. 路由顺序：`lastRoute` 在前，再按 `routes` 原顺序，去重。逐条 `connector.connect({ route, device: { id: d.deviceId, pk: d.pk }, clientKey: key, signal })`，每条失败记进 `attempts`。
+   - 碰到 `client_revoked`、`unknown_client` 就不试下一条：对面认出了这把钥匙，换地址也一样。
+   - `device_identity_changed`（4005）只说明**这个地址上**的 Vonvon 解不开用链接里那把公钥加密的消息 1（D2 计划 4.2），可能是同一个局域网里换到这个 IP 的另一台，不证明目标设备换了身份。记下，接着试下一条。
+3. 都失败 → `onFailure(myGen, 选出的码, attempts)`。选码：
+   - 有 `client_revoked` 或 `unknown_client` → 它；
+   - 每条都是 `device_identity_changed` → 设备级的 `identity_changed`，终止并落盘；
+   - 否则取第一条不是 `device_identity_changed` 的路由的码，照常退避。
 4. 核对 `link.serverInfo.machineId === d.deviceId`。不等就关掉，按 `identity_changed` 终止并落盘。D2 的 IK 已经核对过公钥，这一条防的是数据目录被拷到另一台机器。
 5. `mode`：`serverInfo.protocolVersion === client.protocolVersion` 时为 `full`，否则为 `maintenance`（设计 4.5）。
 6. `status = await withTimeout(link.client.admin({ type: 'daemonStatus' }), 5_000)`，失败当 `undefined`。`daemonStatus` 在维护子集里，两种模式都能发。
@@ -326,7 +339,7 @@ export type DeviceLogEvent = 'device-opened' | 'device-closed' | 'device-failed'
    - `restarted`，而且不是 `expected` → `{ kind: 'restarted' }`。
    - `expected` 用掉即清。
 9. `await registry.update(id, …)`：写 `lastRoute`、`lastConnectedAt`、`lastKnown`，清 `problem`。写失败只记日志。
-10. 再核对 `gen`。然后存 `session`，`phase = 'ready'`，`attempt = 0`，清 `failure`，`lastFailure.delete(id)`。
+10. 再核对 `gen` 和 `seq`。然后存 `session`，`phase = 'ready'`，`attempt = 0`，清 `failure`、`disabledAt`，`problems.delete(id)`，`lastFailure.delete(id)`。
 11. 订 `link.closed.then(c => onClosed(myGen, session, c))`。
 12. 先发 `{ kind: 'remote', session, cause }`，再发状态。顺序要紧：bridge 先换好绑定，界面收到 `ready` 后发的请求才有地方去。
 
@@ -334,36 +347,38 @@ export type DeviceLogEvent = 'device-opened' | 'device-closed' | 'device-failed'
 1. `gen !== myGen` 或 `s !== session` → 忽略，这是我方自己关的。
 2. 把这次的 `pid`、`startedAt`、`version` 记进 `lastIdentity`，`session = undefined`，发 `waiting`。
 3. 按码处理：
-   - `client_revoked`（4003）：**在同一个回调里**写 `problem: revoked`，落盘异步，`phase = 'failed'`，发状态，不设任何定时器。正在删除这台、刚发了自撤销时（`removing` 标记）跳过这一步。
-   - `device_identity_changed`、`unknown_client`：同样终止，落盘。
+   - `client_revoked`（4003）：**在同一个回调里** `problems.set(id, 'revoked')`（内存，同步），`registry.update` 落盘异步，`phase = 'failed'`，发状态，不设任何定时器。正在删除这台、刚发了自撤销时（`removing` 标记）跳过这一步。
+   - `unknown_client`：同样终止，`problems` 同步写、落盘异步。（4005 只在消息 2 之前出现，连上以后不会以 `device_identity_changed` 结束。）
    - 其余（`remote_disabled` 4006、`closed`、1001、`timeout`、`protocol_mismatch` 4001 等）：`phase = 'reconnecting'`，按退避排下一次。
-4. 排下一次：`attempt` 从 0 起，`retryAt = now + delay`，定时器到了就 `open(gen)`，前提是 `gen` 没变。
+   - `remote_disabled` 另记 `disabledAt = now`，直到下次连上或切换才清；之后重连失败得到的 `refused`、`unreachable` 只改 `failure`，不动它。D3 关了地址以后新连接是被拒（`ECONNREFUSED`），不是 4006；不这样记，提示条第一次重连失败后就改成"Vonvon 可能没在运行"。
+4. 排下一次：`attempt` 从 0 起，`retryAt = now + delay`，定时器到了就 `seq++`、`open(gen, seq)`，前提是 `gen` 没变。
 
 **失败 `onFailure(myGen, code, attempts)`**：
-- 终止码：`client_revoked`、`device_identity_changed`、`unknown_client`、`key_unreadable`。
-  - `phase = 'failed'`；前三个落盘为 `problem`，`key_unreadable` 不落盘。
+- 终止码：`client_revoked`、`unknown_client`、`key_unreadable`，以及 `open` 第 3 步选出的设备级 `identity_changed`。
+  - `phase = 'failed'`；除 `key_unreadable` 外都 `problems.set` 并落盘为 `problem`；`key_unreadable` 不落盘，只记 `lastFailure`。
 - 其余：`phase` 保持 `connecting`（还没连上过）或 `reconnecting`（连上过又断了），`attempt++`。
   - `delay = backoff(attempt - 1)`，`rate_limited` 时取 `max(60_000, 退避值)`。
   - 记 `lastFailure`，排定时器。`failure` 一直带着 `attempts`，界面据此按地址给提示。
 
 **`retry()` 和 `wake()`**：
-- `retry()`：当前是远程，`phase` 不是 `ready` 时，清定时器，`attempt = 0`，马上 `open`。
+- `retry()`：当前是远程，`phase` 不是 `ready` 时：`connecting?.abort()`、`seq++`、清定时器、`attempt = 0`，马上 `open(gen, seq)`。旧尝试的结果回来时 `seq` 已经不等，被关掉、不发事件，打开的远程链接仍不超过当前一条加配对一条。
   - `failed` 只对 `key_unreadable` 重试，用户可能刚在钥匙串里点了允许。
   - `revoked`、`identity_changed`、`unknown_client` 要重新配对，`retry()` 什么都不做。
-- `wake()`（`powerMonitor` 的 `resume`）：对 `connecting`、`reconnecting` 同上。对 `ready` 不做事，死连接由 D2 的 30 秒保活发现。
+- `wake()`（`powerMonitor` 的 `resume`）：有进行中的尝试（`connecting` 有值）就什么都不做，正在连的那次就是要的；否则对 `connecting`、`reconnecting` 清定时器、`seq++`、马上 `open`。对 `ready` 不做事，死连接由 D2 的 30 秒保活发现。
+- 内部的 `reconnectNow()`：清这一台的 `problems`、`failure`、`disabledAt`，`phase = 'connecting'`，`attempt = 0`，`connecting?.abort()`、`seq++`、清定时器，`open`。只给"添加"里的重新配对用（第 7 步），不受 `retry()` 对终止码的限制。
 
 **`expect(kind)`**：bridge 在远程会话上转发 `restartHost`、`stopHost` 前调。记 `expected = kind`，两分钟后或下次连上后清。断开时文案按它写，见 U1b。
 
-**`setLocal`**：更新本机那一行和 `active`（本机时）的 `serverInfo`，并记下本机 `machineId`，`own_link` 要用。本机断线时，`machineId` 仍用最后一次见到的。
+**`setLocal`**：更新本机那一行和 `active`（本机时）的 `serverInfo`，并记下本机 `machineId`（`localMachineId`），`own_link` 要用。本机断线时，`machineId` 仍用最后一次见到的。
 
 **添加：`inspectLink(text)`**，纯函数，不联网，按顺序检查：
 1. 超过 4096 字符或 `decodePairingLink` 抛错 → `invalid_link`。`device.id` 不是 UUID 也算。
 2. `invite.expiresAt <= now` → `link_expired`，名字照样回。
 3. `device.id` 等于本机 `machineId` → `own_link`。
-4. 已在列表里、没有问题 → `already_added`。`routesChanged` 表示链接里的地址和存的不一样。
-5. 已在列表里、有问题 → 允许，`repair: true`，就是重新配对。
+4. 已在列表里、可以修 → 允许，`repair: true`，就是重新配对。可以修指下面任一条：有问题（`problems` 或存下的 `problem`）；这次运行里 `lastFailure` 是 `key_unreadable`；`registry.openKey` 现在就抛错。`key_unreadable` 不落盘，只看存下的 `problem` 会把它当成好的，U1b 给的"重新配对"就只能得到 `already_added`。
+5. 已在列表里、好好的 → `already_added`。`routesChanged` 表示链接里的地址和存的不一样。
 6. 下面几条都拒：
-   - `!box.available()` → `no_secure_storage`。
+   - `!box.available()` → `no_secure_storage`。重新配对也要钥匙串：钥匙串用不了（`key_unreadable` 的常见原因）时仍回它，U1b 的文案说明。
    - 列表状态 `newer` → `registry_newer`；`unreadable` → `registry_unreadable`。
    - 新设备会超过 32 台 → `too_many`。
 
@@ -380,7 +395,7 @@ export type DeviceLogEvent = 'device-opened' | 'device-closed' | 'device-failed'
    `connect({ route, device: link.device, clientKey, pairing: { inviteId, inviteSecret, clientName: 本机设备名截到 40 字 }, signal })`。
    本机设备名取本机 `serverInfo.deviceName`，没有就用 `os.hostname()`。开始配对后，状态改成 `pairing`。失败按码处理：
    - `pairing_failed`（4007）→ 停下。`now >= expiresAt` 时回 `link_expired`，否则回 `link_used`。什么都不存。
-   - `device_identity_changed` → 停下，回 `identity_changed`：那个地址上不是链接里那台设备。
+   - `device_identity_changed` → 记下，试下一条：那个地址上不是链接里那台设备，别的地址可能是。每条都是它 → 回 `identity_changed`。
    - `rate_limited` → 停下。
    - `stage === 'pairing'`，码是 `closed` 或 `timeout`：`pairRequest` 可能已经被收下、邀请已作废，只是 `pairResult` 没回来。于是在同一条路由上**用同一把密钥、不带邀请**再连一次：
      - 连上了 → 已配对，`clientId` 用 `device.clients` 的回复里 `publicKey` 等于我方公钥的那条。
@@ -391,7 +406,7 @@ export type DeviceLogEvent = 'device-opened' | 'device-closed' | 'device-failed'
    写失败就尽力在这条连接上 `device.revokeClient(自己)`，回 `failed: registry_write_failed`，别让对面留着一个本机已经忘了的客户端。
 7. 关掉配对连接，清 `pairing`，发状态。
    - **不自动切过去。**
-   - 只有 `repair` 的正好是当前设备、且它处于 `failed` 时，才 `retry()` 用新钥匙连。
+   - 只有 `repair` 的正好是当前设备、且它处于 `failed` 时，才用新钥匙连：调内部的 `reconnectNow()`，不调公开的 `retry()`（它对 `revoked`、`identity_changed`、`unknown_client` 什么都不做）。
 8. 回 `added`。
 
 **`cancelAdd()`**：`pairing.abort.abort()`，`add` 回 `failed: aborted`。如果 `pairRequest` 已经发出，对面可能已经登记了这把我们丢掉的钥匙，那条记录要在对面撤销（第 9 节风险）。
@@ -482,13 +497,13 @@ dispose 后不发任何事件，测试核 `vi.getTimerCount() === 0`。
 - `machine`：
   - 解析：D1 分支的外壳专属检查（`desktopShellRequestSchema` 命中就抛 `Shell-owned machine action`）改成看视图：
     - 看本机：照旧，全部拦下。
-    - 看远程（`view.kind === 'remote'`）：只放行 `service` 的 `install`、`uninstall`（对面的登录时启动开关，U2 4.4.3 的 `toggleService` 在远程时 shell 没有 `setLoginItem`，就发这个）。转发前先 `devices.expect('restart')`：daemon 回完就被助手换掉（I3 分支 `rpc/machine.ts:75-82`），断开显示成"正在重启"，不算连不上。
+    - 看远程（`view.kind === 'remote'`）：只放行 `service` 的 `install`、`uninstall`（对面的登录时启动开关，U2 4.4.3 的 `toggleService` 在远程时 shell 没有 `setLoginItem`，就发这个）。转发前先 `devices.expect('restart')`：daemon 回完就被助手换掉（I3 分支 `rpc/machine.ts:75-81`），断开显示成"正在重启"，不算连不上。
     - 看远程时其余命中的（`startHost`、`service start/stop`、`repairCli`、两项桌面更新）照旧拦：它们由外壳做，只对这台电脑有意义。
     - `waiting` 时照 `client()` 回 `device_unavailable`。
   - `stopHost` 先 `devices.expect('stop')`，再直接转发。
   - `status` 原样返回对面的回复：不套 `stoppedStatus`，不用 `observeCli` 覆盖，`lastStatus` 只记本机的。
 - `close`：远程时什么都不做。不能从远程视图 dispose 本机连接。
-- 不论看哪台，页面发来的 `admin.negotiate` 一律不转发，抛 `LocalOnlyRefusal`，文字"能力由桌面端自己声明。"一条连接只认第一次 `negotiate`，U4 要在本机主连接上声明 `desktop.selfUpdate`（U4 计划 4.4），页面不能抢先。
+- 不论看哪台，页面发来的 `admin.negotiate` 一律不转发，抛 `LocalOnlyRefusal`，文字"能力由桌面端自己声明。"一条连接只认第一次 `negotiate`，U4 要在本机主连接上声明 `desktop.self-update`（U4 计划 4.4），页面不能抢先。
 - 只对本机有效的六个通道——`startHost`、`service`、`setLoginItem`、`repairCli`、`chooseExecutablePath`、`chooseDirectoryPaths`——在 `view` 不是本机时抛 `LocalOnlyRefusal`。U2 加的 `quitKeepsDaemon`（退出时停不停本机服务端，U2 计划 4.7）同样只对本机有效，由 U2 加进这一组。这里说的 `service` 是外壳自己的 `desktop:shell:service` 通道，和上面 `machine` 通道里转给对面的 `service` 不是一回事。
   - `safeFailure` 映射成 `{ kind: 'validation', code: 'local_only', message: '现在看的是「<名字>」，这个操作只对这台电脑有效。先切回这台电脑。' }`。
   - 这是第二道防线，U2 会把入口藏起来。
@@ -497,7 +512,7 @@ dispose 后不发任何事件，测试核 `vi.getTimerCount() === 0`。
 1. `localGen++`；`localWatch` 退订；视图是本机时 `viewBinding?.dispose()`、`viewBinding = null`（远程的绑定不动）。
 2. `previous = localOwner`，`localOwner = null`，`await previous?.dispose()`，失败照今天抛。
 3. `candidate = bind({ view: 'local', client: next.client }, true)`，不放进 `viewBinding`；`initial = await next.client.snapshot()`；连接失败照今天：`candidate.dispose()`、`next.dispose()`、抛。
-4. `localOwner = next`，`watchLocal(next)`，`stoppedStatus = undefined`，`connectionLost = false`，`devices.setLocal({ status: 'online', serverInfo: next.serverInfo })`，通知 `onLocalOwner` 的订阅者。两种视图都走这一步：U4 靠它在每条新的本机连接上重新声明 `desktop.selfUpdate`，本机 daemon 重启或升级后也一样。
+4. `localOwner = next`，`watchLocal(next)`，`stoppedStatus = undefined`，`connectionLost = false`，`devices.setLocal({ status: 'online', serverInfo: next.serverInfo })`，通知 `onLocalOwner` 的订阅者。两种视图都走这一步：U4 靠它在每条新的本机连接上重新声明 `desktop.self-update`，本机 daemon 重启或升级后也一样。
 5. 再看 `view`：
    - 本机：`viewBinding = candidate`，`send({ type: 'reattached', view: 'local' })`，`candidate.activate(initial)`。顺序和今天一样。
    - 远程或 `waiting`：`candidate.dispose()`，**不发 `reattached`，不发快照**。以后切回本机，由 `onView(local)` 用 `localOwner`（就是 `next`）重新绑定。
@@ -594,7 +609,7 @@ export function shellForDevice(shell: ShellCapabilities | undefined, device: Act
 4. `cleanup` 在 `await starting` 之后、`bridge.dispose()` 之前 `await devices.dispose()`。远程连接先关，退出时就不会再触发重连定时器。退出桌面端不碰对面的 daemon（设计 6.4"退出桌面端"一行）。
 5. `recoverConnection` 的两处 `showConnectionLost()`（541、549）改成 `if (!bridge?.deferLocalLost()) showConnectionLost();`。
 6. 本机生命周期里的 `setLocal`：`stopHost`、`service stop` 写 `stoppedStatus` 时 `offline`，`startHost` 开始时 `connecting`。`replaceOwner` 成功时 bridge 自己会调。
-7. `confirmQuit`、`beforeUpdateInstall`、托盘：不改。退出确认的文字说的是本机，U2 再看远程时要不要改。U2 计划 4.7 的结论：退出没有确认框，`confirmQuit` 不改；只改"应用与启动"页的页脚，远程时写"退出这台电脑上的 Vonvon Bot 不影响「X」"。
+7. `confirmQuit`、`beforeUpdateInstall`、托盘：不改。主进程发 `quitRequested` 的路径不变；今天只有 `App` 里订了它，连接页、加载页、维护页不渲染 `App`，那时按 Cmd+Q 没人回应。这个由 U1b 4.1 的 `OutsideWindow`（里面订退出）补上，本片不动主进程。退出确认的文字说的是本机，U2 再看远程时要不要改。U2 计划 4.7 的结论：退出没有确认框，`confirmQuit` 不改；只改"应用与启动"页的页脚，远程时写"退出这台电脑上的 Vonvon Bot 不影响「X」"。
 
 ### 4.9 顺序
 
@@ -632,15 +647,22 @@ export function shellForDevice(shell: ShellCapabilities | undefined, device: Act
 | 同上 | 退避 | 每次都 `unreachable` → 相邻两次尝试的间隔依次 1000、2000、4000、8000、16000、30000、30000 |
 | 同上 | 限流 | `rate_limited` → 下一次在 60000 ms 后，不早于 |
 | 同上 | 快速切换 | `switchTo(A)`、A 还没连上就 `switchTo(B)`、再 `switchTo('local')`；随后让 A、B 的假连接都成功 → A、B 的链接都被 `close()`；没有发出 `remote`；最后 `view()` 是 `local`；任何时刻打开的链接不超过 2 条 |
-| 同上 | 撤销 | `ready` 时假链接以 `client_revoked` 结束 → **同一个微任务轮次内**状态 `failed`、行 `revoked`、`registry.get(A).problem.code === 'revoked'`；`vi.getTimerCount() === 0`；再 `retry()` 不发起连接。main 必败 |
+| 同上 | 撤销 | `ready` 时假链接以 `client_revoked` 结束 → **同一个微任务轮次内**状态 `failed`、行 `revoked`（读内存的 `problems`）；`vi.getTimerCount() === 0`；`await` 落盘后 `registry.get(A).problem.code === 'revoked'`；再 `retry()` 不发起连接。main 必败 |
+| 同上 | 撤销：错误先到 | 假链接先发 `ConnectionError`，下一个微任务才以 `client_revoked` settle `closed` → 状态是 `revoked`，不是 `reconnecting`；没有排重连 |
+| 同上 | 撤销后修复 | A 是当前设备、`revoked` → 粘 A 的新链接 `inspectLink` 回 `repair: true`，`add` 成功后立刻用新钥匙连（没走 `retry()`）→ `ready` |
 | 同上 | 身份变了 | 连上但 `serverInfo.machineId` 不是 A → 链接被关、`failed`、`identity_changed` 落盘 |
+| 同上 | 某个地址上是别的机器 | `routes [r1, r2]`，r1 回 `device_identity_changed`、r2 成功 → `ready`，`lastRoute` 是 r2，没有落盘问题；两条都回它 → `identity_changed` 落盘 |
 | 同上 | 4006 后恢复 | `remote_disabled` → `reconnecting`、1 s 后重试；第二次成功 → `ready`、`cause: 'reopened'`（pid、startedAt 没变） |
+| 同上 | 4006 记住 | `remote_disabled` 后连续两次 `refused` → `active.disabledAt` 还在，`failure.code` 是 `refused`；再连上 → `disabledAt` 清掉 |
+| 同上 | 429 | `unexpected-response` 429 → `rate_limited`，下一次不早于 60000 ms |
 | 同上 | 重启 | 断开后重连，`daemonStatus` 的 `startedAt` 变了 → `cause: 'restarted'`、`notice.kind === 'restarted'`；先 `expect('restart')` 再断 → 没有 `notice`、断开期间 `expected === 'restart'` |
 | 同上 | 升级 | 重连后 `serverInfo.version` 从 0.9.0 变 0.9.1 → `notice: { kind: 'updated', from: '0.9.0', to: '0.9.1' }`，`lastKnown.version` 落盘 |
 | 同上 | 维护 | `serverInfo.protocolVersion` 3 → `mode: 'maintenance'`、行 `maintenance` |
-| 同上 | 钥匙读不出 | `openKey` 抛 → `failed`、`key_unreadable` 不落盘；`retry()` 再试一次 |
+| 同上 | 钥匙读不出 | `openKey` 抛 → `failed`、`key_unreadable` 不落盘；`retry()` 再试一次；这时粘同一台的新链接 → `inspectLink` 回 `repair: true`，不是 `already_added` |
+| 同上 | 失败后切走再切回 | A `failed`（`unreachable`）→ `switchTo('local')` → `switchTo(A)` 的第一条状态是 `connecting`、没有 `failure` |
 | 同上 | 退出时正在连 | 假连接挂着时 `dispose()` → 2 s 内 resolve；之后再让假连接成功 → 链接被关、没有事件；`vi.getTimerCount() === 0` |
-| 同上 | 唤醒 | `reconnecting` 且下一次在 16 s 后，`wake()` → 立刻重试 |
+| 同上 | 唤醒 | `reconnecting` 且下一次在 16 s 后，`wake()` → 立刻重试；尝试进行中时 `wake()` → 不新发起 |
+| 同上 | 重试换掉旧尝试 | `connecting` 时 `retry()` → 旧尝试的 `signal` 被 abort；之后旧尝试成功 → 链接被关、没有事件；打开的链接不超过 2 条 |
 | 同上 | 添加：各种拒绝 | 坏字符串 → `invalid_link`；过期 → `link_expired`；`device.id` 等于本机 → `own_link`；已加过 → `already_added`（地址变了时 `add` 回 `updated` 且没调 `connect`）；`available()` 假 → `no_secure_storage` |
 | 同上 | 添加：成功 | 合法链接 → 用新生成的公钥连、带 `pairing`、`clientName` 是本机名截到 40 字；`put` 的条目里 `clientId` 来自 `pairResult`、`secretKeySealed` 是 box 加密的；没有切换；配对链接已关 |
 | 同上 | 添加：链接用过 | 假连接抛 `pairing_failed` → `failed: link_used`，`registry.list()` 不变 |
@@ -683,7 +705,9 @@ U1a 和 U1b 是一个 PR，Mac 上只发一次验收，写在 U1b 第 6 节。U1
 - 不在 shell 里给 `HOME`、`VONVON_HOME` 赋值或 export，只写在单条命令前面，例如 `HOME=$T/home VONVON_HOME=$T/vh npx vitest run`。
 
 1. 单测：
-   `T=$(mktemp -d); HOME=$T/home VONVON_HOME=$T/vh flock /tmp/vonvon-heavy.lock npx vitest run packages/desktop/test/device-registry.test.ts packages/desktop/test/remote-transport.test.ts packages/desktop/test/connections.test.ts packages/desktop/test/bridge.test.ts packages/desktop/test/facade.test.ts packages/ui/test/client-context.test.tsx`
+   `T=$(mktemp -d); HOME=$T/home VONVON_HOME=$T/vh flock /tmp/vonvon-heavy.lock npx vitest run packages/desktop/test/device-registry.test.ts packages/desktop/test/remote-transport.test.ts packages/desktop/test/connections.test.ts packages/desktop/test/bridge.test.ts packages/desktop/test/facade.test.ts`
+   `HOME=$T/home VONVON_HOME=$T/vh flock /tmp/vonvon-heavy.lock npm test -w packages/ui -- test/client-context.test.tsx`
+   根目录的 `vitest.config.ts` 只收 `*.test.ts`，`.tsx` 的界面测试要在 ui 包里跑（它用默认的 include）。
    然后在 `flock /tmp/vonvon-heavy.lock` 下跑 protocol、client、desktop、ui 的 `typecheck`、`lint`、`build`。最后 `rm -rf -- "${T:?}"`。
 2. 真通道探针 `packages/desktop/test/manual/devices-probe.ts`：进 git；`test/manual/` 不在 vitest include 里；跑法同 D2 的 `secure-probe.ts`。
    - 环境：在 mktemp 的 HOME 和 VONVON_HOME 下起一个临时 daemon，`vonvon remote port 17767`，`vonvon remote enable --tailscale`。不碰 Paseo、验收数据目录、`~/.vonvon-bot`。
@@ -691,7 +715,7 @@ U1a 和 U1b 是一个 PR，Mac 上只发一次验收，写在 U1b 第 6 节。U1
      1. 用 `vonvon pair --json` 的链接 `add`。
      2. `switchTo` 后打印 `admin.daemonStatus` 和快照里 bot 数。
      3. 另一个终端 `vonvon clients revoke <id>`：打印从命令返回到状态变成 `revoked` 的毫秒数，要小于 1000。
-     4. 再配一次；`remote disable` 后状态是 `reconnecting`、码 `remote_disabled`；`remote enable` 后 30 秒内回到 `ready`。
+     4. 再配一次；`remote disable` 后状态是 `reconnecting`、码 `remote_disabled`；`remote enable` 后 45 秒内回到 `ready`（退避最长 30 秒，加上一次连接最多 10 秒）。
      5. `daemon restart` → `cause: 'restarted'`。
      6. `remove` → `revokedRemotely: true`，`clients ls` 那条带 `revokedAt`。
    - 两个进程都用 `HOME=$T/home VONVON_HOME=$T/vh` 前缀，结束 `rm -rf -- "${T:?}"`。PR 里贴脱敏的输出，不贴地址和链接。
@@ -710,11 +734,14 @@ U1a 和 U1b 是一个 PR，Mac 上只发一次验收，写在 U1b 第 6 节。U1
 1. `P/desktop-devices.ts` 只 import zod 和 `P/` 里的 schema；`P/index.ts` 没有导出 `secure-channel`，D2 若导出了，本片改成子路径。
 2. `devices.json` 里没有私钥明文；文件 0600；写入是"临时文件 + rename"，并且串行。
 3. 打开列表失败不会让 app 起不来，`openDeviceRegistry` 没有会抛出的路径。
-4. 远程只走 `ws` + `connectSecure`，`ws` 不设 `origin`；连接码齐全，每条路由 10 秒封顶，`signal` 能打断。
+4. 远程只走 `ws` + `connectSecure`，`ws` 不设 `origin`；连接码齐全，每条路由 10 秒封顶，`signal` 能打断。protocol、client 的 `package.json` `exports` 有新的子路径。
 5. 任何时刻最多两条远程连接（当前一条，配对一条），测试里有断言。
-6. 每个 `await` 之后都核对 `gen`，过期的连接结果会被关掉，不发事件。
-7. 4003 在同一个回调里变成 `revoked`，不留定时器；终止码不再自动重试。
-8. 退避是 1、2、4、8、16、30 秒，`rate_limited` 至少 60 秒，`resume` 会重置。
+6. 每个 `await` 之后都核对 `gen` 和 `seq`，过期的连接结果会被关掉，不发事件；`retry()` 会 abort 进行中的尝试，`wake()` 遇到进行中的尝试不重复发起。
+7. 4003 在同一个回调里变成 `revoked`（内存 `problems` 同步写，落盘异步），不留定时器；`closed` 只看 D2 的 `SecureConnection.closed`，`ConnectionError` 只作 250 ms 后的兜底；终止码不再自动重试。
+   - 4005 按路由处理，只有每条路由都回它才是设备级的 `identity_changed`。
+   - `key_unreadable` 或有问题的设备可以用新链接重新配对，当前设备修好后走内部的 `reconnectNow()`。
+   - 4006 记下 `disabledAt`，之后的 `refused` 不盖掉它；`switchTo` 清 `failure`、`disabledAt`、`expected`、`notice`。
+8. 退避是 1、2、4、8、16、30 秒，`rate_limited`（含 HTTP 429）至少 60 秒，`resume` 会重置。
 9. 添加时邀请密钥不进日志、状态和文件；`link_used` 什么都不存；不自动切过去。
 10. 删除当前设备会先自撤销（3 秒），4003 不当"被撤销"；删除非当前设备不联网。
 11. 发给 daemon 的通道都带 `view`，不匹配的回 `device_switched`；外壳通道不带。
@@ -740,3 +767,24 @@ U1a 和 U1b 是一个 PR，Mac 上只发一次验收，写在 U1b 第 6 节。U1
 - `contextBridge` 代理"函数返回的对象里的函数"：依据是 Electron 文档，真机在 Mac 验收第 2 步核。不行就退回"`vonvonClient` 每个方法带 `view` 参数"，由页面自己传。
 - `safeStorage` 在未签名的开发版里用的是"Electron Safe Storage"钥匙串项，Mac 验收时可能弹一次钥匙串授权（U1b 第 6 节）。
 - 非当前设备的状态点只是上次的结果，可能过时。设计和 `product.md` 3.14 都定了不在后台看，文案写"上次在线 <时间>"，不写"在线"。
+
+## 10. 审查后改了什么
+
+2026-11-02，#640 上 Sonnet 审查（读整个 diff 一位，读 U1a+U1b 一位）。下面每条都接受了：
+
+- `closed` 原来取 D2 的 `closed` 和 `ConnectionError` 先到的那个。`ConnectionError` 同步先到又不带关闭码，4003 会被认成普通断开去重连。改成只看 D2 的 `closed`，`ConnectionError` 只作 250 ms 后的兜底（4.3 第 6 步、第 5 节"撤销：错误先到"）。
+- `retry()`、`wake()` 不换代也不 abort 进行中的尝试，两次 `open` 都能过核对，会多存一条链接。加 `seq`：`open` 每步核对 `gen` 和 `seq`；`retry()` 先 abort 再 `seq++`；`wake()` 遇到进行中的尝试不做事（4.4、第 5 节、第 8 节第 6 条）。
+- `key_unreadable` 不落盘，`inspectLink` 只看存下的 `problem`，U1b 给的"重新配对"只能得到 `already_added`。可以修的条件加上 `lastFailure` 和 `openKey` 现在就抛错；钥匙串用不了仍先回 `no_secure_storage`（"添加"第 4 至 6 步）。
+- 修好当前设备后调 `retry()`，可它对 `revoked` 这类码什么都不做，新钥匙用不上。改成内部的 `reconnectNow()`（4.4"重试和唤醒"、"添加"第 7 步、第 5 节"撤销后修复"）。
+- 测试要求撤销后同一个微任务里 `registry.get` 已是 `revoked`，可 `registry.update` 写成才改内存。加内存的 `problems` Map，同步写，`rowStatus` 先看它；测试改成同步看状态、`await` 后看落盘（4.1、4.4、第 5 节）。
+- 4006 断开后第一次重连就被 `refused` 盖掉，"对面关了远程连接"的提示条留不住。加 `disabledAt`，下次连上或切换才清（4.1 `activeDeviceSchema`、"断了"、第 5 节"4006 记住"）。
+- 单条路由上的 4005 被当作整台设备身份变了、落盘、不试别的地址。改成按路由记，每条都回它才是设备级的 `identity_changed`（"连"第 2、3 步、"添加"第 7 步、第 5 节）。
+- 内部状态清单漏了 `removing`、`expected` 和它的定时器、`notice`、本机 `machineId`，也没写切换时清哪些。补齐（4.4"内部状态"）。
+- `switchTo` 不清 `failure`，失败后切走再切回会先显示旧的"连不上"。改成清 `failure`、`expected`、`notice`、`disabledAt`（`switchTo` 第 3 步、第 5 节）。
+- D3 的 HTTP 429 原来落进 `closed`，按 1 秒退避去撞限流。改成 `rate_limited`（4.3 第 2 步、第 5 节、第 8 节第 8 条）。
+- `@vonvon/client/secure`、`@vonvon/protocol/secure-channel` 没说要在 `package.json` 的 `exports` 里加，不加 import 就报错。补上，D2 计划同步改（4.3 约定第 3 条、第 8 节第 4 条）。
+- 连接页、加载页不在 `App` 里，Cmd+Q 没人接。本片不改主进程，由 U1b 4.1 的 `OutsideWindow` 补（4.8 第 7 条）。
+- 根目录 `vitest.config.ts` 只收 `*.test.ts`，`.tsx` 的界面测试按原命令跑不到。改成在 ui 包里跑（第 6 节第 1 步）。
+- 探针"`remote enable` 后 30 秒内"等于退避上限，加一次连接超时可能偶发失败。改成 45 秒（第 6 节第 2 步第 4 项）。
+- 撤销到断开的 1 秒原来靠 Mac 上 Computer Use 加跨机计时，量不准。判据改为同机探针，`device-closed` 日志只作参考（4.4 日志一段）。
+- U4 的能力名 `desktop.selfUpdate` 过不了 D1 的小写正则，改成 `desktop.self-update`；D1 分支的 sha 更新到 147b2619（开头、4.5）。
