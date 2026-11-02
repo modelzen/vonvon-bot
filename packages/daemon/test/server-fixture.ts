@@ -55,7 +55,7 @@ export async function startFixture(service = fakeService(), environmentOptions?:
   return { api, home, credential, control, sessionTokens, close: async () => { await api.close(); await rm(home, { recursive: true, force: true }); } };
 }
 export type Frame = Event | ReplyEnvelope | ServerInfo;
-export async function socketClient(port: number, credential?: string, version: number = PROTOCOL_VERSION, timeoutMs = 3000) {
+export async function socketClient(port: number, credential?: string, version: number = PROTOCOL_VERSION, timeoutMs = 3000, clientKind: 'cli' | 'web' | 'desktop' = 'cli') {
   const socket = new WebSocket(`ws://127.0.0.1:${port}`);
   const frames: Frame[] = [];
   const waiters = new Set<() => void>();
@@ -78,6 +78,6 @@ export async function socketClient(port: number, credential?: string, version: n
       waiters.add(check);
     });
   }
-  socket.send(JSON.stringify({ type: 'hello', clientKind: 'cli', protocolVersion: version, ...(credential ? { credential } : {}) }));
+  socket.send(JSON.stringify({ type: 'hello', clientKind, protocolVersion: version, ...(credential ? { credential } : {}) }));
   return { socket, frames, wait, async ready() { await wait(frame => frame.type === 'serverInfo'); }, async call(request: Request) { socket.send(JSON.stringify(request)); return wait(frame => (frame.type === 'response' || frame.type === 'error') && frame.id === request.id); }, async close() { if (socket.readyState === WebSocket.CLOSED) return; await new Promise<void>(resolve => { socket.once('close', () => resolve()); socket.close(); }); } };
 }
