@@ -809,3 +809,13 @@ U1a 和 U1b 是一个 PR，Mac 上只发一次验收，写在 U1b 第 6 节。U1
 - 远程的 `ConnectionError` 只作 250 ms 后的兜底：通道 250 ms 内没说关闭原因，就按普通断开（`closed`）重连。
 - 同一台设备在两个桌面端窗口同时操作不在本片考虑之内：桌面端只有一个窗口。
 - 非当前设备的状态点只是上次的结果（第 9 节）。
+
+## Codex 审查后改了什么（任务 235–237）
+
+2026-11-02，Codex 在 JP-VPS 上审了 head 3ed5f8b6：任务 235 通读全部 diff，236 看 desktop 主进程和 protocol/client，237 看 ui。和本片有关的下面五条都接受了：
+
+- **235-1 本机停了，切到远程再切回，页面一直停在"正在打开 Vonvon Bot…"。** 页面按设备重建，新页面要一份快照才显示；本机连接已经停了或断了，`onView(local)` 拿快照失败就什么都不发。改成 bridge 记住本机连接最后一份快照；切回本机时本机已停（`stoppedStatus`）、断了（`connectionLost`、`localLostPending`）或正在换连接，就发 `reattached{local}` 和这份快照，`snapshot` 通道也回它，断线照旧在切回时弹窗。页面和以前一个窗口时一样：留着上次的内容，"高级运行设置"里读到"已停止"，能点"启动 daemon"（4.5 `onView(local)`；`bridge.test.ts` 加两例：正常停止、看远程时断线）。
+- **235-2 消息 2 之前的明文 4005 被写成"身份变了"，网络好了也只能重新配对。** 握手前的关闭码谁都能伪造（D2 已知限制）。改成 `identity_changed`（每条地址都回 4005，或 `machineId` 对不上）只算这一次连接的结果：停在 `failed`、不排重连，但不进 `problems`、不写进设备列表；`retry()`、切走再切回、重启桌面端都会再连一次，真的换了身份会再得到同样的结果。`machineId` 对不上一并这样处理：它在发出任何请求之前就核对，再连一次也只会再停下。用新链接重新配对照旧可以（`inspectLink` 看这次运行的 `lastFailure`）。写进列表的终止问题只剩 `revoked` 和 `unknown_client`，都是对面在通道里说的（4.4"连"第 3、4 步、"失败"、`retry()`；`connections.test.ts` 改两例、加一例）。
+- **235-3 / 236-1 收到 `pairResult` 之后、等 `serverInfo` 时断了，丢掉了已获准的密钥。** 这时对面已经登记了这把钥匙，邀请也用掉了。"添加"第 4 步的找回原来只认 `stage === 'pairing'`，改成 `pairing` 或 `hello`：同一把钥匙、不带邀请再连，从 `device.clients` 找回 `clientId`（`connections.test.ts` 那例改成两个阶段各跑一次）。
+- **236-2 切换时，已握手、还在读 `daemonStatus` 的连接要等读完（最多 5 秒）才关。** 从拿到连接到交给 `session` 之前，这次尝试被 abort（切换、`retry()`、退出）就立刻关掉它；交出时退订（`connections.test.ts` 加一例：连着三次"切过去 → 切回本机"，每次切走后打开的连接都是 0）。
+- **236-3 保存设备时点"取消"，仍可能添加成功。** `registry.put` 之后再看一次 abort：取消了就把列表恢复原样（新设备删掉，重新配对的放回原来那条），再照写失败的路子在对面撤销这把钥匙，回 `failed: aborted`（`connections.test.ts` 加一例）。
