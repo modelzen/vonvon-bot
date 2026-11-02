@@ -347,6 +347,8 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
     },
     hideWindow: () => callShell(desktopChannels.hide),
     quit: () => callShell(desktopChannels.quit),
+    quitKeepsDaemon: () => transport.invoke(desktopChannels.quitKeepsDaemon)
+      .then(value => readResult(value, value => value === true)),
     onQuitRequested(listener) {
       quitListeners.add(listener);
       if (pendingQuit) {

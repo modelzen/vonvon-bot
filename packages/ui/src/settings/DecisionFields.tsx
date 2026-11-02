@@ -3,6 +3,8 @@ import {SelectControl} from '../reference/components/ui';
 import type {DecisionConfigurationState} from './useDecisionConfiguration';
 import {DecisionPicker, decisionApiModels, isDecisionApiProvider, type DecisionPickerValue, type DecisionCatalogs, type DecisionPickerService} from './DecisionPicker';
 import {useDecisionCatalogs} from './useDecisionCatalogs';
+import {LOCAL_ACTIVE_DEVICE, type ActiveDevice} from '../client-context';
+import {onDevice} from '../device-copy';
 
 type Provider = {id: string; displayName: string};
 type Selection = Extract<JudgeSelectionView, {kind: 'llm'}>;
@@ -18,14 +20,15 @@ export function decisionProviderProblem(value: JudgeSelectionView, viewed: strin
   const saved = savedDecisionProvider(value, groupBackend);
   return saved === viewed ? undefined : '请选择当前 Provider。';
 }
-export function providerDecisionProblem(value: JudgeSelectionView, providers: Provider[], services?: DecisionModelsView, configuration?: DecisionConfigurationState): string | undefined {
+/** `where` names the device in the Provider sentence (devices-ui-2 4.2). */
+export function providerDecisionProblem(value: JudgeSelectionView, providers: Provider[], services?: DecisionModelsView, configuration?: DecisionConfigurationState, where: Pick<ActiveDevice, 'isRemote' | 'name'> = LOCAL_ACTIVE_DEVICE): string | undefined {
   if (isKnownJudgeSelection(value) && value.kind === 'default') {
     if (configuration?.kind === 'failed') return '无法读取默认决策模型，请重新读取。';
     if (configuration?.kind !== 'ready') return '正在读取默认决策模型，请稍候。';
     const provider = configuration.configuration.defaultProvider;
     if (!provider) return '请先在设置中选定默认决策模型。';
     if (!configuration.configuration.byProvider[provider]?.model.trim()) return '默认决策模型配置无效，请前往设置。';
-    return providerDecisionProblem({kind: 'provider', provider}, providers, services);
+    return providerDecisionProblem({kind: 'provider', provider}, providers, services, undefined, where);
   }
   if (!isKnownJudgeSelection(value)) return '当前客户端无法编辑已保存的决策设置。';
   const provider = value.kind === 'llm' ? value.backend : value.kind === 'provider' || value.kind === 'decision' ? value.provider : undefined;
@@ -38,7 +41,7 @@ export function providerDecisionProblem(value: JudgeSelectionView, providers: Pr
     if (!service.keySet) return `请先添加 ${name} 密钥。`;
     return provider === 'custom' && service.endpointConfigured === false ? '请先在决策模型设置中配置自定义接口地址。' : undefined;
   }
-  return providers.some(item => item.id === provider) ? undefined : '此决策 Provider 当前不可用，请先安装并登录。';
+  return providers.some(item => item.id === provider) ? undefined : `这个决策 Provider 现在不可用，先${onDevice(where, '安装')}并配置好。`;
 }
 
 /** Legacy markers are displayed through their server-resolved snapshot, never through live host state. */

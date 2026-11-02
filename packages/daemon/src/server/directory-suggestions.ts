@@ -18,7 +18,7 @@ type Suggestions = Extract<DirectoryReply, {kind: 'suggestions'}>;
  */
 export const directorySuggestionWorkerSource = String.raw`(async (root, query) => {
   const {opendir, realpath, stat} = require('node:fs/promises');
-  const {basename, dirname, isAbsolute, join, relative, resolve, sep} = require('node:path');
+  const {basename, dirname, isAbsolute, join, resolve, sep} = require('node:path');
   const windows = process.platform === 'win32';
   const entries = new Map();
   const typed = query.trim();
@@ -35,13 +35,8 @@ export const directorySuggestionWorkerSource = String.raw`(async (root, query) =
   const deadline = Date.now() + 1200;
   const code = error => error instanceof Error && 'code' in error ? String(error.code) : '';
   const fail = (code, message) => Object.assign(new Error(message), {code});
-  const contained = candidate => {
-    const rel = relative(root, candidate);
-    if (isAbsolute(rel) || rel === '..' || rel.startsWith('..' + sep)) throw fail('outside_home', '目录必须位于用户主目录内。');
-  };
   const canonical = async candidate => {
     const safe = await realpath(candidate);
-    contained(safe);
     if (!(await stat(safe)).isDirectory()) throw fail('invalid_directory', '请选择文件夹。');
     return safe;
   };
@@ -54,7 +49,7 @@ export const directorySuggestionWorkerSource = String.raw`(async (root, query) =
     const score = entry => entry.name.toLocaleLowerCase() === needle ? 0 : entry.name.toLocaleLowerCase().startsWith(needle) ? 1 : 2;
     const list = [...entries.values()];
     if (discovery) list.sort((a, b) => score(a) - score(b) || a.path.split(sep).length - b.path.split(sep).length || a.path.localeCompare(b.path));
-    process.stdout.write(JSON.stringify({kind: 'suggestions', root, path, parent: path && path !== root ? dirname(path) : null, entries: list.slice(0, 50), truncated: partial || truncated || entries.size > 50}) + '\n');
+    process.stdout.write(JSON.stringify({kind: 'suggestions', root, path, parent: path && dirname(path) !== path ? dirname(path) : null, entries: list.slice(0, 50), truncated: partial || truncated || entries.size > 50}) + '\n');
   };
   const add = entry => { entries.set(entry.path, entry); emit(); };
   const children = async (directory, visit) => {

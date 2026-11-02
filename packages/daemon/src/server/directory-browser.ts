@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { dirname, join } from 'node:path';
 import { folderTokenSchema, type FolderChoice, type FolderToken } from '@vonvon/protocol';
 import { RpcError } from './errors';
 import { createDirectorySuggestions } from './directory-suggestions';
+import { expandHome } from '../platform/home-path';
 
 /** A path that is not there (or runs through a file, or loops) is the caller's to fix, said as such instead of the raw
  * ENOENT that reached the web page as 操作失败 and the command line as exit 1 (cli-3-groups). */
@@ -13,19 +14,16 @@ function missing(error: unknown): unknown {
   return ['ENOENT', 'ENOTDIR', 'ELOOP'].includes(code) ? new RpcError('invalid_directory', '找不到这个目录，请检查路径。') : error;
 }
 
+/** Any folder this user can read, at home or not (devices 6.4, owner 2026-10-31: servers keep code in /srv, /data; the
+ * daemon runs as this user anyway). Browsing starts at home, and `~` is home. */
 export async function createDirectoryBrowser(home = homedir()) {
   const root = await realpath(home);
   const tokens = new Map<FolderToken, { path: string; expiresAt: number }>();
   const suggestions = createDirectorySuggestions();
-  function contained(path: string) {
-    const rel = relative(root, path);
-    if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) throw new RpcError('outside_home', '目录必须位于用户主目录内。');
-  }
   async function canonical(path: string): Promise<string> {
     let resolved: string;
-    try { resolved = await realpath(path); }
+    try { resolved = await realpath(expandHome(path, root)); }
     catch (error) { throw missing(error); }
-    contained(resolved);
     const info = await stat(resolved).catch((error: unknown) => { throw missing(error); });
     if (!info.isDirectory()) throw new RpcError('invalid_directory', '请选择文件夹。');
     return resolved;
@@ -47,7 +45,7 @@ export async function createDirectoryBrowser(home = homedir()) {
           throw error;
         }
       }
-      return { kind: 'entries' as const, path: resolved, parent: resolved === root ? null : dirname(resolved), entries: entries.slice(0, 1000), truncated: entries.length > 1000 };
+      return { kind: 'entries' as const, path: resolved, parent: dirname(resolved) === resolved ? null : dirname(resolved), entries: entries.slice(0, 1000), truncated: entries.length > 1000 };
     },
     async choose(path: string): Promise<FolderChoice> {
       const resolved = await canonical(path);

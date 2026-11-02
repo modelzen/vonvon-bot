@@ -446,3 +446,13 @@ it("explains unbound reply throttling and both setup routes", () => {
   expect(NOT_REPLIED_TEXT.unbound.reason(record)).toBe("这个群还没设置好，@ 它只回了一句提示（同一个群 10 分钟最多回一次）");
   expect(NOT_REPLIED_TEXT.unbound.next(record)).toBe("主人在私聊的设置卡上选会话方式、点绑定；或者在 Bot 页点「加入飞书群」设置这个群。");
 });
+
+// devices-ui-2 4.5 and 4.9 (main 必败): Windows has its platform name; the old Codex install and login jobs are gone.
+describe("devices-ui-2 protocol", () => {
+  it("parses a windows application and no longer knows the Codex jobs", async () => {
+    const { commandSchema, desktopSnapshotSchema, jobSchema } = await import("../src/index.js");
+    expect(desktopSnapshotSchema.shape.application.shape.platform.parse("windows")).toBe("windows");
+    for (const type of ["installCodex", "startCodexLogin"]) expect(commandSchema.safeParse({ type }).success).toBe(false);
+    expect(jobSchema.safeParse({ id: "job_1", type: "installCodex", phase: "running", message: "" }).success).toBe(false);
+  });
+});

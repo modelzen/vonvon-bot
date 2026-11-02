@@ -20,8 +20,6 @@ const pending = (slice: ParitySlice, note: string): ParityEntry => ({ reason: 'p
 const dead = (slice: ParitySlice, note = 'the daemon answers unsupported'): ParityEntry => ({ reason: 'dead', slice, note });
 
 export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
-  'command.installCodex': dead('U2', 'the old Codex install panel; managed installs are environment.install'),
-  'command.startCodexLogin': dead('U2', 'vonvon does not start a login (3.1, 2026-10-28)'),
   'command.setResponse': { reason: 'superseded', note: 'settings.save.project response (settings set)' },
   'command.setPermission': { reason: 'superseded', note: 'settings.save.project permission (settings set)' },
 

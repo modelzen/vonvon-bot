@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { Event } from '@vonvon/protocol';
 import { createPeerHub } from '../src/server/peer-hub';
+import { viewFor } from '../src/server/http';
 import type { Peer } from '../src/server/ws';
 
 // devices-2 4.3: the hub taken out of ws.ts. The loopback tests (server-handshake, api-listen-lifecycle,
@@ -106,4 +107,19 @@ it('closes the peers a predicate picks, with its code, and releases once', async
   expect(await first.closed).toBe(1001);
   hub.publish(event);
   expect(kept.received).toHaveLength(0);
+});
+
+// main 必败: a protocol 1 client parses snapshots strictly, and a `windows` platform would break it (devices 4.5, devices-ui-2 4.5).
+it('publishes snapshots to current connections only, never to a maintenance one', async () => {
+  // the daemon's own view (devices-4a 4.7), which also gives a maintenance connection nothing
+  const hub = createPeerHub({ detached: () => undefined, view: viewFor({ active: () => false }) });
+  const connect = await sockets();
+  const [current, maintenance] = [fakePeer(), fakePeer()];
+  Object.assign(current.peer, { principal: { kind: 'owner', scope: 'local' } });
+  Object.assign(maintenance.peer, { principal: { kind: 'maintenance' } });
+  for (const { peer } of [current, maintenance]) { const { socket } = await connect(); hub.attach(socket, once(() => hub.remove(peer))); hub.add(peer, socket); }
+  const snapshot = { type: 'event', event: 'snapshot', payload: {} } as unknown as Event;
+  hub.publish(snapshot);
+  expect(current.received).toEqual([snapshot]);
+  expect(maintenance.received).toEqual([]);
 });

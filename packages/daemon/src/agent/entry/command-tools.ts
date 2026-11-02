@@ -67,7 +67,7 @@ export function createCommandTools(deps: {
       catch { return { access: 'unavailable' }; }
     },
   }, {
-    name: 'settings_set', class: 'settings', description: '按明确读取的 revision 修改本 Bot 的既有设置；reason 留作修改说明。群的权限：选档写 permission.mode；高级设置写 permission.custom，能写哪些项看 settings_get 里 permission.options.fields，写完和某一档一样会存成那一档。',
+    name: 'settings_set', class: 'settings', description: '按明确读取的 revision 修改本 Bot 的既有设置；reason 留作修改说明。群的权限：选档写 permission.mode；高级设置写 permission.custom，能写哪些项看 settings_get 里 permission.options.fields，写完和某一档一样会存成那一档。返回里有 warnings 时，回复里原样告诉用户。',
     input: z.object({ edit: editSchema, reason: z.string().max(2000).optional() }).strict(),
     async run(args, ctx) {
       const { edit: raw, reason } = z.object({ edit: z.unknown(), reason: z.string().optional() }).parse(args);

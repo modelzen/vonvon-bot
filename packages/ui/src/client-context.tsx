@@ -31,6 +31,8 @@ export type ShellCapabilities = {
   service?: (action: "install" | "start" | "stop" | "uninstall") => Promise<MachineReply>;
   startHost?: (bot?: string) => Promise<MachineReply>;
   repairCli?: () => Promise<MachineReply>;
+  /** devices 7.4: quitting leaves this computer's daemon running, as one installed and registered on its own. */
+  quitKeepsDaemon?: () => Promise<boolean>;
   checkDesktopUpdate?: () => Promise<DesktopUpdate>;
   /** 忘掉上次没生效的安装，再检查一次。 */
   retryDesktopUpdate?: () => Promise<DesktopUpdate>;
@@ -78,7 +80,7 @@ export function deviceCopyName(device: Pick<ActiveDevice, "isRemote" | "name">):
 
 /** What only acts on this computer, left out while a remote device is shown (devices-ui-1a 4.7); the native directory
  * dialog goes with it, so directory choices fall back to the device's own browser. */
-const LOCAL_ONLY = ["chooseExecutablePath", "chooseDirectoryPaths", "setLoginItem", "service", "startHost", "repairCli"] as const satisfies readonly (keyof ShellCapabilities)[];
+const LOCAL_ONLY = ["chooseExecutablePath", "chooseDirectoryPaths", "setLoginItem", "service", "startHost", "repairCli", "quitKeepsDaemon"] as const satisfies readonly (keyof ShellCapabilities)[];
 export function shellForDevice(shell: ShellCapabilities | undefined, device: ActiveDevice): ShellCapabilities | undefined {
   if (!shell || !device.isRemote) return shell;
   const remote: ShellCapabilities = { ...shell };

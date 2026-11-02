@@ -20,7 +20,7 @@ import {
   type AppConfig,
   type SessionTitleAiConfig,
 } from '../config/schema';
-import { conversationCopy, modeToConversation, topicConversationCopy } from '@vonvon/protocol';
+import { conversationCopy, FULL_ACCESS_WARNING, modeToConversation, topicConversationCopy } from '@vonvon/protocol';
 import { noMentionOf, ruleKind, sessionModeOf, type Project } from '../project/registry';
 import {
   DEFAULT_BACKEND_ID,
@@ -668,6 +668,7 @@ export function buildNewProjectDoneCard(p: Project, droppedNoMention = false, to
     md(`✅ ${verb} **${p.name}**${p.blank ? ' _(空白项目)_' : ''}`),
     note(`📂 \`${p.cwd}\`   ·   ${topic && sessionModeOf(p) === 'multi' ? '按话题聊' : kindLabel(p)}   ·   🧠 ${backendName}`),
     ...(droppedNoMention ? [note('智能开话题没有免 @，刚才选的没用上。')] : []),
+    ...(groupPermission(p).effect.mode === 'full' ? [note(`🔓 权限：完全访问。${FULL_ACCESS_WARNING}`)] : []),
     md(p.chatId ? '👉 去群里 **@我** 干活。' : '发我任意消息可再次打开管理台。'),
   ];
   if (p.chatId)
@@ -1618,6 +1619,8 @@ export function buildPermissionCard(p: Pick<Project, 'name'> & PermissionProject
         tierSelect,
         actions([submitButton('✅ 保存权限', { a: DM.permissionSubmit, n: p.name, v: PERMISSION_CARD_VERSION }, 'primary', 'submit_perm')]),
       ]),
+      // devices 第 15 节：给群选完全访问的地方都带这句。
+      ...(options.some(option => option.value === 'full') ? [note(`完全访问：${FULL_ACCESS_WARNING}`)] : []),
       note('保存会断开本项目正在进行的会话，让新档位立即生效。'),
       note('高级设置在网页端的群详情里改，或者直接跟我说，例如“把这个群的 Claude 改成先出方案”。'),
       actions([button('⬅️ 返回设置', { a: DM.projectSettings, n: p.name })]),
