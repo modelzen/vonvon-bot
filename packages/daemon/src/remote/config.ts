@@ -5,19 +5,21 @@ import { RpcError } from '../server/errors';
 import { devicesPath, prepareDevicesDirectory, refuseNewer } from './files';
 
 export const DEFAULT_REMOTE_PORT = 7767;
-/** `<dataRoot>/devices/remote.json` (devices 4.2): the addresses the owner opened to other devices. D3 writes it, keeping
- * the fields a newer version added ({@link readRemoteConfig} reads them along). */
+/** `<dataRoot>/devices/remote.json` (devices 4.2): the address the owner opened to other devices (A1: one at most, in a
+ * list so the file keeps D3's shape). D3 writes it, keeping the fields a newer version added ({@link readRemoteConfig}
+ * reads them along). */
 export const remoteConfigSchema = z.object({
   v: z.literal(1), port: z.number().int().min(1).max(65535),
   addresses: z.array(z.object({
-    host: z.string(), enabledAt: z.number().int(), kind: z.enum(['tailscale', 'lan', 'cgnat', 'public']), iface: z.string().optional(), network: z.string().optional(),
+    host: z.string(), enabledAt: z.number().int(), kind: z.enum(['tailscale', 'overlay', 'lan', 'cgnat', 'public']), iface: z.string().optional(), network: z.string().optional(),
   }).strict()),
 }).strict();
 export type RemoteConfig = z.infer<typeof remoteConfigSchema>;
 export type RemoteAddress = RemoteConfig['addresses'][number];
 const remoteFileSchema = z.looseObject({ ...remoteConfigSchema.shape, addresses: z.array(z.looseObject(remoteConfigSchema.shape.addresses.element.shape)) });
 
-/** No file: nothing opened yet, on the default port. A file that does not parse is an error, never "nothing opened". */
+/** No file: nothing opened yet, on the default port. A file that does not parse is an error, never "nothing opened". A
+ * file from before A1 with several addresses reads as the one opened last: that is the one listened on from now on. */
 export async function readRemoteConfig(home: string): Promise<RemoteConfig> {
   const file = devicesPath(home, 'remote.json');
   let text: string;
@@ -29,8 +31,12 @@ export async function readRemoteConfig(home: string): Promise<RemoteConfig> {
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { parsed = undefined; }
   refuseNewer(file, parsed);
-  try { return remoteFileSchema.parse(parsed); }
+  let config: RemoteConfig;
+  try { config = remoteFileSchema.parse(parsed); }
   catch (error) { throw new Error(`remote.json 损坏：${file} 不是有效的远程连接配置。`, { cause: error }); }
+  if (config.addresses.length <= 1) return config;
+  const latest = config.addresses.reduce((last, address) => address.enabledAt >= last.enabledAt ? address : last);
+  return { ...config, addresses: [latest] };
 }
 
 /** D3 4.1: the whole file, 0600, through a temporary file and a rename. Fields a newer version added stay. */
@@ -53,12 +59,10 @@ export function updateRemoteConfig(home: string, change: (config: RemoteConfig) 
   void settled.then(() => { if (turns.get(home) === settled) turns.delete(home); });
   return run;
 }
-/** The same host opened again replaces its entry (a LAN address gets its network anew: the owner's confirmation). */
+/** A1: one address. Another one replaces it (the listeners close the old one); the same one opened again is new too (a
+ * LAN address gets its network anew: the owner's confirmation). */
 export function enableAddress(config: RemoteConfig, address: RemoteAddress): RemoteConfig {
-  const at = config.addresses.findIndex(entry => entry.host === address.host);
-  const addresses = [...config.addresses];
-  if (at < 0) addresses.push(address); else addresses[at] = address;
-  return { ...config, addresses };
+  return { ...config, addresses: [address] };
 }
 export function disableAddress(config: RemoteConfig, host: string): RemoteConfig {
   if (!config.addresses.some(entry => entry.host === host)) throw new RpcError('invalid_request', '这个地址没有开启。');

@@ -4,6 +4,13 @@
 
 缩写同 D1：`P/`、`CL/`、`D/`、`DT/`、`U/` 分别是 protocol、client、daemon、desktop、ui 的 `src/`。行号以 `origin/claude/devices-integration`（8051b03c，代码和 413d78d5 相同）为准；D1 的代码以 `origin/claude/devices-1-identity`（147b2619）为准，写"D1 分支"。D2、D3 还没有代码，按 `devices-2-secure-channel.md`、`devices-3-remote-listen.md` 的接口写。U1a、U1b 的接口以它们的计划为准。
 
+**A1 之后要改的地方（2026-11-02，`docs/plans/remote-single-address.md`，设计第 21 节）。** 本计划写在 A1 之前，下面几条以 A1 为准：
+- 地址只开一个：面板里的地址是**单选**，不是勾选列表；选另一个就换掉原来的（daemon 关掉旧地址、它的连接 4006）。没有"用 Tailscale 地址"按钮，`enableErrorText` 里没有 `tailscale_unavailable`。
+- 候选：`D/remote/candidates.ts` A1 已经有了（`listCandidates`、`candidateContext`、`defaultCandidate`、`candidateLabel`），和 `vonvon remote candidates` 同一套过滤（虚拟网桥、198.18/15、169.254 默认不列）和排序（tailscale、overlay、lan、cgnat、public）。本片的 `createCandidates` 只在它外面包 30 秒缓存；`candidateSchema` 照 A1 的 `Candidate` 多带 `tool?`（例如 ZeroTier），隐藏的不进 `device.status`。
+- 分类多了 `overlay`（组网），`KIND_LABEL` 加 `overlay: '组网'`，有 `tool` 时写"组网 · ZeroTier"；组网地址不弹确认框。
+- 远程时换地址：调用者正是从当前地址连进来的（`via`），选别的地址前先确认："你现在就是通过这个地址连着「X」的。换成别的地址后这台电脑会马上断开，要在「X」上生成新链接、粘到"添加设备"里更新地址。"
+- 验收步骤里"勾 Tailscale 地址""取消勾选"改成"选 Tailscale 地址""关闭远程连接"。
+
 ## 1. 做什么
 
 用户能看到的（"应用与启动"页里新的一组"允许别的设备连接"，当前看的是哪台就管哪台）：

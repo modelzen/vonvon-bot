@@ -44,12 +44,14 @@ it('opens only what enable may open, records a LAN address with its network, and
     await client.ready();
     expect((client.frames[0] as { capabilities?: string[] }).capabilities).toEqual(['device', 'session-scope']);
     const error = async (id: string, request: object) => { const reply = await client.call(call(id, { type: 'enable', ...request }) as never) as Reply; return reply.type === 'error' ? { code: reply.code, message: reply.message } : reply; };
-    expect(await error('t', { tailscale: true })).toMatchObject({ code: 'tailscale_unavailable', message: expect.stringContaining('Tailscale') });
+    // A1: a host always, and no --tailscale
+    expect(await error('t', { tailscale: true })).toMatchObject({ code: 'invalid_request' });
     expect(await error('h', { host: 'example.com' })).toEqual({ code: 'invalid_request', message: '只接受 IP 地址，不接受主机名。' });
     expect(await error('l', { host: '127.0.0.1' })).toEqual({ code: 'invalid_request', message: '回环地址不用开启，本机客户端一直能连。' });
     expect(await error('c', { host: '100.70.1.1' })).toMatchObject({ code: 'confirm_required', message: expect.stringContaining('CGNAT') });
     expect(await error('p', { host: '203.0.113.5' })).toMatchObject({ code: 'confirm_required', message: expect.stringContaining('公网') });
     expect(await error('both', { host: LAN, tailscale: true })).toMatchObject({ code: 'invalid_request' });
+    expect(await error('none', {})).toMatchObject({ code: 'invalid_request' });
     // Codex review 232-1, 234-1, 234-2: a wildcard or a link-local IPv6 is refused before remote.json is written
     expect(await error('w4', { host: '0.0.0.0', allowPublic: true })).toMatchObject({ code: 'invalid_request', message: expect.stringMatching(/^不能开启 0\.0\.0\.0：它代表这台设备的所有地址/) });
     expect(await error('w6', { host: '::', allowPublic: true })).toMatchObject({ code: 'invalid_request', message: expect.stringMatching(/^不能开启 ::：它代表这台设备的所有地址/) });
@@ -57,9 +59,11 @@ it('opens only what enable may open, records a LAN address with its network, and
     await expect(readFile(devicesPath(fixture.home, 'remote.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     const opened = await client.call(call('o', { type: 'enable', host: '203.0.113.5', allowPublic: true }) as never);
     expect(payload(opened).status?.remote.addresses).toEqual([expect.objectContaining({ host: '203.0.113.5', kind: 'public', state: 'waiting' })]);
-    await client.call(call('lan', { type: 'enable', host: LAN }) as never);
+    // A1: the LAN address replaces the public one, in the file and the status. main 必败: both were open
+    const replaced = await client.call(call('lan', { type: 'enable', host: LAN }) as never);
+    expect(payload(replaced).status?.remote.addresses).toEqual([expect.objectContaining({ host: LAN, kind: 'lan' })]);
     const file = JSON.parse(await readFile(devicesPath(fixture.home, 'remote.json'), 'utf8'));
-    expect(file.addresses[1]).toEqual({ host: LAN, enabledAt: expect.any(Number), kind: 'lan', iface: 'eth0', network: 'gw:aa:bb:cc:dd:ee:ff' });
+    expect(file.addresses).toEqual([{ host: LAN, enabledAt: expect.any(Number), kind: 'lan', iface: 'eth0', network: 'gw:aa:bb:cc:dd:ee:ff' }]);
     const next = await socketClient(fixture.api.port, fixture.credential);
     await next.ready();
     expect((next.frames[0] as { capabilities?: string[] }).capabilities).toEqual(['device', 'session-scope', 'remote']);

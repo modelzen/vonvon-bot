@@ -128,8 +128,8 @@ V2 先复制 `446b2a4` 的完整 `src/` 和 `test/`，包括 `src/web`，保留�
 
 **两种监听。** 一条连接是本机还是远程，只看它从哪个 `http.Server` 进来，不看 Host、来源地址或第一帧的样子。
 - loopback 监听永远开着，端口和 `daemon.pid` 的 `listen` 字段都不变，现有对 `127.0.0.1:` 的检查都不动。
-- 远程监听是另外几个 server，只绑用户明确开启的字面 IP，端口固定（默认 7767，写进配对链接，所以不随机）。它有自己的请求处理器：只有 `GET /health`（回 `{ ok, protocolVersion }`，不回设备 id、名字和版本）和 WebSocket 升级，不提供网页。Host 必须等于一个已开启的地址，请求带 Origin 一律 403（本期浏览器不远程连），跨站 WebSocket 和 DNS 重绑在门外就挡住了。远程监听上不接受 `credential`，也不接受会话令牌。
-- 地址分 `loopback`、`tailscale`、`lan`、`cgnat`、`public`。100.64/10 也是运营商 CGNAT 段，所以要在 Tailscale 网卡上、或在 `tailscale ip` 的输出里才算 `tailscale`，否则归 `cgnat`。`public`、`cgnat`、`0.0.0.0` 要显式确认。地址还没出现时每 15 秒重试；`lan` 地址记下网卡和网络标识，换了网络进入"需要确认"，不自动重绑。开关在运行中生效。
+- 远程监听是另外一个 server，只绑用户明确开启的那一个字面 IP（A1：只开一个，再开一个就换掉原来的，旧的先关、连接 4006），端口固定（默认 7767，写进配对链接，所以不随机）。它有自己的请求处理器：只有 `GET /health`（回 `{ ok, protocolVersion }`，不回设备 id、名字和版本）和 WebSocket 升级，不提供网页。Host 必须等于一个已开启的地址，请求带 Origin 一律 403（本期浏览器不远程连），跨站 WebSocket 和 DNS 重绑在门外就挡住了。远程监听上不接受 `credential`，也不接受会话令牌。
+- 地址分 `loopback`、`tailscale`、`overlay`、`lan`、`cgnat`、`public`。100.64/10 也是运营商 CGNAT 段，所以要在 Tailscale 网卡上、或在 `tailscale ip` 的输出里才算 `tailscale`，否则归 `cgnat`。`overlay` 是别的组网工具（ZeroTier、蒲公英、EasyTier、NetBird、WireGuard 等）网卡上的地址，按网卡名认（A1）。`public`、`cgnat` 要显式确认，`0.0.0.0`、`::` 和链路本地 IPv6 直接拒绝。地址还没出现时每 15 秒重试；`lan` 地址记下网卡和网络标识，换了网络进入"需要确认"，不自动重绑；`overlay` 地址只核对它还在组网网卡上（编号变了不算）。开关在运行中生效。候选地址（`vonvon remote candidates`）默认不列虚拟网桥和代理软件的 fake-IP。
 - 生命周期：开始排空时停止绑定重试、不接新连接；释放时关掉所有远程 server 并等它们关完。
 
 **加密通道。** 远程连接一律走端到端加密通道，本机 loopback 不走。做法见下面"远程访问端到端加密"。握手没完成前不处理任何帧；通道之上是原来的 `hello`、`serverInfo` 和 RPC 帧，一个字节不改。
