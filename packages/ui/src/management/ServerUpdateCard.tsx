@@ -5,7 +5,7 @@ import {Button} from '../reference/components/ui';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {settingAnchor} from '../search';
 import type {ActiveDevice} from '../client-context';
-import {whereName} from '../device-copy';
+import {onDeviceText, whereName} from '../device-copy';
 
 export type CoreUpdate = Extract<MachineReply, {type: 'coreUpdate'}>;
 /** Installs whose daemon updates itself (devices 6.5): the standalone server and the global npm package. `bundled` is U4's. */
@@ -68,6 +68,9 @@ export function ServerUpdateCard({request, variant, where, bundled, disabled = f
       if (reply.type === 'coreUpdateStatus') { setStatus(reply.status); setMessage(''); if (running(reply.status)) setFollowing(true); }
     } catch (error) {
       if (variant === 'remote' && operation.type === 'checkCoreUpdate' && unknownRequest(error)) setUnsupported(true);
+      // D3 (devices 4.7): a device that is updating answers its progress and `draining` to the rest, the connection kept.
+      // The check this card makes on opening then says nothing: the status line it follows already does.
+      else if (operation.type === 'checkCoreUpdate' && operation.fresh === false && error instanceof RpcError && error.code === 'draining') return;
       else setMessage(error instanceof Error ? error.message : '更新失败');
     } finally {
       setBusy(false);
@@ -89,8 +92,9 @@ export function ServerUpdateCard({request, variant, where, bundled, disabled = f
   }, []);
   const off = busy || disabled;
   const progress = status?.progress && !ended(status) && <progress className="application-update-progress" max={status.progress.total} value={status.progress.transferred} aria-label="Core 更新下载进度"/>;
-  const statusLine = status !== undefined && <p className="settings-operation-message" role="status">{coreStatusLine(status)}</p>;
-  const messageLine = message && <p className="settings-operation-message" role="status">{message}</p>;
+  // The server says 本机 of its own disk ("本机没有 0.9.1"); on a remote card that is 「X」 (owner 2026-11-02).
+  const statusLine = status !== undefined && <p className="settings-operation-message" role="status">{onDeviceText(where, coreStatusLine(status))}</p>;
+  const messageLine = message && <p className="settings-operation-message" role="status">{onDeviceText(where, message)}</p>;
 
   if (variant === 'local-advanced') return <SettingsGroup id={settingAnchor('外部 Core / CLI')} label="外部 Core / CLI" footer="更新外部 Core 不会更改桌面版本。">
     <SettingsRow title="Core 来源" value={core ? (core.distribution.kind === 'global-npm' ? '全局 npm 安装' : core.distribution.kind === 'standalone' ? '独立安装的服务端' : '非全局 npm 安装') : '尚未检查'} />

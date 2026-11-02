@@ -635,3 +635,26 @@ Windows 的平台名和 4.8 的 Windows 启动修复，放进 U4 的 Windows 任
 - `D/test/server-fixture.ts`：`askBot` 仍是第 4 个参数，`distribution` 挪到第 5 个；握手测试期望 `['device', 'session-scope', ...update]`。
 - `D/server/message-loop.ts` 用 D4a 的 `errorEnvelope`（同一份 `DRAIN_KINDS`）；`U/test/bot-schedules-app.test.tsx` 用 U1 的 mock（真模块上只换 hook）。
 - 合完 desktop、ui 的测试都过，没有 U1 那样的语义冲突要修：U2 的退出规则（`quit-daemon.ts`）和 U1 在 `main.ts` 接的设备连接、退出顺序各管各的。
+
+## 14. 合入集成分支前同步，本机页面写"本机"
+
+2026-11-02 合 `claude/devices-integration`（eb6d55a6，多了 D3 #646 远程监听、U1 #647、C5 #651 记忆走 daemon）。冲突照两边的意思合：
+- `D/server/http.ts`：D3 把 `capabilities()` 挪进 `startApi`，按有没有开远程地址加 `remote`；U2 的在模块里，按安装方式加 `update.*`。合成一个导出的 `capabilities(distribution, remoteOpen)`：`device`、`session-scope`，开着远程地址时 `remote`，再按安装方式 `update.standalone` 或 `update.npm`。`startApi` 两个参数都收。
+- `D/test/server-fixture.ts`：D3 的 `remote` 是第 4 个参数，`askBot` 第 5 个，`distribution` 挪到第 6 个；握手测试跟着改。
+- `P/test/rpc-kinds.test.ts`：C5 加了 `memory.branchDelete`（152），减去 U2 删的两个 Codex 命令，是 150。
+
+D3 的排空规则（排空时 `snapshot.get`、`admin.negotiate`、`machine.coreUpdateStatus` 等照答，其余回 `draining`、不断开）和 U2 对得上：桌面重连后要快照、远程升级卡片每秒读 `coreUpdateStatus` 都在白名单里；退出时问 `daemonStatus` 也在，排空中的回复不带安装方式，`daemonKeptOnQuit` 就按"拿不准"处理，照旧停。只有一处要改：远程升级卡片打开时自己查一次 `checkCoreUpdate`，排空中会被回 `draining`，以前当成错误显示一行"daemon 正在停止或重启…"。现在这一次不显示，状态行已经在说正在升级；手动点"检查更新"仍照常显示。
+
+**本机页面写"本机"（owner 2026-11-02）。** 第 1 节写的"本机照旧，不带设备名"改了：看远程设备时写"「X」"，看这台电脑时写"本机"。
+- `U/device-copy.ts`：`whereName` 本机时是"本机"（设备列表里这台照旧叫"这台电脑"，那是 U1 的 `deviceCopyName`）；`onDevice` 两边都是"在 … 上"，`configureProvider` 本机是"在本机上把 Codex 配置好（账号或自定义 API 都行），然后点「重新检测」。"；新加 `placeOf`（本机 /「X」上）和 `updateServerText`。用到它们的地方本机都跟着写"本机"：选目录标题"选择本机上的文件夹"、建群时的"本机上的目录"、解除绑定的"本机上的目录和文件保留"、诊断页的组名"本机"和页脚"本机上的 Provider 每分钟检查一次…"、更新托管副本的确认框"Vonvon 将在本机安装并验证新版本…"、各处"先在本机上安装并配置好"。
+- 原来写死"本机"、看远程时也这么说的，改成远程写「X」：
+  - 决策模型：填 key 的对话框"密钥仅保存在「X」上"，删除确认"只删「X」上存的这一份"，诊断页"「X」上还没填它的 key"（`secretsModel` 的 `removalCopy`、`keyDiagnosis` 加 `place` 参数），自定义接口说明"供「X」上使用该服务的 Bot 和群共用"，服务端太旧时"请更新并重新连接「X」上的服务"（群设置里也是这句）；
+  - 判断次数页脚"按「X」的日期统计"；上下文面板"智能判断交给「X」上的决策模型"；
+  - 主页面连上前"正在读取「X」的运行状态"；导入 Bridge"正在检查 Bot、群和「X」上的数据"；
+  - MCP 的连接方式"「X」上的命令"（本机照旧"本机命令"），daemon 回的 MCP 错误经 `onDeviceText`；
+  - "工具与连接"页的区域名，工具卡的无障碍名；
+  - "连接与设置"页的工具步骤（"去本机环境"那些）和诊断页"最近没回的消息"的下一步（"在本机环境里更新 Codex"）经 `toolStepsOn`、`onDeviceText`，和状态与诊断页的工具一样；
+  - 远程升级卡片的状态行和提示经 `onDeviceText`（服务端说"本机没有 0.9.1"说的是它自己）。
+- 不跟设备的：通用确认框的默认说明改成"请确认后再继续；取消不会做任何修改。"；搜索里"重新检测"那一组从"本机环境"改叫"工具与连接"（锚点跟着改），"本机环境"留作搜索词。
+- 没改的：`main.tsx` 没凭证时的"需要本机访问凭证"（那时还没连任何设备）；搜索里状态与诊断那一组仍叫"这台电脑"（静态索引，不跟当前设备）；daemon 自己的其他提示（模型目录说明"使用本机保存的模型目录"等）原样显示，远程时也写"本机"，指的是那台设备自己。
+- 测试：`device-copy.test.ts`（本机的说法和新函数）、`diagnostics-panel.test.tsx`（本机组名和页脚；远程"没回的消息"的下一步）、`setup-presentation.test.tsx`（远程的工具步骤）、`secrets-page.test.tsx`（远程的填、删、诊断）、`decision-provider-settings.test.tsx`、`judge-usage.test.tsx`、`mcp-presentation.test.tsx`、`memory-new-marks.test.tsx`、`directory-picker-runtime.test.tsx`（本机标题），`server-update-card-lifecycle.test.tsx` 加"排空中打开卡片"一例。`decision-provider-autosave.test.tsx` 的 `client-context` mock 改成在真模块上只换 hook。

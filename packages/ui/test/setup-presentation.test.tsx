@@ -88,6 +88,19 @@ const render = (agents: Agent[], application: Partial<DesktopSnapshot['applicati
   <SetupChecklist snapshot={{...snapshot(agents), application: {...snapshot(agents).application, ...application}}} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}}/>
 </ClientProvider>);
 
+// owner 2026-11-02: the 连接与设置 page's tool steps said 去本机环境 of a remote device too
+it('names a remote device in its tool steps, and keeps 本机 for this computer', () => {
+  const remote = {id: 'test-remote', name: '机房 Linux', isRemote: true, platform: 'linux', version: '0.9.0', mode: 'full', capabilities: ['device']};
+  const page = (device?: typeof remote) => renderToStaticMarkup(<ClientProvider client={client} device={device}>
+    <SetupChecklist snapshot={snapshot([])} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}}/>
+  </ClientProvider>);
+  const html = page(remote);
+  expect(html).toContain('可以在「机房 Linux」的「工具与连接」里装托管副本（要用「机房 Linux」上的 Node.js 和 npm）。');
+  expect(html).toContain('>查看「机房 Linux」的工具<');
+  expect(html).not.toContain('本机');
+  expect(page()).toContain('可以在本机环境里装托管副本（要用本机的 Node.js 和 npm）。');
+});
+
 it('starts a new machine with the tools and the scan step', () => {
   const html = render([]);
   expect(html).toContain('后端');

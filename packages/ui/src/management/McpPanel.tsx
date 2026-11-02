@@ -2,8 +2,8 @@ import {settingAnchor} from '../search';
 import {useCallback, useEffect, useId, useRef, useState} from 'react';
 import {ChevronDown, Plus, X, RefreshCw, Terminal, Globe, Plug} from 'lucide-react';
 import {mcpConfigSchema, type MachineReply, type MachineRequest} from '@vonvon/protocol';
-import {useActiveDevice, useClient} from '../client-context';
-import {whereName} from '../device-copy';
+import {useActiveDevice, useClient, type ActiveDevice} from '../client-context';
+import {onDeviceText, whereName} from '../device-copy';
 import {Button, IconButton, FormField, InlineNotice} from '../reference/components/ui';
 import {ConfirmDialog, Dialog} from '../reference/components/ui/Dialog';
 import {SettingChoices} from '../settings/SettingChoices';
@@ -25,8 +25,10 @@ export function mcpLoginCommand(argv: readonly string[]): string | undefined {
   if (!argv[0]?.trim() || argv.some(value => /[\x00-\x1f\x7f]/.test(value))) return undefined;
   return argv.map(value => `'${value.replaceAll("'", "'\\''")}'`).join(' ');
 }
-export function mcpSummary(entry: Entry): string {
-  if (entry.transport === 'stdio') return [entry.command || '本机命令', entry.argumentCount ? `${entry.argumentCount} 个参数` : ''].filter(Boolean).join(' · ');
+/** A stdio server runs as a command on the device: 本机命令, or 「X」上的命令 while a remote device is shown. */
+export const commandWord = (where: Pick<ActiveDevice, 'isRemote' | 'name'>): string => where.isRemote ? `${whereName(where)}上的命令` : '本机命令';
+export function mcpSummary(entry: Entry, command = '本机命令'): string {
+  if (entry.transport === 'stdio') return [entry.command || command, entry.argumentCount ? `${entry.argumentCount} 个参数` : ''].filter(Boolean).join(' · ');
   if (entry.transport === 'http' || entry.transport === 'sse') {
     try {return entry.urlOrigin ? new URL(entry.urlOrigin).origin : entry.transport.toUpperCase();} catch {return entry.transport.toUpperCase();}
   }
@@ -56,11 +58,13 @@ export function McpPanel({refreshKey = 0}: {refreshKey?: number}) {
       if (request !== sequence.current) return;
       if (reply.type !== 'mcp' || reply.provider !== provider) throw new Error();
       setView(previous => reply.status === 'unavailable' && previous?.provider === provider ? {...reply, entries: previous.entries, configPath: reply.configPath || previous.configPath} : reply);
-      if (reply.status !== 'ready') setError(reply.message || '无法读取 MCP 配置。');
+      // The daemon speaks of 本机 (its own files); a remote device's page says 「X」.
+      if (reply.status !== 'ready') setError(onDeviceText(where, reply.message || '无法读取 MCP 配置。'));
       return reply;
     } catch {
       if (request === sequence.current) setError('未读到最新的 MCP 配置。');
     } finally {if (request === sequence.current) setLoading(false);}
+  // `where` is left out: the page is built again per device (App.tsx), and its object may change with the device list.
   }, [client, provider]);
   useEffect(() => {void refresh(); return () => {sequence.current++;};}, [refresh, refreshKey]);
   const current = view?.provider === provider ? view : undefined;
@@ -70,9 +74,9 @@ export function McpPanel({refreshKey = 0}: {refreshKey?: number}) {
     if (reply.type !== 'mcp' || reply.provider !== provider) throw new Error(safeFailure);
     if (reply.status === 'conflict') {
       setView(reply);
-      return {kind: 'conflict' as const, message: reply.message || '配置已在别处更改。'};
+      return {kind: 'conflict' as const, message: onDeviceText(where, reply.message || '配置已在别处更改。')};
     }
-    if (reply.status !== 'ready' || !reply.changed) return {kind: 'failed' as const, message: reply.message || safeFailure};
+    if (reply.status !== 'ready' || !reply.changed) return {kind: 'failed' as const, message: onDeviceText(where, reply.message || safeFailure)};
     setView(reply); setAdding(false); setNotice('已添加。新会话使用更新后的配置。');
     return {kind: 'saved' as const};
   }
@@ -84,7 +88,7 @@ export function McpPanel({refreshKey = 0}: {refreshKey?: number}) {
       if (reply.type !== 'mcp' || reply.provider !== provider) throw new Error();
       if (reply.status !== 'ready' || !reply.changed) {
         if (reply.status === 'conflict') {setView(reply); setError('配置已更改，请重新读取后再操作。');}
-        setRemoveError(reply.message || safeFailure); return;
+        setRemoveError(onDeviceText(where, reply.message || safeFailure)); return;
       }
       setView(reply); setRemoving(undefined); setNotice('已移除。新会话使用更新后的配置。');
     } catch {setRemoveError(safeFailure);} finally {setBusy(false);}
@@ -109,11 +113,12 @@ export function McpPanel({refreshKey = 0}: {refreshKey?: number}) {
 }
 
 export function McpEntries({view, disabled, onAuthorize, onRemove}: {view: McpView; disabled: boolean; onAuthorize: (entry: Entry) => void; onRemove: (entry: Entry) => void}) {
+  const command = commandWord(useActiveDevice());
   return <div className="mcp-list">
     {view.entries.length ? view.entries.map(entry => <details className={`mcp-entry${entry.enabled ? "" : " mcp-entry-disabled"}`} key={entry.name}>
-      <summary><span className="mcp-transport" title={entry.transport === 'stdio' ? '本机命令' : entry.transport === 'unknown' ? '其他配置' : '远程地址'}>{entry.transport === 'stdio' ? <Terminal size={16}/> : entry.transport === 'unknown' ? <Plug size={16}/> : <Globe size={16}/>}</span><span className="mcp-entry-copy"><strong title={entry.name}>{entry.name}</strong><small title={mcpSummary(entry)}>{mcpSummary(entry)}</small></span>{!entry.enabled && <span className="mcp-disabled-badge">已停用</span>}<ChevronDown className="mcp-chevron" size={14}/></summary>
+      <summary><span className="mcp-transport" title={entry.transport === 'stdio' ? command : entry.transport === 'unknown' ? '其他配置' : '远程地址'}>{entry.transport === 'stdio' ? <Terminal size={16}/> : entry.transport === 'unknown' ? <Plug size={16}/> : <Globe size={16}/>}</span><span className="mcp-entry-copy"><strong title={entry.name}>{entry.name}</strong><small title={mcpSummary(entry, command)}>{mcpSummary(entry, command)}</small></span>{!entry.enabled && <span className="mcp-disabled-badge">已停用</span>}<ChevronDown className="mcp-chevron" size={14}/></summary>
       <div className="mcp-entry-detail"><dl>
-        <div><dt>连接方式</dt><dd>{entry.transport === 'stdio' ? '本机命令' : entry.transport === 'unknown' ? '其他' : entry.transport.toUpperCase()}</dd></div>
+        <div><dt>连接方式</dt><dd>{entry.transport === 'stdio' ? command : entry.transport === 'unknown' ? '其他' : entry.transport.toUpperCase()}</dd></div>
         {entry.envNames.length > 0 && <div><dt>环境变量</dt><dd>{entry.envNames.join('、')}</dd></div>}
         {entry.headerNames.length > 0 && <div><dt>请求头</dt><dd>{entry.headerNames.join('、')}</dd></div>}
         <div><dt>作用范围</dt><dd>{providerName(view.provider)} 用户配置</dd></div>
@@ -128,6 +133,7 @@ export function McpEntries({view, disabled, onAuthorize, onRemove}: {view: McpVi
 type SaveOutcome = {kind: 'saved'} | {kind: 'failed' | 'conflict'; message: string};
 export function AddMcpDialog({provider, revision, onSave, onRefresh, onClose}: {provider: Provider; revision: string; onSave: (name: string, config: AddRequest['config'], revision: string) => Promise<SaveOutcome>; onRefresh: () => Promise<McpView | undefined>; onClose: () => void}) {
   const {navigate} = useDraftGuard();
+  const stdioLabel = commandWord(useActiveDevice());
   const id = useId();
   const [name, setName] = useState('');
   const [transport, setTransport] = useState<'http' | 'stdio'>('http');
@@ -175,7 +181,7 @@ export function AddMcpDialog({provider, revision, onSave, onRefresh, onClose}: {
     <div className="mcp-form">
       <p className="mcp-note">添加到 {providerName(provider)} 用户配置。</p>
       <FormField label="名称" htmlFor={`${id}-name`}><input id={`${id}-name`} value={name} disabled={pending} maxLength={64} autoComplete="off" onChange={event => setName(event.target.value)}/></FormField>
-      <SettingChoices segmented label="连接方式" value={transport} choices={[{value: 'http', label: '远程地址'}, {value: 'stdio', label: '本机命令'}]} disabled={pending} onChange={setTransport}/>
+      <SettingChoices segmented label="连接方式" value={transport} choices={[{value: 'http', label: '远程地址'}, {value: 'stdio', label: stdioLabel}]} disabled={pending} onChange={setTransport}/>
       {transport === 'http' ? <>
         <FormField label="服务地址" htmlFor={`${id}-url`}><input id={`${id}-url`} type="url" value={url} disabled={pending} placeholder="https://…/mcp" autoComplete="off" spellCheck={false} onChange={event => setUrl(event.target.value)}/></FormField>
         <details className="mcp-form-advanced"><summary>令牌环境变量</summary><FormField label="变量名" htmlFor={`${id}-token`} description="由 Provider 读取该变量，不在这里填写令牌。"><input id={`${id}-token`} value={tokenEnv} disabled={pending} placeholder="MCP_TOKEN" autoComplete="off" onChange={event => setTokenEnv(event.target.value)}/></FormField></details>

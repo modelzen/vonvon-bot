@@ -83,6 +83,7 @@ import {createRegistrationRetry} from './setup/registration-retry';
 import {MachinePanel, quitKeepsText} from './management/MachinePanel';
 import {RemoteServiceGroup} from './management/RemoteServiceGroup';
 import {ServerUpdateCard} from './management/ServerUpdateCard';
+import {whereName} from './device-copy';
 import {DiagnosticsPanel} from './management/DiagnosticsPanel';
 import {SecretsPanel} from './management/SecretsPanel';
 import {appCardFor, coreUpdatable, UpdatePanel} from './management/UpdatePanel';
@@ -665,7 +666,7 @@ function DesktopApp() {
             >
               {host.kind === "blocked" || host.kind === "disconnected"
                 ? host.message
-                : "正在读取本机运行状态。"}
+                : `正在读取${device.isRemote ? `${whereName(device)}的` : "本机"}运行状态。`}
             </InlineNotice>
           )}
           {snapshot.stale && ready && (

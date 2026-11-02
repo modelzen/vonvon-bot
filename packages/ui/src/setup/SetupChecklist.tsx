@@ -2,7 +2,8 @@ import {GlowButton} from '../GlowButton';
 import {RefreshCw} from 'lucide-react';
 import {useState, type ReactNode} from 'react';
 import type {AgentId, Command, CommandResult, DesktopSnapshot} from '@vonvon/protocol';
-import {useClient, useShellCapabilities} from '../client-context';
+import {useActiveDevice, useClient, useShellCapabilities} from '../client-context';
+import {toolStepsOn} from '../device-copy';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Button, IconButton, StatusBadge} from '../reference/components/ui';
 import {openExternalUrl} from '../url-actions';
@@ -42,6 +43,7 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
   const client = useClient();
   const shell = useShellCapabilities();
   const {reads, recheck} = useSetupStatus(snapshot.agents.map(agent => agent.id));
+  const where = useActiveDevice();
   const claudeLogin = useClaudeLoginCheck(botsOnly ? [] : snapshot.tools, message => onNotice(message, true));
   const [working, setWorking] = useState<string>();
   async function act(action: StepAction, agentId?: AgentId) {
@@ -83,7 +85,9 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
           disabled={busy || !ready} onClick={() => void act(action, agentId)}>{action.label}</Button>)}
       </span>}/>;
   }
-  const tools = toolSteps(snapshot.tools, {claudeChecking: claudeLogin.checking});
+  // A remote device's tool steps say 「X」 where toolSteps says 本机 (review 244, as on the 状态与诊断 page).
+  const toolState = toolSteps(snapshot.tools, {claudeChecking: claudeLogin.checking});
+  const tools = {...toolState, steps: toolStepsOn(where, toolState.steps)};
   const linux = snapshot.application.platform === 'linux' ? linuxSteps(snapshot.tools) : [];
   const toolContent = <>
     <SettingsGroup label={compact ? '模型工具' : '后端'} footer="Codex 或 Claude 至少需要一个可用。"

@@ -42,10 +42,10 @@ beforeEach(() => {
     : request.path === '/root/b' ? listing('/root/b', ['child'], '/root') : listing('/root', ['a', 'b']));
 });
 // devices-ui-2 4.3: the title says whose folders these are.
-it('names the remote device in the title, and keeps this computer\'s title as it was', async () => {
+it('names the remote device in the title, and this computer as 本机 (owner 2026-11-02)', async () => {
   const title = () => render().all.find(node => node.props.open && typeof node.props.title === 'string')?.props.title;
   void render().pickers.multiple(); await settle();
-  expect(title()).toBe('添加目录');
+  expect(title()).toBe('添加本机上的文件夹');
   for (const effect of harness.effects) effect.cleanup?.();
   harness.state = []; harness.refs = []; harness.effects = []; harness.pending = [];
   harness.device = {id: 'a', isRemote: true, name: 'Linux 主机', mode: 'full', capabilities: []};
