@@ -46,8 +46,7 @@ export async function buildEncryptedAccountConfig(
     ...preferences,
     defaults: { ...defaults, permission: resolved.permission, network: resolved.network },
   };
-  const own = process.platform === 'win32' ? undefined : classifyDistribution(nearestPackageRoot(selfEntry()));
-  const wrapperPath = await ensureSecretsGetterWrapper(own?.kind === 'standalone' ? own.installRoot : undefined);
+  const wrapperPath = await ensureSecretsGetterWrapper();
   return {
     accounts: {
       app: {
@@ -67,16 +66,32 @@ export async function buildEncryptedAccountConfig(
   };
 }
 
+/** The install root of the standalone server this process runs from; never on Windows, which has none (I6). */
+function ownStandaloneRoot(): string | undefined {
+  if (process.platform === 'win32') return undefined;
+  const own = classifyDistribution(nearestPackageRoot(selfEntry()));
+  return own.kind === 'standalone' ? own.installRoot : undefined;
+}
+
 /**
- * Write the secrets-getter wrapper pointing at the current node + bridge
- * entry. Always rewrites (node path can move). 0700 perms.
+ * What the secrets-getter wrapper of this data directory holds. A standalone server's names only
+ * `<installRoot>/current`, never a versioned release (reviews 207, 221): the wrapper outlives the release that writes
+ * it, the getters of data directories whose daemon does not run are never seen by the cleanup of `releases/`, and
+ * that cleanup never removes the release `current` names (cleanupReleases). Elsewhere the running Node and entry.
  */
-export async function ensureSecretsGetterWrapper(installRoot?: string): Promise<string> {
-  const wrapperPath = paths.secretsGetterScript;
-  // A standalone server's names `current`: the wrapper outlives this release, which a later update removes (review 207).
+export function secretsGetterContents(installRoot: string | undefined): string {
   const node = installRoot ? join(installRoot, 'current', 'node', 'bin', 'node') : process.execPath;
   const bridgeEntry = installRoot ? join(installRoot, 'current', 'app', 'bin', 'vonvon.mjs') : selfEntry();
-  const content = getterContents({ nodePath: node, cliPath: bridgeEntry }, paths.appDir);
+  return getterContents({ nodePath: node, cliPath: bridgeEntry }, paths.appDir);
+}
+
+/**
+ * Write the secrets-getter wrapper (secretsGetterContents). Always rewrites (node path can move). 0700 perms.
+ * `installRoot` is this process's own standalone install unless a caller names one.
+ */
+export async function ensureSecretsGetterWrapper(installRoot: string | undefined = ownStandaloneRoot()): Promise<string> {
+  const wrapperPath = paths.secretsGetterScript;
+  const content = secretsGetterContents(installRoot);
   await mkdir(dirname(wrapperPath), { recursive: true });
   const tmp = `${wrapperPath}.tmp-${process.pid}`;
   await writeFile(tmp, content, 'utf8');

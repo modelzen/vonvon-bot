@@ -30,6 +30,19 @@ it('keeps current and previous, removes other releases and every .part, and leav
   expect(await readdir(dir)).toContain('outside');
 });
 
+// review 221: a restart helper keeps the versions of its own update, read long before; another data directory's update
+// may have switched `current` meanwhile, and every getter and service definition runs what `current` names
+it('never removes the release current names, whatever the caller keeps', async () => {
+  const dir = join(root, 'c');
+  await releases(dir);
+  await mkdir(join(dir, 'releases', '1.0.3', 'app'), { recursive: true });
+  await writeFile(join(dir, 'releases', '1.0.3', 'standalone.json'), JSON.stringify({ v: 1, version: '1.0.3' }));
+  await symlink('releases/1.0.3', join(dir, 'current'));
+  await cleanupReleases(dir, ['1.0.2', '1.0.1']);
+  // Before: 1.0.3 went, and `current` pointed at nothing.
+  expect((await readdir(join(dir, 'releases'))).sort()).toEqual(['0.9.0', '1.0.1', '1.0.2', '1.0.3', 'junk']);
+});
+
 it('skips a directory in use and says so, without failing', async () => {
   const dir = join(root, 'b');
   await releases(dir);
