@@ -64,7 +64,7 @@ type Catalog = Awaited<ReturnType<typeof discoverCodexModels>>;
 export function createCodexCatalogCache(discover: typeof discoverCodexModels = discoverCodexModels) {
   let cached: { bin: string; key: string; remote: string; value: Catalog } | undefined;
   let knownCatalogPath: string | undefined;
-  let flight: { bin: string; key: string; remote: string; promise: Promise<ModelInfo[]> } | undefined;
+  let flight: { bin: string; key: string; remote: string; refresh: boolean; promise: Promise<ModelInfo[]> } | undefined;
   const currentKey = (bin: string, catalogPath?: string) => codexModelCacheKey(bin, catalogPath);
   const peek = (bin: string): ModelInfo[] | undefined => {
     if (!cached || cached.bin !== bin || cached.key !== currentKey(bin, cached.value.catalogPath) || cached.remote !== codexRemoteCacheKey()) return;
@@ -78,9 +78,13 @@ export function createCodexCatalogCache(discover: typeof discoverCodexModels = d
       const priorPath = knownCatalogPath;
       const key = currentKey(bin, priorPath);
       const remote = codexRemoteCacheKey();
-      if (flight?.bin === bin && flight.key === key && flight.remote === remote) return flight.promise;
+      if (flight?.bin === bin && flight.key === key && flight.remote === remote) {
+        if (!refresh || flight.refresh) return flight.promise;
+        // A manual refresh starts now rather than waiting for a slow ordinary
+        // discovery. Its result owns the cache even if the old read finishes last.
+      }
       cached = undefined;
-      const entry = { bin, key, remote, promise: Promise.resolve([] as ModelInfo[]) };
+      const entry = { bin, key, remote, refresh, promise: Promise.resolve([] as ModelInfo[]) };
       entry.promise = (async () => {
         const value = await discover(bin);
         if (key !== currentKey(bin, priorPath)) throw new Error('Codex configuration changed during discovery');
