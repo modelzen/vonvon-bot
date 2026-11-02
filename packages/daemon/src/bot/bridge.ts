@@ -1,5 +1,5 @@
 import { createBridgeChannel } from './bridge-channel';
-import { APP_ROLE_CACHE_MS, createAppRoleRefresher, getAppRoleSnapshot } from '../config/app-roles';
+import { APP_ROLE_CACHE_MS, APP_ROLE_RETRY_MS, createAppRoleRefresher, getAppRoleSnapshot } from '../config/app-roles';
 import type { CollaborationRequest } from '../admin/collaboration';
 import type { HostSettings } from '../admin/settings-types';
 import type { AdminWriteResult } from '../admin/ops';
@@ -27,6 +27,7 @@ import type { PermissionMode } from '../agent/types';
 import { onCrashSync } from '../host/crash-guard';
 import { createCardCallbackRecorder } from '../config/card-callback';
 import type { HostApi } from '../admin/ipc';
+import type { StopReason } from '../host/lifecycle';
 
 export interface BridgeOptions {
   identity: BotIdentity;
@@ -56,10 +57,13 @@ export interface BridgeHandle {
   settings: HostSettings;
   /** Scheduled tasks over the wire (admin/ipc.ts `AdminScheduleOp`), run as the local owner or a Bot session's turn. */
   schedule: (actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
-  /** Graceful teardown: drop the long connection first, then close every codex
-   *  session (no orphan app-servers). Idempotent enough for a signal handler. */
-  shutdown: () => Promise<void>;
+  /** Teardown: drop the long connection first, cut the running turns short and close every agent session (no orphan
+   *  app-servers). `reason`, read as the cards end, says why on them. Idempotent enough for a signal handler. */
+  shutdown: (reason?: () => StopReason) => Promise<void>;
 }
+
+/** How long a stop waits for the scheduled runs' records once the orchestrator closed (it settled the runs). */
+const SCHEDULER_DRAIN_MS = 3_000;
 
 /**
  * Bring up the long-connection bot. Wires the `message` handler (group @bot →
@@ -117,16 +121,17 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   const scheduleRoles = (): void => {
     const cached = getAppRoleSnapshot(app.id, app.tenant);
     const remaining = cached ? cached.fetchedAt + APP_ROLE_CACHE_MS - Date.now() : 0;
+    // No fresh result (the last refresh failed, or none ever came): try again sooner, within the trust window (252-4).
     rolesTimer = setTimeout(() => {
       void roles.refresh().then(() => { if (!rolesStopped) scheduleRoles(); });
-    }, remaining > 0 && remaining <= APP_ROLE_CACHE_MS ? remaining : APP_ROLE_CACHE_MS);
+    }, remaining > 0 && remaining <= APP_ROLE_CACHE_MS ? remaining : APP_ROLE_RETRY_MS);
     rolesTimer.unref();
   };
   scheduleRoles();
   const offCrash = onCrashSync(() => orchestrator.saveDroppedSync('crash'));
   const groupTasks = new Set<Promise<JoinedGroups | GroupMembers | Project>>();
   let closing: Promise<void> | undefined;
-  const shutdown = (): Promise<void> => {
+  const shutdown = (reason?: () => StopReason): Promise<void> => {
     if (closing) return closing;
     rolesStopped = true;
     clearTimeout(rolesTimer);
@@ -139,16 +144,17 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     // Drain evidence received before disconnect completed; it runs independently of the business handlers.
     const callbacksClosing = transportClosing.then(() => cardCallbacks.close());
     const groupsClosing = Promise.allSettled([...groupTasks]);
-    // No scheduled run is claimed from here on. The orchestrator interrupts the runs on and settles them; the drain then
-    // waits at most 5 seconds for their records, as the host kills this process 8 seconds into a stop (host/lifecycle.ts).
+    // No scheduled run is claimed from here on. The orchestrator interrupts the runs on and settles them within its drain
+    // (handle-message.ts); the records are written right after, so 3 more seconds are plenty: the host kills this process
+    // 15 seconds into a stop (bot/supervisor.ts).
     orchestrator.scheduler.stop();
-    const orchestratorClosing = orchestrator.shutdown();
+    const orchestratorClosing = orchestrator.shutdown(reason);
     closing = (async () => {
       const errors: unknown[] = [];
       await rolesClosing;
       try { await orchestratorClosing; }
       catch (error) { errors.push(error); }
-      await orchestrator.scheduler.drain(5_000);
+      await orchestrator.scheduler.drain(SCHEDULER_DRAIN_MS);
       const groups = await groupsClosing;
       for (const result of groups) if (result.status === 'rejected') errors.push(result.reason);
       for (const result of await transportClosing) {

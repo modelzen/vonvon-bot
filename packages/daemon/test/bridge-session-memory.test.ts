@@ -31,7 +31,7 @@ vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} },
 vi.mock('../src/bot/bridge-channel', () => ({ createBridgeChannel: () => ({ on() {}, connect: async () => {}, disconnect: async () => {} }) }));
 vi.mock('../src/config/card-callback', () => ({ createCardCallbackRecorder: () => ({ received() {}, close: async () => {} }) }));
 vi.mock('../src/config/app-roles', () => ({
-  APP_ROLE_CACHE_MS: 60_000, getAppRoleSnapshot: () => undefined,
+  APP_ROLE_CACHE_MS: 60_000, APP_ROLE_RETRY_MS: 30_000, trustedFeishuAdmins: () => [], getAppRoleSnapshot: () => undefined,
   createAppRoleRefresher: () => ({ refresh: async () => {}, stop: async () => {} }),
 }));
 vi.mock('../src/admin/groups', () => ({ createGroupExecutor: () => async () => ({ groups: [] }) }));

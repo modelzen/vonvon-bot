@@ -3,9 +3,10 @@
  * is an identity convention, not a protection against shell access. */
 export const SESSION_ENV = 'VONVON_SESSION';
 /**
- * skills-scope: the `--scope` value of a session's own reach (devices 5.3), set beside its token for the builtin skills to
- * copy: neither the tools (session_info names no ids, s46 4.3) nor a Codex session (no session_info, T3b) can say it. Not
- * a permission: the daemon checks `--scope` against the token whatever it says.
+ * The `--scope` value of a session's own reach (devices 5.3), set beside its token for a session's command line to copy
+ * (the daemon's refusal of a call without `--scope` says so): neither the tools (session_info names no ids, s46 4.3) nor
+ * a Codex session (no session_info, T3b) can say it. Not a permission: the daemon checks `--scope` against the token
+ * whatever it says.
  */
 export const SESSION_SCOPE_ENV = 'VONVON_SCOPE';
 /** `bot=<appId>` in a private chat or a comment, `bot=<appId>,group=<chatId>` in a group: the most a session reaches. */

@@ -27,3 +27,22 @@ it('lets the owner do everything, a connection of another protocol only the main
   expect(await authorize(peer({ kind: 'unpaired' }), request('admin', { type: 'daemonStatus' }))).toMatchObject({ ok: false, code: 'permission_denied' });
   expect(await authorize(owner, request('command', { type: 'notAKind' }))).toMatchObject({ ok: false, code: 'permission_denied' });
 });
+
+// s1b, owner 2026-11-02: a group session's cells are a whitelist, written out row by row. main 必败.
+it('gives a group session only what its work needs, and the not-dm sentence for the settings writes', () => {
+  const cells = (want: (cell: string) => boolean) => [...RULES].filter(([, rule]) => want(rule.places.group)).map(([kind]) => kind).sort();
+  expect(cells(cell => cell === 'host')).toEqual(['admin.negotiate', 'command.listGroupMembers', 'snapshot.get']);
+  expect(cells(cell => cell === 'bot')).toEqual(['memory.add', 'memory.archive', 'memory.edit', 'memory.list',
+    'schedule.create', 'schedule.delete', 'schedule.edit', 'schedule.list', 'schedule.pause', 'schedule.resume', 'schedule.runNow']);
+  expect(cells(cell => cell === 'not-dm')).toEqual(['collaboration.createProject', 'collaboration.editProject', 'command.setPermission', 'command.setResponse',
+    'settings.act.adminMember', 'settings.act.commentInstructions', 'settings.act.projectAudience', 'settings.act.projectMember', 'settings.act.voice',
+    'settings.read.agent', 'settings.read.project', 'settings.read.session', 'settings.save.agent', 'settings.save.project', 'settings.save.session']);
+  // the queries a group no longer has: the bot's groups, the settings' models and sessions, history, the library, daemonStatus
+  for (const kind of ['command.refresh', 'command.listPendingGroups', 'command.listJoinedGroups', 'settings.models', 'settings.sessions', 'collaboration.history',
+    'collaboration.context', 'collaboration.project', 'collaboration.providerModels', 'library.list', 'admin.daemonStatus', 'memory.export', 'memory.events']) {
+    expect(RULES.get(kind)?.places.group, kind).toBe('deny');
+  }
+  // a private chat's cells as they were (its sessions come later); a comment's own group-less reads none of these either
+  expect(RULES.get('library.list')?.places).toEqual({ dm: 'host', group: 'deny', comment: 'deny' });
+  expect(RULES.get('settings.models')?.places).toEqual({ dm: 'bot', group: 'deny', comment: 'deny' });
+});

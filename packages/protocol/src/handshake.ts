@@ -24,9 +24,17 @@ export const serverInfoV2Schema = serverInfoV1Schema.extend({
   capabilities: z.array(z.string()), principal: principalWireSchema,
 }).strict();
 export type ServerInfoV2 = z.infer<typeof serverInfoV2Schema>;
-/** What clients parse: either shape, unknown fields kept, and no version compared here; the caller decides on a different one. */
+/**
+ * What a Bot session's hello gets (Codex review 256-2): what its command line reads, the protocol for the version check
+ * and who it is, and the version the client schema wants; nothing of the device (name, machine id, platform, what it can do).
+ */
+export const serverInfoSessionSchema = z.object({
+  type: z.literal("serverInfo"), version: z.string().min(1), protocolVersion: protocolVersionSchema,
+  principal: z.enum(["bot-session:dm", "bot-session:group", "bot-session:comment"]),
+}).strict();
+/** What clients parse: each of the three shapes, unknown fields kept, and no version compared here; the caller decides on a different one. */
 export const serverInfoSchema = z.object({
-  type: z.literal("serverInfo"), machineId: z.string(), version: z.string(), protocolVersion: z.number().int(),
+  type: z.literal("serverInfo"), machineId: z.string().optional(), version: z.string(), protocolVersion: z.number().int(),
   deviceName: z.string().optional(), platform: z.string().optional(), capabilities: z.array(z.string()).optional(), principal: z.string().optional(),
 }).passthrough();
 export type ServerInfo = z.infer<typeof serverInfoSchema>;

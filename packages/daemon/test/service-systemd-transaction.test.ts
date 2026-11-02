@@ -155,6 +155,27 @@ it.each([
   else { expect((await f.registration()).kind).toBe('absent'); expect(f.state.enabled).toBe(false); }
   expect(f.mutations()).toEqual([`stop:${owner.pid}`, 'daemon-reload', `enable --now ${SYSTEMD_UNIT_NAME}`, `disable ${SYSTEMD_UNIT_NAME}`, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`, ...(previous ? [`enable ${SYSTEMD_UNIT_NAME}`] : [])]);
 });
+it('a stopped unit from before TimeoutStopSec=45 is ours and an install rewrites it (owner 2026-11-02)', async () => {
+  const f = await fixture();
+  const legacy = Buffer.from(f.desired.toString().replace('TimeoutStopSec=45\n', 'TimeoutStopSec=infinity\n'));
+  await f.seed(legacy);
+  expect((await f.registration()).kind).toBe('ours');
+  expect((await f.service().install()).kind).toBe('installed');
+  expect(await f.bytes()).toEqual(f.desired);
+  expect(f.mutations()).toEqual(['daemon-reload', `enable --now ${SYSTEMD_UNIT_NAME}`]);
+});
+it('a running unit from before TimeoutStopSec=45 is left as it is, and uninstall still takes it out', async () => {
+  const f = await fixture();
+  const legacy = Buffer.from(f.desired.toString().replace('TimeoutStopSec=45\n', 'TimeoutStopSec=infinity\n'));
+  await f.seed(legacy); f.state.pid = 41001;
+  f.state.owner = { pid: 41001, startedAt: 'birth', listen: '127.0.0.1:32123' };
+  const refused = await f.service().install();
+  expect(refused.kind).toBe('install_refused'); expect(refused.detail).toContain('vonvon daemon stop');
+  expect(await f.bytes()).toEqual(legacy); expect(f.mutations()).toEqual([]);
+  const result = await f.service({ stopOwner: async () => { f.calls.push('verified-stop'); f.state.owner = null; f.state.pid = 0; } }).uninstall();
+  expect(result.kind).toBe('uninstalled');
+  expect((await f.registration()).kind).toBe('absent');
+});
 it('withdraws before owner stop and unloads once', async () => {
   const f = await fixture(); await f.seed(); f.state.pid = 41001;
   f.state.owner = { pid: 41001, startedAt: 'birth', listen: '127.0.0.1:32123' };

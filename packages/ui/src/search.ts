@@ -67,7 +67,7 @@ const globalGroups: readonly {page: Page; section: string; fields: readonly Targ
   // devices-ui-3: 允许别的设备连接, on every device shown (the desktop and the web page alike)
   {page: 'application', section: '允许别的设备连接', fields: [item('设备名字', ['这台设备的名字', '改设备名']), item('地址', ['远程连接', 'Tailscale', '局域网', '组网', '开启远程', '关闭远程连接'], {field: ''}), item('端口', ['改端口']), item('连接链接', ['生成连接链接', '配对链接', '配对'])]},
   {page: 'application', section: '已配对的设备', fields: [item('已配对的设备', ['已配对的客户端', '撤销', '撤销设备', '客户端', '谁连着这台'], {field: ''})]},
-  {page: 'application', section: '软件更新', fields: [item('桌面版', [], {field: ''}), item('更新状态', [], {field: ''}), item('可用版本', [], {field: ''}), item('检查更新', ['检查桌面更新']), item('下载更新', [], {guide: '有可用更新时显示下载操作。'}), item('安装更新', [], {field: '安装并重启', guide: '下载完成后显示安装操作。'}), item('发布说明')]},
+  {page: 'application', section: '软件更新', fields: [item('桌面版', [], {field: ''}), item('更新状态', [], {field: ''}), item('可用版本', [], {field: ''}), item('检查更新', ['检查桌面更新']), item('下载更新', [], {guide: '有可用更新时显示下载操作。'}), item('重启升级', ['安装更新'], {field: '重启升级', guide: '下载完成后显示重启升级，会中断正在进行的对话。'}), item('发布说明')]},
   {page: 'application', section: '外部 Core / CLI', fields: [item('Core 来源'), item('当前版本'), item('可用版本'), item('检查 Core 更新'), item('更新外部 Core'), item('更新进度', ['查看 Core 更新进度'])]},
   {page: 'application', section: 'Codex 可执行文件', fields: [item('Codex 可执行文件', ['执行文件路径', '执行程序'], {field: ''}), item('已保存路径', ['Codex 路径']), item('当前路径配置'), item('本次所选', ['选择 Codex 可执行文件', '选择文件', '更改路径']), item('恢复自动检测'), item('未绑定工作目录时的运行后备'), item('保存路径', ['Codex 可执行文件路径'], {field: '本次所选', guide: '更改路径后，在弹窗中保存。'})]},
   // The section is the page's own name: 本机环境 would be wrong while a remote device is shown (owner 2026-11-02).

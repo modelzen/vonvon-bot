@@ -90,7 +90,7 @@ test('application search points old startup and update labels to the compact con
   const install = findEntries(entries, '安装更新')[0]?.destination;
   assert.equal(install?.page, 'application');
   assert.equal(install?.section, '软件更新');
-  assert.equal(install?.field, '安装并重启');
+  assert.equal(install?.field, '重启升级');
 });
 
 test('s53: application owner and scanner search reveal their administrator rows', () => {

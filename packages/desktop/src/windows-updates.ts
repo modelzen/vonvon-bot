@@ -88,7 +88,7 @@ export class WindowsDesktopUpdater {
   check():Promise<DesktopUpdate>{
     if(this.installing)return this.installing;
     if(this.downloading)return this.downloading;
-    if(this.downloaded)return Promise.resolve(this.result('downloaded','更新已下载，点击安装并重启'));
+    if(this.downloaded)return Promise.resolve(this.result('downloaded','更新已下载，点击重启升级'));
     return this.checking ??= this.lookUp().finally(()=>{this.checking=undefined;});
   }
   private async lookUp():Promise<DesktopUpdate>{
@@ -119,14 +119,14 @@ export class WindowsDesktopUpdater {
         if(this.options.statePath){await mkdir(dirname(this.options.statePath),{recursive:true});await writeFile(this.options.statePath,this.downloaded!,{mode:0o600});}
         try {await this.options.beforeInstall?.();this.options.driver.quitAndInstall(false,true);}
         catch(error){if(this.options.statePath)await rm(this.options.statePath,{force:true}).catch(()=>{});throw error;}
-        return this.result('downloaded','正在安装并重启桌面应用');
+        return this.result('downloaded','正在重启升级桌面应用');
       })().finally(()=>{this.installing=undefined;});return this.installing;
     }
     if(this.downloading)return this.downloading;
     if(!this.enabled||!this.availableVersion)throw new DesktopUpdateError('请先检查桌面更新');
     const latest=this.availableVersion;const manifest=this.manifest!;
     this.downloading=(async()=>{
-      try{const paths=await this.options.driver.downloadUpdate();const file=paths.find(path=>path.toLowerCase().endsWith('.exe'));if(!file||!await (this.options.verify ?? verifyWindowsInstaller)(file,manifest))throw Error('Publisher verification failed');this.downloaded=latest;this.downloadedPath=file;this.progress=undefined;return this.result('downloaded','更新已下载并通过发布签名及完整性校验，点击安装并重启');}
+      try{const paths=await this.options.driver.downloadUpdate();const file=paths.find(path=>path.toLowerCase().endsWith('.exe'));if(!file||!await (this.options.verify ?? verifyWindowsInstaller)(file,manifest))throw Error('Publisher verification failed');this.downloaded=latest;this.downloadedPath=file;this.progress=undefined;return this.result('downloaded','更新已下载并通过发布签名及完整性校验，点击重启升级');}
       catch(cause){throw new DesktopUpdateError('桌面更新下载或签名校验失败',{cause});}
     })().finally(()=>{this.downloading=undefined;});return this.downloading;
   }

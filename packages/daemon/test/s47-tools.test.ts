@@ -42,7 +42,8 @@ function fixture(options: { admin?: boolean; enabled?: boolean; place?: AgentPla
   const entry = entries.issue(options.place ?? { kind: 'p2p' }); entry.attach(thread);
   const turn = entries.openTurn(thread, { requesterOpenId: 'synthetic', requesterKind: 'user', triggerMessageId: 'synthetic-message', retry: false, wake: false, initiative: false, ...options.facts });
   entry.noteToolUse('synthetic-use');
-  return { flags, turn, groups, members, read, save, tools, call: (name: string, args: unknown) => entry.call(name, args, { toolUseId: 'synthetic-use' }) };
+  return { flags, turn, groups, members, read, save, tools, listed: () => entry.tools().map(tool => tool.name),
+    call: (name: string, args: unknown) => entry.call(name, args, { toolUseId: 'synthetic-use' }) };
 }
 const edit = { scope: projectScope, section: 'response', revision: 'held-revision', patch: { noMention: true } };
 describe('s47 MCP authorization and structured commands', () => {
@@ -68,35 +69,58 @@ describe('s47 MCP authorization and structured commands', () => {
     expect(await f.call('feishu_groups', { cursor: 4 })).toMatchObject({ ok: false, code: 'bad-args' });
     expect(f.save).not.toHaveBeenCalled();
   });
-  it('allows a group read with the settings switch off and removes private metadata', async () => {
-    const f = fixture({ admin: false, enabled: false, place: { kind: 'group', chatId: 'visible-chat' } });
-    expect(await f.call('settings_get', { scope: projectScope })).toMatchObject({ ok: true, result: { view: { scope: projectScope, sections: Object.fromEntries(Object.keys(sections).map(name => [name, { access: { kind: 'readonly' } }])) } } });
+  // settings-dm-only: settings are a private chat's, read and written; a group and a comment have none of the three.
+  // s1b: a group's whitelist has its own members and not the bot's groups; a comment neither.
+  it.each([
+    [{ kind: 'group', chatId: 'visible-chat' }, ['session_info', 'feishu_members']],
+    [{ kind: 'doc', docId: 'doc' }, ['session_info']],
+    [{ kind: 'p2p' }, ['session_info', 'settings_get', 'settings_access', 'settings_set', 'feishu_groups', 'feishu_members']],
+  ] satisfies [AgentPlace, string[]][])('lists the settings tools in a private chat only: %j', (place, names) => {
+    expect(fixture({ place }).listed()).toEqual(names);
+  });
+  it.each([{ kind: 'group', chatId: 'visible-chat' }, { kind: 'doc', docId: 'doc' }] satisfies AgentPlace[])('has no settings read outside a private chat, an administrator\'s turn included: %j', async place => {
+    const f = fixture({ admin: true, place });
+    for (const name of ['settings_get', 'settings_access']) {
+      expect(await f.call(name, { scope: projectScope })).toEqual({ ok: false, code: 'unknown-tool', message: '没有这个工具。' });
+    }
+    expect(f.read).not.toHaveBeenCalled();
+  });
+  it('allows a private chat\'s read with the settings switch off and removes private metadata', async () => {
+    const f = fixture({ enabled: false });
+    expect(await f.call('settings_get', { scope: projectScope })).toMatchObject({ ok: true, result: { view: { scope: projectScope, sections: Object.fromEntries(Object.keys(sections).map(name => [name, { access: { kind: 'readonly', reason: 'switch-off' } }])) } } });
     expect(JSON.stringify(await f.call('settings_get', { scope: projectScope }))).not.toContain('secretSentinel');
   });
   it('returns the same access result for absent, unauthorized, host and other-bot scopes', async () => {
-    const f = fixture({ admin: false, place: { kind: 'group', chatId: 'visible-chat' } });
+    const f = fixture({ admin: false });
     const deniedScopes = [
-      { ...projectScope, projectName: 'missing' }, { ...projectScope, projectName: 'hidden' },
+      projectScope, { ...projectScope, projectName: 'missing' }, { ...projectScope, projectName: 'hidden' },
       { ...projectScope, botId: 'cli_other' }, { kind: 'host' }, { kind: 'agent', botId },
     ];
     const replies = [];
     for (const scope of deniedScopes) replies.push(await f.call('settings_access', { scope }));
     expect(replies).toEqual(deniedScopes.map(() => ({ ok: true, result: { access: 'unavailable' } })));
-    expect(await f.call('settings_access', { scope: projectScope })).toEqual({ ok: true, result: { access: Object.fromEntries(Object.keys(sections).map(name => [name, { kind: 'readonly', reason: 'not-dm', message: '设置只能在私聊里改。请对方去私聊里跟我说。' }])) } });
-    expect(f.read).toHaveBeenCalledTimes(1);
+    expect(await f.call('settings_get', { scope: projectScope })).toMatchObject({ ok: false, code: 'refused', message: '目标不存在或没有权限。' });
+    expect(f.read).not.toHaveBeenCalled();
   });
   it('never forwards a cross-bot settings write even from an administrator', async () => {
     const f = fixture();
     expect(await f.call('settings_set', { edit: { ...edit, scope: { ...projectScope, botId: 'cli_other' } } })).toMatchObject({ ok: false, code: 'refused' });
     expect(f.save).not.toHaveBeenCalled();
   });
-  it('filters a nonadministrator group list locally without asking for all upstream groups', async () => {
-    const f = fixture({ admin: false, place: { kind: 'group', chatId: 'visible-chat' } });
-    expect(await f.call('feishu_groups', {})).toEqual({ ok: true, result: { groups: [{ chatId: 'visible-chat', name: 'visible', bound: true }] } });
-    expect(f.groups).not.toHaveBeenCalled();
+  it('has no group list in a group or a comment, and refuses a private chat\'s nonadministrator without asking upstream', async () => {
+    for (const place of [{ kind: 'group', chatId: 'visible-chat' }, { kind: 'doc', docId: 'doc' }] satisfies AgentPlace[]) {
+      const f = fixture({ admin: true, place });
+      expect(await f.call('feishu_groups', {})).toEqual({ ok: false, code: 'unknown-tool', message: '没有这个工具。' });
+      expect(f.groups).not.toHaveBeenCalled();
+    }
     const dm = fixture({ admin: false });
-    expect(await dm.call('feishu_groups', {})).toEqual({ ok: true, result: { groups: [] } });
+    expect(await dm.call('feishu_groups', {})).toMatchObject({ ok: false, code: 'refused' });
     expect(dm.groups).not.toHaveBeenCalled();
+  });
+  it('has no member query in a comment', async () => {
+    const f = fixture({ admin: true, place: { kind: 'doc', docId: 'doc' } });
+    expect(await f.call('feishu_members', { chatId: 'visible-chat' })).toEqual({ ok: false, code: 'unknown-tool', message: '没有这个工具。' });
+    expect(f.members).not.toHaveBeenCalled();
   });
   it('preserves administrator list pagination and shares the direct business function result', async () => {
     const f = fixture();
@@ -127,8 +151,8 @@ describe('s47 MCP authorization and structured commands', () => {
   });
   it('does not expand group visibility when the triggering user is an administrator', async () => {
     const f = fixture({ admin: true, place: { kind: 'group', chatId: 'visible-chat' } });
-    expect(await f.call('settings_get', { scope: { ...projectScope, projectName: 'hidden' } })).toMatchObject({ ok: false, code: 'refused' });
-    expect(await f.call('feishu_groups', {})).toEqual({ ok: true, result: { groups: [{ chatId: 'visible-chat', name: 'visible', bound: true }] } });
+    expect(await f.call('settings_get', { scope: { ...projectScope, projectName: 'hidden' } })).toMatchObject({ ok: false, code: 'unknown-tool' });
+    expect(await f.call('feishu_groups', {})).toMatchObject({ ok: false, code: 'unknown-tool' });
     expect(await f.call('feishu_members', { chatId: 'hidden-chat' })).toMatchObject({ ok: false, code: 'refused' });
     expect(f.groups).not.toHaveBeenCalled(); expect(f.members).not.toHaveBeenCalled();
   });

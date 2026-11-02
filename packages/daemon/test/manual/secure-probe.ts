@@ -56,7 +56,7 @@ async function open(link: ReturnType<typeof decodePairingLink>, clientKey: Stati
   return connectSecure({ socket: nodeBinarySocket(ws), device: { id: link.device.id, pk: link.device.pk }, clientKey, clientKind: 'cli', ...(pairing ? { pairing } : {}) });
 }
 const print = (step: string, value: unknown): void => { process.stdout.write(`${step}: ${JSON.stringify(value)}\n`); };
-const masked = (id: string): string => `${id.slice(0, 5)}…`;
+const masked = (id: string | undefined): string => `${(id ?? '').slice(0, 5)}…`;
 
 async function connect(text: string): Promise<void> {
   const link = decodePairingLink(text);

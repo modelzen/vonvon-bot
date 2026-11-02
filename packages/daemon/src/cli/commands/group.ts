@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import {
   commandSchema, conversationCopy, FULL_ACCESS_WARNING, groupIdSchema, modeToConversation, replyModeSchema, toolSchema,
-  type AgentId, type CollaborationReply, type Conversation, type FolderChoice, type LibraryProject, type Membership, type ProjectRecord,
+  type Agent, type AgentId, type CollaborationReply, type Conversation, type DesktopSnapshot, type FolderChoice, type GroupId, type LibraryProject, type Membership, type ProjectRecord,
 } from '@vonvon/protocol';
 import {
-  conversationLabel, localTime, pickBot, pickGroup, print, runningBot, toolLabel, want, withDaemon, withoutAvatar, type Call, type Daemon, type Io,
+  bindingsHidden, conversationLabel, localTime, pickBot, pickGroup, print, runningBot, toolLabel, want, withDaemon, withoutAvatar, type Call, type Daemon, type Io,
 } from '../daemon-client';
 import { badArgs, CommandError } from '../command-error';
 import { expandHome, pathFor } from '../../platform/home-path';
@@ -224,6 +224,20 @@ async function readGroup(call: Call, membership: Membership): Promise<ProjectRec
   if (reply.kind === 'project') return reply.project;
   throw notDone('读取群', reply);
 }
+/**
+ * s1b: in a session whose snapshot has no bindings (a group's, a comment's), the group a command names. Its project's name
+ * stands for it (the snapshot keeps the group's project with its own binding), and an `oc_` id is taken as it is, as
+ * schedule's chatOf does. None: pickGroup refuses as for any read.
+ */
+function hiddenTarget(snapshot: Pick<DesktopSnapshot, 'memberships' | 'projects'>, agent: Agent, wanted: string): { agentId: AgentId; projectName: string; groupId: GroupId } | undefined {
+  if (!bindingsHidden(snapshot.memberships, agent)) return undefined;
+  for (const project of snapshot.projects ?? []) {
+    const binding = project.bindings.find(each => each.agentId === agent.id && (project.name === wanted || each.groupId === wanted));
+    if (binding) return { agentId: agent.id, projectName: project.name, groupId: binding.groupId };
+  }
+  const id = groupIdSchema.safeParse(wanted);
+  return id.success ? { agentId: agent.id, projectName: wanted, groupId: id.data } : undefined;
+}
 /** The bot named (or the only one), running, and its group by id or name. */
 async function botGroup(call: Call, options: { bot?: string }, wanted: string) {
   const snapshot = await call('读取快照', c => c.snapshot());
@@ -295,7 +309,18 @@ export async function runGroupSet(wanted: string, options: SetOptions, io: Io, d
   if (!changed.length) throw badArgs('没有要改的。给 --enable、--disable、--conversation、--folder 或 --project 里的至少一项。');
   const unknown = `可能已经改了，运行 vonvon group show ${wanted} 查看。`;
   const result = await daemon(async call => {
-    const { membership } = await botGroup(call, options, wanted);
+    const snapshot = await call('读取快照', c => c.snapshot());
+    const agent = runningBot(snapshot.agents, options.bot);
+    const hidden = hiddenTarget(snapshot, agent, wanted);
+    // A group's or a comment's session (Codex review 256-3): a group setting is a settings write, which the daemon refuses
+    // there with the not-dm sentence before it reads the group. So it goes first and nothing is looked up (folders, the
+    // library and the group's revision are not that session's to read); a reply other than a refusal is not one to expect.
+    if (hidden) {
+      throw notDone('改群设置', await call('改群设置', c => c.collaboration({
+        action: 'editProject', ...hidden, expectedRevision: options.revision ?? '-', ...conversation === undefined ? {} : { conversation }, ...enabled === undefined ? {} : { enabled },
+      }), { feishu: true, unknown }));
+    }
+    const membership = pickGroup(snapshot.memberships, agent, wanted);
     const project = options.project === undefined ? undefined : pickProject(await libraryProjects(call), options.project);
     const chosen = folder === undefined ? undefined : await chooseFolder(call, folder);
     const expectedRevision = options.revision ?? (await readGroup(call, membership)).revision;

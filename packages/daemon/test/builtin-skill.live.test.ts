@@ -40,8 +40,8 @@ describe.runIf(live)('the builtin package on the real Claude CLI', () => {
       nativeSettings: { automaticMemory: false }, additionalRoots: [], capabilityPackages: [{ path, kind: 'builtin' }], mcpServers: [], tools: { schedule: true } } });
     try {
       const names = (await query!.supportedCommands()).map(command => command.name);
-      console.log(`[t4b-live] ${name}: vonvon:scheduled-tasks ${names.includes('vonvon:scheduled-tasks') ? 'listed' : 'missing'}`);
-      expect(names.includes('vonvon:scheduled-tasks')).toBe(expected);
+      console.log(`[t4b-live] ${name}: vonvon:vonvon-schedule ${names.includes('vonvon:vonvon-schedule') ? 'listed' : 'missing'}`);
+      expect(names.includes('vonvon:vonvon-schedule')).toBe(expected);
     } finally {
       await thread.close();
       await rm(cwd, { recursive: true, force: true });
