@@ -187,8 +187,8 @@ export function want<R extends { kind: string }, K extends R['kind']>(what: stri
 
 export const NO_BOT = '还没有 Bot。运行 vonvon bot add 在终端里扫码注册，或者在网页里注册（vonvon open）。';
 
-/** No "current bot": only a single bot is picked without --bot. */
-export function pickBot(agents: readonly Agent[], wanted?: string): Agent {
+/** No "current bot": only a single bot is picked without --bot. By id first, then by name (`memory --bot` gets the files' bots too). */
+export function pickBot<A extends { id: string; name: string }>(agents: readonly A[], wanted?: string): A {
   const [only] = agents;
   if (!only) throw badArgs(NO_BOT);
   // Error lines keep their own breaks (printableError), so a name loses a line break of its own here.
