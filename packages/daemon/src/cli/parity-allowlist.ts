@@ -53,10 +53,5 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'machine.applyCoreUpdate': pending('I3', 'vonvon update'),
   'machine.coreUpdateStatus': pending('I3', 'vonvon update (waits on it)'),
 
-  // devices 4: the remote listeners and their commands come with D3
-  'device.status': pending('D3', 'vonvon remote status'),
-  'device.enable': pending('D3', 'vonvon remote enable'),
-  'device.disable': pending('D3', 'vonvon remote disable'),
-  'device.setPort': pending('D3', 'vonvon remote port'),
   'admin.negotiate': { reason: 'internal', note: 'each client sends it after the handshake' },
 };
