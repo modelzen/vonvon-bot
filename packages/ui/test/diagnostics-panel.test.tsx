@@ -34,7 +34,9 @@ it('shows the lock holder across retries, and gives a pause priority', () => {
 
 it('shows this machine, and 检查中 for Claude before its first login check', () => {
   const html = render([]);
-  expect(html).toContain('这台电脑');
+  // owner 2026-11-02: this computer's page says 本机
+  expect(html).toContain('>本机<');
+  expect(html).toContain('本机上的 Provider 每分钟检查一次');
   expect(html).toContain('0.9.0');
   expect(html).toContain('可用 · 0.156.1');
   expect(html).toContain('检查中 · 0.3.296');
@@ -269,13 +271,27 @@ describe('the tools of a remote device', () => {
     expect(old).not.toContain('本机');
   });
 
-  it('leaves this computer\'s words as they were', () => {
+  // owner 2026-11-02: what to do about a message that was not answered says 「X」 too; this computer's keeps 本机环境
+  it('names the device in what to do about a message it did not answer', () => {
+    const records = [record({reason: 'codex-too-old', backend: 'codex'}), record({reason: 'tool-missing', backend: 'codex', ref: 'b2c3d4'})];
+    const panel = (device?: typeof remote) => renderToStaticMarkup(<ClientProvider client={client} device={device ? {...device, capabilities: [...device.capabilities]} : undefined}>
+      <DiagnosticsPanel snapshot={{...snapshot([{...agent, diagnostics: {deniedScopes: [], notReplied: records}}]), tools: signedOut}} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onOpenSecrets={() => {}} onNotice={() => {}}/>
+    </ClientProvider>);
+    const html = panel(remote);
+    expect(html).toContain('在「测试远程设备」的「工具与连接」里更新 Codex。');
+    expect(html).toContain('去「测试远程设备」的「工具与连接」安装。');
+    expect(html).not.toContain('本机');
+    expect(panel()).toContain('在本机环境里更新 Codex。');
+  });
+
+  // owner 2026-11-02: this computer's page says 本机 where the remote one says 「X」
+  it('says 本机 for this computer, the tool steps as they were', () => {
     const html = view(signedOut);
-    expect(html).toContain('>这台电脑<');
+    expect(html).toContain('>本机<');
     expect(html).toContain('在终端运行 codex 配置好（账号或自定义 API 都行），然后重新检测。');
     expect(html).toContain('要用 Claude，在本机环境里安装 Claude Agent SDK。');
     expect(html).toContain('>查看本机环境<');
-    expect(html).toContain('>Provider 每分钟检查一次；Claude 的配置可以单独检查。<');
+    expect(html).toContain('>本机上的 Provider 每分钟检查一次；Claude 的配置可以单独检查。<');
     expect(html).not.toContain('测试远程设备');
   });
 });

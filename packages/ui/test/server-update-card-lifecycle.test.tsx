@@ -17,6 +17,7 @@ vi.mock('react', async original => ({
     h.pending.push(() => {if (typeof old?.cleanup === 'function') old.cleanup(); h.effects[at] = {deps, cleanup: effect()};});
   },
 }));
+import {RpcError} from '@vonvon/client/browser';
 import {coreStatusLine, ServerUpdateCard} from '../src/management/ServerUpdateCard';
 
 type Node = {type: unknown; props: Record<string, any>};
@@ -48,7 +49,8 @@ async function mount(request: ReturnType<typeof device>['request']) {
     const update = all.find(node => [node.props.children].flat().join('') === UPDATE);
     const progress = all.find(node => node.type === 'progress');
     const lines = all.filter(node => node.props.role === 'status').map(node => [node.props.children].flat().join(''));
-    return {update, progress: progress?.props.value as number | undefined, lines};
+    const notes = all.filter(node => node.props.role === 'note').map(node => [node.props.children].flat().join(''));
+    return {update, progress: progress?.props.value as number | undefined, lines, notes};
   };
   const unmount = () => {for (const slot of h.effects) if (typeof slot?.cleanup === 'function') slot.cleanup(); h.effects = [];};
   return {view, unmount};
@@ -146,5 +148,26 @@ it('shows nothing of an update when the device has no record', async () => {
   const card = await mount(fresh.request);
   expect(card.view().lines).toEqual([]);
   expect(card.view().update?.props.disabled).toBe(false);
+  card.unmount();
+});
+
+// D3 (Codex review 248): a device that is updating drains, answers DRAIN_KINDS (the update's progress among them) and
+// `draining` to the rest without closing. A card opened then, as after the desktop reconnects, follows the update; its
+// check refused with `draining` is neither "不支持远程更新" nor an error line.
+it('follows the update of a draining device it opens on, quietly past the refused check', async () => {
+  const remote = device({phase: 'installing', detail: 'downloading', from: '0.9.0', to: '0.9.1', at: 5, progress: {transferred: 30, total: 100}});
+  remote.request.mockImplementation(async (operation: MachineRequest): Promise<MachineReply> => {
+    if (operation.type === 'coreUpdateStatus') return {type: 'coreUpdateStatus', status: remote.server.status};
+    throw new RpcError('draining', 'daemon 正在停止或重启（比如在升级），这个请求没有处理。等它重新启动后再试。');
+  });
+  const card = await mount(remote.request);
+  let shown = card.view();
+  expect(shown.progress).toBe(30);
+  expect(shown.lines).toEqual(['下载中 30% · 0.9.0 → 0.9.1']);
+  expect(shown.notes).toEqual([]);
+  remote.server.status = {phase: 'done', ok: true, from: '0.9.0', to: '0.9.1', at: 20};
+  await vi.advanceTimersByTimeAsync(1000);
+  shown = card.view();
+  expect(shown.lines).toEqual(['更新完成 · 0.9.0 → 0.9.1']);
   card.unmount();
 });

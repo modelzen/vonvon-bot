@@ -14,7 +14,7 @@ import {SettingChoices} from "../settings/SettingChoices";
 import {McpPanel} from "./McpPanel";
 import {settingAnchor, type SearchReveal} from '../search';
 import {useActiveDevice, useShellCapabilities} from '../client-context';
-import {CHECK_CONFIG, CONFIG_STATE, onDeviceText, remoteToolsNote, whereName} from '../device-copy';
+import {CHECK_CONFIG, CONFIG_STATE, onDeviceText, placeOf, remoteToolsNote, whereName} from '../device-copy';
 import {openExternalUrl} from '../url-actions';
 import {OperationActivity} from './OperationActivity';
 
@@ -223,7 +223,7 @@ export function EnvironmentPanel({ request, reveal }: Props) {
     onUninstall: setBackendDisable,
   };
 
-  return <section className="environment-panel" aria-label="本机环境" id={settingAnchor('本机环境')}>
+  return <section className="environment-panel" aria-label={where.isRemote ? `${whereName(where)}的工具与连接` : "本机环境"} id={settingAnchor('工具与连接')}>
     <header className="environment-lead today-page-heading">
       <h1>工具与连接</h1>
       <IconButton label="重新检测" title={where.isRemote ? `重新检测${whereName(where)}的工具与连接` : "重新检测本机工具与连接"} disabled={busy} onClick={() => void refresh()}><RefreshCw size={15}/></IconButton>
@@ -257,7 +257,7 @@ export function EnvironmentPanel({ request, reveal }: Props) {
       </div>}
     </Dialog>
     <ConfirmDialog open={Boolean(backendDisable)} title={backendDisable ? `卸载 ${backendDisable.displayName}` : "卸载"} description="仅卸载由 Vonvon 管理的组件。" confirmLabel="卸载" tone="danger" onCancel={() => setBackendDisable(null)} onConfirm={() => { const selected = backendDisable; setBackendDisable(null); if (selected) void act({ type: "backendUninstall", id: selected.id }); }} />
-    <ConfirmDialog open={Boolean(intent)} title={intent ? `${intent.kind === "disable" ? "停用" : intent.kind === "update" ? "更新" : "安装"} ${toolNames[intent.tool]}` : "确认操作"} description={intent?.kind === "disable" ? "只停用 Vonvon 托管副本。其他已安装的工具不会被删除。" : intent?.kind === "update" ? `Vonvon 将${where.isRemote ? `在${whereName(where)}上` : ""}安装并验证新版本，然后切换到托管副本。` : where.isRemote ? `Vonvon 会在${whereName(where)}上安装并验证托管副本。` : "Vonvon 会在本机安装并验证托管副本。"} confirmLabel={intent?.kind === "disable" ? "停用托管副本" : intent?.kind === "update" ? "开始更新" : "开始安装"} tone={intent?.kind === "disable" ? "danger" : "primary"} onCancel={() => setIntent(null)} onConfirm={() => void confirm()} />
+    <ConfirmDialog open={Boolean(intent)} title={intent ? `${intent.kind === "disable" ? "停用" : intent.kind === "update" ? "更新" : "安装"} ${toolNames[intent.tool]}` : "确认操作"} description={intent?.kind === "disable" ? "只停用 Vonvon 托管副本。其他已安装的工具不会被删除。" : intent?.kind === "update" ? `Vonvon 将在${placeOf(where)}安装并验证新版本，然后切换到托管副本。` : `Vonvon 会在${placeOf(where)}安装并验证托管副本。`} confirmLabel={intent?.kind === "disable" ? "停用托管副本" : intent?.kind === "update" ? "开始更新" : "开始安装"} tone={intent?.kind === "disable" ? "danger" : "primary"} onCancel={() => setIntent(null)} onConfirm={() => void confirm()} />
     <Dialog open={profilesOpen} onClose={() => setProfilesOpen(false)} size="md" title="管理飞书 CLI" description="选择飞书工具使用的应用与账号。">
       <div className="environment-profiles" id={settingAnchor('飞书 CLI 账号配置')}>
         {notice && <p className="environment-notice" role="status">{notice}</p>}
@@ -335,6 +335,7 @@ function ToolRow({ tool, auth, hostBackend, backendActions, profiles, busy, runn
   onManageProfiles?: () => void;
   reveal?: boolean;
 }) {
+  const where = useActiveDevice();
   const [expanded, setExpanded] = useState(false);
   useEffect(() => {if (reveal) setExpanded(true);}, [reveal]);
   const profile = profiles.find((item) => item.effective) ?? profiles.find((item) => item.active);
@@ -346,7 +347,7 @@ function ToolRow({ tool, auth, hostBackend, backendActions, profiles, busy, runn
     if (presentation.action === "login") { onLogin(); return; }
     if (presentation.action === "install" || presentation.action === "update") onIntent({ kind: presentation.action, tool: tool.tool });
   }
-  return <article className="environment-tool" id={settingAnchor(toolNames[tool.tool])} aria-label={`${toolNames[tool.tool]} 本机环境`}>
+  return <article className="environment-tool" id={settingAnchor(toolNames[tool.tool])} aria-label={`${toolNames[tool.tool]} ${where.isRemote ? `${whereName(where)}上的环境` : "本机环境"}`}>
     <div className="environment-tool-summary">
       <button type="button" className="environment-disclosure" aria-controls={detailsId} aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
         <picture className="environment-brand">

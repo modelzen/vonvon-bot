@@ -3,7 +3,8 @@ import {ArrowUp, ChevronRight, Folder, X} from 'lucide-react';
 import type { DirectoryEntry, FolderChoice } from '@vonvon/protocol';
 import { Button, InlineNotice } from './reference/components/ui';
 import { Dialog } from './reference/components/ui/Dialog';
-import { deviceCopyName, useActiveDevice, useClient, useShellCapabilities } from './client-context';
+import { useActiveDevice, useClient, useShellCapabilities } from './client-context';
+import { whereName } from './device-copy';
 import './directory-picker.css';
 
 type Picker = () => Promise<FolderChoice | null>;
@@ -123,7 +124,7 @@ export function DirectoryPickerProvider({ children }: { children: ReactNode }) {
   const visible = entries.filter(entry => !entry.hidden && (!search || entry.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())));
   return <PickerContext.Provider value={{single: async () => (await pick(false))?.[0] ?? null, multiple: () => pick(true)}}>
     {children}
-    {request && <Dialog open title={where.isRemote ? `${request.multiple ? '添加' : '选择'}${deviceCopyName(where)}上的文件夹` : request.multiple ? '添加目录' : '选择目录'} onClose={() => finish(null)} footer={<>
+    {request && <Dialog open title={`${request.multiple ? '添加' : '选择'}${whereName(where)}上的文件夹`} onClose={() => finish(null)} footer={<>
       <span className="directory-selection-count">{request.multiple && `${selected.length} 个已选`}</span>
       <Button onClick={() => finish(null)}>取消</Button>
       <Button variant="primary" loading={choosing} disabled={loading || choosing || (request.multiple ? selected.length === 0 : !path)} onClick={() => void choose()}>{request.multiple ? '添加所选目录' : '选择此目录'}</Button>

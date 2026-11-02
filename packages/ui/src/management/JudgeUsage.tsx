@@ -1,7 +1,8 @@
 import {RefreshCw} from 'lucide-react';
 import {useEffect, useMemo, useState} from 'react';
 import type {AdminReply, AdminRequest, JudgeUsageDay} from '@vonvon/protocol';
-import {useClient} from '../client-context';
+import {useActiveDevice, useClient} from '../client-context';
+import {whereName} from '../device-copy';
 import {IconButton} from '../reference/components/ui';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {settingAnchor} from '../search';
@@ -41,6 +42,7 @@ export function botTotals(days: readonly JudgeUsageDay[]) {
   return [...totals.values()].filter(bot => bot.total > 0).sort((a, b) => b.total - a.total || a.agentName.localeCompare(b.agentName));
 }
 export function JudgeUsageRows({read, onRead, compact = false, disabled = false, dailySource}: {read: JudgeUsageRead; onRead: () => void; compact?: boolean; disabled?: boolean; dailySource?: DailySource}) {
+  const where = useActiveDevice();
   const view = read.kind === 'ready' ? read.view : undefined;
   if (dailySource) {
     const days = view?.days.map(day => ({date: day.date, count: day.sources.reduce((sum, source) => sum + (source.kind === dailySource.kind && (dailySource.id === undefined || source.id === dailySource.id) ? source.count : 0), 0)}));
@@ -61,7 +63,7 @@ export function JudgeUsageRows({read, onRead, compact = false, disabled = false,
     description={empty ? '只有智能群会判断。' : sourcesText(day)}/>);
   return <SettingsGroup id={settingAnchor('智能模式的判断次数')} label="智能模式的判断次数"
     action={!compact && <IconButton size="sm" variant="ghost" label="重新读取" title="重新读取判断次数" disabled={disabled} onClick={onRead}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}
-    footer={<details className="usage-counting-note"><summary>最近 14 天 · 按本机日期统计</summary><p>计入已发起的调用，包括连接失败。不计入缺少密钥、冷却期或达到小时上限而跳过的判断；数据可能延迟几秒。</p></details>}>
+    footer={<details className="usage-counting-note"><summary>最近 14 天 · 按{where.isRemote ? `${whereName(where)}的` : '本机'}日期统计</summary><p>计入已发起的调用，包括连接失败。不计入缺少密钥、冷却期或达到小时上限而跳过的判断；数据可能延迟几秒。</p></details>}>
     {disabled && <SettingsRow title="连接恢复后更新判断次数" description={view ? '当前为上次读取的数据。' : undefined}/>}
     {!disabled && read.kind === 'loading' && <SettingsRow title="正在读取判断次数"/>}
     {read.kind === 'failed' && <SettingsRow title="判断次数读取失败" description={read.problem}/>}

@@ -3,21 +3,28 @@ import {join} from 'node:path';
 import {expect, it} from 'vitest';
 import {toolSteps, type ToolState} from '@vonvon/protocol';
 import {LOCAL_ACTIVE_DEVICE} from '../src/client-context';
-import {configureProvider, hostTitle, onDevice, onDeviceText, remoteServiceFooter, remoteStopConfirm, remoteToolsNote, toolStepsOn} from '../src/device-copy';
+import {configureProvider, diagnosticsToolsFooter, hostTitle, onDevice, onDeviceText, placeOf, remoteServiceFooter, remoteStopConfirm, remoteToolsNote, toolStepsOn, updateServerText, whereName} from '../src/device-copy';
 import {looksLikePath} from '../src/directory-picker';
 import {browseQuery} from '../src/DirectorySearchStep';
 
 const remote = {isRemote: true, name: 'Linux 主机'};
 
 // main 必败: device-copy is new (devices-ui-2 4.1)
-it('names the remote device in Provider words and leaves this computer as it was', () => {
-  expect(configureProvider(LOCAL_ACTIVE_DEVICE, 'codex')).toBe('把 Codex 配置好（账号或自定义 API 都行），然后点「重新检测」。');
-  expect(configureProvider(LOCAL_ACTIVE_DEVICE, 'codex')).not.toContain('在');
+// owner 2026-11-02: this computer's pages say 本机 too
+it('names the remote device in Provider words, and this computer as 本机', () => {
+  expect(configureProvider(LOCAL_ACTIVE_DEVICE, 'codex')).toBe('在本机上把 Codex 配置好（账号或自定义 API 都行），然后点「重新检测」。');
   expect(configureProvider(remote, 'codex')).toContain('在「Linux 主机」上把 Codex 配置好（账号或自定义 API 都行）');
   expect(configureProvider(remote, 'claude')).toContain('在「Linux 主机」上把 Claude 配置好');
   expect(onDevice(remote, '安装')).toBe('在「Linux 主机」上安装');
-  expect(onDevice(LOCAL_ACTIVE_DEVICE, '安装')).toBe('安装');
+  expect(onDevice(LOCAL_ACTIVE_DEVICE, '安装')).toBe('在本机上安装');
   expect(remoteToolsNote(remote)).toBe('这里装的、检查的都是「Linux 主机」上的 Codex、Claude 和 lark-cli。');
+  expect(whereName(LOCAL_ACTIVE_DEVICE)).toBe('本机');
+  expect(whereName(remote)).toBe('「Linux 主机」');
+  expect(placeOf(LOCAL_ACTIVE_DEVICE)).toBe('本机');
+  expect(placeOf(remote)).toBe('「Linux 主机」上');
+  expect(updateServerText(LOCAL_ACTIVE_DEVICE)).toBe('请更新并重新连接本机服务。');
+  expect(updateServerText(remote)).toBe('请更新并重新连接「Linux 主机」上的服务。');
+  expect(diagnosticsToolsFooter(LOCAL_ACTIVE_DEVICE)).toBe('本机上的 Provider 每分钟检查一次；Claude 的配置可以单独检查。');
 });
 
 it('titles the device by platform, Windows included (devices 第 19 节)', () => {

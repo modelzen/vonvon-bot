@@ -5,7 +5,7 @@ import {
   type AdminSetupStatus, type Agent, type Command, type CommandResult, type CrashEntry, type DesktopSnapshot, type DirectoryProblem, type Membership, type NotReplied, type SetupStep, type StepAction, type StepTone,
 } from '@vonvon/protocol';
 import {useActiveDevice, useClient, useShellCapabilities} from '../client-context';
-import {diagnosticsToolsFooter, toolStepsOn, whereName} from '../device-copy';
+import {diagnosticsToolsFooter, onDeviceText, toolStepsOn, whereName} from '../device-copy';
 import {AgentAvatar} from '../AgentAvatar';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Button, IconButton, StatusBadge} from '../reference/components/ui';
@@ -62,6 +62,8 @@ export function setupView(agent: Agent, read: SetupRead | undefined): {badge: Re
 }
 
 function NotRepliedList({records, agent, snapshot, now}: {records: readonly NotReplied[]; agent: Agent; snapshot: DesktopSnapshot; now: number}) {
+  // What to do next says 本机环境; a remote device's says 「X」 (owner 2026-11-02).
+  const device = useActiveDevice();
   if (!records.length) return <>暂无未回复记录。<details className="diagnostics-note"><summary>记录范围</summary><p>记录被 @、群设置要求回复、智能判断后未回复，以及主动接话后未发送的消息。重启后台服务后清空。</p></details></>;
   const groups = new Map(snapshot.groups.map(group => [group.id as string, group.name]));
   return <ul className="diagnostics-replies">{records.map(record => {
@@ -75,7 +77,7 @@ function NotRepliedList({records, agent, snapshot, now}: {records: readonly NotR
     return <li key={`${record.at}-${record.ref ?? ''}-${record.reason}`}>
       <span className="diagnostics-replies__head"><time>{formatTime(record.at, {now})}</time><strong>{text.reason(record)}</strong>{record.count > 1 && <span>{record.count} 次</span>}</span>
       <span>{where}</span>
-      <span>{text.next(record, {id: agent.id, several: snapshot.agents.length > 1})}</span>
+      <span>{onDeviceText(device, text.next(record, {id: agent.id, several: snapshot.agents.length > 1}))}</span>
     </li>;
   })}</ul>;
 }

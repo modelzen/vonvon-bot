@@ -3,7 +3,7 @@ import {smartRulesText} from '@vonvon/protocol';
 import {Blocks, ChevronRight, Folder, GitBranch, Plus, RefreshCw, Search, X} from 'lucide-react';
 import {backendLabel, isKnownJudgeSelection, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
 import {useActiveDevice, useClient} from '../client-context';
-import {onDevice, whereName} from '../device-copy';
+import {onDevice, updateServerText, whereName} from '../device-copy';
 import {useDirectoriesPicker} from '../directory-picker';
 import {Button, IconButton, InlineNotice, SelectControl, Toggle} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
@@ -45,7 +45,7 @@ const pathName = (path: string) => path.split(/[\\/]/).filter(Boolean).at(-1) ||
 const toggleItem = <T,>(items: T[], value: T, checked: boolean) => checked ? [...new Set([...items, value])] : items.filter(item => item !== value);
 
 function MissingSection() {
-  return <InlineNotice title="这项设置暂不可用" tone="warning">请更新并重新连接本机服务。</InlineNotice>;
+  return <InlineNotice title="这项设置暂不可用" tone="warning">{updateServerText(useActiveDevice())}</InlineNotice>;
 }
 export function useProviders(tools?: readonly ToolState[]) {
   return useProviderDiscovery(tools).providers;

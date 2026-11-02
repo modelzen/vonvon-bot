@@ -191,7 +191,7 @@ export function ConfirmDialog(props: {
       {props.error && (
         <InlineNotice title="操作失败" tone="danger">{props.error}</InlineNotice>
       )}
-      {props.children ?? <div className="ui-dialog__notice">请确认后再继续；取消不会修改任何本机数据。</div>}
+      {props.children ?? <div className="ui-dialog__notice">请确认后再继续；取消不会做任何修改。</div>}
     </Dialog>
   );
 }

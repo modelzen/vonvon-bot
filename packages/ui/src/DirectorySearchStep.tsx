@@ -1,7 +1,8 @@
 import {useEffect, useId, useRef, useState} from 'react';
 import {ArrowUp, ChevronRight, Folder, RefreshCw, Search} from 'lucide-react';
 import type {DirectoryEntry, FolderChoice} from '@vonvon/protocol';
-import {deviceCopyName, useActiveDevice, useClient} from './client-context';
+import {useActiveDevice, useClient} from './client-context';
+import {whereName} from './device-copy';
 import {IconButton} from './reference/components/ui';
 import './DirectorySearchStep.css';
 
@@ -85,7 +86,7 @@ export function DirectorySearchStep({onChoose, onBusyChange}: {
   }
 
   return <div className="join-directory-search">
-    <p className="join-directory-context">{where.isRemote ? `${deviceCopyName(where)}上的目录` : 'Bot 所在设备的目录'}</p>
+    <p className="join-directory-context">{`${whereName(where)}上的目录`}</p>
     <div className="join-directory-input">
       <Search size={17}/>
       <input ref={input} role="combobox" aria-label="搜索目录或输入路径" aria-expanded="true" aria-autocomplete="list" aria-controls={listId}

@@ -1,15 +1,16 @@
 import type {SetupStep} from '@vonvon/protocol';
 import {deviceCopyName, type ActiveDevice} from './client-context';
 
-/** devices-ui-2 4.1: the words that say which device a page acts on. Remote: 「X」; this computer: as before. */
+/** devices-ui-2 4.1: the words that say which device a page acts on. Remote: 「X」; this computer: 本机 (owner 2026-11-02:
+ * a page of this computer says so too, not only a remote one). */
 type Where = Pick<ActiveDevice, 'isRemote' | 'name'>;
 const PROVIDER_NAME = {codex: 'Codex', claude: 'Claude'} as const;
 
-/** Remote: "在「X」上安装"; this computer: the action as it is. */
+/** Remote: "在「X」上安装"; this computer: "在本机上安装". */
 export function onDevice(where: Where, action: string): string {
-  return where.isRemote ? `在${deviceCopyName(where)}上${action}` : action;
+  return `在${whereName(where)}上${action}`;
 }
-/** devices 第 15 节"在远程设备上配 Provider"; this computer leaves out "在 … 上". */
+/** devices 第 15 节"在远程设备上配 Provider"; this computer: "在本机上把 … 配置好". */
 export function configureProvider(where: Where, provider: 'codex' | 'claude'): string {
   return `${onDevice(where, `把 ${PROVIDER_NAME[provider]} 配置好`)}（账号或自定义 API 都行），然后点「重新检测」。`;
 }
@@ -20,8 +21,14 @@ export const CHECK_CONFIG = '检查配置';
 export function hostTitle(platform: string | undefined): string {
   return ({macos: '这台 Mac', linux: '这台 Linux 主机', windows: '这台 Windows 电脑'} as Record<string, string>)[platform ?? ''] ?? '这台电脑';
 }
-/** 「X」 for a remote device, 这台电脑 for this one. */
-export const whereName = (where: Where): string => deviceCopyName(where);
+/** 「X」 for a remote device, 本机 for this one. The device list still calls this one 这台电脑 (`deviceCopyName`). */
+export function whereName(where: Where): string {
+  return where.isRemote ? deviceCopyName(where) : '本机';
+}
+/** Where something is kept or done: 「X」上 for a remote device, 本机 for this one ("密钥仅保存在本机"). */
+export const placeOf = (where: Where): string => where.isRemote ? `${whereName(where)}上` : '本机';
+/** A setting the server does not know yet: the words of a page that needs a newer server. */
+export const updateServerText = (where: Where): string => `请更新并重新连接${where.isRemote ? `${whereName(where)}上的` : '本机'}服务。`;
 /** The Provider and tools pages while another device is shown. */
 export const remoteToolsNote = (where: Where): string => `这里装的、检查的都是${whereName(where)}上的 Codex、Claude 和 lark-cli。`;
 /** devices 第 15 节"远程停止确认". */
@@ -56,4 +63,4 @@ export function toolStepsOn(where: Where, steps: readonly SetupStep[]): SetupSte
 }
 /** The footer of the 状态与诊断 page's group of the device's tools. */
 export const diagnosticsToolsFooter = (where: Where): string =>
-  `${where.isRemote ? `${whereName(where)}上的 ` : ''}Provider 每分钟检查一次；Claude 的配置可以单独检查。`;
+  `${whereName(where)}上的 Provider 每分钟检查一次；Claude 的配置可以单独检查。`;
