@@ -1,7 +1,7 @@
 import { chmod, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { removePathBlock, startupFiles, writePathBlock, type AddedBreaks } from '../../platform/shell-path';
+import { everyStartupFile, removePathBlock, startupFiles, writePathBlock, type AddedBreaks } from '../../platform/shell-path';
 import { switchCurrent, VERSION } from '../../service/current-release';
 import { badArgs, CommandError } from '../command-error';
 import type { Io } from '../daemon-client';
@@ -30,18 +30,27 @@ export type StandaloneSetupResult = {
 };
 
 /**
- * Where setup keeps the line breaks it put before the PATH block (shell-path `AddedBreaks`) for teardown: in the
- * install root, which uninstall deletes after teardown.
+ * What setup did to the startup files, for teardown: every file it put the PATH block in, across runs, and the line
+ * breaks it put before the block (shell-path `AddedBreaks`). Kept in the install root, which uninstall deletes after
+ * teardown.
  */
-const breaksFile = (installRoot: string): string => join(installRoot, 'path-breaks.json');
+type PathRecord = { files: string[]; breaks: AddedBreaks };
+const recordFile = (installRoot: string): string => join(installRoot, 'path-block.json');
+const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-/** Nothing recorded, or a record that cannot be read: teardown then keeps those line breaks, as before. */
-async function readBreaks(installRoot: string): Promise<AddedBreaks> {
+/**
+ * Nothing recorded, or a record that cannot be read: teardown then looks only in the files that could hold the block
+ * now, and keeps those line breaks.
+ */
+async function readRecord(installRoot: string): Promise<PathRecord> {
   let parsed: unknown;
-  try { parsed = JSON.parse(await readFile(breaksFile(installRoot), 'utf8')); }
-  catch { return {}; }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-  return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, number] => Number.isSafeInteger(entry[1]) && entry[1] >= 0));
+  try { parsed = JSON.parse(await readFile(recordFile(installRoot), 'utf8')); }
+  catch { return { files: [], breaks: {} }; }
+  if (!isRecord(parsed)) return { files: [], breaks: {} };
+  return {
+    files: Array.isArray(parsed.files) ? parsed.files.filter((file): file is string => typeof file === 'string' && isAbsolute(file)) : [],
+    breaks: isRecord(parsed.breaks) ? Object.fromEntries(Object.entries(parsed.breaks).filter((entry): entry is [string, number] => Number.isSafeInteger(entry[1]) && Number(entry[1]) >= 0)) : {},
+  };
 }
 
 async function checkedRoot(installRoot: string): Promise<void> {
@@ -72,14 +81,18 @@ export async function runStandaloneSetup(options: { installRoot: string; version
     // `current` is switched already: running the script again reuses the release and comes back here
     throw new CommandError('failed', `写不了 ${launcher}：${detailOf(error)}`, { reason: 'launcher_write_failed' });
   }
-  const breaks = await readBreaks(installRoot);
-  const recorded = JSON.stringify(breaks);
-  const written = await writePathBlock(await startupFiles(d.home, d.zdotdir), bin, breaks);
-  if (JSON.stringify(breaks) !== recorded) {
-    const file = breaksFile(installRoot);
-    // without it uninstall leaves one line break at the end of these files
-    try { await writeFile(`${file}.tmp`, `${JSON.stringify(breaks)}\n`, { mode: 0o644 }); await rename(`${file}.tmp`, file); }
-    catch (error) { written.notes.push(`${file} 没写进去：${detailOf(error)}，卸载后 ${Object.keys(breaks).join('、')} 末尾会多一个换行`); }
+  const record = await readRecord(installRoot);
+  const recorded = JSON.stringify(record);
+  const written = await writePathBlock(await startupFiles(d.home, d.zdotdir), bin, record.breaks);
+  for (const file of written.files) if (!record.files.includes(file)) record.files.push(file);
+  if (JSON.stringify(record) !== recorded) {
+    const file = recordFile(installRoot);
+    try { await writeFile(`${file}.tmp`, `${JSON.stringify(record)}\n`, { mode: 0o644 }); await rename(`${file}.tmp`, file); }
+    catch (error) {
+      // without it uninstall leaves one line break at the end of these files
+      const breaks = Object.keys(record.breaks);
+      written.notes.push(`${file} 没写进去：${detailOf(error)}${breaks.length ? `，卸载后 ${breaks.join('、')} 末尾会多一个换行` : ''}`);
+    }
   }
   const result: StandaloneSetupResult = {
     version, previous, launcher, pathFiles: written.files, pathAlreadyOnPath: (d.path ?? '').split(':').includes(bin),
@@ -97,11 +110,16 @@ export async function runStandaloneSetup(options: { installRoot: string; version
   return result;
 }
 
-/** Only the block that names this install root's `bin` is taken out; the desktop app's block stays. */
+/**
+ * Only the block that names this install root's `bin` is taken out; the desktop app's block stays. It is looked for in
+ * every file that could hold it now and every file setup recorded, not only in the files setup would pick today.
+ */
 export async function runStandaloneTeardown(options: { installRoot: string }, io: Io, overrides: Partial<StandaloneDependencies> = {}): Promise<{ pathFiles: string[]; pathNote?: string }> {
   const d = { ...defaults(), ...overrides };
   if (!isAbsolute(options.installRoot)) throw badArgs(`--install-root 要是绝对路径：${options.installRoot}`);
-  const removed = await removePathBlock(await startupFiles(d.home, d.zdotdir), join(options.installRoot, 'bin'), await readBreaks(options.installRoot));
+  const record = await readRecord(options.installRoot);
+  const files = [...new Set([...everyStartupFile(d.home, d.zdotdir), ...record.files])];
+  const removed = await removePathBlock(files, join(options.installRoot, 'bin'), record.breaks);
   const result = { pathFiles: removed.files, ...removed.notes.length ? { pathNote: removed.notes.join('；') } : {} };
   if (io.json) io.write(`${JSON.stringify({ ok: true, ...result })}\n`);
   else io.write(`${removed.files.length ? `已从 ${removed.files.join('、')} 去掉 PATH` : '启动文件里没有服务端的 PATH'}\n${result.pathNote ? `${result.pathNote}\n` : ''}`);

@@ -791,6 +791,58 @@ test('uninstall: a service that will not uninstall keeps every file', async t =>
   assert.equal((await f.calls()).some(line => line.startsWith('__standalone-teardown')), false);
 });
 
+// fix check of 216-218 (P3): an rm -rf cut short (Ctrl-C, SSH gone) could leave an install root whose markers were
+// already gone; the next uninstall refused it (exit 2) and install.sh called its release incomplete. The root is now
+// renamed to server.removing first, and the next run finishes that.
+test('uninstall: a removal cut short leaves server.removing, which the next run finishes; an install beside it goes on', async t => {
+  const f = await fixture(t);
+  const left = `${f.root}.removing`;
+  await f.ready();
+  assert.equal((await f.run('install.sh')).code, 0);
+  await mkdir(join(f.home, '.vonvon-bot'), { recursive: true });
+  await writeFile(join(f.home, '.vonvon-bot', 'config.json'), '{}');
+  // root may empty a directory it cannot write
+  if (process.getuid?.() !== 0) {
+    // rm cannot empty a directory it may not write: the run stops halfway, as a Ctrl-C would
+    await chmod(join(f.root, 'releases', '1.0.0', 'app', 'bin'), 0o555);
+    try {
+      let run = await f.run('uninstall.sh');
+      assert.equal(run.code, 1);
+      assert.match(run.stderr, /安装目录已经改名成 \S*server\.removing，但没删完。看一下上面 rm 说的原因，解决后再运行一次卸载，会接着删。\n$/);
+      assert.equal(await f.exists(f.root), false);
+      assert.equal(await f.exists(join(left, 'releases', '1.0.0', 'app', 'bin', 'vonvon.mjs')), true);
+      run = await f.run('uninstall.sh');
+      assert.equal(run.code, 1);
+      assert.match(run.stderr, /上次卸载没删完的 \S*server\.removing 还是没删完/);
+    } finally {
+      await chmod(join(left, 'releases', '1.0.0', 'app', 'bin'), 0o755).catch(() => undefined);
+      await chmod(join(f.root, 'releases', '1.0.0', 'app', 'bin'), 0o755).catch(() => undefined);
+    }
+    const before = (await f.calls()).length;
+    const run = await f.run('uninstall.sh');
+    assert.equal(run.code, 0, run.stderr);
+    assert.equal(run.stdout, `已删完上次卸载没删完的 ${left}。数据目录 \`~/.vonvon-bot\`（Bot、记忆、设置）保留着；不要了就自己删。\n`);
+    assert.equal(await f.exists(left), false);
+    assert.equal(await f.exists(join(f.home, '.vonvon-bot', 'config.json')), true);
+    // nothing to stop: the services were stopped before the rename
+    assert.deepEqual((await f.calls()).slice(before), []);
+    assert.equal((await f.run('install.sh')).code, 0);
+  }
+  // what a Ctrl-C in the middle of rm -rf may leave: no marker in it any more
+  await mkdir(join(left, 'releases', '1.0.0', 'app', 'node_modules', 'x'), { recursive: true });
+  await writeFile(join(left, 'releases', '1.0.0', 'app', 'node_modules', 'x', 'index.js'), '');
+  await rm(f.root, { recursive: true });
+  assert.equal((await f.run('install.sh')).code, 0);
+  assert.equal(await f.exists(join(f.root, 'releases', '1.0.0', 'standalone.json')), true);
+  // installed again beside it: one uninstall takes both
+  const run = await f.run('uninstall.sh');
+  assert.equal(run.code, 0, run.stderr);
+  assert.match(run.stdout, /已卸载服务端。/);
+  assert.equal(await f.exists(f.root), false);
+  assert.equal(await f.exists(left), false);
+  assert.equal(await f.exists(join(f.home, '.vonvon-bot', 'config.json')), true);
+});
+
 test('uninstall refuses an empty or root HOME, a linked install root and one without a marker, deleting nothing', async t => {
   const f = await fixture(t);
   const keep = join(f.base, 'home2', 'keep');
@@ -819,4 +871,23 @@ test('uninstall refuses an empty or root HOME, a linked install root and one wit
   assert.match(run.stderr, /没有服务端的标记/);
   assert.equal(await f.exists(join(f.root, 'stuff')), true);
   assert.deepEqual(await f.calls(), []);
+
+  // server.removing is only what an earlier uninstall renamed: a link or a file by that name is someone else's, and
+  // is found before anything is stopped
+  await rm(f.root, { recursive: true });
+  await f.ready();
+  assert.equal((await f.run('install.sh')).code, 0);
+  await f.defineService();
+  const left = `${f.root}.removing`;
+  for (const make of [() => symlink(elsewhere, left), () => writeFile(left, 'keep')]) {
+    await make();
+    const before = (await f.calls()).length;
+    run = await f.run('uninstall.sh');
+    assert.equal(run.code, 2);
+    assert.match(run.stderr, /server\.removing (是符号链接|不是目录)，不是卸载脚本留下的，什么都没删。/);
+    assert.equal(await f.exists(join(elsewhere, 'releases', '1.0.0', 'standalone.json')), true);
+    assert.equal(await f.exists(join(f.root, 'current')), true);
+    assert.deepEqual((await f.calls()).slice(before), []);
+    await rm(left);
+  }
 });

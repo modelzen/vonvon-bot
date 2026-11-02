@@ -179,6 +179,55 @@ describe('__standalone-teardown', () => {
     }
   });
 
+  // fix check of 216-218 (P3): teardown worked out bash's login file and ZDOTDIR again, and left the block setup had
+  // written where that answer had changed since
+  it('finds the block wherever setup put it: a .bash_profile made since, a ZDOTDIR set then or since, with or without the record', async () => {
+    const loginLine = '[ -f ~/.profile ] && . ~/.profile\n';
+    const cases: Array<{ setup?: string; teardown?: string; keepRecord: boolean }> = [
+      // the record is gone (or never written): every file that could hold the block is still looked at
+      { keepRecord: false },
+      { keepRecord: true },
+      { setup: 'zdot', keepRecord: true },
+      { teardown: 'zdot', keepRecord: false },
+    ];
+    for (const { setup, teardown, keepRecord } of cases) {
+      const f = await fixture();
+      const zdot = join(f.base, 'zdot');
+      await mkdir(zdot);
+      await writeFile(join(f.home, '.bashrc'), 'export KEEP=1');
+      await runStandaloneSetup({ installRoot: f.root, version: '1.0.0' }, f.io, { ...f.deps, zdotdir: setup && zdot });
+      const written = [setup ? join(zdot, '.zshrc') : join(f.home, '.zshrc'), setup ? join(zdot, '.zprofile') : join(f.home, '.zprofile'), join(f.home, '.profile'), join(f.home, '.bashrc')];
+      for (const file of written) expect(await readFile(file, 'utf8')).toContain(startupBlock(join(f.root, 'bin')));
+      if (keepRecord) expect(JSON.parse(await readFile(join(f.root, 'path-block.json'), 'utf8'))).toEqual({ files: written, breaks: { [join(f.home, '.bashrc')]: 'export KEEP=1'.length } });
+      else await rm(join(f.root, 'path-block.json'), { force: true });
+      // bash would now pick .bash_profile, not the .profile setup wrote
+      await writeFile(join(f.home, '.bash_profile'), loginLine);
+      f.out();
+      const result = await runStandaloneTeardown({ installRoot: f.root }, f.io, { ...f.deps, zdotdir: teardown && zdot });
+      expect(new Set(result.pathFiles)).toEqual(new Set(written));
+      for (const file of written) expect(await readFile(file, 'utf8')).not.toContain('Vonvon Bot CLI');
+      expect(await readFile(join(f.home, '.bashrc'), 'utf8')).toBe(keepRecord ? 'export KEEP=1' : 'export KEEP=1\n');
+      expect(await readFile(join(f.home, '.bash_profile'), 'utf8')).toBe(loginLine);
+    }
+  });
+
+  it('takes out every copy of its block, before or after another block, and leaves the other block alone', async () => {
+    const f = await fixture();
+    const ours = startupBlock(join(f.root, 'bin'));
+    const desktop = startupBlock(join(f.home, '.local', 'share', 'vonvon-bot', 'bin'));
+    await writeFile(join(f.home, '.bashrc'), `export A=1\n${ours}export B=1\n${desktop}${ours}${ours}`);
+    await writeFile(join(f.home, '.zshrc'), `${desktop}export C=1\n${ours}`);
+    const result = await runStandaloneTeardown({ installRoot: f.root }, f.io, f.deps);
+    expect(result.pathFiles).toEqual([join(f.home, '.zshrc'), join(f.home, '.bashrc')]);
+    expect(await readFile(join(f.home, '.bashrc'), 'utf8')).toBe(`export A=1\nexport B=1\n${desktop}`);
+    expect(await readFile(join(f.home, '.zshrc'), 'utf8')).toBe(`${desktop}export C=1\n`);
+    // setup over a file holding two copies, then teardown: none left
+    await writeFile(join(f.home, '.profile'), `export D=1\n${ours}${ours}`);
+    await runStandaloneSetup({ installRoot: f.root, version: '1.0.0' }, f.io, f.deps);
+    await runStandaloneTeardown({ installRoot: f.root }, f.io, f.deps);
+    expect(await readFile(join(f.home, '.profile'), 'utf8')).toBe('export D=1\n');
+  });
+
   // review F1: reading the file as UTF-8 turned other bytes (a GBK comment) into U+FFFD for good
   it('keeps bytes that are not UTF-8, and writes the block for a bin path that is not ASCII as UTF-8', async () => {
     const f = await fixture();
