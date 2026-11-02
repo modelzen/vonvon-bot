@@ -28,7 +28,7 @@ import { settingsRpc } from './rpc/settings';
 import { createLocalIdentity } from './local-credential';
 import { errorEnvelope, RpcError } from './errors';
 import { authorize, MAINTENANCE_STRIKES, type AuthzDeps } from './authz';
-import { filterSnapshot } from './snapshot-filter';
+import { filterSnapshot, scopedOwner } from './snapshot-filter';
 import { createSessionTokens, type SessionTokens } from '../host/session-tokens';
 import { principalWire } from './principal';
 import { deviceRpc } from './rpc/device';
@@ -67,13 +67,15 @@ type ServiceSeams = Pick<Parameters<typeof createServiceActionLauncher>[0], 'pla
 const capabilities = (): string[] => ['device', 'session-scope'];
 
 /**
- * devices-4a 4.7: what each connection gets of a published event. The owner all of it; a Bot session, once it negotiated
- * its scope, its own part of the snapshot and nothing else; a connection of another protocol (the maintenance subset) none.
+ * devices-4a 4.7: what each connection gets of a published event. The owner all of it, its snapshot cut to its `--scope`
+ * if it gave one; a Bot session whose token still stands, once it negotiated its scope, its own part of the snapshot and
+ * nothing else; a connection of another protocol (the maintenance subset) none.
  */
-const peerView: PeerView = (peer, event) => {
+const viewFor = (tokens: Pick<SessionTokens, 'active'>): PeerView => (peer, event) => {
   const principal = peer.principal;
-  if (principal.kind === 'owner') return event;
-  if (principal.kind === 'bot-session' && peer.negotiated && event.event === 'snapshot') return { ...event, payload: filterSnapshot(event.payload, principal, peer.scope) };
+  if (principal.kind === 'owner') return peer.scope && event.event === 'snapshot' ? { ...event, payload: filterSnapshot(event.payload, scopedOwner(peer.scope), peer.scope) } : event;
+  if (principal.kind !== 'bot-session' || !tokens.active(principal.sessionId)) return null;
+  if (peer.negotiated && event.event === 'snapshot') return { ...event, payload: filterSnapshot(event.payload, principal, peer.scope) };
   return null;
 };
 
@@ -84,11 +86,15 @@ const peerView: PeerView = (peer, event) => {
 export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number; sessionTokens?: SessionTokens }): Promise<DaemonApi> {
   const startedAt = options.startedAt ?? Math.round(performance.timeOrigin);
   const sessionTokens = options.sessionTokens ?? createSessionTokens();
-  /** What the bot-session checks read: a bot's bound groups, from its projects file (the snapshot can be 5 s old). */
+  /** What the bot-session checks read: a bot's bound groups and their sessions, from its files (the snapshot can be 5 s old). */
   const authzDeps: AuthzDeps = {
     groupsOf: async appId => (await options.service.listProjects(appId))
       .map(project => ({ name: project.name, chatId: project.chatId, ...(project.projectId ? { projectId: project.projectId } : {}) })),
+    threadsOf: async (appId, projectName) => (await options.service.listSessions(appId, projectName)).map(session => session.threadId),
+    sessionActive: sessionId => sessionTokens.active(sessionId, true),
   };
+  /** devices 5.3: a session that ends (revoked, its bot's process gone, idle) closes the connections made with its token. */
+  let stopEnding: (() => void) | undefined;
   /** Requests refused in a row to a connection of another protocol (devices 4.7: 20 close it). */
   const strikes = new WeakMap<Peer, number>();
   let acquiredServer: ReturnType<typeof createServer> | undefined;
@@ -135,6 +141,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
     if (released) return released;
     let socketCleanup: Promise<void>;
     let listenerClosed: Promise<void>;
+    stopEnding?.();
     released = Promise.resolve().then(async () => {
       await listenerClosed;
       const results = await Promise.allSettled([socketCleanup, Promise.resolve().then(() => acquiredClients?.close())]);
@@ -268,7 +275,8 @@ export async function startApi(options: { service: AdminService; port?: number; 
       ? serverInfoV1Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: 1 })
       : serverInfoV2Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION,
         deviceName: identity.current.name, platform: hostPlatform(), capabilities: capabilities(), principal: principalWire(peer.principal) });
-    const sockets = acquiredSockets = createSocketServer({ server, credential, sessions: sessionTokens, info, request, control, view: peerView, detached: peer => { jobs.detach(peer); logs.detach(peer); } });
+    const sockets = acquiredSockets = createSocketServer({ server, credential, sessions: sessionTokens, info, request, control, view: viewFor(sessionTokens), detached: peer => { jobs.detach(peer); logs.detach(peer); } });
+    stopEnding = sessionTokens.onEnd(sessionId => sockets.disconnect(peer => peer.principal.kind === 'bot-session' && peer.principal.sessionId === sessionId, 4401, 'invalid_session_token'));
     snapshots = await createSnapshotStore({ service: options.service, jobs: () => jobs.snapshot(), serviceAction: () => serviceActions.current(), ...(readService ? { readService } : {}), ...(options.diagnostics ? { diagnostics: options.diagnostics } : {}), ...(options.crashes ? { crashes: options.crashes } : {}), publish: snapshot => sockets.publish({ type: 'event', event: 'snapshot', payload: snapshot }) });
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', () => { server.off('error', reject); resolve(); }); });
     const address = server.address();

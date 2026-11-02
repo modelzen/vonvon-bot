@@ -228,6 +228,10 @@ export function createSocketServer(options: { server: Server; credential: string
         if (shown) peer.event(shown);
       }
     },
+    /** Closes the connections `match` picks, e.g. those made with a session token that ended (devices-4a 4.1). */
+    disconnect(match: (peer: Peer) => boolean, code: number, reason: string): void {
+      for (const peer of [...peers]) if (match(peer)) peer.close(code, reason);
+    },
     beginDrain,
     release,
     close(): Promise<void> {
