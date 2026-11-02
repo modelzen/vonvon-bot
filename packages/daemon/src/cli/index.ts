@@ -469,10 +469,10 @@ covers(settingsAct.command('comment-instructions'), 'settings.act.commentInstruc
   });
 covers(settings.command('models'), 'settings.models').description("List the models a settings page's model picker offers")
   .option('--backend <backend>', 'codex, claude, or an id like codex-appserver').option('--purpose <purpose>', 'project, session, comments, titles or judge')
-  .option('--session <threadId>', 'Session thread id; needed for --purpose session').option(...BOT).option(...JSON_FLAG)
+  .option('--session <threadId>', 'Session thread id; needed for --purpose session').option('--refresh', 'Ask the Provider again now (刷新); without it the list it last read').option(...BOT).option(...JSON_FLAG)
   .addHelpText('after', `
 These are what a bot's model picker offers for one use; every model a Provider reports is vonvon provider models <codex|claude>.`)
-  .action(async (options: Json & { bot?: string; backend?: string; purpose?: string; session?: string }) => {
+  .action(async (options: Json & { bot?: string; backend?: string; purpose?: string; session?: string; refresh?: boolean }) => {
     await (await import('./commands/settings')).runSettingsModels(options, io(options));
   });
 const schedule = program.command('schedule').description('List and change the scheduled tasks of a group (定时任务)')
@@ -660,11 +660,12 @@ covers(env.command('cancel <what> [id]'), 'environment.cancelInstall', 'environm
   .description('Cancel what runs: install (a tool), login (lark-cli) or backend <id> (a component); an app profile: env profile init --cancel').option(...JSON_FLAG)
   .action(async (what: string, id: string | undefined, options: Json) => { await (await envCommands()).runEnvCancel(what, id, io(options)); });
 const provider = program.command('provider').description('The Providers the bots run on: Codex and Claude');
-covers(provider.command('models <provider>'), 'collaboration.providerModels').description('List every model a Provider reports: codex or claude').option(...JSON_FLAG)
+covers(provider.command('models <provider>'), 'collaboration.providerModels').description('List every model a Provider reports: codex or claude')
+  .option('--refresh', 'Ask the Provider again now (刷新); without it the list it last read').option(...JSON_FLAG)
   .addHelpText('after', `
 These are all the models the Provider itself reports. The ones a bot's model picker offers for one use are
 vonvon settings models --backend <codex|claude> --purpose <use>.`)
-  .action(async (name: string, options: Json) => { await (await import('./commands/provider')).runProviderModels(name, io(options)); });
+  .action(async (name: string, options: Json & { refresh?: boolean }) => { await (await import('./commands/provider')).runProviderModels(name, io(options), undefined, Boolean(options.refresh)); });
 covers(program.command('update'), 'machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus')
   .description('Update this server to the signed stable release; with the daemon running, it restarts it and interrupts conversations in progress')
   .option('--check', 'Only say whether a newer version is out')

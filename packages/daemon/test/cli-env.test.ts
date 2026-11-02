@@ -592,6 +592,16 @@ it('provider models asks the Provider by its backend id, and an unavailable list
   await expect(runProviderModels('cursor', none.io(), none.daemon)).rejects.toEqual(failure('bad-args'));
 });
 
+// 3ba7d5c9 必败: no --refresh, so a terminal could only read the list the daemon last read (#641, #629 cache it)
+it('provider models --refresh asks the Provider again, as the Provider list refresh button does', async () => {
+  const collaboration = vi.fn(async () => ({ kind: 'providerModels', backend: 'codex-appserver', state: 'ready', models: [] }));
+  const h = envHarness(() => undefined, { collaboration });
+  await runProviderModels('codex', h.io(true), h.daemon, true);
+  expect(collaboration).toHaveBeenLastCalledWith({ action: 'providerModels', backend: 'codex-appserver', refresh: true });
+  await runProviderModels('codex', h.io(true), h.daemon);
+  expect(collaboration).toHaveBeenLastCalledWith({ action: 'providerModels', backend: 'codex-appserver' });
+});
+
 // main 必败: the step said 在网页里点「去本机环境」
 it('bot status gives env scan for the 本机环境 step', () => {
   expect(stepLines({ id: 'claude', title: 'Claude', status: '未安装', tone: 'neutral', done: false, actions: [{ kind: 'environment', label: '去本机环境' }] }, 'cli_a'))
