@@ -1,4 +1,4 @@
-import { getAppRoleSnapshot } from '../config/app-roles';
+import { getAppRoleSnapshot, trustedFeishuAdmins } from '../config/app-roles';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { isSensitiveAsk, type AgentRun, type AskRequest, type AskResolution } from '../agent/types';
 import { isAdmin, type AppConfig } from '../config/schema';
@@ -71,7 +71,7 @@ export class AskCoordinator {
   }
   private eligible(turn: Turn, request: AskRequest): string[] {
     const roles = getAppRoleSnapshot(this.cfg.accounts.app.id, this.cfg.accounts.app.tenant);
-    return [...new Set([roles?.ownerOpenId, ...(roles?.admins ?? []), this.cfg.preferences?.access?.ownerOpenId,
+    return [...new Set([roles?.ownerOpenId, ...trustedFeishuAdmins(roles), this.cfg.preferences?.access?.ownerOpenId,
       ...(this.cfg.preferences?.access?.admins ?? []),
       ...(request.kind !== 'permission' && turn.initiator.kind === 'user' ? [turn.initiator.openId] : [])]
       .filter((id): id is string => Boolean(id)))];

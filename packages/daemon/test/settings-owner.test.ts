@@ -1,4 +1,4 @@
-import { buildAdminsCard } from '../src/card/dm-cards';
+import { buildAdminsCard, DM } from '../src/card/dm-cards';
 import * as appRoles from '../src/config/app-roles';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -586,13 +586,18 @@ it('shows Feishu administrator sources and prevents their local removal', async 
     if (view.scope.kind !== 'agent' || !('administrators' in view)) throw new Error('Expected agent settings');
     expect(view.administrators.feishu).toEqual({ ownerOpenId: 'ou_feishu_owner', adminOpenIds: ['ou_feishu_admin'] });
     expect(view.administrators.scannerOpenId).toBe('ou_owner');
-    const card = JSON.stringify(buildAdminsCard(cfg, new Map()));
+    const card = JSON.stringify(buildAdminsCard(cfg, new Map(), { editable: true }));
     expect(card).toContain('飞书应用拥有者');
     expect(card).toContain('飞书应用管理员');
     expect(card).toContain('扫码注册者');
     expect(card).toContain('本地管理员');
     expect(card).not.toContain('\"u\":\"ou_feishu_admin\"');
     expect(card).toContain('\"u\":\"ou_admin\"');
+    // audit 252-1: an admin who is not the owner sees the same list, read-only
+    const readOnly = JSON.stringify(buildAdminsCard(cfg, new Map(), { editable: false }));
+    expect(readOnly).toContain('本地管理员');
+    expect(readOnly).toContain('本机管理员名单只有飞书应用的拥有者能改。');
+    for (const action of ['rmAdmin', 'addAdminForm']) expect(readOnly).not.toContain(`"a":"${DM[action as keyof typeof DM]}"`);
     for (const openId of ['ou_feishu_owner', 'ou_feishu_admin', 'ou_owner']) {
       expect((await owner.act({ kind: 'adminMember', botId, openId, membership: 'absent', revision: view.administrators.revision })).kind).toBe('rejected');
     }

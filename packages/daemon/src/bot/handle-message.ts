@@ -1,10 +1,10 @@
-import type { AgentEntries, AgentPlace, TurnMemory, TurnScope } from '../agent/entry/registry';
+import { NOT_DM_MESSAGE, type AgentEntries, type AgentPlace, type TurnMemory, type TurnScope } from '../agent/entry/registry';
 import { createHiddenBlockFilter, escapeInboundMarkers, memoryNonce, noteMissedBlocks, takeLastMissed, takeMemoryNotices, type FoundBlocks, type RawBlock } from './hidden-blocks';
 import type { MemoryWriter } from './memory-writer';
 import { redactAgentEvents } from '../core/token-redact';
 import { buildJudgeFacts, judgeFactRead, sameNameWord } from './judge-facts';
 import { bareText, smartSalience, type Salience, type SalienceDeps } from './salience';
-import { getAppRoleSnapshot } from '../config/app-roles';
+import { getAppRoleSnapshot, trustedFeishuAdmins } from '../config/app-roles';
 import { createChatPeople } from './chat-people';
 import { findHandoffs, handoffSendResult, type HandoffSendResult, handoffText, handoffNote, ambiguousNote, ambiguousPersonNote, overNote, incompleteNote, otherBotNames, HANDOFF_SEND_MS, type HandoffMiss } from './bot-handoff';
 import { AskCoordinator, type AskTurn } from './ask-coordinator';
@@ -82,7 +82,7 @@ import {
   type ThreadHistory,
   type ThreadSummary,
 } from '../agent/types';
-import { note, type SelectOption } from '../card/cards';
+import { card, md, note, type CardObject, type SelectOption } from '../card/cards';
 import { ASK_CONTROLS_EID } from '../card/ask-card';
 import {
   createAppPreferencesWriter,
@@ -185,7 +185,6 @@ import {
   buildAllowlistCard,
   buildDmMenuCard,
   buildDoctorCard,
-  buildGroupSettingsCard,
   buildJoinGroupFormCard,
   parseProjectPick,
   parseNoMentionPick,
@@ -1403,7 +1402,7 @@ export function createOrchestrator(
   }
   /**
    * The token a new session's `vonvon` commands carry (devices 5.3), in place of the bare marker, and beside it the
-   * `--scope` the builtin skills copy (skills-scope): a group's reach is its group, a private chat's and a comment's the bot.
+   * `--scope` its command line copies: a group's reach is its group, a private chat's and a comment's the bot.
    */
   async function sessionEnv(api: Pick<HostApi, 'issueSessionToken'>, sessionId: string, place: AgentPlace): Promise<Record<string, string>> {
     const chatId = place.kind !== 'doc' && place.chatId ? place.chatId : undefined;
@@ -2740,7 +2739,7 @@ export function createOrchestrator(
 
     // Single-session group: the main area is one session keyed by chatId. No
     // topics — reply by quoting (引用回复); runs serialize per chatId (active[chatId]).
-    // Commands: /settings (群设置) + /model. /resume has no topic list here.
+    // Commands: /model, /resume and the session ones; /settings is a private chat's (s1b). /resume has no topic list here.
     // A topic opened in the group (msg.threadId) falls through to the topic path
     // below and gets its own session (product.md 3.5); an old topic that used to
     // share the chat session starts fresh from its next message, nothing migrated.
@@ -2750,7 +2749,7 @@ export function createOrchestrator(
         return;
       }
       if (cmd === 'settings') {
-        await postGroupSettings(msg, project);
+        await refuseGroupSettings(msg);
         return;
       }
       const ts = turnSession(msg.chatId, project);
@@ -2803,15 +2802,19 @@ export function createOrchestrator(
       return;
     }
 
-    // Inside a topic (multi, or a topic in a single group) → a turn in that session. /settings +
-    // /resume aren't topic-scoped — redirect to the main area instead of feeding
-    // them to codex as a normal turn (烧一轮还无人能懂).
+    // Inside a topic (multi, or a topic in a single group) → a turn in that session. /resume isn't
+    // topic-scoped — redirect to the main area instead of feeding it to codex as a normal turn
+    // (烧一轮还无人能懂); /settings is a private chat's (s1b).
     if (msg.threadId) {
       if (cmd === 'help') {
         await postHelpCard(msg, 'topic', true, project);
         return;
       }
-      if (cmd === 'resume' || cmd === 'settings') {
+      if (cmd === 'settings') {
+        await refuseGroupSettings(msg, true);
+        return;
+      }
+      if (cmd === 'resume') {
         await channel
           .send(msg.chatId, { markdown: `\`/${cmd}\` 请到主群区使用（话题外发）。` }, { replyTo: msg.messageId, replyInThread: true })
           .catch(() => undefined);
@@ -2866,8 +2869,8 @@ export function createOrchestrator(
       void trackTask(handleTurn(msg, text, ts.sessionKey, false, project, ts).catch((err) => log.fail('intake', err)));
       return;
     }
-    // Main group area: /resume opens the history picker; /settings opens the
-    // group-settings card; /model only makes sense inside a topic; anything else
+    // Main group area: /resume opens the history picker; /settings is a private
+    // chat's (s1b); /model only makes sense inside a topic; anything else
     // directly creates a topic + runs.
     if (cmd === 'help') {
       await postHelpCard(msg, 'main', false, project);
@@ -2878,7 +2881,7 @@ export function createOrchestrator(
       return;
     }
     if (cmd === 'settings') {
-      await postGroupSettings(msg, project);
+      await refuseGroupSettings(msg);
       return;
     }
     if (cmd === 'clear' || cmd === 'new') {
@@ -3064,9 +3067,9 @@ export function createOrchestrator(
     }
   }
 
-  /** 非管理员触发 owner-only 命令(/resume、/settings)时的统一无权限提示。
+  /** 非管理员触发 owner-only 命令(/resume、/new、/clear)时的统一无权限提示。
    * design §5: 管理类命令仅 bot owner(=admins[]) 可用；对话类(/model、/help)对所有人开放。 */
-  async function denyAdminCommand(msg: NormalizedMessage, cmd: 'resume' | 'settings' | 'clear' | 'new'): Promise<void> {
+  async function denyAdminCommand(msg: NormalizedMessage, cmd: 'resume' | 'clear' | 'new'): Promise<void> {
     const why = cmd === 'clear' || cmd === 'new' ? '主区的会话是大家共用的。' : '';
     await channel
       .send(msg.chatId, { markdown: `⚠️ \`/${cmd}\` 只有主人和管理员能用。${why}` }, { replyTo: msg.messageId })
@@ -3074,22 +3077,15 @@ export function createOrchestrator(
     log.info('intake', 'cmd-denied', { cmd });
   }
 
-  /** @bot /settings in a group: post the in-group settings card (owner/admin-gated). */
-  async function postGroupSettings(msg: NormalizedMessage, project?: Project): Promise<void> {
-    if (!isAdmin(cfg, msg.senderId)) {
-      await denyAdminCommand(msg, 'settings');
-      return;
-    }
-    if (!project) {
-      await channel
-        .send(msg.chatId, { markdown: '本群未绑定项目，请先在私聊里新建项目。' }, { replyTo: msg.messageId })
-        .catch(() => undefined);
-      return;
-    }
-    await withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
-      await sendManagedCard(channel, msg.chatId, buildGroupSettingsCard(project), msg.messageId);
-      log.info('card', 'group-settings', { project: project.name });
-    });
+  /**
+   * @bot /settings in a group (s1b, owner 2026-11-02): no group settings card any more, whoever sends it. Settings are
+   * changed in a private chat, the client or the command line, which the sentence says.
+   */
+  async function refuseGroupSettings(msg: NormalizedMessage, inThread = false): Promise<void> {
+    await channel
+      .send(msg.chatId, { markdown: NOT_DM_MESSAGE }, { replyTo: msg.messageId, ...(inThread ? { replyInThread: true } : {}) })
+      .catch(() => undefined);
+    log.info('intake', 'cmd-denied', { cmd: 'settings', reason: 'not-dm' });
   }
 
   /** A turn's resolved permission: the group's one tier, whoever sends (s15c). */
@@ -5345,16 +5341,26 @@ export function createOrchestrator(
   // DM management console buttons (design §3.1). Admin-gated; sub-views patch
   // the same card in place, each carrying a ⬅️ 菜单 back button.
   const dmAdmin = (openId?: string): boolean => isAdmin(cfg, openId ?? '');
+  /** product.md 3.7: only the owner changes this machine's administrators, here as by chat and the command line (audit 252-1). */
+  const dmOwner = (openId?: string): boolean => Boolean(openId) && resolveOwner(cfg) === openId;
   const administratorIds = (): (string | undefined)[] => {
     const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
-    return [roles?.ownerOpenId, ...(roles?.admins ?? []), cfg.preferences?.access?.ownerOpenId, ...(cfg.preferences?.access?.admins ?? [])];
+    return [roles?.ownerOpenId, ...trustedFeishuAdmins(roles), cfg.preferences?.access?.ownerOpenId, ...(cfg.preferences?.access?.admins ?? [])];
   };
+  /** The administrators card as the clicker may use it: the owner adds and removes, an admin only reads. */
+  const adminsCard = async (evt: CardActionEvent): Promise<CardObject> =>
+    buildAdminsCard(cfg, await namesWithOperator(evt, administratorIds()), { editable: dmOwner(evt.operator?.openId) });
   // DM cards are CardKit entities (sendManagedCard); update them via the
   // settle-then-cardkit path so the click's callback acks first. Passing the
   // whole evt lets settleUpdate self-heal an orphaned (post-restart) card by
   // re-posting to evt.chatId.
   const patch = (evt: CardActionEvent, c: object | (() => object | Promise<object>)): void => {
     void settleUpdate(evt.messageId, c, evt.chatId);
+  };
+  /** An old in-group settings card clicked (s1b): it becomes the not-dm sentence, nothing is written. */
+  const refuseGroupSettingsCard = (evt: CardActionEvent): void => {
+    log.info('console', 'group-settings-card', { refused: 'not-dm' });
+    patch(evt, card([md(NOT_DM_MESSAGE)], { summary: NOT_DM_MESSAGE }));
   };
 
   async function renderForegroundUpdate(): Promise<ReturnType<typeof buildForegroundUpdateCard>> {
@@ -6215,83 +6221,25 @@ export function createOrchestrator(
       if (!dmAdmin(evt.operator?.openId)) return;
       void trackTask(saveCommentRulesFromCard(evt, { kind: 'default' }));
     })
-    // In-group settings: toggle 免@ for the project bound to evt.chatId. Admin-gated.
-    // 写路径走管理面共享层（admin/ops.ts）——与 DM 卡片 / Web 控制台同一套落盘逻辑。
-    .on(GS.setNoMention, ({ evt, value }) => {
-      if (!isAdmin(cfg, evt.operator?.openId ?? '')) return;
-      const on = value.v === 'on';
-      patch(evt, async () => {
-        const project = await getProjectByChatId(evt.chatId);
-        if (project) {
-          const r = await performSetNoMention({ projectName: project.name, on });
-          log.info('console', 'group-nomention', { project: project.name, on, ok: r.ok });
-          if (r.ok) return buildGroupSettingsCard(r.project);
-          // Refused (turned 智能 since the card was sent, s25c): redraw from the row as it is now.
-          const latest = await getProjectByChatId(evt.chatId);
-          return buildGroupSettingsCard(latest ?? project, noMentionRefused(latest, r.reason));
-        }
-        return buildGroupSettingsCard({ name: '本群', kind: 'multi', noMention: on });
-      });
-    })
-    // s12：自动压缩一直开，开关已去掉。旧卡上的按钮不写盘，只把卡刷新成没有开关的样子并说一声。
-    .on(GS.setAutoCompact, ({ evt }) => {
-      if (!isAdmin(cfg, evt.operator?.openId ?? '')) return;
-      patch(evt, async () => {
-        const project = await getProjectByChatId(evt.chatId);
-        return buildGroupSettingsCard(project ?? { name: '本群', kind: 'multi' }, AUTO_COMPACT_RETIRED);
-      });
-    })
-    // 🤖 默认模型/强度：群内 /settings 的镜像入口。GS.settings 返回群设置卡；GS.modelDefault
-    // 进子卡（按项目后端实时列模型）；GS.modelDefaultSubmit 校验+落盘后回群设置卡。均 isAdmin
-    // 门控（与 ✋免@ 同级），项目按 evt.chatId 解析；不驱逐活跃会话（默认只管新话题）。
-    .on(GS.settings, ({ evt }) => {
-      if (!isAdmin(cfg, evt.operator?.openId ?? '')) return;
-      patch(evt, async () => {
-        const project = await getProjectByChatId(evt.chatId);
-        return buildGroupSettingsCard(project ?? { name: '本群', kind: 'multi' });
-      });
-    })
-    .on(GS.modelDefault, ({ evt }) => {
-      if (!isAdmin(cfg, evt.operator?.openId ?? '')) return;
-      patch(evt, async () => {
-        const project = await getProjectByChatId(evt.chatId);
-        if (!project) return buildGroupSettingsCard({ name: '本群', kind: 'multi' });
-        const models = await listModels(groupBackend(project));
-        return buildModelDefaultCard(project, models, 'group');
-      });
-    })
-    // 表单提交锁卡：成功回群设置卡；选的模型无效或手填的 id 不合格时，带提示重发
-    // 默认模型卡让管理员改，不再静默回群设置卡。
-    .on(GS.modelDefaultSubmit, ({ evt, formValue }) => {
-      if (!isAdmin(cfg, evt.operator?.openId ?? '')) return;
-      void trackTask((async () => {
-        const project = await getProjectByChatId(evt.chatId);
-        if (!project) return;
-        const backendId = groupBackendId(project);
-        const models = await listModels(backendFor(backendId));
-        const parsed = parseModelDefaultFormValue(formValue, models, backendId);
-        let next: object;
-        if (!parsed.ok) {
-          next = buildModelDefaultCard(project, models, 'group', `⚠️ ${parsed.message}`);
-        } else {
-          const r = await performSetModelDefault({ projectName: project.name, model: parsed.model, effort: parsed.effort, custom: parsed.custom });
-          if (r.ok) log.info('console', 'group-model-default', { project: project.name, model: parsed.model, effort: parsed.effort, custom: parsed.custom });
-          next = buildGroupSettingsCard((await getProjectByChatId(evt.chatId)) ?? project);
-        }
-        await sendManagedCard(channel, evt.chatId, next);
-      })().catch((e) => log.fail('console', e, { phase: 'group-model-default-result' })));
-    })
+    // The in-group settings card's buttons and forms (s1b, owner 2026-11-02): settings are a private chat's, so a card
+    // still in a group from before changes nothing. Whoever clicks, it turns into the sentence that says where to change
+    // them; the private chat's cards (DM.*) are not these.
+    .on(GS.setNoMention, ({ evt }) => refuseGroupSettingsCard(evt))
+    .on(GS.setAutoCompact, ({ evt }) => refuseGroupSettingsCard(evt))
+    .on(GS.settings, ({ evt }) => refuseGroupSettingsCard(evt))
+    .on(GS.modelDefault, ({ evt }) => refuseGroupSettingsCard(evt))
+    .on(GS.modelDefaultSubmit, ({ evt }) => refuseGroupSettingsCard(evt))
     // ── 权限管理回调（admins 全局 / 项目响应白名单）。均 dmAdmin 门控（私聊管理台）。
     // 列表卡用 patch 原地重渲染（纯按钮不锁）；加人是 form 提交，结果发**新卡**（旧表单
     // 留痕），规避 select 锁卡。owner 恒在 admins 名单顶、不可删。
     .on(DM.admins, ({ evt }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
-      patch(evt, async () =>
-        buildAdminsCard(cfg, await namesWithOperator(evt, administratorIds())),
-      );
+      patch(evt, () => adminsCard(evt));
     })
     .on(DM.addAdminForm, ({ evt }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
+      // An admin's click on an owner's card (a forwarded or older one): the list back, read-only.
+      if (!dmOwner(evt.operator?.openId)) { patch(evt, () => adminsCard(evt)); return; }
       patch(evt, async () => {
         const all = await fetchAllProjectMembers(channel);
         const members = all.filter((m) => !isAdmin(cfg, m.openId)); // 排除已是 admin/owner 的
@@ -6300,11 +6248,12 @@ export function createOrchestrator(
     })
     .on(DM.addAdminSubmit, ({ evt, formValue }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
+      const owner = dmOwner(evt.operator?.openId);
       const manual = String(formValue?.open_id ?? '').trim();
       const id = manual.startsWith('ou_') ? manual : pickOpenId(formValue);
-      log.info('console', 'admin-add', { picked: id?.slice(-6) ?? null });
+      log.info('console', 'admin-add', { picked: id?.slice(-6) ?? null, ...(owner ? {} : { refused: 'not-owner' }) });
       void trackTask((async () => {
-        if (id) {
+        if (id && owner) {
           await writePreferences((preferences) => {
             const access: AppAccess = { ...(preferences.access ?? {}) };
             access.ownerOpenId ??= cfg.preferences?.access?.admins?.[0];
@@ -6312,18 +6261,18 @@ export function createOrchestrator(
             preferences.access = access;
           }).catch((e) => log.fail('console', e, { phase: 'save-config' }));
         }
-        const ids = administratorIds();
-        const next = buildAdminsCard(cfg, await namesWithOperator(evt, ids));
-        await sendManagedCard(channel, evt.chatId, next).catch((e) => log.fail('console', e, { phase: 'admin-add-result' }));
+        await sendManagedCard(channel, evt.chatId, await adminsCard(evt)).catch((e) => log.fail('console', e, { phase: 'admin-add-result' }));
       })());
     })
     .on(DM.rmAdmin, ({ evt, value }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
+      const owner = dmOwner(evt.operator?.openId);
       const id = typeof value.u === 'string' ? value.u : '';
+      if (!owner) log.info('console', 'admin-remove', { refused: 'not-owner' });
       patch(evt, async () => {
         const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
         const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
-        if (id && id !== resolveOwner(cfg) && id !== scanner && !roles?.admins.includes(id)) {
+        if (owner && id && id !== resolveOwner(cfg) && id !== scanner && !trustedFeishuAdmins(roles).includes(id)) {
           await writePreferences((preferences) => {
             const access: AppAccess = { ...(preferences.access ?? {}) };
             access.ownerOpenId ??= cfg.preferences?.access?.admins?.[0];
@@ -6331,8 +6280,7 @@ export function createOrchestrator(
             preferences.access = access;
           }).catch((e) => log.fail('console', e, { phase: 'save-config' }));
         }
-        const ids = administratorIds();
-        return buildAdminsCard(cfg, await namesWithOperator(evt, ids));
+        return adminsCard(evt);
       });
     })
     .on(DM.allowlist, ({ evt, value }) => {

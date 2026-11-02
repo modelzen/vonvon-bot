@@ -429,7 +429,7 @@ describe('record block (s14)', () => {
     await done();
     expect(fake.chat).toHaveBeenCalledWith(expect.anything(), 'chat', expect.objectContaining({ stopAt: 0, enough: 20 }));
     const text = run.consumed[0]!.text ?? '';
-    expect(text.split('\n')[1]).toBe('（更早还有 5 条没带进来，需要时用 vonvon 飞书 skill 查）');
+    expect(text.split('\n')[1]).toBe('（更早还有 5 条没带进来）');
     expect(text.match(/李四：/g)).toHaveLength(20);
     expect(text).not.toContain('第 4 条');
     expect(text).toContain('第 5 条');
@@ -897,7 +897,7 @@ describe('topic openings, 引用行 and the topics table (s14b)', () => {
     const first = message('第一轮');
     await o.onMessage(first);
     await done();
-    expect(run.consumed[0]!.text).toMatch(new RegExp(`^\\[飞书 · 群「test」· 主区\\]\\n（更早的消息没带进来，需要时用 vonvon 飞书 skill 查）\\n`
+    expect(run.consumed[0]!.text).toMatch(new RegExp(`^\\[飞书 · 群「test」· 主区\\]\\n（更早的消息没带进来）\\n`
       + `${clock} 〔话题〕用户u_li开了话题「omt_t 的标题」，你在那边另有一条会话，这里不用接。（话题 id：omt_t，会话 id：old-omt_t）\\n\\[/飞书\\]\\n`));
     await vi.waitFor(() => expect(fake.records.get('chat').seen).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'omt_t' })])));
     expect(fake.records.get('chat').lastSeenAt).toBe(5);
