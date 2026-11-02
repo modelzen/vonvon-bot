@@ -1,6 +1,6 @@
 # 设备：服务端补齐、安装脚本、远程连接、多设备客户端（总设计，第 3 版：owner 2026-10-31 确认后；2026-11-01 命令行只装服务端，只在 Linux 上做）
 
-owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的）：四块一起设计、一波实现，开发分支都合到一个集成分支，最后统一跑一次 CI，三平台同一个版本 0.9.0 发布（`AGENTS.md`"2026-10-30 起"）。产品行为以 `requirements.md` 为准，本文只写做法、共享契约和切片。第 2 版第 14 节"待 owner 确认"的各条，owner 2026-10-31 都答了，答案已写进正文，第 14 节改成"owner 已定"表，没有还开着的产品选择；这一轮改了什么见第 18 节。第 1 版经三位审查者（安全、可行性、需求）审过，改了什么见第 17 节；`devices.draft1.md` 是第 1 版原文。2026-11-01 owner 又定：命令行只装服务端只在 Linux 上做，Mac、Windows 只用安装包装全部软件；I2b、I4a、I4b 取消，改了什么见第 19 节，和前面各节、第 17、18 节的记录冲突时以第 19 节为准。
+owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的）：四块一起设计、一波实现，开发分支都合到一个集成分支，最后统一跑一次 CI，三平台同一个版本 0.9.0 发布（`AGENTS.md`"2026-10-30 起"）。产品行为以 `requirements.md` 为准，本文只写做法、共享契约和切片。第 2 版第 14 节"待 owner 确认"的各条，owner 2026-10-31 都答了，答案已写进正文，第 14 节改成"owner 已定"表，没有还开着的产品选择；这一轮改了什么见第 18 节。第 1 版经三位审查者（安全、可行性、需求）审过，改了什么见第 17 节；`devices.draft1.md` 是第 1 版原文。2026-11-01 owner 又定：命令行只装服务端只在 Linux 上做，Mac、Windows 只用安装包装全部软件；I2b、I4a、I4b 取消，改了什么见第 19 节，和前面各节、第 17、18 节的记录冲突时以第 19 节为准。2026-11-02 owner 还定了：远程只开一个地址，去掉 `--tailscale`，不做自定义地址和内网穿透，组网工具的地址单独标"组网"（A1 `remote-single-address`），见第 21 节，和前面冲突时以第 21 节为准。
 
 调研基线：`origin/dev` 32f0d521。路径前缀：`P/` = `packages/protocol/src/`，`D/` = `packages/daemon/src/`，`CL/` = `packages/client/src/`，`DT/` = `packages/desktop/src/`，`U/` = `packages/ui/src/`。行号按 32f0d521，漂了按函数名找。"未核实"是没在代码或实机上确认过的判断。正文引用的调研笔记（远程就绪、安装升级、Paseo、Orca/Tailscale/中继、服务端和命令行清单、功能对照表 156 行及其复核）是英文原文，没进仓库；和本文冲突时以本文为准。
 
@@ -83,15 +83,15 @@ owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的
 ### 4.2 监听模型
 
 - **loopback 永远开着**，端口和今天一样（随机或服务里钉死的，`D/server/http.ts:206,211`），`daemon.pid` 的 `listen` 字段不变。所有 `^127\.0\.0\.1:` 的检查（`vonvon-remote-readiness.md` 第 2 节列了 14 处）照旧，不动。
-- **远程监听**是**另外几个** `http.Server`（`D/server/remote-listeners.ts`），只绑用户明确开启的地址，端口固定（`remote.port`，默认 7767，写进配对链接，所以不能随机；撞端口用 `vonvon remote port <n>` 改，改完要重新生成连接链接）。owner 2026-10-31 问过会不会和 Paseo、Orca 冲突：Paseo 默认 6767，Orca 移动端直连默认 6768（stablyai/orca `mobile/src/transport/host-endpoint.ts`），vonvon 的 loopback 端口随机，都不冲突；owner 确认用 7767。配置在 `<dataRoot>/remote.json`：`{ v: 1, port, addresses: [{ host, enabledAt, kind, iface?, network? }] }`。开启、关闭都在运行中生效（起、停一个 server），不要求重启。
+- **远程监听**是**另外一个** `http.Server`（`D/server/remote-listeners.ts`），只绑用户明确开启的**那一个**地址（A1，owner 2026-11-02：只开一个；再开一个就换掉原来的，原来的马上停止监听、连接 4006），端口固定（`remote.port`，默认 7767，写进配对链接，所以不能随机；撞端口用 `vonvon remote port <n>` 改，改完要重新生成连接链接）。owner 2026-10-31 问过会不会和 Paseo、Orca 冲突：Paseo 默认 6767，Orca 移动端直连默认 6768（stablyai/orca `mobile/src/transport/host-endpoint.ts`），vonvon 的 loopback 端口随机，都不冲突；owner 确认用 7767。配置在 `<dataRoot>/remote.json`：`{ v: 1, port, addresses: [{ host, enabledAt, kind, iface?, network? }] }`（A1 起 `addresses` 最多一项，保留数组形状；A1 之前写的多项读成最后开的那一项）。开启、关闭都在运行中生效（起、停一个 server），不要求重启。
   - 远程 server **用自己的请求处理器**，只有 `GET /health`（回 `{ ok: true, protocolVersion }`，不回设备 id、版本、名字）和 WS 升级；不复用 `serveWebUi`（今天 `http.ts:136-143` 的处理器就是它），不提供静态页面。
   - **生命周期**（LISTEN-1）：`beginDrain` 时停止绑定重试、停止接受新连接（2026-11-02 D3 审查后改：排空时远程监听继续开，和本机一样接新连接、只答排空白名单，见 4.7；只停绑定重试和地址巡检）；`release` 时关掉所有远程 server 并等它们关完（今天 `release()` 只关 `acquiredServer`，`http.ts:97-114`）。`createSocketServer`（`ws.ts:22`）改成支持多个 server，每个 server 带自己的 Host/Origin/身份规则。测试：有待执行的重试时排空，进程能退出（systemd 的 `TimeoutStopSec=infinity` 会把退不掉的进程一直挂着）。
-- **地址分类**（照 Orca，`orca-tailscale-relay.md` §A、第四轮）：`loopback`（127/8、::1）、`tailscale`、`lan`（10/8、172.16/12、192.168/16、169.254/16、fc00::/7、fe80::/10）、`cgnat`（100.64.0.0/10 但不在 Tailscale 网卡上，见下）、`public`（其余）。只接受**字面 IP**，不接受主机名（Orca 的理由：DNS 决定绑到哪块网卡）。`public` 和 `cgnat` 要显式确认：CLI `--allow-public`，桌面端一个带风险说明的确认框（第 15 节）。`0.0.0.0`/`::` 按 `public` 处理（2026-11-02 D3 审查后改：本期开启时直接拒绝，链路本地 IPv6 `fe80::/10` 也拒，见 D3 计划第 11 节第 16 条）。
-- **Tailscale 识别**（SEC-8：100.64/10 也是运营商 CGNAT 段，大陆 PPPoE 拨号、云厂商内网都会拿到，只按段认会把 daemon 绑到运营商广域网上）：一个地址算 `tailscale`，要么 `fd7a:115c:a1e0::/48`（只看段），要么是 100.64/10 **且**满足其一：`tailscale ip -4` 输出里有它（macOS 的 `utun*`、Windows 以它为准）；或在名字不区分大小写以 `tailscale` 开头的网卡上（Linux 的 `tailscale0`、Windows 的 `Tailscale`；D3 计划 4.3，2026-11-01 按 U3 计划改）。`vonvon remote enable --tailscale` 和桌面端"用 Tailscale 地址"按钮都用同一个 `D/remote/tailscale.ts`：先调 `tailscale ip -4`（5 秒超时，命令不存在就算没装），再在网卡里核对；没有 `tailscale` 命令就只认 `tailscale0` 网卡上的 100.x。都不满足的 100.64/10 归 `cgnat`。不做 Tailscale 身份（whois）校验，不做 `tailscale serve`。
+- **地址分类**（照 Orca，`orca-tailscale-relay.md` §A、第四轮）：`loopback`（127/8、::1）、`tailscale`、`overlay`（组网，A1：Tailscale 以外的组网工具的虚拟网卡上的私有地址，以及网卡名认得出工具的 100.64/10 地址；按网卡名认，认不出就按下面的段分）、`lan`（10/8、172.16/12、192.168/16、169.254/16、fc00::/7、fe80::/10）、`cgnat`（100.64.0.0/10 但不在 Tailscale 或认得出的组网工具网卡上，见下）、`public`（其余）。只接受**字面 IP**，不接受主机名（Orca 的理由：DNS 决定绑到哪块网卡）。`public` 和 `cgnat` 要显式确认：CLI `--allow-public`，桌面端一个带风险说明的确认框（第 15 节）。`0.0.0.0`/`::` 按 `public` 处理（2026-11-02 D3 审查后改：本期开启时直接拒绝，链路本地 IPv6 `fe80::/10` 也拒，见 D3 计划第 11 节第 16 条）。
+- **Tailscale 识别**（SEC-8：100.64/10 也是运营商 CGNAT 段，大陆 PPPoE 拨号、云厂商内网都会拿到，只按段认会把 daemon 绑到运营商广域网上）：一个地址算 `tailscale`，要么 `fd7a:115c:a1e0::/48`（只看段），要么是 100.64/10 **且**满足其一：`tailscale ip -4` 输出里有它（macOS 的 `utun*`、Windows 以它为准）；或在名字不区分大小写以 `tailscale` 开头的网卡上（Linux 的 `tailscale0`、Windows 的 `Tailscale`；D3 计划 4.3，2026-11-01 按 U3 计划改）。列候选地址（`vonvon remote candidates`、`vonvon remote enable` 在终端里的选择列表、桌面端的地址列表）都用同一个 `D/remote/tailscale.ts` 认 Tailscale 地址、标"推荐"（A1 去掉了 `--tailscale` 和"用 Tailscale 地址"按钮，不绑死 Tailscale）：先调 `tailscale ip -4`（5 秒超时，命令不存在就算没装），再在网卡里核对；没有 `tailscale` 命令就只认 `tailscale0` 网卡上的 100.x。都不满足的 100.64/10 归 `cgnat`。不做 Tailscale 身份（whois）校验，不做 `tailscale serve`。
 - **地址还没出现**（开机时 tailscaled 还没登录）：绑定失败不算错，daemon 每 15 秒重试，状态里写"等待地址 100.x.y.z 出现"；地址消失（`EADDRNOTAVAIL`）同样回到等待。桌面端和 `vonvon remote status` 都能看到。
-- **`lan` 地址换了网络不自动重绑**（SEC-8 场景 2：笔记本在咖啡馆拿到和家里一样的 192.168.1.23）：开启 `lan` 地址时记下网卡名和网络标识（默认网关的 MAC；拿不到就只记网卡名，各平台能否拿到 MAC 未核实），重试绑定前核对，不一致进入"需要确认"状态，桌面端和 `remote status` 显示"网络变了，确认后再开"。`tailscale` 地址不做这项检查（地址由 tailnet 分配，不随物理网络变）。
+- **`lan` 地址换了网络不自动重绑**（SEC-8 场景 2：笔记本在咖啡馆拿到和家里一样的 192.168.1.23）：开启 `lan` 地址时记下网卡名和网络标识（默认网关的 MAC；拿不到就只记网卡名，各平台能否拿到 MAC 未核实），重试绑定前核对，不一致进入"需要确认"状态，桌面端和 `remote status` 显示"网络变了，确认后再开"。`tailscale` 地址不做这项检查（地址由 tailnet 分配，不随物理网络变）。`overlay` 地址不比网卡名和网关，只看它还在不在组网工具的网卡上（macOS 的 utun、feth 编号重启后会变，比名字会每次都误报"网络变了"）；跑到普通网卡上（别的网络分到了同一个地址）才进"需要确认"（A1）。
 - **Host / Origin / DNS 重绑**：loopback 监听照旧（Host 必须 loopback，Origin 没有或 loopback，`D/server/ws.ts:13-20,31`）。远程监听：Host 必须等于某个已开启的地址（`ip[:port]`，IPv6 带方括号），否则 403；**Origin 必须不存在**，有 Origin 一律 403，因为本期浏览器不远程连。这就把跨站 WebSocket 劫持和 DNS 重绑整个挡在门外。
-- 连不上时客户端按对方地址的分类给提示：`tailscale` 给 `tailscale ping` 和"两台都登录同一个 tailnet"；`lan` 给"在同一个局域网"；`public` 给"确认防火墙放行 7767"。文案见第 15 节。
+- 连不上时客户端按对方地址的分类给提示：`tailscale` 给 `tailscale ping` 和"两台都登录同一个 tailnet"；`overlay` 给"两台都在同一个组网里"和 `ping`；`lan` 给"在同一个局域网"；`public` 给"确认防火墙放行 7767"。文案见第 15 节。
 
 ### 4.3 配对链接、邀请和授权
 
@@ -100,7 +100,7 @@ owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的
 ```ts
 { v: 1,
   device: { id: string /* deviceId */, name: string, pk: string /* X25519 公钥 base64url */ },
-  addresses: Array<{ host: string; port: number; kind: 'tailscale' | 'lan' | 'cgnat' | 'public' }>,  // 生成时已开启的远程地址，可多条
+  addresses: Array<{ host: string; port: number; kind: 'tailscale' | 'overlay' | 'lan' | 'cgnat' | 'public' }>,  // 生成时已开启的远程地址（A1 起只有一条，保留数组）
   invite: { id: string, secret: string /* 32 字节 base64url */, expiresAt: number /* epoch ms */ },
   relay: null,    // 预留：以后 { endpoint, hostId, inviteToken }
   account: null } // 预留：以后 { accountId }
@@ -244,7 +244,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 ### 6.2 被连的那一侧（桌面端里管自己这台设备）
 
 设置 →"应用与启动"加一组"允许别的设备连接"：
-- 开关 + 地址列表：列出本机非 loopback 地址并标分类（`tailscale` 推荐、`lan`、`cgnat`/`public` 需确认），勾选即 `device.enable`；右边显示状态（监听中 / 等待地址 / 网络变了需确认）。
+- 地址：列出本机能用的地址并标分类（`tailscale` 推荐、`overlay` 组网、`lan`、`cgnat`/`public` 需确认），**单选**，选一个即 `device.enable`，换一个就换掉原来的（A1：只开一个；虚拟网桥、代理软件的虚拟地址默认不列，和 `vonvon remote candidates` 同一套）；右边显示状态（监听中 / 等待地址 / 网络变了需确认）。
 - "生成连接链接"按钮：`device.pair` → 显示可复制的链接，倒计时 10 分钟，"再生成一个"。不显示二维码。
 - "已配对的客户端"：名字、类型、最近连接时间和地址、由谁带进来、最近 24 小时新配对的标出来，"改名""撤销"（带"连它带进来的一起撤销"）。撤销有确认框（第 15 节）。
 - 新客户端配对成功时弹一条提示（4.3）。
@@ -422,7 +422,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 提纲：
 1. 这是什么：一台设备上的 Vonvon Bot，用别的电脑上的 Vonvon Bot 桌面端来管。什么时候需要（服务器上 24 小时跑、代码在服务器上、几台电脑、团队共用）。
 2. 装：**Mac、Windows 下载桌面端安装包**（https://vonvon.cc/get/），它自带服务端，装好打开就是一台能被连的设备，不用命令行；**Linux 一行命令只装服务端**（`curl … | sh`），装完 `vonvon --version`；在 Mac 上跑这条命令只会提示去下载安装包（owner 2026-11-01）。Linux 一段写：**不要用 root 装**（为什么、怎么建普通用户）；只支持 glibc 发行版（Alpine 等 musl 不支持）；首次安装的信任根是 HTTPS 和 dl.vonvon.cc；装完会自动开 linger，退出登录也照常跑。**Mac、Windows 当设备要保持这个用户登录着**（可以锁屏；重启后要有人登录一次）：Mac 打开"登录时启动"；Windows 这一批不做登录自启，要 Vonvon Bot 开着。
-3. 让它能被连上：先把两台设备放进同一个安全网络——推荐 Tailscale（装、登录、`tailscale ip -4`；大陆用户可能延迟高，也可以用局域网）；然后 Linux 上 `vonvon remote enable --tailscale`（或 `vonvon remote enable <ip>`），Mac、Windows 在桌面端设置 →"应用与启动"→"允许别的设备连接"里勾选地址；公网地址的风险和为什么不建议；100.x 地址不一定是 Tailscale（运营商 CGNAT）。
+3. 让它能被连上：先把两台设备放进同一个安全网络——推荐 Tailscale（装、登录、`tailscale ip -4`；大陆用户可能延迟高，也可以用局域网）；然后 Linux 上 运行 `vonvon remote enable` 从列出的地址里选一个（脚本里 `vonvon remote enable <ip>`，Tailscale 用户可以写 `vonvon remote enable "$(tailscale ip -4)"`；蒲公英、ZeroTier、EasyTier 这类组网工具选它的虚拟地址；只能开一个，再开一个就换掉原来的，已配对的设备粘一次新链接更新地址），Mac、Windows 在桌面端设置 →"应用与启动"→"允许别的设备连接"里选一个地址；公网地址的风险和为什么不建议；100.x 地址不一定是 Tailscale（运营商 CGNAT）。
 4. 配对：Linux 上 `vonvon pair` 拿链接，Mac、Windows 在桌面端点"生成连接链接"；客户端设置 → 设备 → 添加 → 粘贴 → 起名；链接 10 分钟有效、只用一次；一台客户端一条；链接会进你的 Agent 的对话记录；配对成功后被连的那台会提示，不是你就撤销。
 5. 切换和日常：切换设备、"在 <设备> 上把 Codex 配置好"是什么意思、选目录选的是那台设备的、托管安装装在那台设备上。
 6. 撤销和改名：在被连的那台设备上（桌面端"允许别的设备连接"或 `vonvon clients ls/revoke`）；授权不会过期，不用的客户端要自己撤销；一台客户端电脑上装了完全访问档的 Bot，它配对过的设备都在同一个信任范围里；完全访问的群里，群成员能让 Bot 在这台设备上做任何事，包括改 vonvon 的设置，只给信任的群用。
@@ -460,7 +460,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 | 文件 | `<dataRoot>/device.json`、`clients.json`、`remote.json`（都 0600、都在 `ROOT_SECRETS`）；Linux 安装根 `releases/<v>/standalone.json`、`current`（symlink）、`bin/vonvon` |
 | 桌面端 | `DT/device-registry.ts`（safeStorage，每设备一对密钥）、`DT/connections.ts`（多设备连接管理）、`ipc-contract.ts` 加 `desktopShellRequestSchema`（接管 `startHost`、`service`、`repairCli` 的形状）、`desktop:devices:*`、`desktop:client:device`；`client-context.tsx` 加 `activeDevice`、`isRemote`；`quit-daemon.ts` 按来历决定停不停（7.4，另外注册成后台服务、不是自带的不停）；`DT/remote-self-update.ts`（收 `desktopUpdateRequest`、驱动 `DesktopUpdater` / `WindowsDesktopUpdater`、回 `desktopUpdateReport`、远程触发时不弹本机确认框、给不拦人的提示，U4） |
 | UI | `U/settings/DevicesPanel.tsx`（客户端侧）、`U/settings/RemoteAccessPanel.tsx`（被连侧）、`U/device-switcher.tsx`、`U/management/UpdatePanel.tsx` 改门控（`bundled` 的按钮和"要开着桌面端"归 U4）、6.4 列的"登录"文案、执行权限选完全访问时的群警示（`SettingsPanel.tsx:1058` 一带和建群/拉进新群对话框，U2） |
-| 终端 | `vonvon remote enable <ip>|--tailscale [--allow-public] / disable <ip> / status / port <n>`、`vonvon pair [--ttl]`、`vonvon clients ls|rename|revoke [--cascade]`、`vonvon device rename <name>`、`vonvon update [--check] [--allow-downgrade --to <v>]`、全局 `--scope`、`--json`；第 8.2 节的新子命令 |
+| 终端 | `vonvon remote enable [<ip>] [--allow-public] / candidates [--all] / disable [<ip>] / status / port <n>`、`vonvon pair [--ttl]`、`vonvon clients ls|rename|revoke [--cascade]`、`vonvon device rename <name>`、`vonvon update [--check] [--allow-downgrade --to <v>]`、全局 `--scope`、`--json`；第 8.2 节的新子命令 |
 | CDN | `bot/server/<version>/vonvon-server-<version>-linux-{x64,arm64}.tar.gz`、`bot/server/<version>/manifest.json`（未签名文件表）、`bot/server/stable/manifest.json`（签名，含 product/channel）、`bot/server/install.sh`、`bot/server/uninstall.sh` |
 | 脚本 | `scripts/build-server.mjs`、`scripts/publish-server.mjs`、`scripts/install.sh`、`scripts/uninstall.sh` |
 | 诊断事件 | `remote-bind-waiting`、`remote-bind-failed`、`remote-network-changed`、`pairing-refused`、`client-paired`、`client-revoked`、`handshake-rejected`、`rate-limited`、`update-standalone-{downloaded,swapped,rolled-back}`、`update-bundled-{requested,no-desktop,reported}` |
@@ -545,14 +545,18 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 哪里 | 文字 |
 |---|---|
 | `vonvon pair` 输出 | 把下面这条链接粘到另一台电脑的 Vonvon Bot → 设置 → 设备 → 添加。10 分钟内有效，只能用一次，别发给别人；如果是让 AI 替你运行的，它的对话记录里会留着这条链接。\n`vonvon://pair#…` |
-| 没开远程时 `pair` | 这台设备还没允许别的设备连接。先运行 `vonvon remote enable --tailscale`（推荐）或 `vonvon remote enable <这台设备的 IP>`。 |
+| 没开远程时 `pair` | 这台设备还没允许别的设备连接。先在终端里运行 `vonvon remote enable`，选一个别的设备能连到的地址。 |
 | daemon 没跑时 `pair` | 后台服务没在运行，连接链接要由它生成。先运行 `vonvon daemon start`。 |
 | `remote enable` 成功 | 已在 100.x.y.z:7767 接受连接（Tailscale 地址）。只有配对过的客户端能连上，接下来运行 `vonvon pair` 生成连接链接。 |
-| Tailscale 提示（没装或没地址） | 推荐用 Tailscale 这类安全网络把两台设备连起来：两边都装上并登录同一个账号，然后用 `tailscale ip -4` 看到的 100.x 地址运行 `vonvon remote enable`。不用 Tailscale 也可以：局域网内用这台设备的局域网地址。 |
-| 100.x 但不是 Tailscale | 100.x.y.z 不在 Tailscale 的网卡上，可能是运营商分配的地址（CGNAT），开启后同一运营商的其他用户也可能连到这台设备。确定要开启请加 `--allow-public`。 |
+| `remote enable` 在终端里、没给地址（A1） | 别的设备用哪个地址连这台设备？只能开一个，已经开着别的会被换掉。\n  1) Tailscale（推荐）· 100.x.y.z  tailscale0\n  2) 组网 · ZeroTier · 10.147.17.5  zt…\n  3) 局域网 · 192.168.1.23  wlan0\n  4) 公网 · 203.0.113.9（要确认）  eth0\n选一个 [1]: |
+| `remote enable` 不在终端里、没给地址（A1，退出码 2） | 没给地址。别的设备能用这些地址连这台设备（只能开一个）：\n  Tailscale（推荐）· 100.x.y.z\n  局域网 · 192.168.1.23\n选一个运行，例如：vonvon remote enable 100.x.y.z |
+| 换了地址（A1） | 已把远程地址从 192.168.1.23 换成 100.x.y.z，192.168.1.23 不再接受连接，经它的连接已断开。（有已配对的设备时再加）已配对的 N 台设备要换到新地址：运行 `vonvon pair` 生成连接链接，粘到那台电脑的 Vonvon Bot → 设置 → 设备 → 添加，只会更新地址，不用重新配对。 |
+| 组网地址跑到了普通网卡上（A1） | 10.147.17.5 现在不在组网工具的网卡上了（可能是别的网络分到了同一个地址）。确认现在的网络是你信任的，再重新开启。 |
+| Tailscale 提示（没找到能用的地址） | 推荐用 Tailscale 这类组网工具把两台设备连起来：两边都装上、登录同一个账号，再运行 `vonvon remote enable` 选它的地址。不用组网工具也可以：两台在同一个局域网里时，选局域网地址。 |
+| 100.x 但不是 Tailscale | 100.x.y.z 不在 Tailscale 或别的组网工具的网卡上，可能是运营商分配的地址（CGNAT），开启后同一运营商的其他用户也可能连到这台设备。确定要开启请加 `--allow-public`。 |
 | 公网地址警告（CLI 和桌面端） | 这是公网地址。开启后互联网上任何人都能尝试连接这台设备；虽然只有配对过的客户端能连上、内容加密，但你的服务端会直接暴露在扫描和攻击之下。建议改用 Tailscale 或局域网地址。确定要开启请加 `--allow-public`（桌面端：勾选"我了解风险"）。 |
 | 局域网换了 | 这台设备所在的网络变了（之前在另一个局域网开启了 192.168.x.x）。确认现在的网络是你信任的，再重新开启。 |
-| 客户端连不上（按分类） | tailscale：连不上 <设备>（100.x）。两台设备都登录了同一个 Tailscale 账号吗？在这台电脑上运行 `tailscale ping <那台的地址>` 看看。/ lan：连不上 <设备>（192.168.x）。两台设备在同一个局域网里吗？那台设备开着吗？/ cgnat：连不上 <设备>（100.x）。这是运营商分配的地址，一般从外面连不进去，建议两台都装上 Tailscale。/ public：连不上 <设备>（x.x.x.x）。那台设备的防火墙放行了 <端口> 端口吗？（2026-11-01 U1b：`tailscale ping` 改在这台电脑上对那台的地址跑，客户端知道对面的地址、不一定知道自己的；加 cgnat；客户端一侧的完整文案见 `devices-ui-1b-devices-page.md` 4.9） |
+| 客户端连不上（按分类） | tailscale：连不上 <设备>（100.x）。两台设备都登录了同一个 Tailscale 账号吗？在这台电脑上运行 `tailscale ping <那台的地址>` 看看。/ overlay：连不上 <设备>（10.x）。两台设备都连在同一个组网（ZeroTier、蒲公英这类工具）里吗？先在这台电脑上 ping 10.x 看看通不通。/ lan：连不上 <设备>（192.168.x）。两台设备在同一个局域网里吗？那台设备开着吗？/ cgnat：连不上 <设备>（100.x）。这是运营商分配的地址，一般从外面连不进去，建议两台都装上 Tailscale。/ public：连不上 <设备>（x.x.x.x）。那台设备的防火墙放行了 <端口> 端口吗？（2026-11-01 U1b：`tailscale ping` 改在这台电脑上对那台的地址跑，客户端知道对面的地址、不一定知道自己的；加 cgnat；客户端一侧的完整文案见 `devices-ui-1b-devices-page.md` 4.9） |
 | 链接已被用掉 | 这条链接已经被用掉了。如果不是你用的，请马上到 <设备> 上撤销它：在那台设备的「允许别的设备连接」里，或者运行 `vonvon clients ls` 查看最近配对的设备、`vonvon clients revoke <id>` 撤销。然后生成一条新链接。（2026-11-01 U1b：客户端此时还没配上，看不到对面的客户端列表，所以不列"最近配对的"，改为指过去看） |
 | 新客户端配对成功（被连的桌面端） | 新设备「X」（<类型>，来自 <地址>）已经配对，可以管理这台电脑的 Vonvon Bot。不是你操作的？到「允许别的设备连接」撤销。 |
 | 设备身份变了 | <设备> 的身份和配对时不一样了（可能重装过，或换了数据目录）。为安全起见已断开。确认是你自己的设备后，重新配对。 |
@@ -735,3 +739,19 @@ owner 原话："Mac 和 Windows 上就直接通过安装包安装全部软件就
 | 文案（第 15 节） | 去掉 Windows、Mac 的"已装过"、"保持登录"、Mac 无图形登录几条；加安装脚本"在 Mac 上""不是 Linux"和卸载脚本"在 Mac 上""不是 Linux"；这几句和 `install.sh`、`uninstall.sh` 打印的逐字一样，`install.test.mjs` 按全文核对；下载地址是 https://vonvon.cc/get/（新版本只认 vonvon.cc，bot.vonvon.cc 只为 0.7.0 留着 301，`v1-plan.md` 第 10 节） |
 | 风险（第 16 节） | 第 4 条换成 Windows 桌面端锁屏时在不在线；第 6 条去掉只 SSH 的 Mac；第 9 条作废；第 11 条去掉 Windows 的 `node.exe` 占用 |
 | 别的文档 | `product.md` 第 1 节、3.1、3.10、3.14、第 7 到 10 节（第 11 节记了这次的问答）和 `architecture.md` 的服务管理、维护子集、共存、"服务端独立安装和升级""在哪些系统上能跑"按上面改；`server-1/2/3/5` 的计划在文首说明；`devices-3-remote-listen.md` 里"I4a 后由 Windows Codex 顺带验 `remote enable --tailscale`"改成在 Windows 的验收任务里看桌面端认不认 Tailscale 地址；`devices-1-identity.md` 里 `platform` 那句和 `server-4a` 文首写明 Windows 的平台名归 U2 |
+
+## 21. owner 2026-11-02 的改动：远程只开一个地址，不绑 Tailscale（A1 `remote-single-address`）
+
+owner 2026-11-02 定：远程连接的体验和能力和 Orca、Paseo 差不多或稍好就行，以后主打账号中继；**不做自定义地址和内网穿透**。Tailscale 只是建议，不绑死：去掉 `--tailscale`；不让用户填网卡名（用户没有这个概念）；**只开一个地址**。调研见 `addr-selection-research.md`（Orca、Paseo 怎么选地址、候选怎么过滤）和 `tunnel-design.md` 第 2 节"组网类"（隧道部分不做）。计划在仓库的 `docs/plans/remote-single-address.md`。和前面各节冲突时以本节为准。
+
+| 项 | 改成 |
+|---|---|
+| 开几个地址（4.2） | 一个。`remote.json` 的 `addresses` 和 `device.status` 的 `remote.addresses` 保留数组形状，最多一项。再开一个就换掉原来的：原来的马上停止监听，经它的连接 4006。A1 之前写了多项的文件读成最后开的那一项 |
+| 已配对的设备怎么跟着换 | 沿用 U1 的"地址变了"：在这台运行 `vonvon pair` 生成链接，粘到那台的"添加设备"，只更新它记的地址（新的排前面、旧的留后面），不用掉邀请、不用重新配对。`remote enable` 换了地址、又有已配对的设备时，输出里写这一步；客户端收到 4006 的文案也说"可能换了地址"。连着的客户端自动跟到新地址（换之前先推一条"新地址"）这一批不做 |
+| `vonvon remote enable` | `enable [<ip>] [--allow-public]`。不给地址、在终端里：列出候选让人选（编号，回车选第一个；也能直接打 IP），选到运营商地址、公网地址再问一次风险。不给地址、不在终端里（或 `--json`）：退出码 2，报错里列出候选和示例命令 `vonvon remote enable 100.x.y.z`，`--json` 的 `partial.candidates` 带候选。命令行里写了地址的照旧：公网和运营商地址要 `--allow-public`，不在终端里问 |
+| `vonvon remote candidates [--all] [--json]`（新） | 和终端里的选择列表同一套：本机网卡上非回环的 IPv4，IPv6 只列 Tailscale 段；排序 Tailscale、组网、局域网、运营商、公网。默认不列虚拟网桥（docker、br-、virbr、vmnet、vboxnet、veth、lxcbr/lxdbr/incusbr、podman、cni、flannel、macOS 的 bridge100 起、Windows 的 Hyper-V Default Switch、WSL、DockerNAT、VMware、VirtualBox 的 Host-Only）、代理软件的 fake-IP（198.18.0.0/15）和 169.254 自动分配的地址，`--all` 才列。只读本机网卡，不经 daemon；`tailscale ip` 只在有 100.64/10 地址、又没有网卡名说明是 Tailscale 时才跑 |
+| `vonvon remote disable [<ip>]` | 不给地址就关掉开着的那个 |
+| 组网（新分类 `overlay`） | Tailscale 以外的组网工具，按网卡名认：ZeroTier（`zt…`、macOS 的 `feth…`、Windows 的 `ZeroTier One […]`）、NetBird（`wt0`）、EasyTier（Windows 的 `et_0`）、蒲公英（`oray…`/`pgy…`，没在真机上核实）、Hamachi、WireGuard（`wg…`），另外 `tun0`、`utun3`、`tap0` 这类普通隧道算没有名字的组网。私有段的地址在这些网卡上就是组网；100.64/10 的只有网卡名认得出工具时才算组网，普通隧道上的照旧算运营商地址、要确认；公网段的地址在什么网卡上都算公网。认不出的照旧按段分 |
+| 组网地址的"网络变了" | 不比网卡名、不比网关，只看它还在不在组网工具的网卡上（macOS 的 utun 编号重启后会变）；跑到普通网卡上进"需要确认"，文案"<地址> 现在不在组网工具的网卡上了（可能是别的网络分到了同一个地址）。确认现在的网络是你信任的，再重新开启。" |
+| 协议 | `addressKindSchema` 加 `overlay`（配对链接、设备状态、桌面端记的地址都跟着认）；`device.enable` 只收 `{ host, allowPublic? }`，`tailscale` 字段去掉。桌面端的地址标签加"组网"，连不上的提示加组网那句 |
+| 桌面端"允许别的设备连接"（U3，还没做） | 地址改成单选，候选和 `remote candidates` 同一套（U3 的 `createCandidates` 包一层 `D/remote/candidates.ts` 的 `listCandidates` 加缓存），不再有"用 Tailscale 地址"按钮。U3 计划文首记了要改的地方 |

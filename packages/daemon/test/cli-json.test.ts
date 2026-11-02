@@ -61,6 +61,8 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['remote', 'status'], 0], [['remote', 'enable', '203.0.113.5'], 4], [['remote', 'disable', '192.0.2.1'], 2], [['remote', 'port', '80'], 2],
   // Codex review 232-1, 234-2: a wildcard or a link-local IPv6 is a typing error, confirmed or not
   [['remote', 'enable', '0.0.0.0', '--allow-public'], 2], [['remote', 'enable', 'fe80::1%eth0'], 2],
+  // A1: no address and no terminal (and --json is none): the candidates and a command to copy; disable with nothing open
+  [['remote', 'enable'], 2], [['remote', 'disable'], 2], [['remote', 'candidates'], 0],
   [['update', '--to', 'latest'], 2],
   // argument errors from commander itself
   [['nope'], 2], [['bot', 'list', '--nope'], 2], [['group'], 2],

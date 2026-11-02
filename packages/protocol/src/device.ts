@@ -1,7 +1,9 @@
 import { z } from "zod";
 
-/** devices 4.2: what kind of network a remote address is on; only literal IPs, never host names. */
-export const addressKindSchema = z.enum(["loopback", "tailscale", "lan", "cgnat", "public"]);
+/** devices 4.2: what kind of network a remote address is on; only literal IPs, never host names. `overlay` (A1): a
+ * virtual network another tool than Tailscale makes (ZeroTier, 蒲公英, EasyTier, NetBird, WireGuard…), told by its
+ * interface: the people in that network reach it, not the LAN around the computer. */
+export const addressKindSchema = z.enum(["loopback", "tailscale", "overlay", "lan", "cgnat", "public"]);
 export type AddressKind = z.infer<typeof addressKindSchema>;
 /** `--scope bot=<appId>[,group=<chatId>]` (devices 5.3), sent in admin.negotiate. */
 export const scopeSchema = z.object({ bot: z.string().min(1), group: z.string().min(1).optional() }).strict();
@@ -63,6 +65,7 @@ export const remoteAddressStateSchema = z.enum(["listening", "waiting", "needs-c
 const deviceIdentitySchema = z.object({ id: z.string(), name: z.string(), publicKey: z.string() }).strict();
 export const deviceStatusSchema = z.object({
   device: deviceIdentitySchema,
+  /** addresses: the one address other devices reach this one on, or none (A1: one at a time; a list, so the shape stays). */
   remote: z.object({ port: z.number().int(), addresses: z.array(z.object({
     host: z.string(), kind: addressKindSchema, enabledAt: z.number().int(), state: remoteAddressStateSchema, detail: z.string().optional(),
   }).strict()) }).strict(),
@@ -71,8 +74,8 @@ export const deviceStatusSchema = z.object({
 export type DeviceStatus = z.infer<typeof deviceStatusSchema>;
 export const deviceRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("status") }).strict(),
-  /** exactly one of host and tailscale */
-  z.object({ type: z.literal("enable"), host: z.string().optional(), tailscale: z.boolean().optional(), allowPublic: z.boolean().optional() }).strict(),
+  /** A1: the one address other devices reach this one on; another one replaces it, and the old one stops listening. */
+  z.object({ type: z.literal("enable"), host: z.string(), allowPublic: z.boolean().optional() }).strict(),
   z.object({ type: z.literal("disable"), host: z.string() }).strict(),
   z.object({ type: z.literal("setPort"), port: z.number().int().min(1024).max(65535) }).strict(),
   z.object({ type: z.literal("pair"), ttlMs: z.number().int().min(60_000).max(600_000).optional() }).strict(),

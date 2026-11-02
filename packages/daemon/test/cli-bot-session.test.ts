@@ -141,7 +141,7 @@ describe('a Bot session\'s command line', () => {
     for (const [path, ...args] of [['daemon restart'], ['daemon start'], ['daemon stop'], ['service install'], ['service uninstall'], ['pair'], ['clients ls'],
       ['clients revoke', 'cl_0000000000000000'], ['device rename', 'x'], ['bot repair-dir', 'x'], ['open'],
       // D3: remote access is the owner's at this computer (devices 8.3), refused before it reads or writes remote.json
-      ['remote status'], ['remote enable', '192.168.1.10'], ['remote enable', '--tailscale'], ['remote disable', '192.168.1.10'], ['remote port', '7767'],
+      ['remote status'], ['remote enable', '192.168.1.10'], ['remote enable'], ['remote disable', '192.168.1.10'], ['remote port', '7767'], ['remote candidates'],
       // I3: update and its check, and the install scripts' switch of `current` (devices 8.3: exit 4 in a session)
       ['update'], ['update', '--check'], ['update', '--allow-downgrade', '--to', '0.0.1'],
       ['__standalone-setup', '--install-root', root, '--release', '0.0.1'], ['__standalone-teardown', '--install-root', root]] as Array<[string, ...string[]]>) {
