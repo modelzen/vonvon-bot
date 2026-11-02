@@ -10,12 +10,17 @@ import { PidLockError, readRunningPidLock } from '../server/pid-lock';
 
 /** Where a command prints; `json` switches stdout to one JSON line, `{ ok: true, … }`. The entry point formats failures for --json. */
 export type Io = { json: boolean; write(text: string): void };
-export type Call = <T>(what: string, run: (c: VonvonClient) => Promise<T>, o?: { feishu?: boolean; unknown?: string; ms?: number }) => Promise<T>;
+export type Call = <T>(what: string, run: (c: VonvonClient) => Promise<T>, o?: { feishu?: boolean; provider?: boolean; unknown?: string; ms?: number }) => Promise<T>;
 /** One connection for the whole command; s47 passes its own connector through `withDaemon`. `info`: the daemon's server info, when the connector has it. */
 export type Daemon = <T>(fn: (call: Call, info?: ServerInfo) => Promise<T>) => Promise<T>;
 export type DaemonConnection = { client: VonvonClient; serverInfo: ServerInfo };
-/** Feishu calls get longer than the supervisor's 60 s IPC timeout, so the daemon's own error arrives first. */
-export const TIMEOUTS = { local: 30_000, feishu: 75_000 };
+/**
+ * Feishu calls get longer than the supervisor's 60 s IPC timeout, so the daemon's own error arrives first. `provider`:
+ * a call that may start a Provider (a bot's settings read, save, action or model list, or the daemon's Provider list)
+ * waits past the 120 s admin/ipc.ts adminIpcTimeout gives those, for the same reason.
+ */
+export const TIMEOUTS = { local: 30_000, feishu: 75_000, provider: 125_000 };
+type Timeouts = { local: number; feishu: number; provider?: number };
 /** How long a command cut short by Ctrl-C waits for the connection's close handshake. */
 const CLOSE_AFTER_INTERRUPT = 200;
 
@@ -145,12 +150,12 @@ function printableError(error: unknown): unknown {
  * with `--scope`, the first request is admin.negotiate (devices 5.3): a scope the daemon refuses ends the command
  * with the daemon's words.
  */
-export async function withDaemon<T>(fn: (call: Call, info?: ServerInfo) => Promise<T>, connect: () => Promise<VonvonClient | DaemonConnection> = () => connectLocalDaemon(), timeouts = TIMEOUTS): Promise<T> {
+export async function withDaemon<T>(fn: (call: Call, info?: ServerInfo) => Promise<T>, connect: () => Promise<VonvonClient | DaemonConnection> = () => connectLocalDaemon(), timeouts: Timeouts = TIMEOUTS): Promise<T> {
   const connected = await connect();
   const { client, serverInfo } = 'serverInfo' in connected ? connected : { client: connected, serverInfo: undefined };
   const checked = checkRequests(client);
   const call: Call = async (what, run, o = {}) => {
-    const ms = o.ms ?? (o.feishu ? timeouts.feishu : timeouts.local);
+    const ms = o.ms ?? (o.provider ? timeouts.provider ?? TIMEOUTS.provider : o.feishu ? timeouts.feishu : timeouts.local);
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new CallTimeout()), ms); });
     // race keeps a handler on the losing call, so its late "connection closed" from close() is handled.

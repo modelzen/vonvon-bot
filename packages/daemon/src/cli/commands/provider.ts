@@ -12,7 +12,7 @@ export async function runProviderModels(name: string, io: Io, daemon: Daemon = w
   if (!backend) throw badArgs(`Provider 写 codex 或 claude，不认识「${name}」。`);
   // the daemon starts the Provider to ask it, which can outlast the local wait. Without --refresh the daemon may answer
   // with the list it last read, as the web page's Provider list does; --refresh asks the Provider again (its 刷新).
-  const reply = await daemon(call => call('读取模型列表', c => c.collaboration({ action: 'providerModels', backend, ...(refresh ? { refresh: true } : {}) }), { feishu: true }));
+  const reply = await daemon(call => call('读取模型列表', c => c.collaboration({ action: 'providerModels', backend, ...(refresh ? { refresh: true } : {}) }), { provider: true }));
   if (reply.kind === 'refused') throw new CommandError('refused', reply.message, { reason: reply.code });
   if (reply.kind !== 'providerModels') throw new CommandError('failed', `读取模型列表没有完成：daemon 回了意外的结果（${reply.kind}）。`);
   if (reply.state === 'unavailable') throw new CommandError('refused', `读不到 ${toolLabel(backend)} 的模型列表${reply.message ? `：${reply.message}` : '。'}`, { reason: 'models_unavailable' });
