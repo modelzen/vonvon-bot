@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { managedCommand, managedToolCommand, terminalCommand, toolCommand } from '../src/environment/tool-command';
+import { managedCommand, managedToolCommand, stableNode, terminalCommand, toolCommand } from '../src/environment/tool-command';
 
 // 0.9.0 Linux acceptance (task 287): a managed Codex or Claude is on no PATH, yet `vonvon env scan` said 在终端里运行 codex.
 describe.skipIf(process.platform === 'win32')('what a terminal types to start a managed copy', () => {
@@ -39,8 +39,17 @@ describe.skipIf(process.platform === 'win32')('what a terminal types to start a 
     writeFileSync(spaced, '#!/bin/sh\nexec node x\n', { mode: 0o755 });
     expect(terminalCommand(spaced, '/opt/node/bin/node', 'linux')).toBe(`'${data}/it'\\''s here/codex'`);
     expect(terminalCommand('C:\\Users\\Jo Ann\\.vonvon-bot\\managed-tools\\codex\\releases\\g\\codex.cmd', 'C:\\x\\node.exe', 'win32'))
-      .toBe('"C:\\Users\\Jo Ann\\.vonvon-bot\\managed-tools\\codex\\releases\\g\\codex.cmd"');
+      .toBe("& 'C:\\Users\\Jo Ann\\.vonvon-bot\\managed-tools\\codex\\releases\\g\\codex.cmd'");
+    expect(terminalCommand("C:\\Users\\O'Brien\\codex.cmd", 'C:\\x\\node.exe', 'win32')).toBe("& 'C:\\Users\\O''Brien\\codex.cmd'");
     expect(terminalCommand('C:\\Users\\jo\\codex.cmd', 'C:\\x\\node.exe', 'win32')).toBe('C:\\Users\\jo\\codex.cmd');
+  });
+
+  it('names a standalone server\'s Node through current/, which outlives the release it runs from', () => {
+    expect(stableNode('/srv/vonvon/releases/0.9.0/node/bin/node', '/srv/vonvon')).toBe('/srv/vonvon/current/node/bin/node');
+    expect(stableNode('/srv/vonvon/current/node/bin/node', '/srv/vonvon')).toBe('/srv/vonvon/current/node/bin/node');
+    expect(stableNode('/usr/bin/node', '/srv/vonvon')).toBe('/usr/bin/node');
+    expect(stableNode('/srv/vonvon/releases/0.9.0/app/node', '/srv/vonvon')).toBe('/srv/vonvon/releases/0.9.0/app/node');
+    expect(stableNode('/srv/vonvon/releases/0.9.0/node/bin/node', undefined)).toBe('/srv/vonvon/releases/0.9.0/node/bin/node');
   });
 
   it('names the managed copy in use, and only that: another install keeps the tool\'s name', () => {
