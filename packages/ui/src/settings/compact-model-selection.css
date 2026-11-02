@@ -11,10 +11,8 @@
 .gd-model-compact-notice { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin: 0 16px 8px; padding: 8px 12px; border-radius: 6px; background: var(--color-status-warning-bg); color: var(--color-status-warning); font-size: 12px; line-height: 1.5; }
 .gd-model-compact-note { margin: 0; padding: 10px 16px; border-top: 1px solid var(--color-separator); color: var(--color-text-secondary); font-size: 12px; line-height: 1.6; }
 /* Two compact summaries; permissions and defaults share each anchored menu. */
-.gd-model-selection-control { display:flex; align-items:center; justify-content:space-between; gap:14px; width:320px; max-width:100%; min-height:52px; padding:8px 11px; border:1px solid var(--color-border-strong); border-radius:8px; background:var(--color-surface); color:var(--color-text); font:inherit; text-align:left; cursor:pointer; }
-.gd-model-selection-copy { display:flex; flex-direction:column; gap:3px; min-width:0; }
-.gd-model-selection-copy strong { font-size:13px; font-weight:500; }
-.gd-model-selection-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--color-text-secondary); }
+.gd-model-selection-control { display:flex; align-items:center; justify-content:space-between; gap:14px; width:320px; max-width:100%; height:var(--control-height, 32px); padding:0 10px; border:1px solid var(--color-border-strong); border-radius:8px; background:var(--color-surface); color:var(--color-text); font:inherit; font-size:12px; text-align:left; cursor:pointer; }
+.gd-model-selection-copy { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .gd-model-selection-control > svg { flex:none; color:var(--color-text-tertiary); }
 .gd-model-selection-control[data-popup-open] { background:var(--color-surface-muted); }
 .gd-model-menu-positioner { z-index:60; outline:0; }

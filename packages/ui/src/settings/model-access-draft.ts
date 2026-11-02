@@ -6,6 +6,14 @@ export type EffortGroup = {key: string; models: CatalogModel[]; efforts: string[
 export const allowedEfforts = (value: ModelAccess, id: string) => value.modelEfforts?.[id] ?? value.efforts;
 const unique = (values: string[]) => [...new Set(values)];
 
+export function modelAccessDefault(value: ModelAccess, models: CatalogModel[]) {
+  const id = value.defaultModel ?? value.models[0];
+  const model = models.find(m => m.id === id && !m.hidden);
+  const supported = model?.supportedEfforts.filter(e => allowedEfforts(value, model.id).includes(e)) ?? [];
+  const effort = value.defaultEffort ?? supported.find(e => e === model?.defaultEffort) ?? supported[0];
+  return {id, model, effort};
+}
+
 /** Group by capabilities, never by provider/model name or the order of native options. */
 export function effortGroups(value: ModelAccess, models: CatalogModel[]): EffortGroup[] {
   const groups = new Map<string, EffortGroup>();
