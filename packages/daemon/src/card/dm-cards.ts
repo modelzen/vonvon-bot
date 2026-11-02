@@ -1,6 +1,6 @@
 import type { ResponseRoster } from '@vonvon/protocol';
 import { responseMemberLabel } from '../bot/response-members';
-import { getAppRoleSnapshot } from '../config/app-roles';
+import { getAppRoleSnapshot, trustedFeishuAdmins } from '../config/app-roles';
 import { voiceView, VOICE_TITLE, VOICE_DESCRIPTION, VOICE_NOTICE, VOICE_DOC_URL } from '../voice/view';
 import {
   COMPLETION_REMINDER_LONG_TASK_MAX_MINUTES,
@@ -1501,9 +1501,10 @@ function memberName(names: Map<string, string>, id: string): string {
  * 全局管理员名单卡（DM「⚙️ 设置 → 👮 管理员」）。**纯按钮卡**——绝不放 select：select
  * 一旦交互会锁 card_id（见 {@link buildSettingsCard} 注释）。加人走独立的表单卡
  * {@link buildAddAdminCard}。owner 行无移除按钮（owner 恒为 admin、不可删）。
- * `names` 由调用方用 contact.batch 预解析 open_id→姓名。
+ * `names` 由调用方用 contact.batch 预解析 open_id→姓名。`editable`：只有主人能加、移本机管理员
+ * （product.md 3.7），别的管理员看到的名单只读，没有增删按钮。
  */
-export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>): CardObject {
+export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>, opts: { editable: boolean }): CardObject {
   const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
   const owner = roles?.ownerOpenId;
   const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
@@ -1514,7 +1515,7 @@ export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>): Car
     seen.add(owner);
     elements.push(actions([md(`👑 **${memberName(names, owner)}** · 飞书应用拥有者`)]));
   }
-  for (const id of roles?.admins ?? []) {
+  for (const id of trustedFeishuAdmins(roles)) {
     if (seen.has(id)) continue;
     seen.add(id);
     elements.push(actions([md(`${memberName(names, id)} · 飞书应用管理员`)]));
@@ -1528,13 +1529,14 @@ export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>): Car
     if (seen.has(id)) continue;
     seen.add(id);
     extra++;
-    elements.push(actions([md(`${memberName(names, id)} · 本地管理员`), button('🗑 移除', { a: DM.rmAdmin, u: id }, 'danger')]));
+    const label = md(`${memberName(names, id)} · 本地管理员`);
+    elements.push(actions(opts.editable ? [label, button('🗑 移除', { a: DM.rmAdmin, u: id }, 'danger')] : [label]));
   }
   if (extra === 0) elements.push(note('暂无额外管理员。'));
   elements.push(
     hr(),
-    actions([button('➕ 添加管理员', { a: DM.addAdminForm }, 'primary'), button('⬅️ 设置', { a: DM.settings })]),
-    note('飞书应用拥有者和管理员请在飞书开放平台管理；扫码注册者不可移除。'),
+    actions(opts.editable ? [button('➕ 添加管理员', { a: DM.addAdminForm }, 'primary'), button('⬅️ 设置', { a: DM.settings })] : [button('⬅️ 设置', { a: DM.settings })]),
+    note(opts.editable ? '飞书应用拥有者和管理员请在飞书开放平台管理；扫码注册者不可移除。' : '本机管理员名单只有主人能改。飞书应用拥有者和管理员请在飞书开放平台管理。'),
   );
   return card(elements, { header: { title: '👮 管理员', template: 'blue' } });
 }
