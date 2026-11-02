@@ -2,12 +2,12 @@ import type { VonvonClient } from '@vonvon/client/browser';
 import {
   adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
   commandResultSchema, desktopSnapshotSchema, directoryReplySchema, memoryReplySchema, contextPreviewReplySchema,
-  environmentReplySchema, libraryReplySchema, logEventPayloadSchema, machineReplySchema, desktopUpdateSchema,
+  environmentReplySchema, libraryReplySchema, logEventPayloadSchema, machineReplySchema, desktopUpdateSchema, deviceReplySchema,
   scheduleReplySchema, settingsReplySchema,
   type BackendInstallEventPayload, type DesktopSnapshot, type DesktopUpdate, type LogEventPayload,
 } from '@vonvon/protocol';
 import {
-  desktopChannels, safeErrorCode, type DesktopShell,
+  desktopChannels, safeErrorCode, type DesktopShell, type DesktopShellRequest,
 } from './ipc-contract.js';
 
 export interface FacadeTransport {
@@ -187,6 +187,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
     directory: request => callClient(desktopChannels.directory, value => directoryReplySchema.parse(value), request),
     library: request => callClient(desktopChannels.library, value => libraryReplySchema.parse(value), request),
     schedule: (botId, request) => callClient(desktopChannels.schedule, value => scheduleReplySchema.parse(value), botId, request),
+    device: request => callClient(desktopChannels.device, value => deviceReplySchema.parse(value), request),
     onLog(listener) {
       if (!clientClosed) logs.add(listener);
       return () => { logs.delete(listener); };
@@ -230,9 +231,9 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
         if (!Array.isArray(paths) || paths.length > 64 || paths.some(path => typeof path !== 'string' || !path || path.includes('\0'))) throw new Error('Invalid desktop response');
         return paths as string[];
       })),
-    startHost: bot => transport.invoke(desktopChannels.startHost, { type: 'startHost', ...(bot === undefined ? {} : { bot }) })
+    startHost: bot => transport.invoke(desktopChannels.startHost, { type: 'startHost', ...(bot === undefined ? {} : { bot }) } satisfies DesktopShellRequest)
       .then(value => readResult(value, value => machineReplySchema.parse(value))),
-    service: action => transport.invoke(desktopChannels.service, { type: 'service', action })
+    service: action => transport.invoke(desktopChannels.service, { type: 'service', action } satisfies DesktopShellRequest)
       .then(value => readResult(value, value => machineReplySchema.parse(value))),
     setLoginItem: enabled => callShell(desktopChannels.setLoginItem, enabled),
     repairCli: () => transport.invoke(desktopChannels.repairCli)

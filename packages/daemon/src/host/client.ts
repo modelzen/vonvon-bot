@@ -87,7 +87,7 @@ export async function connectHost(input: HostOptions): Promise<HostHandle | Host
     }
     const ownership = child ? 'owned' : 'attached';
     const home = resolveDataRoot(options.home).path;
-    let client = await connectLocal({ home, cliEntry: options.cliPath });
+    let client = (await connectLocal({ home, cliEntry: options.cliPath })).client;
     let closed = false;
     let operation = Promise.resolve();
     const serialize = (run: () => Promise<void>): Promise<void> => {
@@ -107,7 +107,7 @@ export async function connectHost(input: HostOptions): Promise<HostHandle | Host
         const started = await launch(options);
         child = started.child;
         endpoint = started.endpoint;
-        client = await connectLocal({ home, cliEntry: options.cliPath });
+        client = (await connectLocal({ home, cliEntry: options.cliPath })).client;
       }),
       close: () => serialize(async () => {
         if (closed) return;

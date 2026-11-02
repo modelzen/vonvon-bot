@@ -4,6 +4,7 @@ import { createServer, type Server } from 'node:net';
 import { join } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
+import { PROTOCOL_VERSION } from '@vonvon/protocol';
 import type { Mutex } from '../src/config/data-access';
 import type { DaemonApi } from '../src/server/http';
 
@@ -137,7 +138,7 @@ it('releases PID and mutex after confirmed API closure even when peer cleanup fa
   });
   peer.once('close', () => disconnected.resolve());
   await new Promise<void>((resolve, reject) => { peer?.once('open', resolve); peer?.once('error', reject); });
-  peer.send(JSON.stringify({ type: 'hello', clientKind: 'cli', protocolVersion: 1, credential }));
+  peer.send(JSON.stringify({ type: 'hello', clientKind: 'cli', protocolVersion: PROTOCOL_VERSION, credential }));
   await authenticated.promise;
   control.requestStop();
   await Promise.all([actualHttpClose.promise, disconnected.promise]);
@@ -209,7 +210,7 @@ it('releases PID and mutex after a release-phase WSS failure and held actual HTT
   });
   peer.once('close', () => disconnected.resolve());
   await new Promise<void>((resolve, reject) => { peer?.once('open', resolve); peer?.once('error', reject); });
-  peer.send(JSON.stringify({ type: 'hello', clientKind: 'cli', protocolVersion: 1, credential }));
+  peer.send(JSON.stringify({ type: 'hello', clientKind: 'cli', protocolVersion: PROTOCOL_VERSION, credential }));
   await authenticated.promise;
   control.requestStop();
   await Promise.all([actualHttpClose.promise, disconnected.promise]);

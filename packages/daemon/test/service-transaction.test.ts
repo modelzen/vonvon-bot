@@ -299,13 +299,13 @@ async function realOwner(mode: 'changed-lock' | 'lost-done') {
   let lock: PidLockInfo;
   const sockets = createSocketServer({
     server, credential,
-    info: { type: 'serverInfo', machineId: machineIdSchema.parse(randomUUID()), version: 'test', protocolVersion: PROTOCOL_VERSION },
+    info: () => ({ type: 'serverInfo', machineId: machineIdSchema.parse(randomUUID()), version: 'test', protocolVersion: PROTOCOL_VERSION }),
     detached: () => undefined,
     request: async (peer: Peer, request) => {
       if (request.method === 'admin' && request.payload.type === 'daemonStatus') {
         status++;
         if (mode === 'changed-lock') await writeFile(join(home, 'daemon.pid'), JSON.stringify({ ...lock, startedAt: next.startedAt }));
-        peer.send({ type: 'response', id: request.id, method: 'admin', payload: { kind: 'daemonStatus', status: {
+        peer.send({ type: 'response', id: request.id, method: 'admin', payload: { kind: 'daemonStatus', status: { startedAt: 1,
           installed: false, running: true, selfHosted: true, version: 'test', supported: true, pid: child.pid,
         } } });
       } else if (request.method === 'machine' && request.payload.type === 'stopHost') {
@@ -1169,13 +1169,13 @@ async function composedOwner() {
   };
   const sockets = createSocketServer({
     server, credential,
-    info: { type: 'serverInfo', machineId: machineIdSchema.parse(randomUUID()), version: 'test', protocolVersion: PROTOCOL_VERSION },
+    info: () => ({ type: 'serverInfo', machineId: machineIdSchema.parse(randomUUID()), version: 'test', protocolVersion: PROTOCOL_VERSION }),
     detached: () => undefined,
     request: async (peer, request) => {
       if (request.method === 'admin' && request.payload.type === 'daemonStatus') {
         state.status++;
         await state.onStatus();
-        peer.send({ type: 'response', id: request.id, method: 'admin', payload: { kind: 'daemonStatus', status: {
+        peer.send({ type: 'response', id: request.id, method: 'admin', payload: { kind: 'daemonStatus', status: { startedAt: 1,
           installed: false, running: true, selfHosted: true, version: 'test', supported: true, pid: state.rejectEndpoint ? pid + 1 : pid,
         } } });
       } else if (request.method === 'machine' && request.payload.type === 'stopHost') {

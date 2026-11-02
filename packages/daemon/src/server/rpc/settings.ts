@@ -9,7 +9,6 @@ import { isAbsolute } from 'node:path';
 
 export async function settingsRpc(service: AdminService, request: SettingsRequest): Promise<RpcOutcome<SettingsReply>> {
   if (request.type === 'sessions') return { kind: 'read', value: { kind: 'sessions', sessions: await service.listSessions(request.botId, request.projectName) } };
-  if (request.type === 'chooseExecutable' || request.type === 'saveExecutable') return unsupported();
   const settings = service.settings;
   if (!settings) return unsupported();
   switch (request.type) {

@@ -45,8 +45,10 @@ const daemonFor = async (options: { fresh?: boolean }) => {
   return options.fresh ? client.freshDaemon : client.withDaemon;
 };
 /** The commands that write the data root themselves, so they hold the data lease (cli-2-bot 4.6); every other command
- * talks to the daemon, or reads files published with tmp + rename, and takes none. */
-const LEASED = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'bot repair-dir', 'secrets list', 'secrets set', 'secrets remove']);
+ * talks to the daemon, or reads files published with tmp + rename, and takes none. clients and device rename write
+ * `devices/` themselves when no daemon runs (devices 4.5); pair only asks the daemon. */
+const LEASED = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'bot repair-dir', 'secrets list', 'secrets set', 'secrets remove',
+  'clients ls', 'clients rename', 'clients revoke', 'device rename']);
 program.hook('preAction', async (_command, action) => {
   const path = `${action.parent?.name() ?? ''} ${action.name()}`;
   if (path === 'daemon run') {
@@ -453,6 +455,21 @@ covers(usage.command('share'), 'collaboration.shareUsage').description('Post a u
   .action(async (options: Json & { bot?: string; group: string; sections?: string }) => { await (await import('./commands/usage')).runUsageShare(options, io(options)); });
 covers(usage.command('judge'), 'admin.judgeUsage').description('Show how often smart groups asked the decision model, per day and bot (last 14 days)').option('--json', 'Print JSON')
   .action(async (options: Json) => { await (await import('./commands/usage')).runUsageJudge(io(options)); });
+// devices 4.3 and 8.1: the link another computer pairs with, the clients that did, and this device's name
+const devices = async () => import('./commands/device');
+covers(program.command('pair'), 'device.pair').description('Print a one-time link another computer pastes to manage this one')
+  .option('--ttl <minutes>', 'Minutes the link stays valid, 1 to 10', '10').option(...JSON_FLAG)
+  .action(async (options: Json & { ttl: string }) => { await (await devices()).runPair(options, io(options)); });
+const clients = program.command('clients').description('The computers paired with this one');
+covers(clients.command('ls'), 'device.clients').description('List paired clients, revoked ones too').option(...JSON_FLAG)
+  .action(async (options: Json) => { await (await devices()).runClients('ls', {}, io(options)); });
+covers(clients.command('rename <clientId> <name>'), 'device.renameClient').description('Rename a paired client').option(...JSON_FLAG)
+  .action(async (clientId: string, name: string, options: Json) => { await (await devices()).runClients('rename', { clientId, name }, io(options)); });
+covers(clients.command('revoke <clientId>'), 'device.revokeClient').description('Revoke a client at once; --cascade also the ones it invited').option('--cascade', 'Also revoke the clients it invited, down the line').option(...JSON_FLAG)
+  .action(async (clientId: string, options: Json & { cascade?: boolean }) => { await (await devices()).runClients('revoke', { clientId, cascade: options.cascade }, io(options)); });
+const device = program.command('device').description("This computer's device identity");
+covers(device.command('rename <name>'), 'device.rename').description('Rename this computer as paired clients see it').option(...JSON_FLAG)
+  .action(async (name: string, options: Json) => { await (await devices()).runDeviceRename(name, io(options)); });
 const feishu = program.command('feishu').description('Read Feishu groups and members');
 covers(feishu.command('groups'), 'command.listJoinedGroups').description('List joined groups, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
   .action(async (options: Json & { bot?: string; cursor?: string }) => {

@@ -102,7 +102,7 @@ export function createRemoteListeners(deps: {
 
 ### 4.8 `D/cli/commands/remote.ts`
 
-`remote status [--json]`、`remote enable <ip> | --tailscale [--allow-public]`、`remote disable <ip>`、`remote port <n>`；`covers` 按 D1 4.0 的表（`device.status/enable/disable/setPort`）。双路：daemon 在 → RPC；不在 → `enterDataAccess(home)` 下用同一套 `classify/tailscaleIps/enableAddress/...` 直接改 `remote.json`，输出末尾加一行"后台服务没在运行，下次启动时生效。"，`--json` 带 `source:'files'`。`enable` 成功文字：设计 15 节"`remote enable` 成功"，`<kind>` 的中文：tailscale "Tailscale 地址"、lan "局域网地址"、cgnat "运营商地址（已确认）"、public "公网地址（已确认）"。`status` 人类输出一张表：地址、种类、状态（在听 / 等待地址出现 / 网络变了，确认后再开 / 失败）、说明、端口；最后一行"客户端：<total> 台，在线 <active>"。`parity-allowlist.ts` 删 `pending('D3')` 四条。`cli-json.test.ts` SAMPLES 加 `remote status --json`、`remote enable 203.0.113.5 --json`（无 `--allow-public` → exit 4）。
+`remote status [--json]`、`remote enable <ip> | --tailscale [--allow-public]`、`remote disable <ip>`、`remote port <n>`；`covers` 按 D1 4.0 的表（`device.status/enable/disable/setPort`）。双路：daemon 在 → RPC；不在 → 走 D1 `D/cli/commands/device.ts` 的 `either()`（导出它复用），在 host 互斥锁下用同一套 `classify/tailscaleIps/enableAddress/...` 直接改 `remote.json`，输出末尾加一行"后台服务没在运行，下次启动时生效。"，`--json` 带 `source:'files'`。`enable` 成功文字：设计 15 节"`remote enable` 成功"，`<kind>` 的中文：tailscale "Tailscale 地址"、lan "局域网地址"、cgnat "运营商地址（已确认）"、public "公网地址（已确认）"。`status` 人类输出一张表：地址、种类、状态（在听 / 等待地址出现 / 网络变了，确认后再开 / 失败）、说明、端口；最后一行"客户端：<total> 台，在线 <active>"。`parity-allowlist.ts` 删 `pending('D3')` 四条。`cli-json.test.ts` SAMPLES 加 `remote status --json`、`remote enable 203.0.113.5 --json`（无 `--allow-public` → exit 4）。
 
 ## 5. 测试
 
@@ -157,7 +157,7 @@ Mac 后验（整批，U1b/U3 的任务里）：Mac 桌面端或 Mac 上的通道
 7. 100.64/10 的判定按 4.3（在 `tailscale ip` 输出里，或网卡名不区分大小写是 `tailscale*`），其余归 `cgnat` 要 `--allow-public`。
 8. 撤销：改文件 → 关连接 4003 → `jobs.detach`、`logs.detach`，1 秒内；事件 `client-revoked` 发出。
 9. 关地址、换端口的连接收 4006。
-10. `remote *` 四条双路，daemon 没跑时在数据租约下写文件并提示"下次启动时生效"。
+10. `remote *` 四条双路，daemon 没跑时在 host 互斥锁下写文件并提示"下次启动时生效"。
 11. 文案和设计第 15 节一致（成功、Tailscale 提示、CGNAT、公网、网络变了）。
 12. 行数 ≤1,500；diff 里没有真实 id、密钥、本机路径、Tailscale 地址。
 

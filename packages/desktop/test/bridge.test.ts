@@ -53,8 +53,9 @@ function harness() {
   const dispose = vi.fn(async () => {});
   const run = vi.fn(async (): ReturnType<VonvonClient['run']> => ({ kind: 'applied', revision: 2 }));
   const schedule = vi.fn(async (_botId: string, _request: unknown): ReturnType<VonvonClient['schedule']> => ({ kind: 'tasks', tasks: [], now: 1, timeZone: 'UTC' }));
+  const device = vi.fn(async (_request: unknown): ReturnType<VonvonClient['device']> => ({ kind: 'clients', generation: 0, clients: [] }));
   const client = {
-    snapshot, machine, run, schedule,
+    snapshot, machine, run, schedule, device,
     watchSnapshots: (listener: (value: unknown) => void) => { onSnapshot = listener; return () => { onSnapshot = () => {}; }; },
     onLog: () => () => {},
     onBackendInstall: () => () => {},
@@ -62,6 +63,7 @@ function harness() {
   } as unknown as VonvonClient;
   const owner: AttachedDaemon = {
     client, identity: { pid: 1, startedAt: 'now', listen: '127.0.0.1:4000' }, dispose,
+    serverInfo: { type: 'serverInfo', machineId: '00000000-0000-4000-8000-000000000000', version: '1', protocolVersion: 2 },
   };
   const paths: DesktopResources = { uiIndex, preload: '/unused', trayPng: '/unused' };
   const actions = {
@@ -87,7 +89,7 @@ function harness() {
     if (!handler) throw new Error(`Missing handler ${channel}`);
     return handler(event, ...args);
   };
-  return { bridge, event, frame, webContents, window, paths, invoke, snapshot, machine, run, schedule, dispose, actions, owner,
+  return { bridge, event, frame, webContents, window, paths, invoke, snapshot, machine, run, schedule, device, dispose, actions, owner,
     emitSnapshot: (value: unknown) => onSnapshot(value),
     emitError: (error: Error) => onError(error) };
 }
@@ -95,6 +97,12 @@ function harness() {
 beforeEach(() => { handlers.clear(); openExternal.mockClear(); failRegistration.channel = ''; });
 
 describe('desktop IPC boundary', () => {
+  it('forwards a device request and refuses one of no known shape', async () => {
+    const h = harness();
+    expect([await h.invoke(desktopChannels.device, { type: 'clients' }), await h.invoke(desktopChannels.device, { type: 'revokeClient' })]).toMatchObject([{ ok: true, value: { kind: 'clients' } }, { ok: false }]);
+    expect(h.device).toHaveBeenCalledExactlyOnceWith({ type: 'clients' });
+    await h.bridge.dispose();
+  });
   it('forwards a schedule request with its bot and checks both arguments', async () => {
     const h = harness();
     const request = { action: 'list', chatId: 'oc_pay' };

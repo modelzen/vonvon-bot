@@ -61,7 +61,7 @@ export function Root() {
     }
     async function connect(): Promise<void> {
       try {
-        const next = await connectBrowser(options);
+        const { client: next } = await connectBrowser(options);
         if (!active) {
           await next.close().catch(error => console.error("Daemon connection cleanup failed", error));
           return;

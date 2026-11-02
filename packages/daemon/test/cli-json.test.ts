@@ -46,6 +46,8 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['mcp', 'list', '--provider', 'codex'], 3], [['mcp', 'add', 'x', '--provider', 'codex', '--command', 'y'], 3], [['mcp', 'remove', 'x', '--provider', 'codex'], 3], [['mcp', 'add', 'x', '--provider', 'codex'], 2],
   [['import', 'detect'], 3], [['import', 'preflight'], 3], [['import', 'start'], 3], [['import', 'status'], 3], [['import', 'rollback'], 3],
   [['context', 'show', '--group', 'g'], 3], [['context', 'show'], 2], [['now'], 3], [['snapshot'], 3],
+  // devices 4.5: pair needs the daemon; the others fall back to the files
+  [['pair'], 3], [['clients', 'ls'], 0], [['clients', 'rename', 'cl_0000000000000000', 'x'], 2], [['clients', 'revoke', 'cl_0000000000000000'], 2], [['device', 'rename', 'x'], 0],
   // argument errors from commander itself
   [['nope'], 2], [['bot', 'list', '--nope'], 2], [['group'], 2],
 ];
@@ -104,5 +106,9 @@ it('takes the data lease for the commands that write the data root only', async 
     await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await run(home, root, ['daemon', 'stop'])).code).toBe(0);
     expect((await stat(root)).isDirectory()).toBe(true);
+    // devices 4.5: with no daemon, clients ls makes devices/ itself, so it needs the data root the lease makes
+    const fresh = join(base, 'fresh');
+    expect((await run(home, fresh, ['clients', 'ls'])).code).toBe(0);
+    expect((await stat(join(fresh, 'devices'))).isDirectory()).toBe(true);
   } finally { await rm(base, { recursive: true, force: true }); }
 }, 60_000);
