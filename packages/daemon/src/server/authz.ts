@@ -29,6 +29,8 @@ export type DenialCode = 'permission_denied' | 'protocol_mismatch' | 'scope_requ
 export type Decision =
   | { ok: true; grant?: SessionGrant; narrow?: <T>(payload: T) => T }
   | { ok: false; code: DenialCode; message: string; details?: Record<string, unknown> };
+/** A settings view as a reply carries it (read's; an act's is a bot's or a group's). */
+type SettingsView = Extract<SettingsReply, { kind: 'view' }>['view'];
 /** A bot's bound group: its project name, its chat and its library project. */
 export interface BoundGroup { name: string; chatId: string; projectId?: string }
 /**
@@ -262,6 +264,9 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
   const botWide = (): Decision => wholeBot ? ok : denied(ONE_GROUP_ONLY);
   const named = (projectName: string, groupId?: string): boolean => groups.some(group => group.name === projectName && (groupId === undefined || group.chatId === groupId));
   const narrow = (cut: (payload: never) => unknown): Decision => ({ ok: true, narrow: <T>(payload: T): T => cut(payload as never) as T });
+  /** A settings reply's views as settings_get shows them: read's, and those a saved or conflicting act answers with. */
+  const settingsShown = (decision: Decision): Decision => !decision.ok || !session ? decision
+    : narrow((reply: SettingsReply) => sessionReply(reply, principal.place === 'group'));
   switch (request.method) {
     case 'snapshot': return narrow((snapshot: DesktopSnapshot) => filterSnapshot(snapshot, principal, scope));
     case 'admin': {
@@ -277,10 +282,7 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
       const payload = request.payload;
       const scoped = (target: SettingsScope): boolean => target.kind === 'host' ? !session : own(target.botId) && (target.kind !== 'project' || named(target.projectName));
       switch (payload.type) {
-        case 'read': {
-          if (!scoped(payload.scope)) return outOfReach();
-          return session ? narrow((reply: SettingsReply) => sessionView(reply, principal.place === 'group')) : ok;
-        }
+        case 'read': return scoped(payload.scope) ? settingsShown(ok) : outOfReach();
         case 'save': {
           if (!scoped(payload.edit.scope)) return outOfReach();
           return payload.edit.scope.kind === 'agent' ? botWide() : ok;
@@ -288,8 +290,9 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
         case 'act': {
           const action = payload.action;
           if (!own(action.botId)) return outOfReach();
-          if ('projectName' in action) return named(action.projectName) ? ok : outOfReach();
-          return botWide();
+          // Codex review 239-2 / 240-1: a saved or conflicting act answers with the whole view, cut as read's is.
+          if ('projectName' in action) return named(action.projectName) ? settingsShown(ok) : outOfReach();
+          return settingsShown(botWide());
         }
         case 'models': return own(payload.query.botId) ? ok : outOfReach();
         case 'sessions': {
@@ -379,9 +382,7 @@ function membershipOf(id: string): { agentId: string; groupId: string } | undefi
  * role draft and who of the administrators Feishu or the scan made stay out: the command line reaches no further than
  * the tools (devices 5; for a private chat devices-4b 4.5a, SEC-4).
  */
-function sessionView(reply: SettingsReply, group: boolean): SettingsReply {
-  if (reply.kind !== 'view') return reply;
-  const view = reply.view;
+function sessionView(view: SettingsView, group: boolean): SettingsView {
   if (view.scope.kind === 'project') {
     const project = view as ProjectSettingsView;
     const access = { kind: 'readonly' as const, reason: 'not-dm' as const, message: NOT_DM_MESSAGE };
@@ -389,16 +390,25 @@ function sessionView(reply: SettingsReply, group: boolean): SettingsReply {
       : Object.fromEntries(Object.entries(project.sections).map(([name, section]) => [name, section && { ...section, access }])) as ProjectSettingsView['sections'];
     const { roster: _names, ...members } = project.members;
     const shown: ProjectSettingsView = { scope: project.scope, sections, identity: project.identity, members };
-    return { ...reply, view: shown };
+    return shown;
   }
   // A group session reaches no other view (read.agent and read.session are refused before): fail closed if one comes.
   if (group || view.scope.kind === 'host') throw new RpcError('permission_denied', OUT_OF_REACH);
-  if (view.scope.kind === 'session') return reply;
+  if (view.scope.kind === 'session') return view;
   const agent = view as AgentSettingsView;
   const { openIds, revision } = agent.administrators;
   const shown: AgentSettingsView = { scope: agent.scope, sections: agent.sections, ownerOpenId: agent.ownerOpenId, administrators: { openIds, revision },
     voice: agent.voice, commentInstructions: agent.commentInstructions };
-  return { ...reply, view: shown };
+  return shown;
+}
+
+/** Every view a settings reply carries, as a session reads it: read's, and the bot's or group's a saved or conflicting act answers with. */
+function sessionReply(reply: SettingsReply, group: boolean): SettingsReply {
+  if (reply.kind === 'view') return { ...reply, view: sessionView(reply.view, group) };
+  if (reply.kind !== 'acted') return reply;
+  const result = reply.result;
+  if (result.kind !== 'saved' && result.kind !== 'conflict') return reply;
+  return { ...reply, result: { ...result, view: sessionView(result.view, group) as typeof result.view } };
 }
 
 /**
