@@ -65,7 +65,6 @@ import { createDroppedReplies, originFor, originOf, type DroppedOrigin } from '.
 import { catalogById, projectCreatableBackends, visibleCatalog } from '../agent/catalog';
 import {
   DEFAULT_PERMISSION_MODE,
-  REASONING_EFFORTS,
   type AgentBackend,
   type StartThreadOptions,
   type ResumeThreadOptions,
@@ -237,7 +236,7 @@ import { resolveProjectsRootDir } from '../config/directories';
 import { loadBots } from '../config/bots';
 import { admitDirectorySettings } from '../config/directories';
 import { DirectoryError, directoryFailure } from '../config/directory-errors';
-import { botBackendId, groupBackendId, resolveCommentsExecution, resolveExecution, resolveModelPreference, executionSessionProfile, projectModelAllowed, projectModelCatalog, type ModelPreference } from '../config/execution';
+import { botBackendId, groupBackendId, resolveCommentsExecution, resolveExecution, resolveModelPreference, executionSessionProfile, projectModelAllowed, projectModelCatalog, projectSpeedAllowed, type ModelPreference } from '../config/execution';
 import { fileClaimMode, messageLink, OutboundFiles } from './outbound-files';
 import { getSecret } from '../config/keystore';
 import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
@@ -423,9 +422,9 @@ function asTier(v: string | undefined): PermissionMode | undefined {
   return v === 'qa' || v === 'write' || v === 'full' ? v : undefined;
 }
 
-/** Narrow an arbitrary string to a ReasoningEffort, else undefined. */
+/** The live provider catalog validates native effort ids at the save boundary. */
 function asEffort(v: string | undefined): ReasoningEffort | undefined {
-  return v !== undefined && (REASONING_EFFORTS as readonly string[]).includes(v) ? (v as ReasoningEffort) : undefined;
+  return v && v.trim() ? v : undefined;
 }
 
 /**
@@ -1867,6 +1866,9 @@ export function createOrchestrator(
   const reconcileStoredSpeed = async (be: AgentBackend, threadId: string | undefined, cwd: string, model: string | undefined, tier: ServiceTier | undefined): Promise<ServiceTier> => {
     if (!tier || tier === 'standard') return 'standard';
     if (be.id !== 'codex-appserver') return 'standard';
+    const session = threadId ? await getSession(threadId) : undefined;
+    const project = session?.chatId ? await getProjectByChatId(session.chatId) : undefined;
+    if (!projectSpeedAllowed(project, model, tier)) return 'standard';
     const contextual = be.listModelsForCwd
       ? await be.listModelsForCwd(cwd).catch(() => undefined)
       : await listModels(be).catch(() => undefined);
@@ -4864,18 +4866,34 @@ export function createOrchestrator(
       const state = authPending(modelPending, evt);
       if (!state || !option) return;
       settleUpdate(evt.messageId, async () => {
-        const stale = modelCardStale(state, await getSession(state.threadId));
+        const rec = await getSession(state.threadId);
+        const stale = modelCardStale(state, rec);
         if (stale) {
           state.note = stale;
           return buildModelCard(state);
         }
         const project = await getProjectByChatId(state.chatId);
-        const catalog = await listModelsAt(backendFor(state.backend), (await getSession(state.threadId))?.cwd);
-        if (!projectModelAllowed(project, state.backend ?? DEFAULT_BACKEND_ID, state.model, option as ReasoningEffort, catalog)) {
+        const catalog = projectModelCatalog(project, state.backend ?? rec!.backend, await listModelsAt(backendFor(state.backend), rec!.cwd));
+        const prefer = modelPrefOf(project, rec!.backend);
+        const currentModel = rec!.model ?? pickDefault(catalog, project?.modelAccess ? { ...prefer, custom: false } : prefer).model;
+        if (currentModel !== state.model || (rec!.modelCustom === true) !== (state.modelCustom === true)) {
+          state.note = '会话模型已变化，请重新打开 /model。';
+          return buildModelCard(state);
+        }
+        if (!catalog.find(m => m.id === state.model && !m.hidden)?.supportedEfforts.includes(option) || !projectModelAllowed(project, state.backend ?? DEFAULT_BACKEND_ID, state.model, option as ReasoningEffort, catalog)) {
           state.note = '这个 Effort 已不在本群可用范围，请重新打开 /model。'; return buildModelCard(state);
         }
+        let saved = false;
+        await patchSession(state.threadId, latest => {
+          if (latest.backend !== rec!.backend || latest.model !== rec!.model || (latest.modelCustom === true) !== (rec!.modelCustom === true)) return {};
+          saved = true;
+          return { effort: option as ReasoningEffort };
+        });
+        if (!saved) {
+          state.note = '会话模型已变化，请重新打开 /model。';
+          return buildModelCard(state);
+        }
         state.effort = option as ReasoningEffort;
-        await patchSession(state.threadId, { effort: state.effort });
         state.note = '✅ 已设置 effort，下一轮生效';
         return buildModelCard(state);
       });
@@ -4909,7 +4927,6 @@ export function createOrchestrator(
           const resetSpeed = rec?.backend === 'codex-appserver' && rec.serviceTier && rec.serviceTier !== 'standard';
           state.model = parsed.id;
           state.modelCustom = true;
-          if (!getSessionTitleEfforts(state.backend ?? rec?.backend ?? '').includes(state.effort)) state.effort = 'medium';
           await patchSession(state.threadId, { model: state.model, effort: state.effort, modelCustom: true, ...(resetSpeed ? { serviceTier: undefined } : {}) });
           if (resetSpeed) state.serviceTier = undefined;
           state.note = `✅ 已切换到手填的模型 ${modelIdCode(parsed.id)}，下一轮生效${resetSpeed ? '；响应速度已恢复普通' : ''}`;

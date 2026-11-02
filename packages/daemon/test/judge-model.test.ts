@@ -35,7 +35,7 @@ describe('judge default model', () => {
     expect(judgeEffort('gpt-6-luna', [model('gpt-6-luna', [])])).toBeUndefined();
     expect(judgeEffort('gpt-6-luna', [LUNA], true)).toBeUndefined();
     expect(judgeEffort('my-gw/qwen', [LUNA], true)).toBeUndefined();
-    expect(defaultCodexDecisionEffort('gpt-6-luna', ['future'])).toBeUndefined();
+    expect(defaultCodexDecisionEffort('gpt-6-luna', ['future'])).toBe('future');
   });
 
   it('without a cached list: gpt-6-luna gets low, other models nothing', () => {
@@ -146,7 +146,7 @@ describe('judge model layers (design 2.2)', () => {
     expect(resolveJudgeModel('claude-agent', { group: llm('claude-agent', 'gpt-6-luna') }, [LUNA])).toEqual({ model: 'gpt-6-luna', modelSource: 'group' });
   });
 
-  it('parseStoredJudge checks the effort against the backend: Claude takes low to max, Codex the whole ladder', () => {
+  it('parseStoredJudge keeps native Codex effort IDs and restricts Claude to its SDK levels', () => {
     for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
       expect(parseStoredJudge({ kind: 'llm', backend: 'claude-agent', model: 'haiku', effort }, IDS).value).toMatchObject({ effort });
     }
@@ -154,7 +154,10 @@ describe('judge model layers (design 2.2)', () => {
       expect(parseStoredJudge({ kind: 'llm', backend: 'claude-agent', model: 'haiku', effort }, IDS)).toEqual({ why: '推理强度这个后端不收' });
       expect(parseStoredJudge({ kind: 'llm', backend: 'codex-appserver', model: 'm', effort }, IDS).value).toMatchObject({ effort });
     }
-    expect(parseStoredJudge({ kind: 'llm', backend: 'codex-appserver', model: 'm', effort: 'tiny' }, IDS).value).toBeUndefined();
+    expect(parseStoredJudge({ kind: 'llm', backend: 'codex-appserver', model: 'm', effort: 'future-adaptive' }, IDS).value)
+      .toMatchObject({ effort: 'future-adaptive' });
+    expect(parseStoredJudge({ kind: 'llm', backend: 'claude-agent', model: 'haiku', effort: 'future-adaptive' }, IDS))
+      .toEqual({ why: '推理强度这个后端不收' });
   });
 
   it('parseStoredJudge keeps a good value and says why a bad one counts as unset', () => {
@@ -165,7 +168,12 @@ describe('judge model layers (design 2.2)', () => {
     for (const bad of [
       'gpt', { kind: 'llm', backend: 'gemini', model: 'x' }, { kind: 'next', model: 'x' },
       { kind: 'decision', model: 'x' }, { kind: 'decision', provider: 'Type Safe', model: 'x' }, { kind: 'decision', provider: 'typesafe', model: 'two words' },
-      { kind: 'llm', backend: 'codex-appserver', model: 'two words' }, { kind: 'llm', backend: 'codex-appserver', model: 'm', effort: 'tiny' },
+      { kind: 'llm', backend: 'codex-appserver', model: 'two words' },
+      { kind: 'llm', backend: 'codex-appserver', model: 'm', effort: '' },
+      { kind: 'llm', backend: 'codex-appserver', model: 'm', effort: ' ' },
+      { kind: 'llm', backend: 'codex-appserver', model: 'm', effort: ' future-adaptive ' },
+      { kind: 'llm', backend: 'codex-appserver', model: 'm', effort: 'x'.repeat(1001) },
+      { kind: 'llm', backend: 'codex-appserver', model: 'm', effort: 7 },
       { kind: 'llm', backend: 'codex-appserver', model: 'm', custom: 'yes' },
     ]) {
       expect(parseStoredJudge(bad, IDS).value).toBeUndefined();
@@ -203,6 +211,8 @@ describe('a chosen effort fitted to the model (Rakazo 第二轮 A6)', () => {
     expect(fitJudgeEffort('m', 'medium', [twoLevels])).toBe('low');
     expect(fitJudgeEffort('m', 'ultra', [twoLevels])).toBe('high');
     expect(fitJudgeEffort('m', 'minimal', [twoLevels])).toBe('low');
+    expect(fitJudgeEffort('m', 'future-adaptive', [model('m', ['future-adaptive', 'low'])])).toBe('future-adaptive');
+    expect(fitJudgeEffort('m', 'future-adaptive', [twoLevels])).toBe('low');
     expect(fitJudgeEffort('gpt-6-luna', 'minimal', [LUNA])).toBe('low');
     expect(fitJudgeEffort('m', 'low', [model('m', [])])).toBeUndefined();
   });

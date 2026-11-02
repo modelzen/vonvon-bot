@@ -1,6 +1,6 @@
 const effortOrder = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 
-export type DecisionReasoningEffort = typeof effortOrder[number];
+export type DecisionReasoningEffort = string;
 
 const codexDecisionModel = 'gpt-6-luna';
 
@@ -34,5 +34,5 @@ export function defaultCodexDecisionEffort(
 ): DecisionReasoningEffort | undefined {
   if (custom) return undefined;
   if (supported === undefined) return model === codexDecisionModel ? 'low' : undefined;
-  return recommendedDecisionEffort(supported) ?? effortOrder.find(effort => supported.includes(effort));
+  return recommendedDecisionEffort(supported) ?? effortOrder.find(effort => supported.includes(effort)) ?? supported[0];
 }

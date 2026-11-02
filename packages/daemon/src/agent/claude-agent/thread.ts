@@ -191,7 +191,8 @@ function toSdkEffort(e: ReasoningEffort | undefined): Options['effort'] | undefi
   if (!e) return undefined;
   if (e === 'none' || e === 'minimal') return 'low';
   if (e === 'ultra') return 'max'; // Claude has no delegation-aware ultra tier
-  return e; // low/medium/high/xhigh/max pass through
+  if (e === 'low' || e === 'medium' || e === 'high' || e === 'xhigh' || e === 'max') return e;
+  return undefined; // an unknown native effort is not a Claude SDK effort
 }
 
 /** Content blocks the SDK accepts in a streaming user message, derived from the
