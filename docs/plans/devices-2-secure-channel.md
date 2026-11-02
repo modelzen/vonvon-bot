@@ -259,3 +259,25 @@ Mac 后验（整批）：U1a 的桌面端用 `webBinarySocket`/`nodeBinarySocket
 9. R3 → 接受。`webBinarySocket.close` 收到 1000 和 3000–4999 以外的码时改用 1000，原因不变。测试：用 Node 全局 WebSocket 连一个回坏消息 2 的假设备，服务端收到 1000，socket 关掉。
 
 另外：`secure-probe.ts` 的跑法补了 `mkdir -p`，不建 `$T/home`，`startApi` 会报 ENOENT。
+
+## 合入集成分支（带 I3、D4a）
+
+2026-11-02 把 `claude/devices-integration`（新合入 I3a #632、I3b #633 的升级引擎和 D4a #645 的会话令牌）merge 进本分支。两处冲突，都在本片抽走了代码的地方：I3 和 D4a 改的是原来 `ws.ts` 里的连接登记、publish、排空和消息处理，合并时把它们的行为移进抽出来的模块，两边的行为都保留：
+
+- **`D/server/ws.ts`**：结构取本片的（hello 之后交给 `handleMessage`，连接登记在 hub）。loopback 的 hello 带上 D4a 的会话令牌：`credential` 以 `vs1.` 开头时查 `sessions`，查不到 4401 `invalid_session_token`，协议不同 4001 `protocol_mismatch`，否则 principal 是 `bot-session`；不是令牌的照旧比本机凭据。`Peer` 两边的字段都要：本片的 `clientId`，D4a 的 `close(code, reason)`。D4a 加在这里的 `view` 参数和 `disconnect()` 不要了，改到 hub 上（下面两条）；`forProtocol1` 去掉错误的 `details` 留着。
+- **`D/server/http.ts`**：hub 建的时候给 `view: viewFor(sessionTokens)`；`createSocketServer` 传 `sessions` 和 `hub`；令牌作废时 `hub.closeWhere(…bot-session 且 sessionId 相同…, 4401, 'invalid_session_token')`，代替 D4a 的 `sockets.disconnect`。`secure` 照旧。
+
+移到抽出来的模块里的行为：
+
+- **`message-loop.ts`**：排空白名单换成 D1 的 `DRAIN_KINDS`（多了 `machine.coreUpdateStatus`，I3 的 `control()` 会回它），第 11 节第 3 条的限制就此没有了；出错的回复用 D4a 的 `errorEnvelope`（带 `details`）。关连接改用 `peer.close`，`MessageLoopOptions.close` 去掉：loopback 的 `peer.close` 就是关 socket，安全连接的是 `shut`（先在通道里说，再关）。
+- **`peer-hub.ts`**：`publish(event, shape?)` 改成 hub 建的时候给 `view`（第 4 节写的 `shape`）。原因：配对写完 `completePairing` 直接 `hub.publish` 设备事件，view 若只在 `createSocketServer.publish` 上，Bot 会话的连接会收到设备事件。现在不管谁发（快照、撤销、配对），每条连接拿到的都是 D4a 的 `filterSnapshot` 那一份，或者没有。
+- **`secure-socket.ts`**：peer 加 `close`，D4a 的维护子集连续 20 条被拒关 4001 在远程连接上也在通道里说。
+
+没冲突、但要对上的：D4a 的每条请求前核令牌、`admin.negotiate` 核 `--scope`、`authorize()` 的 `narrow`/`shown(payload)`、维护子集计数都在 `http.ts` 的 `request`/`control` 里，两种连接共用，不用动。远程 hello 带任何 `credential` 都 4401 `unauthorized`，会话令牌也一样：会话令牌只在 loopback 的 hello 上认。`capabilities` 成了 `['device', 'session-scope']`，`secure-socket.test.ts` 的断言跟着改。
+
+另起提交补的测试（`secure-socket.test.ts` 的"the daemon, with I3 and D4a"）：
+
+- 排空时远程连接问 `machine.coreUpdateStatus` 拿到回复，问 `checkCoreUpdate` 在通道里收到 1001 `server_shutdown`。
+- 会话令牌作废：用它开的 loopback 连接 4401 `invalid_session_token`，关之前就从 jobs/logs 摘掉（`closeWhere` 先 detach）；主人的 loopback 和远程连接照旧能用。
+- 远程 hello 带一个有效的 `vs1.` 令牌，4401 `unauthorized`。
+- 远程配对发出的设备事件，主人的连接收到，已协商的 Bot 会话连接收不到。

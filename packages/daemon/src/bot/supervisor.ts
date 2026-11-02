@@ -1,11 +1,14 @@
+import { selfEntry } from '../core/self-entry';
 import { readSingleInstanceHolder } from '../core/single-instance';
 import { botPaths, paths } from '../config/paths';
 import { CHILD_SHUTDOWN_GRACE_MS, closeOwnedProviders, observeShutdown, settleOwnedChild, type ShutdownControl } from '../host/lifecycle';
 import type { ChildProcess } from 'node:child_process';
 import { spawnProcess } from '../platform/spawn';
 import { log } from '../core/logger';
+import { withoutSessionMarkers } from '../config/session-env';
 import { loadBots, type BotEntry } from '../config/bots';
-import { createAdminIpcCaller, type AdminIpcCaller } from '../admin/ipc';
+import { createAdminIpcCaller, createHostIpcResponder, type AdminIpcCaller } from '../admin/ipc';
+import { createSessionTokens } from '../host/session-tokens';
 import { AdminWriteError } from '../admin/ops';
 import { createAdminService } from '../admin/service';
 import { botNotRunning } from '../admin/schedule-commands';
@@ -83,13 +86,14 @@ export const HOST_PAUSED_ACTIVATION = 'daemon 已暂停（10 分钟内崩溃了 
 export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void>; paused?: boolean; crash?: SupervisorCrash; notifier?: CrashNotifier; registryUnreadable?: boolean; timing?: { lockRetryMs?: number; lockWarnMs?: number; lockSlowMs?: number } } = {}): Promise<void> {
   const control = options.control ?? observeShutdown();
   const supervisorStartedAt = Date.now();
-  const cliEntry = process.argv[1];
-  if (!cliEntry) throw new Error('supervisor: 无法解析 CLI 入口（process.argv[1] 为空）');
+  const cliEntry = selfEntry();
+  if (!cliEntry) throw new Error('supervisor: 无法解析 CLI 入口');
 
   // An untracked host (no run marker) still gets its bots' records, under ids of its own.
   const runId = options.crash?.runId ?? randomUUID();
   const chainId = options.crash?.chainId ?? randomUUID();
-  const childEnv: NodeJS.ProcessEnv = { ...process.env, VONVON_HOME: paths.appDir, VONVON_HOST_RUN_ID: runId, VONVON_HOST_CHAIN_ID: chainId };
+  // Not a session's: a host started inside one carries its markers, which would refuse `daemon run --bot` (devices-4a 4.9).
+  const childEnv: NodeJS.ProcessEnv = { ...withoutSessionMarkers(process.env), VONVON_HOME: paths.appDir, VONVON_HOST_RUN_ID: runId, VONVON_HOST_CHAIN_ID: chainId };
   const migration = bridgeImportRuntime();
   const importCodex = new Map<string, string>();
   let bridgeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -117,6 +121,8 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   const ownership = new WeakMap<ChildProcess, ChildOwnership>();
   const errors: unknown[] = [];
   let api: Awaited<ReturnType<typeof startApi>> | undefined;
+  /** devices-4a 4.1: the bots' session tokens, which the API checks a session's hello against; in memory only. */
+  const sessionTokens = createSessionTokens();
   const children = new Map<string, Child>(bots.map((bot) => [bot.appId, newChild(bot, true)]));
   // Lives here, not in the child: a bot's records survive its restarts and go with the daemon's.
   const diagnostics = createDiagnosticsStore({ changed: () => api?.invalidate(), claudeSignedOut: noteClaudeLoginFailed });
@@ -288,6 +294,18 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     });
     c.ipc = ipc;
     proc.on('message', ipc.onMessage);
+    // devices-4a 4.2: the child asks for its sessions' tokens, and only for its own bot; they end with the process.
+    const appId = c.bot.appId;
+    const issued = new Set<string>();
+    proc.on('message', createHostIpcResponder({
+      issueSessionToken: async input => {
+        if (input.appId !== appId) throw new Error('A bot process asked for another bot\'s session token');
+        const token = sessionTokens.issue(input);
+        issued.add(input.sessionId);
+        return token;
+      },
+      revokeSessionToken: async sessionId => { if (issued.delete(sessionId)) sessionTokens.revoke(sessionId); },
+    }, msg => { if (proc.connected) proc.send(msg); }).onMessage);
     proc.on('message', (message: unknown) => {
       if (c.proc !== proc) return;
       const parsed = ownedWorkSchema.safeParse(message);
@@ -311,6 +329,9 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     });
 
     proc.on('exit', (code, signal) => {
+      // Its sessions ended with it, whether or not it is still the bot's current process.
+      for (const sessionId of issued) sessionTokens.revoke(sessionId);
+      issued.clear();
       if (c.proc !== proc) return;
       diagnostics.clearLive(c.bot.appId);
       c.proc = undefined;
@@ -462,6 +483,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       startedAt: supervisorStartedAt,
       port: options.port,
       control,
+      sessionTokens,
       bridgeImport: migration.importer,
       diagnostics,
       crashes: { application: now => ({ ...(hostPause ? { paused: hostPause } : {}), records: records(now) }), paused: appId => children.get(appId)?.pause, lockHeld: appId => children.get(appId)?.bridgeHeld ?? children.get(appId)?.lockWait?.reported },

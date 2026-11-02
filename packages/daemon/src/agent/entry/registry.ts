@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import type { AgentEntry, AgentThread, AgentToolReply } from '../types';
 import { log } from '../../core/logger';
 import type { MemoryTurn } from '../../bot/memory-authority';
@@ -41,11 +42,13 @@ export interface AgentEntries {
 }
 type Failure = Extract<AgentToolReply, { ok: false }>;
 type Reason = NonNullable<Failure['reason']>;
+/** A settings write outside a private chat: the tools' refusal, and the daemon's to a Bot session's command line (devices 5.2). */
+export const NOT_DM_MESSAGE = '设置只能在私聊里改。请对方去私聊里跟我说。';
 const messages = {
   'not-ready': 'vonvon 还没准备好这条会话的工具，稍后再试。',
   revoked: '这条会话的 vonvon 工具已经失效（会话结束了，或者 daemon 重启过）。不要重试，接着做别的。',
   'unknown-tool': '没有这个工具。',
-  'not-dm': '设置只能在私聊里改。请对方去私聊里跟我说。',
+  'not-dm': NOT_DM_MESSAGE,
   'not-human-turn': '这一轮不是主人或管理员发消息直接触发的，不能改设置。',
   'turn-ended': '发起这次改动的那一轮已经结束了，不能改设置。请对方重新说一遍。',
   'unknown-origin': 'vonvon 认不出这次改动是哪一轮发起的，不能改设置。请对方重新说一遍。',
@@ -90,6 +93,10 @@ interface TurnAuth {
 interface Grant {
   phase: 'pending' | 'attached' | 'revoked' | 'capacity';
   place: AgentPlace;
+  /** devices 5.3: the session's id, which its token in the host names (`ses_` + 16 hex). */
+  sessionId: string;
+  /** The host was told this session ended: once, whichever way it ends. */
+  sessionEnded: boolean;
   thread?: AgentThread;
   turn?: TurnAuth;
   /** The turn before `turn`; its origins outlive `pruneOrigins`. */
@@ -112,6 +119,8 @@ export function createAgentEntries(opts: {
   isOwner(openId: string): boolean;
   chatSettingsOn?(): boolean;
   tools?: readonly AgentTool[];
+  /** devices-4a 4.3: told once when a session ends, so the host drops its token (best effort: it never throws). */
+  sessions?: { revoke(sessionId: string): void };
 }): AgentEntries {
   const tools = opts.tools ?? [sessionInfoTool];
   const table = new Map(tools.map(tool => [tool.name, tool]));
@@ -155,6 +164,10 @@ export function createAgentEntries(opts: {
     grant.origins.clear();
     grant.pruned.clear();
     grants.delete(grant);
+    if (grant.sessionEnded) return;
+    grant.sessionEnded = true;
+    try { opts.sessions?.revoke(grant.sessionId); }
+    catch (error) { log.fail('agent', error, { phase: 'session-revoke', sessionId: grant.sessionId }); }
   }
   function authorizeNow(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
     if (grant.thread && !grant.thread.isAlive()) revoke(grant);
@@ -228,7 +241,8 @@ export function createAgentEntries(opts: {
     const capped = grants.size >= 1024;
     const grant: Grant = {
       phase: shuttingDown ? 'revoked' : capped ? 'capacity' : 'pending',
-      place: { ...place }, origins: new Map(), pruned: new Set(), controller: new AbortController(),
+      place: { ...place }, sessionId: `ses_${randomBytes(8).toString('hex')}`, sessionEnded: false,
+      origins: new Map(), pruned: new Set(), controller: new AbortController(),
       active: 0, settingRunning: false, queue: [],
     };
     if (!capped && !shuttingDown) grants.add(grant);
@@ -375,6 +389,7 @@ export function createAgentEntries(opts: {
       });
     }
     return {
+      sessionId: grant.sessionId,
       tools() {
         if (grant.thread && !grant.thread.isAlive()) revoke(grant);
         if (grant.phase === 'revoked') throw new ToolRefusal(failure('revoked'));

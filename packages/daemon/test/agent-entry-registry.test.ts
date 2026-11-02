@@ -98,6 +98,29 @@ describe('entry lifecycle and authorization', () => {
     vi.mocked(f.t.isAlive).mockReturnValue(true);
     expect(await f.entry.call('t_read', {})).toMatchObject({ code: 'revoked' });
   });
+  // devices-4a 4.3: each session has its id, whose token the host drops once the session ends, however it ends. main 必败
+  it('names each session and tells the host once when it ends', async () => {
+    const sessions = { revoke: vi.fn() };
+    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => false, sessions });
+    const dying = entries.issue({ kind: 'group', chatId: 'oc_a' });
+    const closed = entries.issue({ kind: 'p2p', chatId: 'oc_b' });
+    const open = entries.issue({ kind: 'doc' });
+    for (const entry of [dying, closed, open]) expect(entry.sessionId).toMatch(/^ses_[0-9a-f]{16}$/);
+    expect(new Set([dying.sessionId, closed.sessionId, open.sessionId]).size).toBe(3);
+    const t = thread(); dying.attach(t); closed.attach(thread()); open.attach(thread());
+    vi.mocked(t.isAlive).mockReturnValue(false);
+    expect(await dying.call('session_info', {})).toMatchObject({ code: 'revoked' });
+    expect(await dying.call('session_info', {})).toMatchObject({ code: 'revoked' });
+    expect(sessions.revoke.mock.calls).toEqual([[dying.sessionId]]);
+    closed.revoke('closed'); closed.revoke('closed');
+    entries.closeAll('shutdown');
+    expect(sessions.revoke.mock.calls).toEqual([[dying.sessionId], [closed.sessionId], [open.sessionId]]);
+    // a host that throws does not break the revoke
+    const failing = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => false, sessions: { revoke: () => { throw new Error('gone'); } } });
+    const entry = failing.issue({ kind: 'p2p' });
+    expect(() => entry.revoke('start-failed')).not.toThrow();
+    expect(logs.fail).toHaveBeenCalledWith('agent', expect.any(Error), { phase: 'session-revoke', sessionId: entry.sessionId });
+  });
   it('revokes all grants and stops issuance during shutdown', async () => {
     const f = setup(); const other = f.entries.issue({ kind: 'group' }); other.attach(thread());
     f.entries.closeAll('shutdown');

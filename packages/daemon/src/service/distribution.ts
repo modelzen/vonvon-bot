@@ -115,6 +115,12 @@ export function nearestPackageRoot(modulePath:string):string {
   }
 }
 
+/** The install root when this process runs from a standalone release: decided from the package alone, never by asking npm. */
+export function standaloneInstallRoot():string|undefined {
+  const local = classifyDistribution(nearestPackageRoot(fileURLToPath(import.meta.url)));
+  return local.kind === 'standalone' ? local.installRoot : undefined;
+}
+
 export async function runtimeDistribution():Promise<Distribution> {
   const root = nearestPackageRoot(fileURLToPath(import.meta.url));
   const local = classifyDistribution(root);
