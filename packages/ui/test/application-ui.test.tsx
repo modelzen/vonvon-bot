@@ -136,3 +136,11 @@ it('says on the settings home which entry holds the new version', () => {
   expect(home()).not.toContain('有新版本');
   expect(home()).toContain('后台运行与更新');
 });
+
+it('devices-ui-1b: puts 设备 first in 连接与应用 on the desktop only', () => {
+  const sections = (devices?: boolean) => renderToStaticMarkup(<SettingsHome devices={devices} onNavigate={() => {}} onFeature={() => {}}/>)
+    .split('<section class="today-settings-section"').slice(1).map(section => [...section.matchAll(/<strong>([^<]+)<\/strong>/g)].map(match => match[1]));
+  const before = [['Provider', '工具与连接', '决策模型', '用量'], ['飞书连接', '导入 Bridge', '应用与启动', '状态与诊断']];
+  expect(sections()).toEqual(before);
+  expect(sections(true)).toEqual([before[0], ['设备', ...before[1]!]]);
+});
