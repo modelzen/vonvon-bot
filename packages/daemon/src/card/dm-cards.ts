@@ -1502,7 +1502,7 @@ function memberName(names: Map<string, string>, id: string): string {
  * 全局管理员名单卡（DM「⚙️ 设置 → 👮 管理员」）。**纯按钮卡**——绝不放 select：select
  * 一旦交互会锁 card_id（见 {@link buildSettingsCard} 注释）。加人走独立的表单卡
  * {@link buildAddAdminCard}。owner 行无移除按钮（owner 恒为 admin、不可删）。
- * `names` 由调用方用 contact.batch 预解析 open_id→姓名。`editable`：只有主人能加、移本机管理员
+ * `names` 由调用方用 contact.batch 预解析 open_id→姓名。`editable`：只有飞书应用的拥有者（没有时是扫码注册者）能加、移本机管理员
  * （product.md 3.7），别的管理员看到的名单只读，没有增删按钮。
  */
 export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>, opts: { editable: boolean }): CardObject {
@@ -1537,7 +1537,7 @@ export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>, opts
   elements.push(
     hr(),
     actions(opts.editable ? [button('➕ 添加管理员', { a: DM.addAdminForm }, 'primary'), button('⬅️ 设置', { a: DM.settings })] : [button('⬅️ 设置', { a: DM.settings })]),
-    note(opts.editable ? '飞书应用拥有者和管理员请在飞书开放平台管理；扫码注册者不可移除。' : '本机管理员名单只有主人能改。飞书应用拥有者和管理员请在飞书开放平台管理。'),
+    note(opts.editable ? '飞书应用拥有者和管理员请在飞书开放平台管理；扫码注册者不可移除。' : '本机管理员名单只有飞书应用的拥有者能改。飞书应用拥有者和管理员请在飞书开放平台管理。'),
   );
   return card(elements, { header: { title: '👮 管理员', template: 'blue' } });
 }

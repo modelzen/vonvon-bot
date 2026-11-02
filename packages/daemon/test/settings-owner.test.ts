@@ -596,7 +596,7 @@ it('shows Feishu administrator sources and prevents their local removal', async 
     // audit 252-1: an admin who is not the owner sees the same list, read-only
     const readOnly = JSON.stringify(buildAdminsCard(cfg, new Map(), { editable: false }));
     expect(readOnly).toContain('本地管理员');
-    expect(readOnly).toContain('本机管理员名单只有主人能改。');
+    expect(readOnly).toContain('本机管理员名单只有飞书应用的拥有者能改。');
     for (const action of ['rmAdmin', 'addAdminForm']) expect(readOnly).not.toContain(`"a":"${DM[action as keyof typeof DM]}"`);
     for (const openId of ['ou_feishu_owner', 'ou_feishu_admin', 'ou_owner']) {
       expect((await owner.act({ kind: 'adminMember', botId, openId, membership: 'absent', revision: view.administrators.revision })).kind).toBe('rejected');
