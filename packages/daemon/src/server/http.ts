@@ -10,6 +10,8 @@ import { paths } from '../config/paths';
 import { bridgeVersion } from '../core/version';
 import { createDirectoryBrowser } from './directory-browser';
 import { memoryRpc } from './rpc/memory';
+import { memoryStoreFor } from '../admin/memory';
+import { SESSION_TURN_ENDED } from '../agent/entry/registry';
 import { contextPreviewRpc } from './rpc/context-preview';
 import { scheduleRpc } from './rpc/schedule';
 import { Jobs } from './jobs';
@@ -82,8 +84,9 @@ const viewFor = (tokens: Pick<SessionTokens, 'active'>): PeerView => (peer, even
 /**
  * `startedAt`: when this daemon process started (epoch ms), in every daemonStatus reply (devices 4.7). `sessionTokens`: the
  * Bot sessions' tokens the host issues to its bots (devices-4a 4.1), which a session's hello is checked against.
+ * `askBot`: a session's Bot process, asked about a ★ request (devices-4b 4.3); without it those are refused.
  */
-export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number; sessionTokens?: SessionTokens }): Promise<DaemonApi> {
+export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number; sessionTokens?: SessionTokens; askBot?: AuthzDeps['askBot'] }): Promise<DaemonApi> {
   const startedAt = options.startedAt ?? Math.round(performance.timeOrigin);
   const sessionTokens = options.sessionTokens ?? createSessionTokens();
   /** What the bot-session checks read: a bot's bound groups and their sessions, from its files (the snapshot can be 5 s old). */
@@ -92,6 +95,8 @@ export async function startApi(options: { service: AdminService; port?: number; 
       .map(project => ({ name: project.name, chatId: project.chatId, ...(project.projectId ? { projectId: project.projectId } : {}) })),
     threadsOf: async (appId, projectName) => (await options.service.listSessions(appId, projectName)).map(session => session.threadId),
     sessionActive: sessionId => sessionTokens.active(sessionId, true),
+    ...(options.askBot ? { askBot: options.askBot } : {}),
+    memoryItem: async (scope, itemId) => (await memoryStoreFor(scope)).get(itemId),
   };
   /** devices 5.3: a session that ends (revoked, its bot's process gone, idle) closes the connections made with its token. */
   let stopEnding: (() => void) | undefined;
@@ -227,14 +232,18 @@ export async function startApi(options: { service: AdminService; port?: number; 
         case 'machine': return finish(peer, await machineRpc(options.service, options.control, port, request.payload, { launcher: serviceActions, snapshots, root: home, bridgeImport: options.bridgeImport, environment }), payload => ({ type: 'response', id, method: 'machine', payload }));
         case 'command': return finish(peer, await commandRpc({ service: options.service, jobs, peer, directory, snapshots, control: options.control, port }, request.payload), payload => ({ type: 'response', id, method: 'command', payload: shown(payload) }));
         case 'library': return finish(peer, await libraryRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'library', payload: shown(payload) }));
-        // devices-4a 4.8: a Bot session's request carries its turn's role (D4b: also its person and where it lands).
+        // devices-4b 4.5: a Bot session's write lands where its Bot process said, as its turn's person.
         case 'memory': return finish(peer, await memoryRpc(options.service, request.payload, {
-          origin: peer.clientKind === 'cli' ? 'cli' : 'ui', ...(decision.grant ? { actor: { role: decision.grant.role, ...(decision.grant.openId ? { openId: decision.grant.openId } : {}) } } : {}),
+          origin: peer.clientKind === 'cli' ? 'cli' : 'ui', session: peer.principal.kind === 'bot-session', ...(decision.grant?.memory ? { landing: decision.grant.memory } : {}),
         }), payload => ({ type: 'response', id, method: 'memory', payload }));
         case 'contextPreview': return finish(peer, await contextPreviewRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'contextPreview', payload }));
-        // The client's hello says who asks: the task records it as made from the desktop or the terminal. A Bot session's
-        // still records as the terminal's; D4b gives it the session's actor.
-        case 'schedule': return finish(peer, await scheduleRpc(options.service, peer.clientKind, request.payload), payload => ({ type: 'response', id, method: 'schedule', payload: shown(payload) }));
+        // The owner's hello says who asks: the task records it as made from the desktop or the terminal. A Bot session's
+        // runs as the turn its Bot process named (devices-4b 4.4), and never as the owner.
+        case 'schedule': {
+          const who = peer.principal.kind !== 'bot-session' ? peer.clientKind : decision.grant?.actor;
+          if (!who) throw new RpcError('permission_denied', SESSION_TURN_ENDED);
+          return finish(peer, await scheduleRpc(options.service, who, request.payload), payload => ({ type: 'response', id, method: 'schedule', payload: shown(payload) }));
+        }
         case 'directory': {
           if (request.payload.type === 'list') { peer.send({ type: 'response', id, method: 'directory', payload: await directory.list(request.payload.path) }); return; }
           if (request.payload.type === 'suggest') { peer.send({ type: 'response', id, method: 'directory', payload: await directory.suggest(request.payload.query) }); return; }
