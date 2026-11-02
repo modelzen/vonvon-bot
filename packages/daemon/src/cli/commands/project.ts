@@ -3,7 +3,7 @@ import type { LibraryProject } from '@vonvon/protocol';
 import type { LibraryOverview } from '../../admin/library';
 import { inBotSession } from '../../config/session-env';
 import { badArgs, CommandError } from '../command-error';
-import { print, want, withDaemon, type Daemon, type Io } from '../daemon-client';
+import { cliScope, print, scopeNeedsDaemon, want, withDaemon, type Daemon, type Io } from '../daemon-client';
 import { folderPath, libraryProjects, pickProject, projectName, thisHost, type Host } from './group';
 
 const readOverview = async (): Promise<LibraryOverview> => (await import('../../admin/library')).libraryOverview();
@@ -12,8 +12,11 @@ const NO_PROJECTS = '还没有项目。绑定群以后，daemon 启动时给每�
 /**
  * Asks the daemon when it runs (devices 8.3); with no daemon to reach it reads the files, where a group bound since the
  * last start has no project yet. Not in a Bot's session: the files would go round what the daemon lets the session see.
+ * Nor with the owner's `--scope` (devices 5.3): the files list every project, the daemon those of the scope's groups
+ * (Codex review 251-1).
  */
-export async function runProjectList(io: Io, read: () => Promise<LibraryOverview> = readOverview, daemon: Daemon = withDaemon, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+export async function runProjectList(io: Io, read: () => Promise<LibraryOverview> = readOverview, daemon: Daemon = withDaemon, env: NodeJS.ProcessEnv = process.env,
+  scoped = cliScope() !== undefined): Promise<void> {
   let live: { projects: LibraryProject[]; unlinked: number; bots: Map<string, string> } | undefined;
   try {
     live = await daemon(async call => {
@@ -25,6 +28,7 @@ export async function runProjectList(io: Io, read: () => Promise<LibraryOverview
   } catch (error) {
     const unreachable = (error instanceof CommandError && error.kind === 'connection') || error instanceof ConnectionError;
     if (!unreachable || inBotSession(env)) throw error;
+    if (scoped) throw scopeNeedsDaemon(error);
   }
   if (live) {
     const { bots } = live;

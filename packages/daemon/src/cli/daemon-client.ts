@@ -40,6 +40,17 @@ export function setCliContext(next: { scope?: Scope | undefined; env?: NodeJS.Pr
   if ('scope' in next) { if (next.scope) context.scope = next.scope; else delete context.scope; }
   if (next.env) context.env = next.env;
 }
+/** The global `--scope` this command was given, if any. */
+export const cliScope = (): Scope | undefined => context.scope;
+
+/**
+ * devices 5.3 and 8.3: an owner's `--scope` is the daemon's to apply. A read that falls back to the files with no daemon
+ * cannot apply it, so with one given it wants the daemon instead of quietly ignoring it (Codex review 251-1).
+ */
+export const SCOPE_NEEDS_DAEMON = '给了 --scope 时要 daemon 在运行：范围由 daemon 核对，命令行不读本机文件。';
+/** The connection's own words, then why the files are no way round it. */
+export const scopeNeedsDaemon = (error: unknown): CommandError =>
+  new CommandError('connection', `${error instanceof Error ? error.message : String(error)}\n${SCOPE_NEEDS_DAEMON}`, error instanceof CommandError ? error : {});
 
 /**
  * In a Bot's session (devices 5.3) a command acts as the session, never as the owner: its token goes in the hello,
@@ -187,8 +198,8 @@ export function want<R extends { kind: string }, K extends R['kind']>(what: stri
 
 export const NO_BOT = '还没有 Bot。运行 vonvon bot add 在终端里扫码注册，或者在网页里注册（vonvon open）。';
 
-/** No "current bot": only a single bot is picked without --bot. */
-export function pickBot(agents: readonly Agent[], wanted?: string): Agent {
+/** No "current bot": only a single bot is picked without --bot. By id first, then by name (`memory --bot` gets the files' bots too). */
+export function pickBot<A extends { id: string; name: string }>(agents: readonly A[], wanted?: string): A {
   const [only] = agents;
   if (!only) throw badArgs(NO_BOT);
   // Error lines keep their own breaks (printableError), so a name loses a line break of its own here.

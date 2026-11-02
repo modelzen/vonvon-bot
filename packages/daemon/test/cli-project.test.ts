@@ -66,6 +66,24 @@ it('project list reads the files with no daemon to reach, but not in a Bot sessi
   expect(read).not.toHaveBeenCalled();
 });
 
+// Codex review 251-1 (main 必败: with no daemon project list read every project whatever --scope said): the owner's
+// --scope is the daemon's to apply (devices 5.3), which cuts the projects to the scope's groups; the files cannot
+it('project list with --scope wants the daemon and reads no file', async () => {
+  const read = vi.fn(async () => overview);
+  let out = '';
+  const io = { json: true, write: (text: string) => { out += text; } };
+  for (const error of [new CommandError('connection', 'daemon 没有运行。先运行 vonvon daemon start。'), new ConnectionError(new Error('ECONNREFUSED'))]) {
+    expect(await caught(runProjectList(io, read, offline(error), {}, true))).toMatchObject({ kind: 'connection', message: expect.stringMatching(/\n给了 --scope 时要 daemon 在运行/) });
+  }
+  expect(read).not.toHaveBeenCalled();
+  expect(out).toBe('');
+  // a daemon that answers still does: it applies the scope itself (D4a)
+  const h = harness(listed());
+  await runProjectList(h.io(true), read, h.daemon, {}, true);
+  expect(JSON.parse(h.out())).toMatchObject({ ok: true, source: 'daemon' });
+  expect(read).not.toHaveBeenCalled();
+});
+
 // main 必败: there was no project rename
 it('project rename finds the project by name or id and sends its revision', async () => {
   const library = vi.fn(async (request: { type: string }) => request.type === 'list'

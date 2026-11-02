@@ -29,7 +29,8 @@ it('makes a pairing link only once an address is open, for this device and that 
     expect(link.device).toEqual({ id: device.deviceId, name: device.name, pk: device.keypair.publicKey });
     expect(link.invite).toMatchObject({ id: reply.payload.inviteId, expiresAt: reply.payload.expiresAt });
     expect(await client.call(call('c', { type: 'clients' }) as never)).toMatchObject({ payload: { kind: 'clients', generation: 0, clients: [] } });
-    for (const payload of [{ type: 'status' }, { type: 'disable', host: '192.0.2.9' }]) expect(await client.call(call(payload.type, payload) as never)).toMatchObject({ type: 'error', code: 'unsupported' });
+    // D3 answers the remote kinds (rpc-device-remote.test.ts)
+    expect(await client.call(call('status', { type: 'status' }) as never)).toMatchObject({ type: 'response', payload: { kind: 'deviceStatus', status: { remote: { port: 7767 } } } });
     expect(await client.call(call('r', { type: 'rename', name: '测试机' }) as never)).toMatchObject({ payload: { kind: 'device', device: { name: '测试机', publicKey: device.keypair.publicKey } } });
     expect(JSON.parse(await readFile(devicesPath(fixture.home, 'device.json'), 'utf8')).name).toBe('测试机');
     const next = await socketClient(fixture.api.port, fixture.credential);

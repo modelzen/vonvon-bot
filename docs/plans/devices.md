@@ -85,8 +85,8 @@ owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的
 - **loopback 永远开着**，端口和今天一样（随机或服务里钉死的，`D/server/http.ts:206,211`），`daemon.pid` 的 `listen` 字段不变。所有 `^127\.0\.0\.1:` 的检查（`vonvon-remote-readiness.md` 第 2 节列了 14 处）照旧，不动。
 - **远程监听**是**另外几个** `http.Server`（`D/server/remote-listeners.ts`），只绑用户明确开启的地址，端口固定（`remote.port`，默认 7767，写进配对链接，所以不能随机；撞端口用 `vonvon remote port <n>` 改，改完要重新生成连接链接）。owner 2026-10-31 问过会不会和 Paseo、Orca 冲突：Paseo 默认 6767，Orca 移动端直连默认 6768（stablyai/orca `mobile/src/transport/host-endpoint.ts`），vonvon 的 loopback 端口随机，都不冲突；owner 确认用 7767。配置在 `<dataRoot>/remote.json`：`{ v: 1, port, addresses: [{ host, enabledAt, kind, iface?, network? }] }`。开启、关闭都在运行中生效（起、停一个 server），不要求重启。
   - 远程 server **用自己的请求处理器**，只有 `GET /health`（回 `{ ok: true, protocolVersion }`，不回设备 id、版本、名字）和 WS 升级；不复用 `serveWebUi`（今天 `http.ts:136-143` 的处理器就是它），不提供静态页面。
-  - **生命周期**（LISTEN-1）：`beginDrain` 时停止绑定重试、停止接受新连接；`release` 时关掉所有远程 server 并等它们关完（今天 `release()` 只关 `acquiredServer`，`http.ts:97-114`）。`createSocketServer`（`ws.ts:22`）改成支持多个 server，每个 server 带自己的 Host/Origin/身份规则。测试：有待执行的重试时排空，进程能退出（systemd 的 `TimeoutStopSec=infinity` 会把退不掉的进程一直挂着）。
-- **地址分类**（照 Orca，`orca-tailscale-relay.md` §A、第四轮）：`loopback`（127/8、::1）、`tailscale`、`lan`（10/8、172.16/12、192.168/16、169.254/16、fc00::/7、fe80::/10）、`cgnat`（100.64.0.0/10 但不在 Tailscale 网卡上，见下）、`public`（其余）。只接受**字面 IP**，不接受主机名（Orca 的理由：DNS 决定绑到哪块网卡）。`public` 和 `cgnat` 要显式确认：CLI `--allow-public`，桌面端一个带风险说明的确认框（第 15 节）。`0.0.0.0`/`::` 按 `public` 处理。
+  - **生命周期**（LISTEN-1）：`beginDrain` 时停止绑定重试、停止接受新连接（2026-11-02 D3 审查后改：排空时远程监听继续开，和本机一样接新连接、只答排空白名单，见 4.7；只停绑定重试和地址巡检）；`release` 时关掉所有远程 server 并等它们关完（今天 `release()` 只关 `acquiredServer`，`http.ts:97-114`）。`createSocketServer`（`ws.ts:22`）改成支持多个 server，每个 server 带自己的 Host/Origin/身份规则。测试：有待执行的重试时排空，进程能退出（systemd 的 `TimeoutStopSec=infinity` 会把退不掉的进程一直挂着）。
+- **地址分类**（照 Orca，`orca-tailscale-relay.md` §A、第四轮）：`loopback`（127/8、::1）、`tailscale`、`lan`（10/8、172.16/12、192.168/16、169.254/16、fc00::/7、fe80::/10）、`cgnat`（100.64.0.0/10 但不在 Tailscale 网卡上，见下）、`public`（其余）。只接受**字面 IP**，不接受主机名（Orca 的理由：DNS 决定绑到哪块网卡）。`public` 和 `cgnat` 要显式确认：CLI `--allow-public`，桌面端一个带风险说明的确认框（第 15 节）。`0.0.0.0`/`::` 按 `public` 处理（2026-11-02 D3 审查后改：本期开启时直接拒绝，链路本地 IPv6 `fe80::/10` 也拒，见 D3 计划第 11 节第 16 条）。
 - **Tailscale 识别**（SEC-8：100.64/10 也是运营商 CGNAT 段，大陆 PPPoE 拨号、云厂商内网都会拿到，只按段认会把 daemon 绑到运营商广域网上）：一个地址算 `tailscale`，要么 `fd7a:115c:a1e0::/48`（只看段），要么是 100.64/10 **且**满足其一：`tailscale ip -4` 输出里有它（macOS 的 `utun*`、Windows 以它为准）；或在名字不区分大小写以 `tailscale` 开头的网卡上（Linux 的 `tailscale0`、Windows 的 `Tailscale`；D3 计划 4.3，2026-11-01 按 U3 计划改）。`vonvon remote enable --tailscale` 和桌面端"用 Tailscale 地址"按钮都用同一个 `D/remote/tailscale.ts`：先调 `tailscale ip -4`（5 秒超时，命令不存在就算没装），再在网卡里核对；没有 `tailscale` 命令就只认 `tailscale0` 网卡上的 100.x。都不满足的 100.64/10 归 `cgnat`。不做 Tailscale 身份（whois）校验，不做 `tailscale serve`。
 - **地址还没出现**（开机时 tailscaled 还没登录）：绑定失败不算错，daemon 每 15 秒重试，状态里写"等待地址 100.x.y.z 出现"；地址消失（`EADDRNOTAVAIL`）同样回到等待。桌面端和 `vonvon remote status` 都能看到。
 - **`lan` 地址换了网络不自动重绑**（SEC-8 场景 2：笔记本在咖啡馆拿到和家里一样的 192.168.1.23）：开启 `lan` 地址时记下网卡名和网络标识（默认网关的 MAC；拿不到就只记网卡名，各平台能否拿到 MAC 未核实），重试绑定前核对，不一致进入"需要确认"状态，桌面端和 `remote status` 显示"网络变了，确认后再开"。`tailscale` 地址不做这项检查（地址由 tailnet 分配，不随物理网络变）。
@@ -166,7 +166,7 @@ owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的
 - **保活**：远程通道上客户端每 20 秒发一帧 `ping`（通道内的控制帧，不进 RPC），30 秒没回算断；服务端 60 秒没收到任何帧关 socket（1001）。loopback 不加保活，今天也没有。
 - **重连**：客户端按 `min(30s, 1s × 2^n)` 退避重连当前设备（非当前设备没有连接，SCOPE-1）。重连成功后比较 `serverInfo.machineId`、`daemonStatus.pid/startedAt`，变了就按"重启过"处理（6.4 最后一行）。
 - **关闭码**（服务端主动关时带上，客户端据此给文案）：`4001 protocol_mismatch`（维护子集外的请求太多，服务端关掉），`4002 unknown_client`（公钥不在 `clients.json`，也没有在 5 秒内带有效邀请配对），`4003 client_revoked`（墓碑命中），`4004 rate_limited`，`4005 handshake_failed`（通道校验失败），`4006 remote_disabled`（地址被关闭，所有该监听上的连接一起关），`4007 pairing_failed`（邀请无效、过期、已用）。今天的 `1001 server_shutdown`、`1008` 不变。4.3、4.7、第 15 节用同一张表。
-- **drain 期间**：服务端排空时远程连接和本机一样只收 `machine.stopHost`、`admin.daemonStatus`、**`machine.coreUpdateStatus`**（DRAIN-1：升级时 `vonvon update` 和界面都在轮询它，今天排空一开始就 `closePeers`、白名单只有前两个，`ws.ts:84-92,138-148`，进度就看不见了），其余回 `draining`。`http.ts` 的 `control()` 同步加这一条；4.5 的维护子集和这里的排空白名单写成同一个常量 `MAINTENANCE_KINDS`。
+- **drain 期间**：服务端排空时远程连接和本机一样只收 `machine.stopHost`、`admin.daemonStatus`、**`machine.coreUpdateStatus`**（DRAIN-1：升级时 `vonvon update` 和界面都在轮询它，今天排空一开始就 `closePeers`、白名单只有前两个，`ws.ts:84-92,138-148`，进度就看不见了），其余回 `draining`。`http.ts` 的 `control()` 同步加这一条；4.5 的维护子集和这里的排空白名单写成同一个常量 `MAINTENANCE_KINDS`。（2026-11-02 D3 复查 248 后改：白名单是 `P/handshake.ts` 的 `DRAIN_KINDS`，和维护子集分成两个常量，另加两条：**`snapshot.get`** 回最后一次建好的快照、`stale: true`，不重建、不问正在停的 Bot 进程，权限照表、Bot 会话照样裁到自己那部分；**`admin.negotiate`** 只记在这条连接上，会话和带 `--scope` 的命令行要先发它才能读快照。原因：排空一开始已有连接照旧 1001 关掉，客户端重连后头一个请求就是快照（`watchSnapshots` 自带一次，桌面 bridge 再要一次），快照不在白名单时又被 1001 关掉，桌面端一直"连上 → 要快照 → 断开 → 重连"，看不到升级进度。白名单外的请求回错误码 `draining`（"daemon 正在停止或重启（比如在升级），这个请求没有处理。等它重新启动后再试。"），**连接不关**；读不懂的请求只要带 id 也回 `draining`，没有 id 可回的帧才 1001 关；协议不同的连接问它本来就不能问的，照 4.5 回 `protocol_mismatch`、连续 20 条 4001 关。命令行把 `draining` 当连接类错误（exit 3），`daemon restart` 照旧报"正在停止或重启"。`release` 时所有连接 1001 关。本机和远程同一套，在共用的 `message-loop.ts` 和 `control()` 里。）
 
 ### 4.8 以后的中继和账号怎么接
 
@@ -607,6 +607,7 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 被更新的那台排空超时（U4） | 那台电脑上的后台 1 分钟内没停完，这次没有安装更新。稍后再试。 |
 | 别的连接报告更新进度（`forbidden`，U4） | 只有这台电脑上的桌面端能报告更新进度。 |
 | 远程更新的状态行（U4） | 在 <设备> 上 <`coreStatusLine` 的原文> |
+| 排空中不收的请求（错误码 `draining`，4.7，D3 复查 248） | daemon 正在停止或重启（比如在升级），这个请求没有处理。等它重新启动后再试。 |
 
 ## 16. 风险
 

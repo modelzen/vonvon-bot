@@ -81,6 +81,20 @@ describe('the memory RPC on the files', () => {
     expect(events.kind).toBe('events');
   });
 
+  // C5 main 必败: no branchDelete
+  it('deletes a branch as the command line, a conflict and the store refusals as replies', async () => {
+    const { call } = setup('cli');
+    const one = item(await call({ type: 'add', scope: bot, text: '一', branch: '甲' }));
+    await call({ type: 'add', scope: bot, text: '二', branch: '甲' });
+    expect(await call({ type: 'branchDelete', scope: bot, name: '甲', expected: 1 })).toMatchObject({ kind: 'conflict', message: '分支里的条目刚变过，重新看一次再删' });
+    expect(await call({ type: 'branchDelete', scope: bot, name: '合作方式' })).toMatchObject({ kind: 'refused', reason: 'fixed-branch' });
+    const deleted = await call({ type: 'branchDelete', scope: bot, name: '甲', expected: 2 });
+    expect(deleted).toMatchObject({ kind: 'branches', moved: 2 });
+    expect(deleted.kind === 'branches' && deleted.branches.map(branch => branch.name)).not.toContain('甲');
+    const events = await call({ type: 'events', scope: bot, itemId: one.item.id });
+    expect(events.kind === 'events' && events.events.at(-1)).toMatchObject({ kind: 'archive', actor: { role: 'cli' } });
+  });
+
   it('undoes a merge by event id', async () => {
     const { call } = setup();
     await call({ type: 'add', scope: bot, text: '一', branch: '甲' });

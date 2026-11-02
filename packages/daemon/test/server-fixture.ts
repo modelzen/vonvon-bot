@@ -43,9 +43,10 @@ export function fakeService(overrides: Partial<AdminService> = {}): AdminService
 }
 /** The daemon start every fixture reports in daemonStatus (devices 4.7). */
 export const FIXTURE_STARTED_AT = 1_700_000_000_000;
-/** `askBot`: a session's Bot process for ★ requests (devices-4b 4.3). `distribution`: how the daemon was installed, for
- * serverInfo's `update.*` (devices-ui-2 4.11); a source checkout by default, so no fixture asks npm for its global root. */
-export async function startFixture(service = fakeService(), environmentOptions?: EnvironmentServiceOptions, serviceActions: StartApiOptions['serviceActions'] = noServiceManager, askBot?: StartApiOptions['askBot'],
+/** `remote`: the remote listener's seams (devices 4.2). `askBot`: a session's Bot process for ★ requests (devices-4b 4.3).
+ * `distribution`: how the daemon was installed, for serverInfo's `update.*` (devices-ui-2 4.11); a source checkout by
+ * default, so no fixture asks npm for its global root. */
+export async function startFixture(service = fakeService(), environmentOptions?: EnvironmentServiceOptions, serviceActions: StartApiOptions['serviceActions'] = noServiceManager, remote?: StartApiOptions['remote'], askBot?: StartApiOptions['askBot'],
   distribution: NonNullable<StartApiOptions['distribution']> = async () => ({ kind: 'unknown' })) {
   const home = await mkdtemp(join(tmpdir(), 'vonvon-api-'));
   testHome.current = home;
@@ -53,12 +54,12 @@ export async function startFixture(service = fakeService(), environmentOptions?:
   const control: ShutdownControl = { requested: false, waitForRequest: () => new Promise<void>(() => {}), dispose: () => {}, requestStop: vi.fn(), requestRestart: vi.fn(), completeShutdown: release => release() };
   // devices-4a 4.1: the host's Bot-session tokens, which a test issues as a Bot process would ask for them
   const sessionTokens = createSessionTokens();
-  const api = await startApi({ service, port: 0, control, environmentOptions, serviceActions, startedAt: FIXTURE_STARTED_AT, sessionTokens, distribution, ...(askBot ? { askBot } : {}) });
+  const api = await startApi({ service, port: 0, control, environmentOptions, serviceActions, startedAt: FIXTURE_STARTED_AT, sessionTokens, distribution, ...(remote ? { remote } : {}), ...(askBot ? { askBot } : {}) });
   const credential = (await readFile(join(home, 'local-credential'), 'utf8')).trim();
   return { api, home, credential, control, sessionTokens, close: async () => { await api.close(); await rm(home, { recursive: true, force: true }); } };
 }
 export type Frame = Event | ReplyEnvelope | ServerInfo;
-export async function socketClient(port: number, credential?: string, version: number = PROTOCOL_VERSION, timeoutMs = 3000) {
+export async function socketClient(port: number, credential?: string, version: number = PROTOCOL_VERSION, timeoutMs = 3000, clientKind: 'cli' | 'web' | 'desktop' = 'cli') {
   const socket = new WebSocket(`ws://127.0.0.1:${port}`);
   const frames: Frame[] = [];
   const waiters = new Set<() => void>();
@@ -81,6 +82,6 @@ export async function socketClient(port: number, credential?: string, version: n
       waiters.add(check);
     });
   }
-  socket.send(JSON.stringify({ type: 'hello', clientKind: 'cli', protocolVersion: version, ...(credential ? { credential } : {}) }));
+  socket.send(JSON.stringify({ type: 'hello', clientKind, protocolVersion: version, ...(credential ? { credential } : {}) }));
   return { socket, frames, wait, async ready() { await wait(frame => frame.type === 'serverInfo'); }, async call(request: Request) { socket.send(JSON.stringify(request)); return wait(frame => (frame.type === 'response' || frame.type === 'error') && frame.id === request.id); }, async close() { if (socket.readyState === WebSocket.CLOSED) return; await new Promise<void>(resolve => { socket.once('close', () => resolve()); socket.close(); }); } };
 }

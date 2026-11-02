@@ -1,9 +1,11 @@
 import { encodePairingLink, type DeviceReply, type DeviceRequest } from '@vonvon/protocol';
+import { canonicalHost, resolveEnable, type EnableDeps } from '../../remote/address';
 import type { ClientRegistry } from '../../remote/clients';
-import { readRemoteConfig } from '../../remote/config';
+import { disableAddress, enableAddress, readRemoteConfig, setPort, updateRemoteConfig, type RemoteConfig } from '../../remote/config';
 import type { DeviceHolder, DeviceIdentity } from '../../remote/device';
 import type { InviteBook } from '../../remote/pairing';
 import { RpcError, unsupported } from '../errors';
+import type { RemoteListeners } from '../remote-listeners';
 import type { RpcOutcome } from '../rpc';
 import type { Peer } from '../ws';
 
@@ -14,14 +16,36 @@ export interface DeviceDeps {
   /** Held here, so a rename reaches the next server info; renames take turns there. */
   identity: DeviceHolder;
   clients: ClientRegistry; invites: InviteBook;
+  /** D3: the remote listeners, what opening an address asks of this machine, and how many paired clients are connected. */
+  remote?: { listeners: RemoteListeners; enable: EnableDeps; active(): number };
 }
 const deviceView = ({ deviceId, name, keypair }: DeviceIdentity) => ({ id: deviceId, name, publicKey: keypair.publicKey });
 
-/** The `device` RPC (devices 4.3). `status/enable/disable/setPort` arrive with the remote listeners (D3). */
+/** The `device` RPC (devices 4.3; the remote addresses: D3 4.7). A change to the addresses is written, then the
+ * listeners follow it before the reply: the status it carries is what they do now. */
 export async function deviceRpc(deps: DeviceDeps, peer: Pick<Peer, 'principal'>, request: DeviceRequest): Promise<RpcOutcome<DeviceReply>> {
   const read = (value: DeviceReply): RpcOutcome<DeviceReply> => ({ kind: 'read', value });
+  const { remote } = deps;
+  const status = (port: number): RpcOutcome<DeviceReply> => read({ kind: 'deviceStatus', status: {
+    device: deviceView(deps.identity.current),
+    remote: { port, addresses: remote?.listeners.status() ?? [] },
+    clients: { total: deps.clients.list().filter(client => client.revokedAt === undefined).length, active: remote?.active() ?? 0 },
+  } });
+  const change = async (next: (config: RemoteConfig) => RemoteConfig): Promise<RpcOutcome<DeviceReply>> => {
+    if (!remote) return unsupported();
+    const config = await updateRemoteConfig(deps.home, next);
+    await remote.listeners.sync(config);
+    return status(config.port);
+  };
   switch (request.type) {
-    case 'status': case 'enable': case 'disable': case 'setPort': return unsupported();
+    case 'status': return remote ? status((await readRemoteConfig(deps.home)).port) : unsupported();
+    case 'enable': {
+      if (!remote) return unsupported();
+      const address = await resolveEnable(request, remote.enable);
+      return change(config => enableAddress(config, address));
+    }
+    case 'disable': return change(config => disableAddress(config, canonicalHost(request.host)));
+    case 'setPort': return change(config => setPort(config, request.port));
     case 'pair': {
       const config = await readRemoteConfig(deps.home);
       if (!config.addresses.length) throw new RpcError('no_remote_address', NO_REMOTE_ADDRESS);

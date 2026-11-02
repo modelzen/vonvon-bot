@@ -27,13 +27,6 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
 
   'collaboration.startGoal': { reason: 'unused', note: 'goals start in the group chat; no client sends it' },
 
-  'memory.restore': pending('C5', 'memory restore'),
-  'memory.promote': pending('C5', 'memory promote'),
-  'memory.move': pending('C5', 'memory move'),
-  'memory.confirm': pending('C5', 'memory confirm'),
-  'memory.purge': pending('C5', 'memory purge'),
-  'memory.undo': pending('C5', 'memory undo'),
-  'memory.events': pending('C5', 'memory events'),
   'memory.seen': { reason: 'client-only', note: "the web page's read marks" },
   'memory.newCounts': { reason: 'client-only', note: "the web page's unread counts" },
 
@@ -48,10 +41,5 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'machine.service.start': { reason: 'desktop-only', note: "the shell's 启动服务" },
   'machine.service.stop': { reason: 'desktop-only', note: "the shell's 停止服务" },
 
-  // devices 4: the remote listeners and their commands come with D3
-  'device.status': pending('D3', 'vonvon remote status'),
-  'device.enable': pending('D3', 'vonvon remote enable'),
-  'device.disable': pending('D3', 'vonvon remote disable'),
-  'device.setPort': pending('D3', 'vonvon remote port'),
   'admin.negotiate': { reason: 'internal', note: 'each client sends it after the handshake' },
 };

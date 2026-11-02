@@ -102,7 +102,7 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
   // What memory_list, memory_add, memory_update and memory_forget do, and reading it out: the Bot process says where a
   // write lands and whether an item may be changed (memory-authority, D4b). The rest is the owner's.
   ...rows('memory', 'list export events add edit archive', { dm: 'bot', group: 'bot', comment: 'deny' }),
-  ...rows('memory', 'restore promote move branchRename branchMerge confirm purge undo reseal seen newCounts'),
+  ...rows('memory', 'restore promote move branchRename branchMerge branchDelete confirm purge undo reseal seen newCounts'),
   ...rows('contextPreview', 'get'),
   ...rows('schedule', 'list create edit pause resume delete runNow', { dm: 'not-group', group: 'bot', comment: 'not-group' }),
   ...rows('schedule', 'listBot', { dm: 'not-group', group: 'deny', comment: 'not-group' }),
