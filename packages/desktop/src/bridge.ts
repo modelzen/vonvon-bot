@@ -1,18 +1,21 @@
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { shell, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
-import { ConnectionError, RpcError } from '@vonvon/client/browser';
+import { ConnectionError, RpcError, type VonvonClient } from '@vonvon/client/browser';
 import {
   adminRequestSchema, agentIdSchema, collaborationRequestSchema, commandSchema, scheduleRequestSchema,
   directoryRequestSchema, environmentRequestSchema, libraryRequestSchema, machineRequestSchema, memoryRequestSchema, contextPreviewRequestSchema, deviceRequestSchema,
-  settingsRequestSchema, machineReplySchema, type DesktopUpdate, type MachineReply,
+  settingsRequestSchema, machineReplySchema, addDeviceRequestSchema, viewIdSchema, LOCAL_VIEW,
+  type DesktopSnapshot, type DesktopUpdate, type MachineReply, type ViewId,
 } from '@vonvon/protocol';
+import { DeviceConnectionsError, type DeviceConnections, type ViewChange, type ViewSession } from './connections.js';
+import { RegistryError } from './device-registry.js';
 import { allowedExternalUrl, type ExternalUrlKind } from '../../ui/src/url-actions.js';
 import { ServiceActionError } from './service-error.js';
 import { StartHostRefusal } from './daemon-manager.js';
 import { DesktopUpdateError } from './updates.js';
 import {
-  desktopChannels, desktopShellRequestSchema, safeErrorCode, type AttachedDaemon, type DesktopBridge, type DesktopEvent,
+  desktopChannels, desktopShellRequestSchema, safeErrorCode, viewArgumentSchema, type AttachedDaemon, type DesktopBridge, type DesktopEvent,
   type DesktopResources, type IpcResult, type SafeFailure, type ShellActions,
 } from './ipc-contract.js';
 
@@ -89,12 +92,40 @@ export function sanitizeDaemonMessage(raw: string): string {
   return `${chars.slice(0, daemonMessageLimit - 1).join('')}…`;
 }
 
+/** A request for the device the page shows while it has no connection (devices-ui-1a 4.5). */
+export class DeviceUnavailable extends Error {
+  constructor(name: string) { super(`还没连上「${name}」。`); this.name = 'DeviceUnavailable'; }
+}
+/** A request from a page of the device shown before the last switch: never sent to the one shown now. */
+export class DeviceSwitched extends Error {
+  constructor() { super('已经切到另一台设备，这次操作没有发出。'); this.name = 'DeviceSwitched'; }
+}
+/** What only this computer's shell may do, refused while another device is shown, or always from the page. */
+export class LocalOnlyRefusal extends Error {
+  constructor(message: string, readonly code: string = 'local_only') { super(message); this.name = 'LocalOnlyRefusal'; }
+}
+const deviceErrorText: Record<string, string> = {
+  disposed: 'Vonvon Bot 正在退出。',
+  unknown_device: '设备列表里没有这台设备。',
+  local_device: '这台电脑不能在这里删除或改名。',
+  invalid_name: '名字要 1 到 40 个字。',
+  registry_newer: '设备列表是更新版本的 Vonvon Bot 写的，这个版本只能看、不能改。先更新这台电脑上的应用。',
+  registry_unreadable: '读不了设备列表文件，暂时不能修改。看一下 Vonvon Bot 的数据目录权限。',
+};
+
 function safeFailure(error: unknown): SafeFailure {
   if (error instanceof RpcError) {
     const code = safeErrorCode(error.code);
     return { kind: 'rpc', message: sanitizeDaemonMessage(error.message), ...(code ? { code } : {}) };
   }
   if (error instanceof ConnectionError) return { kind: 'connection', message: '和后台的连接断开了。' };
+  if (error instanceof DeviceUnavailable) return { kind: 'connection', code: 'device_unavailable', message: error.message };
+  if (error instanceof DeviceSwitched) return { kind: 'connection', code: 'device_switched', message: error.message };
+  if (error instanceof LocalOnlyRefusal) return { kind: 'validation', code: error.code, message: error.message };
+  if (error instanceof DeviceConnectionsError || error instanceof RegistryError) {
+    const message = deviceErrorText[error.code];
+    if (message) return { kind: 'validation', code: error.code, message };
+  }
   if (error instanceof ServiceActionError) return { kind: 'validation', message: sanitizeDaemonMessage(error.safeMessage) };
   if (error instanceof StartHostRefusal || error instanceof DesktopUpdateError) return { kind: 'validation', message: error.message };
   return { kind: 'validation', message: '桌面端操作没有成功，请重试。' };
@@ -112,8 +143,21 @@ function stoppedView(before: MachineStatus): MachineStatus {
   return { ...rest, host: null, service: { ...before.service, running: false, pid: undefined, ...(state ? { state } : {}) } };
 }
 
+/** What the page is shown: this computer, a remote device's connection, or a remote device with no connection right now. */
+type View = { kind: 'local' } | { kind: 'remote'; session: ViewSession } | { kind: 'waiting'; id: string };
+type Binding = {
+  dispose(): void;
+  connectionFailure(): ConnectionError | undefined;
+  activate(initial: DesktopSnapshot): void;
+};
+/** The login-time switch of a remote device, which the remote page sends through `machine` (U2 4.4.3). */
+const remoteServiceToggle = (value: unknown): boolean => {
+  const parsed = desktopShellRequestSchema.safeParse(value);
+  return parsed.success && parsed.data.type === 'service' && (parsed.data.action === 'install' || parsed.data.action === 'uninstall');
+};
+
 export function installBridge(
-  owner: AttachedDaemon, window: BrowserWindow, paths: DesktopResources, actions: ShellActions,
+  owner: AttachedDaemon, window: BrowserWindow, paths: DesktopResources, actions: ShellActions, devices: DeviceConnections,
 ): DesktopBridge {
   const expectedUrl = pathToFileURL(realpathSync(paths.uiIndex)).href;
   let disposed = false;
@@ -122,12 +166,24 @@ export function installBridge(
   let pendingQuit = false;
   let retainedUpdate: DesktopUpdate | undefined;
   let connectionLost = false;
-  let activeOwner: AttachedDaemon | null = owner;
+  /** This computer's connection, whichever device the page shows. */
+  let localDaemon: AttachedDaemon | null = owner;
   let replacing: Promise<void> | undefined;
   let candidate: AttachedDaemon | null = null;
   let stoppedStatus: MachineStatus | undefined;
   let lastStatus: MachineStatus | undefined;
   const retainedErrors: SafeFailure[] = [];
+  let view: View = { kind: 'local' };
+  /** The local connection's own subscriptions (losses, device events): follow `localDaemon`, not the view. */
+  let localWatch: (() => void) | null = null;
+  /** The binding of what the page is shown, or none. */
+  let viewBinding: Binding | null = null;
+  /** Bumped by every view change and every local replacement: an await that sees another value is stale. */
+  let viewSeq = 0;
+  let localGen = 0;
+  /** The local connection was lost while a remote device was shown: reported once the page is back here. */
+  let localLostPending = false;
+  const localOwnerListeners = new Set<(owner: AttachedDaemon) => void>();
 
   function currentDocument(): boolean {
     if (disposed || window.isDestroyed() || window.webContents.isDestroyed()) return false;
@@ -164,67 +220,147 @@ export function installBridge(
     retainedErrors.push(error);
     if (retainedErrors.length > 32) retainedErrors.shift();
   }
-
-  function onError(error: Error, from: AttachedDaemon): void {
-    if (disposed) return;
-    // The shell owns reattachment and reports a drop if recovery fails.
-    if (error instanceof ConnectionError && (actions.isExpectedDisconnect() || actions.recoverConnection(from.identity))) return;
+  function report(error: Error): void {
     const safe = safeFailure(error);
     if (!subscribed || !currentDocument()) retain(safe);
     else send({ type: 'error', value: safe });
-    if (error instanceof ConnectionError && !connectionLost) {
-      connectionLost = true;
-      actions.connectionLost();
-    }
+  }
+  function lost(): void {
+    if (connectionLost) return;
+    connectionLost = true;
+    actions.connectionLost();
   }
 
-  function client(): AttachedDaemon['client'] {
-    if (!activeOwner) throw new Error('Daemon connection unavailable');
-    return activeOwner.client;
+  /** devices-ui-1a 4.5 `localLost`: the shell owns reattachment and reports a drop it cannot recover; while a remote
+   * device is shown, only once the page is back here. */
+  function localLost(error: ConnectionError, from: AttachedDaemon): void {
+    if (disposed || from !== localDaemon) return;
+    if (actions.isExpectedDisconnect() || actions.recoverConnection(from.identity)) return;
+    devices.setLocal({ status: 'offline' });
+    if (view.kind !== 'local') { localLostPending = true; return; }
+    report(error);
+    lost();
+  }
+  function watchLocal(current: AttachedDaemon): () => void {
+    const offError = current.client.onError(error => { if (error instanceof ConnectionError) localLost(error, current); });
+    const offDevice = current.client.onDevice(value => send({ type: 'localDevice', value }));
+    return () => { offError(); offDevice(); };
+  }
+
+  function viewId(): ViewId {
+    return view.kind === 'local' ? LOCAL_VIEW : view.kind === 'remote' ? view.session.id : view.id;
+  }
+  function deviceName(id: string): string {
+    return devices.state().devices.find(device => device.id === id)?.name ?? '另一台设备';
+  }
+  function client(): VonvonClient {
+    if (view.kind === 'remote') return view.session.client;
+    if (view.kind === 'waiting') throw new DeviceUnavailable(deviceName(view.id));
+    if (!localDaemon) throw new Error('Daemon connection unavailable');
+    return localDaemon.client;
+  }
+  function localOnly(): void {
+    if (view.kind !== 'local') throw new LocalOnlyRefusal(`现在看的是「${deviceName(viewId())}」，这个操作只对这台电脑有效。先切回这台电脑。`);
   }
 
   /** A login-item switch changed the service: machine `status` reads it again, and the daemon pushes the new snapshot. */
   async function refreshService(): Promise<void> {
-    await activeOwner?.client.machine({ type: 'status' }).catch(() => {});
+    await localDaemon?.client.machine({ type: 'status' }).catch(() => {});
   }
 
-  function bind(current: AttachedDaemon, paused = false) {
-    let latest: Awaited<ReturnType<AttachedDaemon['client']['snapshot']>> | undefined;
+  /** The page's subscriptions to `target`. Sends only while it is the view's binding and not paused, so one replaced or
+   * stale sends nothing even before its listeners are gone. */
+  function bind(target: { view: ViewId; client: VonvonClient }, paused = false): Binding {
+    let latest: DesktopSnapshot | undefined;
     let revision = -1;
     let bound = true;
     let connectionFailure: ConnectionError | undefined;
     const removers: (() => void)[] = [];
-    const dispose = () => { if (!bound) return; bound = false; latest = undefined; for (const off of removers) off(); };
-    try {
-      removers.push(current.client.watchSnapshots(value => {
-        if (!bound || value.revision < revision) return;
-        revision = value.revision;
-        // A paused binding is the candidate of a replacement: it keeps the newest until activated.
-        if (paused) latest = value;
-        else if (activeOwner === current) send({ type: 'snapshot', value });
-      }));
-      removers.push(current.client.onLog(value => { if (!paused && activeOwner === current) send({ type: 'log', value }); }));
-      removers.push(current.client.onBackendInstall(value => { if (!paused && activeOwner === current) send({ type: 'backendInstall', value }); }));
-      removers.push(current.client.onError(error => {
-        if (paused && error instanceof ConnectionError) connectionFailure = error;
-        else if (!paused && activeOwner === current) onError(error, current);
-      }));
-    } catch (error) { dispose(); throw error; }
-    return {
-      dispose,
+    const live = (): boolean => bound && !paused && viewBinding === binding;
+    const binding: Binding = {
+      dispose() { if (!bound) return; bound = false; latest = undefined; for (const off of removers) off(); },
       connectionFailure: () => connectionFailure,
-      activate(initial: Awaited<ReturnType<AttachedDaemon['client']['snapshot']>>) {
+      activate(initial) {
         const value = latest && latest.revision >= initial.revision ? latest : initial;
         latest = undefined;
         revision = value.revision;
         paused = false;
-        send({ type: 'snapshot', value });
+        send({ type: 'snapshot', view: target.view, value });
       },
     };
+    try {
+      removers.push(target.client.watchSnapshots(value => {
+        if (!bound || value.revision < revision) return;
+        revision = value.revision;
+        // A paused binding is the candidate of a replacement or a switch: it keeps the newest until activated.
+        if (paused) latest = value;
+        else if (viewBinding === binding) send({ type: 'snapshot', view: target.view, value });
+      }));
+      removers.push(target.client.onLog(value => { if (live()) send({ type: 'log', view: target.view, value }); }));
+      removers.push(target.client.onBackendInstall(value => { if (live()) send({ type: 'backendInstall', view: target.view, value }); }));
+      removers.push(target.client.onDevice(value => { if (live()) send({ type: 'device', view: target.view, value }); }));
+      // Lost connections are not the page's: the local one is watchLocal's, a remote one the connections'.
+      removers.push(target.client.onError(error => {
+        if (error instanceof ConnectionError) { if (paused) connectionFailure = error; return; }
+        if (live()) report(error);
+      }));
+    } catch (error) { binding.dispose(); throw error; }
+    return binding;
   }
 
-  let binding = bind(owner);
+  /** devices-ui-1a 4.5 `onView`: after each await, only the latest change goes on. */
+  async function onView(change: ViewChange): Promise<void> {
+    if (disposed) return;
+    const seq = ++viewSeq;
+    viewBinding?.dispose();
+    viewBinding = null;
+    if (change.kind === 'waiting') { view = { kind: 'waiting', id: change.id }; return; }
+    if (change.kind === 'local') {
+      view = { kind: 'local' };
+      // The replacement in flight binds its connection itself once it sees this view.
+      if (replacing) return;
+      const current = localDaemon;
+      // Lost while another device was shown: the connection is still set but dead, so it is reported now, as here.
+      if (!current || localLostPending) {
+        send({ type: 'reattached', view: LOCAL_VIEW });
+        if (localLostPending) { localLostPending = false; lost(); }
+        return;
+      }
+      const myLocalGen = localGen;
+      const binding = bind({ view: LOCAL_VIEW, client: current.client }, true);
+      viewBinding = binding;
+      let initial: DesktopSnapshot;
+      try { initial = await current.client.snapshot(); }
+      catch { binding.dispose(); if (viewBinding === binding) viewBinding = null; return; }
+      if (disposed || seq !== viewSeq || myLocalGen !== localGen) { binding.dispose(); return; }
+      send({ type: 'reattached', view: LOCAL_VIEW });
+      binding.activate(initial);
+      return;
+    }
+    const { session } = change;
+    view = { kind: 'remote', session };
+    // A device of another protocol pushes no snapshots and answers no snapshot request.
+    if (session.mode === 'maintenance') { send({ type: 'reattached', view: session.id }); return; }
+    let binding: Binding;
+    try { binding = bind({ view: session.id, client: session.client }, true); }
+    catch { return; }
+    viewBinding = binding;
+    let initial: DesktopSnapshot;
+    // Lost again right away: the connections say waiting next.
+    try { initial = await session.client.snapshot(); }
+    catch { binding.dispose(); if (viewBinding === binding) viewBinding = null; return; }
+    if (disposed || seq !== viewSeq) { binding.dispose(); return; }
+    send({ type: 'reattached', view: session.id });
+    binding.activate(initial);
+  }
+
+  if (devices.view().kind === 'local') {
+    viewBinding = bind({ view: LOCAL_VIEW, client: owner.client });
+  } else void onView(devices.view());
+  try { localWatch = watchLocal(owner); }
+  catch (error) { viewBinding?.dispose(); throw error; }
   const registeredChannels: string[] = [];
+  const unsubscribers: (() => void)[] = [];
 
   function register<T>(channel: string, arity: number, parse: (...values: unknown[]) => T,
     invoke: (value: T) => Promise<unknown>): void {
@@ -236,30 +372,60 @@ export function installBridge(
     });
     registeredChannels.push(channel);
   }
+  /** A channel to a daemon: one more argument, the page's device; a page of another device than the one shown now is
+   * answered `device_switched` and nothing is sent (devices-ui-1a 4.6). */
+  function registerClient<T>(channel: string, arity: number, parse: (...values: unknown[]) => T,
+    invoke: (value: T) => Promise<unknown>): void {
+    register(channel, arity + 1, (...values) => {
+      const target = viewArgumentSchema.parse(values[arity]);
+      if (target !== 'current' && target !== viewId()) throw new DeviceSwitched();
+      return parse(...values.slice(0, arity));
+    }, invoke);
+  }
 
   const noArg = (_: unknown): undefined => undefined;
   const onNavigation = (): void => { subscribed = false; };
   try {
-    register(desktopChannels.snapshot, 0, noArg, () => client().snapshot());
-    register(desktopChannels.run, 1, value => commandSchema.parse(value), value => {
-      if (value.type !== 'restartHost' || !activeOwner) return client().run(value);
-      return actions.restartHost(activeOwner.identity, () => client().run(value));
+    registerClient(desktopChannels.snapshot, 0, noArg, () => client().snapshot());
+    registerClient(desktopChannels.run, 1, value => commandSchema.parse(value), value => {
+      if (value.type !== 'restartHost') return client().run(value);
+      if (view.kind !== 'local') {
+        // A remote restart is followed by its disconnect, not by this computer's pid lock.
+        const remote = client();
+        devices.expect('restart');
+        return remote.run(value);
+      }
+      const current = localDaemon;
+      if (!current) return client().run(value);
+      return actions.restartHost(current.identity, () => current.client.run(value));
     });
-    register(desktopChannels.settings, 1, value => settingsRequestSchema.parse(value), value => client().settings(value));
-    register(desktopChannels.collaboration, 1, value => collaborationRequestSchema.parse(value), value => client().collaboration(value));
-    register(desktopChannels.environment, 1, value => environmentRequestSchema.parse(value), value => client().environment(value));
-    register(desktopChannels.machine, 1, value => {
-      if (desktopShellRequestSchema.safeParse(value).success) throw new Error('Shell-owned machine action');
+    registerClient(desktopChannels.settings, 1, value => settingsRequestSchema.parse(value), value => client().settings(value));
+    registerClient(desktopChannels.collaboration, 1, value => collaborationRequestSchema.parse(value), value => client().collaboration(value));
+    registerClient(desktopChannels.environment, 1, value => environmentRequestSchema.parse(value), value => client().environment(value));
+    registerClient(desktopChannels.machine, 1, value => {
+      // The shell's own actions never reach a daemon; a remote device's login-time switch is that device's own.
+      if (desktopShellRequestSchema.safeParse(value).success && !(view.kind !== 'local' && remoteServiceToggle(value))) throw new Error('Shell-owned machine action');
       return machineRequestSchema.parse(value);
     }, async value => {
-      if (value.type === 'stopHost' && activeOwner) {
-        const owner = activeOwner;
+      if (view.kind !== 'local') {
+        const remote = client();
+        // The daemon answers, then the helper replaces it: a restart, not a lost device.
+        if (value.type === 'service') devices.expect('restart');
+        if (value.type === 'stopHost') devices.expect('stop');
+        return remote.machine(value);
+      }
+      if (value.type === 'service') throw new Error('Shell-owned machine action');
+      if (value.type === 'stopHost' && localDaemon) {
+        const current = localDaemon;
         // Preserve the last readable machine status when the pre-stop status request fails.
-        const read = await owner.client.machine({ type: 'status' }).catch(() => undefined);
+        const read = await current.client.machine({ type: 'status' }).catch(() => undefined);
         const before = read?.type === 'status' ? read : lastStatus;
-        const reply = await actions.stopHost(owner.identity, () => owner.client.machine(value));
+        const reply = await actions.stopHost(current.identity, () => current.client.machine(value));
         // A replacement connected while stopping must keep its own status.
-        if (before && activeOwner === owner) stoppedStatus = stoppedView(before);
+        if (before && localDaemon === current) {
+          stoppedStatus = stoppedView(before);
+          devices.setLocal({ status: 'offline' });
+        }
         return reply;
       }
       const reply = value.type === 'status' && stoppedStatus ? stoppedStatus : await client().machine(value);
@@ -267,23 +433,34 @@ export function installBridge(
       return value.type === 'status' && reply.type === 'status'
         ? { ...reply, cli: await actions.observeCli() } : reply;
     });
-    register(desktopChannels.admin, 1, value => adminRequestSchema.parse(value), value => client().admin(value));
-    register(desktopChannels.memory, 1, value => memoryRequestSchema.parse(value), value => client().memory(value));
-    register(desktopChannels.contextPreview, 1, value => contextPreviewRequestSchema.parse(value), value => client().contextPreview(value));
-    register(desktopChannels.directory, 1, value => directoryRequestSchema.parse(value), value => client().directory(value));
-    register(desktopChannels.library, 1, value => libraryRequestSchema.parse(value), value => client().library(value));
-    register(desktopChannels.schedule, 2, (botId, request) => ({ botId: agentIdSchema.parse(botId), request: scheduleRequestSchema.parse(request) }),
+    registerClient(desktopChannels.admin, 1, value => {
+      const request = adminRequestSchema.parse(value);
+      // One negotiate per connection, and the desktop makes it on its own (U4's capability): never the page's.
+      if (request.type === 'negotiate') throw new LocalOnlyRefusal('能力由桌面端自己声明。', 'shell_owned');
+      return request;
+    }, value => client().admin(value));
+    registerClient(desktopChannels.memory, 1, value => memoryRequestSchema.parse(value), value => client().memory(value));
+    registerClient(desktopChannels.contextPreview, 1, value => contextPreviewRequestSchema.parse(value), value => client().contextPreview(value));
+    registerClient(desktopChannels.directory, 1, value => directoryRequestSchema.parse(value), value => client().directory(value));
+    registerClient(desktopChannels.library, 1, value => libraryRequestSchema.parse(value), value => client().library(value));
+    registerClient(desktopChannels.schedule, 2, (botId, request) => ({ botId: agentIdSchema.parse(botId), request: scheduleRequestSchema.parse(request) }),
       value => client().schedule(value.botId, value.request));
-    register(desktopChannels.device, 1, value => deviceRequestSchema.parse(value), value => client().device(value));
-    register(desktopChannels.close, 0, noArg, () => activeOwner?.dispose() ?? Promise.resolve());
+    registerClient(desktopChannels.device, 1, value => deviceRequestSchema.parse(value), value => client().device(value));
+    // Never this computer's connection from a remote view.
+    registerClient(desktopChannels.close, 0, noArg, () => view.kind === 'local' ? localDaemon?.dispose() ?? Promise.resolve() : Promise.resolve());
     register(desktopChannels.external, 1, value => value, openAllowedExternal);
     register(desktopChannels.startHost, 1, value => {
+      localOnly();
       const request = desktopShellRequestSchema.parse(value);
       if (request.type !== 'startHost') throw new Error('Invalid start request');
       return request;
-    },
-      value => actions.startHost(value.bot).then(reply => machineReplySchema.parse(reply)));
+    }, async value => {
+      devices.setLocal({ status: 'connecting' });
+      try { return machineReplySchema.parse(await actions.startHost(value.bot)); }
+      catch (error) { if (!localDaemon) devices.setLocal({ status: 'offline' }); else devices.setLocal({ status: 'online' }); throw error; }
+    });
     register(desktopChannels.service, 1, value => {
+      localOnly();
       const request = desktopShellRequestSchema.parse(value);
       if (request.type !== 'service') throw new Error('Invalid service request');
       return request.action;
@@ -292,25 +469,28 @@ export function installBridge(
       if (before && before.type !== 'status') throw new Error('Cannot read service status');
       const switchesLoginItem = value === 'install' || value === 'uninstall';
       let reply: MachineReply;
-      try { reply = machineReplySchema.parse(await actions.service(value, activeOwner?.identity ?? null)); }
+      try { reply = machineReplySchema.parse(await actions.service(value, localDaemon?.identity ?? null)); }
       finally { if (switchesLoginItem) await refreshService(); }
       if (value === 'stop' && before?.type === 'status') {
         stoppedStatus = stoppedView(before);
+        devices.setLocal({ status: 'offline' });
       }
       return reply;
     });
     register(desktopChannels.setLoginItem, 1, value => {
+      localOnly();
       if (typeof value !== 'boolean') throw new Error('Invalid login item request');
       return value;
     }, async value => {
       // A failed switch may still have changed the service, so the state is read again either way.
-      try { await actions.setLoginItem(value, activeOwner?.identity ?? null); }
+      try { await actions.setLoginItem(value, localDaemon?.identity ?? null); }
       finally { await refreshService(); }
     });
-    register(desktopChannels.repairCli, 0, noArg,
+    register(desktopChannels.repairCli, 0, () => { localOnly(); },
       () => actions.repairCli().then(reply => machineReplySchema.parse(reply)));
-    register(desktopChannels.chooseExecutablePath, 0, noArg, () => actions.chooseExecutablePath());
+    register(desktopChannels.chooseExecutablePath, 0, () => { localOnly(); }, () => actions.chooseExecutablePath());
     register(desktopChannels.chooseDirectoryPaths, 1, value => {
+      localOnly();
       if (typeof value !== 'boolean') throw new Error('Invalid directory request');
       return value;
     }, value => actions.chooseDirectoryPaths(value));
@@ -319,6 +499,20 @@ export function installBridge(
     register(desktopChannels.installDesktopUpdate, 0, noArg, () => updateResult(() => actions.installDesktopUpdate()));
     register(desktopChannels.hide, 0, noArg, async () => { actions.hide(); });
     register(desktopChannels.quit, 0, noArg, () => actions.confirmQuit());
+    register(desktopChannels.devicesState, 0, noArg, async () => devices.state());
+    register(desktopChannels.devicesInspect, 1, value => {
+      if (typeof value !== 'string' || value.length > 65_536) throw new Error('Invalid link');
+      return value;
+    }, async value => devices.inspectLink(value));
+    register(desktopChannels.devicesAdd, 1, value => addDeviceRequestSchema.parse(value), value => devices.add(value));
+    register(desktopChannels.devicesCancelAdd, 0, noArg, async () => { devices.cancelAdd(); });
+    register(desktopChannels.devicesRename, 2, (id, name) => {
+      if (typeof name !== 'string') throw new Error('Invalid name');
+      return { id: viewIdSchema.parse(id), name };
+    }, value => devices.rename(value.id, value.name));
+    register(desktopChannels.devicesRemove, 1, value => viewIdSchema.parse(value), value => devices.remove(value));
+    register(desktopChannels.devicesSwitch, 1, value => viewIdSchema.parse(value), value => devices.switchTo(value));
+    register(desktopChannels.devicesRetry, 0, noArg, async () => { devices.retry(); });
     ipcMain.handle(desktopChannels.subscribe, async (event, ...args): Promise<IpcResult<void>> => {
       if (!authorized(event)) return { ok: false, error: { kind: 'validation', message: 'Unauthorized desktop request' } };
       if (args.length !== 0) return { ok: false, error: { kind: 'validation', message: 'Invalid desktop request' } };
@@ -326,14 +520,19 @@ export function installBridge(
       for (const value of retainedErrors.splice(0)) send({ type: 'error', value });
       if (retainedUpdate) send({ type: 'update', value: retainedUpdate });
       if (pendingQuit) { pendingQuit = false; send({ type: 'quitRequested' }); }
+      send({ type: 'devices', value: devices.state() });
       return { ok: true, value: undefined };
     });
     registeredChannels.push(desktopChannels.subscribe);
+    unsubscribers.push(devices.onState(value => send({ type: 'devices', value })));
+    unsubscribers.push(devices.onView(change => { void onView(change); }));
     window.webContents.on('did-start-navigation', onNavigation);
   } catch (error) {
     window.webContents.removeListener('did-start-navigation', onNavigation);
     for (const channel of registeredChannels) ipcMain.removeHandler(channel);
-    binding.dispose();
+    for (const off of unsubscribers) off();
+    viewBinding?.dispose();
+    localWatch?.();
     throw error;
   }
 
@@ -345,34 +544,59 @@ export function installBridge(
       }
       candidate = next;
       replacing = (async () => {
-        binding.dispose();
-        const previous = activeOwner;
-        activeOwner = null;
+        localGen++;
+        localWatch?.();
+        localWatch = null;
+        // A remote view's binding is not this connection's.
+        if (view.kind === 'local') { viewBinding?.dispose(); viewBinding = null; }
+        const previous = localDaemon;
+        localDaemon = null;
         try { await previous?.dispose(); }
         catch (error) { await next.dispose(); throw error; }
         if (disposed) { await next.dispose(); throw new Error('Desktop connection is unavailable'); }
-        let initial: Awaited<ReturnType<AttachedDaemon['client']['snapshot']>>;
-        let nextBinding: ReturnType<typeof bind> | undefined;
+        let initial: DesktopSnapshot;
+        let nextBinding: Binding | undefined;
         try {
-          nextBinding = bind(next, true);
-          binding = nextBinding;
+          nextBinding = bind({ view: LOCAL_VIEW, client: next.client }, true);
           initial = await next.client.snapshot();
-          const lost = nextBinding.connectionFailure();
-          if (lost) throw lost;
+          const lostAlready = nextBinding.connectionFailure();
+          if (lostAlready) throw lostAlready;
           if (disposed) throw new Error('Desktop connection is unavailable');
         } catch (error) {
-          binding.dispose();
+          nextBinding?.dispose();
           await next.dispose();
           throw nextBinding?.connectionFailure() ?? error;
         }
-        activeOwner = next;
+        localDaemon = next;
+        localWatch = watchLocal(next);
         stoppedStatus = undefined;
         connectionLost = false;
-        send({ type: 'reattached' });
-        binding.activate(initial);
+        localLostPending = false;
+        devices.setLocal({ status: 'online', serverInfo: next.serverInfo });
+        // Whichever device is shown: U4 declares its capability again on every new local connection.
+        for (const listener of localOwnerListeners) {
+          try { listener(next); } catch { /* one listener does not stop the others or the replacement */ }
+        }
+        // Decided by the view now, after the awaits: a remote view keeps its page and binds this later, when shown.
+        if (view.kind === 'local') {
+          viewBinding = nextBinding;
+          send({ type: 'reattached', view: LOCAL_VIEW });
+          nextBinding.activate(initial);
+        } else nextBinding.dispose();
       })().finally(() => { replacing = undefined; candidate = null; });
       return replacing;
     },
+    localOwner: () => localDaemon,
+    onLocalOwner(listener) {
+      localOwnerListeners.add(listener);
+      return () => { localOwnerListeners.delete(listener); };
+    },
+    deferLocalLost() {
+      if (view.kind === 'local') return false;
+      localLostPending = true;
+      return true;
+    },
+    viewId,
     publishUpdate,
     requestQuit() {
       if (disposed) return;
@@ -383,13 +607,17 @@ export function installBridge(
       disposal ??= (async () => {
         disposed = true;
         subscribed = false;
+        for (const off of unsubscribers.splice(0)) off();
         window.webContents.removeListener('did-start-navigation', onNavigation);
         for (const channel of registeredChannels) ipcMain.removeHandler(channel);
         await candidate?.dispose().catch(() => {});
         if (replacing) await replacing.catch(() => {});
-        binding.dispose();
-        await activeOwner?.dispose();
-        activeOwner = null;
+        viewBinding?.dispose();
+        viewBinding = null;
+        localWatch?.();
+        localWatch = null;
+        await localDaemon?.dispose();
+        localDaemon = null;
       })();
       return disposal;
     },

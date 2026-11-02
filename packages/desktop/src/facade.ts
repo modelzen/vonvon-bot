@@ -3,11 +3,14 @@ import {
   adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
   commandResultSchema, desktopSnapshotSchema, directoryReplySchema, memoryReplySchema, contextPreviewReplySchema,
   environmentReplySchema, libraryReplySchema, logEventPayloadSchema, machineReplySchema, desktopUpdateSchema, deviceReplySchema,
-  scheduleReplySchema, settingsReplySchema,
-  type BackendInstallEventPayload, type DesktopSnapshot, type DesktopUpdate, type LogEventPayload,
+  scheduleReplySchema, settingsReplySchema, viewIdSchema, devicesStateSchema, deviceEventPayloadSchema, linkPreviewSchema,
+  addDeviceResultSchema, removeDeviceResultSchema,
+  type BackendInstallEventPayload, type DesktopSnapshot, type DesktopUpdate, type DeviceEventPayload, type DevicesState, type LogEventPayload,
+  type ViewId,
 } from '@vonvon/protocol';
+import type { DevicesShell } from '../../ui/src/client-context.js';
 import {
-  desktopChannels, safeErrorCode, type DesktopShell, type DesktopShellRequest,
+  desktopChannels, safeErrorCode, type DesktopShell, type DesktopShellRequest, type ViewArgument,
 } from './ipc-contract.js';
 
 export interface FacadeTransport {
@@ -43,180 +46,270 @@ function parseExecutablePath(value: unknown): string | null {
   throw new Error('Invalid desktop response');
 }
 
+/** The events a page's client hears: those of its device ('current' hears every device's). */
+type ViewEvent =
+  | { type: 'reattached'; view: ViewId }
+  | { type: 'snapshot'; view: ViewId; value: DesktopSnapshot }
+  | { type: 'log'; view: ViewId; value: LogEventPayload }
+  | { type: 'backendInstall'; view: ViewId; value: BackendInstallEventPayload }
+  | { type: 'device'; view: ViewId; value: DeviceEventPayload };
+interface BoundClient { client: VonvonClient; receive(event: ViewEvent): void; error(error: Error): void; closed(): boolean }
+
+function readView(raw: object): ViewId {
+  if (!('view' in raw)) throw new Error('Invalid desktop event');
+  return viewIdSchema.parse(raw.view);
+}
+function readValue(raw: object): unknown {
+  if (!('value' in raw)) throw new Error('Invalid desktop event');
+  return raw.value;
+}
+
 export function createDesktopFacades(transport: FacadeTransport): { client: VonvonClient; shell: DesktopShell } {
-  const snapshots = new Set<(value: DesktopSnapshot) => void>();
-  const logs = new Set<(value: LogEventPayload) => void>();
-  const installs = new Set<(value: BackendInstallEventPayload) => void>();
-  const errors = new Set<(error: Error) => void>();
   const quitListeners = new Set<() => void>();
   const updateListeners = new Set<(value: DesktopUpdate) => void>();
+  const stateListeners = new Set<(value: DevicesState) => void>();
+  const localDeviceListeners = new Set<(value: DeviceEventPayload) => void>();
   let latestUpdate: DesktopUpdate | undefined;
-  const retainedErrors: Error[] = [];
-  const pending = new Set<(error: Error) => void>();
+  let latestDevices: DevicesState | undefined;
   let pendingQuit = false;
-  let connectionEpoch = 0;
-  let clientClosed = false;
-  let closing: Promise<void> | undefined;
+  const clients = new Map<ViewArgument, BoundClient>();
 
-  function retain(error: Error): void {
-    retainedErrors.push(error);
-    if (retainedErrors.length > 32) retainedErrors.shift();
+  /** Shell listeners have no client of their own: what they throw goes to the current client's errors. */
+  function shellFailure(failure: unknown): void {
+    clients.get('current')?.error(failure instanceof Error ? failure : new Error(String(failure)));
   }
-
-  function emitError(error: Error): void {
-    if (clientClosed) return;
-    if (errors.size === 0) { retain(error); return; }
-    for (const listener of errors) {
-      try { listener(error); }
-      catch (failure) { retain(failure instanceof Error ? failure : new Error(String(failure))); }
-    }
-  }
-
-  function deliver<T>(listeners: Set<(value: T) => void>, value: T): void {
+  function deliverShell<T>(listeners: Set<(value: T) => void>, value: T): void {
     for (const listener of listeners) {
       try { listener(value); }
-      catch (failure) { emitError(failure instanceof Error ? failure : new Error(String(failure))); }
+      catch (failure) { shellFailure(failure); }
     }
+  }
+  function everyClient(error: Error): void {
+    for (const bound of clients.values()) bound.error(error);
   }
 
   function onEvent(raw: unknown): void {
     try {
       if (!raw || typeof raw !== 'object' || !('type' in raw)) throw new Error('Invalid desktop event');
-      if (raw.type === 'quitRequested') {
-        if (quitListeners.size === 0) pendingQuit = true;
-        else deliver(quitListeners, undefined);
-        return;
-      }
-      if (clientClosed) return;
       switch (raw.type) {
-        case 'reattached':
-          connectionEpoch++;
-          break;
-        case 'snapshot':
-          if (!('value' in raw)) throw new Error('Invalid desktop event');
-          deliver(snapshots, desktopSnapshotSchema.parse(raw.value));
-          break;
-        case 'log':
-          if (!('value' in raw)) throw new Error('Invalid desktop event');
-          deliver(logs, logEventPayloadSchema.parse(raw.value));
-          break;
-        case 'backendInstall':
-          if (!('value' in raw)) throw new Error('Invalid desktop event');
-          deliver(installs, backendInstallEventPayloadSchema.parse(raw.value));
-          break;
+        case 'quitRequested':
+          if (quitListeners.size === 0) pendingQuit = true;
+          else deliverShell(quitListeners, undefined);
+          return;
+        case 'reattached': {
+          const event: ViewEvent = { type: 'reattached', view: readView(raw) };
+          for (const bound of clients.values()) bound.receive(event);
+          return;
+        }
+        case 'snapshot': case 'log': case 'backendInstall': case 'device': {
+          const view = readView(raw);
+          const value = readValue(raw);
+          const event: ViewEvent = raw.type === 'snapshot' ? { type: 'snapshot', view, value: desktopSnapshotSchema.parse(value) }
+            : raw.type === 'log' ? { type: 'log', view, value: logEventPayloadSchema.parse(value) }
+              : raw.type === 'backendInstall' ? { type: 'backendInstall', view, value: backendInstallEventPayloadSchema.parse(value) }
+                : { type: 'device', view, value: deviceEventPayloadSchema.parse(value) };
+          for (const bound of clients.values()) bound.receive(event);
+          return;
+        }
+        case 'localDevice':
+          deliverShell(localDeviceListeners, deviceEventPayloadSchema.parse(readValue(raw)));
+          return;
+        case 'devices':
+          latestDevices = devicesStateSchema.parse(readValue(raw));
+          deliverShell(stateListeners, latestDevices);
+          return;
         case 'update':
-          if (!('value' in raw)) throw new Error('Invalid desktop event');
-          latestUpdate = desktopUpdateSchema.parse(raw.value);
-          deliver(updateListeners, latestUpdate);
-          break;
+          latestUpdate = desktopUpdateSchema.parse(readValue(raw));
+          deliverShell(updateListeners, latestUpdate);
+          return;
         case 'error': {
-          if (!('value' in raw)) throw new Error('Invalid desktop event');
-          const value = raw.value;
+          const value = readValue(raw);
           if (!value || typeof value !== 'object' || !('message' in value) || !('kind' in value) ||
               typeof value.message !== 'string')
             throw new Error('Invalid desktop event');
           const kind = value.kind;
           if (kind !== 'rpc' && kind !== 'connection' && kind !== 'validation')
             throw new Error('Invalid desktop event');
-          emitError(ordinaryError(value.message, 'code' in value ? value.code : undefined));
-          break;
+          everyClient(ordinaryError(value.message, 'code' in value ? value.code : undefined));
+          return;
         }
         default: throw new Error('Invalid desktop event');
       }
-    } catch { emitError(new Error('Invalid desktop event')); }
+    } catch { everyClient(new Error('Invalid desktop event')); }
   }
 
+  /** One page's client: each request names `view` last, and only `view`'s events reach it (devices-ui-1a 4.6). */
+  function makeClient(view: ViewArgument): BoundClient {
+    const snapshots = new Set<(value: DesktopSnapshot) => void>();
+    const logs = new Set<(value: LogEventPayload) => void>();
+    const installs = new Set<(value: BackendInstallEventPayload) => void>();
+    const devices = new Set<(value: DeviceEventPayload) => void>();
+    const errors = new Set<(error: Error) => void>();
+    const retainedErrors: Error[] = [];
+    const pending = new Set<(error: Error) => void>();
+    let connectionEpoch = 0;
+    let clientClosed = false;
+    let closing: Promise<void> | undefined;
+
+    function retain(error: Error): void {
+      retainedErrors.push(error);
+      if (retainedErrors.length > 32) retainedErrors.shift();
+    }
+    function emitError(error: Error): void {
+      if (clientClosed) return;
+      if (errors.size === 0) { retain(error); return; }
+      for (const listener of errors) {
+        try { listener(error); }
+        catch (failure) { retain(failure instanceof Error ? failure : new Error(String(failure))); }
+      }
+    }
+    function deliver<T>(listeners: Set<(value: T) => void>, value: T): void {
+      for (const listener of listeners) {
+        try { listener(value); }
+        catch (failure) { emitError(failure instanceof Error ? failure : new Error(String(failure))); }
+      }
+    }
+    function receive(event: ViewEvent): void {
+      if (clientClosed || (view !== 'current' && event.view !== view)) return;
+      switch (event.type) {
+        // Another connection: its revisions start over.
+        case 'reattached': connectionEpoch++; return;
+        case 'snapshot': deliver(snapshots, event.value); return;
+        case 'log': deliver(logs, event.value); return;
+        case 'backendInstall': deliver(installs, event.value); return;
+        case 'device': deliver(devices, event.value); return;
+      }
+    }
+
+    function callClient<T>(channel: string, parse: (value: unknown) => T, ...args: unknown[]): Promise<T> {
+      if (clientClosed) return Promise.reject(new Error('Daemon connection closed'));
+      return new Promise<T>((resolve, reject) => {
+        pending.add(reject);
+        void transport.invoke(channel, ...args, view).then(value => {
+          if (!pending.delete(reject)) return;
+          try { resolve(readResult(value, parse)); }
+          catch (error) { reject(error); }
+        }, error => {
+          if (!pending.delete(reject)) return;
+          reject(error instanceof Error ? new Error(error.message) : new Error('桌面端操作没有成功，请重试。'));
+        });
+      });
+    }
+
+    const client: VonvonClient = {
+      snapshot: () => callClient(desktopChannels.snapshot, value => desktopSnapshotSchema.parse(value)),
+      watchSnapshots(listener) {
+        if (clientClosed) return () => {};
+        let active = true;
+        let revision = -1;
+        let observedEpoch = connectionEpoch;
+        const receiveSnapshot = (value: DesktopSnapshot): void => {
+          if (observedEpoch !== connectionEpoch) {
+            revision = -1;
+            observedEpoch = connectionEpoch;
+          }
+          if (active && !clientClosed && value.revision > revision) {
+            revision = value.revision;
+            try { listener(value); }
+            catch (failure) { emitError(failure instanceof Error ? failure : new Error(String(failure))); }
+          }
+        };
+        snapshots.add(receiveSnapshot);
+        const seedEpoch = connectionEpoch;
+        void client.snapshot().then(value => { if (seedEpoch === connectionEpoch) receiveSnapshot(value); }).catch(error => {
+          if (active && !clientClosed && seedEpoch === connectionEpoch) emitError(error instanceof Error ? error : new Error('Snapshot failed'));
+        });
+        return () => { active = false; snapshots.delete(receiveSnapshot); };
+      },
+      run: command => callClient(desktopChannels.run, value => commandResultSchema.parse(value), command),
+      settings: request => callClient(desktopChannels.settings, value => settingsReplySchema.parse(value), request),
+      collaboration: request => callClient(desktopChannels.collaboration, value => collaborationReplySchema.parse(value), request),
+      environment: request => callClient(desktopChannels.environment, value => environmentReplySchema.parse(value), request),
+      machine: request => callClient(desktopChannels.machine, value => machineReplySchema.parse(value), request),
+      admin: request => callClient(desktopChannels.admin, value => adminReplySchema.parse(value), request),
+      memory: request => callClient(desktopChannels.memory, value => memoryReplySchema.parse(value), request),
+      contextPreview: request => callClient(desktopChannels.contextPreview, value => contextPreviewReplySchema.parse(value), request),
+      directory: request => callClient(desktopChannels.directory, value => directoryReplySchema.parse(value), request),
+      library: request => callClient(desktopChannels.library, value => libraryReplySchema.parse(value), request),
+      schedule: (botId, request) => callClient(desktopChannels.schedule, value => scheduleReplySchema.parse(value), botId, request),
+      device: request => callClient(desktopChannels.device, value => deviceReplySchema.parse(value), request),
+      onLog(listener) {
+        if (!clientClosed) logs.add(listener);
+        return () => { logs.delete(listener); };
+      },
+      onBackendInstall(listener) {
+        if (!clientClosed) installs.add(listener);
+        return () => { installs.delete(listener); };
+      },
+      onDevice(listener) {
+        if (!clientClosed) devices.add(listener);
+        return () => { devices.delete(listener); };
+      },
+      onError(listener) {
+        if (clientClosed) return () => {};
+        errors.add(listener);
+        for (const error of retainedErrors.splice(0)) {
+          if (clientClosed) break;
+          try { listener(error); }
+          catch (failure) { retain(failure instanceof Error ? failure : new Error(String(failure))); }
+        }
+        return () => { errors.delete(listener); };
+      },
+      close() {
+        closing ??= (async () => {
+          clientClosed = true;
+          for (const reject of pending) reject(new Error('Daemon connection closed'));
+          pending.clear();
+          snapshots.clear(); logs.clear(); installs.clear(); devices.clear(); errors.clear();
+          retainedErrors.length = 0;
+          readResult(await transport.invoke(desktopChannels.close, view), parseVoid);
+        })();
+        return closing;
+      },
+    };
+    return { client, receive, error: emitError, closed: () => clientClosed };
+  }
+  function boundClient(view: ViewArgument): BoundClient {
+    let bound = clients.get(view);
+    // A device's page that closed its client gets a new one next time; the page's own 'current' client stays closed.
+    if (!bound || (view !== 'current' && bound.closed())) { bound = makeClient(view); clients.set(view, bound); }
+    return bound;
+  }
+
+  const client = boundClient('current').client;
   transport.receive(onEvent);
   void transport.invoke(desktopChannels.subscribe).then(value => readResult(value, parseVoid))
-    .catch(() => emitError(new Error('Desktop event subscription failed')));
-
-  function callClient<T>(channel: string, parse: (value: unknown) => T, ...args: unknown[]): Promise<T> {
-    if (clientClosed) return Promise.reject(new Error('Daemon connection closed'));
-    return new Promise<T>((resolve, reject) => {
-      pending.add(reject);
-      void transport.invoke(channel, ...args).then(value => {
-        if (!pending.delete(reject)) return;
-        try { resolve(readResult(value, parse)); }
-        catch (error) { reject(error); }
-      }, error => {
-        if (!pending.delete(reject)) return;
-        reject(error instanceof Error ? new Error(error.message) : new Error('桌面端操作没有成功，请重试。'));
-      });
-    });
-  }
+    .catch(() => everyClient(new Error('Desktop event subscription failed')));
 
   function callShell(channel: string, ...args: unknown[]): Promise<void> {
     return transport.invoke(channel, ...args).then(value => readResult(value, parseVoid), error => {
       throw error instanceof Error ? new Error(error.message) : new Error('桌面端操作没有成功，请重试。');
     });
   }
+  function callShellFor<T>(channel: string, parse: (value: unknown) => T, ...args: unknown[]): Promise<T> {
+    return transport.invoke(channel, ...args).then(value => readResult(value, parse), error => {
+      throw error instanceof Error ? new Error(error.message) : new Error('桌面端操作没有成功，请重试。');
+    });
+  }
 
-  const client: VonvonClient = {
-    snapshot: () => callClient(desktopChannels.snapshot, value => desktopSnapshotSchema.parse(value)),
-    watchSnapshots(listener) {
-      if (clientClosed) return () => {};
-      let active = true;
-      let revision = -1;
-      let observedEpoch = connectionEpoch;
-      const receive = (value: DesktopSnapshot): void => {
-        if (observedEpoch !== connectionEpoch) {
-          revision = -1;
-          observedEpoch = connectionEpoch;
-        }
-        if (active && !clientClosed && value.revision > revision) {
-          revision = value.revision;
-          try { listener(value); }
-          catch (failure) { emitError(failure instanceof Error ? failure : new Error(String(failure))); }
-        }
-      };
-      snapshots.add(receive);
-      const seedEpoch = connectionEpoch;
-      void client.snapshot().then(value => { if (seedEpoch === connectionEpoch) receive(value); }).catch(error => {
-        if (active && !clientClosed && seedEpoch === connectionEpoch) emitError(error instanceof Error ? error : new Error('Snapshot failed'));
-      });
-      return () => { active = false; snapshots.delete(receive); };
-    },
-    run: command => callClient(desktopChannels.run, value => commandResultSchema.parse(value), command),
-    settings: request => callClient(desktopChannels.settings, value => settingsReplySchema.parse(value), request),
-    collaboration: request => callClient(desktopChannels.collaboration, value => collaborationReplySchema.parse(value), request),
-    environment: request => callClient(desktopChannels.environment, value => environmentReplySchema.parse(value), request),
-    machine: request => callClient(desktopChannels.machine, value => machineReplySchema.parse(value), request),
-    admin: request => callClient(desktopChannels.admin, value => adminReplySchema.parse(value), request),
-    memory: request => callClient(desktopChannels.memory, value => memoryReplySchema.parse(value), request),
-    contextPreview: request => callClient(desktopChannels.contextPreview, value => contextPreviewReplySchema.parse(value), request),
-    directory: request => callClient(desktopChannels.directory, value => directoryReplySchema.parse(value), request),
-    library: request => callClient(desktopChannels.library, value => libraryReplySchema.parse(value), request),
-    schedule: (botId, request) => callClient(desktopChannels.schedule, value => scheduleReplySchema.parse(value), botId, request),
-    device: request => callClient(desktopChannels.device, value => deviceReplySchema.parse(value), request),
-    onLog(listener) {
-      if (!clientClosed) logs.add(listener);
-      return () => { logs.delete(listener); };
-    },
-    onBackendInstall(listener) {
-      if (!clientClosed) installs.add(listener);
-      return () => { installs.delete(listener); };
-    },
-    onError(listener) {
-      if (clientClosed) return () => {};
-      errors.add(listener);
-      for (const error of retainedErrors.splice(0)) {
-        if (clientClosed) break;
-        try { listener(error); }
-        catch (failure) { retain(failure instanceof Error ? failure : new Error(String(failure))); }
+  const devices: DevicesShell = {
+    state: () => callShellFor(desktopChannels.devicesState, value => devicesStateSchema.parse(value)),
+    onState(listener) {
+      stateListeners.add(listener);
+      if (latestDevices) {
+        try { listener(latestDevices); }
+        catch (failure) { shellFailure(failure); }
       }
-      return () => { errors.delete(listener); };
+      return () => { stateListeners.delete(listener); };
     },
-    close() {
-      closing ??= (async () => {
-        clientClosed = true;
-        for (const reject of pending) reject(new Error('Daemon connection closed'));
-        pending.clear();
-        snapshots.clear(); logs.clear(); installs.clear(); errors.clear();
-        retainedErrors.length = 0;
-        readResult(await transport.invoke(desktopChannels.close), parseVoid);
-      })();
-      return closing;
-    },
+    clientFor: view => boundClient(viewIdSchema.parse(view)).client,
+    inspect: link => callShellFor(desktopChannels.devicesInspect, value => linkPreviewSchema.parse(value), link),
+    add: request => callShellFor(desktopChannels.devicesAdd, value => addDeviceResultSchema.parse(value), request),
+    cancelAdd: () => callShell(desktopChannels.devicesCancelAdd),
+    rename: (id, name) => callShell(desktopChannels.devicesRename, id, name),
+    remove: id => callShellFor(desktopChannels.devicesRemove, value => removeDeviceResultSchema.parse(value), id),
+    switchTo: id => callShell(desktopChannels.devicesSwitch, id),
+    retry: () => callShell(desktopChannels.devicesRetry),
   };
 
   const shell: DesktopShell = {
@@ -246,9 +339,9 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       .then(value => readResult(value, value => desktopUpdateSchema.parse(value))),
     onDesktopUpdate(listener) {
       updateListeners.add(listener);
-      if (latestUpdate && !clientClosed) {
+      if (latestUpdate) {
         try { listener(latestUpdate); }
-        catch (failure) { emitError(failure instanceof Error ? failure : new Error(String(failure))); }
+        catch (failure) { shellFailure(failure); }
       }
       return () => { updateListeners.delete(listener); };
     },
@@ -259,9 +352,14 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       if (pendingQuit) {
         pendingQuit = false;
         try { listener(); }
-        catch (failure) { emitError(failure instanceof Error ? failure : new Error(String(failure))); }
+        catch (failure) { shellFailure(failure); }
       }
       return () => { quitListeners.delete(listener); };
+    },
+    devices,
+    onLocalDeviceEvent(listener) {
+      localDeviceListeners.add(listener);
+      return () => { localDeviceListeners.delete(listener); };
     },
   };
   return { client, shell };
