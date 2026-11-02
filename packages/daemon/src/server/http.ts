@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir, networkInterfaces } from 'node:os';
-import { CLOSE_CODES, DRAIN_KINDS, PROTOCOL_VERSION, rpcKindOf, serverInfoV1Schema, serverInfoV2Schema, type Request, type Response } from '@vonvon/protocol';
+import { CLOSE_CODES, DRAIN_KINDS, PROTOCOL_VERSION, rpcKindOf, serverInfoSessionSchema, serverInfoV1Schema, serverInfoV2Schema, type Request, type Response } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
 import type { ShutdownControl } from '../host/lifecycle';
 import { createServiceActionLauncher } from '../host/service-action';
@@ -340,7 +340,10 @@ export async function startApi(options: { service: AdminService; port?: number; 
       }
     }
     // devices 4.5: a protocol 1 client gets the three fields it parses strictly, with its own version, so a 0.8 client can still stop this daemon.
-    const info = (peer: Peer) => peer.protocolVersion === 1
+    // A Bot session (always protocol 2) gets what its command line reads and nothing of the device (Codex review 256-2).
+    const info = (peer: Peer) => peer.principal.kind === 'bot-session'
+      ? serverInfoSessionSchema.parse({ type: 'serverInfo', version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION, principal: principalWire(peer.principal) })
+      : peer.protocolVersion === 1
       ? serverInfoV1Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: 1 })
       : serverInfoV2Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION,
         deviceName: identity.current.name, platform: hostPlatform(), capabilities: capabilities(distribution, remote.status().length > 0), principal: principalWire(peer.principal) });

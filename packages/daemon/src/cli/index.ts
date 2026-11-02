@@ -54,7 +54,10 @@ const LEASED = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon res
   'update']);
 /**
  * devices 8.3 and 5.3: what only the person at this computer runs (the trust root, file locks, the service manager,
- * remote access, pairing), refused in a Bot's session before anything runs. `update` refuses in
+ * remote access, pairing), refused in a Bot's session before anything runs. `service status` too (Codex review 256-1):
+ * it reads the service manager and the files, not the daemon, so its definition and log paths went round a group's
+ * whitelist (`machine.status` is no session's). `daemon status` stays: connectLocal finds the daemon through it, and in a
+ * session it says only whether one runs and where (runStatus). `update` refuses in
  * runUpdateCommand too (I3-SEC-3); `__standalone-setup` and `__standalone-teardown` are the install scripts' (server-2 4.3):
  * the first switches `current` to a kept release, an update by another name.
  * `secrets get` is not here: the session's lark-cli resolves its App Secret through it (secrets-get.test.ts). Nor are the
@@ -62,7 +65,7 @@ const LEASED = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon res
  * daemon started inside a session still carries the markers in; refusing them there would leave a restart or an update
  * with no daemon. For the same reason a `daemon run` the supervisor starts (its IPC channel) is not refused.
  */
-export const LOCAL_ONLY: ReadonlySet<string> = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'service install', 'service uninstall',
+export const LOCAL_ONLY: ReadonlySet<string> = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'service install', 'service uninstall', 'service status',
   'update', 'remote status', 'remote enable', 'remote disable', 'remote port', 'pair', 'clients ls', 'clients rename', 'clients revoke', 'device rename',
   'bot repair-dir', 'open', '__standalone-setup', '__standalone-teardown']);
 /** A command's full name without `vonvon`: `daemon restart`, `pair`. */
