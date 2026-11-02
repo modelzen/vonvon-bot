@@ -8,12 +8,19 @@ import { planPublication, uploadPublication, promotePublication, publicationStat
 import { verifyWindowsArtifacts } from './package-windows.mjs';
 import { planWindowsUpdates } from './publish-windows.mjs';
 
-const sha = 'a'.repeat(40), version = '1.2.3';
+const sha = 'a'.repeat(40);
+// From 0.9.0 every release carries the Linux server too; before it, a release without cos-server.json is macOS and Windows only.
+const LEGACY = '0.8.3', THREE_PLATFORMS = '0.9.0';
 const json = value => JSON.stringify(value, null, 2) + '\n';
 const hash = (bytes, algorithm = 'sha256', encoding = 'hex') => createHash(algorithm).update(bytes).digest(encoding);
 const save = (path, value) => writeFile(path, json(value));
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
-async function fixture(t, modern = false, server = false) {
+/** The fixture's dependencies as on a machine without the server's configuration: no server credentials either. */
+const withoutServerCredentials = dependencies => {
+  const strip = env => Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith('SRV_')));
+  return { ...dependencies, env: strip(dependencies.env), macDependencies: { ...dependencies.macDependencies, env: strip(dependencies.macDependencies.env) } };
+};
+async function fixture(t, modern = false, server = false, version = server ? THREE_PLATFORMS : LEGACY) {
   const out = await realpath(await mkdtemp(join(tmpdir(), 'release-publication-test-')));
   t.after(() => rm(out, { recursive: true, force: true }));
   const macOut = join(out, 'mac'), windowsOut = join(out, 'windows');
@@ -26,7 +33,8 @@ async function fixture(t, modern = false, server = false) {
   await save(write, { ...common, secretIdEnv: 'WRITE_ID', secretKeyEnv: 'WRITE_KEY' });
   await save(windowsConfig, { bucket: common.bucket, region: common.region, prefix: 'bot/windows/', publicBaseURL: 'https://dl.vonvon.cc/bot/windows/', secretIdEnv: 'WIN_ID', secretKeyEnv: 'WIN_KEY', ...(modern ? { updatePrivateKeyFile: keyPath } : {}) });
   await save(join(out, 'release-orchestration.json'), { format: 1, out, sha, version, paths: { cosConfig: readonly }, macRelease: macOut,
-    mac: { phase: 'candidate-complete' }, windows: { runId: 123, status: 'completed', conclusion: 'success' }, flags: {} });
+    mac: { phase: 'candidate-complete' }, windows: { runId: 123, status: 'completed', conclusion: 'success' }, flags: {},
+    server: { phase: 'complete', report: join(out, 'server', `vonvon-server-${version}-build.json`) } });
   const artifacts = [];
   for (const architecture of ['x64', 'arm64']) {
     const pe = Buffer.alloc(100); pe.write('MZ'); pe.writeUInt32LE(64, 60); pe.write('PE\0\0', 64);
@@ -123,7 +131,7 @@ async function fixture(t, modern = false, server = false) {
     collect: async (_input, { env }) => { assert.deepEqual(env, {}); calls.push('collect'); return { readyForWebsite: true }; },
   };
   const plan = await planPublication(options, dependencies);
-  return { out, options: { ...options, 'plan-sha256': plan.planSHA256, 'owner-confirmation': '确认发布' }, dependencies, calls, flags, macOut, windowsOut, plan, oldManifest, serverInputs, serverPlan };
+  return { out, version, options: { ...options, 'plan-sha256': plan.planSHA256, 'owner-confirmation': '确认发布' }, dependencies, calls, flags, macOut, windowsOut, plan, oldManifest, serverInputs, serverPlan };
 }
 test('both native verified candidates produce one reviewed plan; uploads overlap and stable waits for both', async t => {
   const f = await fixture(t), macEntered = deferred(), windowsEntered = deferred(), release = deferred();
@@ -182,14 +190,14 @@ test('CANCEL prevents publication; interrupted stable uses reverify rather than 
   assert.deepEqual(f.calls, []);
   const g = await fixture(t);
   await uploadPublication(g.options, g.dependencies);
-  await save(join(g.macOut, 'publish-receipt.json'), { version, sourceCommit: sha, planSHA256: g.plan.macPlanSHA256, status: 'manifest-write-started' });
+  await save(join(g.macOut, 'publish-receipt.json'), { version: g.version, sourceCommit: sha, planSHA256: g.plan.macPlanSHA256, status: 'manifest-write-started' });
   await promotePublication(g.options, g.dependencies);
   assert.deepEqual(g.calls.slice(-2), ['reverify', 'collect']);
 });
 test('a crash before the stable PUT retries only the unchanged snapshot with current owner confirmation', async t => {
   const f = await fixture(t);
   await uploadPublication(f.options, f.dependencies);
-  await save(join(f.macOut, 'publish-receipt.json'), { version, sourceCommit: sha, planSHA256: f.plan.macPlanSHA256, status: 'manifest-write-started' });
+  await save(join(f.macOut, 'publish-receipt.json'), { version: f.version, sourceCommit: sha, planSHA256: f.plan.macPlanSHA256, status: 'manifest-write-started' });
   f.flags.live = f.oldManifest;
   await assert.rejects(promotePublication({ ...f.options, 'owner-confirmation': undefined }, f.dependencies), /owner confirmation/);
   assert.equal(f.calls.includes('promote'), false);
@@ -199,7 +207,7 @@ test('a crash before the stable PUT retries only the unchanged snapshot with cur
 test('an interrupted publication stops if stable is neither the candidate nor its previous snapshot', async t => {
   const f = await fixture(t);
   await uploadPublication(f.options, f.dependencies);
-  await save(join(f.macOut, 'publish-receipt.json'), { version, sourceCommit: sha, planSHA256: f.plan.macPlanSHA256, status: 'manifest-write-started' });
+  await save(join(f.macOut, 'publish-receipt.json'), { version: f.version, sourceCommit: sha, planSHA256: f.plan.macPlanSHA256, status: 'manifest-write-started' });
   f.flags.live = Buffer.from('unrelated manifest');
   const before = [...f.calls];
   await assert.rejects(promotePublication(f.options, f.dependencies), /neither this candidate nor the reviewed previous/);
@@ -212,7 +220,7 @@ test('credential names shared by Mac and Windows remain available to the Mac pub
   await save(path, config);
   for (const env of [f.dependencies.env, f.dependencies.macDependencies.env]) { delete env.WIN_ID; delete env.WIN_KEY; }
   const planned = await planPublication(f.options, f.dependencies);
-  assert.equal(planned.version, version, 'planMac assertions verify the shared write credential is retained');
+  assert.equal(planned.version, f.version, 'planMac assertions verify the shared write credential is retained');
 });
 test('SIGTERM persists CANCEL, aborts the Windows child and joins both upload branches before unlocking', async t => {
   const f = await fixture(t), macEntered = deferred(), windowsEntered = deferred(), releaseMac = deferred(), windowsStopped = deferred();
@@ -255,8 +263,9 @@ test('new EXE-only releases bind two signed feeds in the unified plan and promot
   await assert.rejects(promotePublication(f.options, f.dependencies), /signature/);
 });
 
-test('without cos-server.json the plan, upload and status say only macOS and Windows are published', async t => {
+test('before 0.9.0, without cos-server.json the plan, upload and status say only macOS and Windows are published', async t => {
   const f = await fixture(t);
+  assert.equal(f.version, LEGACY);
   assert.match(f.plan.server, /服务端未配置/);
   assert.deepEqual(f.serverInputs, []);
   await uploadPublication(f.options, f.dependencies);
@@ -265,11 +274,47 @@ test('without cos-server.json the plan, upload and status say only macOS and Win
   assert.match((await publicationStatus(f.options)).server, /服务端未配置/);
   await assert.rejects(planPublication({ ...f.options, 'server-cos-config': join(f.out, 'missing.json') }, f.dependencies), /服务端的 COS 配置不在指定的位置/);
 });
+test('from 0.9.0 the plan refuses to leave the server out: no cos-server.json, or no server build in the release state', async t => {
+  const f = await fixture(t, false, true);
+  assert.equal(f.version, THREE_PLATFORMS);
+  const planPath = join(f.out, 'publication-plan.json'), reviewed = await readFile(planPath);
+  const { 'server-cos-config': _named, ...unnamed } = f.options;
+  // No --server-cos-config and nothing at the default path (dependencies.serverConfigPath does not exist).
+  await assert.rejects(planPublication(unnamed, withoutServerCredentials(f.dependencies)), error => {
+    assert.match(error.message, /^0\.9\.0 起三平台同版本，0\.9\.0 必须连 Linux 服务端包一起发，但没有服务端的发布配置 cos-server\.json/);
+    assert.match(error.message, /docs\/release-orchestration\.md「Linux 服务端包」/);
+    return true;
+  });
+  const statePath = join(f.out, 'release-orchestration.json'), state = JSON.parse(await readFile(statePath, 'utf8'));
+  for (const server of [undefined, { phase: 'failed-or-interrupted' }]) {
+    await save(statePath, { ...state, server });
+    await assert.rejects(planPublication(f.options, f.dependencies), /^Error: 0\.9\.0 起三平台同版本，0\.9\.0 必须连 Linux 服务端包一起发，但 release-all 的状态里没有打好的服务端包.*release-all resume/);
+  }
+  assert.deepEqual(await readFile(planPath), reviewed, 'a refused plan leaves the reviewed one');
+  assert.equal(f.serverInputs.length, 1, 'refused before the server is planned');
+  assert.deepEqual(f.calls, []);
+  // 0.10.0 compares as a later version, not as text.
+  const later = await fixture(t, false, true, '0.10.0');
+  await assert.rejects(planPublication((({ 'server-cos-config': _omit, ...rest }) => rest)(later.options), withoutServerCredentials(later.dependencies)), /0\.10\.0 必须连 Linux 服务端包一起发/);
+});
+test('from 0.9.0 a saved plan without the server can be neither uploaded nor promoted, and status says so', async t => {
+  const f = await fixture(t, false, true);
+  // A plan made before the rule: no server configuration, no server candidate.
+  const planPath = join(f.out, 'publication-plan.json'), plan = JSON.parse(await readFile(planPath, 'utf8'));
+  delete plan.configs.server; plan.candidate.server = null;
+  await save(planPath, plan);
+  const { 'server-cos-config': _named, ...options } = { ...f.options, 'plan-sha256': hash(json(plan)) };
+  const dependencies = withoutServerCredentials(f.dependencies);
+  await assert.rejects(uploadPublication(options, dependencies), /0\.9\.0 起三平台同版本.*cos-server\.json/);
+  await assert.rejects(promotePublication(options, dependencies), /0\.9\.0 起三平台同版本.*cos-server\.json/);
+  assert.deepEqual(f.calls, []);
+  assert.match((await publicationStatus(f.options)).server, /^这份计划没有服务端：0\.9\.0 起不能只发 macOS 和 Windows/);
+});
 test('a configured server joins the reviewed plan; its upload runs beside the others and its stable goes last', async t => {
   const f = await fixture(t, true, true);
   assert.equal(f.plan.server.liveStable, 'none');
   assert.deepEqual(f.plan.server.stable.map(item => item.key), ['bot/server/install.sh', 'bot/server/uninstall.sh', 'bot/server/stable/manifest.json']);
-  assert.ok(f.plan.objects.some(item => item.file === `vonvon-server-${version}-linux-arm64.tar.gz`));
+  assert.ok(f.plan.objects.some(item => item.file === `vonvon-server-${f.version}-linux-arm64.tar.gz`));
   const saved = JSON.parse(await readFile(join(f.out, 'publication-plan.json'), 'utf8'));
   assert.deepEqual(saved.candidate.server, f.serverPlan);
   assert.ok(saved.configs.server.sha256);

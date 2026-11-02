@@ -72,9 +72,9 @@ node scripts/release-publish.mjs status --out "$OUT"
 
 ## Linux 服务端包
 
-0.9.0 起，macOS、Windows 安装包和 Linux 服务端包（linux-x64、linux-arm64）同一个版本号（`AGENTS.md`"三平台发布版本"）。服务端的发布配置是 `~/.config/vonvon-release/cos-server.json`（或 `--server-cos-config`），这个文件不在时 `plan` 写明"服务端未配置"，这次只发 macOS 和 Windows；命令行或计划里指了路径而文件不在，直接失败。配置、签名钥匙和证据项见 [release-mac skill](../.agents/skills/release-mac/SKILL.md) 的"Linux 服务端包"。
+0.9.0 起，macOS、Windows 安装包和 Linux 服务端包（linux-x64、linux-arm64）同一个版本号（`AGENTS.md`"三平台发布版本"）。服务端的发布配置是 `~/.config/vonvon-release/cos-server.json`（或 `--server-cos-config`）。0.9.0 起这个文件必须在：没有它，或者 `release-orchestration.json` 里服务端包没打好（`server.phase` 不是 `complete`），`plan` 直接拒绝，错误里写明缺的是哪个；按以前的规则存下、没有服务端的计划，`upload`、`promote` 也拒绝，`status` 写明要配好后重新 `plan`。0.9.0 以前的版本没有这个文件时，`plan` 写明"服务端未配置"，只发 macOS 和 Windows。命令行或计划里指了路径而文件不在，直接失败。配置、签名钥匙和证据项见 [release-mac skill](../.agents/skills/release-mac/SKILL.md) 的"Linux 服务端包"。
 
-- `build`：两个 Mac 架构之后，用 `scripts/build-server.mjs --targets linux-x64,linux-arm64` 打进 `OUT/server/`，Node 缓存在 `OUT/node-cache`；`product-version.mjs` 核对构建记录的版本。`status` 列出两个包。构建失败或被打断，`resume` 只重打服务端包，Mac 的公证不重做；构建之后包被改过直接失败。
+- `build`：两个 Mac 架构之后，用 `scripts/build-server.mjs --targets linux-x64,linux-arm64` 打进 `OUT/server/`，Node 缓存在 `OUT/node-cache`；`product-version.mjs` 核对构建记录的版本。`status` 列出两个包，`server.required` 写明这个版本是否必须带服务端（0.9.0 起是）。构建失败或被打断，`resume` 只重打服务端包，Mac 的公证不重做；构建之后包被改过直接失败。
 - `plan`：服务端的候选（两个包、构建记录、未签名清单、签好的 stable 清单、两个脚本和线上 stable 快照）写进统一计划，和 macOS、Windows 用同一个计划哈希。构建记录的 `updateKey` 不是 `release`（测试钥匙打的包，或者仓库里还没有发布公钥）就拒绝。
 - `upload`：服务端是和 macOS、Windows 并行的第三个分支，各自保留回执；失败的那个在报错里点名，重跑只补它。
 - `promote`：顺序是 macOS、Windows、服务端。服务端写第一个 stable 对象之前先读线上清单，必须还是计划里的那份（重跑时也可以已经是这次的），不是就三个对象一个都不写；写清单之前再读一次。服务端没切成时，macOS 和 Windows 已经是新版本，报错写明"用同一个计划哈希重跑 promote，只补服务端"；重跑时已经切好的只复核。
@@ -95,7 +95,7 @@ node scripts/release-publish.mjs status --out "$OUT"
 node scripts/release-all.mjs collect --out /absolute/persistent/release-X.Y.Z
 ```
 
-`release-handoff.json` 从已有公开验证回执收集下载入口及尺寸/哈希，不拼接猜测已发布 URL。新 Windows 候选不再生成 ZIP：两个 Mac DMG 加两个 Windows Setup，共四个用户入口；旧版六入口回执仍可读取。只有两平台同版本、同源码、Windows run 成功且下载来源匹配、Mac 版本化验证通过且 stable 回执为 `published` 时，`readyForWebsite` 才为 `true`；统一计划里有服务端时，还要服务端 stable 回执为 `published` 且属于这份计划。`server` 一项给出 Linux 的安装命令和两个包，不进 `downloads`：官网的下载入口仍是 macOS 和 Windows 安装包。新 Windows 候选另外生成架构独立的签名更新清单，统一计划绑定其字节与旧 stable 快照；owner 确认后，在安装包公网验证完成的基础上提升 `stable/x64/update.json` 与 `stable/arm64/update.json`。两份 feed 均验证后写独立 `windows-update-publish-receipt.json`，官网只有匹配此回执才宣告应用内更新可用。缺少阶段只输出未完成状态；版本、来源或 URL 矛盾直接失败。
+`release-handoff.json` 从已有公开验证回执收集下载入口及尺寸/哈希，不拼接猜测已发布 URL。新 Windows 候选不再生成 ZIP：两个 Mac DMG 加两个 Windows Setup，共四个用户入口；旧版六入口回执仍可读取。只有两平台同版本、同源码、Windows run 成功且下载来源匹配、Mac 版本化验证通过且 stable 回执为 `published` 时，`readyForWebsite` 才为 `true`；0.9.0 起（0.9.0 以前是统一计划里有服务端时），还要服务端 stable 回执为 `published` 且属于这份计划。`server` 一项给出 Linux 的安装命令和两个包，不进 `downloads`：官网的下载入口仍是 macOS 和 Windows 安装包。新 Windows 候选另外生成架构独立的签名更新清单，统一计划绑定其字节与旧 stable 快照；owner 确认后，在安装包公网验证完成的基础上提升 `stable/x64/update.json` 与 `stable/arm64/update.json`。两份 feed 均验证后写独立 `windows-update-publish-receipt.json`，官网只有匹配此回执才宣告应用内更新可用。缺少阶段只输出未完成状态；版本、来源或 URL 矛盾直接失败。
 
 官网消费 `downloads` 更新发布配置，再走网站既有测试、部署预演和部署；owner 的完整发布请求已包括官网更新，不重复请求同一部署授权。`evidence` 保存本机证据路径，不能原样复制到公开网站。编排脚本不会自动修改网站或报告部署成功。发布完成后保留 OUT，只用 `git worktree remove` 清理本次状态记录的源码 worktree；临时根按 skill 删除规则处理。
 

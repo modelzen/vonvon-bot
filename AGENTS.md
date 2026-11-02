@@ -173,7 +173,7 @@ owner 2026-10-19 定（Claude 的周额度用到一半）：从 s27a 起，新�
 
 ## 三平台发布版本（owner 2026-10-28 定，2026-10-31 加 Linux 服务端包）
 
-- 每次发布 Vonvon Bot 时，macOS、Windows 安装包和 Linux 服务端包（linux-x64、linux-arm64）使用同一个新版本号；即使某个平台没有内容变化，也要构建并发布该版本的平台安装包。0.9.0 是第一个三平台版本；没有服务端发布配置（`cos-server.json`）时只发 macOS 和 Windows，发布计划里写明。
+- 每次发布 Vonvon Bot 时，macOS、Windows 安装包和 Linux 服务端包（linux-x64、linux-arm64）使用同一个新版本号；即使某个平台没有内容变化，也要构建并发布该版本的平台安装包。0.9.0 是第一个三平台版本：从 0.9.0 起，没有服务端发布配置（`cos-server.json`）或 `release-all` 没打好服务端包时，`release-publish.mjs plan` 直接拒绝，不能只发 macOS 和 Windows（Claude 2026-11-02 定）。
 - 发版前核对三个平台的产品版本和产物版本（`scripts/product-version.mjs` 连服务端包的构建记录一起核）；发布后核对官网显示、下载链接、服务端安装命令及各平台实际安装包的版本一致。平台各自的签名、更新和发布门禁仍照各自流程执行；还没全部同步时，不报告三平台发布完成。
 - 2026-10-28 现有的 macOS 0.7.4 与 Windows 0.7.5 不一致，owner 同意本次先保留；下次发布时同步。
 

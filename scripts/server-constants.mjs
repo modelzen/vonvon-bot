@@ -10,5 +10,18 @@ export const SERVER_BASE_URL = 'https://dl.vonvon.cc/bot/server';
 export const SERVER_PREFIX = 'bot/server/';
 /** The two scripts that live at the top of the prefix, next to stable/. */
 export const SERVER_SCRIPTS = ['install.sh', 'uninstall.sh'];
+/**
+ * From this product version on, every release carries the Linux server with macOS and Windows (Claude 2026-11-02): the
+ * publication plan refuses one without cos-server.json or without the server build, and the website handoff waits for the
+ * server's stable. Before it, a release without cos-server.json is macOS and Windows only.
+ */
+export const SERVER_REQUIRED_FROM = '0.9.0';
+export function serverRequired(version) {
+  const [a, b] = [version, SERVER_REQUIRED_FROM].map(value => String(value).split('.').map(Number));
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return true;
+}
+/** Where the error for a missing server part sends the release operator. */
+export const SERVER_SETUP_DOC = 'docs/release-orchestration.md「Linux 服务端包」和 release-mac skill 的同名一节';
 export const installCommand = `sh -c "$(curl -fsSL ${SERVER_BASE_URL}/install.sh)"`;
 export const uninstallCommand = `sh -c "$(curl -fsSL ${SERVER_BASE_URL}/uninstall.sh)"`;
