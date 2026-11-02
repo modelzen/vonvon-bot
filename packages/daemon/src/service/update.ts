@@ -186,8 +186,10 @@ export function tryUpdateLock(file = updateLockFile()): (() => void) | 'busy' | 
   return tryFileLock(file);
 }
 
-/** What a standalone update is doing inside its phase (server-3 C3). */
-export const updateDetails = ['downloading', 'verifying', 'unpacking', 'switching', 'draining', 'waiting', 'rolled-back'] as const;
+/** What a standalone update is doing inside its phase (server-3 C3); `desktop-*`, the desktop app's update of the
+ * server it carries (U4). */
+export const updateDetails = ['downloading', 'verifying', 'unpacking', 'switching', 'draining', 'waiting', 'rolled-back',
+  'desktop-checking', 'desktop-downloading', 'desktop-downloaded'] as const;
 export const updateStatusSchema = z.object({
   phase: z.enum(['installing', 'restarting', 'done', 'error']),
   ok: z.boolean().optional(), message: z.string().optional(),
@@ -197,6 +199,8 @@ export const updateStatusSchema = z.object({
   progress: z.object({ transferred: z.number().nonnegative(), total: z.number().nonnegative() }).strict().optional(),
   detail: z.enum(updateDetails).optional(),
   rolledBack: z.boolean().optional(),
+  /** The desktop app on this computer runs the update (U4): no `previous`, and the new process ends it by its version. */
+  via: z.enum(['desktop']).optional(),
 }).strict();
 export type UpdateStatus = Readonly<z.infer<typeof updateStatusSchema>>;
 export type UpdatePhase = UpdateStatus['phase'];

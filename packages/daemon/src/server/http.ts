@@ -26,7 +26,8 @@ import { commandRpc } from './rpc/command';
 import { collaborationRpc } from './rpc/collaboration';
 import { environmentRpc } from './rpc/environment';
 import { libraryRpc } from './rpc/library';
-import { machineRpc } from './rpc/machine';
+import { isDesktopShell, machineRpc } from './rpc/machine';
+import { createBundledUpdate, type BundledUpdate } from '../service/bundled-update';
 import type {BridgeImporter} from '../import/bridge/transaction';
 import { settingsRpc } from './rpc/settings';
 import { createLocalIdentity } from './local-credential';
@@ -84,12 +85,13 @@ export type RemoteSeams = Partial<Pick<EnableDeps, 'interfaces' | 'tailscale' | 
 
 /**
  * devices 4.5: what this daemon reports in a v2 server info: `remote` while an address is opened (D3); `session-scope`:
- * Bot sessions' tokens and `--scope` (D4a). A daemon that updates itself says so (devices 6.5, devices-ui-2 4.11);
- * `update.bundled` is U4's.
+ * Bot sessions' tokens and `--scope` (D4a). A daemon that updates itself says so (devices 6.5, devices-ui-2 4.11); one
+ * the desktop app carries is updated by that app (U4), except on Windows for 0.9.0 (owner 2026-11-02).
  */
-export const capabilities = (distribution?: string, remoteOpen = false): string[] => [
+export const capabilities = (distribution?: string, remoteOpen = false, platform: NodeJS.Platform = process.platform): string[] => [
   'device', 'session-scope', ...remoteOpen ? ['remote'] : [],
-  ...distribution === 'standalone' ? ['update.standalone'] : distribution === 'global-npm' ? ['update.npm'] : [],
+  ...distribution === 'standalone' ? ['update.standalone'] : distribution === 'global-npm' ? ['update.npm']
+    : distribution === 'bundled' && platform !== 'win32' ? ['update.bundled'] : [],
 ];
 
 /**
@@ -116,7 +118,8 @@ export async function startApi(options: { service: AdminService; port?: number; 
   const startedAt = options.startedAt ?? Math.round(performance.timeOrigin);
   // How this daemon was installed, read once (it may ask npm) and kept; until it is known the server info says nothing of updates.
   let distribution: string | undefined;
-  void (options.distribution ?? runtimeDistribution)().then(found => { distribution = found.kind; }, () => undefined);
+  const installed: Promise<{ kind: string; cliPath?: string }> = (options.distribution ?? runtimeDistribution)();
+  void installed.then(found => { distribution = found.kind; }, () => undefined);
   const sessionTokens = options.sessionTokens ?? createSessionTokens();
   /** What the bot-session checks read: a bot's bound groups and their sessions, from its files (the snapshot can be 5 s old). */
   const authzDeps: AuthzDeps = {
@@ -139,6 +142,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
   let acquiredSockets: ReturnType<typeof createSocketServer> | undefined;
   let acquiredClients: ClientRegistry | undefined;
   let acquiredRemote: RemoteListeners | undefined;
+  let acquiredBundled: BundledUpdate | undefined;
   let snapshots: SnapshotStore | undefined;
   let port = options.port ?? 0;
   const invalidate = (): void => { void snapshots?.rebuild().catch(() => undefined); };
@@ -179,6 +183,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
     let listenerClosed: Promise<void>;
     let remoteClosed: Promise<void>;
     stopEnding?.();
+    acquiredBundled?.close();
     released = Promise.resolve().then(async () => {
       await listenerClosed;
       // The remote servers are closed beside the loopback one; the clients' last-seen is written once nothing can touch it.
@@ -259,12 +264,19 @@ export async function startApi(options: { service: AdminService; port?: number; 
       const { id } = request;
       switch (request.method) {
         case 'snapshot': peer.send({ type: 'response', id, method: 'snapshot', payload: shown(snapshots.current()) }); return;
-        case 'admin': return finish(peer, await adminRpc(options.service, follow => logs.follow(peer, follow), request.payload, { startedAt, peer }), payload => ({ type: 'response', id, method: 'admin', payload }));
+        case 'admin': {
+          const outcome = await adminRpc(options.service, follow => logs.follow(peer, follow), request.payload, { startedAt, peer });
+          // U4: the desktop shell is known once it declared it can update; after an update's restart, one that comes back
+          // means the app did not change.
+          if (request.payload.type === 'negotiate' && isDesktopShell(peer)) bundled.shellAttached(peer);
+          return finish(peer, outcome, payload => ({ type: 'response', id, method: 'admin', payload }));
+        }
         case 'device': return finish(peer, await deviceRpc({ home, identity, clients, invites, remote: { listeners: remote, enable, active } }, peer, request.payload), payload => ({ type: 'response', id, method: 'device', payload }));
         case 'settings': return finish(peer, await settingsRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'settings', payload: shown(payload) }));
         case 'collaboration': return finish(peer, await collaborationRpc(options.service, directory, request.payload), payload => ({ type: 'response', id, method: 'collaboration', payload: shown(payload) }));
         case 'environment': return finish(peer, await environmentRpc(options.service, jobs, peer, request.payload, environment), payload => ({ type: 'response', id, method: 'environment', payload }));
-        case 'machine': return finish(peer, await machineRpc(options.service, options.control, port, request.payload, { launcher: serviceActions, snapshots, root: home, bridgeImport: options.bridgeImport, environment }), payload => ({ type: 'response', id, method: 'machine', payload }));
+        case 'machine': return finish(peer, await machineRpc(options.service, options.control, port, request.payload, { launcher: serviceActions, snapshots, root: home, bridgeImport: options.bridgeImport, environment,
+          bundled: { peer, update: bundled, distribution: () => installed, clients } }), payload => ({ type: 'response', id, method: 'machine', payload }));
         case 'command': return finish(peer, await commandRpc({ service: options.service, jobs, peer, directory, snapshots, control: options.control, port }, request.payload), payload => ({ type: 'response', id, method: 'command', payload: shown(payload) }));
         case 'library': return finish(peer, await libraryRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'library', payload: shown(payload) }));
         // devices-4b 4.5: a Bot session's write lands where its Bot process said, as its turn's person.
@@ -346,7 +358,11 @@ export async function startApi(options: { service: AdminService; port?: number; 
         deviceName: identity.current.name, platform: hostPlatform(), capabilities: capabilities(distribution, remote.status().length > 0), principal: principalWire(peer.principal) });
     // devices-2 4.3: every server's connections in one hub, so a publish, a drain or a release reaches all of them; its
     // view gives each connection its part of an event whoever publishes it (devices-4a 4.7).
-    const hub = createPeerHub({ detached: peer => { jobs.detach(peer); logs.detach(peer); }, view: viewFor(sessionTokens) });
+    const hub = createPeerHub({ detached: peer => { jobs.detach(peer); logs.detach(peer); if (hub.state === 'open') bundled.shellDetached(peer); }, view: viewFor(sessionTokens) });
+    // U4: the update of a server the desktop app carries, run by this computer's desktop shell.
+    const bundled = acquiredBundled = createBundledUpdate({
+      shells: () => [...hub.peers].filter(isDesktopShell), version: bridgeVersion(), deviceName: () => identity.current.name, log,
+    });
     // devices 4.3 (SEC-16): a revoked client's connections end now, with 4003; the hub's detach cancels its jobs and log
     // follows. Before the owner hears of it (followRevocations), so the revoked one does not get that event.
     clients.onChange((_generation, revoked) => {

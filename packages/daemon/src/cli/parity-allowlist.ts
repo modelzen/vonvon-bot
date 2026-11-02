@@ -40,6 +40,7 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'machine.startHost': { reason: 'desktop-only', note: 'the shell starts the daemon (vonvon daemon start in a terminal)' },
   'machine.service.start': { reason: 'desktop-only', note: "the shell's 启动服务" },
   'machine.service.stop': { reason: 'desktop-only', note: "the shell's 停止服务" },
+  'machine.desktopUpdateReport': { reason: 'desktop-only', note: "the shell's report on the update it runs for the server it carries (devices 7.5)" },
 
   'admin.negotiate': { reason: 'internal', note: 'each client sends it after the handshake' },
 };

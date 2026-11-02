@@ -42,6 +42,9 @@ export type ShellCapabilities = {
   devices?: DevicesShell;
   /** This computer's own paired and revoked clients, whichever device is shown. */
   onLocalDeviceEvent?: (listener: (event: DeviceEventPayload) => void) => () => void;
+  /** U4: another device is updating this computer's Vonvon Bot (the words to show), or no longer; the last one at once.
+   * About this computer, whichever device is shown. */
+  onRemoteUpdate?: (listener: (text: string | undefined) => void) => () => void;
 };
 
 /** The device the page shows. */
