@@ -499,6 +499,7 @@ export function installBridge(
     register(desktopChannels.installDesktopUpdate, 0, noArg, () => updateResult(() => actions.installDesktopUpdate()));
     register(desktopChannels.hide, 0, noArg, async () => { actions.hide(); });
     register(desktopChannels.quit, 0, noArg, () => actions.confirmQuit());
+    register(desktopChannels.quitKeepsDaemon, 0, () => { localOnly(); }, () => actions.quitKeepsDaemon());
     register(desktopChannels.devicesState, 0, noArg, async () => devices.state());
     register(desktopChannels.devicesInspect, 1, value => {
       if (typeof value !== 'string' || value.length > 65_536) throw new Error('Invalid link');
