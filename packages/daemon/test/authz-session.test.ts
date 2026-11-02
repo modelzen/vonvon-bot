@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Request, ScheduledTaskView, Scope, SettingsReply } from '@vonvon/protocol';
+import { settingsReplySchema, type Request, type ScheduledTaskView, type Scope, type SettingsReply } from '@vonvon/protocol';
+import agentFixture from '../../protocol/test/fixtures/agent-settings.json';
 
 const memory = vi.hoisted(() => ({ action: vi.fn() }));
 vi.mock('../src/admin/memory', async original => ({ ...await original<object>(), memoryAction: memory.action }));
@@ -501,6 +502,61 @@ describe('a Bot session against the daemon', () => {
       const list = { type: 'request', id: 'l', method: 'schedule', payload: { botId: BOT, request: { action: 'list', chatId: GROUP } } } as unknown as Request;
       expect(await other.client.call(list)).toMatchObject({ type: 'response', method: 'schedule' });
       await other.client.close();
+    } finally { await fixture.close(); }
+  });
+
+  // Codex review 239-2 / 240-1. main 必败 (in this slice): read's view was cut, and the act's reply carried it whole again
+  it('cuts the view a saved or conflicting act answers a private chat with, as read\'s, still to the protocol; the owner\'s terminal gets it whole', async () => {
+    const section = (value: unknown) => ({ stored: value, effective: value, revision: 'r1', access: { kind: 'writable' }, apply: [] });
+    const options = { tiers: ['qa', 'write', 'full'].map(tier => ({ tier, name: '权限', summary: '说明', native: '' })), strength: '能力说明', fields: [], expanded: { qa: {}, write: {}, full: {} } };
+    const decisionModels = [{ provider: 'deepseek', displayName: 'DeepSeek', models: [{ id: 'deepseek-chat', displayName: 'Chat' }], keyId: 'deepseek', keySet: true }];
+    // What settings_get leaves out, each one set: where the administrators come from, the role draft, the keystore's, the roster's names, the skills.
+    const agent = {
+      ...agentFixture, scope: { kind: 'agent', botId: BOT }, decisionModels, judgeByBackend: { 'codex-appserver': { model: 'gpt-5', source: 'bot' } },
+      roleInfo: { draft: '身份草稿', headed: true, oversized: false, mergedNotice: false, integrity: 'ok' },
+      administrators: { feishu: { ownerOpenId: 'ou_owner', adminOpenIds: ['ou_fs'] }, scannerOpenId: 'ou_scan', openIds: ['ou_local', 'ou_0123456789abcdef'], revision: 'a2' },
+    };
+    const project = {
+      scope: { kind: 'project', botId: BOT, projectName: '研发' }, decisionModels, skillsError: '读不到 /w/skills',
+      sections: { permission: section({ mode: 'qa', guestMode: 'qa', network: false, custom: null, options }), response: section({ noMention: false }), model: section({ selection: { kind: 'default' } }) },
+      identity: { chatId: GROUP, backend: 'codex-appserver', cwd: '/w', kind: 'multi' },
+      skills: [{ path: '/w/skills/review', name: 'review', description: '审查', source: 'workspace', enabled: true }],
+      members: { openIds: ['ou_a'], revision: 'm2', roster: { state: 'complete', entries: [{ openId: 'ou_a', name: '小A', kind: 'person' }], otherBots: false } },
+    };
+    const act = vi.fn(async (action: { kind: string }) => action.kind === 'adminMember' ? { kind: 'saved', view: agent, effects: [], warnings: [] } : { kind: 'conflict', view: project });
+    const settings = { act, read: async () => { throw new Error('unused'); }, save: async () => { throw new Error('unused'); }, models: async () => { throw new Error('unused'); } };
+    const fixture = await startFixture(fakeService({ listProjects: async (appId: string) => appId === BOT ? projects : [], settings } as unknown as Parameters<typeof fakeService>[0]),
+      undefined, undefined, botSays(ownerTurn));
+    const admin = { type: 'request', id: 'a', method: 'settings', payload: { type: 'act', action: { kind: 'adminMember', botId: BOT, openId: 'ou_0123456789abcdef', membership: 'present', revision: 'a1' } } } as unknown as Request;
+    const member = { type: 'request', id: 'm', method: 'settings', payload: { type: 'act', action: { kind: 'projectMember', botId: BOT, projectName: '研发', openId: 'ou_0123456789abcdef', membership: 'present', revision: 'm1' } } } as unknown as Request;
+    // the frame as the client takes it: its schema checked
+    const acted = (frame: unknown): Extract<SettingsReply, { kind: 'acted' }>['result'] => {
+      expect(frame).toMatchObject({ type: 'response', method: 'settings', payload: { kind: 'acted' } });
+      const reply = settingsReplySchema.parse((frame as { payload: unknown }).payload);
+      if (reply.kind !== 'acted') throw new Error('not acted');
+      return reply.result;
+    };
+    try {
+      const client = await socketClient(fixture.api.port, fixture.sessionTokens.issue({ appId: BOT, place: 'dm', chatId: 'oc_dm', sessionId: 'ses_0123456789abcdef' }));
+      await client.ready();
+      await client.call(negotiate({ bot: BOT }));
+      const saved = acted(await client.call(admin));
+      expect(saved).toMatchObject({ kind: 'saved', effects: [], warnings: [] });
+      expect('view' in saved && saved.view).toEqual({ scope: agent.scope, sections: agent.sections, ownerOpenId: agent.ownerOpenId,
+        administrators: { openIds: ['ou_local', 'ou_0123456789abcdef'], revision: 'a2' }, voice: agent.voice, commentInstructions: agent.commentInstructions });
+      const conflict = acted(await client.call(member));
+      expect(conflict.kind).toBe('conflict');
+      expect('view' in conflict && conflict.view).toEqual({ scope: project.scope, sections: project.sections, identity: project.identity, members: { openIds: ['ou_a'], revision: 'm2' } });
+      await client.close();
+      // not in a session: the owner sees what the settings page shows
+      const owner = await socketClient(fixture.api.port, fixture.credential);
+      await owner.ready();
+      const whole = acted(await owner.call(admin));
+      expect('view' in whole && whole.view).toMatchObject({ roleInfo: agent.roleInfo, decisionModels, administrators: agent.administrators });
+      const wholeProject = acted(await owner.call(member));
+      expect('view' in wholeProject && wholeProject.view).toMatchObject({ skills: project.skills, members: project.members });
+      await owner.close();
+      expect(act).toHaveBeenCalledTimes(4);
     } finally { await fixture.close(); }
   });
 });

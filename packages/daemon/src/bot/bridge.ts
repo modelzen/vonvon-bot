@@ -14,6 +14,7 @@ import { isAdmin, resolveOwner, type AppConfig } from '../config/schema';
 import { createCommandTools } from '../agent/entry/command-tools';
 import { createMemoryWriter } from './memory-writer';
 import { listProjects } from '../project/registry';
+import { isProjectId } from '../project/library';
 import { createAgentEntries, type AgentEntries } from '../agent/entry/registry';
 import { log } from '../core/logger';
 import { createOrchestrator } from './handle-message';
@@ -77,10 +78,12 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     onError: error => log.fail('setup', error, { phase: 'card-callback-verification', appId: app.id }),
   });
 
-  // 记忆写入（工具和隐藏块共用）：群绑定的项目取自绑定行，Bot 记忆在 bots/<appId>/ 下
+  // 记忆写入（工具、隐藏块和 Bot 会话的命令行共用）：群绑定的项目取自绑定行，Bot 记忆在 bots/<appId>/ 下。私聊不对应
+  // 群，它的项目是本 Bot 现在绑定的全部项目，每次现读、去重（Codex 审查 239-1 / 241-1：缺了它，私聊写项目记忆全被拒）
   const memory = createMemoryWriter({
     botId: app.id,
     projectIdOf: async chatId => (await listProjects()).find(project => project.chatId === chatId)?.projectId,
+    botProjectIds: async () => [...new Set((await listProjects()).flatMap(project => isProjectId(project.projectId) ? [project.projectId] : []))],
   });
   // 咖啡一下 (the local Claude Code / Codex hook relay) left v1 in s02b: no
   // service and no socket; s02c deleted D/cli-bridge. Since s02c2 the installed

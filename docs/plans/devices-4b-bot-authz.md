@@ -168,3 +168,10 @@ Mac 后验：无专项。Windows：无。
 - **`ScheduleActor.session`** 不带 `topicId`（照计划的形状），`name` 取这一轮发起人的名字。
 - **测试文件**：registry 的放在 `agent-entry-session.test.ts`；`authz-bot` 的映射、透传、范围加轮的用例并进 `authz-session.test.ts`；`rpc-memory` 的落点并进 `memory-admin.test.ts` 和 `authz-session.test.ts` 的 wire 用例；supervisor 和单进程的 `askBot` 接线在 `schedule-rpc.test.ts`（那里已有 supervisor 和 `runRun` 的桩）。端到端的六条验收没写成 vitest 文件，改成手动探针 `packages/daemon/test/manual/bot-authz-probe.ts`：真打包的 CLI、真 fork 出的假 Bot 进程（真 `createAgentEntries`，真 admin/host IPC），输出写进 PR 描述。原因是 `vonvon memory` 在会话里到 C5 之前仍整体拒，记忆那条只能走 wire；设置那几条要协议校验过的完整视图，单测里已经逐条覆盖了判定。
 - D4a 留下的"★ 行在 D4b 之前按成员放行"的窗口已关：没有 `askBot` 时 ★ 行一律拒（`devices-4a-scope.md` 4.6 的偏差到此结束）。
+
+## Codex 审查后改了什么（任务 239–241）
+
+JP-VPS 上 Codex 的三份独立审查（239 通读全部 diff，240 安全和权限，241 Bot 进程、IPC、接线），去重后 2 条，全部接受。每条先写测试，在原代码上确认失败，再改。
+
+- **240-1 / 239-2（私聊会话读设置时裁掉的东西，`settings.act` 的回复又原样带回）→ 接受。** `authz.ts` 的裁剪拆成 `sessionView`（一个视图）和 `sessionReply`（一个回复里的所有视图）：`read` 的 `view`，以及 `act` 回 `saved`、`conflict` 时 `result.view` 的 Bot 视图和项目视图，都按 SEC-4 的同一裁法；允许的会话 `act` 路径附上 narrowing，主人终端（不在会话里）仍拿完整视图。测试：`authz-session.test.ts` 经真实 wire，私聊令牌的 `adminMember` 成功和 `projectMember` 冲突两种回复都不再带 `administrators.feishu/scannerOpenId`、`roleInfo`、`decisionModels`、`judgeByBackend`、成员 roster、skills，裁后的回复过 `settingsReplySchema`，主人连接拿到的仍完整；`cli-bot-session.test.ts` 用打包的 CLI 在私聊令牌下跑 `settings act admin add … --json`，输出的 `administrators` 只有 `openIds`、`revision`。
+- **241-1 / 239-1（生产 bridge 建记忆写入时没给 `botProjectIds`，私聊写本 Bot 已绑定项目的记忆被拒）→ 接受。** `bot/bridge.ts` 给 `createMemoryWriter` 接上 `botProjectIds`：每次现读本 Bot 的项目表，只取有效的项目 id（`isProjectId`），去重。私聊里工具和会话命令行用的是同一个写入器，两边都好了。测试：新文件 `bridge-session-memory.test.ts` 起真的 `startBridge`（只换掉飞书连接、编排器和这里用不到的存储），项目表写在临时目录，host 的 `authorize` 在前面问这个 bridge 的 `authorizeSessionCall`：主人私聊这一轮对已绑定项目的记忆 add、edit、archive 都放行并给出落点；两个群绑同一个项目只算一个（成员的 `--bot` 落到这唯一的项目），没迁移的行和坏 id 不算；没绑的项目被拒，绑上之后同一个会话就能写。
