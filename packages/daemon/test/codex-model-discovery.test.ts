@@ -304,14 +304,20 @@ describe('Codex model discovery preserves the native picker directory', () => {
     const { codexCatalogCache } = await import('../src/agent/codex-appserver/models');
     let finishOld!: (models: Awaited<ReturnType<typeof codexCatalogCache.read>>) => void;
     let failOld!: (error: Error) => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
     const read = vi.spyOn(codexCatalogCache, 'read').mockImplementationOnce(() => new Promise((resolve, reject) => {
       finishOld = resolve;
       failOld = reject;
+      entered();
     }));
     try {
       const backend = new CodexAppServerBackend();
       const old = backend.listModels();
-      await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+      // Windows performs a real owned --version probe before entering the cache;
+      // synchronize on that entry, not waitFor's unrelated one-second default.
+      await Promise.race([started, old.then(() => { throw new Error('Initial model discovery ended before entering the cache'); })]);
+      expect(read).toHaveBeenCalledOnce();
       const fresh = await backend.listModels({ refresh: true });
       expect(fresh[0]?.supportedEfforts).toEqual([]);
       if (outcome === 'failure') failOld(new Error('Codex model discovery was superseded'));
