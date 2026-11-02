@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { buildRelease, collectRelease, inspectRunners, jobTimings, prepareRelease, releaseStatus, runReleaseChild, windowsRunTitle, workflowLabels } from './release-all.mjs';
 
-const sha = 'a'.repeat(40), version = '1.2.3', hash = value => createHash('sha256').update(value).digest('hex');
+const sha = 'a'.repeat(40), version = '1.2.3', VERSION = version, hash = value => createHash('sha256').update(value).digest('hex');
 const save = (path, value) => writeFile(path, JSON.stringify(value));
 const runner = { id: 17, status: 'online', busy: false, labels: ['self-hosted', 'macOS', 'ARM64', 'modelzen-macos', 'modelzen-macos-isolated'].map(name => ({ name })) };
 
@@ -283,7 +283,7 @@ test('the local cancel marker stops at a helper boundary and does not claim remo
   assert.equal(h.helpers.filter(call => call[1][0]?.endsWith('release-mac.mjs')).length, 1);
 });
 
-async function receipts(h, stable = false) {
+async function receipts(h, stable = false, version = VERSION) {
   const state = await h.state(), objects = ['arm64', 'x64'].map(architecture => {
     const file = `Vonvon-Bot-${version}-${architecture}.dmg`;
     return { file, url: `https://dl.vonvon.cc/bot/mac/stable/${file}`, size: 10, sha256: hash(file) };
@@ -295,13 +295,22 @@ async function receipts(h, stable = false) {
     objects: ['x64', 'arm64'].flatMap(arch => [`Vonvon-Bot-Setup-${version}-${arch}.exe`, `Vonvon-Bot-${version}-windows-${arch}.zip`]).map(file => ({ file, url: `https://dl.vonvon.cc/bot/windows/${version}/${file}`, bytes: 20, sha256: hash(file) })) });
 }
 
+/** The server's part of a published 1.2.3 release: both receipts, the stable one bound to the publication plan (written when there is none). */
+async function serverReceipts(h, version = VERSION) {
+  const planPath = join(h.options.out, 'publication-plan.json');
+  if (!(await readFile(planPath).catch(() => undefined))) await save(planPath, { format: 1, candidate: { server: { version } } });
+  const objects = ['linux-x64', 'linux-arm64'].map(target => { const file = `vonvon-server-${version}-${target}.tar.gz`; return { file, url: `https://dl.vonvon.cc/bot/server/${version}/${file}`, bytes: 10, sha256: hash(file) }; });
+  await save(join(h.options.out, 'server', 'server-publish-receipt.json'), { version, sourceSha: sha, objects });
+  await save(join(h.options.out, 'server', 'server-stable-receipt.json'), { version, sourceSha: sha, planSHA256: hash(await readFile(planPath)), status: 'published' });
+}
+
 test('website handoff requires matching public receipts for both platforms and verified stable', async t => {
   const h = await fixture(t); await buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies);
   assert.equal((await collectRelease({ out: h.options.out }, h.dependencies)).readyForWebsite, false);
   await receipts(h);
   const held = await collectRelease({ out: h.options.out }, h.dependencies);
   assert.equal(held.readyForWebsite, false); assert.equal(held.downloads.length, 4);
-  await receipts(h, true);
+  await receipts(h, true); await serverReceipts(h);
   const ready = await collectRelease({ out: h.options.out }, h.dependencies);
   assert.equal(ready.readyForWebsite, true);
   assert.equal(ready.sourceSha, sha);
@@ -318,7 +327,7 @@ test('job timing preserves queued, test and package stages and leaves ongoing du
 });
 
 test('dual Windows handoff requires both native Setup packages and omits ZIP choices', async t => {
-  const h = await fixture(t); await buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies); await receipts(h, true);
+  const h = await fixture(t); await buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies); await receipts(h, true); await serverReceipts(h);
   const file = join(h.options.out, 'windows', 'windows-publish-receipt.json');
   const receipt = JSON.parse(await readFile(file, 'utf8')); receipt.architecture = 'x64';
   await save(file, receipt);
@@ -478,6 +487,7 @@ test('update-capable installers do not advertise application updates until both 
   await save(planFile, {format:1,candidate:{version,sourceSha:sha,windows:{updates:updateReceipt.feeds}}});
   updateReceipt.planSHA256 = hash(await readFile(planFile));
   await save(join(h.options.out, 'windows', 'windows-update-publish-receipt.json'), updateReceipt);
+  await serverReceipts(h);
   const ready = await collectRelease({ out: h.options.out }, h.dependencies);
   assert.equal(ready.readyForWebsite, true); assert.equal(ready.windows.updatesEnabled, true);
   for (const change of [
@@ -502,6 +512,7 @@ test('build makes the two Linux server packages after both Mac architectures; re
   assert.equal(h.helpers.filter(call => call[1][0]?.endsWith('build-server.mjs')).length, 1);
   const status = await releaseStatus({ out: h.options.out }, h.dependencies);
   assert.equal(status.server.phase, 'complete');
+  assert.equal(status.server.required, true, '1.2.3 is a three-platform release');
   assert.deepEqual(status.server.packages.map(item => item.file), [`vonvon-server-${version}-linux-x64.tar.gz`, `vonvon-server-${version}-linux-arm64.tar.gz`]);
 });
 
@@ -531,11 +542,32 @@ test('a resumed source without the built web UI builds it before the server pack
   assert.ok(names.indexOf('npm run') >= 0 && names.indexOf('npm run') < names.indexOf('build-server.mjs'));
 });
 
-test('the website handoff waits for the server stable only when the reviewed plan has the server', async t => {
+test('before 0.9.0 the website handoff waits for the server stable only when the reviewed plan has the server', async t => {
+  const h = await fixture(t); await buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies);
+  // The same output as a release before 0.9.0, when a release without cos-server.json was macOS and Windows only.
+  const legacy = '0.8.3', state = await h.state();
+  await save(join(h.options.out, 'release-orchestration.json'), { ...state, version: legacy });
+  h.remote.run.display_title = windowsRunTitle({ ...state, version: legacy });
+  await receipts(h, true, legacy);
+  const status = await releaseStatus({ out: h.options.out }, h.dependencies);
+  assert.equal(status.server.required, false);
+  const plain = await collectRelease({ out: h.options.out }, h.dependencies);
+  assert.equal(plain.readyForWebsite, true); assert.equal(plain.server, null); assert.equal(plain.evidence.server, null);
+  await save(join(h.options.out, 'publication-plan.json'), { format: 1, candidate: { server: { version: legacy } } });
+  const waiting = await collectRelease({ out: h.options.out }, h.dependencies);
+  assert.equal(waiting.readyForWebsite, false); assert.deepEqual([waiting.server.published, waiting.server.stableVerified], [false, false]);
+});
+
+test('from 0.9.0 the website handoff always waits for the server stable, even when the plan left the server out', async t => {
   const h = await fixture(t); await buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies); await receipts(h, true);
   const plain = await collectRelease({ out: h.options.out }, h.dependencies);
-  assert.equal(plain.readyForWebsite, true); assert.equal(plain.server, null);
+  assert.equal(plain.readyForWebsite, false, 'macOS and Windows alone are not a 1.2.3 release');
+  assert.deepEqual([plain.server.published, plain.server.stableVerified], [false, false]);
+  assert.equal(plain.evidence.server, join(h.options.out, 'server', 'server-stable-receipt.json'));
   const planPath = join(h.options.out, 'publication-plan.json');
+  // A plan without the server (made before the rule) does not let the handoff skip it either.
+  await save(planPath, { format: 1, candidate: { server: null } });
+  assert.equal((await collectRelease({ out: h.options.out }, h.dependencies)).readyForWebsite, false);
   await save(planPath, { format: 1, candidate: { server: { version } } });
   const waiting = await collectRelease({ out: h.options.out }, h.dependencies);
   assert.equal(waiting.readyForWebsite, false); assert.deepEqual([waiting.server.published, waiting.server.stableVerified], [false, false]);

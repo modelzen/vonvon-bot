@@ -9,7 +9,7 @@ import { assertOutputLocation, canonicalPath, checkVersionGate, compareVersions,
 import { cosCredentialEnvNames, readCosConfig, readCosReleaseEvidence } from './release-cos-evidence.mjs';
 import { checkedProductVersion } from './product-version.mjs';
 import { STABLE_RECEIPT, UPLOAD_RECEIPT } from './publish-server.mjs';
-import { PUBLISHED_TARGETS, SERVER_BASE_URL, archiveName, installCommand } from './server-constants.mjs';
+import { PUBLISHED_TARGETS, SERVER_BASE_URL, archiveName, installCommand, serverRequired } from './server-constants.mjs';
 import { assertSecureTransport, readStableManifest, validateReleaseInventory } from './verify-public-release.mjs';
 
 const repository = 'modelzen/vonvon-bot', workflow = 'windows-release.yml';
@@ -477,7 +477,8 @@ export async function releaseStatus({ out }, dependencies = {}) {
 
 async function serverStatus(state) {
   const summary = await exists(serverReport(state)) ? await readJSON(serverReport(state)).catch(() => undefined) : undefined;
-  return { phase: state.server?.phase ?? 'not-started',
+  // required: from 0.9.0 release-publish plans nothing without this build, and the website handoff waits for its stable.
+  return { phase: state.server?.phase ?? 'not-started', required: serverRequired(state.version),
     packages: PUBLISHED_TARGETS.flatMap(target => summary?.files?.[target] ? [{ target, file: summary.files[target].name, bytes: summary.files[target].size, sha256: summary.files[target].sha256 }] : []) };
 }
 
@@ -502,9 +503,9 @@ export async function collectRelease({ out }, dependencies = {}) {
     const source = await readJSON(join(out, 'windows', 'github-build.json'));
     if (run?.conclusion !== 'success' || source.runId !== run.id || source.sourceSha !== state.sha) throw new Error('Windows publication receipt lacks a matching successful build provenance');
   }
-  // The server is part of the release when the reviewed publication plan has it (cos-server.json existed).
+  // The server is part of every release from 0.9.0; before it, when the reviewed publication plan has it (cos-server.json existed).
   const plan = await readOptional(join(out, 'publication-plan.json'));
-  const serverPlanned = !!plan?.candidate?.server;
+  const serverExpected = serverRequired(state.version) || !!plan?.candidate?.server;
   const serverUpload = await readOptional(join(out, 'server', UPLOAD_RECEIPT)), serverStable = await readOptional(join(out, 'server', STABLE_RECEIPT));
   for (const receipt of [mac, stable, windows, serverUpload, serverStable].filter(Boolean)) {
     if (receipt.version !== state.version || (receipt.sourceCommit ?? receipt.sourceSha) !== state.sha) throw new Error('Publication receipt version or source SHA differs from this release');
@@ -554,13 +555,13 @@ export async function collectRelease({ out }, dependencies = {}) {
   }
   const serverStableVerified = !!serverUpload && serverStable?.status === 'published' && serverStable.planSHA256 === (plan ? digest(await readFile(join(out, 'publication-plan.json'))) : undefined);
   const handoff = { format: 1, version: state.version, sourceSha: state.sha, readyForWebsite: macVerified && stableVerified && !!windows && downloads.length === 2 + windowsArchitectures.length && (!windows.updatesEnabled || updatesVerified)
-      && (!serverPlanned || serverStableVerified),
+      && (!serverExpected || serverStableVerified),
     mac: { versionedVerified: macVerified, stableVerified, notarization: mac?.notarization ?? stable?.notarization ?? null },
     windows: { published: !!windows, signed: false, updatesEnabled: updatesVerified, ...(updatesVerified ? { updateFeeds: updates.feeds } : {}) }, downloads,
     // Linux only: Mac and Windows install the desktop app, which carries its server (owner 2026-11-01).
-    server: serverPlanned ? { published: !!serverUpload, stableVerified: serverStableVerified, installCommand, packages: serverPackages } : null,
+    server: serverExpected ? { published: !!serverUpload, stableVerified: serverStableVerified, installCommand, packages: serverPackages } : null,
     evidence: { mac: state.macRelease ? join(state.macRelease, 'upload-receipt.json') : null, stable: state.macRelease ? join(state.macRelease, 'publish-receipt.json') : null,
-      windows: join(out, 'windows', 'windows-publish-receipt.json'), server: serverPlanned ? join(out, 'server', STABLE_RECEIPT) : null } };
+      windows: join(out, 'windows', 'windows-publish-receipt.json'), server: serverExpected ? join(out, 'server', STABLE_RECEIPT) : null } };
   await atomicJSON(join(out, 'release-handoff.json'), handoff);
   runtime(dependencies).log(json(handoff));
   return handoff;
@@ -572,7 +573,7 @@ prepare  --repo /absolute/checkout --version X.Y.Z --sha FULL_MAIN_SHA --update-
 build    Same options for a new release, or only --out for a prepared release, plus --authorize-notarization. Dispatches pinned Windows build, downloads and verifies it as soon as it succeeds while arm64 then x64 Mac helpers run, then builds the two Linux server packages into OUT/server and assembles evidence. Never uploads or promotes stable.
 resume   --out ... --authorize-notarization [--recover-arm64 app=UUID|dmg=UUID] [--recover-x64 app=UUID|dmg=UUID]. Reuses original inputs, Apple IDs and Windows request. Unknown dispatch outcomes are queried, never automatically repeated.
 status   Queries CI/Windows and reads Apple stage evidence. Can run while build is active.
-collect  Validates matching publication receipts and writes release-handoff.json; readyForWebsite requires both public platforms, verified Mac stable and, when the publication plan has the server, its verified stable.
+collect  Validates matching publication receipts and writes release-handoff.json; readyForWebsite requires both public platforms, verified Mac stable and, from 0.9.0 (before it, when the publication plan has the server), the server's verified stable.
 cancel   Creates OUT/CANCEL. Stops before the next stage; does not cancel jobs already submitted to Apple/GitHub. Remove only this marker deliberately before resuming.
 See docs/release-orchestration.md for publication commands, stage boundaries and recovery.`;
 

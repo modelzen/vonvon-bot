@@ -12,6 +12,7 @@ import { collectRelease, runReleaseChild } from './release-all.mjs';
 import { assertSecureTransport, readStableManifest, validateReleaseInventory, verifyPublicRelease } from './verify-public-release.mjs';
 import { cosCredentialEnvNames, readCosConfig } from './release-cos-evidence.mjs';
 import { planServerPublication, promoteServerStable, publishServerObjects, readServerCosConfig, STABLE_RECEIPT, UPLOAD_RECEIPT } from './publish-server.mjs';
+import { SERVER_REQUIRED_FROM, SERVER_SETUP_DOC, serverRequired } from './server-constants.mjs';
 
 const scripts = dirname(fileURLToPath(import.meta.url));
 const planName = 'publication-plan.json';
@@ -65,6 +66,8 @@ async function context(options, r, saved) {
   const out = await realpath(options.out), state = await readJSON(join(out, 'release-orchestration.json'));
   if (state.format !== 1 || state.out !== out || !/^[a-f0-9]{40}$/.test(state.sha ?? '') || !/^\d+\.\d+\.\d+$/.test(state.version ?? '')
     || state.mac?.phase !== 'candidate-complete' || state.windows?.status !== 'completed' || state.windows.conclusion !== 'success' || !Number.isSafeInteger(state.windows.runId)) throw new Error('Both pinned platform candidates must be complete; resume release-all first');
+  const required = serverRequired(state.version), threePlatforms = `${SERVER_REQUIRED_FROM} 起三平台同版本，${state.version} 必须连 Linux 服务端包一起发`;
+  if (required && state.server?.phase !== 'complete') throw new Error(`${threePlatforms}，但 release-all 的状态里没有打好的服务端包（server.phase：${state.server?.phase ?? '没有'}）：先用 release-all resume 打完，再 plan（见 ${SERVER_SETUP_DOC}）`);
   const macOut = await realpath(state.macRelease), windowsOut = join(out, 'windows');
   if (relative(out, macOut).startsWith('..') || macOut === out || isAbsolute(relative(out, macOut))) throw new Error('Mac candidate must be inside this release output');
   const requested = { readonly: state.paths.cosConfig,
@@ -75,7 +78,8 @@ async function context(options, r, saved) {
     if (!isAbsolute(path ?? '')) throw new Error('Use absolute external COS configuration paths');
     configs[key] = { path: await realpath(path), sha256: digest(await readFile(path)) };
   }
-  // The server is published once cos-server.json exists (0.9.0 on); a path named on the command line or in the plan must exist.
+  // The server is published once cos-server.json exists; a path named on the command line or in the plan must exist.
+  // From 0.9.0 it must exist: no release of macOS and Windows alone, at plan, upload or promote (a plan saved without it).
   const serverPath = options['server-cos-config'] ?? (saved ? saved.configs.server?.path : r.serverConfigPath);
   if (serverPath !== undefined) {
     if (!isAbsolute(serverPath)) throw new Error('Use absolute external COS configuration paths');
@@ -83,6 +87,7 @@ async function context(options, r, saved) {
     if (present) configs.server = { path: await realpath(serverPath), sha256: digest(await readFile(serverPath)) };
     else if (options['server-cos-config'] || saved) throw new Error('服务端的 COS 配置不在指定的位置');
   }
+  if (required && !configs.server) throw new Error(`${threePlatforms}，但没有服务端的发布配置 cos-server.json：照 ${SERVER_SETUP_DOC}建好 ~/.config/vonvon-release/cos-server.json（或用 --server-cos-config 指定），再 plan`);
   const readConfig = await readCosConfig(configs.readonly.path), macWrite = await readCosWriteConfig(configs.macWrite.path), windowsConfig = await readWindowsCosConfig(configs.windows.path);
   const serverConfig = configs.server ? await readServerCosConfig(configs.server.path) : undefined;
   const allPrivateNames = new Set([readConfig, macWrite, windowsConfig, ...(serverConfig ? [serverConfig] : [])].flatMap(cosCredentialEnvNames));
@@ -125,7 +130,7 @@ async function reviewed(options, r) {
   if (digest(await readFile(join(c.macOptions.out, 'publish-plan.json'))) !== plan.macPlanSHA256) throw new Error('Mac publication plan changed since review');
   return { ...c, plan };
 }
-const NO_SERVER = '服务端未配置（没有 cos-server.json）：这次只发 macOS 和 Windows';
+const NO_SERVER = `服务端未配置（没有 cos-server.json）：这次只发 macOS 和 Windows（${SERVER_REQUIRED_FROM} 以前的版本才可以）`;
 const matchesFiles = (actual, expected, sizeKey = 'size') => Array.isArray(actual) && actual.length === expected.length && expected.every(file => actual.some(item => item.file === file.file && item.sha256 === file.sha256 && item[sizeKey] === file[sizeKey] && (!file.url || item.url === file.url)));
 async function receipts(c) {
   const mac = await optional(join(c.macOptions.out, 'upload-receipt.json')), windows = await optional(join(c.windowsOut, 'windows-publish-receipt.json'));
@@ -237,13 +242,13 @@ export async function publicationStatus({ out }) {
   return { planned: true, version: plan.candidate.version, sourceSha: plan.candidate.sourceSha, planSHA256: digest(await readFile(join(root, planName))),
     macReceiptPresent: !!await optional(join(plan.candidate.macOut, 'upload-receipt.json')),
     windowsReceiptPresent: !!await optional(join(root, 'windows/windows-publish-receipt.json')),
-    server: !plan.candidate.server ? NO_SERVER : { receiptPresent: !!await optional(join(root, 'server', UPLOAD_RECEIPT)),
+    server: !plan.candidate.server ? (serverRequired(plan.candidate.version) ? `这份计划没有服务端：${SERVER_REQUIRED_FROM} 起不能只发 macOS 和 Windows，照 ${SERVER_SETUP_DOC}配好后重新 plan` : NO_SERVER) : { receiptPresent: !!await optional(join(root, 'server', UPLOAD_RECEIPT)),
       stableStatus: (await optional(join(root, 'server', STABLE_RECEIPT)))?.status ?? 'not-promoted' },
     stableRecordedStatus: (await optional(join(plan.candidate.macOut, 'publish-receipt.json')))?.status ?? 'not-promoted',
     website: (await optional(join(root, 'release-handoff.json')))?.readyForWebsite === true ? 'handoff-ready; deployment not verified' : 'not-ready' };
 }
 
-const help = 'Usage: node scripts/release-publish.mjs <plan|upload|promote|status> --out /absolute/release [--cos-write-config /external/cos-write.json] [--windows-cos-config /external/cos-windows.json] [--server-cos-config /external/cos-server.json]\nplan prints the unified reviewed plan SHA-256; it covers the server packages once cos-server.json exists (default ~/.config/vonvon-release/cos-server.json). upload requires --plan-sha256 and publishes the versioned objects of every platform concurrently. promote requires that same hash and --owner-confirmation with the owner\'s reply about this reviewed candidate; it switches macOS, then Windows, then the server stable (its signed manifest and install scripts), verifies them and writes the website handoff. No command deploys the website.';
+const help = 'Usage: node scripts/release-publish.mjs <plan|upload|promote|status> --out /absolute/release [--cos-write-config /external/cos-write.json] [--windows-cos-config /external/cos-windows.json] [--server-cos-config /external/cos-server.json]\nplan prints the unified reviewed plan SHA-256; it covers the server packages once cos-server.json exists (default ~/.config/vonvon-release/cos-server.json), and from 0.9.0 refuses a release without it or without the server build. upload requires --plan-sha256 and publishes the versioned objects of every platform concurrently. promote requires that same hash and --owner-confirmation with the owner\'s reply about this reviewed candidate; it switches macOS, then Windows, then the server stable (its signed manifest and install scripts), verifies them and writes the website handoff. No command deploys the website.';
 const invoked = process.argv[1] && await realpath(resolve(process.argv[1])).catch(() => null);
 if (invoked && invoked === await realpath(fileURLToPath(import.meta.url))) {
   try {
