@@ -788,3 +788,24 @@ U1a 和 U1b 是一个 PR，Mac 上只发一次验收，写在 U1b 第 6 节。U1
 - 探针"`remote enable` 后 30 秒内"等于退避上限，加一次连接超时可能偶发失败。改成 45 秒（第 6 节第 2 步第 4 项）。
 - 撤销到断开的 1 秒原来靠 Mac 上 Computer Use 加跨机计时，量不准。判据改为同机探针，`device-closed` 日志只作参考（4.4 日志一段）。
 - U4 的能力名 `desktop.selfUpdate` 过不了 D1 的小写正则，改成 `desktop.self-update`；D1 分支的 sha 更新到 147b2619（开头、4.5）。
+
+## 11. 实现时和计划不一样的地方
+
+按本计划（含第 10 节）在 D2 分支 `claude/devices-2-secure-channel` 318c1b1c 上实现，直接用 D2 的 `@vonvon/client/secure`，没有占位实现。和计划不一样的地方：
+
+1. **`RemoteConnectOptions` 多一个可选的 `onSocketOpen()`**：WebSocket 打开、通道开始时调用。添加设备的进度靠它从"正在连接"变成"正在配对"（`adding.stage`），计划没写这个信号从哪来。
+2. **看远程时本机断了，切回本机就报**：计划 4.5 只在"没有 `localOwner`"时补报。实际断线后 `localOwner` 还在（今天也不清空），只是连接已死；照计划会去绑死连接、拿不到快照，弹窗永远不出。改成 `localLostPending` 为真时不绑定，发 `reattached{local}` 后调 `connectionLost()`，和"没有 `localOwner`"一样。
+3. **`admin.negotiate` 的拒绝码是 `shell_owned`**，不是 `local_only`：它在本机视图下也拒，和"只对这台电脑有效"不是一回事。文字照计划。
+4. **`DeviceConnectionsError`、`RegistryError` 的中文提示**是本片定的（计划和总设计第 15 节没写）：`unknown_device`"设备列表里没有这台设备。"、`local_device`"这台电脑不能在这里删除或改名。"、`invalid_name`"名字要 1 到 40 个字。"、`registry_newer`、`registry_unreadable` 各一句，见 `DT/bridge.ts` 的 `deviceErrorText`。U1b 有自己的文案时以 U1b 为准。
+5. **`clientFor(view)` 的缓存**：某台设备的 client 被 `close()` 后，下次 `clientFor` 给一个新的；`'current'` 那个关了就是关了（旧行为和旧测试不变）。不然 U1b 卸载页面关掉 client 后，再切回这台就只能拿到一个关掉的 client。
+6. **`bridge.test.ts` 的假 client** 的 `onError` 改成能挂多个监听（视图绑定和 `watchLocal` 各挂一个），`invoke` 对发给 daemon 的通道自动在最后补 `'current'`；`subscribe` 现在总会多发一条 `devices`，旧用例改为看去掉 `devices` 之后的事件。
+7. **桌面端 `package.json` 加了 `ws` 8.22.0 和 `@types/ws` 8.18.2**（4.3 要的），`package-lock.json` 只多这两行；esbuild 把 `ws` 打进 `main.cjs`，`bufferutil`、`utf-8-validate` 是 `ws` 自己 try 着 require 的，没装也能跑。
+8. **第 6 节的真通道探针 `test/manual/devices-probe.ts` 没写**：它要 D3 的 `vonvon remote port/enable`，D3 还没合入，按 4.9 第 9 步放到 D3 合入后，和 Mac 验收一起。本片的真通道只测到 `remote-transport.test.ts`：本机 `ws` 服务器加 D2 的 `createResponder`（`test/helpers/fake-secure-server.ts`），配对、撤销、4006、4002、403/429、拒绝、取消、超时、钥匙不对都走真 `ws` 和真 `connectSecure`。
+9. **行数**：`connections.ts` 约 750 行（估 560），多在"添加"的配对中途断线找回和各处 `gen`/`seq` 核对；整片不含 lockfile 约 3,700 行（估 1,950 + 测试 1,300）。加上 U1b 约 1,500 会超过 5,000，U1b 动手前要再看一次拆不拆。
+10. **日志文件的 0600** 只在创建时设（`appendFile` 的 `mode`）；已存在的文件不再 `chmod`，用户自己改的权限不动。
+11. **`secureConnector` 的 `handshakeTimeout`** 是 `min(5 秒, 路由超时)`，`unexpected-response` 里 403、429 以外的 HTTP 状态归为 `closed`（可重试）。
+
+已知限制（按真实用法不另做处理）：
+- 远程的 `ConnectionError` 只作 250 ms 后的兜底：通道 250 ms 内没说关闭原因，就按普通断开（`closed`）重连。
+- 同一台设备在两个桌面端窗口同时操作不在本片考虑之内：桌面端只有一个窗口。
+- 非当前设备的状态点只是上次的结果（第 9 节）。
