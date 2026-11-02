@@ -49,8 +49,9 @@ export const responseSchema: z.ZodDiscriminatedUnion<"method", [typeof snapshotR
   snapshotResponse, commandResponse, settingsResponse, collaborationResponse, environmentResponse, machineResponse, adminResponse, directoryResponse, libraryResponse, memoryResponse, contextPreviewResponse, scheduleResponse, deviceResponse,
 ]);
 export type Response = z.infer<typeof responseSchema>;
+/** `details`: what a refusal adds for a program to read, e.g. both versions of a `protocol_mismatch` (devices 4.5). */
 export const errorEnvelopeSchema = z.object({
-  type:z.literal("error"),id,code:z.string().min(1),message:z.string(),
+  type:z.literal("error"),id,code:z.string().min(1),message:z.string(),details:z.record(z.string(),z.unknown()).optional(),
 }).strict();
 export type ErrorEnvelope = z.infer<typeof errorEnvelopeSchema>;
 export const replyEnvelopeSchema: z.ZodUnion<[typeof responseSchema, typeof errorEnvelopeSchema]> = z.union([responseSchema,errorEnvelopeSchema]);

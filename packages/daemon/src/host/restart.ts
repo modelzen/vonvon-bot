@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { paths } from '../config/paths';
+import { withoutSessionMarkers } from '../config/session-env';
 import { getPidLockInfo, isPidLockOwnerRunning, type PidLockInfo } from '../server/pid-lock';
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { finishOwnedUpdate, holdOwnedUpdate, type HeldUpdate, type UpdateStatus } from '../service/update';
@@ -35,7 +36,8 @@ const realDeps = (): RestartHelperDeps => ({
   running: isPidLockOwnerRunning,
   verify: lock => verifyPidLockOwner(paths.appDir, lock),
   start: (file, args) => new Promise((resolve, reject) => {
-    const child = spawn(file, args, { stdio: 'ignore', env: { ...process.env, VONVON_HOME: paths.appDir } });
+    // the host's own child (devices-4a R3): a host started inside a session does not pass the session on
+    const child = spawn(file, args, { stdio: 'ignore', env: { ...withoutSessionMarkers(process.env), VONVON_HOME: paths.appDir } });
     child.once('error', reject);
     child.once('exit', code => resolve(code));
   }),

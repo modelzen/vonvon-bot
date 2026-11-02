@@ -13,16 +13,21 @@ import {
 import type { z } from "zod";
 
 export class RpcError extends Error {
-  constructor(readonly code: string, message: string) {
+  /** `details`: what the daemon added for a program to read (both versions of a `protocol_mismatch`). */
+  constructor(readonly code: string, message: string, readonly details?: Record<string, unknown>) {
     super(message);
     this.name = "RpcError";
   }
 }
 
 export class ConnectionError extends Error {
-  constructor(cause: unknown) {
+  /** When the daemon closed the socket during the handshake: its close code and reason (devices 4.7), e.g. 4401 `invalid_session_token`. */
+  readonly closeCode?: number;
+  readonly closeReason?: string;
+  constructor(cause: unknown, closed?: { code: number; reason: string }) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = "ConnectionError";
+    if (closed) { this.closeCode = closed.code; this.closeReason = closed.reason; }
   }
 }
 
@@ -142,7 +147,7 @@ export function createClient(socket: ClientConnection): VonvonClient {
     if (!call) { failAll(new Error("Unexpected daemon response ID")); return; }
     pending.delete(frame.id);
     const remoteError = errorEnvelopeSchema.safeParse(frame);
-    if (remoteError.success) { call.reject(new RpcError(remoteError.data.code, remoteError.data.message)); return; }
+    if (remoteError.success) { call.reject(new RpcError(remoteError.data.code, remoteError.data.message, remoteError.data.details)); return; }
     if (!("type" in frame) || frame.type !== "response" || !("method" in frame) || frame.method !== call.method || !("payload" in frame)) {
       call.reject(new Error("Daemon response method or envelope mismatch")); return;
     }

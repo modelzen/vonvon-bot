@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { Event } from '@vonvon/protocol';
 import { createPeerHub } from '../src/server/peer-hub';
-import { snapshotShape } from '../src/server/http';
+import { viewFor } from '../src/server/http';
 import type { Peer } from '../src/server/ws';
 
 // devices-2 4.3: the hub taken out of ws.ts. The loopback tests (server-handshake, api-listen-lifecycle,
@@ -36,15 +36,17 @@ function fakePeer(open = true) {
   return { peer, received };
 }
 
-it('publishes to the open peers only, each in the shape it is given', async () => {
-  const hub = createPeerHub({ detached: () => undefined });
+it('publishes to the open peers only, each in the view the hub gives it', async () => {
+  let view: ((peer: Peer, event: Event) => Event | null) | undefined;
+  const hub = createPeerHub({ detached: () => undefined, view: (peer, published) => view ? view(peer, published) : published });
   const connect = await sockets();
   const [a, b, c] = [fakePeer(), fakePeer(false), fakePeer()];
   for (const { peer } of [a, b, c]) { const { socket } = await connect(); hub.attach(socket, once(() => hub.remove(peer))); hub.add(peer, socket); }
   hub.publish(event);
   expect([a.received.length, b.received.length, c.received.length]).toEqual([1, 0, 1]);
   const other = { type: 'event', event: 'log', payload: { line: 'y' } } as unknown as Event;
-  hub.publish(event, peer => peer === a.peer ? null : other);
+  view = peer => peer === a.peer ? null : other;
+  hub.publish(event);
   expect(a.received).toHaveLength(1);
   expect(c.received[1]).toBe(other);
   expect(hub.peers.size).toBe(3);
@@ -109,14 +111,15 @@ it('closes the peers a predicate picks, with its code, and releases once', async
 
 // main 必败: a protocol 1 client parses snapshots strictly, and a `windows` platform would break it (devices 4.5, devices-ui-2 4.5).
 it('publishes snapshots to current connections only, never to a maintenance one', async () => {
-  const hub = createPeerHub({ detached: () => undefined });
+  // the daemon's own view (devices-4a 4.7), which also gives a maintenance connection nothing
+  const hub = createPeerHub({ detached: () => undefined, view: viewFor({ active: () => false }) });
   const connect = await sockets();
   const [current, maintenance] = [fakePeer(), fakePeer()];
   Object.assign(current.peer, { principal: { kind: 'owner', scope: 'local' } });
   Object.assign(maintenance.peer, { principal: { kind: 'maintenance' } });
   for (const { peer } of [current, maintenance]) { const { socket } = await connect(); hub.attach(socket, once(() => hub.remove(peer))); hub.add(peer, socket); }
   const snapshot = { type: 'event', event: 'snapshot', payload: {} } as unknown as Event;
-  hub.publish(snapshot, snapshotShape(snapshot));
+  hub.publish(snapshot);
   expect(current.received).toEqual([snapshot]);
   expect(maintenance.received).toEqual([]);
 });

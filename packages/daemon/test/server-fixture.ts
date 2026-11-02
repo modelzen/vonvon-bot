@@ -8,6 +8,7 @@ import type { AdminService } from '../src/admin/service';
 import type { ShutdownControl } from '../src/host/lifecycle';
 import type { EnvironmentServiceOptions } from '../src/environment/service';
 import type { startApi as StartApi } from '../src/server/http';
+import { createSessionTokens } from '../src/host/session-tokens';
 
 type StartApiOptions = Parameters<typeof StartApi>[0];
 /** Linux refuses the service switch, so no test spawns `vonvon service install` from a Mac runner; and with no
@@ -42,17 +43,19 @@ export function fakeService(overrides: Partial<AdminService> = {}): AdminService
 }
 /** The daemon start every fixture reports in daemonStatus (devices 4.7). */
 export const FIXTURE_STARTED_AT = 1_700_000_000_000;
-/** `distribution`: how the daemon was installed, for serverInfo's `update.*` (devices-ui-2 4.11); a source checkout by default,
- * so no fixture asks npm for its global root. */
-export async function startFixture(service = fakeService(), environmentOptions?: EnvironmentServiceOptions, serviceActions: StartApiOptions['serviceActions'] = noServiceManager,
+/** `askBot`: a session's Bot process for ★ requests (devices-4b 4.3). `distribution`: how the daemon was installed, for
+ * serverInfo's `update.*` (devices-ui-2 4.11); a source checkout by default, so no fixture asks npm for its global root. */
+export async function startFixture(service = fakeService(), environmentOptions?: EnvironmentServiceOptions, serviceActions: StartApiOptions['serviceActions'] = noServiceManager, askBot?: StartApiOptions['askBot'],
   distribution: NonNullable<StartApiOptions['distribution']> = async () => ({ kind: 'unknown' })) {
   const home = await mkdtemp(join(tmpdir(), 'vonvon-api-'));
   testHome.current = home;
   const { startApi } = await import('../src/server/http');
   const control: ShutdownControl = { requested: false, waitForRequest: () => new Promise<void>(() => {}), dispose: () => {}, requestStop: vi.fn(), requestRestart: vi.fn(), completeShutdown: release => release() };
-  const api = await startApi({ service, port: 0, control, environmentOptions, serviceActions, startedAt: FIXTURE_STARTED_AT, distribution });
+  // devices-4a 4.1: the host's Bot-session tokens, which a test issues as a Bot process would ask for them
+  const sessionTokens = createSessionTokens();
+  const api = await startApi({ service, port: 0, control, environmentOptions, serviceActions, startedAt: FIXTURE_STARTED_AT, sessionTokens, distribution, ...(askBot ? { askBot } : {}) });
   const credential = (await readFile(join(home, 'local-credential'), 'utf8')).trim();
-  return { api, home, credential, control, close: async () => { await api.close(); await rm(home, { recursive: true, force: true }); } };
+  return { api, home, credential, control, sessionTokens, close: async () => { await api.close(); await rm(home, { recursive: true, force: true }); } };
 }
 export type Frame = Event | ReplyEnvelope | ServerInfo;
 export async function socketClient(port: number, credential?: string, version: number = PROTOCOL_VERSION, timeoutMs = 3000) {

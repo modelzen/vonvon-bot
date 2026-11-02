@@ -2,7 +2,7 @@ import { MEMORY_TEXT_MAX, type MemoryItem, type MemoryItemScope } from '@vonvon/
 import { log } from '../core/logger';
 import { botDir } from '../config/paths';
 import { libraryLocation, isProjectId, type LibraryLocation } from '../project/library';
-import { decideAdd, decideEdit, type AddDecision, type MemoryPlace, type MemoryTurn, type RequestedScope } from './memory-authority';
+import { decideAdd, decideEdit, decisionMessages, type AddDecision, type MemoryPlace, type MemoryTurn, type RequestedScope } from './memory-authority';
 import { normalizeBranchName } from './memory-branches';
 import { findSecretShape } from './memory-secret-shape';
 import type { FoundBlocks } from './hidden-blocks';
@@ -67,8 +67,8 @@ export class TurnEnded extends Error { constructor() { super('这一轮已经结
 class Redecide extends Error {}
 
 const MESSAGES = {
-  'not-allowed-here': '这里不能记。',
-  'no-project': '这个群还没有绑定项目，记不了。',
+  'not-allowed-here': decisionMessages['not-allowed-here'],
+  'no-project': decisionMessages['no-project'],
   'looks-like-secret': '像密钥，没记。',
   duplicate: '已经记着了。',
 } as const;
@@ -98,6 +98,8 @@ export interface MemoryWriter {
   update(ctx: WriteContext, args: EditArgs): Promise<EditOutcome>;
   forget(ctx: WriteContext, args: Omit<EditArgs, 'text' | 'branch'>): Promise<EditOutcome>;
   list(place: { kind: 'group' | 'p2p' | 'doc'; chatId?: string }, scope?: 'project' | 'bot' | { project: string }): Promise<{ lists: ListedMemory[] } | { error: 'refused'; message: string }>;
+  /** 这一轮在哪：本群绑定的项目（私聊里是本 bot 的项目）。Bot 会话的命令行写记忆时按同一个落点判（devices-4b 4.5） */
+  placeOf(turn: Pick<MemoryTurn, 'chatId' | 'place'>): Promise<MemoryPlace>;
   /** 终态解析：这一轮最后一条消息里的隐藏块，逐条写。返回写成几条和没记上的原因 */
   applyBlocks(input: { found: FoundBlocks; nonce: string; ctx: WriteContext }): Promise<{ written: number; missed: string[] }>;
 }
@@ -195,7 +197,7 @@ export function createMemoryWriter(deps: MemoryWriterDeps): MemoryWriter {
   }
 
   const editMessage = {
-    'not-found': '没有这条记忆。', 'out-of-scope': '这条记忆不在这里，动不了。', 'not-yours': '这条记忆不是你记的，动不了。',
+    'not-found': '没有这条记忆。', 'out-of-scope': decisionMessages['out-of-scope'], 'not-yours': decisionMessages['not-yours'],
     archived: '这条记忆已经归档了。', conflict: '这条记忆刚被别处改过，先看看现在的内容。', 'bad-args': '没有要改的内容，或内容不合要求。',
     refused: '这里不能改。',
   } as const;
@@ -270,6 +272,7 @@ export function createMemoryWriter(deps: MemoryWriterDeps): MemoryWriter {
 
   return {
     add,
+    placeOf,
     update: (ctx, args) => editLike(ctx, args, 'update'),
     forget: (ctx, args) => editLike(ctx, args, 'forget'),
     async list(place, scope) {

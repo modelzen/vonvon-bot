@@ -8,3 +8,13 @@ export const SESSION_ENV = 'VONVON_SESSION';
 export function inBotSession(env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(env[SESSION_ENV]) || env.FEISHU_CODEX_BRIDGE === '1';
 }
+
+/**
+ * The environment of a process the host starts for itself (its bots, its restart helper, a detached daemon), without the
+ * session markers: a host started from inside a session (an older daemon, or one a bridge session started) carries them,
+ * and the command line refuses its own internal commands where it sees them (devices-4a 4.9).
+ */
+export function withoutSessionMarkers(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { [SESSION_ENV]: _session, FEISHU_CODEX_BRIDGE: _bridge, ...rest } = env;
+  return rest;
+}

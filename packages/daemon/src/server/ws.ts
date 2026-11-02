@@ -6,6 +6,7 @@ import { handleMessage } from './message-loop';
 import { createPeerHub, type PeerHub } from './peer-hub';
 import type { JobPeer } from './jobs';
 import type { Principal } from './principal';
+import { SESSION_TOKEN_PREFIX, type SessionTokens } from '../host/session-tokens';
 
 export interface Peer extends JobPeer {
   /** What the client said it is in its hello; every request comes after it. */
@@ -21,12 +22,18 @@ export interface Peer extends JobPeer {
    * no client id): what D3 matches a revoked client's connections by. Undefined on the loopback. */
   readonly clientId?: string;
   send(value: Response | ErrorEnvelope): void;
+  /** Closes the connection with a close code of devices 4.7: the message loop's 1001 and 1007, 4001 `protocol_mismatch` after
+   * too many refused requests. A secure-channel connection says it inside the channel too. */
+  close(code: number, reason: string): void;
 }
+/** What the hub's `publish` hands a peer: the event as it is, another view of it, or nothing (devices-4a 4.7). */
+export type PeerView = (peer: Peer, event: Event) => Event | null;
 export const formatAddress = (host: string | undefined, port: number | undefined): string =>
   `${host?.includes(':') ? `[${host}]` : host ?? 'unknown'}:${port ?? 0}`;
 /** devices 4.5: a 0.8 client parses strictly, so it does not get the startedAt protocol 2 added, nor the device event it has no schema for. */
 function forProtocol1(value: Response | ErrorEnvelope | Event | ServerInfo): unknown {
   if (value.type === 'event' && value.event === 'device') return undefined;
+  if (value.type === 'error' && value.details) { const { details: _added, ...error } = value; return error; }
   if (value.type !== 'response' || value.method !== 'admin' || value.payload.kind !== 'daemonStatus') return value;
   const { startedAt: _added, ...status } = value.payload.status;
   return { ...value, payload: { ...value.payload, status } };
@@ -39,9 +46,13 @@ function loopbackOrigin(origin: string | undefined): boolean {
   try { const url = new URL(origin); return (url.protocol === 'http:' || url.protocol === 'https:') && loopbackHost(url.host); }
   catch { return false; }
 }
-/** `info` answers the hello: the server info shape that peer's protocol reads (devices 4.5). The loopback socket: the hello
- * with the local credential, then the shared message loop; its peers live in `hub` (one of its own when none is given). */
-export function createSocketServer(options: { server: Server; credential: string; info: (peer: Peer) => ServerInfo; request: (peer: Peer, request: Request) => Promise<void>; control?: (peer: Peer, request: Request) => Promise<void>; detached?: (peer: Peer) => void; hub?: PeerHub }) {
+/**
+ * `info` answers the hello: the server info shape that peer's protocol reads (devices 4.5). The loopback socket: the hello
+ * with the local credential or a Bot session's token, then the shared message loop; its peers live in `hub` (one of its own
+ * when none is given). `sessions`: a hello whose credential starts `vs1.` is a Bot session's token, looked up there and never
+ * compared with the owner's (devices 5.3). Only this socket takes one: the secure channel refuses any credential (devices-2 4.4).
+ */
+export function createSocketServer(options: { server: Server; credential: string; sessions?: Pick<SessionTokens, 'resolve'>; info: (peer: Peer) => ServerInfo; request: (peer: Peer, request: Request) => Promise<void>; control?: (peer: Peer, request: Request) => Promise<void>; detached?: (peer: Peer) => void; hub?: PeerHub }) {
   const hub = options.hub ?? createPeerHub({ detached: peer => options.detached?.(peer) });
   const sockets = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 4_000_000 });
   let released: Promise<void> | undefined;
@@ -79,6 +90,7 @@ export function createSocketServer(options: { server: Server; credential: string
         return true;
       },
       send, event: send,
+      close(code, reason) { socket.close(code, reason); },
     };
     const detach = (): void => {
       if (detached) return;
@@ -91,22 +103,29 @@ export function createSocketServer(options: { server: Server; credential: string
     hub.attach(socket, detach);
     socket.on('close', detach);
     socket.on('error', detach);
-    const close = (code: number, reason: string): void => socket.close(code, reason);
     socket.on('message', (bytes, binary) => {
       if (hub.state === 'released' || detached) return;
-      if (authenticated) { handleMessage(hub, peer, binary ? undefined : bytes.toString(), { request: options.request, ...(options.control ? { control: options.control } : {}), close }); return; }
+      if (authenticated) { handleMessage(hub, peer, binary ? undefined : bytes.toString(), { request: options.request, ...(options.control ? { control: options.control } : {}) }); return; }
       let raw: unknown;
       try { if (binary) throw new Error('binary'); raw = JSON.parse(bytes.toString()); }
       catch { socket.close(4401, 'unauthorized'); return; }
       const hello = helloSchema.safeParse(raw);
       const credential = hello.success ? hello.data.credential : undefined;
-      const supplied = Buffer.from(credential ?? '');
-      const expected = Buffer.from(options.credential);
-      if (!hello.success || supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) { socket.close(4401, 'unauthorized'); return; }
+      if (hello.success && credential?.startsWith(SESSION_TOKEN_PREFIX)) {
+        // A Bot session (devices 5.3): its token, not the owner's credential. Its CLI is this daemon's own, so no maintenance subset.
+        const session = options.sessions?.resolve(credential);
+        if (!session) { socket.close(4401, 'invalid_session_token'); return; }
+        if (hello.data.protocolVersion !== PROTOCOL_VERSION) { socket.close(4001, 'protocol_mismatch'); return; }
+        principal = { kind: 'bot-session', sessionId: session.sessionId, appId: session.appId, place: session.place, ...(session.chatId ? { chatId: session.chatId } : {}) };
+      } else {
+        const supplied = Buffer.from(credential ?? '');
+        const expected = Buffer.from(options.credential);
+        if (!hello.success || supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) { socket.close(4401, 'unauthorized'); return; }
+        principal = hello.data.protocolVersion === PROTOCOL_VERSION ? { kind: 'owner', via: 'local' } : { kind: 'maintenance', protocolVersion: hello.data.protocolVersion, inner: 'owner:local' };
+      }
       authenticated = true;
       clientKind = hello.data.clientKind;
       protocolVersion = hello.data.protocolVersion;
-      principal = protocolVersion === PROTOCOL_VERSION ? { kind: 'owner', via: 'local' } : { kind: 'maintenance', protocolVersion, inner: 'owner:local' };
       clearTimeout(deadline);
       hub.add(peer, socket);
       send(options.info(peer));

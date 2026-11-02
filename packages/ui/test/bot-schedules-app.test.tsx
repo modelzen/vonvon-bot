@@ -15,7 +15,11 @@ vi.mock('react', async original => ({...await original<typeof import('react')>()
   useRef: (initial: unknown) => {const i = h.ri++; return h.refs[i] ??= {current: initial};},
   useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const i = h.ei++; const old = h.effects[i]; if (old?.deps && deps && deps.every((value, at) => Object.is(value, old.deps![at]))) return; h.pending.push(() => {h.effects[i] = {deps}; effect();});},
 }));
-vi.mock('../src/client-context', async original => ({...await original<typeof import('../src/client-context')>(), useActiveDevice: () => ({id: 'local', isRemote: false, name: '这台电脑', mode: 'full', capabilities: []}), useDevicesState: () => undefined, useClient: () => h.client, useShellCapabilities: () => undefined}));
+// The page shows this computer, with no shell and no device list.
+vi.mock('../src/client-context', async original => {
+  const actual = await original<typeof import('../src/client-context')>();
+  return {...actual, useClient: () => h.client, useShellCapabilities: () => undefined, useActiveDevice: () => actual.LOCAL_ACTIVE_DEVICE, useDevicesState: () => undefined};
+});
 vi.mock('../src/settings/DraftGuard', () => ({DraftGuardProvider: () => null, useDraftGuard: () => ({navigate: (action: () => void) => action()})}));
 vi.mock('../src/desktop-update', () => ({DesktopUpdateProvider: () => null, useDesktopUpdate: () => [undefined]}));
 vi.mock('../src/new-counts', async original => ({...await original<typeof import('../src/new-counts')>(), useNewCounts: () => ({projects: {}, bots: {}})}));

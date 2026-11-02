@@ -129,6 +129,29 @@ it.each(forbidden)('rejects ordinary drain request $id with 1001', async request
   } finally { work.release(); await Promise.allSettled([draining]); await client.close(); await fixture.close(); }
 });
 
+// devices 4.7: DRAIN_KINDS is the one list, and it has coreUpdateStatus, so an update's progress stays visible while the
+// daemon stops for it. main 必败: a draining daemon closed the connection with 1001.
+it('answers machine.coreUpdateStatus during drain, to whoever the table lets ask it', async () => {
+  const work = gate();
+  const status = { phase: 'restarting' as const, to: '0.9.1', at: 1 };
+  const fixture = await startFixture(fakeService({ close: () => work.promise, updateStatus: () => status }));
+  await recordOwner(fixture);
+  const draining = fixture.api.beginDrain();
+  void draining.catch(() => undefined);
+  const client = await socketClient(fixture.api.port, fixture.credential);
+  const token = fixture.sessionTokens.issue({ appId: 'cli_x', place: 'group', chatId: 'oc_y', sessionId: 'ses_0123456789abcdef' });
+  const session = await socketClient(fixture.api.port, token);
+  try {
+    await client.ready();
+    await session.ready();
+    expect(await client.call({ type: 'request', id: 'u', method: 'machine', payload: { type: 'coreUpdateStatus' } }))
+      .toEqual({ type: 'response', id: 'u', method: 'machine', payload: { type: 'coreUpdateStatus', status } });
+    expect(client.socket.readyState).toBe(WebSocket.OPEN);
+    // a Bot session may not ask it, draining or not
+    expect(await session.call({ type: 'request', id: 'u', method: 'machine', payload: { type: 'coreUpdateStatus' } })).toMatchObject({ type: 'error', code: 'scope_required' });
+  } finally { work.release(); await Promise.allSettled([draining]); await client.close(); await session.close(); await fixture.close(); }
+});
+
 it('retains credential rejection during held drain', async () => {
   const work = gate();
   const fixture = await startFixture(fakeService({ close: () => work.promise }));
