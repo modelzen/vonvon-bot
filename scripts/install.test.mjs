@@ -3,9 +3,10 @@
 // from scenario.json, and the manifest is signed with a key made here. No service manager is touched.
 // main 必败: neither script exists on main.
 import assert from 'node:assert/strict';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -657,6 +658,75 @@ test('uninstall: nothing in the install root runs; a unit still naming it keeps 
   assert.equal(run.code, 0, run.stderr);
   assert.match(run.stdout, /# >>> Vonvon Bot CLI >>>/);
   assert.equal(await f.exists(f.root), false);
+});
+
+// review 216/217: with nothing that runs and no unit, the daemon the fallback started directly was not looked for, and
+// the install root went while it ran. A PID that now belongs to another program (a restarted container hands out the
+// same small numbers) or to an earlier boot is not the server.
+test('uninstall: nothing runs and no unit, but the daemon in daemon.pid still runs from the install root: nothing is deleted', async t => {
+  const sleep = execFileSync(SH, ['-c', 'command -v sleep'], { encoding: 'utf8' }).trim();
+  const bootId = await readFile('/proc/sys/kernel/random/boot_id', 'utf8').then(text => text.trim(), () => undefined);
+  const brokenInstall = async () => {
+    const f = await fixture(t);
+    await f.ready();
+    assert.equal((await f.run('install.sh')).code, 0);
+    await writeFile(join(f.root, 'bin', 'vonvon'), '#!/bin/sh\nexit 1\n');
+    await writeFile(join(f.root, 'releases', '1.0.0', 'node', 'bin', 'node'), '#!/bin/sh\nexit 1\n');
+    await mkdir(join(f.home, '.vonvon-bot'), { recursive: true });
+    return f;
+  };
+  /** A program from the install root, standing in for the release's Node running `daemon run`; named sleep for a multi-call binary. */
+  const startInRoot = async f => {
+    const program = join(f.root, 'releases', '1.0.0', 'node', 'bin', 'sleep');
+    await copyFile(sleep, program);
+    await chmod(program, 0o755);
+    const child = spawn(program, ['120'], { stdio: 'ignore' });
+    t.after(() => child.kill('SIGKILL'));
+    await once(child, 'spawn');
+    return child;
+  };
+  // the lock pid-lock.ts writes
+  const lock = (f, pid, boot = bootId) => writeFile(join(f.home, '.vonvon-bot', 'daemon.pid'), JSON.stringify({ pid, startedAt: new Date().toISOString(), listen: '127.0.0.1:7766', version: '1.0.0', ...boot ? { bootId: boot } : {} }));
+
+  const f = await brokenInstall();
+  const daemon = await startInRoot(f);
+  await lock(f, daemon.pid);
+  const before = (await f.calls()).length;
+  let run = await f.run('uninstall.sh');
+  assert.equal(run.code, 1, run.stdout);
+  if (process.platform === 'linux') assert.equal(run.stderr, `安装目录里没有能运行的 vonvon，服务端还在运行（进程 ${daemon.pid}），什么都没删。先停掉它：\`kill ${daemon.pid}\`，等它退出后再运行一次卸载。\n`);
+  // without /proc it cannot tell what the process runs, and does not guess
+  else assert.match(run.stderr, new RegExp(`进程 ${daemon.pid} 还在，看不出它是不是服务端，什么都没删`));
+  assert.equal(run.stdout, '');
+  assert.equal(await f.exists(join(f.root, 'current')), true);
+  assert.equal(await f.exists(join(f.root, 'releases', '1.0.0', 'standalone.json')), true);
+  // the script stops nothing by itself
+  assert.equal(daemon.exitCode, null);
+  assert.equal(daemon.signalCode, null);
+  assert.deepEqual((await f.calls()).slice(before), []);
+
+  if (process.platform === 'linux') {
+    // this test's own Node: alive, but not a program from the install root
+    const reused = await brokenInstall();
+    await lock(reused, process.pid);
+    run = await reused.run('uninstall.sh');
+    assert.equal(run.code, 0, run.stderr);
+    assert.equal(await reused.exists(reused.root), false);
+    // the daemon's PID, written before a reboot
+    const rebooted = await brokenInstall();
+    await lock(rebooted, (await startInRoot(rebooted)).pid, '00000000-0000-4000-8000-000000000000');
+    run = await rebooted.run('uninstall.sh');
+    assert.equal(run.code, 0, run.stderr);
+    assert.equal(await rebooted.exists(rebooted.root), false);
+  }
+
+  // stopped: the root goes, the data directory stays
+  daemon.kill('SIGTERM');
+  await once(daemon, 'exit');
+  run = await f.run('uninstall.sh');
+  assert.equal(run.code, 0, run.stderr);
+  assert.equal(await f.exists(f.root), false);
+  assert.equal(await f.exists(join(f.home, '.vonvon-bot', 'daemon.pid')), true);
 });
 
 test('uninstall: not registered as a service still stops the daemon, then deletes', async t => {

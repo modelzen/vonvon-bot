@@ -8,6 +8,7 @@ import { ROOT_WARNING, rootWarning } from '../src/cli/root-warning';
 import { acquireMutex, closeMutex } from '../src/config/data-access';
 import type { PidLockInfo } from '../src/server/pid-lock';
 import { classifyServiceFailure, readServiceActionRecord } from '../src/service/action-report';
+import { userManagerProblem, type SessionDependencies } from '../src/service/linux-session';
 import { serviceStatus } from '../src/service/adapter';
 import type { ServiceTransactionOutcome } from '../src/service/adapter';
 import { TRANSLOCATED_REFUSAL } from '../src/service/launchd';
@@ -206,6 +207,23 @@ describe('Linux: linger and the user manager (s20a)', () => {
     expect(commandFailure(error)).toMatchObject({ ok: false, exitCode: 4, error: { kind: 'refused', reason, fallback: 'detached', hint } });
     // install.sh reads the two side by side
     expect(JSON.stringify(commandFailure(error))).toContain(`"reason":"${reason}","fallback":"detached"`);
+  });
+  // review 216/218: the real classifier, not an injected reason, from systemctl's answer to the line install.sh reads.
+  // /run/user/1000 was still there, so a user manager that cannot be reached got no reason and no fallback.
+  it('systemctl unable to connect while /run/user/<uid> is there reaches install.sh as user_instance_down, exit 4', async () => {
+    const session: SessionDependencies = {
+      run: async () => { throw new Error('nothing is run'); },
+      exists: async path => ['/run/systemd/system', '/run/user/1000'].includes(path),
+      uid: 1000, user: 'ops', xdgRuntimeDir: '/run/user/1000',
+    };
+    for (const detail of ['User manager unavailable: Failed to connect to bus: No such file or directory', 'User manager unavailable: Failed to connect to bus: Connection refused']) {
+      const refused = { install: vi.fn(async () => outcome('install_refused', { detail })), uninstall: vi.fn() };
+      const error = await runServiceCommand('install', refused, { linger: 'on' }, linux({ problem: answer => userManagerProblem(answer, session) }), { json: true, write: () => undefined }).catch((caught: unknown) => caught);
+      const failure = commandFailure(error);
+      expect(failure).toMatchObject({ ok: false, exitCode: 4, error: { kind: 'refused', reason: 'user_instance_down', fallback: 'detached', hint: expect.stringContaining('/run/user/1000 还在') } });
+      // install.sh: sed -n 's/.*"reason":"\([a-z_]*\)","fallback":"detached".*/\1/p'
+      expect(/"reason":"([a-z_]*)","fallback":"detached"/.exec(JSON.stringify(failure))?.[1]).toBe('user_instance_down');
+    }
   });
   // owner 2026-11-01: no install script on a Mac, so launchd without a GUI session stays a plain failure
   it('other failures, launchd without a GUI session among them, stay failed without the fallback', async () => {

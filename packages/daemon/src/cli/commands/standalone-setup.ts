@@ -1,7 +1,7 @@
-import { chmod, mkdir, rename, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { removePathBlock, startupFiles, writePathBlock } from '../../platform/shell-path';
+import { removePathBlock, startupFiles, writePathBlock, type AddedBreaks } from '../../platform/shell-path';
 import { switchCurrent, VERSION } from '../../service/current-release';
 import { badArgs, CommandError } from '../command-error';
 import type { Io } from '../daemon-client';
@@ -28,6 +28,21 @@ const detailOf = (error: unknown): string => error instanceof Error ? error.mess
 export type StandaloneSetupResult = {
   version: string; previous: string | null; launcher: string; pathFiles: string[]; pathAlreadyOnPath: boolean; pathNote?: string;
 };
+
+/**
+ * Where setup keeps the line breaks it put before the PATH block (shell-path `AddedBreaks`) for teardown: in the
+ * install root, which uninstall deletes after teardown.
+ */
+const breaksFile = (installRoot: string): string => join(installRoot, 'path-breaks.json');
+
+/** Nothing recorded, or a record that cannot be read: teardown then keeps those line breaks, as before. */
+async function readBreaks(installRoot: string): Promise<AddedBreaks> {
+  let parsed: unknown;
+  try { parsed = JSON.parse(await readFile(breaksFile(installRoot), 'utf8')); }
+  catch { return {}; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, number] => Number.isSafeInteger(entry[1]) && entry[1] >= 0));
+}
 
 async function checkedRoot(installRoot: string): Promise<void> {
   if (!isAbsolute(installRoot)) throw badArgs(`--install-root 要是绝对路径：${installRoot}`);
@@ -57,7 +72,15 @@ export async function runStandaloneSetup(options: { installRoot: string; version
     // `current` is switched already: running the script again reuses the release and comes back here
     throw new CommandError('failed', `写不了 ${launcher}：${detailOf(error)}`, { reason: 'launcher_write_failed' });
   }
-  const written = await writePathBlock(await startupFiles(d.home, d.zdotdir), bin);
+  const breaks = await readBreaks(installRoot);
+  const recorded = JSON.stringify(breaks);
+  const written = await writePathBlock(await startupFiles(d.home, d.zdotdir), bin, breaks);
+  if (JSON.stringify(breaks) !== recorded) {
+    const file = breaksFile(installRoot);
+    // without it uninstall leaves one line break at the end of these files
+    try { await writeFile(`${file}.tmp`, `${JSON.stringify(breaks)}\n`, { mode: 0o644 }); await rename(`${file}.tmp`, file); }
+    catch (error) { written.notes.push(`${file} 没写进去：${detailOf(error)}，卸载后 ${Object.keys(breaks).join('、')} 末尾会多一个换行`); }
+  }
   const result: StandaloneSetupResult = {
     version, previous, launcher, pathFiles: written.files, pathAlreadyOnPath: (d.path ?? '').split(':').includes(bin),
     ...written.notes.length ? { pathNote: written.notes.join('；') } : {},
@@ -78,7 +101,7 @@ export async function runStandaloneSetup(options: { installRoot: string; version
 export async function runStandaloneTeardown(options: { installRoot: string }, io: Io, overrides: Partial<StandaloneDependencies> = {}): Promise<{ pathFiles: string[]; pathNote?: string }> {
   const d = { ...defaults(), ...overrides };
   if (!isAbsolute(options.installRoot)) throw badArgs(`--install-root 要是绝对路径：${options.installRoot}`);
-  const removed = await removePathBlock(await startupFiles(d.home, d.zdotdir), join(options.installRoot, 'bin'));
+  const removed = await removePathBlock(await startupFiles(d.home, d.zdotdir), join(options.installRoot, 'bin'), await readBreaks(options.installRoot));
   const result = { pathFiles: removed.files, ...removed.notes.length ? { pathNote: removed.notes.join('；') } : {} };
   if (io.json) io.write(`${JSON.stringify({ ok: true, ...result })}\n`);
   else io.write(`${removed.files.length ? `已从 ${removed.files.join('、')} 去掉 PATH` : '启动文件里没有服务端的 PATH'}\n${result.pathNote ? `${result.pathNote}\n` : ''}`);

@@ -61,3 +61,25 @@ it('names each common cause with a stable reason, and takes systemctl at its wor
   expect(await problem(up, '/run/user/1000', "User manager unavailable: System has not been booted with systemd as init system (PID 1). Can't operate.")).toMatchObject({ reason: 'no_systemd' });
   expect(await problem(up, '/run/user/1000', 'User manager unavailable: spawn systemctl ENOENT')).toMatchObject({ reason: 'no_systemd' });
 });
+
+// review 216/218: /run/user/<uid> outlives a user manager that failed or exited. systemctl then cannot connect, and
+// with no reason named the install script stopped instead of starting the daemon directly.
+it('a runtime directory whose user manager cannot be reached is user_instance_down', async () => {
+  const problem = (files: string[], xdgRuntimeDir?: string, detail = '') => userManagerProblem(detail, session([yes], files, { xdgRuntimeDir }).d);
+  const directory = ['/run/systemd/system', '/run/user/1000'];
+  const missing = 'User manager unavailable: Failed to connect to bus: No such file or directory';
+  for (const xdgRuntimeDir of [undefined, '/run/user/1000']) {
+    expect(await problem(directory, xdgRuntimeDir, missing)).toMatchObject({ reason: 'user_instance_down', hint: expect.stringContaining('/run/user/1000 还在') });
+  }
+  // systemd 256 and later name the scope
+  expect(await problem(directory, '/run/user/1000', 'User manager unavailable: Failed to connect to user scope bus via local transport: No such file or directory')).toMatchObject({ reason: 'user_instance_down' });
+  // sockets left behind by a manager that exited
+  const left = [...directory, '/run/user/1000/bus', '/run/user/1000/systemd/private'];
+  expect(await problem(left, '/run/user/1000', 'User manager unavailable: Failed to connect to bus: Connection refused')).toMatchObject({ reason: 'user_instance_down' });
+  // service status asks without an answer from systemctl: no socket at all says it
+  expect(await userManagerHint(session([yes], directory, { xdgRuntimeDir: '/run/user/1000' }).d)).toBe('这个账号的 systemd 用户实例没在运行：/run/user/1000 还在，但里面的用户实例连不上（没起来，或者已经退出）。用这个账号重新 SSH 登录后再试；还不行，用管理员权限看 systemctl status user@1000。');
+  // the manager's own socket without dbus-user-session's bus: what is missing is XDG_RUNTIME_DIR
+  expect(await problem([...directory, '/run/user/1000/systemd/private'], undefined, 'User manager unavailable: Failed to connect to bus: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined')).toMatchObject({ reason: 'no_runtime_dir' });
+  // a manager that answers is not a cause the script can work around
+  expect(await problem(left, '/run/user/1000', 'User manager unavailable: stopping')).toBeUndefined();
+});

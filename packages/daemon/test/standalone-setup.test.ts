@@ -150,6 +150,35 @@ describe('__standalone-teardown', () => {
     expect(await readlink(join(f.home, '.zshrc'))).toBe(join(f.base, 'dotfiles', 'zshrc'));
   });
 
+  // review 218 P3: the line break put before the block in a file without one at its end stayed after uninstall
+  it('puts each startup file back byte for byte: with and without a last newline, empty, CRLF, across a second setup', async () => {
+    const f = await fixture();
+    const before: Record<string, string> = { '.zshrc': 'export KEEP=1', '.zprofile': '', '.profile': 'export A=1\r\nexport B=2\r\n', '.bashrc': 'export A=1\r' };
+    for (const [name, text] of Object.entries(before)) await writeFile(join(f.home, name), text);
+    await runStandaloneSetup({ installRoot: f.root, version: '1.0.0' }, f.io, f.deps);
+    // the block still starts on a line of its own, and the file still ends with a newline
+    expect(await readFile(join(f.home, '.zshrc'), 'utf8')).toBe(`export KEEP=1\n${startupBlock(join(f.root, 'bin'))}`);
+    // an upgrade runs setup again
+    await runStandaloneSetup({ installRoot: f.root, version: '1.0.0' }, f.io, f.deps);
+    await runStandaloneTeardown({ installRoot: f.root }, f.io, f.deps);
+    for (const [name, text] of Object.entries(before)) expect(await readFile(join(f.home, name), 'latin1')).toBe(text);
+
+    // A line that went in after the block keeps the line break before it, whether or not setup ran again and moved
+    // the block after that line.
+    for (const again of [false, true]) {
+      const g = await fixture();
+      await writeFile(join(g.home, '.bashrc'), 'export KEEP=1');
+      await runStandaloneSetup({ installRoot: g.root, version: '1.0.0' }, g.io, g.deps);
+      await writeFile(join(g.home, '.bashrc'), `${await readFile(join(g.home, '.bashrc'), 'utf8')}export LATER=1\n`);
+      if (again) {
+        await runStandaloneSetup({ installRoot: g.root, version: '1.0.0' }, g.io, g.deps);
+        expect(await readFile(join(g.home, '.bashrc'), 'utf8')).toBe(`export KEEP=1\nexport LATER=1\n${startupBlock(join(g.root, 'bin'))}`);
+      }
+      await runStandaloneTeardown({ installRoot: g.root }, g.io, g.deps);
+      expect(await readFile(join(g.home, '.bashrc'), 'utf8')).toBe('export KEEP=1\nexport LATER=1\n');
+    }
+  });
+
   // review F1: reading the file as UTF-8 turned other bytes (a GBK comment) into U+FFFD for good
   it('keeps bytes that are not UTF-8, and writes the block for a bin path that is not ASCII as UTF-8', async () => {
     const f = await fixture();

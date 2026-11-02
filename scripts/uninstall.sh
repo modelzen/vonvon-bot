@@ -3,7 +3,8 @@
 #   sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/uninstall.sh)"
 # 停后台服务、删服务定义、去掉启动文件里的 PATH 那几行、删安装根 ~/.local/share/vonvon-bot/server。
 # 数据目录 ~/.vonvon-bot（Bot、记忆、设置）留着。
-# 退出码：0 卸好了或没装过；1 后台服务没停下来，什么文件都没删；2 不是 Linux、HOME 或安装根不对，什么都没删。
+# 退出码：0 卸好了或没装过；1 后台服务或直接启动的服务端没停下来（或确认不了它停了），什么文件都没删；
+# 2 不是 Linux、HOME 或安装根不对，什么都没删。
 # Mac、Windows 的服务端在桌面端安装包里，不由脚本装（owner 2026-11-01）：不是 Linux 就什么都不做。
 set -eu
 
@@ -122,9 +123,39 @@ remove_path_block() {
   esac
 }
 
+# 没有能运行的 vonvon 时自己看数据目录的 daemon.pid（D/server/pid-lock.ts 写的 pid、bootId）：安装时退回直接启动的
+# daemon 没有服务定义，安装目录删了它也还在跑。记下的进程还活着就返回 0，PID 是它；/proc 里看得出它跑的是安装目录里的
+# 程序时 FROM_ROOT=yes，看不出时 FROM_ROOT=no（当它还在跑，不猜）。进程号已经归了别的程序的不算：重启过（bootId 不同），
+# 或者 /proc 里看得出它跑的不是安装目录里的程序（容器重启后进程号又从小数起，常被重用）。
+daemon_alive() {
+  pidfile="$HOME/.vonvon-bot/daemon.pid"
+  [ -f "$pidfile" ] || return 1
+  PID=$(LC_ALL=C sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "$pidfile" 2>/dev/null | head -n 1)
+  [ -n "$PID" ] || return 1
+  # 别的账号的进程 kill -0 也失败：服务端跟着这个账号跑，那不是它
+  kill -0 "$PID" 2>/dev/null || return 1
+  boot=$(LC_ALL=C sed -n 's/.*"bootId":"\([0-9a-f-]*\)".*/\1/p' "$pidfile" 2>/dev/null | head -n 1)
+  booted=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)
+  if [ -n "$boot" ] && [ -n "$booted" ] && [ "$boot" != "$booted" ]; then return 1; fi
+  FROM_ROOT=no
+  program=$(readlink "/proc/$PID/exe" 2>/dev/null) || return 0
+  real=$(CDPATH= cd -- "$ROOT" 2>/dev/null && pwd -P) || return 0
+  case "$program" in
+    "$ROOT"/*|"$real"/*) FROM_ROOT=yes ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+
 no_cli() {
   if defined_for_root all; then
     fail 1 "安装目录里没有能运行的 vonvon，后台服务 $DEFINED 还在，什么都没删。先停掉并删掉这个服务，再运行一次卸载。"
+  fi
+  if daemon_alive; then
+    if [ "$FROM_ROOT" = yes ]; then
+      fail 1 "安装目录里没有能运行的 vonvon，服务端还在运行（进程 $PID），什么都没删。先停掉它：\`kill $PID\`，等它退出后再运行一次卸载。"
+    fi
+    fail 1 "安装目录里没有能运行的 vonvon，数据目录里记的服务端进程 $PID 还在，看不出它是不是服务端，什么都没删。用 \`ps -p $PID -o args=\` 看一下：是 vonvon 的服务端就先停掉它（\`kill $PID\`），不是就删掉 \`~/.vonvon-bot/daemon.pid\`；再运行一次卸载。"
   fi
   say "安装目录里没有能运行的 vonvon。$PATH_BY_HAND"
 }
