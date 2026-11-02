@@ -618,3 +618,20 @@ Windows 的平台名和 4.8 的 Windows 启动修复，放进 U4 的 Windows 任
 
 **没做的自测**
 - 6.1 第 2、3、5 步（验收 daemon 上的目录、lark-cli 私聊 Bot 6 看警示）这次没做：这次的任务不碰验收 daemon、不发飞书消息。换成无头截图（`packages/ui/test/manual/remote-mode-fake-shell.ts`，假外壳）和单测。第 4 步的 `git grep` 做了，只剩测试里断言"已经没有了"的几处。
+
+## 12. Codex 审查后改了什么（任务 244–246）
+
+2026-11-02，Codex 在 JP-VPS 上审了 head 95e21996：任务 244 通读 U2 全部改动，245 看 desktop，246 看 ui。245 通过；244、246 的三条 P2 都接受了：
+
+- **244-1 远程设备的「状态与诊断」页仍把工具说成这台电脑的。** 那一组叫「这台电脑」，按钮「查看本机环境」，说明是「在终端运行 codex 配置好……」「在本机环境里安装 Claude Agent SDK」，用户会去桌面所在的电脑上配。`P/setup-steps.ts` 的 `toolSteps` 不动（它不知道在看哪台设备），由页面读 `useActiveDevice()` 改写：`U/device-copy.ts` 加 `onDeviceText`（本机环境 → 「X」的「工具与连接」，本机的 → 「X」上的，在终端运行 → 在「X」的终端运行，一遍替换，设备名里有"本机"也不会再换）和 `toolStepsOn`（每步的说明和去工具页的按钮「查看「X」的工具」）；`DiagnosticsPanel` 的组名用 `whereName`，页脚写「「X」上的 Provider 每分钟检查一次……」。daemon 自己给的 Claude 提示（`login.ts` 的"在终端运行 `claude` ……"）也经它带上设备名。本机一字不改。测试：`diagnostics-panel.test.tsx` 的 `the tools of a remote device` 三例（signedOut/missing、Codex 缺失和太旧加 daemon 的 Claude 提示、本机原样），`device-copy.test.ts` 把 `toolSteps` 每种状态在远程时都过一遍，不许出现"本机"。
+- **246-1 远程升级卡片重新挂载后不恢复进度。** 离开再回来、或者另一个客户端已经发起了升级，卡片只查 `checkCoreUpdate`，`following` 从 false 开始，进度没了、「更新「X」」又能点。`ServerUpdateCard` 远程时打开就同时读一次 `coreUpdateStatus`：没结束就接着每秒跟、进度条和状态行照旧、更新按钮不可点；已结束就显示结果（更新完成和版本，或者失败的原因）；没有记录什么都不显示。回滚的原因里没写"已切回"时，状态行补"（已切回 X）"，和 `vonvon update` 一样。测试：新的 `server-update-card-lifecycle.test.tsx`，它的 hook 替身照 React 的规则只在依赖变了时重跑 effect、先跑清理，四例：同一张卡跟到结束、离开再回来接着跟到结束（离开后不再轮询）、连上别人已经在升级的设备并看到回滚原因、打开时更新已结束只显示结果不轮询。原来 `server-update-card.test.tsx` 里"每秒跟到结束"那一例的替身每次渲染都重跑所有 effect，开头这次读会被重复，挪进了新文件。
+- **246-2 远程 Provider 详情仍写本机配置和本机的修复办法。** `ProviderSetup` 远程时：「「X」上的配置」「已读取「X」上的配置」「「X」上的 Claude Code 无法启动。请先在「X」的终端运行 `claude`……Vonvon 会复用「X」上 Claude 的认证或 API 配置」、安装来源「「X」上已有」、卸载确认「「X」上的其他安装不受影响」；daemon 给的问题提示、Codex 的更新办法（如"请在终端运行 brew upgrade codex"）和操作结果也经 `onDeviceText`。同类的一起改了，都只在远程时换字：`EnvironmentPanel` 的「本机工具」组名、重新检测的提示、"正在检测本机工具…"和页面通知；`UsagePanel` 错误分支「检测本机配置」；`UsageContent`「所有 Bot 共用本机 Codex 账号的用量」；设置首页 Provider 一项的说明；MCP 授权「在本机终端运行命令」和移除确认「只移除本机配置」；工作区目录「移除引用，保留本机文件」和解除绑定的「本地目录和文件保留」。测试：新的 `provider-remote.test.tsx` 三例（远程 Claude Code 起不来、远程的 daemon 提示和 Homebrew 更新办法、本机原样），用真 React 渲染，只把发 RPC 的 `useProviderSetup` 换成固定数据。`mcp-runtime.test.tsx` 的 `client-context` mock 补上 `useActiveDevice`（MCP 面板现在读当前设备）。
+
+## 13. 合入 U1 和集成分支
+
+2026-11-02 先合 `claude/devices-ui-1`（5d0404ce，带 D2、D4a、D4b、I3 和 U1 补的两个测试），再合 `claude/devices-integration`（63ab38a6，多了 K1 内置 Skill 的 `--scope`，没有冲突）。冲突照两边的意思合：
+- `D/server/http.ts`：D4a 按连接给事件（`viewFor`）已经不给维护连接任何东西，U2 的 `snapshotShape` 去掉；第 11 节"维护连接不收快照"的单测改成用 `viewFor` 建 hub。`capabilities()` 保留 D4a 的 `session-scope`，再按安装方式加 `update.standalone`、`update.npm`。
+- `D/server/authz.ts`：用 D4a 的按场合的表，去掉 U2 删了的 `installCodex`、`startCodexLogin`（表里的行和 `commandInReach` 里的分支）；`authz-session.test.ts` 用 `restartHost` 代替 `installCodex` 当"整台机器的命令"。
+- `D/test/server-fixture.ts`：`askBot` 仍是第 4 个参数，`distribution` 挪到第 5 个；握手测试期望 `['device', 'session-scope', ...update]`。
+- `D/server/message-loop.ts` 用 D4a 的 `errorEnvelope`（同一份 `DRAIN_KINDS`）；`U/test/bot-schedules-app.test.tsx` 用 U1 的 mock（真模块上只换 hook）。
+- 合完 desktop、ui 的测试都过，没有 U1 那样的语义冲突要修：U2 的退出规则（`quit-daemon.ts`）和 U1 在 `main.ts` 接的设备连接、退出顺序各管各的。

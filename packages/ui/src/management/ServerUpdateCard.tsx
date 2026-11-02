@@ -11,8 +11,11 @@ export type CoreUpdate = Extract<MachineReply, {type: 'coreUpdate'}>;
 /** Installs whose daemon updates itself (devices 6.5): the standalone server and the global npm package. `bundled` is U4's. */
 export const coreUpdatable = (kind: string | undefined): boolean => kind === 'standalone' || kind === 'global-npm';
 export const canApplyCoreUpdate = (core: CoreUpdate | undefined): boolean => Boolean(core && coreUpdatable(core.distribution.kind) && core.hasUpdate);
+/** A rollback that its message does not mention says where it went back to, as `vonvon update` does. */
+const wentBack = (status: CoreUpdateStatus): string =>
+  status.phase === 'error' && status.rolledBack && status.previous && !status.message?.includes('已切回') ? `（已切回 ${status.previous}）` : '';
 export const coreStatusLine = (status: CoreUpdateStatus | null): string =>
-  status ? `${coreUpdateStatusText(status)}${status.from && status.to ? ` · ${status.from} → ${status.to}` : ''}` : '尚无更新记录';
+  status ? `${coreUpdateStatusText(status)}${wentBack(status)}${status.from && status.to ? ` · ${status.from} → ${status.to}` : ''}` : '尚无更新记录';
 const ended = (status: CoreUpdateStatus | null | undefined): boolean => status?.phase === 'done' || status?.phase === 'error';
 // No record is nothing to follow: following it would keep the update button off for good (review 207).
 const running = (status: CoreUpdateStatus | null): boolean => status !== null && !ended(status);
@@ -70,8 +73,20 @@ export function ServerUpdateCard({request, variant, where, bundled, disabled = f
       setBusy(false);
     }
   };
-  // The remote card reads the device's daily check once, without asking the update source again.
-  useEffect(() => { if (variant === 'remote') void run({type: 'checkCoreUpdate', fresh: false}); }, []);
+  // The remote card reads the device's daily check once, without asking the update source again, and the update the
+  // device is on (review 246-1): one started before this card opened, from this page or another client, is followed again
+  // with its button off; one that ended shows how (the new version, or why it failed or went back).
+  useEffect(() => {
+    if (variant !== 'remote') return;
+    let open = true;
+    void run({type: 'checkCoreUpdate', fresh: false});
+    void request({type: 'coreUpdateStatus'}).then(reply => {
+      if (!open || reply.type !== 'coreUpdateStatus' || !reply.status) return;
+      setStatus(current => current === undefined ? reply.status : current);
+      if (running(reply.status)) setFollowing(true);
+    }, () => undefined);
+    return () => { open = false; };
+  }, []);
   const off = busy || disabled;
   const progress = status?.progress && !ended(status) && <progress className="application-update-progress" max={status.progress.total} value={status.progress.transferred} aria-label="Core 更新下载进度"/>;
   const statusLine = status !== undefined && <p className="settings-operation-message" role="status">{coreStatusLine(status)}</p>;

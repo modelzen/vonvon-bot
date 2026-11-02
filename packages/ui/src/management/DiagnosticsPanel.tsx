@@ -4,7 +4,8 @@ import {
   CUSTOM_PROMPT_NOTICE, NOT_REPLIED_TEXT, OPTIONAL_SCOPE_EFFECTS, SCOPE_DENIAL_PLACE_TEXT, backendLabel, botSteps, connectionStep, crashText, formatTime, toolSteps,
   type AdminSetupStatus, type Agent, type Command, type CommandResult, type CrashEntry, type DesktopSnapshot, type DirectoryProblem, type Membership, type NotReplied, type SetupStep, type StepAction, type StepTone,
 } from '@vonvon/protocol';
-import {useClient, useShellCapabilities} from '../client-context';
+import {useActiveDevice, useClient, useShellCapabilities} from '../client-context';
+import {diagnosticsToolsFooter, toolStepsOn, whereName} from '../device-copy';
 import {AgentAvatar} from '../AgentAvatar';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Button, IconButton, StatusBadge} from '../reference/components/ui';
@@ -194,9 +195,9 @@ function CrashBars({snapshot, ready, busy, run}: {snapshot: DesktopSnapshot; rea
   </div>)}</>;
 }
 
-/** 状态与诊断 (product.md 3.1 item 8): the red bar of a crash pause, this machine's tools, its decision models' keys
- * (s23g2) and the daemon's crashes, then each bot's connection, setup, scopes, tools, misplaced group directories,
- * recent not-replied messages and crashes, with the daemon log beside the machine details. */
+/** 状态与诊断 (product.md 3.1 item 8): the red bar of a crash pause, the shown device's tools (「X」 on a remote one),
+ * its decision models' keys (s23g2) and the daemon's crashes, then each bot's connection, setup, scopes, tools, misplaced
+ * group directories, recent not-replied messages and crashes, with the daemon log beside the machine details. */
 export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpenEnvironment, onOpenSecrets, onNotice}: {
   snapshot: DesktopSnapshot; ready: boolean; busy: boolean;
   run: (command: Command) => Promise<CommandResult>;
@@ -217,7 +218,9 @@ export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpe
   const secrets = useSecrets();
   const {reads, recheck} = useSetupStatus(snapshot.agents.map(agent => agent.id), {poll: false});
   const claudeLogin = useClaudeLoginCheck(snapshot.tools, message => onNotice(message, true));
-  const tools = toolSteps(snapshot.tools, {claudeChecking: claudeLogin.checking}).steps;
+  // The tools are the shown device's: on a remote one each instruction says 「X」 (review 244).
+  const where = useActiveDevice();
+  const tools = toolStepsOn(where, toolSteps(snapshot.tools, {claudeChecking: claudeLogin.checking}).steps);
   const host = snapshot.host;
   const checking = Object.values(reads).some(read => read?.checking);
   async function recheckAll() {
@@ -242,8 +245,8 @@ export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpe
       <div className="diag-heading-actions"><IconButton size="sm" variant="ghost" label="重新检查" title="刷新快照、飞书设置与密钥状态" loading={checking} disabled={busy || !ready} onClick={() => void recheckAll().catch(error => onNotice(error instanceof Error ? error.message : '重新检查没有完成。', true))}><RefreshCw size={16} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>
     </header>
     <CrashBars snapshot={snapshot} ready={ready} busy={busy} run={run}/>
-    <SettingsGroup label="这台电脑" id={settingAnchor('这台电脑')} className="diag-machine"
-      footer="Provider 每分钟检查一次；Claude 的配置可以单独检查。">
+    <SettingsGroup label={whereName(where)} id={settingAnchor('这台电脑')} className="diag-machine"
+      footer={diagnosticsToolsFooter(where)}>
       {tools.map(step => <SettingsRow key={step.id} title={step.title} description={stepDescription(step)} trailing={<span className="setup-step-trailing">{badge(step.status, step.tone)}{toolAction(step)}</span>}/>)}
       <KeyDiagnosticsRows read={secrets.read} onOpenSecrets={onOpenSecrets} onShowLog={showLog}/>
       <details className="diag-runtime"><summary>运行详情<ChevronDown size={13} aria-hidden="true"/></summary><div>

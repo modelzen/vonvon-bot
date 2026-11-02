@@ -2,7 +2,8 @@ import {settingAnchor} from '../search';
 import {useCallback, useEffect, useId, useRef, useState} from 'react';
 import {ChevronDown, Plus, X, RefreshCw, Terminal, Globe, Plug} from 'lucide-react';
 import {mcpConfigSchema, type MachineReply, type MachineRequest} from '@vonvon/protocol';
-import {useClient} from '../client-context';
+import {useActiveDevice, useClient} from '../client-context';
+import {whereName} from '../device-copy';
 import {Button, IconButton, FormField, InlineNotice} from '../reference/components/ui';
 import {ConfirmDialog, Dialog} from '../reference/components/ui/Dialog';
 import {SettingChoices} from '../settings/SettingChoices';
@@ -34,6 +35,7 @@ export function mcpSummary(entry: Entry): string {
 
 export function McpPanel({refreshKey = 0}: {refreshKey?: number}) {
   const client = useClient();
+  const where = useActiveDevice();
   const {navigate} = useDraftGuard();
   const [provider, setProvider] = useState<Provider>('codex');
   const [view, setView] = useState<McpView>();
@@ -101,7 +103,7 @@ export function McpPanel({refreshKey = 0}: {refreshKey?: number}) {
     {notice && <p className="mcp-note" role="status">{notice}</p>}
     {adding && current && <AddMcpDialog provider={provider} revision={current.revision} onSave={add} onRefresh={refresh} onClose={() => setAdding(false)}/>}
     <ConfirmDialog open={Boolean(removing)} title={`移除 ${removing?.name ?? 'MCP'}？`} description={`将从 ${providerName(provider)} 用户配置移除，使用此配置的 Bot 都会受影响。`} confirmLabel="移除" tone="danger" pending={busy} error={removeError}
-      onCancel={() => {if (!busy) setRemoving(undefined);}} onConfirm={() => void remove()}><p className="mcp-note">只移除本机配置，保留远端服务。</p>{current?.status === 'conflict' && <IconButton size="sm" variant="ghost" label="重新读取" title="重新读取" disabled={busy || loading} onClick={async () => {const latest = await refresh(); if (latest?.status === 'ready') {if (!latest.entries.some(entry => entry.name === removing?.name)) {setRemoving(undefined); setNotice('该连接已从配置中移除。');} else setRemoveError('已重新读取，请确认后再次移除。');}}}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}</ConfirmDialog>
+      onCancel={() => {if (!busy) setRemoving(undefined);}} onConfirm={() => void remove()}><p className="mcp-note">{where.isRemote ? `只移除${whereName(where)}上的配置，保留远端服务。` : '只移除本机配置，保留远端服务。'}</p>{current?.status === 'conflict' && <IconButton size="sm" variant="ghost" label="重新读取" title="重新读取" disabled={busy || loading} onClick={async () => {const latest = await refresh(); if (latest?.status === 'ready') {if (!latest.entries.some(entry => entry.name === removing?.name)) {setRemoving(undefined); setNotice('该连接已从配置中移除。');} else setRemoveError('已重新读取，请确认后再次移除。');}}}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}</ConfirmDialog>
     <McpAuthorizationDialog provider={provider} entry={authorizing} onClose={() => setAuthorizing(undefined)}/>
   </section>;
 }
@@ -192,6 +194,8 @@ export function AddMcpDialog({provider, revision, onSave, onRefresh, onClose}: {
 }
 
 export function McpAuthorizationDialog({provider, entry, onClose}: {provider: Provider; entry?: Entry; onClose: () => void}) {
+  // The command runs where the Provider does: 「X」's terminal on a remote device.
+  const where = useActiveDevice();
   const command = entry?.loginArgv ? mcpLoginCommand(entry.loginArgv) : undefined;
   const field = useRef<HTMLTextAreaElement>(null);
   const [notice, setNotice] = useState('');
@@ -202,7 +206,7 @@ export function McpAuthorizationDialog({provider, entry, onClose}: {provider: Pr
     catch {field.current?.focus(); field.current?.select(); setNotice(`按 ${copyShortcut()} 复制`);}
   }
   return <Dialog open={Boolean(entry && command)} title={`授权 ${entry?.name ?? 'MCP'}`} onClose={onClose} footer={<><Button onClick={onClose}>完成</Button><Button variant="primary" onClick={() => void copy()}>复制命令</Button></>}>
-    <div className="mcp-authorization"><p>在本机终端运行命令，按 {providerName(provider)} 提示完成授权。</p><textarea ref={field} aria-label="MCP 授权命令" value={command ?? ''} rows={3} readOnly/>
+    <div className="mcp-authorization"><p>{where.isRemote ? `在${whereName(where)}的终端运行命令` : '在本机终端运行命令'}，按 {providerName(provider)} 提示完成授权。</p><textarea ref={field} aria-label="MCP 授权命令" value={command ?? ''} rows={3} readOnly/>
       <p className="mcp-note">这里不检测授权结果；完成后在新会话中使用连接。</p>{notice && <p className="mcp-note" role="status">{notice}</p>}
     </div>
   </Dialog>;

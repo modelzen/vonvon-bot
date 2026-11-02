@@ -1,8 +1,9 @@
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {expect, it} from 'vitest';
+import {toolSteps, type ToolState} from '@vonvon/protocol';
 import {LOCAL_ACTIVE_DEVICE} from '../src/client-context';
-import {configureProvider, hostTitle, onDevice, remoteServiceFooter, remoteStopConfirm, remoteToolsNote} from '../src/device-copy';
+import {configureProvider, hostTitle, onDevice, onDeviceText, remoteServiceFooter, remoteStopConfirm, remoteToolsNote, toolStepsOn} from '../src/device-copy';
 import {looksLikePath} from '../src/directory-picker';
 import {browseQuery} from '../src/DirectorySearchStep';
 
@@ -29,6 +30,29 @@ it('titles the device by platform, Windows included (devices 第 19 节)', () =>
 it('uses the design 第 15 节 words for the remote service', () => {
   expect(remoteStopConfirm(remote)).toBe('停止「Linux 主机」的后台服务？停止后它不会自动重启，只能在那台设备上重新启动。要重新加载请用"重启"。');
   expect(remoteServiceFooter(remote)).toBe('退出这台电脑上的 Vonvon Bot 不影响「Linux 主机」。');
+});
+
+// Codex review 244: toolSteps speaks of this computer whichever device is shown; the page says each step of 「X」
+it('says every tool step of a remote device of 「X」, and leaves this computer\'s as they were', () => {
+  const installs = ['missing', 'installed', 'unknown'] as const;
+  const auths = ['signedOut', 'signedIn', 'notRequired', 'unknown'] as const;
+  const tool = (name: 'codex' | 'claude', installation: ToolState['installation'], authentication: ToolState['authentication'], old: boolean): ToolState =>
+    ({tool: name, installation, authentication, version: '1.0.0', ...(old ? {compatibility: {status: 'tooOld', minimum: '2.0.0', verified: '2.1.0'}} : {})});
+  let instructions = 0;
+  for (const installation of installs) for (const authentication of auths) for (const old of [false, true]) for (const claudeChecking of [false, true]) {
+    const steps = toolSteps([tool('codex', installation, authentication, old), tool('claude', installation, authentication, false)], {claudeChecking}).steps;
+    expect(toolStepsOn(LOCAL_ACTIVE_DEVICE, steps)).toEqual(steps);
+    for (const step of toolStepsOn(remote, steps)) {
+      const words = [step.detail ?? '', ...step.actions.map(action => action.label)].join(' ');
+      expect(words, `${step.id} ${installation} ${authentication} ${old}`).not.toContain('本机');
+      if (/终端|工具/.test(words)) { instructions++; expect(words).toContain('「Linux 主机」'); }
+    }
+  }
+  expect(instructions).toBeGreaterThan(0);
+  // one pass: a device whose name has 本机 in it keeps its name
+  expect(onDeviceText({isRemote: true, name: '本机房'}, '在本机环境里装，要用本机的 npm')).toBe('在「本机房」的「工具与连接」里装，要用「本机房」上的 npm');
+  expect(onDeviceText(LOCAL_ACTIVE_DEVICE, '请在终端运行 brew upgrade codex')).toBe('请在终端运行 brew upgrade codex');
+  expect(onDeviceText(remote, '请在终端运行 brew upgrade codex')).toBe('请在「Linux 主机」的终端运行 brew upgrade codex');
 });
 
 // main 必败: Windows and remote paths were not recognized (devices-ui-2 4.3)

@@ -1,7 +1,7 @@
-import {afterEach, expect, it, vi} from 'vitest';
+import {expect, it, vi} from 'vitest';
 import {isValidElement, type ReactNode} from 'react';
 import {RpcError} from '@vonvon/client/browser';
-import type {CoreUpdateStatus, MachineReply, MachineRequest} from '@vonvon/protocol';
+import type {MachineReply, MachineRequest} from '@vonvon/protocol';
 
 const hooks = vi.hoisted(() => ({state: [] as unknown[], index: 0, effects: [] as Array<() => unknown>}));
 vi.mock('react', async original => ({
@@ -9,7 +9,7 @@ vi.mock('react', async original => ({
   useState: (initial: unknown) => {const at = hooks.index++; if (!(at in hooks.state)) hooks.state[at] = initial; return [hooks.state[at], (next: unknown) => {hooks.state[at] = typeof next === 'function' ? (next as (old: unknown) => unknown)(hooks.state[at]) : next;}];},
   useEffect: (effect: () => unknown) => {hooks.effects.push(effect);},
 }));
-import {coreStatusLine, ServerUpdateCard} from '../src/management/ServerUpdateCard';
+import {ServerUpdateCard} from '../src/management/ServerUpdateCard';
 
 type Node = {props: Record<string, any>};
 const nodes = (node: ReactNode): Node[] => Array.isArray(node) ? node.flatMap(nodes)
@@ -33,7 +33,6 @@ async function opened(reply: (operation: MachineRequest) => Promise<MachineReply
   await tick();
   return view;
 }
-afterEach(() => { vi.useRealTimers(); });
 
 it.each([['standalone', '独立安装的服务端'], ['global-npm', '全局 npm 安装']])('shows a %s server of another device and offers its update', async (kind, label) => {
   const view = await opened(async () => core(kind));
@@ -64,21 +63,5 @@ it('shows only the version when the device cannot update remotely', async () => 
   expect(text).not.toContain('安装方式');
 });
 
-it('follows an update every second until it ends', async () => {
-  const done = {phase: 'done', ok: true, from: '0.9.0', to: '0.9.1', at: 2} as CoreUpdateStatus;
-  const statuses: CoreUpdateStatus[] = [{phase: 'installing', from: '0.9.0', to: '0.9.1', at: 1, detail: 'downloading'} as CoreUpdateStatus, done];
-  const view = await opened(async operation => operation.type === 'applyCoreUpdate' ? {type: 'done', message: '开始更新'}
-    : operation.type === 'coreUpdateStatus' ? {type: 'coreUpdateStatus', status: statuses.shift() ?? null} : core('standalone'));
-  const update = nodes(view.render()).find(node => node.props.children?.join?.('') === '更新「验收设备 1」')!;
-  await update.props.onClick();
-  await tick();
-  vi.useFakeTimers();
-  view.render();
-  const cleanups = hooks.effects.map(effect => effect());
-  await vi.advanceTimersByTimeAsync(1000);
-  await vi.advanceTimersByTimeAsync(1000);
-  expect(view.request.mock.calls.filter(([operation]) => operation.type === 'coreUpdateStatus')).toHaveLength(2);
-  // The second answer ended it: following stopped.
-  expect(words(view.render())).toContain(coreStatusLine(done));
-  for (const cleanup of cleanups) if (typeof cleanup === 'function') cleanup();
-});
+// Following an update, in one mount and across mounts, is in server-update-card-lifecycle.test.tsx: its harness runs an
+// effect again only when its deps change, which the opening read of the update record needs.
