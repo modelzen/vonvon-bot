@@ -43,14 +43,14 @@ export function fakeService(overrides: Partial<AdminService> = {}): AdminService
 }
 /** The daemon start every fixture reports in daemonStatus (devices 4.7). */
 export const FIXTURE_STARTED_AT = 1_700_000_000_000;
-export async function startFixture(service = fakeService(), environmentOptions?: EnvironmentServiceOptions, serviceActions: StartApiOptions['serviceActions'] = noServiceManager, remote?: StartApiOptions['remote']) {
+export async function startFixture(service = fakeService(), environmentOptions?: EnvironmentServiceOptions, serviceActions: StartApiOptions['serviceActions'] = noServiceManager, remote?: StartApiOptions['remote'], askBot?: StartApiOptions['askBot']) {
   const home = await mkdtemp(join(tmpdir(), 'vonvon-api-'));
   testHome.current = home;
   const { startApi } = await import('../src/server/http');
   const control: ShutdownControl = { requested: false, waitForRequest: () => new Promise<void>(() => {}), dispose: () => {}, requestStop: vi.fn(), requestRestart: vi.fn(), completeShutdown: release => release() };
   // devices-4a 4.1: the host's Bot-session tokens, which a test issues as a Bot process would ask for them
   const sessionTokens = createSessionTokens();
-  const api = await startApi({ service, port: 0, control, environmentOptions, serviceActions, startedAt: FIXTURE_STARTED_AT, sessionTokens, ...(remote ? { remote } : {}) });
+  const api = await startApi({ service, port: 0, control, environmentOptions, serviceActions, startedAt: FIXTURE_STARTED_AT, sessionTokens, ...(remote ? { remote } : {}), ...(askBot ? { askBot } : {}) });
   const credential = (await readFile(join(home, 'local-credential'), 'utf8')).trim();
   return { api, home, credential, control, sessionTokens, close: async () => { await api.close(); await rm(home, { recursive: true, force: true }); } };
 }
