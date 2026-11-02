@@ -6,7 +6,9 @@ import {
   CLOSE_CODES, helloSchema, pairRequestSchema, PROTOCOL_VERSION,
   type CloseReason, type ErrorEnvelope, type Event, type Hello, type PairResult, type Request, type Response, type Scope, type ServerInfo,
 } from '@vonvon/protocol';
-import { createResponder, decodeFrame, encodeFrame, FRAME, type Channel, type FrameType, type StaticKey } from '@vonvon/protocol/secure-channel';
+import {
+  CHANNEL_VERSION, closeBody, createResponder, decodeFrame, encodeFrame, FRAME, HANDSHAKE_TIMEOUT_REASON, type Channel, type FrameType, type StaticKey,
+} from '@vonvon/protocol/secure-channel';
 import { log } from '../core/logger';
 import type { ClientRegistry } from '../remote/clients';
 import type { completePairing as CompletePairing, InviteBook } from '../remote/pairing';
@@ -49,16 +51,18 @@ const refuseUpgrade = (socket: Duplex, status: number): void => { socket.end(`HT
 
 /** devices-2 4.4: the remote side of the daemon. Each connection: the Noise IK handshake (nothing else is read first), then
  * by its key: a client on the list says hello; a revoked one is told 4003; an unknown one may send one pairing request
- * within 5 seconds and nothing more. Past the hello every request goes through the loopback's message loop, after a check
- * that the client is still on the list. The hub holds the connections; a socket not past its hello never gets a publish. */
+ * within 5 seconds and nothing more. Past the hello every frame is checked against the list first, and every request goes
+ * through the loopback's message loop. The hub holds the connections; a socket not past its hello never gets a publish.
+ * Past message 2 every close is said inside the channel too (`FRAME.close`): the client believes no other. */
 export function createSecureSocketServer(options: SecureSocketServerOptions): { close(reason?: CloseReason): Promise<void> } {
   const { hub, clients, invites } = options;
   const handshakeMs = options.timers?.handshake ?? 3_000;
   const pairingMs = options.timers?.pairing ?? 5_000;
   const idleMs = options.timers?.idle ?? 60_000;
   const sockets = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 4_000_000 });
-  /** This server's connections, for its own close (the hub holds every server's). */
-  const own = new Map<WebSocket, () => void>();
+  /** This server's sockets with their connection's close, until the socket's close event, not just its detach: a refused
+   * socket whose peer never answers the close frame holds `sockets.close()` for ws's 30 seconds (审查 R1). */
+  const own = new Map<WebSocket, (reason: CloseReason) => void>();
   let closing: Promise<void> | undefined;
   const upgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
     if (closing || hub.state === 'released') { refuseUpgrade(socket, 503); return; }
@@ -90,7 +94,7 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
     const send = (value: Response | ErrorEnvelope | Event | ServerInfo | PairResult): void => frame(FRAME.json, Buffer.from(JSON.stringify(value), 'utf8'));
     const peer: Peer = {
       id: randomUUID(), get open() { return phase === 'ready' && !detached && socket.readyState === WebSocket.OPEN; }, get clientKind() { return clientKind; },
-      get principal() { return principal; }, get protocolVersion() { return protocolVersion; },
+      get principal() { return principal; }, get protocolVersion() { return protocolVersion; }, get clientId() { return clientId; },
       get capabilities() { return negotiated?.capabilities ?? []; }, get scope() { return negotiated?.scope ?? null; }, get negotiated() { return negotiated !== undefined; },
       address,
       negotiate(capabilities, scope) {
@@ -104,12 +108,14 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
       if (detached) return;
       detached = true;
       clearTimeout(timer);
-      own.delete(socket);
       hub.remove(peer);
     };
-    const close = (reason: CloseReason): void => { detach(); socket.close(CLOSE_CODES[reason], reason); };
-    const failed = (reason: HandshakeFailure, validInvite = false): void => {
-      close(reason);
+    /** With a channel (past message 2), the close inside it: a WebSocket close code is not authenticated (审查 D2-CRYPTO-1). */
+    const announce = (code: number, text: string): void => { frame(FRAME.close, closeBody(code, text)); };
+    const shut = (code: number, text: string): void => { detach(); announce(code, text); socket.close(code, text); };
+    const close = (reason: CloseReason, text: string = reason): void => { shut(CLOSE_CODES[reason], text); };
+    const failed = (reason: HandshakeFailure, validInvite = false, text: string = reason): void => {
+      close(reason, text);
       options.onHandshakeFailed?.(ip, reason, validInvite);
     };
     const deadline = (ms: number, expire: () => void): void => {
@@ -117,22 +123,24 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
       timer = setTimeout(expire, ms);
       timer.unref();
     };
-    own.set(socket, detach);
-    hub.attach(socket, detach);
+    own.set(socket, reason => { close(reason); });
+    hub.attach(socket, detach, announce);
+    socket.once('close', () => { own.delete(socket); });
     socket.on('close', detach);
     socket.on('error', detach);
     if (hub.state === 'released') { close('server_shutdown'); return; }
     // Before a single frame is read: a rate-limited address costs no DH.
     if (options.onHandshake?.(ip) === 'rate_limited') { close('rate_limited'); return; }
-    deadline(handshakeMs, () => failed('handshake_failed'));
+    // A slow first frame is a timeout, not a key this device cannot read: the client tells the two apart (审查 R2).
+    deadline(handshakeMs, () => failed('handshake_failed', false, HANDSHAKE_TIMEOUT_REASON));
 
-    /** A paired key (on the list, not revoked) goes on to its hello. */
+    /** A paired key (on the list, not revoked) goes on to its hello. Not "seen" yet: anyone who recorded a message 1 can
+     * send it again, so only the hello, the first frame of the channel, shows the key's holder is there (审查 D2-CRYPTO-2). */
     const paired = (id: string): void => {
       clientId = id;
       principal = { kind: 'owner', via: 'paired', clientId: id, generation: clients.generation };
-      clients.touch(id, address);
       phase = 'hello';
-      deadline(pairingMs, () => close('handshake_failed'));
+      deadline(pairingMs, () => failed('handshake_failed', false, HANDSHAKE_TIMEOUT_REASON));
     };
     const stillPaired = (): boolean => {
       const record = clientId === undefined ? undefined : clients.get(clientId);
@@ -140,6 +148,8 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
     };
     const handshake = (bytes: Buffer, binary: boolean): void => {
       if (!binary || bytes.length > UNAUTHENTICATED_FRAME_LIMIT) { failed('handshake_failed'); return; }
+      // Another channel version is not another key: 4001, which the client reads as a protocol mismatch (审查 R2).
+      if (bytes.length > 0 && bytes[0] !== CHANNEL_VERSION) { close('protocol_mismatch'); options.onHandshakeFailed?.(ip, 'handshake_failed', false); return; }
       const responder = createResponder(options.device);
       let remoteKey: Buffer;
       try { remoteKey = responder.readMessage1(bytes).remoteStaticPublicKey; }
@@ -187,7 +197,7 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
       const parsed = helloSchema.safeParse(raw);
       // No credential of any kind over the channel: the key is the authorization (devices 4.4, 5.3).
       if (!parsed.success || parsed.data.credential !== undefined) { close('unauthorized'); return; }
-      if (!stillPaired()) { close('client_revoked'); return; }
+      if (clientId !== undefined) clients.touch(clientId, address);
       clientKind = parsed.data.clientKind;
       protocolVersion = parsed.data.protocolVersion;
       if (protocolVersion !== PROTOCOL_VERSION) principal = { kind: 'maintenance', protocolVersion, inner: 'owner:paired' };
@@ -213,6 +223,8 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
         return;
       }
       const text = plain.type === FRAME.json ? plain.body.toString('utf8') : undefined;
+      // Every frame of a paired key, a ping too, and whatever its principal: revoked since means closed now (审查 R4).
+      if ((phase === 'hello' || phase === 'ready') && !stillPaired()) { close('client_revoked'); return; }
       switch (phase) {
         case 'unpaired': unpaired(text); return;
         // Nothing comes while the pairing is written: the client waits for its result.
@@ -225,9 +237,7 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
           deadline(idleMs, () => close('server_shutdown'));
           if (plain.type === FRAME.ping) { frame(FRAME.pong); return; }
           if (plain.type === FRAME.pong) return;
-          // Before every request: revoked since this connection said hello means closed now (D3 closes it at once too).
-          if (!stillPaired()) { close('client_revoked'); return; }
-          handleMessage(hub, peer, text, { request: options.request, ...(options.control ? { control: options.control } : {}), close: (code, reason) => { socket.close(code, reason); } });
+          handleMessage(hub, peer, text, { request: options.request, ...(options.control ? { control: options.control } : {}), close: shut });
           return;
       }
     });
@@ -238,13 +248,13 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
     close(reason = 'server_shutdown') {
       if (closing) return closing;
       options.server.off('upgrade', upgrade);
-      const pending = [...own.entries()].map(([socket, detach]) => new Promise<void>(resolve => {
-        detach();
+      // Refused ones still closing included: a peer that does not answer is terminated after 250 ms.
+      const pending = [...own.entries()].map(([socket, shutDown]) => new Promise<void>(resolve => {
         if (socket.readyState === WebSocket.CLOSED) { resolve(); return; }
         const deadline = setTimeout(() => { socket.terminate(); resolve(); }, 250);
         deadline.unref();
         socket.once('close', () => { clearTimeout(deadline); resolve(); });
-        socket.close(CLOSE_CODES[reason], reason);
+        shutDown(reason);
       }));
       closing = Promise.all(pending).then(() => new Promise<void>((resolve, reject) => { sockets.close(error => { if (error) reject(error); else resolve(); }); }));
       return closing;

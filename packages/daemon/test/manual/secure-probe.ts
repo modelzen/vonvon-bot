@@ -1,7 +1,7 @@
 /**
  * devices-2 第 6 节第 2 步：两个进程之间的配对和加密 RPC。不是 vitest 用例（test/manual/ 不在 include 里），手动跑：
  *
- *   T=$(mktemp -d)
+ *   T=$(mktemp -d); mkdir -p "$T/home" "$T/vh"
  *   node_modules/.bin/esbuild packages/daemon/test/manual/secure-probe.ts --bundle --platform=node --format=esm \
  *     --packages=external --outfile=packages/daemon/dist/secure-probe.mjs
  *   HOME=$T/home VONVON_HOME=$T/vh node packages/daemon/dist/secure-probe.mjs serve > $T/link &      # 进程 A

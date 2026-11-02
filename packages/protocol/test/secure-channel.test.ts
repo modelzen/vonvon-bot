@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  ChannelError, createInitiator, createResponder, decodeFrame, encodeFrame, FRAME, generateStaticKey, HandshakeError, PROLOGUE,
-  staticKeyFromBase64url, type StaticKey,
+  ChannelError, closeBody, createInitiator, createResponder, decodeFrame, encodeFrame, FRAME, generateStaticKey, HandshakeError, PROLOGUE,
+  readCloseBody, staticKeyFromBase64url, type StaticKey,
 } from "../src/secure-channel.js";
 
 // devices-2 第 5 节 and 验收要点 2–3. main 必败: there was no channel.
@@ -75,6 +75,42 @@ describe("handshake", () => {
     failsHandshake(() => honest.finish(answering.message2().bytes));
   });
 
+  // 审查 D2-CRYPTO-4: the vectors bring their own prologue, so only this shows the default path binds PROLOGUE.
+  it("uses PROLOGUE when given none, on both sides", () => {
+    const client = generateStaticKey().key;
+    const device = generateStaticKey().key;
+    const run = (initiatorPrologue: Buffer | undefined, responderPrologue: Buffer | undefined) => {
+      const initiator = createInitiator(client, device.publicKey, initiatorPrologue ? { prologue: initiatorPrologue } : undefined);
+      const responder = createResponder(device, responderPrologue ? { prologue: responderPrologue } : undefined);
+      responder.readMessage1(initiator.message1());
+      return initiator.finish(responder.message2().bytes).channel;
+    };
+    expect(run(undefined, PROLOGUE).handshakeHash).toHaveLength(32);
+    expect(run(PROLOGUE, undefined).handshakeHash).toHaveLength(32);
+    // No prologue, or the name without its version byte: the default side refuses either.
+    for (const other of [Buffer.alloc(0), Buffer.from("vonvon-secure-channel/1")]) {
+      failsHandshake(() => run(undefined, other));
+      failsHandshake(() => run(other, undefined));
+    }
+  });
+
+  // 审查 D2-CRYPTO-3: the vectors inject the ephemeral keys, so only this shows a real handshake makes new ones.
+  it("makes a new ephemeral key for every handshake, on both sides, never the static one", () => {
+    const client = generateStaticKey().key;
+    const device = generateStaticKey().key;
+    const first = createInitiator(client, device.publicKey).message1();
+    const second = createInitiator(client, device.publicKey).message1();
+    expect(first.subarray(1, 33).equals(second.subarray(1, 33))).toBe(false);
+    for (const message1 of [first, second]) expect(message1.subarray(1, 33).equals(client.publicKey)).toBe(false);
+    const answers = [first, second].map(message1 => {
+      const responder = createResponder(device);
+      responder.readMessage1(message1);
+      return responder.message2().bytes;
+    });
+    expect(answers[0]?.subarray(0, 32).equals(answers[1]?.subarray(0, 32) ?? Buffer.alloc(0))).toBe(false);
+    for (const message2 of answers) expect(message2.subarray(0, 32).equals(device.publicKey)).toBe(false);
+  });
+
   it("refuses another version byte, a changed byte anywhere, a short message, the wrong device key and a low-order point", () => {
     const changed = (index: number) => {
       const { initiator, responder } = pair();
@@ -122,9 +158,12 @@ describe("frames", () => {
     failsFrame(() => handshake().deviceChannel.decrypt(Buffer.alloc(23)), "frame");
   });
 
-  it("types the plaintext: json, ping, pong, and nothing else", () => {
+  it("types the plaintext: json, ping, pong, close, and nothing else", () => {
     expect(encodeFrame(FRAME.json, Buffer.from("{}")).toString("hex")).toBe("007b7d");
     expect(encodeFrame(FRAME.ping)).toEqual(Buffer.from([0x01]));
+    expect(encodeFrame(FRAME.close, closeBody(4003, "client_revoked")).toString("hex")).toBe(`030fa3${Buffer.from("client_revoked").toString("hex")}`);
+    expect(readCloseBody(decodeFrame(Buffer.from("030fa3", "hex")).body)).toEqual({ code: 4003, reason: "" });
+    failsFrame(() => readCloseBody(Buffer.from([0x0f])), "frame");
     expect(decodeFrame(Buffer.from([0x02]))).toEqual({ type: FRAME.pong, body: Buffer.alloc(0) });
     expect(decodeFrame(Buffer.from("\u0000{\"a\":1}")).body.toString()).toBe("{\"a\":1}");
     failsFrame(() => decodeFrame(Buffer.from([0x09])), "frame");

@@ -263,8 +263,10 @@ export function createResponder(local: StaticKey, options?: HandshakeOptions): {
 }
 
 /** What a decrypted frame carries: its first byte says what, the rest is the body. `json` is today's JSON text in UTF-8
- * (hello, serverInfo, request, response, event, error, pairRequest, pairResult); `ping` and `pong` have no body. */
-export const FRAME = { json: 0x00, ping: 0x01, pong: 0x02 } as const;
+ * (hello, serverInfo, request, response, event, error, pairRequest, pairResult); `ping` and `pong` have no body; `close`
+ * is why the device is closing (`closeBody`): a WebSocket close code is not authenticated, so past message 2 only this
+ * one is believed (anyone on the path can send a close frame). */
+export const FRAME = { json: 0x00, ping: 0x01, pong: 0x02, close: 0x03 } as const;
 export type FrameType = (typeof FRAME)[keyof typeof FRAME];
 const FRAME_TYPES = new Set<number>(Object.values(FRAME));
 export function encodeFrame(type: FrameType, body: Buffer = Buffer.alloc(0)): Buffer {
@@ -275,3 +277,16 @@ export function decodeFrame(plain: Buffer): { type: FrameType; body: Buffer } {
   if (type === undefined || !FRAME_TYPES.has(type)) throw new ChannelError("frame");
   return { type: type as FrameType, body: plain.subarray(1) };
 }
+/** A `close` frame's body: the close code (2 bytes, big-endian), then the reason in UTF-8, as on the WebSocket close. */
+export function closeBody(code: number, reason: string): Buffer {
+  const head = Buffer.alloc(2);
+  head.writeUInt16BE(code);
+  return Buffer.concat([head, Buffer.from(reason, "utf8")]);
+}
+export function readCloseBody(body: Buffer): { code: number; reason: string } {
+  if (body.length < 2) throw new ChannelError("frame");
+  return { code: body.readUInt16BE(0), reason: body.subarray(2).toString("utf8") };
+}
+/** The reason of a 4005 for a handshake that did not come in time, not one that failed: a slow link, which a client
+ * retries, is not "another device at that address" (only 4005 `handshake_failed` before message 2 says that). */
+export const HANDSHAKE_TIMEOUT_REASON = "handshake_timeout";

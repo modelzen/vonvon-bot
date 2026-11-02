@@ -17,6 +17,9 @@ export interface Peer extends JobPeer {
   negotiate(capabilities: readonly string[], scope: Scope | null): boolean;
   /** The remote end, `ip:port` (`[ip]:port` for IPv6). */
   readonly address: string;
+  /** A secure-channel connection: the paired client whose key it proved, whatever its principal (a maintenance one has
+   * no client id): what D3 matches a revoked client's connections by. Undefined on the loopback. */
+  readonly clientId?: string;
   send(value: Response | ErrorEnvelope): void;
 }
 export const formatAddress = (host: string | undefined, port: number | undefined): string =>

@@ -10,8 +10,9 @@ export interface PeerHub {
   /** The connections whose hello was accepted: they get `publish`, `closeWhere` looks among them. */
   readonly peers: ReadonlySet<Peer>;
   /** Every socket from its first moment, its handshake done or not, with its connection's detach: `closePeers` and
-   * `release` close it until its close event. */
-  attach(socket: WebSocket, detach: () => void): void;
+   * `release` close it until its close event. `announce` says the close inside the connection first (the secure
+   * channel's authenticated close frame), right before the hub closes the socket. */
+  attach(socket: WebSocket, detach: () => void, announce?: (code: number, reason: string) => void): void;
   add(peer: Peer, socket: WebSocket): void;
   /** The connection ended (the connection's detach calls it once): out of `peers`, and `detached(peer)`. */
   remove(peer: Peer): void;
@@ -31,14 +32,15 @@ export function createPeerHub(options: { detached(peer: Peer): void }): PeerHub 
   let state: HubState = 'open';
   const peers = new Set<Peer>();
   const sockets = new Map<Peer, WebSocket>();
-  const attached = new Map<WebSocket, () => void>();
+  const attached = new Map<WebSocket, { detach(): void; announce?: ((code: number, reason: string) => void) | undefined }>();
   const accepted = new Set<Promise<unknown>>();
   let draining: Promise<void> | undefined;
   let released: Promise<void> | undefined;
   /** Detached first, so nothing more reaches it; closed, and terminated when the peer does not answer within 250 ms. */
   function closeSocket(socket: WebSocket, code: number, reason: string, errors: unknown[]): Promise<void> {
     return new Promise<void>(resolve => {
-      try { attached.get(socket)?.(); }
+      const connection = attached.get(socket);
+      try { connection?.detach(); connection?.announce?.(code, reason); }
       catch (error) { errors.push(error); }
       try { socket.close(code, reason); }
       catch (error) {
@@ -67,8 +69,8 @@ export function createPeerHub(options: { detached(peer: Peer): void }): PeerHub 
   return {
     get state() { return state; },
     peers,
-    attach(socket, detach) {
-      attached.set(socket, detach);
+    attach(socket, detach, announce) {
+      attached.set(socket, { detach, announce });
       socket.once('close', () => { attached.delete(socket); });
     },
     add(peer, socket) { peers.add(peer); sockets.set(peer, socket); },
