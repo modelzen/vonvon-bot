@@ -13,6 +13,7 @@ import type { RpcOutcome } from '../rpc';
 import { RpcError, unsupported } from '../errors';
 import { requireRunningAgent } from './ownership';
 import { discoverProviderModels } from '../../admin/model-catalog';
+import { toolCommand } from '../../environment/tool-command';
 
 const projectRecord = z.unknown().transform(value => projectRecordSchema.parse(value));
 const mutation = z.object({
@@ -49,12 +50,13 @@ const contextResult = z.object({
 });
 const shareResult = z.object({ messageId: z.string().min(1) });
 
-const usageErrorMessages: Record<UsageErrorKind, string> = {
+/** `login`: what signs Codex in from a terminal; a managed copy is on no PATH (0.9.0 Linux acceptance). */
+const usageErrorMessages = (login: string): Record<UsageErrorKind, string> => ({
   'no-auth': '这台设备上的 Codex 没有用 ChatGPT 账号，看不到账号用量。',
   'api-key-mode': '当前 Codex 用的是 API Key，没有 ChatGPT 账号的用量可读。',
-  'need-relogin': 'Codex 的 ChatGPT 账号凭据过期了，在终端运行 `codex login` 后再看。',
+  'need-relogin': `Codex 的 ChatGPT 账号凭据过期了，在终端运行 \`${login}\` 后再看。`,
   transient: '暂时无法读取 Codex 用量，请稍后重试。',
-};
+});
 
 export async function collaborationRpc(service: AdminService, directory: DirectoryBrowser, request: CollaborationRequest): Promise<RpcOutcome<CollaborationReply>> {
   if (request.action === 'providerModels') {
@@ -64,7 +66,7 @@ export async function collaborationRpc(service: AdminService, directory: Directo
   if (request.action === 'usage') {
     try { return { kind: 'read', value: collaborationReplySchema.parse({ kind: 'usage', data: await service.accountUsage(request.force) }) }; }
     catch (error) {
-      throw new RpcError(error instanceof UsageError ? 'usage_unavailable' : 'operation_failed', error instanceof UsageError ? usageErrorMessages[error.kind] : '读取 Codex 用量失败');
+      throw new RpcError(error instanceof UsageError ? 'usage_unavailable' : 'operation_failed', error instanceof UsageError ? usageErrorMessages(`${toolCommand('codex')} login`)[error.kind] : '读取 Codex 用量失败');
     }
   }
   await requireRunningAgent(service, request.agentId);

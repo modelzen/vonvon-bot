@@ -77,7 +77,7 @@ function NotRepliedList({records, agent, snapshot, now}: {records: readonly NotR
     return <li key={`${record.at}-${record.ref ?? ''}-${record.reason}`}>
       <span className="diagnostics-replies__head"><time>{formatTime(record.at, {now})}</time><strong>{text.reason(record)}</strong>{record.count > 1 && <span>{record.count} 次</span>}</span>
       <span>{where}</span>
-      <span>{onDeviceText(device, text.next(record, {id: agent.id, several: snapshot.agents.length > 1}))}</span>
+      <span>{onDeviceText(device, text.next(record, {id: agent.id, several: snapshot.agents.length > 1}, snapshot.tools.find(tool => tool.tool === (record.backend ?? 'codex'))?.command))}</span>
     </li>;
   })}</ul>;
 }

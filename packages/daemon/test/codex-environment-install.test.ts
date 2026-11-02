@@ -125,8 +125,9 @@ it('serializes publication and uninstall across service instances sharing a data
   expect(managedToolSelection(f.dataRoot, 'codex')).toEqual({ kind: 'disabled' });
 });
 
-// 0.9.0 Linux acceptance (task 287): npm ran without the proxy the user set
-it('gives npm the env file\'s names and the proxy names', async () => {
+// 0.9.0 Linux acceptance (task 287): npm ran without the proxy the user set, and the managed copy was named by a bare
+// `codex` that no terminal finds
+it('gives npm the env file\'s names and the proxy names, and says what starts the managed copy in a terminal', async () => {
   vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:7890');
   vi.stubEnv('no_proxy', 'localhost');
   vi.stubEnv('VONVON_ENV_FILE_NAMES', 'NPM_CONFIG_REGISTRY,FEISHU_CODEX_BRIDGE');
@@ -139,6 +140,13 @@ it('gives npm the env file\'s names and the proxy names', async () => {
   const env = JSON.parse(readFileSync(f.npmEnv, 'utf8')) as Record<string, string | undefined>;
   expect(env).toMatchObject({ HTTPS_PROXY: 'http://127.0.0.1:7890', no_proxy: 'localhost', NPM_CONFIG_REGISTRY: 'https://registry.example/', HOME: f.home });
   for (const name of ['FEISHU_CODEX_BRIDGE', 'VONVON_SESSION', 'VONVON_ENV_FILE_NAMES', 'DAEMON_ONLY']) expect(env[name], name).toBeUndefined();
+  const selected = managedToolSelection(f.dataRoot, 'codex');
+  const scan = await f.service.run({ type: 'scan' });
+  if (scan.kind !== 'tools' || selected.kind !== 'active') throw new Error(JSON.stringify(scan));
+  // the fixture's launcher is a shell script, so its path alone starts it
+  expect(scan.tools.find(tool => tool.tool === 'codex')).toMatchObject({ installation: 'managed', command: selected.executable });
+  expect(await f.service.run({ type: 'startLogin', tool: 'codex' })).toEqual({ kind: 'refused', code: 'provider-configuration-required',
+    message: `先把 Codex 配置好（账号或自定义 API 都行，用 Codex App 或 \`${selected.executable}\` 命令行），再回到 Vonvon 检测。` });
 });
 
 // 0.9.0 Linux acceptance (task 287): a 10-minute timeout said only 工具安装失败

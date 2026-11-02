@@ -199,6 +199,9 @@ export const toolStateSchema = z.object({
   compatibility: codexCompatibilitySchema.optional(),
   /** Claude on Linux: what its bubblewrap sandbox for the qa and write modes needs (s20a). */
   sandbox: claudeSandboxSchema.optional(),
+  /** What to type in a terminal to start the Codex in use, or the Claude Code CLI, when it is a managed copy, which is on
+   * no PATH (0.9.0 Linux acceptance). Absent: the name is enough. */
+  command: z.string().max(4096).optional(),
 });
 export type ToolState = z.infer<typeof toolStateSchema>;
 export const serviceStateSchema = z.enum(["not-installed", "running", "stopped", "disabled", "detached", "conflict", "unknown"]);
