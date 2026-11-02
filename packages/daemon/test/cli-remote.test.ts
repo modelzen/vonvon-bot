@@ -71,6 +71,10 @@ it('writes remote.json itself when no daemon runs, says it takes effect at the n
   const moved = output();
   await runRemote('port', { port: '17767' }, moved.io, noDaemon, home, deps);
   expect(moved.last()).toMatchObject({ source: 'files', status: { remote: { port: 17767 } } });
+  // fixes-0-9-0: a new port needs a new link pasted, in the panel's words (portHint); the pairing stays. main 必败: 要重新配对
+  const movedText = output(false);
+  await runRemote('port', { port: '17768' }, movedText.io, noDaemon, home, deps);
+  expect(movedText.text()).toBe('远程端口改成了 17768，已配对的设备要粘一次新链接（`vonvon pair` 生成），只会更新地址，不用重新配对。\n后台服务没在运行，下次启动时生效。\n');
   const off = output();
   await runRemote('disable', { host: LAN }, off.io, noDaemon, home, deps);
   expect(off.last()).toMatchObject({ host: LAN, source: 'files', status: { remote: { addresses: [] } } });

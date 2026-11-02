@@ -582,7 +582,7 @@ remote.command('candidates').description('List the addresses other computers cou
   .action(async (options: Json & { all?: boolean }) => { await (await remotes()).runRemote('candidates', { all: Boolean(options.all) }, io(options)); });
 covers(remote.command('disable [ip]'), 'device.disable').description('Stop accepting connections on this address, or the open one; its connections end').option(...JSON_FLAG)
   .action(async (ip: string | undefined, options: Json) => { await (await remotes()).runRemote('disable', ip === undefined ? {} : { host: ip }, io(options)); });
-covers(remote.command('port <port>'), 'device.setPort').description('Change the remote port (default 7767); paired clients pair again').option(...JSON_FLAG)
+covers(remote.command('port <port>'), 'device.setPort').description('Change the remote port (default 7767); paired clients paste a new link once, no pairing again').option(...JSON_FLAG)
   .action(async (port: string, options: Json) => { await (await remotes()).runRemote('port', { port }, io(options)); });
 const feishu = program.command('feishu').description('Read Feishu groups and members');
 covers(feishu.command('groups'), 'command.listJoinedGroups').description('List joined groups, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
