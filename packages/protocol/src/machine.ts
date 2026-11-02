@@ -13,13 +13,21 @@ export const machineRequestSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('startHost'), bot:agentIdSchema.unwrap().optional()}),
   z.object({type:z.literal('stopHost')}),
   z.object({type:z.literal('logs')}),
-  z.object({type:z.literal('checkCoreUpdate')}),
-  z.object({type:z.literal('applyCoreUpdate')}),
+  /** `fresh: false` answers with the standalone server's last daily check instead of reading the manifest again. */
+  z.object({type:z.literal('checkCoreUpdate'), fresh:z.boolean().optional()}),
+  /** Standalone only: `version` with `allowDowngrade` goes back to a release still kept on this machine. */
+  z.object({type:z.literal('applyCoreUpdate'), version:z.string().regex(/^\d+\.\d+\.\d+$/).optional(), allowDowngrade:z.boolean().optional()}),
   z.object({type:z.literal('coreUpdateStatus')}),
 ]);
 export type MachineRequest = z.infer<typeof machineRequestSchema>;
 export const serviceStatusSchema = z.object({platformName:z.string(),installed:z.boolean(),running:z.boolean(),servicePath:z.string(),stdoutPath:z.string(),stderrPath:z.string(),pid:z.string().optional(),lastExit:z.string().optional(),state:serviceStateSchema.optional(),detail:z.string().optional(),name:z.string().optional(),linger:z.object({state:lingerStateSchema,detail:z.string().optional()}).optional(),hint:z.string().optional()});
-export const coreUpdateStatusSchema = z.object({phase:z.enum(['installing','restarting','done','error']),ok:z.boolean().optional(),message:z.string().optional(),from:z.string().optional(),to:z.string().optional(),at:z.number()}).nullable();
+/**
+ * `update-status.json` (server-3 C3). `phase` and `detail` parse as open strings: a phase a client does not know is
+ * still "in progress". `previous` is the release a standalone update switched away from, `rolledBack` that it went back.
+ */
+export const coreUpdateStatusSchema = z.object({phase:z.string(),ok:z.boolean().optional(),message:z.string().optional(),from:z.string().optional(),to:z.string().optional(),at:z.number(),
+  previous:z.string().optional(),progress:z.object({transferred:z.number().nonnegative(),total:z.number().nonnegative()}).optional(),detail:z.string().optional(),rolledBack:z.boolean().optional()}).nullable();
+export type CoreUpdateStatus = NonNullable<z.infer<typeof coreUpdateStatusSchema>>;
 export type ServiceStatus = z.infer<typeof serviceStatusSchema>;
 export const desktopUpdateSchema = z.object({state:z.enum(['current','available','unavailable','downloaded','install-pending']),current:z.string(),latest:z.string().optional(),message:z.string(),releaseNotes:z.string().max(4096).optional(),downloadProgress:z.object({percent:z.number().finite().min(0).max(100),transferred:z.number().finite().nonnegative(),total:z.number().finite().nonnegative()}).optional()});
 export type DesktopUpdate = z.infer<typeof desktopUpdateSchema>;
@@ -38,7 +46,7 @@ export const machineReplySchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('status'),service:serviceStatusSchema,host:z.object({ownership:z.enum(['owned','attached']),pid:z.number()}).nullable(),temporaryAgent:z.string().optional(),cli:z.union([z.object({kind:z.literal('ready'),bin:z.string(),message:z.string()}),z.object({kind:z.literal('error'),message:z.string()})])}),
   z.object({type:z.literal('done'),message:z.string()}),
   z.object({type:z.literal('logs'),text:z.string()}),
-  z.object({type:z.literal('coreUpdate'),distribution:distributionSchema,current:z.string(),latest:z.string().nullable(),hasUpdate:z.boolean(),dev:z.boolean()}),
+  z.object({type:z.literal('coreUpdate'),distribution:distributionSchema,current:z.string(),latest:z.string().nullable(),hasUpdate:z.boolean(),dev:z.boolean(),channel:z.string().optional(),refused:z.string().optional()}),
   z.object({type:z.literal('coreUpdateStatus'),status:coreUpdateStatusSchema}),
 ]);
 export type MachineReply = z.infer<typeof machineReplySchema>;

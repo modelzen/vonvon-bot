@@ -1,11 +1,12 @@
 import {runtimeDistribution} from './distribution';
-import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { paths } from '../config/paths';
 import { spawnProcess } from '../platform/spawn';
 import { SERVICE_UNAVAILABLE } from '../host/service';
 import { log } from '../core/logger';
+import { acquireFileLock, tryFileLock } from './update-lock';
 import { z } from 'zod';
 
 // `npm` via cross-spawn: on Windows it's an `npm.cmd` shim that a bare
@@ -168,74 +169,41 @@ function updateLockFile(): string {
   return join(paths.appDir, 'update.lock');
 }
 
-function livePid(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    // EPERM：进程在、只是本进程无权 signal → 仍算活。
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
-  }
+export { livePid, processStart } from './update-lock';
+
+/**
+ * `update.lock` of this data directory by default, or the lock `file` named (`releases.lock`, `update-state.lock`).
+ * The protocol and its invariants are in update-lock.ts: a live holder is never taken over, a stale lock is reclaimed
+ * by one process at a time, and the release removes only the lock it was given.
+ */
+export function acquireUpdateLock(file = updateLockFile()): (() => void) | null {
+  return acquireFileLock(file);
 }
 
-function isUpdateLockStale(file: string): boolean {
-  try {
-    const rec = JSON.parse(readFileSync(file, 'utf8')) as { pid?: number; at?: number };
-    if (typeof rec.pid !== 'number') return true; // 无 pid → 损坏，可回收
-    if (!livePid(rec.pid)) return true; // 持有者已死 → 优先回收（不受时钟影响）
-    return false;
-  } catch {
-    return true; // 损坏/读不出 → 可回收
-  }
+/** As acquireUpdateLock, but tells a lock that is held (`'busy'`) from a file system error, for a caller that waits. */
+export function tryUpdateLock(file = updateLockFile()): (() => void) | 'busy' | Error {
+  return tryFileLock(file);
 }
 
-/** A live update owns the lock until it exits or releases it, without an age limit. */
-export function acquireUpdateLock(): (() => void) | null {
-  const file = updateLockFile();
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const fd = openSync(file, 'wx'); // O_EXCL：创建即占有，创建失败即已存在
-      writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
-      closeSync(fd);
-      return releaseUpdateLock(file); // 只删「属于自己」的锁，绝不误删他人的
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'EEXIST') return null; // EACCES/ENOSPC/… → 当作拿不到锁，绝不 throw
-      if (!isUpdateLockStale(file)) return null;
-      try {
-        rmSync(file, { force: true }); // 回收陈旧锁后重试 wx 创建
-      } catch {
-        /* 可能被别人抢先回收，交给下一轮 */
-      }
-    }
-  }
-  return null; // 连续抢回收都输 → 当作进行中（安全：绝不并发 npm）
-}
-
-/** release：只在锁文件仍指向自己时删——避免删掉「回收了本进程陈旧锁后的新持有者」的锁。 */
-function releaseUpdateLock(file: string): () => void {
-  return () => {
-    try {
-      const rec = JSON.parse(readFileSync(file, 'utf8')) as { pid?: number };
-      if (rec.pid !== process.pid) return; // 不是自己的锁（已被回收/换主）→ 别动
-    } catch {
-      /* 损坏/已不存在 → 落到下面尽力删（force 对不存在无害） */
-    }
-    try {
-      rmSync(file, { force: true });
-    } catch {
-      /* best-effort */
-    }
-  };
-}
-
+/** What a standalone update is doing inside its phase (server-3 C3). */
+export const updateDetails = ['downloading', 'verifying', 'unpacking', 'switching', 'draining', 'waiting', 'rolled-back'] as const;
 export const updateStatusSchema = z.object({
   phase: z.enum(['installing', 'restarting', 'done', 'error']),
   ok: z.boolean().optional(), message: z.string().optional(),
   from: z.string().optional(), to: z.string().optional(), at: z.number(),
+  /** The release a standalone update switched `current` away from: the one a rollback goes back to. */
+  previous: z.string().optional(),
+  progress: z.object({ transferred: z.number().nonnegative(), total: z.number().nonnegative() }).strict().optional(),
+  detail: z.enum(updateDetails).optional(),
+  rolledBack: z.boolean().optional(),
 }).strict();
 export type UpdateStatus = Readonly<z.infer<typeof updateStatusSchema>>;
 export type UpdatePhase = UpdateStatus['phase'];
+
+/** A Core update already holds `update.lock`, or a standalone restart has not ended yet. */
+export class UpdateBusyError extends Error {
+  constructor(message = '已有更新正在进行。') { super(message); }
+}
 
 export function finishOwnedUpdate(expected: UpdateStatus | undefined, outcome: 'done' | 'error', message?: string): void {
   if (!expected) return;
@@ -261,8 +229,11 @@ function updateStatusFile(): string {
  * 网页端完全静默）。同步、尽力而为、绝不抛。
  */
 export function writeUpdateStatus(status: UpdateStatus): void {
+  const file = updateStatusFile();
   try {
-    writeFileSync(updateStatusFile(), JSON.stringify(status), 'utf8');
+    // Whole-file replace: a reader polling it never sees half a record. The name is this process's own.
+    writeFileSync(`${file}.${process.pid}.tmp`, JSON.stringify(status), 'utf8');
+    renameSync(`${file}.${process.pid}.tmp`, file);
   } catch {
     /* best-effort */
   }

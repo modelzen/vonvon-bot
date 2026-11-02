@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { crc32, gunzipSync, inflateRawSync } from 'node:zlib';
-import { PUBLISHED_TARGETS, TARGETS, archiveName, assembleRelease, checkServerTree, parseArguments, pinnedNodeFile, tarHeader, unpackZip, writeTarGz, writeZip } from './build-server.mjs';
+import { PUBLISHED_TARGETS, TARGETS, archiveName, assembleRelease, checkServerTree, parseArguments, pinnedNodeFile, serverUpdateConfig, tarHeader, unpackZip, writeTarGz, writeZip } from './build-server.mjs';
 import { fileEntries } from './package-tools.mjs';
 
 async function scratch(t) {
@@ -26,6 +26,7 @@ async function sources(root) {
   const app = join(root, 'app-source');
   await put(app, 'package.json', '{"name":"@vonvon/daemon","version":"0.9.0"}');
   await put(app, 'bin/vonvon.mjs');
+  await put(app, 'server-update.json', '{"publicKey":"","baseURL":"https://example.invalid/bot/server"}');
   await put(app, 'dist/cli.js', `var a=${'1+'.repeat(400)}1;`);
   for (const file of ['ui/dist/index.html', 'NOTICE', 'LICENSE.paseo', 'LICENSE.bridge', 'node_modules/dep/package.json']) await put(app, file);
   await put(app, 'node_modules/dep/src/index.js', 'module.exports = 1;');
@@ -60,6 +61,25 @@ test('a release has the app, the Node of its target with npm, and standalone.jso
   assert.equal(await readFile(join(await release(t, 'win-x64'), 'node/node_modules/npm/bin/npm.cmd'), 'utf8'), '@ECHO off\r\n');
 });
 
+// main 必败: packages carried no manifest key or address (server-3-update-engine C2)
+test('server-update.json: the committed key makes a release build, a key or address given makes a test build', async t => {
+  const root = await scratch(t);
+  const committed = JSON.parse(await readFile(new URL('../packages/daemon/server-update.json', import.meta.url), 'utf8'));
+  const placeholder = await serverUpdateConfig();
+  assert.deepEqual(placeholder.config, committed);
+  assert.equal(placeholder.updateKey, committed.publicKey ? 'release' : 'none');
+  const { publicKey } = generateKeyPairSync('ed25519');
+  const raw = publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64');
+  await writeFile(join(root, 'key.pem'), publicKey.export({ type: 'spki', format: 'pem' }));
+  await writeFile(join(root, 'key.txt'), `${raw}\n`);
+  for (const file of ['key.pem', 'key.txt']) {
+    assert.deepEqual(await serverUpdateConfig({ publicKeyFile: join(root, file), baseURL: 'http://127.0.0.1:9/bot/server' }), { config: { publicKey: raw, baseURL: 'http://127.0.0.1:9/bot/server' }, updateKey: 'test' });
+  }
+  assert.equal((await serverUpdateConfig({ baseURL: 'http://127.0.0.1:9/bot/server' })).updateKey, 'test');
+  await writeFile(join(root, 'bad.txt'), 'not a key');
+  await assert.rejects(serverUpdateConfig({ publicKeyFile: join(root, 'bad.txt') }), /not an Ed25519 public key/);
+});
+
 const caseSensitive = async root => {
   await put(root, 'Case');
   try { await stat(join(root, 'case')); return false; } catch { return true; }
@@ -67,6 +87,7 @@ const caseSensitive = async root => {
 
 test('checkServerTree refuses what must not ship', async t => {
   const cases = [
+    ['no manifest key file', root => rm(join(root, 'app/server-update.json')), /missing app\/server-update\.json/],
     ['a declaration file', root => put(root, 'app/node_modules/dep/index.d.ts'), /source, declaration or source map: app\/node_modules\/dep\/index\.d\.ts/],
     ['a source map', root => put(root, 'app/node_modules/dep/index.js.map'), /source map/],
     ['our source', root => put(root, 'app/src/index.js'), /unexpected app file: app\/src\/index\.js/],

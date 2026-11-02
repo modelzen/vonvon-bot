@@ -66,7 +66,7 @@
 - `update.lock` 不变（`paths.appDir/update.lock`，`O_EXCL`，内容是 pid）。
 
 **C4 `update-state.json`**（安装根 `<installRoot>/update-state.json`）
-- `{ "v": 1, "highestSeen": "<semver>", "lastPublishedAt": <ms>, "lastCheckAt": <ms> }`。写 `.tmp` 再 `rename`。读不出来（没有、坏 JSON、v 不对）→ 当作 `{ highestSeen: currentVersion, lastPublishedAt: 0 }` 并记事件 `update-state-unreadable`，不拒绝检查。
+- `{ "v": 1, "highestSeen": "<semver>", "lastPublishedAt": <ms>, "lastCheckAt": <ms> }`。写 `.tmp` 再 `rename`；读、比较、写回拿着同目录的 `update-state.lock`（O_EXCL），不同数据目录的 daemon 共用安装根。读不出来（没有、坏 JSON、v 不对）→ 当作 `{ highestSeen: currentVersion, lastPublishedAt: 0 }` 并记事件 `update-state-unreadable`，不拒绝检查。
 - 接受一份清单的条件：`publishedAt >= lastPublishedAt` 且 `version >= highestSeen`（相等允许：同一份清单重读、上次没升成功）。接受后更新 `highestSeen = max(highestSeen, version)`、`lastPublishedAt = max(…)`。拒绝时回 `latest: null`、`refused: 'rollback'` 并记事件 `update-manifest-refused { reason }`。
 - 和总设计不一样：§7.5 说记进 `standalone.json`。那个文件在版本目录里，每版一份、随版本目录删，升级切过去就"忘了"历史；放在安装根只有一份。见 §4.11。
 
@@ -255,3 +255,47 @@ JP-VPS 上，不碰 `accept-home2`、Bot 6、真 CDN、真 systemd：
 - 自己写的 tar/zip 读取器是安全面：成员类型、路径、大小三道检查都有测试；不接受任何链接类型。
 - `applyCoreUpdate` 从 `shutdown` 改成先回 `done`：客户端今天的代码（UI、`vonvon update` 旧逻辑）期待回复后连接会断；改完连接不断，UI 要改成轮询状态（§4.9 已含）。
 - 行数估计 ~1,450（daemon 代码 ~750：manifest 120、archive 220、standalone-update 220、current-release 80、self-entry 20、watchdog 60、restart 改 60、bootstrap 20、cleanup 50；protocol 30；CLI 150；UI 60；测试 ~450）。超过 1,500 就拆：**I3a** = C1–C8 契约 + manifest + archive + current-release + check + apply + 事件（~900，含测试）；**I3b** = 助手/看门狗/bootstrap 回滚 + self-entry + `vonvon update` + 排空白名单 + UI 门控（~550）。I3a 单独合入时 `applyCoreUpdate` 对 standalone 先回 `unsupported`，不半开。
+
+## 和计划不一样的地方
+
+实现时（2026-11-01）照代码改了这些，理由写在每条后面。
+
+1. **没有 `__update-watchdog`，重启助手兼任。** §4.6 说"托管时没有助手"，但 `host/lifecycle.ts` 只在"托管且没有更新记录"时才不起助手；带更新记录的重启在托管时也起 `__restart-after-exit`（Linux 用 `systemd-run --user --scope` 脱离服务 cgroup）。所以两条路径都由助手判版本、60 秒没新主人或版本不对就切回 `previous`，再等 25 秒。win32 在服务下（`VONVON_SERVICE`）助手只写 `error`、不切 `current.txt`；Windows 没有 standalone（owner 2026-11-01），I6 清理。§5 的 `update-watchdog.test.ts` 和 `bootstrap-update-finish.test.ts` 因此并进 `standalone-restart.test.ts` 和 `standalone-update-apply.test.ts`（`settleUpdateAtStartup`）。
+2. **助手的启动命令是 `releases/<current>/node/bin/node releases/<current>/app/bin/vonvon.mjs daemon start`**（win 是 `node\node.exe`），不是 `<installRoot>/bin/vonvon`：启动器归 I2a，还不存在；直接按 `current` 现在指的版本拼，意思一样。
+3. **等旧进程退出不设 30 秒上限**：助手原来就无限等旧主人放端口（已有测试要求排空无时限），没改。
+4. **启动时的收尾在 pid 锁发布之后、异步跑**（`bootstrap.ts` 的 `startUpdateUpkeep`），不在"启动早期"：要先确认自己拿到了锁才算新主人；收尾失败不影响启动。
+5. **切完 `current`、写好 `restarting` 后先放 `update.lock` 再请求重启。** §4.5 第 6 步说锁留到新进程；旧进程放锁以后，由下面"审查后改了什么"F1 那几道挡住重复的更新（原来写的"`restarting` 记录本身挡住了重复写"代码里没有）。
+6. **`finishOwnedUpdate` 判等比较全部自有字段**（`phase/ok/message/from/to/at/previous/detail/rolledBack`），不只 `from + to + at`：回滚后第二次写"它也没有起来"时，要认的是回滚写的那份。
+7. **回滚的 `error { rolledBack }` 在启动上一版之前写**：上一版启动时的收尾看到记录已结束，不会再写"重启后仍是"。
+8. **`server-update.json` 现在是占位**（`publicKey` 为空），打包时 `updateKey` 记 `"none"`（不是 `"release"`）；I5 生成密钥后提交公钥，才是 `release`。daemon 读不到可用公钥时回 `refused: 'config'`。
+9. **公钥文件按包根读**（`nearestPackageRoot(import.meta.url)/server-update.json`），不按 `dirname(selfEntry())/..`：源码和打包后都对。
+10. **`vonvon update` 文字版每一步、每 10% 打一行**，不覆盖同一行：输出常被重定向到日志，覆盖行在那里是乱码。
+11. **`update-state.json` 不存在时不记 `update-state-unreadable`**：第一次检查本来就没有它，只有读坏了才记。
+12. **清理时上一版的来源**依次是 `current.txt` 第 2 行、`update-status.json.previous`、剩下版本里最新的一个，保证 `releases/` 总留两版。
+13. **`covers()` 写 RPC kind**（`machine.checkCoreUpdate`、`applyCoreUpdate`、`coreUpdateStatus`），不是 §4.8 写的退出码名：`covers` 本来就是对齐 RPC kind 的。
+14. **`allowDowngrade` 不带 `version` 回 `invalid_request`**（命令行映射成退出 2），协议里没有 `bad-args` 这个错误码。
+15. **`checkCoreUpdate` 加可选 `fresh`**：`fresh: false` 用 daemon 每天检查留下的结果，不再连网；默认照旧现查。
+16. **`server/directory-suggestions.ts` 保留 `process.argv[1]`**：那是目录建议子进程读它自己的参数，不是本进程的入口。其余全部换成 `selfEntry()`。
+17. **`process.execPath` 在 Linux 上已是真实路径**（`self-entry.test.ts` 核实过），不加 `selfNode()`。
+18. **解包失败留下 `.part`**（下次升级先清），下载或校验失败当场删；§4.5 只写了后者。
+19. **按 §9 拆成两个 PR**（合计约 2,800 行，其中测试约 1,000）：I3a `server-3a-update-core`（清单、下载校验、解包、切换、状态记录；standalone 的 `applyCoreUpdate` 先回 `unsupported`，每天检查的定时还没接线）和 I3b `server-3b-update-helper`（重启助手、回滚、启动收尾和清理、`bootstrap.ts` 接线、`vonvon update`、界面和进度文字）。本节和"审查后改了什么"写的是两片合起来的结果，其中重启助手、`startUpdateUpkeep`、`selfEntry()`、`vonvon update` 的输出和退出码、F2/F4/F5/F8 都落在 I3b。
+
+## 审查后改了什么
+
+两位审查者的发现（2026-11-01），逐条核对代码，能复现的写成了测试。
+
+- **F1、I3-SEC-1 → 接受**：daemon 请求重启或停止后不再接更新（`stopping`）；旧 daemon 退出后助手拿住 `update.lock`、记录改成 `waiting`，直到写出结果；两者之间没结束的 `restarting` 记录在 10 分钟内或有 daemon 占着 pid 锁时回 `conflict`（`restartPending`）；降到正在运行的版本直接回"已经是"；启动清理算上一版时跳过当前版本。
+- **F2 → 接受**：切 `current` 前再看一次是否在停或在重启；请求重启后被停止取消、被拒或助手丢失，lifecycle 先切回 `previous` 再写 `error { rolledBack }`，进程等它做完才放手。
+- **F3 → 接受**：`previous` 改用正在运行的版本，Windows `current.txt` 第 2 行同样写它，切到已指向的版本时不再写成同一个版本。
+- **F4 → 接受**：到期时同一个进程占着锁还在启动，再等最多 4 分钟（`STARTING_OWNER_MS`），还不行就不切回、留给它 listen 后自己收尾；换了进程（崩溃循环）照常切回；切回后起来的是新版本就切回新版、写 done；第一轮等待有了上限。
+- **F5 → 接受**：standalone 只按 pid 锁里的版本和进程存活判断，不再开 ws 核对；listen 后要同一进程活过 5 秒（`STEADY_OWNER_MS`）；文案全是中文。
+- **F6 → 接受**：记录还是 `draining` 且有 daemon 占着 pid 锁时不计时，旧 daemon 走了才开始算 120 秒。
+- **F7、I3-SEC-2 → 接受**：`update-state.json` 的临时文件名带 pid 和随机串，进程内排队读改写；只有 ENOENT 算第一次，其他读写错误回 `refused: 'state'`、不接受也不写回；坏 JSON 先另存 `.invalid`；出错文字只带错误码、不带本机路径。
+- **F8 → 接受**：standalone 下普通重启也按 `current` 起；认安装根只看本包，不为此跑 `npm root -g`。
+- **I3-SEC-3 → 接受**：Bot 会话里 `vonvon update` 一律退出码 4（`not_in_session`），不拿租约；daemon 侧拦会话令牌仍归 D4a。
+- **任务 206（Codex 审查 #632）P2 → 接受**：不同数据目录的 daemon 共用安装根，进程内排队挡不住别的进程：两边读到同一份旧记录，旧清单后写，把更高的 `highestSeen`/`lastPublishedAt` 写回低值。读、比较、写回现在拿着安装根的 `update-state.lock`（O_EXCL 建，内容是 pid、时间和随机串；持有进程死了或锁超过 10 秒就挪开接管，挪错了放回去），15 秒拿不到回 `refused: 'state'`。`standalone-update-check.test.ts` 用两个模块实例复现审查的交错（改前低版本被接受、记录退回 1.0.1），并发检查那条加了死进程留下的锁。
+- **207 之后的独立检查 P2（共用 `releases/`）→ 接受**：206 已认定不同数据目录的 daemon 共用安装根，下载暂存、切换和清理却只拿本数据目录的 `update.lock`：别的数据目录的 daemon 一启动就删掉正在下载的 `releases/<v>.part`（用真的解包器时下载的那边直接崩在 ENOENT），第二次升级后的清理会删掉别的数据目录的 daemon 还在跑的版本（它的 `execPath`、`selfEntry` 钉在那里，再起 Bot 就 ENOENT）。现在安装根有 `releases.lock`（和 `update.lock` 一样 O_EXCL 建，什么时候算陈旧见下面"锁只认 pid 死活"一条），一次更新从开始到切完 `current` 都拿着，另一个数据目录这时开始更新回 `conflict`；I3b 的两处清理拿不到它就跳过、下次再清，每个 daemon 启动时把自己运行的版本登记在 `<安装根>/running/<pid>-<版本>`，重启助手登记它可能退回的 `previous`，清理留下登记进程还活着的版本、删掉死进程的登记。回滚切回不拿这把锁：它不能等别人几分钟的下载，切换本身是一次原子改名。用例：`standalone-update-apply.test.ts` 用两个模块实例（数据目录不同、安装根相同），改前第二个数据目录能同时开始更新；I3b 照审查的两条复现：对方下载中启动收尾不删 `.part`，对方在跑 1.0.0 时第二次升级后的清理留下 1.0.0、它起 Bot 的命令照样能跑。
+- **207 之后的独立检查 P3（解包读错）→ 接受**：`extractTarGz` 用的是 `createReadStream(file).pipe(createGunzip())`，读包出错（ENOENT、EACCES、EIO）时读流的 `error` 没人接，成了未捕获异常，daemon 直接退出，解包的 promise 也一直不结束。现在用 `stream/promises` 的 `pipeline` 串起读流、解压和解析，读错让解包 reject，走更新原来的失败路径。`archive.test.ts` 加两条：包不存在、包是个目录，改前两条都是未捕获异常加超时。
+- **清单只认 Linux 两项（owner 2026-11-01）**：standalone 只在 Linux 上有。I2a 的 `install.sh` 只认 `linux-x64`、`linux-arm64`，它的 `build-server.mjs` 的 `PUBLISHED_TARGETS` 也是这两项，`standalone-manifest.ts` 的 `SERVER_TARGETS` 原来却要六项：脚本认的清单 daemon 不认。现在改成同样两项，多一项（darwin、win）或少一项都回 `schema`；macOS、Windows 上 `serverTarget()` 回 undefined（"没有对应的服务端包"）。`PUBLISHED_TARGETS` 还没进集成分支，daemon 这边先自己定义常量，注释写明 I2a 和 I3 必须一致：谁改这份列表，另一边在同一个 PR 里跟着改，I5 发第一份 stable 清单前再核对一次。Windows 的 zip 下载用例删了（清单里不会再有 win 包）；`extractZip`、`current.txt` 这些 Windows 代码先留着，Windows 没有 standalone（owner 2026-11-01），I6 清理。
+- **3a/3b 修完后的独立检查 P3（锁只认 pid 死活）→ 接受**：`update.lock`、`releases.lock` 只在 pid 死了才算陈旧，没有时限，也分不出 pid 被再用。更新半路被杀（kill -9、OOM、容器停）以后，这个 pid 被别的进程用上，锁就一直算有人拿着。容器重启后按同样的顺序发同样的小 pid，重起的 daemon 很可能就拿到它。`releases.lock` 是整个安装根共用的，于是每个数据目录的更新都回 `conflict`（退出码 5），启动收尾和助手的清理每次都跳过 `releases/`、留着 `.part`，只能手删。现在两把锁都走 `acquireUpdateLock()`，锁里写 pid、启动时间（`processStart()`：boot id 加 `/proc/<pid>/stat` 第 22 项）和随机串，进程还记着自己拿着哪些锁（表挂在进程上，模块的另一份实例也看得到）。写着本进程 pid、表里却没有的锁，是之前同 pid 的进程留下的，回收；pid 活着但启动时间对不上，回收；没写启动时间的旧锁和没有 `/proc` 的系统照旧只看 pid。同一个函数里顺手改了三处：回收改成和 `update-state.lock` 一样先挪开，挪错了放回去（原来两个进程同时回收同一把陈旧锁，后删的会删掉先到者刚建的锁；容器重启时几个数据目录的 daemon 同时启动收尾，正好会撞上）；读不出的锁（别人刚 O_EXCL 建、还没写进内容）10 秒内不算陈旧，写失败时删掉刚建的空文件；release 只删自己写的那份、只删一次（`startStandaloneUpdate` 会放两次）。用例：`update-lock.test.ts` 加本进程 pid 的遗留锁、活 pid 换了启动时间、release 两次、读不出的锁四条；`standalone-update-apply.test.ts` 照审查复现，写着本进程 pid、7 天前的 `releases.lock`（改前 `UpdateBusyError`）和父进程 pid 配别的启动时间，更新都走完并放掉锁，启动时间对得上的照旧挡住。原来拿本进程 pid 充当"别的进程拿着的锁"的三个用例改用父进程 pid。I3b 加启动收尾的用例：遗留的 `releases.lock` 不再挡住清理，`.part` 删掉。
+- **任务 220（Codex 第三轮审查 #632）P2、P2、P3 → 接受，锁重新设计**：上一条和 206 的锁改了两回，还剩两个洞：`update-state.lock` 只要超过 10 秒就算陈旧，持有进程还活着（文件系统慢、进程被暂停）也被接管，接管者先写高版本、原持有者再写低版本，回滚保护记录又退回去；回收陈旧锁的办法是先 rename 挪开、发现挪错再 link 放回，rename 和 link 之间锁名是空的，第三个进程这时 O_EXCL 建成功，被挪的那个却以为自己还拿着锁，两个进程同时进临界区。这回不再补症状：三把锁（`update.lock`、`releases.lock`、`update-state.lock`）全走新模块 `update-lock.ts`，不变量写在文件头的注释块里：（1）活着的持有者（pid 活着，Linux 上 `/proc` 的启动时间也对得上）的锁永远不被拿走，可读的记录不看年龄；年龄只用于读不出的文件（上一版代码或没有硬链接的文件系统留下的半截文件），且只在 mtime 超过 10 秒、写它的人不可能还在写之后；本模块自己的锁先写到私有临时文件再 `link` 到锁名，出现时就是完整的，不会有半截。（2）回收陈旧锁没有两人同时持有的窗口：删陈旧记录只能在回收守卫 `<锁>.reclaim` 里做，守卫是一个目录，里面一个以回收者随机串命名、内容是它的 pid/启动时间/随机串的文件，在旁边建好再 `rename` 过去（rename 到非空目录会失败，所以同时只有一个回收者），拿到守卫后再读一次锁、内容和刚才判为陈旧的那份完全一样（随机串相同）才 `unlink`；守卫自己的死活按同一条活持有者规则判，死掉的回收者留下的守卫按文件名删它那一个文件再 `rmdir`（目录非空就失败），不会误删别人的；不再 rename 挪开、放回。（3）release 只删本次拿到的那把（随机串和写下的全文都对得上），只删一次。拿不到守卫或回收后建锁输了就回"忙"，`withStateLock` 轮询 20 毫秒、最多等 15 秒，然后回 `refused: 'state'`，不再抢。P3：下载到解包、改名这一段用 try/catch 包住，不管是我们自己的拒绝还是解包器抛出的 I/O 错误（zlib、EIO、ENOENT），都用 `removeStaging` 删掉这次建的 `releases/<v>.part`，完整的版本目录不碰；`Failure.clearStaging` 这个标志删了。用例（改前都失败）：`update-lock.test.ts` 加活持有者记录和文件都 11 秒以上、3 天以上仍不被拿走，死进程留下的守卫被回收、活进程拿着的守卫不碰、守卫里读不出的文件按年龄；新文件 `update-lock-race.test.ts` 用真子进程跑 8 轮"一个回收者读完陈旧锁暂停 150 毫秒、另一个回收者趁机拿到锁、本进程不停 link 抢空窗"，和 6 轮三个进程同时回收同一把死锁，每轮恰好一个持有者、锁文件写的就是它的 pid、没留守卫（改前 8 轮里本进程抢到空窗、变成两个持有者）；`standalone-update-check.test.ts` 的两实例用例拆成一个助手，加"只拨 Date 时钟 11 秒"的那条：第二个 daemon 等锁而不是接管，最终记录仍是 1.0.2/2000；`standalone-update-apply.test.ts` 原来"崩溃后留下半截目录、下次再清"改成当场删掉、下次重新下载，再加一条清单担保的包 gzip 流在成员中间断掉、真解包器写出半个文件后读错，`.part` 没留下、`current` 没动。
