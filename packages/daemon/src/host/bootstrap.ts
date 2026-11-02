@@ -23,6 +23,23 @@ import {bridgeImportRuntime} from '../import/bridge/runtime';
 
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Once this daemon owns its port (server-3 4.5, 4.6, 4.10): end the update record that restarted it, clear the
+ * releases a standalone server no longer needs, and start its daily manifest check. Nothing here holds startup up.
+ */
+async function startUpdateUpkeep(alive: () => boolean): Promise<() => void> {
+  try {
+    const [{ runtimeDistribution }, upkeep] = await Promise.all([import('../service/distribution'), import('../service/standalone-update')]);
+    const distribution = await runtimeDistribution().catch(() => undefined);
+    const installRoot = distribution?.kind === 'standalone' ? distribution.installRoot : undefined;
+    void upkeep.settleUpdateAtStartup({ version: bridgeVersion(), installRoot, alive }).catch(error => log.fail('core-update', error, { phase: 'startup' }));
+    return installRoot ? upkeep.scheduleStandaloneChecks({ installRoot, currentVersion: bridgeVersion() }) : () => {};
+  } catch (error) {
+    log.fail('core-update', error, { phase: 'startup' });
+    return () => {};
+  }
+}
+
 /** Waits for the host mutex holder to publish readiness, then authenticates it; null when it never proves itself. */
 async function verifiedOtherOwner(): Promise<PidLockInfo | null> {
   const deadline = Date.now() + 25_000;
@@ -45,6 +62,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
   let run: HostRunStart | undefined;
   let stopLoopLag: (() => void) | undefined;
   let stopLogGc: (() => void) | undefined;
+  let stopUpkeep: (() => void) | undefined;
   // The failure that no stop or restart asked for: it is a crash (`fatal`) and counts toward the pause.
   let fatal: { error: unknown } | undefined;
   const errors: unknown[] = [];
@@ -151,7 +169,11 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       port: options.port,
       ...(run?.paused ? { paused: true } : {}),
       ...(run?.runId && run.chainId ? { crash: { runId: run.runId, chainId: run.chainId, ...(run.paused ? { pause: { since: run.pausedAt ? Date.parse(run.pausedAt) : Date.now(), crashes: run.pauseCrashes ?? 3 } } : {}), ...(notice ? { notice } : {}) } } : {}),
-      onListening: claimedOwner ? async (listen) => { await publishPidLock(paths.appDir, claimedOwner, listen); } : undefined,
+      onListening: claimedOwner ? async (listen) => {
+        await publishPidLock(paths.appDir, claimedOwner, listen);
+        const upkeep = startUpdateUpkeep(() => !control.requested);
+        stopUpkeep = () => { void upkeep.then(stop => stop(), () => undefined); };
+      } : undefined,
     });
   } catch (error) {
     errors.push(error);
@@ -163,6 +185,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
   finally {
     stopLoopLag?.();
     stopLogGc?.();
+    stopUpkeep?.();
     // A cleanup failure no longer turns a requested restart into a stop (v1-plan s17): the replacement starts only
     // after this process has exited, and leftover provider processes are swept at the next boot.
     try { await host?.closeAll(); } catch (error) { log.fail('daemon-shutdown', error, { phase: 'process-host' }); errors.push(error); }

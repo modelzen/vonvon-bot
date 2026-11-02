@@ -28,6 +28,18 @@ export const serviceStatusSchema = z.object({platformName:z.string(),installed:z
 export const coreUpdateStatusSchema = z.object({phase:z.string(),ok:z.boolean().optional(),message:z.string().optional(),from:z.string().optional(),to:z.string().optional(),at:z.number(),
   previous:z.string().optional(),progress:z.object({transferred:z.number().nonnegative(),total:z.number().nonnegative()}).optional(),detail:z.string().optional(),rolledBack:z.boolean().optional()}).nullable();
 export type CoreUpdateStatus = NonNullable<z.infer<typeof coreUpdateStatusSchema>>;
+const CORE_UPDATE_DETAIL: Record<string, string> = {
+  downloading: '下载中', verifying: '校验中', unpacking: '解包中', switching: '切换中',
+  draining: '等 Bot 做完手上的活', waiting: '等新版本启动', 'rolled-back': '已切回旧版',
+};
+const CORE_UPDATE_PHASE: Record<string, string> = { installing: '正在安装', restarting: '正在重启', done: '更新完成', error: '更新失败' };
+/** One line for an update's progress, the same on the page and in `vonvon update`; an unknown phase is "进行中". */
+export function coreUpdateStatusText(status: CoreUpdateStatus): string {
+  const ended = status.phase === 'done' || status.phase === 'error';
+  const step = (!ended && status.detail && CORE_UPDATE_DETAIL[status.detail]) || CORE_UPDATE_PHASE[status.phase] || '进行中';
+  const percent = status.progress && status.progress.total > 0 ? ` ${Math.floor(status.progress.transferred / status.progress.total * 100)}%` : '';
+  return `${step}${percent}${status.message ? `：${status.message}` : ''}`;
+}
 export type ServiceStatus = z.infer<typeof serviceStatusSchema>;
 export const desktopUpdateSchema = z.object({state:z.enum(['current','available','unavailable','downloaded','install-pending']),current:z.string(),latest:z.string().optional(),message:z.string(),releaseNotes:z.string().max(4096).optional(),downloadProgress:z.object({percent:z.number().finite().min(0).max(100),transferred:z.number().finite().nonnegative(),total:z.number().finite().nonnegative()}).optional()});
 export type DesktopUpdate = z.infer<typeof desktopUpdateSchema>;

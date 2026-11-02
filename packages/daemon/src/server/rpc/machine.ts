@@ -12,8 +12,8 @@ import { unsupported } from '../errors';
 import type { EnvironmentService } from '../../environment/service';
 import type {BridgeImporter} from '../../import/bridge/transaction';
 import {RpcError} from '../errors';
-import { checkStandaloneUpdate, lastStandaloneCheck, type StandaloneDeps } from '../../service/standalone-update';
-import { currentVersion } from '../../service/update';
+import { checkStandaloneUpdate, lastStandaloneCheck, startStandaloneUpdate, type StandaloneDeps } from '../../service/standalone-update';
+import { currentVersion, UpdateBusyError } from '../../service/update';
 
 const standaloneDeps = (installRoot: string): StandaloneDeps => ({ installRoot, currentVersion: currentVersion() });
 
@@ -59,8 +59,15 @@ export async function machineRpc(service: AdminService, control: ShutdownControl
     }
     case 'applyCoreUpdate': {
       if (!control) return unsupported();
-      // A standalone update applies only with the restart helper that judges the new release and rolls back (server-3 9, I3b).
-      if ((await runtimeDistribution()).kind === 'standalone') return unsupported();
+      const distribution = await runtimeDistribution();
+      if (distribution.kind === 'standalone') {
+        if (request.allowDowngrade && !request.version) throw new RpcError('invalid_request', '降级要写明版本：--allow-downgrade --to <版本>。');
+        // Answered at once: the download may take minutes, and the drain only starts after `current` is switched.
+        // `stopping`: once a restart or stop is asked for, no update starts, and one under way does not switch `current`.
+        try { void startStandaloneUpdate(request, { ...standaloneDeps(distribution.installRoot), stopping: () => control.requested, requestRestart: status => control.requestRestart(port, status) }).done; }
+        catch (error) { if (error instanceof UpdateBusyError) throw new RpcError('conflict', error.message); throw error; }
+        return { kind: 'read', value: { type: 'done', message: '开始更新…' } };
+      }
       if (request.version !== undefined || request.allowDowngrade) throw new RpcError('invalid_request', '只有独立安装的服务端能指定版本。');
       const update = await service.applyUpdate();
       return { kind: 'shutdown', reply: () => ({ type: 'done', message: '正在更新 daemon。' }), afterReply: () => control.requestRestart(port, update ?? undefined) };

@@ -63,7 +63,13 @@ describe('CLI parity with the RPC kinds (devices 8.5)', () => {
       .toEqual(['pair', 'clients ls', 'clients rename', 'clients revoke', 'device rename']);
     for (const kind of ['device.status', 'device.enable', 'device.disable', 'device.setPort']) expect(CLI_PARITY_ALLOWLIST[kind], kind).toMatchObject({ reason: 'pending', slice: 'D3' });
     expect(CLI_PARITY_ALLOWLIST['admin.negotiate']).toMatchObject({ reason: 'internal' });
-    for (const kind of ['machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus']) expect(CLI_PARITY_ALLOWLIST[kind]).toMatchObject({ reason: 'pending', slice: 'I3' });
+  });
+
+  it('covers the update kinds I3 brings: vonvon update ends their pending lines (server-3)', () => {
+    for (const kind of ['machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus']) {
+      expect(CLI_PARITY_ALLOWLIST[kind], kind).toBeUndefined();
+      expect(commands.find(command => command.path === 'update')?.covers, kind).toContain(kind);
+    }
   });
 
   // main 必败: C8's kinds were pending, admin.logs superseded by machine.logs
