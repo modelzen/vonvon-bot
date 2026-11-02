@@ -21,12 +21,14 @@ function fixture(externalVersion?: string) {
   const dataRoot = join(home, 'data');
   const control = join(home, 'npm-mode');
   const trace = join(home, 'npm-args');
+  const npmEnv = join(home, 'npm-env');
   writeFileSync(control, 'success');
   const template = writeNodeExecutable(home, 'codex-template', 'console.log("codex-cli 9.2.0")');
   const launcher = readFileSync(template.bin, 'utf8');
   const npm = writeNodeExecutable(home, 'npm-fixture', `
     const fs = require('node:fs'), path = require('node:path');
     fs.writeFileSync(${JSON.stringify(trace)}, JSON.stringify(process.argv.slice(2)));
+    fs.writeFileSync(${JSON.stringify(npmEnv)}, JSON.stringify(process.env));
     const mode = fs.readFileSync(${JSON.stringify(control)}, 'utf8');
     if (mode === 'fail') process.exit(1);
     const prefix = process.argv[process.argv.indexOf('--prefix') + 1];
@@ -47,10 +49,10 @@ function fixture(externalVersion?: string) {
   vi.stubEnv('VONVON_NPM_CLI', '');
   const context = { home, dataRoot, env: { PATH: externalDir } };
   const resolve = vi.fn(() => refreshCodexResolution({ ...context, force: true }));
-  const service = new EnvironmentService({ home, getDataRoot: () => dataRoot, nodePath: process.execPath, npmPath: npm, path: externalDir, resolveCodex: resolve });
+  const service = new EnvironmentService({ home, getDataRoot: () => dataRoot, nodePath: process.execPath, npmPath: npm, path: externalDir, resolveCodex: resolve, fetchLatest: async () => null });
   services.push(service);
   const pointer = join(dataRoot, 'managed-tools', 'codex', 'current.json');
-  return { service, home, npm, externalDir, dataRoot, control, trace, resolve, pointer, external, externalCalls };
+  return { service, home, npm, externalDir, dataRoot, control, trace, npmEnv, resolve, pointer, external, externalCalls };
 }
 
 it('installs latest through the real environment engine, publishes its pointer and selects the new executable', async () => {
@@ -120,4 +122,20 @@ it('serializes publication and uninstall across service instances sharing a data
   expect(await installing).toMatchObject({ kind: 'applied' });
   expect(await other.run({ type: 'uninstall', tool: 'codex' })).toMatchObject({ kind: 'applied' });
   expect(managedToolSelection(f.dataRoot, 'codex')).toEqual({ kind: 'disabled' });
+});
+
+// 0.9.0 Linux acceptance (task 287): npm ran without the proxy the user set
+it('gives npm the env file\'s names and the proxy names', async () => {
+  vi.stubEnv('HTTPS_PROXY', 'http://127.0.0.1:7890');
+  vi.stubEnv('no_proxy', 'localhost');
+  vi.stubEnv('VONVON_ENV_FILE_NAMES', 'NPM_CONFIG_REGISTRY,FEISHU_CODEX_BRIDGE');
+  vi.stubEnv('NPM_CONFIG_REGISTRY', 'https://registry.example/');
+  vi.stubEnv('FEISHU_CODEX_BRIDGE', '1');
+  vi.stubEnv('VONVON_SESSION', 'session');
+  vi.stubEnv('DAEMON_ONLY', 'not for tools');
+  const f = fixture();
+  expect(await f.service.run({ type: 'install', tool: 'codex' })).toMatchObject({ kind: 'applied' });
+  const env = JSON.parse(readFileSync(f.npmEnv, 'utf8')) as Record<string, string | undefined>;
+  expect(env).toMatchObject({ HTTPS_PROXY: 'http://127.0.0.1:7890', no_proxy: 'localhost', NPM_CONFIG_REGISTRY: 'https://registry.example/', HOME: f.home });
+  for (const name of ['FEISHU_CODEX_BRIDGE', 'VONVON_SESSION', 'VONVON_ENV_FILE_NAMES', 'DAEMON_ONLY']) expect(env[name], name).toBeUndefined();
 });

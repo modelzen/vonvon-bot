@@ -1,17 +1,20 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { withoutSessionMarkers } from '../config/session-env';
 
 /**
  * `<data dir>/env` (owner 2026-11-02): `NAME=value` lines a daemon run reads when it starts. A service manager does not
  * pass on what a terminal set, so a server behind a proxy writes `HTTPS_PROXY` here. Applied to this process before any
- * bot starts, so every bot child, and the Codex or Claude it runs, gets them. The file wins over what the process has,
- * except the names the service sets itself.
+ * bot starts, so every bot child, and the Codex or Claude it runs, gets them; the tools the 本机环境 runs get them through
+ * {@link passedEnv}. The file wins over what the process has, except the names the service sets itself.
  */
 export const SERVICE_ENV_FILE = 'env';
 /** The names applied from the file last time: a restart that inherits this process's environment drops them first. */
 export const SERVICE_ENV_MARKER = 'VONVON_ENV_FILE_NAMES';
 const OWN = /^(?:VONVON_.*|PATH|ELECTRON_RUN_AS_NODE)$/i;
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** The proxy names npm, Codex, Claude and lark-cli read, in either case. */
+const PROXY = new Set(['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY']);
 
 export type ServiceEnv = { values: [string, string][]; ignored: number[]; own: string[] };
 
@@ -30,6 +33,20 @@ export function parseServiceEnv(text: string): ServiceEnv {
     result.values.push([name, value]);
   });
   return result;
+}
+
+/**
+ * What a child started with an environment of its own making (the 本机环境's npm, tool version and sign-in checks: 0.9.0
+ * Linux acceptance) still takes from `env`: the names the file set, and the proxy names, which a daemon started from a
+ * terminal has without a file. Never the service's own names (VONVON_*, PATH) nor a session marker.
+ */
+export function passedEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const named = new Set(env[SERVICE_ENV_MARKER]?.split(',') ?? []);
+  const passed: Record<string, string> = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (value !== undefined && !OWN.test(name) && (named.has(name) || PROXY.has(name.toUpperCase()))) passed[name] = value;
+  }
+  return withoutSessionMarkers(passed) as Record<string, string>;
 }
 
 /**
