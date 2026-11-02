@@ -159,7 +159,14 @@ function normalizedTiers(model: Pick<RawModel, 'serviceTiers' | 'additionalSpeed
     : tier.id === 'ultrafast' ? [{ ...tier, name: 'Ultrafast' }] : []);
 }
 
+function nativeEffort(value: unknown): value is ReasoningEffort {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= 1000;
+}
+
 function mapModel(model: RawModel): ModelInfo {
+  const supportedEfforts = (model.supportedReasoningEfforts ?? [])
+    .map(effort => effort.reasoningEffort)
+    .filter(nativeEffort);
   return {
     // Native picker IDs and the model sent to inference need not be identical.
     id: model.model || model.id,
@@ -167,8 +174,8 @@ function mapModel(model: RawModel): ModelInfo {
     description: model.description ?? '',
     hidden: model.hidden ?? false,
     isDefault: model.isDefault ?? false,
-    supportedEfforts: (model.supportedReasoningEfforts ?? []).map(effort => effort.reasoningEffort),
-    defaultEffort: model.defaultReasoningEffort ?? 'medium',
+    supportedEfforts,
+    defaultEffort: nativeEffort(model.defaultReasoningEffort) ? model.defaultReasoningEffort : supportedEfforts[0] ?? 'medium',
   };
 }
 

@@ -11,7 +11,7 @@ import { createSettingsService } from '../src/admin/settings-service';
 import { createAppPreferencesWriter } from '../src/admin/ops';
 import { addProject, getProjectByName, mutateProject, type Project } from '../src/project/registry';
 import { upsertSession } from '../src/bot/session-store';
-import { projectModelAllowed, projectModelCatalog } from '../src/config/execution';
+import { projectModelAllowed, projectModelCatalog, projectSpeedAllowed, resolveModelPreference } from '../src/config/execution';
 import type { AppConfig } from '../src/config/schema';
 import type { AgentBackend, ModelInfo } from '../src/agent/types';
 import type { AgentSettingsView, ProjectSettingsView, SessionSettingsView } from '../src/admin/settings-types';
@@ -209,6 +209,10 @@ it('prefers persisted observed metadata, falls back honestly, and preserves grou
   expect(initial.models.length).toBeGreaterThan(0); expect(initial.message).toContain('未验证');
   await rememberModelCatalog('codex-appserver', models, '2026-10-22T01:00:00Z');
   expect(await offlineModelCatalog('codex-appserver')).toMatchObject({ models, observedAt: '2026-10-22T01:00:00Z' });
+  const future = [{ ...models[0]!, supportedEfforts: ['future-adaptive'], defaultEffort: 'future-adaptive' }];
+  await rememberModelCatalog('codex-appserver', future, '2026-10-22T02:00:00Z');
+  expect((await offlineModelCatalog('codex-appserver')).models[0]).toMatchObject({ supportedEfforts: ['future-adaptive'], defaultEffort: 'future-adaptive' });
+  await expect(rememberModelCatalog('codex-appserver', [{ ...future[0]!, defaultEffort: '' }], '2026-10-22T03:00:00Z')).rejects.toThrow();
   cfg.preferences = { showModel: 'always' };
   await materializeGroupSettings({ ...deps(), readSessions: async () => [] });
   expect((await getProjectByName('demo'))!.presentation?.showModel).toBe('always');
@@ -223,6 +227,69 @@ it('chooses an allowed Effort supported by the retained default model after a ra
   const owner = createSettingsOwner(deps()); let p = await view(owner);
   expect((await owner.save({ scope, section: 'modelAccess', revision: p.sections.modelAccess!.revision, patch: { backend: 'codex-appserver', models: ['b'], efforts: ['low', 'high'] } })).kind).toBe('saved');
   expect((await getProjectByName('demo'))!).toMatchObject({ defaultModel: 'b', defaultEffort: 'high' });
+});
+
+it('persists disjoint per-model efforts and explicit new-topic defaults', async () => {
+  const owner = createSettingsOwner(deps());
+  const before = await view(owner);
+  const patch = { backend: 'codex-appserver', models: ['a', 'b'], efforts: ['low', 'high'], modelEfforts: { a: ['low'], b: ['high'] }, defaultModel: 'b', defaultEffort: 'high' };
+  expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch })).kind).toBe('saved');
+  const stored = (await getProjectByName('demo'))!;
+  expect(stored.modelAccess).toMatchObject(patch);
+  expect(stored).toMatchObject({ defaultModel: 'b', defaultEffort: 'high' });
+  expect(resolveModelPreference({ group: stored }, 'codex-appserver')).toMatchObject({ model: 'b', effort: 'high' });
+  expect(projectModelAllowed(stored, 'codex-appserver', 'a', 'high', models)).toBe(false);
+  expect(projectModelAllowed(stored, 'codex-appserver', 'b', 'high', models)).toBe(true);
+  expect(projectModelCatalog(stored, 'codex-appserver', models).map(m => [m.id, m.supportedEfforts])).toEqual([['a', ['low']], ['b', ['high']]]);
+});
+
+it('keeps all acceleration off until explicitly allowed for each live model', async () => {
+  const native: ModelInfo[] = models.slice(0, 2).map(m => ({ ...m, serviceTiers: [{ id: 'fast', name: 'Fast', description: '' }] }));
+  const owner = createSettingsOwner({ ...deps(), backendFor: () => ({ ...backend, peekModels: () => native, listModels: async () => native }) });
+  const before = await view(owner);
+  expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch: { models: ['a', 'b'], efforts: ['low', 'high'], defaultModel: 'a', defaultEffort: 'low', modelServiceTiers: { a: ['fast'] } } })).kind).toBe('saved');
+  const stored = (await getProjectByName('demo'))!;
+  expect(projectSpeedAllowed(stored, 'a', 'fast')).toBe(true);
+  expect(projectSpeedAllowed(stored, 'b', 'fast')).toBe(false);
+  expect(projectModelCatalog(stored, 'codex-appserver', native).find(m => m.id === 'b')?.serviceTiers).toEqual([]);
+  const next = await view(owner);
+  expect((await owner.save({ scope, section: 'modelAccess', revision: next.sections.modelAccess!.revision, patch: { modelServiceTiers: { b: ['ultrafast'] } } })).kind).toBe('rejected');
+});
+
+it('clears the old effort when a serialized edit makes a no-effort model the default', async () => {
+  const owner = createSettingsOwner(deps());
+  let before = await view(owner);
+  expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch: { models: ['a', 'flat'], efforts: ['low'], defaultModel: 'a', defaultEffort: 'low' } })).kind).toBe('saved');
+  before = await view(owner);
+  const patch = JSON.parse(JSON.stringify({ defaultModel: 'flat', defaultEffort: undefined })) as { defaultModel: string };
+  expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch })).kind).toBe('saved');
+  const stored = (await getProjectByName('demo'))!;
+  expect(stored.defaultModel).toBe('flat');
+  expect(stored.defaultEffort).toBeUndefined();
+  expect(stored.modelAccess?.defaultEffort).toBeUndefined();
+});
+
+it('rejects a stale session speed choice after the group revokes it', async () => {
+  const native: ModelInfo[] = [{ ...models[0]!, serviceTiers: [{ id: 'fast', name: 'Fast', description: '' }] }];
+  await mutateProject('demo', p => { p.modelAccess = { backend: 'codex-appserver', models: ['a'], efforts: ['low'], modelServiceTiers: {} }; p.defaultModel = 'a'; p.defaultEffort = 'low'; });
+  await upsertSession({ threadId: 'omt_speed', chatId: 'oc_demo', sessionId: 'native-speed', backend: 'codex-appserver', cwd: '/fixture/work', model: 'a', effort: 'low', serviceTier: 'fast', createdAt: 1, updatedAt: 1, summary: '' });
+  const owner = createSettingsOwner({ ...deps(), backendFor: () => ({ ...backend, peekModels: () => native, listModels: async () => native }) });
+  const session = { kind: 'session' as const, botId, threadId: 'omt_speed' };
+  const current = await owner.read(session) as SessionSettingsView;
+  expect(current.sections.speed!.effective.tier).toBe('standard');
+  expect((await owner.save({ scope: session, section: 'speed', revision: current.sections.speed!.revision, patch: { tier: 'fast' } })).kind).toBe('rejected');
+});
+
+it('keeps an empty per-model effort override while other models still use the aggregate', async () => {
+  const native: ModelInfo[] = [{ ...models[0]!, supportedEfforts: [], defaultEffort: 'medium' }, models[1]!];
+  await mutateProject('demo', p => { p.modelAccess = { backend: 'codex-appserver', models: ['a', 'b'], efforts: ['high'], defaultModel: 'a', defaultEffort: 'high' }; p.defaultModel = 'a'; p.defaultEffort = 'high'; });
+  const owner = createSettingsOwner({ ...deps(), backendFor: () => ({ ...backend, peekModels: () => native, listModels: async () => native }) });
+  const before = await view(owner);
+  const patch = JSON.parse(JSON.stringify({ modelEfforts: { a: [], b: ['high'] }, defaultEffort: undefined }));
+  expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch })).kind).toBe('saved');
+  const stored = (await getProjectByName('demo'))!;
+  expect(stored.modelAccess?.modelEfforts).toEqual({ a: [], b: ['high'] });
+  expect(stored.defaultEffort).toBeUndefined();
 });
 
 it('rejects malformed explicit group settings without broadening access or rewriting the registry', async () => {
@@ -286,7 +353,7 @@ it.each([false, true])('rejects new models, efforts and provider switches from f
     expect(await readFile(paths.projectsFile, 'utf8')).toBe(disk);
   }
   expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch: { models: ['a'], efforts: ['high'] } })).kind).toBe('saved');
-  expect((await getProjectByName('demo'))?.modelAccess).toEqual({ backend: 'codex-appserver', models: ['a'], efforts: ['high'] });
+  expect((await getProjectByName('demo'))?.modelAccess).toMatchObject({ backend: 'codex-appserver', models: ['a'], efforts: ['high'], defaultModel: 'a', defaultEffort: 'high' });
 });
 
 it('accepts and persists a newly discovered native model when saving model access', async () => {
@@ -295,7 +362,7 @@ it('accepts and persists a newly discovered native model when saving model acces
   const owner = createSettingsOwner({ ...deps(), backendFor: () => ({ ...backend, peekModels: () => native, listModels: async () => { native = models; return models; } }) });
   const before = await view(owner);
   expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch: { models: ['a', 'b'], efforts: ['high'] } })).kind).toBe('saved');
-  expect((await getProjectByName('demo'))?.modelAccess).toEqual({ backend: 'codex-appserver', models: ['a', 'b'], efforts: ['high'] });
+  expect((await getProjectByName('demo'))?.modelAccess).toMatchObject({ backend: 'codex-appserver', models: ['a', 'b'], efforts: ['high'], defaultModel: 'a', defaultEffort: 'high' });
 });
 
 it('rejects new choices from a populated native cache after the provider becomes unavailable', async () => {

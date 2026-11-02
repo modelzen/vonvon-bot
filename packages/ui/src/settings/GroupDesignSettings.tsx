@@ -7,7 +7,7 @@ import {useDirectoriesPicker} from '../directory-picker';
 import {Button, IconButton, InlineNotice, SelectControl, Toggle} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
-import {Catalog, Editor, ProjectPanel, SessionPicker, type Section} from './SettingsPanel';
+import {Catalog, Editor, ProjectPanel, type CatalogControls, type Section} from './SettingsPanel';
 import {PersonaEditor} from './PersonaEditor';
 import {SmartRulesEditor, SMART_RULES_MAX_LENGTH} from './SmartRulesEditor';
 import {SettingChoices} from './SettingChoices';
@@ -130,12 +130,11 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
             placeholder="例如：在这个群负责发版检查和排障。留空时使用 Bot 页的角色设定。"/>
           <p className="gd-note">{[...draft.supplement].length} / {SUPPLEMENT_MAX} 字。</p>
         </>}/> : <MissingSection/>)}
-      {tab === 'model' && (sections.modelAccess ? <Editor title="可用模型" section={sections.modelAccess} save={(patch, revision) => save('modelAccess', patch, revision)}
+      {tab === 'model' && (sections.modelAccess ? <Editor title="模型设置" section={sections.modelAccess} save={(patch, revision) => save('modelAccess', patch, revision)}
         render={(draft, set, disabled) => <ModelAccessFields botId={view.scope.botId} value={draft} onChange={set} disabled={disabled} providers={providers} onCatalog={rememberCatalog}
           onCheckProviders={discovery.retry} checkingProviders={discovery.checking}
           onOpenProviders={onOpenProviders} permissionName={sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)?.name} savedBackend={view.identity.backend}/>}
         validate={value => providers.some(provider => provider.id === value.backend) ? modelAccessProblem(value, modelCatalog.current) : '此 Provider 当前不可用，请先安装并登录。'}/> : <MissingSection/>)}
-      {tab === 'model' && <details className="gd-disclosure membership-settings-details"><summary>话题模型</summary><SessionPicker view={view}/></details>}
       {(tab === 'model' || tab === 'permission') && <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>}
       {tab === 'response' && <>
         {responseHeader}
@@ -167,10 +166,19 @@ export function modelAccessProblem(value: ModelAccess, catalog?: ModelCatalog): 
   if (!catalog || catalog.backend !== value.backend || catalog.state !== 'ready') return '实时模型目录暂不可用。';
   const missing = value.models.filter(id => !catalog.models.some(model => model.id === id && !model.hidden));
   if (missing.length) return `当前目录中没有：${missing.join('、')}。`;
-  const supported = new Set(catalog.models.flatMap(model => model.supportedEfforts));
-  if (value.efforts.some(effort => !supported.has(effort))) return '已选 Effort 不在当前 Provider 的目录中。';
-  const incompatible = catalog.models.filter(model => value.models.includes(model.id) && model.supportedEfforts.length > 0 && !model.supportedEfforts.some(effort => value.efforts.includes(effort)));
-  return incompatible.length ? `请选择 ${incompatible.map(model => model.displayName).join('、')} 支持的 Effort。` : undefined;
+  const models = catalog.models.filter(model => value.models.includes(model.id) && !model.hidden);
+  const allowed = (id: string) => value.modelEfforts?.[id] ?? value.efforts;
+  const unsupported = value.modelEfforts
+    ? models.some(model => (value.modelEfforts?.[model.id] ?? []).some(e => !model.supportedEfforts.includes(e)))
+    : value.efforts.some(e => !catalog.models.some(model => !model.hidden && model.supportedEfforts.includes(e)));
+  if (unsupported) return '部分已选思考强度已不可用，请在下拉框中取消勾选。';
+  const incompatible = models.filter(model => model.supportedEfforts.length > 0 && !model.supportedEfforts.some(e => allowed(model.id).includes(e)));
+  if (incompatible.length) return `请选择 ${incompatible.map(model => model.displayName).join('、')} 支持的思考强度。`;
+  const defaultModel = models.find(m => m.id === (value.defaultModel ?? value.models[0]));
+  if (!defaultModel) return '请选择允许使用的新话题默认模型。';
+  if (value.defaultEffort && defaultModel.supportedEfforts.length && (!defaultModel.supportedEfforts.includes(value.defaultEffort) || !allowed(defaultModel.id).includes(value.defaultEffort))) return '请选择允许使用的新话题默认思考强度。';
+  if (models.some(model => (value.modelServiceTiers?.[model.id] ?? []).some(tier => !model.serviceTiers?.some(t => t.id === tier)))) return '部分加速选项已不可用，请刷新模型列表。';
+  return undefined;
 }
 export function ModelAccessFields({botId, value, onChange, disabled, providers, onCatalog, permissionName, savedBackend, onOpenProviders, onCheckProviders, checkingProviders}: {botId: AgentId; value: ModelAccess; onChange: (value: ModelAccess) => void; disabled: boolean; providers: Provider[]; onCatalog?: (catalog: ModelCatalog | undefined) => void; permissionName?: string; savedBackend?: string; onOpenProviders?: () => void; onCheckProviders?: () => void; checkingProviders?: boolean}) {
   const available = providers.some(provider => provider.id === value.backend);
@@ -185,16 +193,16 @@ export function ModelAccessFields({botId, value, onChange, disabled, providers, 
     </div>
     {permissionName && value.backend !== savedBackend && <p className="gd-model-compact-notice" role="status">换 Provider 后，权限仍是「{permissionName}」；自定义设置会清掉。</p>}
     {!available && <div className="gd-model-compact-notice" role="status"><span>此 Provider 暂不可用，已保存的选择仍保留。</span>{onOpenProviders && <Button size="sm" onClick={onOpenProviders}>检查 Provider</Button>}</div>}
-    <Catalog key={value.backend} botId={botId} backend={value.backend} purpose="project">{catalog => <ModelAccessChoices value={value} onChange={onChange} catalog={catalog?.backend === value.backend ? catalog : undefined} disabled={disabled || !available} onCatalog={onCatalog}/>}</Catalog>
+    <Catalog key={value.backend} botId={botId} backend={value.backend} purpose="project" showStatus={false}>{(catalog, catalogControls) => <ModelAccessChoices value={value} onChange={onChange} catalog={catalog?.backend === value.backend ? catalog : undefined} catalogControls={catalogControls} disabled={disabled || !available} onCatalog={onCatalog}/>}</Catalog>
   </div>;
 }
-export function ModelAccessChoices({value, onChange, catalog, disabled, onCatalog}: {value: ModelAccess; onChange: (value: ModelAccess) => void; catalog?: ModelCatalog; disabled: boolean; onCatalog?: (catalog: ModelCatalog | undefined) => void}) {
-  useEffect(() => {onCatalog?.(catalog);}, [catalog, onCatalog]);
+export function ModelAccessChoices({value, onChange, catalog, catalogControls, disabled, onCatalog}: {value: ModelAccess; onChange: (value: ModelAccess) => void; catalog?: ModelCatalog; catalogControls?: CatalogControls; disabled: boolean; onCatalog?: (catalog: ModelCatalog | undefined) => void}) {
+  useEffect(() => {onCatalog?.(catalogControls?.loading ? undefined : catalog);}, [catalog, catalogControls?.loading, onCatalog]);
   const problem = modelAccessProblem(value, catalog);
+  const status = catalogControls?.loading ? '正在刷新模型和思考强度，已保存的选择仍保留。' : catalogControls?.error;
   return <>
-    <CompactModelSelection value={value} onChange={onChange} catalog={catalog} disabled={disabled}/>
-    {problem && catalog?.state === 'ready' && <p className="gd-model-compact-note" role="status">{problem}</p>}
-    {!problem && <p className="gd-model-compact-note">群内只显示允许的模型及其支持的强度。</p>}
+    <CompactModelSelection value={value} onChange={onChange} catalog={catalog} catalogControls={catalogControls} disabled={disabled}/>
+    {status ? <p className="gd-model-compact-note" role="status">{status}</p> : problem && catalog?.state === 'ready' ? <p className="gd-model-compact-note" role="status">{problem}</p> : !problem && <p className="gd-model-compact-note">群内通过 /model 切换；新话题使用默认模型与强度，默认不开启加速。</p>}
   </>;
 }
 

@@ -59,7 +59,7 @@ it('keeps saved unavailable Provider and model choices readable without offering
   expect(html).toContain('role="combobox"');
   const control = selector({...providerProps, value: {backend: 'claude-agent', models: ['haiku'], efforts: []}, providers: []});
   expect(control.props.options).toEqual([{value: 'claude-agent', label: 'Claude（当前不可用）', disabled: true}]);
-  expect(html).toContain('haiku'); expect(html).toContain('查看模型');
+  expect(html).toContain('haiku'); expect(html).toContain('aria-label="配置模型"');
   expect(html).toContain('选择仍保留');
 });
 
