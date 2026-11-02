@@ -1386,7 +1386,8 @@ describe('automatic update checks and a stalled install', () => {
     try {
       const starting = startUnderFakeTime();
       await vi.waitFor(() => expect(loaded).toBeTypeOf('function'));
-      expect(powerMonitor.listenerCount('resume')).toBe(0);
+      // Only the remote devices' wake (devices-ui-1a 4.8) listens before the page has loaded.
+      expect(powerMonitor.listenerCount('resume')).toBe(1);
       await vi.advanceTimersByTimeAsync(5 * minute);
       expect(net.fetch).not.toHaveBeenCalled();
       loaded();
@@ -1443,7 +1444,8 @@ describe('automatic update checks and a stalled install', () => {
     try {
       fake.updateConfiguration.mockResolvedValueOnce({ signed: false } as never);
       await startUnderFakeTime();
-      expect(powerMonitor.listenerCount('resume')).toBe(0);
+      // The remote devices' wake (devices-ui-1a 4.8) is the only listener: no update scheduler.
+      expect(powerMonitor.listenerCount('resume')).toBe(1);
       powerMonitor.emit('resume');
       await vi.advanceTimersByTimeAsync(72 * hour);
       expect(net.fetch).not.toHaveBeenCalled();
