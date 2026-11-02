@@ -47,17 +47,34 @@ describe('CLI parity with the RPC kinds (devices 8.5)', () => {
     expect(parityProblems(kinds, unknown, CLI_PARITY_ALLOWLIST)).toEqual(['command.nope: x covers a kind the protocol does not have']);
     const both = { ...CLI_PARITY_ALLOWLIST, 'machine.stopHost': { reason: 'unused', note: 'x' } } as const;
     expect(parityProblems(kinds, commands, both)).toEqual(['machine.stopHost: covered by daemon stop and still in the allowlist']);
-    // D1 adds the device kinds: their lines then drop `arrives`
-    expect(parityProblems([...kinds, 'device.pair'], commands, CLI_PARITY_ALLOWLIST)).toEqual(['device.pair: in the protocol now, so the allowlist line drops arrives: D1']);
+    // a line registered before its kind exists drops `arrives` once the protocol has it
+    const early = { ...CLI_PARITY_ALLOWLIST, 'remote.later': { reason: 'pending', slice: 'D3', note: 'x', arrives: 'D3' } } as const;
+    expect(parityProblems(kinds, commands, early)).toEqual([]);
+    expect(parityProblems([...kinds, 'remote.later'], commands, early)).toEqual(['remote.later: in the protocol now, so the allowlist line drops arrives: D3']);
     const loose = { ...CLI_PARITY_ALLOWLIST, 'library.previous': { reason: 'pending', note: 'x' } } as const;
     expect(parityProblems(kinds, commands, loose)).toEqual(['library.previous: pending needs the slice that ends it']);
   });
 
-  it('registers the kinds D1, D3 and I3 bring before they exist (devices 8.1 SLICE-1)', () => {
-    for (const kind of ['device.status', 'device.enable', 'device.disable', 'device.pair', 'device.clients', 'device.renameClient', 'device.revokeClient', 'device.rename', 'admin.negotiate']) {
-      expect(CLI_PARITY_ALLOWLIST[kind]?.arrives, kind).toBe('D1');
-    }
+  // main 必败: the device kinds were not in the protocol and no command covered them
+  it('covers the device kinds D1 brings, the remote ones pending until D3 (devices 8.1 SLICE-1)', () => {
+    expect(Object.values(CLI_PARITY_ALLOWLIST).filter(entry => entry.arrives)).toEqual([]);
+    const covered = new Map(commands.flatMap(command => command.covers.map(kind => [kind, command.path] as const)));
+    expect(['device.pair', 'device.clients', 'device.renameClient', 'device.revokeClient', 'device.rename'].map(kind => covered.get(kind)))
+      .toEqual(['pair', 'clients ls', 'clients rename', 'clients revoke', 'device rename']);
+    for (const kind of ['device.status', 'device.enable', 'device.disable', 'device.setPort']) expect(CLI_PARITY_ALLOWLIST[kind], kind).toMatchObject({ reason: 'pending', slice: 'D3' });
+    expect(CLI_PARITY_ALLOWLIST['admin.negotiate']).toMatchObject({ reason: 'internal' });
     for (const kind of ['machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus']) expect(CLI_PARITY_ALLOWLIST[kind]).toMatchObject({ reason: 'pending', slice: 'I3' });
+  });
+
+  // main 必败: C8's kinds were pending, admin.logs superseded by machine.logs
+  it('covers the machine kinds C8 brings: daemon logs takes admin.logs, so machine.logs is the superseded one', () => {
+    for (const kind of ['machine.mcp.list', 'machine.mcp.add', 'machine.mcp.remove', 'machine.bridgeImport.detect', 'machine.bridgeImport.preflight', 'machine.bridgeImport.start',
+      'machine.bridgeImport.status', 'machine.bridgeImport.rollback', 'machine.setServiceSkipped', 'admin.followLogs', 'contextPreview.get', 'admin.logs']) {
+      expect(CLI_PARITY_ALLOWLIST[kind], kind).toBeUndefined();
+      expect(commands.some(command => command.covers.includes(kind)), kind).toBe(true);
+    }
+    expect(CLI_PARITY_ALLOWLIST['machine.logs']).toMatchObject({ reason: 'superseded' });
+    expect(commands.find(command => command.path === 'daemon logs')?.options).toContain('--follow');
   });
 
   // main 必败: only settings, feishu and schedule took --json

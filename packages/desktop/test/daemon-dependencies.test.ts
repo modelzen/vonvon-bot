@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { PROTOCOL_VERSION } from '@vonvon/protocol';
+import { AttachError } from '../src/attach.js';
 import { createDaemonDependencies, prepareDesktopRoot } from '../src/daemon-dependencies.js';
 import type { Registration } from '../src/daemon-manager.js';
 import { planStartupRepair } from '../src/login-item.js';
@@ -21,7 +22,7 @@ vi.mock('node:child_process', async importOriginal => ({
 }));
 vi.mock('../../daemon/src/server/pid-lock.js', () => ({ readRunningPidLock: vi.fn(), isPidLockOwnerRunning: vi.fn() }));
 vi.mock('../../daemon/src/server/owner-verification.js', () => ({ verifyPidLockOwner: vi.fn() }));
-vi.mock('../src/attach.js', () => ({ attachExisting: attach }));
+vi.mock('../src/attach.js', async importOriginal => ({ ...await importOriginal<typeof import('../src/attach.js')>(), attachExisting: attach }));
 
 const roots: string[] = [];
 const owner = { pid: 12345, startedAt: '2026-10-11T00:00:00.000Z', listen: '127.0.0.1:54321' };
@@ -147,6 +148,13 @@ describe('desktop daemon dependencies', () => {
     await expect(dependencies().checkProtocol(owner)).resolves.toBe(PROTOCOL_VERSION);
     await expect(dependencies().checkProtocol({ ...owner, pid: owner.pid + 1 })).rejects.toThrow('后台的所有者变了');
     expect(dispose).toHaveBeenCalledTimes(2);
+  });
+  // devices 4.5: a daemon of another protocol answers with its version, so the manager's message names both (it said "start the daemon")
+  it('answers the version of a daemon that runs another protocol', async () => {
+    attach.mockRejectedValueOnce(new AttachError('protocol', undefined, 1));
+    await expect(dependencies().checkProtocol(owner)).resolves.toBe(1);
+    attach.mockRejectedValueOnce(new AttachError('connection'));
+    await expect(dependencies().checkProtocol(owner)).rejects.toMatchObject({ reason: 'connection' });
   });
 
   it('refuses a development runtime instead of spawning a global CLI', async () => {

@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { bundledNpmCli, npmInvocation } from '../src/platform/npm';
 import { toolDirectories, withToolDirectories } from '../src/platform/tool-path';
@@ -82,11 +82,13 @@ describe('tool directories', () => {
     expect(toolDirectories('C:\\Users\\u', 'win32')).toEqual([]);
   });
 
+  // The PATH of a launchd or systemd definition, so `:` and `/` on any host (Windows acceptance task 205).
   it('appends only the missing directories after the user PATH', () => {
-    const finder = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(delimiter);
-    expect(withToolDirectories(finder, '/Users/u', 'darwin')).toBe([finder, '/opt/homebrew/bin', '/usr/local/bin', '/Users/u/.local/bin'].join(delimiter));
-    const shell = ['/Users/u/.local/bin', '/opt/homebrew/bin', '/usr/bin'].join(delimiter);
-    expect(withToolDirectories(shell, '/Users/u', 'darwin')).toBe([shell, '/usr/local/bin'].join(delimiter));
-    expect(withToolDirectories(undefined, '/home/u', 'linux')).toBe(['/usr/local/bin', '/home/u/.local/bin'].join(delimiter));
+    const finder = '/usr/bin:/bin:/usr/sbin:/sbin';
+    expect(withToolDirectories(finder, '/Users/u', 'darwin')).toBe(`${finder}:/opt/homebrew/bin:/usr/local/bin:/Users/u/.local/bin`);
+    const shell = '/Users/u/.local/bin:/opt/homebrew/bin:/usr/bin';
+    expect(withToolDirectories(shell, '/Users/u', 'darwin')).toBe(`${shell}:/usr/local/bin`);
+    expect(withToolDirectories(undefined, '/home/u', 'linux')).toBe('/usr/local/bin:/home/u/.local/bin');
+    expect(withToolDirectories('C:\\Windows;C:\\Tools', 'C:\\Users\\u', 'win32')).toBe('C:\\Windows;C:\\Tools');
   });
 });

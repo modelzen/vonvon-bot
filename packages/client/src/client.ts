@@ -2,8 +2,8 @@ import {
   adminReplySchema, collaborationReplySchema, commandResultSchema,
   desktopSnapshotSchema, directoryReplySchema, environmentReplySchema, memoryReplySchema, contextPreviewReplySchema,
   errorEnvelopeSchema, eventSchema, machineReplySchema, requestSchema,
-  libraryReplySchema, scheduleReplySchema, settingsReplySchema,
-  type AdminReply, type AdminRequest, type BackendInstallEventPayload,
+  libraryReplySchema, scheduleReplySchema, settingsReplySchema, deviceReplySchema,
+  type AdminReply, type DeviceReply, type DeviceRequest, type AdminRequest, type BackendInstallEventPayload,
   type CollaborationReply, type CollaborationRequest, type Command,
   type CommandResult, type DesktopSnapshot, type DirectoryReply,
   type DirectoryRequest, type EnvironmentReply, type EnvironmentRequest, type MemoryReply, type MemoryRequest, type ContextPreviewReply, type ContextPreviewRequest,
@@ -40,6 +40,7 @@ export interface VonvonClient {
   memory(request: MemoryRequest): Promise<MemoryReply>;
   contextPreview(request: ContextPreviewRequest): Promise<ContextPreviewReply>;
   schedule(botId: string, request: ScheduleRequest): Promise<ScheduleReply>;
+  device(request: DeviceRequest): Promise<DeviceReply>;
   onLog(listener: (payload: LogEventPayload) => void): () => void;
   onBackendInstall(listener: (payload: BackendInstallEventPayload) => void): () => void;
   onError(listener: (error: Error) => void): () => void;
@@ -51,7 +52,7 @@ const replySchemas = {
   settings: settingsReplySchema, collaboration: collaborationReplySchema,
   environment: environmentReplySchema, machine: machineReplySchema,
   admin: adminReplySchema, directory: directoryReplySchema, memory: memoryReplySchema,
-  library: libraryReplySchema, contextPreview: contextPreviewReplySchema, schedule: scheduleReplySchema,
+  library: libraryReplySchema, contextPreview: contextPreviewReplySchema, schedule: scheduleReplySchema, device: deviceReplySchema,
 } satisfies Record<z.infer<typeof requestSchema>["method"], z.ZodTypeAny>;
 type Method = keyof typeof replySchemas;
 type Payload<M extends Method> = Extract<z.input<typeof requestSchema>, { method: M }>["payload"];
@@ -184,6 +185,7 @@ export function createClient(socket: ClientConnection): VonvonClient {
     memory: request => send("memory", request),
     contextPreview: request => send("contextPreview", request),
     schedule: (botId, request) => send("schedule", { botId, request }),
+    device: request => send("device", request),
     onLog(listener) { logs.add(listener); return () => { logs.delete(listener); }; },
     onBackendInstall(listener) { installs.add(listener); return () => { installs.delete(listener); }; },
     onError(listener) {

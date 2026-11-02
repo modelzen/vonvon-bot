@@ -23,6 +23,8 @@ interface BackendOperation {
   operationId: string;
   id: string;
   update: boolean;
+  /** the starting request's own id (cli-7-environment); a request that attaches does not change it */
+  requestId?: string;
   abort: AbortController;
   output: BackendOutput;
   peers: Set<JobPeer>;
@@ -152,12 +154,12 @@ export class Jobs {
       this.options.changed();
     }
   }
-  selectBackend(id: string, update: boolean): BackendAdmission {
+  selectBackend(id: string, update: boolean, requestId?: string): BackendAdmission {
     if (this.closed) throw new RpcError('conflict', 'daemon 正在停止，无法安装后端。');
     const key = JSON.stringify([id, update]);
     const existing = this.backends.get(key);
     if (existing) return { operation: existing, attached: true };
-    const operation: BackendOperation = { operationId: randomUUID(), id, update, abort: new AbortController(), output: new BackendOutput(), peers: new Set(), done: Promise.resolve() };
+    const operation: BackendOperation = { operationId: randomUUID(), id, update, ...(requestId === undefined ? {} : { requestId }), abort: new AbortController(), output: new BackendOutput(), peers: new Set(), done: Promise.resolve() };
     this.backends.set(key, operation);
     this.backendWork.add(operation);
     this.backendLatest.set(id, operation);
@@ -194,6 +196,7 @@ export class Jobs {
     if (operation.terminal) replay.push(operation.terminal);
     return {
       operationId: operation.operationId, id: operation.id, update: operation.update,
+      ...(operation.requestId === undefined ? {} : { requestId: operation.requestId }),
       state: !operation.terminal ? 'running' : operation.terminal.type === 'done' ? 'succeeded'
         : operation.terminal.type === 'error' && operation.terminal.code === 'aborted' ? 'cancelled' : 'failed',
       replay, omittedBytes,
