@@ -2,7 +2,7 @@
 // Build the ui first; then `node packages/ui/test/manual/devices-fake-shell.ts <output directory>`.
 // Listens on 127.0.0.1 only; made-up names, ids and documentation addresses only.
 import {createServer} from 'node:http';
-import {readFile} from 'node:fs/promises';
+import {readFile, writeFile} from 'node:fs/promises';
 import {extname, join, resolve} from 'node:path';
 import {chromium} from 'playwright';
 
@@ -53,7 +53,13 @@ function install(input: {state: unknown; snapshot: unknown; preview: unknown}) {
   Object.assign(window, {vonvonClient: client, vonvonShell: {devices, onQuitRequested: () => () => {}, onDesktopUpdate: () => () => {}, onLocalDeviceEvent: () => () => {}, openExternal: async () => {}}});
 }
 
-const scenes: {name: string; active: object; status?: string; steps?: (page: import('playwright').Page) => Promise<void>}[] = [
+/** Each menu item: is what sits at its centre the item itself (Codex 审查 235-4: a sticky heading covered them)? */
+const menuHits = (page: import('playwright').Page) => page.evaluate(() => [...document.querySelectorAll('.device-switcher__menu [role="menuitem"]')].map(item => {
+  const box = item.getBoundingClientRect();
+  const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+  return {item: item.textContent, hit: Boolean(hit && item.contains(hit)), on: hit?.tagName};
+}));
+const scenes: {name: string; active: object; status?: string; steps?: (page: import('playwright').Page) => Promise<unknown>}[] = [
   {name: 'devices-page', active: {phase: 'ready', mode: 'full', serverInfo: info('0.9.1', 2)}, steps: async page => {
     await page.getByRole('button', {name: '设置', exact: true}).click();
     await page.getByRole('button', {name: /^设备/}).click();
@@ -64,6 +70,22 @@ const scenes: {name: string; active: object; status?: string; steps?: (page: imp
     await page.getByRole('button', {name: '添加设备'}).click();
     await page.locator('textarea').fill('vonvon://pair#made-up-example');
     await page.getByText('设备：办公室 Mac').waitFor();
+  }},
+  {name: 'switcher-over-application', active: {phase: 'ready', mode: 'full', serverInfo: info('0.9.1', 2)}, steps: async page => {
+    await page.getByRole('button', {name: '设置', exact: true}).click();
+    await page.getByRole('button', {name: /^应用与启动/}).click();
+    await page.getByRole('button', {name: /点击切换$/}).click();
+    return menuHits(page);
+  }},
+  {name: 'rename-then-switch', active: {phase: 'ready', mode: 'full', serverInfo: info('0.9.1', 2)}, steps: async page => {
+    await page.getByRole('button', {name: '设置', exact: true}).click();
+    await page.getByRole('button', {name: /^设备/}).click();
+    await page.getByRole('button', {name: '改名'}).first().click();
+    await page.getByLabel('设备名字').fill('机房 Linux 新名字');
+    await page.getByRole('button', {name: /点击切换$/}).click();
+    await page.getByRole('menuitem', {name: /这台电脑/}).click();
+    await page.getByText('有未保存的修改').waitFor();
+    return {confirm: true};
   }},
   {name: 'cannot-connect', status: 'connecting', active: {phase: 'connecting', attempt: 2, retryAt: now + 60_000, failure: {code: 'unreachable', attempts: [{route: tailscale, code: 'unreachable'}, {route: lan, code: 'timeout'}], at: now}}},
   {name: 'maintenance', status: 'maintenance', active: {phase: 'ready', mode: 'maintenance', serverInfo: info('0.8.2', 1)}},
@@ -77,8 +99,9 @@ try {
     await page.addInitScript(install, {state: state(scene.active, scene.status), snapshot, preview});
     await page.goto(`http://127.0.0.1:${port}/index.html`);
     await page.waitForTimeout(800);
-    await scene.steps?.(page);
+    const result = await scene.steps?.(page);
     await page.waitForTimeout(400);
+    if (result !== undefined) await writeFile(join(out, `${scene.name}.json`), `${JSON.stringify(result, null, 2)}\n`);
     await page.screenshot({path: join(out, `${scene.name}.png`)});
     await page.close();
   }
