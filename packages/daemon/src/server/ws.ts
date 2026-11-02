@@ -21,6 +21,8 @@ export interface Peer extends JobPeer {
   /** A secure-channel connection: the paired client whose key it proved, whatever its principal (a maintenance one has
    * no client id): what D3 matches a revoked client's connections by. Undefined on the loopback. */
   readonly clientId?: string;
+  /** D3: the remote address whose listener took this connection; undefined on the loopback. */
+  readonly listener?: string;
   send(value: Response | ErrorEnvelope): void;
   /** Closes the connection with a close code of devices 4.7: the message loop's 1001 and 1007, 4001 `protocol_mismatch` after
    * too many refused requests. A secure-channel connection says it inside the channel too. */

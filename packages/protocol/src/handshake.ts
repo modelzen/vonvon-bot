@@ -32,5 +32,7 @@ export const serverInfoSchema = z.object({
 export type ServerInfo = z.infer<typeof serverInfoSchema>;
 /** devices 4.5: all a connection of another protocol may ask. `stopHost` too: a 0.8 desktop or CLI must still stop a newer daemon. */
 export const MAINTENANCE_KINDS = ["admin.daemonStatus", "machine.checkCoreUpdate", "machine.applyCoreUpdate", "machine.coreUpdateStatus", "command.restartHost", "machine.stopHost"] as const;
-/** devices 4.7: all a draining daemon still answers. */
-export const DRAIN_KINDS = ["admin.daemonStatus", "machine.stopHost", "machine.coreUpdateStatus"] as const;
+/** devices 4.7: all a draining daemon still answers; the rest gets the error `draining`, the connection kept. The
+ * snapshot is its last one, marked stale, and a negotiate only records on the connection: a client that reconnects during
+ * an update gets its page and follows the progress (Codex review 248). */
+export const DRAIN_KINDS = ["admin.daemonStatus", "machine.stopHost", "machine.coreUpdateStatus", "snapshot.get", "admin.negotiate"] as const;

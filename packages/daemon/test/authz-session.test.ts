@@ -334,7 +334,7 @@ describe('a Bot session against the daemon', () => {
   const turn = vi.fn(async (_appId: string, _sessionId: string, action: SessionAction): Promise<SessionAuthz> => action.kind === 'schedule'
     ? { ok: true, role: 'member', openId: 'ou_m', actor: { kind: 'session', openId: 'ou_m', role: 'member', chatId: GROUP } }
     : { ok: true, role: 'member', openId: 'ou_m', memory: { scope: { kind: 'project', projectId: 'prj_0000000a' }, trust: 'untrusted', actor: { role: 'member', openId: 'ou_m' }, source: { botId: BOT, chatId: GROUP } } });
-  const start = (askBot: AuthzDeps['askBot'] = turn) => startFixture(fakeService({ listProjects: async appId => appId === BOT ? projects : [], executeSchedule }), undefined, undefined, askBot);
+  const start = (askBot: AuthzDeps['askBot'] = turn) => startFixture(fakeService({ listProjects: async appId => appId === BOT ? projects : [], executeSchedule }), undefined, undefined, undefined, askBot);
   const negotiate = (scope?: Scope) => ({ type: 'request' as const, id: `n${Math.random()}`, method: 'admin' as const, payload: { type: 'negotiate' as const, capabilities: ['cli'], ...(scope ? { scope } : {}) } });
 
   it('checks --scope at negotiate against the session', async () => {
@@ -526,7 +526,7 @@ describe('a Bot session against the daemon', () => {
     const act = vi.fn(async (action: { kind: string }) => action.kind === 'adminMember' ? { kind: 'saved', view: agent, effects: [], warnings: [] } : { kind: 'conflict', view: project });
     const settings = { act, read: async () => { throw new Error('unused'); }, save: async () => { throw new Error('unused'); }, models: async () => { throw new Error('unused'); } };
     const fixture = await startFixture(fakeService({ listProjects: async (appId: string) => appId === BOT ? projects : [], settings } as unknown as Parameters<typeof fakeService>[0]),
-      undefined, undefined, botSays(ownerTurn));
+      undefined, undefined, undefined, botSays(ownerTurn));
     const admin = { type: 'request', id: 'a', method: 'settings', payload: { type: 'act', action: { kind: 'adminMember', botId: BOT, openId: 'ou_0123456789abcdef', membership: 'present', revision: 'a1' } } } as unknown as Request;
     const member = { type: 'request', id: 'm', method: 'settings', payload: { type: 'act', action: { kind: 'projectMember', botId: BOT, projectName: '研发', openId: 'ou_0123456789abcdef', membership: 'present', revision: 'm1' } } } as unknown as Request;
     // the frame as the client takes it: its schema checked
