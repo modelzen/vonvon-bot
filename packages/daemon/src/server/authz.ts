@@ -1,7 +1,7 @@
 import {
   MAINTENANCE_KINDS, PROTOCOL_VERSION, rpcKindOf,
-  type CommandResult, type DesktopSnapshot, type LibraryReply, type MemoryRequest, type ProjectSettingsView, type Request, type ScheduleReply, type Scope,
-  type SettingsReply, type SettingsScope,
+  type CollaborationReply, type Command, type CommandResult, type DesktopSnapshot, type LibraryReply, type MemoryRequest, type ProjectSettingsView, type Request,
+  type ScheduleReply, type Scope, type SettingsReply, type SettingsScope,
 } from '@vonvon/protocol';
 import { NOT_DM_MESSAGE } from '../agent/entry/registry';
 import { scheduleRefusalMessages } from '../admin/schedule-commands';
@@ -109,6 +109,8 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
 const denied = (message: string): Decision => ({ ok: false, code: 'permission_denied', message });
 const OUT_OF_REACH = '这次调用碰到了这条 Bot 会话范围以外的 Bot、群或项目。';
 const outOfReach = (): Decision => denied(OUT_OF_REACH);
+/** devices 5.3: a reach of one group (a private chat or the owner given `--scope … group=`) moves only that group. */
+export const ONE_GROUP_ONLY = '这次调用的 `--scope` 只到一个群：不能改整个 Bot 的设置，也不能建新群。';
 /** devices 3.7: only what the owner or an admin typed goes into a bot's memory; the host cannot tell who started the turn. */
 export const BOT_MEMORY_FROM_SESSION = '命令行在 Bot 会话里还写不了 Bot 记忆：只有主人或管理员亲手说的话才进 Bot 记忆，这里核对不了是谁说的。写到本群的项目记忆里，或者用记忆工具。';
 /** The host cannot tell whose private chat a `dm` memory is: the memory tools keep to the turn's own person. */
@@ -211,22 +213,23 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
   const own = (botId: string): boolean => botId === principal.appId;
   const chats = new Set(groups.map(group => group.chatId));
   const reaches = sessionGroups(principal, scope);
+  // devices 5.3: a reach of one group (a group session; a private chat or the owner given `group=`) moves only that
+  // group, whoever's turn it is: nothing of the whole bot, and no new group.
+  const wholeBot = principal.place === 'dm' && scope?.group === undefined;
+  const botWide = (): Decision => wholeBot ? ok : denied(ONE_GROUP_ONLY);
   const named = (projectName: string, groupId?: string): boolean => groups.some(group => group.name === projectName && (groupId === undefined || group.chatId === groupId));
   const narrow = (cut: (payload: never) => unknown): Decision => ({ ok: true, narrow: <T>(payload: T): T => cut(payload as never) as T });
   switch (request.method) {
     case 'snapshot': return narrow((snapshot: DesktopSnapshot) => filterSnapshot(snapshot, principal, scope));
-    case 'admin': return ok;
-    case 'command': {
-      const command = request.payload;
-      if (command.type === 'refresh') return ok;
-      // What names no bot (installing Codex, restarting the host) is the machine's: no session's, and the owner's as it is.
-      if (!('agentId' in command)) return session ? outOfReach() : ok;
-      if (!own(command.agentId)) return outOfReach();
-      if (command.type === 'listGroupMembers') return reaches(command.groupId) ? ok : outOfReach();
-      // A private chat's own joined and pending groups (D4b asks whose turn it is); a group session's only its own.
-      return narrow((result: CommandResult) => result.kind === 'groups' ? { ...result, groups: result.groups.filter(group => reaches(group.id)) }
-        : result.kind === 'pendingGroups' ? { ...result, groups: result.groups.filter(group => reaches(group.chatId)) } : result);
+    case 'admin': {
+      // A session's row lets through only daemonStatus and negotiate, which name no bot; the owner's name theirs.
+      const admin = request.payload;
+      if (!('agentId' in admin) || admin.agentId === undefined) return ok;
+      if (!own(admin.agentId)) return outOfReach();
+      if (admin.type === 'switchBackend') return named(admin.projectName) ? ok : outOfReach();
+      return admin.type === 'confirmCardCallback' ? botWide() : ok;
     }
+    case 'command': return commandInReach(request.payload, session, own, reaches, botWide, narrow);
     case 'settings': {
       const payload = request.payload;
       const scoped = (target: SettingsScope): boolean => target.kind === 'host' ? !session : own(target.botId) && (target.kind !== 'project' || named(target.projectName));
@@ -235,11 +238,15 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
           if (!scoped(payload.scope)) return outOfReach();
           return session && principal.place === 'group' ? narrow(readOnlyInGroup) : ok;
         }
-        case 'save': return scoped(payload.edit.scope) ? ok : outOfReach();
+        case 'save': {
+          if (!scoped(payload.edit.scope)) return outOfReach();
+          return payload.edit.scope.kind === 'agent' ? botWide() : ok;
+        }
         case 'act': {
           const action = payload.action;
           if (!own(action.botId)) return outOfReach();
-          return 'projectName' in action && !named(action.projectName) ? outOfReach() : ok;
+          if ('projectName' in action) return named(action.projectName) ? ok : outOfReach();
+          return botWide();
         }
         case 'models': return own(payload.query.botId) ? ok : outOfReach();
         case 'sessions': {
@@ -253,15 +260,28 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
       const payload = request.payload;
       // Neither names a bot: a session's table row decides on them (usage is denied there).
       if (payload.action === 'providerModels' || payload.action === 'usage') return ok;
-      if (payload.action === 'createProject') return own(payload.agentId) ? ok : outOfReach();
-      return 'agentId' in payload && own(payload.agentId) && named(payload.projectName, payload.groupId) ? ok : outOfReach();
+      if (payload.action === 'createProject') return own(payload.agentId) ? botWide() : outOfReach();
+      if (!('agentId' in payload) || !own(payload.agentId) || !named(payload.projectName, payload.groupId)) return outOfReach();
+      // The provider lists its sessions by folder: another group's sharing it, and the owner's own from a terminal.
+      // Only those bound to this group are known to be its (Codex review 228-1, 229-1).
+      return payload.action !== 'history' ? ok : narrow((reply: CollaborationReply) => reply.kind !== 'history' ? reply
+        : { ...reply, threads: reply.threads.filter(thread => reply.sessions.some(bound => bound.sessionId === thread.sessionId)) });
     }
-    case 'library':
-      return narrow((reply: LibraryReply) => reply.kind !== 'list' ? reply : {
-        ...reply, unlinked: 0,
-        projects: reply.projects.map(project => ({ ...project, bindings: project.bindings.filter(binding => own(binding.agentId) && chats.has(binding.groupId)) }))
-          .filter(project => project.bindings.length > 0),
-      });
+    case 'library': {
+      const library = request.payload;
+      const projects = new Set(groups.flatMap(group => group.projectId ? [group.projectId] : []));
+      switch (library.type) {
+        case 'list':
+          return narrow((reply: LibraryReply) => reply.kind !== 'list' ? reply : {
+            ...reply, unlinked: 0,
+            projects: reply.projects.map(project => ({ ...project, bindings: project.bindings.filter(binding => own(binding.agentId) && chats.has(binding.groupId)) }))
+              .filter(project => project.bindings.length > 0),
+          });
+        case 'previous': return own(library.agentId) && reaches(library.groupId) ? ok : outOfReach();
+        // A project none of the groups reached is bound to (one no group uses, to delete) is out of reach.
+        default: return projects.has(library.projectId) ? ok : outOfReach();
+      }
+    }
     case 'memory': return memoryInReach(request.payload, principal, scope, groups, who);
     case 'schedule': {
       const { botId, request: task } = request.payload;
@@ -272,6 +292,41 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
     }
     default: return session ? outOfReach() : ok;
   }
+}
+
+/**
+ * A command by what it moves: the machine (installing Codex, restarting the host), no session's and the owner's as it
+ * is; a bot, its own and only with the whole bot reached; a group, one reached. A new bot is outside any reach.
+ */
+function commandInReach(command: Command, session: boolean, own: (botId: string) => boolean, reaches: (groupId: string) => boolean,
+  botWide: () => Decision, narrow: (cut: (payload: never) => unknown) => Decision): Decision {
+  const ok: Decision = { ok: true };
+  switch (command.type) {
+    case 'refresh': return ok;
+    case 'installCodex': case 'startCodexLogin': case 'restartHost': case 'cancelJob': return session ? outOfReach() : ok;
+    case 'registerAgent': return outOfReach();
+    case 'refreshAgentCredentials': case 'setAgentEnabled': case 'deleteAgent': return own(command.agentId) ? botWide() : outOfReach();
+    case 'bindGroup': case 'listGroupMembers': return own(command.agentId) && reaches(command.groupId) ? ok : outOfReach();
+    case 'setResponse': case 'setPermission': {
+      const target = membershipOf(command.membershipId);
+      return target && own(target.agentId) && reaches(target.groupId) ? ok : outOfReach();
+    }
+    case 'listPendingGroups': case 'listJoinedGroups':
+      if (!own(command.agentId)) return outOfReach();
+      // A private chat's own joined and pending groups (D4b asks whose turn it is); a group session's only its own.
+      return narrow((result: CommandResult) => result.kind === 'groups' ? { ...result, groups: result.groups.filter(group => reaches(group.id)) }
+        : result.kind === 'pendingGroups' ? { ...result, groups: result.groups.filter(group => reaches(group.chatId)) } : result);
+  }
+}
+
+/** A membership's id is its bot and group (`server/projection.ts`); the command finds it by exactly that id. */
+function membershipOf(id: string): { agentId: string; groupId: string } | undefined {
+  try {
+    const parsed: unknown = JSON.parse(id);
+    if (!Array.isArray(parsed) || parsed.length !== 2) return undefined;
+    const [agentId, groupId] = parsed as unknown[];
+    return typeof agentId === 'string' && typeof groupId === 'string' ? { agentId, groupId } : undefined;
+  } catch { return undefined; }
 }
 
 /**

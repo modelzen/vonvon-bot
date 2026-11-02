@@ -222,7 +222,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
         case 'admin': return finish(peer, await adminRpc(options.service, follow => logs.follow(peer, follow), request.payload, { startedAt, peer }), payload => ({ type: 'response', id, method: 'admin', payload }));
         case 'device': return finish(peer, await deviceRpc({ home, identity, clients, invites }, peer, request.payload), payload => ({ type: 'response', id, method: 'device', payload }));
         case 'settings': return finish(peer, await settingsRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'settings', payload: shown(payload) }));
-        case 'collaboration': return finish(peer, await collaborationRpc(options.service, directory, request.payload), payload => ({ type: 'response', id, method: 'collaboration', payload }));
+        case 'collaboration': return finish(peer, await collaborationRpc(options.service, directory, request.payload), payload => ({ type: 'response', id, method: 'collaboration', payload: shown(payload) }));
         case 'environment': return finish(peer, await environmentRpc(options.service, jobs, peer, request.payload, environment), payload => ({ type: 'response', id, method: 'environment', payload }));
         case 'machine': return finish(peer, await machineRpc(options.service, options.control, port, request.payload, { launcher: serviceActions, snapshots, root: home, bridgeImport: options.bridgeImport, environment }), payload => ({ type: 'response', id, method: 'machine', payload }));
         case 'command': return finish(peer, await commandRpc({ service: options.service, jobs, peer, directory, snapshots, control: options.control, port }, request.payload), payload => ({ type: 'response', id, method: 'command', payload: shown(payload) }));
@@ -234,7 +234,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
         case 'contextPreview': return finish(peer, await contextPreviewRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'contextPreview', payload }));
         // The client's hello says who asks: the task records it as made from the desktop or the terminal. A Bot session's
         // still records as the terminal's; D4b gives it the session's actor.
-        case 'schedule': return finish(peer, await scheduleRpc(options.service, peer.clientKind, request.payload), payload => ({ type: 'response', id, method: 'schedule', payload }));
+        case 'schedule': return finish(peer, await scheduleRpc(options.service, peer.clientKind, request.payload), payload => ({ type: 'response', id, method: 'schedule', payload: shown(payload) }));
         case 'directory': {
           if (request.payload.type === 'list') { peer.send({ type: 'response', id, method: 'directory', payload: await directory.list(request.payload.path) }); return; }
           if (request.payload.type === 'suggest') { peer.send({ type: 'response', id, method: 'directory', payload: await directory.suggest(request.payload.query) }); return; }
