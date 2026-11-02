@@ -8,4 +8,17 @@ Run `npm ci`, `npm run typecheck`, `npm test`, `npm run lint`, and `npm run buil
 
 The port is based on `modelzen/vonvon-bot` commit `fab5237`. `packages/protocol/test/fixtures/agent-settings.json` comes from that commit. The generated project-store fixture follows `scripts/native-fixtures.mjs` there and the reader in `modelzen/feishu-codex-bridge` commit `446b2a4`.
 
-双平台发布可使用[发布编排说明](docs/release-orchestration.md)：固定版本与 main SHA，同步调度 Windows 和串行 Mac 候选，查询状态、恢复中断并收集官网交接回执。正常发版默认使用该流程，Mac/Windows 上传由发布编排器并行处理；最终 stable 确认绑定展示过的候选，无需手抄 SHA。
+## 安装
+
+- Mac、Windows：从 https://vonvon.cc/get/ 下载桌面端安装包，里面带着服务端。
+- Linux（glibc，x64 或 arm64）只装服务端，0.9.0 起可用：
+
+  ```sh
+  sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/install.sh)"
+  ```
+
+  装到 `~/.local/share/vonvon-bot/server`，数据在 `~/.vonvon-bot`。卸载用 `sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/uninstall.sh)"`，数据目录留着。这条命令只给 Linux，在 Mac 上运行只提示去下载安装包。
+
+## 发布
+
+三平台发布可使用[发布编排说明](docs/release-orchestration.md)：固定版本与 main SHA，同步调度 Windows 和串行 Mac 候选，再打 Linux 服务端的两个包，查询状态、恢复中断并收集官网交接回执。正常发版默认使用该流程，Mac/Windows/服务端上传由发布编排器并行处理；最终 stable 确认绑定展示过的候选，无需手抄 SHA。

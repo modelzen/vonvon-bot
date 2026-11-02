@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { createPlan, packages, parseInputs, runPlan } from './ci-run.mjs';
+import { createPlan, installSmoke, packages, parseInputs, runPlan } from './ci-run.mjs';
 const sourceRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 const temporaryRoots = [];
@@ -57,10 +57,28 @@ test('affected plan builds every workspace before checks and runs root script te
 });
 
 test('full plan executes the root suite after the ordered workspace build', () => {
-  const plan = createPlan('full', ['ui'], fixture());
+  const plan = createPlan('full', ['ui'], fixture(), 'darwin');
   assert.deepEqual(plan.map(command => command.args), [
     ['run', 'build'], ['run', 'typecheck'], ['run', 'test'], ['run', 'lint'],
   ]);
+});
+
+test('Linux runs the server install smoke last, for full scope or a daemon change only', () => {
+  const root = fixture();
+  writeFileSync(join(root, installSmoke), '');
+  const smoke = { executable: 'node', args: [installSmoke] };
+  const full = createPlan('full', packages, root, 'linux');
+  assert.deepEqual(full.map(command => command.args), [['run', 'build'], ['run', 'typecheck'], ['run', 'test'], ['run', 'lint'], [installSmoke]]);
+  const daemon = createPlan('affected', ['daemon', 'desktop'], root, 'linux');
+  assert.deepEqual(daemon.at(-1), smoke);
+  assert.deepEqual(daemon.at(-2).args[0], '--test', 'after the root script tests');
+  for (const [scope, selected, platform] of [['affected', ['ui', 'desktop'], 'linux'], ['full', packages, 'darwin'], ['affected', ['daemon', 'desktop'], 'darwin']]) {
+    assert.equal(createPlan(scope, selected, root, platform).some(command => command.args.includes(installSmoke)), false, `${scope} ${selected} ${platform}`);
+  }
+  // Windows has no server package; its lists stay those of build-windows.ps1.
+  assert.equal(createPlan('full', packages, sourceRoot, 'win32').some(command => command.args.includes(installSmoke)), false);
+  assert.throws(() => createPlan('full', packages, fixture(), 'linux'), /Missing install smoke/);
+  assert.ok(readFileSync(join(sourceRoot, installSmoke), 'utf8').includes('installSmoke'), 'the real smoke exists');
 });
 
 test('Windows full builds and typechecks all packages, then runs supported acceptance tests', () => {
