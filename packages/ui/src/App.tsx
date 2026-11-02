@@ -1,4 +1,8 @@
-import {useClient, useShellCapabilities} from './client-context';
+import {useActiveDevice, useClient, useShellCapabilities} from './client-context';
+import {DevicesPanel} from './devices/DevicesPanel';
+import {DeviceSwitcher} from './devices/DeviceSwitcher';
+import {DeviceStatusBanner, DeviceVersionNotice} from './devices/DeviceStatusBanner';
+import {shouldMarkPlatform} from './devices/devices-presentation';
 import {copyAuthorizationUrl, copyFeedback, groupUrl, openExternalUrl} from './url-actions';
 import {uiFeatures} from './features';
 import {PendingGroupToasts} from './PendingGroupToasts';
@@ -146,6 +150,8 @@ function DesktopApp() {
   const {navigate} = useDraftGuard();
   const client = useClient();
   const shell = useShellCapabilities();
+  // The page is built again per device, so this stays what it was when the page mounted.
+  const device = useActiveDevice();
   const [desktopUpdate] = useDesktopUpdate();
   const updateNotice = desktopUpdateNotice(desktopUpdate);
   const hasUpdateAction = Boolean(shell?.installDesktopUpdate && (desktopUpdate?.state === 'available' || desktopUpdate?.state === 'downloaded'));
@@ -288,8 +294,8 @@ function DesktopApp() {
         latestSnapshot.current = next;
         setSnapshot(next);
         setModal(current => current?.kind === "register" ? withRegisteredAgent(current, next.jobs) : current);
-        document.documentElement.dataset.desktopPlatform =
-          next.application.platform;
+        // A remote device's platform would swap this computer's window chrome (devices-ui-1b 4.2).
+        if (shouldMarkPlatform(device)) document.documentElement.dataset.desktopPlatform = next.application.platform;
       }),
     [],
   );
@@ -537,6 +543,7 @@ function DesktopApp() {
     application: "应用与启动",
     secrets: "决策模型",
     diagnostics: "状态与诊断",
+    devices: "设备",
   };
   const host = snapshot.host;
   const ready = host.kind === "connected";
@@ -612,6 +619,7 @@ function DesktopApp() {
         selectedFeature={featureId}
         onFeatureNavigate={id => navigate(() => {setJoinedTarget(undefined); setModal(current => current?.kind === 'join' && current.suspended ? null : current); setFeatureId(id);})}
         onSearch={() => setSearchOpen(true)}
+        deviceSwitcher={<DeviceSwitcher onManage={() => openPage('devices')}/>}
         onOpenList={openList}
         backLabel={`返回 ${settingsReturn?.label ?? parentLabel}`}
         onBack={
@@ -641,6 +649,8 @@ function DesktopApp() {
             </div>;
           })}
           {feedback}
+          <DeviceStatusBanner/>
+          <DeviceVersionNotice onUpgrade={() => openPage('application')}/>
           {!ready && (
             <InlineNotice
               title={
@@ -671,7 +681,7 @@ function DesktopApp() {
             </InlineNotice>
           )}
           {page === "home" && snapshot.agents.length > 0 && <TodayHome snapshot={snapshot} onSetup={() => openPage("setup")} onRegister={() => void register()} onOpenUsage={() => openPage("usage")} disabled={!ready || busy}/>}
-          {page === "settings" && <SettingsHome updateNotice={updateNotice} onNavigate={openPage} onFeature={id => navigate(() => setFeatureId(id))}/>}
+          {page === "settings" && <SettingsHome devices={Boolean(shell?.devices)} updateNotice={updateNotice} onNavigate={openPage} onFeature={id => navigate(() => setFeatureId(id))}/>}
           {page === "collaboration" && (
             <>
               {route.kind === 'list' && host.kind === "connected" &&
@@ -917,6 +927,7 @@ function DesktopApp() {
               </UpdatePanel>
             </div>
           )}
+          {page === "devices" && <DevicesPanel/>}
           {page === "secrets" && <SecretsPanel onOpenProviders={() => openPage("providers")} onOpenApplication={() => openPage("application")}
             onOpenLogs={() => { openPage("diagnostics"); setSearchTarget({page: "diagnostics", section: "daemon 日志"}); }}/>}
           {page === "diagnostics" && <DiagnosticsPanel snapshot={snapshot} ready={ready} busy={busy} run={run}
@@ -925,7 +936,7 @@ function DesktopApp() {
           </>}
         </div>
       </AppShell>
-      {searchOpen && <SearchDialog open entries={searchEntries(snapshot, {externalCoreAvailable, schedules: searchSchedules})} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>}
+      {searchOpen && <SearchDialog open entries={searchEntries(snapshot, {externalCoreAvailable, schedules: searchSchedules, devices: Boolean(shell?.devices)})} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>}
       <PendingGroupToasts pages={pendingGroups} agents={snapshot.agents} hidden={modal !== null} onContinue={(owner, group) => openJoin(owner.id, group)} />
       {modal?.kind === 'selectJoinBot' && <SelectJoinBotDialog snapshot={snapshot} onSelect={id => openJoin(id)} onClose={() => setModal(null)}/>}
       {modal?.kind === 'join' && (() => {
