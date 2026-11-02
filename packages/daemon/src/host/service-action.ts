@@ -4,6 +4,7 @@ import { closeSync, openSync } from 'node:fs';
 import { join } from 'node:path';
 import { SERVICE_BUSY_MESSAGE } from '@vonvon/protocol';
 import { RpcError } from '../server/errors';
+import { withoutSessionMarkers } from '../config/session-env';
 import { liveServiceActionRecord, readServiceActionRecord, writeServiceActionRecord } from '../service/action-report';
 
 export type ServiceActionKind = 'install' | 'uninstall';
@@ -73,7 +74,8 @@ export function createServiceActionLauncher(options: {
         start() {
           if (used) return;
           used = true;
-          const env: NodeJS.ProcessEnv = { ...process.env, VONVON_HOME: root };
+          // the host's own child (devices-4a R3): `service install|uninstall` is local-only in a session
+          const env: NodeJS.ProcessEnv = { ...withoutSessionMarkers(process.env), VONVON_HOME: root };
           delete env.VONVON_SERVICE;
           try {
             const log = openSync(join(root, 'daemon.log'), 'a', 0o600);
