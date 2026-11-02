@@ -164,3 +164,30 @@ JP-VPS：
 - CI 冒烟要下载 Node 二进制（~30 MB）：用 actions cache 按 `server-node.json` 的哈希缓存 `--node-cache`；缓存失效时多 1 分钟。
 - `install-smoke.mjs` 依赖 I2a（脚本）、I3（`update --check`、`server-update.json` 进包的构建选项）、I6（只剩两个目标）合入；I5 可以先合，冒烟里对未合入的步骤按文件是否存在跳过并打印"跳过：等 I3"——不行：跳过会让 CI 绿得没意义。顺序上 I5 最后合（§13 依赖 I1、I2a、I3、I6），冒烟不写条件跳过。
 - 行数估计 ~950（`publish-server.mjs` 260、`server-update-signing.mjs` 90、`server-manifest.mjs` 60、`server-constants.mjs` 10、`release-publish.mjs` 改 80、`release-all.mjs` 改 60、`product-version.mjs` 15、`install-smoke.mjs` 150、`ci-scope`/`ci-run` 30、文档 60、测试 ~350——测试多一些就到 1,100）。不拆。
+
+## 10. 实现时和计划不一样的地方
+
+实现时（2026-11-02）照代码改了这些，理由写在每条后面。
+
+- **plan 的两个函数合成一个** `planServerPublication`：版本化对象和 stable 三个对象一次算好，签名清单在 plan 时签一次、用 `wx` 写到 `OUT/server/stable-manifest.json`，之后的 upload、promote 复用这份字节，不在 promote 时重签。再跑 plan 时已签的那份和这次的包或说明不一样，就停（"候选变了"）。Ed25519 本身是确定的，重签也能得到同样的字节，但存一份字节更好查。
+- **线上 stable 快照在 plan 时读**，写进统一计划（`previousManifest`）；线上比这次新、同版本却是另一份、`publishedAt` 不比这次早、或者用这把公钥验不过，plan 就拒。promote 写清单前再读一次，必须和计划里的一样，不一样就停（计划写的是 promote 时才读、比版本）。这样 owner 看计划时就知道线上是什么，和 macOS、Windows 的做法一致。
+- **两个脚本不从 `state.source` 读**，用 `git show <发布 SHA>:scripts/install.sh` 从 `release-all` 开始时那个仓库读（`state.seedRepo`）。skill 要求发布完就删源码 worktree，promote 可能在那之后；按 SHA 取的字节和那个 worktree 里的一样。
+- **桶的版本控制**：计划的对象表写 stable 对象"允许覆盖（版本控制 bucket 留历史）"。实际上 `x-cos-forbid-overwrite` 只在桶从没开过版本控制时生效，所以 upload 先查 `getBucketVersioning`，开过就停（和 Mac、Windows 同一条）。stable 的历史不靠桶：旧清单的版本、`publishedAt` 和 sha256 在统一计划里。线上原来没有清单时，写清单也带禁止覆盖。
+- **409 和已存在的对象**：不用 `getObject` 读回，改成先 `headObject`，已存在或 409 就按公网地址整份下载、核 sha256 和 sha512，一样才算已经发过。和 Windows 的做法一致，也不需要给写入的 key 读权限。
+- **回执的文件名**：`OUT/server/server-publish-receipt.json` 和 `OUT/server/server-stable-receipt.json`，不叫 `publish-receipt.json`，免得和 Mac 的同名回执混。stable 回执在每次写之前先记 `write-started`，切完记 `published` 和统一计划哈希；`collect` 只认属于这份计划的 `published`。
+- **promote 的计划哈希**：`promoteServerStable` 只检查它在、是 64 位十六进制、写进回执；和重算的计划哈希比对由 `release-publish.mjs` 的 `reviewed()` 统一做（Windows 也是这样）。线上三个 stable 对象已经和计划一样时什么都不写，不要 owner 确认，只复核。
+- **`release-publish.mjs` 没有 `--dry-run`**（§6 第 2 步写了 `plan --dry-run` 对测试钥匙只打警告）。一个能放过测试钥匙的开关就是一条把测试包发出去的路，没加。§6 的走查改成直接调 `publish-server.mjs` 的 plan → upload → promote，用测试钥匙、内存里的 COS 和假的公网地址，结果写在 PR 描述里。
+- **没有服务端配置时**，计划写的是"0.9.0 起 `checkedProductVersion` 要求三平台都有"。实现没按版本号卡：`release-all build` 每次都打两个服务端包，`checkedProductVersion` 核它们的版本；发布时有没有服务端看 `cos-server.json` 在不在，不在就在 plan、upload 和 status 里写明"服务端未配置：这次只发 macOS 和 Windows"。按版本号卡要等 owner 先生成钥匙、建好配置；0.9.0 发布前要做的事写在 PR 里。命令行或计划里指了配置路径而文件不在，直接失败。
+- **`checkedProductVersion` 在服务端包打完后核**，不在 `prepare`：`prepare` 时还没有构建记录。
+- **`release-all build` 的服务端一步**：源码 worktree 里没有打好的网页（续跑时新建的 worktree）就先 `npm run build`；状态是 `state.server = { phase, report }`，失败记 `failed-or-interrupted`，`resume` 只重打服务端包；构建记录属于别的输入、或者包在构建后被改过，直接失败，不覆盖。
+- **官网交接**：`release-handoff.json` 的 `server` 是 `{ published, stableVerified, installCommand, packages }`（计划写 `downloads`）。服务端的包不进 `downloads`，官网的下载入口仍是 macOS 和 Windows 的安装包；统一计划里有服务端时，`readyForWebsite` 还要服务端 stable 回执是这份计划的 `published`。
+- **CI 冒烟的范围**：Linux 上全量，或者选中了 daemon 的包（计划写"全量或命中服务端路径"——服务端路径本来就归全量）。服务端包就是 daemon，daemon 的改动也要真装一次。
+- **CI 冒烟的 Node 缓存**：`ci.yml` 的 Linux 任务加了一步 `actions/cache`（键是 `scripts/server-node.json` 的哈希）和环境变量 `VONVON_SMOKE_NODE_CACHE`；任务结构没变。`build-server.mjs` 每次用之前都按钉值核对缓存里的 Node。
+- **冒烟打本机的那个目标**（x64 的 runner 打 linux-x64，arm64 的打 linux-arm64），不写死 linux-x64。
+- **假 CDN 上有两份清单**：daemon 的更新检查读 `http://127.0.0.1:<端口>/bot/server/stable/manifest.json`（测试包的 `server-update.json` 指这里），`install.sh` 经 curl 替身读 `/script/stable/manifest.json`；清单里的 url 必须以读它的地址开头，所以两份各签一次，包是同一个文件。`install.sh` 里的 `BASE_URL` 不改，只换公钥。
+- **替身多了 `loginctl`**，和 `systemctl` 一样回"没有 systemd"。冒烟不单独跑 `daemon stop`：`uninstall.sh` 自己会停服务端，用户也是这样卸的；只有中途失败时才 `daemon stop`。
+- **冒烟整体超时 10 分钟**（计划 5 分钟）：缓存没命中时要下载 Node，再打一个包。本机缓存命中时一次 3 分钟左右。
+- **`install-smoke.test.mjs` 不跑整套冒烟**，只测替身、参数和目标；整套冒烟由 CI 的 Linux 任务直接跑 `node scripts/install-smoke.mjs`，不靠 `VONVON_SMOKE=1` 开关，`npm test` 也不会每次都打包。
+- **共享样本**有 14 份（2 份合法、10 份 schema 不对、2 份地址不对），计划写的是 1 + 8。
+- **`ci-scope.mjs`** 把"哪些原因不算收集出错"抽成 `isCollectionFailure`，加了 `server install/release script:`；不然新原因会让 scope 任务失败。
+- **`release-publish.test.mjs` 原有的一条断言**要求 Mac 上传先于 Windows 开始，两个上传是并行的，谁先进假函数不一定（本机跑整个文件时偶尔反过来）。改成只比较集合，其余顺序断言不变。

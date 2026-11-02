@@ -13,7 +13,7 @@ const json = value => JSON.stringify(value, null, 2) + '\n';
 const hash = (bytes, algorithm = 'sha256', encoding = 'hex') => createHash(algorithm).update(bytes).digest(encoding);
 const save = (path, value) => writeFile(path, json(value));
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
-async function fixture(t, modern = false) {
+async function fixture(t, modern = false, server = false) {
   const out = await realpath(await mkdtemp(join(tmpdir(), 'release-publication-test-')));
   t.after(() => rm(out, { recursive: true, force: true }));
   const macOut = join(out, 'mac'), windowsOut = join(out, 'windows');
@@ -49,13 +49,42 @@ async function fixture(t, modern = false) {
     macFiles.push({ file, size: body.length, sha256: hash(body), url: `https://dl.vonvon.cc/bot/mac/stable/${file}` });
   }
   const options = { out, 'cos-write-config': write, 'windows-cos-config': windowsConfig };
-  const calls = [], flags = {};
+  const calls = [], flags = {}, serverInputs = [];
+  if (server) {
+    // planServer, uploadServer and promoteServer are replaced below; their own tests are publish-server.test.mjs.
+    const serverKey = join(out, 'server.pem');
+    await writeFile(serverKey, 'not read by the stubs', { mode: 0o600 });
+    await save(join(out, 'server.json'), { bucket: common.bucket, region: common.region, prefix: 'bot/server/', publicBaseURL: 'https://dl.vonvon.cc/bot/server', secretIdEnv: 'SRV_ID', secretKeyEnv: 'SRV_KEY', updatePrivateKeyFile: serverKey });
+    options['server-cos-config'] = join(out, 'server.json');
+  }
   const candidateManifest = Buffer.from(json({ version, feedURL: `https://dl.vonvon.cc/bot/mac/stable/feed-${version}-arm64.json` }));
   const oldManifest = Buffer.from(json({ version: '1.2.2', feedURL: 'https://dl.vonvon.cc/bot/mac/stable/feed-1.2.2.json' }));
-  const assertMacEnv = ({ env }) => { assert.equal(env.WIN_ID, undefined); assert.equal(env.WIN_KEY, undefined); assert.equal(env.READ_ID, 'private'); assert.equal(env.WRITE_KEY, 'private'); };
+  const assertMacEnv = ({ env }) => { assert.equal(env.WIN_ID, undefined); assert.equal(env.WIN_KEY, undefined); assert.equal(env.SRV_ID, undefined); assert.equal(env.READ_ID, 'private'); assert.equal(env.WRITE_KEY, 'private'); };
+  const secrets = { READ_ID: 'private', READ_KEY: 'private', WRITE_ID: 'private', WRITE_KEY: 'private', WIN_ID: 'private', WIN_KEY: 'private', ...(server ? { SRV_ID: 'private', SRV_KEY: 'private' } : {}) };
+  const serverObject = (file, key) => { const body = Buffer.from(file); return { file, key, url: `https://dl.vonvon.cc/${key}`, bytes: body.length, sha256: hash(body), sha512: hash(body, 'sha512') }; };
+  const serverPlan = { version, sourceSha: sha, publicKey: 'fixture', publishedAt: 1_793_000_000_000,
+    versioned: [`vonvon-server-${version}-linux-x64.tar.gz`, `vonvon-server-${version}-linux-arm64.tar.gz`, `vonvon-server-${version}-build.json`, 'manifest.json'].map(file => serverObject(file, `bot/server/${version}/${file}`)),
+    stable: [serverObject('install.sh', 'bot/server/install.sh'), serverObject('uninstall.sh', 'bot/server/uninstall.sh'), serverObject('stable-manifest.json', 'bot/server/stable/manifest.json')],
+    previousManifest: { status: 404 } };
+  const assertServerEnv = env => { assert.equal(env.SRV_ID, 'private'); assert.equal(env.SRV_KEY, 'private'); for (const name of ['READ_ID', 'WRITE_KEY', 'WIN_ID', 'WIN_KEY']) assert.equal(env[name], undefined, name); };
   const dependencies = {
-    env: { READ_ID: 'private', READ_KEY: 'private', WRITE_ID: 'private', WRITE_KEY: 'private', WIN_ID: 'private', WIN_KEY: 'private' }, log: () => {},
-    macDependencies: { env: { READ_ID: 'private', READ_KEY: 'private', WRITE_ID: 'private', WRITE_KEY: 'private', WIN_ID: 'private', WIN_KEY: 'private' } },
+    env: { ...secrets }, log: () => {}, serverConfigPath: join(out, 'no-cos-server.json'),
+    macDependencies: { env: { ...secrets } },
+    planServer: async input => {
+      assert.equal(input.dir, join(out, 'server')); assert.equal(input.version, version); assert.equal(input.sha, sha); assert.equal(input.config.secretIdEnv, 'SRV_ID');
+      assert.equal(typeof input.readSource, 'function'); assert.equal(input.env, undefined, 'planning needs no write credential');
+      serverInputs.push(input); await flags.serverPlan?.(input); return serverPlan;
+    },
+    uploadServer: async ({ dir, plan, env, cancelFile }) => {
+      assertServerEnv(env); assert.equal(cancelFile, join(out, 'CANCEL')); assert.deepEqual(plan, serverPlan);
+      calls.push('server-upload'); await flags.serverUpload?.();
+      await mkdir(dir, { recursive: true });
+      await save(join(dir, 'server-publish-receipt.json'), { version, sourceSha: sha, objects: plan.versioned });
+    },
+    promoteServer: async ({ env, ownerConfirmation, planSHA256, cancelFile, readSource }) => {
+      assertServerEnv(env); assert.equal(ownerConfirmation, '确认发布'); assert.match(planSHA256, /^[a-f0-9]{64}$/); assert.equal(cancelFile, join(out, 'CANCEL')); assert.equal(typeof readSource, 'function');
+      calls.push('server-promote'); await flags.serverPromote?.();
+    },
     download: async ({ env, expectedSha, expectedVersion }) => {
       assert.deepEqual(env, {}); assert.equal(expectedSha, sha); assert.equal(expectedVersion, version);
       return verifyWindowsArtifacts(windowsOut, { sourceSha: sha, version });
@@ -77,7 +106,7 @@ async function fixture(t, modern = false) {
       await save(join(macOut, 'upload-receipt.json'), { version, sourceCommit: sha, planSHA256: input['plan-sha256'], objects: macFiles, versionedVerification: { versionedObjectsVerified: true } });
     },
     execute: async (_command, args, { env }) => {
-      calls.push('windows-upload'); assert.equal(env.READ_ID, undefined); assert.equal(env.WRITE_ID, undefined); assert.equal(env.WIN_ID, 'private');
+      calls.push('windows-upload'); assert.equal(env.READ_ID, undefined); assert.equal(env.WRITE_ID, undefined); assert.equal(env.WIN_ID, 'private'); assert.equal(env.SRV_ID, undefined);
       assert.equal(args[args.indexOf('--cancel-file') + 1], join(out, 'CANCEL'));
       await flags.windows?.();
       const inventory = JSON.parse(await readFile(join(out, 'publication-plan.json'), 'utf8')).candidate.windows;
@@ -94,7 +123,7 @@ async function fixture(t, modern = false) {
     collect: async (_input, { env }) => { assert.deepEqual(env, {}); calls.push('collect'); return { readyForWebsite: true }; },
   };
   const plan = await planPublication(options, dependencies);
-  return { out, options: { ...options, 'plan-sha256': plan.planSHA256, 'owner-confirmation': '确认发布' }, dependencies, calls, flags, macOut, windowsOut, plan, oldManifest };
+  return { out, options: { ...options, 'plan-sha256': plan.planSHA256, 'owner-confirmation': '确认发布' }, dependencies, calls, flags, macOut, windowsOut, plan, oldManifest, serverInputs, serverPlan };
 }
 test('both native verified candidates produce one reviewed plan; uploads overlap and stable waits for both', async t => {
   const f = await fixture(t), macEntered = deferred(), windowsEntered = deferred(), release = deferred();
@@ -219,7 +248,68 @@ test('new EXE-only releases bind two signed feeds in the unified plan and promot
   assert.ok(f.plan.objects.some(item => item.url.endsWith('/stable/arm64/update.json')));
   await uploadPublication(f.options, f.dependencies);
   await promotePublication(f.options, f.dependencies);
-  assert.deepEqual(f.calls, ['mac-upload', 'windows-upload', 'promote', 'windows-promote', 'collect']);
+  // The two uploads run concurrently; either may start first.
+  assert.deepEqual(f.calls.slice(0, 2).sort(), ['mac-upload', 'windows-upload']);
+  assert.deepEqual(f.calls.slice(2), ['promote', 'windows-promote', 'collect']);
   await writeFile(join(f.windowsOut, 'update-x64.json'), '{}');
   await assert.rejects(promotePublication(f.options, f.dependencies), /signature/);
+});
+
+test('without cos-server.json the plan, upload and status say only macOS and Windows are published', async t => {
+  const f = await fixture(t);
+  assert.match(f.plan.server, /服务端未配置/);
+  assert.deepEqual(f.serverInputs, []);
+  await uploadPublication(f.options, f.dependencies);
+  await promotePublication(f.options, f.dependencies);
+  assert.equal(f.calls.some(name => name.startsWith('server')), false);
+  assert.match((await publicationStatus(f.options)).server, /服务端未配置/);
+  await assert.rejects(planPublication({ ...f.options, 'server-cos-config': join(f.out, 'missing.json') }, f.dependencies), /服务端的 COS 配置不在指定的位置/);
+});
+test('a configured server joins the reviewed plan; its upload runs beside the others and its stable goes last', async t => {
+  const f = await fixture(t, true, true);
+  assert.equal(f.plan.server.liveStable, 'none');
+  assert.deepEqual(f.plan.server.stable.map(item => item.key), ['bot/server/install.sh', 'bot/server/uninstall.sh', 'bot/server/stable/manifest.json']);
+  assert.ok(f.plan.objects.some(item => item.file === `vonvon-server-${version}-linux-arm64.tar.gz`));
+  const saved = JSON.parse(await readFile(join(f.out, 'publication-plan.json'), 'utf8'));
+  assert.deepEqual(saved.candidate.server, f.serverPlan);
+  assert.ok(saved.configs.server.sha256);
+  await uploadPublication(f.options, f.dependencies);
+  assert.deepEqual(f.serverInputs.at(-1).previous, f.serverPlan, 'later steps reuse the reviewed live snapshot, not a fresh read');
+  assert.deepEqual(f.calls.slice(0, 3).sort(), ['mac-upload', 'server-upload', 'windows-upload']);
+  assert.equal((await publicationStatus(f.options)).server.receiptPresent, true);
+  await promotePublication(f.options, f.dependencies);
+  assert.deepEqual(f.calls.slice(3), ['promote', 'windows-promote', 'server-promote', 'collect']);
+});
+test('a failed server upload is named and retried alone; stable waits for its receipt', async t => {
+  const f = await fixture(t, false, true);
+  f.flags.serverUpload = async () => { throw new Error('SECRET-SDK-OUTPUT'); };
+  await assert.rejects(uploadPublication(f.options, f.dependencies), error => {
+    assert.match(error.message, /incomplete: server publication helper failed/); assert.doesNotMatch(error.message, /SECRET/); return true;
+  });
+  await assert.rejects(promotePublication(f.options, f.dependencies), /Both versioned/);
+  assert.equal(f.calls.includes('promote'), false);
+  const before = f.calls.length;
+  f.flags.serverUpload = undefined;
+  await uploadPublication(f.options, f.dependencies);
+  assert.deepEqual(f.calls.slice(before), ['server-upload']);
+  const path = join(f.out, 'server', 'server-publish-receipt.json'), receipt = JSON.parse(await readFile(path, 'utf8'));
+  receipt.objects[0].sha256 = '0'.repeat(64); await save(path, receipt);
+  await assert.rejects(promotePublication(f.options, f.dependencies), /服务端的上传回执/);
+});
+test('a server stable failure after macOS says so; the rerun with the same hash only completes the server', async t => {
+  const f = await fixture(t, false, true);
+  await uploadPublication(f.options, f.dependencies);
+  f.flags.serverPromote = async () => { throw new Error('线上的服务端 stable 清单在 owner 看过计划之后变了；清单没覆盖'); };
+  await assert.rejects(promotePublication(f.options, f.dependencies), /stable 已经切好，服务端 stable 没切成：线上的.*只补服务端/);
+  assert.equal(f.calls.filter(name => name === 'promote').length, 1);
+  f.flags.serverPromote = undefined;
+  const before = f.calls.length;
+  await promotePublication(f.options, f.dependencies);
+  assert.deepEqual(f.calls.slice(before), ['verify-stable', 'server-promote', 'collect'], 'macOS is only re-verified');
+});
+test('the server plan is part of the review: a changed server candidate stops upload before anything is written', async t => {
+  const f = await fixture(t, false, true);
+  f.serverPlan.publishedAt += 1;
+  await assert.rejects(uploadPublication(f.options, f.dependencies), /changed since review|differs/);
+  assert.deepEqual(f.calls, []);
 });

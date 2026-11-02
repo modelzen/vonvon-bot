@@ -12,10 +12,18 @@ export async function productVersion(root = repositoryRoot) {
   return daemon.version;
 }
 
-export async function checkedProductVersion(root = repositoryRoot) {
+/**
+ * The one product version of a release: the daemon's, which the desktop app and, given its build report
+ * (`vonvon-server-<v>-build.json` from build-server.mjs), the Linux server packages must carry too.
+ */
+export async function checkedProductVersion(root = repositoryRoot, { serverBuildJSON } = {}) {
   const version = await productVersion(root);
   const desktop = await metadata(root, 'packages/desktop/package.json');
   if (desktop.version !== version) throw new Error('Desktop/Core version mismatch; run npm run version:sync');
+  if (serverBuildJSON) {
+    const server = JSON.parse(await readFile(serverBuildJSON, 'utf8'));
+    if (server.version !== version) throw new Error(`Server package version ${server.version} differs from the product version ${version}`);
+  }
   return version;
 }
 

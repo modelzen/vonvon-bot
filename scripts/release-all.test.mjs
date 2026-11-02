@@ -85,6 +85,8 @@ async function fixture(t) {
     if (command === 'git' && args[0] === 'rev-parse') return { stdout: sha };
     if (command === 'git' && args[0] === 'worktree') {
       for (const name of ['daemon', 'desktop']) { await mkdir(join(args[3], 'packages', name), { recursive: true }); await save(join(args[3], 'packages', name, 'package.json'), { version }); }
+      // The Mac helper leaves the web UI built; the server build reuses it.
+      if (!remote.noWebUI) { await mkdir(join(args[3], 'packages', 'ui', 'dist'), { recursive: true }); await writeFile(join(args[3], 'packages', 'ui', 'dist', 'index.html'), '<html>'); }
     }
     if (command === 'security') return { stdout: 'Developer ID Application: Fixture (ABCDEFGHIJ)' };
     if (command === 'xcrun') assert.equal(opts.env.READ_KEY, undefined);
@@ -98,7 +100,11 @@ async function fixture(t) {
   };
   const run = async (command, args, opts) => {
     helpers.push([command, args, opts]);
-    if (command === 'npm') { assert.equal(opts.env.READ_KEY, undefined); assert.notEqual(opts.env.HOME, process.env.HOME); await mkdir(join(opts.cwd, 'node_modules')); return; }
+    if (command === 'npm') {
+      assert.equal(opts.env.READ_KEY, undefined); assert.notEqual(opts.env.HOME, process.env.HOME);
+      if (args[0] === 'run') { assert.deepEqual(args, ['run', 'build']); await mkdir(join(opts.cwd, 'packages', 'ui', 'dist'), { recursive: true }); await writeFile(join(opts.cwd, 'packages', 'ui', 'dist', 'index.html'), '<html>'); return; }
+      await mkdir(join(opts.cwd, 'node_modules')); return;
+    }
     const script = args[0], at = flag => args[args.indexOf(flag) + 1];
     if (script.endsWith('release-mac.mjs')) {
       const architecture = at('--architecture'), output = at('--out');
@@ -112,6 +118,18 @@ async function fixture(t) {
     } else if (script.endsWith('assemble-split-release.mjs')) {
       await mkdir(at('--out')); await writeFile(join(at('--out'), 'SHA256SUMS'), 'fixture');
       if (remote.failWindowsAfterAssembly) remote.run.conclusion = 'failure';
+    } else if (script.endsWith('build-server.mjs')) {
+      assert.equal(opts.env.READ_KEY, undefined); assert.notEqual(opts.env.HOME, process.env.HOME);
+      assert.equal(at('--targets'), 'linux-x64,linux-arm64'); assert.equal(at('--out'), join(out, 'server')); assert.equal(at('--node-cache'), join(out, 'node-cache'));
+      await remote.serverBuild?.();
+      await mkdir(at('--out'), { recursive: true });
+      const files = {};
+      for (const target of ['linux-x64', 'linux-arm64']) {
+        const name = `vonvon-server-${remote.serverVersion ?? version}-${target}.tar.gz`, body = Buffer.from(name);
+        await writeFile(join(at('--out'), name), body);
+        files[target] = { name, size: body.length, sha256: hash(body), sha512: createHash('sha512').update(body).digest('hex') };
+      }
+      await save(join(at('--out'), `vonvon-server-${version}-build.json`), { version: remote.serverVersion ?? version, sourceHead: sha, sourceDirty: false, updateKey: 'release', files });
     } else if (script.endsWith('publish-windows.mjs')) {
       assert.ok(args.includes('--download-only')); assert.equal(at('--sha'), sha); assert.equal(at('--version'), version);
       await mkdir(at('--out'), { recursive: true });
@@ -470,4 +488,69 @@ test('update-capable installers do not advertise application updates until both 
     await save(join(h.options.out,'windows','windows-update-publish-receipt.json'),change);
     await assert.rejects(collectRelease({out:h.options.out},h.dependencies),/reviewed publication plan/);
   }
+});
+
+test('build makes the two Linux server packages after both Mac architectures; resume reuses them; status lists them', async t => {
+  const h = await fixture(t);
+  await buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies);
+  const order = h.helpers.filter(call => call[0] !== 'npm').map(call => call[1][0].split('/').at(-1));
+  assert.deepEqual(order.filter(name => name !== 'publish-windows.mjs'), ['release-mac.mjs', 'release-mac.mjs', 'build-server.mjs', 'assemble-split-release.mjs']);
+  const saved = await h.state();
+  assert.equal(saved.server.phase, 'complete');
+  assert.equal(h.helpers.some(call => call[0] === 'npm' && call[1][0] === 'run'), false, 'the web UI the Mac helper built is reused');
+  await buildRelease({ out: h.options.out, 'authorize-notarization': true }, h.dependencies);
+  assert.equal(h.helpers.filter(call => call[1][0]?.endsWith('build-server.mjs')).length, 1);
+  const status = await releaseStatus({ out: h.options.out }, h.dependencies);
+  assert.equal(status.server.phase, 'complete');
+  assert.deepEqual(status.server.packages.map(item => item.file), [`vonvon-server-${version}-linux-x64.tar.gz`, `vonvon-server-${version}-linux-arm64.tar.gz`]);
+});
+
+test('a failed or mismatched server build stops before assembly and is retried on resume', async t => {
+  const h = await fixture(t);
+  h.remote.serverBuild = async () => { throw new Error('build-server failed'); };
+  await assert.rejects(buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies), /build-server failed/);
+  assert.equal((await h.state()).server.phase, 'failed-or-interrupted');
+  assert.equal(h.helpers.some(call => call[1][0]?.endsWith('assemble-split-release.mjs')), false);
+  h.remote.serverBuild = undefined; h.remote.serverVersion = '1.2.4';
+  await assert.rejects(buildRelease({ out: h.options.out, 'authorize-notarization': true }, h.dependencies), /different release inputs|differs from the product version/);
+  h.remote.serverVersion = undefined;
+  await rm(join(h.options.out, 'server'), { recursive: true });
+  await buildRelease({ out: h.options.out, 'authorize-notarization': true }, h.dependencies);
+  assert.equal((await h.state()).server.phase, 'complete');
+  assert.equal(h.helpers.filter(call => call[1][0]?.endsWith('release-mac.mjs')).length, 2, 'Apple work is not repeated');
+  // Bytes changed after the build are refused, not rebuilt over.
+  await writeFile(join(h.options.out, 'server', `vonvon-server-${version}-linux-x64.tar.gz`), 'changed');
+  await assert.rejects(buildRelease({ out: h.options.out, 'authorize-notarization': true }, h.dependencies), /changed after the build/);
+});
+
+test('a resumed source without the built web UI builds it before the server packages', async t => {
+  const h = await fixture(t);
+  h.remote.noWebUI = true;
+  await buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies);
+  const names = h.helpers.map(call => call[0] === 'npm' ? `npm ${call[1][0]}` : call[1][0].split('/').at(-1));
+  assert.ok(names.indexOf('npm run') >= 0 && names.indexOf('npm run') < names.indexOf('build-server.mjs'));
+});
+
+test('the website handoff waits for the server stable only when the reviewed plan has the server', async t => {
+  const h = await fixture(t); await buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies); await receipts(h, true);
+  const plain = await collectRelease({ out: h.options.out }, h.dependencies);
+  assert.equal(plain.readyForWebsite, true); assert.equal(plain.server, null);
+  const planPath = join(h.options.out, 'publication-plan.json');
+  await save(planPath, { format: 1, candidate: { server: { version } } });
+  const waiting = await collectRelease({ out: h.options.out }, h.dependencies);
+  assert.equal(waiting.readyForWebsite, false); assert.deepEqual([waiting.server.published, waiting.server.stableVerified], [false, false]);
+  const objects = ['linux-x64', 'linux-arm64'].map(target => { const file = `vonvon-server-${version}-${target}.tar.gz`; return { file, url: `https://dl.vonvon.cc/bot/server/${version}/${file}`, bytes: 10, sha256: hash(file) }; });
+  await save(join(h.options.out, 'server', 'server-publish-receipt.json'), { version, sourceSha: sha, objects });
+  const planSHA256 = hash(await readFile(planPath));
+  await save(join(h.options.out, 'server', 'server-stable-receipt.json'), { version, sourceSha: sha, planSHA256: '0'.repeat(64), status: 'published' });
+  assert.equal((await collectRelease({ out: h.options.out }, h.dependencies)).readyForWebsite, false, 'a stable receipt for another plan does not count');
+  await save(join(h.options.out, 'server', 'server-stable-receipt.json'), { version, sourceSha: sha, planSHA256, status: 'published' });
+  const ready = await collectRelease({ out: h.options.out }, h.dependencies);
+  assert.equal(ready.readyForWebsite, true);
+  assert.equal(ready.server.installCommand, 'sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/install.sh)"');
+  assert.deepEqual(ready.server.packages.map(item => item.target), ['linux-x64', 'linux-arm64']);
+  assert.equal(ready.downloads.some(item => item.platform === 'server'), false, 'the website download list stays macOS and Windows');
+  objects[1].url = 'https://example.com/elsewhere';
+  await save(join(h.options.out, 'server', 'server-publish-receipt.json'), { version, sourceSha: sha, objects });
+  await assert.rejects(collectRelease({ out: h.options.out }, h.dependencies), /Server receipt lacks/);
 });

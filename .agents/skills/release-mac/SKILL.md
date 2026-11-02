@@ -1,6 +1,6 @@
 ---
 name: release-mac
-description: 发布 Vonvon Bot：固定版本与 main SHA，编排双平台构建、公证、版本化上传和 stable 交接。用户要求发版、准备候选、上传或续跑发布时使用。
+description: 发布 Vonvon Bot：固定版本与 main SHA，编排 macOS、Windows 和 Linux 服务端包的构建、公证、版本化上传和 stable 交接。用户要求发版、准备候选、上传或续跑发布时使用。
 ---
 
 # Vonvon Bot macOS 发布
@@ -62,6 +62,19 @@ COS 写入只用 `scripts/release-cos-publish.mjs`，不得现场拼命令直接
 版本化 ZIP/feed/DMG 上传后，`upload` 用 `scripts/verify-public-release.mjs --versioned-only` 核验公网 HTTPS、完整 SHA-256 和每个对象的响应头（表见 workflow.md），通过后追加台账并打印它输出的 JSON（版本、源码 SHA、公证 submission ID、公开 URL 和哈希）。把这份 JSON 展示给 owner，再按本文开头那条规则取得确认，才可用 `promote` 最后切 stable manifest，`--owner-confirmation` 原样填 owner 那条消息。工具将回复绑定准确计划；带 `--reviewed-plan` 时接受简短肯定回复，旧完整格式也兼容。工具核不了是谁发的，只能填本文开头规则认的 owner 原话。使用 `scripts/verify-public-release.mjs` 复核固定 URL，不能跟随重定向或加随机 query 绕缓存；必须看到它的成功输出才算通过，不能只看退出码。只有公网复核通过才报告发布完成，并持久保存发布回执（`promote` 写 `OUT/publish-receipt.json`；复核失败时它不自动撤回，打印撤回命令并以非零退出）。复核因为网络抖动这类一时的原因失败，或者 `promote` 中途断了，用同一个计划哈希跑 `reverify` 补完复核和回执，它不写 COS；不再跑 `promote`。
 
 manifest 使用 `Cache-Control: no-cache` 和 `application/json`，如果启用了 CDN 就配短 TTL／重验证；版本化文件使用 `public, max-age=31536000, immutable`，feed 也必须是 `application/json`。头传错了按 workflow.md 用 `fix-headers` 只改元数据，不覆盖字节、不废版本号。更新格式保持 Squirrel.Mac 的 manifest `{version, feedURL}`、feed `{url, name, notes, pub_date}`，同源 HTTPS。回滚只恢复事先验证并保存在计划里的旧 manifest（`rollback --restore-previous`；首发用 `rollback --delete-first-release-manifest` 只删 manifest；启用了 CDN 就刷新）以停推，`--dry-run` 只打印、不留记录；撤回过的候选不能再 `plan`、`upload`、`promote`；已升级客户端不降级，修复版必须高于**曾发布的最高版本**。
+
+## Linux 服务端包
+
+0.9.0 起每次发布同时发 Linux 服务端的两个包（linux-x64、linux-arm64），版本号和 macOS、Windows 相同。不是 Linux 的机器装桌面端安装包，里面带着服务端。
+
+- 签名钥匙：服务端的发布清单用单独的 Ed25519 钥匙签名，不和 Windows 的更新钥匙共用。第一次发布前，在 owner 的 Mac 上用 `node scripts/server-update-signing.mjs create-key --out <外部绝对路径>` 生成一次（文件 0600，已存在就拒绝），把它打印的 base64 公钥写进 `packages/daemon/server-update.json` 的 `publicKey`，PEM 写进 `scripts/install.sh` 的 `# BEGIN VONVON PUBKEY` 块，走 PR 合入后再从那个 main SHA 发布。私钥不进仓库，不贴、不打印；备份方式由 owner 定。
+- 发布配置：默认 `~/.config/vonvon-release/cos-server.json`（或 `--server-cos-config`），只写 bucket、region、`prefix: "bot/server/"`、`publicBaseURL: "https://dl.vonvon.cc/bot/server"`、凭据的环境变量名和 `updatePrivateKeyFile`（私钥的绝对路径，0600）。没有这个文件时，`plan` 写明"服务端未配置"，这次只发 macOS 和 Windows。
+- 构建：`release-all.mjs build` 在两个 Mac 架构之后把两个包打进 `OUT/server/`（`vonvon-server-<v>-linux-x64.tar.gz`、`…-linux-arm64.tar.gz` 和构建记录 `vonvon-server-<v>-build.json`），Node 按 `scripts/server-node.json` 的钉值核过才用，缓存在 `OUT/node-cache`。构建记录的 `updateKey` 必须是 `release`：带 `--update-public-key` 打的测试包（`test`）和仓库里还没有公钥时打的包（`none`），`plan` 一律拒绝。
+- `plan`：签一份 stable 清单（`OUT/server/stable-manifest.json`，只签一次，之后复用），核对私钥、`server-update.json`、包里的公钥和 `install.sh` 里的公钥是同一把，读一次线上的 stable 快照；线上比这次新、同版本却是另一份、或者 `publishedAt` 不比这次早，都拒绝。给 owner 看的除了 macOS、Windows 的对象，还有服务端两个包的 sha512 和大小、未签名的 `<v>/manifest.json`、签名清单的 `publishedAt` 和要切的三个 stable 对象，都在同一个计划哈希里。
+- `upload`：两个包、构建记录和未签名清单写到 `bot/server/<v>/`，禁止覆盖，逐个公网复核，回执是 `OUT/server/server-publish-receipt.json`。经 #322／Paseo 的发布任务做到这里就停。
+- `promote`：排在 macOS、Windows 之后，先写 `install.sh`、`uninstall.sh`，最后写签名清单 `bot/server/stable/manifest.json`，都是 `no-cache`；写清单前重读线上快照，和 `plan` 时不同就停。切 stable 的确认规则和本文开头那条一样。只有服务端没切成时，用同一个计划哈希重跑 `promote`：已经切好的 macOS、Windows 只复核、不再写。回执是 `OUT/server/server-stable-receipt.json`；`release-handoff.json` 的 `server` 一项带安装命令和两个包。
+- 回退：装好的服务端不接受比自己见过的更低的版本，所以 stable 不能指回旧版本；有问题就发一个版本号更高的修复版。
+- 证据：两个包的 sha512 和大小、未签名清单、签名清单的 `publishedAt`、两份回执。
 
 ## 输出与清理
 
