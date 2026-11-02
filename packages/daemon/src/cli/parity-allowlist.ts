@@ -29,13 +29,6 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
 
   'collaboration.startGoal': { reason: 'unused', note: 'goals start in the group chat; no client sends it' },
 
-  'memory.restore': pending('C5', 'memory restore'),
-  'memory.promote': pending('C5', 'memory promote'),
-  'memory.move': pending('C5', 'memory move'),
-  'memory.confirm': pending('C5', 'memory confirm'),
-  'memory.purge': pending('C5', 'memory purge'),
-  'memory.undo': pending('C5', 'memory undo'),
-  'memory.events': pending('C5', 'memory events'),
   'memory.seen': { reason: 'client-only', note: "the web page's read marks" },
   'memory.newCounts': { reason: 'client-only', note: "the web page's unread counts" },
 

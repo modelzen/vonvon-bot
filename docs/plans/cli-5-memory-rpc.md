@@ -190,3 +190,55 @@ export async function memoryRpc(service: AdminService, request: MemoryRequest, v
 - 写类没有 daemon 就不能用，是行为变化：输出里给出 `vonvon daemon start`，PR 描述写清楚。
 - `branchDelete` 一次归档很多条时 `trimArchived` 会按上限清理最旧的已归档条目（和逐条归档一样），测试里放一个上限小的位置核对两种做法结果相同。
 - 和 D4a 改同一行（`http.ts`）、同一个文件（`memory.ts`），见 4.8。
+
+## 实现时和计划不一样的地方
+
+基线是叠在 D4b（#648）上的 `claude/devices-4b-bot-authz` 4189f24f；D4b 合入集成分支后，又 merge 了 `origin/claude/devices-integration` 774592ad（带 D4b 最终版和 D2 #644），没有冲突。
+
+1. **4.4 和 4.8 第 1、5 条 D4a、D4b 已经做了，本片不改 `rpc/memory.ts` 和 `http.ts`。** `http.ts` 的 `case 'memory'` 已经按连接的 `clientKind` 传 `origin`（`cli` → `cli`，`web`、`desktop` → `ui`），会话再加上 `session` 和 Bot 进程给的 `landing`。本片只补一条线上测试（`cli-memory-rpc.test.ts`）：三种客户端发 `memory.add`，`memoryAction` 收到的 `origin` 分别是 `cli`、`ui`、`ui`。为此测试夹具 `socketClient` 多了一个可选的 `clientKind` 参数。
+2. **会话里不再整体拒绝（4.8 第 2 条；`devices-4a-scope.md` "实现时和计划不一样的地方"第 2 条的保留到此结束）。** `refuseInSession` 和 `SESSION_REFUSED` 删了。会话里的每条 `vonvon memory` 都带令牌和 `--scope` 连 daemon，由 D4a、D4b 的表判：
+   - `list / export / events / add / edit / archive` 问 Bot 进程，判法和记忆工具一样。写 Bot 记忆按这一轮的角色定落点，成员那一轮落到本群项目、记成不可信；改、删按 `decideEdit`；Bot 记忆一轮只写一条。群令牌只够得着本群的项目。
+   - `restore / promote / move / confirm / purge / undo / reseal / branch-rename / branch-merge / branch-delete` 一律 `permission_denied`，文字是"这个操作不能从 Bot 会话里做。"。
+   - 评论会话的记忆命令全拒。
+   - 4.8 第 4 条的建议，D4a、D4b 已经照做：`export`、`events` 按 `list` 判；`edit`、`archive` 由 D4b 用 `decideEdit` 放开。
+   - 主人终端不受影响，什么都能做。
+3. **`memory.branchDelete` 的权限行（4.3）加在 `authz.ts` 的 `RULES` 里**：和 `branchMerge` 同一行，三种会话都是 `deny`。`authz.test.ts` 里"表和协议互相核对"的测试照常通过。
+4. **读类回退的条件更窄（4.2 第 2 条）**：计划写的是"连不上（`connection` 那一类）就回退"。实现时只在 pid 锁说明"没有 daemon 在跑"（`readRunningPidLock` 回 `null`）时才读文件，和 8.3"daemon 没跑时"的字面一致，也守住验收要点第 1 条：daemon 在跑，但版本不同、本机凭据对不上或者还在启动时，照样报连接错误（exit 3），不绕过它去读文件。锁读不出来按"在跑"处理，同样报连接错误。
+5. **`MemoryContext` 的用法**：
+   - 命令函数不再直接拿 `MemoryContext`，改拿 `MemoryTerminal`，用 `open(kind, fn)` 打开连接。顺序是先核对选项，再打开连接：范围给错、`--revision` 不对，都在连 daemon 之前退 2（`cli-json` 的样本要求这样）。连接只活在回调里，由 `withDaemon` 负责关掉。
+   - 回调里拿到的 `MemoryContext` 有 `io`、`source`、`projects()`（带上绑定的 Bot，`promote` 不写 `--to` 时要用）、`bots()`、`run()`。`env` 挪进 `terminalMemoryContext` 的 deps。
+   - 读写由各命令自己声明：`list`、`export`、`events` 是读，其余都是写。
+6. **`move` 的方向是 Bot 记忆 → 项目。** 计划 4.5 写的是"移到别的项目"，但协议注释（`bot → project memory`）、`memoryAction`（不是 Bot 记忆就拒）和网页的"移回项目"都是 Bot 记忆到项目。所以命令行要求 `--bot`（不能带 `--dm`）加 `--to <项目>`，给了 `--project` 就退 2。
+7. **`memory list --all` 也列"分支已经不在"的已归档条目。** `branch-delete` 之后，空分支会被去掉，它那些已归档的条目在人类输出里就没有分支可挂，旧的输出里看不到它们，验收第 4 步也就做不成。现在这些条目单列一组"已归档（分支已不在）"。`--json` 不变，本来就带全部条目。
+8. **人类输出**：
+   - `events` 每行是本地时间、中文的事件名（撤销的标"（撤销）"）、中文的操作者，最后是 `memory undo` 要用的事件 id。原来最后是条目 id，同一条目的历史里条目 id 每行都一样，没有用处。
+   - 已归档条目在单条输出里标"已归档"。
+   - `purge` 不带 `--yes` 时，文字里写明要删的是哪一条；`--json` 的 `partial.item` 带 `id`、`text`、`branch`、`state`。条目找不到退 2。
+   - `purge` 成功时 `--json` 是 `{ok, kind:'purged', itemId}`。
+9. **写类没有 daemon 时**：文字是 `connectLocalDaemon` 原来那句（含 `vonvon daemon start`），再加一行"改记忆要 daemon 在运行，命令行不再直接改记忆文件。"。只有连接这一步失败时才加这一行。
+10. **`--dm` 的 openId 格式先在命令行核对**，规则和 `dmMemoryLocation` 一样（`[A-Za-z0-9_-]{1,100}`），不对就退 2，不发请求。`--dm` 不带 `--bot` 时报"--dm 要和 --bot 一起给"，不报通用的"要指定哪份记忆"。
+11. **`pickBot` 改成泛型**，接受任何带 `id`、`name` 的列表。读文件时 Bot 名取 `botName`，没有就取 `name`。
+12. **测试的放法**：
+    - store 的 `branchDelete` 测试放在 `memory-store.test.ts`，因为 `memory-branches.test.ts` 只测纯函数。
+    - 上限清理那条：`ARCHIVED_MAX` 是常量，调不小，所以先导入 499 条已归档的，再比较 `branchDelete` 和逐条 `archive` 清掉的是不是同两条。
+    - `memoryAction` 的 `branchDelete`（冲突、固定分支、事件记成 `cli`）在 `memory-admin.test.ts`。
+    - `archive` 和 `forget` 发同一个请求，在 `cli-memory-rpc.test.ts` 里经真的 commander 树测。
+    - `cli-json` 加了 8 条样本，`forget` 那条改成 `archive`，另加两条带范围的写类（`add`，以及旧名 `forget`），没有 daemon 时退 3。
+13. **自测**：
+    - 主人那几步用真 `vonvon daemon start`，数据目录是临时的。
+    - 会话那几步用新探针 `test/manual/memory-rpc-probe.ts`。照 D4b 的探针写：fork 一个假 Bot 进程，跑真 `createAgentEntries` 和真 IPC，再在同一个进程里起 `startApi`，用的是真的记忆文件。
+    - 输出写进 PR 描述。
+14. **`docs/product.md` 不改**：里面没有写 `vonvon memory`、`forget`，也没有"命令行直接改文件"。
+
+## Codex 审查后改了什么（任务 250、251）
+
+JP-VPS 上 Codex 的两份独立审查：250 通读全部 diff、跨模块和数据安全，通过，没有发现；251 协议、store、权限和命令行，一条 P2，接受。
+
+- **251-1（没有 daemon 时读类回退读文件，忽略人类终端显式给的全局 `--scope`）→ 接受，取审查建议的第二种做法。** 回退到文件时，`projects()`、`bots()` 是整个本机的列表，`run()` 直接调 `memoryAction`；`--scope` 只在 daemon 的 negotiate 里生效，所以 daemon 一停，`--scope bot=X` 的 `list`、`export`、`events` 照样读到范围外的项目记忆、正文和修改历史。这和总设计 5.3"没有令牌的人类终端：`--scope` 可选，给了就同样生效"不符。本片不在命令行里离线核对范围（要按 Bot 和群的绑定证明目标属于范围，等于在命令行里再写一份 D4a 的判法），改成：
+  - 人类终端给了 `--scope` 时，读类不走文件回退，和写类一样要 daemon 在运行。连不上就 exit 3，文字是 `connectLocalDaemon` 原来那句（含 `vonvon daemon start`），再加一行"给了 --scope 时要 daemon 在运行：范围由 daemon 核对，命令行不读本机文件。"（`SCOPE_NEEDS_DAEMON`，放在 `daemon-client.ts`，几处共用）。daemon 在跑时照旧由 negotiate 和 D4a 的表判。
+  - 没给 `--scope` 时不变：没有 daemon 就读文件，输出标 `source: 'files'`。Bot 会话本来就不回退，也不变。
+  - 命令行里同样"没有 daemon 就读文件"的地方逐个查过，daemon 在 `--scope` 下会裁、文件回退却不裁的还有两处，一起改成同样的做法：
+    - `project list`：daemon 把 `library.list` 裁到范围里的群绑的项目，文件回退列出全部项目。
+    - `daemon status`：daemon 在范围下去掉崩溃记录、只留范围里的 Bot，文件回退读崩溃文件，里面有所有 Bot 的崩溃和名字。`connectLocal` 的发现子进程（`VONVON_STATUS_FROM_FILES=1`）不带 `--scope`、只看锁，不受影响。
+  - 查过但不用改的：`daemon logs`（`admin.logs`）、`secrets list`（`admin.secrets`）、`clients ls`、`remote status`、`device rename`（`device.*`）。主人带 `--scope` 时 daemon 对这几种请求不裁（`authz.ts` 的 `inReach` 里不点名 Bot 的 admin 请求和 `device` 都直接放行），文件回退读到的和 daemon 回的是同样的内容，没有绕过范围。
+  - 测试：`memory-cli.test.ts` 用真 `connectLocalDaemon` 连一个没有 daemon 的临时数据目录，经 `setCliContext` 给两种 `--scope`（只有 Bot、Bot 加群），`list`、`export`、`events` 都 exit 3、文字带两行、文件回退没被调；去掉 `--scope` 后三条照旧读文件、`source: 'files'`。`cli-project.test.ts`：带 `--scope` 时两种连接错误都 exit 3、不读文件，daemon 能连上时照常回答。`cli-machine.test.ts`：带 `--scope` 时 daemon 没跑、跑着但不应答都 exit 3、什么都不打印，daemon 应答时照常，发现子进程照旧只读锁。`cli-json.test.ts` 加 6 条样本，经真打包的命令行：带 `--scope` 的 `memory list / export / events`、`project list`、`daemon status` 没有 daemon 时 exit 3，不带 `--scope` 的 `memory list --project p` 仍是 2（读了文件，没有这个项目）。
