@@ -38,11 +38,11 @@ async function hostMutex(home: string): Promise<Mutex | undefined> {
   }
 }
 
-/** clients and device rename (devices 8.1): through the daemon when it runs, which alone writes these files then;
+/** clients, device rename and remote (devices 8.1, 8.3): through the daemon when it runs, which alone writes these files then;
  * otherwise straight on the files, and the output says `source: 'files'`. The files path holds the host mutex, which a
  * running daemon holds from its start to its exit (host/bootstrap.ts): two CLIs take turns at the read-change-write, and a
  * daemon starting meanwhile waits for it and then reads what it wrote, so no revocation is lost to a stale copy. */
-async function either<T>(home: string, daemon: Daemon, what: string, rpc: (send: (request: DeviceRequest) => Promise<DeviceReply>) => Promise<T>,
+export async function either<T>(home: string, daemon: Daemon, what: string, rpc: (send: (request: DeviceRequest) => Promise<DeviceReply>) => Promise<T>,
   files: () => Promise<T>): Promise<[T, { source?: 'files' }]> {
   const deadline = Date.now() + FILES_WAIT_MS;
   for (;;) {
@@ -57,7 +57,7 @@ async function either<T>(home: string, daemon: Daemon, what: string, rpc: (send:
     finally { await closeMutex(lock); }
   }
 }
-async function onFiles<T>(home: string, use: (registry: Awaited<ReturnType<typeof createClientRegistry>>) => Promise<T>): Promise<T> {
+export async function onFiles<T>(home: string, use: (registry: Awaited<ReturnType<typeof createClientRegistry>>) => Promise<T>): Promise<T> {
   const registry = await createClientRegistry(home);
   try { return await use(registry); } finally { await registry.close(); }
 }

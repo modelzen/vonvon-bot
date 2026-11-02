@@ -34,8 +34,10 @@ export const badArgs = (message: string): CommandError => new CommandError('bad-
 const REFUSED = new Set([
   'unauthorized', 'forbidden', 'permission_denied', 'scope_required', 'session_token_missing', 'session_token_invalid', 'not_in_session', 'not-dm', 'not-group',
   'desktop_not_running', 'client_revoked', 'pairing_failed', 'rate_limited', 'pairing_limit', 'no_remote_address',
+  'tailscale_unavailable', 'confirm_required',
 ]);
-const CONNECTION = new Set(['protocol_mismatch', 'device_identity_changed']);
+/** `draining` (devices 4.7): the daemon is stopping or restarting and took nothing, as when it closed the connection. */
+const CONNECTION = new Set(['protocol_mismatch', 'device_identity_changed', 'draining']);
 /** What was typed is wrong: a bad request, and a folder that is not there, not a folder, outside the daemon user's home
  * or picked too long ago (cli-3-groups). */
 const BAD_ARGS = new Set(['invalid_request', 'invalid_directory', 'outside_home', 'invalid_folder_token']);

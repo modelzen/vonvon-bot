@@ -57,8 +57,9 @@ export type PairRequest = z.infer<typeof pairRequestSchema>;
 export const pairResultSchema = z.object({ type: z.literal("pairResult"), clientId: z.string(), deviceName: z.string() }).strict();
 export type PairResult = z.infer<typeof pairResultSchema>;
 
-/** D3 fills the states in. */
-export const remoteAddressStateSchema = z.enum(["listening", "waiting", "needs-confirmation", "disabled"]);
+/** D3: an opened address is listened on, waits for its address or port, waits for the owner after its LAN changed, is not
+ * listened on because the daemon is not running (the CLI's files path), or failed to bind for another reason (`detail`). */
+export const remoteAddressStateSchema = z.enum(["listening", "waiting", "needs-confirmation", "disabled", "failed"]);
 const deviceIdentitySchema = z.object({ id: z.string(), name: z.string(), publicKey: z.string() }).strict();
 export const deviceStatusSchema = z.object({
   device: deviceIdentitySchema,

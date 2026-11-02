@@ -12,6 +12,9 @@ export class RpcError extends Error {
 export function unsupported(): never {
   throw new RpcError('unsupported', '当前 daemon 不支持此操作。');
 }
+/** devices 4.7: what a draining daemon answers a request it no longer takes; the connection stays (Codex review 248). */
+export const DRAINING_MESSAGE = 'daemon 正在停止或重启（比如在升级），这个请求没有处理。等它重新启动后再试。';
+export const drainingError = (): RpcError => new RpcError('draining', DRAINING_MESSAGE);
 
 /** The error envelope for a failed request; an `RpcError`'s `details` go with it (a protocol 1 peer drops them, ws.ts). */
 export function errorEnvelope(id: string, error: unknown): { type: 'error'; id: string; code: string; message: string; details?: Record<string, unknown> } {

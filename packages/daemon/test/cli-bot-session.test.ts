@@ -62,7 +62,7 @@ async function daemon(overrides: Partial<AdminService> = {}, askBot?: AuthzDeps[
   // devices-4b: the group's Bot process says a member's turn is going
   const actor = { kind: 'session' as const, openId: 'ou_m', role: 'member' as const, chatId: GROUP };
   const fixture = await startFixture(fakeService({ listBots: async () => [bot], listProjects: async appId => appId === BOT ? [row('研发', GROUP), row('运营', 'oc_z')] : [], executeSchedule, ...overrides }),
-    undefined, undefined, askBot ?? (async () => ({ ok: true, role: 'member', openId: 'ou_m', actor })));
+    undefined, undefined, undefined, askBot ?? (async () => ({ ok: true, role: 'member', openId: 'ou_m', actor })));
   await writeFile(join(fixture.home, 'daemon.pid'), JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), listen: fixture.api.listen }));
   await chmod(join(fixture.home, 'local-credential'), 0o000);
   const home = (await emptyHome()).home;
@@ -140,6 +140,8 @@ describe('a Bot session\'s command line', () => {
     const session = { VONVON_SESSION: `vs1.ses_0123456789abcdef.${'a'.repeat(43)}` };
     for (const [path, ...args] of [['daemon restart'], ['daemon start'], ['daemon stop'], ['service install'], ['service uninstall'], ['pair'], ['clients ls'],
       ['clients revoke', 'cl_0000000000000000'], ['device rename', 'x'], ['bot repair-dir', 'x'], ['open'],
+      // D3: remote access is the owner's at this computer (devices 8.3), refused before it reads or writes remote.json
+      ['remote status'], ['remote enable', '192.168.1.10'], ['remote enable', '--tailscale'], ['remote disable', '192.168.1.10'], ['remote port', '7767'],
       // I3: update and its check, and the install scripts' switch of `current` (devices 8.3: exit 4 in a session)
       ['update'], ['update', '--check'], ['update', '--allow-downgrade', '--to', '0.0.1'],
       ['__standalone-setup', '--install-root', root, '--release', '0.0.1'], ['__standalone-teardown', '--install-root', root]] as Array<[string, ...string[]]>) {
@@ -148,10 +150,10 @@ describe('a Bot session\'s command line', () => {
     }
     expect(await run(root, home, ['service', 'status'], session)).toMatchObject({ code: 0 });
     expect(await run(root, home, ['daemon', 'status'], session)).toMatchObject({ code: 3, json: { error: { kind: 'connection' } } });
-    // devices 8.3's list: each one a command of this CLI, or one D3 adds (remote …)
+    // devices 8.3's list: each one a command of this CLI
     const localOnly = await loadLocalOnly();
     const commands = new Set((await loadCommands()).map(command => command.path.replace(/ [<[].*$/, '')));
-    expect(localOnly.filter(path => !commands.has(path))).toEqual(['remote status', 'remote enable', 'remote disable', 'remote port']);
+    expect(localOnly.filter(path => !commands.has(path))).toEqual([]);
     for (const allowed of ['daemon status', 'service status', 'secrets get', 'schedule list', 'memory add', '__restart-after-exit', '__daemon-control']) expect(localOnly).not.toContain(allowed);
   }, 60_000);
 
