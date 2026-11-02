@@ -1,11 +1,10 @@
 import { z } from 'zod';
-import { REASONING_EFFORTS } from '../agent/types';
 import { TIER_NETWORK } from '../agent/permission/types';
 
 export const ModelSelectionSchema = z.strictObject({
   kind: z.enum(['catalog', 'custom']),
   id: z.string().min(1).refine((value) => value === value.trim(), 'Must not have surrounding whitespace'),
-  effort: z.enum(REASONING_EFFORTS).optional(),
+  effort: z.string().min(1).max(1000).refine((value) => value === value.trim(), 'Must not have surrounding whitespace').optional(),
 });
 
 /** Only this new block is strict; legacy config and preference keys remain untouched. */
