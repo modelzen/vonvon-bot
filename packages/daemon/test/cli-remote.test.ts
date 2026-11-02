@@ -133,6 +133,14 @@ it('lists the candidates in words and as JSON, the left-out ones only with --all
   expect(nothing.text()).toMatch(/^这台设备上没找到别的设备能连的地址。推荐用 Tailscale/);
 });
 
+// A1 (Codex 261 P3): the removed --tailscale says what to write instead, and writes nothing.
+it('tells an old --tailscale what to write instead', async () => {
+  await expect(runRemote('enable', { tailscale: true }, output().io, noDaemon, home, serverDeps, pipe)).rejects.toMatchObject({
+    kind: 'bad-args', message: expect.stringMatching(/^没有 `--tailscale` 了，直接写地址：`vonvon remote enable "\$\(tailscale ip -4\)"`。.*vonvon remote candidates/),
+  });
+  await expect(readFile(devicesPath(home, 'remote.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
 // A1: main 必败, `remote enable` with no address needed --tailscale.
 it('asks for no address without a terminal: exit 2, the candidates and a command to copy', async () => {
   await expect(runRemote('enable', {}, output().io, noDaemon, home, serverDeps, pipe)).rejects.toMatchObject({

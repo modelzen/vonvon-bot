@@ -554,14 +554,14 @@ const remote = program.command('remote').description('Let other computers connec
 covers(remote.command('status'), 'device.status').description('Show the opened address, whether it is listened on, and the clients').option(...JSON_FLAG)
   .action(async (options: Json) => { await (await remotes()).runRemote('status', {}, io(options)); });
 covers(remote.command('enable [ip]'), 'device.enable').description('Accept paired clients on this address (a literal IP); one address only, another one replaces it. With no address, pick one in a terminal')
-  .option('--allow-public', 'Confirm a public or carrier (CGNAT) address').option(...JSON_FLAG)
+  .option('--allow-public', 'Confirm a public or carrier (CGNAT) address').addOption(new Option('--tailscale').hideHelp()).option(...JSON_FLAG)
   .addHelpText('after', `
 Examples:
   vonvon remote enable                      # in a terminal: pick from this computer's addresses
   vonvon remote enable "$(tailscale ip -4)"
   vonvon remote enable 192.168.1.23`)
-  .action(async (ip: string | undefined, options: Json & { allowPublic?: boolean }) => {
-    await (await remotes()).runRemote('enable', { ...(ip === undefined ? {} : { host: ip }), allowPublic: Boolean(options.allowPublic) }, io(options));
+  .action(async (ip: string | undefined, options: Json & { allowPublic?: boolean; tailscale?: boolean }) => {
+    await (await remotes()).runRemote('enable', { ...(ip === undefined ? {} : { host: ip }), allowPublic: Boolean(options.allowPublic), tailscale: Boolean(options.tailscale) }, io(options));
   });
 remote.command('candidates').description('List the addresses other computers could reach this one on, the same list `remote enable` picks from')
   .option('--all', 'Also list virtual bridges, proxy fake IPs and self-assigned addresses').option(...JSON_FLAG)
