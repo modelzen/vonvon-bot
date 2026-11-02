@@ -246,7 +246,7 @@ Mac 后验（整批）：U1a 的桌面端用 `webBinarySocket`/`nodeBinarySocket
 
 ## 12. 代码审查后改了什么
 
-Codex 两位审查者的 9 条，全部接受：
+写作时 Claude 两路自查（加密、健壮性）的 9 条，全部接受（不是独立审查；独立审查交给 Codex，见 PR）：
 
 1. D2-CRYPTO-1 → 接受。消息 2 之后的关闭在通道里认证：新增 `FRAME.close = 0x03`，正文是 2 字节关闭码加 UTF-8 原因（`closeBody`/`readCloseBody`）。服务端有通道时每次关闭都先发这一帧，hub 的 `closePeers`/`closeWhere` 也发（经 `attach` 的第三个参数 `announce`）；客户端收到就按它结束。消息 2 之后只有明文 WS 关闭码的，一律给 `closed`（可重试）；消息 2 之前只认设备那时会发的 4001/4004/4005/4006，4002/4003/4007 给 `closed`。测试：经中继注入 `88 02 0f a3` → `closed`，名单上仍是已配对。消息 2 之前的关闭在 IK 下没法认证，`device_identity_changed`、`rate_limited`、`remote_disabled`、`protocol_mismatch` 仍可能是路径上的人伪造的；U1a 把 `device_identity_changed` 当终止态时要考虑这一点。
 2. D2-CRYPTO-2 → 接受。`clients.touch` 从消息 1 挪到 hello 通过之后；hello 超时也报 `onHandshakeFailed('handshake_failed')`。测试：重放截下的消息 1，`lastAddress`、`lastSeenAt` 不变，真连一次才变。D3 的 `connectionAuthenticated` 挂在 hello 通过（`hub.add`）那一步，不挂在消息 1 之后。重放仍能看出这把钥匙是已撤销（立刻 4003）、已配对（超时 4005）还是未知（超时 4002）：真客户端被拒时，明文关闭码本来就看得见，这里不另外处理。
