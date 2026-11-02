@@ -15,6 +15,8 @@ let storeEntry: string;
 let interruptDriver: string;
 const dirs: string[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
+/** Every data root a CLI ran on, with its HOME: a test that failed or timed out can leave its detached daemon there. */
+const roots = new Map<string, string>();
 beforeAll(async () => {
   await mkdir(resolve('node_modules/.cache'), { recursive: true });
   buildDir = await mkdtemp(resolve('node_modules/.cache/vonvon-cli-'));
@@ -27,8 +29,13 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  // The detached daemons `daemon start` and `restart` spawn are not children: stop any a daemon.pid still names, with
+  // the CLI's own identity check, before their HOME is deleted (fixes-0-9-0: two were found running on deleted dirs).
+  await Promise.all([...roots].map(async ([root, home]) => {
+    if (await readFile(join(root, 'daemon.pid')).then(() => true, () => false)) await launch(home, root, ['daemon', 'stop']).exited;
+  }));
   await Promise.all([buildDir, ...dirs].map(dir => rm(dir, { recursive: true, force: true })));
-});
+}, 60_000);
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), 'vonvon-cli-')); dirs.push(dir);
   const home = join(dir, 'home'); const root = join(dir, 'daemon');
@@ -41,6 +48,7 @@ function launch(home: string, root: string, args: string[], extraEnv: NodeJS.Pro
   // HOME and XDG_CONFIG_HOME isolate the service registration lookup from the real user.
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'), VONVON_HOME: root, ...extraEnv };
   if (!extraEnv.VONVON_SERVICE) delete env.VONVON_SERVICE;
+  roots.set(root, home);
   const child = spawn(process.execPath, [...prefix, entry, ...args], { env, stdio: 'pipe' });
   children.push(child);
   let output = '';
@@ -127,18 +135,23 @@ it.skipIf(process.platform === 'win32')('service status gives an isolated data r
 
 it('concurrent detached starts return the same ready owner and stop clears its lease', async () => {
   const f = await fixture();
-  const first = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
-  const second = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
-  const codes = await Promise.all([first.exited, second.exited]);
-  // #296's CI saw both exit 1 once with nothing to go on: show both CLIs and the detached daemon's log.
-  const log = await readFile(join(f.root, 'daemon.log'), 'utf8').catch(() => '(no daemon.log)');
-  expect(codes, `first:\n${first.output()}\nsecond:\n${second.output()}\ndaemon.log:\n${log}`).toEqual([0, 0]);
-  const record = z.object({ pid: z.number(), listen: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
-  expect(first.output()).toContain(`PID ${record.pid} at ${record.listen}`);
-  expect(second.output()).toContain(`PID ${record.pid} at ${record.listen}`);
-  const stopped = launch(f.home, f.root, ['daemon', 'stop']);
-  expect(await stopped.exited).toBe(0);
-  await expect(readFile(join(f.root, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
+  try {
+    const first = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
+    const second = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
+    const codes = await Promise.all([first.exited, second.exited]);
+    // #296's CI saw both exit 1 once with nothing to go on: show both CLIs and the detached daemon's log.
+    const log = await readFile(join(f.root, 'daemon.log'), 'utf8').catch(() => '(no daemon.log)');
+    expect(codes, `first:\n${first.output()}\nsecond:\n${second.output()}\ndaemon.log:\n${log}`).toEqual([0, 0]);
+    const record = z.object({ pid: z.number(), listen: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
+    expect(first.output()).toContain(`PID ${record.pid} at ${record.listen}`);
+    expect(second.output()).toContain(`PID ${record.pid} at ${record.listen}`);
+    const stopped = launch(f.home, f.root, ['daemon', 'stop']);
+    expect(await stopped.exited).toBe(0);
+    await expect(readFile(join(f.root, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    // A failed step must not leave the detached daemon running.
+    await launch(f.home, f.root, ['daemon', 'stop']).exited;
+  }
 }, 30_000);
 
 it('daemon restart replaces a detached daemon on the same port, and a clean stop leaves no crash record (s17)', async () => {
