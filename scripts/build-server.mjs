@@ -1,6 +1,7 @@
 // Builds the standalone server packages (docs/plans/devices.md 7.1, 7.2; docs/plans/server-1-standalone.md).
 // Each archive unpacks into releases/<version>/: app/ (the daemon, minified, with the web UI), node/ (official Node and
-// its npm), standalone.json and build-manifest.json. Nothing is uploaded.
+// its npm), standalone.json and build-manifest.json. Nothing is uploaded. By default only the Linux packages are built:
+// a script-installed server exists only on Linux (owner 2026-11-01; Mac and Windows get theirs inside the desktop app).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
@@ -19,6 +20,11 @@ import { stageDaemon } from './stage-daemon.mjs';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
 export const TARGETS = ['linux-x64', 'linux-arm64', 'darwin-arm64', 'darwin-x64', 'win-x64', 'win-arm64'];
+/**
+ * What is built by default and published: the server manifest lists these and nothing else. The macOS and Windows
+ * targets can still be built with --targets until a later cleanup removes them with the rest of that standalone code.
+ */
+export const PUBLISHED_TARGETS = ['linux-x64', 'linux-arm64'];
 export const isWindowsTarget = target => target.startsWith('win-');
 export const archiveName = (version, target) => `vonvon-server-${version}-${target}.${isWindowsTarget(target) ? 'zip' : 'tar.gz'}`;
 // PowerShell 5.1 Expand-Archive is held to 260 characters. 100 covers
@@ -258,12 +264,12 @@ async function fileHashes(path) {
   return { size, sha256: hashes.sha256.digest('hex'), sha512: hashes.sha512.digest('hex') };
 }
 
-function parseArguments(args) {
-  const options = { targets: TARGETS, allowDirty: false };
+export function parseArguments(args) {
+  const options = { targets: PUBLISHED_TARGETS, allowDirty: false };
   for (let i = 0; i < args.length; i++) {
     const [name, value] = [args[i], args[i + 1]];
     if (name === '--allow-dirty') { options.allowDirty = true; continue; }
-    if (!['--out', '--targets', '--node-cache', '--update-public-key', '--update-base-url'].includes(name) || !value) throw new Error('usage: build-server.mjs --out <dir> [--targets linux-x64,...] [--node-cache <dir>] [--allow-dirty] [--update-public-key <file> --update-base-url <url>]');
+    if (!['--out', '--targets', '--node-cache', '--update-public-key', '--update-base-url'].includes(name) || !value) throw new Error('usage: build-server.mjs --out <dir> [--targets linux-x64,linux-arm64] [--node-cache <dir>] [--allow-dirty] [--update-public-key <file> --update-base-url <url>]');
     if (name === '--out') options.out = resolve(value);
     if (name === '--update-public-key') options.publicKeyFile = resolve(value);
     if (name === '--update-base-url') options.baseURL = value.replace(/\/+$/, '');
