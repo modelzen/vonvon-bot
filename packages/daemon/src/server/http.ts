@@ -309,7 +309,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
           peer.send({ type: 'response', id, method: 'machine', payload: { type: 'coreUpdateStatus', status: options.service.updateStatus() } });
         } else if (request.method === 'machine' && request.payload.type === 'stopHost') {
           if (!options.control) throw new Error('Host control is unavailable');
-          options.control.requestStop();
+          options.control.requestStop(request.payload.reason);
           peer.send({ type: 'response', id, method: 'machine', payload: { type: 'done', message: 'daemon 正在停止。' } });
         } else if (request.method === 'admin' && request.payload.type === 'daemonStatus') {
           const lock = await owner;

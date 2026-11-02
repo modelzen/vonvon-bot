@@ -233,7 +233,8 @@ afterEach(async () => {
   vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs();
 });
 
-it('retains all three real locks until tree death and direct exit are confirmed, then reaches the real CLI exit-1 consumer', async () => {
+/** The inline daemon ready, its one provider turn completed and the provider process group still there. */
+async function startedWithProvider() {
   expect(process.send).toBeUndefined();
   await import('../src/cli/index');
   await until(() => fixture.ready || fixture.exit.mock.calls.length > 0, 'inline daemon readiness');
@@ -256,16 +257,20 @@ it('retains all three real locks until tree death and direct exit are confirmed,
   await until(() => fixture.finalCard.mock.calls.length > 0, 'completed provider turn');
   await vi.advanceTimersByTimeAsync(0);
   await snapshot('acquired-before-stop');
+}
 
+it('retains all three real locks until tree death and direct exit are confirmed, then reaches the real CLI exit-1 consumer', async () => {
+  await startedWithProvider();
   appProcess.emit('SIGTERM');
   await vi.advanceTimersByTimeAsync(6000);
   await settleIO(30);
   const atSix = await snapshot('uncertain-at-6s');
   expect.soft(atSix).toMatchObject({ botLock: true, daemonPid: true, hostMutex: 'held', cliExits: [], apiCalls: ['drain'] });
-  await vi.advanceTimersByTimeAsync(114000);
+  // Past the bridge's own limit (12 s), short of the host's (30 s): the locks are still held while the tree is unconfirmed.
+  await vi.advanceTimersByTimeAsync(14000);
   await settleIO(30);
-  const at120 = await snapshot('uncertain-at-120s');
-  expect.soft(at120).toMatchObject({ botLock: true, daemonPid: true, hostMutex: 'held', cliExits: [], apiCalls: ['drain'] });
+  const at20 = await snapshot('uncertain-at-20s');
+  expect.soft(at20).toMatchObject({ botLock: true, daemonPid: true, hostMutex: 'held', cliExits: [], apiCalls: ['drain'] });
   expect.soft(fixture.log.warn).toHaveBeenCalledWith('daemon-shutdown', 'owned_work_unconfirmed', { pid: process.pid, pids: [shellPid] });
   expect.soft(signals.some(({ pid, signal }) => pid === -shellPid && signal === 'SIGKILL')).toBe(true);
 
@@ -279,6 +284,27 @@ it('retains all three real locks until tree death and direct exit are confirmed,
   expect.soft(await snapshot('confirmed-death')).toMatchObject({ botLock: false, daemonPid: false, hostMutex: 'released', cliExits: [1], apiCalls: ['drain', 'release'] });
   expect(fixture.disconnect).toHaveBeenCalledOnce();
   expect(fixture.spawn).toHaveBeenCalledOnce();
+  expect(signals.every(({ pid, signal }) => pid === -shellPid || (pid === nativeProcess.pid && signal === 0))).toBe(true);
+});
+
+// owner 2026-11-02: a stop ends within 30 seconds. A tree never confirmed dead (its group was sent SIGKILL long before) no
+// longer holds the daemon forever: at the limit it exits, 1 outside a service manager, and the end of the process frees
+// the locks (the fake exit here does not end the process, so they read as still held).
+it('exits at the host stop limit while the provider tree is unconfirmed', async () => {
+  await startedWithProvider();
+  appProcess.emit('SIGTERM');
+  await vi.advanceTimersByTimeAsync(29000);
+  await settleIO(30);
+  expect.soft(await snapshot('uncertain-at-29s')).toMatchObject({ botLock: true, daemonPid: true, hostMutex: 'held', cliExits: [], apiCalls: ['drain'] });
+  expect.soft(signals.some(({ pid, signal }) => pid === -shellPid && signal === 'SIGKILL')).toBe(true);
+  await vi.advanceTimersByTimeAsync(1000);
+  await until(() => fixture.exit.mock.calls.length > 0, 'stop limit exit');
+  expect.soft(await snapshot('stop-limit-exit')).toMatchObject({ cliExits: [1], directExited: false });
+  expect(fixture.log.warn).toHaveBeenCalledWith('daemon-shutdown', 'host_stop_limit', expect.objectContaining({ limitMs: 30000, intent: 'stop', code: 1 }));
+  // The fake exit leaves the process running: the tree dies here, so the run ends inside the test, not after its stubs go.
+  group = 'missing'; observeExit();
+  await vi.advanceTimersByTimeAsync(2000);
+  await until(() => fixture.exit.mock.calls.length > 1, 'CLI completion after the limit');
   expect(signals.every(({ pid, signal }) => pid === -shellPid || (pid === nativeProcess.pid && signal === 0))).toBe(true);
 });
 

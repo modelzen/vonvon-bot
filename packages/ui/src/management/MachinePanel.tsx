@@ -66,7 +66,7 @@ export function MachinePanel({request, agents, reveal, macos = false}: {request:
       <SettingsRow title="运行方式"
         description={status?.host?.ownership === 'attached' ? '当前由外部服务管理。' : '接收飞书消息并运行 Bot。'}
         value={!status ? '状态未知' : status.host ? (status.host.ownership === 'owned' ? '桌面管理' : '外部服务') : '已停止'} />
-      <SettingsRow title="daemon 服务" description={!shell?.startHost ? '启动功能由桌面版提供。停止服务可能中断正在进行的 Bot 任务。' : '停止服务可能中断正在进行的 Bot 任务。'}
+      <SettingsRow title="daemon 服务" description={!shell?.startHost ? '启动功能由桌面版提供。停止服务会中断正在进行的对话。' : '停止服务会中断正在进行的对话。'}
         trailing={<span className="settings-inline-actions">
           <Button size="sm" disabled={busy || !!status?.host || !shell?.startHost} onClick={() => {if (shell?.startHost) void runShell(shell.startHost);}}>启动 daemon</Button>
           <Button size="sm" disabled={busy || status?.host?.ownership !== 'owned'} onClick={() => setConfirm({type: 'stopHost'})}>停止 daemon</Button>

@@ -83,7 +83,7 @@ async function runCliUpdate(opts: { check?: boolean }): Promise<void> {
   console.log(`✓ 已更新到 v${latest}`);
 
   if (daemonRunning()) {
-    console.log('重启后台服务以加载新版本…');
+    console.log('重启后台服务以加载新版本，正在进行的对话会被中断…');
     try {
       await restartDaemon();
       console.log('✓ 后台服务已重启，新版本已生效。');
@@ -126,13 +126,15 @@ const defaultDeps = (): UpdateCommandDeps => ({
 });
 /**
  * After the old daemon is gone, how long `update-status.json` is read for the outcome (4.6 60 + 25 s, and more). The
- * connection drops when the drain starts, and the drain waits for the Bots' work with no limit: the clock starts only
- * once no daemon drains any more (review F6).
+ * connection drops when the drain starts; the drain interrupts the Bots' turns and ends within 30 seconds (owner
+ * 2026-11-02, host/lifecycle.ts), and the clock starts only once no daemon drains any more (review F6).
  */
 export const OUTCOME_WAIT_MS = 120_000;
 /** How long `applyCoreUpdate` of a global npm install is waited for: its daemon runs `npm install -g` before answering. */
 export const NPM_INSTALL_MS = 10 * 60_000;
 const SESSION_REFUSED = 'vonvon update 不能在 Bot 的会话里用：升级会重启服务端。在网页的设置里更新，或者在自己的终端里运行。';
+/** Said once the update really goes ahead on a running server (owner 2026-11-02): no question, the restart does not wait. */
+export const UPDATE_INTERRUPTS = '升级会重启服务端，正在进行的对话会被中断，卡片上会请发消息的人再发一次。';
 
 type CheckReply = Extract<MachineReply, { type: 'coreUpdate' }> | (StandaloneCheck & { source: 'local' });
 function checkLine(reply: CheckReply): string {
@@ -141,15 +143,20 @@ function checkLine(reply: CheckReply): string {
   return reply.hasUpdate ? `当前 ${reply.current}，最新 ${reply.latest}（有新版本，运行 vonvon update 更新）` : `当前 ${reply.current}，已是最新`;
 }
 
-/** Prints each change of the status: a JSON line `{ event: 'status', … }`, or a line of text at each step and 10 %. */
-function statusPrinter(io: Io, since: number) {
+/**
+ * Prints each change of the status: a JSON line `{ event: 'status', … }`, or a line of text at each step and 10 %. A
+ * `notice` goes once before the first step of an update that goes ahead, in text only: not for one already up to date.
+ */
+function statusPrinter(io: Io, since: number, notice?: string) {
   let last = '';
+  let noticed = notice === undefined || io.json;
   return (status: CoreUpdateStatus | null): CoreUpdateStatus | null => {
     if (!status || status.at < since) return null; // an earlier update's record
     const tenth = status.progress && status.progress.total > 0 ? Math.floor(status.progress.transferred / status.progress.total * 10) : -1;
     const key = JSON.stringify([status.phase, status.detail, status.message, io.json ? status.progress?.transferred : tenth]);
     if (key !== last) {
       last = key;
+      if (!noticed && status.phase !== 'done' && status.phase !== 'error') { noticed = true; io.write(`${notice}\n`); }
       io.write(io.json ? `${JSON.stringify({ event: 'status', ...status })}\n` : `${coreUpdateStatusText(status)}\n`);
     }
     return status;
@@ -208,7 +215,8 @@ export async function runUpdateCommand(options: UpdateCommandOptions, io: Io, de
     return;
   }
   const since = deps.now() - 2000;
-  const show = statusPrinter(io, since);
+  // With no server running there is no conversation to interrupt.
+  const show = statusPrinter(io, since, running ? UPDATE_INTERRUPTS : undefined);
   const wanted = { ...(options.to !== undefined ? { version: options.to } : {}), ...(options.allowDowngrade ? { allowDowngrade: true } : {}) };
   if (!running) {
     let job: ReturnType<typeof startStandaloneUpdate>;

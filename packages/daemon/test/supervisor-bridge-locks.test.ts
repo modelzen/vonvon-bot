@@ -4,7 +4,7 @@ vi.mock('../src/import/bridge/runtime', () => ({bridgeImportRuntime: () => ({imp
 vi.mock('../src/config/bots', () => ({loadBots: async () => {if (fixture.registryUnreadable) throw new Error('unreadable registry'); return {version: 1, bots: [{appId: 'disabled_imported', name: 'disabled', tenant: 'feishu', createdAt: 1, active: false}]};}}));
 vi.mock('../src/admin/service', () => ({createAdminService: () => ({})}));
 vi.mock('../src/server/http', () => ({startApi: fixture.start}));
-vi.mock('../src/agent/owned-process', () => ({closeOwnedProviderProcesses: async () => {}, unconfirmedProviderPids: () => []}));
+vi.mock('../src/agent/owned-process', () => ({closeOwnedProviderProcesses: async () => {}, unconfirmedProviderPids: () => [], registeredProviderPids: () => []}));
 vi.mock('../src/core/logger', () => ({log: {info() {}, warn() {}, fail() {}}}));
 vi.mock('../src/agent', () => ({installBackendDep() {}, uninstallBackendDep() {}}));
 vi.mock('../src/platform/spawn', () => ({spawnProcess: vi.fn(() => {throw new Error('Disabled bot must never spawn');})}));

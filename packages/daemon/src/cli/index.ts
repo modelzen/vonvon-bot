@@ -113,7 +113,16 @@ daemon.command('run').description('Run in the foreground')
   .action(async (options: { bot?: string; port: number; parentControl?: boolean }) => {
     const warning = (await import('./root-warning')).rootWarning();
     if (warning) process.stderr.write(`${warning}\n`);
-    await (await import('../host/bootstrap')).runHostRuntime({ bot: options.bot, port: options.port, managed: false, control });
+    // owner 2026-11-02: a host's stop, restart or update ends within 30 s, whatever a Bot or Feishu does meanwhile; a Bot
+    // child has its own, shorter limit (bot/supervisor.ts). Ended this way, the run is not taken for a crash.
+    const runControl = control;
+    let disarm: (() => void) | undefined;
+    if (runControl && !process.send) {
+      const [{ armHostStopLimit }, { closeHostRun }, logger] = await Promise.all([import('../host/lifecycle'), import('../host/crash-guard'), import('../core/logger')]);
+      disarm = armHostStopLimit(runControl, { beforeExit: () => closeHostRun({ kind: 'clean' }), flush: () => logger.flushLogs() });
+    }
+    try { await (await import('../host/bootstrap')).runHostRuntime({ bot: options.bot, port: options.port, managed: false, control }); }
+    finally { disarm?.(); }
   });
 daemon.command('start').description('Start a detached daemon')
   .option('--port <port>', 'Loopback API port', (value) => Number(value), 0).option(...JSON_FLAG)
@@ -122,11 +131,13 @@ daemon.command('start').description('Start a detached daemon')
     const status = await (await import('./commands/daemon')).runStart(options.port);
     await show(options, status.running ? [`running PID ${status.pid} at ${status.listen}`] : [], status);
   });
-covers(daemon.command('stop'), 'machine.stopHost').description('Stop the running daemon').option(...JSON_FLAG).action(async (options: Json) => {
-  const stopped = await (await import('./commands/daemon')).runStop();
+covers(daemon.command('stop'), 'machine.stopHost').description('Stop the running daemon; conversations in progress are interrupted').option(...JSON_FLAG)
+  // The desktop app stopping the older server it replaces: the interrupted turns' cards say the server was updated.
+  .addOption(new Option('--for-update').hideHelp()).action(async (options: Json & { forUpdate?: boolean }) => {
+  const stopped = await (await import('./commands/daemon')).runStop(undefined, options.forUpdate ? 'update' : undefined);
   await show(options, [stopped ? 'stopped' : 'already stopped'], { stopped });
 });
-covers(daemon.command('restart'), 'command.restartHost').description('Restart the daemon (also resumes it after a crash pause)').option(...JSON_FLAG).action(async (options: Json) => {
+covers(daemon.command('restart'), 'command.restartHost').description('Restart the daemon, interrupting conversations in progress (also resumes it after a crash pause)').option(...JSON_FLAG).action(async (options: Json) => {
   const { status, outcome } = await (await import('./commands/daemon')).runRestart();
   const note = outcome === 'resumed' ? '已恢复运行（之前因 10 分钟内崩溃 3 次暂停）。' : outcome === 'started' ? 'daemon 没在运行，已启动。' : undefined;
   await show(options, [`running PID ${status.pid} at ${status.listen}`, ...note ? [note] : []], { ...status, outcome });
@@ -644,7 +655,7 @@ These are all the models the Provider itself reports. The ones a bot's model pic
 vonvon settings models --backend <codex|claude> --purpose <use>.`)
   .action(async (name: string, options: Json) => { await (await import('./commands/provider')).runProviderModels(name, io(options)); });
 covers(program.command('update'), 'machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus')
-  .description('Update this server to the signed stable release; with the daemon running, it drains and restarts')
+  .description('Update this server to the signed stable release; with the daemon running, it restarts it and interrupts conversations in progress')
   .option('--check', 'Only say whether a newer version is out')
   .option('--allow-downgrade', 'With --to: go back to a release still kept on this machine')
   .option('--to <version>', 'The version to go to')

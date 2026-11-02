@@ -33,8 +33,9 @@ export type LingerChoice = 'ask' | 'on' | 'off';
 /** server-2 4.4: `on` when linger was on or was just turned on; `unsupported` off Linux. */
 export type LingerState = 'on' | 'off' | 'unsupported';
 type LinuxServiceSteps = {
-  /** Whether linger is on afterwards. With `notes` (--json) nothing is asked and the lines go there. */
-  afterInstall: (linger: LingerChoice, notes?: string[]) => Promise<'on' | 'off'>;
+  /** Whether linger is on afterwards. With `notes` (--json) nothing is asked and the lines go there. `running`: the
+   *  service's daemon runs now, for the line that says so. */
+  afterInstall: (linger: LingerChoice, notes?: string[], running?: boolean) => Promise<'on' | 'off'>;
   afterUninstall: () => Promise<string | undefined>;
   /** Why the user manager cannot be asked, given what systemctl answered, when it is one of the common causes. */
   problem: (detail: string) => Promise<UserManagerProblem | undefined>;
@@ -47,6 +48,15 @@ const SAFE_USER = /^[A-Za-z0-9._-]+$/;
 const detailOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
 const TEXT: Io = { json: false, write: text => { process.stdout.write(text); } };
 const succeeded = (kind: ServiceTransactionOutcome['kind']): boolean => kind === 'installed' || kind === 'already-installed' || kind === 'uninstalled' || kind === 'not-installed';
+
+/**
+ * What a finished install says (owner 2026-11-02): plain words, nothing about systemd, launchd, linger or sudo. Boot
+ * start on Linux comes with linger; a launchd agent and a Linux user service without it start at login.
+ */
+export function installedLine(running: boolean, bootStart: boolean): string {
+  const start = bootStart ? '开机自动启动' : '登录后自动启动';
+  return running ? `已在后台运行，${start}。` : `后台服务已经装好，${start}；现在没在运行，下次${bootStart ? '开机' : '登录'}时启动。`;
+}
 
 async function exists(path: string): Promise<boolean> {
   try { await stat(path); return true; }
@@ -123,13 +133,16 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
     ...restart.restarted ? { restarted: { ...restart.restarted, port } } : {}, ...restart.restartError ? { restartError: restart.restartError } : {},
   };
   if (result.kind === 'installed' || result.kind === 'already-installed') {
-    if (result.retained !== null) lines.push(`Daemon PID ${result.retained.pid} is running under the service.`);
-    if (!io.json) io.write(`${lines.join('\n')}\n`);
+    // An install brings its daemon up; one already installed may have been left stopped.
+    const running = result.kind === 'installed' || result.retained !== null;
+    // Only a daemon started again detached is reported besides; the outcome itself is said in plain words below.
+    if (!io.json && lines.length > 1) io.write(`${lines.slice(1).join('\n')}\n`);
     // After the mutex: asking about linger can wait on the user.
     const notes: string[] = warning ? [warning] : [];
     let linger: LingerState = 'unsupported';
-    // A linger that did not take is not a failed install (LINGER-1): the line printed says what to run with sudo.
-    if (d.linux) linger = await (io.json ? d.linux.afterInstall(options.linger ?? 'ask', notes) : d.linux.afterInstall(options.linger ?? 'ask'));
+    // A linger that did not take is not a failed install (LINGER-1): an optional line says how to start at boot.
+    if (d.linux) linger = await (io.json ? d.linux.afterInstall(options.linger ?? 'ask', notes, running) : d.linux.afterInstall(options.linger ?? 'ask', undefined, running));
+    else if (!io.json) io.write(`${installedLine(running, false)}\n`);
     const lingerUser = linger === 'off' && d.linux && SAFE_USER.test(d.linux.user) ? d.linux.user : undefined;
     if (io.json) io.write(`${JSON.stringify({ ok: true, ...outcome, linger, ...lingerUser ? { lingerUser } : {}, notes })}\n`);
     return;
@@ -179,23 +192,28 @@ export type AfterInstallDependencies = {
   write: (text: string) => void;
 };
 
-export const LINGER_QUESTION = 'linger 没开：退出最后一个登录会话后，systemd 会停掉 Bot，开机也不会启动。要开吗？[Y/n] ';
+/** linger belongs to the account, not to Vonvon Bot: uninstall leaves it on and says how to turn it off. */
+export const UNINSTALL_KEEPS_BOOT_START = '这个账号的开机自动启动没关：别的程序可能也要它。不需要的话运行 loginctl disable-linger。';
+export const LINGER_QUESTION = '要让 Vonvon Bot 开机自动启动、退出登录后也继续运行吗？[Y/n] ';
 
 /**
- * After a Linux install (3.10): linger, then how to open the web page. Enter or y agrees; n, EOF, Ctrl-C and a
- * non-terminal do not. Without an answer nothing is turned on. Returns whether linger is on now; a state that cannot
- * be read counts as off.
+ * After a Linux install (3.10): linger, the line that says the server runs, then how to open the web page. Enter or y
+ * agrees; n, EOF, Ctrl-C and a non-terminal do not. Without an answer nothing is turned on. Returns whether linger is
+ * on now; a state that cannot be read counts as off. Only with linger still off is there one more, optional line: how
+ * to have it start at boot (owner 2026-11-02).
  */
-export async function afterLinuxInstall(choice: LingerChoice, d: AfterInstallDependencies): Promise<'on' | 'off'> {
+export async function afterLinuxInstall(choice: LingerChoice, d: AfterInstallDependencies, running = true): Promise<'on' | 'off'> {
   const linger = await d.readLinger();
   const enable = linger.state !== 'on'
     && (choice === 'on' || (choice === 'ask' && linger.state === 'off' && d.interactive && await d.ask(LINGER_QUESTION)));
   let state: 'on' | 'off' = linger.state === 'on' ? 'on' : 'off';
+  let hint: string | undefined;
   if (enable) {
     const enabled = await d.enableLinger();
-    d.write(`${enabled.ok ? '已开 linger。' : enableFailed(enabled.detail, d.user)}\n`);
     if (enabled.ok) state = 'on';
-  } else d.write(`${lingerLine(linger, d.user)}\n`);
+    else hint = enableFailed(enabled.detail, d.user);
+  } else if (state === 'off') hint = lingerLine(linger, d.user);
+  d.write(`${installedLine(running, state === 'on')}\n${hint ? `${hint}\n` : ''}`);
   d.write(`${(await d.guide()).join('\n')}\n`);
   return state;
 }
@@ -214,17 +232,17 @@ function ask(question: string): Promise<boolean> {
 function linuxServiceSteps(): LinuxServiceSteps {
   const user = userInfo().username;
   return {
-    afterInstall: async (choice, notes) => {
+    afterInstall: async (choice, notes, running) => {
       const { serviceOpenGuide } = await import('./open');
       // --json is not a terminal either: no question, and no link with the credential
       const tty = !notes && Boolean(process.stdout.isTTY);
       return afterLinuxInstall(choice, {
         readLinger, enableLinger, ask, interactive: tty && Boolean(process.stdin.isTTY), user,
         guide: () => serviceOpenGuide(tty), write: text => { if (notes) notes.push(...text.replace(/\n$/, '').split('\n')); else process.stdout.write(text); },
-      });
+      }, running);
     },
     // linger belongs to the account and other user services may need it, so uninstall leaves it on.
-    afterUninstall: async () => (await readLinger()).state === 'on' ? 'linger 没关：这个账号上别的用户服务可能也要它。不需要的话运行 loginctl disable-linger。' : undefined,
+    afterUninstall: async () => (await readLinger()).state === 'on' ? UNINSTALL_KEEPS_BOOT_START : undefined,
     problem: detail => userManagerProblem(detail),
     user,
   };

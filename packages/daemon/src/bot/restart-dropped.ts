@@ -1,5 +1,5 @@
-// The queued messages a shutdown dropped unanswered, and the line that asks their senders to send again once the bot is
-// back (product.md 3.10, s18c). `bots/<appId>/dropped.json` keeps one entry per group: its newest dropped message's place
+// The queued messages a shutdown dropped unanswered, the turns it cut short whose card could not say so (owner
+// 2026-11-02), and the line that asks their senders to send again once the bot is back (product.md 3.10, s18c). `bots/<appId>/dropped.json` keeps one entry per group: its newest dropped message's place
 // and how many there were. Ids, times and places only, no text (3.5). The file stays true: an entry leaves it once its
 // group is settled (replied, refused, given up), so a process killed halfway leaves the rest for the next one.
 import { createHash } from 'node:crypto';
@@ -115,10 +115,10 @@ export function settleDroppedSync(file: string, settled: Pick<DroppedEntry, 'cha
   if (kept.length !== loaded.entries.length) write(file, kept);
 }
 
-/** The line under a group's newest dropped message. */
+/** The line under a group's newest dropped message: queued and never started, or cut short mid-turn (owner 2026-11-02). */
 export function droppedText(count: number, sinceMs: number): string {
   const head = sinceMs < DROPPED_RECENT_MS ? '刚才重启了' : 'bot 停了一阵';
-  return count === 1 ? `${head}，这条没处理，请再发一次。` : `${head}，这条和这个群里另外 ${count - 1} 条都没处理，请再发一次。`;
+  return count === 1 ? `${head}，这条没处理完，请再发一次。` : `${head}，这条和这个群里另外 ${count - 1} 条都没处理完，请再发一次。`;
 }
 
 /** Fixed by the message and snapshot revision: retries, including in the next process, use the same uuid; a merge

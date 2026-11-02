@@ -28,18 +28,23 @@ async function helper(owners: (PidLockInfo | null)[] = [null]) {
 const absent: Partial<ServiceCommandDependencies> = { root: join(tmpdir(), 'vonvon-service-cli-absent', 'root'), readOwner: async () => null, linux: undefined };
 const daemon: PidLockInfo = { pid: 31, startedAt: '2026-10-15T00:00:00.000Z', listen: '127.0.0.1:43210' };
 
-it.each(['installed', 'already-installed'] as const)('install prints %s and succeeds', async kind => {
+// owner 2026-11-02: a finished install says it in plain words, nothing about systemd, launchd, linger or sudo
+it.each([
+  ['installed', null, '已在后台运行，登录后自动启动。'],
+  ['already-installed', { pid: 7, startedAt: 'x' }, '已在后台运行，登录后自动启动。'],
+  ['already-installed', null, '后台服务已经装好，登录后自动启动；现在没在运行，下次登录时启动。'],
+] as const)('install %s (daemon %j) says it in plain words and succeeds', async (kind, retained, line) => {
   const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
-  const adapter = { install: vi.fn(async () => outcome(kind)), uninstall: vi.fn() };
+  const adapter = { install: vi.fn(async () => outcome(kind, { retained })), uninstall: vi.fn() };
   await runServiceCommand('install', adapter, { port: 32123 }, absent);
   expect(adapter.install).toHaveBeenCalledWith({ port: 32123 }); expect(adapter.uninstall).not.toHaveBeenCalled();
-  expect(write).toHaveBeenCalledWith(`${kind}: ${kind}\n`);
+  expect(write.mock.calls.map(call => String(call[0])).join('')).toBe(`${line}\n`);
 });
-it('a successful install names the service daemon without calling it left behind', async () => {
+it('a successful install names neither the service daemon nor its definition as left behind', async () => {
   const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
   const adapter = { install: vi.fn(async () => outcome('installed', { detail: 'Installed', retained: { pid: 7, startedAt: 'x' }, leftovers: ['retained pid 7', 'plist /p: ours'] })), uninstall: vi.fn() };
   await runServiceCommand('install', adapter, {}, absent);
-  expect(write).toHaveBeenCalledWith('installed: Installed\nDaemon PID 7 is running under the service.\n');
+  expect(write.mock.calls.map(call => String(call[0])).join('')).toBe('已在后台运行，登录后自动启动。\n');
 });
 it.each(['install_refused', 'install_rolled_back', 'install_incomplete'] as const)('install %s fails with the detail and what was left behind', async kind => {
   const adapter = { install: vi.fn(async () => outcome(kind, { detail: 'stop_unconfirmed: lost', retained: { pid: 7, startedAt: 'x' }, leftovers: ['plist /p: ours'] })), uninstall: vi.fn() };
@@ -128,14 +133,17 @@ describe('Linux: linger and the user manager (s20a)', () => {
     };
     return { d, out: () => out, run: (choice: LingerChoice) => afterLinuxInstall(choice, d) };
   }
-  const OFF = '没开 linger：退出最后一个登录会话后 Bot 会停，开机也不启动。要开就运行 loginctl enable-linger（不行再用 sudo loginctl enable-linger ops）。';
+  // owner 2026-11-02: plain words; only with boot start still off one optional line, the command with sudo as the fallback
+  const BOOT = '已在后台运行，开机自动启动。';
+  const LOGIN = '已在后台运行，登录后自动启动。';
+  const OFF = '没开开机自动启动：退出登录后它会停。需要的话运行一次 loginctl enable-linger（不行再用 sudo loginctl enable-linger ops）。';
   it.each([
-    ['on', 'ask', true, ['linger 已开：开机就启动，退出 SSH 以后 Bot 也还在跑。'], false, false, 'on'],
-    ['off', 'ask', true, ['已开 linger。'], true, true, 'on'],
-    ['off', 'ask', false, [OFF], true, false, 'off'],
-    ['off', 'off', true, [OFF], false, false, 'off'],
-    ['off', 'on', true, ['已开 linger。'], false, true, 'on'],
-    ['unknown', 'ask', true, ['查不到 linger 的状态：找不到 loginctl。要开就运行 loginctl enable-linger（不行再用 sudo loginctl enable-linger ops）。'], false, false, 'off'],
+    ['on', 'ask', true, [BOOT], false, false, 'on'],
+    ['off', 'ask', true, [BOOT], true, true, 'on'],
+    ['off', 'ask', false, [LOGIN, OFF], true, false, 'off'],
+    ['off', 'off', true, [LOGIN, OFF], false, false, 'off'],
+    ['off', 'on', true, [BOOT], false, true, 'on'],
+    ['unknown', 'ask', true, [LOGIN, '查不到能不能开机自动启动：找不到 loginctl。需要的话运行一次 loginctl enable-linger（不行再用 sudo loginctl enable-linger ops）。'], false, false, 'off'],
   ] as const)('linger %s with %s and an answer of %s', async (state, choice, answer, lines, asked, enabled, after_) => {
     const h = after(state, { ask: vi.fn(async () => answer) });
     await expect(h.run(choice)).resolves.toBe(after_);
@@ -151,7 +159,7 @@ describe('Linux: linger and the user manager (s20a)', () => {
     expect(piped.d.enableLinger).not.toHaveBeenCalled();
     const failed = after('off', { enableLinger: vi.fn(async () => ({ ok: false as const, detail: 'Access denied' })) });
     await expect(failed.run('on')).resolves.toBe('off');
-    expect(failed.out()).toBe(['没开成：Access denied。用管理员权限运行：sudo loginctl enable-linger ops', ...guide, ''].join('\n'));
+    expect(failed.out()).toBe([LOGIN, '开机自动启动没开成（Access denied），退出登录后它会停。需要的话用管理员权限运行一次：sudo loginctl enable-linger ops', ...guide, ''].join('\n'));
     await expect(after('off', { enableLinger: failed.d.enableLinger }).run('ask')).resolves.toBe('off');
   });
   const linux = (fields: Partial<NonNullable<ServiceCommandDependencies['linux']>> = {}) => ({
@@ -163,7 +171,7 @@ describe('Linux: linger and the user manager (s20a)', () => {
     vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     const ok = linux();
     await runServiceCommand('install', { install: vi.fn(async () => outcome('installed')), uninstall: vi.fn() }, { linger: 'on' }, ok);
-    expect(ok.linux.afterInstall).toHaveBeenCalledWith('on');
+    expect(ok.linux.afterInstall).toHaveBeenCalledWith('on', undefined, true);
     const refused = linux();
     await expect(runServiceCommand('install', { install: vi.fn(async () => outcome('install_refused')), uninstall: vi.fn() }, {}, refused)).rejects.toThrow('install_refused');
     expect(refused.linux.afterInstall).not.toHaveBeenCalled();
@@ -175,7 +183,7 @@ describe('Linux: linger and the user manager (s20a)', () => {
     const io = { json: true, write: (text: string) => { out += text; } };
     const notes = linux({ afterInstall: vi.fn(async (_choice: LingerChoice, into?: string[]): Promise<'on' | 'off'> => { into?.push('没开 linger。', '网页地址：'); return 'on'; }) });
     await runServiceCommand('install', { install: vi.fn(async () => outcome('installed', { retained: { pid: 9, startedAt: 'then' } })), uninstall: vi.fn() }, {}, notes, io);
-    expect(notes.linux.afterInstall).toHaveBeenCalledWith('ask', ['没开 linger。', '网页地址：']);
+    expect(notes.linux.afterInstall).toHaveBeenCalledWith('ask', ['没开 linger。', '网页地址：'], true);
     expect(JSON.parse(out)).toEqual({ ok: true, action: 'install', result: 'installed', detail: 'installed', retained: { pid: 9, startedAt: 'then' }, linger: 'on', notes: ['没开 linger。', '网页地址：'] });
     out = '';
     const failed = runServiceCommand('uninstall', { install: vi.fn(), uninstall: vi.fn(async () => outcome('uninstall_incomplete', { leftovers: ['unit /u'] })) }, {}, linux(), io);
@@ -259,7 +267,7 @@ describe('Linux: linger and the user manager (s20a)', () => {
     const failed = { install: vi.fn(async () => outcome('install_refused', { detail: 'User manager unavailable: Failed to connect to bus: No medium found' })), uninstall: vi.fn() };
     await expect(runServiceCommand('install', failed, {}, linux({ problem: async () => ({ reason: 'no_runtime_dir', hint }) }))).rejects.toThrow(`install_refused: User manager unavailable: Failed to connect to bus: No medium found\n${hint}`);
     const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
-    const kept = 'linger 没关：这个账号上别的用户服务可能也要它。不需要的话运行 loginctl disable-linger。';
+    const kept = '这个账号的开机自动启动没关：别的程序可能也要它。不需要的话运行 loginctl disable-linger。';
     await runServiceCommand('uninstall', { install: vi.fn(), uninstall: vi.fn(async () => outcome('uninstalled', { detail: 'Uninstalled' })) }, {}, linux({ afterUninstall: async () => kept }));
     expect(write).toHaveBeenLastCalledWith(`uninstalled: Uninstalled\n${kept}\n`);
   });
@@ -267,7 +275,7 @@ describe('Linux: linger and the user manager (s20a)', () => {
     const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     const status = serviceStatus({ ...observed, platformName: 'systemd (Linux)', registration: ours, manager: { kind: 'unknown', detail: 'Failed to connect to bus: No medium found' }, owner: null, running: false });
     await runServiceStatus(false, { status: async () => ({ ...status, hint: '当前终端没有 XDG_RUNTIME_DIR。', linger: { state: 'on' } }) });
-    expect(String(write.mock.calls[0]?.[0])).toMatch(/: unknown\nCannot ask systemd \(Linux\): Failed to connect to bus: No medium found\n当前终端没有 XDG_RUNTIME_DIR。\nlinger 已开：开机就启动，退出 SSH 以后 Bot 也还在跑。\nDefinition: /);
+    expect(String(write.mock.calls[0]?.[0])).toMatch(/: unknown\nCannot ask systemd \(Linux\): Failed to connect to bus: No medium found\n当前终端没有 XDG_RUNTIME_DIR。\n开机自动启动，退出登录后也继续运行。\nDefinition: /);
     await runServiceStatus(true, { status: async () => ({ ...status, linger: { state: 'off' } }) });
     expect(JSON.parse(String(write.mock.calls[1]?.[0]))).toMatchObject({ ok: true, state: 'unknown', linger: { state: 'off' } });
   });

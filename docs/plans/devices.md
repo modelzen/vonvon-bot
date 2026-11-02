@@ -347,7 +347,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 - **桌面端自带的服务端（`bundled`）远程升级**（owner 2026-10-31 要，U4）。bundled 的 daemon 在 `.app` / NSIS 安装目录里，只能随桌面端整包更新，所以 daemon 不自己换文件，而是请同一台电脑上的桌面端外壳跑它已有的应用更新：
   - **通道**：用外壳今天就有的那条本机连接——主进程里 `AttachedDaemon.client` 的 loopback ws（local owner，`clientKind: 'desktop'`），事件和 `onLog`、`onBackendInstall` 一样在 `DT/bridge.ts:206-207` 那里订阅。外壳在 `admin.negotiate` 里声明能力 `desktop.self-update`；只有这台 loopback 上、local 主体、声明了这项能力的连接算"桌面端外壳在"，远程配对来的桌面端客户端（也是 `clientKind: 'desktop'`）不算。界面切到别的设备时外壳对本机的连接仍在（U1a），照样收得到。
   - **检查**：`checkCoreUpdate` 对 `bundled` 发事件 `desktopUpdateRequest { requestId, action: 'check', by: <客户端名> }`，外壳跑 `updater.check()`（macOS `DesktopUpdater`，`DT/updates.ts`；Windows `WindowsDesktopUpdater`，`DT/windows-updates.ts`），用新 RPC `machine.desktopUpdateReport { requestId, state, latest?, message, progress? }` 回结果；daemon 把它放进 `coreUpdate` 回复（`latest`、`hasUpdate`、`desktopShell: true`）。外壳不在 → `desktopShell: false`、`latest: null`；10 秒没回 → 同样按"没回应"处理。
-  - **应用**：`applyCoreUpdate` 对 `bundled` 发 `action: 'apply'`，外壳依次 `check()` → `install()`（下载：macOS Squirrel / Windows electron-updater，带原生签名和 Windows 发布签名校验，最多 10 分钟）→ `install()`（`quitAndInstall`，前面照旧跑 `beforeUpdateInstall`，`DT/main.ts:230-241`）。**排空就是现有的那套**：Windows 在 NSIS 换文件前 `stopHost`（drain，Bot 做完手上的活）；macOS 应用更新时 daemon 照旧跑着，重启后的新桌面端由启动修复用 `stopHost` 停掉旧的 bundled（drain）再起自己的（`login-item.ts:187,225-229`）。远程触发不改这个顺序。Windows 今天手动安装前的本机确认框（`main.ts:633-637`"安装并重启 Vonvon Bot？…可以选择稍后"）远程触发时不弹：点按钮的人就是主人本人（第二轮），确认在发起的客户端上做（第 15 节），没人守着的电脑上弹框会一直挂着；外壳改为在托盘和窗口里给一条不拦人的提示"「<客户端名>」正在更新这台电脑上的 Vonvon Bot"。
+  - **应用**：`applyCoreUpdate` 对 `bundled` 发 `action: 'apply'`，外壳依次 `check()` → `install()`（下载：macOS Squirrel / Windows electron-updater，带原生签名和 Windows 发布签名校验，最多 10 分钟）→ `install()`（`quitAndInstall`，前面照旧跑 `beforeUpdateInstall`，`DT/main.ts:230-241`）。**排空就是现有的那套**：Windows 在 NSIS 换文件前 `stopHost`（2026-11-02 起直接中断进行中的对话，最多 30 秒，`docs/plans/interrupt-and-install-text.md`）；macOS 应用更新时 daemon 照旧跑着，重启后的新桌面端由启动修复用 `stopHost` 停掉旧的 bundled（drain）再起自己的（`login-item.ts:187,225-229`）。远程触发不改这个顺序。Windows 今天手动安装前的本机确认框（`main.ts:633-637`"安装并重启 Vonvon Bot？…可以选择稍后"）远程触发时不弹：点按钮的人就是主人本人（第二轮），确认在发起的客户端上做（第 15 节），没人守着的电脑上弹框会一直挂着；外壳改为在托盘和窗口里给一条不拦人的提示"「<客户端名>」正在更新这台电脑上的 Vonvon Bot"。
   - **状态**：外壳每一步都 `desktopUpdateReport`，daemon 映射到 `coreUpdateStatus`（`installing` 带"正在 <设备> 上下载桌面端更新 45%" / `restarting` / `error`；枚举客户端按开放字符串解析，4.5），所以发起的客户端、`vonvon update` 都看得到进度；`restarting` 要在 `beforeUpdateInstall` 里 `cleanup()` 断开本机连接之前报出去（`main.ts:138-158`）。外壳报 `unavailable`（`updater.enabled` 为假：未签名、没配更新源）就原样回它的文字。重启那一刻连接断开，发起的客户端按 4.7 重连，比较 `serverInfo.version` 判成没成。
   - **外壳不在**：`applyCoreUpdate` 回 `desktop_not_running`（exit 4），文字"<设备> 的服务端是桌面端自带的，要那台电脑上的 Vonvon Bot 桌面端开着才能远程更新。在那台电脑上打开 Vonvon Bot 后再试，或者直接在那里更新。"（第 15 节）。
   - **授权**：`machine.desktopUpdateReport` 只收本机 loopback 上声明了 `desktop.self-update` 的外壳连接，已配对客户端和 bot-session 都 ✗（5.2）；它在对齐测试白名单里标 desktop-only（8.5）。`desktopUpdateRequest` 事件只发给那条连接。
@@ -426,7 +426,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 4. 配对：Linux 上 `vonvon pair` 拿链接，Mac、Windows 在桌面端点"生成连接链接"；客户端设置 → 设备 → 添加 → 粘贴 → 起名；链接 10 分钟有效、只用一次；一台客户端一条；链接会进你的 Agent 的对话记录；配对成功后被连的那台会提示，不是你就撤销。
 5. 切换和日常：切换设备、"在 <设备> 上把 Codex 配置好"是什么意思、选目录选的是那台设备的、托管安装装在那台设备上。
 6. 撤销和改名：在被连的那台设备上（桌面端"允许别的设备连接"或 `vonvon clients ls/revoke`）；授权不会过期，不用的客户端要自己撤销；一台客户端电脑上装了完全访问档的 Bot，它配对过的设备都在同一个信任范围里；完全访问的群里，群成员能让 Bot 在这台设备上做任何事，包括改 vonvon 的设置，只给信任的群用。
-7. 升级：客户端里一键、`vonvon update`、版本对不上的提示；桌面端自带的服务端也能从别的设备一键更新，前提是那台电脑上的 Vonvon Bot 桌面端开着（它会下载、等 Bot 做完手上的活再重启）；0.8 及更早的要先在那台电脑上更新一次。
+7. 升级：客户端里一键、`vonvon update`、版本对不上的提示；桌面端自带的服务端也能从别的设备一键更新，前提是那台电脑上的 Vonvon Bot 桌面端开着（它会下载，再重启，正在进行的对话会被中断，owner 2026-11-02）；0.8 及更早的要先在那台电脑上更新一次。
 8. 连不上怎么办：按地址类型（Tailscale：`tailscale ping`、都登录了吗；局域网：同一网段、防火墙、换了网络要重新确认；公网：端口）；"设备身份变了"的含义（重装、换了数据目录）→ 重新配对。
 9. 命令速查：`remote`（含 `remote port <n>`：默认 7767，撞了就换）、`pair`、`clients`、`device`、`update`、`service`，每条一行。
 
@@ -525,7 +525,7 @@ U2–U4 计划后的变化（2026-11-01，`devices-ui-2-remote-mode.md`、`devic
 | 5 | 会话里的命令行 | 和进程内工具完全同一套规则，堵上"群会话在 shell 里 `vonvon settings set` 以主人身份连上"的洞；保留 owner 要的 `--scope`：群会话带本群、私聊带本 bot，上限按会话算，参数只能缩小 | 5.3、D4a |
 | 6 | 完全访问的残留风险 | 照实写：完全访问会话能读这个 OS 用户的任何文件，包括本机凭据，群成员可以诱导它以主人身份做事。默认不变（bot 自己建的群仍是完全访问）；凡是给群选完全访问的地方加一句"完全访问的群里，群成员能让 Bot 在这台设备上做任何事，包括改 vonvon 的设置，只给信任的群用。" | 5.3、第 15 节、第 16 节第 2 条、`product.md` 3.7/3.8、U2 |
 | 7 | 设置回执卡和［撤销］ | `product.md` 3.7 写了、代码没有（只有记忆能撤销）。**推迟，不进这一批，不做计划**；这一批 bot 在回复里说清改前 → 改后 | 第 9 节、第 11 节、K1 |
-| 8 | 桌面端自带的服务端能不能远程升级 | 要：daemon 请那台的桌面端外壳跑它自己的应用更新（macOS Squirrel、Windows electron-updater NSIS），沿用现有排空；那台桌面端没开就明说要开着 | 6.5、7.5、U4 |
+| 8 | 桌面端自带的服务端能不能远程升级 | 要：daemon 请那台的桌面端外壳跑它自己的应用更新（macOS Squirrel、Windows electron-updater NSIS），沿用现有停止（2026-11-02 起直接中断进行中的对话）；那台桌面端没开就明说要开着 | 6.5、7.5、U4 |
 | 9 | Mac/Windows 当服务端要用户登录着 | 本期接受（可以锁屏），写进文档 | 7.4、第 10 节第 2 条、`product.md` 3.10 |
 | 10 | 远程端口 | 7767。Paseo 默认 6767，Orca 移动端直连默认 6768（stablyai/orca `mobile/src/transport/host-endpoint.ts`），vonvon 的 loopback 端口随机，不冲突；撞了 `vonvon remote port <n>` 改 | 4.2 |
 | 11 | 邀请 | 10 分钟、一次性 | 4.3 |
@@ -564,10 +564,10 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 版本不一致（服务端旧，协议相同） | <设备> 的服务端是 0.9.0，这台电脑是 0.9.1。可以继续用；建议升级服务端。[升级 <设备>] |
 | 版本不一致（协议不同，服务端旧） | <设备> 的服务端是 0.8.0，这台电脑是 0.9.0，两边不能一起工作。升级服务端后才能继续管理。[升级 <设备>] |
 | 版本不一致（协议不同，对面是 0.8 及更早的桌面端自带服务端） | <设备> 的服务端是桌面端自带的（0.8.0），要先在那台电脑上更新一次 Vonvon Bot；之后就能从这里更新。 |
-| 远程更新桌面端自带的服务端（确认，发起的客户端） | 更新 <设备> 上的 Vonvon Bot？那台电脑上的桌面端会下载更新，等 Bot 做完手上的活后重启，期间这里会断开一会儿。[更新] |
+| 远程更新桌面端自带的服务端（确认，发起的客户端） | 更新 <设备> 上的 Vonvon Bot？那台电脑上的桌面端会下载更新，再重启，正在进行的对话会被中断，期间这里会断开一会儿。[更新] |
 | 那台桌面端没开（按钮旁 / `desktop_not_running`） | <设备> 的服务端是桌面端自带的，要那台电脑上的 Vonvon Bot 桌面端开着才能远程更新。在那台电脑上打开 Vonvon Bot 后再试，或者直接在那里更新。 |
-| 远程更新进行中（发起的客户端） | 正在 <设备> 上下载桌面端更新（45%）… / 下载好了，等 Bot 做完手上的活后重启 / <设备> 已更新到 0.9.1。 |
-| 被远程更新的那台（托盘和窗口里的提示，不拦人） | 「<客户端名>」正在更新这台电脑上的 Vonvon Bot。下载好后会等 Bot 做完手上的活再重启。 |
+| 远程更新进行中（发起的客户端） | 正在 <设备> 上下载桌面端更新（45%）… / 下载好了，正在重启（会中断正在进行的对话）/ <设备> 已更新到 0.9.1。 |
+| 被远程更新的那台（托盘和窗口里的提示，不拦人） | 「<客户端名>」正在更新这台电脑上的 Vonvon Bot。下载好后会直接重启，正在进行的对话会被中断。 |
 | 版本不一致（客户端旧） | 这台电脑的 Vonvon Bot（0.8.0）比 <设备>（0.9.0）旧。先更新这台电脑上的应用。 |
 | 服务端太旧（v1） | <设备> 上的 Vonvon Bot（0.7.x）不支持远程管理，请在那台设备上升级一次。 |
 | 安装脚本：开始 | 正在安装 Vonvon Bot 服务端 0.9.0（linux-x64）… |
@@ -577,9 +577,12 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 安装脚本：不是 Linux、也不是 Mac（退出非零，什么都不动） | 这个安装脚本只支持 Linux（这台是 <`uname -s` 的结果>）。Mac、Windows 请下载 Vonvon Bot 桌面端安装包：https://vonvon.cc/get/ |
 | 卸载脚本：在 Mac 上（退出非零，什么都不动） | 这个脚本只卸载 Linux 上的服务端。Mac 上的 Vonvon Bot 是桌面端安装包装的，说明见 https://vonvon.cc/get/ |
 | 卸载脚本：不是 Linux、也不是 Mac（退出非零，什么都不动） | 这个脚本只卸载 Linux 上的服务端（这台是 <`uname -s` 的结果>），什么都没动。 |
-| 安装脚本：完成 | 装好了。后台服务已启动，登录后自动运行。\n试一下：`vonvon --version`\n要从别的电脑连过来管理？看 https://vonvon.cc/guide/remote/ |
+| 安装脚本：完成（2026-11-02 改，不提 systemd、linger、sudo） | 装好了。Vonvon Bot 已在后台运行，开机自动启动。\n试一下：`vonvon --version`\n要从别的电脑连过来管理？看 https://vonvon.cc/guide/remote/ |
 | 安装脚本：没验签名 | 这台机器没有 openssl 3，没能核对发布签名；已核对下载内容的哈希，来源是 https://dl.vonvon.cc。 |
-| 安装脚本：linger 要 sudo | 为了在你退出登录后继续运行，请执行一次：`sudo loginctl enable-linger <用户名>` |
+| 安装脚本：开不了开机自动启动（少数系统，2026-11-02 改；替换"完成"的第一行） | 装好了。Vonvon Bot 已在后台运行。\n这台机器没让它开机自动启动，退出登录后它会停。需要的话运行一次：`sudo loginctl enable-linger <用户名>` |
+| `vonvon service install` 装好（2026-11-02） | 已在后台运行，开机自动启动。（macOS："登录后自动启动"；装好但没在运行："后台服务已经装好，开机自动启动；现在没在运行，下次开机时启动。"） |
+| `vonvon update`：开始重启前（文字模式，2026-11-02） | 升级会重启服务端，正在进行的对话会被中断，卡片上会请发消息的人再发一次。 |
+| 被中断的那一轮（卡片最后一行，2026-11-02） | 服务端重启了，这一轮被中断，请再发一次 / 服务端升级了，这一轮被中断，请再发一次 / Bot 停止运行了，这一轮被中断，等它恢复后请再发一次（定时任务那一轮不带"请再发一次"） |
 | 安装脚本：没有 systemd | 这台机器没有 systemd（可能是容器）。已改为直接启动，崩溃后不会自动重启；需要时运行 `vonvon daemon start`。 |
 | 安装脚本：用户实例不可用 | 连不上这个账号的 systemd（用 sudo 切过来时常见）。已直接启动一次；用这个账号 SSH 登录后运行 `vonvon service install` 装成后台服务。 |
 | 撤销确认（桌面端） | 取消「Clay 的 MacBook」的访问？它会立刻断开，要再连得重新配对。[同时撤销它带进来的 2 台] |
@@ -604,7 +607,7 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 桌面端重开了但没换上（发起的客户端，U4） | 桌面端重新打开了，但服务端还是 <version>，没能换上新版本。在那台电脑上退出 Vonvon Bot 再打开一次。 |
 | 上一次更新还没完（U4） | 上一次更新还在重启，稍后再试。/ 已有更新正在进行。 |
 | 被更新的那台正在退出（U4） | 那台电脑上的 Vonvon Bot 正在退出。 |
-| 被更新的那台排空超时（U4） | 那台电脑上的后台 1 分钟内没停完，这次没有安装更新。稍后再试。 |
+| 被更新的那台排空超时（U4；2026-11-02 起停止最多 30 秒，正常到不了这一步） | 那台电脑上的后台 1 分钟内没停完，这次没有安装更新。稍后再试。 |
 | 别的连接报告更新进度（`forbidden`，U4） | 只有这台电脑上的桌面端能报告更新进度。 |
 | 远程更新的状态行（U4） | 在 <设备> 上 <`coreStatusLine` 的原文> |
 | 排空中不收的请求（错误码 `draining`，4.7，D3 复查 248） | daemon 正在停止或重启（比如在升级），这个请求没有处理。等它重新启动后再试。 |

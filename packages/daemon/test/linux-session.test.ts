@@ -29,8 +29,9 @@ it('turns linger on for this account without a password prompt, and gives the su
   expect(done.run).toHaveBeenCalledWith('loginctl', ['--no-ask-password', 'enable-linger'], 30_000);
   const denied = session([no]);
   expect(await enableLinger(denied.d)).toEqual({ ok: false, detail: 'Access denied' });
-  expect(lingerLine({ state: 'off' }, 'ops')).toBe('没开 linger：退出最后一个登录会话后 Bot 会停，开机也不启动。要开就运行 loginctl enable-linger（不行再用 sudo loginctl enable-linger ops）。');
-  expect(lingerLine({ state: 'unknown', detail: '找不到 loginctl' }, 'ops')).toMatch(/^查不到 linger 的状态：找不到 loginctl。要开就运行/);
+  expect(lingerLine({ state: 'off' }, 'ops')).toBe('没开开机自动启动：退出登录后它会停。需要的话运行一次 loginctl enable-linger（不行再用 sudo loginctl enable-linger ops）。');
+  expect(lingerLine({ state: 'unknown', detail: '找不到 loginctl' }, 'ops')).toMatch(/^查不到能不能开机自动启动：找不到 loginctl。需要的话运行一次/);
+  expect(lingerLine({ state: 'on' }, 'ops')).toBe('开机自动启动，退出登录后也继续运行。');
 });
 
 it('describes a command that times out, is missing or fails without its command line', async () => {

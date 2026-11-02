@@ -80,8 +80,9 @@ export async function runServiceHelper(runtime: ServiceRuntime, action: 'install
 }
 
 /** `vonvon daemon stop`, waiting up to a minute; the error message completes "没能停下旧版本的 daemon：". */
-export async function stopDaemon(runtime: ServiceRuntime, options: CliOptions = {}): Promise<void> {
-  const exit = await runCli(runtime, bundledServiceCli(runtime), ['daemon', 'stop'], options.timeoutMs ?? STOP_TIMEOUT_MS, options.spawn);
+/** `forUpdate`: this app replaces an older server, and the turns the stop cuts short say the server was updated. */
+export async function stopDaemon(runtime: ServiceRuntime, options: CliOptions = {}, forUpdate = false): Promise<void> {
+  const exit = await runCli(runtime, bundledServiceCli(runtime), forUpdate ? ['daemon', 'stop', '--for-update'] : ['daemon', 'stop'], options.timeoutMs ?? STOP_TIMEOUT_MS, options.spawn);
   if (!exit) throw new Error('1 分钟内没停下');
   if (exit.code !== 0) throw new Error(`vonvon daemon stop 失败（${exit.signal ?? `退出码 ${exit.code}`}），详情在 daemon.log`);
 }
@@ -218,12 +219,14 @@ export async function repairServiceAtStartup(runtime: ServiceRuntime,
     ...runtime, registration, running, bundledVersion: readBundledVersion(runtime.resources), exists: options.exists ?? existsSync,
   });
   if (plan === 'none') return undefined;
-  const stop = async (): Promise<string | undefined> => {
-    try { await stopDaemon(runtime, options.stop); return undefined; }
+  // `forUpdate`: the running server is older than this app's (planStartupRepair `stop`, `stop-and-reinstall`); a moved
+  // app's reinstall stops one of the same version.
+  const stop = async (forUpdate: boolean): Promise<string | undefined> => {
+    try { await stopDaemon(runtime, options.stop, forUpdate); return undefined; }
     catch (error) { return `没能停下旧版本的 daemon：${messageOf(error)}。先用着旧版本，稍后在「应用与启动」里重启 daemon。`; }
   };
   if (running && plan !== 'reinstall') {
-    const failed = await stop();
+    const failed = await stop(true);
     if (failed) return failed;
   }
   if (plan === 'stop') return undefined;
@@ -235,7 +238,7 @@ export async function repairServiceAtStartup(runtime: ServiceRuntime,
       // the service turned off in System Settings, from interrupting the bot at every launch.
       const inTheWay = error instanceof ServiceActionError && error.reportReason === 'replace-running';
       if (plan !== 'reinstall' || !running || !inTheWay) throw error;
-      const failed = await stop();
+      const failed = await stop(false);
       if (failed) return failed;
       await install();
     }

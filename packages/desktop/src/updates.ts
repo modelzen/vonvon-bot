@@ -80,10 +80,10 @@ export class DesktopUpdater {
   }
   /** 同一时间只查一次：自动检查进行中用户再点"检查更新"，直接用同一次的结果。 */
   check():Promise<DesktopUpdate> {
-    if (this.downloadedVersion) return Promise.resolve(this.result('downloaded','更新已下载，点击安装并重启'));
+    if (this.downloadedVersion) return Promise.resolve(this.result('downloaded','更新已下载，点击重启升级'));
     this.checking ??= this.lookUp().then(found=>{
       // 检查期间用户可能已经把更新下载好了：以现在的情况为准，别再让界面提示"下载更新"。
-      if (this.downloadedVersion) return this.result('downloaded','更新已下载，点击安装并重启');
+      if (this.downloadedVersion) return this.result('downloaded','更新已下载，点击重启升级');
       // 结果出来后一起改，检查进行中不动 feedURL 和 latest，免得同时点"下载更新"被拒。
       this.latest = found.latest;
       this.feedURL = found.feedURL;
@@ -142,7 +142,7 @@ export class DesktopUpdater {
         await writeFile(this.options.statePath,this.downloadedVersion,{mode:0o600});
       }
       this.options.driver.quitAndInstall();
-      return this.result('downloaded','正在安装并重启桌面应用');
+      return this.result('downloaded','正在重启升级桌面应用');
     }
     if (this.pending) return this.pending;
     if (!this.feedURL) throw new DesktopUpdateError('请先检查桌面更新');
@@ -152,7 +152,7 @@ export class DesktopUpdater {
     this.nativeError = false;
     this.pending = new Promise<DesktopUpdate>((resolve,reject)=>{
       const cleanup = () => {clearTimeout(timer);driver.removeListener('update-downloaded',done);driver.removeListener('error',failed);driver.removeListener('update-not-available',none);};
-      const done = () => {cleanup();if (this.nativeError) {reject(new DesktopUpdateError('桌面更新未通过原生校验'));return;}this.downloadedVersion = version;resolve(this.result('downloaded','更新已下载并通过原生签名校验，点击安装并重启',version));};
+      const done = () => {cleanup();if (this.nativeError) {reject(new DesktopUpdateError('桌面更新未通过原生校验'));return;}this.downloadedVersion = version;resolve(this.result('downloaded','更新已下载并通过原生签名校验，点击重启升级',version));};
       const failed = () => {cleanup();reject(new DesktopUpdateError('桌面更新下载或签名校验失败'));};
       const none = () => {cleanup();resolve(this.result('current','更新源中没有可用的桌面安装包'));};
       const timer = setTimeout(()=>{cleanup();reject(new DesktopUpdateError('桌面更新下载超时'));},10*60*1000);

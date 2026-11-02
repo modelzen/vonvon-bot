@@ -100,9 +100,9 @@ describe('dropped.json', () => {
 
 describe('the reply', () => {
   it('⑧ says how many and how long ago', () => {
-    expect(droppedText(1, 0)).toBe('刚才重启了，这条没处理，请再发一次。');
-    expect(droppedText(3, 0)).toBe('刚才重启了，这条和这个群里另外 2 条都没处理，请再发一次。');
-    expect(droppedText(1, 11 * 60_000)).toBe('bot 停了一阵，这条没处理，请再发一次。');
+    expect(droppedText(1, 0)).toBe('刚才重启了，这条没处理完，请再发一次。');
+    expect(droppedText(3, 0)).toBe('刚才重启了，这条和这个群里另外 2 条都没处理完，请再发一次。');
+    expect(droppedText(1, 11 * 60_000)).toBe('bot 停了一阵，这条没处理完，请再发一次。');
   });
 
   it('⑨ has a uuid fixed by the message', () => {

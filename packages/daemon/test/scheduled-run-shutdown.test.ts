@@ -67,7 +67,8 @@ async function real(seeded: StoredTask, run: () => Promise<ScheduledOutcome>, no
   return { diagnostics, onDisk };
 }
 
-it('stops the scheduler before the orchestrator shuts down, and drains it for at most 5 seconds after', async () => {
+// owner 2026-11-02: the orchestrator already settled the runs within its own drain, so the records get 3 seconds
+it('stops the scheduler before the orchestrator shuts down, and drains it for at most 3 seconds after', async () => {
   let finish!: () => void;
   fixture.orchestrator = orchestrator(
     { stop: () => { fixture.order.push('stop'); }, drain: async ms => { fixture.order.push(`drain ${ms}`); } },
@@ -79,7 +80,7 @@ it('stops the scheduler before the orchestrator shuts down, and drains it for at
   expect(fixture.order).toEqual(['stop', 'shutdown']);
   finish();
   await closing;
-  expect(fixture.order).toEqual(['stop', 'shutdown', 'drain 5000']);
+  expect(fixture.order).toEqual(['stop', 'shutdown', 'drain 3000']);
 });
 
 it('a run on at shutdown is settled interrupted and written before the bridge is closed', async () => {

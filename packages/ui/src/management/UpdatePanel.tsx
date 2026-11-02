@@ -2,6 +2,7 @@ import type {ReactNode} from 'react';
 import {ChevronRight,ArrowUpRight} from 'lucide-react';
 import {useEffect, useState} from 'react';
 import {useDesktopUpdate, useDesktopUpdateOperation} from '../desktop-update';
+import {INTERRUPTS} from '../DesktopUpdateButton';
 import {Button} from '../reference/components/ui';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {useDraftGuard} from '../settings/DraftGuard';
@@ -64,9 +65,9 @@ export function UpdatePanel({request, externalCoreAvailable,version,device,child
   };
   const percent = desktop?.downloadProgress ? Math.floor(desktop.downloadProgress.percent) : undefined;
   const desktopState = desktopOperation.phase === 'downloading' ? percent === undefined ? '正在下载更新…' : `正在下载更新 · ${percent}%`
-    : desktopOperation.phase === 'installing' ? '正在安装并重启…'
+    : desktopOperation.phase === 'installing' ? '正在重启升级…'
     : desktop?.state === 'available' ? '有可用更新'
-    : desktop?.state === 'downloaded' ? '已验证，可安装'
+    : desktop?.state === 'downloaded' ? '已下载并验证'
       : desktop?.state === 'current' ? '已是最新版本'
         : desktop?.state === 'install-pending' ? '上次安装未生效'
           : desktop?.state === 'unavailable' ? '更新源不可用' : '尚未检查';
@@ -86,7 +87,7 @@ export function UpdatePanel({request, externalCoreAvailable,version,device,child
       {desktopOperation.phase === 'downloading' && <progress className="application-update-progress" max={100} value={percent} aria-label="更新下载进度"/>}
       {desktop?.message && <p className="application-update-message">{desktop.message}</p>}
       {desktop?.releaseNotes && <p className="application-update-message application-update-notes">{desktop.releaseNotes}</p>}
-      {(desktop?.state === 'available' || desktop?.state === 'downloaded') && <div className="application-update-install"><span>{desktop.state === 'downloaded' ? '更新已验证。安装会短暂中断 Bot 连接，完成后自动重新打开应用；也可以稍后安装。' : '下载期间可以继续使用，下载后由你决定何时安装。'}</span><Button size="sm" disabled={busy || !shell?.installDesktopUpdate} onClick={() => {const install=shell?.installDesktopUpdate;if(!install)return;if(desktop.state==='downloaded')navigate(()=>void desktopOperation.run(install, 'installing'));else void desktopOperation.run(install, 'downloading');}}>{desktopOperation.error ? desktop.state==='downloaded'?'重试安装':'重试下载' : desktop.state==='downloaded'?'安装并重启':'下载更新'}</Button></div>}
+      {(desktop?.state === 'available' || desktop?.state === 'downloaded') && <div className="application-update-install"><span>{desktop.state === 'downloaded' ? `更新已下载。${INTERRUPTS}升级完自动重新打开应用。` : '下载期间可以继续使用，下载后由你决定何时重启升级。'}</span><Button size="sm" disabled={busy || !shell?.installDesktopUpdate} onClick={() => {const install=shell?.installDesktopUpdate;if(!install)return;if(desktop.state==='downloaded')navigate(()=>void desktopOperation.run(install, 'installing'));else void desktopOperation.run(install, 'downloading');}}>{desktopOperation.error ? desktop.state==='downloaded'?'重试安装':'重试下载' : desktop.state==='downloaded'?'重启升级':'下载更新'}</Button></div>}
       {desktop?.state === 'install-pending' && <div className="application-update-install"><span>可以重试，或者到官网重新下载安装。</span><div className="application-update-actions"><Button size="sm" disabled={busy || !shell?.retryDesktopUpdate} onClick={() => {if(shell?.retryDesktopUpdate) void desktopOperation.run(shell.retryDesktopUpdate, 'checking');}}>重试</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => openPage(downloadPageUrl,'download','无法打开下载页。')}>手动下载<ArrowUpRight size={12}/></Button></div></div>}
       {desktopOperation.error && <p className="application-update-error" role="status">{desktopOperation.error}</p>}
       {desktopMessage && <p className="application-update-error" role="status">{desktopMessage}</p>}
@@ -102,7 +103,7 @@ export function UpdatePanel({request, externalCoreAvailable,version,device,child
       {core && <SettingsRow title="当前版本" value={core.current} />}
       {core && <SettingsRow title="可用版本" value={core.latest ?? '更新源不可用'} />}
       <SettingsRow title="检查 Core 更新" trailing={<Button size="sm" disabled={busy} onClick={() => void run({type: 'checkCoreUpdate'}, 'core')}>检查 Core 更新</Button>} />
-      <SettingsRow title="更新外部 Core" trailing={<Button size="sm" disabled={busy || following || !canApplyCoreUpdate(core)} onClick={() => void run({type: 'applyCoreUpdate'}, 'core')}>更新外部 Core</Button>} />
+      <SettingsRow title="更新外部 Core" description="更新会重启服务端，正在进行的对话会被中断。" trailing={<Button size="sm" disabled={busy || following || !canApplyCoreUpdate(core)} onClick={() => void run({type: 'applyCoreUpdate'}, 'core')}>更新外部 Core</Button>} />
       <SettingsRow title="更新进度" trailing={<Button size="sm" disabled={busy} onClick={() => void run({type: 'coreUpdateStatus'}, 'core')}>查看 Core 更新进度</Button>} />
       {coreStatus?.progress && !ended(coreStatus) && <progress className="application-update-progress" max={coreStatus.progress.total} value={coreStatus.progress.transferred} aria-label="Core 更新下载进度"/>}
       {coreStatus !== undefined && <p className="settings-operation-message" role="status">{coreStatusLine(coreStatus)}</p>}

@@ -304,7 +304,8 @@ export function createSystemdService(options: { root: string }, overrides: Parti
         const current = await registration(s);
         // An unrecognized unit under our own name is an older format: replace it, keeping its bytes for rollback.
         if (current.kind === 'other-root') throw new Error(registrationDetail(current));
-        previous = current.kind === 'ours' ? bytes(s, current.definition) : current.kind === 'unrecognized' ? await readDefinitionBytes(s.target) : null;
+        // The bytes on disk, not re-rendered ones: a unit from before TimeoutStopSec=45 is ours but not byte-equal.
+        previous = current.kind === 'ours' || current.kind === 'unrecognized' ? await readDefinitionBytes(s.target) : null;
         s.expected = previous;
         const owner = await d.readOwner(s.root);
         before = identity(owner);
@@ -385,7 +386,7 @@ export function createSystemdService(options: { root: string }, overrides: Parti
       if (current.kind === 'absent' && unit.kind === 'absent') return outcome(s, 'not-installed', 'Not installed');
       let kept: Uint8Array | null;
       // Only a regular file is replaced; a symlink or directory under our name is refused.
-      try { kept = current.kind === 'ours' ? bytes(s, current.definition) : current.kind === 'unrecognized' ? await readDefinitionBytes(s.target) : null; }
+      try { kept = current.kind === 'ours' || current.kind === 'unrecognized' ? await readDefinitionBytes(s.target) : null; }
       catch (error) { return outcome(s, 'uninstall_refused', `${registrationDetail(current)}: ${detailOf(error)}`); }
       s.expected = kept;
       // An older format's unit may run a process without our lock: job-only refuses it instead of waiting forever.

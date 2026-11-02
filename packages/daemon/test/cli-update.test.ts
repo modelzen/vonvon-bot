@@ -14,7 +14,7 @@ vi.mock('../src/config/paths', async () => {
 
 import { paths } from '../src/config/paths';
 import { commandExitCodes, CommandError } from '../src/cli/command-error';
-import { runUpdateCommand, type UpdateCommandDeps } from '../src/cli/commands/update';
+import { runUpdateCommand, UPDATE_INTERRUPTS, type UpdateCommandDeps } from '../src/cli/commands/update';
 import { withDaemon } from '../src/cli/daemon-client';
 import { switchCurrent } from '../src/service/current-release';
 import { acquireUpdateLock } from '../src/service/update';
@@ -114,7 +114,20 @@ describe('vonvon update', () => {
     });
     await runUpdateCommand({}, io(), deps);
     expect(sent[0]).toEqual({ type: 'applyCoreUpdate' });
-    expect(out().trim().split('\n')).toEqual(['下载中 50%', '解包中', '等 Bot 做完手上的活', '更新完成', '已更新到 1.0.1']);
+    // owner 2026-11-02: said once, before the first step, with no question; the restart does not wait for the Bots.
+    expect(out().trim().split('\n')).toEqual([UPDATE_INTERRUPTS, '下载中 50%', '解包中', '正在中断进行中的对话', '更新完成', '已更新到 1.0.1']);
+    expect(UPDATE_INTERRUPTS).toContain('正在进行的对话会被中断');
+  });
+  it('says nothing about interrupting when the running server is already up to date, nor under --json', async () => {
+    const latest = harness({ machine: async payload => (payload.type === 'applyCoreUpdate' ? accepted : statusReply(status('done', { ok: true, to: '1.0.0', message: '已是最新' }))) });
+    await runUpdateCommand({}, latest.io(), latest.deps);
+    expect(latest.out()).not.toContain('中断');
+    const steps = [status('installing', { detail: 'downloading' }), status('done', { ok: true, to: '1.0.1' })];
+    let polls = 0;
+    const json = harness({ machine: async payload => (payload.type === 'applyCoreUpdate' ? accepted : statusReply(steps[polls++] ?? null)) });
+    await runUpdateCommand({}, json.io(true), json.deps);
+    expect(json.out()).not.toContain(UPDATE_INTERRUPTS);
+    expect(JSON.parse(json.out().trim().split('\n').at(-1)!)).toMatchObject({ ok: true, status: { phase: 'done', to: '1.0.1' } });
   });
   // review 207: under --json a global npm install updated here and left the running daemon on the old code
   it('has a running daemon of a global npm install update and restart itself, under --json too', async () => {
