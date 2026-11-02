@@ -297,6 +297,37 @@ describe('Codex model discovery preserves the native picker directory', () => {
     } finally { await thread.close(); }
   });
 
+  it.each(['failure', 'success'] as const)('keeps refreshed effort capabilities after an older discovery finishes with %s', async outcome => {
+    state.config = { model: 'local-no-effort-metadata', model_provider: 'local-proxy' };
+    state.pages.first.data = [{ ...native('local-no-effort-metadata', true), supportedReasoningEfforts: [] }];
+    save();
+    const { codexCatalogCache } = await import('../src/agent/codex-appserver/models');
+    let finishOld!: (models: Awaited<ReturnType<typeof codexCatalogCache.read>>) => void;
+    let failOld!: (error: Error) => void;
+    const read = vi.spyOn(codexCatalogCache, 'read').mockImplementationOnce(() => new Promise((resolve, reject) => {
+      finishOld = resolve;
+      failOld = reject;
+    }));
+    try {
+      const backend = new CodexAppServerBackend();
+      const old = backend.listModels();
+      await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+      const fresh = await backend.listModels({ refresh: true });
+      expect(fresh[0]?.supportedEfforts).toEqual([]);
+      if (outcome === 'failure') failOld(new Error('Codex model discovery was superseded'));
+      else finishOld(fresh.map(model => ({ ...model, supportedEfforts: ['medium'] })));
+      await old;
+      expect(backend.peekModels()).toEqual(fresh);
+      const thread = await backend.startThread({ cwd: directory, mode: 'full', model: 'local-no-effort-metadata', effort: 'medium' });
+      try {
+        for await (const _ of thread.runStreamed({ text: 'fixture turn after refresh' }).events) { /* drain */ }
+        const turns = calls().filter(call => call.method === 'turn/start');
+        expect(turns).toHaveLength(1);
+        expect(turns[0]!.params).not.toHaveProperty('effort');
+      } finally { await thread.close(); }
+    } finally { read.mockRestore(); }
+  });
+
   it('keeps an existing native model’s effort behavior after the discovered directory changes', async () => {
     state.config = {model: 'custom-before-refresh', model_provider: 'local-proxy'};
     state.pages.first.data = [{...native('custom-before-refresh', true), supportedReasoningEfforts: []}];
