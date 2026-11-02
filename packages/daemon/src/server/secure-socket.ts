@@ -35,19 +35,31 @@ export interface SecureDeps {
 }
 export interface SecureSocketServerOptions extends SecureDeps {
   server: Server;
+  /** D3: the remote address this server listens on, as each of its peers' `listener`. */
+  listenerId?: string;
   /** D3: Host and Origin, and how many connections are not authenticated yet; refused upgrades never reach a socket. */
   admit?(request: IncomingMessage): { ok: true } | { ok: false; status: 403 | 429 };
   /** D3: the rate limit, asked with the remote IP before any frame is read, so before any DH. */
   onHandshake?(ip: string): 'ok' | 'rate_limited';
   /** `validInvite`: the frame named an invite that exists, so the rate limit does not count an unknown key (devices 4.3). */
   onHandshakeFailed?(ip: string, reason: HandshakeFailure, validInvite: boolean): void;
+  /** D3: the connection's hello passed (it joined the hub), so it no longer counts as unauthenticated. `request` is the
+   * upgrade `admit` saw. */
+  onAuthenticated?(request: IncomingMessage): void;
   /** handshake: up to message 1; pairing: up to the pairing request, and again up to the hello; idle: once open. */
   timers?: { handshake?: number; pairing?: number; idle?: number };
 }
 
 type Phase = 'handshake' | 'unpaired' | 'pairing' | 'hello' | 'ready';
 const statusText = (status: number): string => status === 429 ? 'Too Many Requests' : status === 503 ? 'Service Unavailable' : 'Forbidden';
-const refuseUpgrade = (socket: Duplex, status: number): void => { socket.end(`HTTP/1.1 ${status} ${statusText(status)}\r\nConnection: close\r\n\r\n`); };
+/** The answer, and the socket destroyed a second later if the client has not closed its side by then: it would hold it
+ * half open for good otherwise (D3: an address facing strangers). */
+const refuseUpgrade = (socket: Duplex, status: number): void => {
+  socket.end(`HTTP/1.1 ${status} ${statusText(status)}\r\nConnection: close\r\n\r\n`);
+  const timer = setTimeout(() => socket.destroy(), 1_000);
+  timer.unref();
+  socket.once('close', () => { clearTimeout(timer); });
+};
 
 /** devices-2 4.4: the remote side of the daemon. Each connection: the Noise IK handshake (nothing else is read first), then
  * by its key: a client on the list says hello; a revoked one is told 4003; an unknown one may send one pairing request
@@ -96,7 +108,7 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
       id: randomUUID(), get open() { return phase === 'ready' && !detached && socket.readyState === WebSocket.OPEN; }, get clientKind() { return clientKind; },
       get principal() { return principal; }, get protocolVersion() { return protocolVersion; }, get clientId() { return clientId; },
       get capabilities() { return negotiated?.capabilities ?? []; }, get scope() { return negotiated?.scope ?? null; }, get negotiated() { return negotiated !== undefined; },
-      address,
+      address, ...(options.listenerId === undefined ? {} : { listener: options.listenerId }),
       negotiate(capabilities, scope) {
         if (negotiated) return false;
         negotiated = { capabilities: [...capabilities], scope };
@@ -203,6 +215,7 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
       if (protocolVersion !== PROTOCOL_VERSION) principal = { kind: 'maintenance', protocolVersion, inner: 'owner:paired' };
       phase = 'ready';
       hub.add(peer, socket);
+      options.onAuthenticated?.(upgraded);
       deadline(idleMs, () => close('server_shutdown'));
       send(options.info(peer));
     };

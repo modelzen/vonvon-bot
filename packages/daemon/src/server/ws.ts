@@ -20,6 +20,8 @@ export interface Peer extends JobPeer {
   /** A secure-channel connection: the paired client whose key it proved, whatever its principal (a maintenance one has
    * no client id): what D3 matches a revoked client's connections by. Undefined on the loopback. */
   readonly clientId?: string;
+  /** D3: the remote address whose listener took this connection; undefined on the loopback. */
+  readonly listener?: string;
   send(value: Response | ErrorEnvelope): void;
 }
 export const formatAddress = (host: string | undefined, port: number | undefined): string =>
