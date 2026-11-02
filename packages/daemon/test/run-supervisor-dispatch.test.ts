@@ -4,7 +4,7 @@ import { ensureOnboarded } from '../src/bot/onboarding';
 import { runSupervisor } from '../src/bot/supervisor';
 import { runRun } from '../src/cli/commands/run';
 
-vi.mock('../src/agent/owned-process', () => ({ closeOwnedProviderProcesses: async () => {}, unconfirmedProviderPids: () => [] }));
+vi.mock('../src/agent/owned-process', () => ({ closeOwnedProviderProcesses: async () => {}, unconfirmedProviderPids: () => [], registeredProviderPids: () => [] }));
 vi.mock('../src/config/bots', async (original) => ({ ...await original<typeof import('../src/config/bots')>(), ensureRegistry: vi.fn() }));
 vi.mock('../src/bot/supervisor', () => ({ runSupervisor: vi.fn(async () => {}) }));
 vi.mock('../src/bot/onboarding', () => ({ ensureOnboarded: vi.fn(async () => null), announceEventsWhenLive() {} }));

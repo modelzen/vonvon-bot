@@ -86,6 +86,7 @@ vi.mock('../src/bot/topic-registry', async original => ({
 }));
 let createOrchestrator: typeof import('../src/bot/handle-message').createOrchestrator;
 import type { AppConfig } from '../src/config/schema';
+import { SHUTDOWN_INTERRUPT_GRACE_MS } from '../src/bot/handle-message';
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -543,6 +544,10 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
   expect(transport.spawn).toHaveBeenCalledOnce();
   expect(fixture.state()).toBe('present');
   accepted.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  // owner 2026-11-02: the run is interrupted at once and its provider closed once the grace is over.
+  expect(run.t.close).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(SHUTDOWN_INTERRUPT_GRACE_MS);
   await closingProvider.promise;
   await vi.advanceTimersByTimeAsync(0);
   expect(run.t.close).toHaveBeenCalledOnce();

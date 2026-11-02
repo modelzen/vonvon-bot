@@ -12,6 +12,11 @@ const ownedProcesses = new Set<OwnedProviderProcess>();
 let accepting = true;
 let registryClose: Promise<void> | undefined;
 
+/** From a shutdown's start (owner 2026-11-02): no new provider process; the running ones get a moment to end their turns. */
+export function stopAcceptingProviderProcesses(): void {
+  accepting = false;
+}
+
 export function closeOwnedProviderProcesses(): Promise<void> {
   if (registryClose) return registryClose;
   accepting = false;

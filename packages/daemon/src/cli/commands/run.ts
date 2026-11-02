@@ -226,7 +226,9 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
   finally {
     const cleanup = await Promise.allSettled([closeOwnedProviders(async () => {
       const drained = await Promise.allSettled([Promise.resolve().then(() => api?.beginDrain())]);
-      drained.push(...await Promise.allSettled([Promise.resolve().then(() => bridge?.shutdown())]));
+      // The cards of the turns this stop cuts short say why: the host's message says a stop, restart or update.
+      const closing = Promise.resolve().then(() => bridge?.shutdown(() => control.reason ?? 'stop'));
+      drained.push(...await Promise.allSettled([withinStopLimit(closing, BRIDGE_STOP_LIMIT_MS)]));
       errors.push(...drained.filter(result => result.status === 'rejected').map(result => result.reason));
     })]);
     // Only once the bridge is closed: a dropped message's reply settled during the close still reaches the page (s18c).
@@ -243,4 +245,24 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
     if (errors.length === 1) throw errors[0];
     if (errors.length) throw new AggregateError(errors, 'Single Bot cleanup failed.');
   }
+}
+
+/**
+ * The longest the Bot's own close is waited for (owner 2026-11-02): its turns are interrupted and their cards updated
+ * within 3 + 8 seconds (bot/handle-message.ts) and the scheduled runs' records follow; a Feishu call or an agent that
+ * hangs past this does not hold the stop up. The agents are closed right after either way (closeOwnedProviders).
+ */
+export const BRIDGE_STOP_LIMIT_MS = 12_000;
+
+/** Waits for `closing` at most `ms`; past it the stop goes on and the late close is only logged. */
+export async function withinStopLimit(closing: Promise<unknown>, ms: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<'late'>(resolve => { timer = setTimeout(resolve, ms, 'late'); });
+  try {
+    const outcome = await Promise.race([closing.then(() => 'closed' as const), late]);
+    if (outcome === 'late') {
+      log.warn('daemon-shutdown', 'bridge_stop_limit', { pid: process.pid, limitMs: ms });
+      closing.catch(error => log.fail('daemon-shutdown', error, { phase: 'bridge-late' }));
+    }
+  } finally { clearTimeout(timer); }
 }

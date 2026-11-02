@@ -355,6 +355,8 @@ describe('explicit desktop quit', () => {
     await actions.installDesktopUpdate();
     expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
     expect(autoUpdater.quitAndInstall).toHaveBeenCalledOnce();
+    // owner 2026-11-02: no question before 重启升级, on any platform; the button says it interrupts the conversations.
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
   });
 
   it('does not stop the independent daemon when the desktop renderer crashes', async () => {

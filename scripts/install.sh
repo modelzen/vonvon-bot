@@ -248,13 +248,16 @@ start_detached() {
 
 install_service() {
   DETACHED=no
+  AUTOSTART=yes
+  BOOT_USER=
   output=$("$ROOT/bin/vonvon" service install --linger --json </dev/null 2>"$TMP/service.err") && code=0 || code=$?
   case "$output" in
     '{"ok":true'*)
+      # 少数系统不让账号自己开开机自启：装好照样算装好，最后给一句可选的提示
       case "$output" in
         *'"linger":"off"'*)
-          user=$(printf '%s' "$output" | LC_ALL=C sed -n 's/.*"lingerUser":"\([A-Za-z0-9._-]*\)".*/\1/p')
-          say "为了在你退出登录后继续运行，请执行一次：\`sudo loginctl enable-linger ${user:-你的用户名}\`"
+          AUTOSTART=no
+          BOOT_USER=$(printf '%s' "$output" | LC_ALL=C sed -n 's/.*"lingerUser":"\([A-Za-z0-9._-]*\)".*/\1/p')
           ;;
       esac
       ;;
@@ -276,7 +279,12 @@ install_service() {
 }
 
 finish() {
-  if [ "$DETACHED" = yes ]; then say "装好了。已直接启动一次。"; else say "装好了。后台服务已启动，登录后自动运行。"; fi
+  if [ "$DETACHED" = yes ]; then say "装好了。已直接启动一次。"
+  elif [ "$AUTOSTART" = yes ]; then say "装好了。Vonvon Bot 已在后台运行，开机自动启动。"
+  else
+    say "装好了。Vonvon Bot 已在后台运行。"
+    say "这台机器没让它开机自动启动，退出登录后它会停。需要的话运行一次：\`sudo loginctl enable-linger ${BOOT_USER:-你的用户名}\`"
+  fi
   say "试一下：\`vonvon --version\`"
   if [ "$ON_PATH" != yes ]; then say "重开一个终端，或 \`. ~/.bashrc\`（zsh 用 \`. ~/.zshrc\`）再运行 \`vonvon\`。"; fi
   say "要从别的电脑连过来管理？看 $GUIDE_URL"

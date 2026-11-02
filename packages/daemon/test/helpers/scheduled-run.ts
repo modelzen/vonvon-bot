@@ -185,7 +185,8 @@ export async function setup(kind: 'single' | 'multi' | 'smart', opts: { entries?
     chat: { get: fake.chatGet },
     messageReaction: { create: vi.fn(async () => ({ data: {} })), delete: async () => ({}) },
   } } } };
-  const orchestrator = createOrchestrator(channel as never, cfg, '/test', topics as never, opts);
+  // The shutdown closes the sessions once the interrupted turns end or a grace is over (owner 2026-11-02): short here.
+  const orchestrator = createOrchestrator(channel as never, cfg, '/test', topics as never, { shutdownTiming: { interruptGraceMs: 20 }, ...opts });
   return { orchestrator, channel, runScheduled: fake.run! };
 }
 

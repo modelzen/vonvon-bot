@@ -1,13 +1,15 @@
 import type { BuiltinSkill } from './package';
-import { SESSION_RULES } from './session-rules';
 
-export const scheduledTasksSkill: BuiltinSkill = {
-  name: 'scheduled-tasks',
-  title: '任务',
-  description: "创建、修改、暂停、删除本群的定时任务，或给自己排一个稍后回来看的一次性任务。用户提到定时、每天、每周、提醒、稍后、过一会再看时读本 skill。",
-  body: `${SESSION_RULES}
-
-## 什么时候用
+/**
+ * product.md 3.6 / 3.13: the task skill, `vonvon-schedule` (s1b, owner 2026-11-02: "定时任务就叫 schedule"; before s1b
+ * `scheduled-tasks`, titled 任务). The description is all a model reads before it decides to open it, so it lists what
+ * people say (s1b's trigger test, test/manual/skill-trigger-eval.ts).
+ */
+export const scheduleSkill: BuiltinSkill = {
+  name: 'vonvon-schedule',
+  title: '定时任务',
+  description: "创建、查看、修改、暂停、恢复、删除本群的定时任务，或者给自己排一个稍后回来接着做的一次性任务。用户说到定时、每天/每周/每月/工作日几点、每隔多久、明天几点、提醒我、到时候叫我、稍后/过一会/20 分钟后再看、定期发日报周报、cron，或者问本群有哪些定时任务时，先读本 skill；你自己要等一件事过一阵再回来看时也读。",
+  body: `## 什么时候用
 用户说定时、每天、每周、提醒、稍后、过一会，就用这里的工具。
 你自己要过一会再看（比如等一个构建、等一个回复），也用 \`schedule_create\` 给自己排一个一次性任务，不要在这一轮里等。
 
@@ -33,20 +35,6 @@ cron 只在用户自己给了表达式时用。
 发到哪：默认跟群走；用户说'开个话题发'填 \`where: 'newTopic'\`，说'就在这个话题里发'填 \`where: 'thisTopic'\`。
 
 省略 where 就是 \`here\`：在话题里建一次性任务默认回到这个话题，周期任务默认跟群走；要固定在这个话题用 \`thisTopic\`。
-
-## 没有任务工具时
-没有 \`schedule_*\` 工具、shell 里又能跑 \`vonvon\` 时，用命令行，规则和工具一样。先 \`echo "$VONVON_SCOPE"\`，\`group=\` 后面那段是本群的群 id，下面写成 \`<chatId>\`：
-\`\`\`
-vonvon schedule list --group <chatId> --scope "$VONVON_SCOPE" --json
-vonvon schedule add "<任务内容>" --name <名字> --daily 09:00 --group <chatId> --scope "$VONVON_SCOPE" --json
-vonvon schedule edit <taskId> --revision <revision> --weekly mon,tue,wed,thu,fri@09:00 --group <chatId> --scope "$VONVON_SCOPE" --json
-vonvon schedule edit <taskId> --revision <revision> --new-topic --group <chatId> --scope "$VONVON_SCOPE" --json
-vonvon schedule pause <taskId> --group <chatId> --scope "$VONVON_SCOPE" --json
-vonvon schedule resume <taskId> --group <chatId> --scope "$VONVON_SCOPE" --json
-vonvon schedule run <taskId> --group <chatId> --scope "$VONVON_SCOPE" --json
-vonvon schedule delete <taskId> --revision <revision> --group <chatId> --scope "$VONVON_SCOPE" --json
-\`\`\`
-时间只给一个：\`--every 30m\`、\`--daily 09:00\`、\`--weekly mon,wed@10:00\`、\`--at "2026-11-05 14:00"\` 或 \`--cron "0 9 * * 1-5"\`；时区和这里不一样加 \`--tz Asia/Shanghai\`。\`--new-topic\` 是每次开个话题发，\`--follow\` 改回跟群走。任务 id 和 \`revision\` 从 \`schedule list --json\` 的 \`tasks\` 里取。退出码 4 是被拒，把 \`error.message\` 原话告诉用户。
 
 ## 谁能改
 成员只能改自己建的；被拒了就把拒绝原因告诉用户，不要绕。

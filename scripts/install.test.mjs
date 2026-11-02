@@ -180,10 +180,12 @@ test('installs: checks the signed manifest and the hash, unpacks, sets up, insta
   // devices.md §15「安装脚本：开始」「安装脚本：完成」, line by line; 重开一个终端 sits between them while PATH is new
   const lines = run.stdout.split('\n');
   assert.ok(lines.includes('正在安装 Vonvon Bot 服务端 1.0.0（linux-x64）…'), run.stdout);
-  const done = lines.indexOf('装好了。后台服务已启动，登录后自动运行。');
+  // owner 2026-11-02: plain words only, nothing about systemd, linger or sudo when it all worked
+  const done = lines.indexOf('装好了。Vonvon Bot 已在后台运行，开机自动启动。');
   assert.ok(done >= 0, run.stdout);
   assert.deepEqual(lines.slice(done + 1), ['试一下：`vonvon --version`', '重开一个终端，或 `. ~/.bashrc`（zsh 用 `. ~/.zshrc`）再运行 `vonvon`。', '要从别的电脑连过来管理？看 https://vonvon.cc/guide/remote/', '']);
   assert.doesNotMatch(run.stdout, /保持这个账号登录着/);
+  assert.doesNotMatch(run.stdout, /systemd|linger|sudo/);
   if (openssl3) assert.doesNotMatch(run.stdout, /没能核对发布签名/);
   assert.equal(await readlink(join(f.root, 'current')), 'releases/1.0.0');
   assert.equal(await f.exists(join(f.root, 'releases', '1.0.0.part')), false);
@@ -423,9 +425,12 @@ test('the service: linger left off, the fallbacks to a detached daemon, and fail
   await f.scenario({ 'service install': { stdout: JSON.stringify({ ok: true, action: 'install', linger: 'off', lingerUser: 'alice', notes: [] }) } });
   let run = await f.run('install.sh');
   assert.equal(run.code, 0, run.stderr);
-  // devices.md §15「安装脚本：linger 要 sudo」
-  assert.ok(run.stdout.split('\n').includes('为了在你退出登录后继续运行，请执行一次：`sudo loginctl enable-linger alice`'), run.stdout);
-  assert.match(run.stdout, /后台服务已启动/);
+  // devices.md §15「安装脚本：开机自启要管理员」: installed all the same, then the one optional line, last but the usual three
+  const lines = run.stdout.split('\n');
+  const done = lines.indexOf('装好了。Vonvon Bot 已在后台运行。');
+  assert.ok(done >= 0, run.stdout);
+  assert.equal(lines[done + 1], '这台机器没让它开机自动启动，退出登录后它会停。需要的话运行一次：`sudo loginctl enable-linger alice`');
+  assert.doesNotMatch(run.stdout, /开机自动启动。/);
 
   // devices.md §15「安装脚本：没有 systemd」「安装脚本：用户实例不可用」
   const userInstance = '连不上这个账号的 systemd（用 sudo 切过来时常见）。已直接启动一次；用这个账号 SSH 登录后运行 `vonvon service install` 装成后台服务。';
@@ -441,7 +446,7 @@ test('the service: linger left off, the fallbacks to a detached daemon, and fail
     assert.equal(run.code, 0, `${reason}: ${run.stderr}`);
     assert.ok(run.stdout.split('\n').includes(text), `${reason}: ${run.stdout}`);
     assert.match(run.stdout, /装好了。已直接启动一次。/);
-    assert.doesNotMatch(run.stdout, /登录后自动运行/);
+    assert.doesNotMatch(run.stdout, /自动启动/);
     assert.equal((await g.calls())[2], 'daemon start --json');
   }
 

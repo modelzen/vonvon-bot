@@ -78,8 +78,9 @@ it('serves fresh authenticated status, update progress and stop during held drai
     const statusReads = getDaemonStatus.mock.calls.length;
     expect(await client.call({ type: 'request', id: 'status', method: 'admin', payload: { type: 'daemonStatus' } })).toMatchObject({ type: 'response', payload: { kind: 'daemonStatus', status: { running: true, pid: owner.pid, installed: false, supported: false } } });
     expect(await client.call({ type: 'request', id: 'update', method: 'machine', payload: { type: 'coreUpdateStatus' } })).toMatchObject({ type: 'response', payload: { type: 'coreUpdateStatus', status: updating } });
-    expect(await client.call({ type: 'request', id: 'stop', method: 'machine', payload: { type: 'stopHost' } })).toMatchObject({ type: 'response', payload: { type: 'done' } });
-    expect(fixture.control.requestStop).toHaveBeenCalledOnce();
+    // A desktop update's stop during the drain keeps its reason (owner 2026-11-02).
+    expect(await client.call({ type: 'request', id: 'stop', method: 'machine', payload: { type: 'stopHost', reason: 'update' } })).toMatchObject({ type: 'response', payload: { type: 'done' } });
+    expect(fixture.control.requestStop).toHaveBeenCalledExactlyOnceWith('update');
     expect(listBots).toHaveBeenCalledTimes(snapshotReads);
     expect(getDaemonStatus).toHaveBeenCalledTimes(statusReads);
     expect(client.frames.filter(frame => frame.type === 'event')).toEqual([]);

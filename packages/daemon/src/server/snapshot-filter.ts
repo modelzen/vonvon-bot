@@ -46,3 +46,34 @@ export function filterSnapshot(snapshot: DesktopSnapshot, principal: BotSessionP
     application,
   };
 }
+
+/** What a Bot session reads of the daemon's state: a private chat's as {@link filterSnapshot} cuts it, a group's and a comment's far less. */
+export function sessionSnapshot(snapshot: DesktopSnapshot, principal: BotSessionPrincipal, scope: Scope | null): DesktopSnapshot {
+  return principal.place === 'dm' ? filterSnapshot(snapshot, principal, scope) : placeSnapshot(snapshot, principal);
+}
+
+/**
+ * s1b: what a group's (or a comment's) session reads of the daemon's state, the least its command line resolves names
+ * with. Its bot's id and name, its group's id and name, and the group's project (id and name) for `--group <项目名>` and
+ * `memory --project`; nothing of folders, permission tiers, models, other groups, tools, jobs or the machine's service.
+ * The schema's required fields carry blanks where they would say more.
+ */
+function placeSnapshot(snapshot: DesktopSnapshot, principal: BotSessionPrincipal): DesktopSnapshot {
+  const { appId } = principal;
+  const chatId = principal.place === 'group' ? principal.chatId : undefined;
+  const bound = chatId !== undefined && snapshot.memberships.some(membership => membership.agentId === appId && membership.groupId === chatId);
+  const host = snapshot.host.kind === 'blocked' || snapshot.host.kind === 'disconnected' ? { kind: snapshot.host.kind, message: '' } : snapshot.host;
+  const { platform, version } = snapshot.application;
+  return {
+    revision: snapshot.revision, observedAt: snapshot.observedAt, stale: snapshot.stale, host,
+    agents: snapshot.agents.filter(agent => agent.id === appId)
+      .map(({ id, name, enabled, running, activation }) => ({ id, name, enabled, running, connection: '', activation })),
+    groups: bound ? snapshot.groups.filter(group => group.id === chatId).map(({ id, name }) => ({ id, name })) : [],
+    memberships: [],
+    ...(snapshot.projects ? { projects: bound ? snapshot.projects
+      .filter(project => project.bindings.some(binding => binding.agentId === appId && binding.groupId === chatId))
+      .map(({ id, name, revision, bindings }) => ({ id, name, revision, directory: '', bindings: bindings.filter(binding => binding.agentId === appId && binding.groupId === chatId) })) : [] } : {}),
+    tools: [], jobs: [],
+    application: { platform, version, loginItem: false, dataPath: '' },
+  };
+}

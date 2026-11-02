@@ -12,6 +12,7 @@ import {
 } from './cards';
 import type { AgentErrorKind } from '../agent/error-kind';
 import type { ReasoningEffort } from '../agent/types';
+import type { StopReason } from '../host/lifecycle';
 import type { Block, FooterStatus, RunState } from './run-state';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { renderRichText } from './markdown-render';
@@ -173,6 +174,18 @@ export interface RunCardState {
   label?: string;
   /** A scheduled run whose task runs again on schedule after a failure (nextRunAfterFailure): a network failure says so. */
   nextRun?: boolean;
+  /** Cut short by a stop, restart or update of the server (owner 2026-11-02); `resend` when a person sent the message. */
+  stopped?: { reason: StopReason; resend: boolean };
+}
+
+/**
+ * The last line of a turn a stop, restart or update cut short (owner 2026-11-02). A person is asked for the message
+ * again; once the server is back, a turn whose card did not get this line is asked about in the group (restart-dropped.ts).
+ */
+export function stoppedLine(stopped: { reason: StopReason; resend: boolean }): string {
+  const what = stopped.reason === 'restart' ? '服务端重启了' : stopped.reason === 'update' ? '服务端升级了' : 'Bot 停止运行了';
+  const again = !stopped.resend ? '' : stopped.reason === 'stop' ? '，等它恢复后请再发一次' : '，请再发一次';
+  return `${what}，这一轮被中断${again}`;
 }
 
 /**
@@ -371,7 +384,7 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   if (rc.continued) {
     elements.push(noteMd('已接收补充，后续输出见下一张卡片'));
   } else if (state.terminal === 'interrupted') {
-    elements.push(noteMd(`${statusSymbol('stopped')} 已被中断`));
+    elements.push(noteMd(`${statusSymbol('stopped')} ${rc.stopped ? stoppedLine(rc.stopped) : '已被中断'}`));
   } else if (state.terminal === 'idle_timeout') {
     elements.push(noteMd(`${statusSymbol('unknown')} ${failureText(state)}`));
   } else if (state.terminal === 'error' && state.errorMsg) {
