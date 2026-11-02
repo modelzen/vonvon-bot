@@ -1,0 +1,147 @@
+import { spawn } from 'node:child_process';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { build } from 'esbuild';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { VonvonClient } from '@vonvon/client';
+import type { AdminBot, AdminProject } from '../src/admin/service';
+import { setCliContext, withDaemon } from '../src/cli/daemon-client';
+import { loadCommands, loadLocalOnly } from './helpers/cli-commands';
+import { fakeService, startFixture } from './server-fixture';
+
+/**
+ * devices-4a 4.9, run as a Bot session's shell would: the CLI bundle against a daemon in this process. A session's
+ * command carries its token and `--scope` and never the owner's credential; without a valid token nothing connects.
+ */
+const BOT = 'cli_x';
+const GROUP = 'oc_y';
+const bot: AdminBot = { appId: BOT, name: 'X', tenant: 'feishu', active: true, current: true, running: true, completionReminder: { mode: 'failures', longTaskMinutes: 3 } };
+const row = (name: string, chatId: string): AdminProject => ({ name, chatId, cwd: '/w', blank: false, kind: 'multi', origin: 'joined', noMention: false, mode: 'qa', guestMode: 'qa',
+  network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 });
+
+let dir: string;
+let entry: string;
+const temps: string[] = [];
+beforeAll(async () => {
+  await mkdir(resolve('node_modules/.cache'), { recursive: true });
+  dir = await mkdtemp(resolve('node_modules/.cache/vonvon-cli-bot-session-'));
+  entry = join(dir, 'cli.mjs');
+  await build({ entryPoints: [resolve('src/cli/index.ts')], outfile: entry, bundle: true, packages: 'external', platform: 'node', format: 'esm', logLevel: 'silent' });
+});
+afterAll(async () => {
+  await rm(dir, { recursive: true, force: true });
+  for (const temp of temps) await rm(temp, { recursive: true, force: true });
+});
+afterEach(() => { setCliContext({ scope: undefined, env: process.env }); });
+
+async function emptyHome(): Promise<{ home: string; root: string }> {
+  const base = await mkdtemp(join(tmpdir(), 'vonvon-bot-session-')); temps.push(base);
+  const home = join(base, 'home'); await mkdir(home);
+  return { home, root: join(base, 'vh') };
+}
+type Result = { code: number | null; json: { ok: boolean; error?: { kind: string; message: string; reason?: string } } & Record<string, unknown>; stderr: string };
+function run(root: string, home: string, args: string[], session: NodeJS.ProcessEnv): Promise<Result> {
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'), VONVON_HOME: root, VONVON_SESSION: '', FEISHU_CODEX_BRIDGE: '', ...session };
+  delete env.VONVON_SERVICE;
+  const child = spawn(process.execPath, [entry, ...args, '--json'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = ''; let stderr = '';
+  child.stdout.on('data', data => { stdout += String(data); }); child.stderr.on('data', data => { stderr += String(data); });
+  return new Promise((done, fail) => {
+    child.once('error', fail);
+    child.once('close', code => { try { done({ code, json: JSON.parse(stdout) as Result['json'], stderr }); } catch { fail(new Error(`not JSON: ${stdout}${stderr}`)); } });
+  });
+}
+/** A running daemon whose `local-credential` nobody can read any more: a command that reads it fails. */
+async function daemon() {
+  const executeSchedule = vi.fn(async () => ({ kind: 'tasks' as const, tasks: [], now: 1, timeZone: 'UTC' }));
+  const fixture = await startFixture(fakeService({ listBots: async () => [bot], listProjects: async appId => appId === BOT ? [row('研发', GROUP), row('运营', 'oc_z')] : [], executeSchedule }));
+  await writeFile(join(fixture.home, 'daemon.pid'), JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), listen: fixture.api.listen }));
+  await chmod(join(fixture.home, 'local-credential'), 0o000);
+  const home = (await emptyHome()).home;
+  const token = fixture.sessionTokens.issue({ appId: BOT, place: 'group', chatId: GROUP, sessionId: 'ses_0123456789abcdef' });
+  return { fixture, home, token, executeSchedule, close: async () => { await chmod(join(fixture.home, 'local-credential'), 0o600); await fixture.close(); } };
+}
+
+describe('a Bot session\'s command line', () => {
+  // main 必败: the CLI connected with local-credential, as the owner
+  it.each([{ FEISHU_CODEX_BRIDGE: '1' }, { VONVON_SESSION: '1' }, { VONVON_SESSION: 'vs1.bad' }])('refuses %o before it looks for the daemon', async session => {
+    const { home, root } = await emptyHome();
+    // no daemon, no lock, no credential: a refusal after the lock read would be "daemon 没有运行" (exit 3)
+    const result = await run(root, home, ['schedule', 'list', '--group', GROUP, '--scope', `bot=${BOT},group=${GROUP}`], session);
+    expect(result).toMatchObject({ code: 4, json: { ok: false, error: { kind: 'refused', reason: 'session_token_missing', message: '这是 Bot 会话，但没有有效的会话令牌，不能以主人身份运行。' } } });
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('connects with its token, never local-credential, and negotiates its scope first', async () => {
+    const d = await daemon();
+    try {
+      const ok = await run(d.fixture.home, d.home, ['schedule', 'list', '--group', GROUP, '--scope', `bot=${BOT},group=${GROUP}`], { VONVON_SESSION: d.token });
+      expect(ok, ok.stderr).toMatchObject({ code: 0, json: { ok: true } });
+      expect(d.executeSchedule).toHaveBeenCalledWith(BOT, 'cli', { action: 'list', chatId: GROUP });
+      // the global option goes anywhere on the line
+      expect((await run(d.fixture.home, d.home, ['--scope', `bot=${BOT},group=${GROUP}`, 'schedule', 'list', '--group', GROUP], { VONVON_SESSION: d.token })).code).toBe(0);
+      const missing = await run(d.fixture.home, d.home, ['schedule', 'list', '--group', GROUP], { VONVON_SESSION: d.token });
+      expect(missing).toMatchObject({ code: 4, json: { error: { kind: 'refused', reason: 'scope_required' } } });
+      expect(missing.json.error?.message).toContain('必须带 `--scope');
+      const wider = await run(d.fixture.home, d.home, ['schedule', 'list', '--group', GROUP, '--scope', `bot=${BOT}`], { VONVON_SESSION: d.token });
+      expect(wider).toMatchObject({ code: 4, json: { error: { reason: 'scope_required' } } });
+      expect(wider.json.error?.message).toContain('范围超过了这条会话');
+      // a settings write from a group: the tools' sentence
+      const write = await run(d.fixture.home, d.home, ['settings', 'act', 'voice', 'test', '--scope', `bot=${BOT},group=${GROUP}`], { VONVON_SESSION: d.token });
+      expect(write).toMatchObject({ code: 4, json: { error: { kind: 'refused', reason: 'not-dm' } } });
+      expect(write.json.error?.message).toContain('设置只能在私聊里改。请对方去私聊里跟我说。');
+      // daemon status answers from the lock in a session, token or not
+      for (const session of [{ VONVON_SESSION: d.token }, { FEISHU_CODEX_BRIDGE: '1' }]) {
+        expect(await run(d.fixture.home, d.home, ['daemon', 'status'], session)).toMatchObject({ code: 0, json: { ok: true, running: true, listen: d.fixture.api.listen, source: 'files' } });
+      }
+      d.fixture.sessionTokens.revoke('ses_0123456789abcdef');
+      expect(await run(d.fixture.home, d.home, ['schedule', 'list', '--group', GROUP, '--scope', `bot=${BOT},group=${GROUP}`], { VONVON_SESSION: d.token }))
+        .toMatchObject({ code: 4, json: { error: { kind: 'refused', reason: 'session_token_invalid', message: '会话令牌已失效（会话结束或超过 24 小时没用）。' } } });
+    } finally { await d.close(); }
+  }, 60_000);
+
+  // main 必败: these ran in a session
+  it('refuses the local-only commands in a session, naming them, and runs the rest', async () => {
+    const { home, root } = await emptyHome();
+    const session = { VONVON_SESSION: `vs1.ses_0123456789abcdef.${'a'.repeat(43)}` };
+    for (const [path, ...args] of [['daemon restart'], ['daemon start'], ['daemon stop'], ['service install'], ['service uninstall'], ['pair'], ['clients ls'],
+      ['clients revoke', 'cl_0000000000000000'], ['device rename', 'x'], ['bot repair-dir', 'x'], ['open']] as Array<[string, ...string[]]>) {
+      const result = await run(root, home, [...path.split(' '), ...args], session);
+      expect(result, path).toMatchObject({ code: 4, json: { ok: false, error: { kind: 'refused', reason: 'not_in_session', message: `这条命令（\`vonvon ${path}\`）不能在 Bot 会话里运行。告诉用户去设备上或桌面端里做。` } } });
+    }
+    expect(await run(root, home, ['service', 'status'], session)).toMatchObject({ code: 0 });
+    expect(await run(root, home, ['daemon', 'status'], session)).toMatchObject({ code: 3, json: { error: { kind: 'connection' } } });
+    // devices 8.3's list: each one a command of this CLI, or one I3 and D3 add (update, remote …)
+    const localOnly = await loadLocalOnly();
+    const commands = new Set((await loadCommands()).map(command => command.path.replace(/ [<[].*$/, '')));
+    expect(localOnly.filter(path => !commands.has(path))).toEqual(['update', 'remote status', 'remote enable', 'remote disable', 'remote port']);
+    for (const allowed of ['daemon status', 'service status', 'secrets get', 'schedule list', 'memory add']) expect(localOnly).not.toContain(allowed);
+  }, 60_000);
+
+  it('takes --scope only as bot=<appId>[,group=<chatId>]', async () => {
+    const { home, root } = await emptyHome();
+    for (const spec of ['bad', 'group=oc_y', `bot=${BOT},bot=cli_z`, `bot=${BOT},room=oc_y`, `bot=${BOT},group=`]) {
+      expect(await run(root, home, ['schedule', 'list', '--group', GROUP, '--scope', spec], {}), spec)
+        .toMatchObject({ code: 2, json: { error: { kind: 'bad-args', message: '--scope 的写法是 bot=<appId>[,group=<chatId>]。' } } });
+    }
+  });
+});
+
+describe('negotiate outside a session', () => {
+  const fake = () => {
+    const admin = vi.fn(async () => ({ kind: 'negotiated' as const, principal: 'owner:local' as const, scope: null }));
+    const snapshot = vi.fn(async () => ({}));
+    return { admin, snapshot, client: { admin, snapshot, close: async () => {} } as unknown as VonvonClient };
+  };
+  it('negotiates first when the owner gives --scope, not otherwise', async () => {
+    setCliContext({ env: {} });
+    const plain = fake();
+    await withDaemon(call => call('读取快照', c => c.snapshot()), async () => plain.client);
+    expect(plain.admin).not.toHaveBeenCalled();
+    setCliContext({ env: {}, scope: { bot: BOT } });
+    const scoped = fake();
+    await withDaemon(call => call('读取快照', c => c.snapshot()), async () => scoped.client);
+    expect(scoped.admin).toHaveBeenCalledWith({ type: 'negotiate', capabilities: ['cli'], scope: { bot: BOT } });
+    expect(scoped.admin.mock.invocationCallOrder[0]).toBeLessThan(scoped.snapshot.mock.invocationCallOrder[0]!);
+  });
+});

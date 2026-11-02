@@ -5,6 +5,7 @@ import { readAdminState } from '../state';
 import type { RpcOutcome } from '../rpc';
 import { RpcError, unsupported } from '../errors';
 import { principalWire } from '../principal';
+import { checkSessionScope } from '../authz';
 import type { Peer } from '../ws';
 import { judgeUsageView } from '../../admin/judge-usage';
 import { secretsAction } from '../../admin/secrets';
@@ -18,7 +19,7 @@ export async function diagnosis(service: AdminService, agentId?: string): Promis
   return { kind: 'diagnosis', bot: botId, backends, event, eventConfigUrl };
 }
 /** What the connection adds: when this daemon started, and the peer admin.negotiate records on. */
-export interface AdminConnection { startedAt: number; peer: Pick<Peer, 'principal' | 'scope' | 'negotiate'> }
+export interface AdminConnection { startedAt: number; peer: Pick<Peer, 'principal' | 'scope' | 'negotiated' | 'negotiate'> }
 export async function adminRpc(service: AdminService, followLogs: (follow: boolean) => void, request: AdminRequest, connection?: AdminConnection): Promise<RpcOutcome<AdminReply>> {
   switch (request.type) {
     case 'judgeUsage': return { kind: 'read', value: await judgeUsageView() };
@@ -35,9 +36,11 @@ export async function adminRpc(service: AdminService, followLogs: (follow: boole
       return { kind: 'mutation', reply: snapshot => ({ kind: 'applied', revision: snapshot.revision }) };
     }
     case 'daemonStatus': return { kind: 'read', value: { kind: 'daemonStatus', status: { ...await service.getDaemonStatus(), startedAt: connection?.startedAt ?? Math.round(performance.timeOrigin) } } };
-    // devices 4.5: recorded as sent; D4a checks the scope against a bot session's.
+    // devices 4.5: recorded once; a Bot session's scope must be no wider than the session (devices 5.3).
     case 'negotiate': {
       if (!connection) return unsupported();
+      if (connection.peer.negotiated) throw new RpcError('invalid_request', 'negotiate 只能发一次。');
+      checkSessionScope(connection.peer.principal, request.scope ?? null);
       if (!connection.peer.negotiate(request.capabilities, request.scope ?? null)) throw new RpcError('invalid_request', 'negotiate 只能发一次。');
       return { kind: 'read', value: { kind: 'negotiated', principal: principalWire(connection.peer.principal), scope: connection.peer.scope } };
     }

@@ -1,7 +1,7 @@
 // first: sets the connection defaults of every daemon process (the supervisor, each `--bot` child and each command)
 import './tune-network';
 import { Command, CommanderError, Help, Option } from 'commander';
-import { badArgs, commandFailure } from './command-error';
+import { badArgs, commandFailure, CommandError } from './command-error';
 import { mkdir } from 'node:fs/promises';
 import { formatErrorTree } from '../core/error-parts';
 import { bridgeVersion } from '../core/version';
@@ -11,6 +11,7 @@ import { inBotSession } from '../config/session-env';
 import { observeShutdown, type ShutdownControl } from '../host/lifecycle';
 import type { LingerChoice } from './commands/service';
 import type { ScheduleAction, ScheduleTarget } from './commands/schedule';
+import type { Scope } from '@vonvon/protocol';
 
 /** devices 8.1: every command takes --json and fails through `commandFailure` (the runner at the bottom). */
 export const program = new Command().name('vonvon').description('Vonvon Bot daemon').version(bridgeVersion());
@@ -49,8 +50,42 @@ const daemonFor = async (options: { fresh?: boolean }) => {
  * `devices/` themselves when no daemon runs (devices 4.5); pair only asks the daemon. */
 const LEASED = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'bot repair-dir', 'secrets list', 'secrets set', 'secrets remove',
   'clients ls', 'clients rename', 'clients revoke', 'device rename']);
+/**
+ * devices 8.3 and 5.3: what only the person at this computer runs (the trust root, file locks, the service manager,
+ * remote access, pairing), refused in a Bot's session before anything runs. `update` and `remote …` come with I3 and D3.
+ * `secrets get` is not here: the session's lark-cli resolves its App Secret through it (secrets-get.test.ts).
+ */
+export const LOCAL_ONLY: ReadonlySet<string> = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'service install', 'service uninstall',
+  'update', 'remote status', 'remote enable', 'remote disable', 'remote port', 'pair', 'clients ls', 'clients rename', 'clients revoke', 'device rename',
+  'bot repair-dir', 'open', '__daemon-control', '__restart-after-exit']);
+/** A command's full name without `vonvon`: `daemon restart`, `pair`. */
+const commandPath = (command: Command): string => {
+  const names: string[] = [];
+  for (let current: Command | null = command; current?.parent; current = current.parent) names.unshift(current.name());
+  return names.join(' ');
+};
+/** `--scope bot=<appId>[,group=<chatId>]` (devices 5.3): each key once, bot required. */
+export function parseScope(spec: string): Scope {
+  const wrong = () => badArgs('--scope 的写法是 bot=<appId>[,group=<chatId>]。');
+  const scope: { bot?: string; group?: string } = {};
+  for (const part of spec.split(',')) {
+    const match = /^(bot|group)=([^\s=,]+)$/.exec(part.trim());
+    if (!match) throw wrong();
+    const [, key, value] = match as unknown as [string, 'bot' | 'group', string];
+    if (scope[key] !== undefined) throw wrong();
+    scope[key] = value;
+  }
+  if (!scope.bot) throw wrong();
+  return { bot: scope.bot, ...(scope.group ? { group: scope.group } : {}) };
+}
+program.option('--scope <spec>', "The Bot session's scope, bot=<appId>[,group=<chatId>]; a Bot session's commands must carry it");
 program.hook('preAction', async (_command, action) => {
-  const path = `${action.parent?.name() ?? ''} ${action.name()}`;
+  const path = commandPath(action);
+  if (inBotSession(process.env) && LOCAL_ONLY.has(path)) {
+    throw new CommandError('refused', `这条命令（\`vonvon ${path}\`）不能在 Bot 会话里运行。告诉用户去设备上或桌面端里做。`, { reason: 'not_in_session' });
+  }
+  const spec = program.opts<{ scope?: string }>().scope;
+  if (spec !== undefined) (await import('./daemon-client')).setCliContext({ scope: parseScope(spec) });
   if (path === 'daemon run') {
     const runControl = control = observeShutdown(Boolean(action.opts().parentControl));
     (await import('../host/crash-guard')).installCrashHandlers({ intent: () => runControl.intent ?? (runControl.requested ? 'stop' : 'running') });

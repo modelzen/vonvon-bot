@@ -8,7 +8,8 @@ import { botPaths } from '../../config/paths';
 import { activeBots, ensureRegistry, type BotEntry } from '../../config/bots';
 import { log } from '../../core/logger';
 import { AdminWriteError } from '../../admin/ops';
-import { createAdminIpcResponder } from '../../admin/ipc';
+import { createAdminIpcResponder, createHostIpcCaller, type HostApi } from '../../admin/ipc';
+import { createSessionTokens, type SessionTokens } from '../../host/session-tokens';
 import { createAdminService } from '../../admin/service';
 import { botNotRunning } from '../../admin/schedule-commands';
 import { installBackendDep, uninstallBackendDep } from '../../agent';
@@ -115,8 +116,28 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
   setDiagnosticsSink(diagnostics
     ? event => diagnostics.accept(ownAppId, event)
     : ipcDiagnosticsSink((message, callback) => { if (process.connected) process.send?.(message, undefined, undefined, callback); }));
+  // devices-4a 4.2: a supervised child asks the host for its sessions' tokens; alone, this process is the host and keeps them.
+  let tokens: SessionTokens | undefined;
+  let host: HostApi;
+  if (process.send) {
+    const caller = createHostIpcCaller(msg => {
+      if (!process.connected) throw new Error('IPC 通道已关闭');
+      process.send?.(msg);
+    });
+    process.on('message', caller.onMessage);
+    host = caller;
+  } else {
+    const own = tokens = createSessionTokens();
+    host = {
+      issueSessionToken: async input => {
+        if (input.appId !== ownAppId) throw new Error('这个 Bot 不归本进程管');
+        return own.issue(input);
+      },
+      revokeSessionToken: async sessionId => { own.revoke(sessionId); },
+    };
+  }
   try {
-    const handle = bridge = await startBridge({ identity: ready.identity, cfg, appSecret: secret, fallbackCwd, droppedFile: botPaths(ownAppId).droppedFile, judgeUsageFile: botPaths(ownAppId).judgeUsageFile, onConnectionChange: () => {
+    const handle = bridge = await startBridge({ identity: ready.identity, cfg, appSecret: secret, fallbackCwd, droppedFile: botPaths(ownAppId).droppedFile, judgeUsageFile: botPaths(ownAppId).judgeUsageFile, host, onConnectionChange: () => {
       if (process.send) {
         if (process.connected) process.send({ fcb: 'fcb.connection' }, undefined, undefined, (error: Error | null) => { if (error && process.connected) log.fail('run', error, { phase: 'connection-notice' }); });
       }
@@ -147,6 +168,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
         startedAt,
         port: options.port,
         control,
+        ...(tokens ? { sessionTokens: tokens } : {}),
         ...(diagnostics ? { diagnostics } : {}),
         service: createAdminService({
           executeCollaboration: async (botId, request) => {

@@ -1,6 +1,5 @@
 import { scheduleRequestSchema, type Agent, type Membership, type ScheduleReply, type ScheduleRequest, type ScheduleRunRecord, type ScheduleSpec, type ScheduledTaskView } from '@vonvon/protocol';
 import { badArgs, CommandError } from '../command-error';
-import { inBotSession } from '../../config/session-env';
 import { formatAt, normalizeTimeZone, parseCron, parseLocal } from '../../bot/schedule/time';
 import { pickBot, pickGroup, print, want, withDaemon, type Daemon, type Io } from '../daemon-client';
 
@@ -10,7 +9,6 @@ export type ScheduleTarget = {
   every?: string; daily?: string; weekly?: string; at?: string; cron?: string;
 };
 
-const SESSION_REFUSED = '定时任务的命令不能在 Bot 的会话里用：在群里跟 Bot 说就能建和改任务；主人在桌面端或者自己的终端里管。';
 const NOT_FOUND = '本群没有这个任务。';
 const WHEN_FORMS = '--every 30m、--daily 09:00、--weekly mon,wed@10:00、--at "2026-11-01 14:00" 或 --cron "0 9 * * 1-5"';
 const later = (what: string): string => `可能已经${what}，运行 vonvon schedule list 查看。`;
@@ -152,9 +150,8 @@ function chatOf(memberships: readonly Membership[], bot: Agent, group: string, a
   return !bound && UNBOUND.has(action) && /^oc_/.test(group) ? group : pickGroup(memberships, bot, group).groupId;
 }
 
-export async function runSchedule(action: ScheduleAction, target: ScheduleTarget, io: Io, daemon: Daemon = withDaemon, env: NodeJS.ProcessEnv = process.env): Promise<void> {
-  // Before connecting: a sandbox cannot reach the daemon, and the terminal's credentials are the owner's.
-  if (inBotSession(env)) throw new CommandError('refused', SESSION_REFUSED, { reason: 'not_in_session' });
+/** In a Bot's session the connection carries the session's token and `--scope`, and the daemon judges (devices-4a 4.9). */
+export async function runSchedule(action: ScheduleAction, target: ScheduleTarget, io: Io, daemon: Daemon = withDaemon): Promise<void> {
   const all = action === 'list' && Boolean(target.all);
   if (all && target.group !== undefined) throw badArgs('--group 和 --all 只能选一个。');
   if (!all && target.group === undefined) throw badArgs(`要给 --group <群>（群 id oc_… 或项目名）${action === 'list' ? '，或者用 --all 看这个 Bot 的全部任务' : ''}。`);
