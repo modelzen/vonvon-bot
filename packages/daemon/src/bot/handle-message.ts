@@ -4,7 +4,7 @@ import type { MemoryWriter } from './memory-writer';
 import { redactAgentEvents } from '../core/token-redact';
 import { buildJudgeFacts, judgeFactRead, sameNameWord } from './judge-facts';
 import { bareText, smartSalience, type Salience, type SalienceDeps } from './salience';
-import { getAppRoleSnapshot } from '../config/app-roles';
+import { getAppRoleSnapshot, trustedFeishuAdmins } from '../config/app-roles';
 import { createChatPeople } from './chat-people';
 import { findHandoffs, handoffSendResult, type HandoffSendResult, handoffText, handoffNote, ambiguousNote, ambiguousPersonNote, overNote, incompleteNote, otherBotNames, HANDOFF_SEND_MS, type HandoffMiss } from './bot-handoff';
 import { AskCoordinator, type AskTurn } from './ask-coordinator';
@@ -81,7 +81,7 @@ import {
   type ThreadHistory,
   type ThreadSummary,
 } from '../agent/types';
-import { note, type SelectOption } from '../card/cards';
+import { note, type CardObject, type SelectOption } from '../card/cards';
 import { ASK_CONTROLS_EID } from '../card/ask-card';
 import {
   createAppPreferencesWriter,
@@ -1402,7 +1402,7 @@ export function createOrchestrator(
   }
   /**
    * The token a new session's `vonvon` commands carry (devices 5.3), in place of the bare marker, and beside it the
-   * `--scope` the builtin skills copy (skills-scope): a group's reach is its group, a private chat's and a comment's the bot.
+   * `--scope` its command line copies: a group's reach is its group, a private chat's and a comment's the bot.
    */
   async function sessionEnv(api: Pick<HostApi, 'issueSessionToken'>, sessionId: string, place: AgentPlace): Promise<Record<string, string>> {
     const chatId = place.kind !== 'doc' && place.chatId ? place.chatId : undefined;
@@ -5344,10 +5344,15 @@ export function createOrchestrator(
   // DM management console buttons (design §3.1). Admin-gated; sub-views patch
   // the same card in place, each carrying a ⬅️ 菜单 back button.
   const dmAdmin = (openId?: string): boolean => isAdmin(cfg, openId ?? '');
+  /** product.md 3.7: only the owner changes this machine's administrators, here as by chat and the command line (audit 252-1). */
+  const dmOwner = (openId?: string): boolean => Boolean(openId) && resolveOwner(cfg) === openId;
   const administratorIds = (): (string | undefined)[] => {
     const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
-    return [roles?.ownerOpenId, ...(roles?.admins ?? []), cfg.preferences?.access?.ownerOpenId, ...(cfg.preferences?.access?.admins ?? [])];
+    return [roles?.ownerOpenId, ...trustedFeishuAdmins(roles), cfg.preferences?.access?.ownerOpenId, ...(cfg.preferences?.access?.admins ?? [])];
   };
+  /** The administrators card as the clicker may use it: the owner adds and removes, an admin only reads. */
+  const adminsCard = async (evt: CardActionEvent): Promise<CardObject> =>
+    buildAdminsCard(cfg, await namesWithOperator(evt, administratorIds()), { editable: dmOwner(evt.operator?.openId) });
   // DM cards are CardKit entities (sendManagedCard); update them via the
   // settle-then-cardkit path so the click's callback acks first. Passing the
   // whole evt lets settleUpdate self-heal an orphaned (post-restart) card by
@@ -6285,12 +6290,12 @@ export function createOrchestrator(
     // 留痕），规避 select 锁卡。owner 恒在 admins 名单顶、不可删。
     .on(DM.admins, ({ evt }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
-      patch(evt, async () =>
-        buildAdminsCard(cfg, await namesWithOperator(evt, administratorIds())),
-      );
+      patch(evt, () => adminsCard(evt));
     })
     .on(DM.addAdminForm, ({ evt }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
+      // An admin's click on an owner's card (a forwarded or older one): the list back, read-only.
+      if (!dmOwner(evt.operator?.openId)) { patch(evt, () => adminsCard(evt)); return; }
       patch(evt, async () => {
         const all = await fetchAllProjectMembers(channel);
         const members = all.filter((m) => !isAdmin(cfg, m.openId)); // 排除已是 admin/owner 的
@@ -6299,11 +6304,12 @@ export function createOrchestrator(
     })
     .on(DM.addAdminSubmit, ({ evt, formValue }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
+      const owner = dmOwner(evt.operator?.openId);
       const manual = String(formValue?.open_id ?? '').trim();
       const id = manual.startsWith('ou_') ? manual : pickOpenId(formValue);
-      log.info('console', 'admin-add', { picked: id?.slice(-6) ?? null });
+      log.info('console', 'admin-add', { picked: id?.slice(-6) ?? null, ...(owner ? {} : { refused: 'not-owner' }) });
       void trackTask((async () => {
-        if (id) {
+        if (id && owner) {
           await writePreferences((preferences) => {
             const access: AppAccess = { ...(preferences.access ?? {}) };
             access.ownerOpenId ??= cfg.preferences?.access?.admins?.[0];
@@ -6311,18 +6317,18 @@ export function createOrchestrator(
             preferences.access = access;
           }).catch((e) => log.fail('console', e, { phase: 'save-config' }));
         }
-        const ids = administratorIds();
-        const next = buildAdminsCard(cfg, await namesWithOperator(evt, ids));
-        await sendManagedCard(channel, evt.chatId, next).catch((e) => log.fail('console', e, { phase: 'admin-add-result' }));
+        await sendManagedCard(channel, evt.chatId, await adminsCard(evt)).catch((e) => log.fail('console', e, { phase: 'admin-add-result' }));
       })());
     })
     .on(DM.rmAdmin, ({ evt, value }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
+      const owner = dmOwner(evt.operator?.openId);
       const id = typeof value.u === 'string' ? value.u : '';
+      if (!owner) log.info('console', 'admin-remove', { refused: 'not-owner' });
       patch(evt, async () => {
         const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
         const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
-        if (id && id !== resolveOwner(cfg) && id !== scanner && !roles?.admins.includes(id)) {
+        if (owner && id && id !== resolveOwner(cfg) && id !== scanner && !trustedFeishuAdmins(roles).includes(id)) {
           await writePreferences((preferences) => {
             const access: AppAccess = { ...(preferences.access ?? {}) };
             access.ownerOpenId ??= cfg.preferences?.access?.admins?.[0];
@@ -6330,8 +6336,7 @@ export function createOrchestrator(
             preferences.access = access;
           }).catch((e) => log.fail('console', e, { phase: 'save-config' }));
         }
-        const ids = administratorIds();
-        return buildAdminsCard(cfg, await namesWithOperator(evt, ids));
+        return adminsCard(evt);
       });
     })
     .on(DM.allowlist, ({ evt, value }) => {
