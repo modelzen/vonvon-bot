@@ -66,23 +66,28 @@ async function round(name: string, modes: Array<'slow' | 'fast'>, thirdParty: bo
   const children = modes.map((mode, index) => start(lock, go, mode, index));
   try {
     await waitFor(() => children.every(child => existsSync(child.ready)), `${name}: children ready`);
-    // The third party: a record of this process, linked onto the lock's name the moment it is free.
+    // The third party: records of this process, linked onto the lock's name whenever it is free. Nobody releases in a
+    // round, so once anyone holds the lock the name must never be free again: at most one link succeeds, and then no
+    // child may hold.
     const start = processStart(process.pid);
-    const third = join(dir, 'third');
-    writeFileSync(third, JSON.stringify({ pid: process.pid, at: Date.now(), token: 'third', ...(start ? { start } : {}) }));
+    const thirds = [0, 1, 2].map(index => {
+      const file = join(dir, `third-${index}`);
+      writeFileSync(file, JSON.stringify({ pid: process.pid, at: Date.now(), token: `third-${index}`, ...(start ? { start } : {}) }));
+      return file;
+    });
     writeFileSync(go, '');
-    let thirdHeld = false;
+    let taken = 0;
     if (thirdParty) {
-      for (const until = Date.now() + 400; Date.now() < until;) {
-        try { linkSync(third, lock); thirdHeld = true; break; } catch { /* the name is taken: as it should be */ }
+      for (const until = Date.now() + 400; Date.now() < until && taken < thirds.length;) {
+        try { linkSync(thirds[taken]!, lock); taken++; } catch { /* the name is taken: as it should be */ }
       }
     }
     await waitFor(() => children.every(child => child.output().length > 0), `${name}: children answered`);
     const outputs = children.map(child => child.output());
-    const holders = outputs.filter(output => output === 'held').length + (thirdHeld ? 1 : 0);
-    expect(holders, `${name}: ${JSON.stringify(outputs)}, third party ${thirdHeld}`).toBe(1);
+    const holders = outputs.filter(output => output === 'held').length + taken;
+    expect(holders, `${name}: ${JSON.stringify(outputs)}, third party took the name ${taken} times`).toBe(1);
     const record = JSON.parse(readFileSync(lock, 'utf8')) as { pid: number };
-    expect(record.pid, `${name}: the lock names the holder`).toBe(thirdHeld ? process.pid : children[outputs.indexOf('held')]!.child.pid);
+    expect(record.pid, `${name}: the lock names the holder`).toBe(taken ? process.pid : children[outputs.indexOf('held')]!.child.pid);
     expect(existsSync(`${lock}.reclaim`), `${name}: no guard left`).toBe(false);
   } finally {
     for (const { child } of children) child.kill();
