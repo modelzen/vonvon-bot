@@ -8,7 +8,7 @@ import {onDeviceText, whereName} from '../device-copy';
  * says 本机, a remote one 「X」 (devices-ui-2). The caller's own row and the toast say 这台电脑: they are about the computer in
  * front of the user whichever device is shown, and a remote page never says 本机 (product 3.14).
  */
-type Where = Pick<ActiveDevice, 'isRemote' | 'name'>;
+type Where = Pick<ActiveDevice, 'isRemote' | 'name' | 'platform'>;
 type Kind = AddressCandidate['kind'];
 type Opened = DeviceStatus['remote']['addresses'][number];
 export type ClientsReply = Extract<DeviceReply, {kind: 'clients'}>;
@@ -93,7 +93,10 @@ export function switchText(where: Where, from: AddressRow, to: string, paired: n
   const follow = paired ? `已配对的 ${paired} 台设备要换到新地址：在下面生成连接链接，粘到那台电脑的 Vonvon Bot → 设置 → 设备 → 添加，只会更新地址，不用重新配对。` : '';
   return `换成 ${to} 后，${from.host} 不再接受连接，经它连着的设备会马上断开。${follow}`;
 }
-export const portHint = (where: Where): string => onDeviceText(where, '要改端口，在终端运行 `vonvon remote port <端口>`；改完已配对的设备要粘一次新链接。');
+/** Windows has no `vonvon` command (the desktop registers it on macOS only): its port stays as it is. */
+export const portHint = (where: Where): string => where.platform === 'windows'
+  ? onDeviceText(where, 'Windows 上这一版改不了端口；端口被别的程序占着时，关掉那个程序后会自己开始。')
+  : onDeviceText(where, '要改端口，在终端运行 `vonvon remote port <端口>`；改完已配对的设备要粘一次新链接。');
 export const NO_ADDRESS = '这台设备现在没有别的设备能连过来的地址。';
 export const LINK_HELP = '把这条链接粘到另一台电脑的 Vonvon Bot → 设置 → 设备 → 添加。10 分钟内有效，只能用一次，别发给别人。';
 export const LINK_EXPIRED = '链接过期了，再生成一个。';

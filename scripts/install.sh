@@ -44,7 +44,7 @@ check_root() {
     say "以 root 继续，Bot 和 AI 代理都会以 root 运行。"
     return 0
   fi
-  fail 2 "你正在用 root 运行。Vonvon Bot 会以这个账号运行 AI 代理，建议用普通用户：先 \`useradd -m -s /bin/bash vonvon\`，给它设密码（\`passwd vonvon\`）或放好 SSH 公钥，再用这个账号直接 SSH 登录、运行安装命令；不要用 su 或 sudo 切过去，那样装好后不会开机自动启动。说明见 ${GUIDE_URL}#install 。坚持用 root：\`VONVON_ALLOW_ROOT=1 sh -c \"\$(curl -fsSL $BASE_URL/install.sh)\"\`。"
+  fail 2 "你正在用 root 运行。Vonvon Bot 会以这个账号运行 AI 代理，建议用普通用户：先 \`useradd -m -s /bin/bash vonvon\`，给它设密码（\`passwd vonvon\`）或放好 SSH 公钥，再用这个账号直接 SSH 登录、运行安装命令；不要用 su 或 sudo 切过去，那样装好后不会开机自动启动。说明见 ${GUIDE_URL}#no-root 。坚持用 root：\`VONVON_ALLOW_ROOT=1 sh -c \"\$(curl -fsSL $BASE_URL/install.sh)\"\`。"
 }
 
 # 安装根里的 bin/vonvon 是服务端的启动器，而且能运行。

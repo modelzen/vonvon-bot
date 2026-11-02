@@ -115,6 +115,7 @@ it('names the device: 本机 on this computer, 「X」 on a remote one', () => {
   expect(panelTitle(local)).toBe('允许别的设备连接本机');
   expect(panelTitle(remote)).toBe('允许别的设备连接「机房 Linux」');
   expect(portHint(remote)).toBe('要改端口，在「机房 Linux」的终端运行 `vonvon remote port <端口>`；改完已配对的设备要粘一次新链接。');
+  expect(portHint({...remote, name: '办公室 Windows', platform: 'windows'})).toBe('Windows 上这一版改不了端口；端口被别的程序占着时，关掉那个程序后会自己开始。');
   expect(readErrorText('unsupported', 'x', remote)).toBe('「机房 Linux」上的 Vonvon Bot 太旧，不支持这里的设置。');
   expect(riskFromReply('100.70.0.3 不在 Tailscale…（CGNAT），开启后同一运营商的其他用户也可能连到这台设备。确定要开启请加 `--allow-public`。')).toBe('100.70.0.3 不在 Tailscale…（CGNAT），开启后同一运营商的其他用户也可能连到这台设备。勾选「我了解风险」后再开启。');
   expect(enableErrorText('internal', '磁盘满了')).toBe('开不了：磁盘满了');
