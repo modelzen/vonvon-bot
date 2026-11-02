@@ -297,7 +297,7 @@ describe('revocation and identity', () => {
     expect(h.registry.get(a.deviceId)?.problem).toBeUndefined();
   });
 
-  it('stops on a device whose machine id is not the paired one', async () => {
+  it('stops on a device whose machine id is not the paired one, as this attempt\'s result only', async () => {
     const h = harness();
     const a = h.add();
     await h.devices.switchTo(a.deviceId);
@@ -306,7 +306,10 @@ describe('revocation and identity', () => {
     await flush();
     expect(other.closeSpy).toHaveBeenCalled();
     expect(h.devices.state().active).toMatchObject({ phase: 'failed', failure: { code: 'identity_changed' } });
-    expect(h.registry.get(a.deviceId)?.problem?.code).toBe('identity_changed');
+    expect(vi.getTimerCount()).toBe(0);
+    expect(h.registry.get(a.deviceId)?.problem).toBeUndefined();
+    h.devices.retry();
+    expect(h.calls).toHaveLength(2);
   });
 
   it('moves past one address that is another machine; all of them is another identity', async () => {
@@ -328,7 +331,33 @@ describe('revocation and identity', () => {
     h.calls[3]!.reject(failWith('device_identity_changed', 'handshake'));
     await flush();
     expect(h.devices.state().active).toMatchObject({ phase: 'failed', failure: { code: 'identity_changed' } });
-    expect(h.registry.get(b.deviceId)?.problem?.code).toBe('identity_changed');
+    expect(h.devices.state().devices.find(row => row.id === b.deviceId)).toMatchObject({ status: 'needs-pairing', problem: 'identity_changed' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps a 4005 before message 2 out of the list: retry, a switch back and the next start try again (Codex 审查 235-2)', async () => {
+    const h = harness();
+    const a = h.add();
+    await h.devices.switchTo(a.deviceId);
+    // Anyone on the path can close with a plain 4005 before message 2 (D2).
+    h.calls[0]!.reject(failWith('device_identity_changed', 'handshake'));
+    await flush();
+    expect(h.devices.state().active).toMatchObject({ phase: 'failed', failure: { code: 'identity_changed' } });
+    expect(h.registry.get(a.deviceId)?.problem).toBeUndefined();
+    // A new link of the same device may still pair it again.
+    expect(h.devices.inspectLink(pairingLink(a.deviceId))).toMatchObject({ ok: true, repair: true });
+    h.devices.retry();
+    expect(h.calls).toHaveLength(2);
+    h.calls[1]!.reject(failWith('device_identity_changed', 'handshake'));
+    await flush();
+    await h.devices.switchTo('local');
+    await h.devices.switchTo(a.deviceId);
+    expect(h.calls).toHaveLength(3);
+    h.calls[2]!.resolve(h.link({ machineId: a.deviceId }));
+    await flush();
+    expect(h.devices.state().active.phase).toBe('ready');
+    // The next start reads the list: nothing there stops it.
+    expect(h.registry.get(a.deviceId)?.problem).toBeUndefined();
   });
 
   it('leaves an unreadable key on disk as it is, retries it, and lets a new link repair it', async () => {
@@ -439,6 +468,22 @@ describe('reconnecting', () => {
     expect(h.calls).toHaveLength(6);
   });
 
+  it('closes a connection still reading its status at once when switched away (Codex 审查 236-2)', async () => {
+    const h = harness();
+    const a = h.add();
+    for (let round = 0; round < 3; round++) {
+      await h.devices.switchTo(a.deviceId);
+      const slow = h.link({ machineId: a.deviceId });
+      vi.mocked(slow.client.admin).mockReturnValue(new Promise(() => {}));
+      h.calls.at(-1)!.resolve(slow);
+      await flush();
+      await h.devices.switchTo('local');
+      expect(slow.closeSpy).toHaveBeenCalled();
+      expect(h.openLinks()).toBe(0);
+    }
+    expect(h.views.some(view => view.kind === 'remote')).toBe(false);
+  });
+
   it('retry replaces the attempt in flight and closes what it brings back late', async () => {
     const h = harness();
     const a = h.add();
@@ -529,11 +574,11 @@ describe('adding', () => {
     expect(h.registry.list()).toEqual([]);
   });
 
-  it('finds its client id when the pairing answer was lost', async () => {
+  it.each(['pairing', 'hello'] as const)('finds its client id when cut off at %s, the answer to the pairing lost or past it (Codex 审查 235-3)', async stage => {
     const h = harness();
     const id = randomUUID();
     const adding = h.devices.add({ link: pairingLink(id) });
-    h.calls[0]!.reject(failWith('closed', 'pairing'));
+    h.calls[0]!.reject(failWith('closed', stage));
     await flush();
     const again = h.calls[1]!;
     expect(again.options.pairing).toBeUndefined();
@@ -542,6 +587,20 @@ describe('adding', () => {
     again.resolve(h.link({ machineId: id }));
     await expect(adding).resolves.toMatchObject({ kind: 'added' });
     expect(h.registry.get(id)?.clientId).toBe('cl_00000000000000dd');
+  });
+
+  it('cancelled while it is saved, adds nothing and takes its key back off the device (Codex 审查 236-3)', async () => {
+    const h = harness();
+    const id = randomUUID();
+    const put = h.registry.put;
+    h.registry.put = async device => { const saving = put(device); h.devices.cancelAdd(); return saving; };
+    const adding = h.devices.add({ link: pairingLink(id) });
+    const paired = h.link({ machineId: id }, { pairResult: { clientId: 'cl_00000000000000cc' } });
+    h.calls[0]!.resolve(paired);
+    await expect(adding).resolves.toMatchObject({ kind: 'failed', code: 'aborted' });
+    expect(h.registry.list()).toEqual([]);
+    expect(paired.client.device).toHaveBeenCalledWith({ type: 'revokeClient', clientId: 'cl_00000000000000cc' });
+    expect(paired.closeSpy).toHaveBeenCalled();
   });
 
   it('adds one device at a time and can be cancelled', async () => {

@@ -52,8 +52,14 @@ it('says the device took this computer off, with what to do next', () => {
   expect(html).toContain('回到这台电脑');
   expect(html).toContain('已撤销');
   expect(html).not.toContain('现在重试');
+  expect(html).not.toContain('再试一次');
   const key = render(devicesState({id: A, phase: 'failed', failure: {code: 'key_unreadable', attempts: [], at: 1}})).html;
   expect(key).toContain('再试一次');
+  // A 4005 before message 2 can be forged: this attempt's result, tried again from here too (Codex 审查 235-2).
+  const identity = render(devicesState({id: A, phase: 'failed', failure: {code: 'identity_changed', attempts: [], at: 1}})).html;
+  expect(identity).toContain('身份和配对时不一样了');
+  expect(identity).toContain('重新配对');
+  expect(identity).toContain('再试一次');
 });
 
 it('keeps only the device list and the upgrade when the protocols differ', () => {

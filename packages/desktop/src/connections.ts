@@ -80,6 +80,10 @@ type Timer = ReturnType<typeof setTimeout>;
 const TERMINAL: Partial<Record<string, StoredProblem | 'key_unreadable'>> = {
   client_revoked: 'revoked', unknown_client: 'unknown_client', identity_changed: 'identity_changed', key_unreadable: 'key_unreadable',
 };
+/** Stopped on, but only this attempt's result: not written down, tried again on retry, a switch back or the next start.
+ * A key the keychain will not open may open later; another identity is a 4005 before message 2, which anyone on the path
+ * can send (D2), or a machine id that does not match, which every attempt meets again (Codex 审查 235-2). */
+const RETRYABLE = new Set<string>(['key_unreadable', 'identity_changed']);
 const routeKey = (route: Pick<DeviceRoute, 'host' | 'port'>): string => `${route.host}|${route.port}`;
 const sameRoutes = (a: readonly DeviceRoute[], b: readonly DeviceRoute[]): boolean =>
   a.length === b.length && a.every(route => b.some(other => routeKey(other) === routeKey(route) && other.kind === route.kind));
@@ -162,8 +166,8 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     }
     const problem = problemOf(id);
     if (problem) return problem === 'revoked' ? 'revoked' : 'needs-pairing';
-    // Like the current device: a key the keychain will not open needs pairing again, not another try later.
-    if (lastFailure.get(id) === 'key_unreadable') return 'needs-pairing';
+    // Like the current device: stopped on it, pairing again is what fixes it.
+    if (RETRYABLE.has(lastFailure.get(id) ?? '')) return 'needs-pairing';
     if (lastFailure.has(id)) return 'offline';
     if (device.lastKnown && device.lastKnown.protocolVersion !== deps.client.protocolVersion) return 'maintenance';
     return 'unknown';
@@ -174,7 +178,8 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     const platform = live?.platform ?? known?.platform;
     const version = live?.version ?? known?.version;
     const protocolVersion = live?.protocolVersion ?? known?.protocolVersion;
-    const problem = problemOf(device.deviceId) ?? (lastFailure.get(device.deviceId) === 'key_unreadable' ? 'key_unreadable' : undefined);
+    const failed = lastFailure.get(device.deviceId);
+    const problem = problemOf(device.deviceId) ?? (failed === 'key_unreadable' || failed === 'identity_changed' ? failed : undefined);
     return {
       id: device.deviceId, name: device.name, current: device.deviceId === viewId, status: rowStatus(device),
       ...(platform ? { platform } : {}), ...(version ? { version } : {}), ...(protocolVersion === undefined ? {} : { protocolVersion }),
@@ -301,6 +306,9 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     if (!current()) { opened?.link.close(); return; }
     if (!opened) { onFailure(myGen, mySeq, deviceCode(attempts), attempts); return; }
     const { link, route } = opened;
+    // A switch or a retry from here on closes it at once, not after the status read below (Codex 审查 236-2).
+    const closeOnAbort = (): void => link.close();
+    abort.signal.addEventListener('abort', closeOnAbort, { once: true });
     const info = link.serverInfo;
     // The channel checked the key already; this is a data directory copied to another machine.
     if (info.machineId !== device.deviceId) { link.close(); onFailure(myGen, mySeq, 'identity_changed', attempts); return; }
@@ -326,6 +334,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
       };
     }).catch(() => undefined);
     if (!current()) { link.close(); return; }
+    abort.signal.removeEventListener('abort', closeOnAbort);
     const view: ViewSession = { id, client: link.client, serverInfo: info, mode };
     const opening: Session = {
       id, link, info, mode, view, cause,
@@ -385,7 +394,8 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     if (terminal) {
       phase = 'failed';
       clearRetry();
-      if (terminal !== 'key_unreadable') persistProblem(id, terminal);
+      // Revoked and an unknown key are written down; the rest is this attempt's result (RETRYABLE).
+      if (terminal === 'revoked' || terminal === 'unknown_client') persistProblem(id, terminal);
       emitState();
       return;
     }
@@ -459,8 +469,8 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
 
   function retry(): void {
     if (disposed || viewId === LOCAL_VIEW || phase === 'ready') return;
-    // Revoked, another identity, an unknown key: only pairing again helps.
-    if (phase === 'failed' && failure?.code !== 'key_unreadable') return;
+    // Revoked or an unknown key: only pairing again helps.
+    if (phase === 'failed' && !RETRYABLE.has(failure?.code ?? '')) return;
     if (phase === 'failed') { phase = 'connecting'; failure = undefined; }
     attempt = 0;
     attemptNow();
@@ -488,7 +498,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     if (local.serverInfo && deviceId === local.serverInfo.machineId) return { preview: { ok: false, code: 'own_link', deviceId, name } };
     const existing = registry.get(deviceId);
     if (existing) {
-      const repairable = problemOf(deviceId) !== undefined || lastFailure.get(deviceId) === 'key_unreadable' || keyUnreadable(existing);
+      const repairable = problemOf(deviceId) !== undefined || RETRYABLE.has(lastFailure.get(deviceId) ?? '') || keyUnreadable(existing);
       if (!repairable) {
         return { preview: { ok: false, code: 'already_added', deviceId, name: existing.name, routesChanged: !sameRoutes(existing.routes, parsedRoutes) }, link, routes: parsedRoutes, existing };
       }
@@ -541,8 +551,9 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
         attempts.push({ route, code: failure.code });
         if (failure.code === 'pairing_failed') return failed(now() >= link.invite.expiresAt ? 'link_expired' : 'link_used');
         if (failure.code === 'rate_limited') return failed('rate_limited');
-        if (failure.stage === 'pairing' && (failure.code === 'closed' || failure.code === 'timeout')) {
-          // The pairing request may have been taken and the invite spent, only its answer lost: the same key, no invite.
+        // Cut off while pairing, or after its answer while waiting for the hello (Codex 审查 235-3): the request may have been
+        // taken and the invite spent, or was for sure, so the same key, no invite.
+        if ((failure.stage === 'pairing' || failure.stage === 'hello') && (failure.code === 'closed' || failure.code === 'timeout')) {
           const recovered = await recoverPairing(route, connect, generated.publicKeyBase64url, abort);
           if (recovered.kind === 'paired') { paired = { ...recovered, route }; break; }
           if (recovered.kind === 'aborted') return failed('aborted');
@@ -571,6 +582,11 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
           ...(info.deviceName ? { deviceName: info.deviceName } : {}), at },
       };
       await registry.put(stored);
+      // Cancelled while it was saved (Codex 审查 236-3): put back what was there; below takes the key back off its list.
+      if (abort.signal.aborted) {
+        await (existing ? registry.put(existing) : registry.remove(stored.deviceId)).catch(() => undefined);
+        throw new Error('aborted');
+      }
     } catch {
       // Paired over there, forgotten here: take the key back off its list while the connection is still open.
       await withTimeout(linked.client.device({ type: 'revokeClient', clientId }), REVOKE_TIMEOUT_MS).catch(() => undefined);

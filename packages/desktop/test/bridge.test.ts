@@ -1034,6 +1034,42 @@ describe('devices-ui-1a views', () => {
     await h.bridge.dispose();
   });
 
+  it('shows the stopped daemon again, not a page left loading, after a look at a remote device (Codex 审查 235-1)', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    h.machine.mockImplementation(async request => request.type === 'status' ? runningStatus : { type: 'done', message: '正在停止 daemon。' });
+    h.emitSnapshot({ revision: 5 });
+    // Stopped from 高级运行设置: the shell expects the drop, and the connection stays set but dead.
+    h.actions.stopHost.mockImplementation(async (_previous, send) => { h.actions.isExpectedDisconnect.mockReturnValue(true); return send(); });
+    expect(await h.invoke(desktopChannels.machine, { type: 'stopHost' })).toMatchObject({ ok: true });
+    h.snapshot.mockRejectedValue(new ConnectionError('Daemon connection closed'));
+    h.emitError(new ConnectionError('server_shutdown'));
+    await h.devs.show(remoteView(REMOTE_A, remoteClient()));
+    h.webContents.send.mockClear();
+    await h.devs.show({ kind: 'local' });
+    // The page built again for this computer gets what the page had, and 启动 daemon as before.
+    expect(h.events()).toEqual([{ type: 'reattached', view: 'local' }, { type: 'snapshot', view: 'local', value: { revision: 5 } }]);
+    expect(await h.invoke(desktopChannels.snapshot)).toEqual({ ok: true, value: { revision: 5 } });
+    expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toMatchObject({ ok: true, value: { host: null, service: { running: false } } });
+    expect(h.actions.connectionLost).not.toHaveBeenCalled();
+    await h.bridge.dispose();
+  });
+
+  it('shows the last snapshot under the lost-connection message when the daemon died while a remote device was shown', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    h.emitSnapshot({ revision: 5 });
+    await h.devs.show(remoteView(REMOTE_A, remoteClient()));
+    h.snapshot.mockRejectedValue(new ConnectionError('Daemon connection closed'));
+    h.emitError(new ConnectionError('daemon crashed'));
+    h.webContents.send.mockClear();
+    await h.devs.show({ kind: 'local' });
+    expect(h.events()).toEqual([{ type: 'reattached', view: 'local' }, { type: 'snapshot', view: 'local', value: { revision: 5 } }]);
+    expect(h.actions.connectionLost).toHaveBeenCalledOnce();
+    expect(await h.invoke(desktopChannels.snapshot)).toEqual({ ok: true, value: { revision: 5 } });
+    await h.bridge.dispose();
+  });
+
   it('shows no error and asks nothing of the shell when a remote connection drops', async () => {
     const h = harness();
     await h.invoke(desktopChannels.subscribe);
