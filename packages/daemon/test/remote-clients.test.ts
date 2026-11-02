@@ -186,3 +186,36 @@ it('keeps last-seen to write again when its write fails', async () => {
   await registry.close();
   expect(await file()).toMatchObject({ generation: 2, clients: [{ lastSeenAt: 200, lastAddress: '192.0.2.9:1' }] });
 });
+// Codex 审查任务 219: close() writes behind the changes already queued. 147b2619 必败: close() found nothing to write
+// before the queued add of a known key touched, so the disk kept 100/initial until a second close().
+it('writes on one close the last-seen of an add queued before it', async () => {
+  let now = 100;
+  const registry = await createClientRegistry(home, { now: () => now });
+  const a = await registry.add({ ...client(1), address: 'initial' });
+  now = 200;
+  const adding = registry.add({ ...client(1), address: 'latest' });
+  await registry.close();
+  expect(await adding).toMatchObject({ id: a.id, lastSeenAt: 200, lastAddress: 'latest' });
+  expect(await file()).toMatchObject({ generation: 2, clients: [{ id: a.id, lastSeenAt: 200, lastAddress: 'latest' }] });
+  expect((await createClientRegistry(home)).get(a.id)).toMatchObject({ lastSeenAt: 200, lastAddress: 'latest' });
+});
+// What is queued or touched while close() waits is written before it settles, and no timer is left. 147b2619 必败.
+it('writes on close what is queued and touched while it waits, and leaves no timer', async () => {
+  vi.useFakeTimers();
+  let now = 100;
+  const registry = await createClientRegistry(home, { now: () => now });
+  const a = await registry.add(client(1));
+  const b = await registry.add(client(2));
+  now = 200;
+  const closing = registry.close();
+  registry.touch(a.id, '192.0.2.1:1');
+  const adding = registry.add({ ...client(2), address: '192.0.2.2:2' });
+  const renaming = registry.rename(a.id, '笔记本');
+  await closing;
+  await Promise.all([adding, renaming]);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(await file()).toMatchObject({ clients: [
+    { id: a.id, name: '笔记本', lastSeenAt: 200, lastAddress: '192.0.2.1:1' },
+    { id: b.id, lastSeenAt: 200, lastAddress: '192.0.2.2:2' },
+  ] });
+});
