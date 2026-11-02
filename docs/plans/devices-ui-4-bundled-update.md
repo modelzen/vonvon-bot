@@ -565,3 +565,54 @@ Windows 只有这一个任务，等 U2、U3、U4 都合入集成分支后发。C
 - 几条用户看得到的话不在设计第 15 节，补进去了（第 7 节）。
 - Windows 启动修复的验收用"不报协议不同"作断言区分不了有没有修复（新旧包协议都是 2）。改成旧 daemon 的 pid 没了、新 daemon 报新版本（6.3 第 4 步）。
 - `peer-label.ts` 和 hub 的 `attached` 回调原来写成 U3、U4 谁先合入谁建，两边会冲突，"这台电脑上的…"对照表也写了两份。改成 U3 先合入（第 1 节依赖），`peerName` 用 U3 导出的称呼函数（4.3）。
+
+## 11. 实现时和计划不一样的地方
+
+**Windows 不做（owner 2026-11-02）。** 0.9.0 只做 macOS 的远程更新：
+- daemon 在 Windows 上不报 `update.bundled`。`checkCoreUpdate` 不转发，在 `message` 里回"「X」的服务端是 Windows 桌面端自带的，还不能从别的设备更新。请在那台电脑上打开 Vonvon Bot 更新。"；`applyCoreUpdate` 回 `unsupported`。
+- 外壳在 Windows 上不声明 `desktop.self-update`。`main.ts` 的条件是 `process.platform !== 'win32'`，和 daemon 报能力的条件一样。Linux 没有桌面端安装包，这个条件对用户没有影响，测试因此能在 JP-VPS 上把外壳这条路完整跑一遍。
+- UI：bundled 服务端没报 `update.bundled` 时（Windows，以及更早的版本），不给按钮，写"「X」的服务端是桌面端自带的，请在那台电脑上打开 Vonvon Bot 更新。"
+- 下面这些留到以后做，本片没写：
+  - `WindowsDesktopUpdater` 的 `onProgress`，也就是下载百分比；
+  - `beforeUpdateInstall` 里 `stopHost` 1 分钟没停完时，外壳报 `error`（"那台电脑上的后台 1 分钟内没停完…"）；
+  - 排空白名单加 `machine.desktopUpdateReport`。这一项只为上一条的 Windows 路径，所以 4.3 的这一项、`DRAIN_KINDS` 都没改；
+  - 第 5 节的"Windows 进度""重启前没停完""排空时的报告"三例；
+  - 6.3 第 3 步，Windows 的远程更新验收。
+
+**停止、重启、升级直接中断对话（R1，owner 2026-11-02）。** 远程更新不排空，也不等对话结束。确认框、按钮旁和被更新那台的提示，都写"正在进行的对话会被中断"。`restarting` 的状态行照旧用 `draining`，显示"正在中断进行中的对话"。
+
+**U3 还没合入。**
+- `D/server/peer-label.ts` 由本片新建，里面有 `pairedPeerName`、`localPeerLabel` 和 `peerName`。U3 合入时用这一份，不再建第二份。
+- hub 没有 `attached` 回调。改成在 `admin.negotiate` 成功、这条连接认得出是外壳时调 `shellAttached`。外壳要声明以后才认得出，所以效果一样。
+
+**UI。**
+- 没用 U2 留的 `bundled` 渲染位。`ServerUpdateCard` 看 `where.capabilities` 里有没有 `update.bundled`，自己决定怎么显示。按钮、确认框、"要开着桌面端"那句和那台更新器的原话都写在卡里，没有另建 `BundledUpdateRow`。
+- bundled 而且 `latest` 为空时，不显示"可用版本"一行；显示的话会写"更新源不可用"，这不准。
+- `RemoteUpdateNotice` 没挂在 `DesktopRoot`，挂在 `App` 里 `DeviceStatusBanner` 的上面，和页面顶部的其他提示放在一起。`shellForDevice` 不去掉 `onRemoteUpdate`，所以看远程设备时也显示。协议不同时进维护视图，这条不显示。
+
+**外壳。**
+- `SelfUpdater` 没有 `enabled`：更新器关着时，`check()` 自己回 `unavailable` 和原话。
+- 下载期间应用开始退出，或者发来请求的那条本机连接换了：不重启，报 `error`"那台电脑上的 Vonvon Bot 正在退出。"。下载好的包留着，本机点"重启升级"还能用。
+- 远程更新进行中又来一个 `apply`：报 `error`"已有更新正在进行。"。daemon 那头本来有锁，这里是第二道。
+- 报回去的错误只用更新器自己的话（`DesktopUpdateError`、`StartHostRefusal`）。别的错误换成"桌面端更新没有完成。"，免得把本机路径带出去。
+- `quitting()` 除了 `quitRequested`，也算上 `terminating` 和 `cleanupPromise`。
+- `negotiate` 被拒时，写进桌面端的设备日志（`remote-update-negotiate-refused code=…`）。设备日志没有 warn、info 之分。
+
+**daemon。**
+- 外壳断开时，正在等的检查马上回 `desktopShell: false`，不再等满 20 秒。
+- 报 `current` 时记 `done`，文字是"已是最新"（计划写的是"已是最新版本"），状态行显示"更新完成：已是最新"。
+- 从本机发起时（本机命令行），拒绝的话说"这台电脑…"，不说「设备名」。
+
+**测试。**
+- 没有 `desktop/test/main-update.test.ts` 这个文件。`main.ts` 接线的测试放进 `native-lifecycle.test.ts`，用 Electron `autoUpdater` 的假驱动走 check → 下载 → `quitAndInstall`，验这几点：
+  - `restarting` 在断开连接之前报出去；
+  - 本机"重启升级"被拒；
+  - 不弹确认框；
+  - 下载失败时提示清掉。
+- 没有 `server-info.test.ts`、`protocol/test/machine.test.ts`、`standalone-update.test.ts` 这几个文件。对应的用例写在：
+  - `server-handshake.test.ts`，加了 `capabilities('bundled', …, 'win32')` 不含 `update.bundled` 一例；
+  - `protocol/test/distribution.test.ts`；
+  - `bundled-update.test.ts`，启动收尾那几例。
+- `web-rpc-coverage.test.ts`：网页端发 `machine.desktopUpdateReport` 回 `forbidden`。
+- `rpc-machine-bundled.test.ts`：Bot 会话先带 scope `negotiate`，再被权限表拒。不先 `negotiate` 的话，回的是 `scope_required`。
+- `rpc-machine-bundled.test.ts` 在 fixture 的模块之后才动态 import `update.ts`。静态 import 写在前面的话，会读写真实的数据目录。

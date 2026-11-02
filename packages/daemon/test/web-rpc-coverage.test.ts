@@ -198,6 +198,7 @@ else process.exit(0);
         { type: 'mcp', request: { action: 'list', provider: 'claude' } }, { type: 'bridgeImport', action: 'status' },
         { type: 'status' }, { type: 'service', action: 'install' }, { type: 'setServiceSkipped', skipped: false }, { type: 'startHost' }, { type: 'stopHost' }, { type: 'logs' },
         { type: 'checkCoreUpdate' }, { type: 'applyCoreUpdate' }, { type: 'coreUpdateStatus' },
+        { type: 'desktopUpdateReport', requestId: 'dur_0000000000000000', state: 'current', message: 'x' },
       ],
     };
     const unions = {
@@ -205,6 +206,8 @@ else process.exit(0);
       environment: schemas.environmentRequestSchema, machine: schemas.machineRequestSchema,
     };
     const unsupported = new Set(['machine.bridgeImport', 'machine.service', 'machine.startHost']);
+    // devices-ui-4: only this computer's desktop shell, having declared it, reports its own update
+    const shellOnly = new Set(['machine.desktopUpdateReport']);
     for (const method of Object.keys(cases) as (keyof typeof cases)[]) {
       const variants = cases[method];
       const actual = variants.map(value => 'type' in value ? value.type : value.action);
@@ -216,6 +219,7 @@ else process.exit(0);
         const key = `${method}.${variant}`;
         const frame = await client.call(requestSchema.parse({ type: 'request', id: `union-${key}`, method, payload }));
         if (unsupported.has(key)) expect(frame, key).toMatchObject({ type: 'error', code: 'unsupported' });
+        else if (shellOnly.has(key)) expect(frame, key).toMatchObject({ type: 'error', code: 'forbidden' });
         else {
           expect(frame.type, key).toBe('response');
           expect(responseSchema.safeParse(frame).success, key).toBe(true);

@@ -20,14 +20,14 @@ const where = {isRemote: true, name: '验收设备 1', version: '0.9.0'};
 const core = (kind: string, hasUpdate = true): MachineReply => ({type: 'coreUpdate', distribution: {kind, cliPath: '/x'}, current: '0.9.0', latest: hasUpdate ? '0.9.1' : '0.9.0', hasUpdate, dev: false});
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
-function card(reply: (operation: MachineRequest) => Promise<MachineReply>) {
+function card(reply: (operation: MachineRequest) => Promise<MachineReply>, at: typeof where & {capabilities?: string[]} = where) {
   hooks.state = []; hooks.effects = [];
   const request = vi.fn(reply);
-  const render = () => { hooks.index = 0; hooks.effects = []; return ServerUpdateCard({request, variant: 'remote', where}); };
+  const render = () => { hooks.index = 0; hooks.effects = []; return ServerUpdateCard({request, variant: 'remote', where: at}); };
   return {request, render};
 }
-async function opened(reply: (operation: MachineRequest) => Promise<MachineReply>) {
-  const view = card(reply);
+async function opened(reply: (operation: MachineRequest) => Promise<MachineReply>, at?: typeof where & {capabilities?: string[]}) {
+  const view = card(reply, at);
   view.render();
   for (const effect of hooks.effects) effect();
   await tick();
@@ -49,12 +49,57 @@ it.each([['standalone', '独立安装的服务端'], ['global-npm', '全局 npm 
   expect(nodes(tree).some(node => node.props.description === '更新会重启服务端，正在进行的对话会被中断。')).toBe(true);
 });
 
-it('only says where a bundled server is updated, with no update button', async () => {
+// devices-ui-4: a Windows desktop app's server says nothing of `update.bundled` for 0.9.0 (owner 2026-11-02).
+it('only says where a bundled server is updated when its desktop app cannot do it from here, with no update button', async () => {
   const view = await opened(async () => core('bundled'));
   const tree = view.render();
-  expect(words(tree)).toContain('「验收设备 1」的服务端是桌面端自带的，在那台电脑上的 Vonvon Bot 里更新。');
+  expect(words(tree)).toContain('「验收设备 1」的服务端是桌面端自带的，请在那台电脑上打开 Vonvon Bot 更新。');
   expect(words(tree)).toContain('桌面端自带');
-  expect(nodes(tree).some(node => node.props.children?.join?.('') === '更新「验收设备 1」')).toBe(false);
+  expect(nodes(tree).some(node => typeof node.props.children?.join?.('') === 'string' && node.props.children.join('').startsWith('更新「验收设备 1」'))).toBe(false);
+  expect(nodes(tree).some(node => node.props.title === '更新')).toBe(false);
+});
+
+const viaDesktop = {...where, capabilities: ['device', 'session-scope', 'update.bundled']};
+const bundledButton = (tree: ReactNode) => nodes(tree).find(node => node.props.children?.join?.('') === '更新「验收设备 1」上的 Vonvon Bot');
+const dialog = (tree: ReactNode) => nodes(tree).find(node => node.props.confirmLabel === '更新');
+
+// devices-ui-4 第 4 节: the desktop app on that computer updates the server it carries, after a confirmation that says the
+// restart interrupts the conversations. main 必败: no button, only the text.
+it('updates a bundled server through its desktop app after a confirmation', async () => {
+  const view = await opened(async operation => operation.type === 'applyCoreUpdate' ? {type: 'done', message: '开始更新…'} : {...core('bundled'), desktopShell: true}, viaDesktop);
+  let tree = view.render();
+  expect(words(tree)).not.toContain('请在那台电脑上打开 Vonvon Bot 更新');
+  expect(words(tree)).toContain('0.9.1');
+  expect(bundledButton(tree)?.props.disabled).toBe(false);
+  expect(nodes(tree).some(node => node.props.description === '那台电脑上的桌面端会下载更新，然后直接重启，正在进行的对话会被中断。')).toBe(true);
+  expect(dialog(tree)?.props.open).toBe(false);
+  bundledButton(tree)?.props.onClick();
+  tree = view.render();
+  expect(dialog(tree)?.props).toMatchObject({open: true, title: '更新「验收设备 1」上的 Vonvon Bot？', description: expect.stringContaining('正在进行的对话会被中断')});
+  expect(view.request).not.toHaveBeenCalledWith({type: 'applyCoreUpdate'});
+  dialog(tree)?.props.onConfirm();
+  await tick();
+  expect(view.request).toHaveBeenCalledWith({type: 'applyCoreUpdate'});
+  tree = view.render();
+  expect(dialog(tree)?.props.open).toBe(false);
+  expect(words(tree)).toContain('开始更新…');
+  expect(bundledButton(tree)?.props.disabled).toBe(true);
+});
+
+it('says the desktop app there must be open, and still offers the button', async () => {
+  const view = await opened(async () => ({...core('bundled', false), latest: null, desktopShell: false}), viaDesktop);
+  const tree = view.render();
+  expect(words(tree)).toContain('要那台电脑上的 Vonvon Bot 桌面端开着才能远程更新');
+  expect(bundledButton(tree)?.props.disabled).toBe(false);
+  // no version known from there: no 可用版本 row saying the update source is unavailable
+  expect(words(tree)).not.toContain('更新源不可用');
+});
+
+it('shows what the desktop app there answered, as that device\'s', async () => {
+  const view = await opened(async () => ({...core('bundled', false), latest: null, desktopShell: true, message: '这个安装包没有可用的签名更新源，请到官网下载新版本：https://vonvon.cc/get/'}), viaDesktop);
+  const tree = view.render();
+  expect(words(tree)).toContain('没有可用的签名更新源');
+  expect(bundledButton(tree)).toBeUndefined();
 });
 
 it('shows only the version when the device cannot update remotely', async () => {

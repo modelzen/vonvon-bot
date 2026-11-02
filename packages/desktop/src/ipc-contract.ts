@@ -94,12 +94,15 @@ export type DesktopEvent =
   | { type: 'devices'; value: DevicesState }
   /** 自动检查更新的结果；窗口之后才订阅时由主进程补发最近一次。 */
   | { type: 'update'; value: DesktopUpdate }
+  /** U4: another device is updating this computer's Vonvon Bot; no text when it ended. A window that subscribes later
+   * gets the last one. */
+  | { type: 'remoteUpdate'; text?: string }
   | { type: 'error'; value: SafeFailure }
   | { type: 'quitRequested' };
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
   'openExternal' | 'chooseExecutablePath' | 'chooseDirectoryPaths' | 'checkDesktopUpdate' | 'retryDesktopUpdate' | 'installDesktopUpdate' | 'onDesktopUpdate' |
-  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent' | 'quitKeepsDaemon'>>;
+  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent' | 'quitKeepsDaemon' | 'onRemoteUpdate'>>;
 
 export interface DesktopResources {
   uiIndex: string;
@@ -127,6 +130,8 @@ export interface DesktopBridge {
   requestQuit(): void;
   /** 把自动检查到的更新状态推给窗口；窗口还没订阅或刷新后重新订阅时补发最近一次。 */
   publishUpdate(update: DesktopUpdate): void;
+  /** U4: the window's line while another device updates this computer; kept for a window that subscribes later. */
+  sendRemoteUpdate(text: string | undefined): void;
   /** Takes ownership of `owner`, closing it on failure and when the bridge is disposed mid-replacement. */
   replaceOwner(owner: AttachedDaemon): Promise<void>;
   dispose(): Promise<void>;
