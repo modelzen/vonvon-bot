@@ -422,3 +422,11 @@ test('devices-ui-1b: the devices page is found on the desktop only', () => {
   assert.ok(findEntries(searchEntries(snapshot, {devices: true}), 'Tailscale').some(entry => entry.id === 'devices'));
   assert.equal(searchEntries(snapshot).some(entry => entry.id === 'devices'), false);
 });
+
+// devices-ui-3: 允许别的设备连接 and its paired devices are found on 应用与启动. main 必败
+test('finds 允许别的设备连接 and the paired devices on 应用与启动', () => {
+  const link = findEntries(entries, '连接链接').find(entry => entry.destination.section === '允许别的设备连接');
+  assert.deepEqual(link?.destination, {page: 'application', section: '允许别的设备连接', field: '连接链接', reveal: undefined, guide: undefined});
+  assert.equal(findEntries(entries, '撤销')[0]?.destination.section, '已配对的设备');
+  assert.equal(findEntries(entries, '设备名字')[0]?.destination.section, '允许别的设备连接');
+});

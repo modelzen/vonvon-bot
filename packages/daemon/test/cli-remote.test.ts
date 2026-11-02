@@ -213,7 +213,10 @@ it('goes through the daemon when it runs, closing the old address when another o
     expect(enabled.text()).toBe(`已在 ${LAN}:7767 接受连接（局域网地址）。只有配对过的客户端能连上，接下来运行 \`vonvon pair\` 生成连接链接。\n现在：等待地址出现，等待地址 ${LAN} 出现。\n`);
     const status = output();
     await runRemote('status', {}, status.io, daemon, fixture.home, deps);
-    expect(status.last()).toEqual({ ok: true, status: expect.objectContaining({ remote: { port: 7767, addresses: [expect.objectContaining({ host: LAN, state: 'waiting' })] } }) });
+    expect(status.last()).toEqual({ ok: true, status: expect.objectContaining({ remote: { port: 7767, addresses: [expect.objectContaining({ host: LAN, state: 'waiting' })], candidates: expect.any(Array) } }) });
+    // devices-ui-3 4.1: the daemon's own candidates ride along; the hidden flag is not sent
+    expect(status.last().status.remote.candidates).toContainEqual({ host: LAN, kind: 'lan', iface: 'eth0' });
+    expect(JSON.stringify(status.last().status.remote.candidates)).not.toContain('hidden');
     await expect(runRemote('enable', { host: '100.70.0.1' }, output().io, daemon, fixture.home, deps, pipe)).rejects.toMatchObject({ kind: 'refused', message: expect.stringContaining('CGNAT') });
     const replaced = output(false);
     await runRemote('enable', { host: LAN2 }, replaced.io, daemon, fixture.home, deps, pipe);

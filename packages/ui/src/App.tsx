@@ -59,7 +59,8 @@ import {
 import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel} from "./settings/SettingsPanel";
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
-import {decisionProviderSection, diagnosticsSection, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
+import {decisionProviderSection, diagnosticsSection, OPEN_SETTING_EVENT, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
+import {RemoteAccessPanel} from './settings/RemoteAccessPanel';
 import {agentPanes, initialRoute, openMembership, openScheduleTab, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, joinedGroupRoute} from './collaboration-navigation';
 import {SearchDialog} from './SearchDialog';
 import {flushSync} from 'react-dom';
@@ -443,6 +444,14 @@ function DesktopApp() {
     });
   }
   function openPage(next: Page) { navigate(() => { setModal(current => current?.kind === 'join' && current.suspended ? null : current); setJoinedTarget(undefined); setPage(next); setFeatureId(undefined); setSettingsReturn(undefined); }); }
+  // devices-ui-3: the paired toast sits outside App and asks for 应用与启动 → 已配对的设备 this way.
+  const openSetting = useRef<(destination: Destination) => void>(() => undefined);
+  openSetting.current = destination => { navigate(() => { setModal(current => current?.kind === 'join' && current.suspended ? null : current); setJoinedTarget(undefined); setPage(destination.page); setFeatureId(undefined); setSettingsReturn(undefined); setSearchTarget(destination.section ? destination : undefined); }); };
+  useEffect(() => {
+    const open = (event: Event) => { const detail = (event as CustomEvent<Destination | undefined>).detail; if (detail?.page) openSetting.current(detail); };
+    window.addEventListener(OPEN_SETTING_EVENT, open);
+    return () => window.removeEventListener(OPEN_SETTING_EVENT, open);
+  }, []);
   function openContextSettings(next: Page, section?: string) {
     navigate(() => {
       const selected = route.kind === 'membership' ? snapshot?.memberships.find(item => item.id === route.id) : undefined;
@@ -935,6 +944,7 @@ function DesktopApp() {
                     trailing={<Button size="sm" disabled={busy || host.kind !== 'connected'} onClick={() => void run({type: 'restartHost'})}>重启后台</Button>}/>
                   <LoginServiceRow application={snapshot.application} busy={busy} onToggle={enabled => void runShell(async () => setNotice({message: await toggleService(enabled, client, shell), error: false}))}/>
                 </SettingsGroup>}
+                <RemoteAccessPanel/>
               </UpdatePanel>
             </div>
           )}

@@ -64,12 +64,13 @@ describe('retained QR behavior over WebSocket', () => {
     } finally { persist.release(); await fixture.close(); }
   });
 
-  it('aborts the actual owner socket on disconnect and keeps API close pending until persistence settles', async () => {
+  it('keeps the owner socket\'s scan through its disconnect (60-second grace), and API close cancels it and stays pending until persistence settles', async () => {
     const persist = gate();
     const aborted = gate();
     let saved = false;
+    let abortedNow = false;
     const fixture = await startFixture(fakeService({ registerBotByQr: async options => {
-      options.signal.addEventListener('abort', aborted.release, { once: true });
+      options.signal.addEventListener('abort', () => { abortedNow = true; aborted.release(); }, { once: true });
       await persist.promise;
       saved = true;
       return { ok: true, appId: 'cli_saved', name: 'saved', tenant: 'feishu', adminOpenId: 'ou_owner' };
@@ -80,10 +81,15 @@ describe('retained QR behavior over WebSocket', () => {
       await owner.ready(); await observer.ready();
       const id = await start(owner, 'start');
       await owner.close();
-      await aborted.promise;
-      await observer.wait(frame => frame.type === 'event' && frame.event === 'snapshot' && frame.payload.jobs.some(job => job.id === id && job.phase === 'cancelled'));
+      // devices-ui-3 6.3: the owner's disconnect leaves the scan for 60 seconds; the grace itself is tested with a fake clock in server-jobs.test.ts
+      await delay(200);
+      expect(abortedNow).toBe(false);
+      const kept = (await snapshot(observer, 'after-owner')).jobs.find(job => job.id === id);
+      expect(kept).toBeDefined();
+      expect(kept?.phase).not.toBe('cancelled');
       let closed = false;
       const closing = fixture.api.close().then(() => { closed = true; });
+      await aborted.promise;
       await delay(30);
       expect(closed).toBe(false);
       expect(saved).toBe(false);

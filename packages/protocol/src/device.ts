@@ -63,17 +63,27 @@ export type PairResult = z.infer<typeof pairResultSchema>;
  * listened on because the daemon is not running (the CLI's files path), or failed to bind for another reason (`detail`). */
 export const remoteAddressStateSchema = z.enum(["listening", "waiting", "needs-confirmation", "disabled", "failed"]);
 const deviceIdentitySchema = z.object({ id: z.string(), name: z.string(), publicKey: z.string() }).strict();
+/** devices-ui-3 4.1: an address this device could open now, as `vonvon remote candidates` lists it (A1's filter and
+ * order; the hidden ones are left out). `tool`: the network tool its interface names (Tailscale, ZeroTier, …). */
+export const candidateSchema = z.object({
+  host: z.string(), kind: addressKindSchema.exclude(["loopback"]), iface: z.string().optional(), tool: z.string().optional(),
+}).strict();
+export type AddressCandidate = z.infer<typeof candidateSchema>;
 export const deviceStatusSchema = z.object({
   device: deviceIdentitySchema,
-  /** addresses: the one address other devices reach this one on, or none (A1: one at a time; a list, so the shape stays). */
+  /** addresses: the one address other devices reach this one on, or none (A1: one at a time; a list, so the shape stays).
+   * candidates (devices-ui-3): the addresses it could open now, the opened one among them while it is on an interface. */
   remote: z.object({ port: z.number().int(), addresses: z.array(z.object({
     host: z.string(), kind: addressKindSchema, enabledAt: z.number().int(), state: remoteAddressStateSchema, detail: z.string().optional(),
-  }).strict()) }).strict(),
+  }).strict()), candidates: z.array(candidateSchema).optional() }).strict(),
   clients: z.object({ total: z.number().int(), active: z.number().int() }).strict(),
+  /** devices-ui-3: the remote address the caller came in on; none on the loopback. */
+  via: z.string().optional(),
 }).strict();
 export type DeviceStatus = z.infer<typeof deviceStatusSchema>;
 export const deviceRequestSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("status") }).strict(),
+  /** refresh (devices-ui-3): read the interfaces again now, not the list kept for 30 seconds (the panel's 刷新). */
+  z.object({ type: z.literal("status"), refresh: z.boolean().optional() }).strict(),
   /** A1: the one address other devices reach this one on; another one replaces it, and the old one stops listening. */
   z.object({ type: z.literal("enable"), host: z.string(), allowPublic: z.boolean().optional() }).strict(),
   z.object({ type: z.literal("disable"), host: z.string() }).strict(),
@@ -88,7 +98,8 @@ export type DeviceRequest = z.infer<typeof deviceRequestSchema>;
 export const deviceReplySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("deviceStatus"), status: deviceStatusSchema }).strict(),
   z.object({ kind: z.literal("pairingLink"), link: z.string(), inviteId: z.string(), expiresAt: z.number().int() }).strict(),
-  z.object({ kind: z.literal("clients"), generation: z.number().int(), clients: z.array(clientRecordSchema) }).strict(),
+  /** self (devices-ui-3): the caller's own client id, when it is a paired client; none on the loopback. */
+  z.object({ kind: z.literal("clients"), generation: z.number().int(), clients: z.array(clientRecordSchema), self: z.string().optional() }).strict(),
   z.object({ kind: z.literal("revoked"), revoked: z.array(z.string()) }).strict(),
   z.object({ kind: z.literal("device"), device: deviceIdentitySchema }).strict(),
   z.object({ kind: z.literal("refused"), code: z.string(), message: z.string() }).strict(),
