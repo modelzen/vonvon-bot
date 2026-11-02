@@ -208,6 +208,15 @@ it('retains the last Codex model list and marks it stale after refresh fails', (
   expect(harness.verify).toHaveBeenCalledOnce();
 });
 
+it('retains previous models while rechecking without announcing a refresh failure', () => {
+  harness.check = {state: 'checking', stale: true, models: [{id: 'old', displayName: 'Old model'}]};
+  const detail = nodes(ProviderPreparation({provider: 'codex', snapshot: snapshot([tool('codex', 'installed', 'signedIn')]), ready: true, busy: false, run, management: true}));
+  expect(detail.some(node => node.props.children === 'Old model')).toBe(true);
+  expect(detail.some(node => node.props.children === '正在检查…')).toBe(true);
+  expect(detail.some(node => node.props.children === '模型列表是上次读取的结果；本次刷新失败，请稍后重试。')).toBe(false);
+  expect(button(detail, '刷新模型').props.disabled).toBe(true);
+});
+
 it('refreshes Codex path and versions from the same scan despite a stale snapshot', async () => {
   harness.codex = {tool: 'codex', installation: 'managed', version: '0.162.1', latestVersion: '0.163.0', executable: '/managed/codex', canUninstall: true};
   const props = {provider: 'codex' as const, snapshot: snapshot([{...tool('codex', 'installed', 'signedIn'), version: 'codex-cli 0.162.1'}]), ready: true, busy: false, run, management: true};

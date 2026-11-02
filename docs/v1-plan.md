@@ -468,7 +468,7 @@ owner 2026-10-20 的 s65 本地包决定作为当时范围保留。2026-10-26 �
 - s07a：放在第二条线上尽快做，因为 Linux 先行的验收要用它（本文第 1 节）。owner 2026-10-15 说："改配置也不一定非要网页端改。也可以 vonvon-bot 命令行改。我感觉命令行实现验收的快一些。你自行考虑。当然网页端的验收肯定也要的。"命令只调网页端已经在用的 RPC（快照、`listJoinedGroups`、`listPendingGroups`、`bindGroup`、各设置页的读和存，以及清单的 `admin setupStatus`、选文件夹的 `directory choose` 和群设置页的会话列表 `settings sessions`），走 `@vonvon/client` 的 `connectLocal` 和本机凭据，不改 daemon 的行为。本机凭据这条路和网页端同一级，给在终端里的主人用，不交给 agent，设置 skill 也不走它。s07a 当时预留的环境变量地址/令牌方案已由 s46 取代：agent 走 bot 子进程工具登记表，Claude 不用令牌，Codex 专用令牌文件与路由留 s46b；s47 直接复用命令函数。`vonvon bot add`（终端扫码）仍在 s20a（s20a 已做）。行数和风险都是估的，开工时先量。
 - s07a 的做法：命令是 `vonvon bot list`、`bot status [bot]`（也可以写 `--bot`）、`group list`、`group joined`、`group pending`、`group bind <群 id> --folder <路径> [--name] [--tool codex|claude] [--conversation threads|shared]`、`settings get [节]` 和 `settings set <节.项=值…>`。`--bot` 填 bot 的 id 或名字；`settings` 用 `--group`（群 id 或项目名）或 `--session`（话题 id）选范围，都不填就是 bot 的设置。人看的输出和报错是中文，去掉飞书名字里的控制字符，`--json` 打一行 JSON，原样保留，出错退出 1。
 - s07a 的做法：这三组命令只走 RPC，不建数据目录，不拿数据租约，在 `D/cli/index.ts` 的钩子里和 `service` 一样跳过。daemon 没在跑就提示先 `vonvon daemon start`，不自动起：看状态不该把 bot 跑起来。
-- s07a 的做法：每次调用都有超时，本机 30 秒，要调飞书的（清单、查已加入的群、绑群）75 秒，比 supervisor 的 60 秒 IPC 超时长，daemon 自己的报错先到。绑群、存设置超时或断线时，提示可能已经完成和怎么查。存设置撞上别处的修改不自动重试。
+- s07a 的做法：每次调用都有超时，本机 30 秒，要调飞书的（清单、查已加入的群、绑群）75 秒，比 supervisor 的 60 秒 IPC 超时长，daemon 自己的报错先到。dev 的 #641 把 Bot 的读设置、存设置、设置按钮和模型目录的 IPC 放到 120 秒（这些会起 Provider），0.9.0 合入 dev 时命令行这几种和 `provider models` 改等 125 秒，同样让 daemon 的报错先到。绑群、存设置超时或断线时，提示可能已经完成和怎么查。存设置撞上别处的修改不自动重试。
 - s07a 的做法：清单各步的判断从 `packages/ui/src/setup/setupPresentation.ts` 挪到 `packages/protocol/src/setup-steps.ts`，网页和 `bot status` 用同一份，字不会对不上。清单读失败时和网页一样，照样列出「检测失败」、连接和工具几步，再退出 1。
 - s07a 的做法：只有一个 bot 时可以不填 `--bot`，多个时必须填；名字重了（s01 预填的都叫 Vonvon Bot）要填 id。不用 `bots.json` 里旧的"当前 bot"。
 - s07a 的做法：`group bind` 的项目名先用 `--name`，没给就用待绑定记录里的群名，再没有就翻已加入的群（最多 20 页、1000 个群）。文件夹在命令行这边展开 `~`、转成绝对路径、查存在，daemon 照旧要求在主目录里。
@@ -1665,6 +1665,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 
 | 项 | 默认值 | 理由 | 用在 |
 |---|---|---|---|
+| 桌面自动检查更新 | 启动完成后 2 分钟；之后每轮结束后固定 90 分钟，只在北京时间 05:00～次日 02:00 自动检查，无随机；夜间跳过保留相位，唤醒时补一次已到期检查；手动检查不限时 | owner 2026-11-02 确认，持续运行也可发现后来发布的版本 | desktop-update-cadence |
 | Claude 根上凭据读名单 | 挡 local-credential、旧 config.json、.keystore.salt；飞书 secrets.enc/master.key 先不挡 | lark-cli 的 bot 身份 getter 仍需凭据，M8 后问 owner 是否收紧 | s31b |
 | Claude 读名单的不存在路径 | 起会话时去掉 | 原生沙箱不挂不存在的目录；真实路径解析失败时 deny 保留、allow 去掉 | s31b |
 | Claude 多硬链接的普通文件 | 只读、工作区可写档的 Read 一律拒绝 | 路径身份不能识别另一个硬链接来自哪个目录 | s31b |
@@ -2073,3 +2074,12 @@ Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bo
 ## 2026-10-30 Codex 程序与模型刷新
 
 - [x] 统一 Codex 托管安装入口，复用 App / CLI 并按兼容版本选择，Provider 增加来源 / 版本 / 更新说明与模型刷新。当前任务完成后下轮恢复使用新程序，不重启 Vonvon；Claude 本轮不改。实现见 `docs/plans/codex-runtime-refresh.md`，研究与后续 Claude 参考见 `docs/research/2026-10-30-codex-runtime-refresh/report.md`。自动检查与隔离页面验收随 PR 记录，真实 Windows 与 owner 验收单独确认。
+# Windows Provider 后续修复
+
+- 0.8.1 后续：按 [Windows Provider 检测与模型缓存计划](plans/windows-provider-latency.md) 修复真实 IPC 期限、重复探测及正式安装包验收缺口。普通读取使用成功缓存，用户重检才强刷；实际会话权限守卫保留。验收与发布证据分别绑定准确 source SHA 和安装包哈希。
+
+- 2026-11-02 Provider 同类修复：接续 #629，补齐 macOS/Linux 冷探测与 Bot IPC 的超时预算，Claude 模型跨实例缓存、身份失效和显式刷新，以及 Codex 普通发现期间的即时强刷。见 `docs/plans/provider-probe-parity.md`；自测、独立审查与最终 CI 证据记录在本次 PR。仅合入 dev，main 和公开发布另行安排。
+
+## 2026-11-02 桌面更新检查频率
+
+- [x] 按 owner 确认改为启动完成 2 分钟、此后固定 90 分钟，北京时间 05:00～次日 02:00 自动检查；夜间跳过保留各自节奏，唤醒时补一次已到期检查。首次失败也继续循环，手动检查不受时段限制。方案与验收要点见 `docs/plans/desktop-update-cadence.md`；本次自测、独立审查及三平台 CI 证据记录在 PR，仅合入 dev。

@@ -10,7 +10,7 @@ import { permissionTable, PermissionInputError, tableEnv, tierInfo, TIER_NETWORK
 import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, getShowToolCalls, resolveOwner, type AppConfig, type AppPreferences } from '../config/schema';
 import { paths } from '../config/paths';
 import { admitDirectorySettings, resolveProjectsRootDir } from '../config/directories';
-import { botBackendId, groupBackendId, groupPermission, resolveCommentsExecution, resolveModelPreference, resolveProjectModelAccess, projectModelAllowed } from '../config/execution';
+import { botBackendId, groupBackendId, groupPermission, resolveCommentsExecution, resolveModelPreference, resolveProjectModelAccess, projectModelAllowed, projectSpeedAllowed } from '../config/execution';
 import { isProjectId } from '../project/library';
 import { effectiveMode, getProjectByName, listProjects, mutateProject, noMentionOf, pendingPolicyOf, sessionModeOf, type Project, type ProjectWorkspace } from '../project/registry';
 import { getSession, listSessions, isRetiredKey, mutateSession, RETIRED_KEY_TEXT, type SessionRecord } from '../bot/session-store';
@@ -251,7 +251,8 @@ function projectRaw(p: Project, section: keyof T.ProjectSections): unknown {
   if (section === 'speed') return [p.name, p.chatId, p.backend, p.serviceTier];
   if (section === 'role') return [p.name, p.chatId, p.supplement ?? null];
   if (section === 'workspace') return [p.name, p.chatId, p.cwd, p.directories];
-  if (['profile', 'modelAccess', 'smartRules', 'skills', 'presentation'].includes(section)) return [p.name, p.chatId, p[section as 'profile']];
+  if (section === 'modelAccess') return [p.name, p.chatId, p.modelAccess, p.defaultModel, p.defaultEffort];
+  if (['profile', 'smartRules', 'skills', 'presentation'].includes(section)) return [p.name, p.chatId, p[section as 'profile']];
   const data = section === 'permission' ? [p.mode, p.network, p.custom] : section === 'response' ? p.noMention : section === 'run' ? p.pendingPolicy : section === 'judge' ? p.judge : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
   return [p.name, p.chatId, p.cwd, p.backend, data];
 }
@@ -294,6 +295,11 @@ function storeJudge(target: { judge?: JudgeSelectionStored }, prepared: Prepared
   else
     delete target.judge;
 }
+class ModelAccessInputError extends SettingsInputError {
+  constructor(readonly field: keyof T.ProjectSections['modelAccess'], message: string) {
+    super(message);
+  }
+}
 function rejected(error: unknown): {
   kind: 'rejected';
   fields: T.SettingsFieldError[];
@@ -301,7 +307,7 @@ function rejected(error: unknown): {
   return {
     kind: 'rejected',
     fields: [{
-        field: 'settings',
+        field: error instanceof ModelAccessInputError ? error.field : 'settings',
         message: error instanceof SettingsInputError ? error.message : '保存失败，请刷新设置后重试；若配置被其他进程修改，请重启 daemon'
       }]
   };
@@ -365,7 +371,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       if (query.threadId && (!target || target.backend !== query.backend))
         return { ...base, models: [], state: 'unavailable', error: '会话不存在或后端已变化' };
       if (deps.offline) { const cached = await offlineModelCatalog(query.backend); const peeked = backend.peekModels?.(); return { ...base, models: peeked?.length ? peeked : cached.models, state: 'fallback', observedAt: cached.observedAt, error: cached.message }; }
-      const [status] = await probeBackends([backend]);
+      // A model catalog does not require a Windows sandbox capability probe.
+      const [status] = await probeBackends([backend], undefined, { permissions: false });
       if (!status?.probe?.ok)
         return {
           ...base,
@@ -374,8 +381,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           error: '后端现在不可用，请检查安装和配置'
         };
       const listed = target?.cwd && backend.listModelsForCwd
-        ? await backend.listModelsForCwd(target.cwd)
-        : await backend.listModels();
+        ? await backend.listModelsForCwd(target.cwd, { refresh: query.refresh })
+        : await backend.listModels({ refresh: query.refresh });
       // Native backends also return a static list on discovery failure. Only their
       // successful discovery populates peekModels; fallback must not become a
       // confirmed catalog or overwrite a previously confirmed disk snapshot.
@@ -410,7 +417,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       const parsed = parseModelId(value.model);
       if (!parsed.ok)
         throw new SettingsInputError(parsed.message);
-      if (!getSessionTitleEfforts(backend).includes(value.effort))
+      if (backend === 'claude-agent' && !getSessionTitleEfforts(backend).includes(value.effort))
         throw new SettingsInputError('当前后端不支持这个推理强度');
       return { ...value, model: parsed.id };
     }
@@ -424,9 +431,10 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       throw new SettingsInputError('模型或推理强度不在当前后端支持列表中，请刷新模型列表');
     return value;
   }
-  async function validateSpeed(tier: T.SpeedSetting['tier'], backend: string, modelId?: string, custom = false, cwd?: string): Promise<void> {
+  async function validateSpeed(tier: T.SpeedSetting['tier'], backend: string, modelId?: string, custom = false, cwd?: string, group?: Project): Promise<void> {
     if (backend !== 'codex-appserver') throw new SettingsInputError('速度档位仅支持 Codex');
     if (tier === 'inherit' || tier === 'standard') return;
+    if (!projectSpeedAllowed(group, modelId, tier)) throw new SettingsInputError('本群未允许这个模型使用此速度档位');
     if (custom) throw new SettingsInputError('自定义模型没有可验证的速度档位');
     const provider = deps.backendFor(backend);
     const contextual = cwd && provider.listModelsForCwd ? await provider.listModelsForCwd(cwd).catch(() => undefined) : undefined;
@@ -482,11 +490,12 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     if (!backendIds().includes(backend))
       throw new SettingsInputError('未知后端');
 
-    if (value.effort && !getSessionTitleEfforts(backend).includes(value.effort))
-      throw new SettingsInputError('当前后端不支持这个推理强度');
     const stored: JudgeSelectionStored = { kind: 'llm', backend, model: id.id, ...(value.effort ? { effort: value.effort } : {}) };
-    if (value.custom)
+    if (backend === 'claude-agent' && value.effort && !getSessionTitleEfforts(backend).includes(value.effort))
+      throw new SettingsInputError('当前后端不支持这个推理强度');
+    if (value.custom) {
       return { ...stored, custom: true };
+    }
     const listed = peekModels(backend) ?? (await models({ botId, backend, purpose: 'judge' })).models;
     if (!listed.length)
       return stored;
@@ -568,7 +577,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   async function projectSettings(p: Project): Promise<T.ProjectSections> {
     // Identity changes invalidate immediately; ordinary reads share the bounded cache.
     // Environment diagnostics use doctor({ force: true }) for an explicit recheck.
-    await deps.backendFor(groupBackendId(p)).refreshPermissions?.();
+    if (!deps.offline) await deps.backendFor(groupBackendId(p)).refreshPermissions?.({ cached: true });
     const result = projectData(p, deps.backendFor(groupBackendId(p)));
     // `profile` is only a record of what the row held before the memory migration; the runtime reads `role` and the entries.
     result.role = { supplement: supplementOf(p) };
@@ -585,21 +594,45 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     return [botId, projectRaw(p, section)];
   }
   async function validateModelAccess(value: T.ProjectSections['modelAccess'], previous: T.ProjectSections['modelAccess']): Promise<ModelInfo[]> {
-    if (!backendIds().includes(value.backend)) throw new SettingsInputError('请选择支持的 Provider');
-    if (!value.models.length || new Set(value.models).size !== value.models.length || new Set(value.efforts).size !== value.efforts.length) throw new SettingsInputError('至少选择一个模型，模型和 Effort 不能重复');
+    if (!backendIds().includes(value.backend)) throw new ModelAccessInputError('backend', '请选择支持的 Provider');
+    if (!value.models.length || new Set(value.models).size !== value.models.length) throw new ModelAccessInputError('models', '至少选择一个模型，模型不能重复');
+    if (new Set(value.efforts).size !== value.efforts.length) throw new ModelAccessInputError('efforts', 'Effort 不能重复');
     const discovered = await models({ botId, backend: value.backend, purpose: 'project' });
     // Fallback metadata cannot authorize new models, efforts, or a provider
     // switch. An empty trusted catalog retains the existing subset-only path.
     const catalog = discovered.state === 'ready' ? discovered.models : [];
+    const previousEfforts = (id: string) => previous.modelEfforts?.[id] ?? previous.efforts;
+    const efforts = (id: string) => value.modelEfforts?.[id] ?? value.efforts;
+    if (Object.keys(value.modelEfforts ?? {}).some(id => !value.models.includes(id))) throw new ModelAccessInputError('modelEfforts', 'Effort 策略包含未选择的模型');
+    if (Object.keys(value.modelServiceTiers ?? {}).some(id => !value.models.includes(id))) throw new ModelAccessInputError('modelServiceTiers', '速度档位策略包含未选择的模型');
     for (const id of value.models) {
-      if (!parseModelId(id).ok) throw new SettingsInputError('模型 ID 无效');
+      if (!parseModelId(id).ok) throw new ModelAccessInputError('models', `模型 ID ${id} 无效`);
       const model = catalog.find(m => m.id === id && !m.hidden);
+      const selectedEfforts = efforts(id);
+      const selectedTiers = value.modelServiceTiers?.[id] ?? [];
+      const effortField = value.modelEfforts?.[id] ? 'modelEfforts' : 'efforts';
+      if (new Set(selectedEfforts).size !== selectedEfforts.length) throw new ModelAccessInputError(effortField, `模型 ${id} 的 Effort 不能重复`);
+      if (new Set(selectedTiers).size !== selectedTiers.length) throw new ModelAccessInputError('modelServiceTiers', `模型 ${id} 的速度档位不能重复`);
       if (!model) {
-        if (value.backend !== previous.backend || !previous.models.includes(id)) throw new SettingsInputError('模型目录暂不可用或没有此模型，请启动 Bot 并刷新目录');
-        if (value.efforts.some(e => !previous.efforts.includes(e))) throw new SettingsInputError('无法验证新增 Effort，请刷新模型目录');
-      } else if (model.supportedEfforts.length && !model.supportedEfforts.some(e => value.efforts.includes(e))) throw new SettingsInputError(`模型 ${id} 至少需要一个支持的 Effort`);
+        if (value.backend !== previous.backend || !previous.models.includes(id)) {
+          if (discovered.state === 'ready') throw new ModelAccessInputError('models', `当前 Provider 的目录中没有模型 ${id}，请刷新目录后重新选择`);
+          throw new SettingsInputError('模型目录暂不可用，请启动 Bot 并刷新目录');
+        }
+        if (selectedEfforts.some(e => !previousEfforts(id).includes(e))) throw new SettingsInputError('无法验证新增 Effort，请刷新模型目录');
+        if (selectedTiers.some(t => !(previous.modelServiceTiers?.[id] ?? []).includes(t))) throw new SettingsInputError('无法验证新增速度档位，请刷新模型目录');
+      } else {
+        if (model.supportedEfforts.length && (!selectedEfforts.some(e => model.supportedEfforts.includes(e)) || (value.modelEfforts?.[id] && selectedEfforts.some(e => !model.supportedEfforts.includes(e))))) throw new ModelAccessInputError(effortField, `模型 ${id} 的 Effort 选择无效，请从支持的值中选择：${model.supportedEfforts.join('、')}`);
+        if (!model.supportedEfforts.length && value.modelEfforts?.[id]?.length) throw new ModelAccessInputError('modelEfforts', `模型 ${id} 不支持 Effort`);
+        if (selectedTiers.some(t => !model.serviceTiers?.some(s => s.id === t))) throw new ModelAccessInputError('modelServiceTiers', `模型 ${id} 不支持所选速度档位：${selectedTiers.filter(t => !model.serviceTiers?.some(s => s.id === t)).join('、')}`);
+      }
     }
-    if (value.efforts.some(e => !getSessionTitleEfforts(value.backend).includes(e))) throw new SettingsInputError('Provider 不支持这个 Effort');
+    const defaultModel = value.defaultModel ?? value.models[0];
+    if (!defaultModel || !value.models.includes(defaultModel)) throw new ModelAccessInputError('defaultModel', '默认模型必须在本群允许列表中');
+    const defaultEfforts = efforts(defaultModel);
+    const nativeDefault = catalog.find(m => m.id === defaultModel);
+    if (nativeDefault?.supportedEfforts.length && value.defaultEffort && (!defaultEfforts.includes(value.defaultEffort) || !nativeDefault.supportedEfforts.includes(value.defaultEffort))) throw new ModelAccessInputError('defaultEffort', '默认 Effort 必须在默认模型允许列表中');
+    if (nativeDefault && !nativeDefault.supportedEfforts.length && value.defaultEffort) throw new ModelAccessInputError('defaultEffort', '默认模型不支持 Effort');
+    if (!nativeDefault && value.defaultEffort && !defaultEfforts.includes(value.defaultEffort)) throw new ModelAccessInputError('defaultEffort', '默认 Effort 必须在默认模型允许列表中');
     return catalog;
   }
   async function read(scope: T.SettingsScope): Promise<T.SettingsView> {
@@ -733,6 +766,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       let effectiveSpeed: T.SessionSpeedSetting['tier'] = s.serviceTier ?? 'standard';
       if (s.serviceTier && s.serviceTier !== 'standard') {
         const { model: storedModel, serviceTier: storedTier } = s;
+        const speedGroup = (await (deps.listProjects ?? listProjects)()).find(p => p.chatId === s.chatId);
+        const speedPreference = speedGroup ? resolveModelPreference({ bot: cfg.preferences, group: speedGroup }, s.backend) : undefined;
+        if (!projectSpeedAllowed(speedGroup, storedModel ?? speedPreference?.model, storedTier)) effectiveSpeed = 'standard';
         const catalog = s.backend === 'codex-appserver'
           ? await models({ botId, backend: s.backend, purpose: 'session', threadId: s.threadId })
           : undefined;
@@ -884,7 +920,30 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         check(await sectionRaw(initial, e.section), e.revision);
         const original = await projectSettings(initial);
         let admittedWorkspace: ProjectWorkspace | undefined;
-        const allowedCatalog = e.section === 'modelAccess' ? await validateModelAccess({ ...original.modelAccess, ...e.patch }, original.modelAccess) : undefined;
+        const proposedAccess = e.section === 'modelAccess' ? { ...original.modelAccess, ...e.patch } : undefined;
+        if (proposedAccess) {
+          // Optional policies and defaults belong to a provider, even when two
+          // providers happen to expose the same model ID.
+          if (proposedAccess.backend !== original.modelAccess.backend) {
+            if (!('modelEfforts' in e.patch)) delete proposedAccess.modelEfforts;
+            if (!('modelServiceTiers' in e.patch)) delete proposedAccess.modelServiceTiers;
+            if (!('defaultModel' in e.patch)) proposedAccess.defaultModel = proposedAccess.models[0];
+            if (!('defaultEffort' in e.patch)) delete proposedAccess.defaultEffort;
+          }
+          // Editors can submit full maps containing removed-model residue.
+          // Drop only unselected keys; selected policies still need validation.
+          if (proposedAccess.modelEfforts) proposedAccess.modelEfforts = Object.fromEntries(Object.entries(proposedAccess.modelEfforts).filter(([id]) => proposedAccess.models.includes(id)));
+          if (proposedAccess.modelServiceTiers) proposedAccess.modelServiceTiers = Object.fromEntries(Object.entries(proposedAccess.modelServiceTiers).filter(([id]) => proposedAccess.models.includes(id)));
+        }
+        if (proposedAccess && !('defaultModel' in e.patch) && !proposedAccess.models.includes(proposedAccess.defaultModel ?? '')) {
+          proposedAccess.defaultModel = proposedAccess.models[0];
+          proposedAccess.defaultEffort = undefined;
+        }
+        if (proposedAccess && 'defaultModel' in e.patch && !('defaultEffort' in e.patch) && e.patch.defaultModel !== original.modelAccess.defaultModel)
+          proposedAccess.defaultEffort = undefined;
+        if (proposedAccess && !('defaultEffort' in e.patch) && proposedAccess.defaultModel && proposedAccess.defaultEffort && !(proposedAccess.modelEfforts?.[proposedAccess.defaultModel] ?? proposedAccess.efforts).includes(proposedAccess.defaultEffort))
+          proposedAccess.defaultEffort = (proposedAccess.modelEfforts?.[proposedAccess.defaultModel] ?? proposedAccess.efforts)[0];
+        const allowedCatalog = proposedAccess ? await validateModelAccess(proposedAccess, original.modelAccess) : undefined;
         if (e.section === 'workspace') {
           // The project holds the workspace; the host funnels a change through the library (admin/library.ts), never this row.
           if (isProjectId(initial.projectId)) throw new SettingsInputError('这个群的工作区归项目管，请通过 daemon 修改项目的工作区');
@@ -921,17 +980,22 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             case 'modelAccess': {
               const previousBackend = groupBackendId(p);
               const currentTier = groupPermission(p).tier;
-              p.modelAccess = { ...original.modelAccess, ...e.patch };
+              p.modelAccess = proposedAccess!;
               p.backend = p.modelAccess.backend;
               if (groupBackendId(p) !== previousBackend) {
                 delete p.custom;
                 p.mode = currentTier;
                 p.network = TIER_NETWORK[currentTier];
               }
-              if (!p.defaultModel || !p.modelAccess.models.includes(p.defaultModel)) { p.defaultModel = p.modelAccess.models[0]; delete p.defaultModelCustom; }
+              p.defaultModel = p.modelAccess.defaultModel ?? p.modelAccess.models[0];
               const supported = allowedCatalog?.find(m => m.id === p.defaultModel)?.supportedEfforts;
-              const allowed = supported ? p.modelAccess.efforts.filter(effort => supported.includes(effort)) : p.modelAccess.efforts;
-              if (!p.defaultEffort || !allowed.includes(p.defaultEffort)) p.defaultEffort = allowed[0];
+              const allowed: ReasoningEffort[] = p.defaultModel ? p.modelAccess.modelEfforts?.[p.defaultModel] ?? p.modelAccess.efforts : p.modelAccess.efforts;
+              const valid = supported ? allowed.filter((effort: ReasoningEffort) => supported.includes(effort)) : allowed;
+              p.defaultEffort = p.modelAccess.defaultEffort && valid.includes(p.modelAccess.defaultEffort) ? p.modelAccess.defaultEffort : valid[0];
+              p.modelAccess.defaultModel = p.defaultModel;
+              if (p.defaultEffort) p.modelAccess.defaultEffort = p.defaultEffort;
+              else delete p.modelAccess.defaultEffort;
+              delete p.defaultModelCustom;
               break;
             }
             case 'permission': {
@@ -1001,6 +1065,10 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
                 p.defaultModel = chosen.model;
                 p.defaultEffort = chosen.effort;
                 p.defaultModelCustom = chosen.custom === true;
+                if (p.modelAccess) {
+                  p.modelAccess.defaultModel = chosen.model;
+                  p.modelAccess.defaultEffort = chosen.effort;
+                }
               }
               break;
             }
@@ -1042,7 +1110,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             if (!e.patch.tier) throw new SettingsInputError('缺少速度档位');
             const group = (await (deps.listProjects ?? listProjects)()).find(p => p.chatId === s.chatId);
             const prefer = group ? resolveModelPreference({ bot: cfg.preferences, group }, s.backend) : undefined;
-            await validateSpeed(e.patch.tier, s.backend, s.model ?? prefer?.model, s.modelCustom === true || (!s.model && prefer?.custom === true), s.cwd);
+            await validateSpeed(e.patch.tier, s.backend, s.model ?? prefer?.model, s.modelCustom === true || (!s.model && prefer?.custom === true), s.cwd, group);
             if (e.patch.tier === 'standard') delete s.serviceTier;
             else s.serviceTier = e.patch.tier;
             return;
@@ -1060,7 +1128,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           if (s.serviceTier && s.serviceTier !== 'standard') {
             try {
               const prefer = group ? resolveModelPreference({ bot: cfg.preferences, group }, s.backend) : undefined;
-              await validateSpeed(s.serviceTier, s.backend, s.model ?? prefer?.model, s.modelCustom === true || (!s.model && prefer?.custom === true), s.cwd);
+              await validateSpeed(s.serviceTier, s.backend, s.model ?? prefer?.model, s.modelCustom === true || (!s.model && prefer?.custom === true), s.cwd, group);
             } catch (error) {
               if (!(error instanceof SettingsInputError)) throw error;
               delete s.serviceTier;

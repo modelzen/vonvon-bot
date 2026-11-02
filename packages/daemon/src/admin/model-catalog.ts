@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { z } from 'zod';
 import { paths } from '../config/paths';
-import { REASONING_EFFORTS, type ModelInfo } from '../agent/types';
+import type { ModelInfo } from '../agent/types';
 import { OFFLINE_CODEX_MODELS } from '../agent/codex-appserver/backend';
 import { OFFLINE_CLAUDE_MODELS } from '../agent/claude-agent/backend';
 import { createBackend } from '../agent';
@@ -13,11 +13,11 @@ import type { AgentBackend } from '../agent/types';
 
 /** Discover native models without a Bot. A backend's listModels may return its static fallback on failure;
  * only peekModels is populated after a successful provider discovery. */
-export async function discoverProviderModels(backendId: 'codex-appserver' | 'claude-agent', backendFor: (id: string) => AgentBackend = createBackend): Promise<{ models: ModelInfo[]; message?: string }> {
+export async function discoverProviderModels(backendId: 'codex-appserver' | 'claude-agent', backendFor: (id: string) => AgentBackend = createBackend, refresh = false): Promise<{ models: ModelInfo[]; message?: string }> {
   try {
     const backend = backendFor(backendId);
-    if (!(await backend.doctor({ force: true })).ok) return { models: [], message: 'Provider 尚未安装或无法运行。' };
-    await backend.listModels();
+    if (!(await backend.doctor({ permissions: false })).ok) return { models: [], message: 'Provider 尚未安装或无法运行。' };
+    await backend.listModels({ refresh });
     const models = backend.peekModels?.();
     if (!models?.length) return { models: [], message: '暂时无法读取 Provider 实时模型列表。' };
     return { models };
@@ -25,7 +25,8 @@ export async function discoverProviderModels(backendId: 'codex-appserver' | 'cla
     return { models: [], message: '暂时无法读取 Provider 实时模型列表。' };
   }
 }
-const model = z.object({ id: z.string().min(1).max(1000), displayName: z.string(), description: z.string(), hidden: z.boolean(), isDefault: z.boolean(), supportedEfforts: z.array(z.enum(REASONING_EFFORTS)), defaultEffort: z.enum(REASONING_EFFORTS), serviceTiers: z.array(z.object({ id: z.string(), name: z.string(), description: z.string() })).optional() });
+const effort = z.string().trim().min(1).max(1000);
+const model = z.object({ id: z.string().min(1).max(1000), displayName: z.string(), description: z.string(), hidden: z.boolean(), isDefault: z.boolean(), supportedEfforts: z.array(effort).max(1000), defaultEffort: effort, serviceTiers: z.array(z.object({ id: z.string(), name: z.string(), description: z.string() })).optional() });
 const snapshot = z.object({ backend: z.string(), observedAt: z.string(), models: z.array(model).max(1000) });
 const pathFor = (backend: string) => join(paths.appDir, 'model-catalog', `${createHash('sha256').update(backend).digest('hex').slice(0, 24)}.json`);
 async function readJson(file: string): Promise<unknown> {
@@ -51,7 +52,7 @@ export async function offlineModelCatalog(backend: string): Promise<{ models: Mo
       const data = await readJson(join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'models_cache.json')) as { fetched_at?: string; models?: Array<Record<string, unknown>> };
       const models = (data.models ?? []).flatMap(raw => {
         const id = typeof raw.slug === 'string' ? raw.slug : raw.id;
-        const efforts = Array.isArray(raw.supported_reasoning_levels) ? raw.supported_reasoning_levels.map(v => typeof v === 'object' && v ? (v as Record<string, unknown>).effort : undefined).filter(v => REASONING_EFFORTS.includes(v as never)) : [];
+        const efforts = Array.isArray(raw.supported_reasoning_levels) ? raw.supported_reasoning_levels.map(v => typeof v === 'object' && v ? (v as Record<string, unknown>).effort : undefined).flatMap(v => { const parsed = effort.safeParse(v); return parsed.success ? [parsed.data] : []; }) : [];
         const parsed = model.safeParse({ id, displayName: raw.display_name ?? id, description: raw.description ?? '', hidden: raw.visibility === 'hide', isDefault: false, supportedEfforts: efforts, defaultEffort: raw.default_reasoning_level ?? efforts[0] ?? 'medium' });
         return parsed.success ? [parsed.data] : [];
       });

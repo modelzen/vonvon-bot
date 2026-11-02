@@ -166,36 +166,63 @@ export class DesktopUpdater {
 export interface UpdateScheduleOptions {
   firstDelayMs?:number;
   intervalMs?:number;
-  /** 每次再多等 0 到这么久，免得所有人在同一时刻查。 */
-  jitterMs?:number;
-  /** 检查失败（比如没联网）后多久再试。 */
-  retryMs?:number;
-  random?:()=>number;
+  now?:()=>number;
+  /** 平台负责监听唤醒；返回取消监听的函数，随调度器一起清理。 */
+  onResume?:(listener:()=>void)=>()=>void;
   setTimer?:(callback:()=>void,ms:number)=>unknown;
   clearTimer?:(timer:unknown)=>void;
 }
 /**
- * 启动约 60 秒后查一次，之后每 24 小时（加最多 1 小时随机延迟）查一次，只查不装；失败的检查 1 小时后再试。
- * 返回的函数取消还没触发的定时器，退出时调用。
+ * 启动完成 2 分钟后查一次，每轮结束后固定等 90 分钟；失败也继续，不要求用户重启。
+ * 只在北京时间 05:00～次日 02:00 自动检查。夜间或下载中跳过本轮，保留各自的计时节奏。
+ * 唤醒后只补一次已到期的检查；手动检查不经过此调度器。返回的函数在退出时清理计时和监听。
  */
 export function scheduleUpdateChecks(updater:{check():Promise<DesktopUpdate>;readonly busy:boolean},onResult:(update:DesktopUpdate)=>void,options:UpdateScheduleOptions={}):()=>void {
   const hour = 60*60*1000;
-  const random = options.random ?? Math.random;
+  const interval = options.intervalMs ?? 90*60*1000;
+  const now = options.now ?? Date.now;
   const set = options.setTimer ?? ((callback,ms)=>{const timer = setTimeout(callback,ms);timer.unref();return timer;});
   const clear = options.clearTimer ?? (timer=>{clearTimeout(timer as NodeJS.Timeout);});
   let timer:unknown;
   let stopped = false;
-  const arm = (ms:number) => {timer = set(()=>{void run();},ms);};
-  const run = async () => {
-    timer = undefined;
-    let next = (options.intervalMs ?? 24*hour) + random()*(options.jitterMs ?? hour);
-    if (!updater.busy) {
-      let update:DesktopUpdate|undefined;
-      try {update = await updater.check();} catch {next = (options.retryMs ?? hour) + random()*(options.jitterMs ?? hour);}
-      if (update && !stopped) try {onResult(update);} catch {/* 提示失败不影响下一次检查 */}
-    }
-    if (!stopped) arm(next);
+  let running = false;
+  let dueAt:number;
+  let generation = 0;
+  const arm = (at:number) => {
+    dueAt = at;
+    const scheduled = ++generation;
+    timer = set(()=>{if (scheduled !== generation) return;timer = undefined;void run();},Math.max(0,at-now()));
   };
-  arm(options.firstDelayMs ?? 60*1000);
-  return () => {stopped = true;if (timer !== undefined) clear(timer);timer = undefined;};
+  const run = async () => {
+    // A resume and an already queued timer may arrive together. Only one may check or re-arm.
+    if (stopped || running) return;
+    if (now() < dueAt) {
+      // A system clock correction must not consume the only timer and stop the loop.
+      if (timer === undefined) arm(dueAt);
+      return;
+    }
+    ++generation;
+    if (timer !== undefined) clear(timer);
+    timer = undefined;
+    const at = now();
+    // Beijing uses UTC+8, independently of the computer's local time zone.
+    const beijingHour = new Date(at + 8*hour).getUTCHours();
+    if ((beijingHour >= 2 && beijingHour < 5) || updater.busy) {
+      // Skip missed slots without replaying them or moving everyone to 05:00.
+      arm(dueAt + (Math.floor((at-dueAt)/interval)+1)*interval);
+      return;
+    }
+    running = true;
+    try {
+      let update:DesktopUpdate|undefined;
+      try {update = await updater.check();} catch {/* 网络失败也照常安排下一轮。 */}
+      if (update && !stopped) try {onResult(update);} catch {/* 提示失败不影响下一次检查 */}
+    } finally {
+      running = false;
+      if (!stopped) arm(now()+interval);
+    }
+  };
+  arm(now()+(options.firstDelayMs ?? 2*60*1000));
+  const unsubscribe = options.onResume?.(()=>{void run();});
+  return () => {if (stopped) return;stopped = true;unsubscribe?.();if (timer !== undefined) clear(timer);timer = undefined;};
 }

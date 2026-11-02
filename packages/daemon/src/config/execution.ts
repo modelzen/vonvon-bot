@@ -132,8 +132,12 @@ export function botBackendId(bot: AppPreferences | undefined): string {
 export function resolveModelPreference({ bot, group }: ExecutionLayers, backendId: string): ModelPreference | undefined {
   if (group?.modelAccess) {
     if (group.modelAccess.backend !== backendId) return undefined;
-    const model = group.defaultModel && group.modelAccess.models.includes(group.defaultModel) ? group.defaultModel : group.modelAccess.models[0];
-    return model ? { model, effort: group.defaultEffort && group.modelAccess.efforts.includes(group.defaultEffort) ? group.defaultEffort : group.modelAccess.efforts[0], custom: group.defaultModelCustom === true && model === group.defaultModel, source: 'group' } : undefined;
+    const access = group.modelAccess;
+    const wanted = group.defaultModel ?? access.defaultModel;
+    const model = wanted && access.models.includes(wanted) ? wanted : access.models[0];
+    const efforts = model ? access.modelEfforts?.[model] ?? access.efforts : [];
+    const wantedEffort = group.defaultEffort ?? access.defaultEffort;
+    return model ? { model, effort: wantedEffort && efforts.includes(wantedEffort) ? wantedEffort : efforts[0], custom: false, source: 'group' } : undefined;
   }
   if (group?.defaultModel && groupBackendId(group) === backendId) {
     return { model: group.defaultModel, effort: group.defaultEffort, custom: group.defaultModelCustom === true, source: 'group' };
@@ -258,12 +262,17 @@ export async function executionSessionProfile({ execution, cwd, backend, scope, 
 
 /** Legacy rows keep their current defaults until the first explicit group save freezes them. */
 export function resolveProjectModelAccess({ bot, group }: { bot?: AppPreferences; group: GroupLayer }, catalog: ModelInfo[] = []): ProjectModelAccess {
-  if (group.modelAccess) return { ...group.modelAccess, models: [...group.modelAccess.models], efforts: [...group.modelAccess.efforts] };
+  if (group.modelAccess) return { ...group.modelAccess, models: [...group.modelAccess.models], efforts: [...group.modelAccess.efforts],
+    ...(group.modelAccess.modelEfforts ? { modelEfforts: Object.fromEntries(Object.entries(group.modelAccess.modelEfforts).map(([id, efforts]) => [id, [...efforts]])) } : {}),
+    ...(group.modelAccess.modelServiceTiers ? { modelServiceTiers: Object.fromEntries(Object.entries(group.modelAccess.modelServiceTiers).map(([id, tiers]) => [id, [...tiers]])) } : {}),
+    defaultModel: group.defaultModel ?? group.modelAccess.defaultModel ?? group.modelAccess.models[0],
+    defaultEffort: group.defaultEffort ?? group.modelAccess.defaultEffort };
   const backend = groupBackendId(group);
   const preferred = resolveModelPreference({ bot, group }, backend);
   const chosen = preferred?.model ?? catalog.find(m => m.isDefault && !m.hidden)?.id ?? catalog.find(m => !m.hidden)?.id;
   const info = catalog.find(m => m.id === chosen);
-  return { backend, models: chosen ? [chosen] : [], efforts: preferred?.effort ? [preferred.effort] : info?.supportedEfforts ?? [] };
+  const efforts = preferred?.effort ? [preferred.effort] : info?.supportedEfforts ?? [];
+  return { backend, models: chosen ? [chosen] : [], efforts, ...(chosen ? { defaultModel: chosen } : {}), ...(preferred?.effort ? { defaultEffort: preferred.effort } : info?.supportedEfforts.length ? { defaultEffort: info.defaultEffort } : {}) };
 }
 
 /** Both command pickers and the final provider call must enforce the same group allowset. */
@@ -274,15 +283,20 @@ export function projectModelAllowed(project: Pick<Project, 'modelAccess'> | unde
   const info = catalog?.find(m => m.id === model);
   if (info?.hidden) return false;
   if (info && info.supportedEfforts.length === 0) return true;
-  return effort !== undefined && access.efforts.includes(effort) && (!info || info.supportedEfforts.includes(effort));
+  return effort !== undefined && (access.modelEfforts?.[model] ?? access.efforts).includes(effort) && (!info || info.supportedEfforts.includes(effort));
+}
+export function projectSpeedAllowed(project: Pick<Project, 'modelAccess'> | undefined, model: string | undefined, tier: 'fast' | 'ultrafast'): boolean {
+  if (!project?.modelAccess) return true;
+  return !!model && project.modelAccess.models.includes(model) && (project.modelAccess.modelServiceTiers?.[model] ?? []).includes(tier);
 }
 export function projectModelCatalog(project: Pick<Project, 'modelAccess'> | undefined, backend: string, catalog: ModelInfo[]): ModelInfo[] {
   const access = project?.modelAccess;
   if (!access) return catalog;
   if (backend !== access.backend) return [];
   return catalog.filter(model => !model.hidden && access.models.includes(model.id)).flatMap(model => {
-    const supportedEfforts = model.supportedEfforts.filter(e => access.efforts.includes(e));
+    const supportedEfforts = model.supportedEfforts.filter(e => (access.modelEfforts?.[model.id] ?? access.efforts).includes(e));
     if (model.supportedEfforts.length && !supportedEfforts.length) return [];
-    return [{ ...model, supportedEfforts, defaultEffort: supportedEfforts.includes(model.defaultEffort) ? model.defaultEffort : supportedEfforts[0] ?? model.defaultEffort }];
+    const serviceTiers = model.serviceTiers?.filter(tier => tier.id === 'standard' || (access.modelServiceTiers?.[model.id] ?? []).includes(tier.id as 'fast' | 'ultrafast'));
+    return [{ ...model, supportedEfforts, serviceTiers, defaultEffort: supportedEfforts.includes(model.defaultEffort) ? model.defaultEffort : supportedEfforts[0] ?? model.defaultEffort }];
   });
 }

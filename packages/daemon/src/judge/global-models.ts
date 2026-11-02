@@ -5,8 +5,8 @@ import { z } from 'zod';
 import { paths } from '../config/paths';
 import { writeFileAtomic } from '../server/atomic-file';
 import { parseModelId } from '../agent/model-id';
-import { REASONING_EFFORTS, type ReasoningEffort } from '../agent/types';
-import { getSessionTitleEfforts } from '../config/schema';
+import type { ReasoningEffort } from '../agent/types';
+import { acceptsBackendEffort } from '../config/schema';
 import { defaultJudgeModel } from './model';
 import { decisionProvider } from './decision';
 import { JUDGE_PROVIDER_IDS, decisionEndpointProblem } from '@vonvon/protocol';
@@ -18,7 +18,7 @@ export type JudgeModels = { defaultProvider?: JudgeProvider; byProvider: Record<
 export const DEFAULT_JUDGE_PROVIDER: JudgeProvider = 'codex-appserver';
 /** Missing old configuration has a stable default; availability never silently switches providers. */
 export function defaultJudgeProvider(stored: JudgeModels): JudgeProvider { return stored.defaultProvider ?? DEFAULT_JUDGE_PROVIDER; }
-const choice = z.object({ model: z.string(), effort: z.enum(REASONING_EFFORTS).optional(), custom: z.boolean().optional(), endpoint: z.string().max(2048).optional() }).strict();
+const choice = z.object({ model: z.string(), effort: z.string().trim().min(1).max(1000).optional(), custom: z.boolean().optional(), endpoint: z.string().max(2048).optional() }).strict();
 const fileSchema = z.object({ version: z.literal(1), defaultProvider: z.enum(JUDGE_PROVIDERS).optional(), byProvider: z.record(z.string(), choice) }).strict();
 
 export class JudgeModelsError extends Error {}
@@ -30,7 +30,7 @@ function parseSnapshot(text: string): JudgeModels {
   for (const [provider, value] of Object.entries(parsed.byProvider)) {
     if (!JUDGE_PROVIDERS.includes(provider as JudgeProvider)) continue;
     if (!parseModelId(value.model).ok || (decisionProvider(provider) && value.effort)
-      || (value.effort && !decisionProvider(provider) && !getSessionTitleEfforts(provider).includes(value.effort))
+      || (value.effort && !acceptsBackendEffort(provider, value.effort))
       || (value.endpoint !== undefined && (provider !== 'custom' || !!decisionEndpointProblem(value.endpoint))))
       throw new JudgeModelsError(`${provider} 的决策模型设置无效`);
   }

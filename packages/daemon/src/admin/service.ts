@@ -126,7 +126,7 @@ export interface AdminService {
   library?: HostLibrary;
   accountUsage(force: boolean): Promise<AccountUsageBundle>;
   settings?: HostSettings;
-  codexSetup?(): Promise<CodexSetup>;
+  codexSetup?(opts?: { refresh?: boolean }): Promise<CodexSetup>;
   close?(): Promise<void>;
   pendingGroups?(botId: string): Promise<{ groups: PendingGroup[] }>;
   joinedGroups?(botId: string, cursor?: string): Promise<JoinedGroups>;
@@ -648,7 +648,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     },
     settings: createSettingsService(deps, library),
     library,
-    codexSetup: () => codexTools.setup(),
+    codexSetup: opts => codexTools.setup(opts),
     close: () => {
       closing ??= (async () => {
         await Promise.allSettled([...inFlightUsage]);
@@ -965,7 +965,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
 
     async listBackendCatalog(): Promise<AdminBackendCatalog> {
       // force：用户刚装完后要看「现在」的默认（绕过探测缓存）。
-      const defaultBackend = await effectiveDefaultBackend({ force: true }).catch(() => DEFAULT_BACKEND_ID);
+      const defaultBackend = await effectiveDefaultBackend().catch(() => DEFAULT_BACKEND_ID);
       const entries = await Promise.all(
         visibleCatalog().map((entry) => catalogEntryStatus(entry, defaultBackend)),
       );
@@ -1032,7 +1032,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       // library resolved from our node_modules. Force the runtime's own probe so
       // an upgrade at the same path cannot leave this explicit check cached.
       const installed = entry.id === 'codex-appserver'
-        ? parseCodexVersion((await createBackend(entry.id).doctor({ force: true }).catch(() => null))?.version)
+        ? parseCodexVersion((await createBackend(entry.id).doctor({ force: true, permissions: false }).catch(() => null))?.version)
         : installedBackendVersion(entry.dep.pkg);
       // 有 pin 时目标就是 pin：装的版本和它不同（更新或更旧）都提示更新，更新会装回 pin。
       const pinned = entry.dep.version;
@@ -1210,7 +1210,7 @@ async function catalogEntryStatus(
   defaultBackend: string,
 ): Promise<AdminBackendCatalogEntry> {
   const probe: BackendProbe | undefined = await createBackend(entry.id)
-    .doctor({ force: true })
+    .doctor({ permissions: false })
     .catch(() => undefined);
   const ok = probe?.ok === true;
   // depState：installed（探测通过）/ not-installed（npm-ondemand 可一键装）/

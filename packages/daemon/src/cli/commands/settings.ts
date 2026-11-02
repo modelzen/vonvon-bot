@@ -134,8 +134,9 @@ async function resolveScope(call: Call, target: Target): Promise<{ agent: Agent;
   return { agent, scope: { kind: 'agent', botId: agent.id } };
 }
 
+/** A bot's view may start its Provider for the model in effect, so a read waits as long as a save (daemon-client TIMEOUTS). */
 const readView = async (call: Call, scope: SettingsScope): Promise<SettingsView> =>
-  (await settingsGet({ read: async scope => want('读取设置', await call('读取设置', c => c.settings({ type: 'read', scope })), 'view').view }, scope)).view;
+  (await settingsGet({ read: async scope => want('读取设置', await call('读取设置', c => c.settings({ type: 'read', scope }), { provider: true }), 'view').view }, scope)).view;
 /** The machine's settings need no bot, so no snapshot either: they work before the first bot (cli-6-settings 4.2). */
 const scopeOf = async (call: Call, target: Target): Promise<SettingsScope> => target.host ? { kind: 'host' } : (await resolveScope(call, target)).scope;
 
@@ -378,7 +379,8 @@ export async function runSettingsSet(assignments: readonly string[], target: Tar
     const sections = (await readView(call, scope)).sections as Record<string, SectionView>;
     const revision = target.revision ?? (Object.hasOwn(sections, section) ? sections[section]?.revision : undefined);
     if (!revision) throw new Error(`daemon 没有 ${section} 这一节。daemon 可能比命令行旧。`);
-    return settingsSet({ save: async edit => want('保存设置', await call('保存设置', c => c.settings({ type: 'save', edit }), { unknown }), 'saved', unknown).result }, { scope, section, revision, patch });
+    // a model, speed or modelAccess change is checked against the Provider's live list (#641)
+    return settingsSet({ save: async edit => want('保存设置', await call('保存设置', c => c.settings({ type: 'save', edit }), { unknown, provider: true }), 'saved', unknown).result }, { scope, section, revision, patch });
   });
   // Same wording as the web page's errorText; a conflict is not retried, the user reruns with fresh eyes.
   if (result.kind === 'conflict') throw new CommandError('conflict', CONFLICT, { reason: 'conflict', current: result.current });
@@ -422,9 +424,10 @@ function notSaved(result: { kind: 'rejected'; fields: { field: string; message: 
 type Acted = Extract<SettingsReply, { kind: 'acted' }>['result'];
 type ActedView = AgentSettingsView | ProjectSettingsView;
 const ACT_UNKNOWN = '可能已经改了，运行 vonvon settings get 查看。';
-/** `feishu`: voice checks reach Feishu through the bot process, so they get the longer wait (daemon-client TIMEOUTS). */
-async function act(call: Call, action: SettingsAction, feishu = false): Promise<Acted> {
-  return want('修改设置', await call('修改设置', c => c.settings({ type: 'act', action }), { unknown: ACT_UNKNOWN, feishu }), 'acted', ACT_UNKNOWN).result;
+/** Voice checks reach Feishu and every action answers with the view read again, which may start a Provider: the
+ * longest wait (daemon-client TIMEOUTS). */
+async function act(call: Call, action: SettingsAction): Promise<Acted> {
+  return want('修改设置', await call('修改设置', c => c.settings({ type: 'act', action }), { unknown: ACT_UNKNOWN, provider: true }), 'acted', ACT_UNKNOWN).result;
 }
 /** The view after a saved action; a conflict carries the part the action changes, as it is now. */
 function saved<V extends ActedView>(result: Acted, part: (view: V) => unknown): { view: V; warnings: string[] } {
@@ -444,7 +447,7 @@ export async function runSettingsVoice(what: string, target: ActTarget, io: Io, 
   if (!Object.hasOwn(VOICE, what)) throw badArgs('写成 voice test（测一次识别）或 voice refresh（重新检测飞书语音权限）。');
   const result = await daemon(async call => {
     const agent = await botOf(call, target.bot);
-    return act(call, { kind: 'voice', botId: agent.id, action: { action: VOICE[what as keyof typeof VOICE] } }, true);
+    return act(call, { kind: 'voice', botId: agent.id, action: { action: VOICE[what as keyof typeof VOICE] } });
   });
   const { view, warnings } = saved<AgentSettingsView>(result, view => view.voice);
   const { voice } = view;
@@ -532,7 +535,7 @@ export async function runSettingsCommentInstructions(source: InstructionSource, 
 
 const BACKEND_ALIASES: Record<string, string> = { codex: 'codex-appserver', claude: 'claude-agent' };
 const PURPOSES = ['project', 'session', 'comments', 'titles', 'judge'] as const;
-export type ModelsTarget = { bot?: string; backend?: string; purpose?: string; session?: string };
+export type ModelsTarget = { bot?: string; backend?: string; purpose?: string; session?: string; refresh?: boolean };
 
 /** `settings models`: what a model picker on the settings page lists; hidden models only in --json. */
 export async function runSettingsModels(target: ModelsTarget, io: Io, daemon: Daemon = withDaemon): Promise<void> {
@@ -544,9 +547,9 @@ export async function runSettingsModels(target: ModelsTarget, io: Io, daemon: Da
   const backend = Object.hasOwn(BACKEND_ALIASES, target.backend) ? BACKEND_ALIASES[target.backend]! : target.backend.trim();
   const catalog = await daemon(async call => {
     const agent = await botOf(call, target.bot);
-    const query = { botId: agent.id, backend, purpose, ...(target.session !== undefined ? { threadId: target.session } : {}) };
+    const query = { botId: agent.id, backend, purpose, ...(target.session !== undefined ? { threadId: target.session } : {}), ...(target.refresh ? { refresh: true } : {}) };
     // the bot process asks the backend for its list, which can outlast the local wait
-    return want('读取模型目录', await call('读取模型目录', c => c.settings({ type: 'models', query }), { feishu: true }), 'models').catalog;
+    return want('读取模型目录', await call('读取模型目录', c => c.settings({ type: 'models', query }), { provider: true }), 'models').catalog;
   });
   if (catalog.state === 'unavailable') throw new CommandError('refused', `读不到 ${toolLabel(backend)} 的模型目录${catalog.error ? `：${catalog.error}` : '。'}`, { reason: 'models_unavailable' });
   const visible = catalog.models.filter(model => !model.hidden);

@@ -89,8 +89,17 @@ export interface AdminIpcResponse extends IpcResponse {
   code?: string;
 }
 
-/** 写请求默认超时：后端切换要 doctor 探活（单后端 3s 兜底）+ 驱逐，留足余量。 */
+/** 普通状态和不涉及 Provider 的写请求保持短期限。 */
 export const ADMIN_IPC_TIMEOUT_MS = 15_000;
+
+/** Provider operations include bounded native startup and cleanup. Ordinary status
+ * and unrelated writes keep their short deadline; cold metadata must reach the UI. */
+export function adminIpcTimeout(op: AdminIpcOp): number {
+  // Native model discovery may take 30 s after startup on every platform;
+  // Codex session catalogs can additionally validate cwd-specific settings.
+  return ['settingsRead', 'settingsModels', 'settingsPatch', 'settingsAction', 'switchBackend', 'setPermissionMode'].includes(op.kind)
+    ? 120_000 : ADMIN_IPC_TIMEOUT_MS;
+}
 
 export interface AdminIpcCaller {
   /** 发请求并等响应；超时/子进程退场 reject。op 必须可结构化克隆（纯 JSON）。 */
@@ -114,7 +123,7 @@ export interface IpcCaller<Op> {
  * The caller of either channel: requests numbered, each settled once by its response, its timeout or `rejectAll`.
  * `revive` turns a failed response back into the error the other side threw.
  */
-export function createIpcCaller<Op>(channels: IpcChannels, send: (msg: IpcRequest<Op>) => void, opts: { timeoutMs: number; timeoutMessage?: (ms: number) => string; revive?: (msg: Partial<IpcResponse>) => Error }): IpcCaller<Op> {
+export function createIpcCaller<Op>(channels: IpcChannels, send: (msg: IpcRequest<Op>) => void, opts: { timeoutMs: number | ((op: Op) => number); timeoutMessage?: (ms: number) => string; revive?: (msg: Partial<IpcResponse>) => Error }): IpcCaller<Op> {
   let nextId = 1;
   const pending = new Map<
     number,
@@ -130,7 +139,7 @@ export function createIpcCaller<Op>(channels: IpcChannels, send: (msg: IpcReques
   }
 
   return {
-    call(op, timeoutMs = opts.timeoutMs): Promise<unknown> {
+    call(op, timeoutMs = typeof opts.timeoutMs === 'function' ? opts.timeoutMs(op) : opts.timeoutMs): Promise<unknown> {
       const id = nextId++;
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
@@ -193,7 +202,7 @@ const ADMIN_CHANNELS: IpcChannels = { req: ADMIN_IPC_REQ, res: ADMIN_IPC_RES };
  * rejectAll 收尾）。`send` 注入 proc.send（测试里可直连 responder）。 */
 export function createAdminIpcCaller(send: (msg: AdminIpcRequest) => void): AdminIpcCaller {
   return createIpcCaller<AdminIpcOp>(ADMIN_CHANNELS, msg => send(msg as AdminIpcRequest), {
-    timeoutMs: ADMIN_IPC_TIMEOUT_MS,
+    timeoutMs: adminIpcTimeout,
     revive: (msg) => {
       const reason = msg.error ?? '子进程执行失败';
       // 校验拒绝跨进程还原成 AdminWriteError —— HTTP 层与进程内路径同样映射 409。

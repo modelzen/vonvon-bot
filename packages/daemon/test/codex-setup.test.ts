@@ -45,17 +45,30 @@ afterEach(async () => {
 });
 afterAll(() => { vi.unstubAllEnvs(); rmSync(home, { recursive: true, force: true }); });
 
-describe('Codex account setup uses the task executable and home', { timeout: 40_000 }, () => {
+describe('Codex account setup uses the task executable and home', { timeout: process.platform === 'win32' ? 90_000 : 40_000 }, () => {
+  it('reuses success, but an explicit refresh overlapping a cached read still reaches the native account', async () => {
+    const value = service();
+    expect(await value.setup()).toMatchObject({installation:'installed',authentication:'signedOut'});
+    const count = calls().filter(call => call.method === 'account/read').length;
+    await value.setup();
+    expect(calls().filter(call => call.method === 'account/read')).toHaveLength(count);
+    writeFileSync(join(auth, 'fixture-account'), 'fixture');
+    const ordinary = value.setup();
+    const fresh = value.setup({refresh:true});
+    await ordinary;
+    expect(await fresh).toMatchObject({authentication:'signedIn'});
+    expect(calls().filter(call => call.method === 'account/read')).toHaveLength(count + 1);
+  });
   it('distinguishes installation, signed-out, signed-in, not-required and malformed account state', async () => {
     const value = service();
     expect(await value.setup()).toMatchObject({ installation: 'installed', authentication: 'signedOut', version: 'codex-cli 0.156.1', executable: fixture.bin });
     expect(resolveCodexBin()).toBe(fixture.bin);
     writeFileSync(join(auth, 'fixture-account'), 'fixture');
-    expect(await value.setup()).toMatchObject({ authentication: 'signedIn' });
+    expect(await value.setup({refresh: true})).toMatchObject({ authentication: 'signedIn' });
     vi.stubEnv('FIXTURE_MODE', 'custom');
-    expect(await value.setup()).toMatchObject({ authentication: 'notRequired' });
+    expect(await value.setup({refresh: true})).toMatchObject({ authentication: 'notRequired' });
     vi.stubEnv('FIXTURE_MODE', 'malformed');
-    expect(await value.setup()).toMatchObject({ authentication: 'unknown' });
+    expect(await value.setup({refresh: true})).toMatchObject({ authentication: 'unknown' });
     expect(calls().every(call => call.home === auth && call.bin === fixture.script)).toBe(true);
     expect(calls().filter(call => call.method === 'account/read')).toHaveLength(4);
     expect(calls().every(call => !alive(call.pid))).toBe(true);

@@ -1035,7 +1035,7 @@ export function parseSessionTitleFormValue(
   }
 
   const rawEffort = sessionTitleFormScalar(formValue, 'effort');
-  if (!rawEffort || !(REASONING_EFFORTS as readonly string[]).includes(rawEffort)) {
+  if (!rawEffort || rawEffort.length > 1000) {
     return { ok: false, message: '请选择推理强度。' };
   }
   return {
@@ -1068,6 +1068,9 @@ export function buildSessionTitleSettingsCard(
     ? (configuredLive?.id ?? SESSION_TITLE_CUSTOM_MODEL_OPTION)
     : undefined;
   const customModel = configured.enabled && !configuredLive ? configured.model : undefined;
+  const titleEfforts = curBackend === 'claude-agent'
+    ? getSessionTitleEfforts(curBackend)
+    : [...new Set([...getSessionTitleEfforts(curBackend), ...catalogEfforts(visible), ...(configured.enabled ? [configured.effort] : [])])];
 
   const modelSelect = {
     ...selectMenu({
@@ -1087,7 +1090,7 @@ export function buildSessionTitleSettingsCard(
       placeholder: '选择推理强度',
       // 自定义/第三方模型的能力无法事先推断：给全量协议档位，
       // 而不用某个 live 模型的 supportedEfforts 反向做隐形白名单。
-      options: getSessionTitleEfforts(curBackend).map((effort) => ({ label: reasoningEffortLabel(effort), value: effort })),
+      options: titleEfforts.map((effort) => ({ label: reasoningEffortLabel(effort), value: effort })),
       initial: configured.enabled ? configured.effort : undefined,
     }),
     required: true,
@@ -1236,7 +1239,7 @@ export function buildCommentSettingsCard(
     ? visible.find((m) => m.id === comments.model)
     : undefined;
   const curModel = explicit ?? visible.find((m) => m.isDefault) ?? visible[0];
-  const unionEfforts = EFFORT_ORDER.filter((e) => visible.some((m) => (m.supportedEfforts ?? []).includes(e)));
+  const unionEfforts = catalogEfforts(visible);
   const curEffort =
     editingConfiguredBackend && comments.effort && (curModel?.supportedEfforts ?? []).includes(comments.effort)
       ? comments.effort
@@ -1631,8 +1634,14 @@ export function buildPermissionCard(p: Pick<Project, 'name'> & PermissionProject
   );
 }
 
-/** Canonical reasoning-effort ladder (low→high), to order the effort dropdown. */
-const EFFORT_ORDER: readonly ReasoningEffort[] = REASONING_EFFORTS;
+/** Known IDs retain their usual order; provider-defined IDs keep discovery order. */
+function catalogEfforts(models: ModelInfo[]): ReasoningEffort[] {
+  const offered = [...new Set(models.flatMap(model => model.supportedEfforts))];
+  return [
+    ...REASONING_EFFORTS.filter(effort => offered.includes(effort)),
+    ...offered.filter(effort => !(REASONING_EFFORTS as readonly string[]).includes(effort)),
+  ];
+}
 
 /** One-line summary of a project's default model/effort, for the settings cards.
  * Sync (no model list) — shows the raw stored id (e.g. `gpt-5.5`) or「后端默认」. */
@@ -1670,7 +1679,7 @@ export function buildModelDefaultCard(
   // a hand-typed id keeps its stored effort; a listed model only one it still supports
   const keepStoredEffort = Boolean(custom || (explicit && p.defaultEffort && curEfforts.includes(p.defaultEffort)));
   const curEffort = keepStoredEffort ? p.defaultEffort : curModel?.defaultEffort;
-  const unionEfforts = EFFORT_ORDER.filter((e) => visible.some((m) => (m.supportedEfforts ?? []).includes(e)));
+  const unionEfforts = catalogEfforts(visible);
   const canPickEffort = unionEfforts.length > 0;
 
   const submit = ctx === 'dm' ? { a: DM.modelDefaultSubmit, n: p.name } : { a: GS.modelDefaultSubmit };
@@ -1748,13 +1757,12 @@ export function parseModelDefaultFormValue(
 ): ModelDefaultFormParseResult {
   const selected = sessionTitleFormScalar(formValue, 'model');
   const rawEffort = sessionTitleFormScalar(formValue, 'effort');
-  const requestedEffort =
-    rawEffort && (REASONING_EFFORTS as readonly string[]).includes(rawEffort) ? (rawEffort as ReasoningEffort) : undefined;
+  const requestedEffort = rawEffort && rawEffort.length <= 1000 ? rawEffort : undefined;
   if (selected === CUSTOM_MODEL_OPTION) {
     const parsed = parseModelId(sessionTitleFormScalar(formValue, 'customModel'));
     if (!parsed.ok) return parsed;
-    const effort =
-      requestedEffort && getSessionTitleEfforts(backendId).includes(requestedEffort) ? requestedEffort : undefined;
+    const effort = requestedEffort && (backendId !== 'claude-agent' || getSessionTitleEfforts(backendId).includes(requestedEffort))
+      ? requestedEffort : undefined;
     return { ok: true, model: parsed.id, effort, custom: true, label: parsed.id };
   }
   const m = selected ? models.find((x) => x.id === selected && !x.hidden) : undefined;
