@@ -216,5 +216,5 @@ export async function runRemote(action: 'status' | 'enable' | 'disable' | 'port'
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw badArgs(PORT_RANGE);
   const [status, from] = await either(home, daemon, '改远程端口', send => statusOf('改远程端口')(send({ type: 'setPort', port })),
     async () => filesStatus(home, await updateRemoteConfig(home, config => setPort(config, port))));
-  print(io, [`远程端口改成了 ${port}，已配对的设备要重新配对。`, ...status.remote.addresses.flatMap(address => stateLine(address).map(line => `${address.host}：${line}`)), ...tail(from)], { status, ...from });
+  print(io, [`远程端口改成了 ${port}，已配对的设备要粘一次新链接（\`vonvon pair\` 生成），只会更新地址，不用重新配对。`, ...status.remote.addresses.flatMap(address => stateLine(address).map(line => `${address.host}：${line}`)), ...tail(from)], { status, ...from });
 }

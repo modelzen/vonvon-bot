@@ -46,7 +46,7 @@ check_root() {
     say "以 root 继续，Bot 和 AI 代理都会以 root 运行。"
     return 0
   fi
-  fail 2 "你正在用 root 运行。Vonvon Bot 会以这个账号运行 AI 代理，建议用普通用户：\`useradd -m vonvon && su - vonvon\`，再运行安装命令。坚持用 root：\`VONVON_ALLOW_ROOT=1 sh -c \"\$(curl -fsSL $BASE_URL/install.sh)\"\`。"
+  fail 2 "你正在用 root 运行。Vonvon Bot 会以这个账号运行 AI 代理，建议用普通用户：先 \`useradd -m -s /bin/bash vonvon\`，给它设密码（\`passwd vonvon\`）或放好 SSH 公钥，再用这个账号直接 SSH 登录、运行安装命令；不要用 su 或 sudo 切过去，那样装好后不会开机自动启动。说明见 ${GUIDE_URL}#no-root 。坚持用 root：\`VONVON_ALLOW_ROOT=1 sh -c \"\$(curl -fsSL $BASE_URL/install.sh)\"\`。"
 }
 
 # 安装根里的 bin/vonvon 是服务端的启动器，而且能运行。
@@ -84,7 +84,7 @@ need_tools() {
   done
   command -v sha512sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || missing="$missing sha512sum（或 shasum）"
   command -v base64 >/dev/null 2>&1 || command -v openssl >/dev/null 2>&1 || missing="$missing base64（或 openssl）"
-  if [ -n "$missing" ]; then fail 2 "缺少这些命令：$missing。装上以后再运行。"; fi
+  if [ -n "$missing" ]; then fail 2 "缺少这些命令：${missing}。装上以后再运行。"; fi
 }
 
 pick_target() {
@@ -93,7 +93,7 @@ pick_target() {
   case "$machine" in
     x86_64|amd64) ARCH=x64 ;;
     aarch64|arm64) ARCH=arm64 ;;
-    *) fail 2 "不支持这种处理器：$machine。只有 x64 和 arm64 的包。" ;;
+    *) fail 2 "不支持这种处理器：${machine}。只有 x64 和 arm64 的包。" ;;
   esac
   # ldd 是 libc 自己的；它说不清时 getconf 认得 glibc。都认不出 glibc，有 ld-musl 才算 musl：
   # glibc 的系统装了 musl 包（musl-tools）也会有 /lib/ld-musl-*.so.1
@@ -170,9 +170,9 @@ read_manifest() {
 # 只删本脚本建的 releases/<版本>.part：路径对、名字对、不是链接，都满足才删。
 remove_part() {
   name=${PART#"$ROOT/releases/"}
-  case "$PART" in "$ROOT/releases/"*.part) ;; *) fail 1 "不删 $PART：不是本脚本建的临时目录。" ;; esac
-  case "$name" in ''|*/*) fail 1 "不删 $PART：不是本脚本建的临时目录。" ;; esac
-  if [ -z "$ROOT" ] || [ -L "$PART" ]; then fail 1 "不删 $PART：不是本脚本建的临时目录。"; fi
+  case "$PART" in "$ROOT/releases/"*.part) ;; *) fail 1 "不删 ${PART}：不是本脚本建的临时目录。" ;; esac
+  case "$name" in ''|*/*) fail 1 "不删 ${PART}：不是本脚本建的临时目录。" ;; esac
+  if [ -z "$ROOT" ] || [ -L "$PART" ]; then fail 1 "不删 ${PART}：不是本脚本建的临时目录。"; fi
   rm -rf -- "$PART"
 }
 
@@ -207,7 +207,7 @@ unpack_release() {
   for required in standalone.json app/bin/vonvon.mjs node/bin/node; do
     if [ ! -f "$PART/$required" ]; then
       remove_part
-      fail 4 "安装包里缺 $required，没有安装。"
+      fail 4 "安装包里缺 ${required}，没有安装。"
     fi
   done
   link=$(find "$PART" -type l -print | head -n 1)
@@ -226,7 +226,7 @@ set_up() {
     '0:{"ok":true'*) ;;
     *)
       show_output "$output" "$TMP/setup.err"
-      fail 1 "设置 vonvon 命令这一步失败了（退出码 $code）。安装包已经解好，再运行一次安装命令会从这一步接着做。"
+      fail 1 "设置 vonvon 命令这一步失败了（退出码 ${code}）。安装包已经解好，再运行一次安装命令会从这一步接着做。"
       ;;
   esac
   case "$output" in *'"pathAlreadyOnPath":true'*) ON_PATH=yes ;; *) ON_PATH=no ;; esac
@@ -238,7 +238,7 @@ start_detached() {
     '0:{"ok":true'*) ;;
     *)
       show_output "$output" "$TMP/start.err"
-      fail 1 "后台服务装不上，直接启动也没成功（退出码 $code）。文件已经装好，再运行安装命令不会重做这一步；问题解决后运行 \`$ROOT/bin/vonvon daemon start\`。"
+      fail 1 "后台服务装不上，直接启动也没成功（退出码 ${code}）。文件已经装好，再运行安装命令不会重做这一步；问题解决后运行 \`$ROOT/bin/vonvon daemon start\`。"
       ;;
   esac
   case "$1" in
@@ -269,13 +269,13 @@ install_service() {
         no_systemd|user_instance_down|no_runtime_dir) start_detached "$reason" ;;
         *)
           show_output "$output" "$TMP/service.err"
-          fail 1 "后台服务没装上（退出码 $code）。文件已经装好，再运行安装命令不会重做这一步；问题解决后运行 \`$ROOT/bin/vonvon service install\`。"
+          fail 1 "后台服务没装上（退出码 ${code}）。文件已经装好，再运行安装命令不会重做这一步；问题解决后运行 \`$ROOT/bin/vonvon service install\`。"
           ;;
       esac
       ;;
     *)
       show_output "$output" "$TMP/service.err"
-      fail 1 "后台服务没装上：$ROOT/bin/vonvon 没有正常运行（退出码 $code）。问题解决后运行 \`$ROOT/bin/vonvon service install\`。"
+      fail 1 "后台服务没装上：$ROOT/bin/vonvon 没有正常运行（退出码 ${code}）。问题解决后运行 \`$ROOT/bin/vonvon service install\`。"
       ;;
   esac
 }
@@ -308,7 +308,7 @@ main() {
   if [ -z "$(printf '%s' "$HOME" | sed 's#/*$##')" ]; then fail 2 "HOME 是 /，不往根目录里装。"; fi
   # sudo 常留着原来用户的 HOME：root 往里写，启动文件和数据目录都会变成 root 的
   if [ "$(id -u 2>/dev/null || true)" = 0 ] && [ ! -O "$HOME" ]; then
-    fail 2 "HOME（$HOME）不是 root 的，没有安装。要装给那个用户，就用那个用户自己运行，不要 sudo；坚持装在 root 下，用 \`sudo -H\` 或 \`su -\` 切成 root 再运行。"
+    fail 2 "HOME（${HOME}）不是 root 的，没有安装。要装给那个用户，就用那个用户自己运行，不要 sudo；坚持装在 root 下，用 \`sudo -H\` 或 \`su -\` 切成 root 再运行。"
   fi
   ROOT="$HOME/.local/share/vonvon-bot/server"
   DATA="$HOME/.vonvon-bot"
@@ -323,7 +323,7 @@ main() {
   trap 'rm -rf -- "${TMP:?}"' EXIT
   trap 'exit 130' HUP INT TERM
   read_manifest
-  say "正在安装 Vonvon Bot 服务端 $VERSION（$TARGET）…"
+  say "正在安装 Vonvon Bot 服务端 ${VERSION}（${TARGET}）…"
   RELEASE="$ROOT/releases/$VERSION"
   if [ -L "$RELEASE" ]; then fail 1 "$RELEASE 是符号链接，不是本脚本建的。删掉它再运行。"; fi
   if [ -f "$RELEASE/standalone.json" ]; then

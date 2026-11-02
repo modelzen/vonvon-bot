@@ -170,7 +170,7 @@ root 警告：`daemon run` 和 `service install` 在 `process.getuid?.() === 0` 
 | size 不对 | 清单 `size` + 1 → exit 4，没算哈希（stdout 文字区分） | 是 |
 | 包含 `../x` 成员 | 手工 `writeTarGz` 一个带 `../evil` 的包 → exit 4，`home/` 下没有 `evil` | 是 |
 | 包含 symlink 成员 | → exit 4（或按 I1 核对结果改为"相对不逃出根则接受"） | 是 |
-| root 拒绝 | `id` 替身 → exit 2，stdout 含 `useradd -m vonvon`，没有网络调用（`curl.log` 不存在） | 是 |
+| root 拒绝 | `id` 替身 → exit 2，stderr 逐字是 §15"安装脚本：root"那句（2026-11-02 改成 `useradd -m -s /bin/bash vonvon` 加直接 SSH 登录，不再是 `su - vonvon`），没有网络调用（`curl.log` 不存在） | 是 |
 | root 放行 | `VONVON_ALLOW_ROOT=1` → 走完，exit 0，stdout 含"以 root 继续" | 是 |
 | 已装过：pid 活着 | `home/.vonvon-bot/daemon.pid` 写 `{"pid":<本测试进程 pid>}` → exit 0，"已经装过"，没有 `curl` 调用，安装根不存在 | 是 |
 | 已装过：`current` 加能跑的 `bin/vonvon` / systemd unit 文件 / PATH 里有带服务端标记的 `vonvon` | 各 exit 0，文案是 §15"安装脚本：已装过"那句 | 是 |
