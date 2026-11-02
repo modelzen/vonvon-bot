@@ -6,7 +6,7 @@ const LOG_LIMIT = 1_000_000;
 /** devices-ui-1a 4.8: `userData/devices.log`, one line an event (`<ISO time> device-closed id=1a2b3c4d code=client_revoked`),
  * 0600, appended; past 1 MB it becomes `devices.log.1`, replacing the older one. The fields are the connections' own:
  * a device id's first 8 characters, codes and numbers. Writes go in order and never throw. */
-export function createDeviceLog(path: string, now: () => number = Date.now): (event: DeviceLogEvent, fields: Record<string, string | number>) => void {
+export function createDeviceLog<E extends string = DeviceLogEvent>(path: string, now: () => number = Date.now): (event: E, fields: Record<string, string | number>) => void {
   let queue: Promise<void> = Promise.resolve();
   const clean = (value: string | number): string => String(value).replace(/[^\w.:-]/g, '_').slice(0, 64);
   return (event, fields) => {

@@ -24,6 +24,7 @@ import { electronSecretBox, openDeviceRegistry } from './device-registry.js';
 import { createDeviceConnections, type DeviceConnections } from './connections.js';
 import { secureConnector } from './remote-transport.js';
 import { createDeviceLog } from './device-log.js';
+import { REMOTE_UPDATE_TEXT, startRemoteSelfUpdate, type RemoteSelfUpdate } from './remote-self-update.js';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
 
 /** 应用内更新没生效时给用户的手动下载地址，和设置页里的链接一致。 */
@@ -98,6 +99,8 @@ export async function startDesktop(): Promise<void> {
   let wantsVisible = true;
   let visibilityRevision = 0;
   let restoringDock: Promise<void> | undefined;
+  /** U4: another device updating this computer's Vonvon Bot (macOS only for 0.9.0). */
+  let remoteUpdate: RemoteSelfUpdate | undefined;
 
   const show = (): void => {
     if (quitting || terminating || cleanupPromise) return;
@@ -153,6 +156,7 @@ export async function startDesktop(): Promise<void> {
     stopUpdateChecks = undefined;
     restartCancel?.abort();
     powerMonitor.off('resume', onResume);
+    remoteUpdate?.dispose();
     try {
       if (starting) await starting.catch(() => {});
       // Remote connections first, so no reconnect fires while the rest closes; the remote daemons are left alone.
@@ -243,6 +247,8 @@ export async function startDesktop(): Promise<void> {
     const root = await prepareDesktopRoot(resolveDataRoot(homedir()));
     const updateConfiguration = await desktopUpdateConfiguration({ appPath: app.getAppPath(), isPackaged: app.isPackaged });
     const beforeUpdateInstall = async () => {
+      // U4: a remote update tells the daemon it restarts now, before the connection closes (at most 2 s).
+      await remoteUpdate?.aboutToRestart();
       // NSIS replaces this executable and its bundled daemon. Drain and stop the
       // authenticated owner before releasing the desktop connection or installing.
       if (process.platform === 'win32' && await managerDependencies.readVerifiedDaemon()) {
@@ -272,7 +278,21 @@ export async function startDesktop(): Promise<void> {
     // 菜单栏菜单和窗口里的更新提示（有新版本、上次没装上），都以最近一次检查的结果为准。
     const noteUpdate = (update: DesktopUpdate): DesktopUpdate => {
       tray?.setUpdate(desktopUpdateNotice(update));
+      remoteUpdate?.observe(update);
       return update;
+    };
+    /** 重启升级's install, here or for another device: one that fails after the app closed its window says so and quits. */
+    const installUpdate = async (): Promise<DesktopUpdate> => {
+      try { return await updater.install(); }
+      catch (error) {
+        if (cleanupPromise) {
+          terminating = true;
+          dialog.showErrorBox('Vonvon Bot', `桌面更新没有完成。请重新打开 Vonvon Bot 再试一次；也可以到 ${downloadPage} 重新下载安装。`);
+          quitting = true;
+          app.quit();
+        }
+        throw error;
+      }
     };
     await updater.settleInstallState().catch(() => {});
     const serviceRuntime: ServiceRuntime = {
@@ -590,12 +610,13 @@ export async function startDesktop(): Promise<void> {
     }
 
     // devices-ui-1a 4.8: the devices this computer manages; the list never stops the app from starting.
+    const deviceLog = createDeviceLog<string>(join(app.getPath('userData'), 'devices.log'));
     const box = electronSecretBox(safeStorage);
     const registry = await openDeviceRegistry(join(app.getPath('userData'), 'devices.json'), box);
     devices = createDeviceConnections({
       registry, connector: secureConnector(), box,
       client: { version: app.getVersion(), protocolVersion: PROTOCOL_VERSION },
-      log: createDeviceLog(join(app.getPath('userData'), 'devices.log')),
+      log: deviceLog,
     });
     devices.setLocal({ status: 'online', serverInfo: owner.serverInfo });
     powerMonitor.on('resume', onResume);
@@ -658,18 +679,11 @@ export async function startDesktop(): Promise<void> {
       retryDesktopUpdate: async () => noteUpdate(await updater.retry()),
       installDesktopUpdate: async () => {
         if (quitRequested) throw new StartHostRefusal('Vonvon Bot 正在退出，请稍后再更新。');
+        // U4: another device's update downloads and restarts on its own; two installs must not race to quitAndInstall.
+        if (remoteUpdate?.busy) throw new StartHostRefusal(REMOTE_UPDATE_TEXT.localRefused);
         // No question first, as on macOS (owner 2026-11-02): the button itself says the restart interrupts the
         // conversations in progress; a dialog on an unattended computer would wait forever.
-        try { return await updater.install(); }
-        catch (error) {
-          if (cleanupPromise) {
-            terminating = true;
-            dialog.showErrorBox('Vonvon Bot', `桌面更新没有完成。请重新打开 Vonvon Bot 再试一次；也可以到 ${downloadPage} 重新下载安装。`);
-            quitting = true;
-            app.quit();
-          }
-          throw error;
-        }
+        return installUpdate();
       },
       hide,
       confirmQuit,
@@ -680,6 +694,19 @@ export async function startDesktop(): Promise<void> {
       connectionLost: showConnectionLost,
     }, devices);
     tray = createDesktopTray(icon, show, requestQuit);
+    // U4: the daemon this app carries asks it to update when another device says so. Windows' app is updated on that
+    // computer for 0.9.0 (owner 2026-11-02): its shell does not declare it can, as its daemon does not offer it.
+    if (process.platform !== 'win32') {
+      remoteUpdate = startRemoteSelfUpdate({
+        updater: { check: () => updater.check(), install: installUpdate, get busy() { return updater.busy; } },
+        owner: () => bridge?.localOwner() ?? null,
+        onOwner: listener => bridge?.onLocalOwner(listener) ?? (() => {}),
+        quitting: () => quitRequested || terminating || cleanupPromise !== undefined,
+        notice: text => { tray?.setNotice(text); bridge?.sendRemoteUpdate(text); },
+        publish: update => { if (!terminating && !cleanupPromise) bridge?.publishUpdate(noteUpdate(update)); },
+        log: (event, fields = {}) => deviceLog(event, fields),
+      });
+    }
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { label: 'Vonvon Bot', submenu: [
         { label: '显示 Vonvon Bot', click: show },

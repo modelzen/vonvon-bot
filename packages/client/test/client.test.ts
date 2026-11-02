@@ -115,6 +115,7 @@ it("delivers log and backend events and rejects an invalid reply payload", async
     socket.send(JSON.stringify({type:"event",event:"log",payload:{lines:"hello\n"}}));
     socket.send(JSON.stringify({type:"event",event:"backendInstall",payload:{operationId,id:"codex",update:false,item:{type:"log",chunk:"downloading"}}}));
     socket.send(JSON.stringify({type:"event",event:"device",payload:{change:"client-paired",clientId:"cl_0123456789abcdef",name:"笔记本",clientKind:"desktop"}}));
+    socket.send(JSON.stringify({type:"event",event:"desktopUpdateRequest",payload:{requestId:"dur_0123456789abcdef",action:"apply",by:"「笔记本」"}}));
     socket.send(JSON.stringify({type:"response",id:frame.id,method:frame.method,payload:{kind:"state",state:{version:"bad"}}}));
   });
   const { client } = await connectLocal(options);
@@ -124,10 +125,14 @@ it("delivers log and backend events and rejects an invalid reply payload", async
   client.onBackendInstall(value => { if (value.item.type === "log") chunks.push(value.item.chunk); });
   const paired: string[] = [];
   client.onDevice(value => paired.push(`${value.change}:${value.name}`));
+  // devices-ui-4: the daemon the desktop app carries asks the app to update
+  const updates: string[] = [];
+  client.onDesktopUpdateRequest(value => updates.push(`${value.action}:${value.by}`));
   await expect(client.admin({type:"state"})).rejects.toThrow();
   expect(lines).toEqual(["hello\n"]);
   expect(chunks).toEqual(["downloading"]);
   expect(paired).toEqual(["client-paired:笔记本"]);
+  expect(updates).toEqual(["apply:「笔记本」"]);
   await client.close();
 });
 

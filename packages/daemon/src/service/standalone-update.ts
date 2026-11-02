@@ -444,6 +444,12 @@ export async function settleUpdateAtStartup(options: { version: string; installR
       finally { release(); }
     }
   }
+  // U4: an update the desktop app ran for the server it carries. The new app stopped the old server and started this one;
+  // there is no helper to roll back, so no steady wait, and no install root.
+  if (status?.phase === 'restarting' && status.via === 'desktop') {
+    if (status.to === undefined || status.to === options.version) finishOwnedUpdate(status, 'done');
+    else finishOwnedUpdate(status, 'error', `重启后仍是 ${options.version}`);
+  }
   if (!options.installRoot) return;
   await noteRunning(options.installRoot, options.version);
   // A restart is ended only once this process has stayed up as long as the helper watches a new owner (review 207):

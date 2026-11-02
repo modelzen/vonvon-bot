@@ -1,3 +1,4 @@
+import type { ClientRecord } from '@vonvon/protocol';
 import type { ClientRegistry } from '../remote/clients';
 import type { Peer } from './ws';
 
@@ -13,7 +14,7 @@ const KIND: Record<string, string> = { desktop: '桌面端', cli: '命令行', w
 export function localPeerLabel(clientKind: string | undefined): string {
   return `本机的${KIND[clientKind ?? ''] ?? '客户端'}`;
 }
-/** A paired client's name, "未知设备" when it is not on the list. U4's peerName uses it too. */
+/** A paired client's name, "未知设备" when it is not on the list. */
 export function pairedPeerName(clientId: string, clients: Pick<ClientRegistry, 'get'>): string {
   return clients.get(clientId)?.name ?? '未知设备';
 }
@@ -27,4 +28,15 @@ export function peerOwner(peer: Pick<Peer, 'principal' | 'clientKind'>, clients:
   }
   const kind = KIND[peer.clientKind ?? ''] ?? '客户端';
   return { key: `local:${peer.clientKind ?? 'unknown'}`, label: localPeerLabel(peer.clientKind), far: `「${deviceName}」上的${kind}` };
+}
+
+/**
+ * U4 (devices 第 15 节): who asks for an update, in the notice the desktop shell shows the person at this computer
+ * ("「笔记本」正在更新这台电脑上的 Vonvon Bot"). By `peer.clientId`, so a paired client's maintenance connection is named
+ * too: 「名字」, "另一台设备" when it is not on the list; a connection of this computer's own by `localPeerLabel`.
+ */
+export function peerName(peer: Pick<Peer, 'clientKind' | 'clientId'>, clients: { get(clientId: string): Pick<ClientRecord, 'name'> | undefined }): string {
+  if (peer.clientId === undefined) return localPeerLabel(peer.clientKind);
+  const name = clients.get(peer.clientId)?.name;
+  return name ? `「${name}」` : '另一台设备';
 }

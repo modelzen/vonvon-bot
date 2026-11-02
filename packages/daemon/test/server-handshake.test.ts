@@ -53,8 +53,10 @@ describe('local WebSocket handshake', () => {
     } finally { await fixture.close(); }
   });
 
-  // main 必败: serverInfo said only `device`, so no client offered a remote update (devices-ui-2 4.11).
-  it.each([['standalone', ['update.standalone']], ['global-npm', ['update.npm']], ['bundled', []]] as const)('reports what a %s install can update', async (kind, update) => {
+  // main 必败: serverInfo said only `device`, so no client offered a remote update (devices-ui-2 4.11). U4: the desktop app
+  // updates the daemon it carries, except on Windows (owner 2026-11-02).
+  const bundled = process.platform === 'win32' ? [] : ['update.bundled'];
+  it.each([['standalone', ['update.standalone']], ['global-npm', ['update.npm']], ['bundled', bundled]] as const)('reports what a %s install can update', async (kind, update) => {
     const fixture = await startFixture(undefined, undefined, undefined, undefined, undefined, async () => ({ kind }));
     try {
       await new Promise(resolve => setTimeout(resolve, 0));
@@ -63,6 +65,16 @@ describe('local WebSocket handshake', () => {
       expect((client.frames[0] as { capabilities: string[] }).capabilities).toEqual(['device', 'session-scope', ...update]);
       await client.close();
     } finally { await fixture.close(); }
+  });
+
+  // devices-ui-4: a Windows desktop app is not updated from another device in 0.9.0, so its daemon does not offer it.
+  it('offers the desktop update on macOS and Linux only', async () => {
+    // after the fixture's module, which mocks the paths http.ts reads
+    const { capabilities } = await import('../src/server/http');
+    expect(capabilities('bundled', false, 'darwin')).toEqual(['device', 'session-scope', 'update.bundled']);
+    expect(capabilities('bundled', true, 'linux')).toEqual(['device', 'session-scope', 'remote', 'update.bundled']);
+    expect(capabilities('bundled', false, 'win32')).toEqual(['device', 'session-scope']);
+    expect(capabilities('standalone', false, 'win32')).toContain('update.standalone');
   });
 
   it.each([undefined, 'bad'])('rejects credential %s with 4401', async credential => {
