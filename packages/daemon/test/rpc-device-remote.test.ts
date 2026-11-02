@@ -42,7 +42,7 @@ it('opens only what enable may open, records a LAN address with its network, and
   try {
     const client = await socketClient(fixture.api.port, fixture.credential);
     await client.ready();
-    expect((client.frames[0] as { capabilities?: string[] }).capabilities).toEqual(['device']);
+    expect((client.frames[0] as { capabilities?: string[] }).capabilities).toEqual(['device', 'session-scope']);
     const error = async (id: string, request: object) => { const reply = await client.call(call(id, { type: 'enable', ...request }) as never) as Reply; return reply.type === 'error' ? { code: reply.code, message: reply.message } : reply; };
     expect(await error('t', { tailscale: true })).toMatchObject({ code: 'tailscale_unavailable', message: expect.stringContaining('Tailscale') });
     expect(await error('h', { host: 'example.com' })).toEqual({ code: 'invalid_request', message: '只接受 IP 地址，不接受主机名。' });
@@ -57,7 +57,7 @@ it('opens only what enable may open, records a LAN address with its network, and
     expect(file.addresses[1]).toEqual({ host: LAN, enabledAt: expect.any(Number), kind: 'lan', iface: 'eth0', network: 'gw:aa:bb:cc:dd:ee:ff' });
     const next = await socketClient(fixture.api.port, fixture.credential);
     await next.ready();
-    expect((next.frames[0] as { capabilities?: string[] }).capabilities).toEqual(['device', 'remote']);
+    expect((next.frames[0] as { capabilities?: string[] }).capabilities).toEqual(['device', 'session-scope', 'remote']);
     await Promise.all([client.close(), next.close()]);
   } finally { await fixture.close(); }
 });

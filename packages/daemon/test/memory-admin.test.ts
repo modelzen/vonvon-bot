@@ -12,12 +12,12 @@ afterEach(() => { for (const path of roots.splice(0)) rmSync(path, { recursive: 
 
 const PROJECT = { id: 'prj_0a1b2c3d', name: '支付组', createdAt: 1, revision: 1, workspace: { primary: '/work/pay', additional: [] }, memoryLimit: 2 };
 const OTHER = { id: 'prj_0a1b2c3e', name: '别的', createdAt: 1, revision: 1, workspace: { primary: '/work/other', additional: [] } };
-function setup(origin?: 'cli'): { call: (request: unknown) => Promise<MemoryReply>; data: string } {
+function setup(origin?: 'cli', actor?: MemoryAdminDeps['actor']): { call: (request: unknown) => Promise<MemoryReply>; data: string } {
   const data = root();
   mkdirSync(join(data, 'library'), { recursive: true });
   writeFileSync(join(data, 'library', 'projects.json'), JSON.stringify({ version: 1, projects: [PROJECT, OTHER] }));
   const deps: MemoryAdminDeps = {
-    library: libraryLocation(data), origin,
+    library: libraryLocation(data), origin, ...(actor ? { actor } : {}),
     botDirectory: async botId => { if (botId !== 'cli_a') throw new Error('no such bot'); return join(data, 'bots', 'cli_a'); },
   } as MemoryAdminDeps;
   return { data, call: request => memoryAction(memoryRequestSchema.parse(request) as MemoryRequest, deps) };
@@ -41,6 +41,15 @@ describe('the memory RPC on the files', () => {
     const cli = setup('cli');
     expect(item(await cli.call({ type: 'add', scope: bot, text: '先写结论' })).item).toMatchObject({ scope: { kind: 'bot' }, branch: '其他', source: { via: 'cli', actorRole: 'cli', botId: 'cli_a' } });
     expect(readFileSync(join(cli.data, 'bots', 'cli_a', 'memory', 'memory.json'), 'utf8')).toContain('先写结论');
+  });
+
+  // D4a review R4: a Bot session's turn writes as itself, not as the owner's terminal
+  it('adds as a Bot session\'s turn when one is given: its role, trusted only for the owner\'s or an admin\'s', async () => {
+    const member = setup('cli', { role: 'member', openId: 'ou_member' });
+    expect(item(await member.call({ type: 'add', scope: project, text: '周四发版' })).item)
+      .toMatchObject({ trust: 'untrusted', source: { via: 'cli', actorRole: 'member', actorOpenId: 'ou_member' } });
+    const admin = setup('cli', { role: 'admin', openId: 'ou_admin' });
+    expect(item(await admin.call({ type: 'add', scope: project, text: '周五发版' })).item).toMatchObject({ trust: 'trusted', source: { actorRole: 'admin' } });
   });
 
   it('answers refusals and conflicts as replies, not errors', async () => {

@@ -1,6 +1,7 @@
 // Builds the standalone server packages (docs/plans/devices.md 7.1, 7.2; docs/plans/server-1-standalone.md).
 // Each archive unpacks into releases/<version>/: app/ (the daemon, minified, with the web UI), node/ (official Node and
-// its npm), standalone.json and build-manifest.json. Nothing is uploaded.
+// its npm), standalone.json and build-manifest.json. Nothing is uploaded. By default only the Linux packages are built:
+// a script-installed server exists only on Linux (owner 2026-11-01; Mac and Windows get theirs inside the desktop app).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
@@ -11,6 +12,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { crc32, createGzip, deflateRawSync, inflateRawSync } from 'node:zlib';
+import { createPublicKey } from 'node:crypto';
 import { assertNoBundledClaude } from './desktop-backend-policy.mjs';
 import { fileEntries, listFiles, sha256 } from './package-tools.mjs';
 import { checkedProductVersion } from './product-version.mjs';
@@ -18,6 +20,11 @@ import { stageDaemon } from './stage-daemon.mjs';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
 export const TARGETS = ['linux-x64', 'linux-arm64', 'darwin-arm64', 'darwin-x64', 'win-x64', 'win-arm64'];
+/**
+ * What is built by default and published: the server manifest lists these and nothing else. The macOS and Windows
+ * targets can still be built with --targets until a later cleanup removes them with the rest of that standalone code.
+ */
+export const PUBLISHED_TARGETS = ['linux-x64', 'linux-arm64'];
 export const isWindowsTarget = target => target.startsWith('win-');
 export const archiveName = (version, target) => `vonvon-server-${version}-${target}.${isWindowsTarget(target) ? 'zip' : 'tar.gz'}`;
 // PowerShell 5.1 Expand-Archive is held to 260 characters. 100 covers
@@ -25,11 +32,27 @@ export const archiveName = (version, target) => `vonvon-server-${version}-${targ
 export const WINDOWS_PREFIX = 100;
 /** TypeScript sources, declarations and source maps. */
 const SOURCE_FILE = /\.(?:[mc]?ts|map)$/;
-const APP_TOP = new Set(['package.json', 'bin', 'dist', 'ui', 'node_modules', 'NOTICE', 'LICENSE.bridge', 'LICENSE.paseo', 'PROVENANCE.md', 'import-core.json']);
+const APP_TOP = new Set(['package.json', 'bin', 'dist', 'ui', 'node_modules', 'NOTICE', 'LICENSE.bridge', 'LICENSE.paseo', 'PROVENANCE.md', 'import-core.json', 'server-update.json']);
 
 /** Where Node and its npm sit inside an official Node archive of `target`, and so inside the release's node/. */
 export function nodeLayout(target) {
   return isWindowsTarget(target) ? { node: 'node.exe', npm: 'node_modules/npm' } : { node: 'bin/node', npm: 'lib/node_modules/npm' };
+}
+
+/**
+ * The manifest key and address each package carries as app/server-update.json (docs/plans/server-3-update-engine.md C2).
+ * The release build copies packages/daemon/server-update.json; `--update-public-key` (raw base64 or SPKI PEM) and
+ * `--update-base-url` make a test build, marked `updateKey: "test"`, which publishing refuses. A committed key that is
+ * not one yet (the placeholder before the signing key exists) marks the build `updateKey: "none"`.
+ */
+export async function serverUpdateConfig({ publicKeyFile, baseURL } = {}) {
+  const committed = JSON.parse(await readFile(join(repository, 'packages/daemon/server-update.json'), 'utf8'));
+  const text = publicKeyFile ? (await readFile(publicKeyFile, 'utf8')).trim() : committed.publicKey;
+  const publicKey = text.startsWith('-----BEGIN') ? createPublicKey(text).export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64') : text;
+  const valid = Buffer.from(publicKey, 'base64').length === 32 && Buffer.from(publicKey, 'base64').toString('base64') === publicKey;
+  if (publicKeyFile && !valid) throw new Error(`${publicKeyFile} is not an Ed25519 public key`);
+  const config = { publicKey, baseURL: baseURL ?? committed.baseURL };
+  return { config, updateKey: publicKeyFile || baseURL ? 'test' : valid ? 'release' : 'none' };
 }
 
 /** Downloads a pinned Node file once into `cache`; every use checks it against scripts/server-node.json. */
@@ -119,7 +142,7 @@ export async function checkServerTree(release, target) {
   const files = await listFiles(release); // refuses symbolic links and special files
   const problems = [];
   const layout = nodeLayout(target);
-  const required = ['standalone.json', 'app/package.json', 'app/bin/vonvon.mjs', 'app/dist/cli.js', 'app/ui/dist/index.html',
+  const required = ['standalone.json', 'app/package.json', 'app/bin/vonvon.mjs', 'app/dist/cli.js', 'app/ui/dist/index.html', 'app/server-update.json',
     'app/NOTICE', 'app/LICENSE.paseo', 'app/LICENSE.bridge', 'node/LICENSE', `node/${layout.node}`, `node/${layout.npm}/bin/npm-cli.js`];
   for (const file of required) if (!files.includes(file)) problems.push(`missing ${file}`);
   // Every directory and file name, folded: Windows and macOS see `Case/` and `case` as one path.
@@ -241,13 +264,15 @@ async function fileHashes(path) {
   return { size, sha256: hashes.sha256.digest('hex'), sha512: hashes.sha512.digest('hex') };
 }
 
-function parseArguments(args) {
-  const options = { targets: TARGETS, allowDirty: false };
+export function parseArguments(args) {
+  const options = { targets: PUBLISHED_TARGETS, allowDirty: false };
   for (let i = 0; i < args.length; i++) {
     const [name, value] = [args[i], args[i + 1]];
     if (name === '--allow-dirty') { options.allowDirty = true; continue; }
-    if (!['--out', '--targets', '--node-cache'].includes(name) || !value) throw new Error('usage: build-server.mjs --out <dir> [--targets linux-x64,...] [--node-cache <dir>] [--allow-dirty]');
+    if (!['--out', '--targets', '--node-cache', '--update-public-key', '--update-base-url'].includes(name) || !value) throw new Error('usage: build-server.mjs --out <dir> [--targets linux-x64,linux-arm64] [--node-cache <dir>] [--allow-dirty] [--update-public-key <file> --update-base-url <url>]');
     if (name === '--out') options.out = resolve(value);
+    if (name === '--update-public-key') options.publicKeyFile = resolve(value);
+    if (name === '--update-base-url') options.baseURL = value.replace(/\/+$/, '');
     if (name === '--node-cache') options.cache = resolve(value);
     if (name === '--targets') options.targets = value.split(',');
     i++;
@@ -267,7 +292,7 @@ async function outsideRepository(path) {
   if (existing === repo || existing.startsWith(repo + sep)) throw new Error(`${path} must be outside the repository`);
 }
 
-export async function buildServer({ out, targets, cache, allowDirty, platform = process.platform }) {
+export async function buildServer({ out, targets, cache, allowDirty, publicKeyFile, baseURL, platform = process.platform }) {
   await outsideRepository(out);
   if (cache) await outsideRepository(cache);
   // A tar.gz takes its modes from the disk, and Windows keeps no execute bits; nor can it unpack the links in Node's tar.gz.
@@ -291,9 +316,11 @@ export async function buildServer({ out, targets, cache, allowDirty, platform = 
       engines: daemon.engines, license: daemon.license, author: daemon.author, dependencies: daemon.dependencies,
     }, { hoist: true });
     await cp(join(repository, 'packages/ui/dist'), join(app, 'ui/dist'), { recursive: true });
+    const update = await serverUpdateConfig({ publicKeyFile, baseURL });
+    await writeFile(join(app, 'server-update.json'), JSON.stringify(update.config, null, 2) + '\n');
     await assertNoBundledClaude(app);
     const nodeCache = cache ?? join(work, 'node-cache');
-    const summary = { version, sourceHead, sourceDirty, node: pins.version, external: staged.external, bundled: staged.bundled, files: {} };
+    const summary = { version, sourceHead, sourceDirty, node: pins.version, updateKey: update.updateKey, external: staged.external, bundled: staged.bundled, files: {} };
     const lockfileSha256 = sha256(await readFile(join(repository, 'package-lock.json')));
     const esbuild = JSON.parse(await readFile(join(repository, 'node_modules/esbuild/package.json'), 'utf8')).version;
     await mkdir(out, { recursive: true });

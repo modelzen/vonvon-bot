@@ -35,15 +35,17 @@ function fakePeer(open = true) {
   return { peer, received };
 }
 
-it('publishes to the open peers only, each in the shape it is given', async () => {
-  const hub = createPeerHub({ detached: () => undefined });
+it('publishes to the open peers only, each in the view the hub gives it', async () => {
+  let view: ((peer: Peer, event: Event) => Event | null) | undefined;
+  const hub = createPeerHub({ detached: () => undefined, view: (peer, published) => view ? view(peer, published) : published });
   const connect = await sockets();
   const [a, b, c] = [fakePeer(), fakePeer(false), fakePeer()];
   for (const { peer } of [a, b, c]) { const { socket } = await connect(); hub.attach(socket, once(() => hub.remove(peer))); hub.add(peer, socket); }
   hub.publish(event);
   expect([a.received.length, b.received.length, c.received.length]).toEqual([1, 0, 1]);
   const other = { type: 'event', event: 'log', payload: { line: 'y' } } as unknown as Event;
-  hub.publish(event, peer => peer === a.peer ? null : other);
+  view = peer => peer === a.peer ? null : other;
+  hub.publish(event);
   expect(a.received).toHaveLength(1);
   expect(c.received[1]).toBe(other);
   expect(hub.peers.size).toBe(3);

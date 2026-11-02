@@ -1,7 +1,7 @@
 // first: sets the connection defaults of every daemon process (the supervisor, each `--bot` child and each command)
 import './tune-network';
 import { Command, CommanderError, Help, Option } from 'commander';
-import { badArgs, commandFailure } from './command-error';
+import { badArgs, commandFailure, CommandError } from './command-error';
 import { mkdir } from 'node:fs/promises';
 import { formatErrorTree } from '../core/error-parts';
 import { bridgeVersion } from '../core/version';
@@ -11,6 +11,7 @@ import { inBotSession } from '../config/session-env';
 import { observeShutdown, type ShutdownControl } from '../host/lifecycle';
 import type { LingerChoice } from './commands/service';
 import type { ScheduleAction, ScheduleTarget } from './commands/schedule';
+import type { Scope } from '@vonvon/protocol';
 
 /** devices 8.1: every command takes --json and fails through `commandFailure` (the runner at the bottom). */
 export const program = new Command().name('vonvon').description('Vonvon Bot daemon').version(bridgeVersion());
@@ -48,9 +49,51 @@ const daemonFor = async (options: { fresh?: boolean }) => {
  * talks to the daemon, or reads files published with tmp + rename, and takes none. clients, device rename and remote
  * write `devices/` themselves when no daemon runs (devices 4.5, D3 4.8); pair only asks the daemon. */
 const LEASED = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'bot repair-dir', 'secrets list', 'secrets set', 'secrets remove',
-  'clients ls', 'clients rename', 'clients revoke', 'device rename', 'remote status', 'remote enable', 'remote disable', 'remote port']);
+  'clients ls', 'clients rename', 'clients revoke', 'device rename', 'remote status', 'remote enable', 'remote disable', 'remote port',
+  // with no daemon running, a standalone update takes update.lock and writes update-status.json itself (server-3 4.8)
+  'update']);
+/**
+ * devices 8.3 and 5.3: what only the person at this computer runs (the trust root, file locks, the service manager,
+ * remote access, pairing), refused in a Bot's session before anything runs. `update` refuses in
+ * runUpdateCommand too (I3-SEC-3); `__standalone-setup` and `__standalone-teardown` are the install scripts' (server-2 4.3):
+ * the first switches `current` to a kept release, an update by another name.
+ * `secrets get` is not here: the session's lark-cli resolves its App Secret through it (secrets-get.test.ts). Nor are the
+ * hidden `__restart-after-exit` and `__daemon-control`: the host starts them with its own environment, which an older
+ * daemon started inside a session still carries the markers in; refusing them there would leave a restart or an update
+ * with no daemon. For the same reason a `daemon run` the supervisor starts (its IPC channel) is not refused.
+ */
+export const LOCAL_ONLY: ReadonlySet<string> = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'service install', 'service uninstall',
+  'update', 'remote status', 'remote enable', 'remote disable', 'remote port', 'pair', 'clients ls', 'clients rename', 'clients revoke', 'device rename',
+  'bot repair-dir', 'open', '__standalone-setup', '__standalone-teardown']);
+/** A command's full name without `vonvon`: `daemon restart`, `pair`. */
+const commandPath = (command: Command): string => {
+  const names: string[] = [];
+  for (let current: Command | null = command; current?.parent; current = current.parent) names.unshift(current.name());
+  return names.join(' ');
+};
+/** `--scope bot=<appId>[,group=<chatId>]` (devices 5.3): each key once, bot required. */
+export function parseScope(spec: string): Scope {
+  const wrong = () => badArgs('--scope 的写法是 bot=<appId>[,group=<chatId>]。');
+  const scope: { bot?: string; group?: string } = {};
+  for (const part of spec.split(',')) {
+    const match = /^(bot|group)=([^\s=,]+)$/.exec(part.trim());
+    if (!match) throw wrong();
+    const [, key, value] = match as unknown as [string, 'bot' | 'group', string];
+    if (scope[key] !== undefined) throw wrong();
+    scope[key] = value;
+  }
+  if (!scope.bot) throw wrong();
+  return { bot: scope.bot, ...(scope.group ? { group: scope.group } : {}) };
+}
+program.option('--scope <spec>', "The Bot session's scope, bot=<appId>[,group=<chatId>]; a Bot session's commands must carry it");
 program.hook('preAction', async (_command, action) => {
-  const path = `${action.parent?.name() ?? ''} ${action.name()}`;
+  const path = commandPath(action);
+  const supervised = path === 'daemon run' && typeof process.send === 'function';
+  if (inBotSession(process.env) && LOCAL_ONLY.has(path) && !supervised) {
+    throw new CommandError('refused', `这条命令（\`vonvon ${path}\`）不能在 Bot 会话里运行。告诉用户去设备上或桌面端里做。`, { reason: 'not_in_session' });
+  }
+  const spec = program.opts<{ scope?: string }>().scope;
+  if (spec !== undefined) (await import('./daemon-client')).setCliContext({ scope: parseScope(spec) });
   if (path === 'daemon run') {
     const runControl = control = observeShutdown(Boolean(action.opts().parentControl));
     (await import('../host/crash-guard')).installCrashHandlers({ intent: () => runControl.intent ?? (runControl.requested ? 'stop' : 'running') });
@@ -68,6 +111,8 @@ daemon.command('run').description('Run in the foreground')
   .option('--parent-control', 'Accept shutdown through stdin', false)
   .option('--port <port>', 'Loopback API port', (value) => Number(value), 0)
   .action(async (options: { bot?: string; port: number; parentControl?: boolean }) => {
+    const warning = (await import('./root-warning')).rootWarning();
+    if (warning) process.stderr.write(`${warning}\n`);
     await (await import('../host/bootstrap')).runHostRuntime({ bot: options.bot, port: options.port, managed: false, control });
   });
 daemon.command('start').description('Start a detached daemon')
@@ -565,8 +610,29 @@ covers(provider.command('models <provider>'), 'collaboration.providerModels').de
 These are all the models the Provider itself reports. The ones a bot's model picker offers for one use are
 vonvon settings models --backend <codex|claude> --purpose <use>.`)
   .action(async (name: string, options: Json) => { await (await import('./commands/provider')).runProviderModels(name, io(options)); });
+covers(program.command('update'), 'machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus')
+  .description('Update this server to the signed stable release; with the daemon running, it drains and restarts')
+  .option('--check', 'Only say whether a newer version is out')
+  .option('--allow-downgrade', 'With --to: go back to a release still kept on this machine')
+  .option('--to <version>', 'The version to go to')
+  .option('--json', 'Print JSON Lines: each status change, then the result')
+  .addHelpText('after', `
+Exit codes: 0 updated (or already current), 1 failed (the server stays on or goes back to its version),
+5 another update is running, 6 the daemon restarted but the outcome is not known yet.`)
+  .action(async (options: Json & { check?: boolean; allowDowngrade?: boolean; to?: string }) => {
+    await (await import('./commands/update')).runUpdateCommand(options, io(options));
+  });
 program.command('__daemon-control <action>', { hidden: true }).action(async (action: string) => {
   await (await import('./commands/daemon-control')).runDaemonControl(action);
+});
+// server-2 4.3: what the install scripts run from a release before `current` points at it. `--release`, not `--version`:
+// the program's own --version would answer first.
+program.command('__standalone-setup', { hidden: true }).requiredOption('--install-root <root>').requiredOption('--release <version>').option(...JSON_FLAG)
+  .action(async (options: Json & { installRoot: string; release: string }) => {
+    await (await import('./commands/standalone-setup')).runStandaloneSetup({ installRoot: options.installRoot, version: options.release }, io(options));
+  });
+program.command('__standalone-teardown', { hidden: true }).requiredOption('--install-root <root>').option(...JSON_FLAG).action(async (options: Json & { installRoot: string }) => {
+  await (await import('./commands/standalone-setup')).runStandaloneTeardown({ installRoot: options.installRoot }, io(options));
 });
 program.command('__restart-after-exit <port> <oldPid> <oldStartedAt> [update]', { hidden: true }).action(async (port: string, oldPid: string, oldStartedAt: string, update?: string) => {
   const { updateStatusSchema } = await import('../service/update');
