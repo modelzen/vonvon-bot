@@ -175,3 +175,21 @@ Mac 后验（整批，U1b/U3 的任务里）：Mac 桌面端或 Mac 上的通道
 2026-11-02，#640 上 Sonnet 审查 U1a–U4 计划时，提到本片的一条，接受：
 
 - 监听器会把地址记成 `failed`，U3 也给它写了文案，可 D1 的协议枚举没有这个值，没有哪一片负责加。由本片加进 `remoteAddressStateSchema`，并加一条解析测试（4.5、第 5 节）。U3 计划写明：本片没加时由 U3 补。
+
+## 11. 实现时和计划不一样的地方
+
+1. **`createRemoteListeners` 的依赖**：不要 `classify`（监听器用 `remote.json` 里记下的 `kind`，不再分类一次）；`hub` 在 `secure` 里；多一个 `secureTimers`（测试把通道的超时调短）。`beginDrain()` 返回 Promise，直接把每个地址整个关掉（连接 1001），不只 `server.close()`：hub 的排空同一时刻也在关这些连接，效果一样，少一种中间状态。
+2. **关地址、换端口、地址消失**：用 D2 的 `secure.close('remote_disabled')`（D2 计划第 11 节第 4 条）关这个监听器自己的连接，没有另外 `hub.closeWhere(listener === host)`；`Peer.listener` 照计划加了（U3 的 `via` 用得上）。关完通道连接后，再把这个 server 剩下的 TCP 连接全部 `destroy`：升级过的 socket 不在 `closeAllConnections` 管的列表里，一个被拒了升级、自己不关的客户端会让 `server.close()` 一直等下去，关地址、换端口、`daemon stop` 都跟着卡住（写探针时发现，加了测试）。D2 的 `refuseUpgrade` 同理改成回完状态码 1 秒后还没关就 `destroy`。
+3. **未认证连接数**：D2 的 `SecureSocketServerOptions` 除了 `listenerId`，再加一个 `onAuthenticated(request)`（hello 通过、进 hub 时调）。计数按 TCP 连接：`admit` 放行时记一条，连接的 `close` 事件减掉，hello 通过时提前减掉。这样升级被 `ws` 自己拒掉（坏的 `Sec-WebSocket-Key`）的连接也不会把名额占住。
+4. **局域网地址的网络核对**：拿不到当前网络（没有默认路由、ARP 表里没有网关，比如开机时 DHCP 还没好）时照"等待地址出现"处理、15 秒后再试，不进 `needs-confirmation`；不然服务器开机就卡在"网络变了"，要人去重开。在听的时候 15 秒一次的 `watch` 也核对网络（笔记本睡醒换了网络、拿到同一个 IP 时，地址没有消失过）。
+5. **日志**：状态变了才记一行，15 秒一次的重试不重复记。多两个事件：`remote-server-error`（在听之后 server 出错，只记不处理），`remote-config-unreadable`（启动时读不了 `remote.json`：daemon 照常起，远程不开）。
+6. **限流的计法**：一次握手开始扣 1 个令牌，失败再扣 1 个（带有效邀请的 `unknown_client`/`pairing_failed` 不扣），所以同一 IP 一分钟内 20 次正常连接、或约 10 次失败就封 60 秒；桶空时的失败也会触发封禁。公网/CGNAT 的全局每秒 10 次只拒、不封 IP。
+7. **`/health` 的 server**：`headersTimeout`、`requestTimeout` 设成 10 秒。
+8. **撤销断连的顺序**：断连的 `clients.onChange` 监听登记在 `followRevocations` 之前，被撤销的那条连接先断，收不到 `client-revoked` 事件；`jobs.detach`、`logs.detach` 经 hub 的 `detached` 调（`closeWhere` → 连接的 detach → `hub.remove`），没有另写一遍。`followRevocations` 挪到 hub 建好之后，经 hub 发事件。
+9. **IPv6 地址统一写法**：开、关地址时把 IPv6 写成小写短格式（`FD00:0::1` → `fd00::1`），客户端发的 Host 和它比较。
+10. **`--tailscale`**：取网卡上第一个算 Tailscale 的 IPv4，不取只在 `tailscale ip` 输出里、网卡上没有的地址（绑不上）。
+11. **设计第 15 节没写到的文字**（本片自定）：`enable` 同时给或都不给 IP 和 `--tailscale`："给一个 IP 地址，或者用 --tailscale，二选一。"；端口范围："端口要在 1024 到 65535 之间。"；`remote status` 的表头"地址  种类  状态  说明  端口"、种类名（Tailscale 地址、局域网地址、运营商地址、公网地址）、daemon 没运行时的状态"没在听"；`enable` 之后地址没在听时加一行"现在：<状态>，<说明>。"；`disable` 的"已关闭 <地址>，经这个地址的连接都已断开。"（没运行时"已关闭 <地址>。"）；`port` 的"远程端口改成了 <n>，已配对的设备要重新配对。"；没开任何地址时 `remote status` 用 D1 的"没开远程时 pair"那句。
+12. **`device.status` 的端口**每次读 `remote.json`，地址的状态取监听器的。
+13. **`remote *` 四条进 `LEASED`**（数据租约），和 `clients *` 一样，daemon 没跑时它们自己写 `devices/`。
+14. **测试的接缝**：`startApi` 加 `remote?: RemoteSeams`（网卡、Tailscale、局域网网络、分类、计时），`startFixture` 第 4 个参数传它。`rpc-device-remote.test.ts` 里会真去绑的局域网地址用 `10.255.255.253`，不用 `192.168.1.9`：开发机上可能真有这个地址，测试就真在局域网上听了。`cli-remote.test.ts` 的"有 daemon"一路用夹具加手写的 pid 锁。
+15. **第 6 节第 2 步没在 Tailscale 地址上真开**：这片的规矩是不在这台机器的 Tailscale、公网地址上开监听，改用 `test/manual/remote-probe.ts` 在 `127.0.0.2:17767`（注入的分类把它当局域网地址）上跑同样的步骤；真开 Tailscale 地址留到真机验收。第 3 步（`10.255.255.254` 等待地址、`daemon stop` 很快退出）用真 daemon 跑了。
