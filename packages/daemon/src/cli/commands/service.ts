@@ -8,6 +8,7 @@ import { classifyServiceFailure, serviceActionPath, writeServiceActionRecord, ty
 import type { ServiceAdapter, ServiceTransactionOutcome } from '../../service/adapter';
 import { describeServiceExits } from '../../service/exits';
 import { enableFailed, enableLinger, lingerLine, readLinger, userManagerProblem, type Linger, type UserManagerProblem } from '../../service/linux-session';
+import { inBotSession } from '../../config/session-env';
 import { CommandError } from '../command-error';
 import { print, withDaemon, type Daemon, type Io } from '../daemon-client';
 import { rootWarning } from '../root-warning';
@@ -229,8 +230,9 @@ function linuxServiceSteps(): LinuxServiceSteps {
   };
 }
 
-export async function runServiceStatus(json: boolean, adapter?: Pick<ServiceAdapter, 'status'>): Promise<void> {
-  const status = await (adapter ?? (await import('../../service/adapter')).getServiceAdapter()).status();
+/** In a Bot's session the daemon in the lock counts as running unasked: asking it who it is sends `local-credential` (devices-4a 4.9). */
+export async function runServiceStatus(json: boolean, adapter?: Pick<ServiceAdapter, 'status'>, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const status = await (adapter ?? (await import('../../service/adapter')).getServiceAdapter({ trustLock: inBotSession(env) })).status();
   if (json) {
     process.stdout.write(`${JSON.stringify({ ok: true, ...status })}\n`);
     return;

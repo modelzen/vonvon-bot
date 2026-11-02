@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { paths } from '../config/paths';
+import { withoutSessionMarkers } from '../config/session-env';
 import { ApiCleanupError } from '../server/http';
 import { closeOwnedProviderProcesses, unconfirmedProviderPids } from '../agent/owned-process';
 
@@ -221,7 +222,7 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
           ? `vonvon-bot-update-${randomBytes(8).toString('hex')}.scope` : undefined;
         const child = spawn(scope ? 'systemd-run' : process.execPath,
           scope ? ['--user', '--scope', '--quiet', `--unit=${scope}`, process.execPath, ...args] : args,
-          { detached: true, stdio: 'ignore', env: { ...process.env } });
+          { detached: true, stdio: 'ignore', env: withoutSessionMarkers(process.env) });
         let markDead: () => void = () => {};
         const death = new Promise<void>(resolve => { markDead = resolve; });
         const settled = scope ? new Promise<void>(resolve => { settleHelper = resolve; }) : Promise.resolve();

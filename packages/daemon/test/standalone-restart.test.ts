@@ -14,7 +14,7 @@ import { NEW_OWNER_MS, ROLLBACK_OWNER_MS, runSamePortRestartHelper, STARTING_OWN
 import { acquireUpdateLock, finishOwnedUpdate, readUpdateStatus, writeUpdateStatus, type UpdateStatus } from '../src/service/update';
 import { settleUpdateAtStartup } from '../src/service/standalone-update';
 import { switchCurrent } from '../src/service/current-release';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import type { PidLockInfo } from '../src/server/pid-lock';
 
 // main 必败: the helper wrote done for any new PID, whatever version it ran, and never switched back (server-3 4.6)
@@ -210,5 +210,26 @@ describe('standalone update restart helper', () => {
     await run();
     expect(seen).toMatchObject({ phase: 'restarting', detail: 'waiting', to: '1.0.1', previous: '1.0.0' });
     expect(seen!.at).toBeGreaterThan(record.at);
+  });
+  // devices-4a R3: a host started inside a Bot's session carries its markers; the `daemon start` its helper runs does not,
+  // or the command line would refuse it as local-only (exit 4) and leave no daemon
+  it.skipIf(process.platform === 'win32')('starts the daemon without the session markers the helper inherited', async () => {
+    const root = join(paths.appDir, 'markers');
+    const bin = join(root, 'releases', '1.0.1', 'node', 'bin');
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, 'node'), `#!/bin/sh\nenv > '${join(root, 'env.txt')}'\n`, { mode: 0o755 });
+    vi.stubEnv('FEISHU_CODEX_BRIDGE', '1');
+    vi.stubEnv('VONVON_SESSION', `vs1.ses_0123456789abcdef.${'a'.repeat(43)}`);
+    try {
+      let reads = 0;
+      // the real `start`: no daemon at first, then one at the port
+      await runSamePortRestartHelper({ port: 43119, oldPid: old.pid, oldStartedAt: old.startedAt }, {
+        readLock: async () => (++reads === 1 ? null : owner('1.0.1')), running: () => true, verify: async () => {},
+        installRoot: async () => root, readCurrentVersion: async () => '1.0.1',
+      });
+    } finally { vi.unstubAllEnvs(); }
+    const env = await readFile(join(root, 'env.txt'), 'utf8');
+    expect(env).toContain(`VONVON_HOME=${paths.appDir}\n`);
+    expect(env).not.toMatch(/^(FEISHU_CODEX_BRIDGE|VONVON_SESSION)=/m);
   });
 });

@@ -32,9 +32,9 @@ function harness(reply: (request: ScheduleRequest) => ScheduleReply | Promise<Sc
     close: async () => {},
   }) as unknown as VonvonClient);
   const daemon: Daemon = fn => withDaemon(fn, connect, timeouts);
-  const run = (action: ScheduleAction, target: ScheduleTarget, json = false, env: NodeJS.ProcessEnv = {}) =>
-    runSchedule(action, { group: '研发群', ...target }, { json, write: (text: string) => { out += text; } }, daemon, env);
-  const failure = async (action: ScheduleAction, target: ScheduleTarget, env?: NodeJS.ProcessEnv) => commandFailure(await run(action, target, true, env).then(() => undefined, (error: unknown) => error));
+  const run = (action: ScheduleAction, target: ScheduleTarget, json = false) =>
+    runSchedule(action, { group: '研发群', ...target }, { json, write: (text: string) => { out += text; } }, daemon);
+  const failure = async (action: ScheduleAction, target: ScheduleTarget) => commandFailure(await run(action, target, true).then(() => undefined, (error: unknown) => error));
   return { run, failure, requests, connect, out: () => out, json: () => JSON.parse(out) };
 }
 const created = (request: ScheduleRequest): ScheduleReply => request.action === 'list' ? tasks([]) : { kind: 'task', task: task() };
@@ -242,11 +242,7 @@ describe('exit codes (s47)', () => {
     expect(await lost.failure('list', {})).toMatchObject({ exitCode: 1, error: { kind: 'failed', message: '读取任务失败：Bot 进程 15000ms 未响应（可能正忙或已假死）' } });
   });
 
-  it('refuses in a Bot session before connecting', async () => {
-    const h = harness(created);
-    expect(await h.failure('list', {}, { VONVON_SESSION: 'abc' })).toMatchObject({ exitCode: 4, error: { kind: 'refused' } });
-    expect(h.connect).not.toHaveBeenCalled();
-  });
+  // A Bot session's schedule commands are the daemon's to judge now (devices-4a 4.9): cli-bot-session.test.ts
 });
 
 describe('vonvon schedule through the CLI entry', () => {

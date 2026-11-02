@@ -18,6 +18,11 @@ export interface MemoryAdminDeps {
   /** `bots/<appId>/` of a bot that exists; throws for one that does not */
   botDirectory?: (botId: string) => Promise<string>;
   origin?: 'ui' | 'cli';
+  /**
+   * devices-4a 4.8: a Bot session's turn (its role; D4b adds the openId), which writes as itself: trusted only for the
+   * owner's or an admin's turn, as the memory tools write (memory-authority's actorOf). D4b also makes it where the memory lands.
+   */
+  actor?: MemoryActor;
   now?: () => number;
 }
 
@@ -89,15 +94,17 @@ export async function memoryAction(request: MemoryRequest, deps: MemoryAdminDeps
     await markSeen(deps.library ?? libraryLocation(), request.page, at);
     return { kind: 'seen', at };
   }
-  const actor: MemoryActor = { role: origin === 'cli' ? 'cli' : 'desktop' };
+  const actor: MemoryActor = deps.actor ?? { role: origin === 'cli' ? 'cli' : 'desktop' };
+  // The owner at the desktop or the terminal is trusted; a session's turn only if it was the owner's or an admin's.
+  const trust = !deps.actor || deps.actor.role === 'owner' || deps.actor.role === 'admin' ? 'trusted' : 'untrusted';
   const botIdOf = (scope: MemoryScopeRef): string => scope.kind === 'project' ? '' : scope.botId;
   const store = await memoryStoreFor(request.scope, deps);
   const checked = (reply: MemoryReply): MemoryReply => memoryReplySchema.parse(reply);
   switch (request.type) {
     case 'list': return checked(await listWithMarks(store, request.scope, deps));
     case 'add': return checked(replyOf(await store.add({
-      text: request.text, ...(request.branch === undefined ? {} : { branch: request.branch }), trust: 'trusted', actor,
-      source: { via: origin, botId: botIdOf(request.scope), actorRole: actor.role },
+      text: request.text, ...(request.branch === undefined ? {} : { branch: request.branch }), trust, actor,
+      source: { via: origin, botId: botIdOf(request.scope), actorRole: actor.role, ...(actor.openId ? { actorOpenId: actor.openId } : {}) },
     })));
     case 'edit': return checked(replyOf(await store.edit({
       itemId: request.itemId, revision: request.revision, actor,
