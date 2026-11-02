@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useState} from 'react';
 import type {AgentId, ContextPreviewReply, GroupId, MemoryItem} from '@vonvon/protocol';
-import {useClient} from './client-context';
+import {useActiveDevice, useClient} from './client-context';
+import {whereName} from './device-copy';
 import {Button, InlineNotice} from './reference/components/ui';
 import {groupByBranch, injectedLine, INSTRUCTION_FILES_NOTE, judgeItems, judgeLines, lastTurnLines, newestTurn, panelRows, type PanelTarget} from './context-model';
 
@@ -37,7 +38,8 @@ export function ContextPanelView({title, groupId, reply, error, details, open, o
   const session = reply?.session;
   const turn = session?.lastTurn;
   const lines = turn ? lastTurnLines(turn) : undefined;
-  const judge = reply ? judgeLines(reply.judge) : [];
+  const where = useActiveDevice();
+  const judge = reply ? judgeLines(reply.judge, where.isRemote ? `${whereName(where)}上的` : '本机') : [];
   return <section className="context-panel" aria-label="模型看到什么">
     <h3>模型看到什么（{title}）</h3>
     {error && <InlineNotice title="读取未完成" tone="warning">{error}</InlineNotice>}

@@ -53,6 +53,7 @@ import { permissionTable, tableEnv, tierInfo, unavailableTierReply } from '../ag
 import { errorKindFromText, type AgentErrorKind } from '../agent/error-kind';
 import { feishuError, scopeDenial } from '../utils/feishu-error';
 import type { NotReplied, NotRepliedReason, ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
+import { FULL_ACCESS_WARNING } from '@vonvon/protocol';
 import type { JudgeErrorKind, JudgeDecision, JudgeResult, JudgeVariant } from '../judge/types';
 import { JUDGE_INPUT_LIMITS, oneLine } from '../judge/prompt';
 import { deniedScopeName, errorDetail, fitDetail, reportAttention, reportDecision, reportLatestAction, reportNotReplied, reportScopeDenied, type ScheduleDiagnosticEvent } from './diagnostics';
@@ -239,7 +240,7 @@ import { resolveProjectsRootDir } from '../config/directories';
 import { loadBots } from '../config/bots';
 import { admitDirectorySettings } from '../config/directories';
 import { DirectoryError, directoryFailure } from '../config/directory-errors';
-import { botBackendId, groupBackendId, resolveCommentsExecution, resolveExecution, resolveModelPreference, executionSessionProfile, projectModelAllowed, projectModelCatalog, type ModelPreference } from '../config/execution';
+import { botBackendId, groupBackendId, groupPermission, resolveCommentsExecution, resolveExecution, resolveModelPreference, executionSessionProfile, projectModelAllowed, projectModelCatalog, type ModelPreference } from '../config/execution';
 import { fileClaimMode, messageLink, OutboundFiles } from './outbound-files';
 import { getSecret } from '../config/keystore';
 import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
@@ -6460,12 +6461,16 @@ export function createOrchestrator(
         }
         // 共享层（admin/ops.ts）：落盘 + 驱逐活跃会话让新档立即生效；写后回读，
         // 卡片与盘上一致——与 Web 控制台的 setPermissionMode 完全同一条路径。
+        const wasFull = p ? groupPermission(p).effect.mode === 'full' : false;
         const r = await performSetPermissionMode({ projectName: name, mode, backendFor, evictLiveSessionsForChat });
         if (!r.ok) return;
         log.info('console', 'permission', { project: name, mode });
         await sendManagedCard(channel, evt.chatId, buildProjectSettingsCard(r.project, backendDisplayName(r.project.backend))).catch((e) =>
           log.fail('console', e, { phase: 'permission-result' }),
         );
+        // devices 第 15 节：把群改成完全访问时带上这句。
+        if (mode === 'full' && !wasFull)
+          await channel.send(evt.chatId, { markdown: FULL_ACCESS_WARNING }).catch(e => log.fail('console', e, { phase: 'permission-result' }));
       })());
     })
     // 🤖 默认模型/强度：打开下拉表单子卡（按项目后端实时列模型；选完提交）。

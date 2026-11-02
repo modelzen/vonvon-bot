@@ -44,9 +44,9 @@ export async function snapshotProviderJudge(providerId:JudgeProvider,deps:Depend
   if (providerId!=='codex-appserver'&&providerId!=='claude-agent') throw new Error('不支持这个决策模型 Provider。');
   const backend=(deps.backendFor??createBackend)(providerId);
   if (validate) {
-    if (backend.doctor && !(await backend.doctor({force:true})).ok) throw new Error('决策 Provider 尚未安装或未登录。');
+    if (backend.doctor && !(await backend.doctor({force:true})).ok) throw new Error('决策 Provider 还没装好或没配置好。');
     const login=await backend.loginStatus?.({refresh:true});
-    if (!login||(login.state!=='signedIn'&&login.state!=='notRequired')) throw new Error('决策 Provider 尚未登录或无法确认登录状态。');
+    if (!login||(login.state!=='signedIn'&&login.state!=='notRequired')) throw new Error('决策 Provider 没配置好，或者确认不了。');
   }
   // Non-smart groups still take a snapshot, but do not need a usable/authenticated judge yet.
   const listed=backend.peekModels?.()??(validate?await backend.listModels():undefined);

@@ -7,7 +7,6 @@ import { devicesPath } from '../src/remote/files';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
-import { CodexSetupService } from '../src/agent/codex-appserver/setup';
 import type { startApi as startApiType } from '../src/server/http';
 import * as snapshotModule from '../src/server/snapshot';
 
@@ -31,25 +30,25 @@ function gate() {
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 function causes(error: unknown): unknown[] { return error instanceof AggregateError ? error.errors.flatMap(causes) : [error]; }
 
-it('drains an authenticated Codex install through its cleanup gate and shares reentrant close', async () => {
+it('drains through the service cleanup gate with a client connected and shares reentrant close', async () => {
   const cleanup = gate();
-  let signal: AbortSignal | undefined;
-  const tools = new CodexSetupService({ install: cancellation => { signal = cancellation; return cleanup.promise; } });
+  let toolsClosing = false;
+  // The Codex probe's cleanup, held open (devices-ui-2 4.9: the install job this used is gone).
+  const tools = { close: () => { toolsClosing = true; return cleanup.promise; } };
   let reentered: Promise<void> | undefined;
   let api: Awaited<ReturnType<typeof startApiType>> | undefined;
   const close = vi.fn(() => { reentered = api?.close(); return tools.close(); });
-  const fixture = await startFixture(fakeService({ startCodexJob: type => tools.start(type), codexJob: id => tools.get(id), close }));
+  const fixture = await startFixture(fakeService({ close }));
   api = fixture.api;
   const client = await socketClient(api.port, fixture.credential);
   let settled = false;
   try {
     await client.ready();
-    expect(await client.call({ type: 'request', id: 'install', method: 'command', payload: { type: 'installCodex' } })).toMatchObject({ type: 'response', payload: { kind: 'started' } });
     const closing = api.close();
     void closing.then(() => { settled = true; });
     expect(api.close()).toBe(closing);
     await tick();
-    expect(signal?.aborted).toBe(true);
+    expect(toolsClosing).toBe(true);
     expect(reentered).toBe(closing);
     expect(close).toHaveBeenCalledOnce();
     expect(settled).toBe(false);
@@ -59,7 +58,6 @@ it('drains an authenticated Codex install through its cleanup gate and shares re
     expect(close).toHaveBeenCalledOnce();
   } finally {
     cleanup.release();
-    await tools.close();
     await client.close();
     await fixture.close();
   }

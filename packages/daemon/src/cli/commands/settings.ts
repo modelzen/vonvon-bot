@@ -388,7 +388,8 @@ export async function runSettingsSet(assignments: readonly string[], target: Tar
     : known?.kind === 'llm' && known.backend ? `（${toolLabel(known.backend)} 的群用）` : '';
   const saved = stored ? `judge.selection = ${show(stored)}${whose}`
     : Object.entries(patch).map(([key, value]) => `${section}.${key} = ${show(value)}`).join('、');
-  print(io, [`已保存 ${saved}。`, ...result.effects.map(effect => effect.detail)], { ...result, ...(target.reason ? { reason: target.reason } : {}) });
+  // `warnings` (a group turned 完全访问, devices 第 15 节) print after the effects and stay in --json.
+  print(io, [`已保存 ${saved}。`, ...result.effects.map(effect => effect.detail), ...result.warnings ?? []], { ...result, ...(target.reason ? { reason: target.reason } : {}) });
 }
 
 export async function runSettingsAccess(target: Target, io: Io, daemon: Daemon = withDaemon): Promise<void> {

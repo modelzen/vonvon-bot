@@ -27,7 +27,10 @@ vi.mock('react', async original => {
     },
   };
 });
-vi.mock('../src/client-context', () => ({useClient: () => harness.client}));
+vi.mock('../src/client-context', async original => {
+  const actual = await original<typeof import('../src/client-context')>();
+  return {...actual, useClient: () => harness.client, useActiveDevice: () => actual.LOCAL_ACTIVE_DEVICE};
+});
 vi.mock('../src/settings/useDecisionCatalogs', () => ({useDecisionCatalogs: () => ({catalogs: {}, refresh: vi.fn()})}));
 vi.mock('../src/settings/DraftGuard', () => ({useDraft: () => {}}));
 type Element = ReactElement<Record<string, any>>;

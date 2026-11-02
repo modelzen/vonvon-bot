@@ -1,7 +1,7 @@
 import {createElement} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, it} from 'vitest';
-import {agentSchema, collaborationRequestSchema, toolStateSchema} from '@vonvon/protocol';
+import {agentSchema, collaborationRequestSchema, FULL_ACCESS_WARNING, toolStateSchema} from '@vonvon/protocol';
 import {RpcError} from '@vonvon/client/browser';
 import {CONVERSATIONS, CREATION_UNKNOWN, JoinGroupDialog, CreationLockNotice, conversationsFor, creationFailure, keptResponse, projectNameProblem, sentResponse, shownResponse, judgeSetupProblem, initialGroupProvider} from '../src/JoinGroupDialog';
 import {canSaveAll, DraftGuardProvider} from '../src/settings/DraftGuard';
@@ -100,9 +100,13 @@ it('s36b2: shows topic binding choices and read-only permissions when binding', 
   expect(topic).toContain('只读（不联网）');
   expect(topic).not.toContain('网络关闭');
   expect(topic).not.toContain('连接后，在群设置中改为完全访问才能使用。');
+  expect(topic).not.toContain(FULL_ACCESS_WARNING);
   const create = render(false);
   expect(create.match(/role="radio"/g)).toHaveLength(3);
   expect(create).not.toContain('只读（不联网）');
+  // devices-ui-2 4.10: a new group is 完全访问, so creating says so with the warning (main 必败).
+  expect(create).toContain('完全访问');
+  expect(create).toContain(FULL_ACCESS_WARNING);
   expect(render(true, false).match(/role="radio"/g)).toHaveLength(3);
 });
 

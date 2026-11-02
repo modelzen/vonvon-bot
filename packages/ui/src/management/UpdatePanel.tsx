@@ -1,67 +1,38 @@
 import type {ReactNode} from 'react';
 import {ChevronRight,ArrowUpRight} from 'lucide-react';
-import {useEffect, useState} from 'react';
+import {useState} from 'react';
 import {useDesktopUpdate, useDesktopUpdateOperation} from '../desktop-update';
 import {Button} from '../reference/components/ui';
-import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {useDraftGuard} from '../settings/DraftGuard';
-import {coreUpdateStatusText, type CoreUpdateStatus, type MachineReply, type MachineRequest, type MachineRequestHandler} from '@vonvon/protocol';
+import type {MachineRequestHandler} from '@vonvon/protocol';
 import '../settings/settings.css';
 import './application.css';
 import {settingAnchor} from '../search';
-import {useShellCapabilities} from '../client-context';
+import {LOCAL_ACTIVE_DEVICE, useShellCapabilities, type ActiveDevice} from '../client-context';
+import {hostTitle} from '../device-copy';
+import {ServerUpdateCard} from './ServerUpdateCard';
 import {changelogUrl, downloadPageUrl, openExternalUrl} from '../url-actions';
 
-type CoreUpdate = Extract<MachineReply, {type: 'coreUpdate'}>;
-/** Installs whose daemon updates itself (devices 6.5): the standalone server and the global npm package. `bundled` is U4's. */
-export const coreUpdatable = (kind: string | undefined): boolean => kind === 'standalone' || kind === 'global-npm';
-export const canApplyCoreUpdate = (core: CoreUpdate | undefined): boolean => Boolean(core && coreUpdatable(core.distribution.kind) && core.hasUpdate);
-export const coreStatusLine = (status: CoreUpdateStatus | null): string =>
-  status ? `${coreUpdateStatusText(status)}${status.from && status.to ? ` · ${status.from} → ${status.to}` : ''}` : '尚无更新记录';
-const ended = (status: CoreUpdateStatus | null | undefined): boolean => status?.phase === 'done' || status?.phase === 'error';
-// No record is nothing to follow: following it would keep the update button off for good (review 207).
-const running = (status: CoreUpdateStatus | null): boolean => status !== null && !ended(status);
+export {canApplyCoreUpdate, coreStatusLine, coreUpdatable} from './ServerUpdateCard';
 
-/** `attached` no longer gates anything (devices 6.5): a standalone daemon is never one the desktop app attached to. */
-export function UpdatePanel({request, externalCoreAvailable,version,device,children,advancedSettings}: {request: MachineRequestHandler; attached?: boolean; externalCoreAvailable:boolean; version:string;device:string;children:ReactNode;advancedSettings:ReactNode}) {
+/** devices-ui-2 4.4.1: on a remote device the app card is this computer's app. The snapshot is the other device's, so its
+ * version is not this app's; the shell's own version (`DevicesState.client.version`) is. */
+export function appCardFor(device: Pick<ActiveDevice, 'isRemote'>, application: {platform: string; version: string}, clientVersion: string | undefined): {appTitle?: string; device: string; version: string} {
+  return device.isRemote ? {appTitle: '这台电脑上的 Vonvon Bot 应用', device: '这台电脑', version: clientVersion ?? application.version}
+    : {device: hostTitle(application.platform), version: application.version};
+}
+
+/** `attached` no longer gates anything (devices 6.5): a standalone daemon is never one the desktop app attached to.
+ * devices-ui-2 4.4.1: on a remote device the app card is this computer's (`appTitle`, `device`, `version`) and `server`
+ * is that device's `ServerUpdateCard`. */
+export function UpdatePanel({request, externalCoreAvailable,version,device,children,advancedSettings,appTitle = 'Vonvon Bot',server}: {request: MachineRequestHandler; attached?: boolean; externalCoreAvailable:boolean; version:string;device:string;children:ReactNode;advancedSettings:ReactNode;appTitle?: string;server?: ReactNode}) {
   const shell = useShellCapabilities();
   const {navigate} = useDraftGuard();
   const desktopStore = useDesktopUpdate();
   const [desktop, setDesktop] = desktopStore;
   const desktopOperation = useDesktopUpdateOperation(desktopStore);
-  const [core, setCore] = useState<CoreUpdate>();
-  const [coreStatus, setCoreStatus] = useState<CoreUpdateStatus | null>();
-  const [following, setFollowing] = useState(false);
-  // A standalone update answers at once and runs on; its progress is read until it ends.
-  useEffect(() => {
-    if (!following) return;
-    let active = true;
-    const timer = setInterval(() => void request({type: 'coreUpdateStatus'}).then(reply => {
-      if (!active || reply.type !== 'coreUpdateStatus') return;
-      setCoreStatus(reply.status);
-      if (!running(reply.status)) setFollowing(false);
-    }, () => undefined), 1000);
-    return () => {active = false; clearInterval(timer);};
-  }, [following, request]);
   const [desktopMessage, setDesktopMessage] = useState('');
-  const [coreMessage, setCoreMessage] = useState('');
-  const [coreBusy, setBusy] = useState(false);
-  const busy = coreBusy || Boolean(desktopOperation.phase);
-  const run = async (operation: MachineRequest, channel: 'desktop' | 'core') => {
-    setBusy(true);
-    const report = channel === 'desktop' ? setDesktopMessage : setCoreMessage;
-    try {
-      const reply = await request(operation);
-      if (reply.type === 'coreUpdate') setCore(reply);
-      if (reply.type === 'done') report(reply.message);
-      if (reply.type === 'done' && operation.type === 'applyCoreUpdate' && core?.distribution.kind === 'standalone') setFollowing(true);
-      if (reply.type === 'coreUpdateStatus') { setCoreStatus(reply.status); report(''); if (running(reply.status)) setFollowing(true); }
-    } catch (error) {
-      report(error instanceof Error ? error.message : '更新失败');
-    } finally {
-      setBusy(false);
-    }
-  };
+  const busy = Boolean(desktopOperation.phase);
   const percent = desktop?.downloadProgress ? Math.floor(desktop.downloadProgress.percent) : undefined;
   const desktopState = desktopOperation.phase === 'downloading' ? percent === undefined ? '正在下载更新…' : `正在下载更新 · ${percent}%`
     : desktopOperation.phase === 'installing' ? '正在安装并重启…'
@@ -76,7 +47,7 @@ export function UpdatePanel({request, externalCoreAvailable,version,device,child
     <section className="application-update-card" aria-label="软件更新" id={settingAnchor('软件更新')}>
       <div className="application-update-main">
         <img className="application-app-icon" src="./vonvon-logo.png" alt=""/>
-        <div className="application-app-copy"><strong>Vonvon Bot</strong><span>{device} · v{desktop?.current ?? version}</span></div>
+        <div className="application-app-copy"><strong>{appTitle}</strong><span>{device} · v{desktop?.current ?? version}</span></div>
         <Button size="sm" disabled={busy || !shell?.checkDesktopUpdate} onClick={() => {if(shell?.checkDesktopUpdate) void desktopOperation.run(shell.checkDesktopUpdate, 'checking');}}>检查更新</Button>
       </div>
       <div className="application-update-status">
@@ -93,21 +64,12 @@ export function UpdatePanel({request, externalCoreAvailable,version,device,child
       {!shell?.checkDesktopUpdate && <p className="application-update-message">桌面更新由桌面版提供。</p>}
     </section>
     {!desktop && <p className="application-update-footnote">检查更新不会自动安装。</p>}
+    {server}
     {children}
     <details className="today-advanced-settings application-advanced">
       <summary>高级运行设置<span>{externalCoreAvailable ? '外部程序更新、后台服务与执行程序' : '后台服务与执行程序'}</span><ChevronRight size={14}/></summary>
       <div>
-    {externalCoreAvailable && <SettingsGroup id={settingAnchor('外部 Core / CLI')} label="外部 Core / CLI" footer="更新外部 Core 不会更改桌面版本。">
-      <SettingsRow title="Core 来源" value={core ? (core.distribution.kind === 'global-npm' ? '全局 npm 安装' : core.distribution.kind === 'standalone' ? '独立安装的服务端' : '非全局 npm 安装') : '尚未检查'} />
-      {core && <SettingsRow title="当前版本" value={core.current} />}
-      {core && <SettingsRow title="可用版本" value={core.latest ?? '更新源不可用'} />}
-      <SettingsRow title="检查 Core 更新" trailing={<Button size="sm" disabled={busy} onClick={() => void run({type: 'checkCoreUpdate'}, 'core')}>检查 Core 更新</Button>} />
-      <SettingsRow title="更新外部 Core" trailing={<Button size="sm" disabled={busy || following || !canApplyCoreUpdate(core)} onClick={() => void run({type: 'applyCoreUpdate'}, 'core')}>更新外部 Core</Button>} />
-      <SettingsRow title="更新进度" trailing={<Button size="sm" disabled={busy} onClick={() => void run({type: 'coreUpdateStatus'}, 'core')}>查看 Core 更新进度</Button>} />
-      {coreStatus?.progress && !ended(coreStatus) && <progress className="application-update-progress" max={coreStatus.progress.total} value={coreStatus.progress.transferred} aria-label="Core 更新下载进度"/>}
-      {coreStatus !== undefined && <p className="settings-operation-message" role="status">{coreStatusLine(coreStatus)}</p>}
-      {coreMessage && <p className="settings-operation-message" role="status">{coreMessage}</p>}
-    </SettingsGroup>}
+    {externalCoreAvailable && <ServerUpdateCard variant="local-advanced" request={request} where={LOCAL_ACTIVE_DEVICE} disabled={busy}/>}
     {advancedSettings}
     </div></details>
   </>;

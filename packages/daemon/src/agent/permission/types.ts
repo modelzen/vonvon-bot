@@ -1,3 +1,4 @@
+import { FULL_ACCESS_WARNING } from '@vonvon/protocol';
 import type { PermissionMode } from '../types';
 import type { WindowsSandboxCapability } from '../codex-appserver/full-only';
 
@@ -19,6 +20,8 @@ export interface TierInfo {
   native: string;
   /** 有值时这一档不可用，展示原因。 */
   unavailable?: string;
+  /** 群的完全访问档带的警示（devices 第 15 节）。 */
+  warning?: string;
 }
 /** vonvon 自己的功能只看效果，不依赖 provider 原生设置的细节。 */
 export interface PermissionEffect { mode: Tier; network: boolean }
@@ -28,6 +31,8 @@ export interface TableEnv {
   codexWindowsSandbox?: WindowsSandboxCapability;
   fullOnly?: string;
   supportedModes?: readonly Tier[];
+  /** 给群算档位时为 true：完全访问档带上警示。私聊（bot 自己的设置）不带。 */
+  group?: boolean;
 }
 export class PermissionInputError extends Error {}
 export interface NativeChoice { value: string; label: string; native: string; hint?: string }
@@ -65,6 +70,7 @@ export function permissionTiers(env: TableEnv, native?: Record<Tier, string>): [
       : env.supportedModes && !env.supportedModes.includes(tier)
         ? { unavailable: '这个 provider 没有这一档。' }
         : {}),
+    ...(env.group && tier === 'full' ? { warning: FULL_ACCESS_WARNING } : {}),
   });
   return [row('qa'), row('write'), row('full')];
 }

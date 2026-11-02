@@ -902,7 +902,7 @@ it('rechecks a provider-only group before enabling smart mode', async () => {
   try {
     await updateProject('demo', { judge: { kind: 'provider', provider: 'codex-appserver' } });
     const revision = projectRevision((await getProjectByName('demo'))!);
-    await expect(app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' })).rejects.toThrow('尚未登录');
+    await expect(app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' })).rejects.toThrow('没配置好');
     expect((await getProjectByName('demo'))?.smart).not.toBe(true);
   } finally { await app.shutdown(); }
 });

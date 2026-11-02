@@ -47,6 +47,7 @@ import { createRemoteListeners, type RemoteListenerDeps, type RemoteListeners } 
 import { log } from '../core/logger';
 import { serveWebUi } from './web-ui';
 import { getPidLockInfo, type PidLockInfo } from './pid-lock';
+import { runtimeDistribution } from '../service/distribution';
 import { EnvironmentService, type EnvironmentServiceOptions } from '../environment/service';
 import { refreshCodexResolution } from '../agent/codex-appserver/locate';
 
@@ -82,11 +83,22 @@ type ServiceSeams = Pick<Parameters<typeof createServiceActionLauncher>[0], 'pla
 export type RemoteSeams = Partial<Pick<EnableDeps, 'interfaces' | 'tailscale' | 'networkIdentity' | 'classify'>> & Pick<RemoteListenerDeps, 'timers' | 'secureTimers'>;
 
 /**
+ * devices 4.5: what this daemon reports in a v2 server info: `remote` while an address is opened (D3); `session-scope`:
+ * Bot sessions' tokens and `--scope` (D4a). A daemon that updates itself says so (devices 6.5, devices-ui-2 4.11);
+ * `update.bundled` is U4's.
+ */
+export const capabilities = (distribution?: string, remoteOpen = false): string[] => [
+  'device', 'session-scope', ...remoteOpen ? ['remote'] : [],
+  ...distribution === 'standalone' ? ['update.standalone'] : distribution === 'global-npm' ? ['update.npm'] : [],
+];
+
+/**
  * devices-4a 4.7: what each connection gets of a published event. The owner all of it, its snapshot cut to its `--scope`
  * if it gave one; a Bot session whose token still stands, once it negotiated its scope, its own part of the snapshot and
- * nothing else; a connection of another protocol (the maintenance subset) none.
+ * nothing else; a connection of another protocol (the maintenance subset) none: a protocol 1 client parses a snapshot
+ * strictly, and a `windows` platform would break it (devices-ui-2 4.5).
  */
-const viewFor = (tokens: Pick<SessionTokens, 'active'>): PeerView => (peer, event) => {
+export const viewFor = (tokens: Pick<SessionTokens, 'active'>): PeerView => (peer, event) => {
   const principal = peer.principal;
   if (principal.kind === 'owner') return peer.scope && event.event === 'snapshot' ? { ...event, payload: filterSnapshot(event.payload, scopedOwner(peer.scope), peer.scope) } : event;
   if (principal.kind !== 'bot-session' || !tokens.active(principal.sessionId)) return null;
@@ -97,10 +109,14 @@ const viewFor = (tokens: Pick<SessionTokens, 'active'>): PeerView => (peer, even
 /**
  * `startedAt`: when this daemon process started (epoch ms), in every daemonStatus reply (devices 4.7). `sessionTokens`: the
  * Bot sessions' tokens the host issues to its bots (devices-4a 4.1), which a session's hello is checked against.
- * `askBot`: a session's Bot process, asked about a ★ request (devices-4b 4.3); without it those are refused.
+ * `askBot`: a session's Bot process, asked about a ★ request (devices-4b 4.3); without it those are refused. `distribution`:
+ * how this daemon was installed, for serverInfo's `update.*` (devices-ui-2 4.11).
  */
-export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number; sessionTokens?: SessionTokens; askBot?: AuthzDeps['askBot']; remote?: RemoteSeams }): Promise<DaemonApi> {
+export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number; sessionTokens?: SessionTokens; askBot?: AuthzDeps['askBot']; remote?: RemoteSeams; distribution?: () => Promise<{ kind: string }> }): Promise<DaemonApi> {
   const startedAt = options.startedAt ?? Math.round(performance.timeOrigin);
+  // How this daemon was installed, read once (it may ask npm) and kept; until it is known the server info says nothing of updates.
+  let distribution: string | undefined;
+  void (options.distribution ?? runtimeDistribution)().then(found => { distribution = found.kind; }, () => undefined);
   const sessionTokens = options.sessionTokens ?? createSessionTokens();
   /** What the bot-session checks read: a bot's bound groups and their sessions, from its files (the snapshot can be 5 s old). */
   const authzDeps: AuthzDeps = {
@@ -323,14 +339,11 @@ export async function startApi(options: { service: AdminService; port?: number; 
         if ((strikes.get(peer) ?? 0) >= MAINTENANCE_STRIKES) peer.close(4001, 'protocol_mismatch');
       }
     }
-    /** devices 4.5: what this daemon reports in a v2 server info: `remote` while an address is opened (D3); `session-scope`:
-     * Bot sessions' tokens and `--scope` (D4a). */
-    const capabilities = (): string[] => ['device', 'session-scope', ...(remote.status().length ? ['remote'] : [])];
     // devices 4.5: a protocol 1 client gets the three fields it parses strictly, with its own version, so a 0.8 client can still stop this daemon.
     const info = (peer: Peer) => peer.protocolVersion === 1
       ? serverInfoV1Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: 1 })
       : serverInfoV2Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION,
-        deviceName: identity.current.name, platform: hostPlatform(), capabilities: capabilities(), principal: principalWire(peer.principal) });
+        deviceName: identity.current.name, platform: hostPlatform(), capabilities: capabilities(distribution, remote.status().length > 0), principal: principalWire(peer.principal) });
     // devices-2 4.3: every server's connections in one hub, so a publish, a drain or a release reaches all of them; its
     // view gives each connection its part of an event whoever publishes it (devices-4a 4.7).
     const hub = createPeerHub({ detached: peer => { jobs.detach(peer); logs.detach(peer); }, view: viewFor(sessionTokens) });

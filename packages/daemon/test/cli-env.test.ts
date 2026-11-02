@@ -94,7 +94,7 @@ it('env scan reads the sign-in of each installed tool, and one failing read leav
     : { kind: 'auth', tool: (request as { tool: string }).tool, state: 'signedOut', message: '尚未授权' });
   await runEnvScan(human.io(), human.daemon);
   expect(human.out()).toBe([
-    'Codex  0.128.0（托管，有新版本 0.129.0）  没登录：在终端里运行 codex login', 'Claude  没装',
+    'Codex  0.128.0（托管，有新版本 0.129.0）  没配置好：在终端里运行 codex 配置（账号或自定义 API 都行）', 'Claude  没装',
     'lark-cli  1.2.3（系统里的，npm）  没登录：运行 vonvon env login lark-cli', '    npm install -g @larksuite/cli', ''].join('\n'));
 });
 

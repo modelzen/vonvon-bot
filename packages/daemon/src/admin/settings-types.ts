@@ -302,6 +302,8 @@ export type SettingsSave = {
   kind: 'saved';
   section: SettingsSectionView;
   effects: ApplyEffect[];
+  /** 给群选了完全访问时带 `FULL_ACCESS_WARNING`（devices 第 15 节）。 */
+  warnings?: string[];
 } | {
   kind: 'conflict';
   current: SettingsSectionView;
