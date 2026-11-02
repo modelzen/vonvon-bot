@@ -28,7 +28,6 @@ export function UpdatePanel({request, attached,externalCoreAvailable,version,dev
     const report = channel === 'desktop' ? setDesktopMessage : setCoreMessage;
     try {
       const reply = await request(operation);
-      if (reply.type === 'desktopUpdate') setDesktop(reply.update);
       if (reply.type === 'coreUpdate') setCore(reply);
       if (reply.type === 'done') report(reply.message);
       if (reply.type === 'coreUpdateStatus')

@@ -48,7 +48,7 @@ describe('daemon status', () => {
     writeFileSync(join(root, 'daemon.pid'), JSON.stringify({ pid: process.pid, startedAt: new Date(T0 - 1000).toISOString(), listen: '127.0.0.1:43119', version: '0.8.0' }));
     return root;
   };
-  const answer: DaemonStatus = { distribution: { kind: 'standalone', cliPath: '/opt/vonvon/bin/vonvon.mjs' }, installed: true, running: true, selfHosted: true, pid: process.pid, version: '0.8.0', supported: true, platformName: 'systemd', uptimeMs: 1000 };
+  const answer: DaemonStatus = { distribution: { kind: 'standalone', cliPath: '/opt/vonvon/bin/vonvon.mjs' }, installed: true, running: true, selfHosted: true, pid: process.pid, version: '0.8.0', supported: true, platformName: 'systemd', uptimeMs: 1000, startedAt: T0 - 1000 };
   const running = () => harness({
     admin: async () => ({ kind: 'daemonStatus', status: answer }),
     snapshot: async () => snapshot([agent('cli_a', '值班', { paused: { since: T0, crashes: 3 } })], {

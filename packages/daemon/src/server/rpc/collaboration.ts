@@ -67,7 +67,6 @@ export async function collaborationRpc(service: AdminService, directory: Directo
       throw new RpcError(error instanceof UsageError ? 'usage_unavailable' : 'operation_failed', error instanceof UsageError ? usageErrorMessages[error.kind] : '读取 Codex 用量失败');
     }
   }
-  if (request.action === 'openGroup') return unsupported();
   await requireRunningAgent(service, request.agentId);
   if (!service.collaboration) return unsupported();
   let operation: ServiceRequest;
