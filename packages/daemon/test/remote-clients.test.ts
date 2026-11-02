@@ -1,6 +1,9 @@
+import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createClientRegistry, type NewClient } from '../src/remote/clients';
 import { devicesPath } from '../src/remote/files';
@@ -185,4 +188,76 @@ it('keeps last-seen to write again when its write fails', async () => {
   expect(registry.get(a.id)).toMatchObject({ lastSeenAt: 200, lastAddress: '192.0.2.9:1' });
   await registry.close();
   expect(await file()).toMatchObject({ generation: 2, clients: [{ lastSeenAt: 200, lastAddress: '192.0.2.9:1' }] });
+});
+// Codex 审查任务 219: close() writes behind the changes already queued. 147b2619 必败: close() found nothing to write
+// before the queued add of a known key touched, so the disk kept 100/initial until a second close().
+it('writes on one close the last-seen of an add queued before it', async () => {
+  let now = 100;
+  const registry = await createClientRegistry(home, { now: () => now });
+  const a = await registry.add({ ...client(1), address: 'initial' });
+  now = 200;
+  const adding = registry.add({ ...client(1), address: 'latest' });
+  await registry.close();
+  expect(await adding).toMatchObject({ id: a.id, lastSeenAt: 200, lastAddress: 'latest' });
+  expect(await file()).toMatchObject({ generation: 2, clients: [{ id: a.id, lastSeenAt: 200, lastAddress: 'latest' }] });
+  expect((await createClientRegistry(home)).get(a.id)).toMatchObject({ lastSeenAt: 200, lastAddress: 'latest' });
+});
+// What is queued or touched while close() waits is written before it settles, and no timer is left. 147b2619 必败.
+it('writes on close what is queued and touched while it waits, and leaves no timer', async () => {
+  vi.useFakeTimers();
+  let now = 100;
+  const registry = await createClientRegistry(home, { now: () => now });
+  const a = await registry.add(client(1));
+  const b = await registry.add(client(2));
+  now = 200;
+  const closing = registry.close();
+  registry.touch(a.id, '192.0.2.1:1');
+  const adding = registry.add({ ...client(2), address: '192.0.2.2:2' });
+  const renaming = registry.rename(a.id, '笔记本');
+  await closing;
+  await Promise.all([adding, renaming]);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(await file()).toMatchObject({ clients: [
+    { id: a.id, name: '笔记本', lastSeenAt: 200, lastAddress: '192.0.2.1:1' },
+    { id: b.id, lastSeenAt: 200, lastAddress: '192.0.2.2:2' },
+  ] });
+});
+// Sonnet 复查 7674fb13: two close() at once, or one from an onChange listener while another runs, each took the other's
+// flush for a change queued after its own and flushed again forever, in microtasks alone. 7674fb13 必败. That spin starves
+// timers, vitest's timeout too, so it runs in a child process the parent kills after 10 s.
+it('settles close() called twice at once, or from a listener while one runs', async () => {
+  const entry = join(home, 'clients.cjs');
+  await build({ entryPoints: [fileURLToPath(new URL('../src/remote/clients.ts', import.meta.url))], outfile: entry,
+    bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
+  const script = `const { createClientRegistry } = require(${JSON.stringify(entry)});
+const { mkdtempSync } = require('node:fs'), { join } = require('node:path');
+const fresh = async () => {
+  const root = mkdtempSync(join(${JSON.stringify(home)}, 'data-'));
+  const r = await createClientRegistry(root, { now: () => 1 });
+  const a = await r.add({ name: 'x', publicKey: 'a'.repeat(43), clientKind: 'cli', address: 'first', invitedBy: 'local' });
+  return { root, r, a };
+};
+const disk = async (root, id) => {
+  const { lastAddress, revokedAt } = (await createClientRegistry(root)).get(id);
+  return { lastAddress, revoked: revokedAt !== undefined };
+};
+(async () => {
+  const out = {};
+  { const { root, r, a } = await fresh(); await Promise.all([r.close(), r.close()]); out.idle = await disk(root, a.id); }
+  { const { root, r, a } = await fresh(); r.touch(a.id, 'latest'); await Promise.all([r.close(), r.close(), r.close()]);
+    const first = await disk(root, a.id); r.touch(a.id, 'later'); await r.close(); out.touched = [first, await disk(root, a.id)]; }
+  { const { root, r, a } = await fresh(); r.onChange(() => { void r.close(); }); r.touch(a.id, 'latest'); await r.close();
+    out.listener = await disk(root, a.id); }
+  { const { root, r, a } = await fresh(); r.onChange(() => { void r.close(); }); await Promise.all([r.revoke(a.id), r.close()]);
+    out.listenerRevoke = await disk(root, a.id); }
+  process.stdout.write(JSON.stringify(out));
+})().catch(error => { console.error(error); process.exitCode = 1; });`;
+  const run = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL' });
+  expect({ signal: run.signal, status: run.status, stderr: run.stderr }).toEqual({ signal: null, status: 0, stderr: '' });
+  expect(JSON.parse(run.stdout)).toEqual({
+    idle: { lastAddress: 'first', revoked: false },
+    touched: [{ lastAddress: 'latest', revoked: false }, { lastAddress: 'later', revoked: false }],
+    listener: { lastAddress: 'latest', revoked: false },
+    listenerRevoke: { lastAddress: 'first', revoked: true },
+  });
 });

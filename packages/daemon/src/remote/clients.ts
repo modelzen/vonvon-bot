@@ -33,6 +33,10 @@ export interface ClientRegistry {
   touch(clientId: string, address: string): void;
   /** After each write: D3 closes the connections of the revoked clients. */
   onChange(listener: (generation: number, revoked: readonly string[]) => void): () => void;
+  /** Settles once everything is written: the changes queued before it, and those queued while it waits, with the last-seen
+   * they and touch() left. A failed last-seen write rejects it and keeps that last-seen for the next write or close().
+   * One called while another waits (from an onChange listener too) waits with it. Not an end: the registry stays usable,
+   * and a later close() writes what came after. */
   close(): Promise<void>;
 }
 const notFound = (clientId: string): RpcError => new RpcError('invalid_request', `没有这个客户端：${clientId}。运行 vonvon clients ls 查看。`);
@@ -89,12 +93,34 @@ export async function createClientRegistry(home: string, options: { now?: () => 
     turn = run.catch(() => undefined);
     return run;
   }
-  /** Writes the last-seen not written yet, if any; either way, settles after the changes made before it. */
-  const flush = (): Promise<void> => {
+  /** Writes the last-seen not written yet, if any, as a change of its own: what to write is decided at its turn, so it
+   * includes the touches of the changes queued before it (an add of a known key only touches). It does the timer's job,
+   * so it stops the timer then. */
+  const flush = (): Promise<void> => change(() => {
     clearTimeout(timer);
     timer = undefined;
-    return seen.size ? change(() => ({ value: undefined, write: seen.size > 0 })) : turn.then(() => undefined);
-  };
+    return { value: undefined, write: seen.size > 0 };
+  });
+  // What is queued or touched while close() waits is flushed too, not refused: it settles only when its last flush was the
+  // last change queued and no touch came during that write, so nothing is left unwritten and no timer runs. Adds and
+  // touches come from connections, which shutdown stops (http.ts closes the listener first), so the loop ends.
+  // One such loop at a time: a close() called while it runs, a listener's too, waits on that one. Two loops would each
+  // take the other's flush for a change queued after its own and flush again forever, in microtasks that starve timers
+  // and I/O. `closing` is cleared inside the loop, before it settles, so no close() called later gets one already done.
+  let closing: Promise<void> | undefined;
+  function close(): Promise<void> {
+    closing ??= (async () => {
+      try {
+        for (;;) {
+          const flushed = flush();
+          const last = turn;
+          await flushed;
+          if (turn === last && seen.size === 0) return;
+        }
+      } finally { closing = undefined; }
+    })();
+    return closing;
+  }
   function touch(clientId: string, address: string): void {
     if (!state.clients.some(entry => entry.id === clientId)) return;
     seen.set(clientId, { lastSeenAt: now(), lastAddress: address });
@@ -149,6 +175,6 @@ export async function createClientRegistry(home: string, options: { now?: () => 
     }),
     touch,
     onChange(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    close: flush,
+    close,
   };
 }

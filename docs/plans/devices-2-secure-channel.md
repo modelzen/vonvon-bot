@@ -95,6 +95,16 @@ export type SecureChannelErrorCode = 'device_identity_changed' | 'handshake_fail
 
 关闭码到错误（握手阶段、配对阶段、hello 阶段都用这张表；`CLOSE_CODES` 的键名就是 reason）：4005 在**消息 2 到来之前**关 → `device_identity_changed`（那个地址上有 vonvon，但它的静态公钥解不开我们用链接里 `pk` 加密的消息 1；IK 下服务端换了钥匙只能这样表现，设计 4.4 "不同即 `device_identity_changed`" 在 IK 里就是这条）；消息 2 到了但 `finish` 失败 → `handshake_failed`；4002 → `unknown_client`；4003 → `client_revoked`；4007 → `pairing_failed`；4004 → `rate_limited`；4006 → `remote_disabled`；4001 → `protocol_mismatch`；其他 → `closed`。
 
+**U1a 要用的补充**（2026-11-01，见 `devices-ui-1a-connections.md` 4.3；D2 实现时一起做）：
+1. `SecureConnection` 加 `closed: Promise<SecureChannelError>`：已建立的连接结束时 resolve 一次，码按上面这张表映射（4003 → `client_revoked`，4006 → `remote_disabled`，1001 → `closed`，保活超时 → `timeout`）；调用方自己 `close()` 时是 `closed`。桌面端靠它在 1 秒内认出"被撤销"，`ConnectionError` 里没有关闭码。
+2. `SecureChannelError` 加 `stage: 'handshake' | 'pairing' | 'hello' | 'open'`。桌面端靠它判断配对是不是在半路断的。
+3. 导出走子路径：
+   - `@vonvon/client/secure` → `transport-secure.js`。它的 client 用 `client.js` 的 `createClient`，所以 `ConnectionError` 和 `@vonvon/client/browser` 的是同一个类。
+   - `@vonvon/protocol/secure-channel` → `secure-channel.js`，**不从 `P/index.ts` 导出**。界面打浏览器包时会 import `@vonvon/protocol`，不能把 `node:crypto` 带进去。
+   - 两个子路径都要登记进各自的 `package.json` `exports`，不登记，import 时 Node 报 `ERR_PACKAGE_PATH_NOT_EXPORTED`（今天 client 只有 `.` 和 `./browser`，protocol 只有 `.`）：
+     - `packages/client/package.json`：`"./secure": { "types": "./dist/transport-secure.d.ts", "import": "./dist/transport-secure.js" }`；
+     - `packages/protocol/package.json`：`"./secure-channel": { "types": "./dist/secure-channel.d.ts", "import": "./dist/secure-channel.js" }`。
+
 ### 4.3 `D/server/peer-hub.ts`（从 `ws.ts` 抽出）
 
 ```ts
@@ -207,9 +217,15 @@ Mac 后验（整批）：U1a 的桌面端用 `webBinarySocket`/`nodeBinarySocket
 - 撤销瞬间的主动断连在 D3（本片只在下一条 RPC 时关），设计 13 节已把撤销验收挪到 D3。
 - Electron 侧 `webBinarySocket` 未在本片真机验证（U1a 用它），只有假 socket 单测。
 
-## 实现时和计划不一样的地方
+## 10. 审查后改了什么
 
-按 PR #640（计划补充，已合入 `claude/devices-integration`）更新后的本计划实现，本分支上这份计划是从 D1 分出来的旧版，没带那几条，留给合并（含 4.2 末尾"U1a 要用的补充"三条：`SecureConnection.closed`、`SecureChannelError.stage`、两个子路径导出，都做了）。和计划不一样的地方：
+2026-11-02，#640 上 Sonnet 审查 U1a–U4 计划时，提到本片的一条，接受：
+
+- U1a 要用的两个子路径 `@vonvon/client/secure`、`@vonvon/protocol/secure-channel` 没说要登记进 `package.json` 的 `exports`，不登记 import 就失败。4.2"U1a 要用的补充"第 3 条补上两条 `exports`。
+
+## 11. 实现时和计划不一样的地方
+
+按 PR #640（计划补充，已合入 `claude/devices-integration`，本分支已合并进来）更新后的本计划实现（含 4.2 末尾"U1a 要用的补充"三条：`SecureConnection.closed`、`SecureChannelError.stage`、两个子路径导出，都做了）。和计划不一样的地方：
 
 1. **`PeerHub` 的接口**：计划的 `add(peer, detach)` 改成三步：`attach(socket, detach)`（连接一建立就登记，握手没完成的也在里面，`closePeers`/`release` 关它们，直到 socket 的 close 事件）、`add(peer, socket)`（hello 通过后才进 `peers`，收 `publish`）、`remove(peer)`（连接自己的 detach 调一次，hub 再调 `detached(peer)`）。原因：今天的 `closePeers` 关的是 `WebSocketServer.clients`，包括还没认证的 socket；hub 不拥有 `WebSocketServer`，只能自己记 socket；`closeWhere` 也要从 peer 找到 socket。`beginDrain()` 返回 Promise（`http.ts` 的排空要等它），等的是 `track` 的请求和关 socket；`release()` 不等 `track` 的请求，和今天一样（计划第 5 节写"`release` 等 `track`"，按"行为不变"没改）。
 2. **`createSocketServer` 的 `hub` 可选**：不给就自己建一个（`detached` 也变成可选），返回值形状不变（`publish/beginDrain/release/close`）。这样直接调它的五个旧测试一行不用改。`http.ts` 建一个 hub 传进去。
@@ -228,7 +244,7 @@ Mac 后验（整批）：U1a 的桌面端用 `webBinarySocket`/`nodeBinarySocket
 15. **客户端拿到的 socket 可以已经在关**：服务端在读第一帧之前就关（4004 限流、D3 的 4006），客户端的 `open` 事件和关闭帧可能挨着到，`connectSecure` 开始时 socket 已是 CLOSING。这时不发消息 1、不抛，等它的 close 事件按码表给错误（stage `handshake`）；1 秒内没等到（早已关掉）就给 `closed`。
 16. **被撤销的钥匙在哪一段被告知**：服务端先回消息 2 再关 4003，客户端收到消息 2 就接着发 `pairRequest` 或 hello，所以它看到的 `client_revoked` 的 stage 是 `pairing` 或 `hello`，不是 `handshake`（探针第 3 步打印 `client_revoked at hello, close 4003`）。
 
-## 审查后改了什么
+## 12. 代码审查后改了什么
 
 Codex 两位审查者的 9 条，全部接受：
 
