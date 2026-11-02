@@ -15,7 +15,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-function fixture(externalVersion?: string) {
+function fixture(externalVersion?: string, options: { installTimeoutMs?: number } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'codex-environment-install-'));
   roots.push(home);
   const dataRoot = join(home, 'data');
@@ -31,6 +31,7 @@ function fixture(externalVersion?: string) {
     fs.writeFileSync(${JSON.stringify(npmEnv)}, JSON.stringify(process.env));
     const mode = fs.readFileSync(${JSON.stringify(control)}, 'utf8');
     if (mode === 'fail') process.exit(1);
+    if (mode === 'hang') { setInterval(() => {}, 1000); return; }
     const prefix = process.argv[process.argv.indexOf('--prefix') + 1];
     const binDir = process.platform === 'win32' ? prefix : path.join(prefix, 'bin');
     const pkg = path.join(prefix, process.platform === 'win32' ? 'node_modules' : 'lib/node_modules', '@openai/codex');
@@ -49,7 +50,7 @@ function fixture(externalVersion?: string) {
   vi.stubEnv('VONVON_NPM_CLI', '');
   const context = { home, dataRoot, env: { PATH: externalDir } };
   const resolve = vi.fn(() => refreshCodexResolution({ ...context, force: true }));
-  const service = new EnvironmentService({ home, getDataRoot: () => dataRoot, nodePath: process.execPath, npmPath: npm, path: externalDir, resolveCodex: resolve, fetchLatest: async () => null });
+  const service = new EnvironmentService({ home, getDataRoot: () => dataRoot, nodePath: process.execPath, npmPath: npm, path: externalDir, resolveCodex: resolve, fetchLatest: async () => null, ...options });
   services.push(service);
   const pointer = join(dataRoot, 'managed-tools', 'codex', 'current.json');
   return { service, home, npm, externalDir, dataRoot, control, trace, npmEnv, resolve, pointer, external, externalCalls };
@@ -138,4 +139,17 @@ it('gives npm the env file\'s names and the proxy names', async () => {
   const env = JSON.parse(readFileSync(f.npmEnv, 'utf8')) as Record<string, string | undefined>;
   expect(env).toMatchObject({ HTTPS_PROXY: 'http://127.0.0.1:7890', no_proxy: 'localhost', NPM_CONFIG_REGISTRY: 'https://registry.example/', HOME: f.home });
   for (const name of ['FEISHU_CODEX_BRIDGE', 'VONVON_SESSION', 'VONVON_ENV_FILE_NAMES', 'DAEMON_ONLY']) expect(env[name], name).toBeUndefined();
+});
+
+// 0.9.0 Linux acceptance (task 287): a 10-minute timeout said only 工具安装失败
+it('says an install that ran out of time did, and where a server\'s proxy goes', async () => {
+  const f = fixture(undefined, { installTimeoutMs: 300 });
+  writeFileSync(f.control, 'hang');
+  const reply = await f.service.run({ type: 'install', tool: 'codex' });
+  const message = `安装 10 分钟还没完成，已经停下，原工具仍可使用。可能是网络慢或连不上 npm：检查网络和代理后重试。要走代理的，把代理写进 ${join(f.dataRoot, 'env')}（一行一个，如 HTTPS_PROXY=http://127.0.0.1:7890），重启后台服务再装。`;
+  expect(reply).toEqual({ kind: 'refused', code: 'install-failed', message });
+  expect(await f.service.run({ type: 'toolInstallStatus' })).toMatchObject({ kind: 'toolInstall', operation: { kind: 'failed', message } });
+  expect(existsSync(f.pointer)).toBe(false);
+  writeFileSync(f.control, 'fail');
+  expect(await f.service.run({ type: 'install', tool: 'codex' })).toEqual({ kind: 'refused', code: 'install-failed', message: '工具安装失败，请检查网络连接或 npm 配置。' });
 });
