@@ -19,9 +19,26 @@ const asBytes = (text: string): string => Buffer.from(text, 'utf8').toString('la
 /** A startup file that is a link to nothing: writing through it would replace the link, so it is not written. */
 class DanglingLink extends Error {}
 
+const usable = (zdotdir: string | undefined): zdotdir is string => Boolean(zdotdir && isAbsolute(zdotdir));
+const under = (dir: string, name: string): string => `${dir.replace(/\/+$/, '')}/${name}`;
+
+/** The files setup writes the block into (protocol `shellStartupFiles`): bash's login file is the first that exists. */
 export async function startupFiles(home: string, zdotdir: string | undefined): Promise<string[]> {
   const exists = (path: string): Promise<boolean> => lstat(path).then(() => true, () => false);
-  return shellStartupFiles(home, { ...(zdotdir && isAbsolute(zdotdir) ? { zdotdir } : {}), exists });
+  return shellStartupFiles(home, { ...(usable(zdotdir) ? { zdotdir } : {}), exists });
+}
+
+/**
+ * Every file setup could have written the block into, whichever of them existed then: zsh's two under ZDOTDIR and
+ * under the home, and all three of bash's login files. A `.bash_profile` made after setup, or a ZDOTDIR set since,
+ * then does not hide the block setup wrote.
+ */
+export function everyStartupFile(home: string, zdotdir: string | undefined): string[] {
+  const zsh = usable(zdotdir) && under(zdotdir, '') !== under(home, '') ? [zdotdir, home] : [home];
+  return [
+    ...zsh.flatMap(dir => [under(dir, '.zshrc'), under(dir, '.zprofile')]),
+    ...['.bash_profile', '.bash_login', '.profile', '.bashrc'].map(name => under(home, name)),
+  ];
 }
 
 /** The file a write lands in: the path itself, or what its link names. */
@@ -90,10 +107,22 @@ export async function writePathBlock(files: string[], bin: string, breaks: Added
   return result;
 }
 
+/** Every block in `content`, in order: protocol `findCliPathBlock` again from where the one before ended. */
+function blocksIn(content: string): Array<{ start: number; end: number; text: string }> {
+  const blocks: Array<{ start: number; end: number; text: string }> = [];
+  for (let from = 0; ;) {
+    const found = findCliPathBlock(content.slice(from));
+    if (!found) return blocks;
+    blocks.push({ start: from + found.start, end: from + found.end, text: found.text });
+    from += found.end;
+  }
+}
+
 /**
- * Takes the block out of each file, only where it is the block for `bin`: the desktop app's block stays. The line break
- * `breaks` names goes too while the block still comes right after the text it was added to and nothing follows it;
- * once something has been written after the block, or the text before it has changed, the break stays.
+ * Takes every block for `bin` out of each file (a copy someone made of it too); other blocks, such as the desktop
+ * app's, stay. The line break `breaks` names goes too while the last of them still starts right where that text ended
+ * and nothing follows it; once something has been written after the block, or the text before it is no longer as long
+ * as it was, the break stays.
  */
 export async function removePathBlock(files: string[], bin: string, breaks: AddedBreaks = {}): Promise<ShellPathResult> {
   const result: ShellPathResult = { files: [], notes: [] };
@@ -101,11 +130,15 @@ export async function removePathBlock(files: string[], bin: string, breaks: Adde
   for (const file of files) {
     try {
       const changed = await rewrite(file, content => {
-        const found = findCliPathBlock(content);
-        if (found?.text.replace(/\n$/, '') !== ours) return content;
+        const found = blocksIn(content).filter(block => block.text.replace(/\n$/, '') === ours);
+        const last = found.at(-1);
+        if (!last) return content;
         const at = breaks[file];
-        if (at !== undefined && found.start === at + 1 && found.end === content.length && content[at] === '\n') return content.slice(0, at);
-        return spliceBlock(content, null);
+        if (at !== undefined && at >= (found.at(-2)?.end ?? 0) && last.start === at + 1 && last.end === content.length && content[at] === '\n') last.start = at;
+        let rest = '';
+        let from = 0;
+        for (const block of found) { rest += content.slice(from, block.start); from = block.end; }
+        return rest + content.slice(from);
       });
       if (changed) result.files.push(file);
     } catch (error) {

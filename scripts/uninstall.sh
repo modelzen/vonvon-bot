@@ -3,8 +3,8 @@
 #   sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/uninstall.sh)"
 # 停后台服务、删服务定义、去掉启动文件里的 PATH 那几行、删安装根 ~/.local/share/vonvon-bot/server。
 # 数据目录 ~/.vonvon-bot（Bot、记忆、设置）留着。
-# 退出码：0 卸好了或没装过；1 后台服务或直接启动的服务端没停下来（或确认不了它停了），什么文件都没删；
-# 2 不是 Linux、HOME 或安装根不对，什么都没删。
+# 退出码：0 卸好了或没装过；1 后台服务或直接启动的服务端没停下来（或确认不了它停了），什么文件都没删，
+# 或者安装根没删完（再运行一次会接着删）；2 不是 Linux、HOME 或安装根不对，什么都没删。
 # Mac、Windows 的服务端在桌面端安装包里，不由脚本装（owner 2026-11-01）：不是 Linux 就什么都不做。
 set -eu
 
@@ -47,9 +47,31 @@ checked_install_root() {
   fail 2 "$target 里没有服务端的标记（releases/*/standalone.json 或 current），不像是安装脚本装的，什么都没删。"
 }
 
+# 删到一半被打断（Ctrl-C、SSH 断开）或删不动时留下的安装根。这个名字只有本脚本会起，改名之前它是查过上面四条的
+# 安装根，所以名字就是它的标记（和安装脚本只删自己建的 releases/<版本>.part 一样）：里面的标记可能已经删掉了。
+# 不是符号链接、是目录才删。
+checked_leftover() {
+  checked_home
+  : "${HOME:?}"
+  left="$HOME/.local/share/vonvon-bot/server.removing"
+  if [ -L "$left" ]; then fail 2 "$left 是符号链接，不是卸载脚本留下的，什么都没删。"; fi
+  if [ -e "$left" ] && [ ! -d "$left" ]; then fail 2 "$left 不是目录，不是卸载脚本留下的，什么都没删。"; fi
+}
+
+remove_leftover() {
+  checked_leftover
+  if [ -d "$left" ]; then
+    rm -rf -- "$left" || fail 1 "上次卸载没删完的 $left 还是没删完。看一下上面 rm 说的原因，解决后再运行一次卸载。"
+  fi
+}
+
+# 先把安装根改名成同一目录下的 server.removing（rename 是原子的），再删它：删到一半被打断，留下的是 server.removing，
+# 再运行一次卸载会接着删；不会留下一个标记已经删掉、卸载认不出的安装根，安装脚本也不会把删了一半的版本当成解好的。
 remove_install_root() {
   checked_install_root
-  rm -rf -- "$target"
+  remove_leftover
+  mv -- "$target" "$left" || fail 1 "安装目录 $target 没能改名，没删。看一下上面 mv 说的原因，解决后再运行一次卸载。"
+  rm -rf -- "$left" || fail 1 "安装目录已经改名成 $left，但没删完。看一下上面 rm 说的原因，解决后再运行一次卸载，会接着删。"
 }
 
 # 能运行的 vonvon：先用 bin/vonvon；它坏了，就用 releases 里某个版本自带的 node 跑那个版本。
@@ -174,7 +196,14 @@ main() {
     if [ ! -O "$HOME" ]; then fail 2 "HOME（$HOME）不是 root 的，什么都没删。卸载哪个用户的服务端，就用那个用户自己运行，不要 sudo。"; fi
     say "你正在用 root 运行：卸载的是 root 这个账号下的服务端（$ROOT）。"
   fi
+  checked_leftover
   if [ ! -e "$ROOT" ] && [ ! -L "$ROOT" ]; then
+    # 改名之前服务已经停了，留下的只有文件
+    if [ -d "$left" ]; then
+      remove_leftover
+      say "已删完上次卸载没删完的 $left。数据目录 \`~/.vonvon-bot\`（Bot、记忆、设置）保留着；不要了就自己删。"
+      exit 0
+    fi
     say "没有装过服务端（$ROOT 不存在）。"
     exit 0
   fi
