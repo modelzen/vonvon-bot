@@ -2,7 +2,8 @@ import {GlowButton} from '../GlowButton';
 import {RefreshCw} from 'lucide-react';
 import {useState, type ReactNode} from 'react';
 import type {AgentId, Command, CommandResult, DesktopSnapshot} from '@vonvon/protocol';
-import {useClient, useShellCapabilities} from '../client-context';
+import {useActiveDevice, useClient, useShellCapabilities} from '../client-context';
+import {toolStepsOn} from '../device-copy';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Button, IconButton, StatusBadge} from '../reference/components/ui';
 import {openExternalUrl} from '../url-actions';
@@ -34,15 +35,15 @@ export type SetupChecklistProps = {
   onRegister: (agentId?: AgentId) => void;
   onOpenEnvironment: () => void;
   onNotice: (message: string, error: boolean) => void;
-  codexJobs: ReactNode;
   compact?: boolean;
   botsOnly?: boolean;
 };
 
-export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEnvironment, onNotice, codexJobs, compact = false, botsOnly = false}: SetupChecklistProps) {
+export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEnvironment, onNotice, compact = false, botsOnly = false}: SetupChecklistProps) {
   const client = useClient();
   const shell = useShellCapabilities();
   const {reads, recheck} = useSetupStatus(snapshot.agents.map(agent => agent.id));
+  const where = useActiveDevice();
   const claudeLogin = useClaudeLoginCheck(botsOnly ? [] : snapshot.tools, message => onNotice(message, true));
   const [working, setWorking] = useState<string>();
   async function act(action: StepAction, agentId?: AgentId) {
@@ -84,14 +85,15 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
           disabled={busy || !ready} onClick={() => void act(action, agentId)}>{action.label}</Button>)}
       </span>}/>;
   }
-  const tools = toolSteps(snapshot.tools, {claudeChecking: claudeLogin.checking});
+  // A remote device's tool steps say 「X」 where toolSteps says 本机 (review 244, as on the 状态与诊断 page).
+  const toolState = toolSteps(snapshot.tools, {claudeChecking: claudeLogin.checking});
+  const tools = {...toolState, steps: toolStepsOn(where, toolState.steps)};
   const linux = snapshot.application.platform === 'linux' ? linuxSteps(snapshot.tools) : [];
   const toolContent = <>
     <SettingsGroup label={compact ? '模型工具' : '后端'} footer="Codex 或 Claude 至少需要一个可用。"
       action={<StatusBadge tone={tools.ready ? 'success' : 'warning'} variant="pill">{tools.ready ? '可以用了' : compact ? '需要准备' : '还没有能用的后端'}</StatusBadge>}>
       {tools.steps.map((step, index) => stepRow(step, index))}
     </SettingsGroup>
-    {codexJobs}
     {linux.length ? <SettingsGroup label="Linux 上的权限">{linux.map((step, index) => stepRow(step, index))}</SettingsGroup> : null}
     <SettingsGroup label="后台运行" footer={SERVICE_FOOTER[snapshot.application.platform]}>
       {stepRow(serviceStep(snapshot.application), 0)}

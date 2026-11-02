@@ -2,8 +2,7 @@ import { randomUUID } from 'node:crypto';
 import QRCode from 'qrcode';
 import { agentIdSchema, jobIdSchema, type BackendInstallItem, type BackendInstallStatus, type CommandResult, type EnvironmentReply, type Event, type Job, type JobId } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
-import { CodexSetupConflict } from '../agent/codex-appserver/setup';
-import { RpcError, unsupported } from './errors';
+import { RpcError } from './errors';
 import { BackendOutput, backendErrorSuffix } from './backend-output';
 
 export interface JobPeer {
@@ -38,7 +37,6 @@ export class Jobs {
   private readonly registrations = new Map<JobId, Registration>();
   private readonly unsettled = new Set<Registration>();
   private registration: Registration | undefined;
-  private readonly codex = new Map<JobId, 'installCodex' | 'loginCodex'>();
   private readonly views = new Map<JobId, Job>();
   private readonly expires = new Map<JobId, number>();
   private readonly backends = new Map<string, BackendOperation>();
@@ -113,38 +111,16 @@ export class Jobs {
     entry.job = { id: entry.job.id, type: 'registerAgent', phase: 'cancelled', message: '已取消扫码。' };
     this.set(entry.job);
   }
-  startCodex(type: 'install' | 'login'): CommandResult {
-    if (type === 'login') return {kind: 'refused', code: 'provider-configuration-required', message: '请先在 Codex App 或 Codex CLI 中完成登录或自定义模型配置，再回到 Vonvon 检测。'};
-    if (!this.options.service.startCodexJob) return unsupported();
-    try {
-      const id = jobIdSchema.parse(this.options.service.startCodexJob(type).id);
-      this.codex.set(id, type === 'install' ? 'installCodex' : 'loginCodex');
-      this.refresh();
-      return { kind: 'started', jobId: id };
-    } catch (error) {
-      if (error instanceof CodexSetupConflict) return { kind: 'refused', code: 'conflict', message: error.message };
-      throw error;
-    }
-  }
   async cancel(id: JobId): Promise<CommandResult> {
     const registration = this.registrations.get(id);
     if (registration) {
       this.cancelRegistration(registration);
       await registration.done;
-    } else if (this.codex.has(id)) { await this.options.service.cancelCodexJob?.(id); this.refresh(); }
-    else return { kind: 'refused', code: 'unknown_job', message: '任务不存在。' };
+    } else return { kind: 'refused', code: 'unknown_job', message: '任务不存在。' };
     return { kind: 'cancelled' };
   }
+  /** Forgets finished jobs ten minutes after they end. */
   private refresh(): void {
-    for (const [id, type] of this.codex) {
-      const job = this.options.service.codexJob?.(id);
-      if (!job) continue;
-      if (job.state === 'authorizing') this.set({ id, type, phase: 'authorizing', userCode: job.userCode, verificationUrl: job.verificationUrl });
-      else {
-        this.set({ id, type, phase: job.state, message: job.message ?? '' });
-        if (job.state !== 'running') { this.codex.delete(id); this.options.toolsSettled(); }
-      }
-    }
     const now = Date.now();
     for (const [id, expiry] of this.expires) {
       if (expiry > now) continue;

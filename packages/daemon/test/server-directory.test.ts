@@ -1,6 +1,6 @@
-import { chmod, mkdtemp, mkdir, rm, symlink as fileSymlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, realpath, rm, symlink as fileSymlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, parse } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDirectoryBrowser } from '../src/server/directory-browser';
 
@@ -17,21 +17,29 @@ async function fixture() {
   return { home, outside, browser: await createDirectoryBrowser(home) };
 }
 describe('canonical home directory tokens', () => {
-  it('lists nested folders and refuses paths or symlinks escaping home', async () => {
+  // main 必败 (devices-ui-2 4.3): folders outside home were refused as outside_home; any folder this user can read is fine now.
+  it('starts at home, and lists and chooses folders outside it too, up to the filesystem root', async () => {
     const { home, outside, browser } = await fixture();
     await mkdir(join(home, 'a', 'b'), { recursive: true });
     await mkdir(join(home, '.hidden'));
+    await mkdir(join(outside, 'srv-app'));
     await symlink(outside, join(home, 'escape'));
     const list = await browser.list();
-    expect(list.parent).toBeNull();
-    expect(list.entries.map(entry => entry.name)).toEqual(['.hidden', 'a']);
+    expect(list.path).toBe(await realpath(home));
+    expect(list.parent).toBe(dirname(list.path));
+    expect(list.entries.map(entry => entry.name)).toEqual(['.hidden', 'a', 'escape']);
     expect(list.entries[0]?.hidden).toBe(true);
     expect((await browser.list(join(home, 'a', 'b'))).parent).toBe(join(list.path, 'a'));
-    await expect(browser.list(outside)).rejects.toMatchObject({ code: 'outside_home' });
-    await expect(browser.choose(join(home, 'escape'))).rejects.toMatchObject({ code: 'outside_home' });
+    expect((await browser.list('~')).path).toBe(list.path);
+    expect((await browser.list('~/a')).path).toBe(join(list.path, 'a'));
+    const away = await browser.list(outside);
+    expect(away.entries.map(entry => entry.name)).toEqual(['srv-app']);
+    expect((await browser.choose(join(home, 'escape'))).displayPath).toBe(await realpath(outside));
+    const top = parse(list.path).root;
+    expect((await browser.list(top)).parent).toBeNull();
   });
 
-  it('rechecks containment at use and expires a token after ten minutes', async () => {
+  it('resolves a token again at use and expires it after ten minutes', async () => {
     const { home, outside, browser } = await fixture();
     const path = join(home, 'project');
     await mkdir(path);
@@ -39,7 +47,7 @@ describe('canonical home directory tokens', () => {
     expect(await browser.resolve(folder.token)).toBe(folder.displayPath);
     await rm(path, { recursive: true });
     await symlink(outside, path);
-    await expect(browser.resolve(folder.token)).rejects.toMatchObject({ code: 'outside_home' });
+    expect(await browser.resolve(folder.token)).toBe(await realpath(outside));
     const rootFolder = await browser.choose(home);
     vi.useFakeTimers();
     vi.setSystemTime(Date.now() + 600_000);
@@ -80,7 +88,7 @@ describe('web directory suggestions', () => {
     const {home, browser} = await fixture();
     await Promise.all([mkdir(join(home, 'Projects')), mkdir(join(home, '.private')), writeFile(join(home, 'file.txt'), 'file')]);
     const result = await browser.suggest('');
-    expect(result.parent).toBeNull();
+    expect(result.parent).toBe(dirname(result.root));
     expect(result.entries.map(entry => entry.name)).toEqual(['home', 'Projects']);
     expect(result.path).toBe(result.root);
     const chosen = await browser.choose(result.entries[1]!.path);
@@ -119,16 +127,21 @@ describe('web directory suggestions', () => {
     // main 必败: Windows took ~\ for a name to search for (Windows acceptance task 205)
     expect((await browser.suggest('~\\Projects\\')).entries.map(entry => entry.name)).toEqual(['Projects', 'Vonvon Bot']);
     expect((await browser.suggest('~\\Projects\\Von')).entries.map(entry => entry.name)).toEqual(['Vonvon Bot']);
-    await expect(browser.suggest('~\\..\\outside')).rejects.toMatchObject({code: 'outside_home'});
+    expect((await browser.suggest('~\\..\\outside\\')).path).toBe(await realpath(join(home, '..', 'outside')));
   });
 
-  it('rejects outside paths, escaped symlinks, nonexistent parents and files', async () => {
+  // main 必败 (devices-ui-2 4.3): the search refused folders outside home as outside_home.
+  it('browses folders outside home and links out of it, and rejects nonexistent parents and files', async () => {
     const {home, outside, browser} = await fixture();
+    await mkdir(join(outside, 'data'));
     await symlink(outside, join(home, 'escape'));
     await writeFile(join(home, 'not-a-directory'), 'file');
-    await expect(browser.suggest(outside)).rejects.toMatchObject({code: 'outside_home'});
-    await expect(browser.suggest('~/../outside')).rejects.toMatchObject({code: 'outside_home'});
-    await expect(browser.suggest('~/escape/')).rejects.toMatchObject({code: 'outside_home'});
+    const away = await browser.suggest(outside);
+    expect(away.entries.map(entry => entry.name)).toEqual(['outside', 'data']);
+    expect(away.parent).toBe(dirname(await realpath(outside)));
+    expect((await browser.suggest('~/../outside/')).entries.map(entry => entry.name)).toEqual(['outside', 'data']);
+    expect((await browser.suggest('~/escape/')).path).toBe(await realpath(outside));
+    expect((await browser.suggest('~/')).entries.map(entry => entry.name)).toContain('escape');
     await expect(browser.suggest('~/missing/child')).rejects.toMatchObject({code: 'invalid_directory'});
     await expect(browser.suggest('~/not-a-directory')).rejects.toMatchObject({code: 'invalid_directory'});
   });

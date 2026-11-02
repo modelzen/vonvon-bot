@@ -3,7 +3,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {z} from 'zod';
 import type {AdminReply, AdminRequest, SecretService, SecretUse} from '@vonvon/protocol';
 import {createClient, RpcError} from '../../client/src/client';
-import {ClientProvider} from '../src/client-context';
+import {ClientProvider, type ActiveDevice} from '../src/client-context';
 import {FillKeyDialog, KeyDiagnosticsRows, KeyRow, RemoveKeyDialog, SecretsPanel, UsesRow, submitsOnKey} from '../src/management/SecretsPanel';
 import {
   errorText, keyDiagnosis, keyFlows, removalCopy, rereads, resultCopy, saveKey, secretsReader, testKey, testTone, type FillFlow, type KeyFlows, type SecretsRead,
@@ -509,4 +509,23 @@ it('the page reads on entering it, and the search lists it (s23g2 做法)', () =
   expect(findEntries(entries, '密钥').some(entry => entry.destination.page === 'secrets')).toBe(true);
   expect(findEntries(entries, 'TypeSafe')[0]?.destination.page).toBe('secrets');
   expect(findEntries(entries, '决策模型密钥')[0]?.destination).toMatchObject({page: 'diagnostics', section: '这台电脑'});
+});
+
+// owner 2026-11-02: a remote device's key is kept on it; its page says 「X」, never 本机
+describe('a remote device', () => {
+  const remote: ActiveDevice = {id: 'test-remote', name: '机房 Linux', isRemote: true, mode: 'full', capabilities: ['device']};
+  const on = (node: React.ReactNode) => text(renderToStaticMarkup(<ClientProvider client={client} device={remote}>{node}</ClientProvider>));
+  it('says where the key is kept, removed from and missing on', () => {
+    const fill = on(<FillKeyDialog flow={{id: 1, keyId: 'typesafe-api-key', replacing: false, step: 'input'}} service={service({status: 'missing', last4: undefined})} onClose={noop} onSubmit={noop} onAgain={noop} onRetest={noop}/>);
+    expect(fill).toContain('密钥仅保存在「机房 Linux」上，保存后自动验证。');
+    const replace = on(<FillKeyDialog flow={{id: 1, keyId: 'typesafe-api-key', replacing: true, was: '7f3a', step: 'input'}} service={service()} onClose={noop} onSubmit={noop} onAgain={noop} onRetest={noop}/>);
+    expect(replace).toContain('将替换末四位为 7f3a 的密钥。密钥仅保存在「机房 Linux」上。');
+    const removal = on(<RemoveKeyDialog removal={{keyId: 'typesafe-api-key', pending: false}} service={service()} view={view()} onCancel={noop} onConfirm={noop}/>);
+    expect(removal).toContain('只删「机房 Linux」上存的这一份，TypeSafe 那边的 key 还在。');
+    expect(removalCopy(service({status: 'invalid'}), view(), '「机房 Linux」上').description).toBe('存着的这串不能用，现在已经按没填处理。只删「机房 Linux」上存的这一份。');
+    const missing = on(<KeyDiagnosticsRows read={{kind: 'ready', view: view(service({status: 'missing', last4: undefined}))}} onOpenSecrets={noop} onShowLog={noop}/>);
+    expect(missing).toContain('选了 TypeSafe 的 Jev，「机房 Linux」上还没填它的 key。');
+    expect(keyDiagnosis(service({status: 'missing', last4: undefined}), view(), '「机房 Linux」上').description).toContain('「机房 Linux」上还没填它的 key');
+    for (const words of [fill, replace, removal, missing]) expect(words).not.toContain('本机');
+  });
 });

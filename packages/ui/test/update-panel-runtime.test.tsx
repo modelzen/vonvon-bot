@@ -8,16 +8,15 @@ vi.mock('react', async original => ({
   useState: (initial: unknown) => {const at = hooks.index++; if (!(at in hooks.state)) hooks.state[at] = initial; return [hooks.state[at], (next: unknown) => {hooks.state[at] = typeof next === 'function' ? (next as (old: unknown) => unknown)(hooks.state[at]) : next;}];},
   useEffect: () => {},
 }));
-vi.mock('../src/desktop-update', () => ({useDesktopUpdate: () => [undefined, () => {}], useDesktopUpdateOperation: () => ({})}));
-vi.mock('../src/client-context', () => ({useShellCapabilities: () => ({})}));
-vi.mock('../src/settings/DraftGuard', () => ({useDraftGuard: () => ({navigate: (action: () => void) => action()})}));
-import {UpdatePanel} from '../src/management/UpdatePanel';
+// devices-ui-2 4.4.2: the Core update moved from `UpdatePanel` into `ServerUpdateCard`, with the same logic.
+import {ServerUpdateCard} from '../src/management/ServerUpdateCard';
+import {LOCAL_ACTIVE_DEVICE} from '../src/client-context';
 const nodes = (node: ReactNode): Array<{props: Record<string, any>}> => Array.isArray(node) ? node.flatMap(nodes) : isValidElement<Record<string, any>>(node) ? [node, ...nodes(node.props.children), ...nodes(node.props.trailing)] : [];
 const replies: Record<string, MachineReply> = {coreUpdateStatus: {type: 'coreUpdateStatus', status: null},
   checkCoreUpdate: {type: 'coreUpdate', distribution: {kind: 'standalone', cliPath: '/x'}, current: '1.0.0', latest: '1.0.1', hasUpdate: true, dev: false}};
 const button = (label: string) => {
   hooks.index = 0;
-  const tree = UpdatePanel({request: async (operation: MachineRequest) => replies[operation.type]!, externalCoreAvailable: true, version: '1.0.0', device: 'Mac', children: null, advancedSettings: null});
+  const tree = ServerUpdateCard({request: async (operation: MachineRequest) => replies[operation.type]!, variant: 'local-advanced', where: LOCAL_ACTIVE_DEVICE});
   return nodes(tree).find(node => node.props.onClick && node.props.children === label)!;
 };
 // review 207: reading an empty progress record started following it, and the update button stayed off until a reload

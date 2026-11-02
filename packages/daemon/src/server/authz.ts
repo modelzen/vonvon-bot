@@ -73,7 +73,7 @@ const rows = (method: string, types: string, cell: PlaceRule | Readonly<Record<S
 export const RULES: ReadonlyMap<string, Rule> = new Map([
   ...rows('snapshot', 'get', 'host'),
   ...rows('command', 'refresh listPendingGroups listJoinedGroups listGroupMembers', READ),
-  ...rows('command', 'registerAgent refreshAgentCredentials installCodex startCodexLogin restartHost bindGroup setAgentEnabled deleteAgent cancelJob'),
+  ...rows('command', 'registerAgent refreshAgentCredentials restartHost bindGroup setAgentEnabled deleteAgent cancelJob'),
   // The desktop's older permission and reply switches: settings writes, which the command line makes as settings set.
   ...rows('command', 'setResponse setPermission', { dm: 'deny', group: 'not-dm', comment: 'not-dm' }),
   ...rows('settings', 'read.host save.host'),
@@ -341,7 +341,7 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
 }
 
 /**
- * A command by what it moves: the machine (installing Codex, restarting the host), no session's and the owner's as it
+ * A command by what it moves: the machine (restarting the host, cancelling a job), no session's and the owner's as it
  * is; a bot, its own and only with the whole bot reached; a group, one reached. A new bot is outside any reach.
  */
 function commandInReach(command: Command, session: boolean, own: (botId: string) => boolean, reaches: (groupId: string) => boolean,
@@ -349,7 +349,7 @@ function commandInReach(command: Command, session: boolean, own: (botId: string)
   const ok: Decision = { ok: true };
   switch (command.type) {
     case 'refresh': return ok;
-    case 'installCodex': case 'startCodexLogin': case 'restartHost': case 'cancelJob': return session ? outOfReach() : ok;
+    case 'restartHost': case 'cancelJob': return session ? outOfReach() : ok;
     case 'registerAgent': return outOfReach();
     case 'refreshAgentCredentials': case 'setAgentEnabled': case 'deleteAgent': return own(command.agentId) ? botWide() : outOfReach();
     case 'bindGroup': case 'listGroupMembers': return own(command.agentId) && reaches(command.groupId) ? ok : outOfReach();

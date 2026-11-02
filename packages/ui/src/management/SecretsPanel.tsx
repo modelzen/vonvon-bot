@@ -1,7 +1,8 @@
 import {RefreshCw} from 'lucide-react';
 import {useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode} from 'react';
 import {formatTime, keyProblem, type SecretService} from '@vonvon/protocol';
-import {useClient} from '../client-context';
+import {useActiveDevice, useClient} from '../client-context';
+import {placeOf} from '../device-copy';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Button, IconButton, FormField, InlineNotice, StatusBadge, type StatusTone} from '../reference/components/ui';
 import {ConfirmDialog, Dialog} from '../reference/components/ui/Dialog';
@@ -103,9 +104,10 @@ export function UsesRow({service, view}: {service: SecretService; view: SecretsV
   </details>;
 }
 
-const fillDescription = (flow: FillFlow) => flow.replacing
-  ? `将替换${flow.was ? `末四位为 ${flow.was} 的密钥` : '当前密钥'}。密钥仅保存在本机。`
-  : '密钥仅保存在本机，保存后自动验证。';
+/** Where the key is kept: 本机, or 「X」上 while a remote device is shown. */
+const fillDescription = (flow: FillFlow, place: string) => flow.replacing
+  ? `将替换${flow.was ? `末四位为 ${flow.was} 的密钥` : '当前密钥'}。密钥仅保存在${place}。`
+  : `密钥仅保存在${place}，保存后自动验证。`;
 
 /** Enter submits the key, except while an input method is still composing. */
 export const submitsOnKey = (key: string, composing: boolean): boolean => key === 'Enter' && !composing;
@@ -122,6 +124,7 @@ export function FillKeyDialog({flow, service, onClose, onSubmit, onAgain, onRete
   onClose: () => void; onSubmit: (value: string) => void; onAgain: () => void; onRetest: () => void;
 }) {
   const id = useId();
+  const place = placeOf(useActiveDevice());
   const input = useRef<HTMLInputElement>(null);
   const main = useRef<HTMLButtonElement>(null);
   const body = useRef<HTMLDivElement>(null);
@@ -189,7 +192,7 @@ export function FillKeyDialog({flow, service, onClose, onSubmit, onAgain, onRete
   // one ref for the Dialog: a new one would rerun its opening effect and bounce the focus
   const held = hold !== undefined && flow.step !== 'input';
   return <Dialog open title={title} onClose={close} initialFocusRef={input}
-    description={flow.step !== 'result' ? fillDescription(flow) : undefined} footer={footer}>
+    description={flow.step !== 'result' ? fillDescription(flow, place) : undefined} footer={footer}>
     <div className={`secrets-dialog${held && flow.step !== 'result' ? ' secrets-dialog--held' : ''}`} style={held ? {minHeight: hold} : undefined} ref={body}>{content}</div>
   </Dialog>;
 }
@@ -200,7 +203,8 @@ export type Removal = {keyId: string; pending: boolean; error?: string};
 export function RemoveKeyDialog({removal, service, view, onCancel, onConfirm}: {
   removal: Removal | undefined; service: SecretService | undefined; view: SecretsView | undefined; onCancel: () => void; onConfirm: () => void;
 }) {
-  const copy = service && view ? removalCopy(service, view) : undefined;
+  const place = placeOf(useActiveDevice());
+  const copy = service && view ? removalCopy(service, view, place) : undefined;
   const list = (uses: SecretService['inUse']) => <div className="secrets-dialog-list"><ul className="secrets-uses">{uses.map(use =>
     <li key={`${use.agentId}-${use.groupId ?? ''}`}><b>{useName(use)}</b> <span className="secrets-uses__note">· {useNote(use, service!)}</span></li>)}</ul></div>;
   return <ConfirmDialog open={Boolean(removal && copy)} title={service ? `删除 ${service.displayName} 密钥？` : ''} description={copy?.description ?? ''}
@@ -324,9 +328,10 @@ export function SecretsPanel({onOpenLogs, onOpenApplication, onOpenProviders}: {
   </div>;
 }
 
-/** The 决策模型的 key row of 这台电脑 on the 状态与诊断 page: one per service, always there (s23g2). */
+/** The 决策模型的 key row of the device on the 状态与诊断 page: one per service, always there (s23g2). */
 export function KeyDiagnosticsRows({read, onOpenSecrets, onShowLog}: {read: SecretsRead; onOpenSecrets: () => void; onShowLog: () => void}) {
   const title = '决策模型密钥';
+  const place = placeOf(useActiveDevice());
   const trailing = (status: string, tone: StatusTone, action?: ReactNode) => <span className="setup-step-trailing">{pill(status, tone)}{action}</span>;
   if (read.kind === 'loading') return <SettingsRow title={title} trailing={trailing('检查中', 'neutral')}/>;
   if (read.kind === 'old') return <SettingsRow title={title} description={`${OLD_DAEMON}。`} trailing={trailing('看不到', 'neutral')}/>;
@@ -334,7 +339,7 @@ export function KeyDiagnosticsRows({read, onOpenSecrets, onShowLog}: {read: Secr
   // a reread that failed keeps the last list: say so, as the 密钥 page does (多角度审查 R-F1)
   const stale = read.problem ? `没读到最新的（${read.problem}），这是上一次读到的。` : '';
   return <>{read.view.services.map(service => {
-    const row = keyDiagnosis(service, read.view);
+    const row = keyDiagnosis(service, read.view, place);
     const action = row.action && <Button size="sm" variant="ghost" onClick={row.action.to === 'logs' ? onShowLog : onOpenSecrets}>{row.action.label}</Button>;
     return <SettingsRow key={service.keyId} title={title} description={`${stale}${row.description}`}
       trailing={trailing(row.status, stale && row.tone !== 'danger' ? 'warning' : row.tone, action)}/>;

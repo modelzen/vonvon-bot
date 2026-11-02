@@ -1,7 +1,8 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {ArrowRight, Check, Download, LoaderCircle, RefreshCw} from 'lucide-react';
 import type {BridgeImportReply, BridgeImportStep, BridgeImportView, BridgePreflight, DesktopSnapshot, MachineRequestHandler} from '@vonvon/protocol';
-import {useClient} from '../client-context';
+import {useActiveDevice, useClient} from '../client-context';
+import {whereName} from '../device-copy';
 import {Button, IconButton, InlineNotice, StatusBadge} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 import './bridge-import.css';
@@ -67,6 +68,7 @@ export function BridgeImportPanel({ready, busy, platform, onDetected, showUnavai
   showUnavailable?: boolean;
 }) {
   const client = useClient();
+  const where = useActiveDevice();
   const [reply, setReply] = useState<BridgeImportReply>();
   const [operation, setOperation] = useState<ImportAction>();
   const [issue, setIssue] = useState<string>();
@@ -139,7 +141,7 @@ export function BridgeImportPanel({ready, busy, platform, onDetected, showUnavai
       </>}>
       <div className="bridge-import">
         {issue && <InlineNotice title={progress ? '正在重新连接导入状态' : '未能完成操作'} tone="warning">{issue}{progress ? ' 后台可能仍在运行，请不要重新发起导入。' : ''}</InlineNotice>}
-        {operation === 'preflight' && <div className="bridge-import__loading" role="status"><LoaderCircle size={18} className="ui-button__spinner"/>正在检查 Bot、群和本机数据…<small>这一步只读取旧数据，不会停止 Bridge。</small></div>}
+        {operation === 'preflight' && <div className="bridge-import__loading" role="status"><LoaderCircle size={18} className="ui-button__spinner"/>正在检查 Bot、群和{where.isRemote ? `${whereName(where)}上的` : '本机'}数据…<small>这一步只读取旧数据，不会停止 Bridge。</small></div>}
         {reply?.view && <BridgeImportProgress view={reply.view}/>}
         {completed && !reply?.view && <InlineNotice tone="info" title="检测到迁移完成记录">暂未读取到详细回执。可以继续检查 Bot 的连接与权限。</InlineNotice>}
         {!progress && !completed && reply?.view?.step !== 'rollback-failed' && operation !== 'preflight' && <>

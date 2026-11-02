@@ -23,10 +23,6 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
       const value = jobs.startRegistration(peer, request.type === 'refreshAgentCredentials' ? request.agentId : undefined);
       return { kind: 'mutation', reply: () => value };
     }
-    case 'installCodex': case 'startCodexLogin': {
-      const value = jobs.startCodex(request.type === 'installCodex' ? 'install' : 'login');
-      return { kind: 'mutation', reply: () => value };
-    }
     case 'cancelJob': {
       const value = await jobs.cancel(request.jobId);
       return { kind: 'mutation', reply: () => value };
