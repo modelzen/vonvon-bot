@@ -7,7 +7,9 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, IpcMainInvokeEvent } from 'electron';
 import type { VonvonClient } from '@vonvon/client/browser';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
-import { desktopChannels, type AttachedDaemon, type DesktopResources } from '../src/ipc-contract.js';
+import type { DevicesState } from '@vonvon/protocol';
+import { clientChannelNames, desktopChannels, type AttachedDaemon, type DesktopEvent, type DesktopResources } from '../src/ipc-contract.js';
+import { DeviceConnectionsError, type DeviceConnections, type ViewChange } from '../src/connections.js';
 import { ServiceActionError } from '../src/service-error.js';
 import { StartHostRefusal } from '../src/daemon-manager.js';
 import { DesktopUpdateError } from '../src/updates.js';
@@ -36,6 +38,77 @@ const uiIndex = join(fixtureRoot, 'index.html');
 writeFileSync(uiIndex, '<!doctype html><title>Bridge test</title>');
 afterAll(() => rmSync(fixtureRoot, { recursive: true, force: true }));
 
+const clientChannels = new Set<string>(clientChannelNames.map(name => desktopChannels[name]));
+const REMOTE_A = '11111111-1111-4111-8111-111111111111';
+const REMOTE_B = '22222222-2222-4222-8222-222222222222';
+
+/** The connections as the bridge sees them: a view to switch by hand, a list with two remote devices. */
+function fakeDevices() {
+  let current: ViewChange = { kind: 'local' };
+  const viewListeners = new Set<(change: ViewChange) => void>();
+  const stateListeners = new Set<(state: DevicesState) => void>();
+  const activeId = (): string => current.kind === 'local' ? 'local' : current.kind === 'remote' ? current.session.id : current.id;
+  const state = (): DevicesState => ({
+    v: 1, revision: 1, client: { version: '1', protocolVersion: 2 }, registry: 'ok', secureStorage: true,
+    devices: [
+      { id: 'local', name: '这台电脑', current: activeId() === 'local', status: 'online', routes: [] },
+      { id: REMOTE_A, name: '机房', current: activeId() === REMOTE_A, status: 'online', routes: [{ host: '203.0.113.10', port: 7767, kind: 'public' }] },
+      { id: REMOTE_B, name: '书房', current: activeId() === REMOTE_B, status: 'online', routes: [{ host: '203.0.113.11', port: 7767, kind: 'public' }] },
+    ],
+    active: { id: activeId(), phase: 'ready', attempt: 0 },
+  });
+  const devices = {
+    state: vi.fn(state),
+    onState: (listener: (value: DevicesState) => void) => { stateListeners.add(listener); return () => { stateListeners.delete(listener); }; },
+    onView: (listener: (change: ViewChange) => void) => { viewListeners.add(listener); return () => { viewListeners.delete(listener); }; },
+    view: () => current,
+    switchTo: vi.fn(async (_id: string) => {}),
+    retry: vi.fn(), wake: vi.fn(),
+    inspectLink: vi.fn((_text: string) => ({ ok: false as const, code: 'invalid_link' as const })),
+    add: vi.fn(async (_request: unknown) => ({ kind: 'failed' as const, code: 'busy', attempts: [] })),
+    cancelAdd: vi.fn(),
+    rename: vi.fn(async (_id: string, _name: string) => {}),
+    remove: vi.fn(async (_id: string) => ({ revokedRemotely: false })),
+    setLocal: vi.fn(), expect: vi.fn(), dispose: vi.fn(async () => {}),
+  } satisfies DeviceConnections;
+  return {
+    devices,
+    /** Says a view change as the connections do, then lets the bridge's awaits run. */
+    async show(change: ViewChange) {
+      current = change;
+      for (const listener of [...viewListeners]) listener(change);
+      await settle();
+    },
+    emitState() { for (const listener of [...stateListeners]) listener(state()); },
+  };
+}
+const settle = async (): Promise<void> => { for (let index = 0; index < 10; index++) await Promise.resolve(); };
+
+/** A remote device's client: its own snapshots, requests and losses. */
+function remoteClient(revision = 3) {
+  const errors = new Set<(error: Error) => void>();
+  let emitSnapshot: (value: unknown) => void = () => {};
+  const client = {
+    snapshot: vi.fn(async () => ({ revision, application: { platform: 'linux', version: '1', loginItem: false, dataPath: '/srv/vonvon' } })),
+    settings: vi.fn(async () => ({ kind: 'settings' })),
+    machine: vi.fn(async (request: { type: string }) => request.type === 'status' ? { type: 'status', remote: true } : { type: 'done', message: 'remote' }),
+    run: vi.fn(async () => ({ kind: 'applied', revision: 4 })),
+    admin: vi.fn(async () => ({ kind: 'daemonStatus' })),
+    watchSnapshots: (listener: (value: unknown) => void) => { emitSnapshot = listener; return () => { emitSnapshot = () => {}; }; },
+    onLog: () => () => {}, onBackendInstall: () => () => {}, onDevice: () => () => {},
+    onError(listener: (error: Error) => void) { errors.add(listener); return () => { errors.delete(listener); }; },
+  };
+  return {
+    client: client as unknown as VonvonClient, calls: client,
+    emitSnapshot: (value: unknown) => emitSnapshot(value),
+    emitError: (error: Error) => { for (const listener of [...errors]) listener(error); },
+  };
+}
+const remoteView = (id: string, remote: ReturnType<typeof remoteClient>, mode: 'full' | 'maintenance' = 'full'): ViewChange => ({
+  kind: 'remote', cause: 'opened',
+  session: { id, client: remote.client, mode, serverInfo: { type: 'serverInfo', machineId: id, version: '1', protocolVersion: 2 } },
+});
+
 function harness() {
   const expectedUrl = pathToFileURL(realpathSync(uiIndex)).href;
   const frame = { url: expectedUrl };
@@ -46,7 +119,8 @@ function harness() {
   });
   const window = { isDestroyed: () => false, webContents } as unknown as BrowserWindow;
   const event = { sender: webContents, senderFrame: frame } as unknown as IpcMainInvokeEvent;
-  let onError: (error: Error) => void = () => {};
+  const errorListeners = new Set<(error: Error) => void>();
+  const deviceListeners = new Set<(value: unknown) => void>();
   let onSnapshot: (value: unknown) => void = () => {};
   const snapshot = vi.fn(async () => ({ revision: 1, application: { platform: 'macos', version: '1', loginItem: false, dataPath: fixtureRoot } }));
   const machine = vi.fn(async (_request: Parameters<VonvonClient['machine']>[0]): ReturnType<VonvonClient['machine']> => ({ type: 'done', message: 'ok' }));
@@ -59,7 +133,8 @@ function harness() {
     watchSnapshots: (listener: (value: unknown) => void) => { onSnapshot = listener; return () => { onSnapshot = () => {}; }; },
     onLog: () => () => {},
     onBackendInstall: () => () => {},
-    onError(listener: (error: Error) => void) { onError = listener; return () => {}; },
+    onDevice(listener: (value: unknown) => void) { deviceListeners.add(listener); return () => { deviceListeners.delete(listener); }; },
+    onError(listener: (error: Error) => void) { errorListeners.add(listener); return () => { errorListeners.delete(listener); }; },
   } as unknown as VonvonClient;
   const owner: AttachedDaemon = {
     client, identity: { pid: 1, startedAt: 'now', listen: '127.0.0.1:4000' }, dispose,
@@ -83,15 +158,21 @@ function harness() {
     installDesktopUpdate: vi.fn(async () => ({ state: 'downloaded' as const, current: '1.0.0', latest: '1.1.0', message: 'ready' })),
     hide: vi.fn(), confirmQuit: vi.fn(async () => {}), connectionLost: vi.fn(),
   };
-  const bridge = installBridge(owner, window, paths, actions);
-  const invoke = (channel: string, ...args: unknown[]) => {
+  const devs = fakeDevices();
+  const bridge = installBridge(owner, window, paths, actions, devs.devices);
+  /** As the page sends it: a channel to a daemon gets the view last, 'current' unless said. */
+  const invokeAs = (view: string, channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
     if (!handler) throw new Error(`Missing handler ${channel}`);
-    return handler(event, ...args);
+    return handler(event, ...args, ...(clientChannels.has(channel) ? [view] : []));
   };
-  return { bridge, event, frame, webContents, window, paths, invoke, snapshot, machine, run, schedule, device, dispose, actions, owner,
+  const invoke = (channel: string, ...args: unknown[]) => invokeAs('current', channel, ...args);
+  return { bridge, event, frame, webContents, window, paths, invoke, invokeAs, snapshot, machine, run, schedule, device, dispose, actions, owner, devs,
+    /** What the page was sent, leaving out the device list it gets on every subscribe and change. */
+    events: (): DesktopEvent[] => webContents.send.mock.calls.map(call => call[1] as DesktopEvent).filter(value => value.type !== 'devices'),
     emitSnapshot: (value: unknown) => onSnapshot(value),
-    emitError: (error: Error) => onError(error) };
+    emitDevice: (value: unknown) => { for (const listener of [...deviceListeners]) listener(value); },
+    emitError: (error: Error) => { for (const listener of [...errorListeners]) listener(error); } };
 }
 
 beforeEach(() => { handlers.clear(); openExternal.mockClear(); failRegistration.channel = ''; });
@@ -219,9 +300,9 @@ describe('desktop IPC boundary', () => {
     h.emitSnapshot({ revision: 2, application });
     h.emitSnapshot({ revision: 1, application: { ...application, loginItem: false } });
     h.emitSnapshot({ revision: 3, application: { ...application, loginItem: false } });
-    expect(h.webContents.send.mock.calls.map(call => call[1])).toEqual([
-      { type: 'snapshot', value: { revision: 2, application } },
-      { type: 'snapshot', value: { revision: 3, application: { ...application, loginItem: false } } },
+    expect(h.events()).toEqual([
+      { type: 'snapshot', view: 'local', value: { revision: 2, application } },
+      { type: 'snapshot', view: 'local', value: { revision: 3, application: { ...application, loginItem: false } } },
     ]);
     await h.bridge.dispose();
   });
@@ -233,7 +314,7 @@ describe('desktop IPC boundary', () => {
     h.emitError(new ConnectionError('drained by the web UI\'s helper'));
     expect(h.actions.recoverConnection).toHaveBeenCalledExactlyOnceWith(h.owner.identity);
     expect(h.actions.connectionLost).not.toHaveBeenCalled();
-    expect(h.webContents.send).not.toHaveBeenCalled();
+    expect(h.events()).toEqual([]);
     h.actions.recoverConnection.mockReturnValue(false);
     h.emitError(new ConnectionError('daemon crashed'));
     expect(h.actions.connectionLost).toHaveBeenCalledOnce();
@@ -246,7 +327,7 @@ describe('desktop IPC boundary', () => {
     h.actions.isExpectedDisconnect.mockReturnValue(true);
     h.emitError(new ConnectionError('controlled stop'));
     expect(h.actions.connectionLost).not.toHaveBeenCalled();
-    expect(h.webContents.send).not.toHaveBeenCalled();
+    expect(h.events()).toEqual([]);
     await h.bridge.dispose();
   });
   it('authorizes zero-argument CLI repair and overlays readonly CLI status', async () => {
@@ -297,7 +378,7 @@ describe('desktop IPC boundary', () => {
       client: {
         snapshot: vi.fn(async () => ({ revision: 9 })),
         watchSnapshots: (listener: (value: unknown) => void) => { emitOld = listener; return offOld; },
-        onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {},
+        onLog: () => () => {}, onBackendInstall: () => () => {}, onDevice: () => () => {}, onError: () => () => {},
       },
       identity: { pid: 2, startedAt: 'old', listen: '127.0.0.1:4001' },
       dispose: vi.fn(async () => {}),
@@ -307,7 +388,7 @@ describe('desktop IPC boundary', () => {
       client: {
         snapshot: vi.fn(async () => nextSnapshot),
         watchSnapshots: (listener: (value: unknown) => void) => { emitNext = listener; return () => {}; },
-        onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {},
+        onLog: () => () => {}, onBackendInstall: () => () => {}, onDevice: () => () => {}, onError: () => () => {},
       },
       identity: { pid: 3, startedAt: 'new', listen: '127.0.0.1:4002' },
       dispose: vi.fn(async () => {}),
@@ -320,7 +401,7 @@ describe('desktop IPC boundary', () => {
     emitOld?.({ revision: 10 });
     emitNext?.(nextSnapshot);
     await Promise.resolve();
-    expect(h.webContents.send).toHaveBeenCalledExactlyOnceWith(desktopChannels.event, { type: 'snapshot', value: { revision: 1 } });
+    expect(h.webContents.send).toHaveBeenCalledExactlyOnceWith(desktopChannels.event, { type: 'snapshot', view: 'local', value: { revision: 1 } });
     expect(await h.invoke(desktopChannels.snapshot)).toEqual({ ok: true, value: { revision: 1 } });
     await h.bridge.dispose();
     expect(next.dispose).toHaveBeenCalledOnce();
@@ -329,7 +410,7 @@ describe('desktop IPC boundary', () => {
   it('leaves no stale owner when the new connection cannot provide a snapshot', async () => {
     const h = harness();
     const next = {
-      client: { snapshot: vi.fn(async () => { throw new Error('snapshot failed'); }), watchSnapshots: () => () => {}, onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {} },
+      client: { snapshot: vi.fn(async () => { throw new Error('snapshot failed'); }), watchSnapshots: () => () => {}, onLog: () => () => {}, onBackendInstall: () => () => {}, onDevice: () => () => {}, onError: () => () => {} },
       identity: { pid: 4, startedAt: 'new', listen: '127.0.0.1:4003' },
       dispose: vi.fn(async () => {}),
     } as unknown as AttachedDaemon;
@@ -425,13 +506,13 @@ describe('desktop IPC boundary', () => {
     h.bridge.publishUpdate(found);
     expect(h.webContents.send).not.toHaveBeenCalled();
     expect(await h.invoke(desktopChannels.subscribe)).toMatchObject({ ok: true });
-    expect(h.webContents.send).toHaveBeenLastCalledWith(desktopChannels.event, { type: 'update', value: found });
+    expect(h.events()).toEqual([{ type: 'update', value: found }]);
     const downloaded = { ...found, state: 'downloaded' as const };
     h.bridge.publishUpdate(downloaded);
     expect(h.webContents.send).toHaveBeenLastCalledWith(desktopChannels.event, { type: 'update', value: downloaded });
     h.webContents.send.mockClear();
     expect(await h.invoke(desktopChannels.subscribe)).toMatchObject({ ok: true });
-    expect(h.webContents.send).toHaveBeenCalledExactlyOnceWith(desktopChannels.event, { type: 'update', value: downloaded });
+    expect(h.events()).toEqual([{ type: 'update', value: downloaded }]);
     await h.bridge.dispose();
     h.webContents.send.mockClear();
     h.bridge.publishUpdate(found);
@@ -449,9 +530,7 @@ describe('desktop IPC boundary', () => {
     });
     h.webContents.send.mockClear();
     await h.invoke(desktopChannels.subscribe);
-    expect(h.webContents.send).toHaveBeenCalledExactlyOnceWith(desktopChannels.event, {
-      type: 'update', value: expect.objectContaining({ state: 'downloaded' }),
-    });
+    expect(h.events()).toEqual([{ type: 'update', value: expect.objectContaining({ state: 'downloaded' }) }]);
     await h.bridge.dispose();
   });
 
@@ -463,7 +542,7 @@ describe('desktop IPC boundary', () => {
     h.actions[action].mockRejectedValueOnce(new Error('network failed'));
     await h.invoke(desktopChannels[action]);
     await h.invoke(desktopChannels.subscribe);
-    expect(h.webContents.send).toHaveBeenLastCalledWith(desktopChannels.event, { type: 'update', value: found });
+    expect(h.events().at(-1)).toEqual({ type: 'update', value: found });
     await h.bridge.dispose();
   });
 
@@ -477,7 +556,7 @@ describe('desktop IPC boundary', () => {
       { type: 'error', value: { kind: 'validation', message: '桌面端操作没有成功，请重试。' } });
     expect(h.webContents.send).toHaveBeenCalledWith(desktopChannels.event, { type: 'quitRequested' });
     h.bridge.requestQuit();
-    expect(h.webContents.send).toHaveBeenCalledTimes(3);
+    expect(h.events()).toHaveLength(3);
     await Promise.all([h.bridge.dispose(), h.bridge.dispose()]);
     expect(h.dispose).toHaveBeenCalledTimes(1);
     expect(handlers.has(desktopChannels.machine)).toBe(false);
@@ -555,7 +634,7 @@ it('s18g bridge stop never overlays a replacement owner', async () => {
   await vi.waitFor(() => expect(h.actions.stopHost).toHaveBeenCalledOnce());
   const next = { client: { snapshot: vi.fn(async () => ({ revision: 1 })), machine: vi.fn(async () => ({
     ...runningStatus, host: { ownership: 'owned', pid: 2 } })), watchSnapshots: () => () => {},
-    onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {} },
+    onLog: () => () => {}, onBackendInstall: () => () => {}, onDevice: () => () => {}, onError: () => () => {} },
   identity: { pid: 2, startedAt: 'next', listen: '127.0.0.1:4000' }, dispose: vi.fn(async () => {}) } as unknown as AttachedDaemon;
   await h.bridge.replaceOwner(next);
   finish({ type: 'done', message: 'daemon 已停止。' });
@@ -592,7 +671,7 @@ it('serves installed/stopped status after stop closes RPC, then uses the reattac
   expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toMatchObject({ ok: true, value: { host: null, service: { installed: true, running: false } } });
   expect(h.machine).toHaveBeenCalledTimes(1);
   const next = { client: { snapshot: async () => ({ revision: 1 }), machine: async () => ({ ...status, host: { ownership: 'owned', pid: 2 } }),
-    watchSnapshots: () => () => {}, onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {} },
+    watchSnapshots: () => () => {}, onLog: () => () => {}, onBackendInstall: () => () => {}, onDevice: () => () => {}, onError: () => () => {} },
     identity: { pid: 2, startedAt: 'next', listen: '127.0.0.1:4000' }, dispose: async () => {} } as unknown as AttachedDaemon;
   await h.bridge.replaceOwner(next);
   expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toMatchObject({ ok: true, value: { host: { pid: 2 }, service: { running: true } } });
@@ -606,7 +685,7 @@ function candidate(snapshot: () => Promise<unknown>) {
   const dispose = vi.fn(async () => { close(); });
   const owner = { client: {
     snapshot: vi.fn(() => Promise.race([snapshot(), closed])),
-    watchSnapshots: () => () => {}, onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {},
+    watchSnapshots: () => () => {}, onLog: () => () => {}, onBackendInstall: () => () => {}, onDevice: () => () => {}, onError: () => () => {},
   }, identity: { pid: 2, startedAt: 'next', listen: '127.0.0.1:4001' }, dispose } as unknown as AttachedDaemon;
   return { owner, dispose };
 }
@@ -620,7 +699,7 @@ it('closes a replacement candidate whose first snapshot is pending when the brid
   await h.bridge.dispose();
   await replacing;
   expect(next.dispose).toHaveBeenCalled();
-  expect(h.webContents.send).not.toHaveBeenCalledWith(desktopChannels.event, { type: 'reattached' });
+  expect(h.events()).not.toContainEqual(expect.objectContaining({ type: 'reattached' }));
 });
 
 it('closes an owner handed over after disposal', async () => {
@@ -639,7 +718,7 @@ it('cleans partial bindings without announcing a failed reattachment', async () 
     dispose: vi.fn(async () => {}) } as unknown as AttachedDaemon;
   await expect(h.bridge.replaceOwner(next)).rejects.toThrow('bind failed');
   expect(off).toHaveBeenCalledOnce();
-  expect(h.webContents.send).not.toHaveBeenCalled();
+  expect(h.events()).toEqual([]);
   expect(next.dispose).toHaveBeenCalledOnce();
   await h.bridge.dispose();
 });
@@ -651,11 +730,11 @@ it.each(['synchronous', 'pending'] as const)('preserves a newer %s watch snapsho
   const next = { client: {
     snapshot: async () => { if (timing === 'pending') { await Promise.resolve(); emit({ revision: 5 }); } return { revision: 1 }; },
     watchSnapshots: (listener: typeof emit) => { emit = listener; if (timing === 'synchronous') emit({ revision: 5 }); return () => {}; },
-    onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {},
+    onLog: () => () => {}, onBackendInstall: () => () => {}, onDevice: () => () => {}, onError: () => () => {},
   }, dispose: async () => {} } as unknown as AttachedDaemon;
   await h.bridge.replaceOwner(next);
-  expect(h.webContents.send.mock.calls.map(call => call[1])).toEqual([
-    { type: 'reattached' }, { type: 'snapshot', value: { revision: 5 } },
+  expect(h.events()).toEqual([
+    { type: 'reattached', view: 'local' }, { type: 'snapshot', view: 'local', value: { revision: 5 } },
   ]);
   await h.bridge.dispose();
 });
@@ -664,7 +743,7 @@ it('asks the current owner to read the service again after a switch, even a fail
   const h = harness();
   await h.invoke(desktopChannels.subscribe);
   const next = { client: { snapshot: async () => ({ revision: 1 }), machine: vi.fn(async () => ({ type: 'done', message: 'ok' })),
-    watchSnapshots: () => () => {}, onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {} },
+    watchSnapshots: () => () => {}, onLog: () => () => {}, onBackendInstall: () => () => {}, onDevice: () => () => {}, onError: () => () => {} },
     identity: { pid: 2, startedAt: 'next', listen: '127.0.0.1:4000' }, dispose: async () => {} } as unknown as AttachedDaemon;
   h.actions.setLoginItem.mockImplementationOnce(async () => { await h.bridge.replaceOwner(next); });
   expect(await h.invoke(desktopChannels.setLoginItem, true)).toEqual({ ok: true, value: undefined });
@@ -677,7 +756,7 @@ it('asks the current owner to read the service again after a switch, even a fail
   h.actions.service.mockRejectedValueOnce(new ServiceActionError('busy'));
   expect(await h.invoke(desktopChannels.service, { type: 'service', action: 'uninstall' })).toMatchObject({ ok: false });
   expect(next.client.machine).toHaveBeenCalledTimes(3);
-  expect(h.webContents.send.mock.calls.map(call => call[1].type)).toEqual(['reattached', 'snapshot']);
+  expect(h.events().map(value => value.type)).toEqual(['reattached', 'snapshot']);
   await h.bridge.dispose();
 });
 
@@ -693,7 +772,8 @@ it('delivers fresh snapshots through the facade across three replacements, inclu
   let receive: (event: unknown) => void = () => {};
   h.webContents.send.mockImplementation((_channel, event) => receive(event));
   const { client } = createDesktopFacades({
-    invoke: (channel, ...args) => h.invoke(channel, ...args),
+    // The facade names the view itself.
+    invoke: (channel, ...args) => handlers.get(channel)!(h.event, ...args),
     receive: listener => { receive = listener; return () => {}; },
   });
   const seen: Array<Awaited<ReturnType<VonvonClient['snapshot']>>> = [];
@@ -727,4 +807,263 @@ it.each(['rejected', 'resolved'] as const)('rejects an observed candidate connec
   await expect(h.bridge.replaceOwner(next.owner)).rejects.toBe(loss);
   expect(next.dispose).toHaveBeenCalledOnce();
   await h.bridge.dispose();
+});
+
+// devices-ui-1a 第 5 节 bridge: the page's view of one device. main 必败: there were no views.
+/** After `reattached{X}`, every snapshot is X's (第 5 节"交错的共同断言"). */
+function snapshotsFollowReattached(events: DesktopEvent[]): void {
+  let shown = 'local';
+  for (const event of events) {
+    if (event.type === 'reattached') shown = event.view;
+    if (event.type === 'snapshot') expect(event.view).toBe(shown);
+  }
+}
+const read = { type: 'read', scope: { kind: 'host' } };
+
+describe('devices-ui-1a views', () => {
+  it('sends to the device shown, and nothing from a page of the one shown before', async () => {
+    const h = harness();
+    const localSettings = vi.fn(async () => ({ kind: 'local' }));
+    Object.assign(h.owner.client, { settings: localSettings });
+    const a = remoteClient();
+    await h.devs.show(remoteView(REMOTE_A, a));
+    expect(await h.invokeAs(REMOTE_A, desktopChannels.settings, read)).toEqual({ ok: true, value: { kind: 'settings' } });
+    expect(await h.invoke(desktopChannels.settings, read)).toMatchObject({ ok: true });
+    expect(a.calls.settings).toHaveBeenCalledTimes(2);
+    const b = remoteClient();
+    await h.devs.show(remoteView(REMOTE_B, b));
+    expect(await h.invokeAs(REMOTE_A, desktopChannels.settings, read)).toEqual({ ok: false,
+      error: { kind: 'connection', code: 'device_switched', message: '已经切到另一台设备，这次操作没有发出。' } });
+    expect(await h.invokeAs('local', desktopChannels.settings, read)).toMatchObject({ ok: false, error: { code: 'device_switched' } });
+    expect(await h.invokeAs('not-a-device', desktopChannels.settings, read)).toMatchObject({ ok: false });
+    expect(a.calls.settings).toHaveBeenCalledTimes(2);
+    expect(b.calls.settings).not.toHaveBeenCalled();
+    expect(localSettings).not.toHaveBeenCalled();
+    await h.devs.show({ kind: 'waiting', id: REMOTE_A });
+    expect(await h.invoke(desktopChannels.settings, read)).toEqual({ ok: false,
+      error: { kind: 'connection', code: 'device_unavailable', message: '还没连上「机房」。' } });
+    await h.bridge.dispose();
+  });
+
+  it('refuses the six actions that only act on this computer while another device is shown', async () => {
+    const h = harness();
+    await h.devs.show(remoteView(REMOTE_A, remoteClient()));
+    const refused = { ok: false, error: { kind: 'validation', code: 'local_only', message: '现在看的是「机房」，这个操作只对这台电脑有效。先切回这台电脑。' } };
+    expect(await h.invoke(desktopChannels.startHost, { type: 'startHost' })).toEqual(refused);
+    expect(await h.invoke(desktopChannels.service, { type: 'service', action: 'install' })).toEqual(refused);
+    expect(await h.invoke(desktopChannels.setLoginItem, true)).toEqual(refused);
+    expect(await h.invoke(desktopChannels.repairCli)).toEqual(refused);
+    expect(await h.invoke(desktopChannels.chooseDirectoryPaths, true)).toEqual(refused);
+    expect(await h.invoke(desktopChannels.chooseExecutablePath)).toEqual(refused);
+    for (const action of ['startHost', 'service', 'setLoginItem', 'repairCli', 'chooseDirectoryPaths', 'chooseExecutablePath'] as const)
+      expect(h.actions[action]).not.toHaveBeenCalled();
+    // The page never negotiates, on any device.
+    expect(await h.invoke(desktopChannels.admin, { type: 'negotiate', capabilities: [] })).toMatchObject({ ok: false, error: { code: 'shell_owned', message: '能力由桌面端自己声明。' } });
+    await h.bridge.dispose();
+  });
+
+  it('sends a remote restart, stop and status to the device, past this computer\'s shell', async () => {
+    const h = harness();
+    const a = remoteClient();
+    await h.devs.show(remoteView(REMOTE_A, a));
+    expect(await h.invoke(desktopChannels.run, { type: 'restartHost' })).toEqual({ ok: true, value: { kind: 'applied', revision: 4 } });
+    expect(h.devs.devices.expect).toHaveBeenCalledExactlyOnceWith('restart');
+    expect(h.devs.devices.expect.mock.invocationCallOrder[0]).toBeLessThan(a.calls.run.mock.invocationCallOrder[0]!);
+    expect(h.actions.restartHost).not.toHaveBeenCalled();
+    expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toEqual({ ok: true, value: { type: 'status', remote: true } });
+    expect(h.actions.observeCli).not.toHaveBeenCalled();
+    expect(await h.invoke(desktopChannels.machine, { type: 'stopHost' })).toMatchObject({ ok: true });
+    expect(h.devs.devices.expect).toHaveBeenLastCalledWith('stop');
+    expect(h.actions.stopHost).not.toHaveBeenCalled();
+    expect(await h.invoke(desktopChannels.close)).toEqual({ ok: true, value: undefined });
+    expect(h.dispose).not.toHaveBeenCalled();
+    expect(h.machine).not.toHaveBeenCalled();
+    expect(h.run).not.toHaveBeenCalled();
+    await h.bridge.dispose();
+  });
+
+  it('passes a remote device\'s login-time switch to it, and keeps the rest shell-owned', async () => {
+    const h = harness();
+    const a = remoteClient();
+    await h.devs.show(remoteView(REMOTE_A, a));
+    expect(await h.invoke(desktopChannels.machine, { type: 'service', action: 'install' })).toMatchObject({ ok: true });
+    expect(h.devs.devices.expect).toHaveBeenCalledExactlyOnceWith('restart');
+    expect(a.calls.machine).toHaveBeenCalledExactlyOnceWith({ type: 'service', action: 'install' });
+    for (const request of [{ type: 'repairCli' }, { type: 'service', action: 'start' }, { type: 'startHost' }])
+      expect(await h.invoke(desktopChannels.machine, request)).toMatchObject({ ok: false });
+    expect(a.calls.machine).toHaveBeenCalledOnce();
+    await h.devs.show({ kind: 'local' });
+    expect(await h.invoke(desktopChannels.machine, { type: 'service', action: 'install' })).toMatchObject({ ok: false });
+    expect(h.machine).not.toHaveBeenCalled();
+    expect(a.calls.machine).toHaveBeenCalledOnce();
+    await h.bridge.dispose();
+  });
+
+  it('says reattached for the device switched to before its first snapshot, then only its snapshots', async () => {
+    const h = harness();
+    h.snapshot.mockResolvedValue({ revision: 50 } as never);
+    await h.invoke(desktopChannels.subscribe);
+    const b = remoteClient(3);
+    await h.devs.show(remoteView(REMOTE_B, b));
+    h.emitSnapshot({ revision: 51 });
+    b.emitSnapshot({ revision: 4 });
+    expect(h.events()).toEqual([
+      { type: 'reattached', view: REMOTE_B },
+      { type: 'snapshot', view: REMOTE_B, value: expect.objectContaining({ revision: 3 }) },
+      { type: 'snapshot', view: REMOTE_B, value: { revision: 4 } },
+    ]);
+    const old = remoteClient(1);
+    await h.devs.show(remoteView(REMOTE_A, old, 'maintenance'));
+    expect(old.calls.snapshot).not.toHaveBeenCalled();
+    expect(h.events().at(-1)).toEqual({ type: 'reattached', view: REMOTE_A });
+    await h.bridge.dispose();
+  });
+
+  it('replaces this computer\'s connection quietly while a remote device is shown, and shows it on the way back', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    const owners: AttachedDaemon[] = [];
+    h.bridge.onLocalOwner(owner => owners.push(owner));
+    await h.devs.show(remoteView(REMOTE_A, remoteClient()));
+    h.webContents.send.mockClear();
+    const next = candidate(async () => ({ revision: 7 }));
+    await h.bridge.replaceOwner(next.owner);
+    expect(h.events()).toEqual([]);
+    expect(h.bridge.localOwner()).toBe(next.owner);
+    expect(owners).toEqual([next.owner]);
+    expect(h.devs.devices.setLocal).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'online' }));
+    await h.devs.show({ kind: 'local' });
+    expect(h.events()).toEqual([{ type: 'reattached', view: 'local' }, { type: 'snapshot', view: 'local', value: { revision: 7 } }]);
+    await h.bridge.dispose();
+  });
+
+  it('tells a new local connection while this computer is shown too', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    const owners: AttachedDaemon[] = [];
+    h.bridge.onLocalOwner(() => { throw new Error('one listener fails'); });
+    h.bridge.onLocalOwner(owner => owners.push(owner));
+    const next = candidate(async () => ({ revision: 7 }));
+    await h.bridge.replaceOwner(next.owner);
+    expect(h.events()).toEqual([{ type: 'reattached', view: 'local' }, { type: 'snapshot', view: 'local', value: { revision: 7 } }]);
+    expect(owners).toEqual([next.owner]);
+    await h.bridge.dispose();
+  });
+
+  it('interleaved 1: back to this computer while its connection is replaced', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    const b = remoteClient(3);
+    await h.devs.show(remoteView(REMOTE_B, b));
+    let release!: (value: unknown) => void;
+    const next = candidate(() => new Promise(resolve => { release = resolve; }));
+    const replacing = h.bridge.replaceOwner(next.owner);
+    await vi.waitFor(() => expect(next.owner.client.snapshot).toHaveBeenCalled());
+    await h.devs.show({ kind: 'local' });
+    b.emitSnapshot({ revision: 9 });
+    release({ revision: 7 });
+    await replacing;
+    const events = h.events();
+    expect(events.slice(events.findIndex(event => event.type === 'reattached' && event.view === 'local'))).toEqual([
+      { type: 'reattached', view: 'local' }, { type: 'snapshot', view: 'local', value: { revision: 7 } },
+    ]);
+    snapshotsFollowReattached(events);
+    await h.bridge.dispose();
+  });
+
+  it('interleaved 2: to a remote device while this computer\'s connection is replaced', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    const owners: AttachedDaemon[] = [];
+    h.bridge.onLocalOwner(owner => owners.push(owner));
+    let release!: (value: unknown) => void;
+    const next = candidate(() => new Promise(resolve => { release = resolve; }));
+    const replacing = h.bridge.replaceOwner(next.owner);
+    await vi.waitFor(() => expect(next.owner.client.snapshot).toHaveBeenCalled());
+    await h.devs.show(remoteView(REMOTE_B, remoteClient(3)));
+    release({ revision: 7 });
+    await replacing;
+    const events = h.events();
+    expect(events.filter(event => event.type === 'reattached')).toEqual([{ type: 'reattached', view: REMOTE_B }]);
+    expect(events.filter(event => event.type === 'snapshot').map(event => event.type === 'snapshot' && event.view)).toEqual([REMOTE_B]);
+    expect(h.bridge.localOwner()).toBe(next.owner);
+    expect(owners).toEqual([next.owner]);
+    snapshotsFollowReattached(events);
+    await h.bridge.dispose();
+  });
+
+  it('interleaved 3: this computer\'s connection is replaced while switching back waits for its snapshot', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    await h.devs.show(remoteView(REMOTE_B, remoteClient(3)));
+    let releaseOld!: (value: unknown) => void;
+    h.snapshot.mockImplementationOnce(() => new Promise(resolve => { releaseOld = resolve as (value: unknown) => void; }) as never);
+    await h.devs.show({ kind: 'local' });
+    expect(h.snapshot).toHaveBeenCalledOnce();
+    await h.bridge.replaceOwner(candidate(async () => ({ revision: 7 })).owner);
+    releaseOld({ revision: 40 });
+    await settle();
+    const events = h.events();
+    expect(events.filter(event => event.type === 'reattached' && event.view === 'local')).toHaveLength(1);
+    expect(events.slice(-2)).toEqual([{ type: 'reattached', view: 'local' }, { type: 'snapshot', view: 'local', value: { revision: 7 } }]);
+    expect(events).not.toContainEqual(expect.objectContaining({ value: { revision: 40 } }));
+    snapshotsFollowReattached(events);
+    await h.bridge.dispose();
+  });
+
+  it('holds a lost local connection while a remote device is shown, and says it on the way back', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    await h.devs.show(remoteView(REMOTE_A, remoteClient()));
+    h.emitError(new ConnectionError('daemon crashed'));
+    expect(h.actions.recoverConnection).toHaveBeenCalledOnce();
+    expect(h.actions.connectionLost).not.toHaveBeenCalled();
+    expect(h.devs.devices.setLocal).toHaveBeenLastCalledWith({ status: 'offline' });
+    expect(h.bridge.deferLocalLost()).toBe(true);
+    await h.devs.show({ kind: 'local' });
+    expect(h.actions.connectionLost).toHaveBeenCalledOnce();
+    expect(h.bridge.deferLocalLost()).toBe(false);
+    await h.bridge.dispose();
+  });
+
+  it('shows no error and asks nothing of the shell when a remote connection drops', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    const a = remoteClient();
+    await h.devs.show(remoteView(REMOTE_A, a));
+    a.emitError(new ConnectionError('Daemon connection closed'));
+    expect(h.events().filter(event => event.type === 'error')).toEqual([]);
+    expect(h.actions.recoverConnection).not.toHaveBeenCalled();
+    expect(h.actions.connectionLost).not.toHaveBeenCalled();
+    await h.bridge.dispose();
+  });
+
+  it('passes this computer\'s own device events whichever device is shown, and the device list on subscribe', async () => {
+    const h = harness();
+    expect(await h.invoke(desktopChannels.subscribe)).toMatchObject({ ok: true });
+    expect(h.webContents.send).toHaveBeenLastCalledWith(desktopChannels.event, { type: 'devices', value: h.devs.devices.state() });
+    await h.devs.show(remoteView(REMOTE_A, remoteClient()));
+    const paired = { change: 'client-paired', clientId: 'cl_0123456789abcdef', name: '笔记本', clientKind: 'desktop' };
+    h.emitDevice(paired);
+    expect(h.events().at(-1)).toEqual({ type: 'localDevice', value: paired });
+    expect(h.events()).not.toContainEqual(expect.objectContaining({ type: 'device' }));
+    h.webContents.send.mockClear();
+    h.devs.emitState();
+    expect(h.webContents.send).toHaveBeenCalledExactlyOnceWith(desktopChannels.event, expect.objectContaining({ type: 'devices' }));
+    await h.bridge.dispose();
+  });
+
+  it('hands the device page\'s requests to the connections', async () => {
+    const h = harness();
+    expect(await h.invoke(desktopChannels.devicesSwitch, REMOTE_A)).toEqual({ ok: true, value: undefined });
+    expect(h.devs.devices.switchTo).toHaveBeenCalledExactlyOnceWith(REMOTE_A);
+    expect(await h.invoke(desktopChannels.devicesSwitch, 'nonsense')).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.devicesInspect, 'vonvon://pair#x')).toEqual({ ok: true, value: { ok: false, code: 'invalid_link' } });
+    expect(await h.invoke(desktopChannels.devicesAdd, { link: 'vonvon://pair#x', extra: 1 })).toMatchObject({ ok: false });
+    expect(h.devs.devices.add).not.toHaveBeenCalled();
+    h.devs.devices.rename.mockRejectedValueOnce(new DeviceConnectionsError('invalid_name'));
+    expect(await h.invoke(desktopChannels.devicesRename, REMOTE_A, '')).toEqual({ ok: false, error: { kind: 'validation', code: 'invalid_name', message: '名字要 1 到 40 个字。' } });
+    expect(await h.invoke(desktopChannels.devicesRemove, REMOTE_A)).toEqual({ ok: true, value: { revokedRemotely: false } });
+    await h.bridge.dispose();
+  });
 });

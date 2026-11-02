@@ -2,7 +2,7 @@ import { mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, autoUpdater, BrowserWindow, dialog, Menu, net, type WebContents } from 'electron';
+import { app, autoUpdater, BrowserWindow, dialog, Menu, net, powerMonitor, safeStorage, type WebContents } from 'electron';
 import { resolveDataRoot } from '../../daemon/src/config/data-root.js';
 import { attachExisting, AttachError } from './attach.js';
 import { installBridge, openAllowedExternal } from './bridge.js';
@@ -19,7 +19,11 @@ import { stopVerifiedOwner } from '../../daemon/src/server/owner-verification.js
 import { desktopCliOptions, observeCli, registerCli } from './cli-registration.js';
 import { liveServiceActionRecord } from '../../daemon/src/service/action-report.js';
 import { changeLoginItem, followServiceHelper, repairServiceAtStartup, type LoginItemHooks, type ServiceRuntime } from './login-item.js';
-import { desktopUpdateNotice, type CommandResult, type DesktopUpdate, type MachineReply } from '@vonvon/protocol';
+import { desktopUpdateNotice, PROTOCOL_VERSION, type CommandResult, type DesktopUpdate, type MachineReply } from '@vonvon/protocol';
+import { electronSecretBox, openDeviceRegistry } from './device-registry.js';
+import { createDeviceConnections, type DeviceConnections } from './connections.js';
+import { secureConnector } from './remote-transport.js';
+import { createDeviceLog } from './device-log.js';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
 
 /** 应用内更新没生效时给用户的手动下载地址，和设置页里的链接一致。 */
@@ -70,6 +74,8 @@ export async function startDesktop(): Promise<void> {
   let stopUpdateChecks: (() => void) | undefined;
   let owner: AttachedDaemon | null = null;
   let bridge: DesktopBridge | null = null;
+  let devices: DeviceConnections | null = null;
+  const onResume = (): void => { devices?.wake(); };
   let quitting = false;
   let terminating = false;
   let focusWhenReady = false;
@@ -141,14 +147,18 @@ export async function startDesktop(): Promise<void> {
     stopUpdateChecks?.();
     stopUpdateChecks = undefined;
     restartCancel?.abort();
+    powerMonitor.off('resume', onResume);
     try {
       if (starting) await starting.catch(() => {});
+      // Remote connections first, so no reconnect fires while the rest closes; the remote daemons are left alone.
+      await devices?.dispose();
       if (bridge) await bridge.dispose();
       else if (owner) await owner.dispose();
     } catch (error) {
       closeFailure = error;
     } finally {
       bridge = null;
+      devices = null;
       owner = null;
       tray?.destroy();
       tray = null;
@@ -538,7 +548,7 @@ export async function startDesktop(): Promise<void> {
       if (liveServiceActionRecord(root)?.phase === 'running') {
         void guardedService(() => followServiceHelper(serviceRuntime, lost, loginItemHooks)).catch(() => {
           controlledDisconnect = false;
-          showConnectionLost();
+          if (!bridge?.deferLocalLost()) showConnectionLost();
         });
         return true;
       }
@@ -546,7 +556,7 @@ export async function startDesktop(): Promise<void> {
       const deadline = setTimeout(() => cancel.abort(), restartDeadlineMs);
       restartCancel = cancel;
       const done = reconnectPassive(cancel).catch(() => {
-        if (!terminating && !cleanupPromise && cancel.signal.reason !== startTakesOver) showConnectionLost();
+        if (!terminating && !cleanupPromise && cancel.signal.reason !== startTakesOver && !bridge?.deferLocalLost()) showConnectionLost();
       }).finally(() => {
         clearTimeout(deadline);
         if (passive?.cancel === cancel) passive = undefined;
@@ -570,6 +580,16 @@ export async function startDesktop(): Promise<void> {
       });
     }
 
+    // devices-ui-1a 4.8: the devices this computer manages; the list never stops the app from starting.
+    const box = electronSecretBox(safeStorage);
+    const registry = await openDeviceRegistry(join(app.getPath('userData'), 'devices.json'), box);
+    devices = createDeviceConnections({
+      registry, connector: secureConnector(), box,
+      client: { version: app.getVersion(), protocolVersion: PROTOCOL_VERSION },
+      log: createDeviceLog(join(app.getPath('userData'), 'devices.log')),
+    });
+    devices.setLocal({ status: 'online', serverInfo: owner.serverInfo });
+    powerMonitor.on('resume', onResume);
     bridge = installBridge(owner, current, paths, {
       observeCli: () => observeCli(cliOptions),
       repairCli: async () => {
@@ -651,7 +671,7 @@ export async function startDesktop(): Promise<void> {
       hide,
       confirmQuit,
       connectionLost: showConnectionLost,
-    });
+    }, devices);
     tray = createDesktopTray(icon, show, requestQuit);
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { label: 'Vonvon Bot', submenu: [
