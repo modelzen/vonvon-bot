@@ -16,15 +16,15 @@ import { createPublicKey } from 'node:crypto';
 import { assertNoBundledClaude } from './desktop-backend-policy.mjs';
 import { fileEntries, listFiles, sha256 } from './package-tools.mjs';
 import { checkedProductVersion } from './product-version.mjs';
+import { PUBLISHED_TARGETS, archiveName } from './server-constants.mjs';
 import { stageDaemon } from './stage-daemon.mjs';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
 /**
- * Every package there is, built by default and published: the server manifest (standalone-manifest.ts SERVER_TARGETS)
- * and install.sh take exactly these two.
+ * PUBLISHED_TARGETS: every package there is, built by default and published; the server manifest
+ * (standalone-manifest.ts SERVER_TARGETS) and install.sh take exactly these two.
  */
-export const PUBLISHED_TARGETS = ['linux-x64', 'linux-arm64'];
-export const archiveName = (version, target) => `vonvon-server-${version}-${target}.tar.gz`;
+export { PUBLISHED_TARGETS, archiveName };
 /** TypeScript sources, declarations and source maps. */
 const SOURCE_FILE = /\.(?:[mc]?ts|map)$/;
 const APP_TOP = new Set(['package.json', 'bin', 'dist', 'ui', 'node_modules', 'NOTICE', 'LICENSE.bridge', 'LICENSE.paseo', 'PROVENANCE.md', 'import-core.json', 'server-update.json']);
@@ -228,7 +228,7 @@ export async function buildServer({ out, targets, cache, allowDirty, publicKeyFi
     await writeFile(join(app, 'server-update.json'), JSON.stringify(update.config, null, 2) + '\n');
     await assertNoBundledClaude(app);
     const nodeCache = cache ?? join(work, 'node-cache');
-    const summary = { version, sourceHead, sourceDirty, node: pins.version, updateKey: update.updateKey, external: staged.external, bundled: staged.bundled, files: {} };
+    const summary = { version, sourceHead, sourceDirty, node: pins.version, updateKey: update.updateKey, update: update.config, external: staged.external, bundled: staged.bundled, files: {} };
     const lockfileSha256 = sha256(await readFile(join(repository, 'package-lock.json')));
     const esbuild = JSON.parse(await readFile(join(repository, 'node_modules/esbuild/package.json'), 'utf8')).version;
     await mkdir(out, { recursive: true });

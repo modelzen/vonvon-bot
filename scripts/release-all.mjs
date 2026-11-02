@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { assertOutputLocation, canonicalPath, checkVersionGate, compareVersions, validateConfig, validateFirstRelease } from './release-mac.mjs';
 import { cosCredentialEnvNames, readCosConfig, readCosReleaseEvidence } from './release-cos-evidence.mjs';
 import { checkedProductVersion } from './product-version.mjs';
+import { STABLE_RECEIPT, UPLOAD_RECEIPT } from './publish-server.mjs';
+import { PUBLISHED_TARGETS, SERVER_BASE_URL, archiveName, installCommand, serverRequired } from './server-constants.mjs';
 import { assertSecureTransport, readStableManifest, validateReleaseInventory } from './verify-public-release.mjs';
 
 const repository = 'modelzen/vonvon-bot', workflow = 'windows-release.yml';
@@ -331,6 +333,35 @@ async function windowsArtifacts(state, r, env, polling, downloads) {
   }
 }
 
+const serverReport = state => join(state.out, 'server', `vonvon-server-${state.version}-build.json`);
+/** The two Linux server packages of this release are built, from this exact clean source, and unchanged since. */
+async function completedServer(state) {
+  if (!(await exists(serverReport(state)))) return false;
+  const summary = await readJSON(serverReport(state));
+  if (summary.version !== state.version || summary.sourceHead !== state.sha || summary.sourceDirty !== false) throw new Error('Server packages in this output belong to different release inputs');
+  for (const target of PUBLISHED_TARGETS) {
+    const entry = summary.files?.[target];
+    if (entry?.name !== archiveName(state.version, target) || digest(await readFile(join(state.out, 'server', entry.name))) !== entry.sha256) throw new Error('Server package bytes changed after the build');
+  }
+  return summary;
+}
+/**
+ * The Linux server packages (devices 7.6), after both Mac architectures: build-server.mjs needs the built web UI and
+ * the clean source the Mac helper leaves behind. Node comes from a cache kept in the output, checked against the pins.
+ */
+async function buildServerPackages(state, r, env) {
+  if (await completedServer(state)) { state.server = { phase: 'complete', report: serverReport(state) }; await saveState(state); return; }
+  state.server = { phase: 'running' }; await saveState(state);
+  const childEnv = { ...env, HOME: state.buildHome };
+  // A resumed release may have a new source worktree whose web UI is not built yet.
+  if (!(await exists(join(state.source, 'packages/ui/dist/index.html')))) await r.run('npm', ['run', 'build'], { cwd: state.source, env: childEnv });
+  await timed(state, 'server packages build', () => r.run(process.execPath, [join(state.source, 'scripts/build-server.mjs'), '--out', join(state.out, 'server'),
+    '--targets', PUBLISHED_TARGETS.join(','), '--node-cache', join(state.out, 'node-cache')], { cwd: state.source, env: childEnv }));
+  if (!(await completedServer(state))) throw new Error('Server build exited without its build report');
+  await checkedProductVersion(state.source, { serverBuildJSON: serverReport(state) });
+  state.server = { phase: 'complete', report: serverReport(state) }; await saveState(state);
+}
+
 /** Explicit build authorization submits four Apple jobs; publication is a separate helper invocation. */
 export async function buildRelease(options, dependencies = {}) {
   const r = runtime(dependencies);
@@ -390,6 +421,10 @@ export async function buildRelease(options, dependencies = {}) {
         if (!(await completedMac(state, architecture))) throw new Error('macOS helper exited without complete evidence');
         state.mac[architecture] = 'complete'; await saveState(state);
       }
+      await checkCancelled(state); await checkInputs(state);
+      if (windowsError) throw windowsError;
+      try { await buildServerPackages(state, r, buildEnv); }
+      catch (error) { state.server = { phase: 'failed-or-interrupted' }; await saveState(state); throw error; }
       await checkCancelled(state);
       if (windowsError) throw windowsError;
       await assertWindowsHealthy(state, r);
@@ -435,8 +470,16 @@ export async function releaseStatus({ out }, dependencies = {}) {
     ci: checks.status === 'fulfilled' ? pages(checks.value, 'check_runs').map(check => ({ name: check.name, status: check.status, conclusion: check.conclusion })) : 'unavailable; inspect GitHub',
     windows: run ? { runId: run.id, status: run.status, conclusion: run.conclusion, download: state.windows.download ?? 'not-started', url: run.html_url, jobs: jobTimings(pages(jobs ?? {}, 'jobs'), run.created_at) } : { dispatch: state.windows.dispatch, download: state.windows.download ?? 'not-started', status: state.windows.dispatch === 'not-requested' ? 'not-started' : windows.status === 'rejected' ? 'query failed; no new dispatch' : 'waiting for run discovery' },
     mac: { phase: state.mac.phase ?? 'not-started', architectures: await Promise.all(['arm64', 'x64'].map(architecture => appleProgress(state, architecture))), combined: state.macRelease ?? null },
+    server: await serverStatus(state),
     timings: state.timings, runners: { windows: state.runners, ci: state.ciRunners },
     publication: 'Use existing publication helpers after reviewing the candidates; this orchestrator never uploads or promotes stable.' };
+}
+
+async function serverStatus(state) {
+  const summary = await exists(serverReport(state)) ? await readJSON(serverReport(state)).catch(() => undefined) : undefined;
+  // required: from 0.9.0 release-publish plans nothing without this build, and the website handoff waits for its stable.
+  return { phase: state.server?.phase ?? 'not-started', required: serverRequired(state.version),
+    packages: PUBLISHED_TARGETS.flatMap(target => summary?.files?.[target] ? [{ target, file: summary.files[target].name, bytes: summary.files[target].size, sha256: summary.files[target].sha256 }] : []) };
 }
 
 export function jobTimings(jobs, queuedAt) {
@@ -460,7 +503,11 @@ export async function collectRelease({ out }, dependencies = {}) {
     const source = await readJSON(join(out, 'windows', 'github-build.json'));
     if (run?.conclusion !== 'success' || source.runId !== run.id || source.sourceSha !== state.sha) throw new Error('Windows publication receipt lacks a matching successful build provenance');
   }
-  for (const receipt of [mac, stable, windows].filter(Boolean)) {
+  // The server is part of every release from 0.9.0; before it, when the reviewed publication plan has it (cos-server.json existed).
+  const plan = await readOptional(join(out, 'publication-plan.json'));
+  const serverExpected = serverRequired(state.version) || !!plan?.candidate?.server;
+  const serverUpload = await readOptional(join(out, 'server', UPLOAD_RECEIPT)), serverStable = await readOptional(join(out, 'server', STABLE_RECEIPT));
+  for (const receipt of [mac, stable, windows, serverUpload, serverStable].filter(Boolean)) {
     if (receipt.version !== state.version || (receipt.sourceCommit ?? receipt.sourceSha) !== state.sha) throw new Error('Publication receipt version or source SHA differs from this release');
   }
   const macVerified = mac?.versionedVerification?.versionedObjectsVerified === true;
@@ -500,11 +547,21 @@ export async function collectRelease({ out }, dependencies = {}) {
     const expected = item.platform === 'mac' ? `https://dl.vonvon.cc/bot/mac/stable/${item.file}` : `https://dl.vonvon.cc/bot/windows/${state.version}/${item.file}`;
     if (item.url !== expected || item.bytes <= 0) throw new Error('Publication receipt contains an unexpected public download URL or size');
   }
-  const handoff = { format: 1, version: state.version, sourceSha: state.sha, readyForWebsite: macVerified && stableVerified && !!windows && downloads.length === 2 + windowsArchitectures.length && (!windows.updatesEnabled || updatesVerified),
+  const serverPackages = [];
+  if (serverUpload) for (const target of PUBLISHED_TARGETS) {
+    const file = archiveName(state.version, target), object = serverUpload.objects?.find(item => item.file === file);
+    if (!object || object.url !== `${SERVER_BASE_URL}/${state.version}/${file}` || !/^[a-f0-9]{64}$/.test(object.sha256 ?? '') || !Number.isSafeInteger(object.bytes) || object.bytes <= 0) throw new Error('Server receipt lacks a verified package record');
+    serverPackages.push({ target, file, url: object.url, bytes: object.bytes, sha256: object.sha256 });
+  }
+  const serverStableVerified = !!serverUpload && serverStable?.status === 'published' && serverStable.planSHA256 === (plan ? digest(await readFile(join(out, 'publication-plan.json'))) : undefined);
+  const handoff = { format: 1, version: state.version, sourceSha: state.sha, readyForWebsite: macVerified && stableVerified && !!windows && downloads.length === 2 + windowsArchitectures.length && (!windows.updatesEnabled || updatesVerified)
+      && (!serverExpected || serverStableVerified),
     mac: { versionedVerified: macVerified, stableVerified, notarization: mac?.notarization ?? stable?.notarization ?? null },
     windows: { published: !!windows, signed: false, updatesEnabled: updatesVerified, ...(updatesVerified ? { updateFeeds: updates.feeds } : {}) }, downloads,
+    // Linux only: Mac and Windows install the desktop app, which carries its server (owner 2026-11-01).
+    server: serverExpected ? { published: !!serverUpload, stableVerified: serverStableVerified, installCommand, packages: serverPackages } : null,
     evidence: { mac: state.macRelease ? join(state.macRelease, 'upload-receipt.json') : null, stable: state.macRelease ? join(state.macRelease, 'publish-receipt.json') : null,
-      windows: join(out, 'windows', 'windows-publish-receipt.json') } };
+      windows: join(out, 'windows', 'windows-publish-receipt.json'), server: serverExpected ? join(out, 'server', STABLE_RECEIPT) : null } };
   await atomicJSON(join(out, 'release-handoff.json'), handoff);
   runtime(dependencies).log(json(handoff));
   return handoff;
@@ -513,10 +570,10 @@ export async function collectRelease({ out }, dependencies = {}) {
 const help = `Usage: node scripts/release-all.mjs <prepare|build|resume|status|collect|cancel> --out /absolute/persistent/release [options]
 prepare  --repo /absolute/checkout --version X.Y.Z --sha FULL_MAIN_SHA --update-config /external/desktop-update.json --cos-config /external/readonly.json --notes-file /absolute/notes.md [--keychain-profile notelet-notary] [--first-release | --no-live-manifest]
          Checks source versions/main ancestry, repo AND inherited organization runners, config paths and signing/notary credentials. No Apple submissions or publication.
-build    Same options for a new release, or only --out for a prepared release, plus --authorize-notarization. Dispatches pinned Windows build, downloads and verifies it as soon as it succeeds while arm64 then x64 Mac helpers run, and assembles evidence. Never uploads or promotes stable.
+build    Same options for a new release, or only --out for a prepared release, plus --authorize-notarization. Dispatches pinned Windows build, downloads and verifies it as soon as it succeeds while arm64 then x64 Mac helpers run, then builds the two Linux server packages into OUT/server and assembles evidence. Never uploads or promotes stable.
 resume   --out ... --authorize-notarization [--recover-arm64 app=UUID|dmg=UUID] [--recover-x64 app=UUID|dmg=UUID]. Reuses original inputs, Apple IDs and Windows request. Unknown dispatch outcomes are queried, never automatically repeated.
 status   Queries CI/Windows and reads Apple stage evidence. Can run while build is active.
-collect  Validates matching publication receipts and writes release-handoff.json; readyForWebsite requires both public platforms and verified Mac stable.
+collect  Validates matching publication receipts and writes release-handoff.json; readyForWebsite requires both public platforms, verified Mac stable and, from 0.9.0 (before it, when the publication plan has the server), the server's verified stable.
 cancel   Creates OUT/CANCEL. Stops before the next stage; does not cancel jobs already submitted to Apple/GitHub. Remove only this marker deliberately before resuming.
 See docs/release-orchestration.md for publication commands, stage boundaries and recovery.`;
 
