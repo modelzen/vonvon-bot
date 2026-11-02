@@ -74,6 +74,16 @@ export type AdminIpcOp = … | { kind: 'authorizeSessionCall'; sessionId: string
 
 - `rpc/memory.ts`：`memoryAction(request, { origin: clientKind==='cli' ? 'cli' : 'ui', actor: decision ? { openId: decision.openId, role: decision.role } : undefined })`；`admin/memory.ts:84` 的 `deps` 加 `actor?: MemoryActor`，有就用它当 `MemoryActor` 传进 `memory-store`/`memory-authority`（落点规则照旧：role 是 owner/admin 且 openId 有值才进 bot 记忆，member/bot 进项目记忆），没有照今天的本地角色。
 
+### 4.5a D4a 审查后留给本片的（2026-11-02）
+
+D4a 在 host 先拒了几样它核对不了的，本片接上 `askBot` 后按下面打开，每一条都要有测试：
+
+- **记忆的改和删**（D4a 审查 SEC-3）：D4a 把会话的 `memory.edit/archive` 标成 deny。要打开，`SessionAction` 的 `memory` 带上 `op` 和 `itemId`，Bot 进程读出条目后跑 `memory-authority.ts` 的 `decideEdit`（Bot 记忆只有主人/管理员亲手打的那一轮能改；项目记忆只能改自己写的，或者主人/管理员；私聊记忆只能改本人的），过了才回 ok。测试：成员那一轮 archive Bot 记忆被拒，改别人写的项目条目被拒。
+- **写 Bot 记忆**（R4）：D4a 拒会话的 `memory.add {kind:'bot'}`（`BOT_MEMORY_FROM_SESSION`）。本片按 4.5 的落点规则放开：主人/管理员亲手打的那一轮进 Bot 记忆，其余落到本群的项目记忆。`memoryAction` 已经按 `deps.actor` 记角色，只有 owner/admin 记成 trusted。
+- **私聊记忆**（SEC-6、R2）：D4a 拒会话的 `kind:'dm'` 记忆（`DM_MEMORY_FROM_SESSION`）。要打开，`askBot` 回的 `openId` 必须等于 `scope.openId`（和 `decideAdd/decideEdit` 只给本轮请求者自己的一样）；或者私聊令牌发出时把对方 openId 记进 `SessionRecord`。测试：管理员 A 的私聊会话读写主人和 Bot 的私聊记忆被拒。
+- **私聊令牌读设置**（SEC-4）：私聊里 `settings_get` 只回 `{ scope, sections }`。私聊令牌的 `settings.read` 也要裁：agent 视图不带 `administrators`、`decisionModels`、`ownerOpenId` 的多余部分，`schema` 必填的字段按 D4a 的 `readOnlyInGroup` 那样只留必需的。
+- D4a 已经做了的不用再做：`--scope group=` 缩小后 `session{threadId}` 必须是那个群的会话（`threadsOf`）；令牌作废后已开的连接被关（4401）、下一条请求得到 `session_token_invalid`。
+
 ### 4.6 顺序
 
 4.1 → 4.2（先单测 registry）→ 4.3 → 4.4 → 4.5 → 集成测试。

@@ -32,7 +32,7 @@ export const badArgs = (message: string): CommandError => new CommandError('bad-
 
 /** The daemon's error codes that are a refusal (exit 4), with those protocol 2 adds (devices 第 12 节). */
 const REFUSED = new Set([
-  'unauthorized', 'forbidden', 'permission_denied', 'scope_required', 'session_token_missing', 'not_in_session', 'not-dm',
+  'unauthorized', 'forbidden', 'permission_denied', 'scope_required', 'session_token_missing', 'session_token_invalid', 'not_in_session', 'not-dm', 'not-group',
   'desktop_not_running', 'client_revoked', 'pairing_failed', 'rate_limited', 'pairing_limit', 'no_remote_address',
 ]);
 const CONNECTION = new Set(['protocol_mismatch', 'device_identity_changed']);

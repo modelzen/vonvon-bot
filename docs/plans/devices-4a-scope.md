@@ -90,9 +90,9 @@ export function createHostIpcResponder(api: HostApi, send): { onMessage(msg: unk
 | `command.refresh / listPendingGroups / listJoinedGroups / listGroupMembers` | 群令牌 host；私聊令牌 bot；评论 deny | 请求里的 `agentId` 必须等于 `appId`，否则 `permission_denied`；群令牌 `listJoinedGroups` 结果只留本群、`listGroupMembers` 的 `chatId` 必须是本群 |
 | `command.registerAgent / refreshAgentCredentials / bindGroup / setAgentEnabled / deleteAgent / cancelJob / restartHost`、`machine.stopHost` | deny | — |
 | `settings.read / sessions / models` | 群令牌 host；私聊 bot；评论 deny | 群令牌：`scope` 只能是 `project{chatId==本群}`（`sessions` 同），回复各段标只读、`reason:'not-dm'`（和 `settings_get` 在群里一致，复用它的标法）；私聊令牌（★ 之后）：`host` 段 deny、`agent{appId}`、`project{本 bot 的群}`、`session{appId}` |
-| `settings.save / act.*` | 群、评论 deny（**文字 `not-dm`**）；私聊 bot | 私聊令牌范围：`host` 段 deny；`agent{appId}`；`project{本 bot 的群 ∩ scope.group（有的话）}`；`act adminMember` 另在 D4b 要主人 |
-| `collaboration.history / context / project / providerModels / usage` | host | 限自己 bot；群令牌限本群（请求里的 `chatId`/项目 id 必须属于本群） |
-| `collaboration.createProject / editProject` | 群、评论 deny（`not-dm`）；私聊 bot | 私聊：`editProject` 的项目必须是本 bot 的（∩ scope.group） |
+| `settings.save / act.*` | 群、评论 deny（**文字 `not-dm`**）；私聊 bot | 私聊令牌范围：`host` 段 deny；`agent{appId}` 和不带项目的 act（`voice`、`adminMember`、`commentInstructions`）只在 `scope.group` 没给时放（带了 `group=` 就只能动那个群，设计 5.3，这一轮是主人也一样）；`project{本 bot 的群 ∩ scope.group（有的话）}`；`act adminMember` 另在 D4b 要主人 |
+| `collaboration.history / context / project / providerModels / usage` | host | 限自己 bot；群令牌限本群（请求里的 `chatId`/项目 id 必须属于本群）；`history` 回复里 provider 按目录列出的 `threads` 只留本群绑定的会话（同目录别的群、主人终端的不给） |
+| `collaboration.createProject / editProject` | 群、评论 deny（`not-dm`）；私聊 bot | 私聊：`createProject` 只在 `scope.group` 没给时放（建新群超出那个群）；`editProject` 的项目必须是本 bot 的（∩ scope.group） |
 | `collaboration.removeProject / clear / compact / resume / startGoal / stop / stopSubagent / endGoal / reminder / shareUsage` | deny | — |
 | `environment.*`、`machine.*`（除 `stopHost` 上面已 deny）、`admin.*`（除 `daemonStatus`、`negotiate`） | deny | — |
 | `directory.*`、`library.workspace / rename / previous / delete`、`contextPreview.get` | deny | — |
@@ -191,3 +191,87 @@ Mac 后验：U2 的维护子集界面；本片无专项。Windows：无。
 - `verifyPidLockOwner` 在会话里不跑：会话里连的是 pid 锁里的端口，没有 owner 校验；端口被抢占时最坏是令牌发给了抢占者，令牌只代表这条会话、24 小时失效、不能做运维，和设计 16.3 一致。
 - 群令牌的只读 `settings.read` 复用 `settings_get` 在群里的只读标法，具体字段要看 `admin/service.ts` 里它怎么标；若没有现成的"只读 + reason"结构，加一个 `readOnly?: { reason: 'not-dm' }`，行数 +40。
 - 完全访问档的 bot 能读 `local-credential` 自己连（设计 5.3、16.2）：本片不解决，文案在 U2，`product.md` 在 D0。
+
+## 实现时和计划不一样的地方
+
+1. **`secrets get` 不进 `LOCAL_ONLY`。** 计划说它"已有自己的拒绝"，但 `secrets.ts:69` 的 `refuseInSession` 只管 `list/set/remove/test`。`secrets get` 是 `secrets-getter` 的 exec 端点：会话里的 lark-cli 靠它取 App Secret，`secrets-get.test.ts` 就是在 `FEISHU_CODEX_BRIDGE=1` 下跑的。放进集合会让每个 Bot 会话里的 lark-cli 都失灵。`index.ts` 里的注释写了原因，`cli-bot-session.test.ts` 断言它不在集合里。
+2. **`memory.ts` 的整体拒绝保留，只删了 `schedule.ts` 的。** 这个基线上还没有 C5，`vonvon memory` 是在进程内直接调 `memoryAction(…, { origin: 'cli' })` 写文件，不经过 daemon。删掉拒绝，会话就能以主人终端的身份写记忆。等 C5 把记忆命令改成走 daemon RPC，再删这条拒绝。
+3. **会话里的 `daemon status`，有没有令牌都只读 pid 锁**（`source:'files'`，不带崩溃记录和暂停的 Bot），不连 daemon，原因有三：
+   - daemon 的快照要 `--scope` 才给；
+   - 崩溃文件里有别的 Bot；
+   - `verifyPidLockOwner` 会读 `local-credential`。
+
+   这样 `FEISHU_CODEX_BRIDGE=1 vonvon daemon status --json` 也能正常回答（自测 2 第 5 步）。代价是：会话里 daemon 不回应、但锁还在时，以前报连接错误，现在照锁回答"在运行"。`cli-machine.test.ts` 已相应改写：不在会话里的回退照旧，会话的情形另写一条测试。
+4. **这个基线上没有 D2 和 D3、I3 的东西。**
+   - 没有 `message-loop.ts`（D2）：`DRAIN_KINDS` 目前只在 `ws.ts` 和 `http.ts` 的 `control()` 两处用，D2 合入时它的 message loop 要改用同一个常量。
+   - 没有 `remote …`（D3）和 `update`（I3）：这些路径先登记在 `LOCAL_ONLY`。测试断言集合里只有这几条在当前命令树里找不到；自测 2 的 `remote enable 1.2.3.4` 现在得到的是 commander 的"未知命令"（exit 2）。
+5. **维护子集的 `protocol_mismatch`。** 错误码从 `permission_denied` 改成了 `protocol_mismatch`，`authz.test.ts` 和 `server-handshake.test.ts` 的旧断言已更新。`details` 由 `ws.ts` 的 `forProtocol1` 对协议 1（0.8 客户端）去掉，因为 0.8 严格解析错误信封；协议不同的其他客户端照常收到 `details`，测试用 `PROTOCOL_VERSION + 1`。"连续 20 条"按字面实现：中间有一条被放行就重新计数。
+6. **`AuthzDeps` 的两处改动：**
+   - **`groupsOf`** 回 `BoundGroup[]`（`name`、`chatId`、`projectId`），而不是 `Set<string>`：设置和协作请求按项目名指定项目，记忆请求按 `projectId` 指定，都要这几个字段。它读 `service.listProjects(appId)`（项目文件），不读快照，因为快照最多会落后 5 秒。
+   - **`askBot`** 的签名是 `(appId, sessionId, kind, request) → { ok, role, openId? } | { ok:false, reason, message }`，`grant` 只带 `role`/`openId`。计划里的 `actor?: ScheduleActor` 留给 D4b 按需要加。
+7. **群令牌的 `settings.read`。** 回复的每一段标 `access: { kind:'readonly', reason:'not-dm', message: NOT_DM_MESSAGE }`，`NOT_DM_MESSAGE` 就是 `registry.ts` 里那个常量，工具和 daemon 引用的是同一个。另外去掉了 `decisionModels`：哪些决策模型配了 key 属于本机密钥库的信息，不属于这个群。
+8. **测试的文件名和放法：**
+   - `cli-session.test.ts` 已经被 `vonvon session` 占用，新文件叫 `cli-bot-session.test.ts`。它是端到端测试：esbuild 打包的 CLI 跑在测试进程里的 `startApi` 上，`local-credential` 设成 0000（任何去读它的命令都会失败），代替计划里对 `connectLocal` 和 `readFile` 的 spy。
+   - "不连接"的证明：三种没有令牌的情形都在一个没有 daemon、没有锁的目录里跑。如果拒绝发生在读锁之后，结果会是 exit 3"daemon 没有运行"。
+   - `agent-entries.test.ts` 对应现有的 `agent-entry-registry.test.ts`；`handle-message-session` 加在 `run-retry.test.ts`，那里有现成的 orchestrator 测试架子；排空时的回复测在 `server-drain-control.test.ts`，`machine.coreUpdateStatus` 从"1001 关闭"那组挪成单独一条，那组改用 `checkCoreUpdate`。
+   - 拿不到令牌时，orchestrator 会先试 resume、再试新会话，每次都有自己的 entry，每个都被作废；测试按"发出的令牌 = 作废的令牌"断言，不断言只有一次。
+9. **自测 2 的做法：**
+   - 用 `packages/daemon/test/manual/session-probe.ts`，在进程内起 `startApi` 和一个假服务，而不是 `vonvon daemon start`。令牌只在 host 内存里，没有真 Bot 就没有别的办法发出来。
+   - `settings set` 换成了 `settings act voice test`：`settings set` 要先读设置视图，假服务没有；两者都是设置写操作，都在进 handler 之前被 `not-dm` 拒绝。
+   - 结果：缺 `--scope` exit 4，超范围 exit 4，范围正确 `ok:true`，群里改设置 exit 4 并给出 `not-dm` 那句，`FEISHU_CODEX_BRIDGE=1` 时 `daemon status` 正常、`schedule list` exit 4 `session_token_missing`，`daemon restart` 和 `pair` exit 4 `not_in_session`。
+10. **host 作废令牌：**
+    - **supervisor 按子进程记账：** 每个子进程只作废自己发出去的那些 sessionId，不按 appId `revokeAll`。这样旧进程退出和新进程起来撞在一起时，不会误作废新进程的会话；`revokeAll` 留在表上备用。
+    - **单 Bot 的 `vonvon run`（没有 supervisor）：** 自己持有一张表，交给自己的 `startApi`。
+    - **测试和没有 `host` 的调用方：** 会话照旧只带 `'1'` 这个标记，CLI 会以 `session_token_missing` 拒绝。这是安全的失败方向。
+11. **`withDaemon` 的 negotiate。** 发的是 `capabilities: ['cli']`。被拒时报的就是 daemon 的原话（不加"核对范围失败："前缀），退出码按 `rpcErrorKind` 算（`scope_required` → 4）。`--scope` 是挂在 `program` 上的全局选项，写在子命令前后都行。`command-error.ts` 把 `session_token_invalid` 和 `not-group` 加进了 exit 4 那组。
+12. **令牌握手：** 令牌查不到、对不上或闲置超时，都用 4401 `invalid_session_token` 关闭。令牌对、但 hello 里是别的协议，用 4001 `protocol_mismatch` 关闭：会话里跑的是这台 daemon 自己的 CLI，不给维护子集。
+
+## 审查后改了什么
+
+写作时 Claude 两路自查的 13 条（2026-11-02，不是独立审查；独立审查交给 Codex，见 PR），逐条复核代码，能复现的复现了。
+
+- **D4a-SEC-1 / D4A-R5（令牌作废后已开的连接还能用）→ 接受。** `SessionTokens` 加了 `active(sessionId, use)` 和 `onEnd`；作废、替换、闲置超时都通知，`http.ts` 收到后用 4401 `invalid_session_token` 关掉用这个令牌开的连接。`authorize` 每条请求先查 `sessionActive`（顺手记一次使用），不在了回 `session_token_invalid`；推快照前也查。测试：`session-tokens.test.ts` 新一条，`authz-session.test.ts` 的单元和端到端各一条。
+- **D4a-SEC-2（会话里 `service status` 读 `local-credential`）→ 接受。** `getServiceAdapter({ trustLock })`：会话里 systemd 和 launchd 都不验 owner，照锁报运行。`cli-bot-session.test.ts` 在凭据 0000 时断言 `running: true`。
+- **D4a-SEC-3（会话能改、删别人的记忆）→ 接受。** `memory.edit/archive` 对会话改成 deny，等 D4b 逐条跑 `decideEdit`，D4b 计划补了 4.5a。
+- **D4a-SEC-4 / D4A-R6（群令牌读设置多给了字段）→ 部分接受。** 判断提示词、Skill 和路径、`botProfile`、成员名单的姓名、`decisionModels` 都去掉了。`identity` 和 `members.openIds` 保留：协议 `projectViewSchema` 要求这两项，只回 `{scope, sections}` 的话 CLI 解析回复就会失败，`settings get` 和 `settings set --group` 在群里都会坏掉。留下的都属于本群：本群的群号、后端、会话自己的工作目录，以及本群的响应名单。
+- **D4a-SEC-5（`usage` 对会话放行）→ 接受。** `collaboration.usage` 单独一行，会话一律 deny，`providerModels` 照旧。
+- **D4a-SEC-6 / D4A-R2（私聊令牌的私聊记忆不核 openId；`session{threadId}` 不受 `group=` 缩小）→ 接受。** 会话的 `kind:'dm'` 记忆先一律拒（`DM_MEMORY_FROM_SESSION`），D4b 计划写明要核 openId。范围缩成一个群时（群令牌，或私聊带 `group=`），请求里点名的会话必须是那个群的（`AuthzDeps.threadsOf` 读 `listSessions`），设置读写和 `models` 的 `threadId` 都核。
+- **D4A-R1（群里改 Bot 级设置先读视图，拿到的是通用拒绝）→ 接受。** `settings.read.agent/read.session` 在群和评论里改成 `not-dm`，评论里的 `read.project/models/sessions` 也是。`cli-bot-session.test.ts` 补了 `settings set cards.showToolCalls=…`、`settings act admin add`、`settings act comment-instructions` 三条。
+- **D4A-R3（host 自己起的子进程被 `LOCAL_ONLY` 拒）→ 接受。** 加了 `withoutSessionMarkers`，supervisor 起 Bot、`__restart-after-exit`、重启时的 `daemon start`、`runStart` 起的 `daemon run` 都用它去掉 `VONVON_SESSION` 和 `FEISHU_CODEX_BRIDGE`。旧版本升级过来时，旧代码起的 helper 还带着这两个变量，所以 `__restart-after-exit`、`__daemon-control` 移出 `LOCAL_ONLY`；带 IPC 通道的 `daemon run`（supervisor 起的）也不拒。测试：supervisor 带着这两个变量起 Bot，子进程的 env 里没有；`FEISHU_CODEX_BRIDGE=1` 下 `__restart-after-exit` 走到自己的参数检查。
+- **D4A-R4（`memoryAction` 不用 actor，按 cli 记成可信）→ 接受。** 有 `deps.actor` 时按它记角色和 openId，只有 owner/admin 的那一轮记成 trusted。会话写 Bot 记忆先拒（`BOT_MEMORY_FROM_SESSION`），等 D4b 的落点规则。4.6 里“以成员身份放行”现在和代码一致了：会话写的记忆记成 member、不可信。
+- **D4A-R7（主人带的 `--scope` 不生效）→ 接受。** 按设计 5.3“给了就同样生效”：主人带 `--scope` 时，用 `scopedOwner(scope)` 做和会话一样的范围核对和快照、回复过滤（`filterSnapshot`、`listBot` 裁到那个群），但不套地方规则：主人照样能写本群设置、读完整视图。请求里没有点名 Bot 的（环境、机器、host 设置、`installCodex`）不受限。
+
+## Codex 审查后改了什么（任务 228–230）
+
+JP-VPS 上 Codex 的三份独立审查（228 通读全部 diff，229 安全和权限模块，230 Bot 进程、IPC、CLI、protocol/client），去重后 8 条，全部接受。每条先写失败的测试，在原代码上确认失败，再改。
+
+- **229-1 / 228-1（群会话经 history 读到同目录别的群、主人终端的会话）→ 接受。** 会话和带 `--scope` 的主人调 `collaboration.history`，回复里 provider 按目录列出的 `threads` 只留 sessionId 属于本群绑定会话的（`sessions` 里的），证明不了归属的不给；`http.ts` 的 collaboration 回复套上 `shown`。没给 `--scope` 的主人照旧看完整历史。测试：`authz-session.test.ts` 经真实 wire，两个群共用一个目录、主人在同目录开原生会话，群令牌和带范围的主人都只拿到本群的那条，别的 preview、name、sessionId 都不出现。
+- **229-2 / 228-3（私聊令牌带 `group=` 仍能改整个 Bot 的设置、建新群）→ 接受。** 范围只到一个群时（私聊带 `group=`，或主人带 `group=`），`settings.save` 的 `agent` 范围、不带项目的 `settings.act`（`voice`、`adminMember`、`commentInstructions`）和 `createProject` 一律拒，文字是新的 `ONE_GROUP_ONLY`。这一步在问 Bot 进程之前，所以这一轮是主人也照样拒。读整个 Bot 的设置不受影响（只读，不算"动"）。4.5 表的 `settings.save / act.*`、`createProject` 两行已同步。测试：单元的正反用例（含 `askBot` 回 owner），以及 wire 上 `createProject` 被拒、处理函数没被调。
+- **229-3 / 228-2（`schedule.listBot` 的回复没套 `decision.narrow`）→ 接受。** `http.ts` 的 schedule 回复改用 `shown(payload)`。测试：wire 上主人 `--scope bot=X,group=A` 的 `listBot` 只回 A；CLI 上 `schedule list --all --scope bot=X,group=A` 只回 A，不带 `--scope` 回 A 和 B。
+- **229-4（带范围的主人还能绑别的群、动别的 Bot）→ 接受。** command 按每种命令的目标核：`bindGroup`、`listGroupMembers` 核群；`setResponse`、`setPermission` 从 membershipId（`[appId, chatId]`）核 Bot 和群；`setAgentEnabled`、`deleteAgent`、`refreshAgentCredentials` 只在范围是整个 Bot 时放；`registerAgent` 超出任何范围；不点名 Bot 的（`installCodex`、`restartHost`、`cancelJob`）照旧是机器的。admin 里带 `agentId` 的核 Bot，`switchBackend` 再核项目，`confirmCardCallback` 按整个 Bot 算；library 的 `previous` 核群，`workspace`、`rename`、`delete` 的项目要是范围内的群绑的。测试：单元逐条，CLI 上 `group bind oc_outside … --scope bot=X,group=A` exit 4 且 `bindGroup` 没被调。
+- **230-1（Claude 常驻线程在两轮之间退出，令牌没作废）→ 接受。** `ClaudeAgentThread` 的消息流结束或出错（含硬中断之后）时调 `entry.revoke('dead')`，host 随即作废令牌、关掉用它开的连接；`resolveThread` 驱逐死线程时也 `close()` 它。Codex 没有同类路径：线程每轮结束就 release（`close()` 即作废），轮间不留进程；剩下的情况由驱逐时的 `close()` 收掉。测试：`session-token-lifecycle.test.ts` 用真 `ClaudeAgentBackend`（只换 SDK 消息流）、真 entries 和真令牌表，没有在跑的一轮时进程正常结束、出错两种，已开的连接收到 4401、旧令牌再握手也被 4401 关；`message-queue-races.test.ts` 断言驱逐时关了旧线程。
+- **230-2（显式凭据的 `connectLocal`，发现子进程仍读主人凭据）→ 接受。** `runStatus` 在 `VONVON_STATUS_FROM_FILES=1`（只有 `connectLocal` 的发现子进程这样跑）时只读 pid 锁，不验 owner、不读 `local-credential`。主人的两个调用方（CLI 的 `connectLocalDaemon`、`host/client.ts` 的 `readHostEndpoint`）连之前自己验过 owner，不受影响。测试：`cli-bot-session.test.ts` 用真打包的 CLI 做发现，`local-credential` 设成 0000，`connectLocal({ credential: 群令牌 })` 拿到 `bot-session:group`。
+- **230-3（评论会话 `schedule add` 被本地群解析截住，报 bad-args）→ 接受。** 会话里（serverInfo 的 principal 是 `bot-session:*`）快照是裁过的，本地解析不出的 `oc_` 群 id 原样发给 daemon，由 daemon 说为什么不行：评论、私聊给 `not-group`（exit 4），群会话点别的群给超范围。测试：CLI 上评论令牌 `schedule add … --group oc_y` exit 4 `not-group`。
+- **228-4 / 229-5（计划文件末尾多一个空行）→ 接受。** 已删，`git diff --check` 干净。
+
+## 合入集成分支（带 I3）
+
+2026-11-02 把 `claude/devices-integration`（新合入 I3a #632、I3b #633 的升级引擎）merge 进本分支。五处冲突，两边的行为都保留：
+
+- **`D/server/ws.ts`**：取本片的版本。I3 在这里只把排空白名单换成 `DRAIN_KINDS`，本片已经用同一个常量；令牌认证、维护子集、协议不同的处理都在，排空时 `coreUpdateStatus` 照样回复。
+- **`D/cli/commands/service.ts`**：import 取 I3 的 `userManagerProblem`（替换 `userManagerHint`），留着本片的 `inBotSession`：会话里 `service status` 只看锁。
+- **`D/cli/daemon-client.ts`**：取本片的会话路径：没令牌就在连接前拒，会话不读 `local-credential`，协议也照旧检查。`cliEntry` 的默认值换成 I3 的 `selfEntry()`。
+- **`D/cli/index.ts`**：取本片的 `LOCAL_ONLY`、`commandPath` 和 `--scope`。I3 往 `LEASED` 加的 `'vonvon update'` 改成 `'update'`，因为本片的 `commandPath` 不带 `vonvon` 前缀。I3 那行"会话里 update 不拿租约"删了：会话里的 `update` 在 preAction 就被 `LOCAL_ONLY` 拒（exit 4 `not_in_session`）。`runUpdateCommand` 自己的拒绝（I3-SEC-3）留着，算第二道。
+- **`D/host/restart.ts`**：取 I3 的重写（`deps.start`、按版本判成功、回滚）。`realDeps.start` 的 spawn 换成 `withoutSessionMarkers(process.env)`，D4A-R3 的处理照旧：助手起的 `daemon start`，回滚时再起的那次也一样，都不带会话标记。
+
+没冲突、但两边的语义要对上的：
+
+- `D/server/http.ts` 的 `control()` 自动合并后，`coreUpdateStatus` 的分支有两段（两边各加了一段），后面那段删了。
+- `machine.checkCoreUpdate`、`applyCoreUpdate`、`coreUpdateStatus` 原来就在 `authz.ts` 的表里，会话一律拒，维护子集照 `MAINTENANCE_KINDS`。I3 没有加新的 RPC 名，`parity-allowlist` 里 I3 的三条 pending 由 I3 删了，`cli-parity` 照旧通过。
+
+另起提交补的：
+
+- 会话里 `vonvon update`、`update --check`、`update --allow-downgrade --to <v>` 都 exit 4 `not_in_session`（`cli-bot-session.test.ts`）。断言"`LOCAL_ONLY` 里不在命令树上的只剩 `remote …`"：`update` 已经有了。
+- 安装脚本的两个隐藏命令 `__standalone-setup`、`__standalone-teardown`（I2）加进 `LOCAL_ONLY`。前一个会把 `current` 切到本机留着的某个版本，等于换个名字做升级或降级，设计 8.3 里"内部命令会话里一律 exit 4"也包括它们。只有 `install.sh`、`uninstall.sh` 会调这两个命令，host 不会起。
+- `D/host/service-action.ts`：桌面端开关登录时启动，host 会起 `service install|uninstall` 助手，这个助手也去掉会话标记。不去掉的话，在会话里起的 host（旧 daemon）起出来的助手会被 `LOCAL_ONLY` 拒。`machine-service-action.test.ts` 补了断言。
+- `standalone-restart.test.ts` 补一条：带着会话标记的重启助手，用真的 `start` 起 `daemon start`，子进程的环境里没有 `VONVON_SESSION`、`FEISHU_CODEX_BRIDGE`。

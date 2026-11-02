@@ -1,6 +1,5 @@
 import { scheduleRequestSchema, type Agent, type Membership, type ScheduleReply, type ScheduleRequest, type ScheduleRunRecord, type ScheduleSpec, type ScheduledTaskView } from '@vonvon/protocol';
 import { badArgs, CommandError } from '../command-error';
-import { inBotSession } from '../../config/session-env';
 import { formatAt, normalizeTimeZone, parseCron, parseLocal } from '../../bot/schedule/time';
 import { pickBot, pickGroup, print, want, withDaemon, type Daemon, type Io } from '../daemon-client';
 
@@ -10,7 +9,6 @@ export type ScheduleTarget = {
   every?: string; daily?: string; weekly?: string; at?: string; cron?: string;
 };
 
-const SESSION_REFUSED = '定时任务的命令不能在 Bot 的会话里用：在群里跟 Bot 说就能建和改任务；主人在桌面端或者自己的终端里管。';
 const NOT_FOUND = '本群没有这个任务。';
 const WHEN_FORMS = '--every 30m、--daily 09:00、--weekly mon,wed@10:00、--at "2026-11-01 14:00" 或 --cron "0 9 * * 1-5"';
 const later = (what: string): string => `可能已经${what}，运行 vonvon schedule list 查看。`;
@@ -146,15 +144,18 @@ function groupLines(tasks: readonly ScheduledTaskView[], names: ReadonlyMap<stri
 
 /** These also take the raw id of a group no longer bound, whose tasks list --all still shows; the rest would act in it. */
 const UNBOUND = new Set<ScheduleAction>(['list', 'runs', 'delete', 'pause']);
-function chatOf(memberships: readonly Membership[], bot: Agent, group: string, action: ScheduleAction): string {
+/**
+ * `session`: a Bot session's snapshot is cut to what it reaches (a comment's to no group), so a group id it does not
+ * show goes as it is and the daemon says why not (`not-group` outside a group, out of reach elsewhere; Codex review 230-3).
+ */
+function chatOf(memberships: readonly Membership[], bot: Agent, group: string, action: ScheduleAction, session: boolean): string {
   const bound = memberships.some(m => m.agentId === bot.id && (m.groupId === group || m.name === group));
   // The bot process still checks the scope: an id it has no such task under is not-found.
-  return !bound && UNBOUND.has(action) && /^oc_/.test(group) ? group : pickGroup(memberships, bot, group).groupId;
+  return !bound && (session || UNBOUND.has(action)) && /^oc_/.test(group) ? group : pickGroup(memberships, bot, group).groupId;
 }
 
-export async function runSchedule(action: ScheduleAction, target: ScheduleTarget, io: Io, daemon: Daemon = withDaemon, env: NodeJS.ProcessEnv = process.env): Promise<void> {
-  // Before connecting: a sandbox cannot reach the daemon, and the terminal's credentials are the owner's.
-  if (inBotSession(env)) throw new CommandError('refused', SESSION_REFUSED, { reason: 'not_in_session' });
+/** In a Bot's session the connection carries the session's token and `--scope`, and the daemon judges (devices-4a 4.9). */
+export async function runSchedule(action: ScheduleAction, target: ScheduleTarget, io: Io, daemon: Daemon = withDaemon): Promise<void> {
   const all = action === 'list' && Boolean(target.all);
   if (all && target.group !== undefined) throw badArgs('--group 和 --all 只能选一个。');
   if (!all && target.group === undefined) throw badArgs(`要给 --group <群>（群 id oc_… 或项目名）${action === 'list' ? '，或者用 --all 看这个 Bot 的全部任务' : ''}。`);
@@ -173,7 +174,7 @@ export async function runSchedule(action: ScheduleAction, target: ScheduleTarget
   const taskId = target.taskId ?? '';
   const { what, kind } = ACTIONS[action];
 
-  const { reply, names } = await daemon(async (call): Promise<{ reply: ScheduleReply; names?: ReadonlyMap<string, string> }> => {
+  const { reply, names } = await daemon(async (call, info): Promise<{ reply: ScheduleReply; names?: ReadonlyMap<string, string> }> => {
     const snapshot = await call('读取快照', c => c.snapshot());
     const bot = pickBot(snapshot.agents, target.bot);
     // Checked outside the call, whose own errors all become connection, failed or outcome-unknown.
@@ -182,7 +183,8 @@ export async function runSchedule(action: ScheduleAction, target: ScheduleTarget
       return call(as.what, c => c.schedule(bot.id, valid), as.unknown ? { unknown: as.unknown } : {});
     };
     if (all) return { reply: await send({ action: 'listBot' }), names: new Map(snapshot.memberships.filter(m => m.agentId === bot.id).map(m => [m.groupId, m.name])) };
-    const chatId = chatOf(snapshot.memberships, bot, target.group!, action);
+    const session = info !== undefined && 'principal' in info && info.principal?.startsWith('bot-session:') === true;
+    const chatId = chatOf(snapshot.memberships, bot, target.group!, action, session);
     // A list before the change itself is only a read: a lost reply to it changed nothing.
     const list = async () => want(ACTIONS.list.what, await send({ action: 'list', chatId }, ACTIONS.list), 'tasks');
     const find = async () => {
