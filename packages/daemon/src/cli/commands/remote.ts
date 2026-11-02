@@ -116,7 +116,7 @@ async function pickAddress(candidates: readonly Candidate[], terminal: Terminal,
       if (picked) return picked;
     }
     if (typed && isIP(canonicalHost(typed))) return { host: canonicalHost(typed) };
-    io.write(`输入编号，1 到 ${shown.length}。\n`);
+    io.write(`输入编号 1 到 ${shown.length}，或者直接输入一个 IP。\n`);
   }
 }
 
