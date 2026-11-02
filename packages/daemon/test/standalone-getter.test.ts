@@ -66,11 +66,11 @@ const legacyGetter = (installRoot: string, version: string, appDir: string): str
 it('writes a getter that runs current for any install root and data directory path', async () => {
   for (const name of NASTY) {
     const { installRoot, a } = await install(name, ['1.0.0', '1.0.1']);
-    await switchCurrent(installRoot, '1.0.1', 'linux');
+    await switchCurrent(installRoot, '1.0.1');
     state.appDir = a;
     await ensureSecretsGetterWrapper(installRoot);
     expect(runGetter(a), JSON.stringify(name)).toEqual(ran('1.0.1', a));
-    await switchCurrent(installRoot, '1.0.0', 'linux');
+    await switchCurrent(installRoot, '1.0.0');
     expect(runGetter(a), JSON.stringify(name)).toEqual(ran('1.0.0', a));
   }
 });
@@ -82,9 +82,9 @@ it('moves an older getter onto current before the cleanup removes its release, w
     state.appDir = a;
     await writeFile(join(a, 'secrets-getter'), legacyGetter(installRoot, '1.0.0', a), { mode: 0o700 });
     expect(runGetter(a)).toEqual(ran('1.0.0', a));
-    await switchCurrent(installRoot, '1.0.2', 'linux');
+    await switchCurrent(installRoot, '1.0.2');
     writeUpdateStatus({ phase: 'done', ok: true, from: '1.0.1', to: '1.0.2', previous: '1.0.1', at: 9 });
-    await settleUpdateAtStartup({ version: '1.0.2', installRoot, platform: 'linux' });
+    await settleUpdateAtStartup({ version: '1.0.2', installRoot });
     // Before, with a `'` in the path: the getter still named 1.0.0, which the cleanup removed; it exited non-zero.
     expect((await readdir(join(installRoot, 'releases'))).sort(), JSON.stringify(name)).toEqual(['1.0.1', '1.0.2']);
     expect(runGetter(a), JSON.stringify(name)).toEqual(ran('1.0.2', a));
@@ -96,9 +96,9 @@ it('removes no release while the getter of this data directory could not be move
   state.appDir = a;
   await writeFile(join(a, 'secrets-getter'), legacyGetter(installRoot, '1.0.0', a), { mode: 0o700 });
   await mkdir(join(a, `secrets-getter.tmp-${process.pid}`)); // the rewrite's temporary file cannot be written
-  await switchCurrent(installRoot, '1.0.2', 'linux');
+  await switchCurrent(installRoot, '1.0.2');
   writeUpdateStatus({ phase: 'done', ok: true, from: '1.0.1', to: '1.0.2', previous: '1.0.1', at: 9 });
-  await settleUpdateAtStartup({ version: '1.0.2', installRoot, platform: 'linux' });
+  await settleUpdateAtStartup({ version: '1.0.2', installRoot });
   // Before: the failed rewrite was logged and the cleanup went on to remove 1.0.0, which the getter still names.
   expect((await readdir(join(installRoot, 'releases'))).sort()).toEqual(['1.0.0', '1.0.1', '1.0.2']);
   expect(runGetter(a)).toEqual(ran('1.0.0', a));
@@ -107,27 +107,27 @@ it('removes no release while the getter of this data directory could not be move
 // Codex 221 P2 (1): a data directory whose daemon does not run keeps its getter through other data directories' updates
 it('keeps the getter of a data directory whose daemon does not run working through two updates of another', async () => {
   const { installRoot, a, b } = await install(`installer's root`, ['1.0.0', '1.0.1', '1.0.2']);
-  await switchCurrent(installRoot, '1.0.0', 'linux');
+  await switchCurrent(installRoot, '1.0.0');
   state.appDir = b;
   await ensureSecretsGetterWrapper(installRoot);
   expect(await readFile(join(b, 'secrets-getter'), 'utf8')).not.toContain('releases');
   state.appDir = a;
-  await switchCurrent(installRoot, '1.0.1', 'linux').then(() => switchCurrent(installRoot, '1.0.2', 'linux'));
+  await switchCurrent(installRoot, '1.0.1').then(() => switchCurrent(installRoot, '1.0.2'));
   writeUpdateStatus({ phase: 'done', ok: true, from: '1.0.1', to: '1.0.2', previous: '1.0.1', at: 9 });
-  await settleUpdateAtStartup({ version: '1.0.2', installRoot, platform: 'linux' });
+  await settleUpdateAtStartup({ version: '1.0.2', installRoot });
   expect((await readdir(join(installRoot, 'releases'))).sort()).toEqual(['1.0.1', '1.0.2']);
   expect(runGetter(b)).toEqual(ran('1.0.2', b));
 });
 
 it('keeps the release current names when another data directory switched it after this daemon read it', async () => {
   const { installRoot, a, b } = await install('switched meanwhile', ['1.0.0', '1.0.1', '1.0.2']);
-  await switchCurrent(installRoot, '1.0.1', 'linux');
+  await switchCurrent(installRoot, '1.0.1');
   state.appDir = b;
   await ensureSecretsGetterWrapper(installRoot);
   state.appDir = a;
   writeUpdateStatus({ phase: 'done', ok: true, from: '1.0.0', to: '1.0.1', previous: '1.0.0', at: 9 });
-  state.afterRead = () => switchCurrent(installRoot, '1.0.2', 'linux');
-  await settleUpdateAtStartup({ version: '1.0.1', installRoot, platform: 'linux' });
+  state.afterRead = () => switchCurrent(installRoot, '1.0.2');
+  await settleUpdateAtStartup({ version: '1.0.1', installRoot });
   expect(state.afterRead).toBeUndefined();
   // Before: the cleanup kept the 1.0.1 and 1.0.0 read before the switch and removed 1.0.2, which `current` named; the
   // getter of data directory B, and the service definitions, then ran nothing.

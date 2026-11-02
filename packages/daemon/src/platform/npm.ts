@@ -10,7 +10,7 @@ import { classifyDistribution, nearestPackageRoot } from '../service/distributio
  * own Node, which in the desktop app is Electron in Node mode, so a Mac without Node can still install. `undefined`
  * means none: callers fall back to `npm` on PATH, which is what the npm-installed CLI uses.
  */
-export function bundledNpmCli(env: NodeJS.ProcessEnv = process.env, daemonRoot = nearestPackageRoot(fileURLToPath(import.meta.url)), execPath = process.execPath, platform: NodeJS.Platform = process.platform): string | undefined {
+export function bundledNpmCli(env: NodeJS.ProcessEnv = process.env, daemonRoot = nearestPackageRoot(fileURLToPath(import.meta.url)), execPath = process.execPath): string | undefined {
   const override = env.VONVON_NPM_CLI;
   if (override && isAbsolute(override) && isFile(override)) return override;
   const distribution = classifyDistribution(daemonRoot);
@@ -20,10 +20,10 @@ export function bundledNpmCli(env: NodeJS.ProcessEnv = process.env, daemonRoot =
       return isFile(cli) ? cli : undefined;
     }
     if (distribution.kind !== 'standalone') return undefined;
+    // The release's own Node and npm, laid out as in the official Linux archive (scripts/build-server.mjs).
     const node = join(dirname(realpathSync(daemonRoot)), 'node');
-    const windows = platform === 'win32';
-    if (realpathSync(execPath) !== realpathSync(windows ? join(node, 'node.exe') : join(node, 'bin', 'node'))) return undefined;
-    const cli = windows ? join(node, 'node_modules', 'npm', 'bin', 'npm-cli.js') : join(node, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    if (realpathSync(execPath) !== realpathSync(join(node, 'bin', 'node'))) return undefined;
+    const cli = join(node, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
     return isFile(cli) ? cli : undefined;
   } catch { return undefined; }
 }

@@ -8,7 +8,7 @@ import { paths } from '../config/paths';
 import { isGeneratedGetter } from '../config/data-compatibility';
 import { ensureSecretsGetterWrapper, secretsGetterContents } from '../config/store';
 import { STEADY_OWNER_MS } from '../host/restart';
-import { extractTarGz, extractZip, removeStaging } from './archive';
+import { extractTarGz, removeStaging } from './archive';
 import { isCompleteRelease, readCurrent, switchCurrent, VERSION } from './current-release';
 import { nearestPackageRoot } from './distribution';
 import { fetchManifest, ManifestError, readServerUpdateConfig, serverTarget, type Fetch, type Manifest, type ServerUpdateConfig } from './standalone-manifest';
@@ -173,7 +173,7 @@ export type ApplyDeps = StandaloneDeps & {
   stopping?: () => boolean;
   /** Some daemon process holds the pid lock (the CLI asks): a `restarting` record may still be someone's. */
   ownerAlive?: boolean;
-  extract?: (archive: string, into: string, zip: boolean) => Promise<void>;
+  extract?: (archive: string, into: string) => Promise<void>;
   /** Sees each record written, in order. */
   onStatus?: (status: UpdateStatus) => void;
 };
@@ -247,12 +247,11 @@ export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): {
     const target = serverTarget(platform, deps.arch);
     if (!target) throw new Failure(`这台电脑（${platform}-${deps.arch ?? process.arch}）没有对应的服务端包。`);
     const file = manifest.files[target];
-    const zip = target.startsWith('win-');
     const staging = join(root, 'releases', `${version}.part`);
     await removeStaging(root, version);
     try {
       await mkdir(staging, { recursive: true });
-      const archive = join(staging, `download.${zip ? 'zip' : 'tar.gz'}`);
+      const archive = join(staging, 'download.tar.gz');
       let response: Response;
       try { response = await fetcher(file.url, { signal: AbortSignal.timeout(600_000) }); }
       catch (error) { throw new Failure(`下载失败：${error instanceof Error ? error.message : String(error)}`); }
@@ -280,9 +279,9 @@ export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): {
       if (transferred !== file.size || hash.digest('hex') !== file.sha512) throw new Failure('下载内容和发布清单不一致');
       log.info(EVENTS, 'update-standalone-downloaded', { version, size: file.size });
       step('unpacking');
-      await (deps.extract ?? ((source, into, isZip) => (isZip ? extractZip : extractTarGz)(source, into)))(archive, staging, zip);
+      await (deps.extract ?? extractTarGz)(archive, staging);
       await rm(archive, { force: true });
-      const node = join(staging, 'node', platform === 'win32' ? 'node.exe' : join('bin', 'node'));
+      const node = join(staging, 'node', 'bin', 'node');
       const marker = await readFile(join(staging, 'standalone.json'), 'utf8').then(text => JSON.parse(text) as { version?: unknown }, () => ({}) as { version?: unknown });
       if (marker.version !== version || !await isFile(join(staging, 'app', 'bin', 'vonvon.mjs')) || !await isFile(node)) throw new Failure('下载的服务端包不完整。');
       await chmod(node, 0o755);
@@ -298,7 +297,7 @@ export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): {
   const done = (async (): Promise<UpdateStatus> => {
     let version: string | undefined;
     try {
-      const current = (await readCurrent(root, platform))?.version;
+      const current = (await readCurrent(root))?.version;
       if (options.allowDowngrade) {
         version = options.version;
         if (!version) throw new Failure('降级要写明版本：--allow-downgrade --to <版本>。');
@@ -325,7 +324,7 @@ export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): {
       if (!prior) throw new Failure(`本机找不到正在运行的 ${from} 的完整目录，切过去以后没有能退回的版本，这次不更新。`);
       step('switching', { to: version });
       if (deps.stopping?.()) throw new Failure('服务端开始停止或重启了，这次没有切换版本；下载好的版本留着，下次更新直接用。');
-      await switchCurrent(root, version, platform, prior);
+      await switchCurrent(root, version);
       log.info(EVENTS, 'update-standalone-swapped', { from, to: version, previous: prior });
       if (!deps.requestRestart) return write({ phase: 'done', ok: true, from, to: version, previous: prior, at, message: `已切到 ${version}，运行 vonvon daemon start 生效。` });
       const restarting = write({ phase: 'restarting', ok: true, from, to: version, previous: prior, at, detail: 'draining' });
@@ -368,8 +367,9 @@ async function runningVersions(installRoot: string): Promise<string[]> {
 /**
  * Keeps the given releases, the one `current` names and those live processes run (noteRunning); removes other versions
  * and every `.part`. Only direct children of `releases/` named like a version, real directories, holding
- * `standalone.json` or named `.part`. A directory in use (Windows) is left for the next start, and so is all of it while
- * an update holds `releases.lock`, when `current` cannot be read, or while this data directory's getter is not on it.
+ * `standalone.json` or named `.part`. A directory that cannot be removed is left for the next start, and so is all of
+ * it while an update holds `releases.lock`, when `current` cannot be read, or while this data directory's getter is not
+ * on it.
  *
  * `current` is read here, under `releases.lock` (review 221): every switch to a newly unpacked release holds that lock
  * (startStandaloneUpdate), so what is read is what stays current until the lock goes. The caller's `keep` may be older
@@ -387,7 +387,7 @@ export async function cleanupReleases(installRoot: string, keep: ReadonlyArray<s
     // This data directory's getter still naming a release (its rewrite at startup failed) keeps every release.
     const getter = await ownGetter(installRoot);
     if (getter === 'stale' || getter === 'unreadable') { log.warn(EVENTS, 'update-cleanup-skipped', { name: 'getter', code: getter }); return; }
-    const kept = [...keep, current?.version, current?.previous, ...await runningVersions(installRoot)];
+    const kept = [...keep, current?.version, ...await runningVersions(installRoot)];
     const releases = join(installRoot, 'releases');
     for (const name of await readdir(releases).catch(() => [] as string[])) {
       const match = /^(\d+\.\d+\.\d+)(\.part)?$/.exec(name);
@@ -434,8 +434,8 @@ async function moveGetterToCurrent(installRoot: string): Promise<void> {
  * was moved back meanwhile); then releases besides the current and previous one, and those live daemons of other data
  * directories run, go.
  */
-export async function settleUpdateAtStartup(options: { version: string; installRoot?: string; platform?: NodeJS.Platform; alive?: () => boolean; pause?: (ms: number) => Promise<void> }): Promise<void> {
-  if (options.installRoot && (options.platform ?? process.platform) !== 'win32') await moveGetterToCurrent(options.installRoot);
+export async function settleUpdateAtStartup(options: { version: string; installRoot?: string; alive?: () => boolean; pause?: (ms: number) => Promise<void> }): Promise<void> {
+  if (options.installRoot) await moveGetterToCurrent(options.installRoot);
   const status = readUpdateStatus();
   if (status?.phase === 'installing') {
     const release = acquireUpdateLock();
@@ -456,7 +456,7 @@ export async function settleUpdateAtStartup(options: { version: string; installR
   // one that listens and dies at once leaves the record to the helper, which then switches back.
   if (status?.phase === 'restarting') await (options.pause ?? (ms => new Promise<void>(resolve => { setTimeout(resolve, ms).unref(); })))(STEADY_OWNER_MS);
   if (options.alive?.() === false) return;
-  const current = await readCurrent(options.installRoot, options.platform).catch(() => null);
+  const current = await readCurrent(options.installRoot).catch(() => null);
   if (status?.phase === 'restarting' && status.previous !== undefined) {
     if (status.to !== options.version) finishOwnedUpdate(status, 'error', `重启后仍是 ${options.version}`);
     else if (current?.version !== options.version) finishOwnedUpdate(status, 'error', `升级和回滚撞上了，当前运行 ${options.version}`);
@@ -467,8 +467,8 @@ export async function settleUpdateAtStartup(options: { version: string; installR
   if (!release) return; // an update of this data directory is under way
   try {
     const latest = readUpdateStatus();
-    // Never the current release itself: a record or `current.txt` naming it would leave no release to go back to.
-    const candidates = [current.previous, latest?.to === current.version ? latest.previous : undefined, ...await keptReleases(options.installRoot, current.version)];
+    // Never the current release itself: a record naming it would leave no release to go back to.
+    const candidates = [latest?.to === current.version ? latest.previous : undefined, ...await keptReleases(options.installRoot, current.version)];
     const previous = candidates.find(version => version !== undefined && version !== current.version);
     await cleanupReleases(options.installRoot, [current.version, previous]);
   } finally { release(); }
