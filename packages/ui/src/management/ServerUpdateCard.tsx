@@ -27,6 +27,8 @@ export const distributionLabel = (kind: string): string => DISTRIBUTION_LABEL[ki
 const unknownRequest = (error: unknown): boolean => error instanceof RpcError && (error.code === 'unsupported' || error.code === 'invalid_request');
 
 export const bundledServerText = (name: string): string => `${name}的服务端是桌面端自带的，在那台电脑上的 Vonvon Bot 里更新。`;
+/** Beside the update button (owner 2026-11-02): the update restarts the server and does not wait for the turns. */
+export const UPDATE_INTERRUPTS = '更新会重启服务端，正在进行的对话会被中断。';
 export const remoteUpdateUnsupportedText = (name: string): string => `${name}上的 Vonvon Bot 不支持远程更新，请在那台设备上升级一次。`;
 
 /** The server's update, moved out of I3's `UpdatePanel`: in 高级运行设置 on this computer, and as 「X」的服务端 on the
@@ -101,7 +103,7 @@ export function ServerUpdateCard({request, variant, where, bundled, disabled = f
     {core && <SettingsRow title="当前版本" value={core.current} />}
     {core && <SettingsRow title="可用版本" value={core.latest ?? '更新源不可用'} />}
     <SettingsRow title="检查 Core 更新" trailing={<Button size="sm" disabled={off} onClick={() => void run({type: 'checkCoreUpdate'})}>检查 Core 更新</Button>} />
-    <SettingsRow title="更新外部 Core" trailing={<Button size="sm" disabled={off || following || !canApplyCoreUpdate(core)} onClick={() => void run({type: 'applyCoreUpdate'})}>更新外部 Core</Button>} />
+    <SettingsRow title="更新外部 Core" description={UPDATE_INTERRUPTS} trailing={<Button size="sm" disabled={off || following || !canApplyCoreUpdate(core)} onClick={() => void run({type: 'applyCoreUpdate'})}>更新外部 Core</Button>} />
     <SettingsRow title="更新进度" trailing={<Button size="sm" disabled={off} onClick={() => void run({type: 'coreUpdateStatus'})}>查看 Core 更新进度</Button>} />
     {progress}{statusLine}{messageLine}
   </SettingsGroup>;
@@ -113,7 +115,7 @@ export function ServerUpdateCard({request, variant, where, bundled, disabled = f
     {!unsupported && <SettingsRow title="安装方式" value={core ? distributionLabel(core.distribution.kind) : '尚未检查'} />}
     {core && !unsupported && <SettingsRow title="可用版本" value={core.latest ?? '更新源不可用'} />}
     {unsupported ? <p className="settings-operation-message" role="note">{remoteUpdateUnsupportedText(name)}</p>
-      : <SettingsRow title="更新" trailing={<span className="settings-inline-actions">
+      : <SettingsRow title="更新" description={canApplyCoreUpdate(core) ? UPDATE_INTERRUPTS : undefined} trailing={<span className="settings-inline-actions">
         <Button size="sm" disabled={off} onClick={() => void run({type: 'checkCoreUpdate'})}>检查更新</Button>
         {canApplyCoreUpdate(core) && <Button size="sm" variant="primary" disabled={off || following} onClick={() => void run({type: 'applyCoreUpdate'})}>更新{name}</Button>}
       </span>} />}

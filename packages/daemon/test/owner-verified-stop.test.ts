@@ -16,7 +16,7 @@ async function fixture(mode: Mode) {
   const home = await mkdtemp(join(tmpdir(), 'vonvon-verified-stop-'));
   const server = createServer();
   const credential = 'ab'.repeat(32);
-  const requests: { peer: string; type: string }[] = [];
+  const requests: { peer: string; type: string; reason?: unknown }[] = [];
   let upgrades = 0;
   let lock: PidLockInfo = { pid: process.pid, startedAt: new Date().toISOString(), listen: null };
   const sockets = createSocketServer({
@@ -24,7 +24,8 @@ async function fixture(mode: Mode) {
     info: () => ({ type: 'serverInfo', machineId: machineIdSchema.parse(randomUUID()), version: 'test', protocolVersion: 1 }),
     detached: () => {},
     request: async (peer, request) => {
-      requests.push({ peer: peer.id, type: 'type' in request.payload ? request.payload.type : 'action' in request.payload ? request.payload.action : request.method });
+      requests.push({ peer: peer.id, type: 'type' in request.payload ? request.payload.type : 'action' in request.payload ? request.payload.action : request.method,
+        ...'reason' in request.payload ? { reason: request.payload.reason } : {} });
       if (request.method === 'admin' && request.payload.type === 'daemonStatus') {
         if (mode === 'changed-lock') await writeFile(join(home, 'daemon.pid'), JSON.stringify({ ...lock, startedAt: new Date(Date.parse(lock.startedAt) + 1000).toISOString() }));
         peer.send({ type: 'response', id: request.id, method: 'admin', payload: { kind: 'daemonStatus', status: { startedAt: 1, installed: false, supported: false, running: true, selfHosted: true, version: 'test', pid: mode === 'wrong-pid' ? process.pid + 1 : process.pid } } });
@@ -62,6 +63,20 @@ it('authenticates, verifies fresh identity, and receives stop done over exactly 
     expect(JSON.parse(await readFile(join(f.home, 'daemon.pid'), 'utf8'))).toEqual(f.lock);
     expect(result).toEqual({ ok: true });
   } finally { kill.mockRestore(); await f.close(); }
+});
+
+// owner 2026-11-02: the desktop app stopping the older server it replaces says it is for an update; a plain stop does not
+it('carries an update reason on the stop only when asked to', async () => {
+  const f = await fixture('ready');
+  try {
+    await stopVerifiedOwner(f.home, f.lock, 'update');
+    expect(f.requests.find(request => request.type === 'stopHost')).toMatchObject({ reason: 'update' });
+  } finally { await f.close(); }
+  const plain = await fixture('ready');
+  try {
+    await stopVerifiedOwner(plain.home, plain.lock);
+    expect(plain.requests.find(request => request.type === 'stopHost')).not.toHaveProperty('reason');
+  } finally { await plain.close(); }
 });
 
 it.each(modes.filter(mode => mode !== 'ready'))('refuses %s without process signals or lock deletion', async mode => {

@@ -48,6 +48,7 @@ it('keeps external Core controls available when the installation supports them',
   expect(html).toContain('外部 Core / CLI');
   expect(html).toContain('检查 Core 更新');
   expect(html).toContain('更新外部 Core');
+  expect(html).toContain('更新会重启服务端，正在进行的对话会被中断。');
   expect(html).toContain('查看 Core 更新进度');
 });
 
@@ -59,7 +60,7 @@ it('offers the Core update to a standalone server too, and follows its steps in 
   expect(canApplyCoreUpdate(core('standalone', false))).toBe(false);
   expect(canApplyCoreUpdate(core('bundled', true))).toBe(false);
   expect(canApplyCoreUpdate(undefined)).toBe(false);
-  expect(coreStatusLine({phase: 'restarting', from: '1.0.0', to: '1.0.1', at: 1, detail: 'draining'})).toBe('等 Bot 做完手上的活 · 1.0.0 → 1.0.1');
+  expect(coreStatusLine({phase: 'restarting', from: '1.0.0', to: '1.0.1', at: 1, detail: 'draining'})).toBe('正在中断进行中的对话 · 1.0.0 → 1.0.1');
   expect(coreStatusLine({phase: 'installing', from: '1.0.0', at: 1, detail: 'downloading', progress: {transferred: 3, total: 4}})).toBe('下载中 75%');
   expect(coreStatusLine({phase: 'error', ok: false, from: '1.0.0', to: '1.0.1', at: 1, detail: 'waiting', rolledBack: true, message: '新版本 1.0.1 没有起来，已切回 1.0.0'})).toBe('更新失败：新版本 1.0.1 没有起来，已切回 1.0.0 · 1.0.0 → 1.0.1');
   expect(coreStatusLine({phase: 'a-phase-from-a-newer-daemon', at: 1})).toBe('进行中');
@@ -92,9 +93,10 @@ it('shows measured download progress and signed notes, then warns before an expl
   expect(html).toContain('aria-label="更新下载进度"');
   expect(html).toContain('修复连接\n改进升级');
   const ready = renderWith({...update, state: 'downloaded', downloadProgress: undefined});
-  expect(ready).toContain('已验证，可安装');
-  expect(ready).toContain('安装会短暂中断 Bot 连接');
-  expect(ready).toContain('也可以稍后安装');
+  expect(ready).toContain('已下载并验证');
+  expect(ready).toContain('重启时正在进行的对话会被中断');
+  expect(ready).toContain('>重启升级<');
+  expect(ready).not.toContain('稍后');
   expect(ready).not.toContain('<progress');
 });
 

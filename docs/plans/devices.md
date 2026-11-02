@@ -341,13 +341,13 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 
 - **清单** `https://dl.vonvon.cc/bot/server/stable/manifest.json`，Ed25519 签名（复用 Windows 清单的签名和校验代码 `DT/windows-update-manifest.mjs`、`scripts/windows-update-signing.mjs`，**用一把单独的服务端密钥**，公钥编进 daemon 和安装脚本）。签名内容照 Windows 的 `validateWindowsUpdatePayload` 那样严格（SEC-9：第 1 版只有 `{version, publishedAt, files}`，每个版本的签名清单又公开放在 `bot/server/<version>/manifest.json`，谁拿到 COS 写权限或配错了就能把旧版本的合法清单放到 stable 回滚所有人）：`{ schemaVersion: 1, product: 'vonvon-bot-server', channel: 'stable', version, publishedAt, files: { 'linux-x64': { url, sha512, size }, … } }`，`url` 必须等于 `https://dl.vonvon.cc/bot/server/<version>/vonvon-server-<version>-<os>-<arch>.<ext>`，`version` 必须是语义版本。`files` 只有 `linux-x64`、`linux-arm64` 两项，`<ext>` 是 `tar.gz`（owner 2026-11-01；I3 计划的 C1 原来写六项，按那里的说明改）。
 - **检查**：`machine.checkCoreUpdate` 对 `standalone` 读清单（对 `global-npm` 照旧 `npm view`，`D/service/update.ts:68-91`）；回复加 `distribution.kind: 'standalone'`、`channel`。**只接受比当前和历史最高都新的版本**（`newer()`，照 `windows-updates.ts:108-110`），历史最高和上次见到的 `publishedAt` 记进 `standalone.json`，`publishedAt` 倒退的清单拒绝（防冻结）；降级只能在本机 `vonvon update --allow-downgrade --to <v>` 显式要求。默认不自动升级（升级一节）；daemon 每 24 小时查一次只为了在界面上标"有新版本"。
-- **应用**（UPD-1：第 1 版让助手在旧 daemon 退出后才切 `current`，但 launchd `KeepAlive SuccessfulExit=false, ThrottleInterval 5` 和 Windows 监督进程收到 75 立刻拉起、systemd 5 秒后拉起，拉起的都是还指向旧版的 `current`，助手看到"同端口换了 pid"就写 `done`——macOS、Windows 上升级报成功实际跑旧版（2026-11-01 起 `standalone` 只在 Linux，Windows 监督进程、Mac 的 launchd 对它已不适用，systemd 那种照样会发生）。改成和 npm 路径一样"先换文件再重启"，`update.ts:142-153`）：`machine.applyCoreUpdate` → `performStandaloneUpdate`：`update.lock`（已有）→ 下载到 `releases/<v>.part/`（校验 sha512 和清单签名）→ 改名 `releases/<v>/` → **原子切 `current`（rename）** → 把 `{ previous: <旧版> }` 写进 `update-status.json` → `requestRestart(port, update)`（已有：drain → bot 做完手上的活 → 退 75 → systemd 按 `current` 拉起**新版本**，不托管时由助手起）。`__restart-after-exit` 助手（`D/host/restart.ts`）改成：等新 owner 出现后**核对 `serverInfo.version === update.to`**，不只看 pid 变了；成功写 `done`；超时或版本不对 → 切回 `previous`、让管理器再拉起、写 `error`。助手和 Bot 子进程重起自己用的 `process.argv[1]`（`supervisor.ts:86`、`lifecycle.ts:195`、`restart.ts:13`、`service-action.ts:36`、`config/store.ts:59,74`）都改成钉在自己 `realpath` 所在的 release 上，免得排空期间重起的子进程加载新代码。`releases/` 只保留当前和上一版。
+- **应用**（UPD-1：第 1 版让助手在旧 daemon 退出后才切 `current`，但 launchd `KeepAlive SuccessfulExit=false, ThrottleInterval 5` 和 Windows 监督进程收到 75 立刻拉起、systemd 5 秒后拉起，拉起的都是还指向旧版的 `current`，助手看到"同端口换了 pid"就写 `done`——macOS、Windows 上升级报成功实际跑旧版（2026-11-01 起 `standalone` 只在 Linux，Windows 监督进程、Mac 的 launchd 对它已不适用，systemd 那种照样会发生）。改成和 npm 路径一样"先换文件再重启"，`update.ts:142-153`）：`machine.applyCoreUpdate` → `performStandaloneUpdate`：`update.lock`（已有）→ 下载到 `releases/<v>.part/`（校验 sha512 和清单签名）→ 改名 `releases/<v>/` → **原子切 `current`（rename）** → 把 `{ previous: <旧版> }` 写进 `update-status.json` → `requestRestart(port, update)`（已有：drain → 2026-11-02 起直接中断进行中的对话、最多 30 秒 → 退 75 → systemd 按 `current` 拉起**新版本**，不托管时由助手起）。`__restart-after-exit` 助手（`D/host/restart.ts`）改成：等新 owner 出现后**核对 `serverInfo.version === update.to`**，不只看 pid 变了；成功写 `done`；超时或版本不对 → 切回 `previous`、让管理器再拉起、写 `error`。助手和 Bot 子进程重起自己用的 `process.argv[1]`（`supervisor.ts:86`、`lifecycle.ts:195`、`restart.ts:13`、`service-action.ts:36`、`config/store.ts:59,74`）都改成钉在自己 `realpath` 所在的 release 上，免得排空期间重起的子进程加载新代码。`releases/` 只保留当前和上一版。
 - **`vonvon update [--check] [--json] [--allow-downgrade --to <v>]`**：注册到 `cli/index.ts`（今天 `runUpdate` 没注册，`install-update-release.md` §2）。daemon 在跑就发 `machine.applyCoreUpdate` 并轮询 `coreUpdateStatus`（排空期间也放行，4.7）；连接断了（daemon 退出重启那一刻）就改读本机 `update-status.json` 继续显示，直到 `done`/`error` 或 60 秒；"进行中、结果待定"退出码 6。没在跑就直接下载、切 `current`、不启动。`bundled`：daemon 在跑就和别的客户端一样发 `applyCoreUpdate`，由本机桌面端外壳更新（下一条）；桌面端没开或 daemon 没跑，照旧提示"在桌面端里更新"（今天的文案，`cli/commands/update.ts:26-29`）。
 - **从任何客户端升级**：就是 6.5 的按钮 + 4.5 的维护子集。
 - **桌面端自带的服务端（`bundled`）远程升级**（owner 2026-10-31 要，U4）。bundled 的 daemon 在 `.app` / NSIS 安装目录里，只能随桌面端整包更新，所以 daemon 不自己换文件，而是请同一台电脑上的桌面端外壳跑它已有的应用更新：
   - **通道**：用外壳今天就有的那条本机连接——主进程里 `AttachedDaemon.client` 的 loopback ws（local owner，`clientKind: 'desktop'`），事件和 `onLog`、`onBackendInstall` 一样在 `DT/bridge.ts:206-207` 那里订阅。外壳在 `admin.negotiate` 里声明能力 `desktop.self-update`；只有这台 loopback 上、local 主体、声明了这项能力的连接算"桌面端外壳在"，远程配对来的桌面端客户端（也是 `clientKind: 'desktop'`）不算。界面切到别的设备时外壳对本机的连接仍在（U1a），照样收得到。
   - **检查**：`checkCoreUpdate` 对 `bundled` 发事件 `desktopUpdateRequest { requestId, action: 'check', by: <客户端名> }`，外壳跑 `updater.check()`（macOS `DesktopUpdater`，`DT/updates.ts`；Windows `WindowsDesktopUpdater`，`DT/windows-updates.ts`），用新 RPC `machine.desktopUpdateReport { requestId, state, latest?, message, progress? }` 回结果；daemon 把它放进 `coreUpdate` 回复（`latest`、`hasUpdate`、`desktopShell: true`）。外壳不在 → `desktopShell: false`、`latest: null`；10 秒没回 → 同样按"没回应"处理。
-  - **应用**：`applyCoreUpdate` 对 `bundled` 发 `action: 'apply'`，外壳依次 `check()` → `install()`（下载：macOS Squirrel / Windows electron-updater，带原生签名和 Windows 发布签名校验，最多 10 分钟）→ `install()`（`quitAndInstall`，前面照旧跑 `beforeUpdateInstall`，`DT/main.ts:230-241`）。**排空就是现有的那套**：Windows 在 NSIS 换文件前 `stopHost`（drain，Bot 做完手上的活）；macOS 应用更新时 daemon 照旧跑着，重启后的新桌面端由启动修复用 `stopHost` 停掉旧的 bundled（drain）再起自己的（`login-item.ts:187,225-229`）。远程触发不改这个顺序。Windows 今天手动安装前的本机确认框（`main.ts:633-637`"安装并重启 Vonvon Bot？…可以选择稍后"）远程触发时不弹：点按钮的人就是主人本人（第二轮），确认在发起的客户端上做（第 15 节），没人守着的电脑上弹框会一直挂着；外壳改为在托盘和窗口里给一条不拦人的提示"「<客户端名>」正在更新这台电脑上的 Vonvon Bot"。
+  - **应用**：`applyCoreUpdate` 对 `bundled` 发 `action: 'apply'`，外壳依次 `check()` → `install()`（下载：macOS Squirrel / Windows electron-updater，带原生签名和 Windows 发布签名校验，最多 10 分钟）→ `install()`（`quitAndInstall`，前面照旧跑 `beforeUpdateInstall`，`DT/main.ts:230-241`）。**排空就是现有的那套**：Windows 在 NSIS 换文件前 `stopHost`（2026-11-02 起直接中断进行中的对话，最多 30 秒，`docs/plans/interrupt-and-install-text.md`）；macOS 应用更新时 daemon 照旧跑着，重启后的新桌面端由启动修复用 `stopHost` 停掉旧的 bundled（drain）再起自己的（`login-item.ts:187,225-229`）。远程触发不改这个顺序。Windows 今天手动安装前的本机确认框（`main.ts:633-637`"安装并重启 Vonvon Bot？…可以选择稍后"）远程触发时不弹（2026-11-02 起本机点"重启升级"也不弹了，确认框已去掉）：点按钮的人就是主人本人（第二轮），确认在发起的客户端上做（第 15 节），没人守着的电脑上弹框会一直挂着；外壳改为在托盘和窗口里给一条不拦人的提示"「<客户端名>」正在更新这台电脑上的 Vonvon Bot"。
   - **状态**：外壳每一步都 `desktopUpdateReport`，daemon 映射到 `coreUpdateStatus`（`installing` 带"正在 <设备> 上下载桌面端更新 45%" / `restarting` / `error`；枚举客户端按开放字符串解析，4.5），所以发起的客户端、`vonvon update` 都看得到进度；`restarting` 要在 `beforeUpdateInstall` 里 `cleanup()` 断开本机连接之前报出去（`main.ts:138-158`）。外壳报 `unavailable`（`updater.enabled` 为假：未签名、没配更新源）就原样回它的文字。重启那一刻连接断开，发起的客户端按 4.7 重连，比较 `serverInfo.version` 判成没成。
   - **外壳不在**：`applyCoreUpdate` 回 `desktop_not_running`（exit 4），文字"<设备> 的服务端是桌面端自带的，要那台电脑上的 Vonvon Bot 桌面端开着才能远程更新。在那台电脑上打开 Vonvon Bot 后再试，或者直接在那里更新。"（第 15 节）。
   - **授权**：`machine.desktopUpdateReport` 只收本机 loopback 上声明了 `desktop.self-update` 的外壳连接，已配对客户端和 bot-session 都 ✗（5.2）；它在对齐测试白名单里标 desktop-only（8.5）。`desktopUpdateRequest` 事件只发给那条连接。
@@ -428,7 +428,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 4. 配对：Linux 上 `vonvon pair` 拿链接，Mac、Windows 在桌面端点"生成连接链接"；客户端设置 → 设备 → 添加 → 粘贴 → 起名；链接 10 分钟有效、只用一次；一台客户端一条；链接会进你的 Agent 的对话记录；配对成功后被连的那台会提示，不是你就撤销。
 5. 切换和日常：切换设备、"在 <设备> 上把 Codex 配置好"是什么意思、选目录选的是那台设备的、托管安装装在那台设备上。
 6. 撤销和改名：在被连的那台设备上（桌面端"允许别的设备连接"或 `vonvon clients ls/revoke`）；授权不会过期，不用的客户端要自己撤销；一台客户端电脑上装了完全访问档的 Bot，它配对过的设备都在同一个信任范围里；完全访问的群里，群成员能让 Bot 在这台设备上做任何事，包括改 vonvon 的设置，只给信任的群用。
-7. 升级：客户端里一键、`vonvon update`、版本对不上的提示；桌面端自带的服务端也能从别的设备一键更新，前提是那台电脑上的 Vonvon Bot 桌面端开着（它会下载、等 Bot 做完手上的活再重启）；0.8 及更早的要先在那台电脑上更新一次。
+7. 升级：客户端里一键、`vonvon update`、版本对不上的提示；桌面端自带的服务端也能从别的设备一键更新，前提是那台电脑上的 Vonvon Bot 桌面端开着（它会下载，再重启，正在进行的对话会被中断，owner 2026-11-02）；0.8 及更早的要先在那台电脑上更新一次。
 8. 连不上怎么办：按地址类型（Tailscale：`tailscale ping`、都登录了吗；局域网：同一网段、防火墙、换了网络要重新确认；公网：端口）；"设备身份变了"的含义（重装、换了数据目录）→ 重新配对。
 9. 命令速查：`remote`（含 `remote port <n>`：默认 7767，撞了就换）、`pair`、`clients`、`device`、`update`、`service`，每条一行。
 
@@ -499,7 +499,7 @@ U2–U4 计划后的变化（2026-11-01，`devices-ui-2-remote-mode.md`、`devic
 | C8 `cli-8-machine` | 8.2 C8（21 条） | C1 | B1 | ~1,100 | `mcp add/remove` 改到 Codex 配置；`daemon logs --follow` 实时出行；`snapshot --json` 合法 |
 | I1 `server-1-standalone`（已合入） | `standalone` 种类（三处 + 开放解析）、`standalone.json` 识别、`build-server.mjs`（minify、bundle、删 d.ts、`ui/dist`、`bin`、`package.json`、Node、按目标平台 hoist/compact、无 symlink、路径预算）、不解析 realpath、`bundledNpmCli` 认 standalone。六个包里 darwin、win 四个和 Windows 的那些检查 2026-11-01 起用不上，I6 删 | — | B2 | ~1,100 | 产出六个包；解开后 `node app/bin/vonvon.mjs --version` 对、`vonvon open --print` 的页面能开、`vonvon hook` 退 0；包里和桌面端 `Resources/daemon` 里都无 `.ts/.d.ts/.map/src`，`dist/cli.js` 已压缩；win 包无 symlink |
 | I2 `server-2-install-scripts`（只剩 I2a `server-2a-install-sh`） | `install.sh`、`uninstall.sh`（只在 Linux；在 macOS 上打印去 https://vonvon.cc/get/ 下载安装包的话、退出非零、什么都不动）、受保护删法、命令和 PATH（同桌面端的块）、已装过检测（Linux）、root 拒绝、清单 sha512 + 可选 Ed25519、TLS/`main()`/版本格式/解包路径加固、linger `--json`、无 systemd / 用户实例不可用退路、脚本测试（Node 测试在 `mktemp -d` HOME 里跑 sh）。`.ps1`（I2b）取消 | I1 | B2 | ~1,150 | JP-VPS 干净用户 `curl \| sh` 后 `systemctl --user status` 运行中、linger 已开（或打印 sudo 提示且退出 0）；再跑一次说"已经装过了"；root 下拒绝；`HOME=` 空时 uninstall 拒绝；`uname` 不是 Linux（Darwin、FreeBSD、Git Bash）时两个脚本都第一步退出非零、什么都没写 |
-| I3 `server-3-update-engine`（已拆成 I3a `server-3a-update-core` #632、I3b `server-3b-update-helper` #633，I3b 叠在 I3a 上） | 签名清单（product/channel/url/回滚保护；`files` 只有 Linux 两项，2026-11-01：I3a 已写的 `SERVER_TARGETS` 六项连同 `fake-cdn` 和测试在 I3 里改成两项，和 I2a 的脚本一致）、下载校验、先切 `current` 再 `requestRestart`、助手按版本判成功、回滚、`performStandaloneUpdate`、`vonvon update`（断线后读 `update-status.json`）、`checkCoreUpdate` 回复、排空白名单加 `coreUpdateStatus`、子进程钉 release、UI 门控（6.5） | I1、C1 | B2 | ~1,300 | 本地起假 CDN：从 v 到 v+1 升级，bot 做完手上活再重启，新进程版本是 v+1；旧版本的合法清单放到 stable 被拒；坏签名拒；起不来回滚；排空期间 `vonvon update` 一直显示进度 |
+| I3 `server-3-update-engine`（已拆成 I3a `server-3a-update-core` #632、I3b `server-3b-update-helper` #633，I3b 叠在 I3a 上） | 签名清单（product/channel/url/回滚保护；`files` 只有 Linux 两项，2026-11-01：I3a 已写的 `SERVER_TARGETS` 六项连同 `fake-cdn` 和测试在 I3 里改成两项，和 I2a 的脚本一致）、下载校验、先切 `current` 再 `requestRestart`、助手按版本判成功、回滚、`performStandaloneUpdate`、`vonvon update`（断线后读 `update-status.json`）、`checkCoreUpdate` 回复、排空白名单加 `coreUpdateStatus`、子进程钉 release、UI 门控（6.5） | I1、C1 | B2 | ~1,300 | 本地起假 CDN：从 v 到 v+1 升级，重启（2026-11-02 起中断进行中的对话），新进程版本是 v+1；旧版本的合法清单放到 stable 被拒；坏签名拒；起不来回滚；排空期间 `vonvon update` 一直显示进度 |
 | I6 `server-6-linux-only` | 删 Mac、Windows 只装服务端留下的代码（2026-11-01）：`build-server.mjs` 的 `TARGETS` 只留 `linux-x64`、`linux-arm64`，删 `unpackZip`/`writeZip` 和 `.zip`、Windows 的 Node 和 npm 布局、260 字符预算、大小写重名检查，`server-node.json` 只留两个；`bundledNpmCli` 的 Windows 布局；launchd 接受 `standalone` 的分支；桌面端 `RegisteredDaemon.kind` 的 `standalone`；I3 的 `current.txt` 分支和 `extractZip`；对应的测试。清单两项不等 I6：I2a 的脚本已经是两项，I3 自己改 `SERVER_TARGETS`；I3 万一按六项合入，I6 先改它，I5 产出第一份清单之前两边必须一致。I6 在 U2 之后合入：U2 的退出规则要读服务注册的种类（`DT/daemon-manager.ts` 的 `RegisteredDaemon.kind`），I6 删其中的 `standalone`，两片碰同一处 | I2a、I3、U2 | B2 | ~400（多是删除） | `build-server.mjs` 只认两个目标；I3 自测第 2 步的端到端升级照旧过；服务端代码和脚本里搜不到 `current.txt`、`win-x64`、`darwin-arm64` |
 | I5 `server-5-release` | `publish-server.mjs`、`release-publish.mjs` 的 server 项、CI 构建包 + 脚本冒烟、`ci-scope.mjs`、三平台同版本门（macOS、Windows 安装包和 Linux 服务端包） | I1、I2a、I3、I6 | B2 | ~900 | dry-run 列出两个包、构建摘要和清单；stable 不经 owner 不切 |
 | U1a `devices-ui-1a-connections`（和 U1b 一个 PR `claude/devices-ui-1`） | `device-registry`（每设备一对密钥，私钥 safeStorage）、`remote-transport.ts`、`connections.ts` 多设备连接管理（切换、退避、撤销、添加、删除）、请求按设备路由并带上所属设备、`desktop:devices:*`、`client-context` 的 `useActiveDevice`、重连和 `serverInfo` 比较、本机断线弹窗在看远程时延后 | D1、D2（可先用桩）；真机验收要 D3 | C | ~1,900 | 探针：JP-VPS 上加设备、切换拿到对面快照、`clients revoke` 后 1 秒内 `revoked`、4006 后自动重连 |
@@ -527,7 +527,7 @@ U2–U4 计划后的变化（2026-11-01，`devices-ui-2-remote-mode.md`、`devic
 | 5 | 会话里的命令行 | 和进程内工具完全同一套规则，堵上"群会话在 shell 里 `vonvon settings set` 以主人身份连上"的洞；保留 owner 要的 `--scope`：群会话带本群、私聊带本 bot，上限按会话算，参数只能缩小 | 5.3、D4a |
 | 6 | 完全访问的残留风险 | 照实写：完全访问会话能读这个 OS 用户的任何文件，包括本机凭据，群成员可以诱导它以主人身份做事。默认不变（bot 自己建的群仍是完全访问）；凡是给群选完全访问的地方加一句"完全访问的群里，群成员能让 Bot 在这台设备上做任何事，包括改 vonvon 的设置，只给信任的群用。" | 5.3、第 15 节、第 16 节第 2 条、`product.md` 3.7/3.8、U2 |
 | 7 | 设置回执卡和［撤销］ | `product.md` 3.7 写了、代码没有（只有记忆能撤销）。**推迟，不进这一批，不做计划**；这一批 bot 在回复里说清改前 → 改后 | 第 9 节、第 11 节、K1 |
-| 8 | 桌面端自带的服务端能不能远程升级 | 要：daemon 请那台的桌面端外壳跑它自己的应用更新（macOS Squirrel、Windows electron-updater NSIS），沿用现有排空；那台桌面端没开就明说要开着 | 6.5、7.5、U4 |
+| 8 | 桌面端自带的服务端能不能远程升级 | 要：daemon 请那台的桌面端外壳跑它自己的应用更新（macOS Squirrel、Windows electron-updater NSIS），沿用现有停止（2026-11-02 起直接中断进行中的对话）；那台桌面端没开就明说要开着 | 6.5、7.5、U4 |
 | 9 | Mac/Windows 当服务端要用户登录着 | 本期接受（可以锁屏），写进文档 | 7.4、第 10 节第 2 条、`product.md` 3.10 |
 | 10 | 远程端口 | 7767。Paseo 默认 6767，Orca 移动端直连默认 6768（stablyai/orca `mobile/src/transport/host-endpoint.ts`），vonvon 的 loopback 端口随机，不冲突；撞了 `vonvon remote port <n>` 改 | 4.2 |
 | 11 | 邀请 | 10 分钟、一次性 | 4.3 |
@@ -570,10 +570,10 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 版本不一致（服务端旧，协议相同） | <设备> 的服务端是 0.9.0，这台电脑是 0.9.1。可以继续用；建议升级服务端。[升级 <设备>] |
 | 版本不一致（协议不同，服务端旧） | <设备> 的服务端是 0.8.0，这台电脑是 0.9.0，两边不能一起工作。升级服务端后才能继续管理。[升级 <设备>] |
 | 版本不一致（协议不同，对面是 0.8 及更早的桌面端自带服务端） | <设备> 的服务端是桌面端自带的（0.8.0），要先在那台电脑上更新一次 Vonvon Bot；之后就能从这里更新。 |
-| 远程更新桌面端自带的服务端（确认，发起的客户端） | 更新 <设备> 上的 Vonvon Bot？那台电脑上的桌面端会下载更新，等 Bot 做完手上的活后重启，期间这里会断开一会儿。[更新] |
+| 远程更新桌面端自带的服务端（确认，发起的客户端） | 更新 <设备> 上的 Vonvon Bot？那台电脑上的桌面端会下载更新，再重启，正在进行的对话会被中断，期间这里会断开一会儿。[更新] |
 | 那台桌面端没开（按钮旁 / `desktop_not_running`） | <设备> 的服务端是桌面端自带的，要那台电脑上的 Vonvon Bot 桌面端开着才能远程更新。在那台电脑上打开 Vonvon Bot 后再试，或者直接在那里更新。 |
-| 远程更新进行中（发起的客户端） | 正在 <设备> 上下载桌面端更新（45%）… / 下载好了，等 Bot 做完手上的活后重启 / <设备> 已更新到 0.9.1。 |
-| 被远程更新的那台（托盘和窗口里的提示，不拦人） | 「<客户端名>」正在更新这台电脑上的 Vonvon Bot。下载好后会等 Bot 做完手上的活再重启。 |
+| 远程更新进行中（发起的客户端） | 正在 <设备> 上下载桌面端更新（45%）… / 下载好了，正在重启（会中断正在进行的对话）/ <设备> 已更新到 0.9.1。 |
+| 被远程更新的那台（托盘和窗口里的提示，不拦人） | 「<客户端名>」正在更新这台电脑上的 Vonvon Bot。下载好后会直接重启，正在进行的对话会被中断。 |
 | 版本不一致（客户端旧） | 这台电脑的 Vonvon Bot（0.8.0）比 <设备>（0.9.0）旧。先更新这台电脑上的应用。 |
 | 服务端太旧（v1） | <设备> 上的 Vonvon Bot（0.7.x）不支持远程管理，请在那台设备上升级一次。 |
 | 安装脚本：开始 | 正在安装 Vonvon Bot 服务端 0.9.0（linux-x64）… |
@@ -583,9 +583,12 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 安装脚本：不是 Linux、也不是 Mac（退出非零，什么都不动） | 这个安装脚本只支持 Linux（这台是 <`uname -s` 的结果>）。Mac、Windows 请下载 Vonvon Bot 桌面端安装包：https://vonvon.cc/get/ |
 | 卸载脚本：在 Mac 上（退出非零，什么都不动） | 这个脚本只卸载 Linux 上的服务端。Mac 上的 Vonvon Bot 是桌面端安装包装的，说明见 https://vonvon.cc/get/ |
 | 卸载脚本：不是 Linux、也不是 Mac（退出非零，什么都不动） | 这个脚本只卸载 Linux 上的服务端（这台是 <`uname -s` 的结果>），什么都没动。 |
-| 安装脚本：完成 | 装好了。后台服务已启动，登录后自动运行。\n试一下：`vonvon --version`\n要从别的电脑连过来管理？看 https://vonvon.cc/guide/remote/ |
+| 安装脚本：完成（2026-11-02 改，不提 systemd、linger、sudo） | 装好了。Vonvon Bot 已在后台运行，开机自动启动。\n试一下：`vonvon --version`\n要从别的电脑连过来管理？看 https://vonvon.cc/guide/remote/ |
 | 安装脚本：没验签名 | 这台机器没有 openssl 3，没能核对发布签名；已核对下载内容的哈希，来源是 https://dl.vonvon.cc。 |
-| 安装脚本：linger 要 sudo | 为了在你退出登录后继续运行，请执行一次：`sudo loginctl enable-linger <用户名>` |
+| 安装脚本：开不了开机自动启动（少数系统，2026-11-02 改；替换"完成"的第一行） | 装好了。Vonvon Bot 已在后台运行。\n这台机器没让它开机自动启动，退出登录后它会停。需要的话运行一次：`sudo loginctl enable-linger <用户名>` |
+| `vonvon service install` 装好（2026-11-02） | 已在后台运行，开机自动启动。（macOS："登录后自动启动"；装好但没在运行："后台服务已经装好，开机自动启动；现在没在运行，下次开机时启动。"） |
+| `vonvon update`：开始重启前（文字模式，2026-11-02） | 升级会重启服务端，正在进行的对话会被中断，卡片上会请发消息的人再发一次。 |
+| 被中断的那一轮（卡片最后一行，2026-11-02） | 服务端重启了，这一轮被中断，请再发一次 / 服务端升级了，这一轮被中断，请再发一次 / Bot 停止运行了，这一轮被中断，等它恢复后请再发一次（定时任务那一轮不带"请再发一次"） |
 | 安装脚本：没有 systemd | 这台机器没有 systemd（可能是容器）。已改为直接启动，崩溃后不会自动重启；需要时运行 `vonvon daemon start`。 |
 | 安装脚本：用户实例不可用 | 连不上这个账号的 systemd（用 sudo 切过来时常见）。已直接启动一次；用这个账号 SSH 登录后运行 `vonvon service install` 装成后台服务。 |
 | 撤销确认（桌面端） | 取消「Clay 的 MacBook」的访问？它会立刻断开，要再连得重新配对。[同时撤销它带进来的 2 台] |
@@ -610,7 +613,7 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 桌面端重开了但没换上（发起的客户端，U4） | 桌面端重新打开了，但服务端还是 <version>，没能换上新版本。在那台电脑上退出 Vonvon Bot 再打开一次。 |
 | 上一次更新还没完（U4） | 上一次更新还在重启，稍后再试。/ 已有更新正在进行。 |
 | 被更新的那台正在退出（U4） | 那台电脑上的 Vonvon Bot 正在退出。 |
-| 被更新的那台排空超时（U4） | 那台电脑上的后台 1 分钟内没停完，这次没有安装更新。稍后再试。 |
+| 被更新的那台排空超时（U4；2026-11-02 起停止最多 30 秒，正常到不了这一步） | 那台电脑上的后台 1 分钟内没停完，这次没有安装更新。稍后再试。 |
 | 别的连接报告更新进度（`forbidden`，U4） | 只有这台电脑上的桌面端能报告更新进度。 |
 | 远程更新的状态行（U4） | 在 <设备> 上 <`coreStatusLine` 的原文> |
 | 排空中不收的请求（错误码 `draining`，4.7，D3 复查 248） | daemon 正在停止或重启（比如在升级），这个请求没有处理。等它重新启动后再试。 |

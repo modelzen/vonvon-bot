@@ -204,6 +204,52 @@ export function createGracefulInterrupt(opts: {
   };
 }
 
+/**
+ * A turn's stop entry from turn/start until its card is created and {@link createGracefulInterrupt} takes over (review
+ * 260): those are Feishu calls, seconds when Feishu is slow, and a stop or a shutdown meanwhile interrupts the turn at
+ * once. turn/interrupt goes out as soon as the turn has its id (Codex's comes with turn/start's answer, within
+ * milliseconds), looked for every `pollMs` for `waitMs` at most. The ⏹ entry then goes on from what {@link handOver} says.
+ */
+export function createEarlyInterrupt(opts: {
+  turnId: () => string | undefined;
+  /** send turn/interrupt (fire-and-forget) */
+  abort: (turnId: string) => void;
+  pollMs?: number;
+  waitMs?: number;
+}): {
+  interrupt: () => void;
+  /** Ends this entry: whether a stop came, and the turn it sent turn/interrupt to, if it did. */
+  handOver: () => { stopped: boolean; sentTo?: string };
+} {
+  let stopped = false;
+  let over = false;
+  let sentTo: string | undefined;
+  let poll: ReturnType<typeof setInterval> | undefined;
+  const quit = (): void => { if (poll) clearInterval(poll); poll = undefined; };
+  const send = (): boolean => {
+    const id = opts.turnId();
+    if (!id) return false;
+    sentTo = id;
+    opts.abort(id);
+    return true;
+  };
+  return {
+    interrupt: (): void => {
+      if (stopped || over) return;
+      stopped = true;
+      if (send()) return;
+      const until = Date.now() + (opts.waitMs ?? INTERRUPT_DRAIN_TIMEOUT_MS);
+      poll = setInterval(() => { if (send() || Date.now() >= until) quit(); }, opts.pollMs ?? 25);
+      poll.unref?.();
+    },
+    handOver: () => {
+      over = true;
+      quit();
+      return { stopped, ...(sentTo !== undefined ? { sentTo } : {}) };
+    },
+  };
+}
+
 /** A queued slot request from {@link Semaphore.enqueue} (M-3 排队可见可取消). */
 export interface QueuedAcquire {
   /** Resolves with the release fn once a slot is granted — or `null` if the

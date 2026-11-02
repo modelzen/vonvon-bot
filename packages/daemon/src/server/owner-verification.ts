@@ -12,15 +12,16 @@ const statusReplySchema = z.looseObject({ type: z.literal('response'), id: z.str
 const stopReplySchema = z.looseObject({ type: z.literal('response'), id: z.string(), method: z.literal('machine'), payload: z.looseObject({ type: z.literal('done') }) });
 const isEvent = (raw: unknown): boolean => !!raw && typeof raw === 'object' && 'type' in raw && raw.type === 'event';
 
-export function stopVerifiedOwner(home: string, lock: PidLockInfo): Promise<void> {
-  return exchangeWithOwner(home, lock, true);
+/** `reason: 'update'` rides on the stop only when given: an owner of an older protocol is still asked the way it knows. */
+export function stopVerifiedOwner(home: string, lock: PidLockInfo, reason?: 'update'): Promise<void> {
+  return exchangeWithOwner(home, lock, true, reason);
 }
 
 export function verifyPidLockOwner(home: string, lock: PidLockInfo): Promise<void> {
   return exchangeWithOwner(home, lock, false);
 }
 
-async function exchangeWithOwner(home: string, lock: PidLockInfo, stop: boolean): Promise<void> {
+async function exchangeWithOwner(home: string, lock: PidLockInfo, stop: boolean, reason?: 'update'): Promise<void> {
   const failure = (): PidLockError => new PidLockError(`Cannot verify daemon owner (PID ${lock.pid}); leaving its process and lock untouched.`, lock);
   const match = /^127\.0\.0\.1:(\d{1,5})$/.exec(lock.listen ?? '');
   const port = Number(match?.[1]);
@@ -72,7 +73,7 @@ async function exchangeWithOwner(home: string, lock: PidLockInfo, stop: boolean)
           }
           if (!stop) { succeed(); return; }
           phase = 'stop';
-          socket.send(JSON.stringify({ type: 'request', id: stopId, method: 'machine', payload: { type: 'stopHost' } }));
+          socket.send(JSON.stringify({ type: 'request', id: stopId, method: 'machine', payload: reason ? { type: 'stopHost', reason } : { type: 'stopHost' } }));
         }).catch(fail);
       });
     });

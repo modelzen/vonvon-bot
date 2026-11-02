@@ -44,7 +44,7 @@ const fake = vi.hoisted(() => ({
   history: vi.fn(async (..._args: unknown[]) => ({ messages: [] as unknown[], ok: true, complete: true })),
 }));
 // Each test owns an orchestrator, but the process registries live for this module.
-vi.mock('../src/agent/owned-process', async original => ({ ...await original<object>(), closeOwnedProviderProcesses: async () => {} }));
+vi.mock('../src/agent/owned-process', async original => ({ ...await original<object>(), closeOwnedProviderProcesses: async () => {}, stopAcceptingProviderProcesses: () => {} }));
 vi.mock('../src/agent/codex-appserver/client-pool', async original => ({ ...await original<object>(), shutdownResidentClients: async () => {} }));
 afterAll(async () => {
   const processes = await vi.importActual<typeof import('../src/agent/owned-process')>('../src/agent/owned-process');
