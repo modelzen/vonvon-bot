@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import WebSocket from "ws";
-import { helloSchema, PROTOCOL_VERSION, serverInfoSchema } from "@vonvon/protocol";
+import { helloSchema, PROTOCOL_VERSION, serverInfoSchema, type ServerInfo } from "@vonvon/protocol";
 import { z } from "zod";
 import { createClient, type ClientConnection, type VonvonClient } from "./client.js";
 
@@ -12,7 +12,8 @@ const statusSchema = z.object({
   running: z.literal(true), listen: z.string().regex(/^127\.0\.0\.1:\d{1,5}$/),
 });
 
-export async function connectLocal(options: { home: string; cliEntry: string }): Promise<VonvonClient> {
+/** devices 4.1: the daemon's server info comes back too; a different protocol is the caller's to judge (devices 4.5). */
+export async function connectLocal(options: { home: string; cliEntry: string }): Promise<{ client: VonvonClient; serverInfo: ServerInfo }> {
   const { stdout } = await run(process.execPath, [options.cliEntry, "daemon", "status", "--json"], {
     // The discovery reads the files: `daemon status` asks a running daemon otherwise, through this very function (cli-8-machine).
     env: { ...process.env, VONVON_HOME: options.home, VONVON_STATUS_FROM_FILES: "1" }, timeout: 10_000,
@@ -22,7 +23,7 @@ export async function connectLocal(options: { home: string; cliEntry: string }):
   if (!/^[a-f0-9]{64}$/i.test(credential)) throw new Error("Invalid local daemon credential");
   const socket = new WebSocket(`ws://${status.listen}`, { perMessageDeflate: false });
   try {
-    await new Promise<void>((resolve, reject) => {
+    const serverInfo = await new Promise<ServerInfo>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("Daemon handshake timed out")), 5_000);
       const fail = (error: Error) => { clearTimeout(timer); reject(error); };
       const closed = () => fail(new Error("Daemon closed during handshake"));
@@ -34,11 +35,10 @@ export async function connectLocal(options: { home: string; cliEntry: string }):
       socket.once("message", data => {
         try {
           const info = serverInfoSchema.parse(JSON.parse(data.toString()));
-          if (info.protocolVersion !== PROTOCOL_VERSION) throw new Error("Daemon protocol version mismatch");
           clearTimeout(timer);
           socket.off("error", fail);
           socket.off("close", closed);
-          resolve();
+          resolve(info);
         } catch (error) { fail(error instanceof Error ? error : new Error(String(error))); }
       });
     });
@@ -58,7 +58,7 @@ export async function connectLocal(options: { home: string; cliEntry: string }):
         });
       },
     };
-    return createClient(connection);
+    return { client: createClient(connection), serverInfo };
   } catch (error) {
     socket.terminate();
     throw error;

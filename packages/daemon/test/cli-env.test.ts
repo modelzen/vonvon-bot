@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { ConnectionError, RpcError, type VonvonClient } from '@vonvon/client';
-import type { BackendInstallEventPayload, EnvironmentRequest } from '@vonvon/protocol';
+import { rpcKinds, type BackendInstallEventPayload, type EnvironmentRequest } from '@vonvon/protocol';
 import { withDaemon, type Daemon } from '../src/cli/daemon-client';
 import { stepLines } from '../src/cli/commands/bot';
 import {
@@ -612,7 +612,9 @@ it('covers the 24 kinds of the 本机环境 page and the Provider models, none l
   }
   expect(coverers('environment.cancelInstall')).toEqual(['env install', 'env update', 'env cancel']);
   expect(coverers('collaboration.providerModels')).toEqual(['provider models']);
-  expect(CLI_PARITY_ALLOWLIST['environment.openVerification']).toMatchObject({ reason: 'dead', slice: 'D1' });
+  // D1 deleted the dead kind outright
+  expect(rpcKinds().map(entry => entry.kind)).not.toContain('environment.openVerification');
+  expect(CLI_PARITY_ALLOWLIST['environment.openVerification']).toBeUndefined();
   const env = commands.filter(command => command.path.startsWith('env ') || command.path.startsWith('provider '));
   expect(env).toHaveLength(16);
   for (const command of env) expect(command.options, command.path).toContain('--json');

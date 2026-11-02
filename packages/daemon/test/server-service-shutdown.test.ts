@@ -3,6 +3,7 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { rm, writeFile } from 'node:fs/promises';
 import * as directoryModule from '../src/server/directory-browser';
+import { devicesPath } from '../src/remote/files';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
@@ -206,7 +207,8 @@ it.each(['mkdir', 'identity', 'directory'] as const)('awaits service rollback af
       await rm(fixture.home, { recursive: true });
       await writeFile(fixture.home, 'not a directory');
     } else if (phase === 'identity') {
-      await writeFile(join(fixture.home, 'local-credential'), 'invalid');
+      // The credential is new every start (devices 4.4); a damaged device identity still stops the start.
+      await writeFile(devicesPath(fixture.home, 'device.json'), '{}');
     } else {
       vi.spyOn(directoryModule, 'createDirectoryBrowser').mockRejectedValue(directoryError);
     }
@@ -222,7 +224,7 @@ it.each(['mkdir', 'identity', 'directory'] as const)('awaits service rollback af
     const errors = causes(await construction);
     expect(errors).toContain(cleanupError);
     if (phase === 'directory') expect(errors).toContain(directoryError);
-    else if (phase === 'identity') expect(errors).toContainEqual(new Error('Invalid local credential file'));
+    else if (phase === 'identity') expect(errors).toContainEqual(expect.objectContaining({ message: expect.stringContaining('device.json 损坏') }));
     else expect(errors).toContainEqual(expect.objectContaining({ code: 'EEXIST' }));
     expect(close).toHaveBeenCalledOnce();
   } finally {
@@ -238,10 +240,10 @@ it('retains identity failure and a synchronous service rollback failure', async 
   const cleanupError = new Error('synchronous rollback failed');
   const close = vi.fn(() => { throw cleanupError; });
   try {
-    await writeFile(join(fixture.home, 'local-credential'), 'invalid');
+    await writeFile(devicesPath(fixture.home, 'device.json'), '{}');
     const { startApi } = await import('../src/server/http');
     const result = await startApi({ service: fakeService({ close }), port: 0 }).catch(error => error);
-    expect(causes(result)).toContainEqual(new Error('Invalid local credential file'));
+    expect(causes(result)).toContainEqual(expect.objectContaining({ message: expect.stringContaining('device.json 损坏') }));
     expect(causes(result)).toContain(cleanupError);
     expect(close).toHaveBeenCalledOnce();
   } finally { await fixture.close(); }

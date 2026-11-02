@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { agentIdSchema, distributionSchema, permissionSchema } from "./domain.js";
 import { API_KEY_MAX, keyIdSchema, secretServiceSchema, secretTestOutcomeSchema } from "./secrets.js";
+import { principalWireSchema } from "./handshake.js";
+import { scopeSchema } from "./device.js";
 
 export const adminProjectSchema = z.object({
   avatarDataUrl: z.string().optional(),
@@ -90,6 +92,8 @@ export const daemonStatusSchema = z.object({
   selfHosted: z.boolean(), pid: z.number().optional(), lastExit: z.string().optional(),
   version: z.string(), uptimeMs: z.number().optional(), servicePath: z.string().optional(),
   stdoutPath: z.string().optional(), stderrPath: z.string().optional(), supported: z.boolean(),
+  /** When this daemon process started (epoch ms): a reconnecting client compares it to tell a restart (devices 4.7). */
+  startedAt: z.number().int(),
 });
 export type DaemonStatus = z.infer<typeof daemonStatusSchema>;
 
@@ -128,6 +132,8 @@ export const adminRequestSchema = z.discriminatedUnion("type", [
   z.object({type:z.literal("setSecret"),keyId:keyIdSchema,value:z.string().min(1).max(API_KEY_MAX)}).strict(),
   z.object({type:z.literal("removeSecret"),keyId:keyIdSchema}).strict(),
   z.object({type:z.literal("testSecret"),keyId:keyIdSchema}).strict(),
+  /** devices 4.5: the first request after the handshake; the daemon takes only the first one a connection sends. */
+  z.object({type:z.literal("negotiate"),capabilities:z.array(z.string().regex(/^[a-z][a-z0-9.-]{0,63}$/)).max(32),scope:scopeSchema.optional()}).strict(),
 ]);
 export type AdminRequest = z.infer<typeof adminRequestSchema>;
 
@@ -148,5 +154,6 @@ export const adminReplySchema = z.discriminatedUnion("kind", [
   z.object({kind:z.literal("secrets"),services:z.array(secretServiceSchema),unreadBots:z.number().int().nonnegative(),botsUnreadable:z.boolean().optional(),removed:z.boolean().optional()}),
   z.object({kind:z.literal("secretTested"),keyId:z.string(),outcome:secretTestOutcomeSchema,message:z.string(),status:z.number().int().optional()}),
   z.object({kind:z.literal("refused"),code:z.string(),message:z.string()}),
+  z.object({kind:z.literal("negotiated"),principal:principalWireSchema,scope:scopeSchema.nullable()}),
 ]);
 export type AdminReply = z.infer<typeof adminReplySchema>;
