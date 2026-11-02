@@ -1,4 +1,5 @@
-import { memoryReplySchema, type MemoryReply, type MemoryRequest, type MemoryScopeRef } from '@vonvon/protocol';
+import { memoryReplySchema, type MemoryItemScope, type MemoryReply, type MemoryRequest, type MemoryScopeRef } from '@vonvon/protocol';
+import type { MemoryLanding } from './ipc';
 import { loadBots } from '../config/bots';
 import { markSeen, marksFrom, readSeen, seenKey, type SeenPage } from './memory-seen';
 import { botDir } from '../config/paths';
@@ -19,10 +20,10 @@ export interface MemoryAdminDeps {
   botDirectory?: (botId: string) => Promise<string>;
   origin?: 'ui' | 'cli';
   /**
-   * devices-4a 4.8: a Bot session's turn (its role; D4b adds the openId), which writes as itself: trusted only for the
-   * owner's or an admin's turn, as the memory tools write (memory-authority's actorOf). D4b also makes it where the memory lands.
+   * devices-4b 4.5: a Bot session's write as its Bot process decided it with the memory tools' rules (memory-authority):
+   * the memory it lands in (a member's `--bot` lands in its group's project), as whom, trusted or not.
    */
-  actor?: MemoryActor;
+  landing?: MemoryLanding;
   now?: () => number;
 }
 
@@ -86,6 +87,10 @@ async function newCounts(deps: MemoryAdminDeps): Promise<MemoryReply> {
   return { kind: 'newCounts', projects, bots };
 }
 
+/** The memory a decision names, as a request names it: the bot's own for its memory and its private chats. */
+const landedRef = (scope: MemoryItemScope, botId: string): MemoryScopeRef =>
+  scope.kind === 'project' ? scope : scope.kind === 'bot' ? { kind: 'bot', botId } : { kind: 'dm', botId, openId: scope.openId };
+
 export async function memoryAction(request: MemoryRequest, deps: MemoryAdminDeps = {}): Promise<MemoryReply> {
   const origin = deps.origin ?? 'ui';
   if (request.type === 'newCounts') return memoryReplySchema.parse(await newCounts(deps));
@@ -94,17 +99,19 @@ export async function memoryAction(request: MemoryRequest, deps: MemoryAdminDeps
     await markSeen(deps.library ?? libraryLocation(), request.page, at);
     return { kind: 'seen', at };
   }
-  const actor: MemoryActor = deps.actor ?? { role: origin === 'cli' ? 'cli' : 'desktop' };
-  // The owner at the desktop or the terminal is trusted; a session's turn only if it was the owner's or an admin's.
-  const trust = !deps.actor || deps.actor.role === 'owner' || deps.actor.role === 'admin' ? 'trusted' : 'untrusted';
+  const landing = deps.landing;
+  const actor: MemoryActor = landing?.actor ?? { role: origin === 'cli' ? 'cli' : 'desktop' };
+  // The owner at the desktop or the terminal is trusted; a session's turn as its Bot process decided.
+  const trust = landing?.trust ?? 'trusted';
   const botIdOf = (scope: MemoryScopeRef): string => scope.kind === 'project' ? '' : scope.botId;
-  const store = await memoryStoreFor(request.scope, deps);
+  const scope = landing ? landedRef(landing.scope, landing.source.botId) : request.scope;
+  const store = await memoryStoreFor(scope, deps);
   const checked = (reply: MemoryReply): MemoryReply => memoryReplySchema.parse(reply);
   switch (request.type) {
     case 'list': return checked(await listWithMarks(store, request.scope, deps));
     case 'add': return checked(replyOf(await store.add({
       text: request.text, ...(request.branch === undefined ? {} : { branch: request.branch }), trust, actor,
-      source: { via: origin, botId: botIdOf(request.scope), actorRole: actor.role, ...(actor.openId ? { actorOpenId: actor.openId } : {}) },
+      source: { via: origin, botId: botIdOf(scope), ...landing?.source, actorRole: actor.role, ...(actor.openId ? { actorOpenId: actor.openId } : {}) },
     })));
     case 'edit': return checked(replyOf(await store.edit({
       itemId: request.itemId, revision: request.revision, actor,

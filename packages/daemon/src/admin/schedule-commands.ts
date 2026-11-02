@@ -9,9 +9,14 @@ import { clampUnits, type ScheduleStore } from '../bot/schedule/store';
 import { ceilToMinute, describeSpec, nextSlotAfter, normalizeTimeZone, validateSpec } from '../bot/schedule/time';
 import type { StoredTask } from '../bot/schedule/types';
 
-/** Who asks. `chat`: a person in a group turn; `scheduled`: the task's own unattended run; `local`: the owner on this machine. */
+/**
+ * Who asks. `chat`: a person in a group turn; `session`: the same person's turn through a Bot session's command line
+ * (devices-4b 4.4), with the same rights, recorded as made from the terminal; `scheduled`: the task's own unattended run;
+ * `local`: the owner on this machine.
+ */
 export type ScheduleActor =
   | { kind: 'chat'; openId: string; name?: string; role: 'owner' | 'admin' | 'member'; chatId: string; topicId?: string; messageId?: string; text?: string }
+  | { kind: 'session'; openId: string; name?: string; role: 'owner' | 'admin' | 'member'; chatId: string; messageId?: string }
   | { kind: 'scheduled'; taskId: string; runId: string; chatId: string }
   | { kind: 'local'; via: 'desktop' | 'cli' };
 
@@ -89,7 +94,7 @@ function mayCreate(actor: ScheduleActor): actor is Creator {
   switch (actor.kind) {
     case 'local': return true;
     // A member without an openId could never manage the task it made: no openId, no task.
-    case 'chat': return actor.role === 'owner' || actor.role === 'admin' || (actor.role === 'member' && !!actor.openId);
+    case 'chat': case 'session': return actor.role === 'owner' || actor.role === 'admin' || (actor.role === 'member' && !!actor.openId);
     case 'scheduled': return false;
     default: return outsideUnion(actor) ?? false;
   }
@@ -98,10 +103,10 @@ function mayCreate(actor: ScheduleActor): actor is Creator {
 function creator(actor: Creator): StoredTask['createdBy'] {
   if (actor.kind === 'local') return { via: actor.via };
   return {
-    via: 'chat', openId: actor.openId, role: actor.role,
+    via: actor.kind === 'session' ? 'cli' : 'chat', openId: actor.openId, role: actor.role,
     ...(actor.name ? { name: actor.name } : {}),
     ...(actor.messageId ? { messageId: actor.messageId } : {}),
-    ...(actor.text ? { text: clampUnits(actor.text, MAX_CREATOR_TEXT) } : {}),
+    ...(actor.kind === 'chat' && actor.text ? { text: clampUnits(actor.text, MAX_CREATOR_TEXT) } : {}),
   };
 }
 
@@ -110,7 +115,7 @@ function denial(actor: ScheduleActor, action: TaskAction, task: StoredTask): Fix
   switch (actor.kind) {
     case 'local': return undefined;
     case 'scheduled': return (action === 'edit' || action === 'delete') && task.id === actor.taskId ? undefined : 'scheduled-run-scope';
-    case 'chat':
+    case 'chat': case 'session':
       if (actor.role === 'owner' || actor.role === 'admin') return undefined;
       return actor.role === 'member' && actor.openId && task.createdBy.openId === actor.openId ? undefined : 'not-task-owner';
     default: return outsideUnion(actor) ?? 'not-task-owner';
