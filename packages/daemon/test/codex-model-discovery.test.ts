@@ -118,6 +118,17 @@ afterEach(async () => {
 });
 
 describe('Codex model discovery preserves the native picker directory', () => {
+  it('keeps future effort IDs from the native model/list response through the backend cache', async () => {
+    state.pages.first.data = [{ ...native('future', true),
+      supportedReasoningEfforts: [{ reasoningEffort: 'future-adaptive' }, { reasoningEffort: 'high' }],
+      defaultReasoningEffort: 'future-adaptive' }];
+    save();
+    const backend = new CodexAppServerBackend();
+    expect((await backend.listModels())[0]).toMatchObject({
+      supportedEfforts: ['future-adaptive', 'high'], defaultEffort: 'future-adaptive',
+    });
+    expect(backend.peekModels()?.[0]?.supportedEfforts).toEqual(['future-adaptive', 'high']);
+  });
   function enableRemoteAccess(): void {
     state.account = {type:'chatgpt', planType:'pro'};
     state.remoteCache = {};

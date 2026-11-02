@@ -453,18 +453,21 @@ function Switch({
     />
   );
 }
+export type CatalogControls = {loading: boolean; error?: string; refresh: () => void};
 export function Catalog({
   botId,
   backend,
   purpose,
   threadId,
   children,
+  showStatus = true,
 }: {
   botId: AgentId;
   backend: string;
   purpose: "project" | "session" | "comments" | "titles" | "judge";
   threadId?: string;
-  children: (catalog: ModelCatalog | undefined) => ReactNode;
+  children: (catalog: ModelCatalog | undefined, controls: CatalogControls) => ReactNode;
+  showStatus?: boolean;
 }) {
   const client = useClient();
   const [catalog, setCatalog] = useState<ModelCatalog>();
@@ -507,17 +510,22 @@ export function Catalog({
     };
   }, [client, botId, backend, purpose, threadId, queryKey, attempt]);
   const unavailable = catalog && catalog.state !== "ready";
+  const controls: CatalogControls = {
+    loading,
+    error: error || (unavailable ? catalog.error || '暂时无法读取模型，已保存的选择仍保留。' : undefined),
+    refresh: () => {setLoading(true); setAttempt(value => value + 1);},
+  };
   return (
     <>
-      {(error || unavailable) && (
+      {showStatus && (error || unavailable) && (
         <div className="gd-model-catalog-status" role="status">
           <span>{error || catalog?.error || '暂时无法读取模型，已保存的选择仍保留。'}</span>
-          <IconButton size="sm" variant="ghost" label="重新读取模型" title="重新读取模型" disabled={loading} onClick={() => setAttempt(value => value + 1)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
+          <IconButton size="sm" variant="ghost" label="重新读取模型" title="重新读取模型" disabled={loading} onClick={controls.refresh}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
         </div>
       )}
-      {!catalog && !error && <p className="gd-model-compact-note" role="status">正在读取模型…</p>}
-      {catalog?.state === 'ready' && <div className="gd-model-catalog-status"><span>可用模型</span><IconButton size="sm" variant="ghost" label="重新读取模型" title="重新检测模型" disabled={loading} onClick={() => setAttempt(value => value + 1)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>}
-      {children(catalog)}
+      {showStatus && !catalog && !error && <p className="gd-model-compact-note" role="status">正在读取模型…</p>}
+      {showStatus && catalog?.state === 'ready' && <div className="gd-model-catalog-status"><span>可用模型</span><IconButton size="sm" variant="ghost" label="重新读取模型" title="重新检测模型" disabled={loading} onClick={controls.refresh}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>}
+      {children(catalog, controls)}
 
     </>
   );

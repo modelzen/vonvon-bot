@@ -12,7 +12,7 @@ const helper=()=>({backendFor:vi.fn((_id:string)=>({peekModels:()=>models,listMo
 describe('new group configuration admission',()=>{
   it('freezes explicit group settings without depending on Bot defaults',async()=>{
     const settings=await prepareNewGroupSettings({backend:'codex-appserver',kind:'multi'},helper());
-    expect(settings.modelAccess).toEqual({backend:'codex-appserver',models:['work-model'],efforts:['low','high']});
+    expect(settings.modelAccess).toEqual({backend:'codex-appserver',models:['work-model'],efforts:['low','high'],defaultModel:'work-model',defaultEffort:'low'});
     // no `profile`: the role is the bot's file and the supplement and memory start empty (P4a)
     expect(settings.profile).toBeUndefined();
     expect(settings.judge).toEqual({kind:'llm',backend:'codex-appserver',model:'work-model',effort:'low'});
@@ -40,7 +40,7 @@ describe('new group configuration admission',()=>{
     const deps=helper();
     const settings=await prepareNewGroupSettings({backend:'codex-appserver',kind:'smart'},deps);
     expect(settings.judge).toEqual({kind:'llm',backend:'codex-appserver',model:'work-model',effort:'low'});
-    expect(settings.modelAccess).toEqual({backend:'codex-appserver',models:['work-model'],efforts:['low','high']});
+    expect(settings.modelAccess).toEqual({backend:'codex-appserver',models:['work-model'],efforts:['low','high'],defaultModel:'work-model',defaultEffort:'low'});
     expect(deps.backendFor).toHaveBeenCalledTimes(2);
     expect(deps.readKey).not.toHaveBeenCalled();
     expect(parseBindGroupInput({chatId:'oc_a',projectName:'a',backend:'codex-appserver',kind:'smart'})).not.toHaveProperty('judge');
