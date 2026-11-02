@@ -2,7 +2,7 @@ import {expect, it, vi} from 'vitest';
 import type {LinkPreviewCode, MachineRequestHandler} from '@vonvon/protocol';
 import {
   addBlockedReason, bannerCopy, cannotUpgradeRemotely, compareVersions, copy, failureCopy, linkPreviewCopy, maintenanceRequest, platformLabel,
-  registryNotices, relativeTime, removeCopy, routeHint, routeHints, rowView, statusLabel, statusTone, versionNotice,
+  registryNotices, relativeTime, removeCopy, routeHint, routeHints, routeKindLabel, rowView, statusLabel, statusTone, versionNotice,
 } from '../src/devices/devices-presentation';
 import {rowA, rowB} from './devices-fixture';
 
@@ -42,6 +42,9 @@ it('gives a hint per kind of address', () => {
   expect(routeHint({...tailscale, host: '192.0.2.10', kind: 'lan'}, 'timeout', X)).toContain('同一个局域网');
   expect(routeHint({...tailscale, kind: 'cgnat'}, 'timeout', X)).toContain('运营商');
   expect(routeHint({host: '198.51.100.7', port: 17767, kind: 'public'}, 'timeout', X)).toContain('17767');
+  // A1: a network tool's address (ZeroTier, 蒲公英…). main 必败: no such kind
+  expect(routeHint({...tailscale, host: '10.147.17.5', kind: 'overlay'}, 'timeout', X)).toContain('同一个组网');
+  expect(routeKindLabel('overlay')).toBe('组网');
   expect(routeHint(tailscale, 'forbidden', X)).toContain('重新生成连接链接');
   expect(routeHint(tailscale, 'refused', X)).toMatch(/看看。那台设备上的 Vonvon Bot 可能没在运行/);
   expect(routeHint(tailscale, 'device_identity_changed', X)).toContain('100.64.0.10:7767 上的 Vonvon Bot 不是「X」');
@@ -60,6 +63,9 @@ it('says why it failed, naming the device', () => {
     if (!['busy', 'aborted', 'registry_write_failed'].includes(code)) expect(text, code).toContain(X);
   }
   expect(failureCopy('link_used', X)).toContain('`vonvon clients ls`');
+  // A1: one address, so a 4006 may be a move: the new link only updates it, and there is no --tailscale
+  expect(failureCopy('remote_disabled', X)).toMatch(/换了地址.*粘到"添加设备"里，只会更新地址，不用重新配对/);
+  expect(failureCopy('remote_disabled', X)).not.toContain('--tailscale');
   expect(failureCopy('client_revoked', X)).toBe('「X」已取消这台电脑的访问。要再连，请在那台设备上重新生成连接链接。');
   expect(failureCopy('something_new', X)).toBe('没能连上「X」（something_new）。');
   expect(failureCopy('invalid_link', X)).toBe(linkPreviewCopy('invalid_link', X));
@@ -110,7 +116,7 @@ it('never says 服务器 or sends anyone to log in', () => {
   const texts = [
     ...Object.values(copy), ...names.flatMap(name => [...failureCodes.map(code => failureCopy(code, name)), ...previewCodes.map(code => linkPreviewCopy(code, name)),
       removeCopy.title(name), removeCopy.body(name, true), removeCopy.body(name, false), removeCopy.kept(name), cannotUpgradeRemotely(name),
-      ...(['tailscale', 'lan', 'cgnat', 'public'] as const).flatMap(kind => ['refused', 'forbidden', 'device_identity_changed'].map(code => routeHint({...tailscale, kind}, code, name)))]),
+      ...(['tailscale', 'overlay', 'lan', 'cgnat', 'public'] as const).flatMap(kind => ['refused', 'forbidden', 'device_identity_changed'].map(code => routeHint({...tailscale, kind}, code, name)))]),
     ...registryNotices({registry: 'recovered', secureStorage: false}),
   ];
   for (const text of texts) expect(text).not.toMatch(/服务器|登录 Codex|登录 Claude|不代你登录/);

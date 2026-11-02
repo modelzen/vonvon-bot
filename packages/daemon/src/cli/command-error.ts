@@ -34,7 +34,7 @@ export const badArgs = (message: string): CommandError => new CommandError('bad-
 const REFUSED = new Set([
   'unauthorized', 'forbidden', 'permission_denied', 'scope_required', 'session_token_missing', 'session_token_invalid', 'not_in_session', 'not-dm', 'not-group',
   'desktop_not_running', 'client_revoked', 'pairing_failed', 'rate_limited', 'pairing_limit', 'no_remote_address',
-  'tailscale_unavailable', 'confirm_required',
+  'confirm_required',
 ]);
 /** `draining` (devices 4.7): the daemon is stopping or restarting and took nothing, as when it closed the connection. */
 const CONNECTION = new Set(['protocol_mismatch', 'device_identity_changed', 'draining']);

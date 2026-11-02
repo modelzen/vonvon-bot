@@ -49,7 +49,7 @@ export function platformLabel(platform?: string): string {
   return ({macos: 'macOS', windows: 'Windows', linux: 'Linux'} as Record<string, string>)[platform ?? ''] ?? '';
 }
 export function routeKindLabel(kind: DeviceRoute['kind']): string {
-  return {tailscale: 'Tailscale（推荐）', lan: '局域网', cgnat: '运营商地址', public: '公网'}[kind];
+  return {tailscale: 'Tailscale（推荐）', overlay: '组网', lan: '局域网', cgnat: '运营商地址', public: '公网'}[kind];
 }
 export type RowView = {title: string; detail: string[]; status: string; tone: StatusTone; repair: boolean};
 export function rowView(row: DeviceRow, now: number, localName?: string): RowView {
@@ -67,6 +67,7 @@ export function routeHint(route: DeviceRoute, code: string, name: string): strin
   if (code === 'device_identity_changed') return `${at(route)} 上的 Vonvon Bot 不是${name}，可能是同一个网络里别的电脑换到了这个地址。会接着试别的地址；都不行就在${name}上重新生成连接链接，粘到"添加设备"里更新地址。`;
   const base = {
     tailscale: `连不上${name}（${route.host}）。两台设备都登录了同一个 Tailscale 账号吗？在这台电脑上运行 \`tailscale ping ${route.host}\` 看看。`,
+    overlay: `连不上${name}（${route.host}）。两台设备都连在同一个组网（ZeroTier、蒲公英这类工具）里吗？先在这台电脑上 ping ${route.host} 看看通不通。`,
     lan: `连不上${name}（${route.host}）。两台设备在同一个局域网里吗？那台设备开着吗？`,
     cgnat: `连不上${name}（${route.host}）。这是运营商分配的地址，一般从外面连不进去，建议两台都装上 Tailscale。`,
     public: `连不上${name}（${route.host}）。那台设备的防火墙放行了 ${route.port} 端口吗？`,
@@ -98,7 +99,7 @@ export function failureCopy(code: string, name: string): string {
     case 'device_identity_changed': case 'identity_changed': return `${name}的身份和配对时不一样了（可能重装过，或换了数据目录）。为安全起见已断开。确认是你自己的设备后，重新配对。`;
     case 'unknown_client': return `${name}不认识这台电脑了，那台设备上的配对记录可能被清掉了。在那台设备上生成新链接，重新配对。`;
     case 'key_unreadable': return `读不出连接${name}用的密钥：系统钥匙串拒绝了，或者应用换过签名。可以再试一次；还不行就重新配对。`;
-    case 'remote_disabled': return `${name}关闭了远程连接。在那台设备上重新开启（\`vonvon remote enable --tailscale\`，或在「允许别的设备连接」里勾选）后，这里会自动连上。`;
+    case 'remote_disabled': return `${name}关闭了远程连接，或者换了地址。在那台设备上重新开启（运行 \`vonvon remote enable\`，或在「允许别的设备连接」里选一个地址）后，这里会自动连上；换了地址的话，在那台设备上生成新的连接链接，粘到"添加设备"里，只会更新地址，不用重新配对。`;
     case 'rate_limited': return `${name}暂时拒绝了这台电脑：短时间内连得太多次。1 分钟后会自动再试。`;
     case 'handshake_failed': return `和${name}建立加密连接失败。会自动再试；一直失败的话，在那台设备上重新生成链接、重新配对。`;
     case 'protocol_mismatch': return `${name}和这台电脑的版本不能一起工作。`;

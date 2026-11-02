@@ -310,7 +310,7 @@ export function OutsideWindow({ shell, children }: { shell?: ShellCapabilities; 
 | `device_identity_changed`、`identity_changed` | 「X」的身份和配对时不一样了（可能重装过，或换了数据目录）。为安全起见已断开。确认是你自己的设备后，重新配对。（第 15 节） |
 | `unknown_client` | 「X」不认识这台电脑了，那台设备上的配对记录可能被清掉了。在那台设备上生成新链接，重新配对。 |
 | `key_unreadable` | 读不出连接「X」用的密钥：系统钥匙串拒绝了，或者应用换过签名。可以再试一次；还不行就重新配对。 |
-| `remote_disabled` | 「X」关闭了远程连接。在那台设备上重新开启（`vonvon remote enable --tailscale`，或在「允许别的设备连接」里勾选）后，这里会自动连上。 |
+| `remote_disabled` | 「X」关闭了远程连接，或者换了地址。在那台设备上重新开启（运行 `vonvon remote enable`，或在「允许别的设备连接」里选一个地址）后，这里会自动连上；换了地址的话，在那台设备上生成新的连接链接，粘到"添加设备"里，只会更新地址，不用重新配对。（A1 改） |
 | `rate_limited` | 「X」暂时拒绝了这台电脑：短时间内连得太多次。1 分钟后会自动再试。 |
 | `handshake_failed` | 和「X」建立加密连接失败。会自动再试；一直失败的话，在那台设备上重新生成链接、重新配对。 |
 | `protocol_mismatch` | 「X」和这台电脑的版本不能一起工作。 |
@@ -442,7 +442,7 @@ export function OutsideWindow({ shell, children }: { shell?: ShellCapabilities; 
 Claude 先在 JP-VPS 上准备（不进提示词正文的真实地址和数据目录只用占位）：
 1. 拿验收 daemon 的目录锁：`mkdir /tmp/vonvon-accept.d`，并写上 `claude <UTC 时间>`。
 2. 记下验收 worktree 现在的 sha，把它切到 PR 的 sha（detach），构建 daemon，用它重启验收 daemon（Bot 6 那套数据）。
-3. 用前缀 `VONVON_HOME=<验收数据目录>` 运行 `vonvon remote enable --tailscale`，端口用默认 7767；被占就 `remote port 17767`，并在提示词里写明。
+3. 用前缀 `VONVON_HOME=<验收数据目录>` 运行 `vonvon remote enable "$(tailscale ip -4)"`（A1 去掉了 `--tailscale`），端口用默认 7767；被占就 `remote port 17767`，并在提示词里写明。
 4. 后台起验收助手 `packages/desktop/test/manual/devices-accept-helper.ts`。助手进 git，只在本 PR 里用。
    - 它只绑 `<JP-VPS 的 Tailscale 地址>:<助手端口>`，只有 tailnet 里的设备能连。不带令牌，链接不经过 GitHub。
    - 两小时后自己退出。
