@@ -44,7 +44,7 @@ owner 2026-11-01 定：Mac、Windows 只用桌面端安装包装全部软件，�
 
 - `scripts/build-server.test.mjs`：只组装 `linux-x64`；`server-node.json` 的键正好是两个 Linux 目标、文件名都是 `.tar.gz`；`--targets darwin-arm64`、`--targets win-x64` 报 `unknown target`（main 必败：原来照打）；在 Windows 上拒绝打包。
 - `service-transaction.test.ts`：launchd 装 `standalone` 拒绝，`Distribution cannot install a service`，不写 plist（main 必败：原来走到 `serviceProgram` 才因没有 `current` 失败）。
-- 其余改动只删用例或去掉 `'linux'`、`platform: 'linux'` 参数：`archive`、`current-release`、`bundled-npm`、`standalone-update-apply`、`standalone-restart`、`standalone-getter`、`standalone-setup`、`cli-update`。
+- 其余改动只删用例或去掉 `'linux'`、`platform: 'linux'` 参数：`archive`、`current-release`、`bundled-npm`、`standalone-update-apply`、`standalone-restart`、`standalone-getter`、`standalone-setup`、`cli-update`、`self-entry`。
 
 ## 6. 验收要点
 
