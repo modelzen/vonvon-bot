@@ -114,8 +114,8 @@ const shellPid = 987654321;
 const nativeProcess = process;
 const auditDir = fileURLToPath(new URL('../../../.audit/provider-lock-red', import.meta.url));
 
-async function until(predicate: () => boolean, description: string) {
-  for (let attempt = 0; attempt < 400; attempt++) {
+async function until(predicate: () => boolean, description: string, attempts = 400) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     if (predicate()) return;
     await vi.advanceTimersByTimeAsync(0);
     await settleIO(5);
@@ -237,7 +237,9 @@ afterEach(async () => {
 async function startedWithProvider() {
   expect(process.send).toBeUndefined();
   await import('../src/cli/index');
-  await until(() => fixture.ready || fixture.exit.mock.calls.length > 0, 'inline daemon readiness');
+  // The first import of the CLI's module graph is slow on a busy or cold machine (it failed alone on JP-VPS before this
+  // slice too); readiness is not what is tested here.
+  await until(() => fixture.ready || fixture.exit.mock.calls.length > 0, 'inline daemon readiness', 2400);
   expect(fixture.exit).not.toHaveBeenCalled();
   expect(fixture.ready).toBe(true);
   expect(JSON.parse(readFileSync(paths.processesFile, 'utf8'))).toMatchObject({ pid: process.pid, appId: 'provider-lock-fixture' });
