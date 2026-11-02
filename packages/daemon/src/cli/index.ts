@@ -345,28 +345,61 @@ Example:
   .action(async (wanted: string, options: Json & { primary?: string; add?: string[]; remove?: string[]; repos?: string[]; defaultRepos?: boolean }) => {
     await (await import('./commands/project')).runProjectWorkspace(wanted, options, io(options));
   });
-const memory = program.command('memory').description('Read and change memory entries: a project\'s or a bot\'s');
-const memoryScope = (command: Command) => command.option('--project <project>', 'Project name or id (prj_…)').option('--bot <appId>', 'Bot id: its own memory').option('--json', 'Print JSON');
-const memoryContext = async (options: Json) => (await import('./commands/memory')).terminalMemoryContext(io(options));
-type MemoryOptions = Json & { project?: string; bot?: string; branch?: string; revision: string; text?: string; all?: boolean };
+const memory = program.command('memory').description("Read and change memory entries: a project's, a bot's, or a bot's private chat with one person")
+  .addHelpText('after', `
+Every command goes through the daemon, as the web page's memory page does; with no daemon running, list, export and
+events read the files (--json says source: files) and the rest ask you to start it.
+
+Examples:
+  vonvon memory list --project 研发 --all
+  vonvon memory add "周四发版" --project 研发 --branch 发版
+  vonvon memory archive <itemId> --project 研发 --revision <r>     # r: memory list 里的 r 数字
+  vonvon memory events <itemId> --project 研发                     # 每行最后是 memory undo 要的事件 id
+  vonvon memory list --bot 小研 --dm ou_xxx                        # 这个 Bot 和这个人的私聊记忆`);
+const memoryScope = (command: Command) => command.option('--project <project>', 'Project name or id (prj_…)').option('--bot <bot>', "Bot name or appId: its own memory")
+  .option('--dm <openId>', "With --bot: the bot's private chat memory with this person").option(...JSON_FLAG);
+const memoryTerminal = async (options: Json) => (await import('./commands/memory')).terminalMemoryContext(io(options));
+const memoryCommands = () => import('./commands/memory');
+type MemoryOptions = Json & { project?: string; bot?: string; dm?: string; branch?: string; revision: string; text?: string; all?: boolean; to?: string; yes?: boolean; expected?: string };
+const REVISION = ['--revision <n>', 'The revision vonvon memory list shows (r…)'] as const;
 memoryScope(covers(memory.command('list'), 'memory.list').description('List the entries by branch')).option('--all', 'Also list the archived entries; --json always has them').action(async (options: MemoryOptions) => {
-  await (await import('./commands/memory')).runMemoryList(options, await memoryContext(options));
+  await (await memoryCommands()).runMemoryList(options, await memoryTerminal(options));
 });
 memoryScope(covers(memory.command('export'), 'memory.export').description('One markdown document per branch')).action(async (options: MemoryOptions) => {
-  await (await import('./commands/memory')).runMemoryExport(options, await memoryContext(options));
+  await (await memoryCommands()).runMemoryExport(options, await memoryTerminal(options));
 });
-memoryScope(covers(memory.command('add <text>'), 'memory.add').description('Add an entry (refused in a Bot session)').option('--branch <name>', 'Branch; a new name opens one, none means 其他'))
-  .action(async (text: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryAdd(text, options, await memoryContext(options)); });
-memoryScope(covers(memory.command('edit <itemId>'), 'memory.edit').description('Change an entry (refused in a Bot session)').requiredOption('--revision <n>', 'The revision vonvon memory list shows').option('--text <text>', 'New text').option('--branch <name>', 'Move to this branch'))
-  .action(async (itemId: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryEdit(itemId, options, await memoryContext(options)); });
-memoryScope(covers(memory.command('forget <itemId>'), 'memory.archive').description('Archive an entry (refused in a Bot session)').requiredOption('--revision <n>', 'The revision vonvon memory list shows'))
-  .action(async (itemId: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryForget(itemId, options, await memoryContext(options)); });
-memoryScope(covers(memory.command('reseal'), 'memory.reseal').description('Accept memory.json as it is now after it was changed outside the daemon (refused in a Bot session)'))
-  .action(async (options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryReseal(options, await memoryContext(options)); });
-memoryScope(covers(memory.command('branch-rename <from> <to>'), 'memory.branchRename').description('Rename a branch (refused in a Bot session)'))
-  .action(async (from: string, to: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryBranch('rename', from, to, options, await memoryContext(options)); });
-memoryScope(covers(memory.command('branch-merge <from> <into>'), 'memory.branchMerge').description('Merge a branch into another (refused in a Bot session)'))
-  .action(async (from: string, into: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryBranch('merge', from, into, options, await memoryContext(options)); });
+memoryScope(covers(memory.command('events <itemId>'), 'memory.events').description("An entry's history; each line ends with the event id memory undo takes"))
+  .action(async (itemId: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryEvents(itemId, options, await memoryTerminal(options)); });
+memoryScope(covers(memory.command('add <text>'), 'memory.add').description('Add an entry').option('--branch <name>', 'Branch; a new name opens one, none means 其他'))
+  .action(async (text: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryAdd(text, options, await memoryTerminal(options)); });
+memoryScope(covers(memory.command('edit <itemId>'), 'memory.edit').description('Change an entry').requiredOption(...REVISION).option('--text <text>', 'New text').option('--branch <name>', 'Move to this branch'))
+  .action(async (itemId: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryEdit(itemId, options, await memoryTerminal(options)); });
+// devices 8.1: the web page's word; `forget` stays as an alias for the scripts that used it
+memoryScope(covers(memory.command('archive <itemId>').alias('forget'), 'memory.archive').description('Archive an entry; memory restore brings it back').requiredOption(...REVISION))
+  .action(async (itemId: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryItem('archive', itemId, options, await memoryTerminal(options)); });
+memoryScope(covers(memory.command('restore <itemId>'), 'memory.restore').description('Bring an archived entry back').requiredOption(...REVISION))
+  .action(async (itemId: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryItem('restore', itemId, options, await memoryTerminal(options)); });
+memoryScope(covers(memory.command('confirm <itemId>'), 'memory.confirm').description('Mark an entry trusted (待确认 → 可信)').requiredOption(...REVISION))
+  .action(async (itemId: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryItem('confirm', itemId, options, await memoryTerminal(options)); });
+memoryScope(covers(memory.command('promote <itemId>'), 'memory.promote').description("Move a project's entry to a bot's memory").requiredOption(...REVISION)
+  .option('--to <bot>', 'Bot name or appId; defaults to the one bot the project is bound to').option('--branch <name>', "Branch in the bot's memory"))
+  .action(async (itemId: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryPromote(itemId, options, await memoryTerminal(options)); });
+memoryScope(covers(memory.command('move <itemId>'), 'memory.move').description("Move a bot's entry back to a project's memory").requiredOption(...REVISION)
+  .requiredOption('--to <project>', 'Project name or id').option('--branch <name>', "Branch in the project's memory"))
+  .action(async (itemId: string, options: MemoryOptions & { to: string }) => { await (await memoryCommands()).runMemoryMove(itemId, options, await memoryTerminal(options)); });
+memoryScope(covers(memory.command('purge <itemId>'), 'memory.purge').description('Delete an entry for good, its text in the records too; asks for --yes').option('--yes', 'Yes, delete it for good'))
+  .action(async (itemId: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryPurge(itemId, options, await memoryTerminal(options)); });
+memoryScope(covers(memory.command('undo <eventId>'), 'memory.undo').description('Undo one change: an event id from memory events'))
+  .action(async (eventId: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryUndo(eventId, options, await memoryTerminal(options)); });
+memoryScope(covers(memory.command('reseal'), 'memory.reseal').description('Accept memory.json as it is now after it was changed outside the daemon'))
+  .action(async (options: MemoryOptions) => { await (await memoryCommands()).runMemoryReseal(options, await memoryTerminal(options)); });
+memoryScope(covers(memory.command('branch-rename <from> <to>'), 'memory.branchRename').description('Rename a branch'))
+  .action(async (from: string, to: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryBranch('rename', from, to, options, await memoryTerminal(options)); });
+memoryScope(covers(memory.command('branch-merge <from> <into>'), 'memory.branchMerge').description('Merge a branch into another'))
+  .action(async (from: string, into: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryBranch('merge', from, into, options, await memoryTerminal(options)); });
+memoryScope(covers(memory.command('branch-delete <name>'), 'memory.branchDelete').description('Archive every entry of a branch at once; each can be restored')
+  .option('--expected <n>', 'The entry count you saw; a branch changed since is left as it is'))
+  .action(async (name: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryBranchDelete(name, options, await memoryTerminal(options)); });
 const settings = program.command('settings').description('Read and change bot, group and session settings');
 type Target = Json & { bot?: string; group?: string; session?: string; host?: boolean; revision?: string; reason?: string };
 const READ = ['settings.read.agent', 'settings.read.project', 'settings.read.session', 'settings.read.host'];

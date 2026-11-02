@@ -102,6 +102,23 @@ describe('daemon status', () => {
     const files = harness({});
     expect(await caught(runStatus(files.io(true), { home: stopped, now: () => T0, env: { VONVON_SESSION: '1' }, daemon: offline }))).toMatchObject({ kind: 'connection', message: 'daemon 没有运行。先运行 vonvon daemon start。' });
   });
+
+  // Codex review 251-1 (main 必败: with no daemon to answer, status read the crash files whatever --scope said, every
+  // bot's crashes): the owner's --scope is the daemon's to apply (devices 5.3), which leaves the crashes out
+  it('with --scope only the daemon answers; the files do not, the discovery still reads the lock', async () => {
+    const stopped = mkdtempSync(join(tmpdir(), 'vonvon-c8-')); roots.push(stopped);
+    const files = harness({});
+    const scoped = /^daemon 没有运行。先运行 vonvon daemon start。\n给了 --scope 时要 daemon 在运行/;
+    expect(await caught(runStatus(files.io(true), { home: stopped, now: () => T0, env: {}, daemon: offline, scoped: true }))).toMatchObject({ kind: 'connection', message: expect.stringMatching(scoped) });
+    const root = home();
+    expect(await caught(runStatus(files.io(true), { home: root, now: () => T0, env: {}, daemon: offline, scoped: true }))).toMatchObject({ kind: 'connection', message: expect.stringMatching(/\n给了 --scope 时要 daemon 在运行/) });
+    expect(files.out()).toBe('');
+    const h = running();
+    await runStatus(h.io(true), { home: root, now: () => T0, env: {}, daemon: h.daemon, scoped: true });
+    expect(JSON.parse(h.out())).toMatchObject({ ok: true, running: true, source: 'daemon' });
+    await runStatus(files.io(true), { home: root, now: () => T0, env: { VONVON_STATUS_FROM_FILES: '1' }, daemon: offline, scoped: true });
+    expect(JSON.parse(files.out())).toMatchObject({ running: true, listen: '127.0.0.1:43119', source: 'files' });
+  });
 });
 
 describe('daemon logs', () => {

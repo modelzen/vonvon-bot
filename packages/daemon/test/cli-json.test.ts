@@ -24,7 +24,16 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['dir', 'list'], 3], [['dir', 'suggest', 'x'], 3],
   [['project', 'list'], 0], [['project', 'rename', 'p', 'q'], 3], [['project', 'remove', 'p'], 3], [['project', 'workspace', 'p', '--add', '.'], 3],
   [['memory', 'list'], 2], [['memory', 'export'], 2], [['memory', 'add', 'x'], 2], [['memory', 'edit', 'x', '--revision', '1'], 2],
-  [['memory', 'forget', 'x', '--revision', '1'], 2], [['memory', 'reseal'], 2], [['memory', 'branch-rename', 'a', 'b'], 2], [['memory', 'branch-merge', 'a', 'b'], 2],
+  [['memory', 'archive', 'x', '--revision', '1'], 2], [['memory', 'reseal'], 2], [['memory', 'branch-rename', 'a', 'b'], 2], [['memory', 'branch-merge', 'a', 'b'], 2],
+  [['memory', 'events', 'x'], 2], [['memory', 'restore', 'x', '--revision', '1'], 2], [['memory', 'confirm', 'x', '--revision', '1'], 2],
+  [['memory', 'promote', 'x', '--revision', '1'], 2], [['memory', 'move', 'x', '--revision', '1', '--to', 'p'], 2], [['memory', 'purge', 'x'], 2],
+  [['memory', 'undo', 'e'], 2], [['memory', 'branch-delete', 'a'], 2],
+  // C5: a write goes through the daemon only, so with none running it is 3; the old name of archive still works
+  [['memory', 'add', 'x', '--project', 'p'], 3], [['memory', 'forget', 'x', '--revision', '1', '--project', 'p'], 3],
+  // Codex review 251-1: given --scope, the reads that fall back to the files want the daemon instead (no project p: 2 without it)
+  [['memory', 'list', '--project', 'p', '--scope', 'bot=cli_a'], 3], [['memory', 'export', '--project', 'p', '--scope', 'bot=cli_a'], 3],
+  [['memory', 'events', 'x', '--project', 'p', '--scope', 'bot=cli_a,group=oc_x'], 3], [['memory', 'list', '--project', 'p'], 2],
+  [['project', 'list', '--scope', 'bot=cli_a'], 3], [['daemon', 'status', '--scope', 'bot=cli_a'], 3],
   [['settings', 'get'], 3], [['settings', 'access'], 3], [['settings', 'set', 'cards.showToolCalls=false'], 3],
   [['settings', 'get', '--host'], 3], [['settings', 'act', 'voice', 'test'], 3], [['settings', 'act', 'admin', 'add', 'ou_x'], 3], [['settings', 'act', 'admin', 'add', '123'], 2],
   [['settings', 'act', 'member', 'all', '--group', 'g'], 3], [['settings', 'act', 'comment-instructions', '--default'], 3], [['settings', 'act', 'comment-instructions', '--stdin'], 2],

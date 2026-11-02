@@ -695,6 +695,22 @@ export class MemoryStore {
     });
   }
 
+  /**
+   * 删除分支（网页的"删除分支"）：一次事务里把分支的 active 条目全部归档，每条一个 `archive` 事件，撤销时逐条撤；
+   * 分支空了照常去掉。`expected` 是调用方看到的条数，对不上什么都不改
+   */
+  branchDelete(input: { name: string; expected?: number; actor: MemoryActor }): Promise<BranchResult> {
+    return this.transact(async tx => {
+      const entry = findBranch(tx.state.branches, input.name);
+      if (!entry) return { ok: false, reason: 'no-such-branch', message: '没有这个分支' } satisfies Refused;
+      if (entry.fixed) return { ok: false, reason: 'fixed-branch', message: '固定分支不能删' } satisfies Refused;
+      const items = this.itemsOf(tx, entry.name).filter(item => item.state === 'active');
+      if (input.expected !== undefined && input.expected !== items.length) return { ok: false, reason: 'conflict', message: '分支里的条目刚变过，重新看一次再删' } satisfies Conflict;
+      for (const item of items) await this.setState(tx, item, 'archive', input.actor);
+      return { ok: true, branches: orderBranches(tx.state.branches), moved: items.length };
+    });
+  }
+
   // -- undo ------------------------------------------------------------------------------------------------------
 
   /** 撤销：找到事件，核对条目 `revision === after.revision`，应用逆操作并追加新事件 */
