@@ -64,7 +64,13 @@ describe('parseSignedManifest', () => {
     for (const sample of fixture.cases) expect([sample.name, reason(() => parse(signed(sample.payload), config))]).toEqual([sample.name, sample.expect]);
   });
   it('reads the packaged key and address, and nothing that is not one', () => {
-    expect(readServerUpdateConfig(new URL('../server-update.json', import.meta.url).pathname)).toBeNull(); // the placeholder until the signing key exists
+    // the release key (server-5 4.2): 32 raw Ed25519 bytes, and the address install.sh uses
+    const file = new URL('../server-update.json', import.meta.url).pathname;
+    const raw = (JSON.parse(readFileSync(file, 'utf8')) as { publicKey: string }).publicKey;
+    const config = readServerUpdateConfig(file);
+    expect(config?.baseURL).toBe('https://dl.vonvon.cc/bot/server');
+    expect(Buffer.from(raw, 'base64')).toHaveLength(32);
+    expect(config?.key.export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64')).toBe(raw);
   });
 });
 

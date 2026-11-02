@@ -4,7 +4,7 @@
 // main 必败: neither script exists on main.
 import assert from 'node:assert/strict';
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { createHash, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
 import { once } from 'node:events';
 import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -607,14 +607,28 @@ test('a script cut short anywhere before its last line does nothing', async t =>
   }
 });
 
+const PUBKEY_BLOCK = /# BEGIN VONVON PUBKEY\n[^]*?# END VONVON PUBKEY\n/;
+
 test('the script without a public key refuses to install', async t => {
   const f = await fixture(t);
   await f.ready();
-  await writeFile(join(f.base, 'scripts', 'install.sh'), await readFile(join(here, 'install.sh')));
+  const original = await readFile(join(here, 'install.sh'), 'utf8');
+  await writeFile(join(f.base, 'scripts', 'install.sh'), original.replace(PUBKEY_BLOCK, "# BEGIN VONVON PUBKEY\nPUBKEY_PEM=''\n# END VONVON PUBKEY\n"));
   const run = await f.run('install.sh');
   assert.equal(run.code, 4);
   assert.match(run.stderr, /没有带发布公钥/);
   assert.deepEqual(await f.curls(), []);
+});
+
+// server-5 4.2: the release key is in two places, install.sh (SPKI PEM) and the daemon's server-update.json (raw base64).
+// publish-server's plan checks them against the private key; this keeps the two in the repository the same key.
+test('install.sh and server-update.json carry the same release public key', async () => {
+  const text = await readFile(join(here, 'install.sh'), 'utf8');
+  const pem = /PUBKEY_PEM='([^']*)'/.exec(text.match(PUBKEY_BLOCK)?.[0] ?? '')?.[1] ?? '';
+  const { publicKey } = JSON.parse(await readFile(join(here, '..', 'packages', 'daemon', 'server-update.json'), 'utf8'));
+  if (!pem && !publicKey) return;
+  const raw = createPublicKey(pem).export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64');
+  assert.equal(raw, publicKey);
 });
 
 test('uninstall: stops the service and the daemon, takes the PATH out, deletes the install root, keeps the data', async t => {
