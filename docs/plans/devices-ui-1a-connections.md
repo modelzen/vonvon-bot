@@ -819,3 +819,9 @@ U1a 和 U1b 是一个 PR，Mac 上只发一次验收，写在 U1b 第 6 节。U1
 - **235-3 / 236-1 收到 `pairResult` 之后、等 `serverInfo` 时断了，丢掉了已获准的密钥。** 这时对面已经登记了这把钥匙，邀请也用掉了。"添加"第 4 步的找回原来只认 `stage === 'pairing'`，改成 `pairing` 或 `hello`：同一把钥匙、不带邀请再连，从 `device.clients` 找回 `clientId`（`connections.test.ts` 那例改成两个阶段各跑一次）。
 - **236-2 切换时，已握手、还在读 `daemonStatus` 的连接要等读完（最多 5 秒）才关。** 从拿到连接到交给 `session` 之前，这次尝试被 abort（切换、`retry()`、退出）就立刻关掉它；交出时退订（`connections.test.ts` 加一例：连着三次"切过去 → 切回本机"，每次切走后打开的连接都是 0）。
 - **236-3 保存设备时点"取消"，仍可能添加成功。** `registry.put` 之后再看一次 abort：取消了就把列表恢复原样（新设备删掉，重新配对的放回原来那条），再照写失败的路子在对面撤销这把钥匙，回 `failed: aborted`（`connections.test.ts` 加一例）。
+
+## 合入集成分支
+
+2026-11-02 把 `claude/devices-integration`（带 I3 升级引擎、D2、D4a、D4b）合进本分支（merge 2d986e4a），文本没有冲突。合并后两个测试失败，原因都在 U1 自己：测试文件没跟上 U1 的改动，桌面端只换回 U1 的源码也一样失败，和集成分支的改动无关；产品代码没有接错，没改。
+- `DT/test/native-lifecycle.test.ts`（81 条败 78 条）：4.8 让 `main.ts` 启动时用 Electron 的 `safeStorage`、`powerMonitor`，测试的 electron mock 没有这两个，`startDesktop` 走不到 `installBridge`；假 bridge 也没有 `deferLocalLost`。mock 补上这三样（`deferLocalLost` 默认 `false`，即页面看的是这台电脑），再照 4.8 加两例：设备列表交给 bridge、`resume` 时 `wake()`、退出时先关设备连接再关 bridge 并去掉 `resume` 监听；看远程时本机连接断了不弹窗，留到切回再报。
+- `U/test/bot-schedules-app.test.tsx`：U1b 4.2 让 `App` 调 `useActiveDevice()`，这个测试的 `client-context` mock 只给了 `useClient`、`useShellCapabilities`。改成在真模块上只换 hook：`useActiveDevice` 给 `LOCAL_ACTIVE_DEVICE`，`useDevicesState` 给 `undefined`。
