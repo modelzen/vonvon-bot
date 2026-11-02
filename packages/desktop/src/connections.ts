@@ -306,6 +306,9 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     if (!current()) { opened?.link.close(); return; }
     if (!opened) { onFailure(myGen, mySeq, deviceCode(attempts), attempts); return; }
     const { link, route } = opened;
+    // A switch or a retry from here on closes it at once, not after the status read below (Codex 审查 236-2).
+    const closeOnAbort = (): void => link.close();
+    abort.signal.addEventListener('abort', closeOnAbort, { once: true });
     const info = link.serverInfo;
     // The channel checked the key already; this is a data directory copied to another machine.
     if (info.machineId !== device.deviceId) { link.close(); onFailure(myGen, mySeq, 'identity_changed', attempts); return; }
@@ -331,6 +334,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
       };
     }).catch(() => undefined);
     if (!current()) { link.close(); return; }
+    abort.signal.removeEventListener('abort', closeOnAbort);
     const view: ViewSession = { id, client: link.client, serverInfo: info, mode };
     const opening: Session = {
       id, link, info, mode, view, cause,

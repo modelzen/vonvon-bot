@@ -468,6 +468,22 @@ describe('reconnecting', () => {
     expect(h.calls).toHaveLength(6);
   });
 
+  it('closes a connection still reading its status at once when switched away (Codex 审查 236-2)', async () => {
+    const h = harness();
+    const a = h.add();
+    for (let round = 0; round < 3; round++) {
+      await h.devices.switchTo(a.deviceId);
+      const slow = h.link({ machineId: a.deviceId });
+      vi.mocked(slow.client.admin).mockReturnValue(new Promise(() => {}));
+      h.calls.at(-1)!.resolve(slow);
+      await flush();
+      await h.devices.switchTo('local');
+      expect(slow.closeSpy).toHaveBeenCalled();
+      expect(h.openLinks()).toBe(0);
+    }
+    expect(h.views.some(view => view.kind === 'remote')).toBe(false);
+  });
+
   it('retry replaces the attempt in flight and closes what it brings back late', async () => {
     const h = harness();
     const a = h.add();
