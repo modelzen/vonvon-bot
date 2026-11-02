@@ -3984,6 +3984,8 @@ export function createOrchestrator(
         // 还在，话题自愈而不是僵死到重启）。
         sessions.delete(threadId);
         log.info('agent', 'dead-thread-evict', { threadId });
+        // Closed all the same: its entry, and the session's token with it, ends (devices 5.3).
+        void trackTask(live.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
       }
     }
     const rec = await getSession(threadId);

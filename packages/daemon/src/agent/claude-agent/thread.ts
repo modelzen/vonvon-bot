@@ -515,17 +515,24 @@ export class ClaudeAgentThread implements AgentThread {
         this.lastActivityAt = Date.now();
         this.sink?.({ kind: 'msg', msg });
       }
-      this.dead = true;
-      this.askSink = undefined;
-      this.dropAsks('turn-ended');
+      this.died();
       this.sink?.({ kind: 'end' });
     } catch (err) {
-      this.dead = true;
-      this.askSink = undefined;
-      this.dropAsks('turn-ended');
+      this.died();
       log.fail('agent', err, { backend: 'claude-agent', phase: 'pump' });
       this.sink?.({ kind: 'error', err });
     }
+  }
+
+  /**
+   * The process is gone: it exited, its stream failed, or it was hard-aborted. Between two turns no turn is there to
+   * clean up after it, so the session's entry, and with it the session's token in the host, ends here (devices 5.3).
+   */
+  private died(): void {
+    this.dead = true;
+    this.askSink = undefined;
+    this.dropAsks('turn-ended');
+    this.cfg.entry?.revoke('dead');
   }
 
   private async setPlanMode(mode: 'plan' | 'acceptEdits'): Promise<void> {
