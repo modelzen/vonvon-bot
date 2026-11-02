@@ -6,7 +6,7 @@ import type { Agent, Group, Membership, MembershipId } from "@vonvon/protocol";
 import type { CollaborationClient, UsageShareSection } from "@vonvon/protocol";
 import { settingAnchor } from "../search";
 import { useActiveDevice } from "../client-context";
-import { onDevice } from "../device-copy";
+import { onDevice, whereName } from "../device-copy";
 import "./usage.css";
 import { JudgeUsageGroup } from "./JudgeUsage";
 import {UsageAccount, UsageProfile} from "./UsageContent";
@@ -69,7 +69,7 @@ export function UsagePanel({ request, onOpenEnvironment, onOpenShare }: Props) {
       </div>
     </header>
     <UsageAccount data={data}>
-      {!data && <SettingsRow title={loading ? '正在读取用量' : '用量尚未读取'} description={loading ? '请稍候。' : error ? '请先刷新重试，或到 Provider 设置检测本机配置。' : `用量只有 Codex 用 ChatGPT 账号时才有。${onDevice(where, '配置好')}后回来检测。`} trailing={!loading && <Button size="sm" onClick={onOpenEnvironment}>检测 Provider</Button>}/>}
+      {!data && <SettingsRow title={loading ? '正在读取用量' : '用量尚未读取'} description={loading ? '请稍候。' : error ? `请先刷新重试，或到 Provider 设置检测${where.isRemote ? `${whereName(where)}上的` : '本机'}配置。` : `用量只有 Codex 用 ChatGPT 账号时才有。${onDevice(where, '配置好')}后回来检测。`} trailing={!loading && <Button size="sm" onClick={onOpenEnvironment}>检测 Provider</Button>}/>}
       {error && <InlineNotice title="用量读取失败" tone="warning">{error}</InlineNotice>}
       {notice && <p className="usage-operation-note" role="status">{notice}</p>}
     </UsageAccount>

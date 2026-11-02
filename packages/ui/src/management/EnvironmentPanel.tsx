@@ -14,7 +14,7 @@ import {SettingChoices} from "../settings/SettingChoices";
 import {McpPanel} from "./McpPanel";
 import {settingAnchor, type SearchReveal} from '../search';
 import {useActiveDevice, useShellCapabilities} from '../client-context';
-import {CHECK_CONFIG, CONFIG_STATE, remoteToolsNote, whereName} from '../device-copy';
+import {CHECK_CONFIG, CONFIG_STATE, onDeviceText, remoteToolsNote, whereName} from '../device-copy';
 import {openExternalUrl} from '../url-actions';
 import {OperationActivity} from './OperationActivity';
 
@@ -226,13 +226,13 @@ export function EnvironmentPanel({ request, reveal }: Props) {
   return <section className="environment-panel" aria-label="本机环境" id={settingAnchor('本机环境')}>
     <header className="environment-lead today-page-heading">
       <h1>工具与连接</h1>
-      <IconButton label="重新检测" title="重新检测本机工具与连接" disabled={busy} onClick={() => void refresh()}><RefreshCw size={15}/></IconButton>
+      <IconButton label="重新检测" title={where.isRemote ? `重新检测${whereName(where)}的工具与连接` : "重新检测本机工具与连接"} disabled={busy} onClick={() => void refresh()}><RefreshCw size={15}/></IconButton>
     </header>
     {where.isRemote && <p className="environment-notice" role="note">{remoteToolsNote(where)}</p>}
-    {notice && <p className="environment-notice" role="status">{notice}</p>}
+    {notice && <p className="environment-notice" role="status">{onDeviceText(where, notice)}</p>}
     {running && !progressOpen && <div className="environment-notice" role="status">{toolNames[running.tool]} 正在{running.update ? "更新" : "安装"}。<Button size="sm" onClick={() => setProgressOpen(true)}>返回进度</Button></div>}
     <div className="environment-groups">
-      <DependencyGroup title="本机工具" description="读写飞书文档、消息等内容。">
+      <DependencyGroup title={where.isRemote ? `${whereName(where)}上的工具` : "本机工具"} description="读写飞书文档、消息等内容。">
         {tools.filter((tool) => tool.tool === "lark-cli").map((tool) => <ToolRow key={tool.tool} reveal={reveal === 'lark-tool'} tool={tool} auth={auth[tool.tool]} profiles={profiles} busy={busy || Boolean(running)} running={running?.tool === tool.tool} onIntent={setIntent} onCheckAuth={checkAuth} onLogin={() => void act({ type: "startLogin", tool: tool.tool })} onProgress={() => setProgressOpen(true)} onManageProfiles={() => setProfilesOpen(true)} />)}
       </DependencyGroup>
       {otherBackends.length > 0 && <DependencyGroup title="其他 Provider">
@@ -240,7 +240,7 @@ export function EnvironmentPanel({ request, reveal }: Props) {
       </DependencyGroup>}
       <McpPanel refreshKey={mcpRefresh}/>
     </div>
-    {!tools.length && <p className="environment-empty" role="status">正在检测本机工具…</p>}
+    {!tools.length && <p className="environment-empty" role="status">{where.isRemote ? `正在检测${whereName(where)}上的工具…` : "正在检测本机工具…"}</p>}
     {operation && <section className="environment-login-operation" role="status">
       <strong>{operation.kind === "running" ? operation.purpose.kind === "login" ? `${toolNames[operation.purpose.tool]} 等待授权` : "等待创建应用" : operation.message}</strong>
       {operation.kind === "running" && <div className="environment-verification">
