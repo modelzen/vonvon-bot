@@ -191,3 +191,37 @@ Mac 后验：U2 的维护子集界面；本片无专项。Windows：无。
 - `verifyPidLockOwner` 在会话里不跑：会话里连的是 pid 锁里的端口，没有 owner 校验；端口被抢占时最坏是令牌发给了抢占者，令牌只代表这条会话、24 小时失效、不能做运维，和设计 16.3 一致。
 - 群令牌的只读 `settings.read` 复用 `settings_get` 在群里的只读标法，具体字段要看 `admin/service.ts` 里它怎么标；若没有现成的"只读 + reason"结构，加一个 `readOnly?: { reason: 'not-dm' }`，行数 +40。
 - 完全访问档的 bot 能读 `local-credential` 自己连（设计 5.3、16.2）：本片不解决，文案在 U2，`product.md` 在 D0。
+
+## 实现时和计划不一样的地方
+
+1. **`secrets get` 不进 `LOCAL_ONLY`。** 计划说它"已有自己的拒绝"，但 `secrets.ts:69` 的 `refuseInSession` 只管 `list/set/remove/test`。`secrets get` 是 `secrets-getter` 的 exec 端点：会话里的 lark-cli 靠它取 App Secret，`secrets-get.test.ts` 就是在 `FEISHU_CODEX_BRIDGE=1` 下跑的。放进集合会让每个 Bot 会话里的 lark-cli 都失灵。`index.ts` 里的注释写了原因，`cli-bot-session.test.ts` 断言它不在集合里。
+2. **`memory.ts` 的整体拒绝保留，只删了 `schedule.ts` 的。** 这个基线上还没有 C5，`vonvon memory` 是在进程内直接调 `memoryAction(…, { origin: 'cli' })` 写文件，不经过 daemon。删掉拒绝，会话就能以主人终端的身份写记忆。等 C5 把记忆命令改成走 daemon RPC，再删这条拒绝。
+3. **会话里的 `daemon status`，有没有令牌都只读 pid 锁**（`source:'files'`，不带崩溃记录和暂停的 Bot），不连 daemon，原因有三：
+   - daemon 的快照要 `--scope` 才给；
+   - 崩溃文件里有别的 Bot；
+   - `verifyPidLockOwner` 会读 `local-credential`。
+
+   这样 `FEISHU_CODEX_BRIDGE=1 vonvon daemon status --json` 也能正常回答（自测 2 第 5 步）。代价是：会话里 daemon 不回应、但锁还在时，以前报连接错误，现在照锁回答"在运行"。`cli-machine.test.ts` 已相应改写：不在会话里的回退照旧，会话的情形另写一条测试。
+4. **这个基线上没有 D2 和 D3、I3 的东西。**
+   - 没有 `message-loop.ts`（D2）：`DRAIN_KINDS` 目前只在 `ws.ts` 和 `http.ts` 的 `control()` 两处用，D2 合入时它的 message loop 要改用同一个常量。
+   - 没有 `remote …`（D3）和 `update`（I3）：这些路径先登记在 `LOCAL_ONLY`。测试断言集合里只有这几条在当前命令树里找不到；自测 2 的 `remote enable 1.2.3.4` 现在得到的是 commander 的"未知命令"（exit 2）。
+5. **维护子集的 `protocol_mismatch`。** 错误码从 `permission_denied` 改成了 `protocol_mismatch`，`authz.test.ts` 和 `server-handshake.test.ts` 的旧断言已更新。`details` 由 `ws.ts` 的 `forProtocol1` 对协议 1（0.8 客户端）去掉，因为 0.8 严格解析错误信封；协议不同的其他客户端照常收到 `details`，测试用 `PROTOCOL_VERSION + 1`。"连续 20 条"按字面实现：中间有一条被放行就重新计数。
+6. **`AuthzDeps` 的两处改动：**
+   - **`groupsOf`** 回 `BoundGroup[]`（`name`、`chatId`、`projectId`），而不是 `Set<string>`：设置和协作请求按项目名指定项目，记忆请求按 `projectId` 指定，都要这几个字段。它读 `service.listProjects(appId)`（项目文件），不读快照，因为快照最多会落后 5 秒。
+   - **`askBot`** 的签名是 `(appId, sessionId, kind, request) → { ok, role, openId? } | { ok:false, reason, message }`，`grant` 只带 `role`/`openId`。计划里的 `actor?: ScheduleActor` 留给 D4b 按需要加。
+7. **群令牌的 `settings.read`。** 回复的每一段标 `access: { kind:'readonly', reason:'not-dm', message: NOT_DM_MESSAGE }`，`NOT_DM_MESSAGE` 就是 `registry.ts` 里那个常量，工具和 daemon 引用的是同一个。另外去掉了 `decisionModels`：哪些决策模型配了 key 属于本机密钥库的信息，不属于这个群。
+8. **测试的文件名和放法：**
+   - `cli-session.test.ts` 已经被 `vonvon session` 占用，新文件叫 `cli-bot-session.test.ts`。它是端到端测试：esbuild 打包的 CLI 跑在测试进程里的 `startApi` 上，`local-credential` 设成 0000（任何去读它的命令都会失败），代替计划里对 `connectLocal` 和 `readFile` 的 spy。
+   - "不连接"的证明：三种没有令牌的情形都在一个没有 daemon、没有锁的目录里跑。如果拒绝发生在读锁之后，结果会是 exit 3"daemon 没有运行"。
+   - `agent-entries.test.ts` 对应现有的 `agent-entry-registry.test.ts`；`handle-message-session` 加在 `run-retry.test.ts`，那里有现成的 orchestrator 测试架子；排空时的回复测在 `server-drain-control.test.ts`，`machine.coreUpdateStatus` 从"1001 关闭"那组挪成单独一条，那组改用 `checkCoreUpdate`。
+   - 拿不到令牌时，orchestrator 会先试 resume、再试新会话，每次都有自己的 entry，每个都被作废；测试按"发出的令牌 = 作废的令牌"断言，不断言只有一次。
+9. **自测 2 的做法：**
+   - 用 `packages/daemon/test/manual/session-probe.ts`，在进程内起 `startApi` 和一个假服务，而不是 `vonvon daemon start`。令牌只在 host 内存里，没有真 Bot 就没有别的办法发出来。
+   - `settings set` 换成了 `settings act voice test`：`settings set` 要先读设置视图，假服务没有；两者都是设置写操作，都在进 handler 之前被 `not-dm` 拒绝。
+   - 结果：缺 `--scope` exit 4，超范围 exit 4，范围正确 `ok:true`，群里改设置 exit 4 并给出 `not-dm` 那句，`FEISHU_CODEX_BRIDGE=1` 时 `daemon status` 正常、`schedule list` exit 4 `session_token_missing`，`daemon restart` 和 `pair` exit 4 `not_in_session`。
+10. **host 作废令牌：**
+    - **supervisor 按子进程记账：** 每个子进程只作废自己发出去的那些 sessionId，不按 appId `revokeAll`。这样旧进程退出和新进程起来撞在一起时，不会误作废新进程的会话；`revokeAll` 留在表上备用。
+    - **单 Bot 的 `vonvon run`（没有 supervisor）：** 自己持有一张表，交给自己的 `startApi`。
+    - **测试和没有 `host` 的调用方：** 会话照旧只带 `'1'` 这个标记，CLI 会以 `session_token_missing` 拒绝。这是安全的失败方向。
+11. **`withDaemon` 的 negotiate。** 发的是 `capabilities: ['cli']`。被拒时报的就是 daemon 的原话（不加"核对范围失败："前缀），退出码按 `rpcErrorKind` 算（`scope_required` → 4）。`--scope` 是挂在 `program` 上的全局选项，写在子命令前后都行。`command-error.ts` 把 `session_token_invalid` 和 `not-group` 加进了 exit 4 那组。
+12. **令牌握手：** 令牌查不到、对不上或闲置超时，都用 4401 `invalid_session_token` 关闭。令牌对、但 hello 里是别的协议，用 4001 `protocol_mismatch` 关闭：会话里跑的是这台 daemon 自己的 CLI，不给维护子集。

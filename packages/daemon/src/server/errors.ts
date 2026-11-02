@@ -6,10 +6,19 @@ import { CodexSetupConflict } from '../agent/codex-appserver/setup';
 import { LibraryError } from '../project/library';
 
 export class RpcError extends Error {
-  constructor(readonly code: string, message: string) { super(message); }
+  /** `details` goes into the error envelope, for a program to read (both versions of a `protocol_mismatch`). */
+  constructor(readonly code: string, message: string, readonly details?: Record<string, unknown>) { super(message); }
 }
 export function unsupported(): never {
   throw new RpcError('unsupported', '当前 daemon 不支持此操作。');
+}
+
+/** The error envelope for a failed request; an `RpcError`'s `details` go with it (a protocol 1 peer drops them, ws.ts). */
+export function errorEnvelope(id: string, error: unknown): { type: 'error'; id: string; code: string; message: string; details?: Record<string, unknown> } {
+  return {
+    type: 'error', id, code: getRpcErrorCode(error), message: error instanceof Error ? error.message : '操作失败。',
+    ...(error instanceof RpcError && error.details ? { details: error.details } : {}),
+  };
 }
 
 export function getRpcErrorCode(error: unknown): string {

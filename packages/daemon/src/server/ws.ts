@@ -1,10 +1,13 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, Server } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
-import { helloSchema, PROTOCOL_VERSION, requestSchema, type ErrorEnvelope, type Event, type Hello, type Request, type Response, type Scope, type ServerInfo } from '@vonvon/protocol';
-import { getRpcErrorCode } from './errors';
+import { DRAIN_KINDS, helloSchema, PROTOCOL_VERSION, requestSchema, rpcKindOf, type ErrorEnvelope, type Event, type Hello, type Request, type Response, type Scope, type ServerInfo } from '@vonvon/protocol';
+import { errorEnvelope } from './errors';
 import type { JobPeer } from './jobs';
 import type { Principal } from './principal';
+import { SESSION_TOKEN_PREFIX, type SessionTokens } from '../host/session-tokens';
+
+const DRAIN = new Set<string>(DRAIN_KINDS);
 
 export interface Peer extends JobPeer {
   /** What the client said it is in its hello; every request comes after it. */
@@ -17,12 +20,17 @@ export interface Peer extends JobPeer {
   /** The remote end, `ip:port` (`[ip]:port` for IPv6). */
   readonly address: string;
   send(value: Response | ErrorEnvelope): void;
+  /** Closes the connection with a close code of devices 4.7 (4001 `protocol_mismatch` after too many refused requests). */
+  close(code: number, reason: string): void;
 }
+/** What `publish` hands a peer: the event as it is, another view of it, or nothing (devices-4a 4.7). */
+export type PeerView = (peer: Peer, event: Event) => Event | null;
 export const formatAddress = (host: string | undefined, port: number | undefined): string =>
   `${host?.includes(':') ? `[${host}]` : host ?? 'unknown'}:${port ?? 0}`;
 /** devices 4.5: a 0.8 client parses strictly, so it does not get the startedAt protocol 2 added, nor the device event it has no schema for. */
 function forProtocol1(value: Response | ErrorEnvelope | Event | ServerInfo): unknown {
   if (value.type === 'event' && value.event === 'device') return undefined;
+  if (value.type === 'error' && value.details) { const { details: _added, ...error } = value; return error; }
   if (value.type !== 'response' || value.method !== 'admin' || value.payload.kind !== 'daemonStatus') return value;
   const { startedAt: _added, ...status } = value.payload.status;
   return { ...value, payload: { ...value.payload, status } };
@@ -35,8 +43,12 @@ function loopbackOrigin(origin: string | undefined): boolean {
   try { const url = new URL(origin); return (url.protocol === 'http:' || url.protocol === 'https:') && loopbackHost(url.host); }
   catch { return false; }
 }
-/** `info` answers the hello: the server info shape that peer's protocol reads (devices 4.5). */
-export function createSocketServer(options: { server: Server; credential: string; info: (peer: Peer) => ServerInfo; request: (peer: Peer, request: Request) => Promise<void>; control?: (peer: Peer, request: Request) => Promise<void>; detached: (peer: Peer) => void }) {
+/**
+ * `info` answers the hello: the server info shape that peer's protocol reads (devices 4.5). `sessions`: a hello whose
+ * credential starts `vs1.` is a Bot session's token, looked up there and never compared with the owner's (devices 5.3).
+ * `view`: what each peer gets of a published event.
+ */
+export function createSocketServer(options: { server: Server; credential: string; sessions?: Pick<SessionTokens, 'resolve'>; info: (peer: Peer) => ServerInfo; request: (peer: Peer, request: Request) => Promise<void>; control?: (peer: Peer, request: Request) => Promise<void>; detached: (peer: Peer) => void; view?: PeerView }) {
   const sockets = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 4_000_000 });
   const peers = new Set<Peer>();
   const accepted = new Set<Promise<void>>();
@@ -78,6 +90,7 @@ export function createSocketServer(options: { server: Server; credential: string
         return true;
       },
       send, event: send,
+      close(code, reason) { socket.close(code, reason); },
     };
     const detach = (): void => {
       if (detached) return;
@@ -105,13 +118,21 @@ export function createSocketServer(options: { server: Server; credential: string
       if (!authenticated) {
         const hello = helloSchema.safeParse(raw);
         const credential = hello.success ? hello.data.credential : undefined;
-        const supplied = Buffer.from(credential ?? '');
-        const expected = Buffer.from(options.credential);
-        if (!hello.success || supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) { socket.close(4401, 'unauthorized'); return; }
+        if (hello.success && credential?.startsWith(SESSION_TOKEN_PREFIX)) {
+          // A Bot session (devices 5.3): its token, not the owner's credential. Its CLI is this daemon's own, so no maintenance subset.
+          const session = options.sessions?.resolve(credential);
+          if (!session) { socket.close(4401, 'invalid_session_token'); return; }
+          if (hello.data.protocolVersion !== PROTOCOL_VERSION) { socket.close(4001, 'protocol_mismatch'); return; }
+          principal = { kind: 'bot-session', sessionId: session.sessionId, appId: session.appId, place: session.place, ...(session.chatId ? { chatId: session.chatId } : {}) };
+        } else {
+          const supplied = Buffer.from(credential ?? '');
+          const expected = Buffer.from(options.credential);
+          if (!hello.success || supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) { socket.close(4401, 'unauthorized'); return; }
+          principal = hello.data.protocolVersion === PROTOCOL_VERSION ? { kind: 'owner', via: 'local' } : { kind: 'maintenance', protocolVersion: hello.data.protocolVersion, inner: 'owner:local' };
+        }
         authenticated = true;
         clientKind = hello.data.clientKind;
         protocolVersion = hello.data.protocolVersion;
-        principal = protocolVersion === PROTOCOL_VERSION ? { kind: 'owner', via: 'local' } : { kind: 'maintenance', protocolVersion, inner: 'owner:local' };
         clearTimeout(deadline);
         peers.add(peer);
         send(options.info(peer));
@@ -119,12 +140,12 @@ export function createSocketServer(options: { server: Server; credential: string
       }
       if (state === 'draining') {
         const parsed = requestSchema.safeParse(raw);
-        if (!parsed.success || !options.control || !(parsed.data.method === 'admin' && parsed.data.payload.type === 'daemonStatus'
-          || parsed.data.method === 'machine' && parsed.data.payload.type === 'stopHost')) {
+        // devices 4.7: the shared list, coreUpdateStatus included, so an update's progress stays visible.
+        if (!parsed.success || !options.control || !DRAIN.has(rpcKindOf(parsed.data))) {
           socket.close(1001, 'server_shutdown');
           return;
         }
-        void options.control(peer, parsed.data).catch(error => peer.send({ type: 'error', id: parsed.data.id, code: getRpcErrorCode(error), message: error instanceof Error ? error.message : '操作失败。' }));
+        void options.control(peer, parsed.data).catch(error => peer.send(errorEnvelope(parsed.data.id, error)));
         return;
       }
       if (!raw || typeof raw !== 'object' || !('id' in raw) || typeof raw.id !== 'string' || !raw.id) { socket.close(1007, 'invalid_message'); return; }
@@ -136,7 +157,7 @@ export function createSocketServer(options: { server: Server; credential: string
       const parsed = requestSchema.safeParse(raw);
       if (!parsed.success) { peer.send({ type: 'error', id, code: 'invalid_request', message: '请求参数无效。' }); return; }
       const completion = Promise.resolve().then(() => options.request(peer, parsed.data)).catch(error => {
-        peer.send({ type: 'error', id, code: getRpcErrorCode(error), message: error instanceof Error ? error.message : '操作失败。' });
+        peer.send(errorEnvelope(id, error));
       });
       accepted.add(completion);
       void completion.then(() => { accepted.delete(completion); }, () => { accepted.delete(completion); });
@@ -200,7 +221,13 @@ export function createSocketServer(options: { server: Server; credential: string
     return released;
   }
   return {
-    publish(event: Event): void { if (state === 'open') for (const peer of peers) peer.event(event); },
+    publish(event: Event): void {
+      if (state !== 'open') return;
+      for (const peer of peers) {
+        const shown = options.view ? options.view(peer, event) : event;
+        if (shown) peer.event(shown);
+      }
+    },
     beginDrain,
     release,
     close(): Promise<void> {

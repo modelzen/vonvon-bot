@@ -1,7 +1,9 @@
 import { badArgs, CommandError, rpcErrorKind } from './command-error';
 import { connectLocal, ConnectionError, RpcError, type VonvonClient } from '@vonvon/client';
-import { backendLabel, conversationCopy, PROTOCOL_VERSION, requestSchema, type Agent, type Membership, type ServerInfo } from '@vonvon/protocol';
+import { backendLabel, conversationCopy, PROTOCOL_VERSION, requestSchema, type Agent, type Membership, type Scope, type ServerInfo } from '@vonvon/protocol';
 import { paths } from '../config/paths';
+import { inBotSession, SESSION_ENV } from '../config/session-env';
+import { looksLikeSessionToken } from '../host/session-tokens';
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { PidLockError, readRunningPidLock } from '../server/pid-lock';
 
@@ -27,24 +29,47 @@ class BadRequest extends Error {}
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;
 export const printable = (text: string): string => text.replace(CONTROL, '');
 
-export async function connectLocalDaemon(home = paths.appDir, cliEntry = process.argv[1]): Promise<DaemonConnection> {
+/** devices 15. */
+const SESSION_TOKEN_MISSING = '这是 Bot 会话，但没有有效的会话令牌，不能以主人身份运行。';
+const SESSION_TOKEN_INVALID = '会话令牌已失效（会话结束或超过 24 小时没用）。';
+
+/** What every command's connection carries (devices-4a 4.9): the global `--scope`, and the environment it runs in. */
+const context: { scope?: Scope; env: NodeJS.ProcessEnv } = { env: process.env };
+/** index.ts sets the parsed `--scope` before a command runs; tests set both. */
+export function setCliContext(next: { scope?: Scope | undefined; env?: NodeJS.ProcessEnv }): void {
+  if ('scope' in next) { if (next.scope) context.scope = next.scope; else delete context.scope; }
+  if (next.env) context.env = next.env;
+}
+
+/**
+ * In a Bot's session (devices 5.3) a command acts as the session, never as the owner: its token goes in the hello,
+ * `local-credential` is not read, and without a valid token nothing connects at all.
+ */
+export async function connectLocalDaemon(home = paths.appDir, cliEntry = process.argv[1], env: NodeJS.ProcessEnv = context.env): Promise<DaemonConnection> {
+  const session = inBotSession(env);
+  const token = env[SESSION_ENV];
+  if (session && !looksLikeSessionToken(token)) throw new CommandError('refused', SESSION_TOKEN_MISSING, { reason: 'session_token_missing' });
   let lock;
   try { lock = await readRunningPidLock(home); }
   catch (error) { throw new CommandError('connection', `连不上 daemon：${firstLine(error)}`); }
   if (!lock) throw new CommandError('connection', 'daemon 没有运行。先运行 vonvon daemon start。');
   if (!lock.listen) throw new CommandError('connection', 'daemon 正在启动，稍后再试。');
-  // Covers a missing or wrong local-credential too: the check is an authenticated round trip.
-  try { await verifyPidLockOwner(home, lock); }
-  catch (error) {
-    if (error instanceof PidLockError) throw new CommandError('connection', `连不上 daemon（PID ${lock.pid}）：本机凭据对不上，或者这个 PID 已经不是 daemon。运行 vonvon daemon status 查看。`);
-    throw error;
+  // Covers a missing or wrong local-credential too: the check is an authenticated round trip. A session connects to the
+  // lock's port as it is (devices-4a 4.9): the check would read local-credential.
+  if (!session) {
+    try { await verifyPidLockOwner(home, lock); }
+    catch (error) {
+      if (error instanceof PidLockError) throw new CommandError('connection', `连不上 daemon（PID ${lock.pid}）：本机凭据对不上，或者这个 PID 已经不是 daemon。运行 vonvon daemon status 查看。`);
+      throw error;
+    }
   }
   if (!cliEntry) throw new CommandError('connection', 'Cannot locate the daemon CLI entry.');
   let connected: DaemonConnection;
-  try { connected = await connectLocal({ home, cliEntry }); }
+  try { connected = await connectLocal({ home, cliEntry, ...(session && token ? { credential: token } : {}) }); }
   catch (error) {
     // The child printed {"running":false}: the daemon stopped between the lock check and discovery.
     if (isZodError(error)) throw new CommandError('connection', 'daemon 刚刚停止了。先运行 vonvon daemon start。');
+    if (error instanceof ConnectionError && error.closeReason === 'invalid_session_token') throw new CommandError('refused', SESSION_TOKEN_INVALID, { reason: 'session_token_invalid' });
     const message = firstLine(error);
     if (message === 'Daemon closed during handshake') throw new CommandError('connection', 'daemon 在握手时断开了：本机凭据对不上，或者 daemon 刚好停止或重启了。稍后重试，或运行 vonvon daemon status 查看。');
     if (message === 'Daemon handshake timed out') throw new CommandError('connection', '和 daemon 握手超时。');
@@ -102,8 +127,12 @@ function printableError(error: unknown): unknown {
   return message === error.message ? error : error instanceof CommandError ? new CommandError(error.kind, message, error) : new Error(message);
 }
 
-/** `connect` may give a bare client (the tests' fakes) or a connection with the server info. */
-export async function withDaemon<T>(fn: (call: Call, info?: ServerInfo) => Promise<T>, connect: () => Promise<VonvonClient | DaemonConnection> = connectLocalDaemon, timeouts = TIMEOUTS): Promise<T> {
+/**
+ * `connect` may give a bare client (the tests' fakes) or a connection with the server info. In a Bot's session, or
+ * with `--scope`, the first request is admin.negotiate (devices 5.3): a scope the daemon refuses ends the command
+ * with the daemon's words.
+ */
+export async function withDaemon<T>(fn: (call: Call, info?: ServerInfo) => Promise<T>, connect: () => Promise<VonvonClient | DaemonConnection> = () => connectLocalDaemon(), timeouts = TIMEOUTS): Promise<T> {
   const connected = await connect();
   const { client, serverInfo } = 'serverInfo' in connected ? connected : { client: connected, serverInfo: undefined };
   const checked = checkRequests(client);
@@ -118,7 +147,15 @@ export async function withDaemon<T>(fn: (call: Call, info?: ServerInfo) => Promi
   };
   // Ordinary commands exit when the event loop drains, so an open socket would hang the CLI.
   let interrupted = false;
-  try { return await fn(call, serverInfo); }
+  try {
+    if (inBotSession(context.env) || context.scope) {
+      const scope = context.scope;
+      const refusal = await call('核对范围', c => c.admin({ type: 'negotiate', capabilities: ['cli'], ...(scope ? { scope } : {}) })
+        .then(() => undefined, (error: unknown) => { if (error instanceof RpcError) return error; throw error; }));
+      if (refusal) throw new CommandError(rpcErrorKind(refusal.code), refusal.message, { reason: refusal.code });
+    }
+    return await fn(call, serverInfo);
+  }
   catch (error) { interrupted = error instanceof CommandError && error.kind === 'interrupted'; throw printableError(error); }
   finally {
     const closed = client.close().catch(() => undefined);

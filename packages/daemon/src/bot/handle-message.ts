@@ -18,6 +18,8 @@ import { groupSkillProfile } from '../agent/group-skills';
 import { completeBuiltinPackage, ensureBuiltinPackage } from '../agent/builtin-skills/package';
 import { builtinSkillsOfSet } from '../agent/builtin-skills/registry';
 import type { SessionProfile } from '../agent/session-profile';
+import { SESSION_ENV } from '../config/session-env';
+import type { HostApi } from '../admin/ipc';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
 import { projectRevision, projectView, projectSettingsRevision, type CollaborationRequest } from '../admin/collaboration';
@@ -373,6 +375,12 @@ async function fetchAllProjectMembers(channel: LarkChannel): Promise<{ openId: s
     for (const m of members) if (!seen.has(m.openId)) seen.set(m.openId, m.name);
   }
   return [...seen].map(([openId, name]) => ({ openId, name }));
+}
+
+/** The profile a session starts with, its env carrying `env` too; a session with no profile gets one with only that. */
+export function withSessionEnv(profile: SessionProfile | undefined, env: Record<string, string>): SessionProfile {
+  return profile ? { ...profile, env: { ...profile.env, ...env } }
+    : { instructions: '', env, nativeSettings: { automaticMemory: false }, additionalRoots: [], capabilityPackages: [], mcpServers: [] };
 }
 
 /**
@@ -1097,9 +1105,12 @@ export function createOrchestrator(
   /** `droppedFile`: where a shutdown keeps the queued messages it drops (s18c). No default: without it, nothing is
    * kept or answered (tests, and every caller but `daemon run`). */
   // Only daemon run supplies judgeUsageFile; tests that omit it do not persist usage.
-  options?: { entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention },
+  options?: { entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
+    /** devices-4a 4.3: where each new session's token comes from (the host, over IPC). Without it a session gets none (tests). */
+    host?: Pick<HostApi, 'issueSessionToken'> },
 ): Orchestrator {
   const entries = options?.entries;
+  const host = options?.host;
   const memory = options?.memory;
   const bindingBot = options?.bot ? { ...options.bot } : undefined;
   /** Lazily-constructed backends by id — one instance per backend for the whole
@@ -1388,6 +1399,14 @@ export function createOrchestrator(
       throw new ThreadPermissionChanged('旧权限会话没能关闭，请稍后重试。', {cause: error});
     } finally { clearTimeout(timer); }
   }
+  /** The token a new session's `vonvon` commands carry (devices 5.3), in place of the bare marker. */
+  async function sessionEnv(api: Pick<HostApi, 'issueSessionToken'>, sessionId: string, place: AgentPlace): Promise<Record<string, string>> {
+    const token = await api.issueSessionToken({
+      appId: cfg.accounts.app.id, place: place.kind === 'p2p' ? 'dm' : place.kind === 'group' ? 'group' : 'comment', sessionId,
+      ...(place.kind !== 'doc' && place.chatId ? { chatId: place.chatId } : {}),
+    });
+    return { [SESSION_ENV]: token };
+  }
   /** The profile a thread was actually started with: a permission save can swap in a rebuilt one (and its opening). */
   const profileUsed = new WeakMap<AgentThread, object>();
   /** A save can finish while a provider is starting, before eviction can see its thread. */
@@ -1402,7 +1421,12 @@ export function createOrchestrator(
       }
       const entry = entries?.issue(place);
       let thread: AgentThread;
-      try { thread = await create({...opts, ...(entry ? {entry} : {})}); entry?.attach(thread); }
+      try {
+        // devices 5.3: the session's shell gets its token, never the bare marker; no token, no session (the host is gone).
+        const session = entry && host ? await sessionEnv(host, entry.sessionId, place) : undefined;
+        thread = await create({...opts, ...(entry ? {entry} : {}), ...(session ? {profile: withSessionEnv(opts.profile, session)} : {})});
+        entry?.attach(thread);
+      }
       catch (error) { entry?.revoke('start-failed'); throw error; }
       if (opts.profile) profileUsed.set(thread, opts.profile);
       const fingerprint = permissionFingerprint(opts);

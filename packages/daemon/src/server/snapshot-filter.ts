@@ -1,0 +1,40 @@
+import type { DesktopSnapshot, Scope } from '@vonvon/protocol';
+import type { Principal } from './principal';
+
+export type BotSessionPrincipal = Extract<Principal, { kind: 'bot-session' }>;
+
+/**
+ * Which of its bot's groups a Bot session reaches (devices 5.3): a group session only its own, a private chat all of
+ * them narrowed by `--scope group=`, a comment none. A group session without a chat reaches none.
+ */
+export function sessionGroups(principal: BotSessionPrincipal, scope: Scope | null): (groupId: string) => boolean {
+  if (principal.place === 'comment') return () => false;
+  if (principal.place === 'group') return groupId => principal.chatId !== undefined && groupId === principal.chatId;
+  const only = scope?.group;
+  return groupId => only === undefined || groupId === only;
+}
+
+/**
+ * devices-4a 4.7: what a Bot session sees of the daemon's state: its own bot and the groups it reaches, none of the
+ * diagnostics; the host, platform and version as they are.
+ */
+export function filterSnapshot(snapshot: DesktopSnapshot, principal: BotSessionPrincipal, scope: Scope | null): DesktopSnapshot {
+  const { appId } = principal;
+  const reaches = sessionGroups(principal, scope);
+  const memberships = snapshot.memberships.filter(membership => membership.agentId === appId && reaches(membership.groupId));
+  const groupIds = new Set<string>(memberships.map(membership => membership.groupId));
+  const { crashes: _crashes, ...application } = snapshot.application;
+  const { projects, recentConversations, ...rest } = snapshot;
+  return {
+    ...rest,
+    agents: snapshot.agents.filter(agent => agent.id === appId).map(({ diagnostics: _diagnostics, ...agent }) => agent),
+    groups: snapshot.groups.filter(group => groupIds.has(group.id)),
+    memberships,
+    ...(projects ? { projects: projects
+      .map(project => ({ ...project, bindings: project.bindings.filter(binding => binding.agentId === appId && groupIds.has(binding.groupId)) }))
+      .filter(project => project.bindings.length > 0) } : {}),
+    jobs: snapshot.jobs.filter(job => 'agentId' in job && job.agentId === appId),
+    ...(recentConversations ? { recentConversations: { items: recentConversations.items.filter(item => item.agentId === appId && groupIds.has(item.groupId)), unavailableBots: 0 } } : {}),
+    application,
+  };
+}

@@ -18,6 +18,8 @@ export interface MemoryAdminDeps {
   /** `bots/<appId>/` of a bot that exists; throws for one that does not */
   botDirectory?: (botId: string) => Promise<string>;
   origin?: 'ui' | 'cli';
+  /** devices-4a 4.8: a Bot session's turn (its role; D4b adds the openId). D4b makes it where the memory lands; until then the request runs as `origin`. */
+  actor?: MemoryActor;
   now?: () => number;
 }
 

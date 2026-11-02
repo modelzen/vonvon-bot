@@ -30,7 +30,10 @@ describe('local WebSocket handshake', () => {
       const status = await client.call({ type: 'request', id: 's', method: 'admin', payload: { type: 'daemonStatus' } });
       expect(status).toMatchObject({ type: 'response', payload: { kind: 'daemonStatus', status: { running: true } } });
       expect(JSON.stringify(status)).not.toContain('startedAt');
-      expect(await client.call({ type: 'request', id: 'r', method: 'command', payload: { type: 'refresh' } })).toMatchObject({ type: 'error', code: 'permission_denied' });
+      // devices 4.7: refused as another protocol's; a 0.8 client parses errors strictly, so the versions stay out of its envelope
+      const refused = await client.call({ type: 'request', id: 'r', method: 'command', payload: { type: 'refresh' } });
+      expect(refused).toMatchObject({ type: 'error', code: 'protocol_mismatch' });
+      expect(refused).not.toHaveProperty('details');
       await client.close();
     } finally { await fixture.close(); }
   });
@@ -41,7 +44,7 @@ describe('local WebSocket handshake', () => {
       const client = await socketClient(fixture.api.port, fixture.credential);
       await client.ready();
       expect(client.frames[0]).toMatchObject({ protocolVersion: PROTOCOL_VERSION, deviceName: expect.any(String), platform: expect.any(String), principal: 'owner:local' });
-      expect(client.frames[0]).toHaveProperty('capabilities', expect.arrayContaining(['device']));
+      expect(client.frames[0]).toHaveProperty('capabilities', expect.arrayContaining(['device', 'session-scope']));
       expect(await client.call({ type: 'request', id: 's', method: 'admin', payload: { type: 'daemonStatus' } })).toMatchObject({ payload: { status: { startedAt: FIXTURE_STARTED_AT } } });
       const negotiate = (id: string) => ({ type: 'request' as const, id, method: 'admin' as const, payload: { type: 'negotiate' as const, capabilities: ['device'] } });
       expect(await client.call(negotiate('n1'))).toMatchObject({ type: 'response', payload: { kind: 'negotiated', principal: 'owner:local', scope: null } });
@@ -56,6 +59,33 @@ describe('local WebSocket handshake', () => {
       const client = await socketClient(fixture.api.port, credential);
       const code = await new Promise<number>(resolve => client.socket.once('close', code => resolve(code)));
       expect(code).toBe(4401);
+    } finally { await fixture.close(); }
+  });
+
+  // devices-4a 4.4: a `vs1.` credential is a Bot session's token, looked up in the host's table and never compared with
+  // local-credential. main 必败: it was compared and refused as `unauthorized`.
+  it('takes a Bot session token as the session, and closes a bad one with invalid_session_token', async () => {
+    const fixture = await startFixture();
+    try {
+      const token = fixture.sessionTokens.issue({ appId: 'cli_x', place: 'group', chatId: 'oc_y', sessionId: 'ses_0123456789abcdef' });
+      const client = await socketClient(fixture.api.port, token);
+      await client.ready();
+      expect(client.frames[0]).toMatchObject({ protocolVersion: PROTOCOL_VERSION, principal: 'bot-session:group' });
+      await client.close();
+      const forged = `${token.slice(0, -1)}${token.endsWith('A') ? 'B' : 'A'}`;
+      for (const credential of [forged, 'vs1.ses_0123456789abcdef.short', `vs1.ses_ffffffffffffffff.${'a'.repeat(43)}`]) {
+        const bad = await socketClient(fixture.api.port, credential);
+        const closed = await new Promise<{ code: number; reason: string }>(resolve => bad.socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() })));
+        expect(closed).toEqual({ code: 4401, reason: 'invalid_session_token' });
+      }
+      fixture.sessionTokens.revoke('ses_0123456789abcdef');
+      const revoked = await socketClient(fixture.api.port, token);
+      expect(await new Promise<string>(resolve => revoked.socket.once('close', (_code, reason) => resolve(reason.toString())))).toBe('invalid_session_token');
+      // the owner's credential is untouched
+      const owner = await socketClient(fixture.api.port, fixture.credential);
+      await owner.ready();
+      expect(owner.frames[0]).toMatchObject({ principal: 'owner:local' });
+      await owner.close();
     } finally { await fixture.close(); }
   });
 
