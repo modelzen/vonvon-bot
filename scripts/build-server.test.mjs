@@ -7,7 +7,7 @@ import { dirname, join, posix } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { crc32, gunzipSync, inflateRawSync } from 'node:zlib';
-import { TARGETS, archiveName, assembleRelease, checkServerTree, pinnedNodeFile, tarHeader, unpackZip, writeTarGz, writeZip } from './build-server.mjs';
+import { PUBLISHED_TARGETS, TARGETS, archiveName, assembleRelease, checkServerTree, parseArguments, pinnedNodeFile, tarHeader, unpackZip, writeTarGz, writeZip } from './build-server.mjs';
 import { fileEntries } from './package-tools.mjs';
 
 async function scratch(t) {
@@ -205,6 +205,14 @@ test('every target has a pinned Node file and an archive name', async () => {
   }
   assert.equal(archiveName('0.9.0', 'linux-arm64'), 'vonvon-server-0.9.0-linux-arm64.tar.gz');
   assert.equal(archiveName('0.9.0', 'win-arm64'), 'vonvon-server-0.9.0-win-arm64.zip');
+});
+
+// main 必败: every target was built and published by default
+test('the default build and the published list are the two Linux targets; the others still build when named', () => {
+  assert.deepEqual(PUBLISHED_TARGETS, ['linux-x64', 'linux-arm64']);
+  assert.deepEqual(parseArguments(['--out', '/tmp/server-out']).targets, PUBLISHED_TARGETS);
+  assert.deepEqual(parseArguments(['--out', '/tmp/server-out', '--targets', 'win-x64,darwin-arm64']).targets, ['win-x64', 'darwin-arm64']);
+  assert.throws(() => parseArguments(['--out', '/tmp/server-out', '--targets', 'linux-x86']), /unknown target linux-x86/);
 });
 
 // main 必败 on Windows: a URL's pathname there is /E:/…, which is not inside the repository, so the build went on to the

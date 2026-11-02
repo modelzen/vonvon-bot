@@ -165,6 +165,7 @@ Vonvon Bot 是一个 macOS 桌面应用（2026-10-28 起也有 Windows 桌面端
 - 定义文件都是 markdown 和 json，不进用户的代码仓库。只有角色设定（`SOUL.md`）主人可以直接用编辑器改；记忆条目库和项目表由 vonvon 读写，在桌面端改。主工作区（会话的 cwd）里的 `AGENTS.md`、`CLAUDE.md` 照旧由 agent 自己读；Claude 默认只在 cwd 和上级目录都没有 `CLAUDE.md` 时才读 `AGENTS.md`，按会话的开关能让它两份都读（Claude Code 2.1.296 实测，`docs/research/2026-10-16-bot-home/multi-workspace.md` 4.2、4.4）。其余工作区和代码仓库里的，两家默认都不读，vonvon 在指令里让 agent 先读（3.6）。
 - vonvon 不往工作区写任何文件。角色设定、名单和 bot 自己的 skill 都只在 `bots/<appId>/` 下，项目和项目记忆在 `library/` 下，都由 vonvon 交给会话（3.6）。所以工作区里已有的文件不会被覆盖，工作区只读也不影响 bot 记东西。
 - 会话照旧从工作区起，不从 bot 自己的目录起（owner 2026-10-16 定）。这样主工作区里的 `CLAUDE.md`、`AGENTS.md`、skill 和 MCP 由两家原生加载，Codex 一侧还要看 vonvon 传的信任设置（3.6）。原生加载只限主工作区：其余工作区和代码仓库在哪种做法下都是附加目录，那里的 MCP 和 `AGENTS.md` 两家都不加载，Claude 默认也不读那里的 `CLAUDE.md`，只加载 `.claude/skills`，Codex 连 skill 也不读（Claude Code 2.1.296、Codex 0.163.0 实测）。新群的主工作区默认是 vonvon 建的空目录，代码仓库作为附加目录接上（3.2，`docs/v1-plan.md` s36），所以默认情况下仓库自己的 `CLAUDE.md`、MCP 和 Codex 的 skill 都不会原生加载。从 bot 的目录起的话，连主工作区也成了附加目录；今天的代码里，只读档、能发哪些文件也只按会话目录判断。调研见 `docs/research/2026-10-16-bot-home/`。
+- Linux 上只装服务端时（3.10"只装服务端"；Mac、Windows 的服务端在桌面端安装包里，owner 2026-11-01），程序在数据目录之外：`~/.local/share/vonvon-bot/server/` 下 `releases/<版本>/` 每个版本一份（`app/`、自带的 `node/`、`standalone.json`），`current` 指向在用的那一版，`bin/vonvon` 是命令，它每次跟着 `current` 走。启动文件里加 PATH 的那几行和 Mac 桌面端写的是同一段文本（`# >>> Vonvon Bot CLI >>>` 到 `# <<< Vonvon Bot CLI <<<`），只是路径指向安装根的 `bin`；卸载只去掉指向安装根的那一段，服务停不下来时什么文件都不删。安装根整个删掉也不丢 Bot、记忆和设置，它们都在 `~/.vonvon-bot`。
 
 ### 3.4 群：智能模式和规则模式
 

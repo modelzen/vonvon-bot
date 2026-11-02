@@ -322,6 +322,8 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 - 脚本自身只做下载、解包、调 `vonvon`，逻辑尽量放在 `vonvon` 里（`service install`、`remote`），脚本好测、好升级。`uninstall.sh` 一并提供（停服务、删服务定义、删安装根、保留数据目录并说明），同样只在 Linux 上动手，第一步就看系统：在 macOS 上打印第 15 节"卸载脚本：在 Mac 上"那句，别的系统打印"卸载脚本：不是 Linux、也不是 Mac"那句，退出非零。
 - **脚本里的删除**（SCRIPT-1：第 1 版"不对变量拼的家目录路径用 rm -rf"和 uninstall 要删安装根本身冲突）：`install.sh` 只删自己刚建的 `releases/<version>.part`；`uninstall.sh` 删安装根只走一个受保护的函数：`${HOME:?}` 非空、目标是 `$HOME/.local/share/vonvon-bot/server` 这个字面拼法、不是符号链接、目录里有 `releases/*/standalone.json` 标记，四条都满足才 `rm -rf -- "$target"`；不删数据目录。脚本测试：`HOME` 为空或指向没有标记的目录时拒绝。
 
+> 实现时和本节不一样的地方（PATH 块搬进 protocol、`releases/<v>` 已存在时复用）见 `docs/plans/server-2-install-scripts.md` §4.6；2026-11-01 起安装脚本只支持 Linux（owner），见同一文件"只支持 Linux"一节。
+
 ### 7.4 后台服务和共存
 
 - **Linux** systemd 用户服务：现有（`D/service/systemd.ts`），只加 `standalone` 种类和 7.2 的不解析 realpath。
