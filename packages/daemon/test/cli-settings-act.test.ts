@@ -189,6 +189,9 @@ describe('settings models', () => {
     state = 'fallback';
     h.clear(); await runSettingsModels({ backend: 'claude-agent', purpose: 'session', session: 'omt_1' }, h.io(), h.daemon);
     expect(h.send).toHaveBeenLastCalledWith({ type: 'models', query: { botId: 'cli_a', backend: 'claude-agent', purpose: 'session', threadId: 'omt_1' } });
+    // --refresh asks the Provider again (#641's explicit refresh), as the settings page's 刷新 does.
+    h.clear(); await runSettingsModels({ backend: 'codex', purpose: 'project', refresh: true }, h.io(), h.daemon);
+    expect(h.send).toHaveBeenLastCalledWith({ type: 'models', query: { botId: 'cli_a', backend: 'codex-appserver', purpose: 'project', refresh: true } });
     expect(h.out()).toBe('daemon 没拿到最新目录，这是内置的\ngpt-6  GPT-6（默认）\n');
     h.clear(); await runSettingsModels({ backend: 'codex', purpose: 'judge' }, h.io(true), h.daemon);
     expect(h.json()).toEqual({ ok: true, catalog: catalog('fallback') });

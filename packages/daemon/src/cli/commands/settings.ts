@@ -532,7 +532,7 @@ export async function runSettingsCommentInstructions(source: InstructionSource, 
 
 const BACKEND_ALIASES: Record<string, string> = { codex: 'codex-appserver', claude: 'claude-agent' };
 const PURPOSES = ['project', 'session', 'comments', 'titles', 'judge'] as const;
-export type ModelsTarget = { bot?: string; backend?: string; purpose?: string; session?: string };
+export type ModelsTarget = { bot?: string; backend?: string; purpose?: string; session?: string; refresh?: boolean };
 
 /** `settings models`: what a model picker on the settings page lists; hidden models only in --json. */
 export async function runSettingsModels(target: ModelsTarget, io: Io, daemon: Daemon = withDaemon): Promise<void> {
@@ -544,7 +544,7 @@ export async function runSettingsModels(target: ModelsTarget, io: Io, daemon: Da
   const backend = Object.hasOwn(BACKEND_ALIASES, target.backend) ? BACKEND_ALIASES[target.backend]! : target.backend.trim();
   const catalog = await daemon(async call => {
     const agent = await botOf(call, target.bot);
-    const query = { botId: agent.id, backend, purpose, ...(target.session !== undefined ? { threadId: target.session } : {}) };
+    const query = { botId: agent.id, backend, purpose, ...(target.session !== undefined ? { threadId: target.session } : {}), ...(target.refresh ? { refresh: true } : {}) };
     // the bot process asks the backend for its list, which can outlast the local wait
     return want('读取模型目录', await call('读取模型目录', c => c.settings({ type: 'models', query }), { feishu: true }), 'models').catalog;
   });
