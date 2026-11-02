@@ -77,7 +77,7 @@ describe('checkStandaloneUpdate', () => {
     const results = await Promise.allSettled(Array.from({ length: 8 }, () => checkStandaloneUpdate(deps)));
     expect(results.map(result => result.status)).toEqual(Array(8).fill('fulfilled'));
     expect(await state()).toMatchObject({ highestSeen: '1.0.1', lastPublishedAt: 2000 });
-    expect((await readdir(installRoot)).filter(name => /\.(tmp|lock|stale)$/.test(name))).toEqual([]);
+    expect((await readdir(installRoot)).filter(name => /\.(tmp|lock|stale|reclaim|reclaiming)$/.test(name))).toEqual([]);
   });
   it('accepts nothing when update-state.json is there but cannot be read', async () => {
     const { deps, publish, installRoot } = setup();
@@ -86,18 +86,19 @@ describe('checkStandaloneUpdate', () => {
     expect(await checkStandaloneUpdate(deps)).toMatchObject({ latest: null, hasUpdate: false, refused: 'state' });
     expect((await stat(join(installRoot, 'update-state.json'))).isDirectory()).toBe(true);
   });
-  // review 206: two daemons (module instances) on one install root read the same old record; the older manifest won
-  it('keeps the record moving forward when two daemons check at once', async () => {
+  // review 206: two daemons (module instances) on one install root read the same old record; the older manifest won.
+  // review 220: the second one took `update-state.lock` over from the first once it was 10 s old, while the first,
+  // paused or slow, still held it; the record then went lower again.
+  async function twoDaemons(aged: boolean): Promise<void> {
     const { deps, installRoot, state } = setup();
     await mkdir(installRoot, { recursive: true });
     await writeFile(join(installRoot, 'update-state.json'), JSON.stringify({ v: 1, highestSeen: '1.0.0', lastPublishedAt: 0, lastCheckAt: 0 }));
     const held: Array<() => void> = [];
-    let contended = false, free = false;
+    let free = false;
     vi.doMock('node:fs/promises', async original => {
       const fs = await original<typeof import('node:fs/promises')>();
       const readFile = async (...args: Parameters<typeof fs.readFile>) => {
         const data = await fs.readFile(...args);
-        if (String(args[0]).endsWith('update-state.lock')) contended = true;
         if (String(args[0]).endsWith('update-state.json') && !free) await new Promise<void>(resolve => held.push(resolve));
         return data;
       };
@@ -110,18 +111,25 @@ describe('checkStandaloneUpdate', () => {
     };
     try {
       const high = daemon('1.0.2', 2000);
-      await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 5000 });
+      await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 5000 }); // holds the lock, paused inside the read
+      // Only the clock: the lock record is 11 s old to whoever looks, while its holder lives on.
+      if (aged) { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.now() + 11_000); }
       const low = daemon('1.0.1', 1000);
-      await vi.waitFor(() => expect(held.length === 2 || contended).toBe(true), { timeout: 5000 });
+      let lowSettled = false;
+      void low.finally(() => { lowSettled = true; });
+      await new Promise(resolve => setTimeout(resolve, 300));
+      expect(held, 'the second daemon waits for the lock instead of taking it over').toHaveLength(1);
+      expect(lowSettled).toBe(false);
       held[0]?.();
       expect(await high).toMatchObject({ latest: '1.0.2', hasUpdate: true });
       free = true;
-      held[1]?.();
       expect(await low).toMatchObject({ latest: null, refused: 'rollback' });
       expect(await state()).toMatchObject({ highestSeen: '1.0.2', lastPublishedAt: 2000 });
       expect((await readdir(installRoot)).filter(name => name.includes('.lock'))).toEqual([]);
-    } finally { free = true; held.forEach(resolve => resolve()); vi.doUnmock('node:fs/promises'); vi.resetModules(); }
-  });
+    } finally { free = true; held.forEach(resolve => resolve()); vi.useRealTimers(); vi.doUnmock('node:fs/promises'); vi.resetModules(); }
+  }
+  it('keeps the record moving forward when two daemons check at once', () => twoDaemons(false));
+  it('never takes the lock from a live daemon that has held it over 10 s, so the record never goes lower', () => twoDaemons(true));
 });
 
 describe('scheduleStandaloneChecks', () => {
