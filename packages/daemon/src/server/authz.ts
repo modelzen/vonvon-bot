@@ -104,6 +104,8 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
   ...rows('machine', `mcp.list mcp.add mcp.remove bridgeImport.detect bridgeImport.preflight bridgeImport.start bridgeImport.status bridgeImport.rollback
     status service.install service.start service.stop service.uninstall setServiceSkipped startHost stopHost logs
     checkCoreUpdate applyCoreUpdate coreUpdateStatus`),
+  // U4: the owner's, and of the owner's connections only this computer's desktop shell (rpc/machine.ts checks which).
+  ...rows('machine', 'desktopUpdateReport'),
   ...rows('admin', `judgeUsage state diagnosis hostDoctor setupStatus cardCallbackStatus confirmCardCallback codexSetup logs followLogs
     switchBackend secrets setSecret removeSecret testSecret`),
   // A session's command line never asks daemonStatus (`vonvon daemon status` reads the lock there); its paths are the owner's.

@@ -69,6 +69,9 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
   const updateListeners = new Set<(value: DesktopUpdate) => void>();
   const stateListeners = new Set<(value: DevicesState) => void>();
   const localDeviceListeners = new Set<(value: DeviceEventPayload) => void>();
+  const remoteUpdateListeners = new Set<(text: string | undefined) => void>();
+  /** U4: the last remote-update line, once one came (a cleared one too, so a late subscriber hears it is gone). */
+  let latestRemoteUpdate: { text: string | undefined } | undefined;
   let latestUpdate: DesktopUpdate | undefined;
   let latestDevices: DevicesState | undefined;
   let pendingQuit = false;
@@ -122,6 +125,14 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
           latestUpdate = desktopUpdateSchema.parse(readValue(raw));
           deliverShell(updateListeners, latestUpdate);
           return;
+        // About this computer's shell, not one daemon connection: heard whatever a page's client did.
+        case 'remoteUpdate': {
+          const text = 'text' in raw ? raw.text : undefined;
+          if (text !== undefined && (typeof text !== 'string' || text.length > 512)) throw new Error('Invalid desktop event');
+          latestRemoteUpdate = { text };
+          deliverShell(remoteUpdateListeners, text);
+          return;
+        }
         case 'error': {
           const value = readValue(raw);
           if (!value || typeof value !== 'object' || !('message' in value) || !('kind' in value) ||
@@ -245,6 +256,8 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
         if (!clientClosed) devices.add(listener);
         return () => { devices.delete(listener); };
       },
+      // U4: only the main process's own connection to this computer hears the daemon's update requests.
+      onDesktopUpdateRequest: () => () => {},
       onError(listener) {
         if (clientClosed) return () => {};
         errors.add(listener);
@@ -359,6 +372,14 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       return () => { quitListeners.delete(listener); };
     },
     devices,
+    onRemoteUpdate(listener) {
+      remoteUpdateListeners.add(listener);
+      if (latestRemoteUpdate) {
+        try { listener(latestRemoteUpdate.text); }
+        catch (failure) { shellFailure(failure); }
+      }
+      return () => { remoteUpdateListeners.delete(listener); };
+    },
     onLocalDeviceEvent(listener) {
       localDeviceListeners.add(listener);
       return () => { localDeviceListeners.delete(listener); };

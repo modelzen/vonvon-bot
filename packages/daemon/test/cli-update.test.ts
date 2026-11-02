@@ -123,6 +123,29 @@ describe('vonvon update', () => {
     expect(out().trim().split('\n')).toEqual([UPDATE_INTERRUPTS, '下载中 50%', '解包中', '正在中断进行中的对话', '更新完成', '已更新到 1.0.1']);
     expect(UPDATE_INTERRUPTS).toContain('正在进行的对话会被中断');
   });
+  // devices-ui-4 6.1: a desktop app's own CLI, with its daemon running, has the desktop app update it through the daemon,
+  // and says its steps. main 必败: it was refused as one for the desktop app to update.
+  it('follows the desktop app updating the server it carries', async () => {
+    let polls = 0;
+    const desktop = { via: 'desktop' };
+    const steps = [status('installing', { ...desktop, detail: 'desktop-checking' }), status('installing', { ...desktop, detail: 'desktop-downloading', progress: { transferred: 50, total: 100 } }),
+      status('installing', { ...desktop, detail: 'desktop-downloaded', to: '1.0.1' }), status('restarting', { ...desktop, detail: 'draining', to: '1.0.1' })];
+    const { deps, io, out, sent } = harness({
+      distribution: { kind: 'bundled', cliPath: '/x' },
+      machine: async payload => {
+        if (payload.type === 'applyCoreUpdate') return accepted;
+        // the desktop app there found the new version
+        if (payload.type === 'checkCoreUpdate') return { type: 'coreUpdate', distribution: { kind: 'bundled', cliPath: '/x' }, current: '1.0.0', latest: '1.0.1', hasUpdate: true, dev: false, desktopShell: true };
+        const next = steps[polls++];
+        if (!next) throw new ConnectionError(new Error('closed'));
+        return statusReply(next);
+      },
+      file: () => status('done', { ...desktop, ok: true, to: '1.0.1' }),
+    });
+    await runUpdateCommand({}, io(), deps);
+    expect(sent.slice(0, 2)).toEqual([{ type: 'checkCoreUpdate' }, { type: 'applyCoreUpdate' }]);
+    expect(out().trim().split('\n')).toEqual([UPDATE_INTERRUPTS, '正在检查桌面端更新', '正在下载桌面端更新 50%', '下载好了，正在重启（会中断正在进行的对话）', '正在中断进行中的对话', '更新完成', '已更新到 1.0.1']);
+  });
   it('says nothing about interrupting when the running server is already up to date, nor under --json', async () => {
     const latest = harness({ found: upToDate, machine: async payload => (payload.type === 'applyCoreUpdate' ? accepted : statusReply(status('done', { ok: true, to: '1.0.0', message: '已是最新' }))) });
     await runUpdateCommand({}, latest.io(), latest.deps);
