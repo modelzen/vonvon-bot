@@ -29,7 +29,7 @@ vi.mock('../src/server/http', async original => {
   return { ...real, startApi: (options: Parameters<typeof real.startApi>[0]) => { f.api = options; return f.fakeApi ? Promise.resolve(nowhere) : real.startApi(options); } };
 });
 vi.mock('../src/import/bridge/runtime', () => ({ bridgeImportRuntime: () => ({ importer: {}, guard: async () => undefined, bind() {}, releaseRemoved() {}, shutdown: async () => {}, dispose() {} }) }));
-vi.mock('../src/agent/owned-process', () => ({ closeOwnedProviderProcesses: async () => {}, unconfirmedProviderPids: () => [] }));
+vi.mock('../src/agent/owned-process', () => ({ closeOwnedProviderProcesses: async () => {}, unconfirmedProviderPids: () => [], registeredProviderPids: () => [] }));
 vi.mock('../src/cli/commands/daemon-control', () => ({ spawnDaemonControl() {} }));
 vi.mock('../src/config/bots', async original => ({ ...await original<typeof import('../src/config/bots')>(), loadBots: async () => ({ version: 1, bots: [{ appId: 'cli_a', name: 'cli_a', tenant: 'feishu', createdAt: 0 }] }) }));
 vi.mock('../src/core/single-instance', async original => ({ ...await original<typeof import('../src/core/single-instance')>(), acquireSingleInstanceLock: () => () => {}, readSingleInstanceHolder: () => undefined }));

@@ -63,8 +63,8 @@ V5 的系统服务设计要点如下。
 
 - 每个系统用户最多注册一个 Vonvon 服务。服务定义里写着它的 `VONVON_HOME`，这就是唯一的记录，不新增状态文件。其他数据目录的注册、认不出的定义，一律拒绝改动。
 - 注册了服务的数据目录只由系统服务管理器启动，`vonvon daemon start` 也交给管理器，失败就报错，不自己另起进程。
-- 管理器只在失败时重新拉起。停止退出 0，不会被拉起，注册保留。重启在排空后退出 75，由管理器按原端口拉起。崩溃或其他非零退出在 5 秒后拉起。Windows 没有服务管理器。原来为 Windows 只装服务端设计的计划任务和 `__win-supervise` 监督进程随 2026-11-01 的决定取消（[devices.md](plans/devices.md) 第 19 节）；Windows 桌面端这一批不做登录自启，`service/adapter.ts` 在 win32 照旧报不支持。
-- Vonvon 从不通过管理器停止正在运行的 daemon，停止只走 `stopHost`。所以排空没有时限，停止优先的规则和 V3 一样。
+- 管理器只在失败时重新拉起。停止退出 0，不会被拉起，注册保留。重启在排空后退出 75，由管理器按原端口拉起；重启助手起不来时，服务管理下的 daemon 同样退出 75，管理器拉起原来的版本（2026-11-02）。崩溃或其他非零退出在 5 秒后拉起。Windows 没有服务管理器。原来为 Windows 只装服务端设计的计划任务和 `__win-supervise` 监督进程随 2026-11-01 的决定取消（[devices.md](plans/devices.md) 第 19 节）；Windows 桌面端这一批不做登录自启，`service/adapter.ts` 在 win32 照旧报不支持。
+- Vonvon 从不通过管理器停止正在运行的 daemon，停止只走 `stopHost`，停止优先的规则和 V3 一样。2026-11-02 起排空有时限（owner：停止、重启、升级直接中断正在进行的对话）：每个 Bot 先中断所有进行中的一轮，等 3 秒让 Codex、Claude 自己收尾，再关它们的进程，卡片最多再等 8 秒；Bot 子进程关 bridge 最多 12 秒；host 等每个 Bot 最多 15 秒，到点强制结束它和它报过的 provider 进程组；`daemon run` 从收到停止起最多 30 秒，到点写下干净退出的记录、刷完日志就自己退出（重启、升级 75，停止 0，不在服务管理下 1）。systemd 单元的 `TimeoutStopSec=45` 只兜底，正常用不到；旧单元里的 `TimeoutStopSec=infinity` 照旧认作自己的。做法见 `docs/plans/interrupt-and-install-text.md`。
 - Core 更新后的重启仍由 V3 的重启助手确认新进程，并只完成它自己持有的那条更新记录。在 macOS 和 Windows 上，助手和 V3 一样另起进程组；macOS 的 `launchd.plist(5)` 文档支持这样做，但还要原生验收。Linux 上助手用 `systemd-run --user --scope` 放进单独的 scope。systemd 源码说明这一步不换 pid，但不会通知就绪，所以 daemon 自己查同一个 pid：它已经在这个 scope 里，命令行也已经换成助手，才提交并放锁（Gate L）。在这之前助手失败、超时或收到停止，都按 V3 的规则变成停止，那条更新记录写成 `error`。
 - 只装服务端（standalone）的升级（`docs/plans/server-3-update-engine.md`）先换文件再重启：安装根下 `releases/<版本>/{app,node,standalone.json}` 每版一个目录；POSIX 的 `current` 是指向 `releases/<版本>` 的相对符号链接，先建 `current.next` 再 `rename` 覆盖；Windows 没有 standalone（owner 2026-11-01），代码里给它的 `current.txt` 由 I6 清理。已经在跑的进程把自己的入口钉在启动时的真实路径上（`core/self-entry.ts`），切 `current` 以后它派生的子进程和重启助手仍是旧版的文件。
 - 安装根下的 `update-state.json` 记见过的最高版本和上一次清单的 `publishedAt`，原子写，跨版本只有一份，用来拒绝倒退的清单。数据目录下的 `update-status.json` 是一次更新的进度：`installing`（下载、校验、解包、切换）、`restarting`（带 `previous`，排空、等新版本）、`done`、`error`（`rolledBack` 表示已切回）；排空期间 `machine.coreUpdateStatus` 仍可读。重启助手按 pid 锁里的 `version` 判断新版本起来没有（listen 以后还要活过几秒），没有就切回 `previous`；托管时也是同一个助手（Linux 上在单独的 scope 里）。旧 daemon 退出以后，助手拿住 `update.lock` 直到写出结果，这期间不接新的更新，新进程启动时的收尾也让给它；旧 daemon 在请求重启以后停止、助手丢失或重启被拒，先把 `current` 切回 `previous` 再写 `error`。新进程启动后再核对一次，`current` 已经不指向自己就写"升级和回滚撞上了"。同一个安装根可以有几个数据目录的 daemon：下载、解包、切换和清理 `releases/` 还要拿安装根的 `releases.lock`，每个 daemon 把自己运行的版本登记在 `running/<pid>-<版本>`，清理时留着还活着的那些。
@@ -78,7 +78,7 @@ V5 的系统服务设计要点如下。
 
 具体设计和原生验收步骤见 [plan.md](plan.md) V5 一节的 *Service gate*。
 
-V3 的 daemon 都由 CLI 启动，没人会再拉起它。停止和重启都先等已经接受的操作做完，并确认它启动的子进程都已退出，才释放 pid 锁，不为赶时间提前放锁。这些子进程包括 Bot 子进程、npm，以及 Codex app-server 和它的进程组。确认不了子进程退出时宁可一直占着锁。关闭 Codex 进程的调用在确认进程退出之前不会返回，清理出错只在确认退出之后才报告，所以上层缓存或忽略这个错误也不会提前放锁。daemon 排空期间仍接受本机凭据认证的连接，但只回答状态查询和停止请求，所以新开的 CLI 能先核实身份再请求停止，不会按 pid 文件里的数字直接发信号。重启后端口不变：一个没有时限的重启助手等旧进程退出后在原端口拉起新进程。旧 daemon 放锁之前收到的停止请求会取消重启：daemon 立即结束重启助手，确认助手已退出后才放锁。具体规则见 [plan.md](plan.md) V3 一节的 *Lifecycle ownership*。
+V3 的 daemon 都由 CLI 启动，没人会再拉起它。停止和重启都先等已经接受的操作做完，并确认它启动的子进程都已退出，才释放 pid 锁，不为赶时间提前放锁。这些子进程包括 Bot 子进程、npm，以及 Codex app-server 和它的进程组。确认不了子进程退出时宁可一直占着锁。2026-11-02 起这条有上限：停止最多 30 秒（见上面"排空有时限"），到点强制结束 Bot 子进程和它报过的 provider 进程组后退出，没报上来的进程组可能留下。关闭 Codex 进程的调用在确认进程退出之前不会返回，清理出错只在确认退出之后才报告，所以上层缓存或忽略这个错误也不会提前放锁。daemon 排空期间仍接受本机凭据认证的连接，但只回答状态查询和停止请求，所以新开的 CLI 能先核实身份再请求停止，不会按 pid 文件里的数字直接发信号。重启后端口不变：一个没有时限的重启助手等旧进程退出后在原端口拉起新进程。旧 daemon 放锁之前收到的停止请求会取消重启：daemon 立即结束重启助手，确认助手已退出后才放锁。具体规则见 [plan.md](plan.md) V3 一节的 *Lifecycle ownership*。
 
 ### Bot 运行内核是 vonvon-bot 自己的源码
 

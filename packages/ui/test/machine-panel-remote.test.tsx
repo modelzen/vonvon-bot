@@ -62,8 +62,8 @@ it('has no [重启] without onRestart', () => {
 it('says quitting keeps a daemon installed and registered on its own, and keeps the old words otherwise', () => {
   const keeps = panel({quitKeepsDaemon: true});
   expect(text(keeps.render())).toContain('关闭桌面窗口时 Bot 继续运行。退出桌面应用不会停止后台：它是另外装的、注册成后台服务的 Vonvon Bot。要停请运行 vonvon daemon stop。');
-  expect(text(dialog(keeps.render()).props.children)).toBe('此操作可能停止正在进行的所有 Bot 任务。退出桌面应用不会停止后台：它是另外装的、注册成后台服务的 Vonvon Bot。要停请运行 vonvon daemon stop。');
+  expect(text(dialog(keeps.render()).props.children)).toBe('停止服务会中断正在进行的对话。退出桌面应用不会停止后台：它是另外装的、注册成后台服务的 Vonvon Bot。要停请运行 vonvon daemon stop。');
   const stops = panel({});
   expect(text(stops.render())).toContain('关闭桌面窗口时 Bot 继续运行；手动退出桌面应用会停止后台和所有 Bot。');
-  expect(text(dialog(stops.render()).props.children)).toBe('此操作可能停止正在进行的所有 Bot 任务。关闭窗口不会停止后台；退出应用会停止后台和所有 Bot。');
+  expect(text(dialog(stops.render()).props.children)).toBe('停止服务会中断正在进行的对话。关闭窗口不会停止后台；退出应用会停止后台和所有 Bot。');
 });

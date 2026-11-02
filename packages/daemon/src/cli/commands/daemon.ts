@@ -137,11 +137,11 @@ function sameOwner(left: PidLockInfo | null, right: PidLockInfo): boolean {
   return left?.pid === right.pid && left.startedAt === right.startedAt;
 }
 
-export async function runStop(home = paths.appDir): Promise<boolean> {
+export async function runStop(home = paths.appDir, reason?: 'update'): Promise<boolean> {
   const lock = await readRunningPidLock(home);
   if (!lock) return false;
   if (lock.pid === process.pid) throw new Error('Refusing to stop the current CLI process.');
-  await stopVerifiedOwner(home, lock);
+  await stopVerifiedOwner(home, lock, reason);
   let progressAt = Date.now() + 5000;
   for (;;) {
     const current = await getPidLockInfo(home);

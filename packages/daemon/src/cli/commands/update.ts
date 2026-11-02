@@ -83,7 +83,7 @@ async function runCliUpdate(opts: { check?: boolean }): Promise<void> {
   console.log(`✓ 已更新到 v${latest}`);
 
   if (daemonRunning()) {
-    console.log('重启后台服务以加载新版本…');
+    console.log('重启后台服务以加载新版本，正在进行的对话会被中断…');
     try {
       await restartDaemon();
       console.log('✓ 后台服务已重启，新版本已生效。');
@@ -126,13 +126,18 @@ const defaultDeps = (): UpdateCommandDeps => ({
 });
 /**
  * After the old daemon is gone, how long `update-status.json` is read for the outcome (4.6 60 + 25 s, and more). The
- * connection drops when the drain starts, and the drain waits for the Bots' work with no limit: the clock starts only
- * once no daemon drains any more (review F6).
+ * connection drops when the drain starts; the drain interrupts the Bots' turns and ends within 30 seconds (owner
+ * 2026-11-02, host/lifecycle.ts), and the clock starts only once no daemon drains any more (review F6).
  */
 export const OUTCOME_WAIT_MS = 120_000;
 /** How long `applyCoreUpdate` of a global npm install is waited for: its daemon runs `npm install -g` before answering. */
 export const NPM_INSTALL_MS = 10 * 60_000;
 const SESSION_REFUSED = 'vonvon update 不能在 Bot 的会话里用：升级会重启服务端。在网页的设置里更新，或者在自己的终端里运行。';
+/**
+ * Said once, before the request that installs and restarts, when the running server's check finds the update goes ahead
+ * (owner 2026-11-02, review 259): no question, the restart does not wait.
+ */
+export const UPDATE_INTERRUPTS = '升级会重启服务端，正在进行的对话会被中断，卡片上会请发消息的人再发一次。';
 
 type CheckReply = Extract<MachineReply, { type: 'coreUpdate' }> | (StandaloneCheck & { source: 'local' });
 function checkLine(reply: CheckReply): string {
@@ -156,6 +161,15 @@ function statusPrinter(io: Io, since: number) {
   };
 }
 
+/**
+ * Whether the update asked for goes ahead on the running server, as its check found: a newer release (the one `--to`
+ * names, if any), or a downgrade to another version. Not one that is up to date, or that the server will refuse.
+ */
+function updateGoesAhead(found: CheckReply, options: UpdateCommandOptions): boolean {
+  if (options.allowDowngrade) return options.to !== found.current;
+  return found.hasUpdate && (options.to === undefined || options.to === found.latest);
+}
+
 function outcome(io: Io, status: CoreUpdateStatus): void {
   if (status.phase === 'error') {
     const back = status.rolledBack && status.previous && !status.message?.includes('已切回') ? `（已切回 ${status.previous}）` : '';
@@ -174,12 +188,14 @@ export async function runUpdateCommand(options: UpdateCommandOptions, io: Io, de
   const distribution = await deps.distribution();
   const running = await deps.daemonRunning();
   if (distribution.kind === 'development') throw new CommandError('refused', '源码开发态不升级：在仓库里 git pull && npm i。');
+  /** A running daemon of a global npm install, as its check answered: it installs and restarts itself. */
+  let npmDaemon: Extract<MachineReply, { type: 'coreUpdate' }> | undefined;
   if (distribution.kind === 'global-npm') {
     if (options.to !== undefined) throw badArgs('全局 npm 安装只能更新到最新版，不能指定版本。');
     // A running daemon installs and restarts itself, as the page asks it to (review 207), when it is a global npm install
     // too: the desktop app's own daemon refuses, and the global package is then installed here, as with none running.
     const asked = running && !options.check ? await deps.daemon(call => call('检查更新', c => c.machine({ type: 'checkCoreUpdate' }))) : undefined;
-    const npmDaemon = asked?.type === 'coreUpdate' && asked.distribution.kind === 'global-npm' ? asked : undefined;
+    npmDaemon = asked?.type === 'coreUpdate' && asked.distribution.kind === 'global-npm' ? asked : undefined;
     if (!io.json && !npmDaemon) return runUpdate({ check: options.check });
     const { current, latest, hasUpdate, dev } = npmDaemon ?? await deps.npm.check();
     const found = { current, latest, hasUpdate, dev };
@@ -222,6 +238,13 @@ export async function runUpdateCommand(options: UpdateCommandOptions, io: Io, de
     show(settled);
     outcome(io, settled);
     return;
+  }
+  // With no server running there is no conversation to interrupt. With one, the notice goes before the request (review
+  // 259): a global npm daemon answers it once installed and restarts right after, a standalone one may be done before the
+  // first status read. Text only, as the server's check finds the update goes ahead.
+  if (!io.json) {
+    const found = npmDaemon ?? await deps.daemon(call => call('检查更新', c => c.machine({ type: 'checkCoreUpdate' })));
+    if (found.type === 'coreUpdate' && updateGoesAhead(found, options)) io.write(`${UPDATE_INTERRUPTS}\n`);
   }
   let accepted = false;
   try {
