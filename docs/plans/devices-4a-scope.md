@@ -253,3 +253,25 @@ JP-VPS 上 Codex 的三份独立审查（228 通读全部 diff，229 安全和�
 - **230-2（显式凭据的 `connectLocal`，发现子进程仍读主人凭据）→ 接受。** `runStatus` 在 `VONVON_STATUS_FROM_FILES=1`（只有 `connectLocal` 的发现子进程这样跑）时只读 pid 锁，不验 owner、不读 `local-credential`。主人的两个调用方（CLI 的 `connectLocalDaemon`、`host/client.ts` 的 `readHostEndpoint`）连之前自己验过 owner，不受影响。测试：`cli-bot-session.test.ts` 用真打包的 CLI 做发现，`local-credential` 设成 0000，`connectLocal({ credential: 群令牌 })` 拿到 `bot-session:group`。
 - **230-3（评论会话 `schedule add` 被本地群解析截住，报 bad-args）→ 接受。** 会话里（serverInfo 的 principal 是 `bot-session:*`）快照是裁过的，本地解析不出的 `oc_` 群 id 原样发给 daemon，由 daemon 说为什么不行：评论、私聊给 `not-group`（exit 4），群会话点别的群给超范围。测试：CLI 上评论令牌 `schedule add … --group oc_y` exit 4 `not-group`。
 - **228-4 / 229-5（计划文件末尾多一个空行）→ 接受。** 已删，`git diff --check` 干净。
+
+## 合入集成分支（带 I3）
+
+2026-11-02 把 `claude/devices-integration`（新合入 I3a #632、I3b #633 的升级引擎）merge 进本分支。五处冲突，两边的行为都保留：
+
+- **`D/server/ws.ts`**：取本片的版本。I3 在这里只把排空白名单换成 `DRAIN_KINDS`，本片已经用同一个常量；令牌认证、维护子集、协议不同的处理都在，排空时 `coreUpdateStatus` 照样回复。
+- **`D/cli/commands/service.ts`**：import 取 I3 的 `userManagerProblem`（替换 `userManagerHint`），留着本片的 `inBotSession`：会话里 `service status` 只看锁。
+- **`D/cli/daemon-client.ts`**：取本片的会话路径：没令牌就在连接前拒，会话不读 `local-credential`，协议也照旧检查。`cliEntry` 的默认值换成 I3 的 `selfEntry()`。
+- **`D/cli/index.ts`**：取本片的 `LOCAL_ONLY`、`commandPath` 和 `--scope`。I3 往 `LEASED` 加的 `'vonvon update'` 改成 `'update'`，因为本片的 `commandPath` 不带 `vonvon` 前缀。I3 那行"会话里 update 不拿租约"删了：会话里的 `update` 在 preAction 就被 `LOCAL_ONLY` 拒（exit 4 `not_in_session`）。`runUpdateCommand` 自己的拒绝（I3-SEC-3）留着，算第二道。
+- **`D/host/restart.ts`**：取 I3 的重写（`deps.start`、按版本判成功、回滚）。`realDeps.start` 的 spawn 换成 `withoutSessionMarkers(process.env)`，D4A-R3 的处理照旧：助手起的 `daemon start`，回滚时再起的那次也一样，都不带会话标记。
+
+没冲突、但两边的语义要对上的：
+
+- `D/server/http.ts` 的 `control()` 自动合并后，`coreUpdateStatus` 的分支有两段（两边各加了一段），后面那段删了。
+- `machine.checkCoreUpdate`、`applyCoreUpdate`、`coreUpdateStatus` 原来就在 `authz.ts` 的表里，会话一律拒，维护子集照 `MAINTENANCE_KINDS`。I3 没有加新的 RPC 名，`parity-allowlist` 里 I3 的三条 pending 由 I3 删了，`cli-parity` 照旧通过。
+
+另起提交补的：
+
+- 会话里 `vonvon update`、`update --check`、`update --allow-downgrade --to <v>` 都 exit 4 `not_in_session`（`cli-bot-session.test.ts`）。断言"`LOCAL_ONLY` 里不在命令树上的只剩 `remote …`"：`update` 已经有了。
+- 安装脚本的两个隐藏命令 `__standalone-setup`、`__standalone-teardown`（I2）加进 `LOCAL_ONLY`。前一个会把 `current` 切到本机留着的某个版本，等于换个名字做升级或降级，设计 8.3 里"内部命令会话里一律 exit 4"也包括它们。只有 `install.sh`、`uninstall.sh` 会调这两个命令，host 不会起。
+- `D/host/service-action.ts`：桌面端开关登录时启动，host 会起 `service install|uninstall` 助手，这个助手也去掉会话标记。不去掉的话，在会话里起的 host（旧 daemon）起出来的助手会被 `LOCAL_ONLY` 拒。`machine-service-action.test.ts` 补了断言。
+- `standalone-restart.test.ts` 补一条：带着会话标记的重启助手，用真的 `start` 起 `daemon start`，子进程的环境里没有 `VONVON_SESSION`、`FEISHU_CODEX_BRIDGE`。

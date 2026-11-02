@@ -120,16 +120,19 @@ describe('a Bot session\'s command line', () => {
     const { home, root } = await emptyHome();
     const session = { VONVON_SESSION: `vs1.ses_0123456789abcdef.${'a'.repeat(43)}` };
     for (const [path, ...args] of [['daemon restart'], ['daemon start'], ['daemon stop'], ['service install'], ['service uninstall'], ['pair'], ['clients ls'],
-      ['clients revoke', 'cl_0000000000000000'], ['device rename', 'x'], ['bot repair-dir', 'x'], ['open']] as Array<[string, ...string[]]>) {
+      ['clients revoke', 'cl_0000000000000000'], ['device rename', 'x'], ['bot repair-dir', 'x'], ['open'],
+      // I3: update and its check, and the install scripts' switch of `current` (devices 8.3: exit 4 in a session)
+      ['update'], ['update', '--check'], ['update', '--allow-downgrade', '--to', '0.0.1'],
+      ['__standalone-setup', '--install-root', root, '--release', '0.0.1'], ['__standalone-teardown', '--install-root', root]] as Array<[string, ...string[]]>) {
       const result = await run(root, home, [...path.split(' '), ...args], session);
       expect(result, path).toMatchObject({ code: 4, json: { ok: false, error: { kind: 'refused', reason: 'not_in_session', message: `这条命令（\`vonvon ${path}\`）不能在 Bot 会话里运行。告诉用户去设备上或桌面端里做。` } } });
     }
     expect(await run(root, home, ['service', 'status'], session)).toMatchObject({ code: 0 });
     expect(await run(root, home, ['daemon', 'status'], session)).toMatchObject({ code: 3, json: { error: { kind: 'connection' } } });
-    // devices 8.3's list: each one a command of this CLI, or one I3 and D3 add (update, remote …)
+    // devices 8.3's list: each one a command of this CLI, or one D3 adds (remote …)
     const localOnly = await loadLocalOnly();
     const commands = new Set((await loadCommands()).map(command => command.path.replace(/ [<[].*$/, '')));
-    expect(localOnly.filter(path => !commands.has(path))).toEqual(['update', 'remote status', 'remote enable', 'remote disable', 'remote port']);
+    expect(localOnly.filter(path => !commands.has(path))).toEqual(['remote status', 'remote enable', 'remote disable', 'remote port']);
     for (const allowed of ['daemon status', 'service status', 'secrets get', 'schedule list', 'memory add', '__restart-after-exit', '__daemon-control']) expect(localOnly).not.toContain(allowed);
   }, 60_000);
 

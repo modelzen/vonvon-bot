@@ -7,16 +7,24 @@ export type CommandErrorKind = keyof typeof commandExitCodes;
  * `reason` is the machine-readable cause, the daemon's error code or the CLI's own (`not_in_session`);
  * `current` is what a conflict found; `partial` is what a command read before it failed, so --json keeps it.
  */
-export type CommandErrorDetail = { reason?: string; current?: unknown; partial?: object };
+export type CommandErrorDetail = {
+  reason?: string; current?: unknown; partial?: object;
+  /** server-2 4.4: a refusal the Linux install script works around by starting the daemon detached, and what to tell the user. */
+  fallback?: 'detached'; hint?: string;
+};
 export class CommandError extends Error {
   readonly reason?: string;
   readonly current?: unknown;
   readonly partial?: object;
+  readonly fallback?: 'detached';
+  readonly hint?: string;
   constructor(readonly kind: CommandErrorKind, message: string, detail: CommandErrorDetail = {}) {
     super(message);
     if (detail.reason !== undefined) this.reason = detail.reason;
     if (detail.current !== undefined) this.current = detail.current;
     if (detail.partial !== undefined) this.partial = detail.partial;
+    if (detail.fallback !== undefined) this.fallback = detail.fallback;
+    if (detail.hint !== undefined) this.hint = detail.hint;
   }
 }
 /** What the user typed is wrong: exit 2. Errors that are not a CommandError exit 1, as unexpected. */
@@ -52,10 +60,14 @@ function asCommandError(error: unknown): CommandError {
 /** devices 8.1: a failure under --json is `{ ok: false, error: { kind, message }, exitCode }`. */
 export function commandFailure(error: unknown) {
   const failure = asCommandError(error);
-  const { kind, message, reason, current, partial } = failure;
+  const { kind, message, reason, current, partial, fallback, hint } = failure;
   return {
     ok: false as const,
-    error: { kind, message, ...(reason === undefined ? {} : { reason }), ...(current === undefined ? {} : { current }), ...(partial === undefined ? {} : { partial }) },
+    // `reason` then `fallback`: install.sh matches the two side by side
+    error: {
+      kind, message, ...(reason === undefined ? {} : { reason }), ...(fallback === undefined ? {} : { fallback }), ...(hint === undefined ? {} : { hint }),
+      ...(current === undefined ? {} : { current }), ...(partial === undefined ? {} : { partial }),
+    },
     exitCode: commandExitCodes[kind],
   };
 }
