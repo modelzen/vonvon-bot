@@ -111,6 +111,8 @@ export const memoryRequestSchema = z.discriminatedUnion("type", [
   z.object({type:z.literal("move"),scope:memoryScopeRefSchema,itemId:id,revision:z.number().int().min(1),to:z.object({projectId:id}).strict(),branch:z.string().max(200).optional()}).strict(),
   z.object({type:z.literal("branchRename"),scope:memoryScopeRefSchema,from:z.string().min(1).max(200),to:z.string().min(1).max(200)}).strict(),
   z.object({type:z.literal("branchMerge"),scope:memoryScopeRefSchema,from:z.string().min(1).max(200),into:z.string().min(1).max(200)}).strict(),
+  /** Archives every active entry of a branch in one transaction (the web page's 删除分支); each gets its own archive event, undone one by one. `expected`: the count the caller saw. */
+  z.object({type:z.literal("branchDelete"),scope:memoryScopeRefSchema,name:z.string().min(1).max(200),expected:z.number().int().min(0).optional()}).strict(),
   z.object({type:z.literal("confirm"),scope:memoryScopeRefSchema,itemId:id,revision:z.number().int().min(1)}).strict(),
   z.object({type:z.literal("purge"),scope:memoryScopeRefSchema,itemId:id}).strict(),
   z.object({type:z.literal("undo"),scope:memoryScopeRefSchema,eventId:id}).strict(),
