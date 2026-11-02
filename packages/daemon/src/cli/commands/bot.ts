@@ -42,12 +42,12 @@ const ACTION_COMMAND: Record<StepAction['kind'], (action: StepAction, bot: strin
   open: a => a.kind === 'open' ? `${a.label}：${a.url}` : undefined,
   enable: (_a, bot) => `运行 vonvon bot enable ${bot}`,
   confirmCallback: (a, bot) => a.kind === 'confirmCallback' ? `运行 vonvon bot callback ${a.confirmed ? 'confirm' : 'unconfirm'} ${bot}` : undefined,
-  environment: () => undefined,      // C7 填：运行 vonvon env scan
+  environment: () => '运行 vonvon env scan',
   codexLogin: () => undefined,
   claudeLogin: () => undefined,
   serviceInstall: () => '运行 vonvon service install',
-  serviceSkip: () => undefined,      // C8 填：运行 vonvon service skip
-  serviceRecheck: () => undefined,   // C8 填：运行 vonvon service status
+  serviceSkip: () => '运行 vonvon service skip',
+  serviceRecheck: () => '运行 vonvon service status',
 };
 
 /** One checklist step as `bot status` prints it; exported for the tests of steps no status gives today. */

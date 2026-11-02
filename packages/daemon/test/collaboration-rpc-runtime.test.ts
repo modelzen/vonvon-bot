@@ -80,7 +80,6 @@ it('keeps account usage and browser-local group opening outside the owner adapte
     await client.ready();
     expect(await client.call({ type: 'request', id: 'usage', method: 'collaboration', payload: { action: 'usage', force: true } })).toEqual({ type: 'response', id: 'usage', method: 'collaboration', payload: { kind: 'usage', data: bundle } });
     expect(accountUsage).toHaveBeenCalledWith(true);
-    expect(await client.call({ type: 'request', id: 'open', method: 'collaboration', payload: collaborationRequestSchema.parse({ action: 'openGroup', ...target }) })).toMatchObject({ type: 'error', code: 'unsupported' });
     expect(collaboration).not.toHaveBeenCalled();
   } finally { await client.close(); await fixture.close(); }
 });

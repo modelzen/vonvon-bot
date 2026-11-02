@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { adminReplySchema, distributionKinds, machineReplySchema, machineRequestSchema } from "../src/index.js";
 
-const status = (kind: string) => ({ kind: "daemonStatus", status: { distribution: { kind, cliPath: "/x/bin/vonvon.mjs" }, installed: true, running: true, selfHosted: false, version: "0.9.0", supported: true } });
+const status = (kind: string) => ({ kind: "daemonStatus", status: { distribution: { kind, cliPath: "/x/bin/vonvon.mjs" }, installed: true, running: true, selfHosted: false, version: "0.9.0", supported: true, startedAt: 1 } });
 const coreUpdate = (kind: string) => ({ type: "coreUpdate", distribution: { kind, cliPath: "/x/bin/vonvon.mjs" }, current: "0.9.0", latest: null, hasUpdate: false, dev: false });
 
 describe("distribution kind (devices 7.1)", () => {
