@@ -50,6 +50,11 @@ it('opens only what enable may open, records a LAN address with its network, and
     expect(await error('c', { host: '100.70.1.1' })).toMatchObject({ code: 'confirm_required', message: expect.stringContaining('CGNAT') });
     expect(await error('p', { host: '203.0.113.5' })).toMatchObject({ code: 'confirm_required', message: expect.stringContaining('公网') });
     expect(await error('both', { host: LAN, tailscale: true })).toMatchObject({ code: 'invalid_request' });
+    // Codex review 232-1, 234-1, 234-2: a wildcard or a link-local IPv6 is refused before remote.json is written
+    expect(await error('w4', { host: '0.0.0.0', allowPublic: true })).toMatchObject({ code: 'invalid_request', message: expect.stringMatching(/^不能开启 0\.0\.0\.0：它代表这台设备的所有地址/) });
+    expect(await error('w6', { host: '::', allowPublic: true })).toMatchObject({ code: 'invalid_request', message: expect.stringMatching(/^不能开启 ::：它代表这台设备的所有地址/) });
+    expect(await error('ll', { host: 'fe80::1%eth0' })).toMatchObject({ code: 'invalid_request', message: expect.stringContaining('链路本地的 IPv6 地址') });
+    await expect(readFile(devicesPath(fixture.home, 'remote.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     const opened = await client.call(call('o', { type: 'enable', host: '203.0.113.5', allowPublic: true }) as never);
     expect(payload(opened).status?.remote.addresses).toEqual([expect.objectContaining({ host: '203.0.113.5', kind: 'public', state: 'waiting' })]);
     await client.call(call('lan', { type: 'enable', host: LAN }) as never);

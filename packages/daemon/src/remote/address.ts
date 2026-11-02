@@ -20,6 +20,7 @@ const LAN = subnets([
   ['fc00::', 7, 'ipv6'], ['fe80::', 10, 'ipv6'],
 ]);
 const CGNAT = subnets([['100.64.0.0', 10, 'ipv4']]);
+const LINK_LOCAL_V6 = subnets([['fe80::', 10, 'ipv6']]);
 const TAILSCALE_V6 = subnets([['fd7a:115c:a1e0::', 48, 'ipv6']]);
 const family = (host: string): 'ipv4' | 'ipv6' => isIP(host) === 6 ? 'ipv6' : 'ipv4';
 /** A link-local IPv6 may carry its zone (`fe80::1%eth0`): the ranges are about the address. */
@@ -113,6 +114,9 @@ export const PUBLIC_WARNING = '这是公网地址。开启后互联网上任何�
 export const NOT_AN_IP = '只接受 IP 地址，不接受主机名。';
 export const LOOPBACK_REFUSED = '回环地址不用开启，本机客户端一直能连。';
 export const ONE_TARGET = '给一个 IP 地址，或者用 --tailscale，二选一。';
+// D3 plan 11.16 (Codex review 232-1, 234-1, 234-2): no wildcard and no link-local IPv6 address in this batch
+export const wildcardRefused = (host: string): string => `不能开启 ${host}：它代表这台设备的所有地址，别的设备拿它连不上。改用 \`vonvon remote enable --tailscale\`（推荐）或 \`vonvon remote enable <这台设备的 IP>\`。`;
+export const linkLocalRefused = (host: string): string => `不能开启 ${host}：现在还不支持链路本地的 IPv6 地址（fe80:: 开头）。改用 \`vonvon remote enable --tailscale\`（推荐）或 \`vonvon remote enable <这台设备的局域网 IP>\`。`;
 
 export interface EnableDeps {
   interfaces: () => Interfaces;
@@ -133,6 +137,10 @@ export async function resolveEnable(request: { host?: string; tailscale?: boolea
     return { host, enabledAt: now(), kind: 'tailscale' };
   }
   const host = canonicalHost(request.host ?? '');
+  // Neither is an address another computer can dial: a wildcard is every address (the link would carry it, and the Host a
+  // client sends never matches it); a link-local one needs the client's own zone, which no link or URL here can carry.
+  if (host === '0.0.0.0' || host === '::') throw new RpcError('invalid_request', wildcardRefused(host));
+  if (isIP(host) === 6 && inRange(LINK_LOCAL_V6, host)) throw new RpcError('invalid_request', linkLocalRefused(host));
   const kind = await (deps.classify ?? (value => classify(value, deps)))(host);
   if (kind === 'invalid') throw new RpcError('invalid_request', NOT_AN_IP);
   if (kind === 'loopback') throw new RpcError('invalid_request', LOOPBACK_REFUSED);
