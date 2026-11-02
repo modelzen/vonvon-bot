@@ -156,7 +156,7 @@ function harness() {
     checkDesktopUpdate: vi.fn(async () => ({ state: 'available' as const, current: '1.0.0', latest: '1.1.0', message: 'ready' })),
     retryDesktopUpdate: vi.fn(async () => ({ state: 'available' as const, current: '1.0.0', latest: '1.1.0', message: 'retried' })),
     installDesktopUpdate: vi.fn(async () => ({ state: 'downloaded' as const, current: '1.0.0', latest: '1.1.0', message: 'ready' })),
-    hide: vi.fn(), confirmQuit: vi.fn(async () => {}), connectionLost: vi.fn(),
+    hide: vi.fn(), confirmQuit: vi.fn(async () => {}), connectionLost: vi.fn(), quitKeepsDaemon: vi.fn(async () => true),
   };
   const devs = fakeDevices();
   const bridge = installBridge(owner, window, paths, actions, devs.devices);
@@ -328,6 +328,14 @@ describe('desktop IPC boundary', () => {
     h.emitError(new ConnectionError('controlled stop'));
     expect(h.actions.connectionLost).not.toHaveBeenCalled();
     expect(h.events()).toEqual([]);
+    await h.bridge.dispose();
+  });
+  // devices-ui-2 4.7: the 应用与启动 page asks whether quitting keeps this computer's daemon.
+  it('answers quitKeepsDaemon from the shell, with no argument', async () => {
+    const h = harness();
+    expect(await h.invoke(desktopChannels.quitKeepsDaemon)).toEqual({ ok: true, value: true });
+    expect(await h.invoke(desktopChannels.quitKeepsDaemon, 'x')).toMatchObject({ ok: false });
+    expect(h.actions.quitKeepsDaemon).toHaveBeenCalledOnce();
     await h.bridge.dispose();
   });
   it('authorizes zero-argument CLI repair and overlays readonly CLI status', async () => {

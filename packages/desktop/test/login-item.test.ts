@@ -283,6 +283,9 @@ describe('repairing the service when the app starts', () => {
     ['another root\'s service', { registration: { kind: 'other-root' as const, root: '/other' }, running: running('0.1.0') }, 'none'],
     ['unpackaged', { packaged: false, running: running('0.1.0') }, 'none'],
     ['not macOS', { platform: 'linux' as const, running: running('0.1.0') }, 'none'],
+    // devices-ui-2 4.8 (main 必败): a newer Windows install finds the older bundled daemon still running.
+    ['Windows: no service and an older daemon', { platform: 'win32' as const, registration: { kind: 'absent' as const }, running: running('0.1.0') }, 'stop'],
+    ['Windows unpackaged', { platform: 'win32' as const, packaged: false, registration: { kind: 'absent' as const }, running: running('0.1.0') }, 'none'],
     ['a daemon without a version', { running: { pid: 42, startedAt: 'old', listen: '127.0.0.1:4000' } }, 'none'],
   ])('plans %s', (_case, input, expected) => {
     expect(plan(input)).toBe(expected);
@@ -290,6 +293,16 @@ describe('repairing the service when the app starts', () => {
 
   const reads = (registration: Registration, daemon: VerifiedDaemon | null) =>
     ({ readRegistration: vi.fn(async () => registration), readVerifiedDaemon: vi.fn(async () => daemon) });
+
+  // devices-ui-2 4.8: Windows has no `daemon stop` service command to ask; the owner is stopped the way Quit does.
+  it('on Windows stops the older owner directly, and installs nothing', async () => {
+    const runtime = { ...await packagedRuntime({ executable: app }), platform: 'win32' as const };
+    const stopOwner = vi.fn(async (_owner: VerifiedDaemon) => {});
+    const { start, spawn } = children({ code: 0 });
+    await expect(repairServiceAtStartup(runtime, reads({ kind: 'absent' }, running('0.1.0')), { stop: { spawn }, helper: { spawn }, stopOwner, exists: () => true })).resolves.toBeUndefined();
+    expect(stopOwner).toHaveBeenCalledExactlyOnceWith(running('0.1.0'));
+    expect(start).not.toHaveBeenCalled();
+  });
 
   it('stops the older daemon, then installs the service for this app', async () => {
     const runtime = await packagedRuntime({ executable: app });
