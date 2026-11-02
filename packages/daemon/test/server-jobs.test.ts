@@ -233,7 +233,8 @@ describe('scan ownership', () => {
     jobs.attach(b, WEB);
     jobs.attach(c, CLI);
     jobs.startRegistration(a, undefined, WEB);
-    await settle();
+    // The QR has to be up before the 61 s below: a few microtasks are not always enough on a busy CI runner (#667)
+    await vi.waitFor(() => expect(phases(jobs)).toEqual(['qr']));
     jobs.detach(a);
     expect(vi.getTimerCount()).toBe(1); // the finished-job poll only: b still holds it
     await vi.advanceTimersByTimeAsync(61_000);
