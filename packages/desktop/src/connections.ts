@@ -547,8 +547,9 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
         attempts.push({ route, code: failure.code });
         if (failure.code === 'pairing_failed') return failed(now() >= link.invite.expiresAt ? 'link_expired' : 'link_used');
         if (failure.code === 'rate_limited') return failed('rate_limited');
-        if (failure.stage === 'pairing' && (failure.code === 'closed' || failure.code === 'timeout')) {
-          // The pairing request may have been taken and the invite spent, only its answer lost: the same key, no invite.
+        // Cut off while pairing, or after its answer while waiting for the hello (Codex 审查 235-3): the request may have been
+        // taken and the invite spent, or was for sure, so the same key, no invite.
+        if ((failure.stage === 'pairing' || failure.stage === 'hello') && (failure.code === 'closed' || failure.code === 'timeout')) {
           const recovered = await recoverPairing(route, connect, generated.publicKeyBase64url, abort);
           if (recovered.kind === 'paired') { paired = { ...recovered, route }; break; }
           if (recovered.kind === 'aborted') return failed('aborted');
