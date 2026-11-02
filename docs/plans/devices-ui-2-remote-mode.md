@@ -570,3 +570,51 @@ Windows 的平台名和 4.8 的 Windows 启动修复，放进 U4 的 Windows 任
 - 维护连接不收快照原来写在 `ws.ts` 的 `send` 里，可 D2 把 `publish` 挪进了 `peer-hub.ts`，D4a 用它的 `shape` 做同一件事。改成在推快照那一处传 `shape`，D4a 已做就不重复（第 2 节、4.5、第 5 节测试名）。
 - `MachinePanel` 只拿到 `request`（`machine` 通道），可 `restartHost` 是 `command`，计划没说 [重启] 怎么发。加 `onRestart` prop，`RemoteServiceGroup` 同样收它（4.4.3、4.4.4、第 5 节）。
 - I3 拆成 I3a、I3b 后，计划里钉的 `server-3-update-engine`（4aca3777）和行号过期，D1 的 sha 也旧了。头部改成 I3b（83550082）和 D1（147b2619），`UpdatePanel` 那一组从 101 行起，`rpc/machine.ts` 的服务开关在 75-81。
+
+## 11. 实现时和计划不一样的地方
+
+2026-11-02 实现时（Claude，JP-VPS）。基线是 U1（`claude/devices-ui-1` 3ed5f8b6）合上 `claude/devices-integration`（含 I3）。
+
+**文案和目录**
+- 4.2 的表以外，`P/setup-steps.ts`、`P/diagnostics.ts` 里 Codex、Claude 的"登录"也改成"配置好""可用"：这两处的字由网页端的设置清单和诊断页显示，不改的话第 8 节第 2 条做不到。
+- `search.ts` 里留下的"登录"有两处：别名那一行，和"登录电脑时启动"。后者说的是系统登录项，不是 Provider 登录，用词测试把它也放过。
+- 表外 `GroupDesignSettings` 可用模型那一栏的校验提示也改了："这个 Provider 现在不可用，先（在「X」上）安装并配置好。"原来写"请先安装并登录"。
+- `DirectorySearchStep` 不自己判断是不是路径，交给 `directory-picker` 导出的 `browseQuery`，和选目录对话框同一条规则。
+
+**删除（4.9）**
+- `JobPanel` 整个删掉，不留"飞书扫码注册"的标题：基线上它只在环境页给 `installCodex` 任务用，删了任务就没有别的地方渲染它。
+- `installManagedCodex` 这个导出留着：删掉任务后它没有调用方了，但同一模块的 `managedCodexBin`、`runSetupChild` 还在用，它自己也有测试。删不删留给以后清理。
+
+**应用与启动页（4.4）**
+- 抽出 `appCardFor(device, application, clientVersion)`，远程和本机的应用卡标题、设备名、版本都由它算，页面接线才测得到。计划里整页渲染的测试改成渲染 `UpdatePanel` + `RemoteServiceGroup`。
+- `RemoteServiceGroup` 不另外读 `machine.status`，用快照里的 `application`（平台、`service`、linger），和本机的"启动选项"同一份数据。
+- `ServerUpdateCard` 远程时打开就读一次 `checkCoreUpdate {fresh: false}`（只读那台设备每天检查的结果，不重新问更新源）；回 `unsupported` 或 `invalid_request`（I3 以前的服务端）就显示"不支持远程更新"那句。
+- 页面上"退出桌面应用不会停止后台"那句的命令用 `<code>` 显示，文字拆成 `QUIT_KEEPS_DAEMON` 的前、命令、后三段，字和第 15 节一样。
+
+**退出规则（4.7）**
+- `keepOnQuit` 的判断写成 `quit-daemon.ts` 导出的 `daemonKeptOnQuit(owner, {readRegistration, attach})`，`main.ts` 只组装依赖。原因是要注入依赖测它；计划里的 `quit-keep.test.ts` 并进了 `quit-daemon.test.ts`。
+- 页面用的 `quitKeepsDaemon` 通道：主进程读已验证的 owner（`readVerifiedDaemon`），读不到回 `false`。
+
+**协议提示和 Windows 修复（4.8）**
+- `startupMessage` 遇到 `AttachError('protocol')`（带对面的协议号）时也用 `protocolMismatchMessage`。这条路上拿不到注册信息，按 `absent` 算，所以服务端旧时显示"退出再打开"那句，不是 npm 那句。
+- Windows 修复不经命令行停：`stopOwnerDirectly` 调 `stopVerifiedOwner`，再用读进来的 `ownerRunning` 等它退出，最多 60 秒。
+
+**完全访问警示（4.10）**
+- 私聊建群完成卡：群的实际权限是完全访问就显示（新建的群就是），不另看是不是刚改的。
+- 私聊权限卡：选项里有完全访问时，在表单下面加一条 `note`，写"完全访问："加这句，不放在选项旁边。
+- 私聊里保存权限后多发的那条 markdown，只在从别的档改成完全访问时发；本来就是完全访问再保存一次不发。
+- 命令行逐行打印 `warnings`，不加反引号。
+
+**能力（4.11）**
+- 安装方式在启动时不等它读完：读完前 `serverInfo` 不带 `update.*`，读完后缓存。启动后最初那一下连上来的客户端看不到升级按钮，重连就有（写进已知限制）。
+- 测试夹具 `startFixture` 多一个 `distribution` 参数，默认 `unknown`，免得每个用例都去跑 `npm root -g`。
+
+**维护连接不收快照**
+- 在 `http.ts` 推快照那一处传 `snapshotShape`：维护连接的 peer 回 `null`。测试写成对 `snapshotShape` 的单测，放进 `peer-hub.test.ts`，没有另起两条真连接。
+
+**测试文件名**
+- 第 5 节的几个新文件并进了已有的：`no-login-wording` → `device-copy.test.ts`；`settings-permission-warning` → `settings-owner.test.ts`；`command-tools` → `s47-tools.test.ts`；`cli-settings` → `cli-admin.test.ts`；`dm-cards` → `permissions.test.ts`；`permission-fields` → `permission-tiers.test.tsx`；`join-group-dialog` → `join-group.test.ts`；`server-info` → `server-handshake.test.ts`；`snapshot` → `server-snapshot.test.ts`；`domain` → `protocol.test.ts`；`machine-panel` → 新的 `machine-panel-remote.test.tsx`（退出页脚的两种也在这里）；`directory-picker` → `directory-picker-runtime.test.tsx`（远程标题）和 `device-copy.test.ts`（`looksLikePath`）。
+- U1 已有的 `bot-schedules-app.test.tsx` 在合上 U1 后就挂了（它 mock 的 `client-context` 没有 `useActiveDevice`），本片顺手补上。
+
+**没做的自测**
+- 6.1 第 2、3、5 步（验收 daemon 上的目录、lark-cli 私聊 Bot 6 看警示）这次没做：这次的任务不碰验收 daemon、不发飞书消息。换成无头截图（`packages/ui/test/manual/remote-mode-fake-shell.ts`，假外壳）和单测。第 4 步的 `git grep` 做了，只剩测试里断言"已经没有了"的几处。
