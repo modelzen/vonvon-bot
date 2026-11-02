@@ -90,9 +90,9 @@ export function createHostIpcResponder(api: HostApi, send): { onMessage(msg: unk
 | `command.refresh / listPendingGroups / listJoinedGroups / listGroupMembers` | 群令牌 host；私聊令牌 bot；评论 deny | 请求里的 `agentId` 必须等于 `appId`，否则 `permission_denied`；群令牌 `listJoinedGroups` 结果只留本群、`listGroupMembers` 的 `chatId` 必须是本群 |
 | `command.registerAgent / refreshAgentCredentials / bindGroup / setAgentEnabled / deleteAgent / cancelJob / restartHost`、`machine.stopHost` | deny | — |
 | `settings.read / sessions / models` | 群令牌 host；私聊 bot；评论 deny | 群令牌：`scope` 只能是 `project{chatId==本群}`（`sessions` 同），回复各段标只读、`reason:'not-dm'`（和 `settings_get` 在群里一致，复用它的标法）；私聊令牌（★ 之后）：`host` 段 deny、`agent{appId}`、`project{本 bot 的群}`、`session{appId}` |
-| `settings.save / act.*` | 群、评论 deny（**文字 `not-dm`**）；私聊 bot | 私聊令牌范围：`host` 段 deny；`agent{appId}`；`project{本 bot 的群 ∩ scope.group（有的话）}`；`act adminMember` 另在 D4b 要主人 |
-| `collaboration.history / context / project / providerModels / usage` | host | 限自己 bot；群令牌限本群（请求里的 `chatId`/项目 id 必须属于本群） |
-| `collaboration.createProject / editProject` | 群、评论 deny（`not-dm`）；私聊 bot | 私聊：`editProject` 的项目必须是本 bot 的（∩ scope.group） |
+| `settings.save / act.*` | 群、评论 deny（**文字 `not-dm`**）；私聊 bot | 私聊令牌范围：`host` 段 deny；`agent{appId}` 和不带项目的 act（`voice`、`adminMember`、`commentInstructions`）只在 `scope.group` 没给时放（带了 `group=` 就只能动那个群，设计 5.3，这一轮是主人也一样）；`project{本 bot 的群 ∩ scope.group（有的话）}`；`act adminMember` 另在 D4b 要主人 |
+| `collaboration.history / context / project / providerModels / usage` | host | 限自己 bot；群令牌限本群（请求里的 `chatId`/项目 id 必须属于本群）；`history` 回复里 provider 按目录列出的 `threads` 只留本群绑定的会话（同目录别的群、主人终端的不给） |
+| `collaboration.createProject / editProject` | 群、评论 deny（`not-dm`）；私聊 bot | 私聊：`createProject` 只在 `scope.group` 没给时放（建新群超出那个群）；`editProject` 的项目必须是本 bot 的（∩ scope.group） |
 | `collaboration.removeProject / clear / compact / resume / startGoal / stop / stopSubagent / endGoal / reminder / shareUsage` | deny | — |
 | `environment.*`、`machine.*`（除 `stopHost` 上面已 deny）、`admin.*`（除 `daemonStatus`、`negotiate`） | deny | — |
 | `directory.*`、`library.workspace / rename / previous / delete`、`contextPreview.get` | deny | — |
@@ -241,3 +241,15 @@ Mac 后验：U2 的维护子集界面；本片无专项。Windows：无。
 - **D4A-R4（`memoryAction` 不用 actor，按 cli 记成可信）→ 接受。** 有 `deps.actor` 时按它记角色和 openId，只有 owner/admin 的那一轮记成 trusted。会话写 Bot 记忆先拒（`BOT_MEMORY_FROM_SESSION`），等 D4b 的落点规则。4.6 里“以成员身份放行”现在和代码一致了：会话写的记忆记成 member、不可信。
 - **D4A-R7（主人带的 `--scope` 不生效）→ 接受。** 按设计 5.3“给了就同样生效”：主人带 `--scope` 时，用 `scopedOwner(scope)` 做和会话一样的范围核对和快照、回复过滤（`filterSnapshot`、`listBot` 裁到那个群），但不套地方规则：主人照样能写本群设置、读完整视图。请求里没有点名 Bot 的（环境、机器、host 设置、`installCodex`）不受限。
 
+## Codex 审查后改了什么（任务 228–230）
+
+JP-VPS 上 Codex 的三份独立审查（228 通读全部 diff，229 安全和权限模块，230 Bot 进程、IPC、CLI、protocol/client），去重后 8 条，全部接受。每条先写失败的测试，在原代码上确认失败，再改。
+
+- **229-1 / 228-1（群会话经 history 读到同目录别的群、主人终端的会话）→ 接受。** 会话和带 `--scope` 的主人调 `collaboration.history`，回复里 provider 按目录列出的 `threads` 只留 sessionId 属于本群绑定会话的（`sessions` 里的），证明不了归属的不给；`http.ts` 的 collaboration 回复套上 `shown`。没给 `--scope` 的主人照旧看完整历史。测试：`authz-session.test.ts` 经真实 wire，两个群共用一个目录、主人在同目录开原生会话，群令牌和带范围的主人都只拿到本群的那条，别的 preview、name、sessionId 都不出现。
+- **229-2 / 228-3（私聊令牌带 `group=` 仍能改整个 Bot 的设置、建新群）→ 接受。** 范围只到一个群时（私聊带 `group=`，或主人带 `group=`），`settings.save` 的 `agent` 范围、不带项目的 `settings.act`（`voice`、`adminMember`、`commentInstructions`）和 `createProject` 一律拒，文字是新的 `ONE_GROUP_ONLY`。这一步在问 Bot 进程之前，所以这一轮是主人也照样拒。读整个 Bot 的设置不受影响（只读，不算"动"）。4.5 表的 `settings.save / act.*`、`createProject` 两行已同步。测试：单元的正反用例（含 `askBot` 回 owner），以及 wire 上 `createProject` 被拒、处理函数没被调。
+- **229-3 / 228-2（`schedule.listBot` 的回复没套 `decision.narrow`）→ 接受。** `http.ts` 的 schedule 回复改用 `shown(payload)`。测试：wire 上主人 `--scope bot=X,group=A` 的 `listBot` 只回 A；CLI 上 `schedule list --all --scope bot=X,group=A` 只回 A，不带 `--scope` 回 A 和 B。
+- **229-4（带范围的主人还能绑别的群、动别的 Bot）→ 接受。** command 按每种命令的目标核：`bindGroup`、`listGroupMembers` 核群；`setResponse`、`setPermission` 从 membershipId（`[appId, chatId]`）核 Bot 和群；`setAgentEnabled`、`deleteAgent`、`refreshAgentCredentials` 只在范围是整个 Bot 时放；`registerAgent` 超出任何范围；不点名 Bot 的（`installCodex`、`restartHost`、`cancelJob`）照旧是机器的。admin 里带 `agentId` 的核 Bot，`switchBackend` 再核项目，`confirmCardCallback` 按整个 Bot 算；library 的 `previous` 核群，`workspace`、`rename`、`delete` 的项目要是范围内的群绑的。测试：单元逐条，CLI 上 `group bind oc_outside … --scope bot=X,group=A` exit 4 且 `bindGroup` 没被调。
+- **230-1（Claude 常驻线程在两轮之间退出，令牌没作废）→ 接受。** `ClaudeAgentThread` 的消息流结束或出错（含硬中断之后）时调 `entry.revoke('dead')`，host 随即作废令牌、关掉用它开的连接；`resolveThread` 驱逐死线程时也 `close()` 它。Codex 没有同类路径：线程每轮结束就 release（`close()` 即作废），轮间不留进程；剩下的情况由驱逐时的 `close()` 收掉。测试：`session-token-lifecycle.test.ts` 用真 `ClaudeAgentBackend`（只换 SDK 消息流）、真 entries 和真令牌表，没有在跑的一轮时进程正常结束、出错两种，已开的连接收到 4401、旧令牌再握手也被 4401 关；`message-queue-races.test.ts` 断言驱逐时关了旧线程。
+- **230-2（显式凭据的 `connectLocal`，发现子进程仍读主人凭据）→ 接受。** `runStatus` 在 `VONVON_STATUS_FROM_FILES=1`（只有 `connectLocal` 的发现子进程这样跑）时只读 pid 锁，不验 owner、不读 `local-credential`。主人的两个调用方（CLI 的 `connectLocalDaemon`、`host/client.ts` 的 `readHostEndpoint`）连之前自己验过 owner，不受影响。测试：`cli-bot-session.test.ts` 用真打包的 CLI 做发现，`local-credential` 设成 0000，`connectLocal({ credential: 群令牌 })` 拿到 `bot-session:group`。
+- **230-3（评论会话 `schedule add` 被本地群解析截住，报 bad-args）→ 接受。** 会话里（serverInfo 的 principal 是 `bot-session:*`）快照是裁过的，本地解析不出的 `oc_` 群 id 原样发给 daemon，由 daemon 说为什么不行：评论、私聊给 `not-group`（exit 4），群会话点别的群给超范围。测试：CLI 上评论令牌 `schedule add … --group oc_y` exit 4 `not-group`。
+- **228-4 / 229-5（计划文件末尾多一个空行）→ 接受。** 已删，`git diff --check` 干净。
