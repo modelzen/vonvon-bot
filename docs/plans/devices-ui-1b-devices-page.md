@@ -579,3 +579,11 @@ Claude 收尾：停助手；`remote disable`；撤销验收中配对的客户端
 已知限制（按真实用法不另做处理）：
 - 在设备页删掉正在看的那台：删完立刻回到这台电脑，页面整个重建，"删了但对面还记着"那条提示随旧页面一起没了。只在自撤销没成功时才会有这条提示。
 - 页面上"已撤销"多快出现完全取决于 U1a 推来的状态，界面这边不另计时。
+
+## Codex 审查后改了什么（任务 235–237）
+
+2026-11-02，Codex 在 JP-VPS 上审了 head 3ed5f8b6（任务 235 通读、237 看 ui）。和本片有关的下面三条都接受了：
+
+- **235-4 "应用与启动"页的固定标题盖住设备菜单，远程设备那一项点不到。** 表头（`today.css` 的 `.today-app-header`，`z-index: 5`）自成一层，菜单的 `z-index: 20` 出不了这一层；页面里 sticky 的"应用与启动"标题也是 5、排在后面，就盖在菜单上。改成菜单打开时把表头抬到 30（`devices.css`，`.today-app-header:has(.device-switcher__menu)`），菜单关着时什么都不变。无头浏览器在"应用与启动"页打开菜单，每一项中心点到的都是它自己（`test/manual/devices-fake-shell.ts` 加 `switcher-over-application`）。
+- **237-1 改名表单没登记草稿，切换设备时没保存的名字静默丢掉。** `RenameRow` 用 `useDraft` 登记：名字改了还没保存时，用标签或"切换到"切换、离开设置页，都先弹"有未保存的修改"；"保存并离开"先改名再切，"放弃并离开"关掉表单。草稿标题"设备名字"只在保存失败时出现在确认框里（`test/device-rename-draft.test.tsx` 新增；`devices-fake-shell.ts` 加 `rename-then-switch`）。
+- **跟着 U1a 的 235-2**：连接页停在"身份和配对时不一样了"时，除了"重新配对"再给"再试一次"，和 `key_unreadable` 一样；文案没改（`test/device-gate.test.tsx`）。

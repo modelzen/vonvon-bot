@@ -41,6 +41,9 @@ html[data-desktop-chrome="silver"] .device-outside-window :is(button, a, input, 
 
 .device-switcher { position: relative; }
 .device-switcher__button { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid rgb(0 0 0 / 10%); border-radius: 999px; background: none; font: inherit; font-size: 13px; cursor: pointer; }
+/* The header's own stacking (z-index 5) ties with the pages' sticky headings, which come later and cover the menu
+   ("应用与启动"): above them while the menu is open (Codex 审查 235-4). */
+.today-app-header:has(.device-switcher__menu) { z-index: 30; }
 .device-switcher__menu { position: absolute; z-index: 20; top: calc(100% + 4px); right: 0; display: grid; min-width: 200px; padding: 4px; border: 1px solid rgb(0 0 0 / 10%); border-radius: 10px; background: #fff; box-shadow: 0 8px 24px rgb(0 0 0 / 12%); }
 .device-switcher__menu button { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 0; border-radius: 6px; background: none; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .device-switcher__menu button:hover { background: rgb(0 0 0 / 5%); }

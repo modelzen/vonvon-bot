@@ -58,7 +58,7 @@ export function DeviceConnectionView() {
     {active.phase === 'failed'
       ? <div className="device-actions">
         <Button variant="primary" onClick={() => openAdd(row)}>重新配对</Button>
-        {failure.code === 'key_unreadable' && <Button onClick={retry}>再试一次</Button>}
+        {(failure.code === 'key_unreadable' || failure.code === 'identity_changed') && <Button onClick={retry}>再试一次</Button>}
       </div>
       : <div className="device-actions">
         {seconds > 0 && <span className="device-muted" role="status">{seconds} 秒后再试一次</span>}
