@@ -6,7 +6,7 @@ import { spawnProcess } from '../platform/spawn';
 import { log } from '../core/logger';
 import { withoutSessionMarkers } from '../config/session-env';
 import { loadBots, type BotEntry } from '../config/bots';
-import { createAdminIpcCaller, createHostIpcResponder, type AdminIpcCaller } from '../admin/ipc';
+import { askBotOver, createAdminIpcCaller, createHostIpcResponder, type AdminIpcCaller } from '../admin/ipc';
 import { createSessionTokens } from '../host/session-tokens';
 import { AdminWriteError } from '../admin/ops';
 import { createAdminService } from '../admin/service';
@@ -483,6 +483,12 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       port: options.port,
       control,
       sessionTokens,
+      // devices-4b 4.3: a session's ★ request goes to the process of its bot that is running now. A session of a process
+      // that went is not there (its tokens went with it), and one that cannot answer is refused.
+      askBot: (appId, sessionId, action) => {
+        const child = children.get(appId);
+        return askBotOver(child?.proc?.connected ? child.ipc : undefined, sessionId, action);
+      },
       bridgeImport: migration.importer,
       diagnostics,
       crashes: { application: now => ({ ...(hostPause ? { paused: hostPause } : {}), records: records(now) }), paused: appId => children.get(appId)?.pause, lockHeld: appId => children.get(appId)?.bridgeHeld ?? children.get(appId)?.lockWait?.reported },
@@ -554,11 +560,11 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           if (!child?.enabled || !child.proc || !child.ipc) throw new AdminWriteError('这个 Bot 没在运行');
           return child.ipc.call(op, 60_000);
         },
-        executeSchedule: async (botId, via, request) => {
+        executeSchedule: async (botId, actor, request) => {
           const child = byAppId(botId);
           // A crash-paused bot is not running either; its pause is shown on the bot itself. A stopping one drains and says no.
           if (!child?.enabled || child.pause || child.stopping || !child.proc || !child.ipc) return botNotRunning();
-          return child.ipc.call({ kind: 'schedule', via, request }) as Promise<ScheduleReply>;
+          return child.ipc.call({ kind: 'schedule', actor, request }) as Promise<ScheduleReply>;
         },
         executeSettingsRead: async (botId, op) => {
           const child = byAppId(botId);

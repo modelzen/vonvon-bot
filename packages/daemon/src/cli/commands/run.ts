@@ -8,7 +8,7 @@ import { botPaths } from '../../config/paths';
 import { activeBots, ensureRegistry, type BotEntry } from '../../config/bots';
 import { log } from '../../core/logger';
 import { AdminWriteError } from '../../admin/ops';
-import { createAdminIpcResponder, createHostIpcCaller, type HostApi } from '../../admin/ipc';
+import { createAdminIpcResponder, createHostIpcCaller, sessionTurnEnded, type HostApi } from '../../admin/ipc';
 import { createSessionTokens, type SessionTokens } from '../../host/session-tokens';
 import { createAdminService } from '../../admin/service';
 import { botNotRunning } from '../../admin/schedule-commands';
@@ -157,7 +157,8 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
           if (op.kind === 'settingsRead') return handle.settings.read(op.scope);
           if (op.kind === 'settingsModels') return handle.settings.models(op.query);
           if (op.kind === 'libraryWorkspaceChanged' || op.kind === 'libraryWorkspaceCheck') return handle.libraryExecute(op);
-          if (op.kind === 'schedule') return handle.schedule(op.via, op.request);
+          if (op.kind === 'schedule') return handle.schedule(op.actor, op.request);
+          if (op.kind === 'authorizeSessionCall') return handle.entries.authorizeSessionCall(op.sessionId, op.action);
           return handle.adminExecute(op);
         },
         (msg) => void process.send?.(msg),
@@ -170,6 +171,8 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
         port: options.port,
         control,
         ...(tokens ? { sessionTokens: tokens } : {}),
+        // This process is the bot's: a session's ★ request is judged here, by the same entries its tools use.
+        askBot: async (appId, sessionId, action) => (appId === ownAppId ? handle.entries.authorizeSessionCall(sessionId, action) : sessionTurnEnded()),
         ...(diagnostics ? { diagnostics } : {}),
         service: createAdminService({
           executeCollaboration: async (botId, request) => {
@@ -197,7 +200,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
             return handle.libraryExecute(op);
           },
           // Another registered bot is not running here: the same refusal the supervisor gives.
-          executeSchedule: async (botId, via, request) => (botId === ownAppId ? handle.schedule(via, request) : botNotRunning()),
+          executeSchedule: async (botId, actor, request) => (botId === ownAppId ? handle.schedule(actor, request) : botNotRunning()),
           liveStatus: async (botId) =>
             botId === ownAppId
               ? {

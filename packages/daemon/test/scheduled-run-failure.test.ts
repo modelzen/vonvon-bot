@@ -33,7 +33,7 @@ async function stored(o: Orchestrator, scheduled: ScheduledJob): Promise<Schedul
   const file = (await import('../src/config/paths')).botPaths('app').schedulesFile;
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify({ version: 1, tasks: [scheduled.task] }));
-  await o.schedule('cli', { action: 'listBot' });
+  await o.scheduleAs({ kind: 'local', via: 'cli' }, { action: 'listBot' });
   return scheduled;
 }
 const ASK: AgentEvent = { type: 'ask', request: { id: 'q1', kind: 'confirmation', title: '继续吗', detail: '要改文件', acceptedConsequence: '改', declinedConsequence: '不改' } };
@@ -65,8 +65,8 @@ describe('a scheduled turn that fails', () => {
 
   // The promise is read from the task as it is when the run ends, not as it was claimed.
   it.each([
-    ['paused', (o: Orchestrator) => o.schedule('cli', { action: 'pause', chatId: 'chat', taskId: 'st_00000000000000a1' })],
-    ['deleted', (o: Orchestrator) => o.schedule('cli', { action: 'delete', chatId: 'chat', taskId: 'st_00000000000000a1', revision: 'r1' })],
+    ['paused', (o: Orchestrator) => o.scheduleAs({ kind: 'local', via: 'cli' }, { action: 'pause', chatId: 'chat', taskId: 'st_00000000000000a1' })],
+    ['deleted', (o: Orchestrator) => o.scheduleAs({ kind: 'local', via: 'cli' }, { action: 'delete', chatId: 'chat', taskId: 'st_00000000000000a1', revision: 'r1' })],
   ] as const)('on the network, a daily task %s during the run: no next run is promised', async (_name, change) => {
     current = await setup('single');
     const run = thread();
