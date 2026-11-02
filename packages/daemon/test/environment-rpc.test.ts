@@ -64,15 +64,27 @@ describe('daemon environment operations', () => {
     } finally { await environment.close(); }
   }, processTestTimeout);
 
-  it('scans, reads auth, and handles lark profiles with fake local tool', async () => {
+  it('scans and reads auth with fake local tools', async () => {
     const f = await fixture();
     try {
       const scan = await f.environment.run({ type: 'scan' });
       expect(scan).toMatchObject({ kind: 'tools', tools: expect.arrayContaining([expect.objectContaining({ tool: 'lark-cli', installation: 'external', version: '1.2.3' })]) });
       expect(await f.environment.run({ type: 'authStatus', tool: 'lark-cli' })).toMatchObject({ kind: 'auth', state: 'signedIn' });
       expect(await f.environment.run({ type: 'profileList' })).toMatchObject({ kind: 'profiles', profiles: [{ name: 'test' }] });
+    } finally { await f.environment.close(); }
+  }, processTestTimeout);
+
+  it('uses and adds lark profiles with a fake local tool', async () => {
+    const f = await fixture();
+    try {
       expect(await f.environment.run({ type: 'profileUse', name: 'test' })).toMatchObject({ kind: 'profiles' });
       expect(await f.environment.run({ type: 'profileAdd', name: 'new', appId: 'cli_new', appSecret: 'fake-local-secret', brand: 'feishu', use: true })).toMatchObject({ kind: 'profiles' });
+    } finally { await f.environment.close(); }
+  }, processTestTimeout);
+
+  it('preserves external installations on failed installs and initializes a lark profile', async () => {
+    const f = await fixture();
+    try {
       expect(await f.environment.run({ type: 'install', tool: 'lark-cli' })).toMatchObject({ kind: 'refused', code: 'install-failed' });
       expect(await f.environment.run({ type: 'update', tool: 'lark-cli' })).toMatchObject({ kind: 'refused', code: 'install-failed' });
       expect(await f.environment.run({ type: 'uninstall', tool: 'lark-cli' })).toMatchObject({ kind: 'refused', code: 'external-install' });

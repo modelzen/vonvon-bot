@@ -45,8 +45,17 @@ export interface AdminIpcResponse {
   code?: string;
 }
 
-/** 写请求默认超时：后端切换要 doctor 探活（单后端 3s 兜底）+ 驱逐，留足余量。 */
+/** 普通状态和不涉及 Provider 的写请求保持短期限。 */
 export const ADMIN_IPC_TIMEOUT_MS = 15_000;
+
+/** Provider operations include bounded native startup and cleanup. Ordinary status
+ * and unrelated writes keep their short deadline; cold metadata must reach the UI. */
+export function adminIpcTimeout(op: AdminIpcOp): number {
+  // Native model discovery may take 30 s after startup on every platform;
+  // Codex session catalogs can additionally validate cwd-specific settings.
+  return ['settingsRead', 'settingsModels', 'settingsPatch', 'settingsAction', 'switchBackend', 'setPermissionMode'].includes(op.kind)
+    ? 120_000 : ADMIN_IPC_TIMEOUT_MS;
+}
 
 export interface AdminIpcCaller {
   /** 发请求并等响应；超时/子进程退场 reject。op 必须可结构化克隆（纯 JSON）。 */
@@ -75,7 +84,7 @@ export function createAdminIpcCaller(send: (msg: AdminIpcRequest) => void): Admi
   }
 
   return {
-    call(op, timeoutMs = ADMIN_IPC_TIMEOUT_MS): Promise<unknown> {
+    call(op, timeoutMs = adminIpcTimeout(op)): Promise<unknown> {
       const id = nextId++;
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {

@@ -198,6 +198,7 @@ export function parseModelQuery(input: unknown): ModelQuery {
     botId: identifier('cli'),
     backend: text,
     purpose: one('project', 'session', 'comments', 'titles', 'judge'),
+    refresh: value => value === undefined || bool(value),
     threadId: value => value === undefined || text(value)
   }, true)(input) || !['botId', 'backend', 'purpose'].every(key => Object.hasOwn(input as object, key)))
     throw new SettingsInputError('模型查询无效');
