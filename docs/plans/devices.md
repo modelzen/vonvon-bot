@@ -1,6 +1,6 @@
 # 设备：服务端补齐、安装脚本、远程连接、多设备客户端（总设计，第 3 版：owner 2026-10-31 确认后；2026-11-01 命令行只装服务端，只在 Linux 上做）
 
-owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的）：四块一起设计、一波实现，开发分支都合到一个集成分支，最后统一跑一次 CI，三平台同一个版本 0.9.0 发布（`AGENTS.md`"2026-10-30 起"）。产品行为以 `requirements.md` 为准，本文只写做法、共享契约和切片。第 2 版第 14 节"待 owner 确认"的各条，owner 2026-10-31 都答了，答案已写进正文，第 14 节改成"owner 已定"表，没有还开着的产品选择；这一轮改了什么见第 18 节。第 1 版经三位审查者（安全、可行性、需求）审过，改了什么见第 17 节；`devices.draft1.md` 是第 1 版原文。2026-11-01 owner 又定：命令行只装服务端只在 Linux 上做，Mac、Windows 只用安装包装全部软件；I2b、I4a、I4b 取消，改了什么见第 19 节，和前面各节、第 17、18 节的记录冲突时以第 19 节为准。
+owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的）：四块一起设计、一波实现，开发分支都合到一个集成分支，最后统一跑一次 CI，三平台同一个版本 0.9.0 发布（`AGENTS.md`"2026-10-30 起"）。产品行为以 `requirements.md` 为准，本文只写做法、共享契约和切片。第 2 版第 14 节"待 owner 确认"的各条，owner 2026-10-31 都答了，答案已写进正文，第 14 节改成"owner 已定"表，没有还开着的产品选择；这一轮改了什么见第 18 节。第 1 版经三位审查者（安全、可行性、需求）审过，改了什么见第 17 节；`devices.draft1.md` 是第 1 版原文。2026-11-01 owner 又定：命令行只装服务端只在 Linux 上做，Mac、Windows 只用安装包装全部软件；I2b、I4a、I4b 取消，改了什么见第 19 节，和前面各节、第 17、18 节的记录冲突时以第 19 节为准。2026-11-02 owner 又定：对话读、改设置只在私聊里有，群会话没有设置工具；vonvon 不发自己的飞书 skill 和设置 skill，K1 加的撤掉（S1 `settings-dm-only`），改了什么见第 20 节，和前面冲突时以第 20 节为准。
 
 调研基线：`origin/dev` 32f0d521。路径前缀：`P/` = `packages/protocol/src/`，`D/` = `packages/daemon/src/`，`CL/` = `packages/client/src/`，`DT/` = `packages/desktop/src/`，`U/` = `packages/ui/src/`。行号按 32f0d521，漂了按函数名找。"未核实"是没在代码或实机上确认过的判断。正文引用的调研笔记（远程就绪、安装升级、Paseo、Orca/Tailscale/中继、服务端和命令行清单、功能对照表 156 行及其复核）是英文原文，没进仓库；和本文冲突时以本文为准。
 
@@ -12,7 +12,7 @@ owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的
 3. 远程连接：一台设备的服务端能被别的设备上的桌面端连上管理，配对链接、每台客户端一份可撤销的授权、加密通道（第 4、5 节）。
 4. 多设备客户端：桌面端默认连本机，再加别的设备，切换着看（第 6 节）。
 5. 升级：客户端里看到服务端版本、直接升级它，桌面端自带的服务端也行（那台的桌面端要开着，6.5）；`vonvon update`；版本对不上连接时提示（第 4.6、7.5 节）。
-6. 三个内置 Skill（飞书、设置、任务）改成配合新命令行和范围参数（第 9 节）；官网一篇"远程连接 / 多设备"说明（第 10 节）。
+6. ~~三个内置 Skill（飞书、设置、任务）改成配合新命令行和范围参数（第 9 节）~~ 2026-11-02 作废：只留任务 skill（K1 之前的样子），不发飞书、设置 skill，群会话没有设置工具（第 20 节）；官网一篇"远程连接 / 多设备"说明（第 10 节）。
 
 **不做（本期）：** vonvon 账号；vonvon 运营的中继（relay）；浏览器远程连接（无状态、没账号不知道连哪台，第三轮）；Bot 搬家（第二轮）；命令行远程控制别的设备（`--host`，第三轮）；按同事分权限（第二轮：能连上的都当主人本人）；新增 Skill；Linux 桌面端；设置回执卡和［撤销］（`product.md` 3.7 写了、代码没有，owner 2026-10-31 同意推迟）；Windows 桌面端注册 `vonvon` 和登录自启；Mac、Windows 上用命令行只装服务端，以及为它设计的 Windows 计划任务和监督进程（owner 2026-11-01）。账号和中继要留好位置，以后加进来只是多一种连接方式（4.8）。
 
@@ -32,9 +32,9 @@ owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的
 | 本机优先 | 桌面端默认连本机服务端 | 第二、四轮 |
 | 命令行的用户 | 主要是 Skill 和 AI；功能必须全；全部可不交互、`--json`、明确退出码 | 命令行 |
 | 范围参数 | 命令行带一个限制可改范围的参数；会话里的 Skill 一定带（群会话带本群，私聊带本 bot）；服务端把会话标记绑到 Bot/群，上限按会话算，缺了或更大一律拒绝，只能缩小 | 命令行（owner 要求 + Claude 补充已告知）、设计后 owner 回答 |
-| 在哪能改设置 | 三层（第 5 节开头的表）：**群会话不改任何设置**，经进程内工具、经 `vonvon` 命令行都一样；群里能做的是本群定时任务（3.13）、记忆（只有主人/管理员亲手打的话进 Bot 记忆）、本 bot/本群的只读查询、lark-cli 的飞书操作；**私聊会话**只在主人或管理员触发的那一轮能改本 bot 和它所有群的设置，加管理员只有主人那一轮，"聊天改设置"开关照旧；**vonvon 会话以外**（主人的终端、别的 Agent、在那里调命令行的 Skill）全部能改 | 设计后 owner 回答（2026-10-31，第 14 节） |
+| 在哪能改设置 | 三层（第 5 节开头的表）：**群会话不改任何设置**（2026-11-02 起也不读设置，第 20 节），经进程内工具、经 `vonvon` 命令行都一样；群里能做的是本群定时任务（3.13）、记忆（只有主人/管理员亲手打的话进 Bot 记忆）、本群和本群成员的只读查询、lark-cli 的飞书操作；**私聊会话**只在主人或管理员触发的那一轮能改本 bot 和它所有群的设置，加管理员只有主人那一轮，"聊天改设置"开关照旧；**vonvon 会话以外**（主人的终端、别的 Agent、在那里调命令行的 Skill）全部能改 | 设计后 owner 回答（2026-10-31，第 14 节） |
 | 会话里的命令行 | 和进程内工具同一套规则（同一张表、同一组授权函数），堵上今天"群会话在 shell 里 `vonvon settings set` 以主人身份连上"的洞（5.3） | 设计后 owner 回答 |
-| 3.7 照旧 | 设置 skill 只装私聊；Bot 记忆只收主人/管理员亲手打的话；谁触发的这一轮由 daemon 核对——经命令行也一样（5.3）。3.7 写的设置回执卡和［撤销］今天没做（只有记忆能撤销），**推迟，不进这一批**；这一批 bot 在回复里说清改前 → 改后（第 9 节） | 命令行、设计后 owner 回答 |
+| 3.7 照旧 | 设置 skill 只装私聊（2026-11-02：这一批不发设置 skill，私聊会话以后做，第 20 节）；Bot 记忆只收主人/管理员亲手打的话；谁触发的这一轮由 daemon 核对——经命令行也一样（5.3）。3.7 写的设置回执卡和［撤销］今天没做（只有记忆能撤销），**推迟，不进这一批**；这一批 bot 在回复里说清改前 → 改后（第 9 节） | 命令行、设计后 owner 回答 |
 | 完全访问的群 | 默认不变（bot 自己建的群是完全访问）；凡是给群选完全访问的地方加一句警示（第 15 节），残留风险照实写（5.3、第 16 节） | 设计后 owner 回答 |
 | 升级 | 任何连着的客户端都能升级服务端；命令行也能；默认不自动升级；升级前等现有 drain。**桌面端自带的服务端（bundled）也能远程升级**：daemon 请那台的桌面端外壳跑它自己的更新，桌面端没开就明说要开着（6.5、7.5、U4） | 升级、设计后 owner 回答 |
 | 版本号 | macOS、Windows 安装包和服务端包（Linux）同一个版本 0.9.0 | 设计后 owner 回答 |
@@ -183,7 +183,7 @@ owner 2026-10-31 定的三层（第 14 节）。**会话里的 `vonvon` 命令�
 | vonvon Bot 会话以外：主人的终端、别的 Agent（Codex、Claude Code）、在那里调命令行的 Skill | 本机主人 `owner`（local） | 全部 |
 | 别的设备上的桌面端 | 已配对客户端 `owner`（paired） | 全部（第二轮：能连上的都是主人本人） |
 | 私聊会话（只有主人和管理员能私聊） | `bot-session`，令牌 `place: 'dm'` | 本 bot 和它所有群的设置，只在主人或管理员亲手触发、还在进行的那一轮（`authorizeNow`）；加、移本机管理员只在主人那一轮；"聊天改设置"开关关了一律拒；建群（3.7）；本 bot 的只读查询（也要主人或管理员那一轮，和 `settings_get` 一样）。不能：密钥、`host` 段、绑已有群和解绑、升级/停服务、配对/远程/设备命令 |
-| 群会话 | `bot-session`，令牌 `place: 'group'` | **不写任何设置**。能做：本群定时任务（3.13 的规则，`authorizeSchedule`）；记忆（`authorizeMemory`，只有主人/管理员亲手打的话进 Bot 记忆，3.7）；本 bot、本群的只读查询（`settings_get`、`settings_access`、`feishu_groups`、`feishu_members` 和对应的只读命令，范围同工具：设置只看本群、各段标只读）；lark-cli 的飞书操作（走 lark-cli 自己的授权，不经 vonvon，本设计不管）。拒：任何设置写（含权限档、会话方式、角色设定）、绑群和建群、密钥、升级/停服务、配对/远程/设备命令，命令行 exit 4。设置写和建群（私聊里能做的）的拒绝文字复用 `not-dm` 那句"设置只能在私聊里改。请对方去私聊里跟我说。"（`registry.ts:48`）；绑已有群、密钥、运维和设备命令在私聊里也不能做，照 5.2、5.3 回 `permission_denied` / `not_in_session` 的文字，不叫人去私聊 |
+| 群会话 | `bot-session`，令牌 `place: 'group'` | **不写任何设置**。能做：本群定时任务（3.13 的规则，`authorizeSchedule`）；记忆（`authorizeMemory`，只有主人/管理员亲手打的话进 Bot 记忆，3.7）；本群和本群成员的只读查询（`feishu_groups`、`feishu_members` 和对应的只读命令，范围同工具）；lark-cli 的飞书操作（走 lark-cli 自己的授权，不经 vonvon，本设计不管）。2026-11-02 起没有 `settings_get`、`settings_access`，命令行读设置也拒（第 20 节）。拒：任何设置读写（含权限档、会话方式、角色设定）、绑群和建群、密钥、升级/停服务、配对/远程/设备命令，命令行 exit 4。设置读写和建群（私聊里能做的）的拒绝文字复用 `not-dm` 那句，2026-11-02 改成 owner 定的"群里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。"（`registry.ts` 的 `NOT_DM_MESSAGE`）；绑已有群、密钥、运维和设备命令在私聊里也不能做，照 5.2、5.3 回 `permission_denied` / `not_in_session` 的文字，不叫人去私聊 |
 | 云文档评论会话 | `bot-session`，令牌 `place: 'comment'` | 和进程内工具今天一样：不写设置（`authorizeNow` 回 `not-dm`），没有任务（`not-group`）和记忆，设置和群的只读查询也拿不到 |
 
 ### 5.1 主体
@@ -207,7 +207,7 @@ owner 2026-10-31 定的三层（第 14 节）。**会话里的 `vonvon` 命令�
 | `snapshot.get`、事件 `snapshot` | 全量 | 过滤成只含自己 bot 和它的群（`filterSnapshot(appId)`）；群令牌只含本群，评论令牌只含 bot 本身 |
 | `command.refresh / listPendingGroups / listJoinedGroups / listGroupMembers` | ✓ | 只带自己 `agentId` 的。群令牌：`listJoinedGroups` 只回本群、`listGroupMembers` 只能查本群（同 `feishu_groups`、`feishu_members` 在群里的判法，`command-tools.ts`）；私聊令牌：★ 要这一轮是主人或管理员亲手发的（同工具的 `ctx.admin`）；评论令牌 ✗ |
 | `command.registerAgent / refreshAgentCredentials / bindGroup / setAgentEnabled / deleteAgent / cancelJob / restartHost / stopHost` | ✓ | ✗（绑群、建 bot、停服务都在禁区，私聊也一样） |
-| `settings.read / sessions / models` | ✓ | 群令牌：只有 `project{本群}`，各段标只读、原因 `not-dm`（同 `settings_get` 在群里）；私聊令牌：★ 主人或管理员那一轮，范围 `agent{自己}`、`project{自己的任何群}`、`session{自己}`；评论令牌 ✗ |
+| `settings.read / sessions / models` | ✓ | 群令牌：`read` ✗ `not-dm`（2026-11-02，群会话没有 `settings_get`，第 20 节；原来是只给 `project{本群}`、各段标只读），`sessions`、`models` 只有本群；私聊令牌：★ 主人或管理员那一轮，范围 `agent{自己}`、`project{自己的任何群}`、`session{自己}`；评论令牌 ✗ |
 | `settings.save / act` | ✓ | **群令牌、评论令牌 ✗ `not-dm`**（含权限档、会话方式、角色设定，一律不写）。私聊令牌：★ 过 `authorizeNow`（私聊、这一轮活着、人发的、主人或管理员、"聊天改设置"开关开着），再按范围：`host` 段 ✗；`agent{自己}`、`project{自己的任何群}` 按 3.7 的"能改"表——权限档和网络、允许哪些群用都能改（和工具一样，REQ-6）。`act adminMember add|remove` 再要求这一轮是**主人**触发（3.7："本机管理员名单只有主人触发的那一轮能改"，`TurnAuth.facts.requesterOpenId` 等于 owner）；`projectMember`、`projectAudience` 按 `authorizeNow`（主人或管理员） |
 | `collaboration.*`（含 `createProject`） | ✓ | 读类（`history / context / project`）限自己（群令牌只本群）；`createProject`：群令牌 ✗ `not-dm`，私聊令牌 ★ 过 `authorizeNow`（3.7：建群在私聊能改）；`editProject`（会话方式、启用、目录，3.7 能改表里的项）：群令牌 ✗ `not-dm`，私聊令牌 ★ 同 `settings.save`；`removeProject`（解绑）和别的写类（`clear / compact / stop / …`）✗——3.7 的能改表里没有解绑，和绑群一起留给桌面端和会话以外的终端 |
 | `environment.*`、`machine.*`、`admin.*`（含 `secrets*`） | ✓（`machine.desktopUpdateReport` 只收本机 loopback 的桌面端外壳，已配对客户端 ✗，7.5） | 全部 ✗，只放 `admin.daemonStatus`、`admin.negotiate` |
@@ -218,7 +218,7 @@ owner 2026-10-31 定的三层（第 14 节）。**会话里的 `vonvon` 命令�
 
 bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 RPC 一律记 `ui`，`D/server/rpc/memory.ts:13-15`；5.3 把 `peer.principal` 透传进去，顺手修掉这个）。
 
-验收（D4a，host 判的部分）：群令牌 `settings set`、`settings act`、`group create`、`group set` 一律 exit 4，文字是 `not-dm` 那句；群令牌 `settings get` 只拿到本群、各段只读；群令牌 `schedule add`、`memory add` 放行到 ★。验收（D4b，Bot 进程判的部分）：私聊里成员发起的那一轮 `settings set` 被拒；开关关掉时被拒；管理员那一轮 `settings act adminMember add` 被拒、主人那一轮过；私聊主人那一轮改本 bot 另一个群的设置过；非管理员那一轮 `memory add --bot` 落到项目记忆而不是 bot 记忆；一轮结束后同一令牌调用被拒（`turn-ended`）。
+验收（D4a，host 判的部分）：群令牌 `settings set`、`settings act`、`group create`、`group set` 一律 exit 4，文字是 `not-dm` 那句；群令牌 `settings get` ~~只拿到本群、各段只读~~ 2026-11-02 起 exit 4、`not-dm`（第 20 节）；群令牌 `schedule add`、`memory add` 放行到 ★。验收（D4b，Bot 进程判的部分）：私聊里成员发起的那一轮 `settings set` 被拒；开关关掉时被拒；管理员那一轮 `settings act adminMember add` 被拒、主人那一轮过；私聊主人那一轮改本 bot 另一个群的设置过；非管理员那一轮 `memory add --bot` 落到项目记忆而不是 bot 记忆；一轮结束后同一令牌调用被拒（`turn-ended`）。
 
 ### 5.3 范围参数和会话令牌
 
@@ -231,7 +231,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
   - **8.3 里"只能本地"的写类命令在会话里先由 CLI 拒绝**（SEC-2、REQ-8）：`daemon run/start/stop/restart`、`service *`、`update`、`remote *`、`pair`、`clients *`、`device rename`、`bot repair-dir`、`secrets get`、`open`——`inBotSession()` 为真就 exit 4 `not_in_session`，写法和今天 `secrets` 一样（`cli/commands/secrets.ts:69`）。今天只有 secrets、memory、schedule 三处拒（`cli/index.ts:35`、`memory.ts:44`、`schedule.ts:154`），群里有人说"bot 卡了你重启一下"，完全访问档的 agent 就能以 owner 身份 `daemon restart`、`update`、`remote enable 0.0.0.0 --allow-public && pair`，链接还回进群里。只读的 `daemon status`、`--version`、`service status` 放行。测试：会话环境下这些命令一律 exit 4。
   - `schedule.ts:154`、`memory.ts:44` 今天的整体拒绝改成"有令牌 + `--scope` 就放行，由 daemon 判"（D4a）。
 - **群会话经 CLI 能做的**和群里的工具一样：本群定时任务、记忆、本 bot/本群的只读查询；任何设置写、绑群建群、密钥、运维和设备命令都拒（第 5 节开头的表）。私聊会话能改本 bot 和它所有群的设置，3.7 的规则由 Bot 进程判（5.2 ★）。
-- **诚实的边界**：完全访问档的 bot 能读这个 OS 用户的任何文件，包括 `local-credential`（当前这次运行的）、`device.json`、`clients.json`，拿到就是 owner。**所以在完全访问的群里，群成员可以诱导 bot 绕开令牌、以主人身份做事，包括改 vonvon 的设置**。令牌和范围挡的是失误和一般越权（Skill 写错范围、模型拿别的群的 id、模型照群里一句话去跑 `vonvon settings set` 或运维命令，被拒后照 skill 不重试），挡不住被诱导去读凭据文件、自己连 daemon 的 agent。owner 2026-10-31 定：默认不变（bot 自己建的群仍是完全访问），凡是给群选完全访问的地方加一句"完全访问的群里，群成员能让 Bot 在这台设备上做任何事，包括改 vonvon 的设置，只给信任的群用。"（第 15 节，U2）。**跨设备的扩散**（SEC-12）：客户端私钥靠 Electron `safeStorage` 保护，Windows 上同一用户的任何进程都能解开（DPAPI 用户级密钥，未在 Electron 版本实测），macOS 会弹钥匙串提示；所以一台装了完全访问档 Bot 的电脑，它配对过的所有设备都在同一个信任范围里。写进 3.7、第 16 节和官网文档。只读、读写档的沙箱连不上 daemon（e04、e04b），CLI 在那两档里本来就用不了，agent 的主路径仍是进程内工具（3.7 第 2 条）；也就是说令牌这条路只在完全访问档里走得到，它让照规矩办事的 agent 和 Skill 拿到和工具一样的结果，不是对完全访问档的安全边界。要彻底挡需要 bot 换 OS 用户跑，本期不做，记进风险。
+- **诚实的边界**：完全访问档的 bot 能读这个 OS 用户的任何文件，包括 `local-credential`（当前这次运行的）、`device.json`、`clients.json`，拿到就是 owner。**所以在完全访问的群里，群成员可以诱导 bot 绕开令牌、以主人身份做事，包括改 vonvon 的设置**。令牌和范围挡的是失误和一般越权（写错范围、模型拿别的群的 id、模型照群里一句话去跑 `vonvon settings set` 或运维命令；2026-11-02 起不靠 skill 教，被拒的文字自己说清，第 20 节），挡不住被诱导去读凭据文件、自己连 daemon 的 agent。owner 2026-10-31 定：默认不变（bot 自己建的群仍是完全访问），凡是给群选完全访问的地方加一句"完全访问的群里，群成员能让 Bot 在这台设备上做任何事，包括改 vonvon 的设置，只给信任的群用。"（第 15 节，U2）。**跨设备的扩散**（SEC-12）：客户端私钥靠 Electron `safeStorage` 保护，Windows 上同一用户的任何进程都能解开（DPAPI 用户级密钥，未在 Electron 版本实测），macOS 会弹钥匙串提示；所以一台装了完全访问档 Bot 的电脑，它配对过的所有设备都在同一个信任范围里。写进 3.7、第 16 节和官网文档。只读、读写档的沙箱连不上 daemon（e04、e04b），CLI 在那两档里本来就用不了，agent 的主路径仍是进程内工具（3.7 第 2 条）；也就是说令牌这条路只在完全访问档里走得到，它让照规矩办事的 agent 和 Skill 拿到和工具一样的结果，不是对完全访问档的安全边界。要彻底挡需要 bot 换 OS 用户跑，本期不做，记进风险。
 
 ## 6. 客户端多设备
 
@@ -408,6 +408,8 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 
 ## 9. 内置 Skill
 
+**2026-11-02 作废（第 20 节）**：K1 照本节加的飞书 skill、设置 skill 和三个 skill 共用的开头都撤掉了，任务 skill 回到 K1 之前；下面是原来的打算。
+
 只改三个（命令行一节）：`D/agent/builtin-skills/{feishu,settings,scheduled-tasks}.ts`。
 - 工具优先：有进程内工具（Claude MCP、Codex dynamicTools）就用工具；只有完全访问档、工具不可用时才用 `vonvon` 命令行，而且**每次都带 `--scope bot=<appId>[,group=<chatId>]` 和 `--json`**，范围值从 `session_info` 工具的输出里取，不自己猜。缺 `--scope` 会被拒绝（exit 4），skill 里写明。
 - 飞书 skill：`feishu groups/members`、新的 `group show`、`session list` 只读查询的用法和 `--json` 形状；群里只查得到本群（和工具一样）。lark-cli 的飞书操作照旧，不归 vonvon 管。
@@ -505,7 +507,7 @@ U2–U4 计划后的变化（2026-11-01，`devices-ui-2-remote-mode.md`、`devic
 | U2 `devices-ui-2-remote-mode` | 6.4 全表：隐藏/改造 IPC 功能、"登录"文案全部改掉并带设备名、目录浏览标题和 Windows 路径输入、放开 `directory-browser.ts` 的家目录限制、服务开关路由、7.4 桌面侧的退出规则（2026-11-01 起共存只剩这一条）、删 `AgentProfileSettings` 和旧 Codex 任务面板；**完全访问群警示**（`TierInfo.warning` 只在群的完全访问档上有值，执行权限选择、建群和拉进新群对话框、`settings_set`/`createProject` 的回复和 `group create`/`settings set` 的输出都带上，第 15 节）；**Windows 的平台名**（第 19 节，原是 I4a 的一项）：`D/server/snapshot.ts` 的平台判定在 win32 回 `windows`（今天回 `unsupported`），`P/domain.ts` 的 `application.platform` 加 `windows`，serverInfo v2 的 `platform` 同源（D1 的 schema 已有 `'windows'`）；只改平台名，`machine.status.service` 在 win32 照旧是不支持；另加（U2 计划）：daemon 里会显示到页面的 Provider"登录"提示一起改、`ServerUpdateCard`（远程时"<设备> 的服务端"，U1b 的维护视图也用它）、远程的"<设备> 的后台服务"组、本机协议不同时说清楚哪边旧（三种）和 Windows 的启动修复、serverInfo 报 `update.standalone`/`update.npm` | U1a、D1（协议）；I3（服务端卡上的更新按钮，没合入时卡上只有版本和检查） | C | ~1,700 | 远程时退出桌面端 JP-VPS 不停；本机是另外注册成后台服务的 npm 版 daemon 时退出桌面端不停它，桌面端自带的照旧停；Provider 文案带设备名、不含"登录"；远程目录浏览能进 `/srv`；给群选完全访问时看到警示，私聊里让 bot 把群改成完全访问，回复里也有这句；注入 `win32` 时 snapshot 和 serverInfo 的 `platform` 是 `windows`、服务状态仍是不支持（Windows 桌面端当被连的设备时对面认出是 Windows，D 道一起看） |
 | U3 `devices-ui-3-served` | 6.2 "允许别的设备连接"面板（地址分类、`cgnat`/`public` 确认框、网络变了确认、关掉自己连着的地址先确认、设备名字）、生成链接、客户端列表（`invitedBy`、最近配对标记、自己那行不给撤销）、撤销（含 `--cascade`）、配对成功提示（挂在 `DesktopRoot`，看别的设备时也弹）、6.3 的扫码归属（回 `refused`、`code: 'job_running'`）和 60 秒宽限；另加（U3 计划）：`device.status` 的 `candidates`、`via` 和 `clients` 的 `self`（4.3），Mac、Windows 上 Tailscale 应用自带命令的位置（补 D3） | D1、D3；U1a、U1b（`onLocalDeviceEvent`、`DesktopRoot`、`TailscaleAdvice`） | C | ~1,150 | Mac 上开 Tailscale 地址（标"Tailscale（推荐）"）、生成链接，JP-VPS 的通道探针配对成功、出现在列表、Mac 弹出提示；探针带进来的第二台写"由「…」带进来"，级联撤销后两台都断；两个客户端同时扫码时后点的被拒、先点的二维码还在，断开 60 秒内回来续上 |
 | U4 `devices-ui-4-bundled-update` | 7.5 末尾"桌面端自带的服务端远程升级"：`D/service/bundled-update.ts`（找本机声明了 `desktop.self-update` 的外壳连接、`desktopUpdateRequest` 事件、`machine.desktopUpdateReport` 和它的权限表行、映射到 `coreUpdateStatus`、`checkCoreUpdate` 带 `desktopShell`、`desktop_not_running`）、`DT/remote-self-update.ts`（在本机连接上订阅、驱动 `DesktopUpdater`/`WindowsDesktopUpdater` 的 check → 下载 → `quitAndInstall`、沿用 `beforeUpdateInstall` 的排空、远程触发不弹 Windows 本机确认框、托盘和窗口里给提示）、6.5 `update.bundled` 的按钮和"要开着桌面端"文案、对齐测试白名单、假更新驱动的测试 | D1（`negotiate`、权限表）、I3（`coreUpdateStatus`、6.5 门控、`vonvon update`）、U1a（外壳对本机的连接一直在）、U2（`ServerUpdateCard`）、U3（`peer-label.ts`、hub 的 `attached`，U3 先合入）；真机验收要 D3 | C（计划，macOS）+ D（Windows 验证） | ~1,150 | 假驱动测试里远程 `applyCoreUpdate` 走完检查 → 下载 → 排空 → `quitAndInstall`，四个看门狗各自收尾，外壳不在时回 `desktop_not_running`；真机上 Mac（C）和 Windows（D）用不签名的目录包当被更新的那台，从另一台已配对客户端点检查和更新，回到发起方的是那台更新器的原话（Mac 没签名，是"没有可用的签名更新源…"；Windows 的目录包构建时用 `VONVON_WINDOWS_UPDATE_CONFIG` 换上一把临时公钥，验不过真实的更新清单，是"检查桌面更新失败…"，不会下载）、托盘出提示、Windows 不弹本机确认框，退出桌面端后再点给"要在那台打开桌面端"；Windows 任务同时验 U2 的平台名和启动修复、U3 的 Windows 当被连的设备；真实换包在 0.9.0 之后第一个 0.9.x 上验（第 16 节） |
-| K1 `skills-scope` | 第 9 节三个 skill（群里不改设置、拒绝时说 `not-dm` 那句；私聊改完说改前 → 改后） | C1、C3、C4、C6、D4b | A | ~500 | Bot 6 群里让 Claude 用命令行建任务，带 `--scope` 成功、改大范围被拒；让它"重启 vonvon"被拒并解释；群里让它改本群设置被拒、回"设置只能在私聊里改…"、不去试命令行；私聊里主人让它改某个群的设置成功，回复写清改前 → 改后 |
+| K1 `skills-scope` | 第 9 节三个 skill（群里不改设置、拒绝时说 `not-dm` 那句；私聊改完说改前 → 改后）。2026-11-02 由 S1 `settings-dm-only` 撤掉（第 20 节） | C1、C3、C4、C6、D4b | A | ~500 | Bot 6 群里让 Claude 用命令行建任务，带 `--scope` 成功、改大范围被拒；让它"重启 vonvon"被拒并解释；群里让它改本群设置被拒、回"设置只能在私聊里改…"、不去试命令行；私聊里主人让它改某个群的设置成功，回复写清改前 → 改后 |
 | W1 `site-remote-doc` | 第 10 节（vonvon-site 仓库 `origin/main` 的 `site/`，`/guide/remote/`，单独 PR，等 owner 点头发布） | 全部合入后定稿 | A | ~300 | 按文档从零在一台干净机器上连上；vonvon.cc 和 bot.vonvon.cc 上打开打印出的 URL 都到这页 |
 
 **验收怎么跑**（验收与资源一节）：JP-VPS 当 Linux 服务端——在一个干净的测试用户下用 SSH 登录跑 `install.sh`（不用 `sudo -u`，免得没有 `XDG_RUNTIME_DIR`；不碰 `accept-home2` 和 Bot 6 的数据目录；要用验收 daemon 时按 #422 的目录锁 `mkdir /tmp/vonvon-accept.d`），开 Tailscale 地址、`pair`。Mac mini 当远程客户端——Mac Codex 用桌面端粘链接配对、切换、在远程模式下走 6.4 的每一行、撤销后看断开；Mac 上跑 `install.sh`、`uninstall.sh` 只打印去下载桌面端安装包的话、退出非零、什么都不动；0.8 桌面端升到候选版本能停掉旧 daemon；U4 的 macOS 一侧（用 Mac 测试环境里的桌面端，不碰 owner 的 `/Applications/Vonvon Bot.app` 和 `~/.vonvon-bot`；桌面端开着时，从 Windows 桌面端或 JP-VPS 上的通道探针点升级这台 Mac，再退出桌面端点一次）。Windows 机器——Claude 把 Windows 的验证写成一份带开始/结果标记的提示词，owner 转发给 Windows 上的 Codex（2026-11-01 起 I4a、I4b、I2 `.ps1` 取消，只剩桌面端）：Windows 桌面端当被连的设备（在"允许别的设备连接"里开地址、生成链接、被 Mac 桌面端配对，桌面端开着、锁屏后 Bot 仍在线）；从 Mac 桌面端点升级这台 Windows 的桌面端自带服务端（开着、关着各一次，开着时不弹本机确认框）。三台机器都装同一个 0.9.0 候选版本号，验收通过的 SHA 记进集成 PR 描述；一次 CI 之后才 `dev → main`。
@@ -519,7 +521,7 @@ U2–U4 计划后的变化（2026-11-01，`devices-ui-2-remote-mode.md`、`devic
 | # | 事 | owner 的回答 | 落在哪 |
 |---|---|---|---|
 | 1 | 这一批的版本号 | 0.9.0，macOS、Windows 和服务端包同号 | 7.1、7.6、I5、`product.md` 第 8 节 |
-| 2 | 群会话改设置 | **不写任何设置**，经进程内工具、经 `vonvon` 命令行都一样。群里能做：定时任务（3.13 的规则，现有 `schedule_*`）、记忆（只有主人/管理员亲手打的话进 Bot 记忆）、只读查询（`settings_get`、`settings_access`、`feishu_groups`、`feishu_members` 和只限本 bot/本群的只读命令）、lark-cli 的飞书操作（不经 vonvon）。拒：任何设置写（含权限档、会话方式、角色设定）、绑群和建群、密钥、升级/停服务/后台服务、配对/远程/设备命令；拒绝文字复用 `not-dm` 那句（`registry.ts:48`） | 第 5 节开头、5.2、5.3、第 9 节、D4a、K1 |
+| 2 | 群会话改设置 | **不写任何设置**，经进程内工具、经 `vonvon` 命令行都一样；2026-11-02 起也不读（第 20 节）。群里能做：定时任务（3.13 的规则，现有 `schedule_*`）、记忆（只有主人/管理员亲手打的话进 Bot 记忆）、只读查询（`feishu_groups`、`feishu_members` 和只限本 bot/本群的只读命令）、lark-cli 的飞书操作（不经 vonvon）。拒：任何设置写（含权限档、会话方式、角色设定）、绑群和建群、密钥、升级/停服务/后台服务、配对/远程/设备命令；拒绝文字复用 `not-dm` 那句（`registry.ts:48`） | 第 5 节开头、5.2、5.3、第 9 节、D4a、K1 |
 | 3 | 私聊会话改设置 | 能改本 bot 和它所有群的设置，只在主人或管理员触发的那一轮（现有 `authorizeNow`）；加管理员只有主人那一轮；"聊天改设置"开关照旧。不比 3.7 更严，也不更松 | 5.2、D4b |
 | 4 | vonvon 会话以外 | 主人的终端、别的 Agent（Codex、Claude Code）、在那里调命令行的 Skill：全部能改（本机主人） | 第 5 节开头 |
 | 5 | 会话里的命令行 | 和进程内工具完全同一套规则，堵上"群会话在 shell 里 `vonvon settings set` 以主人身份连上"的洞；保留 owner 要的 `--scope`：群会话带本群、私聊带本 bot，上限按会话算，参数只能缩小 | 5.3、D4a |
@@ -589,9 +591,9 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 会话里跑运维命令 | 这条命令（`vonvon daemon restart`）不能在 Bot 会话里运行。告诉用户去设备上或桌面端里做。 |
 | 会话里没有令牌 | 这是 Bot 会话，但没有有效的会话令牌，不能以主人身份运行。 |
 | 这一轮已结束 | 这次调用对应的那一轮对话已经结束，不能再改设置。 |
-| 群会话里改设置（工具和命令行一样，`not-dm`，exit 4） | 设置只能在私聊里改。请对方去私聊里跟我说。（复用 `registry.ts:48`，不新写） |
+| 群会话里改设置（工具和命令行一样，`not-dm`，exit 4） | 群里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。（owner 2026-11-02 定，`registry.ts` 的 `NOT_DM_MESSAGE`） |
 | 给群选完全访问（执行权限选择、建群和拉进新群对话框、私聊里 bot 的回复、`group create`/`settings set` 的输出） | 完全访问的群里，群成员能让 Bot 在这台设备上做任何事，包括改 vonvon 的设置，只给信任的群用。 |
-| 私聊里改完设置（bot 的回复，设置 skill 给的写法，不是固定文字） | 已把「支付组」的权限从「工作区可写」改成「只读」，<生效时机，照工具回的写>。 |
+| 私聊里改完设置（bot 的回复，不是固定文字；私聊会话以后做，第 20 节） | 已把「支付组」的权限从「工作区可写」改成「只读」，<生效时机，照工具回的写>。 |
 | 远程停止确认 | 停止 <设备> 的后台服务？停止后它不会自动重启，只能在那台设备上重新启动。要重新加载请用"重启"。 |
 | 远程设备的后台服务（"应用与启动"页脚，U2） | 退出这台电脑上的 Vonvon Bot 不影响 <设备>。 |
 | 退出桌面端不停另外装的后台服务（"应用与启动"页脚和确认框，U2） | 退出桌面应用不会停止后台：它是另外装的、注册成后台服务的 Vonvon Bot。要停请运行 `vonvon daemon stop`。 |
@@ -735,3 +737,18 @@ owner 原话："Mac 和 Windows 上就直接通过安装包安装全部软件就
 | 文案（第 15 节） | 去掉 Windows、Mac 的"已装过"、"保持登录"、Mac 无图形登录几条；加安装脚本"在 Mac 上""不是 Linux"和卸载脚本"在 Mac 上""不是 Linux"；这几句和 `install.sh`、`uninstall.sh` 打印的逐字一样，`install.test.mjs` 按全文核对；下载地址是 https://vonvon.cc/get/（新版本只认 vonvon.cc，bot.vonvon.cc 只为 0.7.0 留着 301，`v1-plan.md` 第 10 节） |
 | 风险（第 16 节） | 第 4 条换成 Windows 桌面端锁屏时在不在线；第 6 条去掉只 SSH 的 Mac；第 9 条作废；第 11 条去掉 Windows 的 `node.exe` 占用 |
 | 别的文档 | `product.md` 第 1 节、3.1、3.10、3.14、第 7 到 10 节（第 11 节记了这次的问答）和 `architecture.md` 的服务管理、维护子集、共存、"服务端独立安装和升级""在哪些系统上能跑"按上面改；`server-1/2/3/5` 的计划在文首说明；`devices-3-remote-listen.md` 里"I4a 后由 Windows Codex 顺带验 `remote enable --tailscale`"改成在 Windows 的验收任务里看桌面端认不认 Tailscale 地址；`devices-1-identity.md` 里 `platform` 那句和 `server-4a` 文首写明 Windows 的平台名归 U2 |
+
+## 20. owner 2026-11-02 的改动：设置只在私聊，不发飞书、设置 skill（S1 `settings-dm-only`）
+
+owner 原本的诉求是"通过对话读配置、改配置，只有主人或管理员能改，所以只在私聊里有这个能力"。群里没有这个能力：不给群会话任何设置工具，也不给 skill，不往别的 skill 里塞设置规则。"飞书是别人的 Skill"：飞书官方 lark-cli 自带的 `lark-*` skill，vonvon 不发自己叫"飞书"的 skill。私聊的 agent 会话（`docs/v1-plan.md` M9：s49、s54a 等）这一批不做；owner 在自己的 agent 里调 `vonvon` 命令行改配置，这一批不写设置 skill。和前面各节冲突时以本节为准。
+
+| 项 | 改成 |
+|---|---|
+| 内置 skill（第 9 节、K1） | 撤掉 K1 的 `feishu.ts`、`settings.ts`、`session-rules.ts`；任务 skill 回到 K1 之前；群那一套只有任务 skill，私聊那一套没有。`VONVON_SCOPE` 留着，会话里不带 `--scope` 时的拒绝文字直接说"带上 `--scope "$VONVON_SCOPE"`" |
+| 群会话的工具（第 5 节开头、5.2） | Claude 群会话去掉 `settings_get`、`settings_access`；`session_info` 不再说"改设置之前先调它"，群里的结果不带设置那一项。`feishu_groups`、`feishu_members`、记忆、任务工具不动。Codex 群会话本来只有任务工具。设置工具只在私聊里给（现在没有私聊会话） |
+| 群令牌的命令行（5.2） | `settings.read` 群令牌也拒，`not-dm`，和工具一致（命令行能做的不比工具多）；`settings.sessions`、`models` 照旧只有本群 |
+| 拒绝文字（第 15 节） | `NOT_DM_MESSAGE` 改成"群里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。"，host 拒命令行也用它。D4a、D4b 的拒绝都留着 |
+| 私聊卡片的管理员名单（审计 252-1） | 只有主人能在「设置 → 管理员」卡片上加、移本机管理员；别的管理员看到的名单只读 |
+| 飞书来的管理员（审计 252-4） | 以最近一次成功的刷新为准，20 分钟（两个刷新间隔）没刷新成功就不再认；刷新失败 5 分钟后再试；主人、扫码的人、本机名单不受影响 |
+| 群里的 `/settings` 卡片（审计 252-2） | owner 没定，默认保留，`product.md` 3.7 写成例外 |
+| 审计 252-3、252-5 | 记进 `product.md` 3.8"留下的风险"，不改代码 |
