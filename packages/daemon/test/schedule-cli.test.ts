@@ -173,6 +173,31 @@ describe('requests that read first', () => {
   });
 });
 
+describe('in a group\'s Bot session (s1b)', () => {
+  /** A group session's snapshot: no bindings, only its group's project with its own binding. */
+  function session(reply: (request: ScheduleRequest) => ScheduleReply) {
+    const requests: ScheduleRequest[] = [];
+    const client = {
+      snapshot: async () => ({
+        agents: [{ id: 'cli_test', name: 'Test' }], memberships: [],
+        projects: [{ id: 'prj_1', name: '研发', revision: 1, directory: '', bindings: [{ agentId: 'cli_test', groupId: 'oc_group' }] }],
+      }),
+      schedule: async (_botId: string, request: ScheduleRequest) => { requests.push(request); return reply(request); },
+      close: async () => {},
+    } as unknown as VonvonClient;
+    const daemon: Daemon = fn => withDaemon(fn, async () => ({ client, serverInfo: { principal: 'bot-session:ses_0123456789abcdef' } as never }));
+    const run = (target: ScheduleTarget) => runSchedule('list', target, { json: true, write: () => {} }, daemon);
+    return { requests, run };
+  }
+
+  it('takes its project\'s name for its group, and its group id as it is', async () => {
+    const h = session(created);
+    await h.run({ group: '研发' });
+    await h.run({ group: 'oc_group' });
+    expect(h.requests).toEqual([{ action: 'list', chatId: 'oc_group' }, { action: 'list', chatId: 'oc_group' }]);
+  });
+});
+
 describe('output', () => {
   it('prints one line per task word for word', async () => {
     const h = harness(() => tasks([

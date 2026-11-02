@@ -99,6 +99,8 @@ function translate(what: string, error: unknown, ms: number, unknown?: string): 
   if (error instanceof CallTimeout) return new CommandError(unknown ? 'outcome-unknown' : 'connection', lines(`daemon 在 ${ms / 1000} 秒内没有回应（${what}）。`, unknown, '运行 vonvon daemon logs 查看。'));
   // The bot process timed out or exited after the request reached it: the change may still land, so not "failed".
   if (error instanceof RpcError && unknown && error.code === 'operation_failed') return new CommandError('outcome-unknown', lines(`${what}没有确认：${error.message}`, unknown));
+  // A settings change outside a private chat (s1b): the sentence alone, not "读取设置失败：…" from the read a write starts with.
+  if (error instanceof RpcError && error.code === 'not-dm') return new CommandError(rpcErrorKind(error.code), error.message, { reason: error.code });
   if (error instanceof RpcError) return new CommandError(rpcErrorKind(error.code), lines(`${what}失败：${error.message}`, error.code === 'unsupported' ? 'daemon 可能比命令行旧。' : undefined), { reason: error.code });
   if (error instanceof ConnectionError || firstLine(error) === 'Daemon connection closed') return new CommandError(unknown ? 'outcome-unknown' : 'connection', lines('和 daemon 的连接断了，daemon 可能正在停止。', unknown));
   // checkRequests already parsed the request, so the client's own ZodError is a reply this CLI cannot read.
@@ -223,8 +225,18 @@ export function runningBot(agents: readonly Agent[], wanted?: string): Agent {
   return agent;
 }
 
+/**
+ * s1b: a group's (or a comment's) Bot session reads a snapshot with no bindings in it, so it cannot name a group. True
+ * there; a command then lets the daemon say why not (群里不能改设置), or refuses as the daemon would, never "没有绑定".
+ */
+export const bindingsHidden = (memberships: readonly Membership[], bot: Agent): boolean =>
+  inBotSession(context.env) && !memberships.some(membership => membership.agentId === bot.id);
+/** The daemon's words for what a Bot session may not do (server/authz.ts SESSION_DENIED). */
+const SESSION_DENIED = '这个操作不能从 Bot 会话里做。';
+
 /** Group id or project name; both are unique per bot because bind refuses a duplicate project name. */
 export function pickGroup(memberships: readonly Membership[], bot: Agent, wanted: string): Membership {
+  if (bindingsHidden(memberships, bot)) throw new CommandError('refused', SESSION_DENIED, { reason: 'permission_denied' });
   const own = memberships.filter(membership => membership.agentId === bot.id);
   const found = own.find(membership => membership.groupId === wanted) ?? own.find(membership => membership.name === wanted);
   if (!found) throw badArgs(`Bot「${printable(bot.name)}」没有绑定「${wanted}」。用 vonvon group list 查看。`);

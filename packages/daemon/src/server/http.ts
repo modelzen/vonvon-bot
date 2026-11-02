@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir, networkInterfaces } from 'node:os';
-import { CLOSE_CODES, DRAIN_KINDS, PROTOCOL_VERSION, rpcKindOf, serverInfoV1Schema, serverInfoV2Schema, type Request, type Response } from '@vonvon/protocol';
+import { CLOSE_CODES, DRAIN_KINDS, PROTOCOL_VERSION, rpcKindOf, serverInfoSessionSchema, serverInfoV1Schema, serverInfoV2Schema, type Request, type Response } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
 import type { ShutdownControl } from '../host/lifecycle';
 import { createServiceActionLauncher } from '../host/service-action';
@@ -32,7 +32,7 @@ import { settingsRpc } from './rpc/settings';
 import { createLocalIdentity } from './local-credential';
 import { drainingError, errorEnvelope, RpcError } from './errors';
 import { authorize, MAINTENANCE_STRIKES, type AuthzDeps } from './authz';
-import { filterSnapshot, scopedOwner } from './snapshot-filter';
+import { filterSnapshot, scopedOwner, sessionSnapshot } from './snapshot-filter';
 import { createSessionTokens, type SessionTokens } from '../host/session-tokens';
 import { principalWire } from './principal';
 import { deviceRpc } from './rpc/device';
@@ -102,7 +102,7 @@ export const viewFor = (tokens: Pick<SessionTokens, 'active'>): PeerView => (pee
   const principal = peer.principal;
   if (principal.kind === 'owner') return peer.scope && event.event === 'snapshot' ? { ...event, payload: filterSnapshot(event.payload, scopedOwner(peer.scope), peer.scope) } : event;
   if (principal.kind !== 'bot-session' || !tokens.active(principal.sessionId)) return null;
-  if (peer.negotiated && event.event === 'snapshot') return { ...event, payload: filterSnapshot(event.payload, principal, peer.scope) };
+  if (peer.negotiated && event.event === 'snapshot') return { ...event, payload: sessionSnapshot(event.payload, principal, peer.scope) };
   return null;
 };
 
@@ -270,7 +270,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
         // devices-4b 4.5: a Bot session's write lands where its Bot process said, as its turn's person.
         case 'memory': return finish(peer, await memoryRpc(options.service, request.payload, {
           origin: peer.clientKind === 'cli' ? 'cli' : 'ui', session: peer.principal.kind === 'bot-session', ...(decision.grant?.memory ? { landing: decision.grant.memory } : {}),
-        }), payload => ({ type: 'response', id, method: 'memory', payload }));
+        }), payload => ({ type: 'response', id, method: 'memory', payload: shown(payload) }));
         case 'contextPreview': return finish(peer, await contextPreviewRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'contextPreview', payload }));
         // The owner's hello says who asks: the task records it as made from the desktop or the terminal. A Bot session's
         // runs as the turn its Bot process named (devices-4b 4.4), and never as the owner.
@@ -340,7 +340,10 @@ export async function startApi(options: { service: AdminService; port?: number; 
       }
     }
     // devices 4.5: a protocol 1 client gets the three fields it parses strictly, with its own version, so a 0.8 client can still stop this daemon.
-    const info = (peer: Peer) => peer.protocolVersion === 1
+    // A Bot session (always protocol 2) gets what its command line reads and nothing of the device (Codex review 256-2).
+    const info = (peer: Peer) => peer.principal.kind === 'bot-session'
+      ? serverInfoSessionSchema.parse({ type: 'serverInfo', version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION, principal: principalWire(peer.principal) })
+      : peer.protocolVersion === 1
       ? serverInfoV1Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: 1 })
       : serverInfoV2Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION,
         deviceName: identity.current.name, platform: hostPlatform(), capabilities: capabilities(distribution, remote.status().length > 0), principal: principalWire(peer.principal) });
