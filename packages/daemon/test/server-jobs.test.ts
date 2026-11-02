@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { jobIdSchema, type Event } from '@vonvon/protocol';
+import { type Event } from '@vonvon/protocol';
 import type { AdminService } from '../src/admin/service';
 import { Jobs, type JobPeer } from '../src/server/jobs';
 import { fakeService, socketClient, startFixture } from './server-fixture';
@@ -39,23 +39,20 @@ describe('job lifetimes', () => {
     work.forEach(operation => operation.resolve({ ok: false, code: 'abort', reason: '' }));
     await jobs.close();
   });
-
-  it('keeps Codex jobs after disconnect and supports cancellation', async () => {
-    let state: 'running' | 'cancelled' = 'running';
-    const jobs = manager(fakeService({ startCodexJob: () => ({ id: 'codex-job' }), codexJob: () => ({ id: 'codex-job', type: 'install', state }), cancelCodexJob: async () => { state = 'cancelled'; return { id: 'codex-job', type: 'install', state }; } }));
-    expect(jobs.startCodex('install')).toMatchObject({ kind: 'started' });
-    jobs.detach(peer('gone').value);
-    expect(jobs.snapshot()[0]?.phase).toBe('running');
-    await jobs.cancel(jobIdSchema.parse('codex-job'));
-    expect(jobs.snapshot()[0]?.phase).toBe('cancelled');
-  });
 });
 
-it('guides legacy Codex login requests without starting authentication', () => {
-  const startCodexJob = vi.fn();
-  const jobs = manager(fakeService({startCodexJob}));
-  expect(jobs.startCodex('login')).toMatchObject({kind: 'refused', code: 'provider-configuration-required'});
-  expect(startCodexJob).not.toHaveBeenCalled();
+// main 必败 (devices-ui-2 4.9): the old Codex install and login commands are no longer in the protocol.
+it('answers the old Codex install and login commands with invalid_request', async () => {
+  const fixture = await startFixture(fakeService({}));
+  try {
+    const client = await socketClient(fixture.api.port, fixture.credential);
+    await client.ready();
+    for (const type of ['installCodex', 'startCodexLogin']) {
+      // Not in the schema any more, so the request is built as raw JSON.
+      expect(await client.call({ type: 'request', id: type, method: 'command', payload: { type } } as never)).toMatchObject({ type: 'error', id: type, code: 'invalid_request' });
+    }
+    await client.close();
+  } finally { await fixture.close(); }
 });
 
 describe('backend admission commit boundary', () => {

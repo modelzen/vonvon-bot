@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { PROTOCOL_VERSION, serverInfoV1Schema, serverInfoV2Schema, type Request, type Response } from '@vonvon/protocol';
+import { PROTOCOL_VERSION, serverInfoV1Schema, serverInfoV2Schema, type Event, type Request, type Response } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
 import type { ShutdownControl } from '../host/lifecycle';
 import { createServiceActionLauncher } from '../host/service-action';
@@ -38,6 +38,7 @@ import { completePairing, followRevocations, createInviteBook } from '../remote/
 import { log } from '../core/logger';
 import { serveWebUi } from './web-ui';
 import { getPidLockInfo, type PidLockInfo } from './pid-lock';
+import { runtimeDistribution } from '../service/distribution';
 import { EnvironmentService, type EnvironmentServiceOptions } from '../environment/service';
 import { refreshCodexResolution } from '../agent/codex-appserver/locate';
 
@@ -65,12 +66,20 @@ export interface DaemonApi extends ApiLifetime {
 /** Test seams for the login-time service: the platform and spawn of the helper launcher, and the manager read. */
 type ServiceSeams = Pick<Parameters<typeof createServiceActionLauncher>[0], 'platform' | 'spawn'> & Pick<Parameters<typeof createSnapshotStore>[0], 'readService'>;
 
-/** devices 4.5: what this daemon reports in a v2 server info; D3 adds `remote`, D4a `session-scope`. */
-const capabilities = (): string[] => ['device'];
+/** devices 4.5: what this daemon reports in a v2 server info; D3 adds `remote`, D4a `session-scope`. A daemon that updates
+ * itself says so (devices 6.5, devices-ui-2 4.11); `update.bundled` is U4's. */
+/** devices 4.5: a connection of another protocol (a maintenance one) gets no snapshot; it parses it strictly. */
+export const snapshotShape = (event: Event) => (peer: Pick<Peer, 'principal'>): Event | null => peer.principal.kind === 'maintenance' ? null : event;
+export const capabilities = (distribution?: string): string[] => [
+  'device', ...distribution === 'standalone' ? ['update.standalone'] : distribution === 'global-npm' ? ['update.npm'] : [],
+];
 
 /** `startedAt`: when this daemon process started (epoch ms), in every daemonStatus reply (devices 4.7). */
-export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number }): Promise<DaemonApi> {
+export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number; distribution?: () => Promise<{ kind: string }> }): Promise<DaemonApi> {
   const startedAt = options.startedAt ?? Math.round(performance.timeOrigin);
+  // How this daemon was installed, read once (it may ask npm) and kept; until it is known the server info says nothing of updates.
+  let distribution: string | undefined;
+  void (options.distribution ?? runtimeDistribution)().then(found => { distribution = found.kind; }, () => undefined);
   let acquiredServer: ReturnType<typeof createServer> | undefined;
   let acquiredJobs: Jobs | undefined;
   let acquiredLogs: LogFollowers | undefined;
@@ -232,12 +241,16 @@ export async function startApi(options: { service: AdminService; port?: number; 
     const info = (peer: Peer) => peer.protocolVersion === 1
       ? serverInfoV1Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: 1 })
       : serverInfoV2Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION,
-        deviceName: identity.current.name, platform: hostPlatform(), capabilities: capabilities(), principal: principalWire(peer.principal) });
+        deviceName: identity.current.name, platform: hostPlatform(), capabilities: capabilities(distribution), principal: principalWire(peer.principal) });
     // devices-2 4.3: every server's connections in one hub, so a publish, a drain or a release reaches all of them.
     const hub = createPeerHub({ detached: peer => { jobs.detach(peer); logs.detach(peer); } });
-    const sockets = acquiredSockets = createSocketServer({ server, credential, info, request, control, hub });
+    acquiredSockets = createSocketServer({ server, credential, info, request, control, hub });
     const secure: SecureDeps = { hub, device: deviceKeyPair(identity.current), deviceName: () => identity.current.name, clients, invites, completePairing, info, request, control };
-    snapshots = await createSnapshotStore({ service: options.service, jobs: () => jobs.snapshot(), serviceAction: () => serviceActions.current(), ...(readService ? { readService } : {}), ...(options.diagnostics ? { diagnostics: options.diagnostics } : {}), ...(options.crashes ? { crashes: options.crashes } : {}), publish: snapshot => sockets.publish({ type: 'event', event: 'snapshot', payload: snapshot }) });
+    snapshots = await createSnapshotStore({ service: options.service, jobs: () => jobs.snapshot(), serviceAction: () => serviceActions.current(), ...(readService ? { readService } : {}), ...(options.diagnostics ? { diagnostics: options.diagnostics } : {}), ...(options.crashes ? { crashes: options.crashes } : {}), publish: snapshot => {
+      // devices 4.5: a connection of another protocol parses the snapshot it may not know (a `windows` platform); it gets none.
+      const event = { type: 'event', event: 'snapshot', payload: snapshot } as const;
+      hub.publish(event, snapshotShape(event));
+    } });
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', () => { server.off('error', reject); resolve(); }); });
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('API did not bind a TCP port');

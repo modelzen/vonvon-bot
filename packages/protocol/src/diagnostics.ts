@@ -88,7 +88,7 @@ export type BotDiagnostics = z.infer<typeof botDiagnosticsSchema>;
 /** `bot` is the bot the record belongs to, and whether the host has more than one (a command then needs --bot). */
 type Text = { reason: (record: NotReplied) => string; next: (record: NotReplied, bot?: { id: string; several: boolean }) => string };
 const tool = (record: NotReplied) => record.backend === "claude" ? "Claude" : "Codex";
-const CLAUDE_LOGIN_NEXT = "在终端运行 claude，用 /login 登录，再点「检查登录」。";
+const CLAUDE_LOGIN_NEXT = "在终端运行 claude 配置好（账号或自定义 API 都行），再点「检查配置」。";
 /** The page's wording, one per reason; the type makes every reason have one. */
 export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
   "group-disabled": { reason: () => "这个群在 Vonvon 里停用了", next: () => "在群内设置里重新启用。" },
@@ -100,7 +100,7 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
     reason: r => `没查到${r.detail ?? "这条消息是对谁说的"}，没 @ 它的这条就没回`,
     next: () => "飞书接口偶尔出错，请对方 @ 它再发一次；反复出现时看下面的日志。",
   },
-  "signed-out": { reason: r => `${tool(r)} 没登录或登录过期了`, next: r => r.backend === "claude" ? CLAUDE_LOGIN_NEXT : "在 Codex App 或 Codex CLI 中完成登录或自定义模型配置，再回到 Vonvon 检测。" },
+  "signed-out": { reason: r => `${tool(r)} 没配置好或配置过期了`, next: r => r.backend === "claude" ? CLAUDE_LOGIN_NEXT : "先把 Codex 配置好（账号或自定义 API 都行，用 Codex App 或 `codex` 命令行），再回到 Vonvon 检测。" },
   "codex-too-old": { reason: () => "Codex 版本太旧，服务端不让它用这个模型", next: () => "在本机环境里更新 Codex。" },
   "tool-missing": { reason: r => r.backend === "claude" ? "Claude Agent SDK 还没下载" : "Codex 没装好", next: () => "去本机环境安装。" },
   "tier-unavailable": {

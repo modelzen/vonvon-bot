@@ -17,7 +17,7 @@ const rows = (method: string, types: string): Array<[string, Rule]> => types.spl
  * checks both ways). D1: the owner may do everything, a bot session nothing yet (D4a fills that column). */
 export const RULES: ReadonlyMap<string, Rule> = new Map([
   ...rows('snapshot', 'get'),
-  ...rows('command', `refresh listPendingGroups registerAgent refreshAgentCredentials installCodex startCodexLogin restartHost
+  ...rows('command', `refresh listPendingGroups registerAgent refreshAgentCredentials restartHost
     listJoinedGroups listGroupMembers bindGroup setResponse setPermission setAgentEnabled deleteAgent cancelJob`),
   ...rows('settings', `read.host read.agent read.project read.session save.host save.agent save.project save.session
     act.voice act.adminMember act.projectMember act.projectAudience act.commentInstructions models sessions`),

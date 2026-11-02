@@ -71,8 +71,6 @@ export const commandSchema = z.discriminatedUnion("type", [
   z.object({type: z.literal("listPendingGroups"), agentId: agentIdSchema}).strict(),
   empty("registerAgent"),
   z.object({type: z.literal("refreshAgentCredentials"), agentId: agentIdSchema}).strict(),
-  empty("installCodex"),
-  empty("startCodexLogin"),
   empty("restartHost"),
   z
     .object({
@@ -238,7 +236,7 @@ export const applicationServiceSchema = z.object({
   linger: lingerStateSchema.optional(), hint: z.string().optional(),
 });
 export type ApplicationService = z.infer<typeof applicationServiceSchema>;
-const jobBase = { id: jobIdSchema, type: z.enum(["registerAgent", "installCodex", "loginCodex"]) };
+const jobBase = { id: jobIdSchema, type: z.enum(["registerAgent"]) };
 export const jobSchema = z.discriminatedUnion("phase", [
   z.object({ ...jobBase, phase: z.literal("running"), message: z.string() }),
   z.object({ ...jobBase, phase: z.literal("unresolved"), message: z.string() }),
@@ -257,7 +255,7 @@ export const desktopSnapshotSchema = z.object({
   projects: z.array(snapshotProjectSchema).optional(),
   tools: z.array(toolStateSchema), jobs: z.array(jobSchema),
   recentConversations: z.object({items:z.array(z.object({agentId:agentIdSchema,groupId:groupIdSchema,threadId:z.string(),summary:z.string(),updatedAt:z.number()})),unavailableBots:z.number().int().nonnegative()}).optional(),
-  application: z.object({ platform: z.enum(["macos", "linux", "unsupported"]), version: z.string(), loginItem: z.boolean(), dataPath: z.string(), service: applicationServiceSchema.optional(),
+  application: z.object({ platform: z.enum(["macos", "linux", "windows", "unsupported"]), version: z.string(), loginItem: z.boolean(), dataPath: z.string(), service: applicationServiceSchema.optional(),
     /** The whole daemon's pause and the last day's crash records (s18a); absent from older daemons. */
     crashes: applicationCrashesSchema.optional() }),
 });

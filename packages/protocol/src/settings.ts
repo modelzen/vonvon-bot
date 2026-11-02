@@ -135,6 +135,8 @@ export const agentSectionSchemas = {
 const tier = z.enum(["qa", "write", "full"]);
 export const permissionTierSchema = z.object({
   tier, name: z.string(), summary: z.string(), native: z.string(), unavailable: z.string().optional(),
+  /** A group's 完全访问 tier carries `FULL_ACCESS_WARNING` (devices 第 15 节). */
+  warning: z.string().optional(),
 });
 export const permissionFieldSchema = z.object({
   key: z.string(), label: z.string(), native: z.string(), kind: z.enum(["choice", "switch", "domains"]),
@@ -608,6 +610,8 @@ const saveSchema = z.discriminatedUnion("kind", [
     kind: z.literal("saved"),
     section: sectionView,
     effects: z.array(effect),
+    /** Shown with the saved notice, as when a group turns 完全访问. */
+    warnings: z.array(z.string()).optional(),
   }),
   z.object({ kind: z.literal("conflict"), current: sectionView }),
   z.object({
