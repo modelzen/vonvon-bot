@@ -120,7 +120,9 @@ async function fixture(t) {
       if (remote.failWindowsAfterAssembly) remote.run.conclusion = 'failure';
     } else if (script.endsWith('build-server.mjs')) {
       assert.equal(opts.env.READ_KEY, undefined); assert.notEqual(opts.env.HOME, process.env.HOME);
-      assert.equal(at('--targets'), 'linux-x64,linux-arm64'); assert.equal(at('--out'), join(out, 'server')); assert.equal(at('--node-cache'), join(out, 'node-cache'));
+      // The orchestrator canonicalizes the output: on macOS the temporary root /var/folders is /private/var/folders (#667 macOS CI)
+      const canonicalOut = await realpath(out);
+      assert.equal(at('--targets'), 'linux-x64,linux-arm64'); assert.equal(at('--out'), join(canonicalOut, 'server')); assert.equal(at('--node-cache'), join(canonicalOut, 'node-cache'));
       await remote.serverBuild?.();
       await mkdir(at('--out'), { recursive: true });
       const files = {};

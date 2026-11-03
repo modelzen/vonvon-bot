@@ -149,7 +149,8 @@ export async function runStop(home = paths.appDir, reason?: 'update'): Promise<b
       throw new Error(`Daemon was replaced by PID ${current.pid} at ${current.listen ?? 'not ready'}.`);
     }
     if (!isPidLockOwnerRunning(lock)) {
-      if (!sameOwner(current, lock)) return true;
+      // Read again: the daemon may have released daemon.pid and exited between the read above and this check (#667 Windows CI).
+      if (!sameOwner(await getPidLockInfo(home), lock)) return true;
       throw new Error(`Daemon ${lock.pid} exited without releasing daemon.pid. Cleanup was not confirmed; see vonvon daemon logs.`);
     }
     if (Date.now() >= progressAt) {
