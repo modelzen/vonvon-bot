@@ -184,7 +184,7 @@ test('installs: checks the signed manifest and the hash, unpacks, sets up, insta
   // owner 2026-11-02: plain words only, nothing about systemd, linger or sudo when it all worked
   const done = lines.indexOf('装好了。Vonvon Bot 已在后台运行，开机自动启动。');
   assert.ok(done >= 0, run.stdout);
-  assert.deepEqual(lines.slice(done + 1), ['试一下：`vonvon --version`', '重开一个终端，或 `. ~/.bashrc`（zsh 用 `. ~/.zshrc`）再运行 `vonvon`。', '要从别的电脑连过来管理？看 https://vonvon.cc/guide/remote/', '']);
+  assert.deepEqual(lines.slice(done + 1), ['试一下：`vonvon --version`', '重开一个终端，或 `. ~/.bashrc`（zsh 用 `. ~/.zshrc`）再运行 `vonvon`。', '要从别的电脑连过来管理？看 https://vonvon.cc/docs/remote/', '']);
   assert.doesNotMatch(run.stdout, /保持这个账号登录着/);
   assert.doesNotMatch(run.stdout, /systemd|linger|sudo/);
   if (openssl3) assert.doesNotMatch(run.stdout, /没能核对发布签名/);
