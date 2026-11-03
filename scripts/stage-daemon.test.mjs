@@ -281,10 +281,10 @@ test('stageDaemon ships a minified CLI with the workspace packages bundled from 
     const env = {...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'), VONVON_HOME: join(root, 'data')};
     for (const name of ['VONVON_SERVICE', 'VONVON_SESSION', 'FEISHU_CODEX_BRIDGE', 'FEISHU_CODEX_CWD', 'CODEX_HOME']) delete env[name];
     const vonvon = (...args) => spawnSync(process.execPath, [join(staged, 'bin/vonvon.mjs'), ...args], {env, encoding: 'utf8', timeout: 60_000});
+    // The CLI only points at daemon.log; the CI log keeps nothing else of why the daemon went away or did not stop
+    const daemonLog = () => { try { return readFileSync(join(root, 'data', 'daemon.log'), 'utf8').split('\n').slice(-40).join('\n'); } catch (error) { return String(error); } };
     const started = vonvon('daemon', 'start', '--port', '0');
     try {
-      // The CLI only points at daemon.log; the CI log keeps nothing else of why the daemon went away
-      const daemonLog = () => { try { return readFileSync(join(root, 'data', 'daemon.log'), 'utf8').split('\n').slice(-40).join('\n'); } catch (error) { return String(error); } };
       assert.equal(started.status, 0, started.status === 0 ? '' : `${started.stdout}${started.stderr}\n--- daemon.log ---\n${daemonLog()}`);
       for (const query of ['vonvon-stage', '~/Projects/', ...process.platform === 'win32' ? ['~\\Projects\\'] : []]) {
         // A loaded CI runner can take longer than the 1.5 s search budget just to start the worker's node: that comes back
@@ -300,7 +300,7 @@ test('stageDaemon ships a minified CLI with the workspace packages bundled from 
       }
     } finally {
       const stopped = vonvon('daemon', 'stop');
-      assert.equal(stopped.status, 0, stopped.stdout + stopped.stderr);
+      assert.equal(stopped.status, 0, stopped.status === 0 ? '' : `${stopped.stdout}${stopped.stderr}\n--- daemon.log ---\n${daemonLog()}`);
     }
   });
 });
