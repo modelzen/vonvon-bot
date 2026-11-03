@@ -114,8 +114,6 @@ daemon.command('run').description('Run in the foreground')
   .option('--parent-control', 'Accept shutdown through stdin', false)
   .option('--port <port>', 'Loopback API port', (value) => Number(value), 0)
   .action(async (options: { bot?: string; port: number; parentControl?: boolean }) => {
-    const warning = (await import('./root-warning')).rootWarning();
-    if (warning) process.stderr.write(`${warning}\n`);
     // The host reads <data dir>/env before any bot starts; a bot child inherits it. The note reaches `vonvon daemon logs`.
     const envNote = options.bot ? undefined : (await import('./service-env')).applyServiceEnv(paths.appDir);
     if (envNote) (await import('../core/logger')).log.info('host', 'env_file', { note: envNote });
