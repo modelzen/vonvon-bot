@@ -23,8 +23,9 @@ const tailscale = {host: '100.64.0.10', port: 7767, kind: 'tailscale'}, lan = {h
 const info = (version: string, protocolVersion: number) => ({type: 'serverInfo', machineId: A, version, protocolVersion, deviceName: '机房', platform: 'linux', capabilities: ['device']});
 /** A 60-character name with no break in it: rows wrap it, the header button and menus cut it short. */
 const LONG_NAME = 'MacBook-Pro-of-a-colleague-with-a-really-long-hostname-2026x';
-/** `localCurrent`: this computer is shown, with the others in the list; `web`: the browser, no devices in the shell. */
-type Extra = {name?: string; localOnly?: boolean; localCurrent?: boolean; adding?: object; many?: boolean; web?: boolean};
+/** `localCurrent`: this computer is shown, with the others in the list; `web`: the browser, no devices in the shell;
+ * `firstUse`: no Bots yet (the tabs are hidden). */
+type Extra = {name?: string; localOnly?: boolean; localCurrent?: boolean; adding?: object; many?: boolean; web?: boolean; firstUse?: boolean};
 const state = (active: object, status = 'online', extra: Extra = {}) => ({
   v: 1, revision: 1, client: {version: '0.9.1', protocolVersion: 2}, registry: 'ok', secureStorage: true,
   devices: extra.localOnly ? [{id: 'local', name: '这台电脑', current: true, status: 'online', platform: 'macos', version: '0.9.1', routes: []}] : [
@@ -256,6 +257,14 @@ const scenes: Scene[] = [
       return {listScrolls: list.scrollHeight > list.clientHeight, manageVisible: Boolean(hit && manage.contains(hit))};
     });
   }},
+  // 评审 2026-11-03: in first use the tabs are hidden and the brand is gone, so 设置 needs its own way back to 此刻.
+  {name: 'first-use-settings', active: ready, extra: {localOnly: true, firstUse: true}, steps: async page => {
+    await page.getByRole('button', {name: '设置', exact: true}).click();
+    const back = await page.locator('.today-back button').textContent();
+    await page.screenshot({path: join(out, 'first-use-settings-back.png')});
+    await page.locator('.today-back button').click();
+    return {back, then: await page.locator('main').getAttribute('aria-label'), tabs: await page.locator('.today-primary-nav').count()};
+  }},
   {name: 'web-brand', active: ready, extra: {web: true}, steps: page => page.evaluate(() => ({
     brand: document.querySelector('.today-brand')?.getAttribute('aria-label'), switcher: document.querySelectorAll('.device-switcher').length,
   }))},
@@ -268,7 +277,7 @@ try {
   for (const scene of scenes) {
     const page = await browser.newPage({viewport: {width: scene.width ?? 1100, height: 760}});
     page.on('pageerror', error => console.error(scene.name, error.message));
-    await page.addInitScript(install, {state: state(scene.active, scene.status, scene.extra), snapshot, preview: scene.preview ?? preview, ...(scene.add ? {add: scene.add} : {}), web: Boolean(scene.extra?.web)});
+    await page.addInitScript(install, {state: state(scene.active, scene.status, scene.extra), snapshot: scene.extra?.firstUse ? {...snapshot, agents: []} : snapshot, preview: scene.preview ?? preview, ...(scene.add ? {add: scene.add} : {}), web: Boolean(scene.extra?.web)});
     await page.goto(`http://127.0.0.1:${port}/index.html`);
     await page.waitForTimeout(800);
     const result = await scene.steps?.(page).catch(error => { console.error(scene.name, 'step failed:', (error as Error).message.split('\n')[0]); return undefined; });

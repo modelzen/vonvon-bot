@@ -144,7 +144,8 @@
 /* Logo · dot · name · state (only when not online) · chevron. The name is cut first; a remote device keeps a calm accent tint
    (the update button's recipe), so the window says whose Vonvon Bot it shows. */
 .today-app-header > .device-switcher { justify-self: start; display: flex; min-width: 0; max-width: min(300px, 100%); }
-.device-switcher { position: relative; }
+/* The menu hangs from the header's bottom line (not from the button), at the button's left. */
+.today-app-header:has(> .device-switcher) { position: relative; }
 .device-switcher > .device-switcher__button {
   display: flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; height: var(--control-height, 32px); box-sizing: border-box;
   padding: 0 8px 0 5px; border: 0; border-radius: var(--control-radius, 8px); background: none; color: var(--color-text);
@@ -154,7 +155,8 @@
 .device-switcher__logo { flex: none; width: 22px; height: 22px; border-radius: 6px; object-fit: contain; }
 .device-switcher__button > .device-dot + .device-switcher__name { margin-left: -1px; }
 .device-switcher__name { min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; }
-.device-switcher__state { flex: none; margin-left: -3px; color: var(--color-text-secondary); font-size: 12px; font-weight: 400; }
+/* " · 重连中": spaces on both sides of the dot (kept by pre, in place of the gap), as in the tooltip. */
+.device-switcher__state { flex: none; margin-left: -7px; color: var(--color-text-secondary); font-size: 12px; font-weight: 400; white-space: pre; }
 .device-switcher__button > svg { flex: none; color: var(--color-text-tertiary); }
 .device-switcher[data-remote] > .device-switcher__button {
   background: color-mix(in srgb, var(--color-accent) 7%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 12%, transparent);
@@ -169,14 +171,15 @@
 /* The header's own stacking (z-index 5) ties with the pages' sticky headings, which come later and cover the menu
    ("应用与启动"): above them while the menu is open (Codex 审查 235-4). */
 .today-app-header:has(.device-switcher__menu) { z-index: 30; }
-/* The list scrolls past 8 devices; the line and the two actions stay. */
+/* The list scrolls past 8 devices, with half of the 9th showing; the line and the two actions stay. The header is the
+   containing block: top is its bottom line, left stays where the button starts (static position). */
 .device-switcher > .device-switcher__menu {
-  position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto auto auto;
+  position: absolute; z-index: 20; top: calc(100% + 1px); display: grid; grid-template-rows: minmax(0, 1fr) auto auto auto;
   width: max-content; min-width: 272px; max-width: min(360px, calc(100vw - 32px)); box-sizing: border-box; padding: 5px;
   border: 1px solid var(--color-border); border-radius: 11px; background: var(--color-surface);
   box-shadow: 0 8px 28px #0000001a, 0 2px 6px #00000008;
 }
-.device-switcher__list { display: grid; align-content: start; min-width: 0; max-height: min(calc(100dvh - 200px), 352px); overflow-y: auto; scrollbar-width: thin; }
+.device-switcher__list { display: grid; align-content: start; min-width: 0; max-height: min(calc(100dvh - 200px), 374px); overflow-y: auto; scrollbar-width: thin; }
 .device-switcher__menu .device-switcher__device {
   display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: 44px; box-sizing: border-box; padding: 6px 8px;
   border: 0; border-radius: 7px; background: none; color: var(--color-text); font: inherit; text-align: left; cursor: pointer;
@@ -188,12 +191,12 @@
 .device-switcher__menu .device-switcher__status { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--color-text-secondary); font-size: 11px; line-height: 1.3; white-space: nowrap; }
 .device-switcher__status > .device-dot { width: 5px; height: 5px; }
 .device-switcher__device > .device-tag { margin-left: auto; }
-/* 添加设备… and 管理设备…: the ⋯ menu's items. */
+/* 添加设备… and 管理设备…: shorter rows, in the devices' columns (the icon centred where the tiles are, the label where the names start). */
 .device-switcher__menu .device-switcher__action {
-  display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; padding: 7px 10px; border: 0; border-radius: 6px;
+  display: flex; align-items: center; gap: 10px; width: 100%; box-sizing: border-box; padding: 7px 8px; border: 0; border-radius: 7px;
   background: none; color: var(--color-text); font: inherit; font-size: 13px; line-height: 1.4; text-align: left; white-space: nowrap; cursor: pointer;
 }
-.device-switcher__action > svg { flex: none; color: var(--color-text-tertiary); }
+.device-switcher__action > svg { flex: none; width: 28px; color: var(--color-text-tertiary); }
 .device-switcher__menu .device-switcher__action:disabled { opacity: .45; cursor: default; }
 .device-switcher__menu [role="menuitem"]:hover:not(:disabled) { background: var(--color-surface-hover); }
 .device-switcher__menu [role="menuitem"]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }

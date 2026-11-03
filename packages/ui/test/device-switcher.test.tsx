@@ -1,8 +1,9 @@
-import type {ReactElement} from 'react';
-import {expect, it} from 'vitest';
+import {isValidElement, type ReactElement} from 'react';
+import {expect, it, vi} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
 import type {DevicesState} from '@vonvon/protocol';
 import {activeDeviceFrom, ClientProvider, type ShellCapabilities} from '../src/client-context';
+import type {Page} from '../src/collaboration-model';
 import {AppShell} from '../src/LocalShell';
 import {DeviceSwitcher, DeviceSwitcherMenu} from '../src/devices/DeviceSwitcher';
 import {linkPreviewCopy} from '../src/devices/devices-presentation';
@@ -55,6 +56,33 @@ it('replaces the brand at the top-left, and the brand stays when no switcher is 
     expect(web).toContain('<strong>Vonvon Bot</strong>');
     expect(web).not.toContain('device-switcher');
   }
+});
+
+type Element = ReactElement<Record<string, any>>;
+const tree = (node: unknown): Element[] => Array.isArray(node) ? node.flatMap(tree)
+  : isValidElement<Record<string, any>>(node) ? [node, ...tree(node.props.children)] : [];
+
+it('offers ← 此刻 in first use on the desktop, where neither the tabs nor the brand lead home', () => {
+  const back = (page: Page, {firstUse = true, switcher = true} = {}) => {
+    const onNavigate = vi.fn();
+    const shell = AppShell({page, view: 'agents', title: '页面', firstUse, onNavigate, onOpenList: () => {},
+      deviceSwitcher: switcher ? <span className="probe-switcher"/> : undefined, children: <p/>});
+    const row = tree(shell).find(node => node.props.className === 'today-back');
+    return {html: row && renderToStaticMarkup(row), click: () => { (row!.props.children as Element).props.onClick(); return onNavigate.mock.calls; }};
+  };
+  // 设置 itself, and the Bot / 群组 lists that search opens: nothing else leads back.
+  for (const page of ['settings', 'collaboration'] as const) {
+    expect(back(page).html).toContain('此刻');
+    expect(back(page).click()).toEqual([['home']]);
+  }
+  expect(back('home').html).toBeUndefined();
+  // A settings page keeps its way back to 设置, which then leads home.
+  expect(back('devices').html).toContain('设置');
+  expect(back('devices').html).not.toContain('此刻');
+  expect(back('devices').click()).toEqual([['settings']]);
+  // With the tabs, and on the web (the brand), nothing changes.
+  expect(back('settings', {firstUse: false}).html).toBeUndefined();
+  expect(back('settings', {switcher: false}).html).toBeUndefined();
 });
 
 it('shows the device being looked at, and lists them all with a way to add and manage', () => {
