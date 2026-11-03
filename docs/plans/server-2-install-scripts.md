@@ -16,7 +16,7 @@
 - daemon 隐藏命令 `vonvon __standalone-setup --install-root <根> --version <v> [--json]` 和 `vonvon __standalone-teardown --install-root <根> [--json]`（`D/cli/commands/standalone-setup.ts`）：切 `current`、写启动器、写 / 删 PATH 块。
 - PATH 块的文本和拼接逻辑从 `DT/cli-registration.ts` 挪到 `P/cli-path-block.ts`，桌面端和服务端写**同一块**（COEX-2）。
 - `vonvon service install --linger --json` 的两处改动（LINGER-1）：linger 没开成不再非零退出；环境性拒绝带 `fallback: 'detached'` 和稳定的 `reason`。
-- `daemon run`、`service install` 在 root 下打一行警告。
+- `daemon run`、`service install` 在 root 下不警告（2026-11-03 改，原来打一行警告）。
 - 脚本测试：`scripts/install.test.mjs`（`node --test`，在 `mkdtemp` 的 HOME 里真跑 `sh`）。
 - `D/service/current-release.ts`（C5）如果 I3 还没合入就由本片建。
 
@@ -46,7 +46,7 @@
 
 先看系统（2026-11-01）：`uname -s` 不是 `Linux` → 不联网、不写文件、不建临时目录，exit 2。`Darwin` 打印 devices.md §15"安装脚本：在 Mac 上"那句（到 https://vonvon.cc/get/ 下载安装包，里面带了服务端和 `vonvon` 命令）；别的系统（FreeBSD、Windows 的 Git Bash 这类）打印"安装脚本：不是 Linux、也不是 Mac"那句，带上 `uname -s` 的结果。这一步是 `main` 的第一步，在 root、`HOME`、已装过和公钥的检查之前。
 
-0. **root**（2026-11-03 改，原来默认拒绝、`VONVON_ALLOW_ROOT=1` 才放行）：`[ "$(id -u)" = 0 ]` → 打印 §15"安装脚本：root"那句，照常安装。放在"已装过"之后，已装过时不说。
+0. **root**：照装，不提示（owner 2026-11-03，和 Paseo、Orca 一样；原来默认拒绝、`VONVON_ALLOW_ROOT=1` 才放行）。
 1. **已装过**（任一命中 → 按 §15 文案打印、exit 0、不写任何文件）：
    - `$DATA/daemon.pid` 存在，用 `sed -n 's/.*"pid":\([0-9]*\).*/\1/p'` 取 pid，`kill -0 "$pid"` 成功；
    - `$ROOT/current` 存在，而且 `$ROOT/bin/vonvon --version` 能跑（只有 `current` 是设置那一步没做完，接着装）；
@@ -110,7 +110,7 @@
 
 `__standalone-teardown --install-root <根> [--json]`：对 `shellStartupFiles` 的每个文件 `spliceBlock(content, null)`，但只在现有块的 `startupBlock` 文本等于 `startupBlock('<根>/bin')` 时删（桌面端的块不动）。输出 `{ ok: true, pathFiles }`。不碰安装根。
 
-root 警告：`daemon run` 和 `service install` 在 `process.getuid?.() === 0` 时 stderr 打一行"以 root 运行 Vonvon Bot：AI 代理会有整机权限。"（`--json` 时放进 `notes`）。
+root 警告：2026-11-03 去掉（owner：和 Paseo、Orca 一样不提示）。原来 `daemon run` 和 `service install` 在 root 下 stderr 打一行"以 root 运行 Vonvon Bot：AI 代理会有整机权限。"
 
 ### 4.4 `service install --linger --json`（`D/cli/commands/service.ts`）
 
@@ -151,7 +151,7 @@ root 警告：`daemon run` 和 `service install` 在 `process.getuid?.() === 0` 
 
 ### 5.1 `scripts/install.test.mjs`（`node --test`，`npm test` 已包含 `scripts/*.test.mjs`）
 
-跑法：`flock /tmp/vonvon-heavy.lock node --test scripts/install.test.mjs`。每个用例 `mkdtemp` 一个根 `R`，里面 `home/`、`cdn/`、`shims/`、`scripts/`；子进程用 `execFile('sh', [R/scripts/install.sh], { env: { ...process.env, HOME: R/home, PATH: R/shims + ':' + process.env.PATH, VONVON_ALLOW_ROOT: … } })`，`HOME` 只出现在这个 `env` 对象里。结束 `rm(R, { recursive: true })`（`R` 来自 `mkdtemp`）。
+跑法：`flock /tmp/vonvon-heavy.lock node --test scripts/install.test.mjs`。每个用例 `mkdtemp` 一个根 `R`，里面 `home/`、`cdn/`、`shims/`、`scripts/`；子进程用 `execFile('sh', [R/scripts/install.sh], { env: { ...process.env, HOME: R/home, PATH: R/shims + ':' + process.env.PATH } })`（2026-11-03 起不再有 `VONVON_ALLOW_ROOT`），`HOME` 只出现在这个 `env` 对象里。结束 `rm(R, { recursive: true })`（`R` 来自 `mkdtemp`）。
 
 夹具：
 - 测试里 `generateKeyPairSync('ed25519')` 现生成钥匙；`R/scripts/install.sh` 是仓库脚本的副本，`# BEGIN VONVON PUBKEY` 到 `# END VONVON PUBKEY` 之间换成测试公钥的 PEM。**没有别的改动**：`BASE_URL` 不换，靠 `curl` 替身映射。
@@ -170,7 +170,7 @@ root 警告：`daemon run` 和 `service install` 在 `process.getuid?.() === 0` 
 | size 不对 | 清单 `size` + 1 → exit 4，没算哈希（stdout 文字区分） | 是 |
 | 包含 `../x` 成员 | 手工 `writeTarGz` 一个带 `../evil` 的包 → exit 4，`home/` 下没有 `evil` | 是 |
 | 包含 symlink 成员 | → exit 4（或按 I1 核对结果改为"相对不逃出根则接受"） | 是 |
-| root（2026-11-03 改） | `id` 替身 → exit 0，stdout 开头逐字是 §15"安装脚本：root"那句，stderr 为空；再跑一次是"已经装过"，不再提 root | 是 |
+| root（2026-11-03 改） | `id` 替身 → exit 0，stdout 和普通账号装的一样（路径除外），不提 root，stderr 为空 | 是 |
 | 已装过：pid 活着 | `home/.vonvon-bot/daemon.pid` 写 `{"pid":<本测试进程 pid>}` → exit 0，"已经装过"，没有 `curl` 调用，安装根不存在 | 是 |
 | 已装过：`current` 加能跑的 `bin/vonvon` / systemd unit 文件 / PATH 里有带服务端标记的 `vonvon` | 各 exit 0，文案是 §15"安装脚本：已装过"那句 | 是 |
 | 在 macOS 上（2026-11-01） | `uname` 替身 `Darwin`/`arm64`，`install.sh` 和 `uninstall.sh` 各跑一次 → 都 exit 2，stdout 为空，stderr 逐字是 §15"在 Mac 上"那两句；没有 `curl` 调用（`curl.log` 不存在），`home/` 下什么都没写；`home/.local/share/vonvon-bot/server` 事先建好时 `uninstall.sh` 也不删它 | 是 |
@@ -203,7 +203,7 @@ root 警告：`daemon run` 和 `service install` 在 `process.getuid?.() === 0` 
 | `cli-path-block.test.ts`（`packages/protocol/test/`） | `spliceBlock` 四种：无标记追加、有标记替换、`null` 删除、标记残缺（只有 begin）→ 追加完整块并保留原文；`startupBlock` 文本和旧 `DT/cli-registration.ts` 的 snapshot 一致 | 是 |
 | `cli-registration.test.ts`（desktop，已有） | 不改断言，改 import 后仍绿 | 否 |
 | `service-command.test.ts`（扩） | `--linger --json`、`enableLinger` 注入失败 → stdout `ok: true, linger: 'off', lingerUser`、exit 0；文字版 exit 0 且含 `loginctl enable-linger`；`userManagerHint` 三种 → `--json` 的 `error.reason` 分别是 `no_systemd`/`user_instance_down`/`no_runtime_dir`，`fallback: 'detached'`，exit 4；launchd 无 GUI → 照旧 `failed`、没有 `fallback`（I2a 去掉了 `no_gui_session`）；`lingerUser` 含空格 → 字段省略 | 是 |
-| `cli-root-warning.test.ts` | 注入 `getuid: () => 0` → `daemon run` 的 stderr 第一行含 "root"；`service install --json` 的 `notes` 含那句 | 是 |
+| ~~`cli-root-warning.test.ts`~~ | 2026-11-03 去掉：root 下不再警告（原来注入 `getuid: () => 0` 查 stderr 和 `notes`） | 否 |
 
 ### 5.3 `install.ps1` 静态测试（`scripts/install-ps1.test.mjs`，JP-VPS 没有 pwsh）
 
@@ -242,7 +242,7 @@ JP-VPS 自测：
 
 ## 7. 文档
 
-- `docs/product.md` 3.3（磁盘上的位置）：加服务端安装根、`releases/<v>`、`current`、`bin/vonvon`、PATH 块两边共用；3.10：加"只装服务端"的一段（只在 Linux、一行命令、装成后台服务、装不了服务时直接启动并说明、root 默认拒绝、已装过就跳过、在 Mac 上只提示去下载桌面端安装包）和卸载保留数据目录；3.11：加"安装脚本核对发布清单的哈希，有 OpenSSL 3 再验签名"。
+- `docs/product.md` 3.3（磁盘上的位置）：加服务端安装根、`releases/<v>`、`current`、`bin/vonvon`、PATH 块两边共用；3.10：加"只装服务端"的一段（只在 Linux、一行命令、装成后台服务、装不了服务时直接启动并说明、root 照装不提示（2026-11-03 改，原来默认拒绝）、已装过就跳过、在 Mac 上只提示去下载桌面端安装包）和卸载保留数据目录；3.11：加"安装脚本核对发布清单的哈希，有 OpenSSL 3 再验签名"。
 - `docs/architecture.md`：加安装布局一段，指向 I3 §4.1 的 C5。
 - `README.md`：安装一节加服务端的一行命令（URL 等 I5 的 CDN 路径）。
 - `docs/plans/devices.md` §7.3 加一行指到本文 §4.6。

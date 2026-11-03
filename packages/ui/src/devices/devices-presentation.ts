@@ -7,7 +7,9 @@ import type {ActiveDevice} from '../client-context';
 /** devices-ui-1b 4.9: every word the devices pages show. `name` is always `deviceCopyName`'s: 「名字」 or 这台电脑. */
 export const copy = {
   panelIntro: '一次看一台。切换后，整个界面都换成那台设备上的 Vonvon Bot。',
-  pasteHelp: '在要连接的设备上运行 `vonvon pair`，或者在那台电脑的 Vonvon Bot → 设置 → 应用与启动 →「允许别的设备连接」里点「生成连接链接」。链接 10 分钟内有效，只能用一次。',
+  // pasteHelp and invalid_link below: the other computer may still run 0.9.0, which had 允许别的设备连接 on 应用与启动
+  // (moved to 设备 2026-11-03).
+  pasteHelp: '在要连接的设备上运行 `vonvon pair`，或者在那台电脑的 Vonvon Bot → 设置 → 设备 →「允许别的设备连接」里点「生成连接链接」（0.9.0 版在「应用与启动」页）。链接 10 分钟内有效，只能用一次。',
   invalidName: '名字要 1 到 40 个字。',
   maintenanceOnly: '版本不一致时只能做升级',
   recovered: '设备列表文件损坏了，已另存一份并重新开始。之前加过的设备要重新添加。',
@@ -86,7 +88,7 @@ export function routeHints(attempts: readonly RouteFailure[], name: string): str
 const PREVIEW_CODES = new Set<string>(['invalid_link', 'link_expired', 'own_link', 'already_added', 'no_secure_storage', 'registry_newer', 'registry_unreadable', 'too_many']);
 export function linkPreviewCopy(code: LinkPreviewCode, name: string): string {
   switch (code) {
-    case 'invalid_link': return '这不是 Vonvon Bot 的连接链接。链接以 `vonvon://pair#` 开头：在要连接的电脑的 Vonvon Bot → 设置 → 应用与启动 →「允许别的设备连接」里点「生成连接链接」；Linux 主机上运行 `vonvon pair`。';
+    case 'invalid_link': return '这不是 Vonvon Bot 的连接链接。链接以 `vonvon://pair#` 开头：在要连接的电脑的 Vonvon Bot → 设置 → 设备 →「允许别的设备连接」里点「生成连接链接」（0.9.0 版在「应用与启动」页）；Linux 主机上运行 `vonvon pair`。';
     case 'link_expired': return `这条链接已经过期（10 分钟内有效）。在${name}上重新生成一条。`;
     case 'own_link': return '这是这台电脑自己的链接，不用添加。把它粘到另一台电脑的 Vonvon Bot 里。';
     case 'already_added': return `${name}已经在设备列表里了。`;

@@ -1,5 +1,7 @@
 # U1b `devices-ui-1b-devices-page`：设备页、添加和切换、状态和版本提示
 
+> **2026-11-03 起**：添加设备的帮助和错误文案里，"去那台电脑哪里生成链接"指 设置 → 设备 →「允许别的设备连接」（0.9.0 在"应用与启动"）。下文旧路径是历史记录。
+
 总设计见 `docs/plans/devices.md`（下文简称"设计"）4.6、6.1、6.4、第 15 节，本片对应第 13 节的 U1b 行。**和 U1a（`docs/plans/devices-ui-1a-connections.md`）合成一个 PR**，分支 `claude/devices-ui-1`。本片只碰界面，主进程、协议和连接管理全在 U1a。产品行为以 `docs/product.md` 3.14 为准。
 
 缩写同 D1：`P/`、`CL/`、`D/`、`DT/`、`U/` 分别是 protocol、client、daemon、desktop、ui 的 `src/`。行号以 `origin/claude/devices-integration`（8051b03c；本片引用的 ui、desktop 文件和 a2577fb3 相同）为准。
