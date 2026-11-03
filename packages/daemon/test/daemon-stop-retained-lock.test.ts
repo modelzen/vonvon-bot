@@ -1,4 +1,5 @@
 import { ChildProcess } from 'node:child_process';
+import { unlinkSync } from 'node:fs';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
@@ -130,4 +131,25 @@ it('retains exact lock bytes when an acknowledged stop loses its owner, then rep
     if (originalEntry === undefined) delete process.argv[1];
     else process.argv[1] = originalEntry;
   }
+});
+
+// main 必败 (#667 Windows CI): the daemon released daemon.pid and exited between stop's read of the lock and its liveness
+// check, and stop said it had exited without releasing daemon.pid.
+it('counts a daemon that released its lock and exited between the two looks as stopped', async () => {
+  const owner = { pid: 74322, startedAt: new Date().toISOString(), listen: '127.0.0.1:43120' } satisfies PidLockInfo;
+  const lockFile = join(paths.appDir, 'daemon.pid');
+  await writeFile(lockFile, JSON.stringify(owner));
+  fixture.alive.add(owner.pid);
+  let stopped = false;
+  fixture.stop.mockImplementationOnce(async () => { stopped = true; });
+  vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+    if (signal !== 0) throw new Error('test attempted to send an OS signal');
+    // The first liveness check after stop is where the daemon finishes: its lock goes, then the process.
+    if (stopped && fixture.alive.has(pid)) { unlinkSync(lockFile); fixture.alive.delete(pid); }
+    if (fixture.alive.has(pid)) return true;
+    throw Object.assign(new Error('simulated process exit'), { code: 'ESRCH' });
+  });
+  await expect(runStop(paths.appDir)).resolves.toBe(true);
+  expect(stopped).toBe(true);
+  expect(await getPidLockInfo(paths.appDir)).toBeNull();
 });
