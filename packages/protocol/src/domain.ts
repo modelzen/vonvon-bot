@@ -134,8 +134,12 @@ export const hostStateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("disconnected"), message: z.string() }),
 ]);
 export type HostState = z.infer<typeof hostStateSchema>;
+/** Remote connections only: the picture's reference on that connection. With `avatarDataUrl` it names that picture; alone,
+ * the picture went out earlier on the same connection. The client library puts the picture back and drops this before
+ * anyone reads the snapshot; a reader that does not know it sees no picture (0.9.0 Mac 验收: avatars over a slow link). */
+const avatarRef = z.string().optional();
 export const agentSchema = z.object({
-  id: agentIdSchema, name: z.string(), avatarDataUrl: z.string().optional(),
+  id: agentIdSchema, name: z.string(), avatarDataUrl: z.string().optional(), avatarRef,
   enabled: z.boolean(), running: z.boolean(), connection: z.string(),
   activation: z.enum(["active", "restartRequired"]), readError: z.string().optional(),
   /** The bot's recent not-replied messages and scope denials; absent when it has none. */
@@ -150,7 +154,7 @@ export type Agent = z.infer<typeof agentSchema>;
 export const directoryProblemSchema = z.enum(["botRoot", "projectsRoot", "dataDir", "dataDirParent"]);
 export type DirectoryProblem = z.infer<typeof directoryProblemSchema>;
 export const membershipSchema = z.object({
-  avatarDataUrl: z.string().optional(), id: membershipIdSchema, agentId: agentIdSchema,
+  avatarDataUrl: z.string().optional(), avatarRef, id: membershipIdSchema, agentId: agentIdSchema,
   groupId: groupIdSchema, name: z.string(), directory: z.string(), backend: z.string(),
   /** The library project this binding belongs to; absent until the daemon has linked the row (daemon start), and from older daemons. */
   projectId: projectIdSchema.optional(),
@@ -178,7 +182,7 @@ export const snapshotProjectSchema = z.object({
   bindings: z.array(z.object({ agentId: agentIdSchema, groupId: groupIdSchema })),
 });
 export type SnapshotProject = z.infer<typeof snapshotProjectSchema>;
-export const groupSchema = z.object({ id: groupIdSchema, name: z.string(), avatarDataUrl: z.string().optional() });
+export const groupSchema = z.object({ id: groupIdSchema, name: z.string(), avatarDataUrl: z.string().optional(), avatarRef });
 export type Group = z.infer<typeof groupSchema>;
 /** Codex only: how its version compares with the minimum and the tested version. */
 export const codexCompatibilitySchema = z.object({ status: z.enum(["ok", "tooOld", "newer", "unknown"]), minimum: z.string(), verified: z.string() });

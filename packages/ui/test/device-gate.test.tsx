@@ -1,6 +1,7 @@
-import {expect, it} from 'vitest';
+import {expect, it, vi} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {useActiveDevice, useClient} from '../src/client-context';
+import {App} from '../src/App';
 import {DesktopRootView} from '../src/devices/DesktopRoot';
 import {A, devicesState, fakeShell, info, newClient} from './devices-fixture';
 
@@ -45,6 +46,16 @@ it('says it is connecting, then why it cannot', () => {
   expect(failing).toContain('推荐用 Tailscale');
 });
 
+it('gives the network advice only for a network failure', () => {
+  const tailscale = {route: {host: '100.64.0.10', port: 7767, kind: 'tailscale' as const}};
+  const revoked = render(devicesState({id: A, phase: 'failed', failure: {code: 'client_revoked', attempts: [{...tailscale, code: 'client_revoked'}], at: 1}})).html;
+  expect(revoked).not.toContain('tailscale ping');
+  expect(revoked).not.toContain('推荐用 Tailscale');
+  const closed = render(devicesState({id: A, phase: 'connecting', attempt: 1, failure: {code: 'closed', attempts: [{...tailscale, code: 'closed'}], at: 1}})).html;
+  expect(closed).toContain('tailscale ping 100.64.0.10');
+  expect(closed).toContain('推荐用 Tailscale');
+});
+
 it('says the device took this computer off, with what to do next', () => {
   const html = render(devicesState({id: A, phase: 'failed', failure: {code: 'client_revoked', attempts: [], at: 1}}, {[A]: {status: 'revoked'}})).html;
   expect(html).toContain('已取消这台电脑的访问');
@@ -87,4 +98,26 @@ it('gives each device page the client bound to that device', () => {
   expect(remote.client).toBe(shell.devices.clientFor.mock.results[1]!.value);
   expect(local.client).not.toBe(remote.client);
   expect(remote.client).not.toBe(fallback);
+});
+
+// 0.9.0 Mac 验收 B-1 and S-4: App with no snapshot yet was a bare loading line, with no way to another device or to 启动 daemon.
+it('keeps the way out while App waits for its first snapshot', () => {
+  const app = (state: ReturnType<typeof devicesState>, shell = fakeShell()) =>
+    renderToStaticMarkup(<DesktopRootView state={state} fallback={fallback} shell={shell} renderApp={() => <App/>}/>);
+  const remote = app(devicesState({id: A, phase: 'ready', mode: 'full', serverInfo: info()}));
+  expect(remote).toContain('正在打开「机房」…');
+  expect(remote).toContain('回到这台电脑');
+  expect(remote).toContain('家里');
+  expect(remote).not.toContain('现在重试');
+  expect(app(devicesState({id: A, phase: 'reconnecting', mode: 'full', serverInfo: info()}))).toContain('现在重试');
+  // This computer online: the snapshot comes over IPC in a moment, so only the line.
+  const online = app(devicesState({id: 'local'}));
+  expect(online).toContain('正在打开 Vonvon Bot…');
+  expect(online).not.toContain('device-outside-window');
+  const down = app(devicesState({id: 'local'}, {local: {status: 'offline'}}), {...fakeShell(), startHost: vi.fn()});
+  expect(down).toContain('这台电脑的 daemon 没有连上');
+  expect(down).toContain('启动 daemon');
+  expect(down).toContain('机房');
+  expect(down).not.toContain('回到这台电脑');
+  expect(app(devicesState({id: 'local'}, {local: {status: 'connecting'}}))).toContain('正在重新连接这台电脑的 daemon…');
 });

@@ -20,10 +20,16 @@ export interface BinarySocket {
   onClose(listener: (code: number, reason: string) => void): void;
   onError(listener: (error: Error) => void): void;
   isOpen(): boolean;
+  /** Bytes arrived, a whole message or not: where the socket can tell. */
+  onData?(listener: () => void): void;
 }
 const OPEN = 1;
+/** The TCP socket under `ws`, which has no public accessor for it. */
+const rawSocket = (ws: NodeWebSocket): { on(event: "data", listener: () => void): unknown } | null | undefined =>
+  (ws as unknown as { _socket?: { on(event: "data", listener: () => void): unknown } | null })._socket;
 export function nodeBinarySocket(ws: NodeWebSocket): BinarySocket {
   return {
+    onData: listener => { rawSocket(ws)?.on("data", () => listener()); },
     send: bytes => ws.send(bytes, { binary: true }),
     close(code, reason) {
       if (ws.readyState >= 2) return;
@@ -93,6 +99,28 @@ function closeError(code: number, reason: string, stage: SecureChannelStage, how
   return new SecureChannelError(mapped, stage, code);
 }
 
+const PICTURED = ["agents", "groups", "memberships"] as const;
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+/** The device sends each picture once per connection, then its `avatarRef` (0.9.0 Mac 验收: 98 % of a snapshot was
+ * pictures, more than a slow relay carried). Learned from every snapshot that comes, before the client reads it, so also
+ * from a reply nobody waits for any more; a reference not learned goes, and the page shows no picture. */
+function avatarRestorer(): (frame: unknown) => void {
+  const known = new Map<string, string>();
+  return frame => {
+    if (!isRecord(frame)) return;
+    const snapshot = (frame.type === "event" && frame.event === "snapshot") || (frame.type === "response" && frame.method === "snapshot") ? frame.payload : undefined;
+    if (!isRecord(snapshot)) return;
+    const items = PICTURED.flatMap(key => { const list = snapshot[key]; return Array.isArray(list) ? list.filter(isRecord) : []; });
+    for (const item of items) if (typeof item.avatarRef === "string" && typeof item.avatarDataUrl === "string") known.set(item.avatarRef, item.avatarDataUrl);
+    for (const item of items) {
+      if (!("avatarRef" in item)) continue;
+      const url = typeof item.avatarRef === "string" ? known.get(item.avatarRef) : undefined;
+      if (item.avatarDataUrl === undefined && url !== undefined) item.avatarDataUrl = url;
+      delete item.avatarRef;
+    }
+  };
+}
+
 export interface SecureConnectOptions {
   /** Open already; the caller built its url (`ws://ip:port/`) and closes it if this fails before the socket is used. */
   socket: BinarySocket;
@@ -102,7 +130,8 @@ export interface SecureConnectOptions {
   clientKind: "desktop" | "cli";
   /** Only the first time: the invite from the link, redeemed inside the channel for this key. */
   pairing?: { inviteId: string; inviteSecret: string; clientName: string };
-  /** ping: how often the client pings; pong: how long without a frame ends the connection; handshake: up to the server info. */
+  /** ping: how often the client pings; pong: how long without a frame, or without any bytes where the socket tells
+   * them, ends the connection; handshake: up to the server info. */
   timers?: { ping?: number; pong?: number; handshake?: number };
 }
 export interface SecureConnection {
@@ -197,6 +226,7 @@ export async function connectSecure(options: SecureConnectOptions): Promise<Secu
         catch (error) { callback(error instanceof Error ? error : new Error(String(error))); return; }
         callback();
       },
+      restore: avatarRestorer(),
       close: () => {
         end(new SecureChannelError("closed", "open"), 1000, "");
         if (socketClosed) return Promise.resolve();
@@ -276,6 +306,9 @@ export async function connectSecure(options: SecureConnectOptions): Promise<Secu
     socket.onError(() => {
       if (!ended && stage !== "open") end(new SecureChannelError("closed", stage), 1011, "socket_error");
     });
+    // A message still arriving is a device that answers. A big snapshot over a slow relay takes longer than `pong`, and the
+    // device's pong waits behind it (0.9.0 Mac 验收 B-1).
+    socket.onData?.(() => { if (stage === "open" && !ended) armSilence(); });
     if (!socket.isOpen()) {
       // Closing already (a device refusing at once, 4004 or 4006): its close event says why. Closed already: nothing will.
       setupTimer = setTimeout(() => finish(new SecureChannelError("closed", "handshake")), 1000);

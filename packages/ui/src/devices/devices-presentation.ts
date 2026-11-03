@@ -74,7 +74,10 @@ export function routeHint(route: DeviceRoute, code: string, name: string): strin
   }[route.kind];
   return code === 'refused' ? `${base}那台设备上的 Vonvon Bot 可能没在运行，或者没有允许别的设备连接。` : base;
 }
-export const routeHints = (attempts: readonly RouteFailure[], name: string): string[] => attempts.map(entry => routeHint(entry.route, entry.code, name));
+/** Only an address the device could not be reached at gets a hint: a used link, a refusal or another version is not the
+ * network's (0.9.0 Mac 验收 S-1). */
+export const routeHints = (attempts: readonly RouteFailure[], name: string): string[] => attempts
+  .filter(entry => networkFailure(entry.code) || entry.code === 'device_identity_changed').map(entry => routeHint(entry.route, entry.code, name));
 
 const PREVIEW_CODES = new Set<string>(['invalid_link', 'link_expired', 'own_link', 'already_added', 'no_secure_storage', 'registry_newer', 'registry_unreadable', 'too_many']);
 export function linkPreviewCopy(code: LinkPreviewCode, name: string): string {
@@ -91,6 +94,7 @@ export function linkPreviewCopy(code: LinkPreviewCode, name: string): string {
 }
 /** Network failures: the sentence is followed by a hint per address tried. */
 const NETWORK_CODES = new Set(['refused', 'unreachable', 'timeout', 'closed', 'forbidden']);
+export const networkFailure = (code: string): boolean => NETWORK_CODES.has(code);
 export function failureCopy(code: string, name: string): string {
   if (PREVIEW_CODES.has(code)) return linkPreviewCopy(code as LinkPreviewCode, name);
   if (NETWORK_CODES.has(code)) return `连不上${name}。`;

@@ -4,7 +4,7 @@ import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
   CLOSE_CODES, helloSchema, pairRequestSchema, PROTOCOL_VERSION,
-  type CloseReason, type ErrorEnvelope, type Event, type Hello, type PairResult, type Request, type Response, type Scope, type ServerInfo,
+  type CloseReason, type Hello, type Request, type Scope, type ServerInfo,
 } from '@vonvon/protocol';
 import {
   CHANNEL_VERSION, closeBody, createResponder, decodeFrame, encodeFrame, FRAME, HANDSHAKE_TIMEOUT_REASON, type Channel, type FrameType, type StaticKey,
@@ -13,6 +13,7 @@ import { log } from '../core/logger';
 import type { ClientRegistry } from '../remote/clients';
 import type { completePairing as CompletePairing, InviteBook } from '../remote/pairing';
 import { handleMessage } from './message-loop';
+import { createRemoteOutbox } from './remote-outbox';
 import type { PeerHub } from './peer-hub';
 import type { Principal } from './principal';
 import { formatAddress, type Peer } from './ws';
@@ -98,12 +99,16 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
     let timer: NodeJS.Timeout | undefined;
     /** The key message 1 authenticated: the one a pairing registers (a pairing request carries none). */
     let pairingKey = '';
-    const frame = (type: FrameType, body?: Buffer): void => {
-      if (!channel || socket.readyState !== WebSocket.OPEN) return;
-      if (socket.bufferedAmount > 8_000_000) { socket.close(1013, 'slow_consumer'); detach(); return; }
+    /** False when nothing was queued. */
+    const frame = (type: FrameType, body?: Buffer): boolean => {
+      if (!channel || socket.readyState !== WebSocket.OPEN) return false;
+      if (socket.bufferedAmount > 8_000_000) { socket.close(1013, 'slow_consumer'); detach(); return false; }
       socket.send(channel.encrypt(encodeFrame(type, body)), error => { if (error) { socket.terminate(); detach(); } });
+      return true;
     };
-    const send = (value: Response | ErrorEnvelope | Event | ServerInfo | PairResult): void => frame(FRAME.json, Buffer.from(JSON.stringify(value), 'utf8'));
+    // This socket's own: a picture counts as sent once its frame is queued here, ahead of any reference to it.
+    const outbox = createRemoteOutbox({ write: value => frame(FRAME.json, Buffer.from(JSON.stringify(value), 'utf8')), ping: () => frame(FRAME.ping) });
+    const { send } = outbox;
     const peer: Peer = {
       id: randomUUID(), get open() { return phase === 'ready' && !detached && socket.readyState === WebSocket.OPEN; }, get clientKind() { return clientKind; },
       get principal() { return principal; }, get protocolVersion() { return protocolVersion; }, get clientId() { return clientId; },
@@ -114,7 +119,7 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
         negotiated = { capabilities: [...capabilities], scope };
         return true;
       },
-      send, event: send,
+      send, event: outbox.event,
       // The message loop's 1001/1007 and the maintenance strikes' 4001 (D4a), said inside the channel too.
       close(code, reason) { shut(code, reason); },
     };
@@ -122,6 +127,7 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
       if (detached) return;
       detached = true;
       clearTimeout(timer);
+      outbox.close();
       hub.remove(peer);
     };
     /** With a channel (past message 2), the close inside it: a WebSocket close code is not authenticated (审查 D2-CRYPTO-1). */
@@ -252,7 +258,7 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
         case 'ready':
           deadline(idleMs, () => close('server_shutdown'));
           if (plain.type === FRAME.ping) { frame(FRAME.pong); return; }
-          if (plain.type === FRAME.pong) return;
+          if (plain.type === FRAME.pong) { outbox.pong(); return; }
           handleMessage(hub, peer, text, { request: options.request, ...(options.control ? { control: options.control } : {}) });
           return;
       }

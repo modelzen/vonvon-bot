@@ -2,7 +2,7 @@ import {useState, type ReactNode} from 'react';
 import type {DeviceRow} from '@vonvon/protocol';
 import {deviceCopyName, useActiveDevice, useDevicesState, useShellCapabilities} from '../client-context';
 import {Button} from '../reference/components/ui';
-import {addBlockedReason, failureCopy, rowView, routeHints} from './devices-presentation';
+import {addBlockedReason, failureCopy, networkFailure, rowView, routeHints} from './devices-presentation';
 import {CopyText, DeviceTile, OutsideWindow, platformIcon, StatusDot, StatusPill, TailscaleAdvice, useNow} from './device-bits';
 import {AddDeviceDialog, Problem} from './AddDeviceDialog';
 
@@ -27,7 +27,7 @@ export function DeviceOutsideFrame({title, children}: {title: string; children: 
     {children(repairOf => setDialog(repairOf ? {repairOf} : {}))}
     <footer className="device-outside-foot">
       <div className="device-actions">
-        <Button onClick={() => switchTo('local')}>回到这台电脑</Button>
+        {current?.id !== 'local' && <Button onClick={() => switchTo('local')}>回到这台电脑</Button>}
         <Button variant="ghost" disabled={Boolean(blocked)} title={blocked} onClick={() => setDialog({})}>添加设备</Button>
       </div>
       {others.length > 0 && <section aria-label="其他设备"><h2>其他设备</h2>
@@ -53,10 +53,12 @@ export function DeviceConnectionView() {
   const row = state.devices.find(item => item.id === active.id);
   const retry = () => void devices?.retry().catch(reportSwitchFailure);
   const seconds = active.retryAt === undefined ? 0 : Math.ceil((active.retryAt - now) / 1000);
-  const advice = failure && (failure.attempts.some(entry => entry.route.kind === 'tailscale') || ['refused', 'unreachable', 'timeout'].includes(failure.code));
+  const advice = failure && networkFailure(failure.code) &&
+    (failure.attempts.some(entry => entry.route.kind === 'tailscale') || ['refused', 'unreachable', 'timeout'].includes(failure.code));
+  const hints = failure ? routeHints(failure.attempts, name) : [];
   return <DeviceOutsideFrame title={failure ? `连不上${name}` : `正在连接${name}…`}>{openAdd => failure && <>
     <Problem><CopyText text={failureCopy(failure.code, name)}/></Problem>
-    {failure.attempts.length > 0 && <ul className="device-hints">{routeHints(failure.attempts, name).map((hint, index) => <li key={index}><CopyText text={hint}/></li>)}</ul>}
+    {hints.length > 0 && <ul className="device-hints">{hints.map((hint, index) => <li key={index}><CopyText text={hint}/></li>)}</ul>}
     {active.phase === 'failed'
       ? <div className="device-actions">
         <Button variant="primary" onClick={() => openAdd(row)}>重新配对</Button>
@@ -68,4 +70,39 @@ export function DeviceConnectionView() {
       </div>}
     {advice && <TailscaleAdvice/>}
   </>}</DeviceOutsideFrame>;
+}
+
+/** App before its first snapshot. On the desktop a remote device whose snapshot is slow to come, or this computer's daemon
+ * that is not connected, keeps the way to the other devices and to 启动 daemon (0.9.0 Mac 验收 B-1, S-4). */
+export function SnapshotPendingView() {
+  const state = useDevicesState();
+  const device = useActiveDevice();
+  const shell = useShellCapabilities();
+  const local = state?.devices.find(row => row.id === 'local');
+  if (!state || !shell?.devices || (!device.isRemote && local?.status === 'online'))
+    return <div className="desktop-loading" role="status">正在打开 Vonvon Bot…</div>;
+  const name = deviceCopyName(device);
+  const retry = () => void shell.devices?.retry().catch(reportSwitchFailure);
+  if (device.isRemote) return <DeviceOutsideFrame title={`正在打开${name}…`}>{() => <>
+    <p className="device-muted" role="status">还在读取{name}上的数据，网络慢时要多等一会儿。也可以先回到这台电脑。</p>
+    {state.active.phase === 'reconnecting' && <div className="device-actions"><Button onClick={retry}>现在重试</Button></div>}
+  </>}</DeviceOutsideFrame>;
+  return <DeviceOutsideFrame title={local?.status === 'connecting' ? '正在重新连接这台电脑的 daemon…' : '这台电脑的 daemon 没有连上'}>{() => <StartDaemon/>}</DeviceOutsideFrame>;
+}
+
+function StartDaemon() {
+  const startHost = useShellCapabilities()?.startHost;
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  if (!startHost) return null;
+  const start = () => {
+    setBusy(true);
+    setMessage('');
+    void startHost().then(reply => setMessage(reply.type === 'done' ? reply.message : ''),
+      error => setMessage(error instanceof Error ? error.message : '没能启动 daemon。')).finally(() => setBusy(false));
+  };
+  return <>
+    <div className="device-actions"><Button variant="primary" disabled={busy} onClick={start}>启动 daemon</Button></div>
+    {message && <p className="device-muted" role="status">{message}</p>}
+  </>;
 }
