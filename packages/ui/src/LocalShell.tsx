@@ -4,15 +4,16 @@ import type {CollaborationView, Page} from './collaboration-model';
 import {uiFeatures} from './features';
 import {NavigationIndicator} from './NavigationIndicator';
 
-// One compact toolbar at every window size; first use only exposes useful destinations.
+// One compact toolbar at every window size; first use only exposes useful destinations. `deviceSwitcher` (the desktop,
+// which can show several devices) takes the brand's place at the top-left; 此刻 stays the first tab.
 export function AppShell(props: {page: Page; view: CollaborationView; title: string; children: ReactNode; firstUse?: boolean; newCounts?: {bots: number; projects: number}; updateNotice?: string; updateAction?: ReactNode; onNavigate: (page: Page) => void; onOpenList: (view: CollaborationView) => void; onBack?: () => void; backLabel?: string; onSearch?: () => void; deviceSwitcher?: ReactNode; selectedFeature?: string; onFeatureNavigate?: (id: string) => void}) {
   const isSettings = !['home', 'collaboration'].includes(props.page) || Boolean(props.selectedFeature);
   return <div className="settings-window collaboration-window today-window" data-first-use={props.firstUse || undefined}>
     <div className="desktop-titlebar" aria-hidden="true"/>
     <header className="today-app-header">
-      <button type="button" className="today-brand" onClick={() => props.onNavigate('home')} aria-label="Vonvon Bot 此刻" title="Vonvon Bot">
+      {props.deviceSwitcher ?? <button type="button" className="today-brand" onClick={() => props.onNavigate('home')} aria-label="Vonvon Bot 此刻" title="Vonvon Bot">
         <img src="./vonvon-logo.png" alt=""/><strong>Vonvon Bot</strong>
-      </button>
+      </button>}
       {!props.firstUse && <nav className="today-primary-nav gooey-tabs" aria-label="主要导航">
         <NavigationIndicator activeIndex={props.page === 'home' ? 0 : props.page === 'collaboration' ? props.view === 'agents' ? 1 : 2 : null}/>
         <button type="button" aria-current={props.page === 'home' ? 'page' : undefined} onClick={() => props.onNavigate('home')}>此刻</button>
@@ -20,7 +21,6 @@ export function AppShell(props: {page: Page; view: CollaborationView; title: str
         <button type="button" aria-current={props.page === 'collaboration' && props.view !== 'agents' ? 'page' : undefined} onClick={() => props.onOpenList('groups')}>群组{props.newCounts?.projects ? <small className="today-nav-count" title={`新记忆 ${props.newCounts.projects} 条`}>新记忆 {props.newCounts.projects > 99 ? '99+' : props.newCounts.projects}</small> : null}</button>
       </nav>}
       <div className="today-header-actions">
-        {props.deviceSwitcher}
         <button type="button" className="today-icon-button" aria-label="搜索设置、Bot 或群组" title="搜索 · ⌘K" onClick={props.onSearch}><Search size={17} strokeWidth={1.7}/></button>
         <button type="button" className="today-icon-button" aria-label={props.updateNotice ? `设置，${props.updateNotice}` : '设置'} title={props.updateNotice ? `设置 · ${props.updateNotice}` : '设置'} aria-current={isSettings ? 'page' : undefined} onClick={() => props.onNavigate('settings')}><Settings size={17} strokeWidth={1.7}/>{props.updateNotice && <span className="today-update-dot" aria-hidden="true"/>}</button>
         {props.updateAction}
