@@ -3,7 +3,7 @@
 #   sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/install.sh)"
 # 装到 ~/.local/share/vonvon-bot/server，数据目录是 ~/.vonvon-bot。已经装过服务端就什么都不动。
 # Mac、Windows 用桌面端安装包（里面带着服务端）：不是 Linux 就什么都不做、退出 2（owner 2026-11-01）。
-# 用 root 运行默认拒绝；坚持要用：VONVON_ALLOW_ROOT=1。
+# 用 root 运行也照装，只提示风险（owner 2026-11-03）。
 # 退出码：0 装好了或已经装过；1 设置命令或后台服务失败；2 环境不支持；3 下载失败；4 校验没通过。
 # 整个脚本只定义函数，最后一行才调用 main：下载中途断了，sh 读到半截脚本什么也不做。不读标准输入。
 set -eu
@@ -42,11 +42,7 @@ download() {
 
 check_root() {
   if [ "$(id -u 2>/dev/null || true)" != 0 ]; then return 0; fi
-  if [ "${VONVON_ALLOW_ROOT:-}" = 1 ]; then
-    say "以 root 继续，Bot 和 AI 代理都会以 root 运行。"
-    return 0
-  fi
-  fail 2 "你正在用 root 运行。Vonvon Bot 会以这个账号运行 AI 代理，建议用普通用户：先 \`useradd -m -s /bin/bash vonvon\`，给它设密码（\`passwd vonvon\`）或放好 SSH 公钥，再用这个账号直接 SSH 登录、运行安装命令；不要用 su 或 sudo 切过去，那样装好后不会开机自动启动。说明见 ${GUIDE_URL}#no-root 。坚持用 root：\`VONVON_ALLOW_ROOT=1 sh -c \"\$(curl -fsSL $BASE_URL/install.sh)\"\`。"
+  say "你正在用 root 安装，Bot 和它启动的 AI 代理都会有整台机器的权限。用 Claude 时「完全访问」在 root 下用不了（Claude Code 不允许），要用就换普通用户装，说明见 ${GUIDE_URL}#no-root 。"
 }
 
 # 安装根里的 bin/vonvon 是服务端的启动器，而且能运行。
@@ -300,7 +296,6 @@ main() {
     Darwin) fail 2 "Mac 请下载安装包：$DESKTOP_DOWNLOAD ，安装包里已经带了服务端和 vonvon 命令。这个脚本只用于 Linux，什么都没动。" ;;
     *) fail 2 "这个安装脚本只支持 Linux（这台是 ${system:-认不出的系统}）。Mac、Windows 请下载 Vonvon Bot 桌面端安装包：$DESKTOP_DOWNLOAD" ;;
   esac
-  check_root
   case "${HOME:-}" in
     /*) ;;
     *) fail 2 "HOME 没有设置或不是绝对路径，不知道装到哪里。" ;;
@@ -313,6 +308,7 @@ main() {
   ROOT="$HOME/.local/share/vonvon-bot/server"
   DATA="$HOME/.vonvon-bot"
   if already_installed; then exit 0; fi
+  check_root
   if [ -z "$PUBKEY_PEM" ]; then fail 4 "这份安装脚本没有带发布公钥，不能用来安装。请用官网上的安装命令。"; fi
   need_tools
   pick_target
