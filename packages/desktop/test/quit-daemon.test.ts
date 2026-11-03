@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { VerifiedDaemon } from '../src/daemon-manager.js';
-import { stopDaemonForQuit } from '../src/quit-daemon.js';
+import { daemonKeptOnQuit, stopDaemonForQuit, type KeepOnQuitDependencies } from '../src/quit-daemon.js';
+import { AttachError } from '../src/attach.js';
 
 const initial: VerifiedDaemon = { pid: 42, startedAt: 'initial', listen: '127.0.0.1:42345' };
 
@@ -129,5 +130,52 @@ describe('explicit desktop quit drains the current daemon', () => {
     const error = new Error('Process identity unavailable');
     deps.ownerRunning.mockRejectedValueOnce(error);
     await expect(stopDaemonForQuit(deps)).rejects.toBe(error);
+  });
+});
+
+// devices 7.4 (devices-ui-2 4.7): a server installed and registered on its own stays when the app quits.
+describe('quit keeps a daemon installed and registered on its own', () => {
+  it('leaves an owner it keeps and returns without stopping', async () => {
+    const deps = { ...fixture(), keep: vi.fn(async () => true) };
+    deps.readVerifiedDaemon.mockResolvedValue(initial);
+    await stopDaemonForQuit(deps);
+    expect(deps.keep).toHaveBeenCalledExactlyOnceWith(initial);
+    expect(deps.requestStop).not.toHaveBeenCalled();
+  });
+
+  it('judges each owner again: stops the first, keeps the one that replaced it', async () => {
+    const successor = { ...initial, pid: 43, startedAt: 'successor' };
+    const deps = { ...fixture(), keep: vi.fn(async (owner: VerifiedDaemon) => owner === successor) };
+    deps.readVerifiedDaemon.mockResolvedValueOnce(initial).mockResolvedValueOnce(successor);
+    await stopDaemonForQuit(deps);
+    expect(deps.requestStop).toHaveBeenCalledExactlyOnceWith(initial);
+    expect(deps.keep.mock.calls).toEqual([[initial], [successor]]);
+  });
+
+  // main 必败: there was no such rule; quitting stopped every daemon.
+  const keep = (registration: Awaited<ReturnType<KeepOnQuitDependencies['readRegistration']>>, running: string | undefined, identity = { pid: 42, startedAt: 'initial' }, attachFails?: unknown) => {
+    const dispose = vi.fn(async () => {});
+    const attach = vi.fn(async () => {
+      if (attachFails) throw attachFails;
+      return { identity, dispose, client: { admin: async () => ({ kind: 'daemonStatus', status: { running: true, ...(running ? { distribution: { kind: running, cliPath: '/x' } } : {}) } }) } as never };
+    });
+    return { result: daemonKeptOnQuit(initial, { readRegistration: async () => registration, attach }), attach, dispose };
+  };
+  const npm = { kind: 'ours', definition: { kind: 'npm', executable: '/x/node', entry: '/x/cli.js', port: 0 } } as const;
+  it.each([
+    ['an npm service running its global-npm daemon', npm, 'global-npm', true],
+    ['the desktop app\'s own service', { kind: 'ours', definition: { ...npm.definition, kind: 'desktop' } } as const, 'bundled', false],
+    ['an npm service while the app runs its bundled daemon', npm, 'bundled', false],
+    ['no service', { kind: 'absent' } as const, 'global-npm', false],
+    ['a daemon that does not say how it was installed', npm, undefined, false],
+  ])('keeps %s: %s', async (_name, registration, running, kept) => {
+    const { result, dispose, attach } = keep(registration, running);
+    expect(await result).toBe(kept);
+    if (attach.mock.calls.length) expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('stops when the answering daemon is another owner, or speaks another protocol', async () => {
+    expect(await keep(npm, 'global-npm', { pid: 43, startedAt: 'initial' }).result).toBe(false);
+    expect(await keep(npm, 'global-npm', undefined, new AttachError('protocol', undefined, 1)).result).toBe(false);
   });
 });

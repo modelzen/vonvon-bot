@@ -1,7 +1,7 @@
 import { mkdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { paths } from '../config/paths';
-import { runtimeDistribution, type Distribution } from './distribution';
+import { installsService, runtimeDistribution, type Distribution } from './distribution';
 import { serviceTarget } from './identity';
 import { readLinger, userManagerHint } from './linux-session';
 import { isIrreplaceableDefinition, readDefinitionBytes, type Registration } from './registration';
@@ -74,7 +74,11 @@ async function rootExists(): Promise<boolean> {
   catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false; throw error; }
 }
 
-export function getServiceAdapter(): ServiceAdapter {
+/**
+ * `trustLock`: report the daemon in the pid lock as running without asking it who it is. That check sends the owner's
+ * `local-credential`, which a Bot session's command line never reads (devices-4a 4.9): its `service status` takes the lock as it is.
+ */
+export function getServiceAdapter(options: { trustLock?: boolean } = {}): ServiceAdapter {
   const platform = process.platform;
   if (platform !== 'darwin' && platform !== 'linux') throw new Error(`The background service is not supported on ${platform}.`);
   const platformName = platform === 'darwin' ? 'launchd (macOS)' : 'systemd (Linux)';
@@ -82,13 +86,14 @@ export function getServiceAdapter(): ServiceAdapter {
   const plannedTarget = () => serviceTarget(platform === 'darwin'
     ? { platform, home: homedir(), root: paths.appDir }
     : { platform, home: homedir(), root: paths.appDir, xdgConfigHome: process.env.XDG_CONFIG_HOME });
-  const launchd = async (distribution?: Distribution) => (await import('./launchd')).createLaunchdService({ root: paths.appDir }, distribution ? { distribution: async () => distribution } : {});
-  const systemd = async (distribution?: Distribution) => (await import('./systemd')).createSystemdService({ root: paths.appDir }, distribution ? { distribution: async () => distribution } : {});
+  const owner = options.trustLock ? { verifyOwner: async () => {} } : {};
+  const launchd = async (distribution?: Distribution) => (await import('./launchd')).createLaunchdService({ root: paths.appDir }, { ...owner, ...(distribution ? { distribution: async () => distribution } : {}) });
+  const systemd = async (distribution?: Distribution) => (await import('./systemd')).createSystemdService({ root: paths.appDir }, { ...owner, ...(distribution ? { distribution: async () => distribution } : {}) });
   const adapter: ServiceAdapter = {
     async install(options) {
       // Refuse a development checkout before creating the data directory the services resolve.
       const distribution = await runtimeDistribution();
-      if (distribution.kind !== 'bundled' && distribution.kind !== 'global-npm') return result('install_refused', 'Distribution cannot install a service');
+      if (!installsService(distribution)) return result('install_refused', 'Distribution cannot install a service');
       await mkdir(paths.appDir, { recursive: true, mode: 0o700 });
       return (platform === 'darwin' ? await launchd(distribution) : await systemd(distribution)).install(options);
     },

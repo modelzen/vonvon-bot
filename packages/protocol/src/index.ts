@@ -7,7 +7,10 @@ export * from "./bridge-import.js";
 export * from "./watch.js";
 export * from "./store.js";
 export * from "./handshake.js";
+export * from "./device.js";
+export * from "./desktop-devices.js";
 export * from "./rpc.js";
+export * from "./rpc-kinds.js";
 export * from "./events.js";
 export * from "./admin.js";
 export * from "./secrets.js";
@@ -18,6 +21,7 @@ export * from "./context-preview.js";
 export * from "./setup-steps.js";
 export * from "./diagnostics.js";
 export * from "./crash.js";
+export * from "./cli-path-block.js";
 export * from "./display.js";
 
 export * from "./group-decision.js";

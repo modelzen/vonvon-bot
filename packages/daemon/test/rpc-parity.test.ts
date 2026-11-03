@@ -40,8 +40,6 @@ function inventory(folderToken: string) {
     ['GET joined-groups', 'command', { type: 'listJoinedGroups', agentId: bot.appId }],
     ['POST bind-group', 'command', { type: 'bindGroup', agentId: bot.appId, groupId: project.chatId, projectName: project.name, folder: { kind: 'existing', folderToken }, tool: 'codex', conversation: 'threads' }],
     ['GET codex/setup', 'admin', { type: 'codexSetup' }],
-    ['POST codex/install', 'command', { type: 'installCodex' }],
-    ['POST codex/login', 'command', { type: 'startCodexLogin' }],
     ['GET codex/jobs/:id and register-qr status', 'snapshot', { type: 'get' }],
     ['DELETE codex/jobs/:id and register-qr', 'command', { type: 'cancelJob', jobId: 'fixture-job' }],
     ['GET register-qr/stream', 'command', { type: 'registerAgent' }],
@@ -73,7 +71,6 @@ describe('route inventory parity', () => {
     const service = fakeService({ setPermissionMode, listBots: async () => [{ ...bot, active }], listProjects: async () => [project], setBotEnabled: async (_id, enabled) => { active = enabled; return { ok: true, activation: 'applied', message: '' }; },
       pendingGroups: async () => ({ groups: [] }), joinedGroups: async () => ({ groups: [] }), bindGroup: async () => project,
       collaboration: async () => ({ project: { name: project.name, chatId: project.chatId, cwd: project.cwd, kind: project.kind, backend: project.backend, enabled: true, revision: 'project-token' } }),
-      startCodexJob: () => ({ id: 'fixture-job' }), codexJob: () => ({ id: 'fixture-job', type: 'install', state: 'succeeded' }),
       settings: { read: async () => host, save: async () => ({ kind: 'saved', section: { scope: { kind: 'host' }, section: 'execution', value: host.sections.execution }, effects: [] }), act: async () => ({ kind: 'unavailable', reason: { kind: 'readonly', reason: 'owner-offline', message: 'fixture' } }), models: async query => ({ backend: query.backend, models: [], state: 'unavailable', source: 'backend-provided', observedAt: new Date().toISOString(), titleEfforts: [] }) },
     });
     const fixture = await startFixture(service);
@@ -127,7 +124,8 @@ describe('route inventory parity', () => {
       await client.close();
     } finally { await fixture.close(); }
   });
-  it('refuses UI-local and shell-owned actions without closing the connection', async () => {
+  // devices 8.4: the UI-local actions left the protocol; an old client sending one gets invalid_request
+  it('refuses the removed UI-local actions without closing the connection', async () => {
     const fixture = await startFixture();
     try {
       const client = await socketClient(fixture.api.port, fixture.credential); await client.ready();
@@ -136,8 +134,8 @@ describe('route inventory parity', () => {
         { method: 'collaboration', payload: { action: 'openGroup', agentId: bot.appId, groupId: project.chatId, projectName: project.name } },
       ];
       for (const [index, value] of requests.entries()) {
-        const frame = await client.call(requestSchema.parse({ type: 'request', id: `unsupported-${index}`, ...value }));
-        expect(frame).toMatchObject({ type: 'error', code: 'unsupported' });
+        const frame = await client.call({ type: 'request', id: `removed-${index}`, ...value } as never);
+        expect(frame).toMatchObject({ type: 'error', code: 'invalid_request' });
       }
       expect(await client.call({ type: 'request', id: 'still-open', method: 'snapshot', payload: { type: 'get' } })).toMatchObject({ type: 'response' });
       await client.close();

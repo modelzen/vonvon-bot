@@ -103,13 +103,25 @@ describe.skipIf(process.platform === 'win32')('POSIX definition bytes and real f
     const text = Buffer.from(bytes.unit).toString();
     expect(text).toContain('ExecStart="/node %%n/$HOME/\\"bin\\"" "/app/$$HOME/中文\\\\entry.mjs" daemon run --port 43121\n');
     expect(text).toContain('Environment="PATH=/bin/%%n:$HOME"\n');
-    expect(text).toContain('Restart=on-failure\nRestartSec=5\nTimeoutStopSec=infinity\n');
+    expect(text).toContain('Restart=on-failure\nRestartSec=5\nTimeoutStopSec=45\n');
     expect(text).toContain('WantedBy=default.target\n');
     expect(text).not.toMatch(/CODEX_BIN|ELECTRON_RUN_AS_NODE/);
     expect(decodeGeneratedDefinition(target, bytes).distribution.executable).toBe('/node %n/$HOME/"bin"');
-    for (const changed of [text + 'ExecStartPre=/bin/evil\n', text.replace('Restart=on-failure', 'Restart=always'), text.replace('%%n', '%n'), text.replace('$$HOME', '$HOME'), text.replace('[Service]', '[Service]\nEnvironment="VONVON_HOME=/evil"')]) {
+    for (const changed of [text + 'ExecStartPre=/bin/evil\n', text.replace('Restart=on-failure', 'Restart=always'), text.replace('%%n', '%n'), text.replace('$$HOME', '$HOME'), text.replace('[Service]', '[Service]\nEnvironment="VONVON_HOME=/evil"'), text.replace('TimeoutStopSec=45', 'TimeoutStopSec=30'), text.replace('TimeoutStopSec=45\n', '')]) {
       expect(() => decodeGeneratedDefinition(target, { platform: 'linux', unit: Buffer.from(changed) })).toThrow();
     }
+  });
+
+  it('still reads a unit written before TimeoutStopSec=45 as ours, with the same definition', async () => {
+    const input = await fixture();
+    const target = serviceTarget({ platform: 'linux', home: input.root, root: input.root, xdgConfigHome: undefined });
+    const bytes = renderDefinition({ ...input, target, distribution: { kind: 'npm', executable: '/usr/bin/node', entry: '/app/bin/vonvon.mjs' } });
+    if (bytes.platform !== 'linux') throw new Error('Expected unit');
+    const legacy = Buffer.from(Buffer.from(bytes.unit).toString().replace('TimeoutStopSec=45\n', 'TimeoutStopSec=infinity\n'));
+    expect(legacy.toString()).toContain('RestartSec=5\nTimeoutStopSec=infinity\n');
+    expect(decodeGeneratedDefinition(target, { platform: 'linux', unit: legacy })).toEqual(decodeGeneratedDefinition(target, bytes));
+    // Only that one line may differ: anything else in an old unit is still refused.
+    expect(() => decodeGeneratedDefinition(target, { platform: 'linux', unit: Buffer.from(legacy.toString().replace('RestartSec=5', 'RestartSec=1')) })).toThrow();
   });
 
   it('decodes literal executable dollars separately from expanded argument dollars', async () => {

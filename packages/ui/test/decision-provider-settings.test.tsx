@@ -108,3 +108,10 @@ it('blocks readonly custom connection callbacks', () => {
   }
   expect(input.onChange).not.toHaveBeenCalled();
 });
+// owner 2026-11-02: the shared endpoint and key are the device's
+it('says whose Bots share the custom endpoint and key', () => {
+  const note = (place?: string) => nodes(DecisionProviderFields({...props(), ...(place ? {place} : {})})).find(node => node.type === 'p' && node.props.className === 'decision-connection-note');
+  const words = (node: Element | undefined) => [node?.props.children].flat(2).join('');
+  expect(words(note())).toBe('此接口与密钥供本机使用该服务的 Bot 和群共用。');
+  expect(words(note('「机房 Linux」上'))).toBe('此接口与密钥供「机房 Linux」上使用该服务的 Bot 和群共用。');
+});

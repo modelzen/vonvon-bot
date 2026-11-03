@@ -14,7 +14,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock('../src/bot/bridge-channel', () => ({ createBridgeChannel: () => ({ on() {}, connect: async () => {}, disconnect: async () => {} }) }));
 vi.mock('../src/config/card-callback', () => ({ createCardCallbackRecorder: () => ({ received() {}, close: async () => {} }) }));
 vi.mock('../src/config/app-roles', () => ({
-  APP_ROLE_CACHE_MS: 60_000, getAppRoleSnapshot: () => ({ fetchedAt: Date.now() }),
+  APP_ROLE_CACHE_MS: 60_000, APP_ROLE_RETRY_MS: 30_000, trustedFeishuAdmins: () => [], getAppRoleSnapshot: () => ({ fetchedAt: Date.now() }),
   createAppRoleRefresher: () => ({ refresh: async () => {}, stop: async () => {} }),
 }));
 vi.mock('../src/admin/groups', () => ({ createGroupExecutor: () => async () => ({ groups: [] }) }));
@@ -67,7 +67,8 @@ async function real(seeded: StoredTask, run: () => Promise<ScheduledOutcome>, no
   return { diagnostics, onDisk };
 }
 
-it('stops the scheduler before the orchestrator shuts down, and drains it for at most 5 seconds after', async () => {
+// owner 2026-11-02: the orchestrator already settled the runs within its own drain, so the records get 3 seconds
+it('stops the scheduler before the orchestrator shuts down, and drains it for at most 3 seconds after', async () => {
   let finish!: () => void;
   fixture.orchestrator = orchestrator(
     { stop: () => { fixture.order.push('stop'); }, drain: async ms => { fixture.order.push(`drain ${ms}`); } },
@@ -79,7 +80,7 @@ it('stops the scheduler before the orchestrator shuts down, and drains it for at
   expect(fixture.order).toEqual(['stop', 'shutdown']);
   finish();
   await closing;
-  expect(fixture.order).toEqual(['stop', 'shutdown', 'drain 5000']);
+  expect(fixture.order).toEqual(['stop', 'shutdown', 'drain 3000']);
 });
 
 it('a run on at shutdown is settled interrupted and written before the bridge is closed', async () => {

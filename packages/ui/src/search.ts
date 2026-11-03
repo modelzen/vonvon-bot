@@ -9,6 +9,8 @@ export type SearchReveal = 'machine-advanced' | 'codex' | 'claude' | 'codex-tool
 export type Destination = {page: Page; view?: CollaborationView; selection?: Selection; detail?: DetailPane; section?: string; field?: string; reveal?: SearchReveal; guide?: string};
 export type SearchEntry = {id: string; title: string; context: string; aliases: readonly string[]; destination: Destination; kind: 'page' | 'setting' | 'action' | 'item'};
 export const settingAnchor = (title: string) => `setting-${encodeURIComponent(title)}`;
+/** A window event asking the page to open a setting (`detail`: a Destination), from outside App (devices-ui-3's paired toast). */
+export const OPEN_SETTING_EVENT = 'vonvon:open-setting';
 /** One bot's section on the 状态与诊断 page. */
 export const diagnosticsSection = (agentId: string) => `Bot 状态 ${agentId}`;
 /** Shared model configuration opened from a group's decision Provider. */
@@ -62,11 +64,17 @@ const globalGroups: readonly {page: Page; section: string; fields: readonly Targ
   {page: 'application', section: '启动选项', fields: [item('后台运行', ['运行状态', '重启后台服务', '重启后台', '重启 daemon']), item('登录电脑时启动', ['开机启动'])]},
   {page: 'application', section: 'daemon 运行', fields: [item('运行方式'), item('daemon 服务', ['启动 daemon', '停止 daemon']), item('临时运行 Bot', [], {guide: '仅运行指定 Bot 时显示当前临时运行状态。'})]},
   {page: 'application', section: '后台服务', fields: [item('系统服务'), item('服务运行', ['启动已安装服务']), item('仅运行指定 Bot', [], {reveal: 'machine-advanced'}), ...['进程 PID', '上次退出', '服务定义', '标准输出', '错误日志'].map(title => item(title, [], {reveal: 'machine-advanced'}))]},
-  {page: 'application', section: '软件更新', fields: [item('桌面版', [], {field: ''}), item('更新状态', [], {field: ''}), item('可用版本', [], {field: ''}), item('检查更新', ['检查桌面更新']), item('下载更新', [], {guide: '有可用更新时显示下载操作。'}), item('安装更新', [], {field: '安装并重启', guide: '下载完成后显示安装操作。'}), item('发布说明')]},
+  // devices-ui-3: 允许别的设备连接, on every device shown (the desktop and the web page alike)
+  {page: 'application', section: '允许别的设备连接', fields: [item('设备名字', ['这台设备的名字', '改设备名']), item('地址', ['远程连接', 'Tailscale', '局域网', '组网', '开启远程', '关闭远程连接'], {field: ''}), item('端口', ['改端口'])]},
+  // The link is in its own group next to it, which App looks in (Codex 审查 269-2): its row, or the link once made
+  {page: 'application', section: '连接链接', fields: [item('连接链接', ['生成连接链接', '配对链接', '配对'])]},
+  {page: 'application', section: '已配对的设备', fields: [item('已配对的设备', ['已配对的客户端', '撤销', '撤销设备', '客户端', '谁连着这台'], {field: ''})]},
+  {page: 'application', section: '软件更新', fields: [item('桌面版', [], {field: ''}), item('更新状态', [], {field: ''}), item('可用版本', [], {field: ''}), item('检查更新', ['检查桌面更新']), item('下载更新', [], {guide: '有可用更新时显示下载操作。'}), item('重启升级', ['安装更新'], {field: '重启升级', guide: '下载完成后显示重启升级，会中断正在进行的对话。'}), item('发布说明')]},
   {page: 'application', section: '外部 Core / CLI', fields: [item('Core 来源'), item('当前版本'), item('可用版本'), item('检查 Core 更新'), item('更新外部 Core'), item('更新进度', ['查看 Core 更新进度'])]},
   {page: 'application', section: 'Codex 可执行文件', fields: [item('Codex 可执行文件', ['执行文件路径', '执行程序'], {field: ''}), item('已保存路径', ['Codex 路径']), item('当前路径配置'), item('本次所选', ['选择 Codex 可执行文件', '选择文件', '更改路径']), item('恢复自动检测'), item('未绑定工作目录时的运行后备'), item('保存路径', ['Codex 可执行文件路径'], {field: '本次所选', guide: '更改路径后，在弹窗中保存。'})]},
-  {page: 'environment', section: '本机环境', fields: [item('重新检测')]},
-  ...(['Codex', 'Claude'] as const).map(section => ({page: 'providers' as const, section, fields: ['安装', '更新', '登录', '检查授权', '重新登录', '安装托管副本', '重新安装最新版', '停用托管副本', '安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', ...(section === 'Codex' ? ['后端状态', '后端版本'] : ['Claude Agent SDK', '安装后端', '检查后端版本', '更新后端', '卸载后端'])].map(title => item(`${title} ${section}`, [title, ...(formerly[title] ? [formerly[title]] : [])], {field: '', reveal: section === 'Codex' ? 'codex' : 'claude', guide: '在 Provider 详情查看状态和可用操作。'}))})),
+  // The section is the page's own name: 本机环境 would be wrong while a remote device is shown (owner 2026-11-02).
+  {page: 'environment', section: '工具与连接', fields: [item('重新检测', ['本机环境'])]},
+  ...(['Codex', 'Claude'] as const).map(section => ({page: 'providers' as const, section, fields: ['安装', '更新', '配置', '检查配置', '安装托管副本', '重新安装最新版', '停用托管副本', '安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', ...(section === 'Codex' ? ['后端状态', '后端版本'] : ['Claude Agent SDK', '安装后端', '检查后端版本', '更新后端', '卸载后端'])].map(title => item(`${title} ${section}`, [title, ...(formerly[title] ? [formerly[title]] : [])], {field: '', reveal: section === 'Codex' ? 'codex' : 'claude', guide: '在 Provider 详情查看状态和可用操作。'}))})),
   {page: 'environment', section: toolNames['lark-cli'], fields: ['安装', '更新', '登录', '检查授权', '重新登录', '安装托管副本', '重新安装最新版', '停用托管副本', '安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', '当前账号配置'].map(title => item(`${title} 飞书 CLI`, [title, ...(formerly[title] ? [formerly[title]] : [])], {field: title, reveal: 'lark-tool', guide: ['安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', '当前账号配置'].includes(title) ? undefined : '此操作是否可用取决于飞书 CLI 的安装与授权状态。'}))},
   {page: 'environment', section: 'MCP', fields: [item('MCP', ['MCP 连接', '连接器'], {field: ''}), item('添加 MCP', [], {field: '添加'}), item('MCP 授权', [], {field: '', guide: '选择连接的「授权」，在终端完成。'}), item('移除 MCP', [], {field: '', guide: '选择连接的「移除」。'})]},
   {page: 'environment', section: '飞书 CLI 账号配置', fields: [item('管理飞书 CLI', ['管理账号配置', '切换账号配置', 'Profile'], {reveal: 'profile-manager'}), item('添加已有应用', ['添加账号配置', '添加 Profile'], {reveal: 'profile-add'}), item('创建新应用', ['创建账号配置', '创建 Profile'], {reveal: 'profile-create'}), ...['账号配置名称', 'App ID', 'App Secret', '平台', '添加后设为当前'].map(title => item(title, ['飞书应用'], {reveal: 'profile-add'})), item('设为当前', ['切换账号配置', '切换飞书 Profile'], {reveal: 'profile-manager'})]},
@@ -86,7 +94,7 @@ function expand(id: string, context: string, base: Destination, groups: readonly
   });
 }
 /** `schedules`: the tasks the running Bots answered with when search opened; each is found by name on its group's 任务 tab. */
-export function searchEntries(snapshot: DesktopSnapshot, capabilities: {externalCoreAvailable?: boolean; schedules?: readonly ScheduledTaskView[]} = {}): SearchEntry[] {
+export function searchEntries(snapshot: DesktopSnapshot, capabilities: {externalCoreAvailable?: boolean; schedules?: readonly ScheduledTaskView[]; devices?: boolean} = {}): SearchEntry[] {
   const pages: readonly {id: string; title: string; aliases: readonly string[]; page: Page; view?: CollaborationView}[] = [
     {id: 'home', title: '此刻', aliases: ['首页', '概览'], page: 'home'},
     {id: 'agents', title: 'Bot', aliases: ['机器人', '注册 Bot', '添加 Bot', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
@@ -100,6 +108,8 @@ export function searchEntries(snapshot: DesktopSnapshot, capabilities: {external
     {id: 'application', title: '应用与启动', aliases: ['版本', '更新', '后台服务'], page: 'application'},
     {id: 'secrets', title: '决策模型', aliases: ['key', 'API key', 'TypeSafe', 'OpenRouter', 'Vercel', '自定义接口', 'Jev', 'System One', '密钥'], page: 'secrets'},
     {id: 'diagnostics', title: '状态与诊断', aliases: ['日志', '数据目录', '连接', '没回的消息', '缺的权限'], page: 'diagnostics'},
+    // Only the desktop has it; 服务器 is a search word only, never on the page.
+    ...capabilities.devices ? [{id: 'devices', title: '设备', aliases: ['远程', '添加设备', '切换设备', '连接链接', '配对', 'Tailscale', '服务器'], page: 'devices' as const}] : [],
   ];
   const entries: SearchEntry[] = pages.map(page => ({id: page.id, title: page.title, context: '页面', aliases: page.aliases, destination: {page: page.page, view: page.view, selection: page.view ? {kind: 'overview'} : undefined}, kind: 'page'}));
   for (const group of globalGroups.filter(group => group.section !== '外部 Core / CLI' || capabilities.externalCoreAvailable)) group.fields.forEach((field, index) => entries.push({

@@ -4,6 +4,7 @@ import { ConnectionError, connectBrowser, type VonvonClient } from "@vonvon/clie
 import { App } from "./App";
 import { DirectoryPickerProvider } from "./directory-picker";
 import { ClientProvider, type ShellCapabilities } from "./client-context";
+import { DesktopRoot } from "./devices/DesktopRoot";
 import "./reference/App.css";
 import "./collaboration.css";
 import "./desktop.css";
@@ -61,7 +62,7 @@ export function Root() {
     }
     async function connect(): Promise<void> {
       try {
-        const next = await connectBrowser(options);
+        const { client: next } = await connectBrowser(options);
         if (!active) {
           await next.close().catch(error => console.error("Daemon connection cleanup failed", error));
           return;
@@ -94,7 +95,7 @@ export function Root() {
       void owner?.client.close().catch(error => console.error("Daemon connection cleanup failed", error));
     };
   }, [credential, injected]);
-  if (injected) return <ClientProvider client={injected} shell={window.vonvonShell}><DirectoryPickerProvider><App /></DirectoryPickerProvider></ClientProvider>;
+  if (injected) return <DesktopRoot fallback={injected} shell={window.vonvonShell}/>;
   if (!credential) return <main className="app-connection-state" role="alert"><h1>需要本机访问凭证</h1><p>请在终端运行 <code>vonvon open</code> 打开此页面；在远程主机上用 <code>vonvon open --print</code>。</p></main>;
   if (connection.kind === "connecting") return <main className="app-connection-state" role="status"><h1>正在连接 Vonvon Bot…</h1></main>;
   if (connection.kind === "disconnected") return <main className="app-connection-state" role="alert"><h1>连接已断开</h1><p>{connection.message}</p><p>{connection.retrying ? <>正在重试连接。若 daemon 未运行，请执行 <code>vonvon daemon start</code>。</> : "正在关闭连接；若关闭失败，请刷新页面重试。"}</p></main>;

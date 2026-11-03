@@ -8,6 +8,7 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { machineIdSchema, PROTOCOL_VERSION } from '@vonvon/protocol';
 import { daemonStatus, runStop } from '../src/cli/commands/daemon';
 import { readHostEndpoint } from '../src/host/discovery';
+import { stopVerifiedOwner } from '../src/server/owner-verification';
 import { createSocketServer, type Peer } from '../src/server/ws';
 import { type PidLockInfo } from '../src/server/pid-lock';
 
@@ -25,7 +26,7 @@ afterAll(async () => {
   }
 });
 
-type Mode = 'ready' | 'wrong-pid' | 'missing-pid' | 'stopped' | 'wrong-credential' | 'no-credential' | 'bad-credential' | 'timeout' | 'closed' | 'rpc-error' | 'changed-lock' | 'wrong-version';
+type Mode = 'ready' | 'wrong-pid' | 'missing-pid' | 'stopped' | 'wrong-credential' | 'no-credential' | 'bad-credential' | 'timeout' | 'closed' | 'rpc-error' | 'changed-lock' | 'other-version';
 async function fixture(mode: Mode) {
   const home = await mkdtemp(join(tmpdir(), 'vonvon-owner-'));
   const credential = 'ac'.repeat(32);
@@ -34,19 +35,24 @@ async function fixture(mode: Mode) {
   let peers = 0;
   const sockets = createSocketServer({
     server, credential,
-    info: { type: 'serverInfo', machineId: machineIdSchema.parse(randomUUID()), version: 'test', protocolVersion: mode === 'wrong-version' ? PROTOCOL_VERSION + 1 : PROTOCOL_VERSION },
+    info: () => ({ type: 'serverInfo', machineId: machineIdSchema.parse(randomUUID()), version: 'test', protocolVersion: mode === 'other-version' ? 1 : PROTOCOL_VERSION }),
     detached: () => { peers--; },
     request: async (peer: Peer, request) => {
       requests++;
+      if (mode === 'other-version' && request.method === 'machine' && request.payload.type === 'stopHost') {
+        peer.send({ type: 'response', id: request.id, method: 'machine', payload: { type: 'done', message: 'stopping', later: true } as never });
+        return;
+      }
       expect(request.method).toBe('admin');
       expect(request.payload).toEqual({ type: 'daemonStatus' });
       if (mode === 'timeout') return;
       if (mode === 'rpc-error') { peer.send({ type: 'error', id: request.id, code: 'busy', message: credential }); return; }
       if (mode === 'changed-lock') await writeFile(join(home, 'daemon.pid'), JSON.stringify({ ...lock, startedAt: new Date(Date.parse(lock.startedAt) + requests * 1000).toISOString() }));
       peer.event({ type: 'event', event: 'log', payload: { lines: 'concurrent event' } });
-      peer.send({ type: 'response', id: request.id, method: 'admin', payload: { kind: 'daemonStatus', status: {
+      peer.send({ type: 'response', id: request.id, method: 'admin', payload: { kind: 'daemonStatus', status: { startedAt: 1,
         installed: false, running: mode !== 'stopped', selfHosted: true, version: 'test', supported: true,
         ...(mode === 'missing-pid' ? {} : { pid: mode === 'wrong-pid' ? process.pid : pid }),
+        ...(mode === 'other-version' ? { addedLater: true } as never : {}),
       } } });
     },
   });
@@ -78,7 +84,7 @@ it('discovers an authenticated matching PID through read-only RPC with concurren
   } finally { await f.close(); }
 });
 
-it.each<Mode>(['wrong-pid', 'missing-pid', 'stopped', 'wrong-credential', 'no-credential', 'bad-credential', 'timeout', 'closed', 'rpc-error', 'changed-lock', 'wrong-version'])('refuses %s without signaling or removing the lock', async mode => {
+it.each<Mode>(['wrong-pid', 'missing-pid', 'stopped', 'wrong-credential', 'no-credential', 'bad-credential', 'timeout', 'closed', 'rpc-error', 'changed-lock'])('refuses %s without signaling or removing the lock', async mode => {
   const f = await fixture(mode);
   try {
     const before = await readdir(f.home);
@@ -89,6 +95,17 @@ it.each<Mode>(['wrong-pid', 'missing-pid', 'stopped', 'wrong-credential', 'no-cr
     expect(sleeper.signalCode).toBeNull();
     expect(await readdir(f.home)).toEqual(before);
     expect(JSON.parse(await readFile(join(f.home, 'daemon.pid'), 'utf8'))).toMatchObject({ pid });
+    await expect.poll(f.peers).toBe(0);
+  } finally { await f.close(); }
+});
+
+// devices 4.5 旧的也能停新的、新的也能停旧的. main 必败: it compared the protocol version and parsed the reply strictly.
+it('stops an owner of another protocol whose replies carry fields it does not know', async () => {
+  const f = await fixture('other-version');
+  try {
+    expect(await daemonStatus(f.home)).toMatchObject({ running: true, pid });
+    await expect(stopVerifiedOwner(f.home, f.lock)).resolves.toBeUndefined();
+    expect(f.requests()).toBe(3);
     await expect.poll(f.peers).toBe(0);
   } finally { await f.close(); }
 });

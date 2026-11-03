@@ -437,7 +437,7 @@ describe('provider-only group settings admission', () => {
   it('rejects a provider change after login expires and accepts it after login returns', async () => {
     backends['claude-agent'] = { ...fake('claude-agent', LISTS['claude-agent']!), loginStatus: async () => ({ state: 'signedOut', message: '' }) } as AgentBackend;
     const choice = { kind: 'provider' as const, provider: 'claude-agent' as const };
-    expect(messageOf(await save(project, choice))).toContain('尚未登录');
+    expect(messageOf(await save(project, choice))).toContain('没配置好');
     expect((await getProjectByName('demo'))?.judge).toBeUndefined();
     backends['claude-agent'] = fake('claude-agent', LISTS['claude-agent']!);
     expect((await save(project, choice)).kind).toBe('saved');

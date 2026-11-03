@@ -1,10 +1,10 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, expect, it, vi } from 'vitest';
 import { ConnectionError, RpcError, type VonvonClient } from '@vonvon/client';
 import {
-  agentIdSchema, groupIdSchema, jobIdSchema, membershipIdSchema, settingsReplySchema,
+  agentIdSchema, FULL_ACCESS_WARNING, groupIdSchema, jobIdSchema, membershipIdSchema, settingsReplySchema,
   type AdminSetupStatus, type Agent, type DesktopSnapshot, type Job, type Membership, type SettingsReply, type ToolState,
 } from '@vonvon/protocol';
 import { pickBot, withDaemon, type Daemon } from '../src/cli/daemon-client';
@@ -34,6 +34,8 @@ function harness(client: Partial<Record<'snapshot' | 'run' | 'admin' | 'settings
   return { close, connect, daemon, io: (json = false) => ({ json, write: (text: string) => { out += text; } }), out: () => out, clear: () => { out = ''; } };
 }
 const one = (agents = [agent('cli_a')], memberships: Membership[] = [], tools: ToolState[] = []) => async () => snapshot(agents, memberships, tools);
+/** devices 8.1: the entry point prints the message and exits with the kind's code (`commandFailure`). */
+const failure = (kind: string, message?: unknown, extra: object = {}) => expect.objectContaining({ kind, ...(message === undefined ? {} : { message }), ...extra });
 
 it('picks a bot by id or a unique name and lists the choices otherwise', () => {
   const [a, b, c] = [agent('cli_a'), agent('cli_b'), agent('cli_c', '支付')];
@@ -54,7 +56,7 @@ it('bot repair-dir says how many directories it recorded and which will be made 
   expect(h.out()).toBe('✓ 已按现在的位置重新记录「研发助手」的 2 个目录。\n另有 1 个目录不在了，下次用到时会重建一个空的。\n'
     + '同一个项目根目录下的 bot 也要各运行一次：vonvon bot repair-dir 测试；vonvon bot repair-dir 运维。\n');
   h.clear(); await runBotRepairDir('研发助手', h.io(true), repair);
-  expect(JSON.parse(h.out())).toEqual({ handle: '研发助手', recorded: 2, missing: 1, others: ['测试', '运维'] });
+  expect(JSON.parse(h.out())).toEqual({ ok: true, handle: '研发助手', recorded: 2, missing: 1, others: ['测试', '运维'] });
   expect(h.connect).not.toHaveBeenCalled();
 });
 
@@ -74,7 +76,7 @@ it('bot list and bot status show a bot paused alone, and every bot of a paused d
   await runBotList(h.io(), h.daemon);
   expect(h.out()).toBe('Vonvon Bot  cli_a  已暂停（10 分钟内崩溃了 3 次） · 未连接 · 0 个群\n另一个  cli_b  已启用 · 已连接 · 0 个群\n');
   h.clear(); await expect(runBotStatus('cli_a', h.io(), h.daemon)).rejects.toThrow();
-  expect(h.out().split('\n').slice(0, 2)).toEqual(['Vonvon Bot（cli_a）', '已暂停：10 分钟内崩溃了 3 次，没有自动重启。查完原因后在网页的状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。']);
+  expect(h.out().split('\n').slice(0, 2)).toEqual(['Vonvon Bot（cli_a）', '已暂停：10 分钟内崩溃了 3 次，没有自动重启。查完原因后在网页的状态与诊断页点「恢复运行」，或运行 vonvon bot enable cli_a。']);
   const host = snapshot([agent('cli_b', '另一个', { running: false, connection: 'disconnected' })]);
   const down = harness({ snapshot: async () => ({ ...host, application: { ...host.application, crashes: { paused: { since: 1, crashes: 4 }, records: [] } } }) });
   await runBotList(down.io(), down.daemon);
@@ -102,7 +104,7 @@ it('bot status prints the checklist with its links and next steps', async () => 
   await runBotStatus(undefined, h.io(), h.daemon);
   expect(admin).toHaveBeenCalledWith({ type: 'setupStatus', agentId: 'cli_a' });
   for (const line of ['Vonvon Bot（cli_a）', '✓ 飞书应用：凭据有效', '! 权限：还缺 2 项', '    - im:message:readonly', '    - im:resource', `    一键开权限：${setup.scopes.grantUrl}`,
-    '· 卡片回调：待验证', '    打开回调设置：https://open.feishu.cn/app/cli_a/event', '    在网页里点「我已配置」（vonvon open）', '✓ Codex：可用 · 0.156.1', '· 后台服务：不支持', '还有 4 步没完成。']) expect(h.out()).toContain(`${line}\n`);
+    '· 卡片回调：待验证', '    打开回调设置：https://open.feishu.cn/app/cli_a/event', '    运行 vonvon bot callback confirm cli_a', '✓ Codex：可用 · 0.156.1', '· 后台服务：不支持', '还有 4 步没完成。']) expect(h.out()).toContain(`${line}\n`);
   h.clear(); await runBotStatus('cli_a', h.io(true), h.daemon);
   const json = JSON.parse(h.out());
   expect(json.steps.map((step: { id: string }) => step.id)).toEqual(['credentials', 'scopes', 'connection', 'event', 'callback', 'publish', 'codex', 'claude', 'service']);
@@ -113,11 +115,14 @@ it('bot status still prints the connection and tool steps when the checklist rea
   const h = harness({ snapshot: one(undefined, [], [{ tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '0.156.1' }]), admin: async () => { throw new RpcError('internal', '飞书接口超时'); } });
   await expect(runBotStatus(undefined, h.io(), h.daemon)).rejects.toThrow('清单没有读全，稍后重新运行 vonvon bot status。');
   expect(h.out()).toBe(['Vonvon Bot（cli_a）', '! 飞书应用：检测失败', '    读取清单状态失败：飞书接口超时', '✓ 长连接：已连接', '✓ Codex：可用 · 0.156.1',
-    '· Claude：无法确认', '    在网页里点「去本机环境」（vonvon open）', '· 后台服务：不支持', '    这台电脑不支持后台服务。', ''].join('\n'));
-  h.clear(); await expect(runBotStatus(undefined, h.io(true), h.daemon)).rejects.toThrow('清单没有读全');
-  const json = JSON.parse(h.out());
+    '· Claude：无法确认', '    运行 vonvon env scan', '· 后台服务：不支持', '    这台电脑不支持后台服务。', ''].join('\n'));
+  // main 必败: --json printed a success line before exiting 1; what was read now rides on the failure
+  h.clear(); const thrown = await runBotStatus(undefined, h.io(true), h.daemon).catch((error: unknown) => error);
+  expect(thrown).toEqual(failure('failed', '清单没有读全，稍后重新运行 vonvon bot status。'));
+  expect(h.out()).toBe('');
+  const json = (thrown as { partial: { steps: { id: string }[] } }).partial;
   expect(json).toMatchObject({ problem: '读取清单状态失败：飞书接口超时', ready: false });
-  expect(json.steps.map((step: { id: string }) => step.id)).toEqual(['credentials', 'connection', 'codex', 'claude', 'service']);
+  expect(json.steps.map(step => step.id)).toEqual(['credentials', 'connection', 'codex', 'claude', 'service']);
 });
 
 it('bot status prints the service step after the tools without counting it', async () => {
@@ -129,9 +134,9 @@ it('bot status prints the service step after the tools without counting it', asy
   const status = (application: DesktopSnapshot['application']) => async () => ({ ...snapshot([agent('cli_a')], [], [{ tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '0.156.1' }]), application });
   const mac = harness({ snapshot: status({ platform: 'macos', version: '1', loginItem: false, dataPath: '/x', service: { state: 'not-installed', skipped: false } }), admin: async () => ({ kind: 'setupStatus', status: setup }) });
   await runBotStatus(undefined, mac.io(), mac.daemon);
-  expect(mac.out()).toContain(['✓ Codex：可用 · 0.156.1', '· Claude：无法确认', '    在网页里点「去本机环境」（vonvon open）',
+  expect(mac.out()).toContain(['✓ Codex：可用 · 0.156.1', '· Claude：无法确认', '    运行 vonvon env scan',
     '! 登录电脑时自动运行 Bot（推荐）：推荐打开', '    打开后 Bot 跑在 macOS 的后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。',
-    '    运行 vonvon service install', '    在网页里点「跳过」（vonvon open）', '全部就绪。', ''].join('\n'));
+    '    运行 vonvon service install', '    运行 vonvon service skip', '全部就绪。', ''].join('\n'));
   mac.clear(); await runBotStatus(undefined, mac.io(true), mac.daemon);
   expect(JSON.parse(mac.out())).toMatchObject({ ready: true, steps: expect.arrayContaining([expect.objectContaining({ id: 'service', done: false })]) });
   const linux = harness({ snapshot: status({ platform: 'linux', version: '1', loginItem: false, dataPath: '/x', service: { state: 'not-installed', skipped: false } }), admin: async () => ({ kind: 'setupStatus', status: setup }) });
@@ -178,13 +183,12 @@ function scanner(jobs: Job[], o: { reply?: unknown; dropAt?: number; onQr?: () =
     watchSnapshots: (next: (value: DesktopSnapshot) => void) => { listener = next; return () => { listener = undefined; }; },
     onError: (next: (error: Error) => void) => { lost = next; return () => { lost = undefined; }; },
   } as never);
-  const exitCode = vi.fn();
   const deps: Partial<AddDependencies> = {
-    tty: o.tty ?? true, exitCode,
+    tty: o.tty ?? true,
     qr: async url => { setTimeout(() => o.onQr?.(), 0); return `[QR ${url}]\n`; },
     onInterrupt: handler => { interrupt = handler; return () => { interrupt = undefined; }; },
   };
-  return { ...h, run, exitCode, add: () => runBotAdd(h.io(), h.daemon, deps), interrupt: () => interrupt?.(), interrupted: () => interrupt === undefined };
+  return { ...h, run, add: (json = false) => runBotAdd(h.io(json), h.daemon, deps), interrupt: () => interrupt?.(), interrupted: () => interrupt === undefined };
 }
 
 it('bot add draws the QR, draws it again for a new link, and prints the saved bot', async () => {
@@ -195,7 +199,6 @@ it('bot add draws the QR, draws it again for a new link, and prints the saved bo
     '识别到国际版租户，改用 larksuite.com。', '用飞书 App 扫下面的二维码，建一个新的飞书应用（14:32 前有效）：', '[QR https://open.larksuite.com/q?a=\u0007]', '扫不了的话，在手机飞书里打开：https://open.larksuite.com/q?a=', '等你在飞书里确认…（Ctrl-C 取消）',
     '✓ 已保存 Bot：新[2Jbot（cli_new），已启用。', '清单没读到：读取清单状态失败：飞书接口超时。稍后运行 vonvon bot status。', ''].join('\n'));
   expect(s.run).toHaveBeenCalledWith({ type: 'registerAgent' });
-  expect(s.exitCode).not.toHaveBeenCalled();
   expect(s.interrupted()).toBe(true);
   expect(s.close).toHaveBeenCalledTimes(1);
   const setup: AdminSetupStatus = {
@@ -208,24 +211,46 @@ it('bot add draws the QR, draws it again for a new link, and prints the saved bo
 });
 
 it('bot add exits 1 for a failed, expired or busy scan and one cancelled elsewhere', async () => {
-  await expect(scanner([{ id: jobId, type: 'registerAgent', phase: 'failed', code: 'expired_token', message: '二维码已过期，请重新生成。' }]).add()).rejects.toThrow(/^二维码已过期，请重新生成。重新运行 vonvon bot add。$/);
-  await expect(scanner([{ id: jobId, type: 'registerAgent', phase: 'failed', code: 'access_denied', message: '用户拒绝了授权。' }]).add()).rejects.toThrow(/^用户拒绝了授权。$/);
-  await expect(scanner([qr('https://x'), { id: jobId, type: 'registerAgent', phase: 'cancelled', message: '已取消扫码。' }]).add()).rejects.toThrow('扫码被取消了：可能在网页里又开了一次注册（同一时间只能有一个）。');
-  await expect(scanner([], { reply: { kind: 'refused', code: 'registration_busy', message: '已有注册正在保存，请稍后重试。' } }).add()).rejects.toThrow(/^已有注册正在保存，请稍后重试。$/);
+  await expect(scanner([{ id: jobId, type: 'registerAgent', phase: 'failed', code: 'expired_token', message: '二维码已过期，请重新生成。' }]).add()).rejects.toEqual(failure('failed', '二维码已过期，请重新生成。重新运行 vonvon bot add。', { reason: 'expired_token' }));
+  await expect(scanner([{ id: jobId, type: 'registerAgent', phase: 'failed', code: 'access_denied', message: '用户拒绝了授权。' }]).add()).rejects.toEqual(failure('failed', '用户拒绝了授权。'));
+  await expect(scanner([qr('https://x'), { id: jobId, type: 'registerAgent', phase: 'cancelled', message: '已取消扫码。' }]).add()).rejects.toEqual(failure('failed', '扫码被取消了：可能在网页里又开了一次注册（同一时间只能有一个）。'));
+  await expect(scanner([], { reply: { kind: 'refused', code: 'registration_busy', message: '已有注册正在保存，请稍后重试。' } }).add()).rejects.toEqual(failure('failed', '已有注册正在保存，请稍后重试。', { reason: 'registration_busy' }));
+});
+
+// devices 6.3 (devices-ui-3): another client scanning is refused as the other bot subcommands are, 4; nothing is cancelled. main 必败: 1
+it('bot add exits 4 while another client scans, and cancels nothing', async () => {
+  const message = '另一台设备「Clay 的 MacBook」正在扫码添加 Bot，等它完成后再试。';
+  const busy = scanner([], { reply: { kind: 'refused', code: 'job_running', message } });
+  await expect(busy.add()).rejects.toEqual(failure('refused', message, { reason: 'job_running' }));
+  expect(busy.run.mock.calls.map(([command]) => command)).toEqual([{ type: 'registerAgent' }]);
 });
 
 it('bot add cancels its scan on Ctrl-C, refuses a pipe, and tells a dropped connection before and after the QR', async () => {
   const s = scanner([qr('https://x')], { onQr: () => s.interrupt() });
-  await s.add();
+  await expect(s.add()).rejects.toEqual(failure('interrupted', '已取消扫码。'));
   expect(s.run.mock.calls.map(([command]) => command)).toEqual([{ type: 'registerAgent' }, { type: 'cancelJob', jobId }]);
-  expect(s.out()).toMatch(/等你在飞书里确认…（Ctrl-C 取消）\n已取消扫码。\n$/);
-  expect(s.exitCode).toHaveBeenCalledWith(130);
+  expect(s.out()).toMatch(/等你在飞书里确认…（Ctrl-C 取消）\n$/);
   expect(s.close).toHaveBeenCalledTimes(1);
   const piped = scanner([], { tty: false });
-  await expect(piped.add()).rejects.toThrow('vonvon bot add 要在终端里运行：二维码打进日志会被别人扫走。没有终端的话，用网页注册（vonvon open --print）。');
+  await expect(piped.add()).rejects.toEqual(failure('bad-args', 'vonvon bot add 要在终端里运行：二维码打进日志会被别人扫走。脚本里用 vonvon bot add --json（输出别进日志），或者用网页注册（vonvon open --print）。'));
   expect(piped.connect).not.toHaveBeenCalled();
-  await expect(scanner([qr('https://x')], { dropAt: 0 }).add()).rejects.toThrow('和 daemon 的连接断了，扫码已经取消。重新运行 vonvon bot add。');
-  await expect(scanner([qr('https://x'), qr('https://x')], { dropAt: 1 }).add()).rejects.toThrow('不知道扫码有没有完成：运行 vonvon bot list 看看。');
+  // main 必败: both exited 1; a drop before the QR is a lost connection (3), after it the scan may have finished (6)
+  // devices-ui-3: a scan that started is kept 60 seconds after the drop, so it is not said to be cancelled. main 必败
+  await expect(scanner([qr('https://x')], { dropAt: 0 }).add()).rejects.toEqual(failure('connection', '和 daemon 的连接断了。扫码任务要是已经开了，会再留 60 秒，之后自动取消；重新运行 vonvon bot add 会重新开始。'));
+  await expect(scanner([qr('https://x'), qr('https://x')], { dropAt: 1 }).add()).rejects.toEqual(failure('outcome-unknown', '不知道扫码有没有完成：运行 vonvon bot list 看看。'));
+});
+
+// main 必败: bot add refused anything but a terminal, --json included
+it('bot add --json runs without a terminal: one JSON line per step and QR link, then the result', async () => {
+  const s = scanner([{ id: jobId, type: 'registerAgent', phase: 'running', message: '正在创建扫码会话。' }, qr('https://open.feishu.cn/q?a=1'), qr('https://open.feishu.cn/q?a=1'),
+    qr('https://open.feishu.cn/q?a=1', 'domain_switched'), { id: jobId, type: 'registerAgent', phase: 'succeeded', message: 'Bot 已保存。', agentId: agentIdSchema.parse('cli_new') }], { tty: false });
+  await s.add(true);
+  const lines = s.out().trimEnd().split('\n').map(line => JSON.parse(line) as Record<string, unknown>);
+  expect(lines.map(line => line.event)).toEqual(['phase', 'qr', 'qr', 'result']);
+  expect(lines[1]).toEqual({ event: 'qr', url: 'https://open.feishu.cn/q?a=1', expiresAt: new Date(2026, 9, 15, 14, 32).getTime() });
+  expect(lines[2]).toMatchObject({ event: 'qr', status: 'domain_switched' });
+  expect(lines[3]).toMatchObject({ ok: true, event: 'result', agentId: 'cli_new', bot: { id: 'cli_new' }, problem: '读取清单状态失败：飞书接口超时' });
+  expect(s.out()).not.toContain('[QR');
 });
 
 it('group joined follows pages, stops on a repeated cursor or at 20 pages', async () => {
@@ -235,7 +260,7 @@ it('group joined follows pages, stops on a repeated cursor or at 20 pages', asyn
   const h = harness({ snapshot: one(), run });
   await runGroupJoined({}, h.io(true), h.daemon);
   expect(run).toHaveBeenCalledTimes(2);
-  expect(JSON.parse(h.out())).toEqual({ groups: [{ id: 'oc_1', name: '一', bound: true }, { id: 'oc_2', name: '二', bound: false }], complete: true });
+  expect(JSON.parse(h.out())).toEqual({ ok: true, groups: [{ id: 'oc_1', name: '一', bound: true }, { id: 'oc_2', name: '二', bound: false }], complete: true });
   let page = 0;
   const endless = harness({ snapshot: one(), run: async () => ({ kind: 'groups', groups: [], nextCursor: `c${++page}` }) });
   await runGroupJoined({}, endless.io(), endless.daemon);
@@ -258,7 +283,7 @@ it('group pending reports the daemon refusal and still closes', async () => {
 
 it('group bind sends an absolute folder, the chosen token and the pending name', async () => {
   const home = await mkdtemp(join(tmpdir(), 'vonvon-cli-admin-')); dirs.push(home);
-  await mkdir(join(home, 'work', 'pay'), { recursive: true }); await writeFile(join(home, 'work', 'file'), '');
+  await mkdir(join(home, 'work', 'pay'), { recursive: true });
   const host = { cwd: join(home, 'work'), home, platform: 'linux' as const };
   const token = '7d1f1a6e-3b8e-4d0c-9a51-2f6a0e4b9c11';
   const run = vi.fn(async (command: { type: string }) => command.type === 'listPendingGroups'
@@ -283,8 +308,7 @@ it('group bind sends an absolute folder, the chosen token and the pending name',
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'later' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项');
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'toString' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项');
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'multi', response: 'yes' }, offline.io(), offline.daemon, host)).rejects.toThrow('--response 只能是 mention');
-  await expect(runGroupBind('oc_pay', { folder: 'missing', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow(`文件夹不存在：${join(home, 'work', 'missing')}`);
-  await expect(runGroupBind('oc_pay', { folder: 'file', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow('不是文件夹：');
+  // cli-3-groups: a folder that is not there is the daemon's to say (test/cli-group.test.ts), not stat on this computer
   await expect(runGroupBind('chat_pay', { folder: 'pay', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow('群 id 应该以 oc_ 开头。');
   expect(offline.connect).not.toHaveBeenCalled();
 
@@ -405,11 +429,18 @@ it('settings set saves with the section revision and explains each refusal', asy
   expect(settings).toHaveBeenNthCalledWith(1, { type: 'read', scope });
   expect(settings).toHaveBeenNthCalledWith(2, { type: 'save', edit: { scope, section: 'permission', revision: 'rev-mode', patch: { mode: 'full' } } });
   expect(h.out()).toBe('已保存 permission.mode = full。\n下一轮生效。\n');
+  // devices-ui-2 4.10: a group turned 完全访问 prints the warning after the effects, and keeps it in --json.
+  results.unshift({ kind: 'saved', section: { scope, section: 'permission', value: section({ mode: 'full' }) }, effects: [], warnings: [FULL_ACCESS_WARNING] });
+  h.clear(); await runSettingsSet(['permission.mode=full'], { group: 'oc_pay' }, h.io(), h.daemon);
+  expect(h.out()).toBe(`已保存 permission.mode = full。\n${FULL_ACCESS_WARNING}\n`);
+  results.unshift({ kind: 'saved', section: { scope, section: 'permission', value: section({ mode: 'full' }) }, effects: [], warnings: [FULL_ACCESS_WARNING] });
+  h.clear(); await runSettingsSet(['permission.mode=full'], { group: 'oc_pay' }, h.io(true), h.daemon);
+  expect(JSON.parse(h.out())).toMatchObject({ warnings: [FULL_ACCESS_WARNING] });
   for (const message of ['这项设置刚在别处改过，没有保存。先读取当前版本再修改。', '没有保存：mode：后端不支持此权限档位', '这个 Bot 没在运行，运行起来后才能改设置']) {
     await expect(runSettingsSet(['permission.mode=full'], { group: 'pay' }, h.io(), h.daemon)).rejects.toThrow(message);
   }
   await expect(runSettingsSet(['permission.mode=full'], { group: 'pay', session: 'omt_x' }, h.io(), h.daemon)).rejects.toThrow('--group 和 --session 只能选一个。');
-  expect(h.connect).toHaveBeenCalledTimes(4);
+  expect(h.connect).toHaveBeenCalledTimes(6);
 });
 
 it('a blank --session is an input error, a bad request is never sent, and only an unreadable reply blames the version', async () => {

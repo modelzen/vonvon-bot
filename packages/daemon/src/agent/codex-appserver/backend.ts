@@ -882,11 +882,11 @@ export class CodexAppServerBackend implements AgentBackend {
   async loginStatus(opts?: { refresh?: boolean }): Promise<import('../types').BackendLogin> {
     try {
       const account = await utilityRequest<{ requiresOpenaiAuth: boolean; account: unknown }>('account/read', { refreshToken: opts?.refresh === true });
-      if (account.requiresOpenaiAuth === false) return { state: 'notRequired', message: '当前 Provider 不需要 OpenAI 登录。', account: {kind: 'api', apiProvider: 'custom'} };
-      if (account.requiresOpenaiAuth === true && account.account && typeof account.account === 'object') return { state: 'signedIn', message: '已登录。', account: codexAccountMetadata(account.account) ?? {kind: 'unknown'} };
-      if (account.requiresOpenaiAuth === true && account.account === null) return { state: 'signedOut', message: '尚未登录。' };
+      if (account.requiresOpenaiAuth === false) return { state: 'notRequired', message: '用的是自定义 Provider，可用。', account: {kind: 'api', apiProvider: 'custom'} };
+      if (account.requiresOpenaiAuth === true && account.account && typeof account.account === 'object') return { state: 'signedIn', message: '可用（OpenAI 账号）。', account: codexAccountMetadata(account.account) ?? {kind: 'unknown'} };
+      if (account.requiresOpenaiAuth === true && account.account === null) return { state: 'signedOut', message: '没配置好。' };
     } catch { /* preserve an unknown state; callers must not treat it as signed in */ }
-    return { state: 'unknown', message: '无法确认 Codex 登录状态。' };
+    return { state: 'unknown', message: '无法确认 Codex 的配置。' };
   }
 
   async listModels(opts?: { refresh?: boolean }): Promise<ModelInfo[]> {

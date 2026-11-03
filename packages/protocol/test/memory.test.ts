@@ -14,6 +14,8 @@ describe("memory requests", () => {
       { type: "move", scope: { kind: "bot", botId: "cli_a" }, itemId: "x", revision: 1, to: { projectId: "prj_0a1b2c3d" } },
       { type: "branchRename", scope: project, from: "发版", to: "上线" },
       { type: "branchMerge", scope: project, from: "发版", into: "决定" },
+      { type: "branchDelete", scope: project, name: "发版" },
+      { type: "branchDelete", scope: project, name: "发版", expected: 0 },
       { type: "confirm", scope: project, itemId: "x", revision: 1 },
       { type: "purge", scope: project, itemId: "x" },
       { type: "undo", scope: project, eventId: "e" },
@@ -29,6 +31,9 @@ describe("memory requests", () => {
     expect(memoryRequestSchema.safeParse({ type: "add", scope: project, text: "x", extra: 1 }).success).toBe(false);
     expect(memoryRequestSchema.safeParse({ type: "list" }).success).toBe(false);
     expect(memoryRequestSchema.safeParse({ type: "branchMerge", scope: project, from: "a" }).success).toBe(false);
+    // C5: a count is a whole number, and a branch has a name
+    expect(memoryRequestSchema.safeParse({ type: "branchDelete", scope: project, name: "a", expected: -1 }).success).toBe(false);
+    expect(memoryRequestSchema.safeParse({ type: "branchDelete", scope: project, name: "" }).success).toBe(false);
   });
 
   it("travels inside the request and reply envelopes", () => {

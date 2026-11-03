@@ -84,7 +84,7 @@ describe('a queued turn whose session went before it started', () => {
     await until(() => expect(held).toBe(true));
     const closing = by === 'the shutdown' ? current!.orchestrator.shutdown() : evict();
     if (by === 'a settings change') await closing;
-    expect(run.t.close).toHaveBeenCalledOnce();
+    await until(() => expect(run.t.close).toHaveBeenCalledOnce());
     hold.resolve();
     if (result) await expect(result).resolves.toMatchObject(by === 'the shutdown' ? SHUTDOWN : SKIPPED);
     await closing;
@@ -110,7 +110,7 @@ describe('a scheduled turn that is its session\'s first', () => {
     const result = current!.runScheduled(job());
     await until(() => expect(held).toBe(true));
     await evict();
-    expect(run.t.close).toHaveBeenCalledOnce();
+    await until(() => expect(run.t.close).toHaveBeenCalledOnce());
     hold.resolve();
     await expect(result).resolves.toEqual(SKIPPED);
     expect(run.consumed).toHaveLength(0);
@@ -134,7 +134,7 @@ describe('a scheduled turn whose session went while it ran', () => {
     const result = current!.runScheduled(job());
     await until(() => expect(fake.createCard).toHaveBeenCalledOnce());
     const closing = current!.orchestrator.shutdown();
-    expect(run.t.close).toHaveBeenCalled();
+    await until(() => expect(run.t.close).toHaveBeenCalled());
     card.resolve('card');
     await expect(result).resolves.toMatchObject(SHUTDOWN);
     await closing;
@@ -154,7 +154,7 @@ describe('a scheduled turn that failed on its own', () => {
     await until(() => expect(fake.final).toHaveBeenCalledOnce());
     const closing = by === 'the shutdown' ? current!.orchestrator.shutdown() : evict();
     if (by === 'a settings change') await closing;
-    expect(run.t.close).toHaveBeenCalled();
+    await until(() => expect(run.t.close).toHaveBeenCalled());
     hold.resolve(true);
     await expect(result).resolves.toMatchObject({ status: 'failed', error: expect.stringContaining('model overloaded'), counts: true });
     await closing;

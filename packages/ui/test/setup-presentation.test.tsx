@@ -71,7 +71,7 @@ it('needs Codex or Claude installed, signed in and new enough', () => {
   const old = toolSteps([tool({tool: 'codex', compatibility: {status: 'tooOld', minimum: '0.156.1', verified: '0.156.1'}}), tool({tool: 'claude', authentication: 'signedOut'})]);
   expect(old.ready).toBe(false);
   expect(old.steps[0]).toMatchObject({status: '版本太旧 · 0.162.1', detail: '最低要 0.156.1，请在本机环境更新。'});
-  expect(old.steps[1]?.actions).toEqual([{kind: 'claudeLogin', label: '检查登录'}]);
+  expect(old.steps[1]?.actions).toEqual([{kind: 'claudeLogin', label: '检查配置'}]);
   const missing = toolSteps([tool({tool: 'codex', installation: 'missing', authentication: 'unknown', version: null})]);
   expect(missing.steps[0]?.detail).toContain('Homebrew');
   expect(toolSteps([tool({tool: 'codex', authentication: 'signedOut'})]).steps[0]?.actions).toEqual([{kind: 'environment', label: '查看本机环境'}]);
@@ -85,8 +85,21 @@ const snapshot = (agents: Agent[]): DesktopSnapshot => ({
   application: {platform: 'macos', version: 'test', loginItem: false, dataPath: '/tmp/test'},
 });
 const render = (agents: Agent[], application: Partial<DesktopSnapshot['application']> = {}) => renderToStaticMarkup(<ClientProvider client={client}>
-  <SetupChecklist snapshot={{...snapshot(agents), application: {...snapshot(agents).application, ...application}}} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
+  <SetupChecklist snapshot={{...snapshot(agents), application: {...snapshot(agents).application, ...application}}} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}}/>
 </ClientProvider>);
+
+// owner 2026-11-02: the 连接与设置 page's tool steps said 去本机环境 of a remote device too
+it('names a remote device in its tool steps, and keeps 本机 for this computer', () => {
+  const remote = {id: 'test-remote', name: '机房 Linux', isRemote: true, platform: 'linux', version: '0.9.0', mode: 'full', capabilities: ['device']};
+  const page = (device?: typeof remote) => renderToStaticMarkup(<ClientProvider client={client} device={device}>
+    <SetupChecklist snapshot={snapshot([])} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}}/>
+  </ClientProvider>);
+  const html = page(remote);
+  expect(html).toContain('可以在「机房 Linux」的「工具与连接」里装托管副本（要用「机房 Linux」上的 Node.js 和 npm）。');
+  expect(html).toContain('>查看「机房 Linux」的工具<');
+  expect(html).not.toContain('本机');
+  expect(page()).toContain('可以在本机环境里装托管副本（要用本机的 Node.js 和 npm）。');
+});
 
 it('starts a new machine with the tools and the scan step', () => {
   const html = render([]);
@@ -101,7 +114,7 @@ it('starts a new machine with the tools and the scan step', () => {
 
 it('starts the welcome with Provider preparation before Bot scanning', () => {
   const html = renderToStaticMarkup(<ClientProvider client={client}>
-    <WelcomeSetup snapshot={snapshot([])} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
+    <WelcomeSetup snapshot={snapshot([])} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}}/>
   </ClientProvider>);
   expect(html).toContain('先准备一个 Provider');
   expect(html).toContain('准备 Provider');
@@ -116,7 +129,7 @@ it('starts the welcome with Provider preparation before Bot scanning', () => {
 
 it('preserves existing Bot Feishu checks while its Provider still needs attention', () => {
   const html = renderToStaticMarkup(<ClientProvider client={client}>
-    <WelcomeSetup snapshot={snapshot([agent])} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenGroups={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
+    <WelcomeSetup snapshot={snapshot([agent])} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenGroups={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}}/>
   </ClientProvider>);
   expect(html).toContain('小助手');
   expect(html).toContain('正在检测…');
@@ -129,13 +142,13 @@ it('says 检查中 for Claude until its login is asked, never 无法确认 befor
   const claude = tool({tool: 'claude', authentication: 'unknown', version: '0.3.296'});
   expect(toolSteps([claude], {claudeChecking: true}).steps[1]).toMatchObject({status: '检查中 · 0.3.296', tone: 'neutral', done: false});
   // The CLI's `vonvon bot status` asks nothing, so it keeps saying it cannot tell.
-  expect(toolSteps([claude]).steps[1]?.status).toBe('登录状态无法确认 · 0.3.296');
-  expect(toolSteps([{...claude, authentication: 'signedOut'}], {claudeChecking: true}).steps[1]?.status).toBe('未登录 · 0.3.296');
+  expect(toolSteps([claude]).steps[1]?.status).toBe('无法确认配置 · 0.3.296');
+  expect(toolSteps([{...claude, authentication: 'signedOut'}], {claudeChecking: true}).steps[1]?.status).toBe('没配置好 · 0.3.296');
   const html = renderToStaticMarkup(<ClientProvider client={client}>
-    <SetupChecklist snapshot={{...snapshot([]), tools: [claude]}} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
+    <SetupChecklist snapshot={{...snapshot([]), tools: [claude]}} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}}/>
   </ClientProvider>);
   expect(html).toContain('检查中 · 0.3.296');
-  expect(html).not.toContain('登录状态无法确认');
+  expect(html).not.toContain('无法确认配置');
 });
 
 it('lists each bot with the admin-review note while its first read is pending', () => {
@@ -288,7 +301,7 @@ it('puts the service step in its own group after the tools', () => {
 it('shows the Linux group between the tools and the service, with commands in a block', () => {
   const html = renderToStaticMarkup(<ClientProvider client={client}>
     <SetupChecklist snapshot={{...snapshot([]), tools: [tool({tool: 'claude', sandbox: {bwrap: null, socat: true, userns: 'unchecked'}})], application: {...snapshot([]).application, platform: 'linux', service: service()}}}
-      ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
+      ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}}/>
   </ClientProvider>);
   expect(html.indexOf('后端')).toBeLessThan(html.indexOf('Linux 上的权限'));
   expect(html.indexOf('Linux 上的权限')).toBeLessThan(html.indexOf('后台运行'));
@@ -305,7 +318,7 @@ it('shows connection settings without first-use progress after a group is bound'
   current.tools = [tool({tool: 'codex', authentication: 'signedOut'})];
   current.memberships = [{id: 'bound', agentId: agent.id, groupId: 'oc_bound'}] as DesktopSnapshot['memberships'];
   const html = renderToStaticMarkup(<ClientProvider client={client}>
-    <WelcomeSetup snapshot={current} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenGroups={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
+    <WelcomeSetup snapshot={current} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenGroups={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}}/>
   </ClientProvider>);
   expect(html).toContain('飞书连接');
   expect(html).not.toContain('连接到群聊');

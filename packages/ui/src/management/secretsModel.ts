@@ -250,17 +250,17 @@ export const unreadNotes = (view: Pick<SecretsView, 'botsUnreadable' | 'unreadBo
 /**
  * The removal's confirmation: who chose it, in two lists, or why no one is listed (product.md 3.1 第 9 条). When no
  * one is listed because of what could not be read, the lead says it once, with where the log says why, in place of
- * that note.
+ * that note. `place`: where the key is kept, 本机 or 「X」上 (`placeOf`).
  */
-export function removalCopy(service: SecretService, view: Pick<SecretsView, 'botsUnreadable' | 'unreadBots'>) {
+export function removalCopy(service: SecretService, view: Pick<SecretsView, 'botsUnreadable' | 'unreadBots'>, place = '本机') {
   const active = service.inUse.filter(use => !use.notSmart);
   const notSmart = service.inUse.filter(use => use.notSmart);
   const unknown = service.inUse.length ? undefined
     : view.botsUnreadable ? {text: 'Bot 清单读不了，不知道谁选了它', log: BOTS_LOG}
       : view.unreadBots ? {text: `有 ${view.unreadBots} 个 Bot 的设置读不了，不知道它们选没选它`, log: BOT_LOG} : undefined;
   return {
-    description: service.status === 'invalid' ? '存着的这串不能用，现在已经按没填处理。只删本机存的这一份。'
-      : `${service.last4 ? `末四位 ${service.last4}。` : ''}只删本机存的这一份，${service.displayName} 那边的 key 还在。`,
+    description: service.status === 'invalid' ? `存着的这串不能用，现在已经按没填处理。只删${place}存的这一份。`
+      : `${service.last4 ? `末四位 ${service.last4}。` : ''}只删${place}存的这一份，${service.displayName} 那边的 key 还在。`,
     lead: unknown ? `${unknown.text}；${unknown.log}选了它的飞书群删了以后${MEANWHILE}，重新填就恢复。`
       : !service.inUse.length ? '现在没有 Bot 或飞书群选它，删了不影响任何群。'
         : !active.length ? undefined
@@ -274,8 +274,9 @@ export function removalCopy(service: SecretService, view: Pick<SecretsView, 'bot
 
 /** The 决策模型的 key row names up to four of those who chose it, else three and counts them all; the 密钥 page lists them (多角度审查 B3). */
 const NAMED = 3;
-/** The 决策模型的 key row on the 状态与诊断 page (product.md 3.1 第 8 条): always there, a problem only when someone chose it. */
-export function keyDiagnosis(service: SecretService, view: Pick<SecretsView, 'botsUnreadable' | 'unreadBots'>): {
+/** The 决策模型的 key row on the 状态与诊断 page (product.md 3.1 第 8 条): always there, a problem only when someone chose it.
+ * `place` as for `removalCopy`. */
+export function keyDiagnosis(service: SecretService, view: Pick<SecretsView, 'botsUnreadable' | 'unreadBots'>, place = '本机'): {
   status: string; tone: Tone; description: string; action?: {label: string; to: 'secrets' | 'logs'};
 } {
   const named = service.inUse.length > NAMED + 1 ? service.inUse.slice(0, NAMED) : service.inUse;
@@ -289,7 +290,7 @@ export function keyDiagnosis(service: SecretService, view: Pick<SecretsView, 'bo
     case 'set': return {status: `${service.displayName} 已填${service.last4 ? ` ••••${service.last4}` : ''}`, tone: 'success',
       description: `${used ? `选了 ${choice(service)} 的：${who}。` : `${nobody}。`}${notes}`};
     case 'missing': return used
-      ? {status: `还没填 ${service.displayName} 的 key`, tone: 'warning', description: `${chose}，本机还没填它的 key。填之前${meanwhile}${notes}`, action: {label: '去填', to: 'secrets'}}
+      ? {status: `还没填 ${service.displayName} 的 key`, tone: 'warning', description: `${chose}，${place}还没填它的 key。填之前${meanwhile}${notes}`, action: {label: '去填', to: 'secrets'}}
       : {status: `${service.displayName} 没填`, tone: 'neutral', description: `${nobody}，用不着它的 key。${notes}`, action: {label: '去填', to: 'secrets'}};
     case 'invalid': return {status: '存着的 key 不能用', tone: used ? 'danger' : 'warning', action: {label: '去重新填', to: 'secrets'},
       description: `${used ? `${chose}，但` : ''}存着的 ${service.displayName} 的 key 不是一串可见字符，判断时当没填。${used ? `重新填之前${meanwhile}` : `${nobody}。`}${notes}`};

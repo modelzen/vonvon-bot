@@ -57,7 +57,7 @@ describe('new group configuration admission',()=>{
     expect(deps.backendFor.mock.calls.every(([id])=>id==='codex-appserver')).toBe(true);
     deps.readJudgeModels.mockResolvedValue({defaultProvider:'claude-agent',byProvider:{}});
     deps.backendFor.mockImplementation(id=>({peekModels:()=>id==='claude-agent'?[]:models,listModels:vi.fn(async()=>[]),loginStatus:vi.fn(async()=>({state:'signedOut' as 'signedIn'|'signedOut',message:''}))}));
-    await expect(prepareNewGroupSettings(input,deps)).rejects.toThrow('尚未登录');
+    await expect(prepareNewGroupSettings(input,deps)).rejects.toThrow('没配置好');
   });
   it('keeps a cross-provider decision separate from the working model',async()=>{
     const deps=helper();
@@ -131,6 +131,6 @@ describe('new group configuration admission',()=>{
   it('rejects a selected Provider after its login expires', async()=>{
     const deps=helper();
     deps.backendFor.mockImplementation(()=>({peekModels:()=>models,listModels:vi.fn(async()=>models),loginStatus:vi.fn(async()=>({state:'signedOut' as 'signedIn'|'signedOut',message:''}))}));
-    await expect(prepareNewGroupSettings({backend:'codex-appserver',kind:'smart',judge:{kind:'provider',provider:'claude-agent'}},deps)).rejects.toThrow('尚未登录');
+    await expect(prepareNewGroupSettings({backend:'codex-appserver',kind:'smart',judge:{kind:'provider',provider:'claude-agent'}},deps)).rejects.toThrow('没配置好');
   });
 });

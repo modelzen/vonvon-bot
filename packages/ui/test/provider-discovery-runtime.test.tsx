@@ -9,7 +9,7 @@ vi.mock('react', async original => ({...await original<typeof import('react')>()
   useCallback: (fn: unknown) => fn,
   useEffect: (effect: () => (() => void) | void, deps: unknown[]) => {const i = h.ei++; const old = h.effects[i]; if (old && deps.every((value, index) => Object.is(value, old.deps[index]))) return; h.pending.push(() => {old?.cleanup?.(); h.effects[i] = {deps, cleanup: effect()};});},
 }));
-vi.mock('../src/client-context', () => ({useClient: () => h.client}));
+vi.mock('../src/client-context', async original => ({...await original<typeof import('../src/client-context')>(), useActiveDevice: () => ({id: 'local', isRemote: false, name: '这台电脑', mode: 'full', capabilities: []}), useClient: () => h.client}));
 const tools = (auth = 'unknown') => [
   {tool: 'codex', installation: 'installed', authentication: 'signedIn'},
   {tool: 'claude', installation: 'installed', authentication: auth},
@@ -46,7 +46,7 @@ it('keeps signed-out Claude gated and provides login guidance', async () => {
   h.client.environment.mockImplementation(async command => command.type === 'backendCatalog' ? catalog : {...signedIn, state: 'signedOut'});
   render(tools()); await flush(); const result = render(tools());
   expect(result.providers.map(provider => provider.id)).toEqual(['codex-appserver']);
-  expect(result.message).toContain('尚未登录'); expect(result.message).toContain('Provider 页面');
+  expect(result.message).toContain('Claude 还没配置好'); expect(result.message).toContain('账号或自定义 API 都行');
 });
 it.each(['refused', 'throw'])('retains Codex on Claude %s and allows a forced explicit retry', async failure => {
   let failed = true;
@@ -58,7 +58,7 @@ it.each(['refused', 'throw'])('retains Codex on Claude %s and allows a forced ex
   });
   render(tools()); await flush(); let result = render(tools());
   expect(result.providers.map(provider => provider.id)).toEqual(['codex-appserver']);
-  expect(result.message).toContain('Claude 登录检查失败');
+  expect(result.message).toContain('Claude 的配置检查失败');
   for (let i = 0; i < 4; i++) {render(tools()); await flush();}
   expect(probes()).toHaveLength(1);
   failed = false; result.retry(); render(tools()); await flush(); result = render(tools());

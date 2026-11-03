@@ -17,13 +17,26 @@ export async function writeFileAtomic(filePath: string, data: string | NodeJS.Ar
         await file.sync();
       } finally { await file.close(); }
     } else await writeFile(temporary, data, { mode: 0o600 });
-    await rename(temporary, filePath);
+    await renameOverReaders(temporary, filePath);
   } catch (error) {
     await rm(temporary, { force: true });
     throw error;
   }
   // The rename is the commit point: the new content is in place, so nothing after it may reject.
   if (opts?.durable) await syncDirectoryBestEffort(parent);
+}
+
+/** Windows will not replace a file that another process has open (EPERM, EACCES or EBUSY): daemon.pid while the CLI or the
+ * desktop polls it for readiness made `daemon start` die (#667 Windows CI). Readers hold it for milliseconds; retry ~2.5 s. */
+async function renameOverReaders(from: string, to: string): Promise<void> {
+  for (let delay = 10; ; delay *= 2) {
+    try { return await rename(from, to); }
+    catch (error) {
+      const code = error instanceof Error && 'code' in error ? String(error.code) : '';
+      if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(code) || delay > 1280) throw error;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
 }
 
 /** Makes the rename itself durable where the platform allows it; a failure only costs durability, never the write. */

@@ -3,7 +3,10 @@ import type { AdminService } from '../../admin/service';
 import { buildEventConfigUrl } from '../../config/scopes';
 import { readAdminState } from '../state';
 import type { RpcOutcome } from '../rpc';
-import { unsupported } from '../errors';
+import { RpcError, unsupported } from '../errors';
+import { principalWire } from '../principal';
+import { checkSessionScope } from '../authz';
+import type { Peer } from '../ws';
 import { judgeUsageView } from '../../admin/judge-usage';
 import { secretsAction } from '../../admin/secrets';
 
@@ -15,7 +18,9 @@ export async function diagnosis(service: AdminService, agentId?: string): Promis
   const eventConfigUrl = bot ? buildEventConfigUrl(bot.appId, bot.tenant) : undefined;
   return { kind: 'diagnosis', bot: botId, backends, event, eventConfigUrl };
 }
-export async function adminRpc(service: AdminService, followLogs: (follow: boolean) => void, request: AdminRequest): Promise<RpcOutcome<AdminReply>> {
+/** What the connection adds: when this daemon started, and the peer admin.negotiate records on. */
+export interface AdminConnection { startedAt: number; peer: Pick<Peer, 'principal' | 'scope' | 'negotiated' | 'negotiate'> }
+export async function adminRpc(service: AdminService, followLogs: (follow: boolean) => void, request: AdminRequest, connection?: AdminConnection): Promise<RpcOutcome<AdminReply>> {
   switch (request.type) {
     case 'judgeUsage': return { kind: 'read', value: await judgeUsageView() };
     case 'state': return { kind: 'read', value: { kind: 'state', state: await readAdminState(service) } };
@@ -30,7 +35,15 @@ export async function adminRpc(service: AdminService, followLogs: (follow: boole
       await service.confirmCardCallback(request.agentId, request.confirmed);
       return { kind: 'mutation', reply: snapshot => ({ kind: 'applied', revision: snapshot.revision }) };
     }
-    case 'daemonStatus': return { kind: 'read', value: { kind: 'daemonStatus', status: await service.getDaemonStatus() } };
+    case 'daemonStatus': return { kind: 'read', value: { kind: 'daemonStatus', status: { ...await service.getDaemonStatus(), startedAt: connection?.startedAt ?? Math.round(performance.timeOrigin) } } };
+    // devices 4.5: recorded once; a Bot session's scope must be no wider than the session (devices 5.3).
+    case 'negotiate': {
+      if (!connection) return unsupported();
+      if (connection.peer.negotiated) throw new RpcError('invalid_request', 'negotiate 只能发一次。');
+      checkSessionScope(connection.peer.principal, request.scope ?? null);
+      if (!connection.peer.negotiate(request.capabilities, request.scope ?? null)) throw new RpcError('invalid_request', 'negotiate 只能发一次。');
+      return { kind: 'read', value: { kind: 'negotiated', principal: principalWire(connection.peer.principal), scope: connection.peer.scope } };
+    }
     case 'codexSetup': {
       if (!service.codexSetup) return unsupported();
       return { kind: 'read', value: { kind: 'codexSetup', setup: await service.codexSetup() } };

@@ -4,6 +4,8 @@ import type { CanonicalRoot, Target } from './identity';
 export type DistributionInput =
   | { kind: 'npm'; executable: string; entry: string }
   | { kind: 'desktop'; executable: string; entry: string }
+  /** Rendered like `npm`; told apart by its `current` link paths (devices 7.2). */
+  | { kind: 'standalone'; executable: string; entry: string }
   | { kind: 'development' }
   | { kind: 'unknown' };
 export type Definition = Readonly<{
@@ -51,7 +53,15 @@ export function renderDefinition(input: {
   return render(input.target, { ...input, distribution: input.distribution });
 }
 
-function render(target: Target, definition: DecodedDefinition): SerializedDefinition {
+/**
+ * How long systemd waits for a stop before it kills the unit: 45 seconds since 2026-11-02, over the host's own limit of
+ * 30 (host/lifecycle.ts HOST_STOP_LIMIT_MS). Units written before say `infinity`; they still read as ours, so a running
+ * server and `vonvon service` keep working with them, and the next install writes the new value.
+ */
+const UNIT_STOP_TIMEOUT = 'TimeoutStopSec=45';
+const LEGACY_UNIT_STOP_TIMEOUT = 'TimeoutStopSec=infinity';
+
+function render(target: Target, definition: DecodedDefinition, stopTimeout = UNIT_STOP_TIMEOUT): SerializedDefinition {
   const { root, port, distribution, capturedPath } = definition;
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new InvalidDefinitionInput('Port must be an integer from 1 to 65535');
   for (const value of [root, distribution.executable, distribution.entry, capturedPath]) {
@@ -72,10 +82,16 @@ function render(target: Target, definition: DecodedDefinition): SerializedDefini
       return { platform: target.platform, plist: Buffer.from(plist) };
     }
     case 'linux': {
-      const unit = `[Unit]\nDescription=Vonvon Bot daemon\n\n[Service]\nType=simple\nExecStart="${unitLiteral(distribution.executable)}" "${unitLiteral(distribution.entry, true)}" daemon run --port ${port}\nEnvironment="VONVON_HOME=${unitLiteral(root)}"\nEnvironment="VONVON_SERVICE=systemd"\nEnvironment="PATH=${unitLiteral(capturedPath)}"\n${desktop ? 'Environment="ELECTRON_RUN_AS_NODE=1"\n' : ''}StandardOutput=append:${out.replace(/%/g, '%%')}\nStandardError=append:${err.replace(/%/g, '%%')}\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=infinity\n\n[Install]\nWantedBy=default.target\n`;
+      const unit = `[Unit]\nDescription=Vonvon Bot daemon\n\n[Service]\nType=simple\nExecStart="${unitLiteral(distribution.executable)}" "${unitLiteral(distribution.entry, true)}" daemon run --port ${port}\nEnvironment="VONVON_HOME=${unitLiteral(root)}"\nEnvironment="VONVON_SERVICE=systemd"\nEnvironment="PATH=${unitLiteral(capturedPath)}"\n${desktop ? 'Environment="ELECTRON_RUN_AS_NODE=1"\n' : ''}StandardOutput=append:${out.replace(/%/g, '%%')}\nStandardError=append:${err.replace(/%/g, '%%')}\nRestart=on-failure\nRestartSec=5\n${stopTimeout}\n\n[Install]\nWantedBy=default.target\n`;
       return { platform: target.platform, unit: Buffer.from(unit) };
     }
   }
+}
+
+/** `<installRoot>/current/node/bin/node <installRoot>/current/app/bin/vonvon.mjs`, as distribution.ts serviceProgram writes it. */
+function isStandaloneProgram(executable: string, entry: string): boolean {
+  const suffix = '/current/app/bin/vonvon.mjs';
+  return entry.endsWith(suffix) && executable === `${entry.slice(0, -suffix.length)}/current/node/bin/node`;
 }
 
 function capture(text: string, pattern: RegExp): string[] {
@@ -120,9 +136,14 @@ export function decodeGeneratedDefinition(target: Target, bytes: SerializedDefin
       break;
     }
   }
-  const definition: DecodedDefinition = { root, capturedPath, port, distribution: { kind: desktop ? 'desktop' : 'npm', executable, entry } };
+  const standalone = !desktop && isStandaloneProgram(executable, entry);
+  const definition: DecodedDefinition = { root, capturedPath, port, distribution: { kind: desktop ? 'desktop' : standalone ? 'standalone' : 'npm', executable, entry } };
   const expected = render(target, definition);
   if (bytes.platform === 'darwin' && expected.platform === 'darwin' && Buffer.from(bytes.plist).equals(expected.plist)) return definition;
   if (bytes.platform === 'linux' && expected.platform === 'linux' && Buffer.from(bytes.unit).equals(expected.unit)) return definition;
+  if (bytes.platform === 'linux') {
+    const legacy = render(target, definition, LEGACY_UNIT_STOP_TIMEOUT);
+    if (legacy.platform === 'linux' && Buffer.from(bytes.unit).equals(legacy.unit)) return definition;
+  }
   throw new Error('Definition does not match the complete generated format');
 }

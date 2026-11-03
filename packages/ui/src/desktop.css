@@ -94,7 +94,7 @@ html[data-desktop-chrome="silver"] .desktop-titlebar {
   box-shadow: inset 0 -1px rgb(0 0 0 / 10%);
   -webkit-app-region: drag;
 }
-html[data-desktop-chrome="silver"] .today-app-header :is(.today-brand, .today-primary-nav, .today-header-actions) {
+html[data-desktop-chrome="silver"] .today-app-header :is(.today-brand, .device-switcher, .today-primary-nav, .today-header-actions) {
   -webkit-app-region: no-drag;
 }
 html[data-desktop-chrome="silver"] .ui-dialog-backdrop {

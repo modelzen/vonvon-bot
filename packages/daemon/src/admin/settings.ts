@@ -1,8 +1,8 @@
-import { getAppRoleSnapshot } from '../config/app-roles';
+import { getAppRoleSnapshot, trustedFeishuAdmins } from '../config/app-roles';
 import { ToolRefusal } from '../agent/entry/tools';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { JUDGE_SELECTION_KINDS, decisionEndpointProblem } from '@vonvon/protocol';
+import { FULL_ACCESS_WARNING, JUDGE_SELECTION_KINDS, decisionEndpointProblem } from '@vonvon/protocol';
 import type { AgentBackend, ModelInfo, ReasoningEffort } from '../agent/types';
 import { backendIds } from '../agent';
 import { parseModelId } from '../agent/model-id';
@@ -22,7 +22,7 @@ import { DECISION_PROVIDER_ID, parseStoredJudge, resolveJudgeModel, judgeBackend
 import { JUDGE_CLAUDE_NOTE, JUDGE_CODEX_NOTE, JUDGE_FORMAT_LINES, JUDGE_INPUT_EXAMPLE } from '../judge/prompt';
 import { readSmartPrompt, SMART_MAX_CHARS, SmartPromptError, composeSmartRules, resolveSmartRules, rulesFromSmartPrompt } from '../judge/smart-file';
 import type { JudgeSelectionStored } from '../judge/types';
-import type { VoiceAction } from '../voice/types';
+import { VoiceActionRefused, type VoiceAction } from '../voice/types';
 import { probeBackends, SMART_NO_MENTION_REFUSED, type AppPreferencesWriter } from './ops';
 import { parseSettingsAction, parseSettingsEdit, SettingsInputError } from './settings-parse';
 import type * as T from './settings-types';
@@ -203,7 +203,7 @@ function agentRaw(p: AppPreferences, section: keyof T.AgentSections): unknown {
 function projectData(p: Project, backend: AgentBackend): T.ProjectSections {
   const perm = groupPermission(p);
   const table = permissionTable(groupBackendId(p));
-  const env = tableEnv(backend);
+  const env = { ...tableEnv(backend), group: true };
   return {
     profile: p.profile ?? { persona: '', memory: '', inheritPersona: true, inheritMemory: true },
     role: { supplement: p.supplement ?? '' },
@@ -378,7 +378,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           ...base,
           models: [],
           state: 'unavailable',
-          error: '后端当前不可用，请检查安装或登录状态'
+          error: '后端现在不可用，请检查安装和配置'
         };
       const listed = target?.cwd && backend.listModelsForCwd
         ? await backend.listModelsForCwd(target.cwd, { refresh: query.refresh })
@@ -678,7 +678,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         },
         ownerOpenId: resolveOwner(cfg) ?? null,
         administrators: {
-          feishu: { ownerOpenId: roles?.ownerOpenId ?? null, adminOpenIds: roles?.admins ?? [] },
+          feishu: { ownerOpenId: roles?.ownerOpenId ?? null, adminOpenIds: [...trustedFeishuAdmins(roles)] },
           scannerOpenId: cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0] ?? null,
           openIds: [...(cfg.preferences?.access?.admins ?? [])],
           revision: settingsRevision([botId, resolveOwner(cfg), cfg.preferences?.access?.admins ?? []])
@@ -835,6 +835,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       if (project) await deps.backendFor(groupBackendId(project)).refreshPermissions?.();
     }
     let additionalEffects: T.ApplyEffect[] = [];
+    let turnedFull = false;
     try {
       if (edit.scope.kind === 'agent') {
         const e = edit as Extract<T.BotSettingsEdit, {
@@ -1008,6 +1009,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               }
               const backendId = groupBackendId(p);
               const table = permissionTable(backendId);
+              const wasFull = groupPermission(p).effect.mode === 'full';
               let mode = e.patch.mode ?? effectiveMode(p);
               let effectMode = mode;
               let network = TIER_NETWORK[mode];
@@ -1033,6 +1035,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               p.network = network;
               if (custom) p.custom = custom;
               else delete p.custom;
+              // devices 第 15 节：给群选完全访问的地方都带这句。
+              turnedFull = effectMode === 'full' && !wasFull;
               break;
             }
             case 'response':
@@ -1137,7 +1141,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       return {
         kind: 'saved',
         section,
-        effects: [...section.value.apply.filter(item => item.fields.some(field => Object.hasOwn(edit.patch, field))), ...additionalEffects, ...(keyless ? effect(['selection'], 'next-message', keyless) : [])]
+        effects: [...section.value.apply.filter(item => item.fields.some(field => Object.hasOwn(edit.patch, field))), ...additionalEffects, ...(keyless ? effect(['selection'], 'next-message', keyless) : [])],
+        ...(turnedFull ? { warnings: [FULL_ACCESS_WARNING] } : {}),
       };
     }
     catch (error) {
@@ -1178,14 +1183,17 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               kind: 'unavailable',
               reason: offlineSettings
             };
-          await deps.voiceAction(action.action);
+          // its refusals say what to do (switch voice on, wait for the check); other failures stay the generic message
+          await deps.voiceAction(action.action).catch((error: unknown) => {
+            throw error instanceof VoiceActionRefused ? new SettingsInputError(error.message) : error;
+          });
           break;
         case 'adminMember':
           await deps.writePreferences(p => {
             check([botId, resolveOwner(cfg), p.access?.admins ?? []], action.revision);
             const roles = getAppRoleSnapshot(botId, cfg.accounts.app.tenant);
             const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
-            if (action.membership === 'absent' && (action.openId === resolveOwner(cfg) || action.openId === scanner || roles?.admins.includes(action.openId)))
+            if (action.membership === 'absent' && (action.openId === resolveOwner(cfg) || action.openId === scanner || trustedFeishuAdmins(roles).includes(action.openId)))
               throw new SettingsInputError('飞书应用管理员和注册者不能在本机移除');
             const admins = new Set(p.access?.admins ?? []);
             if (action.membership === 'present')
