@@ -7,12 +7,20 @@ import { RpcError } from './errors';
 import { createDirectorySuggestions } from './directory-suggestions';
 import { expandHome } from '../platform/home-path';
 
+const code = (error: unknown) => error instanceof Error && 'code' in error ? String(error.code) : '';
 /** A path that is not there (or runs through a file, or loops) is the caller's to fix, said as such instead of the raw
  * ENOENT that reached the web page as 操作失败 and the command line as exit 1 (cli-3-groups). */
 function missing(error: unknown): unknown {
-  const code = error instanceof Error && 'code' in error ? String(error.code) : '';
-  return ['ENOENT', 'ENOTDIR', 'ELOOP'].includes(code) ? new RpcError('invalid_directory', '找不到这个目录，请检查路径。') : error;
+  return ['ENOENT', 'ENOTDIR', 'ELOOP'].includes(code(error)) ? new RpcError('invalid_directory', '找不到这个目录，请检查路径。') : error;
 }
+/** Folders this user may not open. Windows says EPERM, not EACCES, for protected ones such as a drive's
+ * `System Volume Information` or another user's profile (Windows acceptance task 318). */
+const DENIED = ['EACCES', 'EPERM'];
+function unreadable(error: unknown): unknown {
+  return DENIED.includes(code(error)) ? new RpcError('directory_unreadable', '没有权限打开这个目录。') : error;
+}
+/** A child that is gone, loops or is shut to this user is left out of a listing instead of failing all of it. */
+const SKIPPED = ['ENOENT', 'ELOOP', ...DENIED];
 
 /** Any folder this user can read, at home or not (devices 6.4, owner 2026-10-31: servers keep code in /srv, /data; the
  * daemon runs as this user anyway). Browsing starts at home, and `~` is home. */
@@ -33,7 +41,7 @@ export async function createDirectoryBrowser(home = homedir()) {
     close: () => suggestions.close(),
     async list(path = root) {
       const resolved = await canonical(path);
-      const children = await readdir(resolved, { withFileTypes: true });
+      const children = await readdir(resolved, { withFileTypes: true }).catch((error: unknown) => { throw unreadable(error); });
       const entries = [];
       for (const child of children.sort((a, b) => a.name.localeCompare(b.name))) {
         if (!child.isDirectory() && !child.isSymbolicLink()) continue;
@@ -41,7 +49,7 @@ export async function createDirectoryBrowser(home = homedir()) {
           const path = await canonical(join(resolved, child.name));
           entries.push({ name: child.name, path, hidden: child.name.startsWith('.') });
         } catch (error) {
-          if (error instanceof RpcError || (error instanceof Error && 'code' in error && ['ENOENT', 'EACCES', 'ELOOP'].includes(String(error.code)))) continue;
+          if (error instanceof RpcError || SKIPPED.includes(code(error))) continue;
           throw error;
         }
       }
