@@ -6,7 +6,7 @@ import {SettingsGroup, SettingsRow} from '../reference/components/system-setting
 import type {MachineRequest, MachineRequestHandler, MachineReply, ServiceState} from '@vonvon/protocol';
 import '../settings/settings.css';
 import {settingAnchor, type SearchReveal} from '../search';
-import {useShellCapabilities, type ActiveDevice} from '../client-context';
+import {useDevicesState, useShellCapabilities, type ActiveDevice} from '../client-context';
 import {QUIT_KEEPS_DAEMON, remoteStopConfirm, whereName} from '../device-copy';
 
 type MachineStatus = Extract<MachineReply, {type: 'status'}>;
@@ -35,6 +35,11 @@ export const quitKeepsText = <>{QUIT_KEEPS_DAEMON.lead}<code>{QUIT_KEEPS_DAEMON.
  * `quitKeepsDaemon`: quitting this computer's app leaves its daemon running (4.7). */
 export function MachinePanel({request, agents, reveal, macos = false, remote, onRestart, quitKeepsDaemon = false}: {request: MachineRequestHandler; agents: ReadonlyArray<{id: string; name: string}>; reveal?: SearchReveal; macos?: boolean; remote?: Pick<ActiveDevice, 'isRemote' | 'name'>; onRestart?: () => void; quitKeepsDaemon?: boolean}) {
   const shell = useShellCapabilities();
+  // This computer's daemon stopped or crashed and the shell knows it: its status can't be read, and that is no error
+  // (0.9.0 Mac 验收 S-4). Back online, the status is read again.
+  const devices = useDevicesState();
+  const localRow = remote ? undefined : devices?.devices.find(row => row.id === 'local');
+  const localDown = localRow?.status === 'offline' ? '已停止' : localRow?.status === 'connecting' ? '正在连接' : undefined;
   const advanced = useRef<HTMLDetailsElement>(null);
   useEffect(() => {if (reveal === 'machine-advanced' && advanced.current) advanced.current.open = true;}, [reveal]);
   const [status, setStatus] = useState<MachineStatus>();
@@ -43,7 +48,7 @@ export function MachinePanel({request, agents, reveal, macos = false, remote, on
   const [bot, setBot] = useState('');
   const [confirm, setConfirm] = useState<MachineRequest>();
   const refresh = () => runMachineRequest(request, {type: 'status'}, setStatus);
-  useEffect(() => { void refresh().catch(error => setMessage(String(error))); }, [request]);
+  useEffect(() => { void refresh().catch(error => { if (!localDown) setMessage(String(error)); }); }, [request, localDown]);
   const run = async (operation: MachineRequest) => {
     setBusy(true);
     try {
@@ -71,7 +76,7 @@ export function MachinePanel({request, agents, reveal, macos = false, remote, on
     <SettingsGroup id={settingAnchor('daemon 运行')} label="daemon 运行" action={<IconButton size="sm" variant="ghost" label="刷新状态" title="刷新后台运行状态" disabled={busy} onClick={() => void run({type: 'status'})}><RefreshCw size={15} strokeWidth={1.7}/></IconButton>}>
       <SettingsRow title="运行方式"
         description={status?.host?.ownership === 'attached' ? '当前由外部服务管理。' : '接收飞书消息并运行 Bot。'}
-        value={!status ? '状态未知' : status.host ? (status.host.ownership === 'owned' ? '桌面管理' : '外部服务') : '已停止'} />
+        value={!status ? localDown ?? '状态未知' : status.host ? (status.host.ownership === 'owned' ? '桌面管理' : '外部服务') : '已停止'} />
       {remote ? <SettingsRow title="daemon 服务" description="停止服务会中断正在进行的对话。"
         trailing={<span className="settings-inline-actions">
           {onRestart && <Button size="sm" disabled={busy || !status?.host} onClick={onRestart}>重启</Button>}
@@ -88,7 +93,7 @@ export function MachinePanel({request, agents, reveal, macos = false, remote, on
     <SettingsGroup id={settingAnchor('后台服务')} label="后台服务" footer={remote ? `这些设置作用在${whereName(remote)}上。`
       : quitKeepsDaemon ? <>{macos ? '开启「登录电脑时启动」后，Bot 可在登录后自动运行。' : '关闭桌面窗口时 Bot 继续运行。'}{quitKeepsText}</>
       : macos ? '开启「登录电脑时启动」后，Bot 可在登录后自动运行。手动退出桌面应用会停止后台和所有 Bot。' : '关闭桌面窗口时 Bot 继续运行；手动退出桌面应用会停止后台和所有 Bot。'}>
-      <SettingsRow title="系统服务" description={service ? service.platformName : '正在读取服务状态…'}
+      <SettingsRow title="系统服务" description={service ? service.platformName : localDown ? '后台没有连上，连上后再读取服务状态。' : '正在读取服务状态…'}
         value={service && (service.state ? SERVICE_STATE_TEXT[service.state] : `${service.installed ? '已安装' : '未安装'} · ${service.running ? '运行中' : '已停止'}`)} />
       {!remote && <SettingsRow title="服务运行" description={!shell?.service ? '请在桌面版中启动服务。' : '启动已安装的后台服务。'}
         trailing={<span className="settings-inline-actions">
