@@ -2,6 +2,7 @@ import {useActiveDevice, useClient, useDevicesState, useShellCapabilities} from 
 import {DevicesPanel} from './devices/DevicesPanel';
 import {DeviceSwitcher} from './devices/DeviceSwitcher';
 import {DeviceStatusBanner, DeviceVersionNotice} from './devices/DeviceStatusBanner';
+import {SnapshotPendingView} from './devices/DeviceConnectionView';
 import {RemoteUpdateNotice} from './devices/RemoteUpdateNotice';
 import {shouldMarkPlatform} from './devices/devices-presentation';
 import {groupUrl} from './url-actions';
@@ -526,12 +527,7 @@ function DesktopApp() {
     if (cancel) await run({ type: "cancelJob", jobId: cancel }, () => generation === modalGeneration.current);
     if (generation === modalGeneration.current) setModal(null);
   }
-  if (!snapshot)
-    return (
-      <div className="desktop-loading" role="status">
-        正在打开 Vonvon Bot…
-      </div>
-    );
+  if (!snapshot) return <SnapshotPendingView/>;
   const member =
     selection.kind === "membership"
       ? snapshot.memberships.find((item) => item.id === selection.id)

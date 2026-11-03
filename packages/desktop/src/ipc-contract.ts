@@ -124,7 +124,8 @@ export interface DesktopBridge {
   /** Each new local connection once it is ready (looking at this computer or not); never on a loss. U4 declares its
    * capability on each. A listener that throws affects no other. */
   onLocalOwner(listener: (owner: AttachedDaemon) => void): () => void;
-  /** Showing a remote device: a lost local connection is reported when the user switches back. True when deferred. */
+  /** The shell gave up reconnecting: this computer shows offline. Showing a remote device: the loss is reported when the
+   * user switches back. True when deferred. */
   deferLocalLost(): boolean;
   viewId(): ViewId;
   requestQuit(): void;

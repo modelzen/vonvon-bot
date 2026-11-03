@@ -32,6 +32,19 @@ describe('lossless admin state and pinned projection', () => {
     expect(projected.agents[0]?.readError).toBe('invalid projects.json');
   });
 
+  it('0.9.0 Mac 验收 B-1: puts a group\'s picture on the group once, not on each of its memberships', async () => {
+    const pictured = { ...project, avatarDataUrl: 'data:image/png;base64,AAAA' };
+    const state = await readAdminState({ listBots: async () => [bot, { ...bot, appId: 'cli_second' }], listProjects: async () => [pictured] });
+    const projected = projectState(state, empty, new Set());
+    expect(projected.memberships).toHaveLength(2);
+    for (const member of projected.memberships) expect(member).not.toHaveProperty('avatarDataUrl');
+    const group = { id: 'oc_test', name: 'project', avatarDataUrl: pictured.avatarDataUrl };
+    expect(projected.groups).toEqual([group]);
+    // A Bot whose groups cannot be read keeps its stale memberships, and their group its picture.
+    const bad = await readAdminState({ listBots: async () => [bot], listProjects: async () => { throw new Error('invalid projects.json'); } });
+    expect(projectState(bad, { ...empty, ...projected }, new Set()).groups).toEqual([group]);
+  });
+
   it('s36c2d: carries a misplaced directory to the membership only when there is one', async () => {
     const state = await readAdminState({ listBots: async () => [bot], listProjects: async () => [{ ...project, directoryProblem: 'botRoot' }, { ...project, name: 'fine', chatId: 'oc_fine' }] });
     const projected = projectState(state, empty, new Set());
