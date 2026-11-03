@@ -9,7 +9,7 @@
 set -eu
 
 BASE_URL="https://dl.vonvon.cc/bot/server"
-GUIDE_URL="https://vonvon.cc/guide/remote/"
+GUIDE_URL="https://vonvon.cc/docs/remote/"
 DESKTOP_DOWNLOAD="https://vonvon.cc/get/"
 SERVER_MARKER="# Vonvon Bot server CLI v1"
 # 服务端发布清单的签名公钥（server-3 C2，SPKI PEM），和 packages/daemon/server-update.json 是同一把。
