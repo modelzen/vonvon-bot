@@ -69,5 +69,12 @@ it('shows the switch on macOS only, with the state it cannot change', () => {
 });
 
 it('names this Mac, this Linux host, or this computer on the 应用与启动 page', () => {
-  expect(['macos', 'linux', 'unsupported'].map(platform => deviceTitle(platform as DesktopSnapshot['application']['platform']))).toEqual(['这台 Mac', '这台 Linux 主机', '这台电脑']);
+  expect(['macos', 'linux', 'windows', 'unsupported'].map(platform => deviceTitle(platform as DesktopSnapshot['application']['platform']))).toEqual(['这台 Mac', '这台 Linux 主机', '这台 Windows 电脑', '这台电脑']);
+});
+
+// devices-ui-2 4.4.3: a remote device's shell has no setLoginItem (shellForDevice), so the switch goes to that daemon.
+it('switches a remote device through its daemon, as the shell has no setLoginItem there', async () => {
+  const client = machine();
+  await toggleService(true, client, {openExternal: async () => {}});
+  expect(client.machine.mock.calls.map(([request]) => request)).toEqual([{type: 'setServiceSkipped', skipped: false}, {type: 'service', action: 'install'}]);
 });

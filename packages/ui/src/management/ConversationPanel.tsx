@@ -86,7 +86,7 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
     return () => { active = false; clearInterval(timer); };
   }, [Boolean(run), selected, target]);
 
-  async function execute(action: Exclude<Parameters<CollaborationClient>[0], { action: "project" | "history" | "context" | "usage" | "openGroup" | "createProject" | "editProject" | "removeProject" | "shareUsage" }>, success: string) {
+  async function execute(action: Exclude<Parameters<CollaborationClient>[0], { action: "project" | "history" | "context" | "usage" | "createProject" | "editProject" | "removeProject" | "shareUsage" }>, success: string) {
     setBusy(true);
     setError("");
     setNotice("");

@@ -8,6 +8,7 @@ import type {
 } from '../agent/types';
 import { actions, button, card, hr, md, note, noteMd, submitButton, type CardElement, type CardObject } from './cards';
 import { DM } from './dm-cards';
+import { toolCommand } from '../environment/tool-command';
 
 /**
  * Codex 用量卡：DM 控制台的「📊 用量」子卡（带刷新/分享按钮、原地更新）+
@@ -374,10 +375,11 @@ const usageButtons = (): CardElement =>
     button('⬅️ 菜单', { a: DM.menu }),
   ]);
 
-const ERROR_COPY: Record<UsageErrorKind, { title: string; hint: string }> = {
+/** `login`: what signs Codex in from a terminal; a managed copy is on no PATH (0.9.0 Linux acceptance). */
+const errorCopy = (login: string): Record<UsageErrorKind, { title: string; hint: string }> => ({
   'no-auth': {
     title: '未找到 Codex 登录态',
-    hint: '本机没有可读的 `~/.codex/auth.json`，请在宿主机终端运行 `codex login` 后重试。',
+    hint: `本机没有可读的 \`~/.codex/auth.json\`，请在宿主机终端运行 \`${login}\` 后重试。`,
   },
   'api-key-mode': {
     title: '当前是 API-key 登录模式',
@@ -385,13 +387,13 @@ const ERROR_COPY: Record<UsageErrorKind, { title: string; hint: string }> = {
   },
   'need-relogin': {
     title: 'Codex 登录态已失效',
-    hint: '令牌已无法刷新（过期/被撤销），请在宿主机终端重新运行 `codex login`。',
+    hint: `令牌已无法刷新（过期/被撤销），请在宿主机终端重新运行 \`${login}\`。`,
   },
   transient: {
     title: '暂时拉不到数据',
     hint: '网络或 ChatGPT 服务波动，稍后点「🔄 刷新」重试。',
   },
-};
+});
 
 /**
  * 控制台用量卡（CardKit 实体、原地更新）。`forward:false`——它带管理按钮，转出去
@@ -406,7 +408,7 @@ export function buildUsageCard(state: UsageCardState): CardObject {
   }
 
   if (state.phase === 'error') {
-    const copy = ERROR_COPY[state.kind];
+    const copy = errorCopy(`${toolCommand('codex')} login`)[state.kind];
     return card(
       [
         md(`⚠️ **${copy.title}**`),

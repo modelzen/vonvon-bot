@@ -8,15 +8,18 @@ import { botPaths } from '../../config/paths';
 import { activeBots, ensureRegistry, type BotEntry } from '../../config/bots';
 import { log } from '../../core/logger';
 import { AdminWriteError } from '../../admin/ops';
-import { createAdminIpcResponder } from '../../admin/ipc';
+import { createAdminIpcResponder, createHostIpcCaller, sessionTurnEnded, type HostApi } from '../../admin/ipc';
+import { createSessionTokens, type SessionTokens } from '../../host/session-tokens';
 import { createAdminService } from '../../admin/service';
 import { botNotRunning } from '../../admin/schedule-commands';
 import { installBackendDep, uninstallBackendDep } from '../../agent';
 import { performCoreUpdate } from '../../service/update';
 import { startApi } from '../../server/http';
 import { noteClaudeLoginFailed } from '../../agent/claude-agent/login';
+import { toolCommand } from '../../environment/tool-command';
 import { createDiagnosticsStore, ipcDiagnosticsSink, setDiagnosticsSink } from '../../bot/diagnostics';
 import {bridgeImportRuntime} from '../../import/bridge/runtime';
+import { fallbackWorkingDirectory } from '../../platform/fallback-cwd';
 
 interface RunOptions {
   control?: ShutdownControl;
@@ -103,7 +106,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
     throw err;
   }
 
-  const fallbackCwd = process.env.FEISHU_CODEX_CWD || process.cwd();
+  const fallbackCwd = fallbackWorkingDirectory();
   console.log('\n正在启动 Bot 的长连接…');
   console.log('私聊我 `/new <名>` 建项目；在项目群里 @我 干活。Ctrl+C 退出。\n');
   let api: Awaited<ReturnType<typeof startApi>> | undefined;
@@ -111,12 +114,32 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
   const errors: unknown[] = [];
   // Supervised: the records go to the supervisor, which keeps them across this child's restarts.
   const ownAppId = cfg.accounts.app.id;
-  const diagnostics = process.send ? undefined : createDiagnosticsStore({ changed: () => api?.invalidate(), claudeSignedOut: noteClaudeLoginFailed });
+  const diagnostics = process.send ? undefined : createDiagnosticsStore({ changed: () => api?.invalidate(), claudeSignedOut: at => noteClaudeLoginFailed(at, toolCommand('claude')) });
   setDiagnosticsSink(diagnostics
     ? event => diagnostics.accept(ownAppId, event)
     : ipcDiagnosticsSink((message, callback) => { if (process.connected) process.send?.(message, undefined, undefined, callback); }));
+  // devices-4a 4.2: a supervised child asks the host for its sessions' tokens; alone, this process is the host and keeps them.
+  let tokens: SessionTokens | undefined;
+  let host: HostApi;
+  if (process.send) {
+    const caller = createHostIpcCaller(msg => {
+      if (!process.connected) throw new Error('IPC 通道已关闭');
+      process.send?.(msg);
+    });
+    process.on('message', caller.onMessage);
+    host = caller;
+  } else {
+    const own = tokens = createSessionTokens();
+    host = {
+      issueSessionToken: async input => {
+        if (input.appId !== ownAppId) throw new Error('这个 Bot 不归本进程管');
+        return own.issue(input);
+      },
+      revokeSessionToken: async sessionId => { own.revoke(sessionId); },
+    };
+  }
   try {
-    const handle = bridge = await startBridge({ identity: ready.identity, cfg, appSecret: secret, fallbackCwd, droppedFile: botPaths(ownAppId).droppedFile, judgeUsageFile: botPaths(ownAppId).judgeUsageFile, onConnectionChange: () => {
+    const handle = bridge = await startBridge({ identity: ready.identity, cfg, appSecret: secret, fallbackCwd, droppedFile: botPaths(ownAppId).droppedFile, judgeUsageFile: botPaths(ownAppId).judgeUsageFile, host, onConnectionChange: () => {
       if (process.send) {
         if (process.connected) process.send({ fcb: 'fcb.connection' }, undefined, undefined, (error: Error | null) => { if (error && process.connected) log.fail('run', error, { phase: 'connection-notice' }); });
       }
@@ -135,7 +158,8 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
           if (op.kind === 'settingsRead') return handle.settings.read(op.scope);
           if (op.kind === 'settingsModels') return handle.settings.models(op.query);
           if (op.kind === 'libraryWorkspaceChanged' || op.kind === 'libraryWorkspaceCheck') return handle.libraryExecute(op);
-          if (op.kind === 'schedule') return handle.schedule(op.via, op.request);
+          if (op.kind === 'schedule') return handle.schedule(op.actor, op.request);
+          if (op.kind === 'authorizeSessionCall') return handle.entries.authorizeSessionCall(op.sessionId, op.action);
           return handle.adminExecute(op);
         },
         (msg) => void process.send?.(msg),
@@ -144,8 +168,12 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
     } else {
       const startedAt = Date.now();
       api = await startApi({
+        startedAt,
         port: options.port,
         control,
+        ...(tokens ? { sessionTokens: tokens } : {}),
+        // This process is the bot's: a session's ★ request is judged here, by the same entries its tools use.
+        askBot: async (appId, sessionId, action) => (appId === ownAppId ? handle.entries.authorizeSessionCall(sessionId, action) : sessionTurnEnded()),
         ...(diagnostics ? { diagnostics } : {}),
         service: createAdminService({
           executeCollaboration: async (botId, request) => {
@@ -173,7 +201,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
             return handle.libraryExecute(op);
           },
           // Another registered bot is not running here: the same refusal the supervisor gives.
-          executeSchedule: async (botId, via, request) => (botId === ownAppId ? handle.schedule(via, request) : botNotRunning()),
+          executeSchedule: async (botId, actor, request) => (botId === ownAppId ? handle.schedule(actor, request) : botNotRunning()),
           liveStatus: async (botId) =>
             botId === ownAppId
               ? {
@@ -199,7 +227,9 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
   finally {
     const cleanup = await Promise.allSettled([closeOwnedProviders(async () => {
       const drained = await Promise.allSettled([Promise.resolve().then(() => api?.beginDrain())]);
-      drained.push(...await Promise.allSettled([Promise.resolve().then(() => bridge?.shutdown())]));
+      // The cards of the turns this stop cuts short say why: the host's message says a stop, restart or update.
+      const closing = Promise.resolve().then(() => bridge?.shutdown(() => control.reason ?? 'stop'));
+      drained.push(...await Promise.allSettled([withinStopLimit(closing, BRIDGE_STOP_LIMIT_MS)]));
       errors.push(...drained.filter(result => result.status === 'rejected').map(result => result.reason));
     })]);
     // Only once the bridge is closed: a dropped message's reply settled during the close still reaches the page (s18c).
@@ -216,4 +246,24 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
     if (errors.length === 1) throw errors[0];
     if (errors.length) throw new AggregateError(errors, 'Single Bot cleanup failed.');
   }
+}
+
+/**
+ * The longest the Bot's own close is waited for (owner 2026-11-02): its turns are interrupted and their cards updated
+ * within 3 + 8 seconds (bot/handle-message.ts) and the scheduled runs' records follow; a Feishu call or an agent that
+ * hangs past this does not hold the stop up. The agents are closed right after either way (closeOwnedProviders).
+ */
+export const BRIDGE_STOP_LIMIT_MS = 12_000;
+
+/** Waits for `closing` at most `ms`; past it the stop goes on and the late close is only logged. */
+export async function withinStopLimit(closing: Promise<unknown>, ms: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<'late'>(resolve => { timer = setTimeout(resolve, ms, 'late'); });
+  try {
+    const outcome = await Promise.race([closing.then(() => 'closed' as const), late]);
+    if (outcome === 'late') {
+      log.warn('daemon-shutdown', 'bridge_stop_limit', { pid: process.pid, limitMs: ms });
+      closing.catch(error => log.fail('daemon-shutdown', error, { phase: 'bridge-late' }));
+    }
+  } finally { clearTimeout(timer); }
 }

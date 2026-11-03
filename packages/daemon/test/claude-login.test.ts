@@ -31,6 +31,9 @@ describe('Claude login mapping', () => {
     expect(loginFromAccount({ tokenSource: 'CLAUDE_CODE_OAUTH_TOKEN' })).toMatchObject({ state: 'signedIn' });
     expect(loginFromAccount({ tokenSource: 'none', apiProvider: 'firstParty' })).toEqual({ state: 'signedOut', message: CLAUDE_SIGNED_OUT_MESSAGE });
     expect(loginFromAccount({ apiKeySource: 'none' })).toEqual({ state: 'signedOut', message: CLAUDE_SIGNED_OUT_MESSAGE });
+    // 0.9.0 Linux acceptance (task 287): a managed Claude Code is on no PATH, so the text names what starts it
+    expect(loginFromAccount({ apiKeySource: 'none' }, '/d/managed-tools/claude/releases/g/bin/claude')).toEqual({ state: 'signedOut',
+      message: '没配置好。在终端运行 `/d/managed-tools/claude/releases/g/bin/claude` 配置账号，或设置 ANTHROPIC_API_KEY 用自定义 API。' });
     expect(loginFromAccount({ apiProvider: 'bedrock' })).toMatchObject({ state: 'unknown' });
     expect(loginFromAccount({})).toBeNull();
     expect(loginFromAccount(undefined)).toBeNull();
@@ -55,6 +58,7 @@ describe('Claude login mapping', () => {
   it('under launchd a signed-out answer is unconfirmed: the keychain may be out of reach (s07)', () => {
     const signedOut = { state: 'signedOut', message: CLAUDE_SIGNED_OUT_MESSAGE } as const;
     expect(loginUnderService(signedOut, { VONVON_SERVICE: 'launchd' })).toMatchObject({ state: 'unknown', message: expect.stringContaining('钥匙串') });
+    expect(loginUnderService(signedOut, { VONVON_SERVICE: 'launchd' }, '/d/claude')).toMatchObject({ message: expect.stringContaining('在终端运行 `/d/claude` 看能不能用') });
     expect(loginUnderService(signedOut, { VONVON_SERVICE: 'systemd' })).toBe(signedOut);
     expect(loginUnderService(signedOut, {})).toBe(signedOut);
     const signedIn = { state: 'signedIn', message: 'ok' } as const;

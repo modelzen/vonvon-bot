@@ -1,5 +1,11 @@
-import {useClient, useShellCapabilities} from './client-context';
-import {copyAuthorizationUrl, copyFeedback, groupUrl, openExternalUrl} from './url-actions';
+import {useActiveDevice, useClient, useDevicesState, useShellCapabilities} from './client-context';
+import {DevicesPanel} from './devices/DevicesPanel';
+import {DeviceSwitcher} from './devices/DeviceSwitcher';
+import {DeviceStatusBanner, DeviceVersionNotice} from './devices/DeviceStatusBanner';
+import {SnapshotPendingView} from './devices/DeviceConnectionView';
+import {RemoteUpdateNotice} from './devices/RemoteUpdateNotice';
+import {shouldMarkPlatform} from './devices/devices-presentation';
+import {groupUrl} from './url-actions';
 import {uiFeatures} from './features';
 import {PendingGroupToasts} from './PendingGroupToasts';
 import {JoinGroupDialog} from './JoinGroupDialog';
@@ -11,7 +17,6 @@ import type {MembershipId, PendingGroup, ProjectId} from '@vonvon/protocol';
 import { useEffect, useRef, useState } from "react";
 import {
   Bot,
-  Check,
   ChevronRight,
   ListChecks,
   MessageSquare,
@@ -48,17 +53,16 @@ import {
   type Command,
   type CommandResult,
   type DesktopSnapshot,
-  type Job,
   type Membership,
   type ScheduledTaskView,
   backendLabel,
   desktopUpdateNotice,
-  formatTime,
 } from "@vonvon/protocol";
 import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel} from "./settings/SettingsPanel";
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
-import {decisionProviderSection, diagnosticsSection, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
+import {decisionProviderSection, diagnosticsSection, OPEN_SETTING_EVENT, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
+import {RemoteAccessPanel} from './settings/RemoteAccessPanel';
 import {agentPanes, initialRoute, openMembership, openScheduleTab, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, joinedGroupRoute} from './collaboration-navigation';
 import {SearchDialog} from './SearchDialog';
 import {flushSync} from 'react-dom';
@@ -75,14 +79,17 @@ import {type SetupProvider} from './setup/provider-state';
 import {WelcomeSetup} from './setup/WelcomeSetup';
 import {BridgeImportPanel} from './setup/BridgeImportPanel';
 import {TodayHome, SettingsHome} from './TodayHome';
-import {LoginServiceRow, deviceTitle, toggleService} from './setup/service-toggle';
+import {LoginServiceRow, toggleService} from './setup/service-toggle';
 import {BotConnectionSettings, jobToCancel, withRegisteredAgent, type RegisterModal} from './setup/GrantStep';
 import {RegistrationDialog} from './setup/RegistrationDialog';
 import {createRegistrationRetry} from './setup/registration-retry';
-import {MachinePanel} from './management/MachinePanel';
+import {MachinePanel, quitKeepsText} from './management/MachinePanel';
+import {RemoteServiceGroup, RESTART_HOST_TEXT} from './management/RemoteServiceGroup';
+import {ServerUpdateCard} from './management/ServerUpdateCard';
+import {whereName} from './device-copy';
 import {DiagnosticsPanel} from './management/DiagnosticsPanel';
 import {SecretsPanel} from './management/SecretsPanel';
-import {UpdatePanel} from './management/UpdatePanel';
+import {appCardFor, coreUpdatable, UpdatePanel} from './management/UpdatePanel';
 import {DesktopUpdateProvider, useDesktopUpdate} from './desktop-update';
 import {DesktopUpdateButton} from './DesktopUpdateButton';
 
@@ -120,9 +127,6 @@ const agentListStatus = (agent: DesktopSnapshot["agents"][number]): { label: str
     tone: agent.connection === "connected" ? "success" : "neutral",
   };
 };
-const isActive = (job: Job) =>
-  !["succeeded", "failed", "cancelled"].includes(job.phase);
-
 function DetailTabs({selected, onSelect, first, second}: {selected: 'overview' | 'settings'; onSelect: (next: 'overview' | 'settings') => void; first: string; second: string}) {
   return <nav className="collaboration-detail-tabs" aria-label="详情视图">
     <button type="button" aria-current={selected === 'overview' ? 'page' : undefined} className={selected === 'overview' ? 'is-selected' : ''} onClick={() => onSelect('overview')}>{first}</button>
@@ -146,6 +150,8 @@ function DesktopApp() {
   const {navigate} = useDraftGuard();
   const client = useClient();
   const shell = useShellCapabilities();
+  // The page is built again per device, so this stays what it was when the page mounted.
+  const device = useActiveDevice();
   const [desktopUpdate] = useDesktopUpdate();
   const updateNotice = desktopUpdateNotice(desktopUpdate);
   const hasUpdateAction = Boolean(shell?.installDesktopUpdate && (desktopUpdate?.state === 'available' || desktopUpdate?.state === 'downloaded'));
@@ -169,11 +175,20 @@ function DesktopApp() {
     void (async () => {
       try {
         const reply = await client.admin({type: 'daemonStatus'});
-        if (active) setExternalCoreAvailable(reply.kind === 'daemonStatus' && reply.status.distribution?.kind === 'global-npm');
+        if (active) setExternalCoreAvailable(reply.kind === 'daemonStatus' && coreUpdatable(reply.status.distribution?.kind));
       } catch { if (active) setExternalCoreAvailable(false); }
     })();
     return () => {active = false;};
   }, [client, page, searchOpen, snapshot?.host.kind, connectedVersion]);
+  // devices 7.4: read once when 应用与启动 opens; unknown counts as quitting stops the daemon, as before.
+  const devicesState = useDevicesState();
+  const [quitKeepsDaemon, setQuitKeepsDaemon] = useState(false);
+  useEffect(() => {
+    if (page !== 'application' || !shell?.quitKeepsDaemon) {setQuitKeepsDaemon(false); return;}
+    let active = true;
+    void shell.quitKeepsDaemon().then(keep => {if (active) setQuitKeepsDaemon(keep);}, () => {if (active) setQuitKeepsDaemon(false);});
+    return () => {active = false;};
+  }, [page, shell]);
   // Task names are not in the snapshot: search asks the running Bots once each time it opens.
   const [searchSchedules, setSearchSchedules] = useState<ScheduledTaskView[]>([]);
   useEffect(() => {
@@ -288,8 +303,8 @@ function DesktopApp() {
         latestSnapshot.current = next;
         setSnapshot(next);
         setModal(current => current?.kind === "register" ? withRegisteredAgent(current, next.jobs) : current);
-        document.documentElement.dataset.desktopPlatform =
-          next.application.platform;
+        // A remote device's platform would swap this computer's window chrome (devices-ui-1b 4.2).
+        if (shouldMarkPlatform(device)) document.documentElement.dataset.desktopPlatform = next.application.platform;
       }),
     [],
   );
@@ -431,6 +446,14 @@ function DesktopApp() {
     });
   }
   function openPage(next: Page) { navigate(() => { setModal(current => current?.kind === 'join' && current.suspended ? null : current); setJoinedTarget(undefined); setPage(next); setFeatureId(undefined); setSettingsReturn(undefined); }); }
+  // devices-ui-3: the paired toast sits outside App and asks for 应用与启动 → 已配对的设备 this way.
+  const openSetting = useRef<(destination: Destination) => void>(() => undefined);
+  openSetting.current = destination => { navigate(() => { setModal(current => current?.kind === 'join' && current.suspended ? null : current); setJoinedTarget(undefined); setPage(destination.page); setFeatureId(undefined); setSettingsReturn(undefined); setSearchTarget(destination.section ? destination : undefined); }); };
+  useEffect(() => {
+    const open = (event: Event) => { const detail = (event as CustomEvent<Destination | undefined>).detail; if (detail?.page) openSetting.current(detail); };
+    window.addEventListener(OPEN_SETTING_EVENT, open);
+    return () => window.removeEventListener(OPEN_SETTING_EVENT, open);
+  }, []);
   function openContextSettings(next: Page, section?: string) {
     navigate(() => {
       const selected = route.kind === 'membership' ? snapshot?.memberships.find(item => item.id === route.id) : undefined;
@@ -504,12 +527,7 @@ function DesktopApp() {
     if (cancel) await run({ type: "cancelJob", jobId: cancel }, () => generation === modalGeneration.current);
     if (generation === modalGeneration.current) setModal(null);
   }
-  if (!snapshot)
-    return (
-      <div className="desktop-loading" role="status">
-        正在打开 Vonvon Bot…
-      </div>
-    );
+  if (!snapshot) return <SnapshotPendingView/>;
   const member =
     selection.kind === "membership"
       ? snapshot.memberships.find((item) => item.id === selection.id)
@@ -537,6 +555,7 @@ function DesktopApp() {
     application: "应用与启动",
     secrets: "决策模型",
     diagnostics: "状态与诊断",
+    devices: "设备",
   };
   const host = snapshot.host;
   const ready = host.kind === "connected";
@@ -612,6 +631,7 @@ function DesktopApp() {
         selectedFeature={featureId}
         onFeatureNavigate={id => navigate(() => {setJoinedTarget(undefined); setModal(current => current?.kind === 'join' && current.suspended ? null : current); setFeatureId(id);})}
         onSearch={() => setSearchOpen(true)}
+        deviceSwitcher={shell?.devices ? <DeviceSwitcher onManage={() => openPage('devices')}/> : undefined}
         onOpenList={openList}
         backLabel={`返回 ${settingsReturn?.label ?? parentLabel}`}
         onBack={
@@ -641,6 +661,9 @@ function DesktopApp() {
             </div>;
           })}
           {feedback}
+          <RemoteUpdateNotice/>
+          <DeviceStatusBanner/>
+          <DeviceVersionNotice onUpgrade={() => openPage('application')}/>
           {!ready && (
             <InlineNotice
               title={
@@ -650,7 +673,7 @@ function DesktopApp() {
             >
               {host.kind === "blocked" || host.kind === "disconnected"
                 ? host.message
-                : "正在读取本机运行状态。"}
+                : `正在读取${device.isRemote ? `${whereName(device)}的` : "本机"}运行状态。`}
             </InlineNotice>
           )}
           {snapshot.stale && ready && (
@@ -671,7 +694,7 @@ function DesktopApp() {
             </InlineNotice>
           )}
           {page === "home" && snapshot.agents.length > 0 && <TodayHome snapshot={snapshot} onSetup={() => openPage("setup")} onRegister={() => void register()} onOpenUsage={() => openPage("usage")} disabled={!ready || busy}/>}
-          {page === "settings" && <SettingsHome updateNotice={updateNotice} onNavigate={openPage} onFeature={id => navigate(() => setFeatureId(id))}/>}
+          {page === "settings" && <SettingsHome devices={Boolean(shell?.devices)} updateNotice={updateNotice} onNavigate={openPage} onFeature={id => navigate(() => setFeatureId(id))}/>}
           {page === "collaboration" && (
             <>
               {route.kind === 'list' && host.kind === "connected" &&
@@ -891,32 +914,39 @@ function DesktopApp() {
               )}
             </>
           )}
-          {(page === "setup" || (page === "home" && !snapshot.agents.length)) && <WelcomeSetup initialProvider={setupProvider} onProviderPrepared={setSetupProvider} onCreateBot={provider => void register(undefined, provider)} onOpenGroups={() => snapshot.agents.length === 1 ? openJoin(snapshot.agents[0]!.id, undefined, setupProvider) : openList("agents")} snapshot={snapshot} ready={ready} busy={busy} run={run} onRegister={agentId => void register(agentId)} onOpenEnvironment={() => openPage("environment")} onNotice={(message, error) => setNotice({message, error})} codexJobs={null}/>}
+          {(page === "setup" || (page === "home" && !snapshot.agents.length)) && <WelcomeSetup initialProvider={setupProvider} onProviderPrepared={setSetupProvider} onCreateBot={provider => void register(undefined, provider)} onOpenGroups={() => snapshot.agents.length === 1 ? openJoin(snapshot.agents[0]!.id, undefined, setupProvider) : openList("agents")} snapshot={snapshot} ready={ready} busy={busy} run={run} onRegister={agentId => void register(agentId)} onOpenEnvironment={() => openPage("environment")} onNotice={(message, error) => setNotice({message, error})}/>}
           {page === "bridgeImport" && <section className="welcome-setup" aria-label="导入 Bridge"><header className="today-page-heading"><h1>导入 Bridge</h1></header><BridgeImportPanel ready={ready} busy={busy} platform={snapshot.application.platform} showUnavailable/></section>}
           {page === "providers" && <ProviderManager snapshot={snapshot} ready={ready} busy={busy} run={run} reveal={searchTarget?.reveal === 'codex' ? 'codex' : searchTarget?.reveal === 'claude' ? 'claude' : undefined}/>}
-          {page === "environment" && <><EnvironmentPanel reveal={searchTarget?.reveal} codexBusy={snapshot.jobs.some(job => job.type === "installCodex" && isActive(job))} request={client.environment} codexJobs={snapshot.jobs.filter(job => job.type === "installCodex").map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/></>}
+          {page === "environment" && <><EnvironmentPanel reveal={searchTarget?.reveal} request={client.environment}/></>}
           {page === "usage" && <UsagePanel request={client.collaboration} onOpenEnvironment={() => openPage('environment')} onOpenShare={() => setModal({kind: 'shareUsage'})}/>}
           {page === "application" && (
             <div className="application-page">
               <header className="application-heading today-page-heading"><h1>应用与启动</h1></header>
-              <UpdatePanel request={client.machine} externalCoreAvailable={externalCoreAvailable}
+              <UpdatePanel request={client.machine} externalCoreAvailable={device.isRemote ? false : externalCoreAvailable}
                 attached={host.kind === 'connected' && host.ownership === 'attached'}
-                version={snapshot.application.version} device={deviceTitle(snapshot.application.platform)}
+                {...appCardFor(device, snapshot.application, devicesState?.client.version)}
+                server={device.isRemote ? <ServerUpdateCard variant="remote" request={client.machine} where={device}/> : undefined}
                 advancedSettings={<>
-                  <MachinePanel reveal={searchTarget?.reveal} request={client.machine} agents={snapshot.agents} macos={snapshot.application.platform === 'macos'}/>
+                  <MachinePanel reveal={searchTarget?.reveal} request={client.machine} agents={snapshot.agents} macos={snapshot.application.platform === 'macos'}
+                    {...device.isRemote ? {remote: device, onRestart: () => void run({type: 'restartHost'})} : {quitKeepsDaemon}}/>
                   <SettingsPanel scope="host" target={{kind: 'host'}}/>
                 </>}>
-                <SettingsGroup label="启动选项" id={settingAnchor('启动选项')} footer={snapshot.application.platform === 'macos' ? '关闭窗口会隐藏 Dock 图标，Bot 继续运行；可从状态栏恢复窗口。选择退出会停止后台和所有 Bot。' : '关闭桌面窗口后应用留在系统托盘，Bot 继续运行。选择退出会停止后台和所有 Bot。'}>
+                {device.isRemote ? <RemoteServiceGroup application={snapshot.application} where={device} busy={busy || host.kind !== 'connected'}
+                  onRestart={() => void run({type: 'restartHost'})}
+                  onToggle={enabled => void runShell(async () => setNotice({message: await toggleService(enabled, client, shell), error: false}))}/>
+                : <SettingsGroup label="启动选项" id={settingAnchor('启动选项')} footer={<>{snapshot.application.platform === 'macos' ? '关闭窗口会隐藏 Dock 图标，Bot 继续运行；可从状态栏恢复窗口。' : '关闭桌面窗口后应用留在系统托盘，Bot 继续运行。'}{quitKeepsDaemon ? quitKeepsText : '选择退出会停止后台和所有 Bot。'}</>}>
                   <SettingsRow title="后台运行"
                     description={host.kind === 'connected'
-                      ? `${host.ownership === 'owned' ? '由本机启动' : '已接续现有服务'} · 重新加载已保存的 Bot 设置`
+                      ? `${host.ownership === 'owned' ? '由本机启动' : '已接续现有服务'} · ${RESTART_HOST_TEXT}`
                       : '尚未连接'}
                     trailing={<Button size="sm" disabled={busy || host.kind !== 'connected'} onClick={() => void run({type: 'restartHost'})}>重启后台</Button>}/>
                   <LoginServiceRow application={snapshot.application} busy={busy} onToggle={enabled => void runShell(async () => setNotice({message: await toggleService(enabled, client, shell), error: false}))}/>
-                </SettingsGroup>
+                </SettingsGroup>}
+                <RemoteAccessPanel/>
               </UpdatePanel>
             </div>
           )}
+          {page === "devices" && <DevicesPanel/>}
           {page === "secrets" && <SecretsPanel onOpenProviders={() => openPage("providers")} onOpenApplication={() => openPage("application")}
             onOpenLogs={() => { openPage("diagnostics"); setSearchTarget({page: "diagnostics", section: "daemon 日志"}); }}/>}
           {page === "diagnostics" && <DiagnosticsPanel snapshot={snapshot} ready={ready} busy={busy} run={run}
@@ -925,7 +955,7 @@ function DesktopApp() {
           </>}
         </div>
       </AppShell>
-      {searchOpen && <SearchDialog open entries={searchEntries(snapshot, {externalCoreAvailable, schedules: searchSchedules})} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>}
+      {searchOpen && <SearchDialog open entries={searchEntries(snapshot, {externalCoreAvailable, schedules: searchSchedules, devices: Boolean(shell?.devices)})} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>}
       <PendingGroupToasts pages={pendingGroups} agents={snapshot.agents} hidden={modal !== null} onContinue={(owner, group) => openJoin(owner.id, group)} />
       {modal?.kind === 'selectJoinBot' && <SelectJoinBotDialog snapshot={snapshot} onSelect={id => openJoin(id)} onClose={() => setModal(null)}/>}
       {modal?.kind === 'join' && (() => {
@@ -1004,112 +1034,5 @@ function DesktopApp() {
         }}
       />
     </>
-  );
-}
-function JobPanel({
-  job,
-  run,
-  busy,
-}: {
-  job: Job;
-  run: (command: Command) => Promise<CommandResult>;
-  busy: boolean;
-}) {
-  const shell = useShellCapabilities();
-  const [linkError, setLinkError] = useState("");
-  const [copyNote, setCopyNote] = useState("");
-  const urlInput = useRef<HTMLInputElement>(null);
-  const linkFailure = (error: unknown) => setLinkError(error instanceof Error ? error.message : "链接操作失败。");
-  async function copyLink(url: string) {
-    setLinkError(""); setCopyNote("");
-    try {
-      // When the clipboard refuses, select the full link so the user can copy it by hand.
-      const outcome = await copyAuthorizationUrl(url, "registration", () => { urlInput.current?.focus(); urlInput.current?.select(); });
-      setCopyNote(copyFeedback(outcome));
-    } catch (error) { linkFailure(error); }
-  }
-  const [now, setNow] = useState(Date.now);
-  const expiresAt = job.phase === "qr" ? job.expiresAt : null;
-  useEffect(() => {
-    if (expiresAt === null) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [expiresAt]);
-  const expired = expiresAt !== null && expiresAt <= now;
-  return (
-    <SettingsGroup
-      label={
-        job.type === "registerAgent"
-          ? "飞书扫码注册"
-          : job.type === "installCodex"
-            ? "Codex 安装"
-            : "Codex 授权"
-      }
-    >
-      <div className="desktop-job" role="status">
-        {job.phase === "qr" ? (
-          <>
-            {expired ? (
-              <p>
-                二维码和注册链接已过期。请取消本次操作，关闭此对话框后重新注册 Bot。
-              </p>
-            ) : (
-              <>
-                <img className="desktop-qr" src={job.image} alt="飞书注册二维码" />
-                <p>
-                  请用飞书扫码，或打开注册链接。有效期至{" "}
-                  {formatTime(job.expiresAt)}。
-                </p>
-                <FormField className="desktop-registration-url" label="完整注册链接">
-                  <input ref={urlInput} aria-label="完整注册链接" readOnly value={job.url} />
-                </FormField>
-                <div className="desktop-actions">
-                  <Button
-                    disabled={busy}
-                    onClick={() => void openExternalUrl(job.url, 'registration', shell).catch(linkFailure)}
-                  >
-                    打开链接
-                  </Button>
-                  <Button
-                    disabled={busy}
-                    onClick={() => void copyLink(job.url)}
-                  >
-                    复制链接
-                  </Button>
-                </div>
-                {copyNote && <p className="settings-operation-message">{copyNote}</p>}
-              </>
-            )}
-          </>
-        ) : job.phase === "authorizing" ? (
-          <>
-            <p>在官方授权页面输入此设备代码。</p>
-            <code className="desktop-device-code">{job.userCode}</code>
-            <Button
-              disabled={busy || !job.verificationUrl}
-              onClick={() => { if (job.verificationUrl) void openExternalUrl(job.verificationUrl, 'authorization', shell).catch(linkFailure); }}
-            >
-              打开官方授权页面
-            </Button>
-            {!job.verificationUrl && <p>当前授权链接不可用，请重新开始授权。</p>}
-          </>
-        ) : (
-          <p>
-            {job.phase === "succeeded" && <Check size={14} />} {job.message}
-          </p>
-        )}
-        {linkError && <p className="settings-operation-message" role="alert">{linkError}</p>}
-        {isActive(job) && (
-          <Button
-            size="sm"
-            disabled={busy || job.phase === "activating"}
-            onClick={() => void run({ type: "cancelJob", jobId: job.id })}
-          >
-            取消本次操作
-          </Button>
-        )}
-      </div>
-    </SettingsGroup>
   );
 }

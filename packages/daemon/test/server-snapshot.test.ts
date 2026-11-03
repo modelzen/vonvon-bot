@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { desktopSnapshotSchema, type DesktopSnapshot } from '@vonvon/protocol';
 import type { AdminBot, AdminProject } from '../src/admin/service';
 import type { DesktopServiceStatus } from '../src/host/service';
-import { createSnapshotStore, type SnapshotStore } from '../src/server/snapshot';
+import { createSnapshotStore, hostPlatform, type SnapshotStore } from '../src/server/snapshot';
 import { environmentRpc } from '../src/server/rpc/environment';
 import { commandRpc } from '../src/server/rpc/command';
 import { writeServiceActionRecord, writeServiceSkipped, type ServiceActionRecord } from '../src/service/action-report';
@@ -230,7 +230,7 @@ describe('login-time service field (s08)', () => {
     set({ ...managed('unknown', 'Cannot ask systemd (Linux): Failed to connect to bus'), hint: '当前终端没有 XDG_RUNTIME_DIR。', linger: { state: 'off', detail: 'x' } });
     await store.refreshService();
     expect(store.current().application.service).toMatchObject({ state: 'unknown', hint: '当前终端没有 XDG_RUNTIME_DIR。', linger: 'off' });
-    expect(store.current().application.platform).toBe(process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : 'unsupported');
+    expect(store.current().application.platform).toBe(hostPlatform());
   });
   it('re-reads the skip flag and a finished report on the next rebuild', async () => {
     const { root, store } = await serviceStore();
@@ -297,4 +297,10 @@ describe('login-time service field (s08)', () => {
     await store.refreshService();
     expect(store.current().application.service).toBeUndefined();
   });
+});
+
+// main 必败: Windows answered `unsupported` (devices 第 19 节). serverInfo reads the same function.
+it('names Windows as windows in the snapshot, which still parses', () => {
+  expect(['darwin', 'linux', 'win32', 'freebsd'].map(platform => hostPlatform(platform as NodeJS.Platform))).toEqual(['macos', 'linux', 'windows', 'unsupported']);
+  expect(desktopSnapshotSchema.shape.application.shape.platform.parse('windows')).toBe('windows');
 });

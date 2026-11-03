@@ -46,8 +46,9 @@ describe('entry lifecycle and authorization', () => {
     const b = entries.issue({ kind: 'p2p', chatId: 'private-dm' });
     const ta = thread(); a.attach(ta); b.attach(thread()); entries.openTurn(ta, person);
     const aa = await a.call('session_info', {}), bb = await b.call('session_info', {});
-    expect(aa).toMatchObject({ ok: true, result: { v: 1, place: 'group', turn: 'person', settings: { allowed: false, reason: 'not-dm' } } });
-    expect(bb).toMatchObject({ ok: true, result: { place: 'p2p', turn: 'none' } });
+    // settings-dm-only: only a private chat's session_info says anything about settings
+    expect(aa).toEqual({ ok: true, result: { v: 1, place: 'group', turn: 'person' } });
+    expect(bb).toEqual({ ok: true, result: { v: 1, place: 'p2p', turn: 'none', settings: { allowed: false, reason: 'not-human-turn' } } });
     expect(JSON.stringify([aa, bb])).not.toMatch(/private-chat|private-dm|admin|m1/);
     entries.closeAll('shutdown');
   });
@@ -64,6 +65,18 @@ describe('entry lifecycle and authorization', () => {
     expect(write).not.toHaveBeenCalled();
     f.entry.revoke('closed');
     expect(() => names()).toThrow();
+  });
+  // settings-dm-only: a read kept to private chats (settings_get, settings_access) is neither listed nor called elsewhere
+  it.each(['group', 'doc', 'p2p'] as const)('lists and calls a private chat\'s read only there: %s', async kind => {
+    const run = vi.fn(async () => 'dm read');
+    const dmRead: AgentTool = { name: 't_dm_read', class: 'read', places: ['p2p'], description: 'fixture dm read', input: z.object({}), run };
+    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => false, tools: [read, dmRead] });
+    const entry = entries.issue({ kind, ...(kind === 'group' ? { chatId: 'oc_a' } : {}) });
+    const t = thread(); entry.attach(t); entries.openTurn(t, person);
+    expect(entry.tools().map(spec => spec.name)).toEqual(kind === 'p2p' ? ['t_read', 't_dm_read'] : ['t_read']);
+    expect(await entry.call('t_dm_read', {})).toEqual(kind === 'p2p' ? { ok: true, result: 'dm read' } : { ok: false, code: 'unknown-tool', message: '没有这个工具。' });
+    expect(run).toHaveBeenCalledTimes(kind === 'p2p' ? 1 : 0);
+    entries.closeAll('shutdown');
   });
   it('permits static discovery pending attach, but no calls', async () => {
     const run = vi.fn(async () => 'ok'); const f = setup({ attached: false, open: false, run });
@@ -97,6 +110,29 @@ describe('entry lifecycle and authorization', () => {
     expect(await f.call()).toMatchObject({ code: 'revoked' });
     vi.mocked(f.t.isAlive).mockReturnValue(true);
     expect(await f.entry.call('t_read', {})).toMatchObject({ code: 'revoked' });
+  });
+  // devices-4a 4.3: each session has its id, whose token the host drops once the session ends, however it ends. main 必败
+  it('names each session and tells the host once when it ends', async () => {
+    const sessions = { revoke: vi.fn() };
+    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => false, sessions });
+    const dying = entries.issue({ kind: 'group', chatId: 'oc_a' });
+    const closed = entries.issue({ kind: 'p2p', chatId: 'oc_b' });
+    const open = entries.issue({ kind: 'doc' });
+    for (const entry of [dying, closed, open]) expect(entry.sessionId).toMatch(/^ses_[0-9a-f]{16}$/);
+    expect(new Set([dying.sessionId, closed.sessionId, open.sessionId]).size).toBe(3);
+    const t = thread(); dying.attach(t); closed.attach(thread()); open.attach(thread());
+    vi.mocked(t.isAlive).mockReturnValue(false);
+    expect(await dying.call('session_info', {})).toMatchObject({ code: 'revoked' });
+    expect(await dying.call('session_info', {})).toMatchObject({ code: 'revoked' });
+    expect(sessions.revoke.mock.calls).toEqual([[dying.sessionId]]);
+    closed.revoke('closed'); closed.revoke('closed');
+    entries.closeAll('shutdown');
+    expect(sessions.revoke.mock.calls).toEqual([[dying.sessionId], [closed.sessionId], [open.sessionId]]);
+    // a host that throws does not break the revoke
+    const failing = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => false, sessions: { revoke: () => { throw new Error('gone'); } } });
+    const entry = failing.issue({ kind: 'p2p' });
+    expect(() => entry.revoke('start-failed')).not.toThrow();
+    expect(logs.fail).toHaveBeenCalledWith('agent', expect.any(Error), { phase: 'session-revoke', sessionId: entry.sessionId });
   });
   it('revokes all grants and stops issuance during shutdown', async () => {
     const f = setup(); const other = f.entries.issue({ kind: 'group' }); other.attach(thread());

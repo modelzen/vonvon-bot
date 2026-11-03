@@ -1,11 +1,14 @@
+import { selfEntry } from '../core/self-entry';
 import { readSingleInstanceHolder } from '../core/single-instance';
 import { botPaths, paths } from '../config/paths';
-import { CHILD_SHUTDOWN_GRACE_MS, closeOwnedProviders, observeShutdown, settleOwnedChild, type ShutdownControl } from '../host/lifecycle';
+import { CHILD_SHUTDOWN_GRACE_MS, closeOwnedProviders, observeShutdown, settleOwnedChild, type ShutdownControl, type StopReason } from '../host/lifecycle';
 import type { ChildProcess } from 'node:child_process';
 import { spawnProcess } from '../platform/spawn';
 import { log } from '../core/logger';
+import { withoutSessionMarkers } from '../config/session-env';
 import { loadBots, type BotEntry } from '../config/bots';
-import { createAdminIpcCaller, type AdminIpcCaller } from '../admin/ipc';
+import { askBotOver, createAdminIpcCaller, createHostIpcResponder, type AdminIpcCaller } from '../admin/ipc';
+import { createSessionTokens } from '../host/session-tokens';
 import { AdminWriteError } from '../admin/ops';
 import { createAdminService } from '../admin/service';
 import { botNotRunning } from '../admin/schedule-commands';
@@ -13,6 +16,7 @@ import { installBackendDep, uninstallBackendDep } from '../agent';
 import { performCoreUpdate } from '../service/update';
 import { startApi } from '../server/http';
 import { noteClaudeLoginFailed } from '../agent/claude-agent/login';
+import { toolCommand } from '../environment/tool-command';
 import { createDiagnosticsStore, parseDiagnosticsIpc } from './diagnostics';
 import { bridgeVersion } from '../core/version';
 import {
@@ -29,6 +33,8 @@ const ownedWorkSchema = z.object({
   fcb: z.literal('fcb.owned-work'),
   pids: z.array(z.number().int().positive()),
   settled: z.boolean(),
+  /** The provider process groups the child still has registered; absent from a child before 2026-11-02. */
+  registered: z.array(z.number().int().positive()).optional(),
 });
 type OwnedWorkReport = z.infer<typeof ownedWorkSchema>;
 type ChildOwnership = { report?: OwnedWorkReport };
@@ -43,6 +49,23 @@ const PAUSES_RETRY_MS = 30_000;
 const LOCK_RETRY_MS = 5_000;
 const LOCK_WARN_MS = 120_000;
 const LOCK_SLOW_MS = 30_000;
+/**
+ * The longest a Bot child takes to stop (owner 2026-11-02): it interrupts its turns, gives them 3 seconds, closes the
+ * agents and waits at most 8 seconds for the cards (handle-message.ts); past this it is killed, and so are the agent
+ * process groups it last reported (they run in groups of their own and would outlive it).
+ */
+export const BOT_STOP_LIMIT_MS = 15_000;
+
+/** SIGKILL to each reported agent process group still there; POSIX only (Windows ends a child's tree with its job). */
+export function reapReportedGroups(pids: readonly number[], kill: (pid: number, signal: NodeJS.Signals) => void = (pid, signal) => process.kill(pid, signal)): number[] {
+  if (process.platform === 'win32') return [];
+  const reaped: number[] = [];
+  for (const pid of new Set(pids)) {
+    try { kill(-pid, 'SIGKILL'); reaped.push(pid); }
+    catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) log.fail('daemon-shutdown', error, { phase: 'reap-agent-group', pid }); }
+  }
+  return reaped;
+}
 
 interface Child {
   bot: BotEntry;
@@ -80,16 +103,17 @@ const STATUS_IPC_TIMEOUT_MS = 2_000;
 const STDERR_TAIL_LINES = 64;
 export const HOST_PAUSED_ACTIVATION = 'daemon 已暂停（10 分钟内崩溃了 3 次），这个 Bot 恢复运行后才会启动。运行 vonvon daemon restart 恢复。';
 
-export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void>; paused?: boolean; crash?: SupervisorCrash; notifier?: CrashNotifier; registryUnreadable?: boolean; timing?: { lockRetryMs?: number; lockWarnMs?: number; lockSlowMs?: number } } = {}): Promise<void> {
+export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void>; paused?: boolean; crash?: SupervisorCrash; notifier?: CrashNotifier; registryUnreadable?: boolean; timing?: { lockRetryMs?: number; lockWarnMs?: number; lockSlowMs?: number; botStopLimitMs?: number } } = {}): Promise<void> {
   const control = options.control ?? observeShutdown();
   const supervisorStartedAt = Date.now();
-  const cliEntry = process.argv[1];
-  if (!cliEntry) throw new Error('supervisor: 无法解析 CLI 入口（process.argv[1] 为空）');
+  const cliEntry = selfEntry();
+  if (!cliEntry) throw new Error('supervisor: 无法解析 CLI 入口');
 
   // An untracked host (no run marker) still gets its bots' records, under ids of its own.
   const runId = options.crash?.runId ?? randomUUID();
   const chainId = options.crash?.chainId ?? randomUUID();
-  const childEnv: NodeJS.ProcessEnv = { ...process.env, VONVON_HOME: paths.appDir, VONVON_HOST_RUN_ID: runId, VONVON_HOST_CHAIN_ID: chainId };
+  // Not a session's: a host started inside one carries its markers, which would refuse `daemon run --bot` (devices-4a 4.9).
+  const childEnv: NodeJS.ProcessEnv = { ...withoutSessionMarkers(process.env), VONVON_HOME: paths.appDir, VONVON_HOST_RUN_ID: runId, VONVON_HOST_CHAIN_ID: chainId };
   const migration = bridgeImportRuntime();
   const importCodex = new Map<string, string>();
   let bridgeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -101,6 +125,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   const lockRetryMs = options.timing?.lockRetryMs ?? LOCK_RETRY_MS;
   const lockWarnMs = options.timing?.lockWarnMs ?? LOCK_WARN_MS;
   const lockSlowMs = options.timing?.lockSlowMs ?? LOCK_SLOW_MS;
+  const botStopLimitMs = options.timing?.botStopLimitMs ?? BOT_STOP_LIMIT_MS;
   // Same chain after a host crash: a paused bot stays paused. A new chain (restart, stop and start) starts them all, and
   // so does a damaged file, logged like a damaged run.json.
   const saved = readBotPauses(root, chainId, () => log.warn('daemon-crash', 'bot_pauses_corrupt', {}));
@@ -117,9 +142,11 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   const ownership = new WeakMap<ChildProcess, ChildOwnership>();
   const errors: unknown[] = [];
   let api: Awaited<ReturnType<typeof startApi>> | undefined;
+  /** devices-4a 4.1: the bots' session tokens, which the API checks a session's hello against; in memory only. */
+  const sessionTokens = createSessionTokens();
   const children = new Map<string, Child>(bots.map((bot) => [bot.appId, newChild(bot, true)]));
   // Lives here, not in the child: a bot's records survive its restarts and go with the daemon's.
-  const diagnostics = createDiagnosticsStore({ changed: () => api?.invalidate(), claudeSignedOut: noteClaudeLoginFailed });
+  const diagnostics = createDiagnosticsStore({ changed: () => api?.invalidate(), claudeSignedOut: at => noteClaudeLoginFailed(at, toolCommand('claude')) });
   const records = createCrashRecordCache(root);
   const notifier = options.notifier ?? createCrashNotifier({ root, clock, log });
 
@@ -288,6 +315,18 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     });
     c.ipc = ipc;
     proc.on('message', ipc.onMessage);
+    // devices-4a 4.2: the child asks for its sessions' tokens, and only for its own bot; they end with the process.
+    const appId = c.bot.appId;
+    const issued = new Set<string>();
+    proc.on('message', createHostIpcResponder({
+      issueSessionToken: async input => {
+        if (input.appId !== appId) throw new Error('A bot process asked for another bot\'s session token');
+        const token = sessionTokens.issue(input);
+        issued.add(input.sessionId);
+        return token;
+      },
+      revokeSessionToken: async sessionId => { if (issued.delete(sessionId)) sessionTokens.revoke(sessionId); },
+    }, msg => { if (proc.connected) proc.send(msg); }).onMessage);
     proc.on('message', (message: unknown) => {
       if (c.proc !== proc) return;
       const parsed = ownedWorkSchema.safeParse(message);
@@ -311,6 +350,9 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     });
 
     proc.on('exit', (code, signal) => {
+      // Its sessions ended with it, whether or not it is still the bot's current process.
+      for (const sessionId of issued) sessionTokens.revoke(sessionId);
+      issued.clear();
       if (c.proc !== proc) return;
       diagnostics.clearLive(c.bot.appId);
       c.proc = undefined;
@@ -380,19 +422,32 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     }).finally(() => {child.bridgeChecking = false;});
   };
 
-  const stopBot = (child: Child): Promise<void> => {
+  const stopBot = (child: Child, reason?: StopReason): Promise<void> => {
     if (child.stopping) return child.stopping;
     const proc = child.proc;
     if (!proc) return Promise.resolve();
     const owned = ownership.get(proc);
-    const stopping = settleOwnedChild(proc, CHILD_SHUTDOWN_GRACE_MS, false, async () => {
-      const graceEnds = Date.now() + CHILD_SHUTDOWN_GRACE_MS;
-      while (proc.exitCode === null && proc.signalCode === null && !owned?.report?.settled) {
-        if (Date.now() >= graceEnds) {
-          log.warn('daemon-shutdown', 'owned_work_unconfirmed', { pid: proc.pid, pids: owned?.report?.pids ?? [] });
+    // One deadline for the whole stop: the child's own drain, then its exit; SIGKILL after it (stopChild).
+    const deadline = Date.now() + botStopLimitMs;
+    const left = (): number => Math.max(0, deadline - Date.now());
+    const alive = (): boolean => proc.exitCode === null && proc.signalCode === null;
+    const settling = settleOwnedChild(proc, () => Math.min(CHILD_SHUTDOWN_GRACE_MS, left()), false, async () => {
+      while (alive() && !owned?.report?.settled) {
+        if (left() <= 0) {
+          log.warn('daemon-shutdown', 'bot_stop_limit', { bot: child.bot.name, pid: proc.pid, limitMs: botStopLimitMs, pids: owned?.report?.pids ?? [] });
+          return;
         }
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, Math.min(1000, left())));
       }
+    }, reason);
+    // Killed past the deadline: the agents it had not closed run in their own groups and would outlive it.
+    const stopping = settling.catch(error => {
+      const report = owned?.report;
+      if (report && !report.settled) {
+        const reaped = reapReportedGroups([...report.pids, ...report.registered ?? []]);
+        if (reaped.length) log.warn('daemon-shutdown', 'agent_groups_reaped', { bot: child.bot.name, pid: proc.pid, pids: reaped });
+      }
+      throw error;
     });
     child.stopping = stopping;
     const finished = (): void => {
@@ -459,8 +514,16 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     };
     bridgeTimer = setTimeout(() => void checkBridgeLocks(), lockSlowMs);
     api = await startApi({
+      startedAt: supervisorStartedAt,
       port: options.port,
       control,
+      sessionTokens,
+      // devices-4b 4.3: a session's ★ request goes to the process of its bot that is running now. A session of a process
+      // that went is not there (its tokens went with it), and one that cannot answer is refused.
+      askBot: (appId, sessionId, action) => {
+        const child = children.get(appId);
+        return askBotOver(child?.proc?.connected ? child.ipc : undefined, sessionId, action);
+      },
       bridgeImport: migration.importer,
       diagnostics,
       crashes: { application: now => ({ ...(hostPause ? { paused: hostPause } : {}), records: records(now) }), paused: appId => children.get(appId)?.pause, lockHeld: appId => children.get(appId)?.bridgeHeld ?? children.get(appId)?.lockWait?.reported },
@@ -532,11 +595,11 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           if (!child?.enabled || !child.proc || !child.ipc) throw new AdminWriteError('这个 Bot 没在运行');
           return child.ipc.call(op, 60_000);
         },
-        executeSchedule: async (botId, via, request) => {
+        executeSchedule: async (botId, actor, request) => {
           const child = byAppId(botId);
           // A crash-paused bot is not running either; its pause is shown on the bot itself. A stopping one drains and says no.
           if (!child?.enabled || child.pause || child.stopping || !child.proc || !child.ipc) return botNotRunning();
-          return child.ipc.call({ kind: 'schedule', via, request }) as Promise<ScheduleReply>;
+          return child.ipc.call({ kind: 'schedule', actor, request }) as Promise<ScheduleReply>;
         },
         executeSettingsRead: async (botId, op) => {
           const child = byAppId(botId);
@@ -596,7 +659,8 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     if (pausesRetry) clearTimeout(pausesRetry);
     const cleanup = await Promise.allSettled([closeOwnedProviders(async () => {
       const drained = await Promise.allSettled([Promise.resolve().then(() => api?.beginDrain())]);
-      drained.push(...await Promise.allSettled([...children.values()].map(stopBot)));
+      // The Bots stop all at once, each told why: their cards say the server stopped, restarted or updated.
+      drained.push(...await Promise.allSettled([...children.values()].map(child => stopBot(child, control.reason))));
       errors.push(...drained.filter(result => result.status === 'rejected').map(result => result.reason));
     }), notices]);
     cleanup.push(...await Promise.allSettled([control.completeShutdown(() => api?.release() ?? Promise.resolve())]));

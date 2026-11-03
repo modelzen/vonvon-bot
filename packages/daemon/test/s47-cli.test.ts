@@ -39,10 +39,10 @@ it('keeps terminal field patches compatible and retains reason only after a save
 it('returns the shared access structure and Feishu pagination without converting a failure to empty success', async () => {
   const h = harness(async () => ({ kind: 'view', view: { scope, sections: { cards: value } } }));
   await runSettingsAccess({}, h.io, h.daemon);
-  expect(h.out()).toEqual({ access: { cards: { kind: 'writable' } } });
+  expect(h.out()).toEqual({ ok: true, access: { cards: { kind: 'writable' } } });
   const groups = harness(async () => undefined);
   await runFeishu('groups', undefined, { cursor: 'before' }, groups.io, groups.daemon);
-  expect(groups.out()).toEqual({ groups: [], nextCursor: 'next' });
+  expect(groups.out()).toEqual({ ok: true, groups: [], nextCursor: 'next' });
   const failed = harness(async () => undefined, vi.fn(async () => { throw new Error('upstream'); }));
   await expect(runFeishu('groups', undefined, {}, failed.io, failed.daemon)).rejects.toThrow('upstream');
 });
@@ -88,6 +88,6 @@ it('strips transport reply envelopes from member results shared with MCP', async
   const run = vi.fn(async () => ({ kind: 'members', members: [{ openId: 'synthetic-member', name: 'Fixture' }], nextCursor: 'more' }));
   const h = harness(async () => undefined, run);
   await runFeishu('members', 'oc_fixture', { cursor: 'page' }, h.io, h.daemon);
-  expect(h.out()).toEqual({ members: [{ openId: 'synthetic-member', name: 'Fixture' }], nextCursor: 'more' });
+  expect(h.out()).toEqual({ ok: true, members: [{ openId: 'synthetic-member', name: 'Fixture' }], nextCursor: 'more' });
   expect(run).toHaveBeenCalledWith({ type: 'listGroupMembers', agentId: 'cli_test', groupId: 'oc_fixture', cursor: 'page' });
 });

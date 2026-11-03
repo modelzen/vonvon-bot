@@ -53,6 +53,9 @@ export class VoiceFailure extends Error {
   }
 }
 
+/** A voice action the user can fix themselves (switch voice on, wait for a running check or the cooldown); its message is shown as is. */
+export class VoiceActionRefused extends Error {}
+
 /** Bridge-owned reply decoration. Never sent to the agent as an instruction. */
 export interface VoiceReply {
   messageId: string;

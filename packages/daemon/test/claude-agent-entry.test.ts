@@ -13,7 +13,7 @@ afterEach(async () => { await Promise.all(threads.splice(0).map(t => t.close()))
 function entry() {
   return { tools: () => [{ name: 'session_info', description: 'test', input: z.object({}) }],
     call: vi.fn<AgentEntry['call']>(async () => ({ ok: true, result: { v: 1 } })),
-    noteToolUse: vi.fn(), attach: vi.fn(), revoke: vi.fn() } satisfies AgentEntry;
+    noteToolUse: vi.fn(), attach: vi.fn(), revoke: vi.fn(), sessionId: 'ses_0123456789abcdef' } satisfies AgentEntry;
 }
 function fixture(withSdk = true, stream?: AsyncIterable<SDKMessage>) {
   let options: Options | undefined;

@@ -1,6 +1,6 @@
 import type { ResponseRoster } from '@vonvon/protocol';
 import { responseMemberLabel } from '../bot/response-members';
-import { getAppRoleSnapshot } from '../config/app-roles';
+import { getAppRoleSnapshot, trustedFeishuAdmins } from '../config/app-roles';
 import { voiceView, VOICE_TITLE, VOICE_DESCRIPTION, VOICE_NOTICE, VOICE_DOC_URL } from '../voice/view';
 import {
   COMPLETION_REMINDER_LONG_TASK_MAX_MINUTES,
@@ -20,7 +20,7 @@ import {
   type AppConfig,
   type SessionTitleAiConfig,
 } from '../config/schema';
-import { conversationCopy, modeToConversation, topicConversationCopy } from '@vonvon/protocol';
+import { conversationCopy, FULL_ACCESS_WARNING, modeToConversation, topicConversationCopy } from '@vonvon/protocol';
 import { noMentionOf, ruleKind, sessionModeOf, type Project } from '../project/registry';
 import {
   DEFAULT_BACKEND_ID,
@@ -138,7 +138,7 @@ export const DM = {
   sessionTitleDisable: 'dm.sessionTitle.disable',
 } as const;
 
-/** Action ids for the in-group settings card (@bot /settings). */
+/** Action ids of the in-group settings card (@bot /settings), no longer sent (s1b): a click on an old one changes nothing. */
 export const GS = {
   setNoMention: 'gs.noMention',
   // 旧卡上的自动压缩按钮（s12 已去掉开关）
@@ -668,6 +668,7 @@ export function buildNewProjectDoneCard(p: Project, droppedNoMention = false, to
     md(`✅ ${verb} **${p.name}**${p.blank ? ' _(空白项目)_' : ''}`),
     note(`📂 \`${p.cwd}\`   ·   ${topic && sessionModeOf(p) === 'multi' ? '按话题聊' : kindLabel(p)}   ·   🧠 ${backendName}`),
     ...(droppedNoMention ? [note('智能开话题没有免 @，刚才选的没用上。')] : []),
+    ...(groupPermission(p).effect.mode === 'full' ? [note(`🔓 权限：完全访问。${FULL_ACCESS_WARNING}`)] : []),
     md(p.chatId ? '👉 去群里 **@我** 干活。' : '发我任意消息可再次打开管理台。'),
   ];
   if (p.chatId)
@@ -1457,7 +1458,7 @@ export function buildCompletionReminderCustomCard(cfg: AppConfig): CardObject {
 export const AUTO_COMPACT_RETIRED = '🗜️ 自动压缩现在一直开着，这个开关已经去掉了。';
 
 /**
- * In-group settings card (@bot /settings). 会话方式 is a read-only label here (the web
+ * In-group settings card (@bot /settings until s1b, which sends none any more). 会话方式 is a read-only label here (the web
  * changes it); 免@ is a live toggle. Uses option buttons (never lock) like
  * {@link buildSettingsCard}. Admin-gated by the handler. `notice` = 卡顶提示行。
  */
@@ -1504,9 +1505,10 @@ function memberName(names: Map<string, string>, id: string): string {
  * 全局管理员名单卡（DM「⚙️ 设置 → 👮 管理员」）。**纯按钮卡**——绝不放 select：select
  * 一旦交互会锁 card_id（见 {@link buildSettingsCard} 注释）。加人走独立的表单卡
  * {@link buildAddAdminCard}。owner 行无移除按钮（owner 恒为 admin、不可删）。
- * `names` 由调用方用 contact.batch 预解析 open_id→姓名。
+ * `names` 由调用方用 contact.batch 预解析 open_id→姓名。`editable`：只有飞书应用的拥有者（没有时是扫码注册者）能加、移本机管理员
+ * （product.md 3.7），别的管理员看到的名单只读，没有增删按钮。
  */
-export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>): CardObject {
+export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>, opts: { editable: boolean }): CardObject {
   const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
   const owner = roles?.ownerOpenId;
   const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
@@ -1517,7 +1519,7 @@ export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>): Car
     seen.add(owner);
     elements.push(actions([md(`👑 **${memberName(names, owner)}** · 飞书应用拥有者`)]));
   }
-  for (const id of roles?.admins ?? []) {
+  for (const id of trustedFeishuAdmins(roles)) {
     if (seen.has(id)) continue;
     seen.add(id);
     elements.push(actions([md(`${memberName(names, id)} · 飞书应用管理员`)]));
@@ -1531,13 +1533,14 @@ export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>): Car
     if (seen.has(id)) continue;
     seen.add(id);
     extra++;
-    elements.push(actions([md(`${memberName(names, id)} · 本地管理员`), button('🗑 移除', { a: DM.rmAdmin, u: id }, 'danger')]));
+    const label = md(`${memberName(names, id)} · 本地管理员`);
+    elements.push(actions(opts.editable ? [label, button('🗑 移除', { a: DM.rmAdmin, u: id }, 'danger')] : [label]));
   }
   if (extra === 0) elements.push(note('暂无额外管理员。'));
   elements.push(
     hr(),
-    actions([button('➕ 添加管理员', { a: DM.addAdminForm }, 'primary'), button('⬅️ 设置', { a: DM.settings })]),
-    note('飞书应用拥有者和管理员请在飞书开放平台管理；扫码注册者不可移除。'),
+    actions(opts.editable ? [button('➕ 添加管理员', { a: DM.addAdminForm }, 'primary'), button('⬅️ 设置', { a: DM.settings })] : [button('⬅️ 设置', { a: DM.settings })]),
+    note(opts.editable ? '飞书应用拥有者和管理员请在飞书开放平台管理；扫码注册者不可移除。' : '本机管理员名单只有飞书应用的拥有者能改。飞书应用拥有者和管理员请在飞书开放平台管理。'),
   );
   return card(elements, { header: { title: '👮 管理员', template: 'blue' } });
 }
@@ -1621,6 +1624,8 @@ export function buildPermissionCard(p: Pick<Project, 'name'> & PermissionProject
         tierSelect,
         actions([submitButton('✅ 保存权限', { a: DM.permissionSubmit, n: p.name, v: PERMISSION_CARD_VERSION }, 'primary', 'submit_perm')]),
       ]),
+      // devices 第 15 节：给群选完全访问的地方都带这句。
+      ...(options.some(option => option.value === 'full') ? [note(`完全访问：${FULL_ACCESS_WARNING}`)] : []),
       note('保存会断开本项目正在进行的会话，让新档位立即生效。'),
       note('高级设置在网页端的群详情里改，或者直接跟我说，例如“把这个群的 Claude 改成先出方案”。'),
       actions([button('⬅️ 返回设置', { a: DM.projectSettings, n: p.name })]),

@@ -6,7 +6,10 @@ export type ClaudeLogin = BackendLogin;
 /** The `account` the SDK's CLI reports at initialize (`AccountInfo` in sdk.d.ts). */
 export type ClaudeAccount = { subscriptionType?: string; tokenSource?: string; apiKeySource?: string; apiProvider?: string };
 
-export const CLAUDE_SIGNED_OUT_MESSAGE = '未登录。在终端运行 `claude` 登录，或设置 ANTHROPIC_API_KEY。';
+/** `command`: what starts the Claude Code CLI in a terminal, `claude` unless the one in use is a managed copy, which is on
+ * no PATH (environment/tool-command.ts, 0.9.0 Linux acceptance). */
+export const claudeSignedOutMessage = (command = 'claude'): string => `没配置好。在终端运行 \`${command}\` 配置账号，或设置 ANTHROPIC_API_KEY 用自定义 API。`;
+export const CLAUDE_SIGNED_OUT_MESSAGE = claudeSignedOutMessage();
 const CREDENTIAL_VARIABLES = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'] as const;
 
 /**
@@ -15,7 +18,7 @@ const CREDENTIAL_VARIABLES = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'A
  * until a real turn fails. Bedrock, Vertex and the like keep their credentials
  * elsewhere, so they are 无法确认. Returns null when the fields say nothing.
  */
-export function loginFromAccount(account: ClaudeAccount | undefined): ClaudeLogin | null {
+export function loginFromAccount(account: ClaudeAccount | undefined, command = 'claude'): ClaudeLogin | null {
   if (!account) return null;
   const provider = account.apiProvider ?? 'firstParty';
   if (provider !== 'firstParty') return {
@@ -30,15 +33,15 @@ export function loginFromAccount(account: ClaudeAccount | undefined): ClaudeLogi
   }
   const source = [account.apiKeySource, account.tokenSource].find(value => value && value !== 'none');
   if (source) return { state: 'signedIn', message: `已连接，凭据来自 ${source}。`, account: {kind: account.apiKeySource && account.apiKeySource !== 'none' || source === 'ANTHROPIC_AUTH_TOKEN' || source === 'ANTHROPIC_API_KEY' ? 'api' : 'unknown', apiProvider: 'firstParty'} };
-  return account.tokenSource === 'none' || account.apiKeySource === 'none' ? { state: 'signedOut', message: CLAUDE_SIGNED_OUT_MESSAGE } : null;
+  return account.tokenSource === 'none' || account.apiKeySource === 'none' ? { state: 'signedOut', message: claudeSignedOutMessage(command) } : null;
 }
 
 /** Under launchd the daemon may not reach the login keychain, and the CLI then reports
  * no credentials. e06 could not check this (that Mac's login is not in the keychain),
  * so under the LaunchAgent a signed-out answer is 无法确认, never 未登录. */
-export function loginUnderService(login: ClaudeLogin, env: NodeJS.ProcessEnv): ClaudeLogin {
+export function loginUnderService(login: ClaudeLogin, env: NodeJS.ProcessEnv, command = 'claude'): ClaudeLogin {
   if (login.state !== 'signedOut' || env.VONVON_SERVICE !== 'launchd') return login;
-  return { state: 'unknown', message: '无法确认：后台服务里没查到 Claude 登录，可能是读不到钥匙串。在终端里运行 `claude` 看是否已登录，或设置 ANTHROPIC_API_KEY。' };
+  return { state: 'unknown', message: `无法确认：后台服务里没查到 Claude 的配置，可能是读不到钥匙串。在终端运行 \`${command}\` 看能不能用，或设置 ANTHROPIC_API_KEY。` };
 }
 
 /** When the SDK cannot tell: a credential in the env counts as signed in (not
@@ -92,13 +95,14 @@ export function cachedClaudeLogin(): ClaudeLogin | undefined {
   return fresh();
 }
 
-export const CLAUDE_TURN_SIGNED_OUT_MESSAGE = '刚才有一轮因为没登录或登录过期失败了。在终端运行 `claude` 登录，再点「检查登录」。';
+export const claudeTurnSignedOutMessage = (command = 'claude'): string => `刚才有一轮因为 Claude 的配置不可用（没配置或已过期）失败了。在终端运行 \`${command}\` 配置好，再点「检查配置」。`;
+export const CLAUDE_TURN_SIGNED_OUT_MESSAGE = claudeTurnSignedOutMessage();
 /** A Claude turn failed for its login (s19). The probe only reads local credentials and would still say
  * 已登录 for an expired one, so the cache says 未登录 for the usual 5 minutes instead of being cleared;
  * a probe started by 检查登录 after this writes as usual. */
-export function noteClaudeLoginFailed(at = Date.now()): void {
+export function noteClaudeLoginFailed(at = Date.now(), command = 'claude'): void {
   generation++;
-  cache = { value: { state: 'signedOut', message: CLAUDE_TURN_SIGNED_OUT_MESSAGE }, at };
+  cache = { value: { state: 'signedOut', message: claudeTurnSignedOutMessage(command) }, at };
 }
 
 /** Test seam. */

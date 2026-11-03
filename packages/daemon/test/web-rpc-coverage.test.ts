@@ -23,7 +23,7 @@ const operationId = '00000000-0000-4000-8000-000000000001';
 it('serves browser daemon branches and keeps local URL and shell actions unsupported', async () => {
   const fixture = await startFixture();
   try {
-    const client = await socketClient(fixture.api.port, fixture.credential, 1, requestTimeout);
+    const client = await socketClient(fixture.api.port, fixture.credential, undefined, requestTimeout);
     await client.ready();
     const daemon = [
       ['command', { type: 'refresh' }],
@@ -44,24 +44,8 @@ it('serves browser daemon branches and keeps local URL and shell actions unsuppo
       if (method === 'machine' && payload.type === 'status') expect(frame).toMatchObject({ payload: { type: 'status', host: { ownership: 'owned', pid: process.pid }, cli: { kind: 'ready' } } });
       if (method === 'machine' && payload.type === 'logs') expect(frame).toMatchObject({ payload: { type: 'logs', text: 'log\n' } });
     }
-    const local = [
-      ['command', { type: 'openEventSettings', url: 'https://open.feishu.cn/app/cli_test/event' }],
-      ['command', { type: 'openJobAuthorization', jobId: 'job' }],
-      ['command', { type: 'copyJobAuthorization', jobId: 'job' }],
-      ['settings', { type: 'chooseExecutable' }],
-      ['settings', { type: 'saveExecutable', token: operationId, revision: 'rev' }],
-      ['environment', { type: 'openVerification', operationId }],
-      ['machine', { type: 'repairCli' }],
-      ['machine', { type: 'startHost' }],
-      ['machine', { type: 'openReleases' }],
-      ['machine', { type: 'checkDesktopUpdate' }],
-      ['machine', { type: 'installDesktopUpdate' }],
-      ['collaboration', { action: 'openGroup', agentId: 'cli_test', groupId: 'oc_test', projectName: 'test' }],
-    ] as const;
-    for (const [method, payload] of local) {
-      const frame = await client.call(requestSchema.parse({ type: 'request', id: `local-${method}-${'type' in payload ? payload.type : payload.action}`, method, payload }));
-      expect(frame).toMatchObject({ type: 'error', code: 'unsupported' });
-    }
+    const startHost = await client.call(requestSchema.parse({ type: 'request', id: 'machine-startHost', method: 'machine', payload: { type: 'startHost' } }));
+    expect(startHost).toMatchObject({ type: 'error', code: 'unsupported' });
     const service = await client.call(requestSchema.parse({ type: 'request', id: 'machine-service', method: 'machine', payload: { type: 'service', action: 'install' } }));
     expect(service).toMatchObject({ type: 'error', code: 'unsupported' });
     await client.close();
@@ -88,7 +72,7 @@ it('holds the real API drain until a login child exits after stop intent', async
     signal.throwIfAborted();
     fixture = await (starting = startFixture(fakeService(), { home: dir, getDataRoot: () => dir, resolveCodex: () => null, nodePath, path: dir, fetchLatest: async () => null }));
     signal.throwIfAborted();
-    const client = await socketClient(fixture.api.port, fixture.credential, 1, requestTimeout);
+    const client = await socketClient(fixture.api.port, fixture.credential, undefined, requestTimeout);
     await client.ready();
     const login = await client.call(requestSchema.parse({ type: 'request', id: 'login', method: 'environment', payload: { type: 'startLogin', tool: 'lark-cli' } }));
     expect(login).toMatchObject({ type: 'response', payload: { kind: 'operation', operation: { kind: 'running' } } });
@@ -148,8 +132,6 @@ else process.exit(0);
     joinedGroups: async () => ({ groups: [] }),
     groupMembers,
     bindGroup: async () => ({ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }),
-    startCodexJob: () => ({ id: operationId }),
-    codexJob: () => ({ id: operationId, type: 'install', state: 'succeeded' }),
     collaboration: async (_agent, request) => {
       if (request.action === 'project') return { project };
       if (request.action === 'history') return { sessions: [], threads: [], backend: 'codex-appserver' };
@@ -172,7 +154,7 @@ else process.exit(0);
   let fixture: Awaited<ReturnType<typeof startFixture>> | undefined;
   try {
     fixture = await startFixture(service, environmentOptions);
-    const client = await socketClient(fixture.api.port, fixture.credential, 1, requestTimeout);
+    const client = await socketClient(fixture.api.port, fixture.credential, undefined, requestTimeout);
     await client.ready();
     const folderReply = await client.call(requestSchema.parse({ type: 'request', id: 'folder-for-union', method: 'directory', payload: { type: 'choose', path: process.env.HOME } }));
     if (folderReply.type !== 'response' || folderReply.method !== 'directory' || folderReply.payload.kind !== 'folderChosen') throw new Error('Folder token missing');
@@ -181,20 +163,19 @@ else process.exit(0);
     const session = { ...target, threadId: 'thread' };
     const cases = {
       command: [
-        { type: 'refresh' }, { type: 'listPendingGroups', agentId }, { type: 'openEventSettings', url: 'https://open.feishu.cn/app/cli_fixture/event' },
-        { type: 'registerAgent' }, { type: 'refreshAgentCredentials', agentId }, { type: 'installCodex' }, { type: 'startCodexLogin' }, { type: 'restartHost' },
+        { type: 'refresh' }, { type: 'listPendingGroups', agentId },
+        { type: 'registerAgent' }, { type: 'refreshAgentCredentials', agentId }, { type: 'restartHost' },
         { type: 'listJoinedGroups', agentId }, { type: 'listGroupMembers', agentId, groupId, cursor: 'members-page' }, { type: 'bindGroup', agentId, groupId, projectName, folder: { kind: 'existing', folderToken }, tool: 'codex', conversation: 'threads' },
         { type: 'setResponse', membershipId: JSON.stringify([agentId, groupId]), response: 'all' },
         { type: 'setPermission', membershipId: JSON.stringify([agentId, groupId]), administrator: 'write', network: true },
         { type: 'setAgentEnabled', agentId, enabled: true }, { type: 'deleteAgent', agentId }, { type: 'cancelJob', jobId: operationId },
-        { type: 'openJobAuthorization', jobId: operationId }, { type: 'copyJobAuthorization', jobId: operationId },
       ],
       settings: [
         { type: 'read', scope: { kind: 'host' } },
         { type: 'save', edit: { scope: { kind: 'host' }, section: 'execution', revision: 'token', patch: { codexBin: null } } },
         { type: 'act', action: { kind: 'voice', botId: agentId, action: { action: 'disable' } } },
         { type: 'models', query: { botId: agentId, backend: 'codex-appserver', purpose: 'session' } },
-        { type: 'sessions', botId: agentId, projectName }, { type: 'chooseExecutable' }, { type: 'saveExecutable', token: operationId, revision: 'token' },
+        { type: 'sessions', botId: agentId, projectName },
       ],
       collaboration: [
         { action: 'providerModels', backend: 'codex-appserver' },
@@ -203,31 +184,30 @@ else process.exit(0);
         { action: 'history', ...target }, { action: 'context', ...session }, { action: 'clear', ...session }, { action: 'compact', ...session },
         { action: 'resume', ...target, sessionId: 'session', backend: 'codex-appserver' }, { action: 'startGoal', ...session, objective: 'fixture' },
         { action: 'stop', ...session, runId: 'run' }, { action: 'stopSubagent', ...session, runId: 'run', subagentId: 'child' }, { action: 'endGoal', ...session, runId: 'run' }, { action: 'reminder', ...session, runId: 'run', requested: true },
-        { action: 'usage', force: false }, { action: 'shareUsage', ...target, sections: ['stats'] }, { action: 'openGroup', ...target },
+        { action: 'usage', force: false }, { action: 'shareUsage', ...target, sections: ['stats'] },
       ],
       environment: [
         { type: 'backendInstallStatus', id: 'claude-agent' }, { type: 'cancelBackendInstall', operationId },
         { type: 'scan' }, { type: 'backendCatalog' }, { type: 'backendVersion', id: 'claude-agent' }, { type: 'backendLogin', id: 'claude-agent', refresh: false }, { type: 'backendInstall', id: 'claude-agent', update: false }, { type: 'backendUninstall', id: 'claude-agent' },
         { type: 'install', tool: 'lark-cli' }, { type: 'update', tool: 'lark-cli' }, { type: 'toolInstallStatus' }, { type: 'cancelInstall', operationId }, { type: 'uninstall', tool: 'lark-cli' },
-        { type: 'authStatus', tool: 'lark-cli' }, { type: 'startLogin', tool: 'lark-cli' }, { type: 'loginStatus' }, { type: 'openVerification', operationId }, { type: 'cancelLogin', operationId },
+        { type: 'authStatus', tool: 'lark-cli' }, { type: 'startLogin', tool: 'lark-cli' }, { type: 'loginStatus' }, { type: 'cancelLogin', operationId },
         { type: 'profileList' }, { type: 'profileUse', name: 'test' }, { type: 'profileAdd', name: 'test', appId: 'cli_test', appSecret: 'fake-secret', brand: 'feishu', use: false },
         { type: 'profileInit', name: 'test' }, { type: 'profileInitStatus' }, { type: 'profileInitCancel', operationId },
       ],
       machine: [
         { type: 'mcp', request: { action: 'list', provider: 'claude' } }, { type: 'bridgeImport', action: 'status' },
-        { type: 'status' }, { type: 'repairCli' }, { type: 'service', action: 'install' }, { type: 'setServiceSkipped', skipped: false }, { type: 'startHost' }, { type: 'stopHost' }, { type: 'logs' },
-        { type: 'checkCoreUpdate' }, { type: 'applyCoreUpdate' }, { type: 'coreUpdateStatus' }, { type: 'checkDesktopUpdate' }, { type: 'openReleases' }, { type: 'installDesktopUpdate' },
+        { type: 'status' }, { type: 'service', action: 'install' }, { type: 'setServiceSkipped', skipped: false }, { type: 'startHost' }, { type: 'stopHost' }, { type: 'logs' },
+        { type: 'checkCoreUpdate' }, { type: 'applyCoreUpdate' }, { type: 'coreUpdateStatus' },
+        { type: 'desktopUpdateReport', requestId: 'dur_0000000000000000', state: 'current', message: 'x' },
       ],
     };
     const unions = {
       command: schemas.commandSchema, settings: schemas.settingsRequestSchema, collaboration: schemas.collaborationRequestSchema,
       environment: schemas.environmentRequestSchema, machine: schemas.machineRequestSchema,
     };
-    const unsupported = new Set([
-      'command.openEventSettings', 'command.openJobAuthorization', 'command.copyJobAuthorization',
-      'settings.chooseExecutable', 'settings.saveExecutable', 'collaboration.openGroup', 'environment.openVerification',
-      'machine.bridgeImport', 'machine.repairCli', 'machine.service', 'machine.startHost', 'machine.checkDesktopUpdate', 'machine.openReleases', 'machine.installDesktopUpdate',
-    ]);
+    const unsupported = new Set(['machine.bridgeImport', 'machine.service', 'machine.startHost']);
+    // devices-ui-4: only this computer's desktop shell, having declared it, reports its own update
+    const shellOnly = new Set(['machine.desktopUpdateReport']);
     for (const method of Object.keys(cases) as (keyof typeof cases)[]) {
       const variants = cases[method];
       const actual = variants.map(value => 'type' in value ? value.type : value.action);
@@ -239,6 +219,7 @@ else process.exit(0);
         const key = `${method}.${variant}`;
         const frame = await client.call(requestSchema.parse({ type: 'request', id: `union-${key}`, method, payload }));
         if (unsupported.has(key)) expect(frame, key).toMatchObject({ type: 'error', code: 'unsupported' });
+        else if (shellOnly.has(key)) expect(frame, key).toMatchObject({ type: 'error', code: 'forbidden' });
         else {
           expect(frame.type, key).toBe('response');
           expect(responseSchema.safeParse(frame).success, key).toBe(true);
@@ -254,7 +235,7 @@ else process.exit(0);
       action: 'stopSubagent', projectName, chatId: groupId, threadId: 'thread', runId: 'run', subagentId: 'child',
     });
     expect(groupMembers).toHaveBeenCalledExactlyOnceWith(agentId, groupId, 'members-page');
-    expect(unsupported.size).toBe(14);
+    expect(unsupported.size).toBe(3);
     await client.close();
   } finally {
     await fixture?.close();

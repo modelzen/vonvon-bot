@@ -1,7 +1,9 @@
+import { randomBytes } from 'node:crypto';
 import type { AgentEntry, AgentThread, AgentToolReply } from '../types';
 import { log } from '../../core/logger';
-import type { MemoryTurn } from '../../bot/memory-authority';
+import { decideAdd, decideEdit, decisionMessages, ownDm, type MemoryPlace, type MemoryTurn, type RequestedScope } from '../../bot/memory-authority';
 import { scheduleRefusalMessages, type ScheduleActor } from '../../admin/schedule-commands';
+import type { MemoryLanding, SessionAction, SessionAuthz } from '../../admin/ipc';
 import { sessionInfoTool, TOOL_RESULT_BYTES, ToolRefusal, type AgentTool, type ToolContext } from './tools';
 
 export interface AgentPlace { kind: 'group' | 'p2p' | 'doc'; chatId?: string; docId?: string }
@@ -37,15 +39,36 @@ export interface AgentEntries {
   /** 这一轮对记忆的事实（`memoryTurn()` 一调就绑定当前这一轮）；线程不是这个 daemon 发过入口的返回 undefined */
   memoryTurn(thread: AgentThread): TurnMemory | undefined;
   noteSteer(thread: AgentThread, sender: { openId?: string; kind: 'user' | 'bot' | 'unknown' }): void;
+  /**
+   * devices-4b 4.2: a Bot session's ★ request from its command line, judged for the session's current turn by the same
+   * checks as the tools' (authorizeNow, authorizeMemory, authorizeSchedule, `ctx.admin`). Changes nothing but a dead
+   * session's grant (revoked) and a bot-memory write's quota of the turn.
+   */
+  authorizeSessionCall(sessionId: string, action: SessionAction): Promise<SessionAuthz>;
   closeAll(reason: 'shutdown'): void;
 }
 type Failure = Extract<AgentToolReply, { ok: false }>;
 type Reason = NonNullable<Failure['reason']>;
+/**
+ * A settings write outside a private chat: the tools' refusal, and the daemon's to a Bot session's command line (devices
+ * 5.2). The owner's words (2026-11-02, settings-dm-only).
+ */
+export const NOT_DM_MESSAGE = '群里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。';
+/** The same refusal in a document comment's session (s1b): it is not a group. */
+export const NOT_DM_COMMENT_MESSAGE = '评论里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。';
+/** The not-dm sentence of a place: a comment's own, every other place's the group's. */
+export const notDmMessage = (place: 'group' | 'dm' | 'comment' | AgentPlace['kind']): string => place === 'comment' || place === 'doc' ? NOT_DM_COMMENT_MESSAGE : NOT_DM_MESSAGE;
+/** devices 15, 这一轮已结束: a Bot session's command line called when no turn of its session is going (or its Bot process is gone). */
+export const SESSION_TURN_ENDED = '这次调用对应的那一轮对话已经结束，不能再改设置。';
+/** devices 3.7: only the owner's turn changes this machine's administrators (devices-4b 4.2). */
+export const NOT_OWNER_MESSAGE = '本机管理员名单只有飞书应用的拥有者能改。';
+/** A session's call is not tied to a tool use: a turn not known, ended or a session gone all read as the turn having ended. */
+const ENDED = new Set(['revoked', 'unknown-origin', 'turn-ended']);
 const messages = {
   'not-ready': 'vonvon 还没准备好这条会话的工具，稍后再试。',
   revoked: '这条会话的 vonvon 工具已经失效（会话结束了，或者 daemon 重启过）。不要重试，接着做别的。',
   'unknown-tool': '没有这个工具。',
-  'not-dm': '设置只能在私聊里改。请对方去私聊里跟我说。',
+  'not-dm': NOT_DM_MESSAGE,
   'not-human-turn': '这一轮不是主人或管理员发消息直接触发的，不能改设置。',
   'turn-ended': '发起这次改动的那一轮已经结束了，不能改设置。请对方重新说一遍。',
   'unknown-origin': 'vonvon 认不出这次改动是哪一轮发起的，不能改设置。请对方重新说一遍。',
@@ -69,6 +92,10 @@ function failure(code: Exclude<Failure['code'], 'refused' | 'bad-args'>): Failur
 function refused(reason: Reason): Failure {
   return { ok: false, code: 'refused', reason, message: messages[reason] };
 }
+/** A settings write outside a private chat, in its place's words. */
+function notDm(place: AgentPlace): Failure {
+  return { ...refused('not-dm'), message: notDmMessage(place.kind) };
+}
 function scheduleRefused(reason: keyof typeof scheduleTurnMessages): Failure {
   return { ok: false, code: 'refused', reason, message: scheduleTurnMessages[reason] };
 }
@@ -90,6 +117,10 @@ interface TurnAuth {
 interface Grant {
   phase: 'pending' | 'attached' | 'revoked' | 'capacity';
   place: AgentPlace;
+  /** devices 5.3: the session's id, which its token in the host names (`ses_` + 16 hex). */
+  sessionId: string;
+  /** The host was told this session ended: once, whichever way it ends. */
+  sessionEnded: boolean;
   thread?: AgentThread;
   turn?: TurnAuth;
   /** The turn before `turn`; its origins outlive `pruneOrigins`. */
@@ -106,12 +137,18 @@ interface Grant {
   queue: Array<() => void>;
 }
 const PRUNED_IDS = 1024;
+/** A tool kept to some places (the settings reads, a private chat's) is neither listed nor called elsewhere. */
+const placed = (tool: AgentTool, place: AgentPlace): boolean => !tool.places || tool.places.includes(place.kind);
 export function createAgentEntries(opts: {
   appId: string;
   isAdmin(openId: string): boolean;
   isOwner(openId: string): boolean;
   chatSettingsOn?(): boolean;
   tools?: readonly AgentTool[];
+  /** devices-4a 4.3: told once when a session ends, so the host drops its token (best effort: it never throws). */
+  sessions?: { revoke(sessionId: string): void };
+  /** devices-4b 4.5: a turn's place for memory (the memory writer's own), where a session's command-line write lands. */
+  memoryPlace?(turn: Pick<MemoryTurn, 'chatId' | 'place'>): Promise<MemoryPlace>;
 }): AgentEntries {
   const tools = opts.tools ?? [sessionInfoTool];
   const table = new Map(tools.map(tool => [tool.name, tool]));
@@ -155,11 +192,15 @@ export function createAgentEntries(opts: {
     grant.origins.clear();
     grant.pruned.clear();
     grants.delete(grant);
+    if (grant.sessionEnded) return;
+    grant.sessionEnded = true;
+    try { opts.sessions?.revoke(grant.sessionId); }
+    catch (error) { log.fail('agent', error, { phase: 'session-revoke', sessionId: grant.sessionId }); }
   }
   function authorizeNow(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
     if (grant.thread && !grant.thread.isAlive()) revoke(grant);
     if (grant.phase === 'revoked') return failure('revoked');
-    if (grant.place.kind !== 'p2p') return refused('not-dm');
+    if (grant.place.kind !== 'p2p') return notDm(grant.place);
     if (!auth) return refused('unknown-origin');
     if (!auth.active || grant.turn !== auth) return refused('turn-ended');
     if (!auth.human) return refused('not-human-turn');
@@ -189,6 +230,13 @@ export function createAgentEntries(opts: {
     if (auth.presence !== 'scheduled') return undefined;
     if (action === 'create') return refused('no-human-create');
     if ((action !== 'edit' && action !== 'delete') || taskId !== auth.facts.scheduled?.taskId) return refused('scheduled-run-scope');
+  }
+  /** The tools' `ctx.admin` (a private chat's read-only queries, settings_get): the owner's or an admin's own turn, going. */
+  function adminTurn(grant: Grant): Failure | undefined {
+    const turn = grant.turn;
+    if (!turn?.active) return refused('turn-ended');
+    if (!turn.human) return refused('not-human-turn');
+    if (!opts.isAdmin(turn.facts.requesterOpenId ?? '')) return refused('not-admin');
   }
   const roleOf = (auth: TurnAuth): MemoryTurn['role'] => {
     const openId = auth.facts.requesterOpenId ?? '';
@@ -228,7 +276,8 @@ export function createAgentEntries(opts: {
     const capped = grants.size >= 1024;
     const grant: Grant = {
       phase: shuttingDown ? 'revoked' : capped ? 'capacity' : 'pending',
-      place: { ...place }, origins: new Map(), pruned: new Set(), controller: new AbortController(),
+      place: { ...place }, sessionId: `ses_${randomBytes(8).toString('hex')}`, sessionEnded: false,
+      origins: new Map(), pruned: new Set(), controller: new AbortController(),
       active: 0, settingRunning: false, queue: [],
     };
     if (!capped && !shuttingDown) grants.add(grant);
@@ -244,7 +293,7 @@ export function createAgentEntries(opts: {
       if (grant.phase === 'revoked') return finishLog(failure('revoked'));
       if (grant.phase !== 'attached') return finishLog(failure('not-ready'));
       const tool = table.get(name);
-      if (!tool) return finishLog(failure('unknown-tool'));
+      if (!tool || !placed(tool, grant.place)) return finishLog(failure('unknown-tool'));
       const runTool = tool.run.bind(tool);
       const settings = tool.class === 'settings';
       const memory = tool.class === 'memory';
@@ -310,7 +359,7 @@ export function createAgentEntries(opts: {
           if (Date.now() > deadline - reserveMs) throw new ToolRefusal(failure('timeout'));
         };
         async function execute() {
-          const ctx: ToolContext = { signal: controller.signal, place: grant.place, notAfter: deadline, get admin() { return !!grant.turn?.active && grant.turn.human && opts.isAdmin(grant.turn.facts.requesterOpenId ?? ''); }, get writeRefusal() { return authorizeNow(grant, auth); } };
+          const ctx: ToolContext = { signal: controller.signal, place: grant.place, notAfter: deadline, get admin() { return !adminTurn(grant); }, get writeRefusal() { return authorizeNow(grant, auth); } };
           if (memory && auth) {
             ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: roleOf(auth) };
             ctx.memoryTurn = () => memoryTurnOf(grant, auth);
@@ -342,8 +391,10 @@ export function createAgentEntries(opts: {
           try {
             let result: unknown;
             if (name === 'session_info') {
-              const refusal = grant.turn ? authorizeNow(grant, grant.turn) : grant.place.kind === 'p2p' ? refused('not-human-turn') : refused('not-dm');
-              result = { v: 1, place: place.kind, turn: !grant.turn?.active ? 'none' : grant.turn.human ? 'person' : 'other', settings: refusal ? { allowed: false, reason: refusal.reason ?? refusal.code } : { allowed: true } };
+              const turn = !grant.turn?.active ? 'none' : grant.turn.human ? 'person' : 'other';
+              // Only a private chat changes settings, so only there it says whether this turn may (settings-dm-only).
+              const refusal = grant.place.kind !== 'p2p' ? undefined : grant.turn ? authorizeNow(grant, grant.turn) : refused('not-human-turn');
+              result = { v: 1, place: place.kind, turn, ...(grant.place.kind !== 'p2p' ? {} : { settings: refusal ? { allowed: false, reason: refusal.reason ?? refusal.code } : { allowed: true } }) };
             } else result = await runTool(parsed.data, ctx);
             if (committed && Date.now() > deadline) log.warn('agent', 'late-commit', { tool: name });
             const json = JSON.stringify(result);
@@ -375,13 +426,14 @@ export function createAgentEntries(opts: {
       });
     }
     return {
+      sessionId: grant.sessionId,
       tools() {
         if (grant.thread && !grant.thread.isAlive()) revoke(grant);
         if (grant.phase === 'revoked') throw new ToolRefusal(failure('revoked'));
         if (grant.phase === 'capacity') return [];
-        // 评论会话（doc）只给读类工具；写记忆的在群和私聊里给，任务的只在群里给
-        return tools.filter(tool => tool.class === 'read' || (tool.class === 'memory' ? grant.place.kind !== 'doc'
-          : grant.place.kind === (tool.class === 'schedule' ? 'group' : 'p2p')))
+        // 评论会话（doc）只给读类工具；写记忆的在群和私聊里给，任务的只在群里给；只为设置服务的读工具只在私聊里给
+        return tools.filter(tool => placed(tool, grant.place) && (tool.class === 'read' || (tool.class === 'memory' ? grant.place.kind !== 'doc'
+          : grant.place.kind === (tool.class === 'schedule' ? 'group' : 'p2p'))))
           .map(({ name, description, input }) => ({ name, description, input }));
       },
       call,
@@ -401,8 +453,82 @@ export function createAgentEntries(opts: {
       revoke() { revoke(grant); },
     };
   }
+  /** A refusal as a session's command line reads it: the tools' reason and sentence, but an ended turn in the design's words. */
+  const denial = (failure: Failure): SessionAuthz => {
+    const reason = failure.reason ?? failure.code;
+    return ENDED.has(reason) ? { ok: false, reason: 'turn-ended', message: SESSION_TURN_ENDED } : { ok: false, reason, message: failure.message };
+  };
+  const live = (sessionId: string): Grant | undefined => {
+    for (const grant of grants) if (grant.sessionId === sessionId) return grant;
+  };
+  async function authorizeSessionCall(sessionId: string, action: SessionAction): Promise<SessionAuthz> {
+    const ended = denial(refused('turn-ended'));
+    const found = live(sessionId);
+    if (!found) return ended;
+    // The only wait, before the turn is read: everything after it runs in one go, so the turn cannot change under it.
+    const place = action.kind === 'memory' && action.op !== 'read'
+      ? await opts.memoryPlace?.({ place: found.place.kind === 'group' ? 'group' : found.place.kind === 'p2p' ? 'dm' : 'comment', ...(found.place.chatId ? { chatId: found.place.chatId } : {}) }) ?? {}
+      : {};
+    const grant = live(sessionId);
+    if (!grant) return ended;
+    if (grant.thread && !grant.thread.isAlive()) { revoke(grant); return ended; }
+    const auth = grant.turn;
+    const who = (turn: TurnAuth): { role: MemoryTurn['role']; openId?: string } => ({ role: roleOf(turn), ...(turn.facts.requesterOpenId ? { openId: turn.facts.requesterOpenId } : {}) });
+    switch (action.kind) {
+      case 'settingsWrite': case 'adminMember': {
+        const failure = authorizeNow(grant, auth);
+        if (failure || !auth) return denial(failure ?? refused('unknown-origin'));
+        if (action.kind === 'adminMember' && !opts.isOwner(auth.facts.requesterOpenId ?? '')) return { ok: false, reason: 'not-owner', message: NOT_OWNER_MESSAGE };
+        return { ok: true, ...who(auth) };
+      }
+      case 'adminRead': {
+        const failure = grant.place.kind !== 'p2p' ? notDm(grant.place) : adminTurn(grant);
+        return failure || !grant.turn ? denial(failure ?? refused('turn-ended')) : { ok: true, ...who(grant.turn) };
+      }
+      case 'schedule': {
+        const failure = authorizeSchedule(grant, auth, action.action, action.taskId);
+        if (failure || !auth) return denial(failure ?? refused('unknown-origin'));
+        const actor = scheduleActor(grant, auth);
+        // The command core checks a person's turn again by its role; a task's own run as itself (3.13).
+        if (actor.kind === 'scheduled') return { ok: true, ...who(auth), actor };
+        const { openId, role, chatId, name, messageId } = actor;
+        return { ok: true, ...who(auth), actor: { kind: 'session', openId, role, chatId, ...(name ? { name } : {}), ...(messageId ? { messageId } : {}) } };
+      }
+      case 'memory': {
+        const failure = authorizeMemory(grant, auth);
+        const turn = !failure && auth ? memoryTurnOf(grant, auth) : undefined;
+        if (!turn || !auth) return denial(failure ?? refused('unknown-origin'));
+        const target = action.op === 'edit' ? action.item.scope : action.target;
+        // A private chat's memory is its own person's: the tools' decideAdd and decideEdit give no other (4.5a).
+        if (target.kind === 'dm' && !ownDm(turn, target.openId)) return { ok: false, reason: 'out-of-scope', message: decisionMessages['out-of-scope'] };
+        if (action.op === 'read') return { ok: true, ...who(auth) };
+        const source: MemoryLanding['source'] = {
+          botId: opts.appId, turn: { kind: turn.kind, steered: turn.steered }, ...(turn.chatId ? { chatId: turn.chatId } : {}),
+          ...(auth.facts.triggerMessageId ? { messageId: auth.facts.triggerMessageId } : {}),
+        };
+        const actorOf = (decided: { actorRole: string; actorOpenId?: string }): MemoryLanding['actor'] =>
+          ({ role: decided.actorRole as MemoryLanding['actor']['role'], ...(decided.actorOpenId ? { openId: decided.actorOpenId } : {}) });
+        if (action.op === 'edit') {
+          const decision = decideEdit({ turn, place, item: action.item, ...(action.text !== undefined ? { text: action.text } : {}) });
+          if (!decision.allow) return { ok: false, reason: decision.reason, message: decisionMessages[decision.reason] };
+          // One Bot-memory write a turn, as the tools reserve it; not given back if the write then fails.
+          if (action.item.scope.kind === 'bot') auth.botWrites++;
+          return { ok: true, ...who(auth), memory: { scope: action.item.scope, trust: 'untrusted', actor: actorOf(decision.actor), source } };
+        }
+        const requested: RequestedScope = target.kind === 'project' ? { project: target.projectId } : target.kind;
+        const decision = decideAdd({ turn, place, via: 'tool', text: action.text.trim(), scope: requested });
+        if (!decision.allow) return { ok: false, reason: decision.reason, message: decisionMessages[decision.reason] };
+        if (decision.scope.kind === 'bot') auth.botWrites++;
+        return { ok: true, ...who(auth), memory: {
+          scope: decision.scope, trust: decision.trust, actor: actorOf(decision),
+          source: { ...source, ...(decision.downgraded ? { downgraded: decision.downgraded } : {}) },
+        } };
+      }
+    }
+  }
   return {
     issue,
+    authorizeSessionCall,
     openTurn(thread, facts) {
       const grant = threads.get(thread);
       const scheduled = facts.scheduled ? { ...facts.scheduled } : undefined;

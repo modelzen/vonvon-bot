@@ -63,23 +63,46 @@ export async function enableLinger(d: SessionDependencies = sessionDefaults()): 
 }
 
 const sudoLinger = (user: string): string => `sudo loginctl enable-linger ${user}`;
-const lingerOffHint = (user: string): string => `要开就运行 loginctl enable-linger（不行再用 ${sudoLinger(user)}）。`;
-export const enableFailed = (detail: string, user: string): string => `没开成：${detail}。用管理员权限运行：${sudoLinger(user)}`;
+/** The optional line (owner 2026-11-02): the command first, sudo only when the account may not do it itself. */
+const lingerOffHint = (user: string): string => `需要的话运行一次 loginctl enable-linger（不行再用 ${sudoLinger(user)}）。`;
+export const enableFailed = (detail: string, user: string): string => `开机自动启动没开成（${detail}），退出登录后它会停。需要的话用管理员权限运行一次：${sudoLinger(user)}`;
 
-/** The linger line of `service status` and of an install that leaves it alone. */
+/** The boot-start line of `service status`, and the optional one of an install that leaves linger off. */
 export function lingerLine(linger: Linger, user: string): string {
-  if (linger.state === 'on') return 'linger 已开：开机就启动，退出 SSH 以后 Bot 也还在跑。';
-  if (linger.state === 'off') return `没开 linger：退出最后一个登录会话后 Bot 会停，开机也不启动。${lingerOffHint(user)}`;
-  return `查不到 linger 的状态：${linger.detail ?? '原因不明'}。${lingerOffHint(user)}`;
+  if (linger.state === 'on') return '开机自动启动，退出登录后也继续运行。';
+  if (linger.state === 'off') return `没开开机自动启动：退出登录后它会停。${lingerOffHint(user)}`;
+  return `查不到能不能开机自动启动：${linger.detail ?? '原因不明'}。${lingerOffHint(user)}`;
 }
 
-/** Why `systemctl --user` cannot be asked, when it is one of the three common cases; undefined otherwise. */
-export async function userManagerHint(d: SessionDependencies = sessionDefaults()): Promise<string | undefined> {
-  if (!(await d.exists('/run/systemd/system'))) return '这台机器不是用 systemd 启动的（容器里常见），装不了 systemd 用户服务。用 vonvon daemon start 起一个分离的 daemon；它崩溃后不会自动重启。';
-  const runtime = `/run/user/${d.uid}`;
-  if (d.xdgRuntimeDir !== runtime && await d.exists(`${runtime}/bus`)) {
-    return `当前终端没有 XDG_RUNTIME_DIR（用 sudo -u 或 su 切到这个账号时常见），连不上这个账号的 systemd。运行 export XDG_RUNTIME_DIR=${runtime} 再试，或者直接用这个账号 SSH 登录。`;
+/** server-2 4.4: the three causes `service install --json` names in `reason`, for the install script's fallback. */
+export type UserManagerProblem = { reason: 'no_systemd' | 'user_instance_down' | 'no_runtime_dir'; hint: string };
+/** What systemctl says without systemd as PID 1, or when it is not installed at all. */
+const NO_SYSTEMD = /has not been booted with systemd|spawn systemctl ENOENT/;
+/** What systemctl says when it cannot connect to the user manager: systemd 255 "Failed to connect to bus: …", 256 and later "Failed to connect to user scope bus …". */
+const NO_CONNECTION = /Failed to connect to (?:user scope )?bus/;
+
+/**
+ * Why `systemctl --user` cannot be asked, when it is one of the three common cases; undefined otherwise. `detail` is
+ * what systemctl answered, if it was asked.
+ */
+export async function userManagerProblem(detail = '', d: SessionDependencies = sessionDefaults()): Promise<UserManagerProblem | undefined> {
+  if (NO_SYSTEMD.test(detail) || !(await d.exists('/run/systemd/system'))) {
+    return { reason: 'no_systemd', hint: '这台机器不是用 systemd 启动的（容器里常见），装不了 systemd 用户服务。用 vonvon daemon start 起一个分离的 daemon；它崩溃后不会自动重启。' };
   }
-  if (!(await d.exists(runtime))) return `这个账号的 systemd 用户实例没在运行：没有登录会话，也没开 linger。用这个账号 SSH 登录后再试；或者先开 linger：loginctl enable-linger（不行就 ${sudoLinger(d.user)}）。`;
+  const runtime = `/run/user/${d.uid}`;
+  // The user manager's own socket; the D-Bus one is there only with dbus-user-session.
+  const socket = await d.exists(`${runtime}/systemd/private`) || await d.exists(`${runtime}/bus`);
+  if (d.xdgRuntimeDir !== runtime && socket) {
+    return { reason: 'no_runtime_dir', hint: `当前终端没有 XDG_RUNTIME_DIR（用 sudo -u 或 su 切到这个账号时常见），连不上这个账号的 systemd。运行 export XDG_RUNTIME_DIR=${runtime} 再试，或者直接用这个账号 SSH 登录。` };
+  }
+  if (!(await d.exists(runtime))) return { reason: 'user_instance_down', hint: `这个账号的 systemd 用户实例没在运行：没有登录会话，也没开 linger。用这个账号 SSH 登录后再试；或者先开 linger：loginctl enable-linger（不行就 ${sudoLinger(d.user)}）。` };
+  // The directory outlives a user manager that failed to start or has exited: no socket in it, or one nobody answers.
+  if (!socket || NO_CONNECTION.test(detail)) {
+    return { reason: 'user_instance_down', hint: `这个账号的 systemd 用户实例没在运行：${runtime} 还在，但里面的用户实例连不上（没起来，或者已经退出）。用这个账号重新 SSH 登录后再试；还不行，用管理员权限看 systemctl status user@${d.uid}。` };
+  }
   return undefined;
+}
+
+export async function userManagerHint(d: SessionDependencies = sessionDefaults()): Promise<string | undefined> {
+  return (await userManagerProblem('', d))?.hint;
 }

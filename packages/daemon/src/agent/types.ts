@@ -370,6 +370,8 @@ export type AgentToolReply =
         | 'not-group' | 'no-human-create' | 'scheduled-run-scope'; message: string };
 
 export interface AgentEntry {
+  /** devices 5.3: names this session's token in the host (`ses_` + 16 hex). */
+  readonly sessionId: string;
   tools(): readonly AgentToolSpec[];
   call(name: string, args: unknown, origin?: { toolUseId?: string }): Promise<AgentToolReply>;
   noteToolUse(toolUseId: string): void;

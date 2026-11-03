@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { delimiter, dirname, isAbsolute, join } from 'node:path';
+import { pathFor } from './home-path';
 
 /**
  * Where Homebrew, the official Node installer and user-level installs put command-line tools.
@@ -9,13 +9,13 @@ import { delimiter, dirname, isAbsolute, join } from 'node:path';
  */
 export function toolDirectories(home: string, platform: NodeJS.Platform = process.platform): string[] {
   if (platform === 'win32') return [];
-  const directories = ['/usr/local/bin', join(home, '.local', 'bin')];
+  const directories = ['/usr/local/bin', pathFor(platform).join(home, '.local', 'bin')];
   return platform === 'darwin' ? ['/opt/homebrew/bin', ...directories] : directories;
 }
 
 /** `path` with the {@link toolDirectories} that it lacks appended, so the user's own order wins. */
 export function withToolDirectories(path: string | undefined, home: string, platform: NodeJS.Platform = process.platform): string {
-  return appendDirectories(path, toolDirectories(home, platform));
+  return appendDirectories(path, toolDirectories(home, platform), platform);
 }
 
 /**
@@ -26,7 +26,8 @@ export function withToolDirectories(path: string | undefined, home: string, plat
  * the symlink's directory is the one that holds `node`.
  */
 export function withBinDirectory(bin: string, path: string | undefined = process.env.PATH, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
-  return appendDirectories(path, [...(isAbsolute(bin) ? [dirname(bin)] : []), ...toolDirectories(home, platform)]);
+  const { dirname, isAbsolute } = pathFor(platform);
+  return appendDirectories(path, [...(isAbsolute(bin) ? [dirname(bin)] : []), ...toolDirectories(home, platform)], platform);
 }
 
 /** Env for a child started from `bin` (codex and its `--version`): `base` with
@@ -37,7 +38,9 @@ export function binChildEnv(bin: string, base: NodeJS.ProcessEnv = process.env):
   return { ...base, PATH: withBinDirectory(bin, base.PATH) };
 }
 
-function appendDirectories(path: string | undefined, directories: string[]): string {
+/** PATH as `platform` writes it: launchd and systemd definitions are made for their own platform, whatever runs the code. */
+function appendDirectories(path: string | undefined, directories: string[], platform: NodeJS.Platform): string {
+  const { delimiter } = pathFor(platform);
   const entries = (path ?? '').split(delimiter).filter(Boolean);
   for (const directory of directories) if (!entries.includes(directory)) entries.push(directory);
   return entries.join(delimiter);

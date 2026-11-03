@@ -352,7 +352,7 @@ export type HelpScope = 'main' | 'topic' | 'single';
 function talkLine(noMention: boolean, tail: string): string {
   return noMention
     ? `· 直接发消息（免@）→ ${tail}`
-    : `· **@我 + 内容** → ${tail}（本群默认需 @；\`/settings\` 可开启免@）`;
+    : `· **@我 + 内容** → ${tail}（本群默认需 @）`;
 }
 
 /** What 选了智能 tells the group (3.4): the welcome card's first line when it is bound so, and a plain message
@@ -376,7 +376,7 @@ export interface HelpCaps {
 
 /** The `/help` card: commands available **right here** (this exact scope).
  * `noMention` is the group's effective 免@ state (`noMention ?? defaultNoMention`).
- * `isAdmin` gates the owner-only commands (`/settings`、`/resume`): non-admins
+ * `isAdmin` gates the owner-only commands (`/resume`、`/new`): non-admins
  * don't see them listed (they'd be denied anyway — see handle-message 的门控).
  * `caps` 按会话后端能力裁剪：不支持 /goal、/compact、/resume 的后端
  * （能力守卫会拒），就不在速查卡里列出来——避免「列了点了才发现不支持」的不一致。
@@ -390,7 +390,6 @@ export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = fals
   const compactLine = '· `/compact` → 压缩上下文（正忙时等这一轮结束再压）';
 
   const elements: CardElement[] = [];
-  const settingsLine = kind === 'smart' ? '· `/settings` → 群设置' : '· `/settings` → 群设置（免@ 开关）';
   if (scope === 'single') {
     const lines = talkLines(kind, noMention, '交给我处理', '我看情况接话或开话题');
     if (showGoal) lines.push(goalLine);
@@ -398,7 +397,6 @@ export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = fals
     if (showCompact) lines.push(compactLine);
     if (isAdmin) lines.push(`· \`/new\`（或 \`/clear\`）→ 换一条新会话${showResume ? '，旧的能 `/resume` 回来' : ''}（飞书消息保留）`);
     if (isAdmin && showResume) lines.push('· `/resume` → 切回历史会话');
-    if (isAdmin) lines.push(settingsLine);
     lines.push('· `/help` → 这张速查卡');
     const head = kind === 'smart' ? `💬 **智能开话题** — 不用 @ 我，${SMART_NOTICE}主区一条会话；聊到新的事，我自己开话题。` : '💬 **整群一条会话** — 主区一条会话，上下文一直连着。';
     elements.push(md(head), hr(), md(lines.join('\n')));
@@ -418,7 +416,6 @@ export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = fals
     const lines = ['· **@我 + 内容** → 开一个新话题并开始'];
     if (showGoal) lines.push(goalLine);
     if (isAdmin && showResume) lines.push('· `/resume` → 恢复历史会话');
-    if (isAdmin) lines.push(settingsLine);
     lines.push('· `/model` → 需要在话题里用', '· `/help` → 这张速查卡');
     elements.push(md('👥 **主群区** — @我开话题，每个话题是独立会话。'), hr(), md(lines.join('\n')));
   }
@@ -466,7 +463,6 @@ export function buildWelcomeCard(
           '· `/model` → 切换模型 / 推理强度',
           `· \`/new\`（或 \`/clear\`）→ 开新会话（管理员，${showResume ? '旧的能 `/resume` 回来，' : ''}飞书消息保留）`,
           ...(showResume ? ['· `/resume` → 切回历史会话（管理员）'] : []),
-          kind === 'smart' ? '· `/settings` → 群设置' : '· `/settings` → 群设置（免@ 开关）',
           '· `/help` → 命令速查卡',
         ].join('\n'),
       ),
@@ -479,7 +475,6 @@ export function buildWelcomeCard(
           '· **@我 + 内容** → 开一个新话题并开始（一个话题一条会话）',
           ...(showGoal ? [goalLine] : []),
           ...(showResume ? ['· `/resume` → 恢复历史会话'] : []),
-          '· `/settings` → 群设置（免@ 开关）',
         ].join('\n'),
       ),
       md('🧵 **话题内**'),

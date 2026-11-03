@@ -1,8 +1,8 @@
 import { mkdirSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, release } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, autoUpdater, BrowserWindow, dialog, Menu, net, powerMonitor, type WebContents } from 'electron';
+import { app, autoUpdater, BrowserWindow, dialog, Menu, net, powerMonitor, safeStorage, type WebContents } from 'electron';
 import { resolveDataRoot } from '../../daemon/src/config/data-root.js';
 import { attachExisting, AttachError } from './attach.js';
 import { installBridge, openAllowedExternal } from './bridge.js';
@@ -12,14 +12,19 @@ import { createDesktopTray, type DesktopTray } from './tray.js';
 import { DesktopUpdater, scheduleUpdateChecks } from './updates.js';
 import { WindowsDesktopUpdater, windowsUpdateConfiguration, createWindowsUpdateDriver } from './windows-updates.js';
 import { desktopUpdateConfiguration } from './update-configuration.js';
-import { createDaemonManager, StartHostRefusal } from './daemon-manager.js';
+import { createDaemonManager, protocolMismatchMessage, StartHostRefusal, type VerifiedDaemon } from './daemon-manager.js';
 import { createDaemonDependencies, prepareDesktopRoot } from './daemon-dependencies.js';
-import { stopDaemonForQuit } from './quit-daemon.js';
+import { daemonKeptOnQuit, stopDaemonForQuit } from './quit-daemon.js';
 import { stopVerifiedOwner } from '../../daemon/src/server/owner-verification.js';
 import { desktopCliOptions, observeCli, registerCli } from './cli-registration.js';
 import { liveServiceActionRecord } from '../../daemon/src/service/action-report.js';
 import { changeLoginItem, followServiceHelper, repairServiceAtStartup, type LoginItemHooks, type ServiceRuntime } from './login-item.js';
-import { desktopUpdateNotice, type CommandResult, type DesktopUpdate, type MachineReply } from '@vonvon/protocol';
+import { desktopUpdateNotice, PROTOCOL_VERSION, type CommandResult, type DesktopUpdate, type MachineReply } from '@vonvon/protocol';
+import { electronSecretBox, openDeviceRegistry } from './device-registry.js';
+import { createDeviceConnections, type DeviceConnections } from './connections.js';
+import { secureConnector } from './remote-transport.js';
+import { createDeviceLog } from './device-log.js';
+import { REMOTE_UPDATE_TEXT, startRemoteSelfUpdate, type RemoteSelfUpdate } from './remote-self-update.js';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
 
 /** 应用内更新没生效时给用户的手动下载地址，和设置页里的链接一致。 */
@@ -42,7 +47,12 @@ export function desktopResources(appPath: string, packaged: boolean): DesktopRes
 }
 
 function startupMessage(error: unknown): string {
-  if (error instanceof AttachError) return `${error.message}请先启动 daemon，再重新打开 Vonvon Bot。`;
+  // Another protocol says which side is older (devices 4.5). `ensureReady` already says it with the registration; a
+  // daemon swapped in before the attach gets the same words without it.
+  if (error instanceof AttachError && error.reason === 'protocol' && error.serverProtocol !== undefined) {
+    return protocolMismatchMessage({ server: error.serverProtocol, client: PROTOCOL_VERSION, registration: { kind: 'absent' } });
+  }
+  if (error instanceof AttachError) return error.reason === 'protocol' ? error.message : `${error.message}请先启动 daemon，再重新打开 Vonvon Bot。`;
   if (error instanceof Error) return error.message;
   return 'Vonvon Bot 没能打开桌面窗口。请检查 daemon，再重新打开应用。';
 }
@@ -70,6 +80,8 @@ export async function startDesktop(): Promise<void> {
   let stopUpdateChecks: (() => void) | undefined;
   let owner: AttachedDaemon | null = null;
   let bridge: DesktopBridge | null = null;
+  let devices: DeviceConnections | null = null;
+  const onResume = (): void => { devices?.wake(); };
   let quitting = false;
   let terminating = false;
   let focusWhenReady = false;
@@ -87,6 +99,8 @@ export async function startDesktop(): Promise<void> {
   let wantsVisible = true;
   let visibilityRevision = 0;
   let restoringDock: Promise<void> | undefined;
+  /** U4: another device updating this computer's Vonvon Bot (macOS only for 0.9.0). */
+  let remoteUpdate: RemoteSelfUpdate | undefined;
 
   const show = (): void => {
     if (quitting || terminating || cleanupPromise) return;
@@ -141,14 +155,19 @@ export async function startDesktop(): Promise<void> {
     stopUpdateChecks?.();
     stopUpdateChecks = undefined;
     restartCancel?.abort();
+    powerMonitor.off('resume', onResume);
+    remoteUpdate?.dispose();
     try {
       if (starting) await starting.catch(() => {});
+      // Remote connections first, so no reconnect fires while the rest closes; the remote daemons are left alone.
+      await devices?.dispose();
       if (bridge) await bridge.dispose();
       else if (owner) await owner.dispose();
     } catch (error) {
       closeFailure = error;
     } finally {
       bridge = null;
+      devices = null;
       owner = null;
       tray?.destroy();
       tray = null;
@@ -228,11 +247,13 @@ export async function startDesktop(): Promise<void> {
     const root = await prepareDesktopRoot(resolveDataRoot(homedir()));
     const updateConfiguration = await desktopUpdateConfiguration({ appPath: app.getAppPath(), isPackaged: app.isPackaged });
     const beforeUpdateInstall = async () => {
+      // U4: a remote update tells the daemon it restarts now, before the connection closes (at most 2 s).
+      await remoteUpdate?.aboutToRestart();
       // NSIS replaces this executable and its bundled daemon. Drain and stop the
       // authenticated owner before releasing the desktop connection or installing.
       if (process.platform === 'win32' && await managerDependencies.readVerifiedDaemon()) {
         const attached = await attachExisting(root);
-        try { await stopHost(attached.identity, () => attached.client.machine({type:'stopHost'})); }
+        try { await stopHost(attached.identity, () => attached.client.machine({type:'stopHost', reason:'update'})); }
         finally { await attached.dispose(); }
       }
       await cleanup();
@@ -257,7 +278,21 @@ export async function startDesktop(): Promise<void> {
     // 菜单栏菜单和窗口里的更新提示（有新版本、上次没装上），都以最近一次检查的结果为准。
     const noteUpdate = (update: DesktopUpdate): DesktopUpdate => {
       tray?.setUpdate(desktopUpdateNotice(update));
+      remoteUpdate?.observe(update);
       return update;
+    };
+    /** 重启升级's install, here or for another device: one that fails after the app closed its window says so and quits. */
+    const installUpdate = async (): Promise<DesktopUpdate> => {
+      try { return await updater.install(); }
+      catch (error) {
+        if (cleanupPromise) {
+          terminating = true;
+          dialog.showErrorBox('Vonvon Bot', `桌面更新没有完成。请重新打开 Vonvon Bot 再试一次；也可以到 ${downloadPage} 重新下载安装。`);
+          quitting = true;
+          app.quit();
+        }
+        throw error;
+      }
     };
     await updater.settleInstallState().catch(() => {});
     const serviceRuntime: ServiceRuntime = {
@@ -266,7 +301,11 @@ export async function startDesktop(): Promise<void> {
     };
     const managerDependencies = createDaemonDependencies(serviceRuntime);
     const manager = createDaemonManager(managerDependencies);
+    // devices 7.4: a server installed and registered on its own, and not the one this app carries, stays on quit.
+    const keepOnQuit = (owner: VerifiedDaemon): Promise<boolean> =>
+      daemonKeptOnQuit(owner, { readRegistration: () => managerDependencies.readRegistration(), attach: () => attachExisting(root) });
     stopBeforeQuit = () => stopDaemonForQuit({
+      keep: keepOnQuit,
       readVerifiedDaemon: () => managerDependencies.readVerifiedDaemon(),
       requestStop: daemon => stopVerifiedOwner(root, daemon),
       ownerRunning: daemon => managerDependencies.ownerRunning(daemon),
@@ -509,7 +548,7 @@ export async function startDesktop(): Promise<void> {
             throw error;
           }
           if (!(error instanceof AttachError) ||
-              (error.reason !== 'owner' && error.reason !== 'connection' && error.reason !== 'identity')) throw error;
+              (error.reason !== 'owner' && error.reason !== 'connection' && error.reason !== 'identity' && error.reason !== 'protocol')) throw error;
           await unlessStopped(new Promise(resolve => setTimeout(resolve, 250)));
           continue;
         }
@@ -538,7 +577,7 @@ export async function startDesktop(): Promise<void> {
       if (liveServiceActionRecord(root)?.phase === 'running') {
         void guardedService(() => followServiceHelper(serviceRuntime, lost, loginItemHooks)).catch(() => {
           controlledDisconnect = false;
-          showConnectionLost();
+          if (!bridge?.deferLocalLost()) showConnectionLost();
         });
         return true;
       }
@@ -546,7 +585,7 @@ export async function startDesktop(): Promise<void> {
       const deadline = setTimeout(() => cancel.abort(), restartDeadlineMs);
       restartCancel = cancel;
       const done = reconnectPassive(cancel).catch(() => {
-        if (!terminating && !cleanupPromise && cancel.signal.reason !== startTakesOver) showConnectionLost();
+        if (!terminating && !cleanupPromise && cancel.signal.reason !== startTakesOver && !bridge?.deferLocalLost()) showConnectionLost();
       }).finally(() => {
         clearTimeout(deadline);
         if (passive?.cancel === cancel) passive = undefined;
@@ -570,6 +609,19 @@ export async function startDesktop(): Promise<void> {
       });
     }
 
+    // devices-ui-1a 4.8: the devices this computer manages; the list never stops the app from starting.
+    const deviceLog = createDeviceLog<string>(join(app.getPath('userData'), 'devices.log'));
+    const box = electronSecretBox(safeStorage);
+    const registry = await openDeviceRegistry(join(app.getPath('userData'), 'devices.json'), box);
+    devices = createDeviceConnections({
+      registry, connector: secureConnector(), box,
+      client: { version: app.getVersion(), protocolVersion: PROTOCOL_VERSION },
+      log: deviceLog,
+      // macOS 15 is Darwin 24.
+      localNetworkPrivacy: process.platform === 'darwin' && Number(release().split('.')[0]) >= 24,
+    });
+    devices.setLocal({ status: 'online', serverInfo: owner.serverInfo });
+    powerMonitor.on('resume', onResume);
     bridge = installBridge(owner, current, paths, {
       observeCli: () => observeCli(cliOptions),
       repairCli: async () => {
@@ -629,30 +681,34 @@ export async function startDesktop(): Promise<void> {
       retryDesktopUpdate: async () => noteUpdate(await updater.retry()),
       installDesktopUpdate: async () => {
         if (quitRequested) throw new StartHostRefusal('Vonvon Bot 正在退出，请稍后再更新。');
-        try {
-          if (process.platform === 'win32' && (await updater.check()).state === 'downloaded') {
-            const choice = await dialog.showMessageBox(current, {type:'question',title:'安装更新',
-              message:'安装并重启 Vonvon Bot？', detail:'更新会短暂中断 Bot 的后台连接，正在运行的任务可能会中断。你可以选择稍后，等任务结束再安装。',
-              buttons:['安装并重启','稍后'],defaultId:1,cancelId:1,noLink:true});
-            if (choice.response !== 0) return updater.check();
-          }
-          return await updater.install();
-        }
-        catch (error) {
-          if (cleanupPromise) {
-            terminating = true;
-            dialog.showErrorBox('Vonvon Bot', `桌面更新没有完成。请重新打开 Vonvon Bot 再试一次；也可以到 ${downloadPage} 重新下载安装。`);
-            quitting = true;
-            app.quit();
-          }
-          throw error;
-        }
+        // U4: another device's update downloads and restarts on its own; two installs must not race to quitAndInstall.
+        if (remoteUpdate?.busy) throw new StartHostRefusal(REMOTE_UPDATE_TEXT.localRefused);
+        // No question first, as on macOS (owner 2026-11-02): the button itself says the restart interrupts the
+        // conversations in progress; a dialog on an unattended computer would wait forever.
+        return installUpdate();
       },
       hide,
       confirmQuit,
+      quitKeepsDaemon: async () => {
+        const verified = await managerDependencies.readVerifiedDaemon().catch(() => null);
+        return verified ? keepOnQuit(verified) : false;
+      },
       connectionLost: showConnectionLost,
-    });
+    }, devices);
     tray = createDesktopTray(icon, show, requestQuit);
+    // U4: the daemon this app carries asks it to update when another device says so. Windows' app is updated on that
+    // computer for 0.9.0 (owner 2026-11-02): its shell does not declare it can, as its daemon does not offer it.
+    if (process.platform !== 'win32') {
+      remoteUpdate = startRemoteSelfUpdate({
+        updater: { check: () => updater.check(), install: installUpdate, get busy() { return updater.busy; } },
+        owner: () => bridge?.localOwner() ?? null,
+        onOwner: listener => bridge?.onLocalOwner(listener) ?? (() => {}),
+        quitting: () => quitRequested || terminating || cleanupPromise !== undefined,
+        notice: text => { tray?.setNotice(text); bridge?.sendRemoteUpdate(text); },
+        publish: update => { if (!terminating && !cleanupPromise) bridge?.publishUpdate(noteUpdate(update)); },
+        log: (event, fields = {}) => deviceLog(event, fields),
+      });
+    }
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { label: 'Vonvon Bot', submenu: [
         { label: '显示 Vonvon Bot', click: show },

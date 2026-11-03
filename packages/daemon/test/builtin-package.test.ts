@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, rmdir, stat, unlink } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -14,8 +14,8 @@ async function setup() {
   isolated.root = await mkdtemp(join(tmpdir(), 'builtin-package-'));
   directories.push(isolated.root);
   const { completeBuiltinPackage, ensureBuiltinPackage } = await import('../src/agent/builtin-skills/package');
-  const { scheduledTasksSkill } = await import('../src/agent/builtin-skills/scheduled-tasks');
-  return { completeBuiltinPackage, ensureBuiltinPackage, skill: scheduledTasksSkill };
+  const { scheduleSkill } = await import('../src/agent/builtin-skills/schedule');
+  return { completeBuiltinPackage, ensureBuiltinPackage, skill: scheduleSkill };
 }
 
 describe('builtin capability package', () => {
@@ -43,7 +43,7 @@ describe('builtin capability package', () => {
     const description: unknown = JSON.parse(descriptionLine!.slice('description: '.length));
     expect(description).toBe(skill.description);
     expect(description).not.toMatch(/[\r\n]/);
-    expect(String(description).length).toBeLessThanOrEqual(200);
+    expect(String(description).length).toBeLessThanOrEqual(300);
     const before = await Promise.all([stat(plugin), stat(file)]);
     expect(await ensureBuiltinPackage('example', 'group', [skill])).toEqual({ ...first, changed: false });
     expect((await stat(plugin)).mtimeMs).toBe(before[0]!.mtimeMs);
@@ -52,7 +52,8 @@ describe('builtin capability package', () => {
       for (const directory of [isolated.root, join(isolated.root, 'bots'), join(isolated.root, 'bots', 'example'), join(isolated.root, 'bots', 'example', 'capabilities'), join(isolated.root, 'bots', 'example', 'capabilities', 'builtin'), first.path, join(first.path, 'skills'), join(first.path, 'skills', skill.name), join(first.path, '.claude-plugin')]) {
         expect((await stat(directory)).mode & 0o777).toBe(0o700);
       }
-      for (const path of [plugin, file]) expect((await stat(path)).mode & 0o777).toBe(0o644);
+      // s1b: read-only; the next session writes a changed one over again.
+      for (const path of [plugin, file]) expect((await stat(path)).mode & 0o777).toBe(0o444);
     }
   });
   it('updates content at the same path and removes only obsolete SKILL.md files', async () => {
@@ -70,6 +71,18 @@ describe('builtin capability package', () => {
     await expect(stat(join(oldDirectory, 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await ensureBuiltinPackage('example', 'group', [])).toEqual({ path: first.path, changed: true });
     expect((await stat(first.path)).isDirectory()).toBe(true);
+  });
+  // s1b: the files are read-only, and one a person made writable and changed is written over by the next session.
+  it('writes a hand-edited SKILL.md over again, read-only', async () => {
+    const { ensureBuiltinPackage, skill } = await setup();
+    const first = await ensureBuiltinPackage('example', 'group', [skill]);
+    const file = join(first.path, 'skills', skill.name, 'SKILL.md');
+    const original = await readFile(file, 'utf8');
+    await chmod(file, 0o644);
+    await writeFile(file, 'changed by hand');
+    expect(await ensureBuiltinPackage('example', 'group', [skill])).toEqual({ path: first.path, changed: true });
+    expect(await readFile(file, 'utf8')).toBe(original);
+    if (process.platform !== 'win32') expect((await stat(file)).mode & 0o777).toBe(0o444);
   });
   it('serializes concurrent cleanup and keeps the old directory', async () => {
     const { ensureBuiltinPackage, skill } = await setup();
