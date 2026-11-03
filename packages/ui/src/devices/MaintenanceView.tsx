@@ -14,7 +14,7 @@ function ClientUpdateAction() {
   return <div className="device-actions">
     <DesktopUpdateButton/>
     {shell?.checkDesktopUpdate && <Button disabled={Boolean(phase)} onClick={() => void run(shell.checkDesktopUpdate!, 'checking')}>检查更新</Button>}
-    {error && <span role="alert">{error}</span>}
+    {error && <span className="device-problem" role="alert">{error}</span>}
   </div>;
 }
 
@@ -32,9 +32,9 @@ export function MaintenanceView() {
     ...(info.capabilities ? {capabilities: info.capabilities} : {}), name,
   }) : null;
   return <DeviceOutsideFrame title={`${name}和这台电脑的版本不能一起工作`}>{() => notice && <>
-    <p>{notice.text}</p>
+    <p className="device-outside-text">{notice.text}</p>
     {notice.side === 'client' && <DraftGuardProvider><DesktopUpdateProvider><ClientUpdateAction/></DesktopUpdateProvider></DraftGuardProvider>}
-    {notice.side === 'server' && info?.capabilities && !notice.action && <p>{cannotUpgradeRemotely(name)}</p>}
+    {notice.side === 'server' && info?.capabilities && !notice.action && <p className="device-outside-text">{cannotUpgradeRemotely(name)}</p>}
     {notice.side === 'server' && notice.action === 'upgrade-server' && <ServerUpdateCard variant="remote" request={request} where={device}/>}
   </>}</DeviceOutsideFrame>;
 }

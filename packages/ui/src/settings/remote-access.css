@@ -1,34 +1,111 @@
-/* devices-ui-3: 允许别的设备连接 and the paired toast. Plain layout, as the devices pages; the visual pass comes with the
-   final UI overhaul. */
-.remote-access { display: grid; gap: 16px; }
-.remote-address-block { display: grid; gap: 10px; padding: 12px 14px; }
-.remote-address-head { display: grid; gap: 2px; }
-.remote-address-head strong { font-size: 13px; font-weight: 500; }
-.remote-address-head span, .remote-address-empty, .remote-address-actions span { color: var(--text-secondary, #666); font-size: 12px; }
-.remote-address-empty { margin: 0; }
-.remote-address-list { display: grid; border: 1px solid rgb(0 0 0 / 8%); border-radius: 8px; }
-.remote-address { display: flex; align-items: center; gap: 10px; padding: 8px 10px; cursor: pointer; }
-.remote-address + .remote-address { border-top: 1px solid rgb(0 0 0 / 6%); }
-.remote-address:has(input:checked) { background: rgb(37 99 235 / 6%); }
-.remote-address__copy { display: grid; flex: 1; min-width: 0; }
-.remote-address__copy strong { font-size: 13px; font-weight: 500; }
-.remote-address__copy span { color: var(--text-secondary, #666); font-size: 12px; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
-.remote-address__state { flex: 0 1 auto; max-width: 50%; font-size: 12px; color: #15803d; }
-.remote-address__state:not([data-state="listening"]) { color: #b45309; }
-/* The daemon's detail marks commands with backticks (`vonvon remote port <n>`); CopyText shows them as code. */
-.remote-address__state code { font-size: 12px; overflow-wrap: anywhere; }
-.remote-address__state[data-state="failed"] { color: #b91c1c; }
-.remote-address-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.remote-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: rgb(0 0 0 / 6%); font-size: 11px; font-weight: 500; line-height: 18px; vertical-align: 1px; }
-.remote-tag[data-tone="new"] { background: rgb(22 163 74 / 12%); color: #15803d; }
-.remote-link { display: grid; gap: 8px; padding: 12px 14px; }
-.remote-link input { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid rgb(0 0 0 / 15%); border-radius: 6px; font: 12px ui-monospace, monospace; }
-.remote-link__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary, #666); }
-.remote-rename { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.remote-rename input { font: inherit; padding: 4px 6px; }
-.remote-error { color: #b91c1c; font-size: 12px; }
-.remote-tick { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 13px; }
-.remote-dialog-text { margin: 0 0 10px; font-size: 13px; line-height: 1.6; }
+/* 0.9.0: 允许别的设备连接, the remote device's 服务端 / 后台服务 groups, and the paired toast. Scoped to remote- / paired- classes
+   and the app's tokens; the shared settings kit is not restyled. Some rules repeat a class: this file can load before the
+   shared styles and must still win over them. The row menu (⋯) and 改名 in place come from devices/devices.css. */
+.remote-access { display: grid; gap: var(--settings-section-gap, 18px); }
+.remote-access > .ss-section + .ss-section { margin-top: 0; }
+.remote-access > .ui-inline-notice { margin-top: -8px; }
+.remote-access > .device-tailscale { margin-top: -6px; }
 
-.paired-toasts { position: fixed; top: 96px; right: 24px; z-index: 100; display: grid; gap: 12px; width: min(420px, calc(100vw - 48px)); }
-.paired-toasts .ui-inline-notice { background: var(--surface, #fff); box-shadow: 0 8px 32px #0003; }
+/* The address choice: a described row with its list. */
+.remote-address-block { position: relative; display: grid; gap: 10px; padding: 12px 16px 14px; }
+.ss-row + .remote-address-block::before, .remote-address-block + .ss-row::before {
+  content: ''; position: absolute; top: 0; right: 16px; left: 16px; height: 1px; background: var(--color-separator, var(--color-border));
+}
+.remote-address-head { display: grid; }
+.remote-address-head strong { color: var(--color-text); font-size: 13px; font-weight: 400; line-height: 1.45; }
+.remote-address-head span { margin-top: 3px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.55; }
+.remote-address-list { overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--control-radius, 8px); background: var(--color-surface); }
+.remote-address {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 4px 12px;
+  min-height: 48px; box-sizing: border-box; padding: 8px 12px; cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+.remote-address + .remote-address { border-top: 1px solid var(--color-border); }
+.remote-address:hover { background: var(--color-surface-hover); }
+.remote-address:has(input:checked) { background: var(--color-accent-subtle); }
+.remote-address:has(input:disabled) { cursor: default; }
+.remote-address > input[type="radio"] { width: 16px; height: 16px; margin: 0; accent-color: var(--color-accent); }
+.remote-address__copy { display: grid; gap: 1px; min-width: 0; }
+.remote-address__copy strong { color: var(--color-text); font-size: 13px; font-weight: 500; line-height: 1.45; }
+.remote-address__copy span { color: var(--color-text-secondary); font: 12px/1.5 var(--font-family-mono); overflow-wrap: anywhere; }
+.remote-address__tags { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; min-width: 0; }
+/* A long state (a taken port and how to change it) goes on its own line under the address. */
+.remote-address__tags[data-long] { grid-column: 2 / -1; justify-content: flex-start; }
+
+/* The address's state, as the devices list's. */
+.remote-pill {
+  --remote-state-color: var(--color-status-neutral);
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-height: 20px; box-sizing: border-box;
+  padding: 1px 7px; border: 1px solid color-mix(in srgb, var(--remote-state-color) 17%, transparent); border-radius: 999px;
+  background: color-mix(in srgb, var(--remote-state-color) 5%, var(--color-canvas)); color: var(--remote-state-color);
+  font-size: 11px; font-weight: 500; line-height: 16px; white-space: nowrap;
+}
+.remote-pill > i { width: 5px; height: 5px; flex: none; border-radius: 50%; background: var(--remote-state-color); }
+.remote-pill[data-state="listening"] { --remote-state-color: var(--color-status-success); }
+.remote-pill:is([data-state="waiting"], [data-state="needs-confirmation"]) { --remote-state-color: var(--color-status-warning); }
+.remote-pill[data-state="failed"] { --remote-state-color: var(--color-status-danger); }
+.remote-pill[data-state="via"] { color: var(--color-text-secondary); }
+.remote-address__tags[data-long] .remote-pill { align-items: flex-start; padding: 2px 8px; line-height: 1.45; white-space: normal; }
+.remote-address__tags[data-long] .remote-pill > i { margin-top: 6px; }
+.remote-address__tags[data-long] .remote-pill > span { min-width: 0; overflow-wrap: anywhere; }
+.remote-access .remote-pill code { padding: 0 4px; font-size: 11px; background: color-mix(in srgb, currentColor 10%, transparent); }
+
+.remote-address-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 2px; }
+.remote-address-actions:empty { display: none; }
+.remote-address-actions > .remote-address-close { margin-left: auto; color: var(--color-text-secondary); }
+.remote-address-actions > .remote-address-note { flex-basis: 100%; margin: 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.55; }
+.remote-address-empty.remote-address-empty {
+  margin: 0; padding: 12px; border: 1px dashed var(--color-border-strong, var(--color-border)); border-radius: var(--control-radius, 8px);
+  color: var(--color-text-secondary); font-size: 12px; line-height: 1.55; text-align: center;
+}
+
+/* 连接链接 */
+.remote-link { display: grid; gap: 10px; padding: 12px 16px; }
+.remote-link > input[readonly] {
+  width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 10px; overflow: hidden; text-overflow: ellipsis;
+  border: 1px solid var(--color-border-strong); border-radius: var(--control-radius, 8px); background: var(--color-surface-muted);
+  color: var(--color-text); font: 12px/1.6 var(--font-family-mono);
+}
+.remote-link > input[readonly]:focus-visible { border-color: var(--color-accent); outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.remote-link__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.remote-link__countdown { margin-left: auto; color: var(--color-text-tertiary); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* 已配对的设备 */
+.remote-tag {
+  display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 999px; background: var(--color-accent-subtle); color: var(--color-accent);
+  font-size: 11px; font-weight: 500; line-height: 18px; vertical-align: 1px;
+}
+.remote-tag[data-tone="new"] {
+  padding: 0 6px; border: 1px solid var(--color-status-success-border); background: var(--color-status-success-bg); color: var(--color-status-success);
+}
+.remote-client .ss-row__trailing { align-self: center; }
+.remote-client .ss-row__description { overflow-wrap: anywhere; }
+.remote-paired-empty .ss-row__title.ss-row__title { color: var(--color-text-secondary); font-size: 12px; }
+.remote-loading .ss-row__title.ss-row__title { color: var(--color-text-secondary); }
+.remote-error { display: block; }
+
+/* Confirmations */
+.remote-dialog-text { margin: 0 0 12px; color: var(--color-text); font-size: 13px; line-height: 1.6; }
+.remote-tick { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; color: var(--color-text); font-size: 13px; cursor: pointer; }
+.remote-tick > input { width: 16px; height: 16px; margin: 0; accent-color: var(--color-accent); }
+
+/* 「X」的服务端 / 「X」的后台服务 of another device */
+.remote-server .ss-row__value { font-variant-numeric: tabular-nums; }
+.remote-update-actions.remote-update-actions { gap: 6px; }
+.remote-server .remote-status.remote-status { padding: 8px 16px 12px; font-size: 12px; line-height: 1.55; }
+
+/* A device paired with this computer */
+.paired-toasts { position: fixed; z-index: 100; top: 72px; right: 20px; display: grid; gap: 10px; width: min(380px, calc(100vw - 40px)); }
+html[data-desktop-chrome="silver"] .paired-toasts { top: 106px; }
+.paired-toasts > .ui-inline-notice.ui-inline-notice {
+  align-items: flex-start; padding: 12px 14px; border: 1px solid var(--color-border); border-radius: var(--radius-lg, 14px);
+  background: var(--color-surface); box-shadow: var(--shadow-md); color: var(--color-text);
+}
+.paired-toasts > .ui-inline-notice .ui-inline-notice__icon { color: var(--color-status-info); }
+.paired-toasts > .ui-inline-notice .ui-inline-notice__title { margin-bottom: 2px; color: var(--color-text); font-size: 13px; font-weight: 600; }
+.paired-toasts > .ui-inline-notice .ui-inline-notice__content p { color: var(--color-text-secondary); font-size: 12px; line-height: 1.55; }
+.paired-toasts > .ui-inline-notice .ui-inline-notice__actions { align-self: flex-start; gap: 4px; }
+@keyframes paired-toast-in { from { opacity: 0; transform: translateY(-8px); } }
+@media (prefers-reduced-motion: no-preference) {
+  .paired-toasts > .ui-inline-notice { animation: paired-toast-in var(--duration-base) var(--ease-standard); }
+}
