@@ -34,6 +34,13 @@ export interface MemoryPlace {
 }
 
 export type MemoryRefusalReason = 'not-allowed-here' | 'no-project';
+/** What the tools and a Bot session's command line say for a refusal of this table (memory-writer, devices-4b 4.5a). */
+export const decisionMessages = {
+  'not-allowed-here': '这里不能记。',
+  'no-project': '这个群还没有绑定项目，记不了。',
+  'out-of-scope': '这条记忆不在这里，动不了。',
+  'not-yours': '这条记忆不是你记的，动不了。',
+} as const;
 export type AddDecision =
   | { allow: true; scope: MemoryItemScope; trust: 'trusted' | 'untrusted'; actorRole: MemoryActorRole; actorOpenId?: string; downgraded?: MemoryDowngrade }
   | { allow: false; reason: MemoryRefusalReason };
@@ -142,6 +149,9 @@ export type EditDecision =
   | { allow: true; actor: { actorRole: MemoryActorRole; actorOpenId?: string } }
   | { allow: false; reason: 'not-allowed-here' | 'out-of-scope' | 'not-yours'; downgraded?: MemoryDowngrade };
 
+/** 私聊记忆只归私聊里的这个人：读、改、删都只能是本人那一轮 */
+export const ownDm = (turn: Pick<MemoryTurn, 'place' | 'openId'>, openId: string): boolean => turn.place === 'dm' && turn.openId === openId;
+
 /** `memory_update` / `memory_forget`；`text` 是新文本（只有改文本时才核对出处） */
 export function decideEdit(input: { turn: MemoryTurn; place: MemoryPlace; item: Pick<MemoryItem, 'scope' | 'source'>; text?: string }): EditDecision {
   const { turn, place, item, text } = input;
@@ -153,9 +163,7 @@ export function decideEdit(input: { turn: MemoryTurn; place: MemoryPlace; item: 
     const failed = botWriteGate(turn, text);
     return failed ? { allow: false, reason: 'out-of-scope', downgraded: failed } : { allow: true, actor };
   }
-  if (scope.kind === 'dm') {
-    return turn.place === 'dm' && turn.openId === scope.openId ? { allow: true, actor } : { allow: false, reason: 'out-of-scope' };
-  }
+  if (scope.kind === 'dm') return ownDm(turn, scope.openId) ? { allow: true, actor } : { allow: false, reason: 'out-of-scope' };
   const bound = turn.place === 'dm' ? (place.botProjectIds ?? []) : place.chatProjectId ? [place.chatProjectId] : [];
   if (!bound.includes(scope.projectId)) return { allow: false, reason: 'out-of-scope' };
   if (isHuman(turn) && isManager(turn)) return { allow: true, actor };

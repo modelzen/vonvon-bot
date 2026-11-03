@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { PROTOCOL_VERSION } from '@vonvon/protocol';
 
 /** Native-protocol fixture for the actual packaged daemon. No accounts, Bot or
  * Feishu transport are created; every production build exercises these bytes. */
@@ -36,6 +37,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
   return {bin, directory, stateFile, callsFile};
 }
 
+/** The hello carries the protocol this checkout builds: an older one is held to status, upgrade and stop. */
 export async function verifyPackagedProvider(listen, home, fixture) {
   const credential = (await readFile(join(home, 'local-credential'), 'utf8')).trim();
   const socket = new WebSocket(`ws://${listen}`);
@@ -43,7 +45,7 @@ export async function verifyPackagedProvider(listen, home, fixture) {
   let nextId = 1;
   const ready = new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Packaged Provider handshake timed out')), 10_000);
-    socket.addEventListener('open', () => socket.send(JSON.stringify({type:'hello',protocolVersion:1,clientKind:'cli',credential})));
+    socket.addEventListener('open', () => socket.send(JSON.stringify({type:'hello',protocolVersion:PROTOCOL_VERSION,clientKind:'cli',credential})));
     socket.addEventListener('error', () => {clearTimeout(timeout); reject(new Error('Packaged Provider connection failed'));});
     socket.addEventListener('message', event => {const value=JSON.parse(event.data); if(value.type==='serverInfo'){clearTimeout(timeout);resolve();}else if(value.id){pending.get(value.id)?.(value);pending.delete(value.id);}});
   });

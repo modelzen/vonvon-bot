@@ -1,7 +1,9 @@
+import { selfEntry } from '../core/self-entry';
 import { homedir } from 'node:os';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { classifyDistribution, nearestPackageRoot } from '../service/distribution';
 import { paths } from './paths';
 import type { AppConfig, AppPreferences, TenantBrand } from './schema';
 import { secretKeyForApp } from './schema';
@@ -56,7 +58,7 @@ export async function buildEncryptedAccountConfig(
     secrets: {
       providers: {
         bridge: process.platform === 'win32'
-          ? { source: 'exec', command: process.execPath, args: [process.argv[1] ?? '', 'secrets', 'get'], env: { HOME: homedir(), USERPROFILE: homedir(), VONVON_HOME: paths.appDir, ELECTRON_RUN_AS_NODE: '1' } }
+          ? { source: 'exec', command: process.execPath, args: [selfEntry(), 'secrets', 'get'], env: { HOME: homedir(), USERPROFILE: homedir(), VONVON_HOME: paths.appDir, ELECTRON_RUN_AS_NODE: '1' } }
           : { source: 'exec', command: wrapperPath, args: [] },
       },
     },
@@ -64,15 +66,31 @@ export async function buildEncryptedAccountConfig(
   };
 }
 
+/** The install root of the standalone server this process runs from, if it runs from one. */
+function ownStandaloneRoot(): string | undefined {
+  const own = classifyDistribution(nearestPackageRoot(selfEntry()));
+  return own.kind === 'standalone' ? own.installRoot : undefined;
+}
+
 /**
- * Write the secrets-getter wrapper pointing at the current node + bridge
- * entry. Always rewrites (node path can move). 0700 perms.
+ * What the secrets-getter wrapper of this data directory holds. A standalone server's names only
+ * `<installRoot>/current`, never a versioned release (reviews 207, 221): the wrapper outlives the release that writes
+ * it, the getters of data directories whose daemon does not run are never seen by the cleanup of `releases/`, and
+ * that cleanup never removes the release `current` names (cleanupReleases). Elsewhere the running Node and entry.
  */
-export async function ensureSecretsGetterWrapper(): Promise<string> {
+export function secretsGetterContents(installRoot: string | undefined): string {
+  const node = installRoot ? join(installRoot, 'current', 'node', 'bin', 'node') : process.execPath;
+  const bridgeEntry = installRoot ? join(installRoot, 'current', 'app', 'bin', 'vonvon.mjs') : selfEntry();
+  return getterContents({ nodePath: node, cliPath: bridgeEntry }, paths.appDir);
+}
+
+/**
+ * Write the secrets-getter wrapper (secretsGetterContents). Always rewrites (node path can move). 0700 perms.
+ * `installRoot` is this process's own standalone install unless a caller names one.
+ */
+export async function ensureSecretsGetterWrapper(installRoot: string | undefined = ownStandaloneRoot()): Promise<string> {
   const wrapperPath = paths.secretsGetterScript;
-  const node = process.execPath;
-  const bridgeEntry = process.argv[1] ?? '';
-  const content = getterContents({ nodePath: node, cliPath: bridgeEntry }, paths.appDir);
+  const content = secretsGetterContents(installRoot);
   await mkdir(dirname(wrapperPath), { recursive: true });
   const tmp = `${wrapperPath}.tmp-${process.pid}`;
   await writeFile(tmp, content, 'utf8');

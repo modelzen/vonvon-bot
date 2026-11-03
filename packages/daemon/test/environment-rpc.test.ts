@@ -141,7 +141,9 @@ fs.writeFileSync(path.join(process.env.HOME, 'install-started'), 'started');
 const timer = setInterval(() => { if (fs.existsSync(path.join(process.env.HOME, 'release-install'))) { clearInterval(timer); process.exit(1); } }, 20);
 `, { mode: 0o700 });
     try {
-      const installing = f.environment.run({ type: 'install', tool: 'lark-cli' });
+      // cli-7-environment 审查 202: the request's own id stays on the state it starts, and only there
+      const requestId = '33333333-3333-4333-8333-333333333333';
+      const installing = f.environment.run({ type: 'install', tool: 'lark-cli', requestId });
       let id: string | undefined;
       await waitUntil(async () => {
         const status = await f.environment.run({ type: 'toolInstallStatus' });
@@ -150,7 +152,11 @@ const timer = setInterval(() => { if (fs.existsSync(path.join(process.env.HOME, 
         return await readFile(join(f.dir, 'install-started'), 'utf8').catch(() => null) === 'started';
       });
       if (!id) throw new Error('Install id missing');
-      expect(await f.environment.run({ type: 'cancelInstall', operationId: id })).toMatchObject({ kind: 'toolInstall', operation: { kind: 'cancelled', id } });
+      expect(await f.environment.run({ type: 'toolInstallStatus' })).toMatchObject({ kind: 'toolInstall', operation: { kind: 'running', id, requestId } });
+      // another caller is refused busy, and the state still shows the first request's id
+      expect(await f.environment.run({ type: 'update', tool: 'lark-cli', requestId: '44444444-4444-4444-8444-444444444444' })).toMatchObject({ kind: 'refused', code: 'busy' });
+      expect(await f.environment.run({ type: 'toolInstallStatus' })).toMatchObject({ kind: 'toolInstall', operation: { id, requestId } });
+      expect(await f.environment.run({ type: 'cancelInstall', operationId: id })).toMatchObject({ kind: 'toolInstall', operation: { kind: 'cancelled', id, requestId } });
       expect(await installing).toMatchObject({ kind: 'refused', code: 'install-cancelled' });
       expect(await readFile(join(f.dir, 'managed-tools', 'lark-cli', 'current.json'), 'utf8').catch(() => null)).toBeNull();
     } finally {

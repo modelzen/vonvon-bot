@@ -338,6 +338,20 @@ it('resubmits a definitely unsent message on a fresh thread after a process exit
  expect(next.consumed[0]!.text).toContain('unsent followup');
  first.turns[0]!.resolve(); next.turns[0]!.resolve();
 });
+// Codex review 230-1: dropping it from the cache without closing it left its entry, and the session's token, standing
+it('closes a cached thread whose process went between turns when the next message evicts it', async () => {
+ const first = thread(), next = thread();
+ fake.backend.resumeThread.mockResolvedValueOnce(first.t).mockResolvedValue(next.t);
+ const o = setup('queue'); await o.onMessage(message('first'));
+ await until(() => expect(first.consumed).toHaveLength(1));
+ first.turns[0]!.resolve();
+ await until(() => expect(fake.final).toHaveBeenCalled());
+ first.t.isAlive = () => false;
+ await o.onMessage(message('second'));
+ await until(() => expect(next.consumed).toHaveLength(1));
+ expect(first.t.close).toHaveBeenCalled();
+ next.turns[0]!.resolve();
+});
 it('keeps the healthy thread and queued messages after terminal card failure', async () => {
  const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t);
  const o = setup('queue'); await o.onMessage(message('first'));
@@ -702,7 +716,7 @@ describe('agent entry orchestration', () => {
     await o.onMessage(first);
     await until(() => expect(run.consumed).toHaveLength(1));
     const grant: AgentEntry = fake.backend.resumeThread.mock.calls[0]![0].entry;
-    await expect(grant.call('session_info', {})).resolves.toMatchObject({ ok: true, result: { place: 'group', turn: 'person', settings: { allowed: false, reason: 'not-dm' } } });
+    await expect(grant.call('session_info', {})).resolves.toEqual({ ok: true, result: { v: 1, place: 'group', turn: 'person' } });
     expect(open).toHaveBeenCalledWith(run.t, expect.objectContaining({ requesterOpenId: 'owner', triggerMessageId: first.messageId, retry: false }));
     const second = { ...human('second'), senderId: 'other' };
     await o.onMessage(second);

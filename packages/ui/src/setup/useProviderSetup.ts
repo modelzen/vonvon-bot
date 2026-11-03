@@ -33,8 +33,6 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
   const observedToolInstallId = useRef<string | undefined>(undefined);
   const tool = snapshot.tools.find(item => item.tool === provider);
   const signature = providerSignature(tool);
-  const codexJob = snapshot.jobs.filter(job => job.type === 'loginCodex').at(-1);
-  const activeCodexJob = provider === 'codex' && codexJob && !['succeeded', 'failed', 'cancelled'].includes(codexJob.phase) ? codexJob : undefined;
   const accept = useCallback((reply: EnvironmentReply) => {
     if (!mounted.current) return;
     if (reply.kind === 'refused') throw new Error(reply.message);
@@ -123,9 +121,6 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
     lastSignature.current = signature;
     if (ready) void latest.current.verify();
   }, [signature, ready]);
-  useEffect(() => {
-    if (provider === 'codex' && codexJob?.phase === 'succeeded' && ready) void latest.current.verify();
-  }, [provider, ready, codexJob?.id, codexJob?.phase]);
 
   async function request(next: EnvironmentRequest) {
     const requestedProvider = provider;
@@ -187,8 +182,8 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
   const operationMessage = provider === 'claude' && install?.state === 'failed' ? installError?.message ?? '安装未完成，请重试。'
     : toolInstall?.id === observedToolInstallId.current && toolInstall?.kind === 'failed' ? toolInstall.message
     : login?.id === observedLoginId.current && (login?.kind === 'failed' || login?.kind === 'timedOut') ? login.message : undefined;
-  const canContinue = ready && !working && !activeInstall && !relevantToolInstall && !activeLogin && !activeCodexJob && providerInstalled(tool) && providerAuthenticated(tool) && check?.state === 'ready' && check.provider === provider && Boolean(check.models?.length) && check.signature === signature;
-  return {tool, tools, entry, check, issue: issue || operationMessage || (tool?.installation === 'unknown' || providerInstalled(tool) && tool?.authentication === 'unknown' ? tool?.message : undefined), working, activeInstall, relevantToolInstall, activeLogin, activeCodexJob, canContinue, verify: () => verify(true), read, installProvider,
+  const canContinue = ready && !working && !activeInstall && !relevantToolInstall && !activeLogin && providerInstalled(tool) && providerAuthenticated(tool) && check?.state === 'ready' && check.provider === provider && Boolean(check.models?.length) && check.signature === signature;
+  return {tool, tools, entry, check, issue: issue || operationMessage || (tool?.installation === 'unknown' || providerInstalled(tool) && tool?.authentication === 'unknown' ? tool?.message : undefined), working, activeInstall, relevantToolInstall, activeLogin, canContinue, verify: () => verify(true), read, installProvider,
     cancelInstall: () => activeInstall ? request({type: 'cancelBackendInstall', operationId: activeInstall.operationId}) : relevantToolInstall ? request({type: 'cancelInstall', operationId: relevantToolInstall.id}) : undefined,
     cancelLogin: () => activeLogin ? request({type: 'cancelLogin', operationId: activeLogin.id}) : undefined,
     installTool, request};

@@ -38,9 +38,9 @@ export function panelRows(reply: ContextPreviewReply): PanelRow[] {
   ];
 }
 
-/** The judge block: who gets it and what goes in it (§4.6). */
-export function judgeLines(judge: ContextPreviewReply['judge']): string[] {
-  const who = judge.via === 'third-party' ? `智能判断会发给决策模型（${judge.label ?? '第三方'}，第三方）` : `智能判断交给${judge.label ? `本机决策模型（${judge.label}）` : '本机决策模型'}`;
+/** The judge block: who gets it and what goes in it (§4.6). `machine`: whose model a local judge is, 本机 or 「X」上的. */
+export function judgeLines(judge: ContextPreviewReply['judge'], machine = '本机'): string[] {
+  const who = judge.via === 'third-party' ? `智能判断会发给决策模型（${judge.label ?? '第三方'}，第三方）` : `智能判断交给${machine}决策模型${judge.label ? `（${judge.label}）` : ''}`;
   return [who, `补充职责 + 身份与职责（${judge.roleChars} 字）；项目记忆只发本群可信条目 ${judge.memoryItems} 条；待确认的、Bot 记忆不发`];
 }
 

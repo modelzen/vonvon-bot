@@ -159,6 +159,8 @@ it('opens the entries behind the counts by branch, and for the decision model li
 
 it('words the judge line for a local model, the last turn for the project page and picks the newest among bindings', () => {
   expect(judgeLines({via: 'local', roleChars: 0, memoryItems: 0, memoryChars: 0})[0]).toBe('智能判断交给本机决策模型');
+  // owner 2026-11-02: a remote device's judge runs there
+  expect(judgeLines({via: 'local', label: 'Codex', roleChars: 0, memoryItems: 0, memoryChars: 0}, '「机房 Linux」上的')[0]).toBe('智能判断交给「机房 Linux」上的决策模型（Codex）');
   const turn = reply().session!.lastTurn!;
   expect(lastTurnLines(turn).head).toMatch(/^最近一轮参考了 2 条（10-23 \d\d:\d\d）$/);
   expect(lastTurnLines({...turn, missed: undefined}).missed).toBeUndefined();

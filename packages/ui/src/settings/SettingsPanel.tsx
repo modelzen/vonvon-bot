@@ -206,7 +206,8 @@ export function Editor<T extends object>({
     const canonical = reply.result.section.value;
     priorRevision.current = confirmed.revision;
     setConfirmed({ ...confirmed, stored: canonical.stored as T, effective: canonical.effective as T, revision: canonical.revision, apply: canonical.apply });
-    setNotice(savedNotice?.(canonical.stored as T) ?? (reply.result.effects.map(item => item.detail).join(' ') || '已保存。'));
+    const saved = savedNotice?.(canonical.stored as T) ?? (reply.result.effects.map(item => item.detail).join(' ') || '已保存。');
+    setNotice([saved, ...reply.result.warnings ?? []].join(' '));
     return true;
   }
   function noteConflict(reply: SettingsReply) {
@@ -1054,13 +1055,15 @@ export function PermissionFields({value, disabled, onChange, provider}: {value: 
   const fields = options.fields ?? [];
   type Choice = PermissionView['mode'] | 'custom';
   const choices: {value: Choice; label: string; disabled?: boolean; description: ReactNode}[] = options.tiers.map(tier => ({value: tier.tier, label: tier.name, disabled: Boolean(tier.unavailable), description: <>
-        <small>{tier.summary}</small>{tier.native && <small>{tier.native}</small>}{tier.unavailable && <small>{tier.unavailable}</small>}
+        <small>{tier.summary}</small>{tier.native && <small>{tier.native}</small>}{tier.unavailable && <small>{tier.unavailable}</small>}{tier.warning && <small>{tier.warning}</small>}
       </>}));
+  const warning = fullAccessWarning(value);
   if (hasAdditionalPermissionChoices(value) || value.custom || options.invalid) choices.push({value: 'custom', label: '自定义', disabled: !fields.length, description: <small>{fields.length ? `使用${provider ? ` ${provider} ` : ' Provider '}提供的原生设置。` : '当前 Provider 未提供可编辑字段，仅可查看已保存的设置。'}</small>});
   return <div className="permission-fields">
     {options.invalid && <p className="permission-note" role="status">自定义设置读不出来，现在按只读跑。选择预设重新设置。</p>}
     <SettingChoices<Choice> label="权限" stacked value={options.invalid ? '' : value.custom ? 'custom' : value.mode} disabled={disabled}
       choices={choices} onChange={choice => choice === 'custom' ? onChange({custom: {...(value.custom ?? options.expanded[value.mode])}}) : onChange({mode: choice})}/>
+    {warning && !value.custom && <InlineNotice title="完全访问" tone="warning">{warning}</InlineNotice>}
     {value.custom && <section className="permission-custom-fields" aria-label="自定义权限设置">
       {fields.length ? <>
         <p className="permission-note">这里只列{provider ? ` ${provider} ` : ' Provider '}自己支持的设置。群里没人确认，要确认的操作一律拒绝。换 Provider 时会清掉自定义设置。</p>
@@ -1070,6 +1073,11 @@ export function PermissionFields({value, disabled, onChange, provider}: {value: 
     </section>}
     <p className="permission-note" id={settingAnchor('能挡到什么')}>能挡到什么：{options.strength}</p>
   </div>;
+}
+
+/** A group on 完全访问 carries the daemon's warning (devices 第 15 节); a bot's own settings do not. */
+export function fullAccessWarning(value: Pick<PermissionView, 'mode' | 'options'>): string | undefined {
+  return value.mode === 'full' && !value.options.invalid ? value.options.tiers.find(tier => tier.tier === 'full')?.warning : undefined;
 }
 
 /** Keep the current grant readable; compare the provider's levels only while editing. */
@@ -1096,6 +1104,7 @@ export function PermissionSummary({section, provider, save}: {section: Section<P
       <SettingsRow title={invalid ? '只读（设置异常）' : value.custom ? '自定义权限' : currentTier?.name ?? value.mode}
         description={description}
         trailing={<span data-search-title="修改权限"><Button size="sm" onClick={() => {setEditSession(session => session + 1); setOpen(true);}}>{section.access.kind === 'readonly' ? '查看权限' : '修改权限'}</Button></span>}/>
+      {fullAccessWarning(value) && <p className="permission-note" role="note">{fullAccessWarning(value)}</p>}
     </SettingsGroup>
     <Editor key={editSession} title="执行权限" section={section} save={savePermission} afterSave={async () => setOpen(false)}
       prepareSave={(_patch, draft) => draft.custom ? {custom: nativePermissionPatch(draft.options.fields ?? [], draft.custom)} : {mode: draft.mode}}

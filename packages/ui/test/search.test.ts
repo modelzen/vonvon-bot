@@ -90,7 +90,7 @@ test('application search points old startup and update labels to the compact con
   const install = findEntries(entries, '安装更新')[0]?.destination;
   assert.equal(install?.page, 'application');
   assert.equal(install?.section, '软件更新');
-  assert.equal(install?.field, '安装并重启');
+  assert.equal(install?.field, '重启升级');
 });
 
 test('s53: application owner and scanner search reveal their administrator rows', () => {
@@ -414,4 +414,21 @@ test('任务 opens the group 任务 tab, and a task the Bot answered with is fou
   assert.deepEqual(findEntries(withTasks, '站会').map(entry => [entry.title, entry.destination.selection, entry.destination.detail, entry.destination.section, entry.destination.field]),
     [['每日站会提醒', {kind: 'membership', id: membershipId}, {kind: 'membership-settings'}, '任务', '每日站会提醒']]);
   assert.deepEqual(findEntries(withTasks, '别处的提醒'), []);
+});
+
+test('devices-ui-1b: the devices page is found on the desktop only', () => {
+  const desktop = searchEntries(snapshot, {devices: true}).find(entry => entry.id === 'devices');
+  assert.deepEqual(desktop?.destination, {page: 'devices', view: undefined, selection: undefined});
+  assert.ok(findEntries(searchEntries(snapshot, {devices: true}), 'Tailscale').some(entry => entry.id === 'devices'));
+  assert.equal(searchEntries(snapshot).some(entry => entry.id === 'devices'), false);
+});
+
+// devices-ui-3: 允许别的设备连接 and its paired devices are found on 应用与启动. main 必败
+test('finds 允许别的设备连接 and the paired devices on 应用与启动', () => {
+  // Codex 审查 269-2: the link has its own section (remote-access-panel.test.tsx checks each entry lands in its section)
+  const link = findEntries(entries, '连接链接').find(entry => entry.destination.page === 'application');
+  assert.deepEqual(link?.destination, {page: 'application', section: '连接链接', field: '连接链接', reveal: undefined, guide: undefined});
+  assert.equal(findEntries(entries, '生成连接链接')[0]?.destination.section, '连接链接');
+  assert.equal(findEntries(entries, '撤销')[0]?.destination.section, '已配对的设备');
+  assert.equal(findEntries(entries, '设备名字')[0]?.destination.section, '允许别的设备连接');
 });

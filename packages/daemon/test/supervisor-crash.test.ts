@@ -23,7 +23,7 @@ vi.mock('../src/config/paths', async original => {
   return { ...real, paths: { ...real.paths, get appDir() { return f.root; } } };
 });
 vi.mock('../src/import/bridge/runtime', () => ({ bridgeImportRuntime: () => ({ importer: {}, guard: async () => undefined, bind() {}, releaseRemoved() {}, shutdown: async () => {}, dispose() {} }) }));
-vi.mock('../src/agent/owned-process', () => ({ closeOwnedProviderProcesses: async () => {}, unconfirmedProviderPids: () => [] }));
+vi.mock('../src/agent/owned-process', () => ({ closeOwnedProviderProcesses: async () => {}, unconfirmedProviderPids: () => [], registeredProviderPids: () => [] }));
 vi.mock('../src/admin/service', () => ({ createAdminService: (deps: AdminServiceDeps) => { f.deps = deps; return deps; } }));
 vi.mock('../src/server/http', async original => ({ ...await original<typeof import('../src/server/http')>(), startApi: vi.fn(async (options: { crashes?: typeof f.crashes }) => {
   f.crashes = options.crashes;
@@ -130,6 +130,17 @@ const seedRecord = (fields: Partial<CrashRecord> = {}): CrashRecord => ({
   startedAt: new Date().toISOString(), version: '0.7.0', managed: null, during: 'run', reason: 'Error: before', ...fields,
 });
 const seed = (fields: Partial<CrashRecord> = {}): void => { writeCrashRecordSync(f.root, seedRecord(fields)); };
+
+// D4a review R3: a host started inside a session carries its markers; its bots' `daemon run --bot` must not inherit them
+it('starts its bots without the session markers of the environment it was started in', async () => {
+  vi.stubEnv('FEISHU_CODEX_BRIDGE', '1');
+  vi.stubEnv('VONVON_SESSION', `vs1.ses_0123456789abcdef.${'a'.repeat(43)}`);
+  try {
+    await start([A]);
+    const env = vi.mocked(spawnProcess).mock.calls[0]?.[2]?.env ?? {};
+    expect([env.FEISHU_CODEX_BRIDGE, env.VONVON_SESSION, env.VONVON_HOST_RUN_ID]).toEqual([undefined, undefined, RUN]);
+  } finally { vi.unstubAllEnvs(); }
+});
 
 it('records what the child could not, once each, and the third crash stops only that bot', async () => {
   const deps = await start([A, B]);

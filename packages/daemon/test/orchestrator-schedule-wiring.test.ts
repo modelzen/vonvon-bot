@@ -89,7 +89,7 @@ describe('the orchestrator owns the bot\'s schedule store (T1b 4.2)', () => {
     expect(fake.stores.map(s => s.file)).toEqual([file]);
     expect(fake.starts).toHaveLength(1);
     await o.initialize?.();
-    expect(await listed(o.schedule('cli', list))).toEqual([]);
+    expect(await listed(o.scheduleAs({ kind: 'local', via: 'cli' }, list))).toEqual([]);
     expect(fake.starts[0]).not.toHaveBeenCalled();
   });
 
@@ -98,8 +98,8 @@ describe('the orchestrator owns the bot\'s schedule store (T1b 4.2)', () => {
     const o = setup();
     await o.initialize?.();
     expect(fake.stores[0]!.load).toHaveBeenCalledOnce();
-    expect(await listed(o.schedule('cli', list))).toEqual(earlier.map(t => t.id));
-    const created = await o.schedule('desktop', { action: 'create', chatId: CHAT, name: '早报', instruction: '整理早上的新闻', spec: { kind: 'every', minutes: 60 } });
+    expect(await listed(o.scheduleAs({ kind: 'local', via: 'cli' }, list))).toEqual(earlier.map(t => t.id));
+    const created = await o.scheduleAs({ kind: 'local', via: 'desktop' }, { action: 'create', chatId: CHAT, name: '早报', instruction: '整理早上的新闻', spec: { kind: 'every', minutes: 60 } });
     expect(created).toMatchObject({ kind: 'task', task: { chatId: CHAT, name: '早报', createdBy: { via: 'desktop' } } });
     expect(onDisk()).toHaveLength(3);
     expect(onDisk()).toEqual(expect.arrayContaining(earlier.map(t => t.id)));
@@ -113,7 +113,7 @@ describe('the orchestrator owns the bot\'s schedule store (T1b 4.2)', () => {
     await o.initialize?.();
     expect(readdirSync(dirname(file)).filter(name => /^schedules\.json\.corrupt-\d+$/.test(name))).toHaveLength(1);
     expect(corruptions()).toHaveLength(1);
-    expect(await listed(o.schedule('cli', list))).toEqual([]);
+    expect(await listed(o.scheduleAs({ kind: 'local', via: 'cli' }, list))).toEqual([]);
     expect(corruptions()).toHaveLength(1);
   });
 
@@ -122,8 +122,8 @@ describe('the orchestrator owns the bot\'s schedule store (T1b 4.2)', () => {
     await o.initialize?.();
     await o.shutdown();
     const notRunning = { kind: 'refused', reason: 'bot-not-running', message: 'Bot 没在运行，任务暂时看不到；启动后再来。' };
-    expect(await o.schedule('cli', list)).toEqual(notRunning);
-    expect(await o.schedule('desktop', { action: 'create', chatId: CHAT, name: '早报', instruction: '整理早上的新闻', spec: { kind: 'every', minutes: 60 } })).toEqual(notRunning);
+    expect(await o.scheduleAs({ kind: 'local', via: 'cli' }, list)).toEqual(notRunning);
+    expect(await o.scheduleAs({ kind: 'local', via: 'desktop' }, { action: 'create', chatId: CHAT, name: '早报', instruction: '整理早上的新闻', spec: { kind: 'every', minutes: 60 } })).toEqual(notRunning);
     expect(readdirSync(dirname(file))).not.toContain('schedules.json');
   });
 
@@ -131,8 +131,8 @@ describe('the orchestrator owns the bot\'s schedule store (T1b 4.2)', () => {
     seed();
     const o = setup();
     expect(fake.stores[0]!.load).not.toHaveBeenCalled();
-    const first = o.schedule('cli', list);
-    const second = o.schedule('desktop', list);
+    const first = o.scheduleAs({ kind: 'local', via: 'cli' }, list);
+    const second = o.scheduleAs({ kind: 'local', via: 'desktop' }, list);
     expect(await listed(first)).toEqual(earlier.map(t => t.id));
     expect(await listed(second)).toEqual(earlier.map(t => t.id));
     await o.initialize?.();

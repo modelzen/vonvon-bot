@@ -1,0 +1,330 @@
+{
+  "note": "Shared by scripts/server-update-signing.test.mjs and packages/daemon/test/standalone-manifest.test.ts: the release scripts and the daemon must agree on every C1 payload here (docs/plans/server-3-update-engine.md C1).",
+  "baseURL": "https://dl.vonvon.cc/bot/server",
+  "cases": [
+    {
+      "name": "a release with notes",
+      "expect": "accepted",
+      "payload": {
+        "schemaVersion": 1,
+        "product": "vonvon-bot-server",
+        "channel": "stable",
+        "version": "0.9.0",
+        "publishedAt": 1793000000000,
+        "files": {
+          "linux-x64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-x64.tar.gz",
+            "sha512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 51234567
+          },
+          "linux-arm64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-arm64.tar.gz",
+            "sha512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 49876543
+          }
+        },
+        "notes": "第一个三平台版本"
+      }
+    },
+    {
+      "name": "a release without notes",
+      "expect": "accepted",
+      "payload": {
+        "schemaVersion": 1,
+        "product": "vonvon-bot-server",
+        "channel": "stable",
+        "version": "0.9.1",
+        "publishedAt": 1793000000000,
+        "files": {
+          "linux-x64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.1/vonvon-server-0.9.1-linux-x64.tar.gz",
+            "sha512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 51234567
+          },
+          "linux-arm64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.1/vonvon-server-0.9.1-linux-arm64.tar.gz",
+            "sha512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 49876543
+          }
+        }
+      }
+    },
+    {
+      "name": "another channel",
+      "expect": "schema",
+      "payload": {
+        "schemaVersion": 1,
+        "product": "vonvon-bot-server",
+        "channel": "beta",
+        "version": "0.9.0",
+        "publishedAt": 1793000000000,
+        "files": {
+          "linux-x64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-x64.tar.gz",
+            "sha512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 51234567
+          },
+          "linux-arm64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-arm64.tar.gz",
+            "sha512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 49876543
+          }
+        }
+      }
+    },
+    {
+      "name": "a key C1 does not have",
+      "expect": "schema",
+      "payload": {
+        "schemaVersion": 1,
+        "product": "vonvon-bot-server",
+        "channel": "stable",
+        "version": "0.9.0",
+        "publishedAt": 1793000000000,
+        "files": {
+          "linux-x64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-x64.tar.gz",
+            "sha512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 51234567
+          },
+          "linux-arm64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-arm64.tar.gz",
+            "sha512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 49876543
+          }
+        },
+        "extra": true
+      }
+    },
+    {
+      "name": "a two-part version",
+      "expect": "schema",
+      "payload": {
+        "schemaVersion": 1,
+        "product": "vonvon-bot-server",
+        "channel": "stable",
+        "version": "0.9",
+        "publishedAt": 1793000000000,
+        "files": {
+          "linux-x64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9/vonvon-server-0.9-linux-x64.tar.gz",
+            "sha512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 51234567
+          },
+          "linux-arm64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9/vonvon-server-0.9-linux-arm64.tar.gz",
+            "sha512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 49876543
+          }
+        }
+      }
+    },
+    {
+      "name": "a fractional publishedAt",
+      "expect": "schema",
+      "payload": {
+        "schemaVersion": 1,
+        "product": "vonvon-bot-server",
+        "channel": "stable",
+        "version": "0.9.0",
+        "publishedAt": 1.5,
+        "files": {
+          "linux-x64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-x64.tar.gz",
+            "sha512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 51234567
+          },
+          "linux-arm64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-arm64.tar.gz",
+            "sha512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 49876543
+          }
+        }
+      }
+    },
+    {
+      "name": "no publishedAt",
+      "expect": "schema",
+      "payload": {
+        "schemaVersion": 1,
+        "product": "vonvon-bot-server",
+        "channel": "stable",
+        "version": "0.9.0",
+        "files": {
+          "linux-x64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-x64.tar.gz",
+            "sha512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 51234567
+          },
+          "linux-arm64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-arm64.tar.gz",
+            "sha512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 49876543
+          }
+        }
+      }
+    },
+    {
+      "name": "one Linux package missing",
+      "expect": "schema",
+      "payload": {
+        "schemaVersion": 1,
+        "product": "vonvon-bot-server",
+        "channel": "stable",
+        "version": "0.9.0",
+        "publishedAt": 1793000000000,
+        "files": {
+          "linux-x64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-x64.tar.gz",
+            "sha512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 51234567
+          }
+        }
+      }
+    },
+    {
+      "name": "a macOS package as well",
+      "expect": "schema",
+      "payload": {
+        "schemaVersion": 1,
+        "product": "vonvon-bot-server",
+        "channel": "stable",
+        "version": "0.9.0",
+        "publishedAt": 1793000000000,
+        "files": {
+          "linux-x64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-x64.tar.gz",
+            "sha512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 51234567
+          },
+          "linux-arm64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-arm64.tar.gz",
+            "sha512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 49876543
+          },
+          "darwin-arm64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-darwin-arm64.tar.gz",
+            "sha512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 49876543
+          }
+        }
+      }
+    },
+    {
+      "name": "an upper-case sha512",
+      "expect": "schema",
+      "payload": {
+        "schemaVersion": 1,
+        "product": "vonvon-bot-server",
+        "channel": "stable",
+        "version": "0.9.0",
+        "publishedAt": 1793000000000,
+        "files": {
+          "linux-x64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-x64.tar.gz",
+            "sha512": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+            "size": 51234567
+          },
+          "linux-arm64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-arm64.tar.gz",
+            "sha512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 49876543
+          }
+        }
+      }
+    },
+    {
+      "name": "a zero size",
+      "expect": "schema",
+      "payload": {
+        "schemaVersion": 1,
+        "product": "vonvon-bot-server",
+        "channel": "stable",
+        "version": "0.9.0",
+        "publishedAt": 1793000000000,
+        "files": {
+          "linux-x64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-x64.tar.gz",
+            "sha512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 0
+          },
+          "linux-arm64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-arm64.tar.gz",
+            "sha512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 49876543
+          }
+        }
+      }
+    },
+    {
+      "name": "a file entry with another key",
+      "expect": "schema",
+      "payload": {
+        "schemaVersion": 1,
+        "product": "vonvon-bot-server",
+        "channel": "stable",
+        "version": "0.9.0",
+        "publishedAt": 1793000000000,
+        "files": {
+          "linux-x64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-x64.tar.gz",
+            "sha512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 51234567
+          },
+          "linux-arm64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-arm64.tar.gz",
+            "sha512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 49876543,
+            "name": "x"
+          }
+        }
+      }
+    },
+    {
+      "name": "a package on another host",
+      "expect": "url",
+      "payload": {
+        "schemaVersion": 1,
+        "product": "vonvon-bot-server",
+        "channel": "stable",
+        "version": "0.9.0",
+        "publishedAt": 1793000000000,
+        "files": {
+          "linux-x64": {
+            "url": "https://example.invalid/bot/server/0.9.0/vonvon-server-0.9.0-linux-x64.tar.gz",
+            "sha512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 51234567
+          },
+          "linux-arm64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-arm64.tar.gz",
+            "sha512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 49876543
+          }
+        }
+      }
+    },
+    {
+      "name": "a package in another version directory",
+      "expect": "url",
+      "payload": {
+        "schemaVersion": 1,
+        "product": "vonvon-bot-server",
+        "channel": "stable",
+        "version": "0.9.0",
+        "publishedAt": 1793000000000,
+        "files": {
+          "linux-x64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.9.0/vonvon-server-0.9.0-linux-x64.tar.gz",
+            "sha512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 51234567
+          },
+          "linux-arm64": {
+            "url": "https://dl.vonvon.cc/bot/server/0.8.9/vonvon-server-0.9.0-linux-arm64.tar.gz",
+            "sha512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 49876543
+          }
+        }
+      }
+    }
+  ]
+}

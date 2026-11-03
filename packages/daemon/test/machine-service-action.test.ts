@@ -31,6 +31,9 @@ const snapshot = {} as never;
 it('darwin install replies first, then spawns the detached helper with the data root and without the service marker', async () => {
   vi.stubEnv('VONVON_SERVICE', 'launchd');
   vi.stubEnv('ELECTRON_RUN_AS_NODE', '1');
+  // devices-4a R3: a host started inside a session hands its helper no session marker (service install is local-only there)
+  vi.stubEnv('FEISHU_CODEX_BRIDGE', '1');
+  vi.stubEnv('VONVON_SESSION', `vs1.ses_0123456789abcdef.${'a'.repeat(43)}`);
   const m = await machine();
   const outcome = await m.call({ type: 'service', action: 'install' });
   if (outcome.kind !== 'shutdown') throw new Error('Expected the reply before the helper');
@@ -46,6 +49,8 @@ it('darwin install replies first, then spawns the detached helper with the data 
   expect(options.stdio[0]).toBe('ignore'); expect(typeof options.stdio[1]).toBe('number'); expect(options.stdio[2]).toBe(options.stdio[1]);
   expect(options.env).toMatchObject({ VONVON_HOME: m.root, ELECTRON_RUN_AS_NODE: '1', PATH: process.env.PATH });
   expect(options.env).not.toHaveProperty('VONVON_SERVICE');
+  expect(options.env).not.toHaveProperty('FEISHU_CODEX_BRIDGE');
+  expect(options.env).not.toHaveProperty('VONVON_SESSION');
   expect(m.children[0]?.unref).toHaveBeenCalledOnce();
   expect(m.launcher.current()).toEqual({ action: 'install', startedAt: 1000, pid: 5000 });
   expect(await readFile(join(m.root, 'daemon.log'), 'utf8')).toBe('');

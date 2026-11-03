@@ -32,9 +32,9 @@ function harness(reply: (request: ScheduleRequest) => ScheduleReply | Promise<Sc
     close: async () => {},
   }) as unknown as VonvonClient);
   const daemon: Daemon = fn => withDaemon(fn, connect, timeouts);
-  const run = (action: ScheduleAction, target: ScheduleTarget, json = false, env: NodeJS.ProcessEnv = {}) =>
-    runSchedule(action, { group: '研发群', ...target }, { json, write: (text: string) => { out += text; } }, daemon, env);
-  const failure = async (action: ScheduleAction, target: ScheduleTarget, env?: NodeJS.ProcessEnv) => commandFailure(await run(action, target, true, env).then(() => undefined, (error: unknown) => error));
+  const run = (action: ScheduleAction, target: ScheduleTarget, json = false) =>
+    runSchedule(action, { group: '研发群', ...target }, { json, write: (text: string) => { out += text; } }, daemon);
+  const failure = async (action: ScheduleAction, target: ScheduleTarget) => commandFailure(await run(action, target, true).then(() => undefined, (error: unknown) => error));
   return { run, failure, requests, connect, out: () => out, json: () => JSON.parse(out) };
 }
 const created = (request: ScheduleRequest): ScheduleReply => request.action === 'list' ? tasks([]) : { kind: 'task', task: task() };
@@ -103,6 +103,22 @@ describe('parsing the time options', () => {
     await h.run('edit', { taskId: 'st_0123456789abcdef', revision: 'r7', daily: '10:00', name: ' 早报 ' });
     expect(h.requests).toEqual([{ action: 'edit', chatId: 'oc_group', taskId: 'st_0123456789abcdef', revision: 'r7', patch: { name: '早报', spec: { kind: 'daily', time: '10:00' } } }]);
   });
+
+  // main 必败 (cli-6-settings): edit had no placement, and --new-topic alone was "nothing to change"
+  it('edit --new-topic or --follow changes where each run posts, alone or with the rest', async () => {
+    const h = harness(created);
+    await h.run('edit', { taskId: 'st_1', revision: '3', follow: true });
+    await h.run('edit', { taskId: 'st_1', revision: '4', newTopic: true });
+    await h.run('edit', { taskId: 'st_1', revision: '5', newTopic: true, name: '巡检' });
+    expect(h.requests).toEqual([
+      { action: 'edit', chatId: 'oc_group', taskId: 'st_1', revision: '3', patch: { placement: { kind: 'follow' } } },
+      { action: 'edit', chatId: 'oc_group', taskId: 'st_1', revision: '4', patch: { placement: { kind: 'newTopic' } } },
+      { action: 'edit', chatId: 'oc_group', taskId: 'st_1', revision: '5', patch: { name: '巡检', placement: { kind: 'newTopic' } } },
+    ]);
+    expect(await h.failure('edit', { taskId: 'st_1', revision: '3', newTopic: true, follow: true })).toMatchObject({ exitCode: 2, error: { kind: 'bad-args', message: '--new-topic 和 --follow 只能选一个。' } });
+    expect(await h.failure('edit', { taskId: 'st_1', revision: '3' })).toMatchObject({ exitCode: 2, error: { message: expect.stringContaining('--new-topic 或 --follow') } });
+    expect(h.connect).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe('requests that read first', () => {
@@ -157,6 +173,31 @@ describe('requests that read first', () => {
   });
 });
 
+describe('in a group\'s Bot session (s1b)', () => {
+  /** A group session's snapshot: no bindings, only its group's project with its own binding. */
+  function session(reply: (request: ScheduleRequest) => ScheduleReply) {
+    const requests: ScheduleRequest[] = [];
+    const client = {
+      snapshot: async () => ({
+        agents: [{ id: 'cli_test', name: 'Test' }], memberships: [],
+        projects: [{ id: 'prj_1', name: '研发', revision: 1, directory: '', bindings: [{ agentId: 'cli_test', groupId: 'oc_group' }] }],
+      }),
+      schedule: async (_botId: string, request: ScheduleRequest) => { requests.push(request); return reply(request); },
+      close: async () => {},
+    } as unknown as VonvonClient;
+    const daemon: Daemon = fn => withDaemon(fn, async () => ({ client, serverInfo: { principal: 'bot-session:ses_0123456789abcdef' } as never }));
+    const run = (target: ScheduleTarget) => runSchedule('list', target, { json: true, write: () => {} }, daemon);
+    return { requests, run };
+  }
+
+  it('takes its project\'s name for its group, and its group id as it is', async () => {
+    const h = session(created);
+    await h.run({ group: '研发' });
+    await h.run({ group: 'oc_group' });
+    expect(h.requests).toEqual([{ action: 'list', chatId: 'oc_group' }, { action: 'list', chatId: 'oc_group' }]);
+  });
+});
+
 describe('output', () => {
   it('prints one line per task word for word', async () => {
     const h = harness(() => tasks([
@@ -184,14 +225,14 @@ describe('output', () => {
     expect(await h.failure('list', { all: true })).toMatchObject({ exitCode: 2 }); // --group 研发群 and --all
   });
 
-  it('--json prints the reply as it is', async () => {
+  it('--json prints the reply as it is, after ok: true', async () => {
     const reply = tasks([task()]);
     const h = harness(() => reply);
     await h.run('list', {}, true);
-    expect(h.json()).toEqual(reply);
+    expect(h.json()).toEqual({ ok: true, ...reply });
     const started = harness(() => ({ kind: 'started', taskId: 'st_0123456789abcdef', runId: 'r1' }));
     await started.run('run', { taskId: 'st_0123456789abcdef' }, true);
-    expect(started.json()).toEqual({ kind: 'started', taskId: 'st_0123456789abcdef', runId: 'r1' });
+    expect(started.json()).toEqual({ ok: true, kind: 'started', taskId: 'st_0123456789abcdef', runId: 'r1' });
     expect(started.requests).toEqual([{ action: 'runNow', chatId: 'oc_group', taskId: 'st_0123456789abcdef' }]);
   });
 });
@@ -226,11 +267,7 @@ describe('exit codes (s47)', () => {
     expect(await lost.failure('list', {})).toMatchObject({ exitCode: 1, error: { kind: 'failed', message: '读取任务失败：Bot 进程 15000ms 未响应（可能正忙或已假死）' } });
   });
 
-  it('refuses in a Bot session before connecting', async () => {
-    const h = harness(created);
-    expect(await h.failure('list', {}, { VONVON_SESSION: 'abc' })).toMatchObject({ exitCode: 4, error: { kind: 'refused' } });
-    expect(h.connect).not.toHaveBeenCalled();
-  });
+  // A Bot session's schedule commands are the daemon's to judge now (devices-4a 4.9): cli-bot-session.test.ts
 });
 
 describe('vonvon schedule through the CLI entry', () => {

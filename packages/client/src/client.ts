@@ -2,27 +2,32 @@ import {
   adminReplySchema, collaborationReplySchema, commandResultSchema,
   desktopSnapshotSchema, directoryReplySchema, environmentReplySchema, memoryReplySchema, contextPreviewReplySchema,
   errorEnvelopeSchema, eventSchema, machineReplySchema, requestSchema,
-  libraryReplySchema, scheduleReplySchema, settingsReplySchema,
-  type AdminReply, type AdminRequest, type BackendInstallEventPayload,
+  libraryReplySchema, scheduleReplySchema, settingsReplySchema, deviceReplySchema,
+  type AdminReply, type DeviceReply, type DeviceRequest, type AdminRequest, type BackendInstallEventPayload,
   type CollaborationReply, type CollaborationRequest, type Command,
   type CommandResult, type DesktopSnapshot, type DirectoryReply,
   type DirectoryRequest, type EnvironmentReply, type EnvironmentRequest, type MemoryReply, type MemoryRequest, type ContextPreviewReply, type ContextPreviewRequest,
-  type LibraryReply, type LibraryRequest, type LogEventPayload, type MachineReply, type MachineRequest,
-  type ScheduleReply, type ScheduleRequest, type SettingsReply, type SettingsRequest,
+  type LibraryReply, type LibraryRequest, type LogEventPayload, type MachineReply, type MachineRequest, type DeviceEventPayload,
+  type ScheduleReply, type ScheduleRequest, type SettingsReply, type SettingsRequest, type DesktopUpdateRequestPayload,
 } from "@vonvon/protocol";
 import type { z } from "zod";
 
 export class RpcError extends Error {
-  constructor(readonly code: string, message: string) {
+  /** `details`: what the daemon added for a program to read (both versions of a `protocol_mismatch`). */
+  constructor(readonly code: string, message: string, readonly details?: Record<string, unknown>) {
     super(message);
     this.name = "RpcError";
   }
 }
 
 export class ConnectionError extends Error {
-  constructor(cause: unknown) {
+  /** When the daemon closed the socket during the handshake: its close code and reason (devices 4.7), e.g. 4401 `invalid_session_token`. */
+  readonly closeCode?: number;
+  readonly closeReason?: string;
+  constructor(cause: unknown, closed?: { code: number; reason: string }) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = "ConnectionError";
+    if (closed) { this.closeCode = closed.code; this.closeReason = closed.reason; }
   }
 }
 
@@ -40,8 +45,14 @@ export interface VonvonClient {
   memory(request: MemoryRequest): Promise<MemoryReply>;
   contextPreview(request: ContextPreviewRequest): Promise<ContextPreviewReply>;
   schedule(botId: string, request: ScheduleRequest): Promise<ScheduleReply>;
+  device(request: DeviceRequest): Promise<DeviceReply>;
   onLog(listener: (payload: LogEventPayload) => void): () => void;
   onBackendInstall(listener: (payload: BackendInstallEventPayload) => void): () => void;
+  /** A client paired with or revoked from this device (devices 4.3); only the owner's connections hear it. */
+  onDevice(listener: (payload: DeviceEventPayload) => void): () => void;
+  /** U4: the daemon asks this computer's desktop shell to check for or run the app's update. Only a connection that
+   * declared `desktop.self-update` hears it. */
+  onDesktopUpdateRequest(listener: (payload: DesktopUpdateRequestPayload) => void): () => void;
   onError(listener: (error: Error) => void): () => void;
   close(): Promise<void>;
 }
@@ -51,7 +62,7 @@ const replySchemas = {
   settings: settingsReplySchema, collaboration: collaborationReplySchema,
   environment: environmentReplySchema, machine: machineReplySchema,
   admin: adminReplySchema, directory: directoryReplySchema, memory: memoryReplySchema,
-  library: libraryReplySchema, contextPreview: contextPreviewReplySchema, schedule: scheduleReplySchema,
+  library: libraryReplySchema, contextPreview: contextPreviewReplySchema, schedule: scheduleReplySchema, device: deviceReplySchema,
 } satisfies Record<z.infer<typeof requestSchema>["method"], z.ZodTypeAny>;
 type Method = keyof typeof replySchemas;
 type Payload<M extends Method> = Extract<z.input<typeof requestSchema>, { method: M }>["payload"];
@@ -64,6 +75,8 @@ export interface ClientConnection {
   onError(listener: (error: Error) => void): void;
   send(data: string, callback: (error?: Error) => void): void;
   close(): Promise<void>;
+  /** What the transport puts back into each parsed frame before anything reads it (the secure channel's avatars). */
+  restore?(frame: unknown): void;
 }
 
 export function createClient(socket: ClientConnection): VonvonClient {
@@ -71,6 +84,8 @@ export function createClient(socket: ClientConnection): VonvonClient {
   const snapshots = new Set<(value: DesktopSnapshot) => void>();
   const logs = new Set<(value: LogEventPayload) => void>();
   const installs = new Set<(value: BackendInstallEventPayload) => void>();
+  const devices = new Set<(value: DeviceEventPayload) => void>();
+  const updateRequests = new Set<(value: DesktopUpdateRequestPayload) => void>();
   const errors = new Set<(error: Error) => void>();
   const undeliveredErrors: Error[] = [];
   let closed = false;
@@ -121,12 +136,15 @@ export function createClient(socket: ClientConnection): VonvonClient {
     let frame: unknown;
     try { frame = JSON.parse(data); }
     catch { failAll(new Error("Invalid daemon frame")); return; }
+    socket.restore?.(frame);
     const event = eventSchema.safeParse(frame);
     if (event.success) {
       switch (event.data.event) {
         case "snapshot": deliver(snapshots, event.data.payload); break;
         case "log": deliver(logs, event.data.payload); break;
         case "backendInstall": deliver(installs, event.data.payload); break;
+        case "device": deliver(devices, event.data.payload); break;
+        case "desktopUpdateRequest": deliver(updateRequests, event.data.payload); break;
       }
       return;
     }
@@ -137,7 +155,7 @@ export function createClient(socket: ClientConnection): VonvonClient {
     if (!call) { failAll(new Error("Unexpected daemon response ID")); return; }
     pending.delete(frame.id);
     const remoteError = errorEnvelopeSchema.safeParse(frame);
-    if (remoteError.success) { call.reject(new RpcError(remoteError.data.code, remoteError.data.message)); return; }
+    if (remoteError.success) { call.reject(new RpcError(remoteError.data.code, remoteError.data.message, remoteError.data.details)); return; }
     if (!("type" in frame) || frame.type !== "response" || !("method" in frame) || frame.method !== call.method || !("payload" in frame)) {
       call.reject(new Error("Daemon response method or envelope mismatch")); return;
     }
@@ -184,8 +202,11 @@ export function createClient(socket: ClientConnection): VonvonClient {
     memory: request => send("memory", request),
     contextPreview: request => send("contextPreview", request),
     schedule: (botId, request) => send("schedule", { botId, request }),
+    device: request => send("device", request),
     onLog(listener) { logs.add(listener); return () => { logs.delete(listener); }; },
     onBackendInstall(listener) { installs.add(listener); return () => { installs.delete(listener); }; },
+    onDevice(listener) { devices.add(listener); return () => { devices.delete(listener); }; },
+    onDesktopUpdateRequest(listener) { updateRequests.add(listener); return () => { updateRequests.delete(listener); }; },
     onError(listener) {
       errors.add(listener);
       for (const error of undeliveredErrors.splice(0)) {

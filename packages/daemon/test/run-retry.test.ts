@@ -76,6 +76,8 @@ import { stripBridgeMessageEnvelope } from '../src/bot/session-title';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 import { projectRevision } from '../src/admin/collaboration';
 import type { AppConfig } from '../src/config/schema';
+import type { HostApi } from '../src/admin/ipc';
+import { inBotSession } from '../src/config/session-env';
 
 const NETWORK: AgentEvent = { type: 'error', message: 'stream disconnected before completion', willRetry: false, kind: 'network' };
 const PROJECT = { name: 'test', chatId: 'chat', cwd: '/test', groupMode: 'multi' };
@@ -129,13 +131,13 @@ function message(text: string): NormalizedMessage {
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
 /** Starts the orchestrator; every resume returns `thread` when given. */
-function setup(thread?: unknown, allowedChats = ['chat'], entries?: AgentEntries) {
+function setup(thread?: unknown, allowedChats = ['chat'], entries?: AgentEntries, host?: Pick<HostApi, 'issueSessionToken'>) {
   if (thread) fake.backend.resumeThread.mockResolvedValue(thread);
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['admin'], allowedChats } } };
   const channel = { send: fake.send, getChatInfo: async () => ({ name: 'Test', chatType: 'group' }), rawClient: { cardkit: { v1: { cardElement: { delete: fake.deleteElement } } }, im: { v1: { chat: { get: async () => ({ data: { chat_mode: 'group' } }) }, chatMembers: { isInChat: async () => ({ code: 0, data: { is_in_chat: true } }) }, message: { get: async () => ({ data: { items: [{ thread_id: 'topic', body: { content: JSON.stringify({ type: 'card', data: { card_id: 'orphan-entity' } }) } }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
-  orchestrator = createOrchestrator(channel as never, cfg, '/test', undefined, { entries });
+  orchestrator = createOrchestrator(channel as never, cfg, '/test', undefined, { entries, ...(host ? { host } : {}) });
   return orchestrator;
 }
 /** Sends `msg` to a session on `run` and waits for its run card's error final. */
@@ -938,5 +940,43 @@ describe('agent entry authority during compact and retry', () => {
     await until(() => expect(checked).toHaveBeenCalledOnce());
     expect(run.consumed).toHaveLength(2);
     expect(open).toHaveBeenLastCalledWith(run.t, expect.objectContaining({ retry: true }));
+  });
+});
+
+// devices-4a 4.3: a session's shell carries the token the host issued for it, never the bare marker; no token, no session.
+describe('session token', () => {
+  const human = (text: string) => ({ ...message(text), raw: { sender: { sender_type: 'user' } } });
+  const TOKEN = `vs1.ses_0123456789abcdef.${'a'.repeat(43)}`;
+  // main 必败: the session started with VONVON_SESSION=1
+  it('starts the session with its token in the environment', async () => {
+    const sessions = { revoke: vi.fn() };
+    const entries = createAgentEntries({ appId: 'app', isAdmin: () => true, isOwner: () => true, sessions });
+    const host = { issueSessionToken: vi.fn(async () => TOKEN) };
+    const run = scriptedThread([]);
+    const o = setup(run.t, ['chat'], entries, host);
+    await o.onMessage(human('hi'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const opts = fake.backend.resumeThread.mock.calls[0]![0] as { entry: AgentEntry; profile: { env: Record<string, string> } };
+    expect(host.issueSessionToken).toHaveBeenCalledWith({ appId: 'app', place: 'group', chatId: 'chat', sessionId: opts.entry.sessionId });
+    expect(opts.profile.env.VONVON_SESSION).toBe(TOKEN);
+    // skills-scope: the scope the builtin skills copy into --scope, this group's
+    expect(opts.profile.env.VONVON_SCOPE).toBe('bot=app,group=chat');
+    expect(inBotSession(opts.profile.env)).toBe(true);
+    expect(sessions.revoke).not.toHaveBeenCalled();
+  });
+  it('does not start a session the host gave no token for', async () => {
+    const sessions = { revoke: vi.fn() };
+    const entries = createAgentEntries({ appId: 'app', isAdmin: () => true, isOwner: () => true, sessions });
+    const host = { issueSessionToken: vi.fn(async () => { throw new Error('vonvon 主进程 5000ms 未响应'); }) };
+    const run = scriptedThread([]);
+    const o = setup(run.t, ['chat'], entries, host);
+    await o.onMessage(human('hi'));
+    // each attempt (the resume, then a new session) got its own entry, ended when its token did not come
+    const issued = () => (host.issueSessionToken.mock.calls as unknown as Array<[{ sessionId: string }]>).map(([input]) => input.sessionId);
+    await until(() => { expect(issued().length).toBeGreaterThan(0); expect(sessions.revoke.mock.calls.map(([id]) => id)).toEqual(issued()); });
+    await sleep(200);
+    expect(sessions.revoke.mock.calls.map(([id]) => id)).toEqual(issued());
+    expect(fake.backend.resumeThread).not.toHaveBeenCalled();
+    expect(fake.backend.startThread).not.toHaveBeenCalled();
   });
 });

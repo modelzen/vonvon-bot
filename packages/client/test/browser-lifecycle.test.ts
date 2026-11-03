@@ -27,7 +27,7 @@ async function loopback(onRequest: (socket: ServerSocket) => void) {
       socket.on("message", () => onRequest(socket));
     });
   });
-  const client = await connectBrowser({ url: `ws://127.0.0.1:${address.port}`, credential: "a".repeat(64) });
+  const { client } = await connectBrowser({ url: `ws://127.0.0.1:${address.port}`, credential: "a".repeat(64) });
   return { client, server };
 }
 
@@ -74,7 +74,7 @@ class StuckSocket extends EventTarget {
 it("rejects an unobserved physical close while settling RPCs once and ignoring late frames", async () => {
   vi.useFakeTimers();
   vi.stubGlobal("WebSocket", StuckSocket);
-  const client = await connectBrowser({ url: "ws://127.0.0.1:1", credential: "a".repeat(64) });
+  const { client } = await connectBrowser({ url: "ws://127.0.0.1:1", credential: "a".repeat(64) });
   const errors: string[] = [];
   const logs: string[] = [];
   client.onError(error => errors.push(error.message));
@@ -101,7 +101,7 @@ it("rejects an unobserved physical close while settling RPCs once and ignoring l
 it("retains automatic malformed-frame close timeout without an unhandled rejection", async () => {
   vi.useFakeTimers();
   vi.stubGlobal("WebSocket", StuckSocket);
-  const client = await connectBrowser({ url: "ws://127.0.0.1:1", credential: "a".repeat(64) });
+  const { client } = await connectBrowser({ url: "ws://127.0.0.1:1", credential: "a".repeat(64) });
   const pending = expect(client.snapshot()).rejects.toThrow("Invalid daemon frame");
   StuckSocket.latest.dispatchEvent(new MessageEvent("message", { data: new Blob(["bad"]) }));
   await pending;
@@ -114,6 +114,17 @@ it("retains automatic malformed-frame close timeout without an unhandled rejecti
     expect(error.cause).toBeInstanceOf(Error);
     expect(error.cause).toHaveProperty("message", error.message);
   }
+});
+
+// devices 4.5: the caller decides on a daemon of another protocol. main 必败: the transport threw and returned no server info.
+it("returns the server info of a daemon of another protocol instead of refusing it", async () => {
+  class OldDaemonSocket extends StuckSocket {
+    override handshake = JSON.stringify({ ...info, protocolVersion: 1 });
+  }
+  vi.stubGlobal("WebSocket", OldDaemonSocket);
+  const { serverInfo } = await connectBrowser({ url: "ws://127.0.0.1:1", credential: "a".repeat(64) });
+  expect(serverInfo).toEqual({ ...info, protocolVersion: 1 });
+  expect(StuckSocket.latest.closeCalls).toBe(0);
 });
 
 it("preserves handshake and cleanup errors when browser closure cannot be observed", async () => {

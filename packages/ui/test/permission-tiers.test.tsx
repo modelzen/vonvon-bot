@@ -1,10 +1,10 @@
 import { expect, it, vi } from "vitest";
 import {Children, isValidElement, type ReactElement, type ReactNode} from 'react';
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ProjectSettingsView } from "@vonvon/protocol";
+import { FULL_ACCESS_WARNING, type ProjectSettingsView } from "@vonvon/protocol";
 import { createClient } from "../../client/src/client";
 import { ClientProvider } from "../src/client-context";
-import {PermissionFields, ProjectPanel} from "../src/settings/SettingsPanel";
+import {fullAccessWarning, PermissionFields, ProjectPanel} from "../src/settings/SettingsPanel";
 import {SettingChoices} from '../src/settings/SettingChoices';
 import {permissionValue} from './permission-fixture';
 
@@ -170,4 +170,20 @@ it.each(['qa', 'write', 'full'] as const)('Windows ready view offers all three t
   expect(radio(html, 'write')).not.toContain('disabled=""');
   expect(radio(html, 'full')).not.toContain('disabled=""');
   expect(html).not.toContain('升级后就能选');
+});
+
+// main 必败: choosing 完全访问 for a group said nothing about group members (devices 第 15 节, devices-ui-2 4.10)
+it('shows the group warning under 完全访问, once more when it is chosen, and on the summary', () => {
+  const warned = (mode: 'qa' | 'full') => {
+    const value = permissionValue(mode);
+    return {...value, options: {...value.options, tiers: value.options.tiers.map(tier => tier.tier === 'full' ? {...tier, warning: FULL_ACCESS_WARNING} : tier)}};
+  };
+  expect(render(warned('qa')).split(FULL_ACCESS_WARNING)).toHaveLength(2);
+  expect(render(warned('full')).split(FULL_ACCESS_WARNING)).toHaveLength(3);
+  expect(fullAccessWarning(warned('full'))).toBe(FULL_ACCESS_WARNING);
+  expect(fullAccessWarning(warned('qa'))).toBeUndefined();
+  // A bot's own settings carry no warning, so nothing is shown.
+  expect(render(permissionValue('full'))).not.toContain(FULL_ACCESS_WARNING);
+  expect(renderPanel(warned('full'))).toContain(FULL_ACCESS_WARNING);
+  expect(renderPanel(warned('qa'))).not.toContain(FULL_ACCESS_WARNING);
 });

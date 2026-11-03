@@ -4,6 +4,7 @@ import { createBackend } from '../agent';
 import { cachedClaudeLogin, type ClaudeLogin } from '../agent/claude-agent/login';
 import { probeClaudeSandbox } from '../agent/claude-agent/sandbox-probe';
 import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion } from '../agent/codex-appserver/version';
+import { managedCommand, managedToolCommand } from '../environment/tool-command';
 import type { AdminService } from '../admin/service';
 import { paths } from '../config/paths';
 import type { RunningServiceAction } from '../host/service-action';
@@ -27,6 +28,10 @@ export interface SnapshotStore {
   close(): Promise<void>;
 }
 
+/** The platform the snapshot and the server info report (devices 4.5). */
+/** The snapshot's and serverInfo's platform name (devices 第 19 节: win32 is `windows`, only the name; services stay unsupported there). */
+export const hostPlatform = (platform: NodeJS.Platform = process.platform): 'macos' | 'linux' | 'windows' | 'unsupported' =>
+  platform === 'darwin' ? 'macos' : platform === 'linux' ? 'linux' : platform === 'win32' ? 'windows' : 'unsupported';
 export async function createSnapshotStore(options: {
   service: Pick<AdminService, 'listBots' | 'listProjects' | 'codexSetup'>;
   jobs: () => Job[];
@@ -51,7 +56,7 @@ export async function createSnapshotStore(options: {
 }): Promise<SnapshotStore> {
   const version = bridgeVersion();
   const root = options.root ?? paths.appDir;
-  const base = { platform: process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : 'unsupported', version, dataPath: paths.appDir } as const;
+  const base = { platform: hostPlatform(), version, dataPath: paths.appDir } as const;
   let snapshot: DesktopSnapshot = {
     revision: 0, observedAt: 0, stale: false,
     host: { kind: 'connected', ownership: 'owned', version },
@@ -114,9 +119,12 @@ export async function createSnapshotStore(options: {
     // The login is not probed here: the probe starts a ~250 MB Claude CLI, and this runs every
     // 60 s even when no window is open. build() lays the cached answer over it.
     const compatibility = codex?.installation === 'installed' ? { status: classifyCodexVersion(codex.version), minimum: CODEX_MIN_VERSION, verified: CODEX_VERIFIED_VERSION } : undefined;
+    // A managed copy is on no PATH: the setup steps name what starts it (0.9.0 Linux acceptance).
+    const codexCommand = codex && 'executable' in codex && codex.executable ? managedCommand(codex.executable, root) : undefined;
+    const claudeCommand = managedToolCommand('claude', root);
     return [
-      { tool: 'codex', installation: codex?.installation ?? 'unknown', authentication: codex?.authentication ?? 'unknown', version: codex?.version ?? null, ...(codex?.message ? { message: codex.message } : {}), ...(compatibility ? { compatibility } : {}) },
-      { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: 'unknown', version: claude?.version ?? null, ...(claude?.hint ? { message: claude.hint } : {}), ...(sandbox ? { sandbox } : {}) },
+      { tool: 'codex', installation: codex?.installation ?? 'unknown', authentication: codex?.authentication ?? 'unknown', version: codex?.version ?? null, ...(codex?.message ? { message: codex.message } : {}), ...(compatibility ? { compatibility } : {}), ...(codexCommand ? { command: codexCommand } : {}) },
+      { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: 'unknown', version: claude?.version ?? null, ...(claude?.hint ? { message: claude.hint } : {}), ...(sandbox ? { sandbox } : {}), ...(claudeCommand ? { command: claudeCommand } : {}) },
     ];
   });
   async function build(committed?: (snapshot: DesktopSnapshot) => void): Promise<void> {

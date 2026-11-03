@@ -14,6 +14,7 @@ import { requireDecisionKey } from '../project/initial-settings';
 import { freezeGroupJudgeReferences } from '../project/judge-snapshots';
 import { decisionEndpointProblem } from '@vonvon/protocol';
 import { readServiceCodexBin, saveServiceCodexBin } from '../service/codex-bin';
+import { fallbackWorkingDirectory } from '../platform/fallback-cwd';
 import type { ApplyEffect, HostSettings, HostSettingsView, SettingsSave, SettingsSectionView } from './settings-types';
 
 export function createHostSettings(options: {
@@ -55,7 +56,7 @@ export function createHostSettings(options: {
           apply: [judgeEffect],
         },
       },
-      runtime: { codexBin: runningCodexBin, fallbackCwd: process.env.FEISHU_CODEX_CWD || process.cwd(), platform: process.platform },
+      runtime: { codexBin: runningCodexBin, fallbackCwd: fallbackWorkingDirectory(), platform: process.platform },
     };
   }
   const section = (current: HostSettingsView, name: 'execution' | 'judge'): SettingsSectionView =>

@@ -1,15 +1,18 @@
+import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
-import { open, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
+import { access, open, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseArgs } from 'node:util';
+import { parseArgs, promisify } from 'node:util';
 import { planPublish, uploadRelease, promoteRelease, reverifyRelease, readCosWriteConfig } from './release-cos-publish.mjs';
 import { downloadBuild, readWindowsCosConfig, windowsObjectPlan, planWindowsUpdates, promoteWindowsUpdates } from './publish-windows.mjs';
 import { collectRelease, runReleaseChild } from './release-all.mjs';
 import { assertSecureTransport, readStableManifest, validateReleaseInventory, verifyPublicRelease } from './verify-public-release.mjs';
 import { cosCredentialEnvNames, readCosConfig } from './release-cos-evidence.mjs';
+import { planServerPublication, promoteServerStable, publishServerObjects, readServerCosConfig, STABLE_RECEIPT, UPLOAD_RECEIPT } from './publish-server.mjs';
+import { SERVER_REQUIRED_FROM, SERVER_SETUP_DOC, serverRequired } from './server-constants.mjs';
 
 const scripts = dirname(fileURLToPath(import.meta.url));
 const planName = 'publication-plan.json';
@@ -44,8 +47,16 @@ async function locked(out, work) {
     await lock.close(); await unlink(path);
   }
 }
+/** A repository file's bytes at the release SHA, from the checkout release-all started from (not the working copy). */
+async function sourceFile(repo, sha, path) {
+  const { stdout } = await promisify(execFile)('git', ['show', `${sha}:${path}`], { cwd: repo, encoding: 'buffer', maxBuffer: 4 * 1024 * 1024,
+    env: Object.fromEntries(['PATH', 'HOME'].filter(name => process.env[name]).map(name => [name, process.env[name]])) });
+  return stdout;
+}
 function runtime(dependencies) {
   return { env: process.env, download: downloadBuild, planWindowsUpdates, promoteWindowsUpdates, verifyMac: validateReleaseInventory, planMac: planPublish,
+    planServer: planServerPublication, uploadServer: publishServerObjects, promoteServer: promoteServerStable, readSource: sourceFile,
+    serverConfigPath: join(homedir(), '.config/vonvon-release/cos-server.json'),
     uploadMac: uploadRelease, promoteMac: promoteRelease, reverifyMac: reverifyRelease,
     verifyPublicMac: verifyPublicRelease, readLiveManifest: readStableManifest, collect: collectRelease, execute: runReleaseChild, log: console.log, ...dependencies };
 }
@@ -55,6 +66,8 @@ async function context(options, r, saved) {
   const out = await realpath(options.out), state = await readJSON(join(out, 'release-orchestration.json'));
   if (state.format !== 1 || state.out !== out || !/^[a-f0-9]{40}$/.test(state.sha ?? '') || !/^\d+\.\d+\.\d+$/.test(state.version ?? '')
     || state.mac?.phase !== 'candidate-complete' || state.windows?.status !== 'completed' || state.windows.conclusion !== 'success' || !Number.isSafeInteger(state.windows.runId)) throw new Error('Both pinned platform candidates must be complete; resume release-all first');
+  const required = serverRequired(state.version), threePlatforms = `${SERVER_REQUIRED_FROM} 起三平台同版本，${state.version} 必须连 Linux 服务端包一起发`;
+  if (required && state.server?.phase !== 'complete') throw new Error(`${threePlatforms}，但 release-all 的状态里没有打好的服务端包（server.phase：${state.server?.phase ?? '没有'}）：先用 release-all resume 打完，再 plan（见 ${SERVER_SETUP_DOC}）`);
   const macOut = await realpath(state.macRelease), windowsOut = join(out, 'windows');
   if (relative(out, macOut).startsWith('..') || macOut === out || isAbsolute(relative(out, macOut))) throw new Error('Mac candidate must be inside this release output');
   const requested = { readonly: state.paths.cosConfig,
@@ -65,8 +78,19 @@ async function context(options, r, saved) {
     if (!isAbsolute(path ?? '')) throw new Error('Use absolute external COS configuration paths');
     configs[key] = { path: await realpath(path), sha256: digest(await readFile(path)) };
   }
+  // The server is published once cos-server.json exists; a path named on the command line or in the plan must exist.
+  // From 0.9.0 it must exist: no release of macOS and Windows alone, at plan, upload or promote (a plan saved without it).
+  const serverPath = options['server-cos-config'] ?? (saved ? saved.configs.server?.path : r.serverConfigPath);
+  if (serverPath !== undefined) {
+    if (!isAbsolute(serverPath)) throw new Error('Use absolute external COS configuration paths');
+    const present = await access(serverPath).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; });
+    if (present) configs.server = { path: await realpath(serverPath), sha256: digest(await readFile(serverPath)) };
+    else if (options['server-cos-config'] || saved) throw new Error('服务端的 COS 配置不在指定的位置');
+  }
+  if (required && !configs.server) throw new Error(`${threePlatforms}，但没有服务端的发布配置 cos-server.json：照 ${SERVER_SETUP_DOC}建好 ~/.config/vonvon-release/cos-server.json（或用 --server-cos-config 指定），再 plan`);
   const readConfig = await readCosConfig(configs.readonly.path), macWrite = await readCosWriteConfig(configs.macWrite.path), windowsConfig = await readWindowsCosConfig(configs.windows.path);
-  const allPrivateNames = new Set([readConfig, macWrite, windowsConfig].flatMap(cosCredentialEnvNames));
+  const serverConfig = configs.server ? await readServerCosConfig(configs.server.path) : undefined;
+  const allPrivateNames = new Set([readConfig, macWrite, windowsConfig, ...(serverConfig ? [serverConfig] : [])].flatMap(cosCredentialEnvNames));
   const downloadEnv = Object.fromEntries(Object.entries(r.env).filter(([name]) => !allPrivateNames.has(name)));
   const macEvidence = await r.verifyMac(macOut, { version: state.version, sha: state.sha });
   if (['arm64', 'x64'].some(architecture => !macEvidence.files.some(file => file.file === `Vonvon-Bot-${state.version}-${architecture}.dmg`))) throw new Error('Both Mac architecture candidates are required');
@@ -76,19 +100,26 @@ async function context(options, r, saved) {
   if (provenance.runId !== state.windows.runId || provenance.sourceSha !== state.sha) throw new Error('Windows provenance differs from this release');
   const windowsNotes = windowsInventory.updatesEnabled && state.paths.notesFile ? (await readFile(state.paths.notesFile, 'utf8')).trim().slice(0, 4096) : undefined;
   const updates = windowsInventory.updatesEnabled ? await r.planWindowsUpdates({ out: windowsOut, inventory: windowsInventory, env: r.env, privateKeyFile: windowsConfig.updatePrivateKeyFile, notes: windowsNotes, previous: saved?.candidate.windows.updates }) : [];
+  const serverOut = join(out, 'server');
+  const readSource = path => r.readSource(state.seedRepo, state.sha, path);
+  const serverNotes = state.paths.notesFile ? (await readFile(state.paths.notesFile, 'utf8')).trim().slice(0, 4096) || undefined : undefined;
+  const server = serverConfig ? await r.planServer({ dir: serverOut, version: state.version, sha: state.sha, config: serverConfig, readSource, notes: serverNotes, previous: saved?.candidate.server ?? undefined }) : null;
   const candidate = { version: state.version, sourceSha: state.sha, macOut, macFiles: macEvidence.files,
-    windows: { runId: state.windows.runId, provenance, updatesEnabled: windowsInventory.updatesEnabled, updates, objects: windowsObjectPlan(windowsInventory) } };
+    windows: { runId: state.windows.runId, provenance, updatesEnabled: windowsInventory.updatesEnabled, updates, objects: windowsObjectPlan(windowsInventory) }, server };
   const macOptions = { out: macOut, version: state.version, sha: state.sha, 'cos-config': configs.readonly.path, 'cos-write-config': configs.macWrite.path };
   const releaseFlags = Object.fromEntries(['first-release', 'no-live-manifest'].filter(key => state.flags?.[key === 'first-release' ? 'firstRelease' : 'noLiveManifest']).map(key => [key, true]));
   const windowsNames = new Set(cosCredentialEnvNames(windowsConfig));
   const macNames = new Set([...cosCredentialEnvNames(readConfig), ...cosCredentialEnvNames(macWrite)]);
-  const privateNames = [...macNames].filter(name => !windowsNames.has(name));
+  const serverNames = new Set(serverConfig ? cosCredentialEnvNames(serverConfig) : []);
+  // Each platform's writer sees only its own key (names shared between configurations stay with each that uses them).
+  const othersOf = mine => new Set([...allPrivateNames].filter(name => !mine.has(name)));
   const without = (env, names) => Object.fromEntries(Object.entries(env).filter(([name]) => !names.has(name)));
-  return { out, state, configs, candidate, windowsInventory, windowsConfig, windowsNotes, macOptions, releaseFlags, windowsOut,
+  return { out, state, configs, candidate, windowsInventory, windowsConfig, windowsNotes, macOptions, releaseFlags, windowsOut, serverOut, serverConfig, readSource,
     publicEnv: downloadEnv,
-    macDependencies: { ...r.macDependencies, env: without(r.macDependencies?.env ?? r.env, new Set([...windowsNames].filter(name => !macNames.has(name)))) },
+    macDependencies: { ...r.macDependencies, env: without(r.macDependencies?.env ?? r.env, othersOf(macNames)) },
     collectDependencies: { ...r.collectDependencies, env: without(r.collectDependencies?.env ?? r.env, allPrivateNames) },
-    windowsEnv: Object.fromEntries(Object.entries(r.env).filter(([name]) => !privateNames.includes(name))) };
+    windowsEnv: without(r.env, othersOf(windowsNames)),
+    serverEnv: without(r.env, othersOf(serverNames)) };
 }
 async function reviewed(options, r) {
   if (!/^[a-f0-9]{64}$/.test(options['plan-sha256'] ?? '')) throw new Error('Supply the reviewed publication --plan-sha256');
@@ -99,13 +130,16 @@ async function reviewed(options, r) {
   if (digest(await readFile(join(c.macOptions.out, 'publish-plan.json'))) !== plan.macPlanSHA256) throw new Error('Mac publication plan changed since review');
   return { ...c, plan };
 }
+const NO_SERVER = `服务端未配置（没有 cos-server.json）：这次只发 macOS 和 Windows（${SERVER_REQUIRED_FROM} 以前的版本才可以）`;
 const matchesFiles = (actual, expected, sizeKey = 'size') => Array.isArray(actual) && actual.length === expected.length && expected.every(file => actual.some(item => item.file === file.file && item.sha256 === file.sha256 && item[sizeKey] === file[sizeKey] && (!file.url || item.url === file.url)));
 async function receipts(c) {
   const mac = await optional(join(c.macOptions.out, 'upload-receipt.json')), windows = await optional(join(c.windowsOut, 'windows-publish-receipt.json'));
+  const server = c.candidate.server ? await optional(join(c.serverOut, UPLOAD_RECEIPT)) : undefined;
+  if (server && (server.version !== c.state.version || server.sourceSha !== c.state.sha || !matchesFiles(server.objects, c.candidate.server.versioned, 'bytes'))) throw new Error('服务端的上传回执和 owner 看过的候选对不上');
   const macPlan = await readJSON(join(c.macOptions.out, 'publish-plan.json'));
   if (mac && (mac.version !== c.state.version || mac.sourceCommit !== c.state.sha || mac.planSHA256 !== c.plan.macPlanSHA256 || mac.versionedVerification?.versionedObjectsVerified !== true || !matchesFiles(mac.objects, macPlan.upload))) throw new Error('Mac upload receipt does not match the reviewed candidate');
   if (windows && (windows.version !== c.state.version || windows.sourceSha !== c.state.sha || windows.architecture !== 'x64+arm64' || windows.signed !== false || windows.updatesEnabled !== c.candidate.windows.updatesEnabled || !matchesFiles(windows.objects, c.candidate.windows.objects, 'bytes'))) throw new Error('Windows upload receipt does not match the reviewed candidate');
-  return { mac, windows };
+  return { mac, windows, server };
 }
 
 export async function planPublication(options, dependencies = {}) {
@@ -116,9 +150,12 @@ export async function planPublication(options, dependencies = {}) {
     const mac = await r.planMac({ ...c.macOptions, ...c.releaseFlags }, c.macDependencies);
     const plan = { format: 1, out, configs: c.configs, candidate: c.candidate, macPlanSHA256: mac.sha256 };
     await atomic(join(out, planName), plan);
+    const server = c.candidate.server;
     const report = { version: c.state.version, sourceSha: c.state.sha, planSHA256: digest(json(plan)),
       macPlanSHA256: mac.sha256, windowsRunId: c.state.windows.runId,
-      objects: [...mac.plan.upload, ...c.candidate.windows.objects, ...c.candidate.windows.updates].map(({ file, url, size, bytes, sha256 }) => ({ file, url, bytes: bytes ?? size, sha256 })) };
+      objects: [...mac.plan.upload, ...c.candidate.windows.objects, ...c.candidate.windows.updates, ...server?.versioned ?? []].map(({ file, url, size, bytes, sha256 }) => ({ file, url, bytes: bytes ?? size, sha256 })),
+      server: server ? { publishedAt: server.publishedAt, liveStable: server.previousManifest.status === 404 ? 'none' : server.previousManifest.version ?? 'unverified',
+        stable: server.stable.map(({ key, url, bytes, sha256 }) => ({ key, url, bytes, sha256 })) } : NO_SERVER };
     r.log(json(report)); return report;
   });
 }
@@ -137,15 +174,20 @@ export async function uploadPublication(options, dependencies = {}) {
       await r.execute(process.execPath, [join(scripts, 'publish-windows.mjs'), '--run-id', String(c.state.windows.runId), '--out', c.windowsOut,
         '--sha', c.state.sha, '--version', c.state.version, '--cos-config', c.configs.windows.path, '--cancel-file', join(out, 'CANCEL')],
       { env: c.windowsEnv, signal });
+    }, async () => {
+      if (!c.candidate.server || prior.server) return;
+      await cancelled(out);
+      await r.uploadServer({ dir: c.serverOut, plan: c.candidate.server, config: c.serverConfig, env: c.serverEnv, cancelFile: join(out, 'CANCEL'), log: r.log });
     }];
-    // Join both branches even on failure; a successful platform keeps its original durable receipt.
+    // Join every branch even on failure; a successful platform keeps its original durable receipt.
     const outcomes = await Promise.allSettled(tasks.map(task => task()));
-    const failed = outcomes.flatMap((item, index) => item.status === 'rejected' ? [index ? 'Windows' : 'Mac'] : []);
+    const failed = outcomes.flatMap((item, index) => item.status === 'rejected' ? [['Mac', 'Windows', 'server'][index]] : []);
     // execFile / SDK errors can embed command output or signed URLs. Never forward raw failures.
     if (failed.length) throw new Error(`Versioned publication incomplete: ${failed.join(' and ')} publication helper failed; successful receipts retained; inspect platform state and resume upload with the same plan hash`);
     const completed = await receipts(c);
-    if (!completed.mac || !completed.windows) throw new Error('Publication helpers did not produce both verified receipts');
-    r.log('Both platforms uploaded and publicly verified. Stable and website are unchanged.');
+    if (!completed.mac || !completed.windows || (c.candidate.server && !completed.server)) throw new Error('Publication helpers did not produce every verified receipt');
+    r.log(c.candidate.server ? 'macOS, Windows and the server packages uploaded and publicly verified. Stable and website are unchanged.'
+      : `Both platforms uploaded and publicly verified. Stable and website are unchanged. ${NO_SERVER}.`);
     return { version: c.state.version, sourceSha: c.state.sha, versionedObjectsVerified: true };
   });
 }
@@ -154,7 +196,7 @@ export async function promotePublication(options, dependencies = {}) {
   return locked(out, async () => {
     await cancelled(out);
     const c = await reviewed(options, r), uploaded = await receipts(c);
-    if (!uploaded.mac || !uploaded.windows) throw new Error('Both versioned public receipts are required before stable');
+    if (!uploaded.mac || !uploaded.windows || (c.candidate.server && !uploaded.server)) throw new Error('Both versioned public receipts (and the server\'s, when planned) are required before stable');
     const previous = await optional(join(c.macOptions.out, 'publish-receipt.json'));
     if (previous && (previous.planSHA256 !== c.plan.macPlanSHA256 || previous.version !== c.state.version || previous.sourceCommit !== c.state.sha)) throw new Error('Stable receipt belongs to a different candidate');
     const macOptions = { ...c.macOptions, 'plan-sha256': c.plan.macPlanSHA256 };
@@ -178,6 +220,16 @@ export async function promotePublication(options, dependencies = {}) {
     }
     if (c.candidate.windows.updatesEnabled) await r.promoteWindowsUpdates({ out: c.windowsOut, inventory: c.windowsInventory, feeds: c.candidate.windows.updates, config: c.windowsConfig,
       env: c.windowsEnv, notes: c.windowsNotes, ownerConfirmation: options['owner-confirmation'], planSHA256: options['plan-sha256'], cancelFile: join(out, 'CANCEL') });
+    // Last, after macOS and Windows (devices 7.6). Each of those is skipped on a rerun once its stable is live, so a
+    // rerun with the same plan hash only completes the server.
+    if (c.candidate.server) {
+      try {
+        await r.promoteServer({ dir: c.serverOut, plan: c.candidate.server, config: c.serverConfig, env: c.serverEnv, readSource: c.readSource, log: r.log,
+          ownerConfirmation: options['owner-confirmation'], planSHA256: options['plan-sha256'], cancelFile: join(out, 'CANCEL') });
+      } catch (error) {
+        throw new Error(`macOS 和 Windows 的 stable 已经切好，服务端 stable 没切成：${error.message}。用同一个计划哈希重跑 promote，只补服务端。`);
+      }
+    }
     const handoff = await r.collect({ out }, c.collectDependencies);
     if (handoff.readyForWebsite !== true) throw new Error('Publication receipts did not produce a complete website handoff');
     r.log('Stable publicly verified. release-handoff.json is ready for the existing website workflow.');
@@ -190,15 +242,17 @@ export async function publicationStatus({ out }) {
   return { planned: true, version: plan.candidate.version, sourceSha: plan.candidate.sourceSha, planSHA256: digest(await readFile(join(root, planName))),
     macReceiptPresent: !!await optional(join(plan.candidate.macOut, 'upload-receipt.json')),
     windowsReceiptPresent: !!await optional(join(root, 'windows/windows-publish-receipt.json')),
+    server: !plan.candidate.server ? (serverRequired(plan.candidate.version) ? `这份计划没有服务端：${SERVER_REQUIRED_FROM} 起不能只发 macOS 和 Windows，照 ${SERVER_SETUP_DOC}配好后重新 plan` : NO_SERVER) : { receiptPresent: !!await optional(join(root, 'server', UPLOAD_RECEIPT)),
+      stableStatus: (await optional(join(root, 'server', STABLE_RECEIPT)))?.status ?? 'not-promoted' },
     stableRecordedStatus: (await optional(join(plan.candidate.macOut, 'publish-receipt.json')))?.status ?? 'not-promoted',
     website: (await optional(join(root, 'release-handoff.json')))?.readyForWebsite === true ? 'handoff-ready; deployment not verified' : 'not-ready' };
 }
 
-const help = 'Usage: node scripts/release-publish.mjs <plan|upload|promote|status> --out /absolute/release [--cos-write-config /external/cos-write.json] [--windows-cos-config /external/cos-windows.json]\nplan prints the unified reviewed plan SHA-256. upload requires --plan-sha256 and publishes both versioned platforms concurrently. promote requires that same hash and --owner-confirmation with the owner\'s reply about this reviewed candidate; it verifies stable and writes the website handoff. No command deploys the website.';
+const help = 'Usage: node scripts/release-publish.mjs <plan|upload|promote|status> --out /absolute/release [--cos-write-config /external/cos-write.json] [--windows-cos-config /external/cos-windows.json] [--server-cos-config /external/cos-server.json]\nplan prints the unified reviewed plan SHA-256; it covers the server packages once cos-server.json exists (default ~/.config/vonvon-release/cos-server.json), and from 0.9.0 refuses a release without it or without the server build. upload requires --plan-sha256 and publishes the versioned objects of every platform concurrently. promote requires that same hash and --owner-confirmation with the owner\'s reply about this reviewed candidate; it switches macOS, then Windows, then the server stable (its signed manifest and install scripts), verifies them and writes the website handoff. No command deploys the website.';
 const invoked = process.argv[1] && await realpath(resolve(process.argv[1])).catch(() => null);
 if (invoked && invoked === await realpath(fileURLToPath(import.meta.url))) {
   try {
-    const { values, positionals } = parseArgs({ allowPositionals: true, options: { help: { type: 'boolean' }, ...Object.fromEntries(['out', 'cos-write-config', 'windows-cos-config', 'plan-sha256', 'owner-confirmation'].map(name => [name, { type: 'string' }])) } });
+    const { values, positionals } = parseArgs({ allowPositionals: true, options: { help: { type: 'boolean' }, ...Object.fromEntries(['out', 'cos-write-config', 'windows-cos-config', 'server-cos-config', 'plan-sha256', 'owner-confirmation'].map(name => [name, { type: 'string' }])) } });
     const commands = { plan: planPublication, upload: uploadPublication, promote: promotePublication, status: publicationStatus };
     if (values.help) console.log(help);
     else if (positionals.length !== 1 || !commands[positionals[0]] || !values.out) throw new Error(help);

@@ -1,6 +1,8 @@
 import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, test} from 'vitest';
 import type {AdminReply, JudgeUsageDay} from '@vonvon/protocol';
+import {createClient} from '../../client/src/client';
+import {ClientProvider} from '../src/client-context';
 import {botTotals, dayLabel, judgeSourceTotals, JudgeUsageRows, judgeUsageReader, type JudgeUsageRead, type JudgeUsageView} from '../src/management/JudgeUsage';
 
 const days: JudgeUsageDay[] = [
@@ -9,6 +11,7 @@ const days: JudgeUsageDay[] = [
   {date: '2026-10-17', total: 1, sources: [{kind: 'llm', id: 'codex-appserver', label: 'Codex', count: 1}], bots: [{agentId: 'cli_fixture', agentName: 'Bot 7', count: 1}]},
 ];
 const view: JudgeUsageView = {kind: 'judgeUsage', days, unreadBots: 0};
+const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
 const render = (read: JudgeUsageRead) => renderToStaticMarkup(<JudgeUsageRows read={read} onRead={() => {}}/>);
 
 test('Jev daily totals include every decision service and exclude native language-model calls', () => {
@@ -111,4 +114,14 @@ test('the Jev tab keeps real zero dates and reports incomplete or failed reads',
   expect(html).not.toContain('3 次');
   expect(html).toContain('部分记录暂时无法读取');
   expect(html).toContain('没连上 daemon');
+});
+
+// owner 2026-11-02: the days are the device's; a remote device's page says whose, this computer's says 本机
+test('counts the days by the device it is on', () => {
+  expect(render({kind: 'ready', view})).toContain('最近 14 天 · 按本机日期统计');
+  const remote = renderToStaticMarkup(<ClientProvider client={client} device={{id: 'test-remote', name: '机房 Linux', isRemote: true, mode: 'full', capabilities: ['device']}}>
+    <JudgeUsageRows read={{kind: 'ready', view}} onRead={() => {}}/>
+  </ClientProvider>);
+  expect(remote).toContain('最近 14 天 · 按「机房 Linux」的日期统计');
+  expect(remote).not.toContain('本机');
 });

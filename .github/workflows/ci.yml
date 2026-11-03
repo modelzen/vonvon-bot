@@ -74,10 +74,18 @@ jobs:
           SOURCE_SHA: ${{ needs.scope.outputs.source_sha }}
         run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - run: npm ci
+      # The install smoke builds a server package with the Node pinned in scripts/server-node.json; build-server.mjs
+      # checks a cached download against that pin before every use.
+      - name: Restore pinned server Node
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/vonvon-server-node
+          key: server-node-${{ hashFiles('scripts/server-node.json') }}
       - name: Run scoped Linux checks
         env:
           CI_SCOPE: ${{ needs.scope.outputs.scope }}
           CI_PACKAGES: ${{ needs.scope.outputs.packages }}
+          VONVON_SMOKE_NODE_CACHE: ${{ runner.temp }}/vonvon-server-node
         run: node .github/scripts/ci-run.mjs
 
   macos:

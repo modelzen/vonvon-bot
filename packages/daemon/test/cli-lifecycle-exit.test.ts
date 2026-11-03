@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const fixture = vi.hoisted(() => ({ run: vi.fn(), release: vi.fn(), exit: vi.fn() }));
+const fixture = vi.hoisted(() => ({ run: vi.fn(), release: vi.fn(), exit: vi.fn(), arm: vi.fn(), disarm: vi.fn() }));
 vi.mock('../src/core/version', () => ({ bridgeVersion: () => '0.7.0' }));
 vi.mock('../src/config/paths', () => ({ paths: { appDir: '/owned/root' } }));
 vi.mock('node:fs/promises', () => ({ mkdir: vi.fn() }));
 vi.mock('../src/config/data-access', () => ({ enterDataAccess: async () => ({ release: fixture.release }) }));
 vi.mock('../src/host/bootstrap', () => ({ runHostRuntime: fixture.run }));
-vi.mock('../src/host/lifecycle', () => ({ observeShutdown: () => ({ dispose() {} }) }));
+vi.mock('../src/host/lifecycle', () => ({ observeShutdown: () => ({ dispose() {} }), armHostStopLimit: fixture.arm }));
 // The real handlers would land on the vitest worker's process.
-vi.mock('../src/host/crash-guard', () => ({ installCrashHandlers: vi.fn() }));
+vi.mock('../src/host/crash-guard', () => ({ installCrashHandlers: vi.fn(), closeHostRun: vi.fn() }));
 
 beforeEach(() => {
   vi.resetModules();
@@ -72,4 +72,19 @@ it('prints each error of a failed shutdown on its own line and keeps a requested
   await import('../src/cli/index');
   await vi.waitFor(() => expect(fixture.exit).toHaveBeenCalledExactlyOnceWith(75));
   expect(console.error).toHaveBeenCalledWith('Host shutdown failed.\n  - Error: a\n  - Error: b');
+});
+
+// owner 2026-11-02: a host's stop ends within 30 s; the limit is armed for the run and disarmed once it returns. A Bot
+// child has the supervisor's limit instead.
+it.each([false, true])('arms the host stop limit around the run, Bot child %s', async child => {
+  if (child) process.send = vi.fn();
+  fixture.arm.mockImplementation(() => fixture.disarm);
+  fixture.run.mockImplementation(async () => {
+    if (!child) expect(fixture.disarm).not.toHaveBeenCalled();
+    process.exitCode = 0;
+  });
+  await import('../src/cli/index');
+  await vi.waitFor(() => expect(fixture.exit).toHaveBeenCalledOnce());
+  expect(fixture.arm).toHaveBeenCalledTimes(child ? 0 : 1);
+  expect(fixture.disarm).toHaveBeenCalledTimes(child ? 0 : 1);
 });

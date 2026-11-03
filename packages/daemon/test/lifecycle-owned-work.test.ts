@@ -1,13 +1,13 @@
 import { afterEach, expect, it, vi } from 'vitest';
 
-const f = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), fail: vi.fn(), pids: [123] }));
+const f = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), fail: vi.fn(), pids: [123], registered: [] as number[] }));
 vi.mock('../src/core/logger', () => ({ log: f }));
 vi.mock('../src/agent/owned-process', () => ({
-  closeOwnedProviderProcesses: async () => {}, unconfirmedProviderPids: () => f.pids,
+  closeOwnedProviderProcesses: async () => {}, unconfirmedProviderPids: () => f.pids, registeredProviderPids: () => f.registered,
 }));
 import { closeOwnedProviders } from '../src/host/lifecycle';
 
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.clearAllMocks(); f.pids = [123]; });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.clearAllMocks(); f.pids = [123]; f.registered = []; });
 
 it('an orphan drains without sending to its absent supervisor or logging repeated IPC errors', async () => {
   vi.useFakeTimers();
@@ -66,4 +66,22 @@ it('s18g ② ignores ordering changes in an orphan PID set', async () => {
   finish();
   await closing;
   expect(f.info).toHaveBeenCalledExactlyOnceWith('daemon-shutdown', 'owned-work-orphan', { pids: [7, 8] });
+});
+
+// owner 2026-11-02: a Bot child killed past its stop limit leaves its agents in groups of their own; the host reaps the
+// groups the child last reported as registered (bot/supervisor.ts).
+it('reports the registered agent groups while unsettled, and none once settled', async () => {
+  vi.useFakeTimers();
+  f.pids = [];
+  f.registered = [501, 502];
+  const sent: unknown[] = [];
+  const send = vi.fn((message: unknown, callback: (error: Error | null) => void) => { sent.push(message); callback(null); });
+  vi.stubGlobal('process', Object.defineProperties(Object.create(process), { send: { value: send }, connected: { value: true } }));
+  let finish!: () => void;
+  const closing = closeOwnedProviders(() => new Promise<void>(resolve => { finish = resolve; }));
+  await vi.advanceTimersByTimeAsync(1500);
+  finish();
+  await closing;
+  expect(sent[0]).toEqual({ fcb: 'fcb.owned-work', pids: [], settled: false, registered: [501, 502] });
+  expect(sent.at(-1)).toEqual({ fcb: 'fcb.owned-work', pids: [], settled: true, registered: [] });
 });

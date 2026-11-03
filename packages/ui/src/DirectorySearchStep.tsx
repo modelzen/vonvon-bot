@@ -1,9 +1,17 @@
 import {useEffect, useId, useRef, useState} from 'react';
 import {ArrowUp, ChevronRight, Folder, RefreshCw, Search} from 'lucide-react';
 import type {DirectoryEntry, FolderChoice} from '@vonvon/protocol';
-import {useClient} from './client-context';
+import {useActiveDevice, useClient} from './client-context';
+import {whereName} from './device-copy';
 import {IconButton} from './reference/components/ui';
 import './DirectorySearchStep.css';
+
+/** The query that lists a folder's children: the folder and its own separator, `\` for `C:\…` and `\\server\…`
+ * (devices-ui-2 4.3: a Windows device's paths come back in its own form). */
+export function browseQuery(path: string): string {
+  const separator = /^([A-Za-z]:|\\\\)/.test(path) ? '\\' : '/';
+  return `${path.replace(/[\\/]+$/, '')}${separator}`;
+}
 
 /** Searches the daemon's filesystem in both web and desktop, without a native picker. */
 export function DirectorySearchStep({onChoose, onBusyChange}: {
@@ -11,6 +19,7 @@ export function DirectorySearchStep({onChoose, onBusyChange}: {
   onBusyChange?: (busy: boolean) => void;
 }) {
   const client = useClient();
+  const where = useActiveDevice();
   const [query, setQuery] = useState('');
   const [entries, setEntries] = useState<DirectoryEntry[]>([]);
   const [parent, setParent] = useState<string | null>(null);
@@ -58,7 +67,7 @@ export function DirectorySearchStep({onChoose, onBusyChange}: {
     setQuery(value);
   }
   function browse(path: string) {
-    changeQuery(`${path.replace(/\/$/, '')}/`);
+    changeQuery(browseQuery(path));
     input.current?.focus();
   }
   async function choose(path: string) {
@@ -77,7 +86,7 @@ export function DirectorySearchStep({onChoose, onBusyChange}: {
   }
 
   return <div className="join-directory-search">
-    <p className="join-directory-context">Bot 所在设备的目录</p>
+    <p className="join-directory-context">{`${whereName(where)}上的目录`}</p>
     <div className="join-directory-input">
       <Search size={17}/>
       <input ref={input} role="combobox" aria-label="搜索目录或输入路径" aria-expanded="true" aria-autocomplete="list" aria-controls={listId}

@@ -7,11 +7,13 @@ import type { ShutdownControl } from '../../host/lifecycle';
 import type { DirectoryBrowser } from '../directory-browser';
 import { RpcError, unsupported } from '../errors';
 import type { Jobs, JobPeer } from '../jobs';
+import type { PeerOwner } from '../peer-label';
 import type { RpcOutcome } from '../rpc';
 import type { SnapshotStore } from '../snapshot';
 import { requireRunningAgent } from './ownership';
 
-export async function commandRpc(options: { service: AdminService; jobs: Jobs; peer: JobPeer; directory: DirectoryBrowser; snapshots: SnapshotStore; control?: ShutdownControl; port: number }, request: Command): Promise<RpcOutcome<CommandResult>> {
+/** `owner`: the client the connection belongs to (devices-ui-3 `peerOwner`), which a scan it starts is kept for. */
+export async function commandRpc(options: { service: AdminService; jobs: Jobs; peer: JobPeer; owner?: PeerOwner; directory: DirectoryBrowser; snapshots: SnapshotStore; control?: ShutdownControl; port: number }, request: Command): Promise<RpcOutcome<CommandResult>> {
   const { service, jobs, peer, directory, snapshots, control, port } = options;
   const applied: RpcOutcome<CommandResult> = { kind: 'mutation', reply: snapshot => ({ kind: 'applied', revision: snapshot.revision }) };
   switch (request.type) {
@@ -20,11 +22,7 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
       if (request.tools) await snapshots.refreshTools();
       return applied;
     case 'registerAgent': case 'refreshAgentCredentials': {
-      const value = jobs.startRegistration(peer, request.type === 'refreshAgentCredentials' ? request.agentId : undefined);
-      return { kind: 'mutation', reply: () => value };
-    }
-    case 'installCodex': case 'startCodexLogin': {
-      const value = jobs.startCodex(request.type === 'installCodex' ? 'install' : 'login');
+      const value = jobs.startRegistration(peer, request.type === 'refreshAgentCredentials' ? request.agentId : undefined, options.owner);
       return { kind: 'mutation', reply: () => value };
     }
     case 'cancelJob': {

@@ -9,7 +9,7 @@ import { classifyDistribution } from '../../daemon/src/service/distribution.js';
 import { withToolDirectories } from '../../daemon/src/platform/tool-path.js';
 import { serviceTarget } from '../../daemon/src/service/identity.js';
 import { isIrreplaceableDefinition, readRegistration } from '../../daemon/src/service/registration.js';
-import { attachExisting } from './attach.js';
+import { attachExisting, AttachError } from './attach.js';
 import type { DaemonManagerDependencies } from './daemon-manager.js';
 
 export async function prepareDesktopRoot(selected: DataRoot): Promise<string> {
@@ -79,7 +79,7 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
       if (!lock.listen) throw new Error(`后台服务（PID ${lock.pid}）还没有公布监听地址。先别关它，稍后再试。`);
       try { await verifyPidLockOwner(runtime.root, lock); }
       catch (cause) {
-        throw new Error(`无法验证后台服务（PID ${lock.pid}）与桌面协议 ${PROTOCOL_VERSION} 是否匹配。先别关它，检查应用和后台的版本是否兼容，以及本机凭据。`, { cause });
+        throw new Error(`无法确认正在运行的后台服务（PID ${lock.pid}）属于这个数据目录。先别关它，检查本机凭据；详情在 daemon.log。`, { cause });
       }
       return { pid: lock.pid, startedAt: lock.startedAt, listen: lock.listen, ...(lock.version === undefined ? {} : { version: lock.version }) };
     },
@@ -111,7 +111,13 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
       return pid;
     },
     async checkProtocol(expected) {
-      const attached = await attachExisting(runtime.root);
+      let attached;
+      // Another protocol is an answer here, not a failure: the manager says which versions differ (daemon-manager.ts).
+      try { attached = await attachExisting(runtime.root); }
+      catch (error) {
+        if (error instanceof AttachError && error.reason === 'protocol' && error.serverProtocol !== undefined) return error.serverProtocol;
+        throw error;
+      }
       try {
         if (attached.identity.pid !== expected.pid || attached.identity.startedAt !== expected.startedAt || attached.identity.listen !== expected.listen) {
           throw new Error('桌面启动期间，后台的所有者变了。');

@@ -3,7 +3,11 @@ import type { BotSettingsScope, ModelQuery } from './settings-types';
 import { GroupUpstreamError, InvalidGroupInput, type AdminGroupOp } from './groups';
 import { AdminWriteError, type AdminWriteOp } from './ops';
 import type { AdminLibraryOp } from './library';
-import type { ScheduleRequest } from '@vonvon/protocol';
+import type { ScheduleActor } from './schedule-commands';
+import type { MemoryDowngrade, MemoryItem, MemoryItemScope, MemorySource, ScheduleRequest } from '@vonvon/protocol';
+import { z } from 'zod';
+import { SESSION_ID_RE, type SessionInput } from '../host/session-tokens';
+import { SESSION_TURN_ENDED } from '../agent/entry/registry';
 
 /**
  * supervisor ↔ bot 子进程的管理面 IPC（node 'ipc' stdio / process.send）。
@@ -25,9 +29,41 @@ export const ADMIN_IPC_REQ = 'fcb.admin.req' as const;
 export const ADMIN_IPC_RES = 'fcb.admin.res' as const;
 
 export type AdminSettingsReadOp = { kind: 'settingsRead'; scope: BotSettingsScope } | { kind: 'settingsModels'; query: ModelQuery };
-/** Scheduled-task requests from the desktop and the terminal; the bot process runs them through schedule-commands as the local owner. */
-export type AdminScheduleOp = { kind: 'schedule'; via: 'desktop' | 'cli'; request: ScheduleRequest };
-export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | { kind: 'status' };
+/**
+ * Scheduled-task requests over the wire; the bot process runs them through schedule-commands as `actor`: the local owner
+ * (`local`, the desktop or the terminal) or a Bot session's turn (`session`, D4b), as the host decided.
+ */
+export type AdminScheduleOp = { kind: 'schedule'; actor: ScheduleActor; request: ScheduleRequest };
+
+/** A memory a Bot session's request names (the bot's own: the host has checked that). */
+export type SessionMemoryTarget = { kind: 'bot' } | { kind: 'project'; projectId: string } | { kind: 'dm'; openId: string };
+/**
+ * devices-4b 4.1: what a Bot session's ★ request asks of its Bot process, which answers with the tools' own checks for the
+ * session's current turn. `settingsWrite`: authorizeNow; `adminMember`: that and the owner's turn; `adminRead`: the private
+ * chat's read-only queries (the tools' `ctx.admin`); `memory`: authorizeMemory, then memory-authority's decideAdd (where it
+ * lands) or decideEdit (the item as the host read it); `schedule`: authorizeSchedule.
+ */
+export type SessionAction =
+  | { kind: 'settingsWrite' }
+  | { kind: 'adminMember' }
+  | { kind: 'adminRead' }
+  | { kind: 'memory'; op: 'read'; target: SessionMemoryTarget }
+  | { kind: 'memory'; op: 'add'; target: SessionMemoryTarget; text: string }
+  | { kind: 'memory'; op: 'edit'; item: Pick<MemoryItem, 'scope' | 'source'>; text?: string }
+  | { kind: 'schedule'; action: ScheduleRequest['action']; taskId?: string };
+/** Where a session's memory write lands and as whom (memory-authority's decision), with the source fields the tools write. */
+export interface MemoryLanding {
+  scope: MemoryItemScope;
+  trust: 'trusted' | 'untrusted';
+  actor: { role: 'owner' | 'admin' | 'member' | 'bot'; openId?: string };
+  source: { botId: string; turn?: NonNullable<MemorySource['turn']>; chatId?: string; messageId?: string; downgraded?: MemoryDowngrade };
+}
+/** The Bot process's answer: who started the turn (and for a task its actor, for a memory write where it lands), or the refusal with the tools' sentence. */
+export type SessionAuthz =
+  | { ok: true; role: 'owner' | 'admin' | 'member' | 'bot'; openId?: string; actor?: Extract<ScheduleActor, { kind: 'session' | 'scheduled' }>; memory?: MemoryLanding }
+  | { ok: false; reason: string; message: string };
+export type AdminSessionOp = { kind: 'authorizeSessionCall'; sessionId: string; action: SessionAction };
+export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | { kind: 'status' };
 
 export interface AdminIpcRequest {
   fcb: typeof ADMIN_IPC_REQ;
@@ -35,7 +71,15 @@ export interface AdminIpcRequest {
   op: AdminIpcOp;
 }
 
-export interface AdminIpcResponse {
+export interface IpcResponse {
+  fcb: string;
+  id: number;
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+  code?: string;
+}
+export interface AdminIpcResponse extends IpcResponse {
   fcb: typeof ADMIN_IPC_RES;
   id: number;
   ok: boolean;
@@ -66,9 +110,20 @@ export interface AdminIpcCaller {
   rejectAll(reason: string): void;
 }
 
-/** supervisor 侧：每个子进程一个 caller（子进程重启后换新的——旧在途请求由
- * rejectAll 收尾）。`send` 注入 proc.send（测试里可直连 responder）。 */
-export function createAdminIpcCaller(send: (msg: AdminIpcRequest) => void): AdminIpcCaller {
+/** One request/response channel pair over a child's IPC: the admin one (host → bot) and the host one (bot → host). */
+export interface IpcChannels { req: string; res: string }
+export interface IpcRequest<Op> { fcb: string; id: number; op: Op }
+export interface IpcCaller<Op> {
+  call(op: Op, timeoutMs?: number): Promise<unknown>;
+  onMessage(raw: unknown): void;
+  rejectAll(reason: string): void;
+}
+
+/**
+ * The caller of either channel: requests numbered, each settled once by its response, its timeout or `rejectAll`.
+ * `revive` turns a failed response back into the error the other side threw.
+ */
+export function createIpcCaller<Op>(channels: IpcChannels, send: (msg: IpcRequest<Op>) => void, opts: { timeoutMs: number | ((op: Op) => number); timeoutMessage?: (ms: number) => string; revive?: (msg: Partial<IpcResponse>) => Error }): IpcCaller<Op> {
   let nextId = 1;
   const pending = new Map<
     number,
@@ -84,17 +139,17 @@ export function createAdminIpcCaller(send: (msg: AdminIpcRequest) => void): Admi
   }
 
   return {
-    call(op, timeoutMs = adminIpcTimeout(op)): Promise<unknown> {
+    call(op, timeoutMs = typeof opts.timeoutMs === 'function' ? opts.timeoutMs(op) : opts.timeoutMs): Promise<unknown> {
       const id = nextId++;
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.delete(id);
-          reject(new Error(`Bot 进程 ${timeoutMs}ms 未响应（可能正忙或已假死）`));
+          reject(new Error(opts.timeoutMessage?.(timeoutMs) ?? `Bot 进程 ${timeoutMs}ms 未响应（可能正忙或已假死）`));
         }, timeoutMs);
         timer.unref?.();
         pending.set(id, { resolve, reject, timer });
         try {
-          send({ fcb: ADMIN_IPC_REQ, id, op });
+          send({ fcb: channels.req, id, op });
         } catch (err) {
           settle(id)?.reject(err instanceof Error ? err : new Error(String(err)));
         }
@@ -102,19 +157,15 @@ export function createAdminIpcCaller(send: (msg: AdminIpcRequest) => void): Admi
     },
 
     onMessage(raw): void {
-      const msg = raw as Partial<AdminIpcResponse> | null;
-      if (!msg || msg.fcb !== ADMIN_IPC_RES || typeof msg.id !== 'number') return;
+      const msg = raw as Partial<IpcResponse> | null;
+      if (!msg || msg.fcb !== channels.res || typeof msg.id !== 'number') return;
       const entry = settle(msg.id);
       if (!entry) return; // 已超时/已拒绝的迟到响应
       if (msg.ok) {
         entry.resolve(msg.result);
         return;
       }
-      const reason = msg.error ?? '子进程执行失败';
-      // 校验拒绝跨进程还原成 AdminWriteError —— HTTP 层与进程内路径同样映射 409。
-      // 「群建好了没存上」只带回它的 code（s36d1），RPC 层据此让网页锁住建群表单。
-      entry.reject(msg.code === 'ADMIN_WRITE_REJECTED' ? new AdminWriteError(reason) : msg.code === 'GROUP_UPSTREAM' ? new GroupUpstreamError(reason) : msg.code === 'INVALID_GROUP_INPUT' ? new InvalidGroupInput(reason)
-        : msg.code === 'CREATED_UNSAVED' ? Object.assign(new Error(reason), { code: msg.code }) : new Error(reason));
+      entry.reject(opts.revive?.(msg) ?? new Error(msg.error ?? '子进程执行失败'));
     },
 
     rejectAll(reason): void {
@@ -123,6 +174,43 @@ export function createAdminIpcCaller(send: (msg: AdminIpcRequest) => void): Admi
       }
     },
   };
+}
+
+/** The other side of {@link createIpcCaller}: a thrown error is an `ok: false` response with its code; a send that fails (the peer is leaving) is dropped. */
+export function createIpcResponder<Op>(channels: IpcChannels, execute: (op: Op) => Promise<unknown>, send: (msg: IpcResponse) => void): (raw: unknown) => void {
+  return (raw) => {
+    const msg = raw as Partial<IpcRequest<Op>> | null;
+    if (!msg || msg.fcb !== channels.req || typeof msg.id !== 'number' || !msg.op) return;
+    const id = msg.id;
+    const reply = (response: Omit<IpcResponse, 'fcb' | 'id'>): void => {
+      try {
+        send({ fcb: channels.res, id, ...response });
+      } catch {
+        /* 对端退场中 */
+      }
+    };
+    void execute(msg.op as Op).then(
+      (result) => reply({ ok: true, result }),
+      (err: unknown) => reply({ ok: false, error: err instanceof Error ? err.message : String(err), code: (err as { code?: string } | null)?.code }),
+    );
+  };
+}
+
+const ADMIN_CHANNELS: IpcChannels = { req: ADMIN_IPC_REQ, res: ADMIN_IPC_RES };
+
+/** supervisor 侧：每个子进程一个 caller（子进程重启后换新的——旧在途请求由
+ * rejectAll 收尾）。`send` 注入 proc.send（测试里可直连 responder）。 */
+export function createAdminIpcCaller(send: (msg: AdminIpcRequest) => void): AdminIpcCaller {
+  return createIpcCaller<AdminIpcOp>(ADMIN_CHANNELS, msg => send(msg as AdminIpcRequest), {
+    timeoutMs: adminIpcTimeout,
+    revive: (msg) => {
+      const reason = msg.error ?? '子进程执行失败';
+      // 校验拒绝跨进程还原成 AdminWriteError —— HTTP 层与进程内路径同样映射 409。
+      // 「群建好了没存上」只带回它的 code（s36d1），RPC 层据此让网页锁住建群表单。
+      return msg.code === 'ADMIN_WRITE_REJECTED' ? new AdminWriteError(reason) : msg.code === 'GROUP_UPSTREAM' ? new GroupUpstreamError(reason) : msg.code === 'INVALID_GROUP_INPUT' ? new InvalidGroupInput(reason)
+        : msg.code === 'CREATED_UNSAVED' ? Object.assign(new Error(reason), { code: msg.code }) : new Error(reason);
+    },
+  });
 }
 
 /**
@@ -134,31 +222,98 @@ export function createAdminIpcResponder(
   execute: (op: AdminIpcOp) => Promise<unknown>,
   send: (msg: AdminIpcResponse) => void,
 ): (raw: unknown) => void {
-  return (raw) => {
-    const msg = raw as Partial<AdminIpcRequest> | null;
-    if (!msg || msg.fcb !== ADMIN_IPC_REQ || typeof msg.id !== 'number' || !msg.op) return;
-    const id = msg.id;
-    void execute(msg.op).then(
-      (result) => {
-        try {
-          send({ fcb: ADMIN_IPC_RES, id, ok: true, result });
-        } catch {
-          /* supervisor 退场中 */
-        }
-      },
-      (err: unknown) => {
-        try {
-          send({
-            fcb: ADMIN_IPC_RES,
-            id,
-            ok: false,
-            error: err instanceof Error ? err.message : String(err),
-            code: (err as { code?: string } | null)?.code,
-          });
-        } catch {
-          /* supervisor 退场中 */
-        }
-      },
-    );
+  return createIpcResponder<AdminIpcOp>(ADMIN_CHANNELS, execute, msg => send(msg as AdminIpcResponse));
+}
+
+/** devices-4b 4.3: a Bot process slower than this is refused, not waited for (not ADMIN_IPC_TIMEOUT_MS). */
+export const SESSION_IPC_TIMEOUT_MS = 5_000;
+/** No turn to answer for: the grant is gone, the process is gone, or it did not answer (devices 15, 这一轮已结束). */
+export const sessionTurnEnded = (): SessionAuthz => ({ ok: false, reason: 'turn-ended', message: SESSION_TURN_ENDED });
+const short = z.string().min(1).max(200);
+/** The answer as the host takes it: anything else, a local actor above all, is refused. */
+export const sessionAuthzSchema: z.ZodType<SessionAuthz> = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true), role: z.enum(['owner', 'admin', 'member', 'bot']), openId: short.optional(),
+    actor: z.discriminatedUnion('kind', [
+      // A bot's turn may list its group's tasks: no openId then (and as a member it may create none).
+      z.object({ kind: z.literal('session'), openId: z.string().max(200), role: z.enum(['owner', 'admin', 'member']), chatId: short, name: z.string().max(200).optional(), messageId: short.optional() }).strict(),
+      z.object({ kind: z.literal('scheduled'), taskId: short, runId: short, chatId: short }).strict(),
+    ]).optional(),
+    memory: z.object({
+      scope: z.discriminatedUnion('kind', [
+        z.object({ kind: z.literal('project'), projectId: short }).strict(), z.object({ kind: z.literal('bot') }).strict(), z.object({ kind: z.literal('dm'), openId: short }).strict(),
+      ]),
+      trust: z.enum(['trusted', 'untrusted']),
+      actor: z.object({ role: z.enum(['owner', 'admin', 'member', 'bot']), openId: short.optional() }).strict(),
+      source: z.object({
+        botId: short, turn: z.object({ kind: z.enum(['human', 'wake', 'initiative', 'retry', 'bot']), steered: z.boolean() }).strict().optional(),
+        chatId: short.optional(), messageId: short.optional(), downgraded: z.enum(['member', 'not-human-turn', 'steered', 'not-typed', 'not-in-message', 'quota']).optional(),
+      }).strict(),
+    }).strict().optional(),
+  }).strict(),
+  z.object({ ok: z.literal(false), reason: short, message: z.string().min(1).max(500) }).strict(),
+]);
+
+/**
+ * The host asks a Bot process to authorize a session's ★ request. No process, no answer in time, a failure or an
+ * answer of the wrong shape are all refusals: never a way through (devices 5.2).
+ */
+export async function askBotOver(ipc: Pick<AdminIpcCaller, 'call'> | undefined, sessionId: string, action: SessionAction): Promise<SessionAuthz> {
+  if (!ipc) return sessionTurnEnded();
+  try {
+    const parsed = sessionAuthzSchema.safeParse(await ipc.call({ kind: 'authorizeSessionCall', sessionId, action }, SESSION_IPC_TIMEOUT_MS));
+    return parsed.success ? parsed.data : sessionTurnEnded();
+  } catch { return sessionTurnEnded(); }
+}
+
+/** devices-4a 4.2: bot → host. A bot process asks the host for its sessions' tokens (devices 5.3), the reverse of the admin channel. */
+export const HOST_IPC_REQ = 'fcb.host.req' as const;
+export const HOST_IPC_RES = 'fcb.host.res' as const;
+/** A session does not start without its token, so a host that does not answer is given up on soon. */
+export const HOST_IPC_TIMEOUT_MS = 5_000;
+export type HostIpcOp =
+  | ({ kind: 'issueSessionToken' } & SessionInput)
+  | { kind: 'revokeSessionToken'; sessionId: string };
+/** The result of a host op; a failure is the response's `error`, as on the admin channel. */
+export type HostIpcReply = { kind: 'token'; token: string } | { kind: 'ok' };
+export interface HostApi {
+  issueSessionToken(input: SessionInput): Promise<string>;
+  revokeSessionToken(sessionId: string): Promise<void>;
+}
+const HOST_CHANNELS: IpcChannels = { req: HOST_IPC_REQ, res: HOST_IPC_RES };
+const hostOpSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('issueSessionToken'), appId: z.string().min(1).max(200), chatId: z.string().min(1).max(200).optional(),
+    place: z.enum(['dm', 'group', 'comment']), threadId: z.string().min(1).max(1000).optional(), sessionId: z.string().regex(SESSION_ID_RE),
+  }).strict(),
+  z.object({ kind: z.literal('revokeSessionToken'), sessionId: z.string().regex(SESSION_ID_RE) }).strict(),
+]);
+const hostReplySchema = z.discriminatedUnion('kind', [z.object({ kind: z.literal('token'), token: z.string() }).strict(), z.object({ kind: z.literal('ok') }).strict()]);
+
+/** The bot process's side: `send` is process.send; feed the host's messages to `onMessage`. */
+export function createHostIpcCaller(send: (msg: IpcRequest<HostIpcOp>) => void): HostApi & { onMessage(raw: unknown): void; rejectAll(reason: string): void } {
+  const caller = createIpcCaller<HostIpcOp>(HOST_CHANNELS, send, { timeoutMs: HOST_IPC_TIMEOUT_MS, timeoutMessage: ms => `vonvon 主进程 ${ms}ms 未响应` });
+  const ask = async (op: HostIpcOp): Promise<HostIpcReply> => hostReplySchema.parse(await caller.call(op));
+  return {
+    async issueSessionToken(input) {
+      const reply = await ask({ kind: 'issueSessionToken', ...input });
+      if (reply.kind !== 'token') throw new Error('The host did not answer with a token');
+      return reply.token;
+    },
+    async revokeSessionToken(sessionId) { await ask({ kind: 'revokeSessionToken', sessionId }); },
+    onMessage: caller.onMessage,
+    rejectAll: caller.rejectAll,
+  };
+}
+
+/** The host's side, one per bot child: a request that is not one of the two ops is refused, not passed on. */
+export function createHostIpcResponder(api: HostApi, send: (msg: IpcResponse) => void): { onMessage(raw: unknown): void } {
+  return {
+    onMessage: createIpcResponder<unknown>(HOST_CHANNELS, async (raw): Promise<HostIpcReply> => {
+      const op = hostOpSchema.parse(raw);
+      if (op.kind === 'revokeSessionToken') { await api.revokeSessionToken(op.sessionId); return { kind: 'ok' }; }
+      const { kind: _kind, ...input } = op;
+      return { kind: 'token', token: await api.issueSessionToken(input) };
+    }, send),
   };
 }

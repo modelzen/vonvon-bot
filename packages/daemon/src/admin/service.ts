@@ -8,7 +8,7 @@ import { projectRevision, projectView } from './collaboration';
 import { AdminWriteError } from './ops';
 import type { HostSettings } from './settings-types';
 import type { AdminSettingsReadOp } from './ipc';
-import { CodexSetupService, type CodexSetup, type CodexJob, type CodexJobType } from '../agent/codex-appserver/setup';
+import { CodexSetupService, type CodexSetup } from '../agent/codex-appserver/setup';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { compareCodexVersions, parseCodexVersion } from '../agent/codex-appserver/version';
 import { fetchUsageBundle } from '../agent/usage';
@@ -20,6 +20,7 @@ import { botIdentity, loadBots, setBotActivation, removeBot } from '../config/bo
 import { botPaths, botDir } from '../config/paths';
 import { configuredProjectsRoots, directoryContext, legacyDirectoryProblems } from '../project/directory-audit';
 import type { DirectoryProblem, ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
+import type { ScheduleActor } from './schedule-commands';
 import { removeSecret } from '../config/keystore';
 import {
   getCompletionReminderConfig,
@@ -119,16 +120,13 @@ export interface AdminService {
   /** true only in the read-only preview process: it refuses every write, memory writes included */
   readonlyPreview?: boolean;
   collaboration?(botId: string, request: CollaborationRequest): Promise<unknown>;
-  /** Scheduled tasks of one bot; the bot process checks scope and roles (admin/schedule-commands.ts). Refusals are replies, not errors. */
-  executeSchedule?(botId: string, via: 'desktop' | 'cli', request: ScheduleRequest): Promise<ScheduleReply>;
+  /** Scheduled tasks of one bot, as `actor`; the bot process checks scope and roles (admin/schedule-commands.ts). Refusals are replies, not errors. */
+  executeSchedule?(botId: string, actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply>;
   /** The project library (admin/library.ts): its workspace is changed only through here. */
   library?: HostLibrary;
   accountUsage(force: boolean): Promise<AccountUsageBundle>;
   settings?: HostSettings;
   codexSetup?(opts?: { refresh?: boolean }): Promise<CodexSetup>;
-  startCodexJob?(type: CodexJobType): { id: string };
-  codexJob?(id: string): CodexJob | undefined;
-  cancelCodexJob?(id: string): Promise<CodexJob | undefined>;
   close?(): Promise<void>;
   pendingGroups?(botId: string): Promise<{ groups: PendingGroup[] }>;
   joinedGroups?(botId: string, cursor?: string): Promise<JoinedGroups>;
@@ -461,7 +459,7 @@ export interface AdminServiceDeps {
   /** Asks a running bot process to follow a project's new workspace (admin/library.ts `AdminLibraryOp`). */
   executeLibrary?: (botId: string, op: AdminLibraryOp) => Promise<unknown>;
   /** Forwards a scheduled-task request to the bot process; a bot that is not running replies `refused bot-not-running`. */
-  executeSchedule?: (botId: string, via: 'desktop' | 'cli', request: ScheduleRequest) => Promise<ScheduleReply>;
+  executeSchedule?: (botId: string, actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
   /** 实时运行状态（daemon 进程内：本进程 channel / 子进程 IPC）。返回 undefined
    * 或缺省 → 回退锁文件探测（该 bot 不归本 daemon 管，如未激活的 bot）。 */
   liveStatus?: (botId: string) => Promise<BotLiveStatus | undefined>;
@@ -651,12 +649,6 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     settings: createSettingsService(deps, library),
     library,
     codexSetup: opts => codexTools.setup(opts),
-    startCodexJob(type) {
-      if (deps.readonlyPreview || deps.daemonStartedAt === undefined) throw new NotWiredYetError('Codex 设置');
-      return codexTools.start(type);
-    },
-    codexJob: id => codexTools.get(id),
-    cancelCodexJob: id => codexTools.cancel(id),
     close: () => {
       closing ??= (async () => {
         await Promise.allSettled([...inFlightUsage]);
@@ -673,9 +665,9 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       }
       return deps.executeCollaboration(botId, request);
     },
-    async executeSchedule(botId, via, request) {
+    async executeSchedule(botId, actor, request) {
       if (!deps.executeSchedule) throw new NotWiredYetError('定时任务');
-      return deps.executeSchedule(botId, via, request);
+      return deps.executeSchedule(botId, actor, request);
     },
     async pendingGroups(botId) {
       const registry = await loadBots();
@@ -1056,8 +1048,8 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async backendLogin(id, refresh): Promise<BackendLogin> {
       if (!catalogById(id)) return { state: 'unknown', message: '没有这个后端。' };
       const backend = createBackend(id);
-      if (!backend.loginStatus) return { state: 'unknown', message: `「${backend.displayName}」的登录在它自己的设置里看。` };
-      return backend.loginStatus({ refresh }).catch(() => ({ state: 'unknown' as const, message: '无法确认登录状态，请重新检测。' }));
+      if (!backend.loginStatus) return { state: 'unknown', message: `「${backend.displayName}」的配置在它自己的设置里看。` };
+      return backend.loginStatus({ refresh }).catch(() => ({ state: 'unknown' as const, message: '无法确认配置，请重新检测。' }));
     },
 
     async getDaemonStatus(): Promise<DaemonStatus> {
@@ -1262,7 +1254,7 @@ async function probeAllBackends(): Promise<AdminBackendStatus[]> {
         ok: probe?.ok === true,
         version: probe?.version ?? null,
         location: probe?.location,
-        hint: probe?.ok ? undefined : (probe?.hint ?? '环境探测失败（未安装、未登录或探测超时）'),
+        hint: probe?.ok ? undefined : (probe?.hint ?? '环境探测失败（没装、没配置好或探测超时）'),
         isDefault: id === DEFAULT_BACKEND_ID,
       };
     }),

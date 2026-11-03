@@ -7,22 +7,32 @@ import type { AdminState } from './state';
 export function projectState(state: AdminState, previous: DesktopSnapshot, pending: ReadonlySet<string>) {
   const agents: Agent[] = [];
   const memberships: Membership[] = [];
+  /** A group's picture goes on the group once. A copy on each membership made a snapshot hundreds of KB larger, more than
+   * a slow link to another device carried in time (0.9.0 Mac 验收 B-1). */
+  const avatars = new Map<string, string>();
   for (const bot of state.bots) {
     const agentId = agentIdSchema.parse(bot.appId);
     const duplicate = new Set(bot.projects.map(project => project.chatId)).size !== bot.projects.length;
     const readError = ('projectsError' in bot ? bot.projectsError : undefined) ?? (duplicate ? '同一个 Bot 存在冲突的群绑定，请在内核中修复。' : undefined);
     agents.push({ id: agentId, name: bot.botName || bot.name, ...(bot.avatarDataUrl ? { avatarDataUrl: bot.avatarDataUrl } : {}), enabled: bot.active, running: bot.running, connection: bot.connection ?? (bot.running ? 'unknown' : 'disconnected'), activation: pending.has(bot.appId) || bot.active !== bot.running ? 'restartRequired' : 'active', ...(readError ? { readError } : {}) });
     if (readError) {
-      memberships.push(...previous.memberships.filter(member => member.agentId === bot.appId).map(member => ({ ...member, stale: true })));
+      for (const member of previous.memberships.filter(member => member.agentId === bot.appId)) {
+        memberships.push({ ...member, stale: true });
+        const avatar = previous.groups.find(group => group.id === member.groupId)?.avatarDataUrl;
+        if (avatar && !avatars.has(member.groupId)) avatars.set(member.groupId, avatar);
+      }
       continue;
     }
     // AdminProject.mode/network already carry groupPermission's resolved effects.
     // A 智能 group's `response` is always mention and means nothing: it has no 免@ (s25c).
-    for (const project of bot.projects) memberships.push({ id: membershipIdSchema.parse(JSON.stringify([bot.appId, project.chatId])), agentId, groupId: groupIdSchema.parse(project.chatId), name: project.name, ...(project.avatarDataUrl ? { avatarDataUrl: project.avatarDataUrl } : {}), directory: project.cwd, ...(projectIdSchema.safeParse(project.projectId).success ? { projectId: projectIdSchema.parse(project.projectId) } : {}), ...(project.directoryProblem ? { directoryProblem: project.directoryProblem } : {}), backend: project.backend, ...(project.enabled === undefined ? {} : { enabled: project.enabled }), conversation: modeToConversation(project.kind), effectMode: groupPermission(project).effect.mode, response: project.noMention ? 'all' : 'mention', permission: { administrator: project.mode, member: project.mode, network: project.network }, stale: false });
+    for (const project of bot.projects) {
+      if (project.avatarDataUrl) avatars.set(project.chatId, project.avatarDataUrl);
+      memberships.push({ id: membershipIdSchema.parse(JSON.stringify([bot.appId, project.chatId])), agentId, groupId: groupIdSchema.parse(project.chatId), name: project.name, directory: project.cwd, ...(projectIdSchema.safeParse(project.projectId).success ? { projectId: projectIdSchema.parse(project.projectId) } : {}), ...(project.directoryProblem ? { directoryProblem: project.directoryProblem } : {}), backend: project.backend, ...(project.enabled === undefined ? {} : { enabled: project.enabled }), conversation: modeToConversation(project.kind), effectMode: groupPermission(project).effect.mode, response: project.noMention ? 'all' : 'mention', permission: { administrator: project.mode, member: project.mode, network: project.network }, stale: false });
+    }
   }
   const groups = new Map<string, Group>();
   for (const member of memberships) {
-    const avatarDataUrl = member.avatarDataUrl ?? groups.get(member.groupId)?.avatarDataUrl;
+    const avatarDataUrl = avatars.get(member.groupId);
     groups.set(member.groupId, { id: member.groupId, name: member.name, ...(avatarDataUrl ? { avatarDataUrl } : {}) });
   }
   return { agents, memberships, groups: [...groups.values()], stale: agents.some(agent => !!agent.readError) };

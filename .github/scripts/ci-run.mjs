@@ -17,6 +17,19 @@ const windowsPackageTests = {
   desktop: ['windows-updates', 'updates', 'tray', 'daemon-dependencies'].map(name => `test/${name}.test.ts`),
 };
 
+/**
+ * Builds a Linux server package and runs install.sh for real in a temporary HOME (docs/plans/server-5-release.md 4.6).
+ * Linux only: macOS runners would install a LaunchAgent under the CI account, and Windows has no server package.
+ * Runs for full scope (which every server script and server-update.json select) and whenever the daemon is checked,
+ * as the package is the daemon.
+ */
+export const installSmoke = 'scripts/install-smoke.mjs';
+function withInstallSmoke(plan, scope, selected, root, platform) {
+  if (platform !== 'linux' || (scope !== 'full' && !selected.includes('daemon'))) return plan;
+  if (!existsSync(join(root, installSmoke))) throw new Error(`Missing install smoke: ${installSmoke}`);
+  return [...plan, { executable: 'node', args: [installSmoke] }];
+}
+
 export function parseInputs(scope, rawPackages) {
   if (scope !== 'affected' && scope !== 'full') {
     throw new Error('CI_SCOPE must be affected or full');
@@ -71,6 +84,7 @@ export function createPlan(scope, selected, root = projectRoot, platform = proce
       }
       plan.push({ executable: 'npm', args: ['run', script] });
     }
+    return withInstallSmoke(plan, scope, selected, root, platform);
   } else {
     for (const script of scripts) {
       for (const name of selected) {
@@ -89,7 +103,7 @@ export function createPlan(scope, selected, root = projectRoot, platform = proce
     if (rootTests.length === 0) throw new Error('No root script tests found');
     plan.push({ executable: 'node', args: ['--test', ...rootTests] });
   }
-  return plan;
+  return withInstallSmoke(plan, scope, selected, root, platform);
 }
 
 export function runPlan(plan, root = projectRoot, spawn = spawnSync) {

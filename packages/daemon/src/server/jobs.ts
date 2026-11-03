@@ -2,9 +2,9 @@ import { randomUUID } from 'node:crypto';
 import QRCode from 'qrcode';
 import { agentIdSchema, jobIdSchema, type BackendInstallItem, type BackendInstallStatus, type CommandResult, type EnvironmentReply, type Event, type Job, type JobId } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
-import { CodexSetupConflict } from '../agent/codex-appserver/setup';
-import { RpcError, unsupported } from './errors';
+import { RpcError } from './errors';
 import { BackendOutput, backendErrorSuffix } from './backend-output';
+import type { PeerOwner } from './peer-label';
 
 export interface JobPeer {
   readonly id: string;
@@ -13,7 +13,16 @@ export interface JobPeer {
 }
 interface Registration {
   job: Job;
+  /** The connection that started it; what a registration with no `ownerKey` is cancelled by. */
   owner: string;
+  /** devices-ui-3 4.2: the client it belongs to (`PeerOwner`), how a refusal names it, and the connections of that client
+   * now (`holders`); once they are all gone `grace` cancels it, unless the client comes back first. */
+  ownerKey?: string;
+  ownerLabel?: string;
+  ownerFar?: string;
+  holders?: Set<string>;
+  grace?: NodeJS.Timeout;
+  agentId?: string;
   abort: AbortController;
   done: Promise<void>;
   qrVersion: number;
@@ -23,6 +32,8 @@ interface BackendOperation {
   operationId: string;
   id: string;
   update: boolean;
+  /** the starting request's own id (cli-7-environment); a request that attaches does not change it */
+  requestId?: string;
   abort: AbortController;
   output: BackendOutput;
   peers: Set<JobPeer>;
@@ -31,17 +42,22 @@ interface BackendOperation {
   expiresAt?: number;
 }
 export interface BackendAdmission { operation: BackendOperation; attached: boolean }
+/** devices 6.3: how long a scan waits for its client to come back after its last connection dropped. */
+export const REGISTRATION_GRACE_MS = 60_000;
+const ended = (entry: Registration): boolean => entry.abort.signal.aborted || ['succeeded', 'failed', 'cancelled'].includes(entry.job.phase);
 
 export class Jobs {
   private readonly registrations = new Map<JobId, Registration>();
   private readonly unsettled = new Set<Registration>();
   private registration: Registration | undefined;
-  private readonly codex = new Map<JobId, 'installCodex' | 'loginCodex'>();
   private readonly views = new Map<JobId, Job>();
   private readonly expires = new Map<JobId, number>();
   private readonly backends = new Map<string, BackendOperation>();
   private readonly backendWork = new Set<BackendOperation>();
   private readonly backendLatest = new Map<string, BackendOperation>();
+  /** devices 6.3: each connection now and the client it belongs to (`attach`, `detach`), so a scan holds every
+   * connection of its client, the ones there before it started too. */
+  private readonly connected = new Map<string, string>();
   private readonly poll: NodeJS.Timeout;
   private closed = false;
   private closing: Promise<void> | undefined;
@@ -61,11 +77,25 @@ export class Jobs {
   }
   snapshot(): Job[] { return [...this.views.values()]; }
 
-  startRegistration(peer: JobPeer, agentId?: string): CommandResult {
+  /**
+   * devices 6.3: one scan at a time. Another client's scan still running refuses this one (`job_running`, naming who
+   * scans, as said to this client: `owner.key` tells a paired one from one on this computer) and is left alone; the same
+   * client starting again starts over. Without an owner on either side, as before: the new one cancels the old.
+   */
+  startRegistration(peer: JobPeer, agentId?: string, owner?: PeerOwner): CommandResult {
     if (this.closed || this.unsettled.size >= 32) return { kind: 'refused', code: 'registration_busy', message: '已有注册正在保存，请稍后重试。' };
-    if (this.registration) this.cancelRegistration(this.registration);
+    const current = this.registration;
+    if (current && owner && current.ownerKey && owner.key !== current.ownerKey && this.unsettled.has(current) && !ended(current)) {
+      const who = (owner.key.startsWith('paired:') ? current.ownerFar : current.ownerLabel) ?? '另一个客户端';
+      return { kind: 'refused', code: 'job_running', message: current.agentId ? `${who}正在为一个 Bot 重新扫码，等它完成后再试。` : `${who}正在扫码添加 Bot，等它完成后再试。` };
+    }
+    if (current) this.cancelRegistration(current);
     const id = jobIdSchema.parse(randomUUID());
-    const entry: Registration = { job: { id, type: 'registerAgent', phase: 'running', message: '正在创建扫码会话。' }, owner: peer.id, abort: new AbortController(), done: Promise.resolve(), qrVersion: 0 };
+    const entry: Registration = {
+      job: { id, type: 'registerAgent', phase: 'running', message: '正在创建扫码会话。' }, owner: peer.id, abort: new AbortController(), done: Promise.resolve(), qrVersion: 0,
+      ...(agentId ? { agentId } : {}),
+      ...(owner ? { ownerKey: owner.key, ownerLabel: owner.label, ownerFar: owner.far, holders: this.holdersOf(peer, owner.key) } : {}),
+    };
     this.registration = entry;
     this.registrations.set(id, entry);
     this.unsettled.add(entry);
@@ -99,50 +129,38 @@ export class Jobs {
     }).catch(error => {
       update({ id, type: 'registerAgent', phase: 'failed', code: 'unknown', message: error instanceof Error ? error.message.slice(0, 1024) : '注册失败。' });
     }).finally(() => {
+      clearTimeout(entry.grace);
+      entry.grace = undefined;
       this.unsettled.delete(entry);
       if (this.registration === entry) this.registration = undefined;
       this.options.changed();
     });
     return { kind: 'started', jobId: id };
   }
+  /** The connection starting a scan and every other connection of its client now. */
+  private holdersOf(peer: JobPeer, ownerKey: string): Set<string> {
+    const holders = new Set([peer.id]);
+    for (const [id, key] of this.connected) if (key === ownerKey) holders.add(id);
+    return holders;
+  }
   private cancelRegistration(entry: Registration): void {
+    clearTimeout(entry.grace);
+    entry.grace = undefined;
     if (!this.unsettled.has(entry) || entry.abort.signal.aborted) return;
     entry.abort.abort();
     entry.job = { id: entry.job.id, type: 'registerAgent', phase: 'cancelled', message: '已取消扫码。' };
     this.set(entry.job);
-  }
-  startCodex(type: 'install' | 'login'): CommandResult {
-    if (type === 'login') return {kind: 'refused', code: 'provider-configuration-required', message: '请先在 Codex App 或 Codex CLI 中完成登录或自定义模型配置，再回到 Vonvon 检测。'};
-    if (!this.options.service.startCodexJob) return unsupported();
-    try {
-      const id = jobIdSchema.parse(this.options.service.startCodexJob(type).id);
-      this.codex.set(id, type === 'install' ? 'installCodex' : 'loginCodex');
-      this.refresh();
-      return { kind: 'started', jobId: id };
-    } catch (error) {
-      if (error instanceof CodexSetupConflict) return { kind: 'refused', code: 'conflict', message: error.message };
-      throw error;
-    }
   }
   async cancel(id: JobId): Promise<CommandResult> {
     const registration = this.registrations.get(id);
     if (registration) {
       this.cancelRegistration(registration);
       await registration.done;
-    } else if (this.codex.has(id)) { await this.options.service.cancelCodexJob?.(id); this.refresh(); }
-    else return { kind: 'refused', code: 'unknown_job', message: '任务不存在。' };
+    } else return { kind: 'refused', code: 'unknown_job', message: '任务不存在。' };
     return { kind: 'cancelled' };
   }
+  /** Forgets finished jobs ten minutes after they end. */
   private refresh(): void {
-    for (const [id, type] of this.codex) {
-      const job = this.options.service.codexJob?.(id);
-      if (!job) continue;
-      if (job.state === 'authorizing') this.set({ id, type, phase: 'authorizing', userCode: job.userCode, verificationUrl: job.verificationUrl });
-      else {
-        this.set({ id, type, phase: job.state, message: job.message ?? '' });
-        if (job.state !== 'running') { this.codex.delete(id); this.options.toolsSettled(); }
-      }
-    }
     const now = Date.now();
     for (const [id, expiry] of this.expires) {
       if (expiry > now) continue;
@@ -152,12 +170,12 @@ export class Jobs {
       this.options.changed();
     }
   }
-  selectBackend(id: string, update: boolean): BackendAdmission {
+  selectBackend(id: string, update: boolean, requestId?: string): BackendAdmission {
     if (this.closed) throw new RpcError('conflict', 'daemon 正在停止，无法安装后端。');
     const key = JSON.stringify([id, update]);
     const existing = this.backends.get(key);
     if (existing) return { operation: existing, attached: true };
-    const operation: BackendOperation = { operationId: randomUUID(), id, update, abort: new AbortController(), output: new BackendOutput(), peers: new Set(), done: Promise.resolve() };
+    const operation: BackendOperation = { operationId: randomUUID(), id, update, ...(requestId === undefined ? {} : { requestId }), abort: new AbortController(), output: new BackendOutput(), peers: new Set(), done: Promise.resolve() };
     this.backends.set(key, operation);
     this.backendWork.add(operation);
     this.backendLatest.set(id, operation);
@@ -194,6 +212,7 @@ export class Jobs {
     if (operation.terminal) replay.push(operation.terminal);
     return {
       operationId: operation.operationId, id: operation.id, update: operation.update,
+      ...(operation.requestId === undefined ? {} : { requestId: operation.requestId }),
       state: !operation.terminal ? 'running' : operation.terminal.type === 'done' ? 'succeeded'
         : operation.terminal.type === 'error' && operation.terminal.code === 'aborted' ? 'cancelled' : 'failed',
       replay, omittedBytes,
@@ -213,9 +232,40 @@ export class Jobs {
     if (!this.closed && peer.open && !operation.terminal) operation.peers.add(peer);
     return { kind: 'backendInstall', operationId: operation.operationId, id: operation.id, update: operation.update, attached, replay, omittedBytes };
   }
+  /**
+   * A connection ended. A scan with no owner is cancelled with the connection that started it, as before. One with an
+   * owner loses a holder; with none left it waits `REGISTRATION_GRACE_MS` for the same client to come back (`attach`).
+   */
   detach(peer: JobPeer): void {
-    for (const entry of this.unsettled) if (entry.owner === peer.id) this.cancelRegistration(entry);
+    this.connected.delete(peer.id);
+    for (const entry of this.unsettled) {
+      if (ended(entry)) continue;
+      if (!entry.holders) { if (entry.owner === peer.id) this.cancelRegistration(entry); continue; }
+      if (!entry.holders.delete(peer.id) || entry.holders.size || entry.grace) continue;
+      entry.grace = setTimeout(() => { entry.grace = undefined; this.cancelRegistration(entry); }, REGISTRATION_GRACE_MS);
+      entry.grace.unref();
+    }
     for (const operation of this.backendWork) operation.peers.delete(peer);
+  }
+  /**
+   * A connection of `owner` started (the hub's `attached`): it holds that client's scans, in their grace or not, and the
+   * ones that client starts while it is connected (Codex 审查 267-1: a second web page open before the scan). A new
+   * network often brings the new connection before the server sees the old one drop; that later `detach` then leaves a
+   * holder, and no grace starts. Any connection of the same client counts, a short `vonvon bot list` too.
+   */
+  attach(peer: JobPeer, owner: PeerOwner | undefined): void {
+    if (!owner) return;
+    this.connected.set(peer.id, owner.key);
+    for (const entry of this.unsettled) {
+      if (entry.ownerKey !== owner.key || !entry.holders || ended(entry)) continue;
+      entry.holders.add(peer.id);
+      clearTimeout(entry.grace);
+      entry.grace = undefined;
+    }
+  }
+  /** A revoked client's scans end now, connected or in their grace: it cannot come back (devices 6.3). */
+  cancelOwner(ownerKey: string): void {
+    for (const entry of [...this.unsettled]) if (entry.ownerKey === ownerKey) this.cancelRegistration(entry);
   }
   close(): Promise<void> {
     if (this.closing) return this.closing;

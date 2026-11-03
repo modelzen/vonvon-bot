@@ -5,7 +5,7 @@ import { DEFAULT_RETRY_DELAY_MS, MAX_VOICE_BYTES, MAX_VOICE_DURATION_MS } from '
 import { normalizeHealth } from './health';
 import { probePcm } from './probe';
 import { createFeishuVoiceClient, type FeishuVoiceClient } from './providers';
-import { VoiceFailure, type VoiceAction, type VoiceConfig, type VoiceHealth, type VoiceService } from './types';
+import { VoiceActionRefused, VoiceFailure, type VoiceAction, type VoiceConfig, type VoiceHealth, type VoiceService } from './types';
 
 export function validateVoiceAction(input: unknown): VoiceAction {
   if (!input || typeof input !== 'object') throw new Error('缺少语音设置操作');
@@ -113,9 +113,9 @@ export function createVoiceService(
   async function actionImpl(raw: VoiceAction): Promise<void> {
     const { action } = validateVoiceAction(raw);
     const requiresEnabled = action === 'test' || action === 'refreshPermission';
-    if (requiresEnabled && !config().enabled) throw new Error('请先开启语音转文字，再测试');
+    if (requiresEnabled && !config().enabled) throw new VoiceActionRefused('请先开启语音转文字，再测试');
     if (requiresEnabled && testJob) return;
-    if (testJob && action !== 'disable') throw new Error('检测正在进行，请稍后再试');
+    if (testJob && action !== 'disable') throw new VoiceActionRefused('检测正在进行，请稍后再试');
     if (action === 'disable') {
       generation++;
       // Preserve diagnostics/cooldown: toggling the switch must not bypass rate limiting.
@@ -127,7 +127,7 @@ export function createVoiceService(
     }
     const current = normalizeHealth(config().feishu);
     if (action === 'test' && current.retryAt && current.retryAt > Date.now()) {
-      throw new Error('飞书暂时受限，请等待冷却结束后再检测');
+      throw new VoiceActionRefused('飞书暂时受限，请等待冷却结束后再检测');
     }
     generation++;
     const epoch = generation;
