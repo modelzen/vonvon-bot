@@ -1,7 +1,9 @@
 import {expect, it, vi} from 'vitest';
+import {isValidElement, type ReactNode} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import type {DeviceEventPayload} from '@vonvon/protocol';
 import {pairedToasts, PairedToastsView} from '../src/devices/PairedToasts';
+import {OPEN_SETTING_EVENT} from '../src/search';
 
 // devices-ui-3 第 5 节 paired-toasts. main 必败: there was no toast.
 const paired = (clientId: string, name: string, change: DeviceEventPayload['change'] = 'client-paired'): DeviceEventPayload =>
@@ -26,4 +28,22 @@ it('gives 查看 only while this computer is shown', () => {
   expect(away).not.toContain('本机');
   expect(away).not.toContain('查看');
   expect(renderToStaticMarkup(<PairedToastsView shown={[]} local onClose={vi.fn()}/>)).toBe('');
+});
+
+// owner 2026-11-03: 查看 opens 设备 → 已配对的设备, where 允许别的设备连接 moved (it opened 应用与启动). main 必败
+type Node = {type: unknown; props: Record<string, any>};
+const nodes = (node: ReactNode): Node[] => Array.isArray(node) ? node.flatMap(nodes)
+  : isValidElement<Record<string, any>>(node) ? [node as Node, ...['children', 'actions'].flatMap(key => nodes(node.props[key]))] : [];
+it('查看 opens 已配对的设备 on the 设备 page', () => {
+  const dispatchEvent = vi.fn();
+  vi.stubGlobal('window', {dispatchEvent});
+  try {
+    const onClose = vi.fn();
+    const look = nodes(PairedToastsView({shown: [paired('a', '工作笔记本')], local: true, onClose})).find(node => node.props.children === '查看');
+    look!.props.onClick();
+    const event = dispatchEvent.mock.calls[0]![0] as CustomEvent;
+    expect(event.type).toBe(OPEN_SETTING_EVENT);
+    expect(event.detail).toEqual({page: 'devices', section: '已配对的设备'});
+    expect(onClose).toHaveBeenCalledWith('a');
+  } finally { vi.unstubAllGlobals(); }
 });

@@ -1,10 +1,11 @@
 import {useMemo, useRef, useState} from 'react';
 import {ArrowRightLeft, Pencil, Trash2} from 'lucide-react';
-import {deviceAliasSchema, type DeviceRow} from '@vonvon/protocol';
-import {useDevicesState, useShellCapabilities} from '../client-context';
+import {deviceAliasSchema, type DeviceRow, type DevicesState} from '@vonvon/protocol';
+import {useDevicesState, useShellCapabilities, type DevicesShell} from '../client-context';
 import {Button, InlineNotice} from '../reference/components/ui';
 import {ConfirmDialog} from '../reference/components/ui/Dialog';
 import {useDraft, useDraftGuard} from '../settings/DraftGuard';
+import {RemoteAccessPanel} from '../settings/RemoteAccessPanel';
 import {addBlockedReason, copy, registryNotices, removeCopy, rowView} from './devices-presentation';
 import {CopyText, DeviceTile, platformIcon, RowMenu, StatusPill, TailscaleAdvice, useNow, type RowMenuItem} from './device-bits';
 import {AddDeviceDialog} from './AddDeviceDialog';
@@ -35,17 +36,31 @@ export function RenameRow({row, onDone}: {row: DeviceRow; onDone: () => void}) {
   </form>;
 }
 
-/** devices-ui-1b 4.5: settings → 设备. */
+/**
+ * devices-ui-1b 4.5: settings → 设备. owner 2026-11-03: 允许别的设备连接 moved here from 应用与启动, below the list, as Orca's
+ * Remote Orca Servers page has both "Add Server" and "Advertise this app as a server". The list is this computer's (the
+ * devices it connects to); the block below is the device shown's (who may connect to it), named by its `panelTitle`. The web
+ * page has no list (it cannot add devices): only the block.
+ */
 export function DevicesPanel() {
   const state = useDevicesState();
   const devices = useShellCapabilities()?.devices;
+  const listed = Boolean(state && devices);
+  return <section className="devices-page" aria-label="设备">
+    {state && devices ? <DeviceList state={state} devices={devices}/> : <header className="today-page-heading"><div><h1>设备</h1></div></header>}
+    {/* The list already says to use Tailscale; once is enough on one page. */}
+    <RemoteAccessPanel tailscaleAdvice={!listed}/>
+  </section>;
+}
+
+/** The devices this computer connects to: 添加设备, the list, 切换到, 改名 and 删除. */
+function DeviceList({state, devices}: {state: DevicesState; devices: DevicesShell}) {
   const {navigate} = useDraftGuard();
   const now = useNow(60_000);
   const [dialog, setDialog] = useState<{repairOf?: DeviceRow}>();
   const [renaming, setRenaming] = useState<string>();
   const [removing, setRemoving] = useState<{row: DeviceRow; pending?: boolean; error?: string}>();
   const [notice, setNotice] = useState<string>();
-  if (!state || !devices) return null;
   const switchTo = (id: string) => navigate(() => void devices.switchTo(id).catch(reportSwitchFailure));
   const blocked = addBlockedReason(state);
   const remove = async (row: DeviceRow) => {
@@ -57,7 +72,7 @@ export function DevicesPanel() {
     } catch (error) { setRemoving({row, error: message(error)}); }
   };
   const localName = state.active.id === 'local' ? state.active.serverInfo?.deviceName : undefined;
-  return <section className="devices-page" aria-label="设备">
+  return <>
     <header className="today-page-heading today-page-heading--actions"><div><h1>设备</h1></div>
       <Button disabled={Boolean(blocked)} title={blocked} onClick={() => setDialog({})}>添加设备</Button>
     </header>
@@ -96,5 +111,5 @@ export function DevicesPanel() {
       title={removeCopy.title(`「${removing.row.name}」`)}
       description={removeCopy.body(`「${removing.row.name}」`, removing.row.current && removing.row.status === 'online')}
       onCancel={() => setRemoving(undefined)} onConfirm={() => void remove(removing.row)}><span/></ConfirmDialog>}
-  </section>;
+  </>;
 }

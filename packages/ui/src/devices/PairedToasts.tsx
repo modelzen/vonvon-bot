@@ -3,11 +3,13 @@ import {X} from 'lucide-react';
 import type {DeviceEventPayload} from '@vonvon/protocol';
 import type {ShellCapabilities} from '../client-context';
 import {Button, IconButton, InlineNotice} from '../reference/components/ui';
-import {OPEN_SETTING_EVENT} from '../search';
+import {OPEN_SETTING_EVENT, type Destination} from '../search';
 import {PAIRED_SECTION, PAIRED_TOAST_TITLE, pairedToastText} from '../settings/remote-access-presentation';
 import '../settings/remote-access.css';
 
 export const PAIRED_TOAST_LIMIT = 2;
+/** 查看 opens 设备 → 已配对的设备 (on 应用与启动 until owner 2026-11-03 moved 允许别的设备连接). */
+export const PAIRED_DESTINATION: Destination = {page: 'devices', section: PAIRED_SECTION};
 /** The newest pairing of each client, newest first, at most two; a revocation is not shown. */
 export function pairedToasts(events: readonly DeviceEventPayload[], closed: ReadonlySet<string>): DeviceEventPayload[] {
   const seen = new Set<string>();
@@ -38,7 +40,7 @@ export function PairedToastsView({shown, local, onClose}: {shown: readonly Devic
   return <aside className="paired-toasts" aria-label="新配对的设备" aria-live="polite">
     {shown.map(event => <InlineNotice key={event.clientId} title={PAIRED_TOAST_TITLE} tone="info" actions={<>
       {local && <Button size="sm" onClick={() => {
-        window.dispatchEvent(new CustomEvent(OPEN_SETTING_EVENT, {detail: {page: 'application', section: PAIRED_SECTION}}));
+        window.dispatchEvent(new CustomEvent(OPEN_SETTING_EVENT, {detail: PAIRED_DESTINATION}));
         onClose(event.clientId);
       }}>查看</Button>}
       <IconButton label={`关闭「${event.name}」的配对提示`} onClick={() => onClose(event.clientId)}><X size={14}/></IconButton>
