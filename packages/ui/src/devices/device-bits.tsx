@@ -1,4 +1,4 @@
-import {Fragment, useEffect, useRef, useState, type ReactNode, type RefObject} from 'react';
+import {Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject} from 'react';
 import {Ellipsis, Globe, Laptop, Monitor, MonitorSmartphone, Server, Terminal, type LucideIcon} from 'lucide-react';
 import {useShellCapabilities, type ShellCapabilities} from '../client-context';
 import {openExternalUrl} from '../url-actions';
@@ -75,17 +75,39 @@ export type RowMenuItem = {label: string; icon: LucideIcon; onSelect: () => void
  * A row's rarer actions behind ⋯ (`groups`: separated by a line); the devices page and 已配对的设备 share it. A button with
  * `aria-expanded`, as the header's device switcher; the menu stays in the page, hidden while closed.
  */
+/** The part of the window an element can be seen in: the viewport, cut by every ancestor that clips or scrolls. */
+function visibleBounds(element: HTMLElement): {top: number; bottom: number} {
+  let top = 0, bottom = window.innerHeight;
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    if (getComputedStyle(node).overflowY === 'visible') continue;
+    const box = node.getBoundingClientRect();
+    top = Math.max(top, box.top);
+    bottom = Math.min(bottom, box.bottom);
+  }
+  return {top, bottom};
+}
+
 export function RowMenu({label, groups, className}: {label: string; groups: RowMenuItem[][]; className?: string}) {
   const [open, setOpen] = useState(false);
+  const [up, setUp] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
   useDismiss(ref, open, () => setOpen(false));
+  // Codex 审查 304: a row scrolled to the bottom of the window opened its menu below what can be seen. It opens upward
+  // when it runs past the bottom and there is more room above the ⋯ than below it.
+  useLayoutEffect(() => {
+    if (!open || !menu.current || !trigger.current) { setUp(false); return; }
+    const box = menu.current.getBoundingClientRect(), button = trigger.current.getBoundingClientRect();
+    const {top, bottom} = visibleBounds(menu.current);
+    setUp(box.bottom > bottom && button.top - top > bottom - button.bottom);
+  }, [open]);
   const shown = groups.filter(group => group.length);
   return <div ref={ref} className={className ? `device-menu ${className}` : 'device-menu'} data-open={open || undefined}>
     <button ref={trigger} type="button" className="device-menu__button" aria-label={label} aria-haspopup="menu" aria-expanded={open} title="更多操作" onClick={() => setOpen(value => !value)}>
       <Ellipsis size={16} aria-hidden="true"/>
     </button>
-    <div role="menu" aria-label={label} hidden={!open}>{shown.map((group, index) => <Fragment key={index}>
+    <div ref={menu} role="menu" aria-label={label} hidden={!open} data-placement={up ? 'up' : undefined}>{shown.map((group, index) => <Fragment key={index}>
       {index > 0 && <div role="separator" className="device-menu__separator"/>}
       {group.map(({label: text, icon: Icon, onSelect, danger, disabled}) => <button key={text} type="button" role="menuitem" disabled={disabled} data-danger={danger || undefined}
         onClick={() => {

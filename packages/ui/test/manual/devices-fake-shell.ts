@@ -23,7 +23,7 @@ const tailscale = {host: '100.64.0.10', port: 7767, kind: 'tailscale'}, lan = {h
 const info = (version: string, protocolVersion: number) => ({type: 'serverInfo', machineId: A, version, protocolVersion, deviceName: '机房', platform: 'linux', capabilities: ['device']});
 /** A 60-character name with no break in it: rows wrap it, the header button and menus cut it short. */
 const LONG_NAME = 'MacBook-Pro-of-a-colleague-with-a-really-long-hostname-2026x';
-type Extra = {name?: string; localOnly?: boolean; adding?: object};
+type Extra = {name?: string; localOnly?: boolean; adding?: object; many?: boolean};
 const state = (active: object, status = 'online', extra: Extra = {}) => ({
   v: 1, revision: 1, client: {version: '0.9.1', protocolVersion: 2}, registry: 'ok', secureStorage: true,
   devices: extra.localOnly ? [{id: 'local', name: '这台电脑', current: true, status: 'online', platform: 'macos', version: '0.9.1', routes: []}] : [
@@ -31,6 +31,8 @@ const state = (active: object, status = 'online', extra: Extra = {}) => ({
     {id: A, name: extra.name ?? '机房 Linux', current: true, status, platform: 'linux', version: '0.9.1', routes: [tailscale, lan]},
     {id: B, name: '家里的 Windows', current: false, status: 'revoked', platform: 'windows', version: '0.9.0', routes: [lan]},
     {id: C, name: '办公室 Mac', current: false, status: 'unknown', platform: 'macos', version: '0.9.1', lastConnectedAt: now - 3 * 3_600_000, routes: [lan]},
+    // Codex 审查 304: enough devices that the list scrolls
+    ...extra.many ? Array.from({length: 12}, (_, index) => ({id: `44444444-4444-4444-8444-${String(index).padStart(12, '0')}`, name: `测试设备 ${index + 1}`, current: false, status: 'unknown', platform: 'linux', version: '0.9.1', lastConnectedAt: now - 3_600_000, routes: [lan]})) : [],
   ],
   active: extra.localOnly ? {id: 'local', attempt: 0, phase: 'ready', mode: 'full', serverInfo: {...info('0.9.1', 2), machineId: 'local', deviceName: '办公室 Mac', platform: 'macos'}} : {id: A, attempt: 0, ...active},
   ...(extra.adding ? {adding: extra.adding} : {}),
@@ -153,6 +155,21 @@ const scenes: Scene[] = [
   // 设备 UI 评审再改: a long name on the outside card, the list while the device shown reconnects, and the row menu by keyboard.
   {name: 'cannot-connect-long-name', status: 'connecting', active: cannotConnect, extra: {name: LONG_NAME}},
   {name: 'devices-reconnecting', status: 'reconnecting', active: {phase: 'reconnecting', mode: 'full', attempt: 1, retryAt: now + 60_000, serverInfo: info('0.9.1', 2)}, steps: devicesPage},
+  // Codex 审查 304: a ⋯ scrolled to the bottom of the window opens its menu upward, where both items can be hit
+  {name: 'devices-menu-bottom', active: ready, extra: {many: true}, steps: async page => {
+    await devicesPage(page);
+    const trigger = page.getByRole('button', {name: '「测试设备 8」的更多操作'});
+    const box = await trigger.boundingBox();
+    await page.mouse.move(500, 500);
+    await page.mouse.wheel(0, box!.y - 710);
+    await page.waitForTimeout(300);
+    await trigger.click();
+    return page.evaluate(() => [...document.querySelectorAll('.device-menu[data-open] [role="menuitem"]')].map(item => {
+      const at = item.getBoundingClientRect();
+      const hit = document.elementFromPoint(at.left + at.width / 2, at.top + at.height / 2);
+      return {item: item.textContent, hit: Boolean(hit && item.contains(hit)), placement: item.parentElement?.getAttribute('data-placement') ?? 'down'};
+    }));
+  }},
   {name: 'devices-menu-keyboard', active: ready, steps: async page => {
     await devicesPage(page);
     const focused = () => page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName);

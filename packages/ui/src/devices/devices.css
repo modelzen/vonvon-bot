@@ -67,6 +67,7 @@
   border: 1px solid var(--color-border); border-radius: 11px; background: var(--color-surface);
   box-shadow: 0 8px 28px #0000001a, 0 2px 6px #00000008;
 }
+.device-menu > [role="menu"][data-placement="up"] { top: auto; bottom: 34px; }
 .device-menu > [role="menu"][hidden] { display: none; }
 .device-menu [role="menuitem"] {
   display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; padding: 7px 10px; border: 0; border-radius: 6px;
