@@ -11,7 +11,6 @@ import { enableFailed, enableLinger, lingerLine, readLinger, userManagerProblem,
 import { inBotSession } from '../../config/session-env';
 import { CommandError } from '../command-error';
 import { print, withDaemon, type Daemon, type Io } from '../daemon-client';
-import { rootWarning } from '../root-warning';
 
 const STATE_TEXT = {
   'not-installed': 'not installed', running: 'running', stopped: 'installed, stopped', disabled: 'turned off',
@@ -26,8 +25,6 @@ export type ServiceCommandDependencies = {
   now: () => number;
   /** Linux only (s20a): what follows a finished install or uninstall, and why the user manager cannot be asked. */
   linux: LinuxServiceSteps | undefined;
-  /** 0 is root, which gets a warning (server-2 4.3); undefined on Windows. */
-  getuid: () => number | undefined;
 };
 export type LingerChoice = 'ask' | 'on' | 'off';
 /** server-2 4.4: `on` when linger was on or was just turned on; `unsupported` off Linux. */
@@ -72,7 +69,7 @@ async function exists(path: string): Promise<boolean> {
 export async function runServiceCommand(action: 'install' | 'uninstall', adapter?: Pick<ServiceAdapter, 'install' | 'uninstall'>, options: { port?: number; keepRunning?: boolean; linger?: LingerChoice } = {}, overrides: Partial<ServiceCommandDependencies> = {}, io: Io = TEXT): Promise<void> {
   const service = adapter ?? (await import('../../service/adapter')).getServiceAdapter();
   const d: ServiceCommandDependencies = {
-    root: paths.appDir, readOwner: readRunningPidLock, now: Date.now, linux: process.platform === 'linux' ? linuxServiceSteps() : undefined, getuid: () => process.getuid?.(),
+    root: paths.appDir, readOwner: readRunningPidLock, now: Date.now, linux: process.platform === 'linux' ? linuxServiceSteps() : undefined,
     start: async port => {
       const status = await (await import('./daemon')).runStart(port);
       if (!status.running) throw new Error('Daemon did not start.');
@@ -80,8 +77,6 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
     },
     ...overrides,
   };
-  const warning = action === 'install' ? rootWarning(d.getuid) : undefined;
-  if (warning && !io.json) process.stderr.write(`${warning}\n`);
   // A fresh machine has no data root yet: install creates it, and nothing else can be running there.
   let mutex: Mutex | null = null;
   if (await exists(d.root)) {
@@ -138,7 +133,7 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
     // Only a daemon started again detached is reported besides; the outcome itself is said in plain words below.
     if (!io.json && lines.length > 1) io.write(`${lines.slice(1).join('\n')}\n`);
     // After the mutex: asking about linger can wait on the user.
-    const notes: string[] = warning ? [warning] : [];
+    const notes: string[] = [];
     let linger: LingerState = 'unsupported';
     // A linger that did not take is not a failed install (LINGER-1): an optional line says how to start at boot.
     if (d.linux) linger = await (io.json ? d.linux.afterInstall(options.linger ?? 'ask', notes, running) : d.linux.afterInstall(options.linger ?? 'ask', undefined, running));
@@ -164,7 +159,7 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
     case 'uninstall_rolled_back':
     case 'uninstall_incomplete': {
       if (result.detail.includes('stop_unconfirmed')) lines.push('Next step: vonvon service uninstall');
-      const partial = { ...outcome, leftovers: result.leftovers, ...warning ? { notes: [warning] } : {} };
+      const partial = { ...outcome, leftovers: result.leftovers };
       if (result.detail.includes('User manager unavailable')) {
         const problem = await d.linux?.problem(result.detail);
         if (problem) lines.push(problem.hint);

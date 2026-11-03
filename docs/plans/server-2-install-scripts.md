@@ -46,7 +46,7 @@
 
 先看系统（2026-11-01）：`uname -s` 不是 `Linux` → 不联网、不写文件、不建临时目录，exit 2。`Darwin` 打印 devices.md §15"安装脚本：在 Mac 上"那句（到 https://vonvon.cc/get/ 下载安装包，里面带了服务端和 `vonvon` 命令）；别的系统（FreeBSD、Windows 的 Git Bash 这类）打印"安装脚本：不是 Linux、也不是 Mac"那句，带上 `uname -s` 的结果。这一步是 `main` 的第一步，在 root、`HOME`、已装过和公钥的检查之前。
 
-0. **root**（2026-11-03 改，原来默认拒绝、`VONVON_ALLOW_ROOT=1` 才放行）：`[ "$(id -u)" = 0 ]` → 打印 §15"安装脚本：root"那句，照常安装。放在"已装过"之后，已装过时不说。
+0. **root**：照装，不提示（owner 2026-11-03，和 Paseo、Orca 一样；原来默认拒绝、`VONVON_ALLOW_ROOT=1` 才放行）。
 1. **已装过**（任一命中 → 按 §15 文案打印、exit 0、不写任何文件）：
    - `$DATA/daemon.pid` 存在，用 `sed -n 's/.*"pid":\([0-9]*\).*/\1/p'` 取 pid，`kill -0 "$pid"` 成功；
    - `$ROOT/current` 存在，而且 `$ROOT/bin/vonvon --version` 能跑（只有 `current` 是设置那一步没做完，接着装）；
@@ -110,7 +110,7 @@
 
 `__standalone-teardown --install-root <根> [--json]`：对 `shellStartupFiles` 的每个文件 `spliceBlock(content, null)`，但只在现有块的 `startupBlock` 文本等于 `startupBlock('<根>/bin')` 时删（桌面端的块不动）。输出 `{ ok: true, pathFiles }`。不碰安装根。
 
-root 警告：`daemon run` 和 `service install` 在 `process.getuid?.() === 0` 时 stderr 打一行"以 root 运行 Vonvon Bot：AI 代理会有整机权限。"（`--json` 时放进 `notes`）。
+root 警告：2026-11-03 去掉（owner：和 Paseo、Orca 一样不提示）。原来 `daemon run` 和 `service install` 在 root 下 stderr 打一行"以 root 运行 Vonvon Bot：AI 代理会有整机权限。"
 
 ### 4.4 `service install --linger --json`（`D/cli/commands/service.ts`）
 
@@ -170,7 +170,7 @@ root 警告：`daemon run` 和 `service install` 在 `process.getuid?.() === 0` 
 | size 不对 | 清单 `size` + 1 → exit 4，没算哈希（stdout 文字区分） | 是 |
 | 包含 `../x` 成员 | 手工 `writeTarGz` 一个带 `../evil` 的包 → exit 4，`home/` 下没有 `evil` | 是 |
 | 包含 symlink 成员 | → exit 4（或按 I1 核对结果改为"相对不逃出根则接受"） | 是 |
-| root（2026-11-03 改） | `id` 替身 → exit 0，stdout 开头逐字是 §15"安装脚本：root"那句，stderr 为空；再跑一次是"已经装过"，不再提 root | 是 |
+| root（2026-11-03 改） | `id` 替身 → exit 0，stdout 和普通账号装的一样（路径除外），不提 root，stderr 为空 | 是 |
 | 已装过：pid 活着 | `home/.vonvon-bot/daemon.pid` 写 `{"pid":<本测试进程 pid>}` → exit 0，"已经装过"，没有 `curl` 调用，安装根不存在 | 是 |
 | 已装过：`current` 加能跑的 `bin/vonvon` / systemd unit 文件 / PATH 里有带服务端标记的 `vonvon` | 各 exit 0，文案是 §15"安装脚本：已装过"那句 | 是 |
 | 在 macOS 上（2026-11-01） | `uname` 替身 `Darwin`/`arm64`，`install.sh` 和 `uninstall.sh` 各跑一次 → 都 exit 2，stdout 为空，stderr 逐字是 §15"在 Mac 上"那两句；没有 `curl` 调用（`curl.log` 不存在），`home/` 下什么都没写；`home/.local/share/vonvon-bot/server` 事先建好时 `uninstall.sh` 也不删它 | 是 |

@@ -3,7 +3,7 @@
 #   sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/install.sh)"
 # 装到 ~/.local/share/vonvon-bot/server，数据目录是 ~/.vonvon-bot。已经装过服务端就什么都不动。
 # Mac、Windows 用桌面端安装包（里面带着服务端）：不是 Linux 就什么都不做、退出 2（owner 2026-11-01）。
-# 用 root 运行也照装，只提示风险（owner 2026-11-03）。
+# 用 root 运行也照装，不另外提示，和 Paseo、Orca 一样（owner 2026-11-03）。
 # 退出码：0 装好了或已经装过；1 设置命令或后台服务失败；2 环境不支持；3 下载失败；4 校验没通过。
 # 整个脚本只定义函数，最后一行才调用 main：下载中途断了，sh 读到半截脚本什么也不做。不读标准输入。
 set -eu
@@ -38,11 +38,6 @@ show_output() {
 
 download() {
   curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 -o "$2" "$1" </dev/null
-}
-
-check_root() {
-  if [ "$(id -u 2>/dev/null || true)" != 0 ]; then return 0; fi
-  say "你正在用 root 安装，Bot 和它启动的 AI 代理都会有整台机器的权限。用 Claude 时「完全访问」在 root 下用不了（Claude Code 不允许），要用就换普通用户装，说明见 ${GUIDE_URL}#no-root 。"
 }
 
 # 安装根里的 bin/vonvon 是服务端的启动器，而且能运行。
@@ -308,7 +303,6 @@ main() {
   ROOT="$HOME/.local/share/vonvon-bot/server"
   DATA="$HOME/.vonvon-bot"
   if already_installed; then exit 0; fi
-  check_root
   if [ -z "$PUBKEY_PEM" ]; then fail 4 "这份安装脚本没有带发布公钥，不能用来安装。请用官网上的安装命令。"; fi
   need_tools
   pick_target

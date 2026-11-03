@@ -746,7 +746,7 @@ owner 说过"崩溃报错就好了"，让 Claude 斟酌。自动重启是 Claude
 
 **只装服务端（只在 Linux，0.9.0）。** 一条命令只装服务端、`vonvon` 命令和开机后自动运行的后台服务，再用别的设备上的桌面端连过来管（3.14）。Linux 没有桌面端，这就是它的命令行版（0.7.0 没发 Linux 版，owner 2026-10-26；0.9.0 第一次发）。Mac、Windows 不做只装服务端，也不用命令行装：下载桌面端安装包，服务端在里面（owner 2026-11-01）。服务端包只有 Linux x64、arm64 两个（glibc），自带 Node，不发源码（压缩、不带 source map 和类型声明），和 Mac、Windows 安装包放在同一个 https://dl.vonvon.cc：
 1. 一条命令：`curl -fsSL https://dl.vonvon.cc/bot/server/install.sh | sh`。装在用户自己的目录里（`~/.local/share/vonvon-bot/server/`），数据目录照旧是 `~/.vonvon-bot`。在 Mac 上跑这条命令，脚本什么都不动，只打印一句让用户到 https://vonvon.cc/get/ 下载安装包（安装包里已经带了服务端和 `vonvon` 命令），退出非零；别的系统同样不动，说只支持 Linux。
-2. root 也照装（owner 2026-11-03，原来 2026-10-31 定的是默认拒绝、加 `VONVON_ALLOW_ROOT=1` 才装）：脚本先说一句风险，Bot 和 AI 代理都有整台机器的权限，用 Claude 时「完全访问」在 root 下用不了（Claude Code 自己不允许），要用就换普通用户装；然后照常安装。已经装过时不说这句。Linux 只支持 glibc 的发行版，Alpine 这类 musl 的脚本明说不支持。
+2. root 也照装，不另外提示（owner 2026-11-03：和 Paseo、Orca 一样；Claude 在 root 下能不能用「完全访问」是 Claude Code 自己的事，Vonvon 不管。原来 2026-10-31 定的是默认拒绝、加 `VONVON_ALLOW_ROOT=1` 才装）。Linux 只支持 glibc 的发行版，Alpine 这类 musl 的脚本明说不支持。
 3. 脚本用签名清单里的哈希核对下载的包，有 openssl 3 时再验签名，没有就明说没验、信任根是 HTTPS 和 dl.vonvon.cc；然后执行 `vonvon service install --linger` 装 systemd 用户服务。没有 systemd（容器）、连不上这个账号的 systemd（用 sudo 切过来时常见）时，退回直接启动一次，并说明崩溃后不会自动重启、之后怎么装成后台服务。
 4. 装好说"装好了。Vonvon Bot 已在后台运行，开机自动启动。"（开不了开机自动启动时多一句可选提示，见上面"Linux"一条）；不打印连接链接，只提示试一下 `vonvon --version`，要从别的电脑连过来管就看官网说明 https://vonvon.cc/guide/remote/。
 5. 在那台设备上把 Codex 或 Claude 配置好（账号或自定义 API 都行，3.11），然后从别的设备连过来走首次运行清单（3.14）。不连也行：`vonvon bot add` 在终端里扫码建 bot，`vonvon bot status` 看清单各步，`vonvon group bind` 绑群，`vonvon settings get`、`set` 改设置。

@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { afterLinuxInstall, LINGER_QUESTION, runServiceCommand, runServiceStatus, type AfterInstallDependencies, type LingerChoice, type ServiceCommandDependencies } from '../src/cli/commands/service';
 import { commandFailure } from '../src/cli/command-error';
-import { ROOT_WARNING, rootWarning } from '../src/cli/root-warning';
 import { acquireMutex, closeMutex } from '../src/config/data-access';
 import type { PidLockInfo } from '../src/server/pid-lock';
 import { classifyServiceFailure, readServiceActionRecord } from '../src/service/action-report';
@@ -163,7 +162,7 @@ describe('Linux: linger and the user manager (s20a)', () => {
     await expect(after('off', { enableLinger: failed.d.enableLinger }).run('ask')).resolves.toBe('off');
   });
   const linux = (fields: Partial<NonNullable<ServiceCommandDependencies['linux']>> = {}) => ({
-    ...absent, getuid: () => 1000,
+    ...absent,
     linux: { afterInstall: vi.fn(async (): Promise<'on' | 'off'> => 'on'), afterUninstall: vi.fn(async () => undefined), problem: vi.fn(async () => undefined), user: 'ops', ...fields },
   });
   // main 必败 (the last line): a linger that did not take failed the whole install with exit 1 (LINGER-1)
@@ -201,7 +200,7 @@ describe('Linux: linger and the user manager (s20a)', () => {
     await runServiceCommand('install', installed, { linger: 'on' }, linux({ afterInstall: async () => 'off', user: 'alice smith' }), io);
     expect(JSON.parse(out)).not.toHaveProperty('lingerUser');
     out = '';
-    await runServiceCommand('install', installed, {}, { ...absent, getuid: () => 501 }, io);
+    await runServiceCommand('install', installed, {}, absent, io);
     expect(JSON.parse(out)).toMatchObject({ ok: true, linger: 'unsupported', notes: [] });
   });
   it.each([
@@ -246,21 +245,6 @@ describe('Linux: linger and the user manager (s20a)', () => {
     // the user manager answered but is not running: no cause the script can work around
     const down = { install: vi.fn(async () => outcome('install_refused', { detail: 'User manager unavailable: starting' })), uninstall: vi.fn() };
     expect(commandFailure(await runServiceCommand('install', down, {}, linux()).catch((caught: unknown) => caught))).toMatchObject({ exitCode: 1, error: { kind: 'failed' } });
-  });
-  // main 必败: nothing warned a root install
-  it('warns a root install: on stderr, or in the notes with --json', async () => {
-    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-    vi.spyOn(process.stdout, 'write').mockReturnValue(true);
-    const installed = { install: vi.fn(async () => outcome('installed')), uninstall: vi.fn() };
-    await runServiceCommand('install', installed, {}, { ...absent, getuid: () => 0 });
-    expect(stderr).toHaveBeenCalledWith(`${ROOT_WARNING}\n`);
-    stderr.mockClear();
-    let out = '';
-    await runServiceCommand('install', installed, {}, { ...absent, getuid: () => 0 }, { json: true, write: text => { out += text; } });
-    expect(stderr).not.toHaveBeenCalled();
-    expect(JSON.parse(out).notes).toEqual([ROOT_WARNING]);
-    expect(rootWarning(() => 1000)).toBeUndefined();
-    expect(rootWarning(() => undefined)).toBeUndefined();
   });
   it('explains an unavailable user manager and a linger left on by uninstall', async () => {
     const hint = '当前终端没有 XDG_RUNTIME_DIR（用 sudo -u 或 su 切到这个账号时常见）。';
