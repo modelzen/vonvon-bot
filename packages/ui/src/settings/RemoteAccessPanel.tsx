@@ -53,10 +53,11 @@ function NameForm({label, initial, onSave, onDone}: {label: string; initial: str
 }
 
 /**
- * devices-ui-3 4.4: 应用与启动 → 允许别的设备连接, of the device shown. Read when it opens, every 10 seconds while the page
- * is visible, and when the device says a client paired or was revoked. The link lives in this component only.
+ * devices-ui-3 4.4: 设备 → 允许别的设备连接 (on 应用与启动 until owner 2026-11-03 moved it), of the device shown. Read when
+ * it opens, every 10 seconds while the page is visible, and when the device says a client paired or was revoked. The link
+ * lives in this component only. `tailscaleAdvice`: false where the page already says to use Tailscale (the devices list).
  */
-export function RemoteAccessPanel() {
+export function RemoteAccessPanel({tailscaleAdvice = true}: {tailscaleAdvice?: boolean} = {}) {
   const client = useClient();
   const where = useActiveDevice();
   const [status, setStatus] = useState<DeviceStatus>();
@@ -151,7 +152,7 @@ export function RemoteAccessPanel() {
   };
   const confirmed = confirm ? confirmedRequest(confirm, ticked) : undefined;
   return <RemoteAccessView where={where} status={status} clients={clients} rows={rows} picked={picked} link={link} gone={gone} now={now}
-    busy={busy} notice={notice} readError={readError} renaming={renaming}
+    busy={busy} notice={notice} readError={readError} renaming={renaming} tailscaleAdvice={tailscaleAdvice}
     onPick={setPicked} onRefresh={() => void read(true)}
     onEnable={() => picked && void act(enableStep(rows, picked, where, status?.clients.total ?? 0))}
     onDisable={row => void act(disableStep(row, where))}
@@ -189,6 +190,8 @@ type ViewProps = {
   busy: boolean; notice?: {text: string; error?: boolean; about?: About}; readError?: string; renaming?: string; dialog?: ReactNode;
   /** The link was just copied: 已复制 shows beside 复制. */
   copied?: boolean;
+  /** Say to use Tailscale while no Tailscale address is listed (default); the devices page says it once, above. */
+  tailscaleAdvice?: boolean;
   onPick: (host: string) => void; onRefresh: () => void; onEnable: () => void; onDisable: (row: AddressRow) => void; onReconfirm: (row: AddressRow) => void;
   onPair: () => void; onCopy: () => void; onRename: (target: string) => void; renameForm: (target: string) => ReactNode; onRevoke: (client: ClientRecord) => void;
 };
@@ -196,9 +199,11 @@ type ViewProps = {
 export function RemoteAccessView(props: ViewProps) {
   const {where, status, clients, rows, picked, link, busy} = props;
   const radio = useId();
-  if (!status) return <SettingsGroup label={panelTitle(where)} id={settingAnchor(SECTION)}>
+  // In the same wrapper as once read, so the page around it lays it out alike meanwhile. The same `key` keeps the group's
+  // element once read: a search for 允许别的设备连接 or 地址 lands on it while it still reads, and keeps its focus (审查 P3).
+  if (!status) return <div className="remote-access"><SettingsGroup key="address" label={panelTitle(where)} id={settingAnchor(SECTION)}>
     <SettingsRow className="remote-loading" title={props.readError ?? '正在读取…'}/>
-  </SettingsGroup>;
+  </SettingsGroup></div>;
   const open = rows.find(row => row.enabled);
   const switching = open && picked && picked !== open.host;
   const blocked = linkBlocked(rows);
@@ -208,7 +213,7 @@ export function RemoteAccessView(props: ViewProps) {
     <InlineNotice title={props.notice.error ? '没办成' : '好了'} tone={props.notice.error ? 'danger' : 'success'}><CopyText text={props.notice.text}/></InlineNotice>;
   return <div className="remote-access">
     {props.readError && <InlineNotice title="没读到最新状态" tone="warning">{props.readError}</InlineNotice>}
-    <SettingsGroup label={panelTitle(where)} id={settingAnchor(SECTION)}
+    <SettingsGroup key="address" label={panelTitle(where)} id={settingAnchor(SECTION)}
       action={<IconButton label="刷新" size="sm" variant="ghost" disabled={busy} onClick={props.onRefresh}><RefreshCw size={14}/></IconButton>}
       footer={<CopyText text={portHint(where)}/>}>
       <SettingsRow title="设备名字" description={props.renaming === 'device' ? props.renameForm('device') : '别的设备配对时看到的名字。'}
@@ -240,7 +245,7 @@ export function RemoteAccessView(props: ViewProps) {
       <SettingsRow title="端口" value={String(status.remote.port)}/>
     </SettingsGroup>
     {noticeAbout('address')}
-    {!rows.some(row => row.kind === 'tailscale') && <TailscaleAdvice/>}
+    {props.tailscaleAdvice !== false && !rows.some(row => row.kind === 'tailscale') && <TailscaleAdvice/>}
     <SettingsGroup label={LINK_SECTION} id={settingAnchor(LINK_SECTION)} footer={LINK_HELP}>
       {link ? <div className="remote-link">
         <input readOnly aria-label="连接链接" value={link.text} onFocus={event => event.currentTarget.select()} onClick={event => event.currentTarget.select()}/>

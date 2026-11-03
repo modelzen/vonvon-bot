@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import {expect, it, vi} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
 import type {ClientRecord, DeviceStatus} from '@vonvon/protocol';
@@ -120,7 +121,7 @@ it('lists the paired clients with who brought them, marks the new one and the ca
   expect(newest).toContain('这台电脑');
   expect(newest).not.toContain('本机');
   expect(newest).toContain('命令行 · 上次连接 1 分钟前，来自 100.64.0.20 · 由「Clay 的 MacBook」带进来');
-  expect(newest).toContain('这是你现在用的这台电脑。要断开，到「设备」页删掉「机房 Linux」。');
+  expect(newest).toContain('这是你现在用的这台电脑。要断开，在上面的设备列表里删掉「机房 Linux」。');
   expect(newest).not.toContain('撤销');
   expect(first).toContain('在「机房 Linux」上生成的链接');
   expect(first).toContain('撤销');
@@ -138,6 +139,8 @@ it('says why it has nothing to show, and gives the Tailscale advice without a Ta
   expect(text(view({readError: '「机房 Linux」上的 Vonvon Bot 太旧，不支持这里的设置。'}))).toContain('太旧，不支持这里的设置');
   const bare: DeviceStatus = {...status([]), remote: {port: 7767, addresses: [], candidates: [{host: '192.168.1.9', kind: 'lan'}]}};
   expect(text(view({status: bare}))).toContain('推荐用 Tailscale');
+  // On 设备 (owner 2026-11-03) the list above already says it: once on the page (修之前必败: it said it twice)
+  expect(text(view({status: bare, tailscaleAdvice: false}))).not.toContain('推荐用 Tailscale');
   const none: DeviceStatus = {...status([]), remote: {port: 7767, addresses: [], candidates: []}};
   expect(text(view({status: none}))).toContain('这台设备现在没有别的设备能连过来的地址。');
 });
@@ -148,8 +151,8 @@ it('says why it has nothing to show, and gives the Tailscale advice without a Ta
 it('puts every search entry of this panel inside the section it names, with a link and without', () => {
   const snapshot = {agents: [], groups: [], projects: [], memberships: []} as unknown as Parameters<typeof searchEntries>[0];
   const sections = ['允许别的设备连接', '连接链接', '已配对的设备'];
-  const ours = searchEntries(snapshot).filter(entry => entry.destination.page === 'application' && sections.includes(entry.destination.section ?? ''));
-  expect(ours.map(entry => entry.title)).toEqual(expect.arrayContaining(['设备名字', '地址', '端口', '连接链接', '已配对的设备']));
+  const ours = searchEntries(snapshot).filter(entry => entry.destination.page === 'devices' && sections.includes(entry.destination.section ?? ''));
+  expect(ours.map(entry => entry.title)).toEqual(expect.arrayContaining(['允许别的设备连接', '设备名字', '地址', '端口', '连接链接', '已配对的设备']));
   const st = status([{host: '100.64.0.10', kind: 'tailscale', enabledAt: 1, state: 'listening'}]);
   const clients: ClientsReply = {kind: 'clients', generation: 1, clients: [client('cl_aaaaaaaaaaaaaaaa', 'Clay 的 MacBook')]};
   for (const html of [view({status: st, clients}), view({status: st, clients, link: {text: 'vonvon://pair#example', expiresAt: now + 552_000}})]) {
@@ -164,4 +167,12 @@ it('puts every search entry of this panel inside the section it names, with a li
       expect(found, `${entry.title}: field ${field} in ${section}`).toBe(true);
     }
   }
+});
+// 审查 P3 (owner 2026-11-03 move): searching 允许别的设备连接 or 地址 lands on the group while it still reads; once read, React
+// must keep that element, or the focus falls back to the page (seen in a browser: activeElement BODY). A static render cannot
+// show React keeping it, so: the group has the same key in both. 修之前必败
+it('keeps the address group\'s element from 正在读取… to read, so a search keeps its focus', () => {
+  const source = readFileSync(new URL('../src/settings/RemoteAccessPanel.tsx', import.meta.url), 'utf8');
+  const view = source.slice(source.indexOf('export function RemoteAccessView'));
+  expect(view.match(/<SettingsGroup key="address" label=\{panelTitle\(where\)\} id=\{settingAnchor\(SECTION\)\}/g)).toHaveLength(2);
 });
