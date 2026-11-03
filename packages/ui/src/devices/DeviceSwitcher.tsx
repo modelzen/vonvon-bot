@@ -18,11 +18,12 @@ function focusItem(menu: HTMLElement | null, which: Focus) {
 
 /**
  * Every device, then 添加设备… and 管理设备…. The items leave the Tab order (arrow keys move between them), so Tab leaves
- * the menu and closes it. `autoFocus`: the item to focus once it opens, when it was opened by keyboard.
+ * the menu and closes it; Shift+Tab goes back to the trigger (`onLeave`). `autoFocus`: the item to focus once it opens,
+ * when it was opened by keyboard.
  */
-export function DeviceSwitcherMenu({state, now, onPick, onAdd, onManage, menuRef, autoFocus}: {
+export function DeviceSwitcherMenu({state, now, onPick, onAdd, onManage, onLeave, menuRef, autoFocus}: {
   state: DevicesState; now: number; onPick: (id: string) => void; onAdd: () => void; onManage: () => void;
-  menuRef?: RefObject<HTMLDivElement | null>; autoFocus?: Focus;
+  onLeave?: () => void; menuRef?: RefObject<HTMLDivElement | null>; autoFocus?: Focus;
 }) {
   const own = useRef<HTMLDivElement>(null);
   const menu = menuRef ?? own;
@@ -30,6 +31,12 @@ export function DeviceSwitcherMenu({state, now, onPick, onAdd, onManage, menuRef
   // Once, as it opens.
   useEffect(() => { if (autoFocus) focusItem(menu.current, autoFocus); }, []);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    // The trigger is inside the switcher, so focus landing there would not close the menu.
+    if (event.key === 'Tab' && event.shiftKey && onLeave) {
+      event.preventDefault();
+      onLeave();
+      return;
+    }
     const items = enabledItems(menu.current);
     if (!items.length) return;
     const at = items.indexOf(document.activeElement as HTMLButtonElement);
@@ -105,7 +112,7 @@ export function DeviceSwitcher({onManage}: {onManage: () => void}) {
     {open && <DeviceSwitcherMenu state={state} now={now} menuRef={menu} autoFocus={focusOnOpen}
       onPick={id => choose(() => { if (id !== current.id) switchTo(id); })}
       onAdd={() => choose(() => setAdding(true))}
-      onManage={() => choose(onManage)}/>}
+      onManage={() => choose(onManage)} onLeave={() => { trigger.current?.focus(); setOpen(false); }}/>}
     {adding && <AddDeviceDialog onClose={() => setAdding(false)} onSwitch={switchTo}/>}
   </div>;
 }
