@@ -16,7 +16,7 @@ import {
 } from './remote-access-presentation';
 import './remote-access.css';
 
-type Where = Pick<ActiveDevice, 'isRemote' | 'name'>;
+type Where = Pick<ActiveDevice, 'isRemote' | 'name' | 'platform'>;
 /** `host`, `port`: the open address and port it was made on (Codex 审查 267-2、269-1). */
 type Link = {text: string; expiresAt: number; host: string; port: number};
 /** Why the last link is gone: it expired, or its address or port changed. */

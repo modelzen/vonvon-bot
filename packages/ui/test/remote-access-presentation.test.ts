@@ -116,6 +116,11 @@ it('names the device: 本机 on this computer, 「X」 on a remote one', () => {
   expect(panelTitle(remote)).toBe('允许别的设备连接「机房 Linux」');
   expect(portHint(remote)).toBe('要改端口，在「机房 Linux」的终端运行 `vonvon remote port <端口>`；改完已配对的设备要粘一次新链接。');
   expect(portHint({...remote, name: '办公室 Windows', platform: 'windows'})).toBe('Windows 上这一版改不了端口；端口被别的程序占着时，关掉那个程序后会自己开始。');
+  // 0.9.0 Windows 验收 322: 取消 on Windows's firewall question left 监听中 with nothing getting in, and no word of it. main 必败
+  expect(portHint({...local, platform: 'windows'})).toBe('开启后 Windows 可能会问是否允许 Vonvon Bot 访问网络，点「允许」。'
+    + '点过「取消」的话别的设备连不上：到 Windows 安全中心 → 防火墙和网络保护 → 高级设置 → 入站规则，删掉名为 Vonvon Bot 的「阻止」规则（要管理员权限），再在这里关掉、重新开启，Windows 会再问一次。'
+    + 'Windows 上这一版改不了端口；端口被别的程序占着时，关掉那个程序后会自己开始。');
+  expect(portHint({...local, platform: 'macos'})).not.toContain('防火墙');
   expect(readErrorText('unsupported', 'x', remote)).toBe('「机房 Linux」上的 Vonvon Bot 太旧，不支持这里的设置。');
   expect(riskFromReply('100.70.0.3 不在 Tailscale…（CGNAT），开启后同一运营商的其他用户也可能连到这台设备。确定要开启请加 `--allow-public`。')).toBe('100.70.0.3 不在 Tailscale…（CGNAT），开启后同一运营商的其他用户也可能连到这台设备。勾选「我了解风险」后再开启。');
   expect(enableErrorText('internal', '磁盘满了')).toBe('开不了：磁盘满了');
