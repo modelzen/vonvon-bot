@@ -67,9 +67,9 @@ export function DevicesPanel() {
     <ul className="device-list">{state.devices.map(row => {
       const view = rowView(row, now, localName);
       const local = row.id === 'local';
-      // As before: this computer while shown has no 切换到, nor does a device shown and online (it was greyed out); one
-      // shown and not online keeps it, to connect again.
-      const canSwitch = !(local && row.current) && !(row.current && row.status === 'online');
+      // The device shown is marked 当前 and has no 切换到. Online it was greyed out; while it reconnects, switching to it does
+      // nothing (the shell retries only a failed one, shown outside App), and the 连接断了 banner offers 现在重试.
+      const canSwitch = !row.current;
       const menu: RowMenuItem[][] = local ? [] : [
         [...view.repair && canSwitch ? [{label: '切换到', icon: ArrowRightLeft, onSelect: () => switchTo(row.id)}] : [],
           {label: '改名', icon: Pencil, onSelect: () => setRenaming(row.id)}],

@@ -156,7 +156,7 @@ const scenes: {name: string; remote?: boolean; open?: string; via?: string; some
     await panel(page);
     await page.getByRole('button', {name: '生成连接链接'}).click();
     await page.getByRole('button', {name: '复制'}).click();
-    await page.getByText('已复制。').waitFor();
+    await page.getByText('已复制', {exact: true}).waitFor();
     await page.getByText('连接链接').first().scrollIntoViewIfNeeded();
   }},
   {name: 'served-720', open: '100.64.0.10', some: true, width: 720, steps: addressEnd},

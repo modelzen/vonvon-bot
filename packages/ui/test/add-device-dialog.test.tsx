@@ -42,9 +42,8 @@ it('offers another try with the same link for other failures', () => {
 
 it('shows each address with its kind, and stops at the link expiry', () => {
   const html = stage({stage: 'confirm', link: 'x', name: '机房', preview});
-  // the device's card names it; each address with its kind
-  expect(html).toContain('device-add__preview');
-  expect(html).toContain('机房');
+  // the device's card names it (not only the name box under it); each address with its kind
+  expect(html).toMatch(/class="device-add__preview".*class="device-add__name"[^>]*>机房</);
   expect(text(html)).toContain('Tailscale（推荐） 100.64.0.10:7767');
   expect(text(html)).toContain('局域网 192.0.2.10:7767');
   expect(html).toContain('还剩 8 分钟');

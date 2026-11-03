@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode} from 'react';
-import {Copy, Pencil, RefreshCw, Trash2} from 'lucide-react';
+import {Check, Copy, Pencil, RefreshCw, Trash2} from 'lucide-react';
 import type {ClientRecord, DeviceReply, DeviceRequest, DeviceStatus} from '@vonvon/protocol';
 import {useActiveDevice, useClient, type ActiveDevice} from '../client-context';
 import {clientIcon, CopyText, RowMenu, TailscaleAdvice, useNow} from '../devices/device-bits';
@@ -28,8 +28,8 @@ const validName = (name: string): boolean => name.trim().length >= 1 && name.tri
 type About = 'address' | 'link' | 'clients';
 type Notice = {text: string; error?: boolean; about: About};
 const aboutOf = (request: DeviceRequest): About => request.type === 'pair' ? 'link' : request.type === 'revokeClient' || request.type === 'renameClient' || request.type === 'clients' ? 'clients' : 'address';
-/** A notice that something went well goes after a while; one that did not stays. */
-const NOTICE_MS = 4_000;
+/** 复制 says 已复制 beside it for a moment, in place of a notice. */
+const COPIED_MS = 2_000;
 
 /** A name typed and not saved is a draft, as the devices page's (Codex 审查 237-1). */
 function NameForm({label, initial, onSave, onDone}: {label: string; initial: string; onSave: (name: string) => Promise<void>; onDone: () => void}) {
@@ -69,6 +69,8 @@ export function RemoteAccessPanel() {
   const [ticked, setTicked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
+  /** Which 复制 is being confirmed (a count, so a second click restarts the moment). */
+  const [copied, setCopied] = useState<number>();
   const [renaming, setRenaming] = useState<string>();
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
@@ -96,10 +98,10 @@ export function RemoteAccessPanel() {
     return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', visible); off(); };
   }, [client, read, readClients]);
   useEffect(() => {
-    if (!notice || notice.error) return;
-    const timer = setTimeout(() => setNotice(current => current === notice ? undefined : current), NOTICE_MS);
+    if (copied === undefined) return;
+    const timer = setTimeout(() => setCopied(current => current === copied ? undefined : current), COPIED_MS);
     return () => clearTimeout(timer);
-  }, [notice]);
+  }, [copied]);
   const rows = useMemo(() => status ? addressRows(status) : [], [status]);
   useEffect(() => { if (!picked || !rows.some(row => row.host === picked)) setPicked(defaultPick(rows)); }, [rows, picked]);
   const now = useNow(link ? 1_000 : 60_000);
@@ -138,6 +140,7 @@ export function RemoteAccessPanel() {
     const open = rows.find(row => row.enabled);
     if (linkBlocked(rows) || !open || port === undefined) return;
     setGone(undefined);
+    setCopied(undefined);
     const reply = await send({type: 'pair'});
     if (reply?.kind === 'pairingLink') setLink({text: reply.link, expiresAt: reply.expiresAt, host: open.host, port});
   }
@@ -154,7 +157,9 @@ export function RemoteAccessPanel() {
     onDisable={row => void act(disableStep(row, where))}
     onReconfirm={row => void act({request: {type: 'enable', host: row.host}})}
     onPair={() => void pair()}
-    onCopy={() => void navigator.clipboard.writeText(link?.text ?? '').then(() => setNotice({text: '已复制。', about: 'link'}), () => setNotice({text: '没能复制，请选中链接手动复制。', error: true, about: 'link'}))}
+    copied={copied !== undefined}
+    onCopy={() => void navigator.clipboard.writeText(link?.text ?? '').then(() => { setNotice(undefined); setCopied(count => (count ?? 0) + 1); },
+      () => { setCopied(undefined); setNotice({text: '没能复制，请选中链接手动复制。', error: true, about: 'link'}); })}
     onRename={setRenaming}
     renameForm={target => <NameForm label={target === 'device' ? '设备名字' : '名字'} initial={target === 'device' ? status?.device.name ?? '' : clients?.clients.find(each => each.id === target)?.name ?? ''}
       onSave={name => rename(target === 'device' ? {type: 'rename', name} : {type: 'renameClient', clientId: target, name})} onDone={() => setRenaming(undefined)}/>}
@@ -182,6 +187,8 @@ export function ConfirmPanel({confirm, ticked, busy, ready, onTick, onCancel, on
 type ViewProps = {
   where: Where; status?: DeviceStatus; clients?: ClientsReply; rows: AddressRow[]; picked?: string; link?: Pick<Link, 'text' | 'expiresAt'>; gone?: Gone; now: number;
   busy: boolean; notice?: {text: string; error?: boolean; about?: About}; readError?: string; renaming?: string; dialog?: ReactNode;
+  /** The link was just copied: 已复制 shows beside 复制. */
+  copied?: boolean;
   onPick: (host: string) => void; onRefresh: () => void; onEnable: () => void; onDisable: (row: AddressRow) => void; onReconfirm: (row: AddressRow) => void;
   onPair: () => void; onCopy: () => void; onRename: (target: string) => void; renameForm: (target: string) => ReactNode; onRevoke: (client: ClientRecord) => void;
 };
@@ -240,6 +247,7 @@ export function RemoteAccessView(props: ViewProps) {
         <div className="remote-link__actions">
           <Button size="sm" variant="primary" icon={<Copy size={13} aria-hidden="true"/>} onClick={props.onCopy}>复制</Button>
           <Button size="sm" variant="ghost" disabled={busy || Boolean(blocked)} onClick={props.onPair}>再生成一个</Button>
+          <span className="remote-link__copied" role="status">{props.copied && <><Check size={13} aria-hidden="true"/>已复制</>}</span>
           <span className="remote-link__countdown">{linkCountdown(link.expiresAt, props.now)}</span>
         </div>
       </div> : <SettingsRow title="连接链接" description={blocked ?? (props.gone === 'moved' ? LINK_MOVED : props.gone === 'expired' ? LINK_EXPIRED : '生成后 10 分钟内有效。')}
@@ -250,9 +258,11 @@ export function RemoteAccessView(props: ViewProps) {
       {live.length ? live.map(record => {
         const self = record.id === clients?.self;
         const editing = props.renaming === record.id;
-        return <SettingsRow key={record.id} className="remote-client" icon={clientIcon(record.clientKind)} iconTone="gray"
-          title={<>{record.name}{isRecent(record, props.now) && <span className="remote-tag" data-tone="new">新</span>}{self && <span className="remote-tag">{SELF_TAG}</span>}</>}
-          description={editing ? props.renameForm(record.id) : <>
+        const Icon = clientIcon(record.clientKind);
+        // 改名 takes the name's place (title and description), on one line with the tile, as on the devices page.
+        return <SettingsRow key={record.id} className="remote-client" icon={<Icon size={16} strokeWidth={1.7} aria-hidden="true"/>} iconTone="gray"
+          title={editing ? props.renameForm(record.id) : <>{record.name}{isRecent(record, props.now) && <span className="remote-tag" data-tone="new">新</span>}{self && <span className="remote-tag">{SELF_TAG}</span>}</>}
+          description={editing ? undefined : <>
             {CLIENT_KIND_LABEL[record.clientKind] ?? record.clientKind} · 上次连接 {relativeTime(record.lastSeenAt, props.now)}，来自 {hostOf(record.lastAddress)} · {invitedByText(record, clients?.clients ?? [], where)}
             {self && <><br/>{selfText(where)}</>}
           </>}
