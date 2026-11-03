@@ -2,15 +2,16 @@ import {expect, it, vi} from 'vitest';
 import {isValidElement, type ReactNode} from 'react';
 import type {MachineReply, MachineRequestHandler} from '@vonvon/protocol';
 
-const hooks = vi.hoisted(() => ({state: [] as unknown[], index: 0}));
+const hooks = vi.hoisted(() => ({state: [] as unknown[], index: 0, effects: [] as Array<() => unknown>, devices: undefined as unknown}));
 vi.mock('react', async original => ({
   ...await original<typeof import('react')>(),
   useState: (initial: unknown) => {const at = hooks.index++; if (!(at in hooks.state)) hooks.state[at] = initial; return [hooks.state[at], (next: unknown) => {hooks.state[at] = typeof next === 'function' ? (next as (old: unknown) => unknown)(hooks.state[at]) : next;}];},
-  useEffect: () => {},
+  useEffect: (effect: () => unknown) => { hooks.effects.push(effect); },
   useRef: () => ({current: null}),
 }));
-vi.mock('../src/client-context', async original => ({...await original<typeof import('../src/client-context')>(), useShellCapabilities: () => undefined}));
+vi.mock('../src/client-context', async original => ({...await original<typeof import('../src/client-context')>(), useShellCapabilities: () => undefined, useDevicesState: () => hooks.devices}));
 import {MachinePanel} from '../src/management/MachinePanel';
+import {devicesState} from './devices-fixture';
 
 type Node = {props: Record<string, any>};
 const nodes = (node: ReactNode): Node[] => Array.isArray(node) ? node.flatMap(nodes)
@@ -27,8 +28,9 @@ const running: Extract<MachineReply, {type: 'status'}> = {
 const remote = {isRemote: true, name: '验收设备 1'};
 function panel(props: {onRestart?: () => void; remote?: typeof remote; quitKeepsDaemon?: boolean}) {
   hooks.state = [];
+  hooks.devices = undefined;
   const request = vi.fn<MachineRequestHandler>(async () => running);
-  const render = () => { hooks.index = 0; return MachinePanel({request, agents: [{id: 'a', name: 'A'}], ...props}); };
+  const render = () => { hooks.index = 0; hooks.effects = []; return MachinePanel({request, agents: [{id: 'a', name: 'A'}], ...props}); };
   render();
   hooks.state[0] = running; // the status the first read would have stored
   return {request, render};
@@ -66,4 +68,28 @@ it('says quitting keeps a daemon installed and registered on its own, and keeps 
   const stops = panel({});
   expect(text(stops.render())).toContain('关闭桌面窗口时 Bot 继续运行；手动退出桌面应用会停止后台和所有 Bot。');
   expect(text(dialog(stops.render()).props.children)).toBe('停止服务会中断正在进行的对话。关闭窗口不会停止后台；退出应用会停止后台和所有 Bot。');
+});
+
+// 0.9.0 Mac 验收 S-4: this computer's daemon stopped from outside; its settings said 状态未知 and 桌面端操作没有成功，请重试。
+it('says this computer\'s daemon is stopped or connecting, without an error, while the shell has it down', async () => {
+  hooks.state = [];
+  const request = vi.fn<MachineRequestHandler>(async () => { throw new Error('桌面端操作没有成功，请重试。'); });
+  const render = (props: {remote?: typeof remote} = {}) => { hooks.index = 0; hooks.effects = []; return MachinePanel({request, agents: [], ...props}); };
+  const read = async () => { for (const effect of hooks.effects) effect(); await new Promise(resolve => setTimeout(resolve)); return text(render()); };
+  hooks.devices = devicesState({id: 'local'}, {local: {status: 'offline'}});
+  render();
+  let page = await read();
+  expect(page).toContain('运行方式接收飞书消息并运行 Bot。已停止');
+  expect(page).toContain('后台没有连上，连上后再读取服务状态。');
+  expect(page).not.toContain('状态未知');
+  expect(page).not.toContain('桌面端操作没有成功');
+  hooks.devices = devicesState({id: 'local'}, {local: {status: 'connecting'}});
+  expect(await read()).toContain('运行方式接收飞书消息并运行 Bot。正在连接');
+  // Another device is shown: its status is unknown, whatever this computer's is.
+  expect(text(render({remote}))).toContain('状态未知');
+  // A page with no devices (the web page) keeps the error.
+  hooks.devices = undefined;
+  page = await read();
+  expect(page).toContain('状态未知');
+  expect(page).toContain('桌面端操作没有成功，请重试。');
 });
