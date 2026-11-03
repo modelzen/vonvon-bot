@@ -241,11 +241,16 @@ const scenes: Scene[] = [
     await page.keyboard.press('Tab');
     const afterTab = await open();
     await trigger(page).focus();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Shift+Tab');
+    const afterShiftTab = await open();
+    const focusAfterShiftTab = await page.evaluate(() => document.activeElement?.getAttribute('aria-label'));
+    await trigger(page).focus();
     await page.keyboard.press('ArrowUp');
     const arrowUp = await focused();
     await page.keyboard.press('ArrowDown');
     const wrapped = await focused();
-    return {f1, f2, f3, afterEscape, openAfterEscape, afterTab, arrowUp, wrapped};
+    return {f1, f2, f3, afterEscape, openAfterEscape, afterTab, afterShiftTab, focusAfterShiftTab, arrowUp, wrapped};
   }},
   {name: 'switcher-many', active: ready, extra: {many: true}, steps: async page => {
     await trigger(page).click();
