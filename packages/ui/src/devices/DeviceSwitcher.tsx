@@ -99,7 +99,7 @@ export function DeviceSwitcher({onManage}: {onManage: () => void}) {
       <img className="device-switcher__logo" src="./vonvon-logo.png" alt=""/>
       <StatusDot tone={view.tone}/>
       <span className="device-switcher__name">{view.title}</span>
-      {view.tone !== 'green' && <span className="device-switcher__state">{`· ${view.status}`}</span>}
+      {view.tone !== 'green' && <span className="device-switcher__state">{` · ${view.status}`}</span>}
       <ChevronDown size={13} aria-hidden="true"/>
     </button>
     {open && <DeviceSwitcherMenu state={state} now={now} menuRef={menu} autoFocus={focusOnOpen}

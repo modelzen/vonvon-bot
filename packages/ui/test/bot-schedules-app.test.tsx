@@ -67,3 +67,14 @@ it('opens a group page on its 任务 tab from the Bot page\'s 任务 pane, and B
   page.find(AppShell)[0]!.props.onBack();
   expect(render().find(BotSchedules).map(node => node.props.agentId)).toEqual([agentId]);
 });
+
+it('keeps the web\'s brand: without the shell\'s devices, App gives the header no device switcher', () => {
+  vi.stubGlobal('window', {addEventListener: () => {}, removeEventListener: () => {}});
+  vi.stubGlobal('document', {documentElement: {dataset: {}}});
+  h.client.watchSnapshots = listener => {listener(snapshot); return () => {};};
+  render();
+  const shell = render().find(AppShell);
+  expect(shell).toHaveLength(1);
+  // AppShell shows the brand only when this is undefined: an element that renders nothing would leave the top-left empty.
+  expect(shell[0]!.props.deviceSwitcher).toBeUndefined();
+});
