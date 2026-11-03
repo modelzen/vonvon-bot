@@ -224,8 +224,10 @@ describe('__standalone-teardown', () => {
       const f = await fixture();
       const link = join(f.base, 'home-link');
       await symlink(f.home, link);
+      // the home by its real path: on macOS the temp directory is itself reached through a link (/var is /private/var)
+      const real = await realpath(f.home);
       const via = (which: 'real' | 'link') => {
-        const home = which === 'link' ? link : f.home;
+        const home = which === 'link' ? link : real;
         return { home, root: join(home, '.local', 'share', 'vonvon-bot', 'server') };
       };
       const before: Record<string, string> = { '.bashrc': 'export KEEP=1', '.profile': 'export A=1\n' };
