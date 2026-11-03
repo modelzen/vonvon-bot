@@ -13,6 +13,21 @@ export function isDocsPath(path) {
   return path === 'README.md' || /^docs\/(?:[^/]+\/)*[^/]+\.md$/.test(path);
 }
 
+/**
+ * The Linux server's packages, install scripts, signing key and release: always full, so the Linux job also builds a
+ * package and runs install.sh for real (ci-run.mjs install smoke).
+ */
+export function isServerReleasePath(path) {
+  return /^scripts\/(?:(?:un)?install\.sh|install-smoke\.mjs|build-server\.mjs|publish-server\.mjs|server-[^/]+\.(?:mjs|json))$/.test(path) ||
+    path === 'packages/daemon/server-update.json';
+}
+
+/** A reason only a collection error gives: the scope job fails rather than letting the gate pass on a guess. */
+export function isCollectionFailure(reason) {
+  return Boolean(reason) && !['manual dispatch', 'main integration', 'ci:all label', 'platform label on docs'].includes(reason) &&
+    !['shared or unknown path:', 'shared package:', 'shared package config:', 'server install/release script:'].some(prefix => reason.startsWith(prefix));
+}
+
 export function parseChangedPaths(bytes) {
   if (!bytes.length || bytes.at(-1) !== 0 || bytes.length > maxDiffBytes) return null;
   const paths = decoder.decode(bytes).slice(0, -1).split('\0');
@@ -71,6 +86,11 @@ export function planScope({ eventName, event, paths, base = '', head = '', sourc
   let fullReason = '';
   for (const path of paths) {
     if (isDocsPath(path)) continue;
+    if (isServerReleasePath(path)) {
+      fullReason ||= `server install/release script: ${path}`;
+      for (const platform of allPlatforms) platforms.add(platform);
+      continue;
+    }
     const match = /^packages\/([^/]+)\//.exec(path);
     if (!match || !allPackages.includes(match[1])) {
       fullReason ||= `shared or unknown path: ${path}`;
@@ -178,9 +198,7 @@ function main() {
     appendFileSync(process.env.GITHUB_STEP_SUMMARY,
       `Scope: **${result.scope}**. Ready: **${result.ready}**. Packages: ${escapeHtml(JSON.stringify(result.packages))}. Platforms: ${escapeHtml(JSON.stringify(result.platforms))}.\n\nReason: ${escapeHtml(explanation)}\n\nChanged paths:\n\n<pre>${escaped}</pre>\n\n`);
   }
-  if (result.reason && !['manual dispatch', 'main integration', 'ci:all label'].includes(result.reason) &&
-    !result.reason.startsWith('shared or unknown path:') && !result.reason.startsWith('shared package:') &&
-    !result.reason.startsWith('shared package config:') && result.reason !== 'platform label on docs') {
+  if (isCollectionFailure(result.reason)) {
     console.error(`CI scope collection failed: ${result.reason}`);
     process.exitCode = 1;
   }

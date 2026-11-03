@@ -1,8 +1,9 @@
 import {useCallback, useContext, useEffect, useRef, useState, type ReactNode} from 'react';
 import {smartRulesText} from '@vonvon/protocol';
 import {Blocks, ChevronRight, Folder, GitBranch, Plus, RefreshCw, Search, X} from 'lucide-react';
-import {backendLabel, isKnownJudgeSelection, type AgentId, type AgentSettingsView, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
-import {useClient} from '../client-context';
+import {backendLabel, isKnownJudgeSelection, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
+import {useActiveDevice, useClient} from '../client-context';
+import {onDevice, updateServerText, whereName} from '../device-copy';
 import {useDirectoriesPicker} from '../directory-picker';
 import {Button, IconButton, InlineNotice, SelectControl, Toggle} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
@@ -45,7 +46,7 @@ const pathName = (path: string) => path.split(/[\\/]/).filter(Boolean).at(-1) ||
 const toggleItem = <T,>(items: T[], value: T, checked: boolean) => checked ? [...new Set([...items, value])] : items.filter(item => item !== value);
 
 function MissingSection() {
-  return <InlineNotice title="这项设置暂不可用" tone="warning">请更新并重新连接本机服务。</InlineNotice>;
+  return <InlineNotice title="这项设置暂不可用" tone="warning">{updateServerText(useActiveDevice())}</InlineNotice>;
 }
 export function useProviders(tools?: readonly ToolState[]) {
   return useProviderDiscovery(tools).providers;
@@ -84,6 +85,7 @@ function GroupSettingsLoader(props: Props) {
 
 export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, onOpenProviders, onOpenSecrets, responseHeader}: Omit<Props, 'scope'> & {view: ProjectSettingsView; refresh: () => Promise<void>}) {
   const client = useClient();
+  const where = useActiveDevice();
   const discovery = useProviderDiscovery(tools);
   const providers = discovery.providers;
   const outerReadonly = useContext(AnnouncedReadonlyMessages);
@@ -111,7 +113,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
     {notices.map(notice => <p className="settings-readonly-notice" role="status" key={`${notice.reason}:${notice.message}`}>{notice.message}</p>)}
     <div className="gd-page">
       {(tab === 'response' || (tab === 'model' && (discovery.checking || discovery.message))) && <div className="gd-provider-discovery" role="status">
-        {discovery.checking ? '正在检查 Provider 登录状态…' : discovery.message}
+        {discovery.checking ? '正在检查 Provider 是否可用…' : discovery.message}
         {!discovery.checking && <IconButton size="sm" variant="ghost" label="重新检查 Provider" title="重新检查 Provider" onClick={discovery.retry}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}
       </div>}
       {tab === 'capabilities' && <>
@@ -136,13 +138,13 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
         render={(draft, set, disabled, _commit, _resetKey, _discard, fieldIssues) => <ModelAccessFields fieldIssues={fieldIssues} botId={view.scope.botId} value={draft} onChange={set} disabled={disabled} providers={providers} onCatalog={rememberCatalog}
           onCheckProviders={discovery.retry} checkingProviders={discovery.checking}
           onOpenProviders={onOpenProviders} permissionName={sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)?.name} savedBackend={view.identity.backend}/>}
-        validate={value => providers.some(provider => provider.id === value.backend) ? modelAccessProblem(value, modelCatalog.current) : '此 Provider 当前不可用，请先安装并登录。'}/> : <MissingSection/>)}
+        validate={value => providers.some(provider => provider.id === value.backend) ? modelAccessProblem(value, modelCatalog.current) : `这个 Provider 现在不可用，先${onDevice(where, '安装')}并配置好。`}/> : <MissingSection/>)}
       {(tab === 'model' || tab === 'permission') && <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>}
       {tab === 'response' && <>
         {responseHeader}
         {view.identity.kind === 'smart' && <>
           {judgeSection ? <Editor title="决策模型" section={judgeSection} autoSave save={(patch, revision) => save('judge', patch, revision)}
-            validate={value => providerDecisionProblem(value.selection, providers, view.decisionModels)}
+            validate={value => providerDecisionProblem(value.selection, providers, view.decisionModels, undefined, where)}
             render={(draft, set, disabled, _commit, resetKey) => <DecisionFields key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection}
               onChange={selection => set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} catalogs={decisionCatalogs} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>}
           {sections.smartRules ? <Editor title="判断规则" section={sections.smartRules} save={(patch, revision) => save('smartRules', patch, revision)}
@@ -196,7 +198,7 @@ export function ModelAccessFields({botId, value, onChange, disabled, providers, 
       <div className="gd-model-provider-control"><SelectControl label="模型 Provider" getOptionIcon={providerIcon} className="gd-model-provider-select" options={choices} value={value.backend} disabled={disabled}
         onChange={backend => {if (!disabled && backend !== value.backend && providers.some(provider => provider.id === backend)) onChange({backend, models: [], efforts: [], modelEfforts: {}, modelServiceTiers: {}, defaultModel: undefined, defaultEffort: undefined});}}/>
         {!available && <span className="gd-model-provider-state">当前不可用</span>}
-        {onCheckProviders && <IconButton size="sm" variant="ghost" label="重新检查 Provider" title="重新检查 Provider 登录状态" disabled={checkingProviders} onClick={onCheckProviders}><RefreshCw size={14}/></IconButton>}</div>
+        {onCheckProviders && <IconButton size="sm" variant="ghost" label="重新检查 Provider" title="重新检查 Provider 是否可用" disabled={checkingProviders} onClick={onCheckProviders}><RefreshCw size={14}/></IconButton>}</div>
       {onOpenProviders && <Button size="sm" variant="ghost" onClick={onOpenProviders}>Provider 设置<ChevronRight size={13}/></Button>}
     </div>
     {permissionName && value.backend !== savedBackend && <p className="gd-model-compact-notice" role="status">换 Provider 后，权限仍是「{permissionName}」；自定义设置会清掉。</p>}
@@ -221,6 +223,8 @@ export function ModelAccessChoices({value, onChange, catalog, catalogControls, d
 
 export function WorkspaceFields({value, onChange, disabled}: {value: Workspace; onChange: (value: Workspace) => void; disabled: boolean}) {
   const pick = useDirectoriesPicker();
+  // The folders are the shown device's (devices-ui-2 第 8 节第 1 条).
+  const where = useActiveDevice();
   const [error, setError] = useState<string>();
   const [picking, setPicking] = useState(false);
   async function add(field: 'directories' | 'repositories') {
@@ -236,7 +240,7 @@ export function WorkspaceFields({value, onChange, disabled}: {value: Workspace; 
       <ul className="gd-directory-list">{value[field].map(path => <li className="gd-directory-row" key={path}>
         {field === 'directories' ? <Folder size={17}/> : <GitBranch size={17}/>}<span className="gd-directory-copy"><strong>{pathName(path)}</strong><small title={path}>{path}</small></span>
         <div className="gd-directory-actions">{field === 'directories' && (value.primary === path ? <span className="gd-primary-label">主目录</span> : <button className="gd-text-action" type="button" disabled={disabled || picking} onClick={() => onChange({...value, primary: path})}>设为主目录</button>)}
-          <button type="button" className="gd-icon-action" disabled={disabled || picking || field === 'directories' && value.primary === path} aria-label={`移除${pathName(path)}`} title={field === 'directories' && value.primary === path ? '请先选择其他主目录' : '移除引用，保留本机文件'} onClick={() => onChange({...value, [field]: value[field].filter(item => item !== path)})}><X size={14}/></button>
+          <button type="button" className="gd-icon-action" disabled={disabled || picking || field === 'directories' && value.primary === path} aria-label={`移除${pathName(path)}`} title={field === 'directories' && value.primary === path ? '请先选择其他主目录' : where.isRemote ? `移除引用，保留${whereName(where)}上的文件` : '移除引用，保留本机文件'} onClick={() => onChange({...value, [field]: value[field].filter(item => item !== path)})}><X size={14}/></button>
         </div>
       </li>)}</ul>
       {!value[field].length && <p className="gd-note">{field === 'directories' ? '尚未添加目录' : '尚未添加代码仓库'}</p>}
@@ -269,39 +273,4 @@ function SkillsList({skills, disabledPaths, disabled, onToggle, refresh}: {
       {selected && <dl className="gd-skill-facts"><div><dt>说明</dt><dd>{selected.description || '未提供说明'}</dd></div><div><dt>来源</dt><dd>{{workspace: '本群工作区', user: '用户目录', provider: 'Provider'}[selected.source]}</dd></div><div><dt>位置</dt><dd>{selected.path}</dd></div></dl>}
     </Dialog>
   </>;
-}
-export function AgentProfileSettings({botId, onSaved}: {botId: AgentId; onSaved?: () => void}) {
-  return <AgentProfileLoader key={botId} botId={botId} onSaved={onSaved}/>;
-}
-function AgentProfileLoader({botId, onSaved}: {botId: AgentId; onSaved?: () => void}) {
-  const client = useClient();
-  const [view, setView] = useState<AgentSettingsView>();
-  const [error, setError] = useState<string>();
-  const serial = useRef(0);
-  const refresh = useCallback(async () => {
-    const request = ++serial.current;
-    try {
-      const reply = await client.settings({type: 'read', scope: {kind: 'agent', botId}});
-      if (request !== serial.current) return;
-      if (reply.kind !== 'view' || !('administrators' in reply.view) || reply.view.scope.botId !== botId) throw new Error(reply.kind === 'refused' ? reply.message : 'Bot 设置暂不可用。');
-      setView(reply.view); setError(undefined);
-    } catch (failure) {if (request === serial.current) setError(failText(failure));}
-  }, [client, botId]);
-  useEffect(() => {void refresh(); return () => {serial.current++;};}, [refresh]);
-  return <div className="group-design-settings">{error && <InlineNotice title="读取未完成" tone="warning">{error}<IconButton size="sm" variant="ghost" label="重试" title="重试" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></InlineNotice>}
-    {view?.sections.role ? <>
-      {view.roleInfo?.mergedNotice && <p className="settings-readonly-notice" role="status">原来 AGENTS.md 里的内容已并到「其他说明」末尾。</p>}
-      {view.roleInfo?.oversized && <p className="settings-readonly-notice" role="status">这份角色设定比现在的上限长，能打开，下次修改时请精简。</p>}
-      {view.roleInfo?.integrity === 'changed' && <p className="settings-readonly-notice" role="status">角色设定文件在 vonvon 之外被改过。</p>}
-      <Editor title="角色设定" section={view.sections.role} initialDraft={view.roleInfo?.draft ? {identity: view.roleInfo.draft} : undefined} save={async (patch, revision) => {
-        const reply = await client.settings({type: 'save', edit: {scope: {kind: 'agent', botId}, section: 'role', patch, revision}});
-        if (reply.kind === 'saved' && reply.result.kind === 'saved') {await refresh(); onSaved?.();}
-        return reply;
-      }} render={(draft, set, disabled) => <>
-        <PersonaEditor label="身份与职责" value={draft.identity} onChange={identity => set({...draft, identity})} disabled={disabled} maxLength={500}/>
-        <p className="gd-note">{[...draft.identity].length} / 500</p>
-        <PersonaEditor label="其他说明" value={draft.notes} onChange={notes => set({...draft, notes})} disabled={disabled}/>
-      </>}/>
-    </> : view ? <MissingSection/> : !error && <p className="gd-empty" role="status">正在读取…</p>}
-  </div>;
 }

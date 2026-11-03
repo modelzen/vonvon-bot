@@ -12,12 +12,12 @@ afterEach(() => { for (const path of roots.splice(0)) rmSync(path, { recursive: 
 
 const PROJECT = { id: 'prj_0a1b2c3d', name: '支付组', createdAt: 1, revision: 1, workspace: { primary: '/work/pay', additional: [] }, memoryLimit: 2 };
 const OTHER = { id: 'prj_0a1b2c3e', name: '别的', createdAt: 1, revision: 1, workspace: { primary: '/work/other', additional: [] } };
-function setup(origin?: 'cli'): { call: (request: unknown) => Promise<MemoryReply>; data: string } {
+function setup(origin?: 'cli', landing?: MemoryAdminDeps['landing']): { call: (request: unknown) => Promise<MemoryReply>; data: string } {
   const data = root();
   mkdirSync(join(data, 'library'), { recursive: true });
   writeFileSync(join(data, 'library', 'projects.json'), JSON.stringify({ version: 1, projects: [PROJECT, OTHER] }));
   const deps: MemoryAdminDeps = {
-    library: libraryLocation(data), origin,
+    library: libraryLocation(data), origin, ...(landing ? { landing } : {}),
     botDirectory: async botId => { if (botId !== 'cli_a') throw new Error('no such bot'); return join(data, 'bots', 'cli_a'); },
   } as MemoryAdminDeps;
   return { data, call: request => memoryAction(memoryRequestSchema.parse(request) as MemoryRequest, deps) };
@@ -43,6 +43,20 @@ describe('the memory RPC on the files', () => {
     expect(readFileSync(join(cli.data, 'bots', 'cli_a', 'memory', 'memory.json'), 'utf8')).toContain('先写结论');
   });
 
+  // D4a review R4, devices-4b 4.5: a Bot session's turn writes as itself, where its Bot process said it lands
+  it('adds as a Bot session\'s turn where its Bot process landed it, as its person, trusted as it said', async () => {
+    // a member's --bot lands in its group's project, untrusted (memory-authority's decideAdd)
+    const member = setup('cli', { scope: { kind: 'project', projectId: PROJECT.id }, trust: 'untrusted', actor: { role: 'member', openId: 'ou_member' },
+      source: { botId: 'cli_a', turn: { kind: 'human', steered: false }, chatId: 'oc_pay', messageId: 'om_1', downgraded: 'member' } });
+    const landed = item(await member.call({ type: 'add', scope: bot, text: '周四发版' })).item;
+    expect(landed).toMatchObject({ scope: { kind: 'project', projectId: PROJECT.id }, trust: 'untrusted',
+      source: { via: 'cli', botId: 'cli_a', actorRole: 'member', actorOpenId: 'ou_member', chatId: 'oc_pay', messageId: 'om_1', downgraded: 'member' } });
+    expect(() => readFileSync(join(member.data, 'bots', 'cli_a', 'memory', 'memory.json'), 'utf8')).toThrow();
+    const admin = setup('cli', { scope: { kind: 'bot' }, trust: 'trusted', actor: { role: 'admin', openId: 'ou_admin' }, source: { botId: 'cli_a', turn: { kind: 'human', steered: false } } });
+    expect(item(await admin.call({ type: 'add', scope: bot, text: '先写结论' })).item).toMatchObject({ scope: { kind: 'bot' }, trust: 'trusted', source: { actorRole: 'admin', actorOpenId: 'ou_admin' } });
+    expect(readFileSync(join(admin.data, 'bots', 'cli_a', 'memory', 'memory.json'), 'utf8')).toContain('先写结论');
+  });
+
   it('answers refusals and conflicts as replies, not errors', async () => {
     const { call } = setup();
     const first = item(await call({ type: 'add', scope: project, text: '周四发版' }));
@@ -65,6 +79,20 @@ describe('the memory RPC on the files', () => {
     expect(merged).toMatchObject({ kind: 'branches', moved: 1 });
     const events = await call({ type: 'events', scope: bot, itemId: (item(await call({ type: 'add', scope: bot, text: '三', branch: '乙' })).item.id) });
     expect(events.kind).toBe('events');
+  });
+
+  // C5 main 必败: no branchDelete
+  it('deletes a branch as the command line, a conflict and the store refusals as replies', async () => {
+    const { call } = setup('cli');
+    const one = item(await call({ type: 'add', scope: bot, text: '一', branch: '甲' }));
+    await call({ type: 'add', scope: bot, text: '二', branch: '甲' });
+    expect(await call({ type: 'branchDelete', scope: bot, name: '甲', expected: 1 })).toMatchObject({ kind: 'conflict', message: '分支里的条目刚变过，重新看一次再删' });
+    expect(await call({ type: 'branchDelete', scope: bot, name: '合作方式' })).toMatchObject({ kind: 'refused', reason: 'fixed-branch' });
+    const deleted = await call({ type: 'branchDelete', scope: bot, name: '甲', expected: 2 });
+    expect(deleted).toMatchObject({ kind: 'branches', moved: 2 });
+    expect(deleted.kind === 'branches' && deleted.branches.map(branch => branch.name)).not.toContain('甲');
+    const events = await call({ type: 'events', scope: bot, itemId: one.item.id });
+    expect(events.kind === 'events' && events.events.at(-1)).toMatchObject({ kind: 'archive', actor: { role: 'cli' } });
   });
 
   it('undoes a merge by event id', async () => {

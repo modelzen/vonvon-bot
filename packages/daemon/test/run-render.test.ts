@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentEvent } from '../src/agent/types';
-import { ANSWER_EID, buildRunCard, RC } from '../src/card/run-card';
+import { ANSWER_EID, buildRunCard, RC, stoppedLine } from '../src/card/run-card';
 import {
   initialState,
   markIdleTimeout,
@@ -353,6 +353,21 @@ describe('buildRunCard — terminal collapse', () => {
     expect(els.some((e) => e.tag === 'markdown' && e.content === 'partial ans')).toBe(true);
     expect(JSON.stringify(els)).toContain('已被中断');
     expect(buttons(els).some((button) => button.a === RC.stop)).toBe(false);
+  });
+
+  // owner 2026-11-02: a stop, restart or update cuts the turn short and its card says which, and to send it again
+  it.each([
+    [{ reason: 'restart', resend: true }, '服务端重启了，这一轮被中断，请再发一次'],
+    [{ reason: 'update', resend: true }, '服务端升级了，这一轮被中断，请再发一次'],
+    [{ reason: 'stop', resend: true }, 'Bot 停止运行了，这一轮被中断，等它恢复后请再发一次'],
+    [{ reason: 'restart', resend: false }, '服务端重启了，这一轮被中断'],
+  ] as const)('says why a stop cut the turn short: %j', (stopped, line) => {
+    const rs = markInterrupted(run([{ type: 'text_delta', itemId: 'a', delta: 'partial ans' }]));
+    expect(stoppedLine(stopped)).toBe(line);
+    const text = JSON.stringify(bodyEls(buildRunCard({ rs, cardKey: 'm1', stopped })));
+    expect(text).toContain(line);
+    expect(text).not.toContain('已被中断');
+    expect(text).toContain('partial ans');
   });
 
   it('folds process and shows the error note when the agent fails', () => {

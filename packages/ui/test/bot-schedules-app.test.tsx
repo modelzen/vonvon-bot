@@ -15,7 +15,11 @@ vi.mock('react', async original => ({...await original<typeof import('react')>()
   useRef: (initial: unknown) => {const i = h.ri++; return h.refs[i] ??= {current: initial};},
   useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const i = h.ei++; const old = h.effects[i]; if (old?.deps && deps && deps.every((value, at) => Object.is(value, old.deps![at]))) return; h.pending.push(() => {h.effects[i] = {deps}; effect();});},
 }));
-vi.mock('../src/client-context', () => ({useClient: () => h.client, useShellCapabilities: () => undefined}));
+// The page shows this computer, with no shell and no device list.
+vi.mock('../src/client-context', async original => {
+  const actual = await original<typeof import('../src/client-context')>();
+  return {...actual, useClient: () => h.client, useShellCapabilities: () => undefined, useActiveDevice: () => actual.LOCAL_ACTIVE_DEVICE, useDevicesState: () => undefined};
+});
 vi.mock('../src/settings/DraftGuard', () => ({DraftGuardProvider: () => null, useDraftGuard: () => ({navigate: (action: () => void) => action()})}));
 vi.mock('../src/desktop-update', () => ({DesktopUpdateProvider: () => null, useDesktopUpdate: () => [undefined]}));
 vi.mock('../src/new-counts', async original => ({...await original<typeof import('../src/new-counts')>(), useNewCounts: () => ({projects: {}, bots: {}})}));
@@ -62,4 +66,15 @@ it('opens a group page on its 任务 tab from the Bot page\'s 任务 pane, and B
   expect(page.find(GroupWorkspace).map(node => [node.props.member.id, node.props.initialTab])).toEqual([[secondMember, 'schedule']]);
   page.find(AppShell)[0]!.props.onBack();
   expect(render().find(BotSchedules).map(node => node.props.agentId)).toEqual([agentId]);
+});
+
+it('keeps the web\'s brand: without the shell\'s devices, App gives the header no device switcher', () => {
+  vi.stubGlobal('window', {addEventListener: () => {}, removeEventListener: () => {}});
+  vi.stubGlobal('document', {documentElement: {dataset: {}}});
+  h.client.watchSnapshots = listener => {listener(snapshot); return () => {};};
+  render();
+  const shell = render().find(AppShell);
+  expect(shell).toHaveLength(1);
+  // AppShell shows the brand only when this is undefined: an element that renders nothing would leave the top-left empty.
+  expect(shell[0]!.props.deviceSwitcher).toBeUndefined();
 });

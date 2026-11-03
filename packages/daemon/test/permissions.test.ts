@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { effectiveMode, type Project } from '../src/project/registry';
 import { CodexAppServerBackend, sandboxParams } from '../src/agent/codex-appserver/backend';
 import { codexFullOnlyReason, CodexFullOnlyError } from '../src/agent/codex-appserver/full-only';
-import { AUTO_COMPACT_RETIRED, buildGroupSettingsCard, buildPermissionCard, buildProjectSettingsCard, PERMISSION_CARD_VERSION } from '../src/card/dm-cards';
+import { AUTO_COMPACT_RETIRED, buildGroupSettingsCard, buildNewProjectDoneCard, buildPermissionCard, buildProjectSettingsCard, PERMISSION_CARD_VERSION } from '../src/card/dm-cards';
+import { FULL_ACCESS_WARNING } from '@vonvon/protocol';
 import { permissionTable, type TableEnv } from '../src/agent/permission';
 
 vi.mock('../src/agent/codex-appserver/locate', () => ({ refreshCodexResolution: () => '/fixture/codex', resolveCodexBin: () => '/fixture/codex', cachedCodexVersion: () => undefined }));
@@ -120,6 +121,14 @@ describe('permission cards', () => {
     expect(json).not.toContain('dm.proj.autoCompact');
     expect(json).not.toContain('自动压缩');
     expect(JSON.stringify(buildProjectSettingsCard(stored, undefined, AUTO_COMPACT_RETIRED))).toContain('自动压缩现在一直开着');
+  });
+
+  // main 必败: devices 第 15 节, devices-ui-2 4.10
+  it('says the 完全访问 warning on the permission form, and on the done card of a 完全访问 group only', () => {
+    expect(JSON.stringify(render({ name: 'P', mode: 'qa', network: false }))).toContain(FULL_ACCESS_WARNING);
+    const done = (mode: 'full' | 'write') => JSON.stringify(buildNewProjectDoneCard({ name: 'P', chatId: 'oc_p', cwd: '/x', blank: false, createdAt: 1, kind: 'multi', origin: 'created', mode, network: true }));
+    expect(done('full')).toContain(FULL_ACCESS_WARNING);
+    expect(done('write')).not.toContain(FULL_ACCESS_WARNING);
   });
 
   it('permission form has one tier dropdown, no network switch, and pre-selects the current tier', () => {

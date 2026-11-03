@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { lstat, mkdtemp, mkdir, readFile, readdir, readlink, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
-import { stageDependencies } from './stage-daemon.mjs';
+import { fileURLToPath } from 'node:url';
+import { bundledWorkspaces, stageDaemon, stageDependencies } from './stage-daemon.mjs';
 
 const sdk = '@anthropic-ai/claude-agent-sdk';
 
@@ -223,23 +226,83 @@ test('compact staging removes development payloads but retains runtime assets an
   assert.equal(createRequire(join(destination, 'package.json'))('runtime'), 'fixture');
 });
 
-test('compact staging keeps only built output and package/legal metadata for first-party runtime packages', async t => {
+test('hoist staging (Windows desktop, server packages) also removes development payloads', async t => {
   const {source, destination, pkg} = await fixture(t);
-  for (const name of ['@vonvon/client', '@vonvon/protocol']) {
-    const root = await pkg(name, {main: 'dist/index.cjs'});
-    await addFile(root, 'dist/index.cjs', `module.exports = ${JSON.stringify(name)};`);
-    for (const file of ['LICENSE', 'LICENSE.bridge', 'NOTICE', 'NOTICE.md']) await addFile(root, file);
-    for (const file of ['src/index.ts', 'test/runtime.test.ts', 'tsconfig.json', 'README.md', 'dist/index.d.ts', 'dist/index.cjs.map']) await addFile(root, file);
+  const runtime = await pkg('runtime', {main: 'src/index.js'});
+  const removed = ['index.d.ts', 'src/index.ts', 'src/worker.mts', 'dist/index.js.map', 'test/fixture.json', 'docs/guide.md', 'examples/demo.cjs'];
+  for (const file of removed) await addFile(runtime, file);
+  await addFile(runtime, 'src/index.js', "module.exports = 'runs from src';");
+  await addFile(runtime, 'LICENSE');
+  await stageDependencies(source, destination, {hoist: true, metadata: {dependencies: {runtime: '1'}}});
+  const staged = join(destination, 'node_modules/runtime');
+  for (const file of removed) await assert.rejects(lstat(join(staged, file)), {code: 'ENOENT'}, file);
+  assert.equal(await readFile(join(staged, 'LICENSE'), 'utf8'), 'fixture');
+  assert.equal(createRequire(join(destination, 'package.json'))('runtime'), 'runs from src');
+});
+
+test('stageDaemon ships a minified CLI with the workspace packages bundled from source', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'vonvon-stage-daemon-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const daemonRoot = fileURLToPath(new URL('../packages/daemon/', import.meta.url));
+  const daemon = JSON.parse(await readFile(join(daemonRoot, 'package.json'), 'utf8'));
+  const staged = join(root, 'daemon');
+  const result = await stageDaemon(staged, {name: daemon.name, version: daemon.version, type: 'module', bin: daemon.bin, dependencies: daemon.dependencies}, {hoist: true});
+  const cli = await readFile(join(staged, 'dist/cli.js'), 'utf8');
+  assert.ok(cli.length / cli.split('\n').length > 400, 'dist/cli.js is minified');
+  assert.doesNotMatch(cli, /sourceMappingURL|\bfrom\s*["']@vonvon\//);
+  const metadata = JSON.parse(await readFile(join(staged, 'package.json'), 'utf8'));
+  for (const name of bundledWorkspaces) {
+    assert.equal(name in metadata.dependencies, false, name);
+    await assert.rejects(lstat(join(staged, 'node_modules', name)), {code: 'ENOENT'}, name);
+    assert.equal(result.external.includes(name), false, name);
   }
-  await stageDependencies(source, destination, {compact: true, metadata: {dependencies: {'@vonvon/client': '1', '@vonvon/protocol': '1'}}});
-  const appRequire = createRequire(join(destination, 'package.json'));
-  for (const name of ['@vonvon/client', '@vonvon/protocol']) {
-    const root = join(destination, 'node_modules', name);
-    assert.equal(appRequire(name), name);
-    assert.equal(JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).name, name);
-    for (const file of ['LICENSE', 'LICENSE.bridge', 'NOTICE', 'NOTICE.md']) assert.equal(await readFile(join(root, file), 'utf8'), 'fixture');
-    for (const file of ['src', 'test', 'index.cjs', 'tsconfig.json', 'README.md', 'dist/index.d.ts', 'dist/index.cjs.map']) await assert.rejects(lstat(join(root, file)), {code: 'ENOENT'}, `${name}/${file}`);
+  assert.ok(result.external.includes('ws'));
+  // Protocol keeps its own zod when the daemon ships a different one.
+  const zodOf = from => realpath(dirname(createRequire(join(from, 'package.json')).resolve('zod/package.json')));
+  const protocolRoot = fileURLToPath(new URL('../packages/protocol/', import.meta.url));
+  assert.equal(result.bundled.includes('zod'), await zodOf(protocolRoot) !== await zodOf(daemonRoot));
+  const shipped = [];
+  async function walk(path) {
+    for (const entry of await readdir(path, {withFileTypes: true})) {
+      if (entry.isDirectory()) await walk(join(path, entry.name));
+      else if (/\.(?:[mc]?ts|map)$/.test(entry.name)) shipped.push(join(path, entry.name));
+    }
   }
+  await walk(staged);
+  assert.deepEqual(shipped, []);
+  assert.equal(execFileSync(process.execPath, [join(staged, 'bin/vonvon.mjs'), '--version'], {encoding: 'utf8'}).trim(), daemon.version);
+
+  // main 必败: the folder search ran its worker from Function.prototype.toString(), and after minify + keepNames the body
+  // called esbuild's __name helper, which the worker's own process did not have: every search failed with
+  // directory_unreadable on the packaged daemon (Windows acceptance task 205).
+  await t.test('dir suggest finds a folder through the staged daemon', async () => {
+    const home = join(root, 'home');
+    await mkdir(join(home, 'Projects', 'vonvon-stage-target'), {recursive: true});
+    const env = {...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'), VONVON_HOME: join(root, 'data')};
+    for (const name of ['VONVON_SERVICE', 'VONVON_SESSION', 'FEISHU_CODEX_BRIDGE', 'FEISHU_CODEX_CWD', 'CODEX_HOME']) delete env[name];
+    const vonvon = (...args) => spawnSync(process.execPath, [join(staged, 'bin/vonvon.mjs'), ...args], {env, encoding: 'utf8', timeout: 60_000});
+    // The CLI only points at daemon.log; the CI log keeps nothing else of why the daemon went away or did not stop
+    const daemonLog = () => { try { return readFileSync(join(root, 'data', 'daemon.log'), 'utf8').split('\n').slice(-40).join('\n'); } catch (error) { return String(error); } };
+    const started = vonvon('daemon', 'start', '--port', '0');
+    try {
+      assert.equal(started.status, 0, started.status === 0 ? '' : `${started.stdout}${started.stderr}\n--- daemon.log ---\n${daemonLog()}`);
+      for (const query of ['vonvon-stage', '~/Projects/', ...process.platform === 'win32' ? ['~\\Projects\\'] : []]) {
+        // A loaded CI runner can take longer than the 1.5 s search budget just to start the worker's node: that comes back
+        // empty and truncated, or as a timeout. The bug this guards failed every attempt with directory_unreadable.
+        let found;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          found = vonvon('dir', 'suggest', query, '--json');
+          const slow = found.status === 0 ? (({entries, truncated}) => truncated && !entries.length)(JSON.parse(found.stdout)) : /超时|directory_timeout/.test(found.stdout + found.stderr);
+          if (!slow) break;
+        }
+        assert.equal(found.status, 0, `${query}: ${found.stdout}${found.stderr}`);
+        assert.ok(JSON.parse(found.stdout).entries.some(entry => entry.name === 'vonvon-stage-target'), `${query}: ${found.stdout}`);
+      }
+    } finally {
+      const stopped = vonvon('daemon', 'stop');
+      assert.equal(stopped.status, 0, stopped.status === 0 ? '' : `${stopped.stdout}${stopped.stderr}\n--- daemon.log ---\n${daemonLog()}`);
+    }
+  });
 });
 
 test('default CLI staging keeps development payloads and separate dependency copies without symlinks', async t => {

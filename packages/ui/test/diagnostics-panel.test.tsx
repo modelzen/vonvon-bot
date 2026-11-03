@@ -1,4 +1,4 @@
-import {expect, it} from 'vitest';
+import {describe, expect, it} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {formatTime, type AdminSetupStatus, type Agent, type ApplicationCrashes, type DesktopSnapshot, type NotReplied, type ToolState} from '@vonvon/protocol';
 import {createClient} from '../../client/src/client';
@@ -34,11 +34,13 @@ it('shows the lock holder across retries, and gives a pause priority', () => {
 
 it('shows this machine, and 检查中 for Claude before its first login check', () => {
   const html = render([]);
-  expect(html).toContain('这台电脑');
+  // owner 2026-11-02: this computer's page says 本机
+  expect(html).toContain('>本机<');
+  expect(html).toContain('本机上的 Provider 每分钟检查一次');
   expect(html).toContain('0.9.0');
   expect(html).toContain('可用 · 0.156.1');
   expect(html).toContain('检查中 · 0.3.296');
-  expect(html).not.toContain('登录状态无法确认');
+  expect(html).not.toContain('无法确认配置');
   expect(html).toContain('/tmp/vonvon-home');
   expect(html).toContain('后台日志');
   expect(html).toContain(`id="${settingAnchor('daemon 日志')}"`);
@@ -99,12 +101,12 @@ it('lists a bot\'s not-replied messages newest first, with the group, place, sen
   ]}}]);
   expect(html).toContain(`id="${settingAnchor(diagnosticsSection(agent.id))}"`);
   expect(html).toContain('11 条未回复记录');
-  expect(html).toContain('Claude 没登录或登录过期了');
+  expect(html).toContain('Claude 没配置好或配置过期了');
   expect(html).toContain('10 次');
   expect(html).toContain('发布群 · 话题 · 某同事 · 消息尾号 a1b2c3');
-  expect(html).toContain('用 /login 登录');
+  expect(html).toContain('在终端运行 claude 配置好');
   expect(html).toContain('没绑定的群（尾号 9f8e7d） · 主区');
-  expect(html.indexOf('Claude 没登录')).toBeLessThan(html.indexOf('没绑定的群'));
+  expect(html.indexOf('Claude 没配置好')).toBeLessThan(html.indexOf('没绑定的群'));
   expect(html).toContain('Codex 可用 · 0.156.1（1 个群）');
 });
 
@@ -231,4 +233,81 @@ it('distinguishes a new daemon with empty attention from an old daemon without t
   };
   expect(show([])).toContain('主区尚无关注状态');
   expect(show()).toContain('daemon 未提供关注状态');
+});
+
+// Codex review 244: a remote device's tools were explained as this computer's (这台电脑, 查看本机环境, 在终端运行 codex …)
+describe('the tools of a remote device', () => {
+  const remote = {id: 'test-remote', name: '测试远程设备', isRemote: true, platform: 'linux', version: '0.9.0', mode: 'full', capabilities: ['device']} as const;
+  const view = (tools: ToolState[], device?: typeof remote) => renderToStaticMarkup(<ClientProvider client={client} device={device ? {...device, capabilities: [...device.capabilities]} : undefined}>
+    <DiagnosticsPanel snapshot={{...snapshot([]), tools}} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onOpenSecrets={() => {}} onNotice={() => {}}/>
+  </ClientProvider>);
+  const signedOut: ToolState[] = [
+    {tool: 'codex', installation: 'installed', authentication: 'signedOut', version: '0.163.0'},
+    {tool: 'claude', installation: 'missing', authentication: 'unknown', version: null},
+  ];
+
+  it('names the device in the group, every instruction, the button and the footer', () => {
+    const html = view(signedOut, remote);
+    expect(html).toContain('>「测试远程设备」<');
+    expect(html).toContain('没配置好 · 0.163.0');
+    expect(html).toContain('在「测试远程设备」的终端运行 codex 配置好（账号或自定义 API 都行），然后重新检测。');
+    expect(html).toContain('要用 Claude，在「测试远程设备」的「工具与连接」里安装 Claude Agent SDK。');
+    expect(html).toContain('>查看「测试远程设备」的工具<');
+    expect(html).toContain('「测试远程设备」上的 Provider 每分钟检查一次；Claude 的配置可以单独检查。');
+    expect(html).not.toContain('本机');
+    expect(html).not.toContain('这台电脑');
+  });
+
+  it('names the device in a missing Codex, a too old one and the daemon\'s own Claude message', () => {
+    const html = view([
+      {tool: 'codex', installation: 'missing', authentication: 'unknown', version: null},
+      {tool: 'claude', installation: 'installed', authentication: 'signedOut', version: '2.1.0', message: '没配置好。在终端运行 `claude` 配置账号，或设置 ANTHROPIC_API_KEY 用自定义 API。'},
+    ], remote);
+    expect(html).toContain('可以在「测试远程设备」的「工具与连接」里装托管副本（要用「测试远程设备」上的 Node.js 和 npm）。没装 Node.js 的话，在那台设备上装 ChatGPT 或 Codex 桌面应用，或者用 Homebrew 装 Codex。');
+    expect(html).toContain('没配置好。在「测试远程设备」的终端运行 `claude` 配置账号，或设置 ANTHROPIC_API_KEY 用自定义 API。');
+    expect(html).not.toContain('本机');
+    const old = view([{tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '0.100.0', compatibility: {status: 'tooOld', minimum: '0.150.0', verified: '0.163.0'}}], remote);
+    expect(old).toContain('最低要 0.150.0，请在「测试远程设备」的「工具与连接」更新。');
+    expect(old).not.toContain('本机');
+  });
+
+  // owner 2026-11-02: what to do about a message that was not answered says 「X」 too; this computer's keeps 本机环境
+  it('names the device in what to do about a message it did not answer', () => {
+    const records = [record({reason: 'codex-too-old', backend: 'codex'}), record({reason: 'tool-missing', backend: 'codex', ref: 'b2c3d4'})];
+    const panel = (device?: typeof remote) => renderToStaticMarkup(<ClientProvider client={client} device={device ? {...device, capabilities: [...device.capabilities]} : undefined}>
+      <DiagnosticsPanel snapshot={{...snapshot([{...agent, diagnostics: {deniedScopes: [], notReplied: records}}]), tools: signedOut}} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onOpenSecrets={() => {}} onNotice={() => {}}/>
+    </ClientProvider>);
+    const html = panel(remote);
+    expect(html).toContain('在「测试远程设备」的「工具与连接」里更新 Codex。');
+    expect(html).toContain('去「测试远程设备」的「工具与连接」安装。');
+    expect(html).not.toContain('本机');
+    expect(panel()).toContain('在本机环境里更新 Codex。');
+  });
+
+  // 0.9.0 Linux acceptance (task 287): a managed Codex is on no PATH, so `codex` was a command not found there
+  it('names what starts a managed copy where it says to run Codex or Claude in a terminal', () => {
+    const codex = '/srv/vonvon/node/bin/node /srv/vonvon-data/managed-tools/codex/releases/g/bin/codex';
+    const claude = '/srv/vonvon-data/managed-tools/claude/releases/g/bin/claude';
+    const tools: ToolState[] = [{...signedOut[0]!, command: codex}, {tool: 'claude', installation: 'installed', authentication: 'signedOut', version: '2.1.0', command: claude}];
+    const records = [record({reason: 'signed-out', backend: 'codex'}), record({reason: 'signed-out', backend: 'claude', ref: 'b2c3d4'})];
+    const html = renderToStaticMarkup(<ClientProvider client={client} device={{...remote, capabilities: [...remote.capabilities]}}>
+      <DiagnosticsPanel snapshot={{...snapshot([{...agent, diagnostics: {deniedScopes: [], notReplied: records}}]), tools}} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onOpenSecrets={() => {}} onNotice={() => {}}/>
+    </ClientProvider>);
+    expect(html).toContain(`在「测试远程设备」的终端运行 ${codex} 配置好（账号或自定义 API 都行），然后重新检测。`);
+    expect(html).toContain(`在「测试远程设备」的终端运行 ${claude} 配置好（账号或自定义 API 都行），然后点&quot;检查配置&quot;。`);
+    expect(html).toContain(`先把 Codex 配置好（账号或自定义 API 都行，用 Codex App 或 \`${codex}\` 命令行），再回到 Vonvon 检测。`);
+    expect(html).toContain(`在「测试远程设备」的终端运行 ${claude} 配置好（账号或自定义 API 都行），再点「检查配置」。`);
+    expect(html).not.toContain('运行 codex');
+  });
+
+  // owner 2026-11-02: this computer's page says 本机 where the remote one says 「X」
+  it('says 本机 for this computer, the tool steps as they were', () => {
+    const html = view(signedOut);
+    expect(html).toContain('>本机<');
+    expect(html).toContain('在终端运行 codex 配置好（账号或自定义 API 都行），然后重新检测。');
+    expect(html).toContain('要用 Claude，在本机环境里安装 Claude Agent SDK。');
+    expect(html).toContain('>查看本机环境<');
+    expect(html).toContain('>本机上的 Provider 每分钟检查一次；Claude 的配置可以单独检查。<');
+    expect(html).not.toContain('测试远程设备');
+  });
 });

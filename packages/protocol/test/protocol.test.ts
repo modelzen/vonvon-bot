@@ -12,6 +12,7 @@ import {
   applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema, notRepliedSchema, KEY_FAILURE, keyFailureOf, keyProblem,
   isKnownJudgeSelection, type JudgeSelectionView,
   adminProjectSchema, collaborationRequestSchema, collaborationReplySchema, topicConversationCopy, conversationCopy, conversationSchema, conversationToMode, modeToConversation, projectRecordSchema,
+  toolSteps, environmentToolStateSchema,
 } from "../src/index.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -51,7 +52,7 @@ describe("pinned contract extraction", () => {
     expect(directoryRequestSchema.safeParse({type:"suggest",query:"x".repeat(4097)}).success).toBe(false);
     expect(directoryReplySchema.parse({kind:"folderChosen",folder:{token:randomUUID(),displayPath:"/tmp/p"}}).kind).toBe("folderChosen");
     const backend = {id:"codex",name:"Codex",ok:true,version:"1",isDefault:true};
-    const daemon = {installed:false,running:true,selfHosted:true,version:"1",supported:false};
+    const daemon = {installed:false,running:true,selfHosted:true,version:"1",supported:false,startedAt:1};
     for (const payload of [
       {kind:"diagnosis",bot:"cli_fixture",backends:[backend],event:{state:"ok"},eventConfigUrl:"https://example.test"},
       {kind:"hostDoctor",doctor:{node:"24",platform:"darwin",arch:"arm64",osRelease:"1",appDir:"/tmp",logsDir:"/tmp/logs",logBytes:0,version:"1",backends:[backend]}},
@@ -310,6 +311,32 @@ it("accepts optional omittedBytes and rejects negative or fractional counts", ()
   expect(environmentReplySchema.safeParse({...reply,omittedBytes:0.5}).success).toBe(false);
 });
 
+// cli-7-environment 审查 202: the request id is optional both ways, so an older client and an older reply still parse
+it("takes an optional request id on the install starts and echoes it in their states, older shapes still parsing", () => {
+  const requestId = randomUUID();
+  const envelope = (payload: unknown) => requestSchema.safeParse({type:"request",id:"1",method:"environment",payload});
+  for (const start of [{type:"install",tool:"codex"}, {type:"update",tool:"lark-cli"}, {type:"backendInstall",id:"claude-agent",update:false}]) {
+    expect(envelope(start).success).toBe(true);
+    expect(envelope({...start,requestId}).success).toBe(true);
+    expect(envelope({...start,requestId:"not-a-uuid"}).success).toBe(false);
+  }
+  // only the starts carry one
+  expect(envelope({type:"toolInstallStatus",requestId}).success).toBe(false);
+  expect(envelope({type:"startLogin",tool:"lark-cli",requestId}).success).toBe(false);
+  const running = {kind:"running",id:"op",tool:"codex",update:false,startedAt:1};
+  const ended = {kind:"failed",id:"op",message:"x"};
+  for (const operation of [running, ended]) {
+    expect(environmentReplySchema.parse({kind:"toolInstall",operation})).toEqual({kind:"toolInstall",operation});
+    expect(environmentReplySchema.parse({kind:"toolInstall",operation:{...operation,requestId}})).toEqual({kind:"toolInstall",operation:{...operation,requestId}});
+  }
+  const status = {operationId:randomUUID(),id:"claude-agent",update:false,state:"running",replay:[],omittedBytes:0};
+  expect(environmentReplySchema.parse({kind:"backendInstallStatus",operation:status})).toEqual({kind:"backendInstallStatus",operation:status});
+  expect(environmentReplySchema.parse({kind:"backendInstallStatus",operation:{...status,requestId}})).toEqual({kind:"backendInstallStatus",operation:{...status,requestId}});
+  // a reply schema without the field (an older client's) drops it instead of failing
+  const older = z.object({kind:z.literal("running"),id:z.string(),tool:z.string(),update:z.boolean(),startedAt:z.number()});
+  expect(older.parse({...running,requestId})).toEqual(running);
+});
+
 it("writes a crash in one line: a signal the supervisor saw with its uptime, a forced end found later with a lower bound (s18a)", () => {
   expect(crashText({ kind: "exception", reason: "TypeError: x", uptimeMs: 192_000 })).toBe("程序出错：TypeError: x，运行了 3 分 12 秒");
   expect(crashText({ kind: "forced", reason: "SIGKILL", uptimeMs: 500 })).toBe("被系统强制结束（SIGKILL），运行了 0 秒");
@@ -415,8 +442,38 @@ it("preserves optional pending group topic flags", () => {
   expect(pendingGroupsSchema.safeParse({ groups: [{ ...group, topic: "x" }] }).success).toBe(false);
 });
 
+// 0.9.0 Linux acceptance (task 287): a managed Codex or Claude Code is on no PATH, so a bare `codex` was not found
+it("names what starts a managed copy where a step says to run Codex or Claude in a terminal", () => {
+  const codex = "/srv/node/bin/node /srv/data/managed-tools/codex/releases/g/bin/codex";
+  const claude = "/srv/data/managed-tools/claude/releases/g/bin/claude";
+  const [codexStep, claudeStep] = toolSteps([
+    { tool: "codex", installation: "installed", authentication: "signedOut", version: "0.166.0", command: codex },
+    { tool: "claude", installation: "installed", authentication: "signedOut", version: "2.1.0", command: claude },
+  ]).steps;
+  expect(codexStep?.detail).toBe(`在终端运行 ${codex} 配置好（账号或自定义 API 都行），然后重新检测。`);
+  expect(claudeStep?.detail).toBe(`在终端运行 ${claude} 配置好（账号或自定义 API 都行），然后点"检查配置"。`);
+  expect(toolSteps([{ tool: "codex", installation: "installed", authentication: "signedOut", version: null }]).steps[0]?.detail).toBe("在终端运行 codex 配置好（账号或自定义 API 都行），然后重新检测。");
+  const record = { at: 1, count: 1, groupId: "oc_fixture_group", place: "main" as const, reason: "signed-out" as const };
+  expect(NOT_REPLIED_TEXT["signed-out"].next({ ...record, backend: "codex" }, undefined, codex)).toBe(`先把 Codex 配置好（账号或自定义 API 都行，用 Codex App 或 \`${codex}\` 命令行），再回到 Vonvon 检测。`);
+  expect(NOT_REPLIED_TEXT["signed-out"].next({ ...record, backend: "claude" })).toBe("在终端运行 claude 配置好（账号或自定义 API 都行），再点「检查配置」。");
+  // a daemon from before the field sends none; a client from before it drops it
+  const state = { tool: "codex", installation: "managed", executable: "/x/codex", version: "1.0.0", managedVersion: "1.0.0", latestVersion: null, updateAvailable: null, canUninstall: true };
+  expect(environmentToolStateSchema.parse({ ...state, command: codex }).command).toBe(codex);
+  expect(environmentToolStateSchema.parse(state).command).toBeUndefined();
+});
+
 it("explains unbound reply throttling and both setup routes", () => {
   const record = notRepliedSchema.parse({ reason: "unbound", groupId: "oc_pending", place: "main", ref: "abc123", at: 1, count: 1 });
   expect(NOT_REPLIED_TEXT.unbound.reason(record)).toBe("这个群还没设置好，@ 它只回了一句提示（同一个群 10 分钟最多回一次）");
   expect(NOT_REPLIED_TEXT.unbound.next(record)).toBe("主人在私聊的设置卡上选会话方式、点绑定；或者在 Bot 页点「加入飞书群」设置这个群。");
+});
+
+// devices-ui-2 4.5 and 4.9 (main 必败): Windows has its platform name; the old Codex install and login jobs are gone.
+describe("devices-ui-2 protocol", () => {
+  it("parses a windows application and no longer knows the Codex jobs", async () => {
+    const { commandSchema, desktopSnapshotSchema, jobSchema } = await import("../src/index.js");
+    expect(desktopSnapshotSchema.shape.application.shape.platform.parse("windows")).toBe("windows");
+    for (const type of ["installCodex", "startCodexLogin"]) expect(commandSchema.safeParse({ type }).success).toBe(false);
+    expect(jobSchema.safeParse({ id: "job_1", type: "installCodex", phase: "running", message: "" }).success).toBe(false);
+  });
 });

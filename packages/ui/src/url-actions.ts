@@ -8,7 +8,7 @@ const verificationHosts = new Set([
   ...registrationHosts, "auth.openai.com", "chatgpt.com",
   "claude.ai", "console.anthropic.com", "platform.claude.com",
 ]);
-export type ExternalUrlKind = "registration" | "authorization" | "verification" | "event-settings" | "app-console" | "group" | "bot-chat" | "releases" | "download";
+export type ExternalUrlKind = "registration" | "authorization" | "verification" | "event-settings" | "app-console" | "group" | "bot-chat" | "releases" | "download" | "tailscale";
 
 /** 官网的更新日志和下载页；安装包在这里下载，应用内更新没生效时也指到这里。 */
 export const changelogUrl = "https://vonvon.cc/changelog/";
@@ -45,6 +45,10 @@ export function allowedExternalUrl(value: string, kind: ExternalUrlKind): string
         break;
       case "download":
         if (url.hostname !== "vonvon.cc" || url.pathname !== "/get/") return null;
+        break;
+      case "tailscale":
+        // devices-ui-1b 4.9: only Tailscale's download page, exactly.
+        if (value !== "https://tailscale.com/download") return null;
         break;
     }
     return url.href;

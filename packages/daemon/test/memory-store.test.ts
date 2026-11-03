@@ -230,6 +230,76 @@ describe('renaming and merging branches', () => {
   });
 });
 
+// C5: the web page's 删除分支 as one request (memory.branchDelete)
+describe('deleting a branch', () => {
+  async function withBranch() {
+    const made = project();
+    const a = must(await addHuman(made.store, '甲一', '甲'));
+    const b = must(await addHuman(made.store, '甲二', '甲'));
+    const c = must(await addHuman(made.store, '甲三', '甲'));
+    must(await made.store.archive({ itemId: c.item.id, revision: 1, actor: DESKTOP }));
+    const other = must(await addHuman(made.store, '乙一', '乙'));
+    return { ...made, a, b, c, other };
+  }
+  const eventsOf = (dir: string) => readFileSync(join(dir, 'events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line) as { kind: string; itemId?: string; eventId: string; actor: { role: string } });
+
+  // main 必败: there was no branchDelete
+  it("archives the branch's active entries in one go, an archive event each, and the empty branch goes", async () => {
+    const { store, dir, a, b, c, other } = await withBranch();
+    const before = eventsOf(dir).length;
+    expect(await store.branchDelete({ name: ' 甲 ', expected: 2, actor: { role: 'cli' } })).toMatchObject({ ok: true, moved: 2 });
+    const view = await store.read();
+    expect(names(view)).not.toContain('甲');
+    expect(names(view)).toContain('乙');
+    expect(view.items.filter(item => item.branch === '甲').map(item => [item.id, item.state, item.revision])).toEqual(expect.arrayContaining([
+      [a.item.id, 'archived', 2], [b.item.id, 'archived', 2], [c.item.id, 'archived', 2],
+    ]));
+    expect(view.items.find(item => item.id === other.item.id)?.state).toBe('active');
+    const added = eventsOf(dir).slice(before);
+    expect(added.map(event => [event.kind, event.itemId, event.actor.role])).toEqual([['archive', a.item.id, 'cli'], ['archive', b.item.id, 'cli']]);
+  });
+
+  it('changes nothing when the count the caller saw is not the count now, and refuses a fixed or a missing branch', async () => {
+    const { store, dir } = await withBranch();
+    const before = readFileSync(join(dir, 'events.jsonl'), 'utf8');
+    expect(await store.branchDelete({ name: '甲', expected: 3, actor: DESKTOP })).toEqual({ ok: false, reason: 'conflict', message: '分支里的条目刚变过，重新看一次再删' });
+    expect(await store.branchDelete({ name: '决定', actor: DESKTOP })).toEqual({ ok: false, reason: 'fixed-branch', message: '固定分支不能删' });
+    expect(await store.branchDelete({ name: '其他', actor: DESKTOP })).toMatchObject({ ok: false, reason: 'fixed-branch' });
+    expect(await store.branchDelete({ name: '没有', actor: DESKTOP })).toMatchObject({ ok: false, reason: 'no-such-branch' });
+    expect(readFileSync(join(dir, 'events.jsonl'), 'utf8')).toBe(before);
+    expect(names(await store.read())).toContain('甲');
+  });
+
+  it('is undone one entry at a time, which brings the branch back', async () => {
+    const { store, dir, a, b } = await withBranch();
+    expect(await store.branchDelete({ name: '甲', actor: DESKTOP })).toMatchObject({ ok: true, moved: 2 });
+    const archiveOfA = eventsOf(dir).filter(event => event.kind === 'archive' && event.itemId === a.item.id).at(-1)!;
+    mustItem(await store.undo({ eventId: archiveOfA.eventId, actor: DESKTOP }));
+    const view = await store.read();
+    expect(names(view)).toContain('甲');
+    expect(view.items.find(item => item.id === a.item.id)).toMatchObject({ state: 'active', branch: '甲' });
+    expect(view.items.find(item => item.id === b.item.id)?.state).toBe('archived');
+  });
+
+  it('trims the oldest archived entries past the cap as archiving them one by one does', async () => {
+    const results: string[][] = [];
+    for (const oneByOne of [false, true]) {
+      const { store } = project();
+      const old: ImportEntry[] = Array.from({ length: ARCHIVED_MAX - 1 }, (_, at) => ({ text: `旧${at}`, branch: '背景', source: human, trust: 'trusted', archived: true }));
+      await store.importItems(old, DESKTOP);
+      const items = [must(await addHuman(store, '甲一', '甲')), must(await addHuman(store, '甲二', '甲')), must(await addHuman(store, '甲三', '甲'))];
+      if (oneByOne) for (const { item } of items) must(await store.archive({ itemId: item.id, revision: 1, actor: DESKTOP }));
+      else expect(await store.branchDelete({ name: '甲', actor: DESKTOP })).toMatchObject({ ok: true, moved: 3 });
+      const view = await store.read();
+      expect(view.items).toHaveLength(ARCHIVED_MAX);
+      results.push(view.items.map(item => item.text).sort());
+    }
+    expect(results[0]).toEqual(results[1]);
+    expect(results[0]).not.toContain('旧0');
+    expect(results[0]).toContain('甲一');
+  });
+});
+
 describe('the event log and the snapshot', () => {
   it('replays to the same state after a kill between the events and the snapshot', async () => {
     const { store, again } = project();

@@ -15,7 +15,7 @@ vi.mock('react', async original => ({...await original<typeof import('react')>()
   useRef: (initial: unknown) => harness.refs[harness.refIndex++] ??= {current: initial},
   useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const index = harness.effectIndex++; const old = harness.effects[index]; if (old?.deps && deps && deps.length === old.deps.length && deps.every((value, at) => Object.is(value, old.deps![at]))) return; harness.pending.push(() => {old?.cleanup?.(); harness.effects[index] = {deps, cleanup: effect() || undefined};});},
 }));
-vi.mock('../src/client-context', () => ({useClient: () => harness.client}));
+vi.mock('../src/client-context', async original => ({...await original<typeof import('../src/client-context')>(), useActiveDevice: () => ({id: 'local', isRemote: false, name: '这台电脑', mode: 'full', capabilities: []}), useClient: () => harness.client}));
 type Element = ReactElement<Record<string, any>>;
 function nodes(node: ReactNode): Element[] {if (Array.isArray(node)) return node.flatMap(nodes); if (!isValidElement<Record<string, any>>(node)) return []; return [node, ...nodes(node.props.children)];}
 function render() {

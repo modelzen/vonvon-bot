@@ -50,7 +50,7 @@ const onOpenGroups = vi.fn();
 const onNotice = vi.fn();
 function render(value: DesktopSnapshot = snapshot) {
   h.index = 0;
-  return nodes(FeishuConnections({snapshot: value, ready: true, busy: false, run, onRegister, onOpenGroups, onOpenEnvironment: () => {}, onNotice, codexJobs: null}));
+  return nodes(FeishuConnections({snapshot: value, ready: true, busy: false, run, onRegister, onOpenGroups, onOpenEnvironment: () => {}, onNotice}));
 }
 const section = (all: Element[]) => all.find(node => node.type === 'section' && String(node.props['aria-label'] ?? '').endsWith('的配置检查'))!;
 const button = (all: Element[], label: string) => all.find(node => node.props.onClick && (text(node.props.children) === label || node.props['aria-label'] === label))!;

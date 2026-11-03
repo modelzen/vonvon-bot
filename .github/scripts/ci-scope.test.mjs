@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
-import { determineScope, isDocsPath, parseChangedPaths, planScope } from './ci-scope.mjs';
+import { determineScope, isCollectionFailure, isDocsPath, isServerReleasePath, parseChangedPaths, planScope } from './ci-scope.mjs';
 
 const allPackages = ['protocol', 'client', 'daemon', 'ui', 'desktop'];
 const allPlatforms = ['linux', 'macos', 'windows'];
@@ -101,6 +101,28 @@ test('shared consumers, governance, root config and unknown paths force full', (
   }
   assert.deepEqual(plan(['AGENTS.md', '.github/scripts/ci-scope.mjs']).platforms, allPlatforms);
   assert.deepEqual(plan(['.agents/skills/verify/SKILL.md', '.github/scripts/ci-scope.mjs']).platforms, allPlatforms);
+});
+
+test('server install and release scripts force full with their own reason, which is not a collection failure', () => {
+  for (const path of ['scripts/install.sh', 'scripts/uninstall.sh', 'scripts/install-smoke.mjs', 'scripts/build-server.mjs',
+    'scripts/publish-server.mjs', 'scripts/server-manifest.mjs', 'scripts/server-node.json', 'packages/daemon/server-update.json']) {
+    assert.equal(isServerReleasePath(path), true, path);
+    const result = plan([path]);
+    assert.equal(result.scope, 'full', path);
+    assert.deepEqual(result.packages, allPackages, path);
+    assert.deepEqual(result.platforms, allPlatforms, path);
+    assert.equal(result.reason, `server install/release script: ${path}`);
+    assert.equal(isCollectionFailure(result.reason), false, path);
+  }
+  for (const path of ['scripts/install.test.mjs', 'scripts/publish-server.test.mjs', 'scripts/sub/install.sh', 'packages/daemon/src/service/server-update.ts']) {
+    assert.equal(isServerReleasePath(path), false, path);
+  }
+  assert.equal(plan(['packages/daemon/src/service/server-update.ts']).scope, 'affected');
+  // The first full reason wins; the platforms are the union.
+  assert.equal(plan(['scripts/build.mjs', 'scripts/install.sh']).reason, 'shared or unknown path: scripts/build.mjs');
+  for (const reason of ['manual dispatch', 'main integration', 'ci:all label', 'platform label on docs', 'shared package: protocol',
+    'shared or unknown path: x', 'shared package config: packages/ui/package.json', '']) assert.equal(isCollectionFailure(reason), false, reason);
+  for (const reason of ['empty diff', 'Git collection failed', 'missing or invalid SHA', 'unsupported event', 'server install/release']) assert.equal(isCollectionFailure(reason), true, reason);
 });
 
 test('main integration is full for non-docs; readiness requires non-draft frozen head', () => {

@@ -23,6 +23,7 @@ import { attachExisting, AttachError } from '../src/attach.js';
 
 const identity = { pid: 4321, startedAt: '2026-10-11T00:00:00.000Z', listen: '127.0.0.1:42345' };
 const credential = 'a'.repeat(64);
+const serverInfo = { type: 'serverInfo', machineId: '00000000-0000-4000-8000-000000000000', version: '0.9.0', protocolVersion: 2, deviceName: 'mac', platform: 'macos', capabilities: ['device'], principal: 'owner:local' };
 let root: string;
 let close: ReturnType<typeof vi.fn>;
 let admin: ReturnType<typeof vi.fn>;
@@ -36,7 +37,7 @@ beforeEach(async () => {
   fake.current.mockReset().mockResolvedValue(identity);
   fake.running.mockReset().mockReturnValue(true);
   fake.verify.mockReset().mockResolvedValue(undefined);
-  fake.connect.mockReset().mockResolvedValue({ admin, close });
+  fake.connect.mockReset().mockResolvedValue({ client: { admin, close }, serverInfo });
 });
 
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
@@ -48,6 +49,7 @@ describe('read-only desktop attachment', () => {
     expect(fake.connect).toHaveBeenCalledExactlyOnceWith({ url: `ws://${identity.listen}`, credential, clientKind: 'desktop' });
     expect(admin).toHaveBeenCalledExactlyOnceWith({ type: 'daemonStatus' });
     expect(attached.identity).toEqual(identity);
+    expect(attached.serverInfo).toEqual(serverInfo);
     await Promise.all([attached.dispose(), attached.dispose()]);
     expect(close).toHaveBeenCalledOnce();
   });
@@ -94,6 +96,14 @@ describe('read-only desktop attachment', () => {
     close.mockClear();
     fake.current.mockResolvedValue({ ...identity, startedAt: '2026-10-11T00:01:00.000Z' });
     await expect(attachExisting(root)).rejects.toMatchObject({ reason: 'identity' });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  // devices 4.5: until U2 lets it in for maintenance, a daemon of another protocol still fails the attach, so startup repairs as before
+  it('refuses a daemon of another protocol and closes the candidate', async () => {
+    fake.connect.mockResolvedValueOnce({ client: { admin, close }, serverInfo: { ...serverInfo, protocolVersion: 1 } });
+    await expect(attachExisting(root)).rejects.toMatchObject({ reason: 'protocol', serverProtocol: 1, message: expect.stringContaining('协议版本是 1') });
+    expect(admin).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledOnce();
   });
 

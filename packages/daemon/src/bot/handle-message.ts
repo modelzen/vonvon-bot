@@ -1,10 +1,10 @@
-import type { AgentEntries, AgentPlace, TurnMemory, TurnScope } from '../agent/entry/registry';
+import { NOT_DM_MESSAGE, type AgentEntries, type AgentPlace, type TurnMemory, type TurnScope } from '../agent/entry/registry';
 import { createHiddenBlockFilter, escapeInboundMarkers, memoryNonce, noteMissedBlocks, takeLastMissed, takeMemoryNotices, type FoundBlocks, type RawBlock } from './hidden-blocks';
 import type { MemoryWriter } from './memory-writer';
 import { redactAgentEvents } from '../core/token-redact';
 import { buildJudgeFacts, judgeFactRead, sameNameWord } from './judge-facts';
 import { bareText, smartSalience, type Salience, type SalienceDeps } from './salience';
-import { getAppRoleSnapshot } from '../config/app-roles';
+import { getAppRoleSnapshot, trustedFeishuAdmins } from '../config/app-roles';
 import { createChatPeople } from './chat-people';
 import { findHandoffs, handoffSendResult, type HandoffSendResult, handoffText, handoffNote, ambiguousNote, ambiguousPersonNote, overNote, incompleteNote, otherBotNames, HANDOFF_SEND_MS, type HandoffMiss } from './bot-handoff';
 import { AskCoordinator, type AskTurn } from './ask-coordinator';
@@ -18,6 +18,8 @@ import { groupSkillProfile } from '../agent/group-skills';
 import { completeBuiltinPackage, ensureBuiltinPackage } from '../agent/builtin-skills/package';
 import { builtinSkillsOfSet } from '../agent/builtin-skills/registry';
 import type { SessionProfile } from '../agent/session-profile';
+import { SESSION_ENV, SESSION_SCOPE_ENV, sessionScope } from '../config/session-env';
+import type { HostApi } from '../admin/ipc';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
 import { projectRevision, projectView, projectSettingsRevision, type CollaborationRequest } from '../admin/collaboration';
@@ -51,6 +53,7 @@ import { permissionTable, tableEnv, tierInfo, unavailableTierReply } from '../ag
 import { errorKindFromText, type AgentErrorKind } from '../agent/error-kind';
 import { feishuError, scopeDenial } from '../utils/feishu-error';
 import type { NotReplied, NotRepliedReason, ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
+import { FULL_ACCESS_WARNING } from '@vonvon/protocol';
 import type { JudgeErrorKind, JudgeDecision, JudgeResult, JudgeVariant } from '../judge/types';
 import { JUDGE_INPUT_LIMITS, oneLine } from '../judge/prompt';
 import { deniedScopeName, errorDetail, fitDetail, reportAttention, reportDecision, reportLatestAction, reportNotReplied, reportScopeDenied, type ScheduleDiagnosticEvent } from './diagnostics';
@@ -78,7 +81,7 @@ import {
   type ThreadHistory,
   type ThreadSummary,
 } from '../agent/types';
-import { note, type SelectOption } from '../card/cards';
+import { card, md, note, type CardObject, type SelectOption } from '../card/cards';
 import { ASK_CONTROLS_EID } from '../card/ask-card';
 import {
   createAppPreferencesWriter,
@@ -120,7 +123,8 @@ import {
   type SessionTitleBackendConfig,
 } from '../config/schema';
 import { CardDispatcher, type CardActionHandler } from '../card/dispatcher';
-import { closeOwnedProviderProcesses } from '../agent/owned-process';
+import { closeOwnedProviderProcesses, stopAcceptingProviderProcesses } from '../agent/owned-process';
+import type { StopReason } from '../host/lifecycle';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { JUDGE_NAMED_TIMEOUT_MS, createJudge } from '../judge/judge';
 import { createJudgeUsage } from '../judge/usage';
@@ -181,7 +185,6 @@ import {
   buildAllowlistCard,
   buildDmMenuCard,
   buildDoctorCard,
-  buildGroupSettingsCard,
   buildJoinGroupFormCard,
   parseProjectPick,
   parseNoMentionPick,
@@ -236,7 +239,7 @@ import { resolveProjectsRootDir } from '../config/directories';
 import { loadBots } from '../config/bots';
 import { admitDirectorySettings } from '../config/directories';
 import { DirectoryError, directoryFailure } from '../config/directory-errors';
-import { botBackendId, groupBackendId, resolveCommentsExecution, resolveExecution, resolveModelPreference, executionSessionProfile, projectModelAllowed, projectModelCatalog, projectSpeedAllowed, type ModelPreference } from '../config/execution';
+import { botBackendId, groupBackendId, groupPermission, resolveCommentsExecution, resolveExecution, resolveModelPreference, executionSessionProfile, projectModelAllowed, projectModelCatalog, projectSpeedAllowed, type ModelPreference } from '../config/execution';
 import { fileClaimMode, messageLink, OutboundFiles } from './outbound-files';
 import { getSecret } from '../config/keystore';
 import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
@@ -356,7 +359,7 @@ import {
   SUPPORTED_FILE_TYPES,
   syncCommentInstructions,
 } from './comments';
-import { createGracefulInterrupt, createIdlePause, Semaphore, withIdleTimeout, type IdlePause } from './watchdog';
+import { createEarlyInterrupt, createGracefulInterrupt, createIdlePause, Semaphore, withIdleTimeout, type IdlePause } from './watchdog';
 import { createBotRoster } from './bot-roster';
 import { readResponseRoster, responseMemberLabel } from './response-members';
 import { createNameBook, fetchChatMembers, resolveNames, withDeadline } from './names';
@@ -372,6 +375,12 @@ async function fetchAllProjectMembers(channel: LarkChannel): Promise<{ openId: s
     for (const m of members) if (!seen.has(m.openId)) seen.set(m.openId, m.name);
   }
   return [...seen].map(([openId, name]) => ({ openId, name }));
+}
+
+/** The profile a session starts with, its env carrying `env` too; a session with no profile gets one with only that. */
+export function withSessionEnv(profile: SessionProfile | undefined, env: Record<string, string>): SessionProfile {
+  return profile ? { ...profile, env: { ...profile.env, ...env } }
+    : { instructions: '', env, nativeSettings: { automaticMemory: false }, additionalRoots: [], capabilityPackages: [], mcpServers: [] };
 }
 
 /**
@@ -650,6 +659,13 @@ type NotedMessage = Pick<NormalizedMessage, 'chatId' | 'messageId' | 'senderId' 
 
 /** How long a group's full-only explanation quiets 免@ and bot messages; a person's @ always gets one. */
 const FULL_ONLY_QUIET_MS = 10 * 60_000;
+/**
+ * A stop, restart or update interrupts every turn at once (owner 2026-11-02) and gives Codex and Claude this long to
+ * end them, and the shell commands they started, before their processes are closed. Codex answers within milliseconds.
+ */
+export const SHUTDOWN_INTERRUPT_GRACE_MS = 3_000;
+/** How long a shutdown waits for the interrupted turns' cards, the grace above included; the Bot child is killed at 15 s. */
+export const SHUTDOWN_DRAIN_MS = 8_000;
 const UNBOUND_QUIET_MS = 10 * 60_000;
 /** Each 三条底线 lookup's limit (s22): the group's later messages wait behind it. */
 const LOOKUP_DEADLINE_MS = 3000;
@@ -780,6 +796,12 @@ interface ActiveState {
   newAt?: number;
   /** The run's trigger while it waits for a global slot (acquireRunSlot), for a shutdown to keep (s18c). */
   waiting?: DroppedOrigin;
+  /**
+   * A person's turn in flight, from the moment its run reserves the session (a first turn still being prepared: its
+   * session resumed, its images downloaded) or takes it off the queue, until its final card is written: what a shutdown
+   * or a crash cuts short (review 260).
+   */
+  inFlight?: DroppedOrigin;
   /** A main-area run's trigger time: until {@link woven} is known, its record block will carry the unread
    * messages before it (a smart verdict to open a topic checks this, s25). */
   triggerAt?: number;
@@ -919,15 +941,16 @@ export interface Orchestrator {
   /** The host changed a library project's workspace: this bot's rows of it follow, their groups' sessions archived (admin/library.ts). */
   libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
-  /** Scheduled tasks from the desktop and the terminal, run as the local owner (admin/schedule-commands.ts). */
-  schedule: (via: 'desktop' | 'cli', request: ScheduleRequest) => Promise<ScheduleReply>;
-  /** The same command core for the agent tools (agent/entry/schedule-tools.ts): the actor comes from the turn's grant. */
+  /**
+   * Scheduled tasks through the command core (admin/schedule-commands.ts): the agent tools' actor comes from the turn's
+   * grant (agent/entry/schedule-tools.ts), the wire's is the local owner's or a Bot session's turn.
+   */
   scheduleAs: (actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
   /** The scheduled-task tick (bot/schedule/scheduler.ts), outside admit; bridge.ts starts it once Feishu is connected. */
   scheduler: { start(): Promise<void>; stop(): void; drain(ms: number): Promise<void> };
-  /** Close every live codex session (SIGKILLs the app-server children) so a
-   *  graceful exit leaves no orphan processes. */
-  shutdown: () => Promise<void>;
+  /** Interrupts every turn, gives the agents a moment to end them, then closes every live session so a graceful exit
+   *  leaves no orphan processes (owner 2026-11-02). `reason` is read as each cut-short turn's card is written. */
+  shutdown: (reason?: () => StopReason) => Promise<void>;
   /** Persist queued messages before an uncaught failure exits the bot. */
   saveDroppedSync: (why: 'shutdown' | 'crash') => void;
   /** Once connected: ask the senders of what the last shutdown dropped to send again (s18c). Not after shutdown. */
@@ -1096,9 +1119,14 @@ export function createOrchestrator(
   /** `droppedFile`: where a shutdown keeps the queued messages it drops (s18c). No default: without it, nothing is
    * kept or answered (tests, and every caller but `daemon run`). */
   // Only daemon run supplies judgeUsageFile; tests that omit it do not persist usage.
-  options?: { entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention },
+  options?: { entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
+    /** devices-4a 4.3: where each new session's token comes from (the host, over IPC). Without it a session gets none (tests). */
+    host?: Pick<HostApi, 'issueSessionToken'>;
+    /** A shutdown's two waits (owner 2026-11-02); tests shorten them. */
+    shutdownTiming?: { interruptGraceMs?: number; drainMs?: number } },
 ): Orchestrator {
   const entries = options?.entries;
+  const host = options?.host;
   const memory = options?.memory;
   const bindingBot = options?.bot ? { ...options.bot } : undefined;
   /** Lazily-constructed backends by id — one instance per backend for the whole
@@ -1387,6 +1415,18 @@ export function createOrchestrator(
       throw new ThreadPermissionChanged('旧权限会话没能关闭，请稍后重试。', {cause: error});
     } finally { clearTimeout(timer); }
   }
+  /**
+   * The token a new session's `vonvon` commands carry (devices 5.3), in place of the bare marker, and beside it the
+   * `--scope` its command line copies: a group's reach is its group, a private chat's and a comment's the bot.
+   */
+  async function sessionEnv(api: Pick<HostApi, 'issueSessionToken'>, sessionId: string, place: AgentPlace): Promise<Record<string, string>> {
+    const chatId = place.kind !== 'doc' && place.chatId ? place.chatId : undefined;
+    const token = await api.issueSessionToken({
+      appId: cfg.accounts.app.id, place: place.kind === 'p2p' ? 'dm' : place.kind === 'group' ? 'group' : 'comment', sessionId,
+      ...(chatId ? { chatId } : {}),
+    });
+    return { [SESSION_ENV]: token, [SESSION_SCOPE_ENV]: sessionScope(cfg.accounts.app.id, place.kind === 'group' ? chatId : undefined) };
+  }
   /** The profile a thread was actually started with: a permission save can swap in a rebuilt one (and its opening). */
   const profileUsed = new WeakMap<AgentThread, object>();
   /** A save can finish while a provider is starting, before eviction can see its thread. */
@@ -1401,7 +1441,12 @@ export function createOrchestrator(
       }
       const entry = entries?.issue(place);
       let thread: AgentThread;
-      try { thread = await create({...opts, ...(entry ? {entry} : {})}); entry?.attach(thread); }
+      try {
+        // devices 5.3: the session's shell gets its token, never the bare marker; no token, no session (the host is gone).
+        const session = entry && host ? await sessionEnv(host, entry.sessionId, place) : undefined;
+        thread = await create({...opts, ...(entry ? {entry} : {}), ...(session ? {profile: withSessionEnv(opts.profile, session)} : {})});
+        entry?.attach(thread);
+      }
       catch (error) { entry?.revoke('start-failed'); throw error; }
       if (opts.profile) profileUsed.set(thread, opts.profile);
       const fingerprint = permissionFingerprint(opts);
@@ -1525,6 +1570,22 @@ export function createOrchestrator(
   let shuttingDown = false;
   attention.observe(publishAttention);
   let shutdownPromise: Promise<void> | undefined;
+  /** Why the shutdown came, read as each cut-short turn's card is written (the host's message may come after its SIGTERM). */
+  let shutdownReason: () => StopReason = () => 'stop';
+  /**
+   * The people's turns a shutdown cut short (owner 2026-11-02), by trigger message: each card says so and asks for the
+   * message again; one whose card is not confirmed when the shutdown stops waiting goes to dropped.json, so its sender
+   * hears once the bot is back.
+   */
+  const cutShort = new Map<string, DroppedOrigin>();
+  /**
+   * What this shutdown settled for each person's message, by id: saved as it began (collectLost), appended later
+   * (keepForResend), or answered by its card. A message is kept once however many paths reach it, its preparation ending
+   * after the drain, say (review 260); an appended one a late card answers leaves dropped.json again (review 259).
+   */
+  const resendKept = new Map<string, 'saved' | 'appended' | 'answered'>();
+  const interruptGraceMs = options?.shutdownTiming?.interruptGraceMs ?? SHUTDOWN_INTERRUPT_GRACE_MS;
+  const shutdownDrainMs = options?.shutdownTiming?.drainMs ?? SHUTDOWN_DRAIN_MS;
   const droppedReplies = options?.droppedFile ? createDroppedReplies({
     appId: cfg.accounts.app.id, file: options.droppedFile, log,
     // The raw API, not channel.send: with the message gone, that sends a new one to the main area instead.
@@ -2712,7 +2773,7 @@ export function createOrchestrator(
 
     // Single-session group: the main area is one session keyed by chatId. No
     // topics — reply by quoting (引用回复); runs serialize per chatId (active[chatId]).
-    // Commands: /settings (群设置) + /model. /resume has no topic list here.
+    // Commands: /model, /resume and the session ones; /settings is a private chat's (s1b). /resume has no topic list here.
     // A topic opened in the group (msg.threadId) falls through to the topic path
     // below and gets its own session (product.md 3.5); an old topic that used to
     // share the chat session starts fresh from its next message, nothing migrated.
@@ -2722,7 +2783,7 @@ export function createOrchestrator(
         return;
       }
       if (cmd === 'settings') {
-        await postGroupSettings(msg, project);
+        await refuseGroupSettings(msg);
         return;
       }
       const ts = turnSession(msg.chatId, project);
@@ -2775,15 +2836,19 @@ export function createOrchestrator(
       return;
     }
 
-    // Inside a topic (multi, or a topic in a single group) → a turn in that session. /settings +
-    // /resume aren't topic-scoped — redirect to the main area instead of feeding
-    // them to codex as a normal turn (烧一轮还无人能懂).
+    // Inside a topic (multi, or a topic in a single group) → a turn in that session. /resume isn't
+    // topic-scoped — redirect to the main area instead of feeding it to codex as a normal turn
+    // (烧一轮还无人能懂); /settings is a private chat's (s1b).
     if (msg.threadId) {
       if (cmd === 'help') {
         await postHelpCard(msg, 'topic', true, project);
         return;
       }
-      if (cmd === 'resume' || cmd === 'settings') {
+      if (cmd === 'settings') {
+        await refuseGroupSettings(msg, true);
+        return;
+      }
+      if (cmd === 'resume') {
         await channel
           .send(msg.chatId, { markdown: `\`/${cmd}\` 请到主群区使用（话题外发）。` }, { replyTo: msg.messageId, replyInThread: true })
           .catch(() => undefined);
@@ -2838,8 +2903,8 @@ export function createOrchestrator(
       void trackTask(handleTurn(msg, text, ts.sessionKey, false, project, ts).catch((err) => log.fail('intake', err)));
       return;
     }
-    // Main group area: /resume opens the history picker; /settings opens the
-    // group-settings card; /model only makes sense inside a topic; anything else
+    // Main group area: /resume opens the history picker; /settings is a private
+    // chat's (s1b); /model only makes sense inside a topic; anything else
     // directly creates a topic + runs.
     if (cmd === 'help') {
       await postHelpCard(msg, 'main', false, project);
@@ -2850,7 +2915,7 @@ export function createOrchestrator(
       return;
     }
     if (cmd === 'settings') {
-      await postGroupSettings(msg, project);
+      await refuseGroupSettings(msg);
       return;
     }
     if (cmd === 'clear' || cmd === 'new') {
@@ -3036,9 +3101,9 @@ export function createOrchestrator(
     }
   }
 
-  /** 非管理员触发 owner-only 命令(/resume、/settings)时的统一无权限提示。
+  /** 非管理员触发 owner-only 命令(/resume、/new、/clear)时的统一无权限提示。
    * design §5: 管理类命令仅 bot owner(=admins[]) 可用；对话类(/model、/help)对所有人开放。 */
-  async function denyAdminCommand(msg: NormalizedMessage, cmd: 'resume' | 'settings' | 'clear' | 'new'): Promise<void> {
+  async function denyAdminCommand(msg: NormalizedMessage, cmd: 'resume' | 'clear' | 'new'): Promise<void> {
     const why = cmd === 'clear' || cmd === 'new' ? '主区的会话是大家共用的。' : '';
     await channel
       .send(msg.chatId, { markdown: `⚠️ \`/${cmd}\` 只有主人和管理员能用。${why}` }, { replyTo: msg.messageId })
@@ -3046,22 +3111,15 @@ export function createOrchestrator(
     log.info('intake', 'cmd-denied', { cmd });
   }
 
-  /** @bot /settings in a group: post the in-group settings card (owner/admin-gated). */
-  async function postGroupSettings(msg: NormalizedMessage, project?: Project): Promise<void> {
-    if (!isAdmin(cfg, msg.senderId)) {
-      await denyAdminCommand(msg, 'settings');
-      return;
-    }
-    if (!project) {
-      await channel
-        .send(msg.chatId, { markdown: '本群未绑定项目，请先在私聊里新建项目。' }, { replyTo: msg.messageId })
-        .catch(() => undefined);
-      return;
-    }
-    await withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
-      await sendManagedCard(channel, msg.chatId, buildGroupSettingsCard(project), msg.messageId);
-      log.info('card', 'group-settings', { project: project.name });
-    });
+  /**
+   * @bot /settings in a group (s1b, owner 2026-11-02): no group settings card any more, whoever sends it. Settings are
+   * changed in a private chat, the client or the command line, which the sentence says.
+   */
+  async function refuseGroupSettings(msg: NormalizedMessage, inThread = false): Promise<void> {
+    await channel
+      .send(msg.chatId, { markdown: NOT_DM_MESSAGE }, { replyTo: msg.messageId, ...(inThread ? { replyInThread: true } : {}) })
+      .catch(() => undefined);
+    log.info('intake', 'cmd-denied', { cmd: 'settings', reason: 'not-dm' });
   }
 
   /** A turn's resolved permission: the group's one tier, whoever sends (s15c). */
@@ -3489,7 +3547,9 @@ export function createOrchestrator(
       return;
     }
     const reserved: ActiveState = { queue: [], chatId: msg.chatId, requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg), smart: project && sessionModeOf(project) === 'smart', isGoal: goal, runLoop: true,
-      ...(flat && !msg.threadId && !goal ? { triggerAt: msg.createTime } : {}) };
+      ...(flat && !msg.threadId && !goal ? { triggerAt: msg.createTime } : {}),
+      // A shutdown keeps it from now on, however long its preparation takes past the drain (review 260).
+      ...(origin ? { inFlight: origin } : {}) };
     active.set(sessionKey, reserved);
     dropRetries(sessionKey);
     extra?.retry?.accepted();
@@ -3847,7 +3907,7 @@ export function createOrchestrator(
         // Stopping: the shutdown's, not this turn's failure, as in launchRun (settleGone); the shutdown took the queue.
         if (shuttingDown) {
           if (extra?.scheduled) extra.scheduled.settle(scheduleStopped());
-          else if (origin) droppedReplies?.appendSync(origin);
+          else if (origin) keepForResend(origin);
           return;
         }
         if (!goal) noteFailure(msg, flat ? 'main' : 'topic', launchOpts?.backendId ?? groupBackend(project).id, { error: err });
@@ -3962,6 +4022,8 @@ export function createOrchestrator(
         // 还在，话题自愈而不是僵死到重启）。
         sessions.delete(threadId);
         log.info('agent', 'dead-thread-evict', { threadId });
+        // Closed all the same: its entry, and the session's token with it, ends (devices 5.3).
+        void trackTask(live.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
       }
     }
     const rec = await getSession(threadId);
@@ -5330,16 +5392,26 @@ export function createOrchestrator(
   // DM management console buttons (design §3.1). Admin-gated; sub-views patch
   // the same card in place, each carrying a ⬅️ 菜单 back button.
   const dmAdmin = (openId?: string): boolean => isAdmin(cfg, openId ?? '');
+  /** product.md 3.7: only the owner changes this machine's administrators, here as by chat and the command line (audit 252-1). */
+  const dmOwner = (openId?: string): boolean => Boolean(openId) && resolveOwner(cfg) === openId;
   const administratorIds = (): (string | undefined)[] => {
     const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
-    return [roles?.ownerOpenId, ...(roles?.admins ?? []), cfg.preferences?.access?.ownerOpenId, ...(cfg.preferences?.access?.admins ?? [])];
+    return [roles?.ownerOpenId, ...trustedFeishuAdmins(roles), cfg.preferences?.access?.ownerOpenId, ...(cfg.preferences?.access?.admins ?? [])];
   };
+  /** The administrators card as the clicker may use it: the owner adds and removes, an admin only reads. */
+  const adminsCard = async (evt: CardActionEvent): Promise<CardObject> =>
+    buildAdminsCard(cfg, await namesWithOperator(evt, administratorIds()), { editable: dmOwner(evt.operator?.openId) });
   // DM cards are CardKit entities (sendManagedCard); update them via the
   // settle-then-cardkit path so the click's callback acks first. Passing the
   // whole evt lets settleUpdate self-heal an orphaned (post-restart) card by
   // re-posting to evt.chatId.
   const patch = (evt: CardActionEvent, c: object | (() => object | Promise<object>)): void => {
     void settleUpdate(evt.messageId, c, evt.chatId);
+  };
+  /** An old in-group settings card clicked (s1b): it becomes the not-dm sentence, nothing is written. */
+  const refuseGroupSettingsCard = (evt: CardActionEvent): void => {
+    log.info('console', 'group-settings-card', { refused: 'not-dm' });
+    patch(evt, card([md(NOT_DM_MESSAGE)], { summary: NOT_DM_MESSAGE }));
   };
 
   async function renderForegroundUpdate(): Promise<ReturnType<typeof buildForegroundUpdateCard>> {
@@ -6200,83 +6272,25 @@ export function createOrchestrator(
       if (!dmAdmin(evt.operator?.openId)) return;
       void trackTask(saveCommentRulesFromCard(evt, { kind: 'default' }));
     })
-    // In-group settings: toggle 免@ for the project bound to evt.chatId. Admin-gated.
-    // 写路径走管理面共享层（admin/ops.ts）——与 DM 卡片 / Web 控制台同一套落盘逻辑。
-    .on(GS.setNoMention, ({ evt, value }) => {
-      if (!isAdmin(cfg, evt.operator?.openId ?? '')) return;
-      const on = value.v === 'on';
-      patch(evt, async () => {
-        const project = await getProjectByChatId(evt.chatId);
-        if (project) {
-          const r = await performSetNoMention({ projectName: project.name, on });
-          log.info('console', 'group-nomention', { project: project.name, on, ok: r.ok });
-          if (r.ok) return buildGroupSettingsCard(r.project);
-          // Refused (turned 智能 since the card was sent, s25c): redraw from the row as it is now.
-          const latest = await getProjectByChatId(evt.chatId);
-          return buildGroupSettingsCard(latest ?? project, noMentionRefused(latest, r.reason));
-        }
-        return buildGroupSettingsCard({ name: '本群', kind: 'multi', noMention: on });
-      });
-    })
-    // s12：自动压缩一直开，开关已去掉。旧卡上的按钮不写盘，只把卡刷新成没有开关的样子并说一声。
-    .on(GS.setAutoCompact, ({ evt }) => {
-      if (!isAdmin(cfg, evt.operator?.openId ?? '')) return;
-      patch(evt, async () => {
-        const project = await getProjectByChatId(evt.chatId);
-        return buildGroupSettingsCard(project ?? { name: '本群', kind: 'multi' }, AUTO_COMPACT_RETIRED);
-      });
-    })
-    // 🤖 默认模型/强度：群内 /settings 的镜像入口。GS.settings 返回群设置卡；GS.modelDefault
-    // 进子卡（按项目后端实时列模型）；GS.modelDefaultSubmit 校验+落盘后回群设置卡。均 isAdmin
-    // 门控（与 ✋免@ 同级），项目按 evt.chatId 解析；不驱逐活跃会话（默认只管新话题）。
-    .on(GS.settings, ({ evt }) => {
-      if (!isAdmin(cfg, evt.operator?.openId ?? '')) return;
-      patch(evt, async () => {
-        const project = await getProjectByChatId(evt.chatId);
-        return buildGroupSettingsCard(project ?? { name: '本群', kind: 'multi' });
-      });
-    })
-    .on(GS.modelDefault, ({ evt }) => {
-      if (!isAdmin(cfg, evt.operator?.openId ?? '')) return;
-      patch(evt, async () => {
-        const project = await getProjectByChatId(evt.chatId);
-        if (!project) return buildGroupSettingsCard({ name: '本群', kind: 'multi' });
-        const models = await listModels(groupBackend(project));
-        return buildModelDefaultCard(project, models, 'group');
-      });
-    })
-    // 表单提交锁卡：成功回群设置卡；选的模型无效或手填的 id 不合格时，带提示重发
-    // 默认模型卡让管理员改，不再静默回群设置卡。
-    .on(GS.modelDefaultSubmit, ({ evt, formValue }) => {
-      if (!isAdmin(cfg, evt.operator?.openId ?? '')) return;
-      void trackTask((async () => {
-        const project = await getProjectByChatId(evt.chatId);
-        if (!project) return;
-        const backendId = groupBackendId(project);
-        const models = await listModels(backendFor(backendId));
-        const parsed = parseModelDefaultFormValue(formValue, models, backendId);
-        let next: object;
-        if (!parsed.ok) {
-          next = buildModelDefaultCard(project, models, 'group', `⚠️ ${parsed.message}`);
-        } else {
-          const r = await performSetModelDefault({ projectName: project.name, model: parsed.model, effort: parsed.effort, custom: parsed.custom });
-          if (r.ok) log.info('console', 'group-model-default', { project: project.name, model: parsed.model, effort: parsed.effort, custom: parsed.custom });
-          next = buildGroupSettingsCard((await getProjectByChatId(evt.chatId)) ?? project);
-        }
-        await sendManagedCard(channel, evt.chatId, next);
-      })().catch((e) => log.fail('console', e, { phase: 'group-model-default-result' })));
-    })
+    // The in-group settings card's buttons and forms (s1b, owner 2026-11-02): settings are a private chat's, so a card
+    // still in a group from before changes nothing. Whoever clicks, it turns into the sentence that says where to change
+    // them; the private chat's cards (DM.*) are not these.
+    .on(GS.setNoMention, ({ evt }) => refuseGroupSettingsCard(evt))
+    .on(GS.setAutoCompact, ({ evt }) => refuseGroupSettingsCard(evt))
+    .on(GS.settings, ({ evt }) => refuseGroupSettingsCard(evt))
+    .on(GS.modelDefault, ({ evt }) => refuseGroupSettingsCard(evt))
+    .on(GS.modelDefaultSubmit, ({ evt }) => refuseGroupSettingsCard(evt))
     // ── 权限管理回调（admins 全局 / 项目响应白名单）。均 dmAdmin 门控（私聊管理台）。
     // 列表卡用 patch 原地重渲染（纯按钮不锁）；加人是 form 提交，结果发**新卡**（旧表单
     // 留痕），规避 select 锁卡。owner 恒在 admins 名单顶、不可删。
     .on(DM.admins, ({ evt }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
-      patch(evt, async () =>
-        buildAdminsCard(cfg, await namesWithOperator(evt, administratorIds())),
-      );
+      patch(evt, () => adminsCard(evt));
     })
     .on(DM.addAdminForm, ({ evt }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
+      // An admin's click on an owner's card (a forwarded or older one): the list back, read-only.
+      if (!dmOwner(evt.operator?.openId)) { patch(evt, () => adminsCard(evt)); return; }
       patch(evt, async () => {
         const all = await fetchAllProjectMembers(channel);
         const members = all.filter((m) => !isAdmin(cfg, m.openId)); // 排除已是 admin/owner 的
@@ -6285,11 +6299,12 @@ export function createOrchestrator(
     })
     .on(DM.addAdminSubmit, ({ evt, formValue }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
+      const owner = dmOwner(evt.operator?.openId);
       const manual = String(formValue?.open_id ?? '').trim();
       const id = manual.startsWith('ou_') ? manual : pickOpenId(formValue);
-      log.info('console', 'admin-add', { picked: id?.slice(-6) ?? null });
+      log.info('console', 'admin-add', { picked: id?.slice(-6) ?? null, ...(owner ? {} : { refused: 'not-owner' }) });
       void trackTask((async () => {
-        if (id) {
+        if (id && owner) {
           await writePreferences((preferences) => {
             const access: AppAccess = { ...(preferences.access ?? {}) };
             access.ownerOpenId ??= cfg.preferences?.access?.admins?.[0];
@@ -6297,18 +6312,18 @@ export function createOrchestrator(
             preferences.access = access;
           }).catch((e) => log.fail('console', e, { phase: 'save-config' }));
         }
-        const ids = administratorIds();
-        const next = buildAdminsCard(cfg, await namesWithOperator(evt, ids));
-        await sendManagedCard(channel, evt.chatId, next).catch((e) => log.fail('console', e, { phase: 'admin-add-result' }));
+        await sendManagedCard(channel, evt.chatId, await adminsCard(evt)).catch((e) => log.fail('console', e, { phase: 'admin-add-result' }));
       })());
     })
     .on(DM.rmAdmin, ({ evt, value }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
+      const owner = dmOwner(evt.operator?.openId);
       const id = typeof value.u === 'string' ? value.u : '';
+      if (!owner) log.info('console', 'admin-remove', { refused: 'not-owner' });
       patch(evt, async () => {
         const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
         const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
-        if (id && id !== resolveOwner(cfg) && id !== scanner && !roles?.admins.includes(id)) {
+        if (owner && id && id !== resolveOwner(cfg) && id !== scanner && !trustedFeishuAdmins(roles).includes(id)) {
           await writePreferences((preferences) => {
             const access: AppAccess = { ...(preferences.access ?? {}) };
             access.ownerOpenId ??= cfg.preferences?.access?.admins?.[0];
@@ -6316,8 +6331,7 @@ export function createOrchestrator(
             preferences.access = access;
           }).catch((e) => log.fail('console', e, { phase: 'save-config' }));
         }
-        const ids = administratorIds();
-        return buildAdminsCard(cfg, await namesWithOperator(evt, ids));
+        return adminsCard(evt);
       });
     })
     .on(DM.allowlist, ({ evt, value }) => {
@@ -6441,12 +6455,16 @@ export function createOrchestrator(
         }
         // 共享层（admin/ops.ts）：落盘 + 驱逐活跃会话让新档立即生效；写后回读，
         // 卡片与盘上一致——与 Web 控制台的 setPermissionMode 完全同一条路径。
+        const wasFull = p ? groupPermission(p).effect.mode === 'full' : false;
         const r = await performSetPermissionMode({ projectName: name, mode, backendFor, evictLiveSessionsForChat });
         if (!r.ok) return;
         log.info('console', 'permission', { project: name, mode });
         await sendManagedCard(channel, evt.chatId, buildProjectSettingsCard(r.project, backendDisplayName(r.project.backend))).catch((e) =>
           log.fail('console', e, { phase: 'permission-result' }),
         );
+        // devices 第 15 节：把群改成完全访问时带上这句。
+        if (mode === 'full' && !wasFull)
+          await channel.send(evt.chatId, { markdown: FULL_ACCESS_WARNING }).catch(e => log.fail('console', e, { phase: 'permission-result' }));
       })());
     })
     // 🤖 默认模型/强度：打开下拉表单子卡（按项目后端实时列模型；选完提交）。
@@ -7394,7 +7412,7 @@ export function createOrchestrator(
     // Checked right after this await: no macrotask can start a shutdown between here and the free-slot acquire below.
     // A shutdown that began meanwhile found this turn neither queued nor waiting for a slot (collectLost), so a
     // person's turn is kept for redelivery here.
-    if (shuttingDown) { if (opts.origin) droppedReplies?.appendSync(opts.origin); reaction?.done(); await opts.thread.close(); return; }
+    if (shuttingDown) { if (opts.origin) keepForResend(opts.origin); reaction?.done(); await opts.thread.close(); return; }
     state.runLoop = true;
     state.smart = opts.smart === true;
     if (opts.requesterOpenId) state.requesterOpenId = opts.requesterOpenId;
@@ -7558,7 +7576,7 @@ export function createOrchestrator(
     const settleGone = (turn: QueuedTurn, target: string | undefined): boolean => {
       if (shuttingDown) {
         if (turn.scheduled) turn.scheduled.settle(scheduleStopped());
-        else if (turn.origin) droppedReplies?.appendSync(turn.origin);
+        else if (turn.origin) keepForResend(turn.origin);
         return true;
       }
       if (!state.evicted) return false;
@@ -7600,6 +7618,8 @@ export function createOrchestrator(
       let replyInThread = opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId));
       for (;;) {
         let turnInput = currentTurn.input;
+        // In flight from here, through the preparation below, not only once turn/start went out (review 260).
+        state.inFlight = currentTurn.origin;
         state.requesterOpenId = currentTurn.requesterOpenId;
         state.requesterKind = currentTurn.requesterKind;
         const scheduled = currentTurn.scheduled;
@@ -7666,6 +7686,10 @@ export function createOrchestrator(
         titleTurnAttempted = true;
         const turnStartAt = Date.now(); // turn/start 已在 runStreamed() 内发出（与下面的建卡并行）
         state.run = run;
+        // review 260: the ⏹ entry comes only once the card is created and the topic adopted (Feishu calls, seconds when
+        // Feishu is slow); a stop or the shutdown meanwhile interrupts the turn through this one, as soon as it has its id.
+        const early = createEarlyInterrupt({ turnId: () => run.turnId(), abort: (tid) => void opts.thread.abort(tid).catch(() => undefined) });
+        state.interrupt = () => { state.intakeCancelled = true; early.interrupt(); };
         activity?.end();
         activity = createRunActivity(opts.chatId);
         const render = new RunRender();
@@ -7754,8 +7778,9 @@ export function createOrchestrator(
           // 无人消费的通知流会污染该 thread 的下一轮。turnId 此时多半还没到手
           // （事件尚未消费），abort 仅尽力而为；close() SIGKILL 子进程兜底终结
           // 这轮。下一条消息经 resolveThread 的 resume 兜底自愈。
+          const { sentTo } = early.handOver();
           const tid = run.turnId();
-          if (tid) void opts.thread.abort(tid).catch(() => undefined);
+          if (tid && tid !== sentTo) void opts.thread.abort(tid).catch(() => undefined);
           void trackTask(opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
           if (topicThreadId) sessions.delete(topicThreadId);
           throw err; // 外层 catch 把错误回给用户
@@ -7878,9 +7903,12 @@ export function createOrchestrator(
         });
         let startedTurnId: string | undefined;
         let awaitingSubagents = false;
+        // From here the ⏹ entry below stops the turn; a stop that came while the card was created goes on through it.
+        const handed = early.handOver();
         const stopper = createGracefulInterrupt({
           turnId: () => run.turnId() ?? (awaitingSubagents ? startedTurnId : undefined),
-          abort: (tid) => void opts.thread.abort(tid).catch(() => undefined),
+          // That stop sent turn/interrupt to this turn already.
+          abort: (tid) => { if (tid !== handed.sentTo) void opts.thread.abort(tid).catch(() => undefined); },
           forceStop: resolveStop,
         });
         disposeInterrupt = stopper.dispose;
@@ -7906,6 +7934,7 @@ export function createOrchestrator(
           run.lastActivity, // raw-notification liveness: a long shell command isn't "idle"
           idlePause,
         );
+        if (handed.stopped) originalInterrupt();
         // Per-turn stream-latency observability (file log `stream.timing`): locates
         // where a reply lags — first byte, backlog (lastEv vs done), push split, RTT.
         const tStart = Date.now();
@@ -8013,6 +8042,8 @@ export function createOrchestrator(
           procDead,
         });
         rc.rs = segmentSnapshot();
+        // owner 2026-11-02: a turn a stop, restart or update cut short says so, and asks a person for the message again.
+        if (interrupted && shuttingDown) rc.stopped = { reason: shutdownReason(), resend: currentTurn.origin !== undefined };
         // The final card promises a next run from the task as it is now: paused or deleted during the run, it has none.
         if (scheduled) rc.nextRun = scheduledNextRun(scheduled.job);
         if (interrupted) log.info('agent', 'interrupt', { graceful: !stopper.forced(), threadId: topicThreadId ?? null });
@@ -8100,6 +8131,11 @@ export function createOrchestrator(
           completionReminderRefreshers.delete(cardMsgId);
           const terminalCardUpdated = await stream.finalizeCard(channel, buildRunCard(rc));
           delivered = terminalCardUpdated;
+          // Its card has its last word (the answer, or that the shutdown cut it short): nothing to ask again after a restart.
+          if (terminalCardUpdated) {
+            cutShortAnswered(state.inFlight);
+            state.inFlight = undefined;
+          }
           if (confirmedDone && rc.rs.terminal === 'done' && answerText.trim() && terminalCardUpdated) reportLatestAction(opts.chatId, 'replied');
           // One-line per-turn timeline; all ms are relative to the turn's stream start.
           {
@@ -8164,6 +8200,7 @@ export function createOrchestrator(
         }
         // Settled as it ends, before any turn queued behind it runs (T2 4.1 第 5 条).
         scheduled?.settle(ranScheduled(scheduled, rc.rs, delivered, askFaulted, goneAt));
+        state.inFlight = undefined;
         retrySessionTitleAfterTurn();
         // Queued turns reply to the last card still there; a deleted one keeps the previous target.
         if (!gone) replyTo = finalMsgId;
@@ -8223,6 +8260,7 @@ export function createOrchestrator(
       askTurn?.close('turn-ended');
       // Detach before any await: new messages must not join a failed consumer.
       if (active.get(activeKey) === state) active.delete(activeKey);
+      state.inFlight = undefined;
       // The session went (the shutdown, a settings change): not this turn's failure, nor the queue's.
       const went = noted !== undefined && settleGone(noted, replyTo);
       const dropped = went ? 0 : askAgain(state.queue.splice(0), opts.chatId, opts.flat ? 'main' : 'topic', 'run-failed', '前一轮出错，排队的没跑');
@@ -8290,7 +8328,7 @@ export function createOrchestrator(
    * non-complete goal is cleared first so it won't reactivate on the next resume.
    */
   async function launchGoalRun(opts: LaunchOpts): Promise<void> {
-    if (shuttingDown) { if (opts.origin) droppedReplies?.appendSync(opts.origin); await opts.thread.close(); return; }
+    if (shuttingDown) { if (opts.origin) keepForResend(opts.origin); await opts.thread.close(); return; }
     const objective = opts.firstText;
     let activeKey = opts.knownThreadId ?? `pending:${opts.replyTo}`;
     let topicThreadId = opts.knownThreadId;
@@ -8447,7 +8485,10 @@ export function createOrchestrator(
 
     /** Finalize a turn's card (terminal render). No-op for a render-only turn that
      * never produced content (no card was sent) — that's how empty turns vanish. */
+    /** Whether the last card finalizeCard wrote got through (a cut-short goal's last word, owner 2026-11-02). */
+    let lastCardUpdated = false;
     const finalizeCard = async (ctx: GoalTurnCtx | null, continues = false): Promise<void> => {
+      lastCardUpdated = false;
       if (!ctx) return;
       carried = ctx.render.snapshot().subagents.filter(row => row.status === 'running');
       ctx.rc.subagentsCarried = continues && carried.length ? true : undefined;
@@ -8468,6 +8509,7 @@ export function createOrchestrator(
       }, (elementId, element) => ctx.stream!.updateElement(channel, elementId, element));
       ctx.rc.images = await ctx.stream.settleImages(answerText);
       const terminalCardUpdated = await ctx.stream.updateCard(channel, buildRunCard(ctx.rc));
+      lastCardUpdated = terminalCardUpdated;
       if (confirmedDone && ctx.rc.rs.terminal === 'done' && answerText.trim() && terminalCardUpdated) reportLatestAction(opts.chatId, 'replied');
       runsByCard.delete(ctx.cardMsgId);
       promoteCard(ctx.cardMsgId, ctx.rc);
@@ -8576,6 +8618,7 @@ export function createOrchestrator(
       const run = opts.thread.runGoal(goalContext.text ? `${goalContext.text}\n\n目标：${objective}` : objective,
         { serviceTier: goalServiceTier });
       state.run = run;
+      state.inFlight = opts.origin;
       activity = createRunActivity(opts.chatId);
       // ⏹ 终止: clear the goal first (so it won't reactivate on resume), then end
       // the loop immediately — cutting the in-flight turn's output.
@@ -8738,8 +8781,14 @@ export function createOrchestrator(
         const subagents = cur.render.snapshot().subagents;
         cur.render.interrupt();
         logSubagentChanges(subagents, cur.render.snapshot().subagents);
+        // owner 2026-11-02: cut short by a stop, restart or update, the in-flight turn's card says so.
+        if (shuttingDown) cur.rc.stopped = { reason: shutdownReason(), resend: opts.origin !== undefined };
       }
+      const cutCard = interrupted && shuttingDown && cur !== null;
       await finalizeCard(cur);
+      // Only a card that said the goal was cut short settles it; between turns no card says so, and the sender hears later.
+      if (cutCard && lastCardUpdated) cutShortAnswered(opts.origin);
+      state.inFlight = undefined;
       if (!cur && finalized.last && carried.length) {
         const rs = { ...finalized.last.rc.rs, subagents: [...finalized.last.rc.rs.subagents.filter(row => !carried.some(latest => latest.id === row.id)), ...carried] };
         finalized.last.rc.rs = interrupted ? markInterrupted(rs) : rs;
@@ -9412,16 +9461,89 @@ export function createOrchestrator(
     return lost;
   }
 
-  function shutdown(): Promise<void> {
+  /** Each message once: a run waiting for a slot is both lost (collectLost) and in flight. */
+  function oncePerMessage(items: readonly DroppedOrigin[]): DroppedOrigin[] {
+    return items.filter((item, index) => items.findIndex(other => other.messageId === item.messageId) === index);
+  }
+
+  /** The people's turns in flight now (ActiveState.inFlight), a first turn still being prepared too. */
+  function inFlightTurns(): DroppedOrigin[] {
+    return [...new Set(active.values())].flatMap(state => state.inFlight ? [state.inFlight] : []);
+  }
+
+  /**
+   * A cut-short turn whose card said so (or answered): its sender is not asked again once the bot is back. A card that
+   * got through after the drain had kept its turn takes it off dropped.json again (review 259).
+   */
+  function cutShortAnswered(origin: DroppedOrigin | undefined): void {
+    if (!origin) return;
+    const ref = origin.messageId.slice(-6);
+    if (cutShort.delete(origin.messageId)) {
+      resendKept.set(origin.messageId, 'answered');
+      log.info('bridge', 'cut-short-card', { ref });
+    } else if (resendKept.get(origin.messageId) === 'appended') {
+      resendKept.set(origin.messageId, 'answered');
+      droppedReplies?.retractSync(origin);
+      log.info('bridge', 'cut-short-card-late', { ref });
+    }
+  }
+
+  /** Keeps a person's message the shutdown dropped or cut short in dropped.json: once, and not one its card answered. */
+  function keepForResend(origin: DroppedOrigin): void {
+    cutShort.delete(origin.messageId);
+    if (resendKept.has(origin.messageId)) return;
+    resendKept.set(origin.messageId, 'appended');
+    droppedReplies?.appendSync(origin);
+  }
+
+  /** The cut-short turns whose card did not say so in time (or at all): their senders hear once the bot is back. */
+  function keepCutShort(): void {
+    const left = [...cutShort.values()];
+    for (const origin of left) keepForResend(origin);
+    if (left.length) log.info('bridge', 'cut-short-kept', { turns: left.length });
+  }
+
+  /** Waits for the runs (and, with `accepted`, the other tracked tasks) for at most `ms`; true when they all ended. */
+  async function settleWithin(ms: number, accepted: boolean): Promise<boolean> {
+    const deadline = Date.now() + ms;
+    const pending = (): Promise<unknown>[] => accepted ? [...acceptedTasks, ...runTasks] : [...runTasks];
+    while (pending().length) {
+      const left = deadline - Date.now();
+      if (left <= 0) return false;
+      let timer: NodeJS.Timeout | undefined;
+      const results = await Promise.race([
+        Promise.allSettled(pending()),
+        new Promise<undefined>(resolve => { timer = setTimeout(resolve, left, undefined); }),
+      ]).finally(() => clearTimeout(timer));
+      if (!results) return false;
+      for (const result of results) if (result.status === 'rejected') shutdownErrors.add(result.reason);
+    }
+    return true;
+  }
+
+  /**
+   * Stops, restarts and updates cut the turns short at once (owner 2026-11-02): every turn is interrupted now, Codex and
+   * Claude get up to {@link SHUTDOWN_INTERRUPT_GRACE_MS} to end it, then their processes are closed. The cards of the
+   * cut-short turns say why and ask for the message again; the drain waits {@link SHUTDOWN_DRAIN_MS} at most for them,
+   * and what is not confirmed by then goes to dropped.json like the queued messages (s18c).
+   */
+  function shutdown(reason?: () => StopReason): Promise<void> {
     if (shutdownPromise) return shutdownPromise;
     shuttingDown = true;
+    if (reason) shutdownReason = reason;
+    // No new agent process from now on; the running ones are closed once the grace is over.
+    stopAcceptingProviderProcesses();
     entries?.closeAll('shutdown');
     if (attentionTimer !== undefined) time.clearTimer(attentionTimer);
     attentionTimer = undefined;
     attention.observe(() => undefined);
     asks.shutdown();
     // Written at once, before anything is cleared below and long before the Codex processes end or the lock goes.
-    droppedReplies?.saveSync(collectLost(), 'shutdown');
+    const lost = collectLost();
+    droppedReplies?.saveSync(lost, 'shutdown');
+    for (const origin of lost) resendKept.set(origin.messageId, 'saved');
+    // A run waiting for a slot is in both: kept above already.
+    for (const origin of inFlightTurns()) if (!resendKept.has(origin.messageId)) cutShort.set(origin.messageId, origin);
     // After collectLost read the lanes, before the judge's processes go: nothing judged lands now, nor takes its THINKING off.
     for (const item of smartLanes.pending()) dropAck(item);
     smartLanes.shutdown();
@@ -9433,8 +9555,6 @@ export function createOrchestrator(
       try { cleanup.push(operation()); }
       catch (error) { shutdownErrors.add(error); }
     };
-    startCleanup(closeOwnedProviderProcesses);
-    startCleanup(shutdownResidentClients);
     const dropped = { queued: 0, held: 0, compacts: 0 };
     for (const state of active.values()) {
       state.intakeCancelled = true;
@@ -9460,13 +9580,21 @@ export function createOrchestrator(
     });
     const live = [...new Set(sessions.values())];
     sessions.clear();
-    for (const thread of live) startCleanup(() => thread.close());
+    // Interrupted above, closed once the turns ended or the grace is over: an agent that ends its turn itself also
+    // stops the commands it started, which the process group kill may not reach.
+    const graceOver = settleWithin(interruptGraceMs, false).then(ended => {
+      if (!ended) log.info('bridge', 'shutdown_grace_over', { runs: runTasks.size, graceMs: interruptGraceMs });
+    });
+    startCleanup(async () => { await graceOver; await closeOwnedProviderProcesses(); });
+    startCleanup(async () => { await graceOver; await shutdownResidentClients(); });
+    for (const thread of live) startCleanup(async () => { await graceOver; await thread.close(); });
     const cleanupResults = Promise.allSettled(cleanup);
     shutdownPromise = (async () => {
-      while (acceptedTasks.size || runTasks.size) {
-        const results = await Promise.allSettled([...acceptedTasks, ...runTasks]);
-        for (const result of results) if (result.status === 'rejected') shutdownErrors.add(result.reason);
+      // The cards of the cut-short turns get what is left of the drain; a Feishu call without an answer is not waited out.
+      if (!await settleWithin(shutdownDrainMs, true)) {
+        log.warn('bridge', 'shutdown_drain_cut', { runs: runTasks.size, tasks: acceptedTasks.size, limitMs: shutdownDrainMs });
       }
+      keepCutShort();
       for (const result of await cleanupResults) if (result.status === 'rejected') shutdownErrors.add(result.reason);
       // Whatever the drain left unsettled (a run never launched, input /new held): the scheduler waits on none of it.
       for (const hook of scheduledHooks) hook.settle({ status: 'interrupted', by: 'shutdown' });
@@ -9729,18 +9857,11 @@ export function createOrchestrator(
   const scheduleCommands = createScheduleCommands({ store: scheduleStore, scheduler, botId: cfg.accounts.app.id, now: () => Date.now(), hostTimeZone });
   let storeLoaded: ReturnType<typeof scheduleStore.load> | undefined;
   const loadStore = (): ReturnType<typeof scheduleStore.load> => (storeLoaded ??= scheduleStore.load());
-  const schedule = async (via: 'desktop' | 'cli', request: ScheduleRequest): Promise<ScheduleReply> => {
-    await loadStore();
-    return scheduleCommands.execute({ kind: 'local', via }, request);
-  };
   const scheduleAs = async (actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply> => {
     await loadStore();
     return scheduleCommands.execute(actor, request);
   };
   /** Not admit: a stopping bot did nothing, so it says so as a refusal, not as a rejection the terminal reads as a result not known. */
-  const admittedSchedule = (via: 'desktop' | 'cli', request: ScheduleRequest): Promise<ScheduleReply> => (
-    shuttingDown ? Promise.resolve(botNotRunning()) : trackTask(schedule(via, request))
-  );
   const admittedScheduleAs = (actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply> => (
     shuttingDown ? Promise.resolve(botNotRunning()) : trackTask(scheduleAs(actor, request))
   );
@@ -9774,11 +9895,15 @@ export function createOrchestrator(
     adminExecute: admit(adminExecute),
     libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
-    schedule: admittedSchedule,
     scheduleAs: admittedScheduleAs,
     scheduler: { start: async () => scheduler.start(await loadStore()), stop: () => scheduler.stop(), drain: ms => scheduler.drain(ms) },
     shutdown,
-    saveDroppedSync: (why: 'shutdown' | 'crash') => droppedReplies?.saveSync(collectLost(), why),
+    // A crash before the shutdown also keeps the people's turns in flight: no card of theirs will say anything. One during
+    // the shutdown keeps the cut-short turns whose cards had not said so yet; the shutdown already saved the rest.
+    saveDroppedSync: (why: 'shutdown' | 'crash') => {
+      if (shuttingDown) keepCutShort();
+      else droppedReplies?.saveSync(oncePerMessage([...collectLost(), ...inFlightTurns()]), why);
+    },
     replyDropped: () => { if (!shuttingDown) droppedReplies?.start(); },
   };
 }

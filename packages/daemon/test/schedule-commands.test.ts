@@ -127,6 +127,17 @@ describe('who may do what', () => {
     expect(f.scheduler.runNow).not.toHaveBeenCalled();
     expect(await f.onDisk()).toEqual([stored('st_theirs')]);
   });
+  // devices-4b 4.4: a Bot session's command line acts as its turn's person, with that person's rights, recorded as the terminal's
+  it('gives a session actor the chat actor\'s rights, and records what it makes as made from the terminal', async () => {
+    const f = await setup([stored('st_theirs')]);
+    const session: ScheduleActor = { kind: 'session', openId: 'ou_member', name: '成员甲', role: 'member', chatId: G, messageId: 'om_1' };
+    expect(await f.run(session, create())).toMatchObject({ kind: 'task', task: { createdBy: { via: 'cli', openId: 'ou_member', name: '成员甲', role: 'member', messageId: 'om_1' } } });
+    expect((await f.onDisk()).at(-1)!.createdBy).toEqual({ via: 'cli', openId: 'ou_member', name: '成员甲', role: 'member', messageId: 'om_1' });
+    expect(await f.run(session, { action: 'delete', chatId: G, taskId: 'st_theirs', revision: 'rev-st_theirs' })).toEqual(refusal('not-task-owner', '这个任务是别人建的，只有建它的人、主人和管理员能改。'));
+    expect(await f.run(session, { action: 'list', chatId: OTHER })).toEqual(refusal('not-group', '定时任务只能在群里管；要看别的群的任务去那个群说，或者用桌面端。'));
+    expect(await f.run(session, { action: 'listBot' })).toMatchObject(refusal('not-group'));
+    expect(await f.run({ ...session, role: 'admin', openId: 'ou_admin' }, { action: 'delete', chatId: G, taskId: 'st_theirs', revision: 'rev-st_theirs' })).toEqual({ kind: 'deleted', taskId: 'st_theirs' });
+  });
   it('gives listBot to the local owner only', async () => {
     const f = await setup([stored('st_here'), stored('st_there', { chatId: OTHER })]);
     expect(await f.run(local, { action: 'listBot' })).toMatchObject({ kind: 'tasks', tasks: [{ id: 'st_here', chatId: G }, { id: 'st_there', chatId: OTHER }], timeZone: HOST });

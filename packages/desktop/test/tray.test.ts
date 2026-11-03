@@ -77,3 +77,21 @@ it('adds an update item at the top of the menu and takes it away again', () => {
   expect(labels()).toEqual(['打开 Vonvon Bot', 'separator', '退出 Vonvon Bot']);
   expect(fake.tray.setToolTip).toHaveBeenLastCalledWith('Vonvon Bot');
 });
+
+// devices-ui-4: another device updating this computer says so at the top of the menu, as a line that is not a button.
+it('shows a remote update notice above the update item and takes it away again', () => {
+  const tray = createDesktopTray('/app/assets/tray.png', vi.fn(), vi.fn(), 'darwin');
+  const menu = () => fake.tray.setContextMenu.mock.lastCall?.[0] as Array<{label?: string; type?: string; enabled?: boolean; click?: () => void}>;
+  tray.setUpdate('有新版本 0.9.1');
+  tray.setNotice('「笔记本」正在更新这台电脑上的 Vonvon Bot。');
+  expect(menu().map(item => item.label ?? item.type)).toEqual(['「笔记本」正在更新这台电脑上的 Vonvon Bot。', 'separator', '有新版本 0.9.1', 'separator', '打开 Vonvon Bot', 'separator', '退出 Vonvon Bot']);
+  expect(menu()[0]).toMatchObject({enabled: false});
+  expect(menu()[0]?.click).toBeUndefined();
+  const rebuilt = fake.tray.setContextMenu.mock.calls.length;
+  tray.setNotice('「笔记本」正在更新这台电脑上的 Vonvon Bot。');
+  expect(fake.tray.setContextMenu.mock.calls.length).toBe(rebuilt);
+  tray.setNotice(undefined);
+  expect(menu().map(item => item.label ?? item.type)).toEqual(['有新版本 0.9.1', 'separator', '打开 Vonvon Bot', 'separator', '退出 Vonvon Bot']);
+  // the tooltip stays the update's
+  expect(fake.tray.setToolTip).toHaveBeenLastCalledWith('Vonvon Bot · 有新版本 0.9.1');
+});

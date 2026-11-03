@@ -24,10 +24,17 @@ export function isBridgeGetter(command: string, args: string[] | undefined, home
   return hasLegacyAlias(home) && realpathSync(command) === realpathSync(canonical);
 }
 
+/**
+ * Every path goes in as one POSIX single-quoted word (`'` itself as `'\''`): inside single quotes the shell expands
+ * nothing, so spaces, `$`, backticks, `"`, `\` and newlines in a path stay as they are (review 221).
+ */
 export function getterContents(runtime: BridgeRuntime, dataRoot?: string): string {
   const quote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
   return `#!/bin/sh\n${marker}\n${dataRoot === undefined ? '' : `VONVON_HOME=${quote(dataRoot)}; export VONVON_HOME\n`}exec ${quote(runtime.nodePath)} ${quote(runtime.cliPath)} secrets get "$@"\n`;
 }
+
+/** A wrapper getterContents wrote, whatever paths it names: told by its first two lines, never by a path in it. */
+export const isGeneratedGetter = (contents: string): boolean => contents.startsWith(`#!/bin/sh\n${marker}\n`);
 
 function regularFile(path: string): void {
   const stat = lstatSync(path);

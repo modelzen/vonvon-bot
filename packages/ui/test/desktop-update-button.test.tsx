@@ -34,7 +34,7 @@ it('downloads immediately without leaving the page, then waits for a separate gu
   expect(h.run).toHaveBeenCalledWith(h.install, 'downloading');
   expect(h.navigate).not.toHaveBeenCalled();
   h.run.mockClear(); h.update!.state = 'downloaded';
-  expect(action().props['aria-label']).toBe('安装并重启');
+  expect(action().props['aria-label']).toBe('重启升级');
   action().props.onClick();
   expect(h.run).not.toHaveBeenCalled();
   h.navigate.mock.calls[0]![0]();
@@ -49,7 +49,7 @@ it('displays a disabled activity state, and offers an accessible retry after fai
   expect(action().props.title).toContain(h.error);
   expect(renderToStaticMarkup(DesktopUpdateButton())).toContain('role="status"');
   h.update!.state = 'downloaded'; h.phase = 'installing';
-  expect(action().props).toMatchObject({disabled: true, 'aria-busy': true, 'aria-label': '正在安装并重启'});
+  expect(action().props).toMatchObject({disabled: true, 'aria-busy': true, 'aria-label': '正在重启升级'});
 });
 
 it('shows progress reported by the updater and keeps installation separate from download completion', () => {
@@ -60,8 +60,10 @@ it('shows progress reported by the updater and keeps installation separate from 
   h.update!.downloadProgress.percent = 100;
   expect(action().props['aria-label']).toBe('正在下载更新，100%');
   h.phase = undefined; h.update!.state = 'downloaded';
-  expect(action().props['aria-label']).toBe('安装并重启');
-  expect(action().props.title).toContain('Bot 连接会短暂中断');
+  expect(action().props['aria-label']).toBe('重启升级');
+  // owner 2026-11-02: the second step says it interrupts the conversations in progress, and asks nothing more.
+  expect(renderToStaticMarkup(DesktopUpdateButton())).toContain('重启升级');
+  expect(action().props.title).toContain('正在进行的对话会被中断');
   expect(h.run).not.toHaveBeenCalled();
 });
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { JUDGE_PROVIDER_IDS } from './decision-providers.js';
-import { agentIdSchema, folderTokenSchema, groupIdSchema } from "./domain.js";
+import { agentIdSchema, groupIdSchema } from "./domain.js";
 
 /** Provider-defined effort IDs are discovered with the model catalog. */
 const effort = z.string().trim().min(1).max(1000);
@@ -135,6 +135,8 @@ export const agentSectionSchemas = {
 const tier = z.enum(["qa", "write", "full"]);
 export const permissionTierSchema = z.object({
   tier, name: z.string(), summary: z.string(), native: z.string(), unavailable: z.string().optional(),
+  /** A group's 完全访问 tier carries `FULL_ACCESS_WARNING` (devices 第 15 节). */
+  warning: z.string().optional(),
 });
 export const permissionFieldSchema = z.object({
   key: z.string(), label: z.string(), native: z.string(), kind: z.enum(["choice", "switch", "domains"]),
@@ -203,7 +205,8 @@ const access = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("writable") }),
   z.object({
     kind: z.literal("readonly"),
-    reason: z.enum(["preview", "owner-offline", "unsupported-host", "stale"]),
+    /** `not-dm`: a Bot's group session reads its group's settings, which only a private chat changes (devices 5.2). */
+    reason: z.enum(["preview", "owner-offline", "unsupported-host", "stale", "not-dm"]),
     message: z.string(),
   }),
 ]);
@@ -587,14 +590,6 @@ export const settingsRequestSchema = z.discriminatedUnion("type", [
       projectName: z.string().trim().min(1).max(1000),
     })
     .strict(),
-  z.object({ type: z.literal("chooseExecutable") }).strict(),
-  z
-    .object({
-      type: z.literal("saveExecutable"),
-      token: folderTokenSchema,
-      revision: z.string().min(1),
-    })
-    .strict(),
 ]);
 export type ParsedSettingsRequest = z.infer<typeof settingsRequestSchema>;
 export type SettingsRequest =
@@ -606,9 +601,7 @@ export type SettingsRequest =
       type: "sessions";
       botId: z.infer<typeof agentIdSchema>;
       projectName: string;
-    }
-  | { type: "chooseExecutable" }
-  | { type: "saveExecutable"; token: string; revision: string };
+    };
 const sectionView = z.object({
   scope,
   section: z.string(),
@@ -619,6 +612,8 @@ const saveSchema = z.discriminatedUnion("kind", [
     kind: z.literal("saved"),
     section: sectionView,
     effects: z.array(effect),
+    /** Shown with the saved notice, as when a group turns 完全访问. */
+    warnings: z.array(z.string()).optional(),
   }),
   z.object({ kind: z.literal("conflict"), current: sectionView }),
   z.object({

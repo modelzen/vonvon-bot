@@ -89,3 +89,8 @@ it('opens the intended Bot private chat without prefilled messages or other dest
   for (const suffix of ['&text=send-this','#message','&redirect=https://evil.test']) expect(allowedExternalUrl(url+suffix,'bot-chat')).toBeNull();
   expect(allowedExternalUrl(botChatUrl('oc_group'),'bot-chat')).toBeNull();
 });
+
+it('devices-ui-1b: opens Tailscale\'s download page and nothing else', () => {
+  expect(allowedExternalUrl('https://tailscale.com/download', 'tailscale')).toBe('https://tailscale.com/download');
+  for (const url of ['https://tailscale.com/download?x=1', 'http://tailscale.com/download', 'https://evil.com', 'https://tailscale.com/download/']) expect(allowedExternalUrl(url, 'tailscale')).toBeNull();
+});

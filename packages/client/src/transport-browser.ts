@@ -1,4 +1,4 @@
-import { helloSchema, PROTOCOL_VERSION, serverInfoSchema } from "@vonvon/protocol";
+import { helloSchema, PROTOCOL_VERSION, serverInfoSchema, type ServerInfo } from "@vonvon/protocol";
 import { createClient, type ClientConnection, type VonvonClient } from "./client.js";
 
 export interface BrowserConnectionOptions {
@@ -7,7 +7,8 @@ export interface BrowserConnectionOptions {
   clientKind?: "web" | "desktop";
 }
 
-export async function connectBrowser(options: BrowserConnectionOptions): Promise<VonvonClient> {
+/** devices 4.1: the daemon's server info comes back too; a different protocol is the caller's to judge (devices 4.5). */
+export async function connectBrowser(options: BrowserConnectionOptions): Promise<{ client: VonvonClient; serverInfo: ServerInfo }> {
   if (!/^[a-f0-9]{64}$/i.test(options.credential)) throw new Error("Invalid local daemon credential");
   const socket = new WebSocket(options.url);
   async function closeSocket(): Promise<void> {
@@ -28,6 +29,7 @@ export async function connectBrowser(options: BrowserConnectionOptions): Promise
     });
   }
   try {
+    let serverInfo: ServerInfo | undefined;
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => finish(new Error("Daemon handshake timed out")), 5_000);
       function finish(error?: Error): void {
@@ -43,8 +45,7 @@ export async function connectBrowser(options: BrowserConnectionOptions): Promise
       function onMessage(event: MessageEvent): void {
         try {
           if (typeof event.data !== "string") throw new Error("Invalid daemon handshake frame");
-          const info = serverInfoSchema.parse(JSON.parse(event.data));
-          if (info.protocolVersion !== PROTOCOL_VERSION) throw new Error("Daemon protocol version mismatch");
+          serverInfo = serverInfoSchema.parse(JSON.parse(event.data));
           finish();
         } catch (error) { finish(error instanceof Error ? error : new Error(String(error))); }
       }
@@ -69,7 +70,8 @@ export async function connectBrowser(options: BrowserConnectionOptions): Promise
       send: (data, callback) => { try { socket.send(data); callback(); } catch (error) { callback(error instanceof Error ? error : new Error(String(error))); } },
       close: closeSocket,
     };
-    return createClient(connection);
+    if (!serverInfo) throw new Error("Daemon handshake ended without server info");
+    return { client: createClient(connection), serverInfo };
   } catch (error) {
     try { await closeSocket(); }
     catch (failure) { throw new AggregateError([error, failure], "Daemon connection failed and physical closure was not observed"); }

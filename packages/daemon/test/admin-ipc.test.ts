@@ -3,7 +3,9 @@ import {
   ADMIN_IPC_REQ,
   ADMIN_IPC_RES,
   adminIpcTimeout,
+  askBotOver,
   createAdminIpcCaller,
+  SESSION_IPC_TIMEOUT_MS,
   createAdminIpcResponder,
   type AdminIpcOp,
   type AdminIpcRequest,
@@ -157,5 +159,31 @@ describe('admin IPC · 兜底（超时 / 子进程退场 / 脏消息）', () => 
       caller.onMessage({ fcb: ADMIN_IPC_REQ, id: 1, op: { kind: 'status' } }); // 错方向
       caller.onMessage({ fcb: ADMIN_IPC_RES, id: 999, ok: true }); // 无人认领
     }).not.toThrow();
+  });
+});
+
+/** devices-4b 4.3: the host asks a session's Bot process about its ★ request; whatever goes wrong is a turn that ended. */
+describe('askBotOver', () => {
+  const ended = { ok: false, reason: 'turn-ended', message: '这次调用对应的那一轮对话已经结束，不能再改设置。' };
+  const action = { kind: 'settingsWrite' } as const;
+  it('refuses without a process, when the call fails or times out, and for an answer of the wrong shape', async () => {
+    expect(await askBotOver(undefined, 'ses_1', action)).toEqual(ended);
+    expect(await askBotOver({ call: async () => { throw new Error('admin IPC timeout'); } }, 'ses_1', action)).toEqual(ended);
+    for (const answer of [
+      undefined, { ok: true }, { ok: true, role: 'root' }, { ok: 'yes', role: 'owner' },
+      // never the owner at the terminal: a local actor is no session's
+      { ok: true, role: 'owner', actor: { kind: 'local', via: 'cli' } },
+      { ok: true, role: 'member', actor: { kind: 'session', openId: 'ou_m', role: 'member', chatId: 'oc_y', text: '多出来的' } },
+      { ok: true, role: 'member', memory: { scope: { kind: 'bot' }, trust: 'trusted', actor: { role: 'desktop' }, source: { botId: 'cli_x' } } },
+      { ok: false, reason: 'not-admin' },
+    ]) expect(await askBotOver({ call: async () => answer }, 'ses_1', action), JSON.stringify(answer)).toEqual(ended);
+  });
+  it('passes a good answer on, asking with the session and its action within the time limit', async () => {
+    const answer = { ok: true, role: 'member', openId: 'ou_m', actor: { kind: 'session', openId: 'ou_m', role: 'member', chatId: 'oc_y', messageId: 'om_1' } };
+    const call = vi.fn(async () => answer);
+    expect(await askBotOver({ call }, 'ses_1', { kind: 'schedule', action: 'create' })).toEqual(answer);
+    expect(call).toHaveBeenCalledExactlyOnceWith({ kind: 'authorizeSessionCall', sessionId: 'ses_1', action: { kind: 'schedule', action: 'create' } }, SESSION_IPC_TIMEOUT_MS);
+    const refusal = { ok: false, reason: 'not-owner', message: '本机管理员名单只有飞书应用的拥有者能改。' };
+    expect(await askBotOver({ call: async () => refusal }, 'ses_1', { kind: 'adminMember' })).toEqual(refusal);
   });
 });

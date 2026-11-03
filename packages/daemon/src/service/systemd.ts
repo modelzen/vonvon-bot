@@ -9,7 +9,7 @@ import { isStaleOwner, readRunningPidLock, type StaleOwner } from '../server/pid
 import { stopVerifiedOwner, verifyPidLockOwner } from '../server/owner-verification';
 import { renderDefinition, type Definition } from './definitions';
 import { parseSystemdExits, type ServiceExits } from './exits';
-import { runtimeDistribution } from './distribution';
+import { installsService, runtimeDistribution, serviceProgram } from './distribution';
 import { createServiceDrain, type DrainFailure, type DrainScope, type OwnerIdentity } from './drain';
 import { resolveServiceRoot, serviceTarget, type CanonicalRoot } from './identity';
 import { readDefinitionBytes, readRegistration, type Registration } from './registration';
@@ -299,11 +299,13 @@ export function createSystemdService(options: { root: string }, overrides: Parti
         const state = manager.stdout.trim();
         if (!(manager.ok && manager.status === 0 && state === 'running') && !(manager.status === 1 && state === 'degraded') && !(manager.ok && manager.status === 0 && state === 'degraded')) throw new Error(`User manager unavailable: ${manager.stderr.trim() || state}`);
         const distribution = await d.distribution();
-        if (distribution.kind !== 'global-npm' && distribution.kind !== 'bundled') throw new Error('Distribution cannot install a service');
+        if (!installsService(distribution)) throw new Error('Distribution cannot install a service');
+        const program = serviceProgram(distribution, d.executable, d.capturedPath);
         const current = await registration(s);
         // An unrecognized unit under our own name is an older format: replace it, keeping its bytes for rollback.
         if (current.kind === 'other-root') throw new Error(registrationDetail(current));
-        previous = current.kind === 'ours' ? bytes(s, current.definition) : current.kind === 'unrecognized' ? await readDefinitionBytes(s.target) : null;
+        // The bytes on disk, not re-rendered ones: a unit from before TimeoutStopSec=45 is ours but not byte-equal.
+        previous = current.kind === 'ours' || current.kind === 'unrecognized' ? await readDefinitionBytes(s.target) : null;
         s.expected = previous;
         const owner = await d.readOwner(s.root);
         before = identity(owner);
@@ -313,7 +315,7 @@ export function createSystemdService(options: { root: string }, overrides: Parti
           if (!match) throw new Error('Running owner has no published port');
           port = Number(match[1]);
         } else port = input.port ?? (current.kind === 'ours' ? current.definition.port : await d.freePort());
-        desired = bytes(s, { root: s.root, port, distribution: { kind: distribution.kind === 'bundled' ? 'desktop' : 'npm', executable: d.executable, entry: distribution.cliPath }, capturedPath: d.capturedPath });
+        desired = bytes(s, { root: s.root, port, ...program });
         const unit = await observeUnit();
         const enabled = await observeEnabled();
         if (unit.kind === 'unknown' || enabled.kind === 'unknown') throw new Error(unit.kind === 'unknown' ? unit.detail : 'Enable state is unknown');
@@ -384,7 +386,7 @@ export function createSystemdService(options: { root: string }, overrides: Parti
       if (current.kind === 'absent' && unit.kind === 'absent') return outcome(s, 'not-installed', 'Not installed');
       let kept: Uint8Array | null;
       // Only a regular file is replaced; a symlink or directory under our name is refused.
-      try { kept = current.kind === 'ours' ? bytes(s, current.definition) : current.kind === 'unrecognized' ? await readDefinitionBytes(s.target) : null; }
+      try { kept = current.kind === 'ours' || current.kind === 'unrecognized' ? await readDefinitionBytes(s.target) : null; }
       catch (error) { return outcome(s, 'uninstall_refused', `${registrationDetail(current)}: ${detailOf(error)}`); }
       s.expected = kept;
       // An older format's unit may run a process without our lock: job-only refuses it instead of waiting forever.

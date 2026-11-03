@@ -69,11 +69,8 @@ const empty = <T extends string>(type: T) =>
 export const commandSchema = z.discriminatedUnion("type", [
   z.object({type: z.literal("refresh"), tools: z.boolean().optional()}).strict(),
   z.object({type: z.literal("listPendingGroups"), agentId: agentIdSchema}).strict(),
-  z.object({type: z.literal("openEventSettings"), url: z.string().regex(/^https:\/\/open\.(?:feishu\.cn|larksuite\.com)\/app\/cli_[\w-]{1,200}\/event$/)}).strict(),
   empty("registerAgent"),
   z.object({type: z.literal("refreshAgentCredentials"), agentId: agentIdSchema}).strict(),
-  empty("installCodex"),
-  empty("startCodexLogin"),
   empty("restartHost"),
   z
     .object({
@@ -128,12 +125,6 @@ export const commandSchema = z.discriminatedUnion("type", [
     .strict(),
   z.object({type:z.literal("deleteAgent"),agentId:agentIdSchema}).strict(),
   z.object({ type: z.literal("cancelJob"), jobId: jobIdSchema }).strict(),
-  z
-    .object({ type: z.literal("openJobAuthorization"), jobId: jobIdSchema })
-    .strict(),
-  z
-    .object({ type: z.literal("copyJobAuthorization"), jobId: jobIdSchema })
-    .strict(),
 ]);
 export type Command = z.infer<typeof commandSchema>;
 export const hostStateSchema = z.discriminatedUnion("kind", [
@@ -143,8 +134,12 @@ export const hostStateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("disconnected"), message: z.string() }),
 ]);
 export type HostState = z.infer<typeof hostStateSchema>;
+/** Remote connections only: the picture's reference on that connection. With `avatarDataUrl` it names that picture; alone,
+ * the picture went out earlier on the same connection. The client library puts the picture back and drops this before
+ * anyone reads the snapshot; a reader that does not know it sees no picture (0.9.0 Mac 验收: avatars over a slow link). */
+const avatarRef = z.string().optional();
 export const agentSchema = z.object({
-  id: agentIdSchema, name: z.string(), avatarDataUrl: z.string().optional(),
+  id: agentIdSchema, name: z.string(), avatarDataUrl: z.string().optional(), avatarRef,
   enabled: z.boolean(), running: z.boolean(), connection: z.string(),
   activation: z.enum(["active", "restartRequired"]), readError: z.string().optional(),
   /** The bot's recent not-replied messages and scope denials; absent when it has none. */
@@ -159,7 +154,7 @@ export type Agent = z.infer<typeof agentSchema>;
 export const directoryProblemSchema = z.enum(["botRoot", "projectsRoot", "dataDir", "dataDirParent"]);
 export type DirectoryProblem = z.infer<typeof directoryProblemSchema>;
 export const membershipSchema = z.object({
-  avatarDataUrl: z.string().optional(), id: membershipIdSchema, agentId: agentIdSchema,
+  avatarDataUrl: z.string().optional(), avatarRef, id: membershipIdSchema, agentId: agentIdSchema,
   groupId: groupIdSchema, name: z.string(), directory: z.string(), backend: z.string(),
   /** The library project this binding belongs to; absent until the daemon has linked the row (daemon start), and from older daemons. */
   projectId: projectIdSchema.optional(),
@@ -187,7 +182,7 @@ export const snapshotProjectSchema = z.object({
   bindings: z.array(z.object({ agentId: agentIdSchema, groupId: groupIdSchema })),
 });
 export type SnapshotProject = z.infer<typeof snapshotProjectSchema>;
-export const groupSchema = z.object({ id: groupIdSchema, name: z.string(), avatarDataUrl: z.string().optional() });
+export const groupSchema = z.object({ id: groupIdSchema, name: z.string(), avatarDataUrl: z.string().optional(), avatarRef });
 export type Group = z.infer<typeof groupSchema>;
 /** Codex only: how its version compares with the minimum and the tested version. */
 export const codexCompatibilitySchema = z.object({ status: z.enum(["ok", "tooOld", "newer", "unknown"]), minimum: z.string(), verified: z.string() });
@@ -208,10 +203,18 @@ export const toolStateSchema = z.object({
   compatibility: codexCompatibilitySchema.optional(),
   /** Claude on Linux: what its bubblewrap sandbox for the qa and write modes needs (s20a). */
   sandbox: claudeSandboxSchema.optional(),
+  /** What to type in a terminal to start the Codex in use, or the Claude Code CLI, when it is a managed copy, which is on
+   * no PATH (0.9.0 Linux acceptance). Absent: the name is enough. */
+  command: z.string().max(4096).optional(),
 });
 export type ToolState = z.infer<typeof toolStateSchema>;
 export const serviceStateSchema = z.enum(["not-installed", "running", "stopped", "disabled", "detached", "conflict", "unknown"]);
 export type ServiceState = z.infer<typeof serviceStateSchema>;
+/** How this daemon was installed (devices 7.1). `standalone` is the script-installed server package. */
+export const distributionKinds = ["global-npm", "bundled", "standalone", "development", "unknown"] as const;
+export type DistributionKind = (typeof distributionKinds)[number];
+/** The kind parses as an open string, so a client does not fail on a kind that a newer daemon adds. */
+export const distributionSchema = z.object({ kind: z.string().min(1), cliPath: z.string() });
 /** Linux: whether systemd keeps this account's user services running without a login session (s20a). */
 export const lingerStateSchema = z.enum(["on", "off", "unknown"]);
 /** Why a service install or uninstall failed, read from the transaction's detail (daemon service/action-report.ts). */
@@ -240,7 +243,7 @@ export const applicationServiceSchema = z.object({
   linger: lingerStateSchema.optional(), hint: z.string().optional(),
 });
 export type ApplicationService = z.infer<typeof applicationServiceSchema>;
-const jobBase = { id: jobIdSchema, type: z.enum(["registerAgent", "installCodex", "loginCodex"]) };
+const jobBase = { id: jobIdSchema, type: z.enum(["registerAgent"]) };
 export const jobSchema = z.discriminatedUnion("phase", [
   z.object({ ...jobBase, phase: z.literal("running"), message: z.string() }),
   z.object({ ...jobBase, phase: z.literal("unresolved"), message: z.string() }),
@@ -259,7 +262,7 @@ export const desktopSnapshotSchema = z.object({
   projects: z.array(snapshotProjectSchema).optional(),
   tools: z.array(toolStateSchema), jobs: z.array(jobSchema),
   recentConversations: z.object({items:z.array(z.object({agentId:agentIdSchema,groupId:groupIdSchema,threadId:z.string(),summary:z.string(),updatedAt:z.number()})),unavailableBots:z.number().int().nonnegative()}).optional(),
-  application: z.object({ platform: z.enum(["macos", "linux", "unsupported"]), version: z.string(), loginItem: z.boolean(), dataPath: z.string(), service: applicationServiceSchema.optional(),
+  application: z.object({ platform: z.enum(["macos", "linux", "windows", "unsupported"]), version: z.string(), loginItem: z.boolean(), dataPath: z.string(), service: applicationServiceSchema.optional(),
     /** The whole daemon's pause and the last day's crash records (s18a); absent from older daemons. */
     crashes: applicationCrashesSchema.optional() }),
 });

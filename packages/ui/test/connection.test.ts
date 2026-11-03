@@ -15,9 +15,11 @@ vi.mock("@vonvon/client/browser", async () => ({
   ...await import("../../client/src/browser"), connectBrowser: harness.connect,
 }));
 vi.mock("../src/App", () => ({ App: () => null }));
+vi.mock("../src/devices/DesktopRoot", () => ({ DesktopRoot: () => null }));
 vi.mock("../src/directory-picker", () => ({ DirectoryPickerProvider: () => null }));
 vi.mock("../src/client-context", () => ({ ClientProvider: () => null }));
 
+const connected = <T>(client: T) => ({ client, serverInfo: { type: "serverInfo", machineId: "00000000-0000-4000-8000-000000000000", version: "1", protocolVersion: 2 } });
 let dispose: (() => void) | void;
 beforeEach(() => {
   vi.useFakeTimers();
@@ -63,7 +65,7 @@ it("retires one client before one retry, ignoring repeated and stale terminal ca
   let finishClose = (): void => {};
   const first = fixture(() => new Promise<void>(resolve => { finishClose = resolve; }));
   const second = fixture();
-  harness.connect.mockResolvedValueOnce(first.client).mockResolvedValueOnce(second.client);
+  harness.connect.mockResolvedValueOnce(connected(first.client)).mockResolvedValueOnce(connected(second.client));
   await mount();
   const staleCallback = first.subscription.mock.calls[0]?.[0];
   expect(staleCallback).toBeDefined();
@@ -90,7 +92,7 @@ it("handles synchronous retained errors during subscription without duplicating 
   first.fail();
   first.fail();
   const second = fixture();
-  harness.connect.mockResolvedValueOnce(first.client).mockResolvedValueOnce(second.client);
+  harness.connect.mockResolvedValueOnce(connected(first.client)).mockResolvedValueOnce(connected(second.client));
   await mount();
   await vi.advanceTimersByTimeAsync(1000);
   expect(first.closeClient).toHaveBeenCalledTimes(1);
@@ -110,14 +112,14 @@ it("cancels pending retry on unmount", async () => {
 
 it("closes a late connection after unmount and consumes cleanup rejection", async () => {
   const late = fixture(async () => { throw new Error("close timed out"); });
-  let resolveConnection = (_client: typeof late.client): void => {};
+  let resolveConnection = (_connected: ReturnType<typeof connected>): void => {};
   harness.connect.mockImplementation(() => new Promise(resolve => { resolveConnection = resolve; }));
   const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
   await mount();
   dispose?.();
   dispose = undefined;
   harness.setConnection.mockClear();
-  resolveConnection(late.client);
+  resolveConnection(connected(late.client));
   await vi.advanceTimersByTimeAsync(5000);
   expect(late.closeClient).toHaveBeenCalledTimes(1);
   expect(harness.setConnection).not.toHaveBeenCalled();
@@ -127,7 +129,7 @@ it("closes a late connection after unmount and consumes cleanup rejection", asyn
 
 it("does not create another socket if physical close was not observed", async () => {
   const first = fixture(async () => { throw new Error("physical closure was not observed"); });
-  harness.connect.mockResolvedValue(first.client);
+  harness.connect.mockResolvedValue(connected(first.client));
   await mount();
   first.fail();
   await vi.advanceTimersByTimeAsync(5000);
@@ -152,7 +154,7 @@ it("keeps one healthy client through persistent log and watch failures, then ret
     const next = fixture();
     next.client.watchSnapshots(() => { throw new Error("watch observer failed"); });
     clients.push(next);
-    return next.client;
+    return connected(next.client);
   });
   await mount();
   const first = clients[0];
@@ -192,7 +194,7 @@ it("reports retained observer errors without retiring the healthy client", async
   const first = fixture();
   first.observe();
   first.observe();
-  harness.connect.mockResolvedValue(first.client);
+  harness.connect.mockResolvedValue(connected(first.client));
   await mount();
   await vi.advanceTimersByTimeAsync(5000);
   expect(harness.connect).toHaveBeenCalledTimes(1);
@@ -207,7 +209,7 @@ it("treats a terminal error thrown by an observer as a callback failure", async 
   const first = fixture();
   const thrown = new ConnectionError(new Error("observer dependency disconnected"));
   first.client.onLog(() => { throw thrown; });
-  harness.connect.mockResolvedValue(first.client);
+  harness.connect.mockResolvedValue(connected(first.client));
   await mount();
   first.observe();
   await vi.advanceTimersByTimeAsync(5000);

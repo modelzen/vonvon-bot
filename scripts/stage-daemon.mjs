@@ -1,12 +1,15 @@
 import { build } from 'esbuild';
 import { access, cp, mkdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, sep } from 'node:path';
-import { createRequire } from 'node:module';
+import { createRequire, isBuiltin } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { buildWindowsSupervisor } from './build-windows-supervisor.mjs';
 
 const source = fileURLToPath(new URL('../packages/daemon/', import.meta.url));
 const assets = ['LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md', 'import-core.json'];
+/** Our own workspace packages: bundled into dist/cli.js, never shipped as readable files (devices 7.1). */
+export const bundledWorkspaces = ['@vonvon/client', '@vonvon/protocol'];
+const packageOf = specifier => specifier.split('/').slice(0, specifier.startsWith('@') ? 2 : 1).join('/');
 
 async function packageRoot(name, from) {
   const require = createRequire(join(from, 'package.json'));
@@ -18,17 +21,16 @@ async function packageRoot(name, from) {
   throw new Error(`Cannot stage daemon dependency ${name} from ${from}. Run npm ci in this worktree.`);
 }
 
-function runtimeFile(source, path, name) {
+/** A third-party package's runtime files: no tests, docs, declarations, source maps or TypeScript sources. Its `src/` stays, as some packages run from there. */
+function runtimeFile(source, path) {
   const local = relative(source, path);
   if (!local) return true;
-  const first = local.split(sep)[0];
-  if (['test', 'tests', '__tests__', 'examples', 'docs'].includes(first)) return false;
-  if (/\.d\.(?:ts|mts|cts)$|\.map$/.test(local)) return false;
-  if (name === '@vonvon/client' || name === '@vonvon/protocol') {
-    return first === 'dist' || first === 'package.json' || /^(?:LICENSE|NOTICE)(?:[.-]|$)/i.test(first);
-  }
-  return true;
+  if (['test', 'tests', '__tests__', 'examples', 'docs'].includes(local.split(sep)[0])) return false;
+  return !/\.(?:[mc]?ts|map)$/.test(local);
 }
+
+/** The desktop and server layouts (compact, hoist) ship runtime files only; the npm package layout keeps whole packages. */
+const copied = (from, runtimeOnly) => path => !['node_modules', '.git'].includes(basename(path)) && (!runtimeOnly || runtimeFile(from, path));
 
 export async function stageDependencies(from, destination, options = {}) {
   if (options.hoist) return stageHoistedDependencies(from, destination, options);
@@ -64,10 +66,7 @@ export async function stageDependencies(from, destination, options = {}) {
     }
     await mkdir(dirname(target), { recursive: true });
     if (compact) copies.set(dependency, { target, peers });
-    await cp(dependency, target, {
-      recursive: true, dereference: true,
-      filter: path => !['node_modules', '.git'].includes(basename(path)) && (!compact || runtimeFile(dependency, path, name)),
-    });
+    await cp(dependency, target, { recursive: true, dereference: true, filter: copied(dependency, compact) });
     await stageDependencies(dependency, target, next);
   }
 }
@@ -136,31 +135,93 @@ async function stageHoistedDependencies(from, destination, options) {
       instances.get(dependency).add(target);
       edges.push({ owner, name, from: dependency });
       await mkdir(dirname(target), { recursive: true });
-      await cp(dependency, target, {
-        recursive: true, dereference: true,
-        filter: path => !['node_modules', '.git'].includes(basename(path)),
-      });
+      await cp(dependency, target, { recursive: true, dereference: true, filter: copied(dependency, true) });
       queue.push(node);
     }
   }
 }
 
+/** The source file behind a workspace import: its export's `./dist/<x>.js` read back to `src/<x>.ts`, so a stale dist is never shipped. */
+async function workspaceSource(specifier, root) {
+  const metadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  const target = metadata.exports?.[`.${specifier.slice(packageOf(specifier).length)}`]?.import;
+  const match = typeof target === 'string' ? /^\.\/dist\/([\w/-]+)\.js$/.exec(target) : null;
+  if (!match) throw new Error(`Cannot map ${specifier} to its TypeScript source`);
+  const file = join(root, 'src', `${match[1]}.ts`);
+  await access(file);
+  return file;
+}
+
+/**
+ * Decides, during bundling, what dist/cli.js imports at run time. The daemon's own bare imports stay external; our
+ * workspace packages are bundled from source. A bare import inside bundled code stays external only when it is a
+ * runtime dependency that resolves to the same directory the daemon ships; otherwise it is bundled too, so protocol's
+ * zod 3 is never replaced by the daemon's zod 4.
+ */
+function runtimePlugin(runtime, decisions) {
+  return {
+    name: 'vonvon-runtime-imports',
+    setup(esbuild) {
+      const bundledRoots = [];
+      const inBundled = file => bundledRoots.some(root => file === root || file.startsWith(root + sep));
+      esbuild.onResolve({ filter: /^[^./]/ }, async args => {
+        // `@/` is the daemon's tsconfig path alias, which esbuild resolves to source.
+        if (args.kind === 'entry-point' || isBuiltin(args.path) || args.path.startsWith('node:') || args.path.startsWith('@/')) return undefined;
+        const name = packageOf(args.path);
+        const own = async () => realpath(await packageRoot(name, args.resolveDir));
+        if (bundledWorkspaces.includes(name)) {
+          const root = await own();
+          bundledRoots.push(root);
+          return { path: await workspaceSource(args.path, root) };
+        }
+        if (!inBundled(await realpath(args.importer))) return { path: args.path, external: true };
+        const shipped = runtime.has(name) ? await realpath(await packageRoot(name, source)).catch(() => undefined) : undefined;
+        const resolved = await own();
+        if (shipped === resolved) return { path: args.path, external: true };
+        bundledRoots.push(resolved);
+        decisions.add(name);
+        return undefined;
+      });
+    },
+  };
+}
+
 export async function stageDaemon(destination, metadata, options = {}) {
+  const withoutBundled = names => names?.filter(name => !bundledWorkspaces.includes(name));
+  const dependencies = Object.fromEntries(Object.entries(metadata.dependencies ?? {}).filter(([name]) => !bundledWorkspaces.includes(name)));
+  const runtimeMetadata = { ...metadata, dependencies, ...(metadata.bundleDependencies ? { bundleDependencies: withoutBundled(metadata.bundleDependencies) } : {}) };
+  const runtime = new Set(Object.keys({ ...dependencies, ...runtimeMetadata.optionalDependencies }));
+  const bundled = new Set();
   await mkdir(join(destination, 'dist'), { recursive: true });
   const supervisorHash = process.platform === 'win32' ? await buildWindowsSupervisor(join(destination, 'dist')) : undefined;
-  await build({
+  const result = await build({
     absWorkingDir: source,
     entryPoints: ['src/cli/index.ts'],
     outfile: join(destination, 'dist/cli.js'),
     bundle: true,
-    packages: 'external',
     platform: 'node',
     target: 'node22',
     format: 'esm',
+    // Source protection (devices 7.1); names stay, so error names and stack frames remain readable.
+    minify: true,
+    keepNames: true,
+    sourcemap: false,
+    metafile: true,
+    plugins: [runtimePlugin(runtime, bundled)],
     define: { __VONVON_SUPERVISOR_SHA256__: supervisorHash ? JSON.stringify(supervisorHash) : 'undefined' },
   });
+  const external = new Set();
+  for (const output of Object.values(result.metafile.outputs)) {
+    for (const item of output.imports) {
+      if (!item.external || isBuiltin(item.path) || item.path.startsWith('node:')) continue;
+      const name = packageOf(item.path);
+      if (!runtime.has(name)) throw new Error(`dist/cli.js imports ${item.path}, which is not a runtime dependency of the staged daemon`);
+      external.add(name);
+    }
+  }
   await cp(join(source, 'bin'), join(destination, 'bin'), { recursive: true });
-  await writeFile(join(destination, 'package.json'), JSON.stringify(metadata, null, 2) + '\n');
+  await writeFile(join(destination, 'package.json'), JSON.stringify(runtimeMetadata, null, 2) + '\n');
   for (const file of assets) await cp(join(source, file), join(destination, file));
-  await stageDependencies(source, destination, { ...options, metadata });
+  await stageDependencies(source, destination, { ...options, metadata: runtimeMetadata });
+  return { external: [...external].sort(), bundled: [...bundled].sort() };
 }
