@@ -19,14 +19,22 @@ it('lists this computer first, then the devices with what each can do', () => {
   expect(local).toContain('切换到');
   expect(local).not.toContain('删除');
   expect(local).not.toContain('改名');
+  // no ⋯ menu on this computer's row
+  expect(local).not.toContain('更多操作');
   const [a, b] = [rowOf(html, 'remote', 0), rowOf(html, 'remote', 1)];
   expect(a).toContain('机房');
-  expect(a).toMatch(/<button[^>]*disabled=""[^>]*><span>切换到<\/span>/);
+  // the device shown is marked, with no 切换到 (it was a greyed-out button)
+  expect(a).toContain('data-current="true"');
+  expect(a).toContain('当前');
+  expect(a).not.toContain('>切换到<');
   expect(a).not.toContain('重新配对');
   expect(b).toContain('家里');
   expect(b).toContain('重新配对');
   expect(b).toContain('data-tone="red"');
   expect(b).toContain('已撤销');
+  // 改名 and 删除 sit behind the row's ⋯
+  expect(b).toContain('role="menuitem"');
+  expect(b).toContain('「家里」的更多操作');
   expect(html.indexOf('data-device="local"')).toBeLessThan(html.indexOf('data-device="remote"'));
   expect(html).toContain('推荐用 Tailscale');
   expect(html).toContain('一次看一台。');

@@ -5,6 +5,7 @@ import {Button} from '../reference/components/ui';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {settingAnchor} from '../search';
 import {LoginServiceRow} from '../setup/service-toggle';
+import '../settings/remote-access.css';
 
 type Application = DesktopSnapshot['application'];
 type Where = Pick<ActiveDevice, 'isRemote' | 'name'>;
@@ -28,7 +29,7 @@ export function RemoteLoginRow({application, busy, onToggle}: {application: Appl
 /** devices-ui-2 4.4.3: the 启动选项 group while another device is shown. Restarting is `restartHost`, a command the page
  * sends (`onRestart`); the desktop's bridge already expects the restart, so the banner says 正在重启. */
 export function RemoteServiceGroup({application, where, busy, onRestart, onToggle}: {application: Application; where: Where; busy: boolean; onRestart: () => void; onToggle: (enabled: boolean) => void}) {
-  return <SettingsGroup label={`${whereName(where)}的后台服务`} id={settingAnchor('启动选项')} footer={remoteServiceFooter(where)}>
+  return <SettingsGroup className="remote-service" label={`${whereName(where)}的后台服务`} id={settingAnchor('启动选项')} footer={remoteServiceFooter(where)}>
     <SettingsRow title="后台运行" description={RESTART_HOST_TEXT} trailing={<Button size="sm" disabled={busy} onClick={onRestart}>重启</Button>}/>
     <RemoteLoginRow application={application} busy={busy} onToggle={onToggle}/>
   </SettingsGroup>;

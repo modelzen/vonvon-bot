@@ -27,6 +27,7 @@ vi.mock('../src/client-context', async original => ({...await original<typeof im
   useClient: () => h.client, useActiveDevice: () => ({id: 'local', isRemote: false, name: '这台电脑', mode: 'full', capabilities: []})}));
 
 import {RemoteAccessPanel, RemoteAccessView} from '../src/settings/RemoteAccessPanel';
+import {InlineNotice} from '../src/reference/components/ui';
 
 type Node = {type: unknown; props: Record<string, any>};
 const nodes = (node: ReactNode): Node[] => Array.isArray(node) ? node.flatMap(nodes)
@@ -71,6 +72,7 @@ async function mount(request: ReturnType<typeof device>['request']) {
     const all = nodes(RemoteAccessView((await settle()).props));
     const button = (label: string) => all.find(node => words(node) === label);
     return {
+      all,
       link: all.find(node => node.type === 'input' && node.props['aria-label'] === '连接链接')?.props.value as string | undefined,
       button, radio: (host: string) => all.find(node => node.type === 'input' && node.props.type === 'radio' && node.props.value === host),
       text: all.map(node => typeof node.props.description === 'string' ? node.props.description : '').join(' '),
@@ -147,4 +149,58 @@ it('drops the link when the 10-second read finds the address or port changed fro
   await flush();
   await panel.poll();
   expect((await panel.view()).link).toBe(`vonvon://pair#made-up-${LAN}-7768`);
+});
+
+// 0.9.0 设备 UI 打磨: 复制 is confirmed beside the button for a moment, not by a notice; the other notices stay until the
+// next action, as before.
+const notices = (all: Node[]) => all.filter(node => node.type === InlineNotice)
+  .map(node => nodes(node.props.children).find(child => typeof child.props.text === 'string')?.props.text as string);
+const copiedShown = (all: Node[]) => all.some(node => words(node) === '已复制');
+it('says 已复制 beside 复制 for two seconds, without a notice; a failed copy says so and stays', async () => {
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+  try {
+    const writeText = vi.fn(async (_text: string) => {});
+    vi.stubGlobal('navigator', {clipboard: {writeText}});
+    const panel = await mount(device().request);
+    (await panel.view()).button('生成连接链接')!.props.onClick();
+    await flush();
+    (await panel.view()).button('复制')!.props.onClick();
+    await flush();
+    let after = await panel.view();
+    expect(writeText).toHaveBeenCalledWith(`vonvon://pair#made-up-${TAILSCALE}-7767`);
+    expect(copiedShown(after.all)).toBe(true);
+    expect(notices(after.all)).toEqual([]);
+    vi.advanceTimersByTime(1_900);
+    expect(copiedShown((await panel.view()).all)).toBe(true);
+    vi.advanceTimersByTime(200);
+    after = await panel.view();
+    expect(copiedShown(after.all)).toBe(false);
+    expect(after.button('复制')).toBeDefined();
+    writeText.mockRejectedValueOnce(new Error('denied'));
+    after.button('复制')!.props.onClick();
+    await flush();
+    vi.advanceTimersByTime(10_000);
+    after = await panel.view();
+    expect(copiedShown(after.all)).toBe(false);
+    expect(notices(after.all)).toEqual(['没能复制，请选中链接手动复制。']);
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
+it('keeps a notice that something was done until the next action', async () => {
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+  try {
+    const remote = device();
+    const panel = await mount(remote.request);
+    (await panel.view()).button('关闭远程连接')!.props.onClick();
+    await flush();
+    vi.advanceTimersByTime(60_000);
+    const after = await panel.view();
+    expect(remote.server.open).toBeUndefined();
+    expect(notices(after.all)).toContain('已关闭远程连接，别的设备暂时连不上了。');
+  } finally {
+    vi.useRealTimers();
+  }
 });

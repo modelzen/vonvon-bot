@@ -1,11 +1,12 @@
 import {useMemo, useRef, useState} from 'react';
+import {ArrowRightLeft, Pencil, Trash2} from 'lucide-react';
 import {deviceAliasSchema, type DeviceRow} from '@vonvon/protocol';
 import {useDevicesState, useShellCapabilities} from '../client-context';
 import {Button, InlineNotice} from '../reference/components/ui';
 import {ConfirmDialog} from '../reference/components/ui/Dialog';
 import {useDraft, useDraftGuard} from '../settings/DraftGuard';
 import {addBlockedReason, copy, registryNotices, removeCopy, rowView} from './devices-presentation';
-import {CopyText, StatusDot, TailscaleAdvice, useNow} from './device-bits';
+import {CopyText, DeviceTile, platformIcon, RowMenu, StatusPill, TailscaleAdvice, useNow, type RowMenuItem} from './device-bits';
 import {AddDeviceDialog} from './AddDeviceDialog';
 
 const reportSwitchFailure = (error: unknown) => console.error('Device switch failed', error);
@@ -28,7 +29,7 @@ export function RenameRow({row, onDone}: {row: DeviceRow; onDone: () => void}) {
   const draft = useMemo(() => ({title: '设备名字', save: () => latest.current.save(), discard: () => latest.current.onDone()}), []);
   useDraft(name.trim() !== row.name, draft);
   return <form className="device-rename" onSubmit={event => { event.preventDefault(); void save(); }}>
-    <input aria-label="设备名字" value={name} maxLength={60} onChange={event => { setName(event.target.value); setError(undefined); }}/>
+    <input aria-label="设备名字" value={name} maxLength={60} autoFocus onChange={event => { setName(event.target.value); setError(undefined); }}/>
     <Button size="sm" type="submit" variant="primary">保存</Button><Button size="sm" type="button" onClick={onDone}>取消</Button>
     {error && <p className="device-problem" role="alert">{error}</p>}
   </form>;
@@ -57,26 +58,36 @@ export function DevicesPanel() {
   };
   const localName = state.active.id === 'local' ? state.active.serverInfo?.deviceName : undefined;
   return <section className="devices-page" aria-label="设备">
-    <header className="today-page-heading"><h1>设备</h1></header>
-    <p className="device-muted">{copy.panelIntro}</p>
+    <header className="today-page-heading today-page-heading--actions"><div><h1>设备</h1></div>
+      <Button disabled={Boolean(blocked)} title={blocked} onClick={() => setDialog({})}>添加设备</Button>
+    </header>
+    <p className="device-page-intro">{copy.panelIntro}</p>
     {registryNotices(state).map(text => <InlineNotice key={text} title="设备列表" tone="warning">{text}</InlineNotice>)}
     {notice && <InlineNotice title="已删除" tone="info" actions={<Button size="sm" onClick={() => setNotice(undefined)}>知道了</Button>}><CopyText text={notice}/></InlineNotice>}
-    <div className="device-actions">
-      <Button variant="primary" disabled={Boolean(blocked)} onClick={() => setDialog({})}>添加设备</Button>
-      {blocked && <span className="device-muted">{blocked}</span>}
-    </div>
     <ul className="device-list">{state.devices.map(row => {
       const view = rowView(row, now, localName);
       const local = row.id === 'local';
-      return <li key={row.id} className="device-row" data-device={local ? 'local' : 'remote'}>
-        <StatusDot tone={view.tone}/>
-        <div className="device-row__copy"><strong>{view.title}</strong><small>{[...view.detail, view.status].join(' · ')}</small></div>
-        {renaming === row.id ? <RenameRow row={row} onDone={() => setRenaming(undefined)}/> : <div className="device-actions">
-          {view.repair && <Button size="sm" onClick={() => setDialog({repairOf: row})}>重新配对</Button>}
-          {!(local && row.current) && <Button size="sm" disabled={row.current && row.status === 'online'} onClick={() => switchTo(row.id)}>切换到</Button>}
-          {!local && <Button size="sm" onClick={() => setRenaming(row.id)}>改名</Button>}
-          {!local && <Button size="sm" variant="danger" onClick={() => setRemoving({row})}>删除</Button>}
-        </div>}
+      // The device shown is marked 当前 and has no 切换到. Online it was greyed out; while it reconnects, switching to it does
+      // nothing (the shell retries only a failed one, shown outside App), and the 连接断了 banner offers 现在重试.
+      const canSwitch = !row.current;
+      const menu: RowMenuItem[][] = local ? [] : [
+        [...view.repair && canSwitch ? [{label: '切换到', icon: ArrowRightLeft, onSelect: () => switchTo(row.id)}] : [],
+          {label: '改名', icon: Pencil, onSelect: () => setRenaming(row.id)}],
+        [{label: '删除', icon: Trash2, danger: true, onSelect: () => setRemoving({row})}],
+      ];
+      return <li className="device-row" key={row.id} data-device={local ? 'local' : 'remote'} data-current={row.current || undefined}>
+        <DeviceTile icon={platformIcon(row.platform)}/>
+        {renaming === row.id ? <RenameRow row={row} onDone={() => setRenaming(undefined)}/> : <>
+          <div className="device-row__copy">
+            <span className="device-row__title"><strong>{view.title}</strong>{row.current && <span className="device-tag">当前</span>}<StatusPill tone={view.tone}>{view.status}</StatusPill></span>
+            {view.detail.length > 0 && <small>{view.detail.join(' · ')}</small>}
+          </div>
+          <div className="device-row__actions">
+            {view.repair ? <Button size="sm" onClick={() => setDialog({repairOf: row})}>重新配对</Button>
+              : canSwitch && <Button size="sm" onClick={() => switchTo(row.id)}>切换到</Button>}
+            {!local && <RowMenu label={`「${row.name}」的更多操作`} groups={menu}/>}
+          </div>
+        </>}
       </li>;
     })}</ul>
     <TailscaleAdvice/>

@@ -1,8 +1,8 @@
 import {useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode} from 'react';
-import {RefreshCw} from 'lucide-react';
+import {Check, Copy, Pencil, RefreshCw, Trash2} from 'lucide-react';
 import type {ClientRecord, DeviceReply, DeviceRequest, DeviceStatus} from '@vonvon/protocol';
 import {useActiveDevice, useClient, type ActiveDevice} from '../client-context';
-import {CopyText, TailscaleAdvice, useNow} from '../devices/device-bits';
+import {clientIcon, CopyText, RowMenu, TailscaleAdvice, useNow} from '../devices/device-bits';
 import {copy, relativeTime} from '../devices/devices-presentation';
 import {Button, IconButton, InlineNotice} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
@@ -24,6 +24,12 @@ type Gone = 'expired' | 'moved';
 const codeOf = (error: unknown): string | undefined => error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
 const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
 const validName = (name: string): boolean => name.trim().length >= 1 && name.trim().length <= 40;
+/** Which group a notice is about: it shows right under that group. */
+type About = 'address' | 'link' | 'clients';
+type Notice = {text: string; error?: boolean; about: About};
+const aboutOf = (request: DeviceRequest): About => request.type === 'pair' ? 'link' : request.type === 'revokeClient' || request.type === 'renameClient' || request.type === 'clients' ? 'clients' : 'address';
+/** 复制 says 已复制 beside it for a moment, in place of a notice. */
+const COPIED_MS = 2_000;
 
 /** A name typed and not saved is a draft, as the devices page's (Codex 审查 237-1). */
 function NameForm({label, initial, onSave, onDone}: {label: string; initial: string; onSave: (name: string) => Promise<void>; onDone: () => void}) {
@@ -40,7 +46,7 @@ function NameForm({label, initial, onSave, onDone}: {label: string; initial: str
   const draft = useMemo(() => ({title: label, save: () => latest.current.save(), discard: () => latest.current.onDone()}), [label]);
   useDraft(name.trim() !== initial, draft);
   return <form className="remote-rename" onSubmit={event => { event.preventDefault(); void save(); }}>
-    <input aria-label={label} value={name} maxLength={60} onChange={event => { setName(event.target.value); setError(undefined); }}/>
+    <input aria-label={label} value={name} maxLength={60} autoFocus onChange={event => { setName(event.target.value); setError(undefined); }}/>
     <Button size="sm" type="submit" variant="primary">保存</Button><Button size="sm" type="button" onClick={onDone}>取消</Button>
     {error && <span className="remote-error" role="alert">{error}</span>}
   </form>;
@@ -62,7 +68,9 @@ export function RemoteAccessPanel() {
   const [confirm, setConfirm] = useState<Confirm>();
   const [ticked, setTicked] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<{text: string; error?: boolean}>();
+  const [notice, setNotice] = useState<Notice>();
+  /** Which 复制 is being confirmed (a count, so a second click restarts the moment). */
+  const [copied, setCopied] = useState<number>();
   const [renaming, setRenaming] = useState<string>();
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
@@ -89,6 +97,11 @@ export function RemoteAccessPanel() {
     const off = client.onDevice(() => { void readClients().catch(() => undefined); });
     return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', visible); off(); };
   }, [client, read, readClients]);
+  useEffect(() => {
+    if (copied === undefined) return;
+    const timer = setTimeout(() => setCopied(current => current === copied ? undefined : current), COPIED_MS);
+    return () => clearTimeout(timer);
+  }, [copied]);
   const rows = useMemo(() => status ? addressRows(status) : [], [status]);
   useEffect(() => { if (!picked || !rows.some(row => row.host === picked)) setPicked(defaultPick(rows)); }, [rows, picked]);
   const now = useNow(link ? 1_000 : 60_000);
@@ -111,7 +124,7 @@ export function RemoteAccessPanel() {
       if (!alive.current) return undefined;
       const code = codeOf(error) ?? '';
       if (request.type === 'enable' && code === 'confirm_required') { setTicked(false); setConfirm({kind: 'risk', host: request.host, text: riskFromReply(messageOf(error))}); }
-      else setNotice({text: request.type === 'enable' ? enableErrorText(code, messageOf(error)) : messageOf(error), error: true});
+      else setNotice({text: request.type === 'enable' ? enableErrorText(code, messageOf(error)) : messageOf(error), error: true, about: aboutOf(request)});
       return undefined;
     } finally { if (alive.current) setBusy(false); }
   }
@@ -119,14 +132,15 @@ export function RemoteAccessPanel() {
     if ('confirm' in step) { setTicked(false); setConfirm(step.confirm); return; }
     const reply = await send(step.request);
     if (!reply) return;
-    if (step.request.type === 'enable') setNotice({text: `已开启 ${step.request.host}。`});
-    if (step.request.type === 'disable') setNotice({text: '已关闭远程连接，别的设备暂时连不上了。'});
-    if (reply.kind === 'revoked') { setNotice({text: `已撤销 ${reply.revoked.length} 台。`}); void read(); }
+    if (step.request.type === 'enable') setNotice({text: `已开启 ${step.request.host}。`, about: 'address'});
+    if (step.request.type === 'disable') setNotice({text: '已关闭远程连接，别的设备暂时连不上了。', about: 'address'});
+    if (reply.kind === 'revoked') { setNotice({text: `已撤销 ${reply.revoked.length} 台。`, about: 'clients'}); void read(); }
   }
   async function pair() {
     const open = rows.find(row => row.enabled);
     if (linkBlocked(rows) || !open || port === undefined) return;
     setGone(undefined);
+    setCopied(undefined);
     const reply = await send({type: 'pair'});
     if (reply?.kind === 'pairingLink') setLink({text: reply.link, expiresAt: reply.expiresAt, host: open.host, port});
   }
@@ -143,7 +157,9 @@ export function RemoteAccessPanel() {
     onDisable={row => void act(disableStep(row, where))}
     onReconfirm={row => void act({request: {type: 'enable', host: row.host}})}
     onPair={() => void pair()}
-    onCopy={() => void navigator.clipboard.writeText(link?.text ?? '').then(() => setNotice({text: '已复制。'}), () => setNotice({text: '没能复制，请选中链接手动复制。', error: true}))}
+    copied={copied !== undefined}
+    onCopy={() => void navigator.clipboard.writeText(link?.text ?? '').then(() => { setNotice(undefined); setCopied(count => (count ?? 0) + 1); },
+      () => { setCopied(undefined); setNotice({text: '没能复制，请选中链接手动复制。', error: true, about: 'link'}); })}
     onRename={setRenaming}
     renameForm={target => <NameForm label={target === 'device' ? '设备名字' : '名字'} initial={target === 'device' ? status?.device.name ?? '' : clients?.clients.find(each => each.id === target)?.name ?? ''}
       onSave={name => rename(target === 'device' ? {type: 'rename', name} : {type: 'renameClient', clientId: target, name})} onDone={() => setRenaming(undefined)}/>}
@@ -170,7 +186,9 @@ export function ConfirmPanel({confirm, ticked, busy, ready, onTick, onCancel, on
 
 type ViewProps = {
   where: Where; status?: DeviceStatus; clients?: ClientsReply; rows: AddressRow[]; picked?: string; link?: Pick<Link, 'text' | 'expiresAt'>; gone?: Gone; now: number;
-  busy: boolean; notice?: {text: string; error?: boolean}; readError?: string; renaming?: string; dialog?: ReactNode;
+  busy: boolean; notice?: {text: string; error?: boolean; about?: About}; readError?: string; renaming?: string; dialog?: ReactNode;
+  /** The link was just copied: 已复制 shows beside 复制. */
+  copied?: boolean;
   onPick: (host: string) => void; onRefresh: () => void; onEnable: () => void; onDisable: (row: AddressRow) => void; onReconfirm: (row: AddressRow) => void;
   onPair: () => void; onCopy: () => void; onRename: (target: string) => void; renameForm: (target: string) => ReactNode; onRevoke: (client: ClientRecord) => void;
 };
@@ -179,13 +197,17 @@ export function RemoteAccessView(props: ViewProps) {
   const {where, status, clients, rows, picked, link, busy} = props;
   const radio = useId();
   if (!status) return <SettingsGroup label={panelTitle(where)} id={settingAnchor(SECTION)}>
-    <SettingsRow title={props.readError ?? '正在读取…'}/>
+    <SettingsRow className="remote-loading" title={props.readError ?? '正在读取…'}/>
   </SettingsGroup>;
   const open = rows.find(row => row.enabled);
   const switching = open && picked && picked !== open.host;
   const blocked = linkBlocked(rows);
   const live = clients ? liveClients(clients) : [];
+  // Right under the group it is about; a notice from before `about` existed goes under the last one.
+  const noticeAbout = (about: About) => props.notice && (props.notice.about ?? 'clients') === about &&
+    <InlineNotice title={props.notice.error ? '没办成' : '好了'} tone={props.notice.error ? 'danger' : 'success'}><CopyText text={props.notice.text}/></InlineNotice>;
   return <div className="remote-access">
+    {props.readError && <InlineNotice title="没读到最新状态" tone="warning">{props.readError}</InlineNotice>}
     <SettingsGroup label={panelTitle(where)} id={settingAnchor(SECTION)}
       action={<IconButton label="刷新" size="sm" variant="ghost" disabled={busy} onClick={props.onRefresh}><RefreshCw size={14}/></IconButton>}
       footer={<CopyText text={portHint(where)}/>}>
@@ -194,53 +216,63 @@ export function RemoteAccessView(props: ViewProps) {
       <div className="remote-address-block" data-search-title="地址">
         <div className="remote-address-head"><strong>别的设备用哪个地址连过来</strong><span>只能开一个。只有配对过的设备能连上，内容加密。</span></div>
         {rows.length ? <div className="remote-address-list" role="radiogroup" aria-label="地址">
-          {rows.map(row => <label key={row.host} className="remote-address" data-enabled={row.enabled || undefined}>
-            <input type="radio" name={radio} value={row.host} checked={picked === row.host} disabled={busy} onChange={() => props.onPick(row.host)}/>
-            <span className="remote-address__copy"><strong>{kindLabel(row)}</strong><span>{row.host}{row.iface ? ` · ${row.iface}` : ''}</span></span>
-            {row.enabled && <span className="remote-address__state" data-state={row.state}><CopyText text={stateText(row) ?? ''}/></span>}
-            {row.current && <span className="remote-tag">你正通过它连着</span>}
-          </label>)}
+          {rows.map(row => {
+            const state = row.enabled ? stateText(row) ?? '' : '';
+            return <label key={row.host} className="remote-address" data-enabled={row.enabled || undefined}>
+              <input type="radio" name={radio} value={row.host} checked={picked === row.host} disabled={busy} onChange={() => props.onPick(row.host)}/>
+              <span className="remote-address__copy"><strong>{kindLabel(row)}</strong><span>{row.host}{row.iface ? ` · ${row.iface}` : ''}</span></span>
+              {/* A long state (a taken port and how to change it) goes on its own line under the address. */}
+              {(row.enabled || row.current) && <span className="remote-address__tags" data-long={state.length > 12 || undefined}>
+                {row.enabled && <span className="remote-address__state remote-pill" data-state={row.state}><i aria-hidden="true"/><span><CopyText text={state}/></span></span>}
+                {row.current && <span className="remote-pill" data-state="via"><i aria-hidden="true"/>你正通过它连着</span>}
+              </span>}
+            </label>;
+          })}
         </div> : <p className="remote-address-empty">{NO_ADDRESS}</p>}
         <div className="remote-address-actions">
           {!open && <Button size="sm" variant="primary" disabled={busy || !picked} onClick={props.onEnable}>开启</Button>}
           {switching && <Button size="sm" variant="primary" disabled={busy} onClick={props.onEnable}>换成这个地址</Button>}
           {open?.state === 'needs-confirmation' && <Button size="sm" disabled={busy} onClick={() => props.onReconfirm(open)}>确认并重新开启</Button>}
-          {open && <Button size="sm" variant="ghost" disabled={busy} onClick={() => props.onDisable(open)}>关闭远程连接</Button>}
-          {switching && <span>换了以后 {open.host} 不再接受连接，已配对的设备要粘一次新链接。</span>}
+          {open && <Button size="sm" variant="ghost" className="remote-address-close" disabled={busy} onClick={() => props.onDisable(open)}>关闭远程连接</Button>}
+          {switching && <p className="remote-address-note">换了以后 {open.host} 不再接受连接，已配对的设备要粘一次新链接。</p>}
         </div>
       </div>
       <SettingsRow title="端口" value={String(status.remote.port)}/>
     </SettingsGroup>
+    {noticeAbout('address')}
     {!rows.some(row => row.kind === 'tailscale') && <TailscaleAdvice/>}
     <SettingsGroup label={LINK_SECTION} id={settingAnchor(LINK_SECTION)} footer={LINK_HELP}>
       {link ? <div className="remote-link">
         <input readOnly aria-label="连接链接" value={link.text} onFocus={event => event.currentTarget.select()} onClick={event => event.currentTarget.select()}/>
         <div className="remote-link__actions">
-          <Button size="sm" variant="primary" onClick={props.onCopy}>复制</Button>
-          <span>{linkCountdown(link.expiresAt, props.now)}</span>
+          <Button size="sm" variant="primary" icon={<Copy size={13} aria-hidden="true"/>} onClick={props.onCopy}>复制</Button>
           <Button size="sm" variant="ghost" disabled={busy || Boolean(blocked)} onClick={props.onPair}>再生成一个</Button>
+          <span className="remote-link__copied" role="status">{props.copied && <><Check size={13} aria-hidden="true"/>已复制</>}</span>
+          <span className="remote-link__countdown">{linkCountdown(link.expiresAt, props.now)}</span>
         </div>
       </div> : <SettingsRow title="连接链接" description={blocked ?? (props.gone === 'moved' ? LINK_MOVED : props.gone === 'expired' ? LINK_EXPIRED : '生成后 10 分钟内有效。')}
         trailing={<Button size="sm" disabled={busy || Boolean(blocked)} onClick={props.onPair}>生成连接链接</Button>}/>}
     </SettingsGroup>
+    {noticeAbout('link')}
     <SettingsGroup label={PAIRED_SECTION} id={settingAnchor(PAIRED_SECTION)}>
       {live.length ? live.map(record => {
         const self = record.id === clients?.self;
         const editing = props.renaming === record.id;
-        return <SettingsRow key={record.id} className="remote-client"
-          title={<>{record.name}{isRecent(record, props.now) && <span className="remote-tag" data-tone="new">新</span>}{self && <span className="remote-tag">{SELF_TAG}</span>}</>}
-          description={editing ? props.renameForm(record.id) : <>
+        const Icon = clientIcon(record.clientKind);
+        // 改名 takes the name's place (title and description), on one line with the tile, as on the devices page.
+        return <SettingsRow key={record.id} className="remote-client" icon={<Icon size={16} strokeWidth={1.7} aria-hidden="true"/>} iconTone="gray"
+          title={editing ? props.renameForm(record.id) : <>{record.name}{isRecent(record, props.now) && <span className="remote-tag" data-tone="new">新</span>}{self && <span className="remote-tag">{SELF_TAG}</span>}</>}
+          description={editing ? undefined : <>
             {CLIENT_KIND_LABEL[record.clientKind] ?? record.clientKind} · 上次连接 {relativeTime(record.lastSeenAt, props.now)}，来自 {hostOf(record.lastAddress)} · {invitedByText(record, clients?.clients ?? [], where)}
             {self && <><br/>{selfText(where)}</>}
           </>}
-          trailing={editing ? undefined : <>
-            <Button size="sm" disabled={busy} onClick={() => props.onRename(record.id)}>改名</Button>
-            {!self && <Button size="sm" variant="danger" disabled={busy} onClick={() => props.onRevoke(record)}>撤销</Button>}
-          </>}/>;
-      }) : <SettingsRow title="还没有别的设备连过来。"/>}
+          trailing={editing ? undefined : <RowMenu className="remote-paired-menu" label={`「${record.name}」的更多操作`} groups={[
+            [{label: '改名', icon: Pencil, disabled: busy, onSelect: () => props.onRename(record.id)}],
+            self ? [] : [{label: '撤销', icon: Trash2, danger: true, disabled: busy, onSelect: () => props.onRevoke(record)}],
+          ]}/>}/>;
+      }) : <SettingsRow className="remote-paired-empty" title="还没有别的设备连过来。"/>}
     </SettingsGroup>
-    {props.notice && <InlineNotice title={props.notice.error ? '没办成' : '好了'} tone={props.notice.error ? 'danger' : 'success'}><CopyText text={props.notice.text}/></InlineNotice>}
-    {props.readError && <InlineNotice title="没读到最新状态" tone="warning">{props.readError}</InlineNotice>}
+    {noticeAbout('clients')}
     {props.dialog}
   </div>;
 }

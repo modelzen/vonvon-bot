@@ -11,6 +11,7 @@ const preview: Extract<LinkPreview, {ok: true}> = {ok: true, deviceId: A, name: 
 const actions: StageActions = {input: vi.fn(), rename: vi.fn(), add: vi.fn(), cancel: vi.fn(), reset: vi.fn(), close: vi.fn(), switchTo: vi.fn()};
 const stage = (state: AddDialogState, extra: Partial<Parameters<typeof AddDeviceStage>[0]> = {}) =>
   renderToStaticMarkup(<AddDeviceStage state={state} now={now} actions={actions} {...extra}/>);
+const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
 it('goes from the pasted link to a failure that asks for a new link, and back to an empty box', () => {
   const link = 'vonvon://pair#example';
@@ -41,9 +42,10 @@ it('offers another try with the same link for other failures', () => {
 
 it('shows each address with its kind, and stops at the link expiry', () => {
   const html = stage({stage: 'confirm', link: 'x', name: '机房', preview});
-  expect(html).toContain('设备：机房');
-  expect(html).toContain('Tailscale（推荐） 100.64.0.10:7767');
-  expect(html).toContain('局域网 192.0.2.10:7767');
+  // the device's card names it (not only the name box under it); each address with its kind
+  expect(html).toMatch(/class="device-add__preview".*class="device-add__name"[^>]*>机房</);
+  expect(text(html)).toContain('Tailscale（推荐） 100.64.0.10:7767');
+  expect(text(html)).toContain('局域网 192.0.2.10:7767');
   expect(html).toContain('还剩 8 分钟');
   expect(html).not.toMatch(/disabled=""[^>]*><span>连接并添加/);
   const expired = stage({stage: 'confirm', link: 'x', name: '机房', preview: {...preview, expiresAt: now - 1}});
