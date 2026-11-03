@@ -20,10 +20,16 @@ export interface BinarySocket {
   onClose(listener: (code: number, reason: string) => void): void;
   onError(listener: (error: Error) => void): void;
   isOpen(): boolean;
+  /** Bytes arrived, a whole message or not: where the socket can tell. */
+  onData?(listener: () => void): void;
 }
 const OPEN = 1;
+/** The TCP socket under `ws`, which has no public accessor for it. */
+const rawSocket = (ws: NodeWebSocket): { on(event: "data", listener: () => void): unknown } | null | undefined =>
+  (ws as unknown as { _socket?: { on(event: "data", listener: () => void): unknown } | null })._socket;
 export function nodeBinarySocket(ws: NodeWebSocket): BinarySocket {
   return {
+    onData: listener => { rawSocket(ws)?.on("data", () => listener()); },
     send: bytes => ws.send(bytes, { binary: true }),
     close(code, reason) {
       if (ws.readyState >= 2) return;
@@ -102,7 +108,8 @@ export interface SecureConnectOptions {
   clientKind: "desktop" | "cli";
   /** Only the first time: the invite from the link, redeemed inside the channel for this key. */
   pairing?: { inviteId: string; inviteSecret: string; clientName: string };
-  /** ping: how often the client pings; pong: how long without a frame ends the connection; handshake: up to the server info. */
+  /** ping: how often the client pings; pong: how long without a frame, or without any bytes where the socket tells
+   * them, ends the connection; handshake: up to the server info. */
   timers?: { ping?: number; pong?: number; handshake?: number };
 }
 export interface SecureConnection {
@@ -276,6 +283,9 @@ export async function connectSecure(options: SecureConnectOptions): Promise<Secu
     socket.onError(() => {
       if (!ended && stage !== "open") end(new SecureChannelError("closed", stage), 1011, "socket_error");
     });
+    // A message still arriving is a device that answers. A big snapshot over a slow relay takes longer than `pong`, and the
+    // device's pong waits behind it (0.9.0 Mac 验收 B-1).
+    socket.onData?.(() => { if (stage === "open" && !ended) armSilence(); });
     if (!socket.isOpen()) {
       // Closing already (a device refusing at once, 4004 or 4006): its close event says why. Closed already: nothing will.
       setupTimer = setTimeout(() => finish(new SecureChannelError("closed", "handshake")), 1000);

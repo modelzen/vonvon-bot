@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
+import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import { CLOSE_CODES, PROTOCOL_VERSION } from "@vonvon/protocol";
 import {
   closeBody, createResponder, decodeFrame, encodeFrame, FRAME, generateStaticKey, HANDSHAKE_TIMEOUT_REASON, type Channel, type StaticKey,
 } from "@vonvon/protocol/secure-channel";
 import { ConnectionError } from "../src/client.js";
-import { connectSecure, SecureChannelError, webBinarySocket, type BinarySocket, type SecureChannelErrorCode } from "../src/transport-secure.js";
+import { connectSecure, nodeBinarySocket, SecureChannelError, webBinarySocket, type BinarySocket, type SecureChannelErrorCode } from "../src/transport-secure.js";
 
 // devices-2 第 5 节, in process: a pair of fake binary sockets, and a fake device built from the protocol's responder.
 // main 必败: there was no secure transport.
@@ -19,6 +19,9 @@ class End implements BinarySocket {
   closedWith: { code: number; reason: string } | undefined;
   private messages: Array<(bytes: Uint8Array) => void> = [];
   private closes: Array<(code: number, reason: string) => void> = [];
+  private data: Array<() => void> = [];
+  /** Part of a message reaches the other end: bytes, but no whole frame yet. */
+  trickle(): void { queueMicrotask(() => { for (const listener of this.other.data) listener(); }); }
   send(bytes: Uint8Array): void {
     if (!this.open) throw new Error("socket closed");
     const copy = Buffer.from(bytes);
@@ -36,6 +39,7 @@ class End implements BinarySocket {
   onClose(listener: (code: number, reason: string) => void): void { this.closes.push(listener); }
   onError(): void { /* never errors */ }
   isOpen(): boolean { return this.open; }
+  onData(listener: () => void): void { this.data.push(listener); }
 }
 const socketPair = (): [End, End] => {
   const client = new End();
@@ -245,12 +249,56 @@ describe("an open connection", () => {
     expect(client.closedWith?.code).toBe(1001);
   });
 
+  // 0.9.0 Mac 验收 B-1: an 875 KB snapshot over a relay at 20 KB/s took longer than 30 seconds, so the client cut a live
+  // connection, reconnected and asked again, for ever.
+  it("stays open while a long message is still arriving, and gives up 30 seconds after its last bytes", async () => {
+    vi.useFakeTimers();
+    const { options, served, device } = setup();
+    const connection = await connectSecure(options);
+    let ended: SecureChannelError | undefined;
+    void connection.closed.then(error => { ended = error; });
+    served.state.muted = true;
+    for (let second = 0; second < 90; second += 10) {
+      device.trickle();
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(ended).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(ended).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(ended).toMatchObject({ code: "timeout", stage: "open" });
+  });
+
   it("answers a device ping with a pong", async () => {
     const { options, served } = setup();
     const connection = await connectSecure(options);
     served.sendFrame(FRAME.ping);
     await vi.waitFor(() => expect(served.controls).toContain(FRAME.pong));
     connection.close();
+  });
+});
+
+describe("nodeBinarySocket", () => {
+  it("tells the bytes of a message as they arrive", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise<void>(resolve => server.once("listening", () => resolve()));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    server.once("connection", socket => socket.once("message", () => socket.send(Buffer.alloc(64, 7))));
+    const ws = new NodeWebSocket(`ws://127.0.0.1:${address.port}/`);
+    try {
+      await new Promise<void>((resolve, reject) => { ws.once("open", () => resolve()); ws.once("error", reject); });
+      const socket = nodeBinarySocket(ws);
+      let bytes = 0;
+      socket.onData?.(() => { bytes++; });
+      const message = new Promise<Uint8Array>(resolve => socket.onMessage(resolve));
+      socket.send(new Uint8Array([1]));
+      expect((await message).byteLength).toBe(64);
+      expect(bytes).toBeGreaterThan(0);
+    } finally {
+      ws.close();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
   });
 });
 

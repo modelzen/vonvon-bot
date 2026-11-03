@@ -32,6 +32,18 @@ it('goes from the pasted link to a failure that asks for a new link, and back to
   expect(stage(state)).not.toContain('vonvon://pair#example');
 });
 
+// 0.9.0 Mac 验收 S-1: a link used up came with "连不上…tailscale ping" for the address that refused it.
+it('gives address hints only when an address could not be reached', () => {
+  const failed = (code: string, attempts: Array<{route: typeof preview.routes[number]; code: string}>) =>
+    stage({stage: 'failed', link: 'x', name: '机房', preview, code, attempts});
+  for (const [code, attempt] of [['link_used', 'pairing_failed'], ['rate_limited', 'rate_limited'], ['protocol_mismatch', 'protocol_mismatch']]) {
+    const html = failed(code!, [{route: preview.routes[0]!, code: attempt!}]);
+    expect(html).not.toContain('tailscale ping');
+    expect(html).not.toContain('device-hints');
+  }
+  expect(failed('timeout', [{route: preview.routes[0]!, code: 'timeout'}])).toContain('tailscale ping 100.64.0.10');
+});
+
 it('offers another try with the same link for other failures', () => {
   const html = stage({stage: 'failed', link: 'x', name: '机房', preview, code: 'unreachable',
     attempts: [{route: preview.routes[0]!, code: 'unreachable'}]});
