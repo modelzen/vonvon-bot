@@ -62,7 +62,6 @@ import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel} from "./settings/SettingsPanel";
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
 import {decisionProviderSection, diagnosticsSection, OPEN_SETTING_EVENT, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
-import {RemoteAccessPanel} from './settings/RemoteAccessPanel';
 import {agentPanes, initialRoute, openMembership, openScheduleTab, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, joinedGroupRoute} from './collaboration-navigation';
 import {SearchDialog} from './SearchDialog';
 import {flushSync} from 'react-dom';
@@ -446,7 +445,7 @@ function DesktopApp() {
     });
   }
   function openPage(next: Page) { navigate(() => { setModal(current => current?.kind === 'join' && current.suspended ? null : current); setJoinedTarget(undefined); setPage(next); setFeatureId(undefined); setSettingsReturn(undefined); }); }
-  // devices-ui-3: the paired toast sits outside App and asks for 应用与启动 → 已配对的设备 this way.
+  // devices-ui-3: the paired toast sits outside App and asks for 设备 → 已配对的设备 this way (on 应用与启动 until 2026-11-03).
   const openSetting = useRef<(destination: Destination) => void>(() => undefined);
   openSetting.current = destination => { navigate(() => { setModal(current => current?.kind === 'join' && current.suspended ? null : current); setJoinedTarget(undefined); setPage(destination.page); setFeatureId(undefined); setSettingsReturn(undefined); setSearchTarget(destination.section ? destination : undefined); }); };
   useEffect(() => {
@@ -942,10 +941,10 @@ function DesktopApp() {
                     trailing={<Button size="sm" disabled={busy || host.kind !== 'connected'} onClick={() => void run({type: 'restartHost'})}>重启后台</Button>}/>
                   <LoginServiceRow application={snapshot.application} busy={busy} onToggle={enabled => void runShell(async () => setNotice({message: await toggleService(enabled, client, shell), error: false}))}/>
                 </SettingsGroup>}
-                <RemoteAccessPanel/>
               </UpdatePanel>
             </div>
           )}
+          {/* 设备: the desktop's list, then 允许别的设备连接 of the device shown (the web page has only that) */}
           {page === "devices" && <DevicesPanel/>}
           {page === "secrets" && <SecretsPanel onOpenProviders={() => openPage("providers")} onOpenApplication={() => openPage("application")}
             onOpenLogs={() => { openPage("diagnostics"); setSearchTarget({page: "diagnostics", section: "daemon 日志"}); }}/>}

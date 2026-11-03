@@ -143,7 +143,7 @@ Mac 后验（整批，U1b/U3 的任务里）：Mac 桌面端或 Mac 上的通道
 ## 7. 文档
 
 - `docs/product.md` 本片不改；D0 的 3.14 写"允许别的设备连接"、地址种类和 `--allow-public`、`/health`、7767。
-- 官网 `/guide/remote/` → W1。
+- 官网 `/guide/remote/` → W1（0.9.1 起是 `/docs/remote/`）。
 - `docs/v1-plan.md` 不改。
 
 ## 8. 验收要点

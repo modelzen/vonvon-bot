@@ -184,7 +184,8 @@ export function cascadeCount(all: readonly ClientRecord[], clientId: string): nu
 /** devices 第 15 节"撤销确认". */
 export const revokeConfirmText = (name: string): string => `取消「${name}」的访问？它会立刻断开，要再连得重新配对。`;
 export const SELF_TAG = '这台电脑';
-export const selfText = (where: Where): string => `这是你现在用的这台电脑。要断开，到「设备」页删掉${whereName(where)}。`;
+/** Only on a remote device's block, which is on 设备 under this computer's list since owner 2026-11-03: it is right above. */
+export const selfText = (where: Where): string => `这是你现在用的这台电脑。要断开，在上面的设备列表里删掉${whereName(where)}。`;
 /** devices 第 15 节"新客户端配对成功"; the toast is always about this computer, whichever device is shown. */
 export function pairedToastText(event: Pick<DeviceEventPayload, 'name' | 'clientKind' | 'address'>): string {
   const kind = CLIENT_KIND_LABEL[event.clientKind] ?? '客户端';
