@@ -634,7 +634,7 @@ describe('a remote connection on a slow link', () => {
     expect(event.payload.groups.map(group => [group.avatarDataUrl, 'avatarRef' in group])).toEqual([[GROUP, false], [GROUP, false]]);
   });
 
-  it('pings after a pushed snapshot and keeps only the newest one until the pong; replies and other events go at once', async () => {
+  it('pings after a pushed snapshot and keeps only the newest one until the pong; other events go at once, a reply behind the held snapshot', async () => {
     const h = await harness();
     const { clientKey, connection } = await paired(h);
     connection.close();
@@ -649,13 +649,21 @@ describe('a remote connection on a slow link', () => {
     expect(await client.read()).toEqual({ control: FRAME.ping });
     for (const revision of [2, 3]) h.hub.publish(snapshot(revision));
     h.hub.publish({ type: 'event', event: 'log', payload: { lines: 'x' } });
-    client.json({ type: 'request', id: 's', method: 'admin', payload: { type: 'daemonStatus' } });
     expect(await client.read()).toMatchObject({ type: 'event', event: 'log' });
-    expect(await client.read()).toMatchObject({ type: 'response', id: 's' });
     client.frame(FRAME.pong);
     expect(await client.read()).toMatchObject({ type: 'event', event: 'snapshot', payload: { revision: 3 } });
     expect(await client.read()).toEqual({ control: FRAME.ping });
+    // 复核 P2: a reply goes after the snapshot it may refer to (docs/plan.md), the held one written ahead of it
+    for (const revision of [4, 5]) h.hub.publish(snapshot(revision));
+    client.json({ type: 'request', id: 's', method: 'admin', payload: { type: 'daemonStatus' } });
+    expect(await client.read()).toMatchObject({ type: 'event', event: 'snapshot', payload: { revision: 5 } });
+    expect(await client.read()).toMatchObject({ type: 'response', id: 's' });
+    // The pong of the ping after 3 finds nothing held; the next push goes at once
+    client.frame(FRAME.pong);
     client.json({ type: 'request', id: 't', method: 'admin', payload: { type: 'daemonStatus' } });
     expect(await client.read()).toMatchObject({ type: 'response', id: 't' });
+    h.hub.publish(snapshot(6));
+    expect(await client.read()).toMatchObject({ type: 'event', event: 'snapshot', payload: { revision: 6 } });
+    expect(await client.read()).toEqual({ control: FRAME.ping });
   });
 });

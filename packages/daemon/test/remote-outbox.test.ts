@@ -34,6 +34,10 @@ const payloadOf = (value: Outgoing | 'ping' | undefined): DesktopSnapshot => {
   if (typeof value === 'object' && value.type === 'response' && value.method === 'snapshot') return value.payload;
   throw new Error('not a snapshot');
 };
+/** Each frame as 'snapshot <revision>', 'response <revision>', 'log', 'error' or 'ping'. */
+const kinds = (written: Array<Outgoing | 'ping'>) => written.map(value => value === 'ping' ? 'ping'
+  : value.type === 'event' ? `${value.event} ${value.event === 'snapshot' ? value.payload.revision : ''}`.trim()
+  : value.type === 'response' ? `${value.type} ${payloadOf(value).revision}` : value.type);
 const pictures = (value: Outgoing | undefined) => {
   const payload = payloadOf(value);
   return [...payload.agents, ...payload.groups].map(item => [item.avatarDataUrl === undefined ? null : item.avatarDataUrl.length, item.avatarRef ?? null]);
@@ -97,25 +101,48 @@ describe('a remote connection\'s pictures', () => {
 });
 
 describe('a remote connection whose client does not have the last pushed snapshot yet', () => {
-  it('pings after each pushed snapshot, keeps only the newest one until the pong, and lets replies and other events through', () => {
+  it('pings after each pushed snapshot, keeps only the newest one until the pong, and lets other events through', () => {
     const { outbox, written } = socket();
     outbox.event(pushed(1));
     outbox.event(pushed(2));
-    outbox.send(reply('r', 2));
     outbox.event(log);
     outbox.event(pushed(3));
     outbox.event(pushed(4));
-    const kinds = () => written.map(value => value === 'ping' ? 'ping' : value.type === 'event' ? `${value.event} ${value.event === 'snapshot' ? value.payload.revision : ''}`.trim() : `${value.type} ${payloadOf(value).revision}`);
-    expect(kinds()).toEqual(['snapshot 1', 'ping', 'response 2', 'log']);
+    expect(kinds(written)).toEqual(['snapshot 1', 'ping', 'log']);
     outbox.pong();
-    expect(kinds().slice(4)).toEqual(['snapshot 4', 'ping']);
-    // The reply carried the pictures already
-    expect(payloadOf(written[4]).agents[0]?.avatarDataUrl).toBeUndefined();
+    expect(kinds(written).slice(3)).toEqual(['snapshot 4', 'ping']);
+    // The first push carried the pictures already
+    expect(payloadOf(written[3]).agents[0]?.avatarDataUrl).toBeUndefined();
     outbox.pong();
     outbox.pong();
-    expect(written).toHaveLength(6);
+    expect(written).toHaveLength(5);
     outbox.event(pushed(5));
-    expect(kinds().slice(6)).toEqual(['snapshot 5', 'ping']);
+    expect(kinds(written).slice(5)).toEqual(['snapshot 5', 'ping']);
+  });
+
+  // 复核 P2: a write's reply names the revision its rebuild just published, and the client reads that state from the
+  // event before the reply (docs/plan.md). With the event held, the reply came first and the Bot's switch flipped back
+  // until the snapshot caught up. 954995c4 必败: 'response 3' came before 'snapshot 3'.
+  it('writes the held snapshot ahead of a reply or an error, without another ping, and not ahead of a log event', () => {
+    const { outbox, written } = socket();
+    outbox.event(pushed(1));
+    outbox.event(pushed(2));
+    outbox.event(pushed(3));
+    outbox.event(log);
+    outbox.send(reply('r', 3));
+    expect(kinds(written)).toEqual(['snapshot 1', 'ping', 'log', 'snapshot 3', 'response 3']);
+    // Pictures went with the first push: the held one and the reply carry references alone
+    for (const later of written.slice(3)) expect(payloadOf(later).agents[0]?.avatarDataUrl).toBeUndefined();
+    outbox.event(pushed(4));
+    const failed = { type: 'error', id: 'w', code: 'internal', message: 'x' } as const;
+    outbox.send(failed);
+    expect(kinds(written).slice(5)).toEqual(['snapshot 4', 'error']);
+    // Nothing is held: a reply goes alone, and the pong of the first ping sends nothing
+    outbox.send(reply('s', 4));
+    outbox.pong();
+    expect(kinds(written).slice(7)).toEqual(['response 4']);
+    outbox.event(pushed(5));
+    expect(kinds(written).slice(8)).toEqual(['snapshot 5', 'ping']);
   });
 
   it('drops the waiting snapshot when the connection closes', () => {
