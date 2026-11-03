@@ -2,7 +2,7 @@ import {expect, it, vi} from 'vitest';
 import type {LinkPreviewCode, MachineRequestHandler} from '@vonvon/protocol';
 import {
   addBlockedReason, bannerCopy, cannotUpgradeRemotely, compareVersions, copy, failureCopy, linkPreviewCopy, maintenanceRequest, platformLabel,
-  registryNotices, relativeTime, removeCopy, routeHint, routeHints, routeKindLabel, rowView, statusLabel, statusTone, versionNotice,
+  LOCAL_NETWORK_HINT, registryNotices, relativeTime, removeCopy, routeHint, routeHints, routeKindLabel, rowView, statusLabel, statusTone, versionNotice,
 } from '../src/devices/devices-presentation';
 import {rowA, rowB} from './devices-fixture';
 
@@ -52,6 +52,14 @@ it('gives a hint per kind of address', () => {
   expect(routeHints(['pairing_failed', 'rate_limited', 'client_revoked', 'remote_disabled', 'protocol_mismatch', 'handshake_failed'].map(code => ({route: tailscale, code})), X)).toEqual([]);
   expect(routeHints(['timeout', 'device_identity_changed'].map(code => ({route: tailscale, code})), X)).toHaveLength(2);
   expect(routeHints([{route: tailscale, code: 'timeout'}, {route: {...tailscale, kind: 'lan'}, code: 'timeout'}], X)).toHaveLength(2);
+  // 0.9.0 Mac 验收 S-1': macOS 15 may have blocked a local network address; said once, after the addresses' own hints.
+  const lan = {...tailscale, host: '192.0.2.10', kind: 'lan' as const};
+  const blocked = routeHints([{route: lan, code: 'unreachable', localNetwork: true}, {route: {...lan, host: '192.0.2.11'}, code: 'unreachable', localNetwork: true}], X);
+  expect(blocked).toHaveLength(3);
+  expect(blocked.at(-1)).toBe(LOCAL_NETWORK_HINT);
+  expect(LOCAL_NETWORK_HINT).toContain('系统设置 → 隐私与安全性 → 本地网络');
+  expect(routeHints([{route: lan, code: 'unreachable'}], X)).not.toContain(LOCAL_NETWORK_HINT);
+  expect(routeHints([{route: lan, code: 'link_used', localNetwork: true}], X)).toEqual([]);
 });
 
 const failureCodes = ['client_revoked', 'revoked', 'device_identity_changed', 'identity_changed', 'unknown_client', 'key_unreadable', 'remote_disabled', 'rate_limited',
