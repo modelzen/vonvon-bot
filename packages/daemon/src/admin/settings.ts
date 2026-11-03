@@ -22,7 +22,7 @@ import { DECISION_PROVIDER_ID, parseStoredJudge, resolveJudgeModel, judgeBackend
 import { JUDGE_CLAUDE_NOTE, JUDGE_CODEX_NOTE, JUDGE_FORMAT_LINES, JUDGE_INPUT_EXAMPLE } from '../judge/prompt';
 import { readSmartPrompt, SMART_MAX_CHARS, SmartPromptError, composeSmartRules, resolveSmartRules, rulesFromSmartPrompt } from '../judge/smart-file';
 import type { JudgeSelectionStored } from '../judge/types';
-import type { VoiceAction } from '../voice/types';
+import { VoiceActionRefused, type VoiceAction } from '../voice/types';
 import { probeBackends, SMART_NO_MENTION_REFUSED, type AppPreferencesWriter } from './ops';
 import { parseSettingsAction, parseSettingsEdit, SettingsInputError } from './settings-parse';
 import type * as T from './settings-types';
@@ -1183,7 +1183,10 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               kind: 'unavailable',
               reason: offlineSettings
             };
-          await deps.voiceAction(action.action);
+          // its refusals say what to do (switch voice on, wait for the check); other failures stay the generic message
+          await deps.voiceAction(action.action).catch((error: unknown) => {
+            throw error instanceof VoiceActionRefused ? new SettingsInputError(error.message) : error;
+          });
           break;
         case 'adminMember':
           await deps.writePreferences(p => {

@@ -12,6 +12,7 @@ import type { AgentSettingsView, ProjectSettingsView, SessionSettingsView, Setti
 import { addProject, getProjectByName, updateProject } from '../src/project/registry';
 import { getSession, upsertSession } from '../src/bot/session-store';
 import type { AppConfig } from '../src/config/schema';
+import { VoiceActionRefused } from '../src/voice/types';
 import type { AgentBackend } from '../src/agent/types';
 
 vi.mock('../src/config/paths', () => {
@@ -187,6 +188,16 @@ it('CARD-027 dispatches voice actions', async () => {
     expect((await settings.act({ kind: 'voice', botId, action: { action } })).kind).toBe('saved');
   }
   expect(voiceAction.mock.calls.map(call => (call as unknown as [{ action: string }])[0].action)).toEqual(['enable', 'test', 'refreshPermission', 'disable']);
+});
+
+// Linux 验收 296: 没开语音就点检测，页面只说"保存失败，请刷新设置后重试"，看不出要先开语音
+it('CARD-027 shows a voice refusal as it is, and keeps the generic message for other failures', async () => {
+  const refused = await owner({ voiceAction: vi.fn(async () => { throw new VoiceActionRefused('请先开启语音转文字，再测试'); }) });
+  expect(await refused.act({ kind: 'voice', botId, action: { action: 'test' } })).toEqual({ kind: 'rejected', fields: [{ field: 'settings', message: '请先开启语音转文字，再测试' }] });
+  const broken = await owner({ voiceAction: vi.fn(async () => { throw new Error('EACCES: config.json'); }) });
+  const result = await broken.act({ kind: 'voice', botId, action: { action: 'enable' } });
+  expect(result).toMatchObject({ kind: 'rejected', fields: [{ field: 'settings' }] });
+  expect(JSON.stringify(result)).not.toContain('EACCES');
 });
 
 it('CARD-036 CARD-038 CARD-040 keeps comment, title and current-session model choices separate', async () => {
