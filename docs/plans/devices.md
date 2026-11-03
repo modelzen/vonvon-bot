@@ -243,7 +243,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 
 ### 6.2 被连的那一侧（桌面端里管自己这台设备）
 
-设置 →"应用与启动"加一组"允许别的设备连接"：
+设置 →"设备"页、设备列表下面一组"允许别的设备连接"（U3 起先放在"应用与启动"，owner 2026-11-03 问"不应该放在多设备一起？"，照 Orca 的 Remote Orca Servers 一页里既有"Add Server"又有"Advertise this app as a server"，移到"设备"页；管的仍是当前看的那台，网页端的"设备"页只有这一块）：
 - 地址：列出本机能用的地址并标分类（`tailscale` 推荐、`overlay` 组网、`lan`、`cgnat`/`public` 需确认），**单选**，选一个即 `device.enable`，换一个就换掉原来的（A1：只开一个；虚拟网桥、代理软件的虚拟地址默认不列，和 `vonvon remote candidates` 同一套）；右边显示状态（监听中 / 等待地址 / 网络变了需确认）。
 - "生成连接链接"按钮：`device.pair` → 显示可复制的链接，倒计时 10 分钟，"再生成一个"。不显示二维码。
 - "已配对的客户端"：名字、类型、最近连接时间和地址、由谁带进来、最近 24 小时新配对的标出来，"改名""撤销"（带"连它带进来的一起撤销"）。撤销有确认框（第 15 节）。
@@ -307,7 +307,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 `install.sh`（POSIX sh）只在 Linux 上装。`install.ps1` 随 I2b 取消（owner 2026-11-01）。
 
 先看系统：`uname -s` 不是 `Linux` 就什么都不碰、退出非零（2）。是 `Darwin` 时打印第 15 节"安装脚本：在 Mac 上"那句，让用户到 https://vonvon.cc/get/ 下载安装包（里面带了服务端和 `vonvon` 命令）；别的系统（Windows 的 Git Bash 这类）打印"安装脚本：不是 Linux、也不是 Mac"那句。这一步在 root、已装过和公钥的检查之前，不联网、不写文件。然后：
-0. **root 检查**（SEC-13：大陆云服务器默认 root 登录，`curl | sh` 会把 daemon、Bot 和远程 owner 全变成 root，完全访问档被注入一次就是整机 root）：`id -u` 为 0 时打印第 15 节"安装脚本：root"那句后照装（owner 2026-11-03 改；原来默认拒绝，`VONVON_ALLOW_ROOT=1` 才放行，再早是 2026-11-02 的直接 SSH 登录建议）。Claude Code 以 root 运行时拒绝 bypassPermissions（只认 `IS_SANDBOX=1` 或 bubblewrap），完全访问档在 root 下起不来，2026-11-03 在它的 CLI 里核实过。`vonvon daemon run` 和 `service install` 在 root 下照旧警告。
+0. **root**：照装，不提示（owner 2026-11-03，和 Paseo、Orca 一样；Claude 在 root 下拒绝 bypassPermissions 是 Claude Code 自己的事）。`vonvon daemon run` 和 `service install` 也不再警告。原来是默认拒绝、`VONVON_ALLOW_ROOT=1` 才放行（SEC-13，owner 2026-10-31），0.9.1 改掉。
 1. **已装过？**（REQ-3）任一命中就按第 15 节的文案跳过、退出 0、不动任何东西：
    - 数据目录里 `daemon.pid` 的进程活着；
    - systemd 的服务定义 `vonvon-bot*.service` 在（7.4 的命名）；
@@ -419,12 +419,12 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 
 ## 10. 说明文档（官网）
 
-仓库 modelzen/vonvon-site。**第 1 版看的是过时的本地 worktree（`claude/bot-site-v3` 2b3b3e8），`origin/main`（0b7bd42）已经是 `site/` 结构**（REQ-4）：官网域名 vonvon.cc，bot.vonvon.cc 整站 301 到它；`site/scripts/deploy-config.mjs` 的 `HOST_SCOPED_PATHS` 把 `/docs/` 划给 bridge.vonvon.cc，`LEGACY_PATH_REDIRECTS` 把 `/docs` 301 到 `https://bridge.vonvon.cc/docs/`。所以第 1 版的 `https://vonvon.cc/docs/remote/` 会跳到 bridge 的文档站。W1 按 `origin/main` 重做：路径用 **`/guide/remote/`**（不和 bridge 的 `/docs/` 冲突；`HOST_SCOPED_PATHS` 加 `['/guide/', BOT_DOMAIN]`），样式照 `site/` 里现有页面，怎么进构建由实现者看 `site/` 的构建脚本定。Linux 的安装脚本和 CLI 打印的 URL 用 **`https://vonvon.cc/guide/remote/`**，W1 定稿前脚本先写这个值，W1 改了路径再一起改。W1 验收加：在 vonvon.cc 和 bot.vonvon.cc 上打开这个 URL 都能到这页。**发布官网要 owner 点头**，PR 开好等确认。
+仓库 modelzen/vonvon-site。**第 1 版看的是过时的本地 worktree（`claude/bot-site-v3` 2b3b3e8），`origin/main`（0b7bd42）已经是 `site/` 结构**（REQ-4）：官网域名 vonvon.cc，bot.vonvon.cc 整站 301 到它；`site/scripts/deploy-config.mjs` 的 `HOST_SCOPED_PATHS` 把 `/docs/` 划给 bridge.vonvon.cc，`LEGACY_PATH_REDIRECTS` 把 `/docs` 301 到 `https://bridge.vonvon.cc/docs/`。所以第 1 版的 `https://vonvon.cc/docs/remote/` 会跳到 bridge 的文档站。W1 按 `origin/main` 重做：路径用 **`/guide/remote/`**（2026-11-03 owner 改：旧的 bridge 文档移除，Bot 文档改放 **`/docs/`**，远程连接是 `/docs/remote/`，`/guide/` 不保留）（不和 bridge 的 `/docs/` 冲突；`HOST_SCOPED_PATHS` 加 `['/guide/', BOT_DOMAIN]`），样式照 `site/` 里现有页面，怎么进构建由实现者看 `site/` 的构建脚本定。Linux 的安装脚本和 CLI 打印的 URL 用 **`https://vonvon.cc/guide/remote/`**（0.9.1 起是 `https://vonvon.cc/docs/remote/`），W1 定稿前脚本先写这个值，W1 改了路径再一起改。W1 验收加：在 vonvon.cc 和 bot.vonvon.cc 上打开这个 URL 都能到这页。**发布官网要 owner 点头**，PR 开好等确认。
 
 提纲：
 1. 这是什么：一台设备上的 Vonvon Bot，用别的电脑上的 Vonvon Bot 桌面端来管。什么时候需要（服务器上 24 小时跑、代码在服务器上、几台电脑、团队共用）。
-2. 装：**Mac、Windows 下载桌面端安装包**（https://vonvon.cc/get/），它自带服务端，装好打开就是一台能被连的设备，不用命令行；**Linux 一行命令只装服务端**（`curl … | sh`），装完 `vonvon --version`；在 Mac 上跑这条命令只会提示去下载安装包（owner 2026-11-01）。Linux 一段写：**不要用 root 装**（为什么、怎么建普通用户）；只支持 glibc 发行版（Alpine 等 musl 不支持）；首次安装的信任根是 HTTPS 和 dl.vonvon.cc；装完会自动开 linger，退出登录也照常跑。**Mac、Windows 当设备要保持这个用户登录着**（可以锁屏；重启后要有人登录一次）：Mac 打开"登录时启动"；Windows 这一批不做登录自启，要 Vonvon Bot 开着。
-3. 让它能被连上：先把两台设备放进同一个安全网络——推荐 Tailscale（装、登录、`tailscale ip -4`；大陆用户可能延迟高，也可以用局域网）；然后 Linux 上 运行 `vonvon remote enable` 从列出的地址里选一个（脚本里 `vonvon remote enable <ip>`，Tailscale 用户可以写 `vonvon remote enable "$(tailscale ip -4)"`；蒲公英、ZeroTier、EasyTier 这类组网工具选它的虚拟地址；只能开一个，再开一个就换掉原来的，已配对的设备粘一次新链接更新地址），Mac、Windows 在桌面端设置 →"应用与启动"→"允许别的设备连接"里选一个地址；公网地址的风险和为什么不建议；100.x 地址不一定是 Tailscale（运营商 CGNAT）。
+2. 装：**Mac、Windows 下载桌面端安装包**（https://vonvon.cc/get/），它自带服务端，装好打开就是一台能被连的设备，不用命令行；**Linux 一行命令只装服务端**（`curl … | sh`），装完 `vonvon --version`；在 Mac 上跑这条命令只会提示去下载安装包（owner 2026-11-01）。Linux 一段写：~~不要用 root 装~~（2026-11-03 去掉：root 照装，不提示）；只支持 glibc 发行版（Alpine 等 musl 不支持）；首次安装的信任根是 HTTPS 和 dl.vonvon.cc；装完会自动开 linger，退出登录也照常跑。**Mac、Windows 当设备要保持这个用户登录着**（可以锁屏；重启后要有人登录一次）：Mac 打开"登录时启动"；Windows 这一批不做登录自启，要 Vonvon Bot 开着。
+3. 让它能被连上：先把两台设备放进同一个安全网络——推荐 Tailscale（装、登录、`tailscale ip -4`；大陆用户可能延迟高，也可以用局域网）；然后 Linux 上 运行 `vonvon remote enable` 从列出的地址里选一个（脚本里 `vonvon remote enable <ip>`，Tailscale 用户可以写 `vonvon remote enable "$(tailscale ip -4)"`；蒲公英、ZeroTier、EasyTier 这类组网工具选它的虚拟地址；只能开一个，再开一个就换掉原来的，已配对的设备粘一次新链接更新地址），Mac、Windows 在桌面端设置 →"设备"页 →"允许别的设备连接"里选一个地址（2026-11-03 从"应用与启动"移过来，0.9.0 还在"应用与启动"）；公网地址的风险和为什么不建议；100.x 地址不一定是 Tailscale（运营商 CGNAT）。
 4. 配对：Linux 上 `vonvon pair` 拿链接，Mac、Windows 在桌面端点"生成连接链接"；客户端设置 → 设备 → 添加 → 粘贴 → 起名；链接 10 分钟有效、只用一次；一台客户端一条；链接会进你的 Agent 的对话记录；配对成功后被连的那台会提示，不是你就撤销。
 5. 切换和日常：切换设备、"在 <设备> 上把 Codex 配置好"是什么意思、选目录选的是那台设备的、托管安装装在那台设备上。
 6. 撤销和改名：在被连的那台设备上（桌面端"允许别的设备连接"或 `vonvon clients ls/revoke`）；授权不会过期，不用的客户端要自己撤销；一台客户端电脑上装了完全访问档的 Bot，它配对过的设备都在同一个信任范围里；完全访问的群里，群成员能让 Bot 在这台设备上做任何事，包括改 vonvon 的设置，只给信任的群用。
@@ -508,7 +508,7 @@ U2–U4 计划后的变化（2026-11-01，`devices-ui-2-remote-mode.md`、`devic
 | U3 `devices-ui-3-served` | 6.2 "允许别的设备连接"面板（地址分类、`cgnat`/`public` 确认框、网络变了确认、关掉自己连着的地址先确认、设备名字）、生成链接、客户端列表（`invitedBy`、最近配对标记、自己那行不给撤销）、撤销（含 `--cascade`）、配对成功提示（挂在 `DesktopRoot`，看别的设备时也弹）、6.3 的扫码归属（回 `refused`、`code: 'job_running'`）和 60 秒宽限；另加（U3 计划）：`device.status` 的 `candidates`、`via` 和 `clients` 的 `self`（4.3），Mac、Windows 上 Tailscale 应用自带命令的位置（补 D3） | D1、D3；U1a、U1b（`onLocalDeviceEvent`、`DesktopRoot`、`TailscaleAdvice`） | C | ~1,150 | Mac 上开 Tailscale 地址（标"Tailscale（推荐）"）、生成链接，JP-VPS 的通道探针配对成功、出现在列表、Mac 弹出提示；探针带进来的第二台写"由「…」带进来"，级联撤销后两台都断；两个客户端同时扫码时后点的被拒、先点的二维码还在，断开 60 秒内回来续上 |
 | U4 `devices-ui-4-bundled-update` | 7.5 末尾"桌面端自带的服务端远程升级"：`D/service/bundled-update.ts`（找本机声明了 `desktop.self-update` 的外壳连接、`desktopUpdateRequest` 事件、`machine.desktopUpdateReport` 和它的权限表行、映射到 `coreUpdateStatus`、`checkCoreUpdate` 带 `desktopShell`、`desktop_not_running`）、`DT/remote-self-update.ts`（在本机连接上订阅、驱动 `DesktopUpdater`/`WindowsDesktopUpdater` 的 check → 下载 → `quitAndInstall`、沿用 `beforeUpdateInstall` 的排空、远程触发不弹 Windows 本机确认框、托盘和窗口里给提示）、6.5 `update.bundled` 的按钮和"要开着桌面端"文案、对齐测试白名单、假更新驱动的测试 | D1（`negotiate`、权限表）、I3（`coreUpdateStatus`、6.5 门控、`vonvon update`）、U1a（外壳对本机的连接一直在）、U2（`ServerUpdateCard`）、U3（`peer-label.ts`、hub 的 `attached`，U3 先合入）；真机验收要 D3 | C（计划，macOS）+ D（Windows 验证） | ~1,150 | 假驱动测试里远程 `applyCoreUpdate` 走完检查 → 下载 → 排空 → `quitAndInstall`，四个看门狗各自收尾，外壳不在时回 `desktop_not_running`；真机上 Mac（C）和 Windows（D）用不签名的目录包当被更新的那台，从另一台已配对客户端点检查和更新，回到发起方的是那台更新器的原话（Mac 没签名，是"没有可用的签名更新源…"；Windows 的目录包构建时用 `VONVON_WINDOWS_UPDATE_CONFIG` 换上一把临时公钥，验不过真实的更新清单，是"检查桌面更新失败…"，不会下载）、托盘出提示、Windows 不弹本机确认框，退出桌面端后再点给"要在那台打开桌面端"；Windows 任务同时验 U2 的平台名和启动修复、U3 的 Windows 当被连的设备；真实换包在 0.9.0 之后第一个 0.9.x 上验（第 16 节） |
 | K1 `skills-scope` | 第 9 节三个 skill（群里不改设置、拒绝时说 `not-dm` 那句；私聊改完说改前 → 改后）。2026-11-02 由 S1 `settings-dm-only` 撤掉（第 20 节） | C1、C3、C4、C6、D4b | A | ~500 | Bot 6 群里让 Claude 用命令行建任务，带 `--scope` 成功、改大范围被拒；让它"重启 vonvon"被拒并解释；群里让它改本群设置被拒、回"设置只能在私聊里改…"、不去试命令行；私聊里主人让它改某个群的设置成功，回复写清改前 → 改后 |
-| W1 `site-remote-doc` | 第 10 节（vonvon-site 仓库 `origin/main` 的 `site/`，`/guide/remote/`，单独 PR，等 owner 点头发布） | 全部合入后定稿 | A | ~300 | 按文档从零在一台干净机器上连上；vonvon.cc 和 bot.vonvon.cc 上打开打印出的 URL 都到这页 |
+| W1 `site-remote-doc` | 第 10 节（vonvon-site 仓库 `origin/main` 的 `site/`，`/guide/remote/`（0.9.1 起 `/docs/remote/`），单独 PR，等 owner 点头发布） | 全部合入后定稿 | A | ~300 | 按文档从零在一台干净机器上连上；vonvon.cc 和 bot.vonvon.cc 上打开打印出的 URL 都到这页 |
 
 **验收怎么跑**（验收与资源一节）：JP-VPS 当 Linux 服务端——在一个干净的测试用户下用 SSH 登录跑 `install.sh`（不用 `sudo -u`，免得没有 `XDG_RUNTIME_DIR`；不碰 `accept-home2` 和 Bot 6 的数据目录；要用验收 daemon 时按 #422 的目录锁 `mkdir /tmp/vonvon-accept.d`），开 Tailscale 地址、`pair`。Mac mini 当远程客户端——Mac Codex 用桌面端粘链接配对、切换、在远程模式下走 6.4 的每一行、撤销后看断开；Mac 上跑 `install.sh`、`uninstall.sh` 只打印去下载桌面端安装包的话、退出非零、什么都不动；0.8 桌面端升到候选版本能停掉旧 daemon；U4 的 macOS 一侧（用 Mac 测试环境里的桌面端，不碰 owner 的 `/Applications/Vonvon Bot.app` 和 `~/.vonvon-bot`；桌面端开着时，从 Windows 桌面端或 JP-VPS 上的通道探针点升级这台 Mac，再退出桌面端点一次）。Windows 机器——Claude 把 Windows 的验证写成一份带开始/结果标记的提示词，owner 转发给 Windows 上的 Codex（2026-11-01 起 I4a、I4b、I2 `.ps1` 取消，只剩桌面端）：Windows 桌面端当被连的设备（在"允许别的设备连接"里开地址、生成链接、被 Mac 桌面端配对，桌面端开着、锁屏后 Bot 仍在线）；从 Mac 桌面端点升级这台 Windows 的桌面端自带服务端（开着、关着各一次，开着时不弹本机确认框）。三台机器都装同一个 0.9.0 候选版本号，验收通过的 SHA 记进集成 PR 描述；一次 CI 之后才 `dev → main`。
 
@@ -533,7 +533,7 @@ U2–U4 计划后的变化（2026-11-01，`devices-ui-2-remote-mode.md`、`devic
 | 11 | 邀请 | 10 分钟、一次性 | 4.3 |
 | 12 | 授权过期 | 不过期，只能手动撤销 | 4.3 |
 | 13 | 远程选目录 | 不限家目录，该用户能读的都能选，本机和远程一样 | 6.4、U2 |
-| 14 | root 安装 | 提示风险后照装（owner 2026-11-03；原来默认拒绝，`VONVON_ALLOW_ROOT=1` 才放行） | 7.3、I2 |
+| 14 | root 安装 | 照装，不提示（owner 2026-11-03，和 Paseo、Orca 一样；原来默认拒绝，`VONVON_ALLOW_ROOT=1` 才放行） | 7.3、I2 |
 | 15 | Linux libc | 只支持 glibc，musl/Alpine 脚本明说不支持 | 7.1、I2 |
 | 16 | linger | 安装脚本能开就自动开，要 sudo 就打印命令，不问 | 7.3、I2 |
 | 17 | 远程"停止 daemon" | 保留，带"只能在那台设备上重新启动"的确认，"重启"放前面 | 6.4、U2 |
@@ -577,13 +577,12 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 版本不一致（客户端旧） | 这台电脑的 Vonvon Bot（0.8.0）比 <设备>（0.9.0）旧。先更新这台电脑上的应用。 |
 | 服务端太旧（v1） | <设备> 上的 Vonvon Bot（0.7.x）不支持远程管理，请在那台设备上升级一次。 |
 | 安装脚本：开始 | 正在安装 Vonvon Bot 服务端 0.9.0（linux-x64）… |
-| 安装脚本：root（2026-11-03 改，提示后照装，已装过时不说） | 你正在用 root 安装，Bot 和它启动的 AI 代理都会有整台机器的权限。用 Claude 时「完全访问」在 root 下用不了（Claude Code 不允许），要用就换普通用户装，说明见 https://vonvon.cc/guide/remote/#no-root 。 |
 | 安装脚本：已装过 | 这台机器已经装过 Vonvon Bot，不用再装。直接用：`vonvon --version`。 |
 | 安装脚本：在 Mac 上（退出非零，什么都不动） | Mac 请下载安装包：https://vonvon.cc/get/ ，安装包里已经带了服务端和 vonvon 命令。这个脚本只用于 Linux，什么都没动。 |
 | 安装脚本：不是 Linux、也不是 Mac（退出非零，什么都不动） | 这个安装脚本只支持 Linux（这台是 <`uname -s` 的结果>）。Mac、Windows 请下载 Vonvon Bot 桌面端安装包：https://vonvon.cc/get/ |
 | 卸载脚本：在 Mac 上（退出非零，什么都不动） | 这个脚本只卸载 Linux 上的服务端。Mac 上的 Vonvon Bot 是桌面端安装包装的，说明见 https://vonvon.cc/get/ |
 | 卸载脚本：不是 Linux、也不是 Mac（退出非零，什么都不动） | 这个脚本只卸载 Linux 上的服务端（这台是 <`uname -s` 的结果>），什么都没动。 |
-| 安装脚本：完成（2026-11-02 改，不提 systemd、linger、sudo） | 装好了。Vonvon Bot 已在后台运行，开机自动启动。\n试一下：`vonvon --version`\n要从别的电脑连过来管理？看 https://vonvon.cc/guide/remote/ |
+| 安装脚本：完成（2026-11-02 改，不提 systemd、linger、sudo） | 装好了。Vonvon Bot 已在后台运行，开机自动启动。\n试一下：`vonvon --version`\n要从别的电脑连过来管理？看 https://vonvon.cc/docs/remote/ |
 | 安装脚本：没验签名 | 这台机器没有 openssl 3，没能核对发布签名；已核对下载内容的哈希，来源是 https://dl.vonvon.cc。 |
 | 安装脚本：开不了开机自动启动（少数系统，2026-11-02 改；替换"完成"的第一行） | 装好了。Vonvon Bot 已在后台运行。\n这台机器没让它开机自动启动，退出登录后它会停。需要的话运行一次：`sudo loginctl enable-linger <用户名>` |
 | `vonvon service install` 装好（2026-11-02） | 已在后台运行，开机自动启动。（macOS："登录后自动启动"；装好但没在运行："后台服务已经装好，开机自动启动；现在没在运行，下次开机时启动。"） |
@@ -655,7 +654,7 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | SEC-10 | 接受 | Windows 不用联接，用 `current.txt` + 固定启动器；监督进程收到 75 看 `current.txt` 变了就 exec 新版本；被占用目录跳过（7.2、7.4） |
 | SEC-11 | 部分接受 | 加 `client-paired` 事件、桌面端提示、链接已用掉的专门文案、`invitedBy` 和级联撤销；**不加** `--print-secret`（和 REQ-2 冲突，`pair --json` 必须让 AI 拿到链接，改为文案提醒会进 Agent 对话记录）；不经 bot 私聊通知 |
 | SEC-12 | 接受 | 每台设备一对客户端密钥；信任范围写进 5.3、16.2、文档；列表显示最近地址 |
-| SEC-13 | 接受 | 脚本 euid=0 提示风险后照装（2026-11-03 改，原来默认拒绝）；`daemon run`/`service install` 警告；列第 14 节第 9 条 |
+| SEC-13 | 接受 | 脚本 euid=0 照装、不提示，`daemon run`/`service install` 也不警告（owner 2026-11-03 改，原来默认拒绝并警告）；列第 14 节第 9 条 |
 | SEC-14 | 接受 | 用签名清单的 sha512 不用 sidecar；可选 openssl 3 验 Ed25519；`--proto =https --tlsv1.2`；`main()`；版本格式；解包路径检查（7.3） |
 | SEC-15 | 接受 | 计划任务名 `\VonvonBot\<sid-hash>-<root-hash>`，只认本用户本目录，不 `/F` 覆盖别人的（7.4） |
 | SEC-16 | 接受 | `clients.json` 加 `generation`，每条 RPC 前核对；撤销取消任务和日志订阅（4.3） |

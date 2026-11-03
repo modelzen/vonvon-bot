@@ -1,3 +1,4 @@
+import {readdirSync, readFileSync} from 'node:fs';
 import {expect, it, vi} from 'vitest';
 import type {LinkPreviewCode, MachineRequestHandler} from '@vonvon/protocol';
 import {
@@ -140,4 +141,18 @@ it('lets only upgrades through while the versions cannot work together', async (
   expect(machine).not.toHaveBeenCalled();
   await request({type: 'checkCoreUpdate'});
   expect(machine).toHaveBeenCalledWith({type: 'checkCoreUpdate'});
+});
+
+// owner 2026-11-03: 允许别的设备连接 moved from 应用与启动 to 设备; the words that send people there say so, and where 0.9.0,
+// still on the other computer, has it (审查 P3). main 必败
+it('sends people to 设置 → 设备 to make a link, or to 应用与启动 on 0.9.0', () => {
+  for (const words of [copy.pasteHelp, linkPreviewCopy('invalid_link', X), failureCopy('invalid_link', X)]) {
+    expect(words).toContain('设置 → 设备 →「允许别的设备连接」里点「生成连接链接」（0.9.0 版在「应用与启动」页）');
+    expect(words.replace('（0.9.0 版在「应用与启动」页）', '')).not.toContain('应用与启动');
+  }
+  const src = new URL('../src/', import.meta.url);
+  const files = (readdirSync(src, {recursive: true}) as string[]).filter(path => /\.tsx?$/.test(path));
+  const stale = files.filter(path => /应用与启动\s*→\s*(「?允许别的设备连接|已配对的设备|连接链接)/.test(readFileSync(new URL(path, src), 'utf8')));
+  expect(files.length).toBeGreaterThan(50);
+  expect(stale).toEqual([]);
 });

@@ -85,7 +85,8 @@ function install(input: Input) {
 
 const panel = async (page: Page) => {
   await page.getByRole('button', {name: '设置', exact: true}).click();
-  await page.getByRole('button', {name: /^应用与启动/}).click();
+  // On 设备, under the list, since owner 2026-11-03 (it was on 应用与启动).
+  await page.getByRole('button', {name: /^设备/}).click();
   await page.getByText('别的设备用哪个地址连过来').scrollIntoViewIfNeeded();
 };
 /** The panel with the bottom of the address choice in the middle of the page (its actions and any long state). */

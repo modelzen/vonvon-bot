@@ -1,5 +1,7 @@
 # U3 `devices-ui-3-served`：允许别的设备连接、连接链接、已配对的客户端、扫码任务归属
 
+> **2026-11-03 起（owner，照 Orca）**：「允许别的设备连接」整块（连同连接链接、已配对的设备）在 设置 → 设备 页，设备列表下面，不再在"应用与启动"。下文写"应用与启动"的地方指 0.9.0 的旧位置，是历史记录；验收、帮助文字按新位置做。
+
 总设计见 `docs/plans/devices.md`（下文简称"设计"）4.2、4.3、6.2、6.3、第 15 节，本片对应第 13 节的 U3 行。单独一个 PR，分支 `claude/devices-ui-3-served`，从集成分支开、PR 回集成分支。产品行为以 `docs/product.md` 3.14 为准。
 
 缩写同 D1：`P/`、`CL/`、`D/`、`DT/`、`U/` 分别是 protocol、client、daemon、desktop、ui 的 `src/`。行号以 `origin/claude/devices-integration`（8051b03c，代码和 413d78d5 相同）为准；D1 的代码以 `origin/claude/devices-1-identity`（147b2619）为准，写"D1 分支"。D2、D3 还没有代码，按 `devices-2-secure-channel.md`、`devices-3-remote-listen.md` 的接口写。U1a、U1b 的接口以它们的计划为准。

@@ -184,7 +184,7 @@ test('installs: checks the signed manifest and the hash, unpacks, sets up, insta
   // owner 2026-11-02: plain words only, nothing about systemd, linger or sudo when it all worked
   const done = lines.indexOf('装好了。Vonvon Bot 已在后台运行，开机自动启动。');
   assert.ok(done >= 0, run.stdout);
-  assert.deepEqual(lines.slice(done + 1), ['试一下：`vonvon --version`', '重开一个终端，或 `. ~/.bashrc`（zsh 用 `. ~/.zshrc`）再运行 `vonvon`。', '要从别的电脑连过来管理？看 https://vonvon.cc/guide/remote/', '']);
+  assert.deepEqual(lines.slice(done + 1), ['试一下：`vonvon --version`', '重开一个终端，或 `. ~/.bashrc`（zsh 用 `. ~/.zshrc`）再运行 `vonvon`。', '要从别的电脑连过来管理？看 https://vonvon.cc/docs/remote/', '']);
   assert.doesNotMatch(run.stdout, /保持这个账号登录着/);
   assert.doesNotMatch(run.stdout, /systemd|linger|sudo/);
   if (openssl3) assert.doesNotMatch(run.stdout, /没能核对发布签名/);
@@ -290,21 +290,20 @@ test('a package with a path out of its directory, or a link, is refused before a
   assert.equal(await g.exists(join(g.root, 'releases', '1.0.0')), false);
 });
 
-// owner 2026-11-03: root installs too; the script only says what that means, Claude's full access above all
-test('root installs too, after a notice; an install that is there already gets no notice', async t => {
+// owner 2026-11-03: root installs like any account, with no word about it, as Paseo and Orca do
+test('root installs like any account, and nothing is said about root', async t => {
   const f = await fixture(t);
   await f.ready();
-  await shim(f.shims, 'id', `case "$1" in -u) echo 0 ;; *) echo root ;; esac`);
-  let run = await f.run('install.sh');
+  const user = await f.run('install.sh');
+  assert.equal(user.code, 0, user.stderr);
+  const g = await fixture(t);
+  await g.ready();
+  await shim(g.shims, 'id', `case "$1" in -u) echo 0 ;; *) echo root ;; esac`);
+  const run = await g.run('install.sh');
   assert.equal(run.code, 0, run.stderr);
-  // devices.md §15「安装脚本：root」, with the script's own address in place of …
-  const notice = '你正在用 root 安装，Bot 和它启动的 AI 代理都会有整台机器的权限。用 Claude 时「完全访问」在 root 下用不了（Claude Code 不允许），要用就换普通用户装，说明见 https://vonvon.cc/guide/remote/#no-root 。\n';
-  assert.ok(run.stdout.startsWith(notice), run.stdout);
   assert.equal(run.stderr, '');
-  run = await f.run('install.sh');
-  assert.equal(run.code, 0, run.stderr);
-  assert.match(run.stdout, /已经装过/);
-  assert.equal(run.stdout.includes('root'), false, run.stdout);
+  assert.equal(run.stdout, user.stdout.replaceAll(f.base, g.base));
+  assert.doesNotMatch(run.stdout, /root/);
 });
 
 // review F5: sudo keeps the user's HOME (macOS, sudo -s, sudo -E), and root writing there takes the user's files
