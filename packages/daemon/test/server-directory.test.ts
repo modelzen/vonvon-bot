@@ -1,13 +1,27 @@
 import { chmod, mkdtemp, mkdir, realpath, rm, symlink as fileSymlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, parse } from 'node:path';
+import { basename, dirname, join, parse } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDirectoryBrowser } from '../src/server/directory-browser';
+
+/** Folder names whose realpath or readdir fails the way Windows fails on protected folders. */
+const denied = vi.hoisted(() => ({ realpath: new Set<string>(), readdir: new Set<string>() }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const deny = (names: Set<string>, path: unknown) => {
+    if (names.has(basename(String(path)))) throw Object.assign(new Error(`EPERM: operation not permitted, '${String(path)}'`), { code: 'EPERM' });
+  };
+  return {
+    ...actual,
+    realpath: async (...args: Parameters<typeof actual.realpath>) => { deny(denied.realpath, args[0]); return actual.realpath(...args); },
+    readdir: async (...args: Parameters<typeof actual.readdir>) => { deny(denied.readdir, args[0]); return actual.readdir(...args); },
+  };
+});
 
 /** A directory link. Windows makes a junction, which needs no admin rights (Windows acceptance task 205); targets here are absolute. */
 const symlink = (target: string, path: string) => fileSymlink(target, path, process.platform === 'win32' ? 'junction' : 'dir');
 const roots: string[] = [];
-afterEach(async () => { vi.restoreAllMocks(); vi.useRealTimers(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+afterEach(async () => { vi.restoreAllMocks(); vi.useRealTimers(); denied.realpath.clear(); denied.readdir.clear(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'vonvon-directory-'));
   roots.push(root);
@@ -69,6 +83,16 @@ describe('canonical home directory tokens', () => {
     expect((await browser.list()).entries.map(entry => entry.name)).toEqual([]);
     const folder = await browser.choose(home);
     expect(await browser.resolve(folder.token)).toBe(folder.displayPath);
+  });
+
+  // main 必败 (Windows acceptance task 318): a drive root failed to list, as its `System Volume Information` gave EPERM
+  it('leaves out children this user may not open, and says so for a listed folder it cannot read', async () => {
+    const { home, browser } = await fixture();
+    await Promise.all(['open', 'System Volume Information', 'Other User'].map(name => mkdir(join(home, name))));
+    denied.realpath.add('System Volume Information');
+    denied.readdir.add('Other User');
+    expect((await browser.list()).entries.map(entry => entry.name)).toEqual(['open', 'Other User']);
+    await expect(browser.list(join(home, 'Other User'))).rejects.toMatchObject({ code: 'directory_unreadable' });
   });
 
   it('sorts and caps a directory listing at 1000 entries with an explicit truncated flag', async () => {
