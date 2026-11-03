@@ -77,9 +77,9 @@ describe('startStandaloneUpdate', () => {
       expect(existsSync(join(paths.appDir, 'update.lock'))).toBe(false);
       deps.requestRestart?.(status);
     } });
-    expect(readUpdateStatus()).toMatchObject({ phase: 'installing', from: '1.0.0', detail: 'downloading' });
+    expect(readUpdateStatus()).toMatchObject({ phase: 'installing', from: '1.0.0', detail: 'checking' });
     const final = await job.done;
-    expect(details(statuses)).toEqual(['downloading', 'verifying', 'unpacking', 'switching', 'draining']);
+    expect(details(statuses)).toEqual(['checking', 'downloading', 'verifying', 'unpacking', 'switching', 'draining']);
     expect(final).toMatchObject({ phase: 'restarting', from: '1.0.0', to: '1.0.1', previous: '1.0.0', detail: 'draining' });
     expect(restarts).toEqual([final]);
     expect(await readlink(join(installRoot, 'current'))).toBe('releases/1.0.1');
@@ -142,7 +142,10 @@ describe('startStandaloneUpdate', () => {
   });
   it('says already current and lets the lock go', async () => {
     const { deps } = await setup();
-    expect(await startStandaloneUpdate({}, { ...deps, currentVersion: '1.0.1' }).done).toMatchObject({ phase: 'done', message: '已是最新' });
+    const statuses: UpdateStatus[] = [];
+    expect(await startStandaloneUpdate({}, { ...deps, currentVersion: '1.0.1', onStatus: status => { statuses.push(status); } }).done).toMatchObject({ phase: 'done', message: '已是最新' });
+    // 0.9.0 Linux 验收 319: it said 下载中 before it knew there was nothing to download.
+    expect(details(statuses)).toEqual(['checking', 'done']);
     expect(existsSync(join(paths.appDir, 'update.lock'))).toBe(false);
   });
   it('goes back only to a release kept here, without downloading', async () => {

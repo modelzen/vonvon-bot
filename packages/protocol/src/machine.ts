@@ -48,7 +48,7 @@ export const coreUpdateStatusSchema = z.object({phase:z.string(),ok:z.boolean().
   via:z.string().optional()}).nullable();
 export type CoreUpdateStatus = NonNullable<z.infer<typeof coreUpdateStatusSchema>>;
 const CORE_UPDATE_DETAIL: Record<string, string> = {
-  downloading: '下载中', verifying: '校验中', unpacking: '解包中', switching: '切换中',
+  checking: '正在检查更新', downloading: '下载中', verifying: '校验中', unpacking: '解包中', switching: '切换中',
   draining: '正在中断进行中的对话', waiting: '等新版本启动', 'rolled-back': '已切回旧版',
   'desktop-checking': '正在检查桌面端更新', 'desktop-downloading': '正在下载桌面端更新',
   'desktop-downloaded': '下载好了，正在重启（会中断正在进行的对话）',
