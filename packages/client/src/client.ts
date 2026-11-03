@@ -75,6 +75,8 @@ export interface ClientConnection {
   onError(listener: (error: Error) => void): void;
   send(data: string, callback: (error?: Error) => void): void;
   close(): Promise<void>;
+  /** What the transport puts back into each parsed frame before anything reads it (the secure channel's avatars). */
+  restore?(frame: unknown): void;
 }
 
 export function createClient(socket: ClientConnection): VonvonClient {
@@ -134,6 +136,7 @@ export function createClient(socket: ClientConnection): VonvonClient {
     let frame: unknown;
     try { frame = JSON.parse(data); }
     catch { failAll(new Error("Invalid daemon frame")); return; }
+    socket.restore?.(frame);
     const event = eventSchema.safeParse(frame);
     if (event.success) {
       switch (event.data.event) {

@@ -99,6 +99,28 @@ function closeError(code: number, reason: string, stage: SecureChannelStage, how
   return new SecureChannelError(mapped, stage, code);
 }
 
+const PICTURED = ["agents", "groups", "memberships"] as const;
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+/** The device sends each picture once per connection, then its `avatarRef` (0.9.0 Mac 验收: 98 % of a snapshot was
+ * pictures, more than a slow relay carried). Learned from every snapshot that comes, before the client reads it, so also
+ * from a reply nobody waits for any more; a reference not learned goes, and the page shows no picture. */
+function avatarRestorer(): (frame: unknown) => void {
+  const known = new Map<string, string>();
+  return frame => {
+    if (!isRecord(frame)) return;
+    const snapshot = (frame.type === "event" && frame.event === "snapshot") || (frame.type === "response" && frame.method === "snapshot") ? frame.payload : undefined;
+    if (!isRecord(snapshot)) return;
+    const items = PICTURED.flatMap(key => { const list = snapshot[key]; return Array.isArray(list) ? list.filter(isRecord) : []; });
+    for (const item of items) if (typeof item.avatarRef === "string" && typeof item.avatarDataUrl === "string") known.set(item.avatarRef, item.avatarDataUrl);
+    for (const item of items) {
+      if (!("avatarRef" in item)) continue;
+      const url = typeof item.avatarRef === "string" ? known.get(item.avatarRef) : undefined;
+      if (item.avatarDataUrl === undefined && url !== undefined) item.avatarDataUrl = url;
+      delete item.avatarRef;
+    }
+  };
+}
+
 export interface SecureConnectOptions {
   /** Open already; the caller built its url (`ws://ip:port/`) and closes it if this fails before the socket is used. */
   socket: BinarySocket;
@@ -204,6 +226,7 @@ export async function connectSecure(options: SecureConnectOptions): Promise<Secu
         catch (error) { callback(error instanceof Error ? error : new Error(String(error))); return; }
         callback();
       },
+      restore: avatarRestorer(),
       close: () => {
         end(new SecureChannelError("closed", "open"), 1000, "");
         if (socketClosed) return Promise.resolve();
