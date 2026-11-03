@@ -42,6 +42,15 @@ it('offers the addresses as one choice, the recommended one first and picked, wi
   // a Tailscale address is there: no advice
   expect(html).not.toContain('推荐用 Tailscale');
 });
+// 0.9.0 Windows 验收 322: under 开启 and 监听中, a Windows computer says to allow Vonvon Bot at Windows's firewall question. main 必败
+it('says on a Windows computer that Windows asks about its firewall, and how to undo 取消', () => {
+  const html = text(view({where: {...local, platform: 'windows'}, status: status([{host: '192.168.1.9', kind: 'lan', enabledAt: 1, state: 'listening'}]), picked: '192.168.1.9'}));
+  expect(html).toContain('监听中');
+  expect(html).toContain('开启后 Windows 可能会问是否允许 Vonvon Bot 访问网络，点「允许」');
+  expect(html).toContain('删掉名为 Vonvon Bot 的「阻止」规则');
+  expect(html).toContain('Windows 上这一版改不了端口');
+  expect(text(view({status: status([{host: '192.168.1.9', kind: 'lan', enabledAt: 1, state: 'listening'}]), picked: '192.168.1.9'}))).not.toContain('防火墙');
+});
 it('shows the open address\'s state, 换成这个地址 for another pick, and 确认并重新开启 after the network changed', () => {
   const open = view({status: status([{host: '100.64.0.10', kind: 'tailscale', enabledAt: 1, state: 'listening'}]), picked: '192.168.1.9'});
   expect(text(open)).toContain('监听中');
