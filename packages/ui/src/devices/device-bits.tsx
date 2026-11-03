@@ -41,21 +41,32 @@ export function useNow(interval?: number): number {
   return now;
 }
 
-/** While `open`, a click outside `ref` or Escape closes it (Escape gives the focus back to `ref`'s first button). */
+/**
+ * While `open`, a click outside `ref`, the keyboard focus moving out of it (Tab, or Enter on another row's ⋯), or Escape
+ * closes it. Escape gives the focus back to `ref`'s first button only when the focus was inside.
+ */
 export function useDismiss(ref: RefObject<HTMLElement | null>, open: boolean, close: () => void) {
   const latest = useRef(close);
   latest.current = close;
   useEffect(() => {
     if (!open) return;
     const outside = (event: MouseEvent) => { if (!ref.current?.contains(event.target as Node)) latest.current(); };
+    // Focus landing outside closes it; a click on the menu's own padding moves the focus to no element and fires no focusin.
+    const left = (event: FocusEvent) => { if (event.target instanceof Node && !ref.current?.contains(event.target)) latest.current(); };
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      const inside = ref.current?.contains(document.activeElement) ?? false;
       latest.current();
-      ref.current?.querySelector<HTMLElement>('button')?.focus();
+      if (inside) ref.current?.querySelector<HTMLElement>('button')?.focus();
     };
     document.addEventListener('mousedown', outside);
+    document.addEventListener('focusin', left);
     document.addEventListener('keydown', escape);
-    return () => { document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', escape); };
+    return () => {
+      document.removeEventListener('mousedown', outside);
+      document.removeEventListener('focusin', left);
+      document.removeEventListener('keydown', escape);
+    };
   }, [ref, open]);
 }
 
@@ -67,16 +78,22 @@ export type RowMenuItem = {label: string; icon: LucideIcon; onSelect: () => void
 export function RowMenu({label, groups, className}: {label: string; groups: RowMenuItem[][]; className?: string}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
   useDismiss(ref, open, () => setOpen(false));
   const shown = groups.filter(group => group.length);
   return <div ref={ref} className={className ? `device-menu ${className}` : 'device-menu'} data-open={open || undefined}>
-    <button type="button" className="device-menu__button" aria-label={label} aria-haspopup="menu" aria-expanded={open} title="更多操作" onClick={() => setOpen(value => !value)}>
+    <button ref={trigger} type="button" className="device-menu__button" aria-label={label} aria-haspopup="menu" aria-expanded={open} title="更多操作" onClick={() => setOpen(value => !value)}>
       <Ellipsis size={16} aria-hidden="true"/>
     </button>
     <div role="menu" aria-label={label} hidden={!open}>{shown.map((group, index) => <Fragment key={index}>
       {index > 0 && <div role="separator" className="device-menu__separator"/>}
       {group.map(({label: text, icon: Icon, onSelect, danger, disabled}) => <button key={text} type="button" role="menuitem" disabled={disabled} data-danger={danger || undefined}
-        onClick={() => { setOpen(false); onSelect(); }}>
+        onClick={() => {
+          // The item hides with the menu: the focus goes to ⋯ first, so a dialog the item opens gives it back there.
+          trigger.current?.focus();
+          setOpen(false);
+          onSelect();
+        }}>
         <Icon size={14} aria-hidden="true"/><span>{text}</span>
       </button>)}
     </Fragment>)}</div>

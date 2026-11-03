@@ -20,7 +20,9 @@ export function DeviceOutsideFrame({title, children}: {title: string; children: 
   const others = state?.devices.filter(row => row.id !== 'local' && !row.current) ?? [];
   const blocked = state && addBlockedReason(state);
   return <OutsideWindow shell={shell}>
-    {current && view && <p className="device-outside-head"><DeviceTile large icon={platformIcon(current.platform)}/><strong>{view.title}</strong><StatusPill tone={view.tone}>{view.status}</StatusPill></p>}
+    {current && view && <div className="device-outside-head"><DeviceTile large icon={platformIcon(current.platform)}/>
+      <span className="device-outside-head__copy"><strong title={view.title}>{view.title}</strong><StatusPill tone={view.tone}>{view.status}</StatusPill></span>
+    </div>}
     <h1>{title}</h1>
     {children(repairOf => setDialog(repairOf ? {repairOf} : {}))}
     <footer className="device-outside-foot">

@@ -185,8 +185,12 @@ html[data-desktop-chrome="silver"] .device-outside-window :is(button, a, input, 
 .device-outside-main :is(h1, p) { margin: 0; }
 .device-outside-scroll > .device-outside-main > h1 { margin-top: 2px; font-size: 22px; font-weight: 600; line-height: 1.3; letter-spacing: -.025em; overflow-wrap: anywhere; }
 .device-outside-main .device-outside-text { color: var(--color-text-secondary); font-size: 13px; line-height: 1.65; }
-.device-outside-main .device-outside-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; }
-.device-outside-head > strong { min-width: 0; color: var(--color-text); font-size: 15px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+/* Tile | name and state; a long name is cut here (the heading under it says it in full), so the tile never stands alone. */
+.device-outside-main .device-outside-head { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; margin: 0; }
+.device-outside-head__copy { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.device-outside-head__copy > strong {
+  min-width: 0; overflow: hidden; color: var(--color-text); font-size: 15px; font-weight: 600; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap;
+}
 .device-outside-main .device-problem { font-size: 13px; }
 .device-outside-main .device-problem > svg { margin-top: 3px; }
 .device-outside-main .device-tailscale { margin: 0; }
@@ -204,7 +208,7 @@ html[data-desktop-chrome="silver"] .device-outside-window :is(button, a, input, 
 .device-compact-list button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 /* 版本不一致: the server's card sits inside as an inset, not a second white card. */
 .device-outside-main .ss-section { margin: 0; }
-.device-outside-main .ss-section > .ss-group { background: var(--color-surface-muted); box-shadow: none; }
+.device-outside-main .ss-section > .ss-group.ss-group { background: var(--color-surface-muted); box-shadow: none; }
 .device-outside-main .ss-section__label { margin-left: 4px; }
 @media (max-width: 600px) {
   .device-outside-scroll > .device-outside-main { max-width: calc(100% - 32px); margin: 24px auto; padding: 20px; }

@@ -150,6 +150,33 @@ const scenes: Scene[] = [
     await page.getByText('有未保存的修改').waitFor();
     return {confirm: true};
   }},
+  // 设备 UI 评审再改: a long name on the outside card, the list while the device shown reconnects, and the row menu by keyboard.
+  {name: 'cannot-connect-long-name', status: 'connecting', active: cannotConnect, extra: {name: LONG_NAME}},
+  {name: 'devices-reconnecting', status: 'reconnecting', active: {phase: 'reconnecting', mode: 'full', attempt: 1, retryAt: now + 60_000, serverInfo: info('0.9.1', 2)}, steps: devicesPage},
+  {name: 'devices-menu-keyboard', active: ready, steps: async page => {
+    await devicesPage(page);
+    const focused = () => page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName);
+    const open = () => page.locator('.device-menu[data-open]').count();
+    const office = page.getByRole('button', {name: '「办公室 Mac」的更多操作'});
+    await office.focus();
+    await page.keyboard.press('Enter');
+    await page.getByRole('menuitem', {name: '删除'}).focus();
+    await page.keyboard.press('Enter');
+    await page.getByRole('dialog').waitFor();
+    await page.keyboard.press('Escape');
+    await page.getByRole('dialog').waitFor({state: 'detached'});
+    const afterCancel = await focused();
+    await page.keyboard.press('Enter');
+    const openedAgain = await open();
+    await page.keyboard.press('Shift+Tab');
+    const afterTabOut = await open();
+    await page.getByRole('button', {name: '「机房 Linux」的更多操作'}).focus();
+    await page.keyboard.press('Enter');
+    await office.focus();
+    await page.keyboard.press('Enter');
+    const afterSecond = await open();
+    return {afterCancel, openedAgain, afterTabOut, afterSecond};
+  }},
   {name: 'cannot-connect', status: 'connecting', active: cannotConnect},
   {name: 'maintenance', status: 'maintenance', active: {phase: 'ready', mode: 'maintenance', serverInfo: info('0.8.2', 1)}},
   {name: 'reconnecting-banner', status: 'reconnecting', active: {phase: 'reconnecting', mode: 'full', attempt: 1, retryAt: now + 60_000, serverInfo: info('0.9.1', 2)}},
