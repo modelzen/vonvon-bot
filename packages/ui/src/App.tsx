@@ -635,7 +635,7 @@ function DesktopApp() {
         selectedFeature={featureId}
         onFeatureNavigate={id => navigate(() => {setJoinedTarget(undefined); setModal(current => current?.kind === 'join' && current.suspended ? null : current); setFeatureId(id);})}
         onSearch={() => setSearchOpen(true)}
-        deviceSwitcher={<DeviceSwitcher onManage={() => openPage('devices')}/>}
+        deviceSwitcher={shell?.devices ? <DeviceSwitcher onManage={() => openPage('devices')}/> : undefined}
         onOpenList={openList}
         backLabel={`返回 ${settingsReturn?.label ?? parentLabel}`}
         onBack={
