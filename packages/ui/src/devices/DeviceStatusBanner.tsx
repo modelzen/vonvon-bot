@@ -16,11 +16,11 @@ export function DeviceStatusBanner() {
   if (!device.isRemote || !active) return null;
   const banner = bannerCopy(active, deviceCopyName(device), now);
   if (!banner || (banner.noticeAt !== undefined && banner.noticeAt === dismissed)) return null;
-  return <InlineNotice title={banner.retry ? '连接断了' : '已重新连上'} tone={banner.retry ? 'warning' : 'info'} actions={banner.retry
+  return <InlineNotice className="device-banner" title={banner.retry ? '连接断了' : '已重新连上'} tone={banner.retry ? 'warning' : 'info'} actions={banner.retry
     ? <Button size="sm" onClick={() => void devices?.retry().catch(error => console.error('Device retry failed', error))}>现在重试</Button>
     : <IconButton label="关闭提示" onClick={() => setDismissed(banner.noticeAt)}><X size={14}/></IconButton>}>
     <CopyText text={banner.text}/>
-    {banner.hints.map((hint, index) => <span key={index} className="device-hint"><br/><CopyText text={hint}/></span>)}
+    {banner.hints.map((hint, index) => <span key={index} className="device-hint"><CopyText text={hint}/></span>)}
   </InlineNotice>;
 }
 
@@ -40,7 +40,7 @@ export function DeviceVersionNotice({onUpgrade}: {onUpgrade: () => void}) {
     ...(info.capabilities ? {capabilities: info.capabilities} : {}), name,
   });
   if (!notice || dismissedVersions.has(key)) return null;
-  return <InlineNotice title="版本不一致" tone="info" actions={<>
+  return <InlineNotice className="device-banner" title="版本不一致" tone="info" actions={<>
     {notice.action && <Button size="sm" onClick={onUpgrade}>{notice.action === 'upgrade-server' ? `升级${name}` : '去更新'}</Button>}
     <IconButton label="关闭提示" onClick={() => { dismissedVersions.add(key); setClosed(count => count + 1); }}><X size={14}/></IconButton>
   </>}>{notice.text}</InlineNotice>;

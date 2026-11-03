@@ -41,9 +41,10 @@ const candidates = [
   {host: '192.168.1.23', kind: 'lan', iface: 'en0'},
   {host: '100.70.0.3', kind: 'cgnat', iface: 'pdp_ip0'},
 ];
-const status = (open: string | undefined, via?: string) => ({
+type Listener = {state?: string; detail?: string};
+const status = (open: string | undefined, via?: string, listener: Listener = {}, list: object[] = candidates) => ({
   device: {id: A, name: via ? '机房 Linux' : '办公室 Mac', publicKey: 'made-up'},
-  remote: {port: 7767, addresses: open ? [{host: open, kind: candidates.find(each => each.host === open)?.kind ?? 'tailscale', enabledAt: now - 3_600_000, state: 'listening'}] : [], candidates},
+  remote: {port: 7767, addresses: open ? [{host: open, kind: candidates.find(each => each.host === open)?.kind ?? 'tailscale', enabledAt: now - 3_600_000, state: listener.state ?? 'listening', ...(listener.detail ? {detail: listener.detail} : {})}] : [], candidates: list},
   clients: {total: open ? 3 : 0, active: open ? 1 : 0}, ...(via ? {via} : {}),
 });
 const client = (id: string, name: string, extra: object) => ({id, name, publicKey: 'made-up', clientKind: 'desktop', createdAt: now - 20 * 86_400_000, lastSeenAt: now - 2 * 3_600_000, lastAddress: '100.64.0.20:51000', pairedVia: 'invite', invitedBy: 'local', ...extra});
@@ -87,11 +88,16 @@ const panel = async (page: Page) => {
   await page.getByRole('button', {name: /^应用与启动/}).click();
   await page.getByText('别的设备用哪个地址连过来').scrollIntoViewIfNeeded();
 };
+/** The panel with the bottom of the address choice in the middle of the page (its actions and any long state). */
+const addressEnd = async (page: Page) => {
+  await panel(page);
+  await page.locator('.remote-address-actions').evaluate(element => element.scrollIntoView({block: 'center'}));
+};
 const toast = (name: string) => async (page: Page) => {
   await page.evaluate(event => (window as unknown as {emitPaired: (value: unknown) => void}).emitPaired(event),
     {change: 'client-paired', clientId: 'cl_dddddddddddddddd', name, clientKind: 'desktop', address: '100.64.0.40:52144', invitedBy: 'local'});
 };
-const scenes: {name: string; remote?: boolean; open?: string; via?: string; some?: boolean; self?: string; steps: (page: Page) => Promise<void>}[] = [
+const scenes: {name: string; remote?: boolean; open?: string; via?: string; some?: boolean; self?: string; width?: number; listener?: Listener; noCandidates?: boolean; steps: (page: Page) => Promise<void>}[] = [
   {name: 'served-local-none', steps: panel},
   {name: 'served-local-link', open: '100.64.0.10', some: true, steps: async page => {
     await panel(page);
@@ -115,8 +121,9 @@ const scenes: {name: string; remote?: boolean; open?: string; via?: string; some
   }},
   {name: 'served-revoke-confirm', open: '100.64.0.10', some: true, steps: async page => {
     await panel(page);
-    await page.getByRole('button', {name: '撤销'}).last().scrollIntoViewIfNeeded();
-    await page.locator('.remote-client').filter({has: page.locator('.ss-row__title', {hasText: /^Clay 的 MacBook$/})}).getByRole('button', {name: '撤销'}).click();
+    await page.getByText('已配对的设备').last().scrollIntoViewIfNeeded();
+    await page.getByRole('button', {name: '「Clay 的 MacBook」的更多操作'}).click();
+    await page.getByRole('menuitem', {name: '撤销'}).click();
   }},
   {name: 'served-remote-via', remote: true, open: '100.64.0.10', via: '100.64.0.10', some: true, self: 'cl_bbbbbbbbbbbbbbbb', steps: panel},
   {name: 'served-remote-self', remote: true, open: '100.64.0.10', via: '100.64.0.10', some: true, self: 'cl_bbbbbbbbbbbbbbbb', steps: async page => {
@@ -129,14 +136,45 @@ const scenes: {name: string; remote?: boolean; open?: string; via?: string; some
   }},
   {name: 'served-paired-toast-local', open: '100.64.0.10', steps: async page => { await panel(page); await toast('家里的台式机')(page); }},
   {name: 'served-paired-toast-remote', remote: true, open: '100.64.0.10', steps: toast('家里的台式机')},
+  // 0.9.0 设备 UI 打磨: no address, a port that is taken, the paired row's menu, 已复制, and a narrow window.
+  {name: 'served-no-address', noCandidates: true, steps: addressEnd},
+  {name: 'served-waiting-port', open: '100.64.0.10', listener: {state: 'waiting', detail: '端口 7767 被占用，每 15 秒重试；可用 `vonvon remote port <n>` 换端口'}, steps: addressEnd},
+  {name: 'served-paired-menu', open: '100.64.0.10', some: true, steps: async page => {
+    await panel(page);
+    await page.getByText('已配对的设备').last().scrollIntoViewIfNeeded();
+    await page.getByRole('button', {name: '「工作笔记本」的更多操作'}).click();
+    await page.getByRole('menuitem', {name: '撤销'}).waitFor();
+  }},
+  {name: 'served-paired-rename', open: '100.64.0.10', some: true, steps: async page => {
+    await panel(page);
+    await page.getByText('已配对的设备').last().scrollIntoViewIfNeeded();
+    await page.getByRole('button', {name: '「CI 服务」的更多操作'}).click();
+    await page.getByRole('menuitem', {name: '改名'}).click();
+    await page.getByLabel('名字', {exact: true}).waitFor();
+  }},
+  {name: 'served-copied', open: '100.64.0.10', some: true, steps: async page => {
+    await panel(page);
+    await page.getByRole('button', {name: '生成连接链接'}).click();
+    await page.getByRole('button', {name: '复制'}).click();
+    await page.getByText('已复制', {exact: true}).waitFor();
+    await page.getByText('连接链接').first().scrollIntoViewIfNeeded();
+  }},
+  {name: 'served-720', open: '100.64.0.10', some: true, width: 720, steps: addressEnd},
+  {name: 'served-720-clients', open: '100.64.0.10', some: true, width: 720, steps: async page => {
+    await panel(page);
+    await page.getByRole('button', {name: '生成连接链接'}).click();
+    await page.getByText('已配对的设备').last().scrollIntoViewIfNeeded();
+  }},
 ];
 const browser = await chromium.launch();
 try {
   for (const scene of scenes) {
-    const page = await browser.newPage({viewport: {width: 1100, height: 820}});
+    const page = await browser.newPage({viewport: {width: scene.width ?? 1100, height: 820}});
     page.on('pageerror', error => console.error(scene.name, error.message));
+    // 复制 writes to the clipboard: allowed here, on this made-up page only.
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     await page.addInitScript(install, {state: devicesState(Boolean(scene.remote)), snapshot: snapshot(scene.remote ? 'linux' : 'macos'),
-      status: status(scene.open, scene.via), clients: clients(Boolean(scene.some), scene.self)});
+      status: status(scene.open, scene.via, scene.listener, scene.noCandidates ? [] : candidates), clients: clients(Boolean(scene.some), scene.self)});
     await page.goto(`http://127.0.0.1:${port}/index.html`);
     await page.waitForTimeout(800);
     await scene.steps(page).catch(error => console.error(scene.name, 'step failed:', (error as Error).message.split('\n')[0]));

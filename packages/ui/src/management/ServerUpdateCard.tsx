@@ -7,6 +7,7 @@ import {SettingsGroup, SettingsRow} from '../reference/components/system-setting
 import {settingAnchor} from '../search';
 import type {ActiveDevice} from '../client-context';
 import {onDeviceText, whereName} from '../device-copy';
+import '../settings/remote-access.css';
 
 export type CoreUpdate = Extract<MachineReply, {type: 'coreUpdate'}>;
 /** Installs whose daemon updates itself (devices 6.5): the standalone server and the global npm package. A bundled one is
@@ -109,8 +110,10 @@ export function ServerUpdateCard({request, variant, where, disabled = false}: {
   // The server says 本机 of its own disk ("本机没有 0.9.1"); on a remote card that is 「X」 (owner 2026-11-02).
   // U4: the desktop app on that computer runs it, so the line says where.
   const statusText = status?.via === 'desktop' && where.isRemote ? `在${whereName(where)}上${coreStatusLine(status)}` : coreStatusLine(status ?? null);
-  const statusLine = status !== undefined && <p className="settings-operation-message" role="status">{onDeviceText(where, statusText)}</p>;
-  const messageLine = message && <p className="settings-operation-message" role="status">{onDeviceText(where, message)}</p>;
+  // The remote card's lines sit at its rows' inset (0.9.0); this computer's 外部 Core card keeps its own.
+  const lineClass = variant === 'remote' ? 'settings-operation-message remote-status' : 'settings-operation-message';
+  const statusLine = status !== undefined && <p className={lineClass} role="status">{onDeviceText(where, statusText)}</p>;
+  const messageLine = message && <p className={lineClass} role="status">{onDeviceText(where, message)}</p>;
 
   if (variant === 'local-advanced') return <SettingsGroup id={settingAnchor('外部 Core / CLI')} label="外部 Core / CLI" footer="更新外部 Core 不会更改桌面版本。">
     <SettingsRow title="Core 来源" value={core ? (core.distribution.kind === 'global-npm' ? '全局 npm 安装' : core.distribution.kind === 'standalone' ? '独立安装的服务端' : '非全局 npm 安装') : '尚未检查'} />
@@ -128,14 +131,15 @@ export function ServerUpdateCard({request, variant, where, disabled = false}: {
   // U4: offered with no update known too while the app there is closed: pressed, it says the same, and once the app is
   // open there it goes ahead without reloading this page.
   const bundledButton = viaDesktop && core && (core.hasUpdate || core.desktopShell === false);
-  const note = (text: string) => <p className="settings-operation-message" role="note">{text}</p>;
-  return <SettingsGroup id={settingAnchor('服务端')} label={`${name}的服务端`}>
+  const note = (text: string) => <p className={lineClass} role="note">{text}</p>;
+  return <SettingsGroup className="remote-server" id={settingAnchor('服务端')} label={`${name}的服务端`}>
     <SettingsRow title="版本" value={core?.current ?? where.version ?? '未知'} />
     {!unsupported && <SettingsRow title="安装方式" value={core ? distributionLabel(core.distribution.kind) : '尚未检查'} />}
     {core && !unsupported && (!isBundled || core.latest !== null) && <SettingsRow title="可用版本" value={core.latest ?? '更新源不可用'} />}
     {unsupported ? note(remoteUpdateUnsupportedText(name))
-      : (!isBundled || viaDesktop) && <SettingsRow title="更新" description={canApplyCoreUpdate(core) ? UPDATE_INTERRUPTS : bundledButton ? BUNDLED_UPDATE_INTERRUPTS : undefined} trailing={<span className="settings-inline-actions">
-        <Button size="sm" disabled={off} onClick={() => void run({type: 'checkCoreUpdate'})}>检查更新</Button>
+      : (!isBundled || viaDesktop) && <SettingsRow title="更新" description={canApplyCoreUpdate(core) ? UPDATE_INTERRUPTS : bundledButton ? BUNDLED_UPDATE_INTERRUPTS : undefined} trailing={<span className="settings-inline-actions remote-update-actions">
+        {/* With an update to apply, that is the one filled button. */}
+        <Button size="sm" variant={canApplyCoreUpdate(core) || bundledButton ? 'ghost' : 'secondary'} disabled={off} onClick={() => void run({type: 'checkCoreUpdate'})}>检查更新</Button>
         {canApplyCoreUpdate(core) && <Button size="sm" variant="primary" disabled={off || following} onClick={() => void run({type: 'applyCoreUpdate'})}>更新{name}</Button>}
         {bundledButton && <Button size="sm" variant="primary" disabled={off || following} onClick={() => setConfirming(true)}>更新{name}上的 Vonvon Bot</Button>}
       </span>} />}

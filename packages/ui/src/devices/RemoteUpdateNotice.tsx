@@ -13,5 +13,5 @@ export function RemoteUpdateNotice() {
 
 export function RemoteUpdateNoticeView({text}: {text: string | undefined}) {
   if (!text) return null;
-  return <InlineNotice title="正在远程更新这台电脑" tone="info">{text}</InlineNotice>;
+  return <InlineNotice className="device-banner" title="正在远程更新这台电脑" tone="info">{text}</InlineNotice>;
 }
