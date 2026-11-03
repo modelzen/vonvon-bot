@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
-import { PROTOCOL_VERSION, serverInfoV2Schema, type Request } from '@vonvon/protocol';
+import { PROTOCOL_VERSION, serverInfoV2Schema, type DesktopSnapshot, type Request } from '@vonvon/protocol';
 import { createInitiator, decodeFrame, encodeFrame, FRAME, generateStaticKey, readCloseBody, type Channel, type StaticKey } from '@vonvon/protocol/secure-channel';
 import { connectSecure, nodeBinarySocket, SecureChannelError, type BinarySocket, type SecureConnection } from '@vonvon/client/secure';
 import { createClientRegistry } from '../src/remote/clients';
@@ -14,6 +14,7 @@ import { completePairing, createInviteBook } from '../src/remote/pairing';
 import { createPeerHub } from '../src/server/peer-hub';
 import { principalWire } from '../src/server/principal';
 import { createSecureSocketServer, type SecureSocketServerOptions } from '../src/server/secure-socket';
+import type { AdminBot, AdminProject } from '../src/admin/service';
 import type { Peer } from '../src/server/ws';
 import { Jobs } from '../src/server/jobs';
 import { LogFollowers } from '../src/server/logs';
@@ -562,5 +563,99 @@ describe('the daemon, with I3 and D4a', () => {
     // replies keep their order on a socket: a device event published to it before this request would be there by now
     await bot.call({ type: 'request', id: 'after', method: 'admin', payload: { type: 'daemonStatus' } });
     expect(bot.frames.filter(frame => frame.type === 'event' && frame.event === 'device')).toEqual([]);
+  });
+});
+
+// 0.9.0 Mac 验收: B's snapshot was 98 % pictures, sent whole on every change to every connection; a remote one on a
+// 20 KB/s relay never caught up. main 必败: each reply and push carried every picture, and every push was queued.
+describe('a remote connection on a slow link', () => {
+  const BOT = `data:image/png;base64,${'B'.repeat(80_000)}`;
+  const GROUP = `data:image/png;base64,${'G'.repeat(20_000)}`;
+  const largest = (sizes: number[], from: number): number => Math.max(0, ...sizes.slice(from));
+
+  it('gets each picture once over the real channel and its client puts it back everywhere; the loopback gets them whole', async () => {
+    let connection = 'connected';
+    const bot: AdminBot = { appId: 'cli_a', name: 'a', tenant: 'feishu', active: true, current: true, running: true, avatarDataUrl: BOT, completionReminder: { mode: 'failures', longTaskMinutes: 3 } };
+    const project: AdminProject = { name: 'p', chatId: 'oc_1', cwd: '/tmp/p', blank: false, kind: 'multi', origin: 'joined', noMention: false, mode: 'write', guestMode: 'qa', network: true, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1, avatarDataUrl: GROUP };
+    const fixture = await startFixture(fakeService({ listBots: async () => [{ ...bot, connection }], listProjects: async () => [project, { ...project, name: 'q', chatId: 'oc_2' }] }));
+    const server = createServer();
+    const secure = fixture.api.secure;
+    if (!secure) throw new Error('startApi gives no secure deps');
+    const remote = createSecureSocketServer({ ...secure, server });
+    const port = await listen(server);
+    cleanup.push(async () => { await remote.close(); await fixture.close(); await new Promise<void>(resolve => server.close(() => resolve())); });
+    const invite = secure.invites.create({ invitedBy: 'local' });
+    const ws = await opened(port);
+    cleanup.push(async () => { ws.terminate(); });
+    const sizes: number[] = [];
+    ws.on('message', data => { sizes.push((data as Buffer).length); });
+    const { client } = await connectSecure({ socket: nodeBinarySocket(ws), device: { id: 'd', pk: secure.device.publicKey.toString('base64url') }, clientKey: generateStaticKey().key, clientKind: 'desktop',
+      pairing: { inviteId: invite.id, inviteSecret: invite.secret, clientName: '探针' } });
+
+    let mark = sizes.length;
+    const first = await client.snapshot();
+    expect(largest(sizes, mark)).toBeGreaterThan(100_000);
+    expect(first.agents[0]).toMatchObject({ avatarDataUrl: BOT });
+    expect(first.agents[0]).not.toHaveProperty('avatarRef');
+    expect(first.groups.map(group => [group.avatarDataUrl, 'avatarRef' in group])).toEqual([[GROUP, false], [GROUP, false]]);
+    mark = sizes.length;
+    expect(await client.snapshot()).toEqual(first);
+    expect(largest(sizes, mark)).toBeLessThan(5_000);
+
+    const pushed: DesktopSnapshot[] = [];
+    const stop = client.watchSnapshots(value => { pushed.push(value); });
+    cleanup.push(async () => { stop(); });
+    await vi.waitFor(() => { expect(pushed).toHaveLength(1); });
+    mark = sizes.length;
+    connection = 'reconnecting';
+    fixture.api.invalidate();
+    await vi.waitFor(() => { expect(pushed).toHaveLength(2); });
+    expect(pushed[1]?.agents[0]).toMatchObject({ connection: 'reconnecting', avatarDataUrl: BOT });
+    expect(pushed[1]?.groups.map(group => group.avatarDataUrl)).toEqual([GROUP, GROUP]);
+    expect(largest(sizes, mark)).toBeLessThan(5_000);
+    // The client answered the ping after that push: the next one comes too
+    connection = 'connecting';
+    fixture.api.invalidate();
+    await vi.waitFor(() => { expect(pushed.at(-1)?.agents[0]).toMatchObject({ connection: 'connecting', avatarDataUrl: BOT }); });
+
+    const local = await socketClient(fixture.api.port, fixture.credential);
+    cleanup.push(() => local.close());
+    await local.ready();
+    for (const id of ['l1', 'l2']) {
+      const reply = await local.call({ type: 'request', id, method: 'snapshot', payload: { type: 'get' } });
+      if (reply.type !== 'response' || reply.method !== 'snapshot') throw new Error('no snapshot');
+      expect(reply.payload.agents[0]).toMatchObject({ avatarDataUrl: BOT });
+      expect([...reply.payload.agents, ...reply.payload.groups].some(item => 'avatarRef' in item)).toBe(false);
+    }
+    connection = 'connected';
+    fixture.api.invalidate();
+    const event = await local.wait(frame => frame.type === 'event' && frame.event === 'snapshot');
+    if (event.type !== 'event' || event.event !== 'snapshot') throw new Error('no snapshot');
+    expect(event.payload.groups.map(group => [group.avatarDataUrl, 'avatarRef' in group])).toEqual([[GROUP, false], [GROUP, false]]);
+  });
+
+  it('pings after a pushed snapshot and keeps only the newest one until the pong; replies and other events go at once', async () => {
+    const h = await harness();
+    const { clientKey, connection } = await paired(h);
+    connection.close();
+    await connection.closed;
+    const client = await raw(h, clientKey);
+    await client.handshake();
+    client.json(hello);
+    await client.read();
+    const snapshot = (revision: number) => ({ type: 'event', event: 'snapshot', payload: { revision, agents: [], groups: [], memberships: [] } }) as never;
+    h.hub.publish(snapshot(1));
+    expect(await client.read()).toMatchObject({ type: 'event', event: 'snapshot', payload: { revision: 1 } });
+    expect(await client.read()).toEqual({ control: FRAME.ping });
+    for (const revision of [2, 3]) h.hub.publish(snapshot(revision));
+    h.hub.publish({ type: 'event', event: 'log', payload: { lines: 'x' } });
+    client.json({ type: 'request', id: 's', method: 'admin', payload: { type: 'daemonStatus' } });
+    expect(await client.read()).toMatchObject({ type: 'event', event: 'log' });
+    expect(await client.read()).toMatchObject({ type: 'response', id: 's' });
+    client.frame(FRAME.pong);
+    expect(await client.read()).toMatchObject({ type: 'event', event: 'snapshot', payload: { revision: 3 } });
+    expect(await client.read()).toEqual({ control: FRAME.ping });
+    client.json({ type: 'request', id: 't', method: 'admin', payload: { type: 'daemonStatus' } });
+    expect(await client.read()).toMatchObject({ type: 'response', id: 't' });
   });
 });
