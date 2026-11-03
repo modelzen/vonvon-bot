@@ -10,7 +10,8 @@ import { MAX_DEVICES, RegistryError, type DeviceRegistry, type SecretBox, type S
 import { RemoteConnectError, type RemoteConnector, type RemoteLink } from './remote-transport.js';
 
 /** devices-ui-1a 4.4: the desktop's devices, one current at a time, and the connection to it. */
-export type DeviceLogEvent = 'device-opened' | 'device-closed' | 'device-failed' | 'device-added' | 'device-removed';
+export type DeviceLogEvent = 'device-opened' | 'device-closed' | 'device-failed' | 'device-added' | 'device-removed'
+  | 'device-route-failed' | 'device-add-failed';
 export interface DeviceConnectionsDeps {
   registry: DeviceRegistry;
   connector: RemoteConnector;
@@ -24,6 +25,9 @@ export interface DeviceConnectionsDeps {
   hostname?: () => string;
   /** Only the device id's first 8 characters, the event, codes and times: never an address, a link or a key. */
   log?: (event: DeviceLogEvent, fields: Record<string, string | number>) => void;
+  /** macOS 15 and later: the system may block an app's connections to the local network until the user allows them, and
+   * the first one fails at once while it asks (TN3179). */
+  localNetworkPrivacy?: boolean;
 }
 export type ViewMode = 'full' | 'maintenance';
 export interface ViewSession { id: string; client: VonvonClient; serverInfo: ServerInfo; mode: ViewMode }
@@ -103,6 +107,24 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     try { deps.log?.(event, fields); } catch { /* logging never breaks a connection */ }
   };
   const short = (id: string): string => id.slice(0, 8);
+  /** Reconnecting: each address's failure as last logged, so a device that stays unreachable logs it once, not every 30 s. */
+  const loggedRoutes = new Map<string, string>();
+  /** One failed address: logged with why (stage, errno, HTTP status) and how long it took, never the address itself.
+   * `changes`: only when it differs from the last one logged for this address. */
+  const routeFailure = (id: string, route: DeviceRoute, error: unknown, started: number, changes = false): RouteFailure => {
+    const failure = error instanceof RemoteConnectError ? error : new RemoteConnectError('closed', 'socket');
+    const sys = failure.detail?.sysCode;
+    const http = failure.detail?.httpStatus;
+    const key = `${id} ${routeKey(route)}`;
+    const what = `${failure.code} ${failure.stage} ${sys ?? ''} ${http ?? ''}`;
+    if (failure.code !== 'aborted' && !(changes && loggedRoutes.get(key) === what)) {
+      if (changes) loggedRoutes.set(key, what);
+      log('device-route-failed', { id: short(id), kind: route.kind, code: failure.code, stage: failure.stage,
+        ...(sys ? { sys } : {}), ...(http === undefined ? {} : { http }), ms: Math.max(0, now() - started) });
+    }
+    const blocked = deps.localNetworkPrivacy === true && sys === 'EHOSTUNREACH' && (route.kind === 'lan' || route.kind === 'overlay');
+    return { route, code: failure.code, ...(blocked ? { localNetwork: true as const } : {}) };
+  };
 
   let disposed = false;
   let disposal: Promise<void> | undefined;
@@ -291,14 +313,16 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     let opened: { link: RemoteLink; route: DeviceRoute } | undefined;
     for (const route of routeOrder(device)) {
       if (!current()) break;
+      const started = now();
       try {
         const link = await connector.connect({ route, device: { id: device.deviceId, pk: device.pk }, clientKey: key, signal: abort.signal });
         opened = { link, route };
         break;
       } catch (error) {
-        const code = error instanceof RemoteConnectError ? error.code : 'closed';
+        const failed = routeFailure(device.deviceId, route, error, started, true);
+        const { code } = failed;
         if (code === 'aborted') break;
-        attempts.push({ route, code });
+        attempts.push(failed);
         // The device knew this key: another address says the same.
         if (code === 'client_revoked' || code === 'unknown_client') break;
       }
@@ -353,6 +377,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     lastIdentity.set(id, { ...(opening.pid === undefined ? {} : { pid: opening.pid }), ...(opening.startedAt === undefined ? {} : { startedAt: opening.startedAt }), version: info.version });
     void link.closed.then(closed => onClosed(myGen, opening, closed));
     log('device-opened', { id: short(id), cause });
+    for (const key of loggedRoutes.keys()) if (key.startsWith(`${id} `)) loggedRoutes.delete(key);
     // The bridge binds first, so a request the page sends once it reads `ready` has somewhere to go.
     emitView({ kind: 'remote', session: view, cause });
     emitState();
@@ -540,6 +565,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     for (const route of routes) {
       if (abort.signal.aborted) return failed('aborted');
       setAdding('connecting', route);
+      const started = now();
       try {
         const linked = await connect(route, true);
         if (abort.signal.aborted) { linked.close(); return failed('aborted'); }
@@ -548,7 +574,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
       } catch (error) {
         const failure = error instanceof RemoteConnectError ? error : new RemoteConnectError('closed', 'socket');
         if (failure.code === 'aborted' || abort.signal.aborted) return failed('aborted');
-        attempts.push({ route, code: failure.code });
+        attempts.push(routeFailure(link.device.id, route, failure, started));
         if (failure.code === 'pairing_failed') return failed(now() >= link.invite.expiresAt ? 'link_expired' : 'link_used');
         if (failure.code === 'rate_limited') return failed('rate_limited');
         // Cut off while pairing, or after its answer while waiting for the hello (Codex 审查 235-3): the request may have been
@@ -660,6 +686,8 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
       pairing = undefined;
       emitState();
     }
+    // Adding failed: the page says so, and only this line is left to tell why afterwards (0.9.0 Mac 验收 S-1').
+    if (result.kind === 'failed' && result.code !== 'aborted') log('device-add-failed', { id: short(link.device.id), code: result.code, routes: result.attempts.length });
     // Repaired the current device while it is stopped on its problem: connect with the new key now.
     if (result.kind === 'added' && result.repaired && viewId === result.deviceId && phase === 'failed' && !disposed) reconnectNow(result.deviceId);
     return result;

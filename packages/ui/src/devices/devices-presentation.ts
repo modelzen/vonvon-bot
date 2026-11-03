@@ -74,10 +74,14 @@ export function routeHint(route: DeviceRoute, code: string, name: string): strin
   }[route.kind];
   return code === 'refused' ? `${base}那台设备上的 Vonvon Bot 可能没在运行，或者没有允许别的设备连接。` : base;
 }
+export const LOCAL_NETWORK_HINT = 'macOS 可能拦住了 Vonvon Bot 访问本地网络：弹出了询问就点「允许」，再试一次；没有弹出，打开 系统设置 → 隐私与安全性 → 本地网络，把 Vonvon Bot 打开后再试。';
 /** Only an address the device could not be reached at gets a hint: a used link, a refusal or another version is not the
- * network's (0.9.0 Mac 验收 S-1). */
-export const routeHints = (attempts: readonly RouteFailure[], name: string): string[] => attempts
-  .filter(entry => networkFailure(entry.code) || entry.code === 'device_identity_changed').map(entry => routeHint(entry.route, entry.code, name));
+ * network's (0.9.0 Mac 验收 S-1). macOS's local network question, once, after them. */
+export function routeHints(attempts: readonly RouteFailure[], name: string): string[] {
+  const network = attempts.filter(entry => networkFailure(entry.code) || entry.code === 'device_identity_changed');
+  const hints = network.map(entry => routeHint(entry.route, entry.code, name));
+  return network.some(entry => entry.localNetwork && networkFailure(entry.code)) ? [...hints, LOCAL_NETWORK_HINT] : hints;
+}
 
 const PREVIEW_CODES = new Set<string>(['invalid_link', 'link_expired', 'own_link', 'already_added', 'no_secure_storage', 'registry_newer', 'registry_unreadable', 'too_many']);
 export function linkPreviewCopy(code: LinkPreviewCode, name: string): string {
