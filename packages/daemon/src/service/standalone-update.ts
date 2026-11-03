@@ -238,7 +238,8 @@ export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): {
   const platform = deps.platform ?? process.platform;
   const fetcher = deps.fetch ?? fetch;
   const from = deps.currentVersion;
-  let status: UpdateStatus = { phase: 'installing', from, at, detail: options.allowDowngrade ? 'switching' : 'downloading' };
+  // Downloading only once the manifest says there is something newer: an up-to-date server never says 下载中 (0.9.0 Linux 验收 319).
+  let status: UpdateStatus = { phase: 'installing', from, at, detail: options.allowDowngrade ? 'switching' : 'checking' };
   const write = (next: UpdateStatus): UpdateStatus => { status = next; writeUpdateStatus(next); deps.onStatus?.(next); return next; };
   const step = (detail: UpdateStatus['detail'], extra: Partial<UpdateStatus> = {}): UpdateStatus => write({ phase: 'installing', from, at, detail, ...extra });
   write(status);
@@ -248,6 +249,7 @@ export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): {
     if (!target) throw new Failure(`这台电脑（${platform}-${deps.arch ?? process.arch}）没有对应的服务端包。`);
     const file = manifest.files[target];
     const staging = join(root, 'releases', `${version}.part`);
+    step('downloading');
     await removeStaging(root, version);
     try {
       await mkdir(staging, { recursive: true });

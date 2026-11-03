@@ -188,7 +188,7 @@ export function tryUpdateLock(file = updateLockFile()): (() => void) | 'busy' | 
 
 /** What a standalone update is doing inside its phase (server-3 C3); `desktop-*`, the desktop app's update of the
  * server it carries (U4). */
-export const updateDetails = ['downloading', 'verifying', 'unpacking', 'switching', 'draining', 'waiting', 'rolled-back',
+export const updateDetails = ['checking', 'downloading', 'verifying', 'unpacking', 'switching', 'draining', 'waiting', 'rolled-back',
   'desktop-checking', 'desktop-downloading', 'desktop-downloaded'] as const;
 export const updateStatusSchema = z.object({
   phase: z.enum(['installing', 'restarting', 'done', 'error']),
