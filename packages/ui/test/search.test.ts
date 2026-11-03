@@ -416,19 +416,28 @@ test('任务 opens the group 任务 tab, and a task the Bot answered with is fou
   assert.deepEqual(findEntries(withTasks, '别处的提醒'), []);
 });
 
-test('devices-ui-1b: the devices page is found on the desktop only', () => {
-  const desktop = searchEntries(snapshot, {devices: true}).find(entry => entry.id === 'devices');
-  assert.deepEqual(desktop?.destination, {page: 'devices', view: undefined, selection: undefined});
-  assert.ok(findEntries(searchEntries(snapshot, {devices: true}), 'Tailscale').some(entry => entry.id === 'devices'));
-  assert.equal(searchEntries(snapshot).some(entry => entry.id === 'devices'), false);
+// devices-ui-1b; owner 2026-11-03: 允许别的设备连接 is on 设备, so the web page (no list) has the page too. main 必败
+test('the devices page is found everywhere; adding and switching devices only on the desktop', () => {
+  const desktop = searchEntries(snapshot, {devices: true});
+  assert.deepEqual(desktop.find(entry => entry.id === 'devices')?.destination, {page: 'devices', view: undefined, selection: undefined});
+  assert.ok(findEntries(desktop, 'Tailscale').some(entry => entry.id === 'devices'));
+  assert.ok(findEntries(desktop, '添加设备').some(entry => entry.id === 'devices'));
+  const web = searchEntries(snapshot);
+  assert.deepEqual(web.find(entry => entry.id === 'devices')?.destination, {page: 'devices', view: undefined, selection: undefined});
+  // Its own name lands on the block itself, below the list on the desktop, not on the page's top (审查 P3; 修之前必败)
+  for (const each of [desktop, web]) assert.deepEqual(findEntries(each, '允许别的设备连接')[0]?.destination, {page: 'devices', section: '允许别的设备连接', field: '', reveal: undefined, guide: undefined});
+  assert.equal(findEntries(web, '添加设备').some(entry => entry.id === 'devices'), false);
+  assert.equal(findEntries(web, '切换设备').some(entry => entry.id === 'devices'), false);
 });
 
-// devices-ui-3: 允许别的设备连接 and its paired devices are found on 应用与启动. main 必败
-test('finds 允许别的设备连接 and the paired devices on 应用与启动', () => {
+// devices-ui-3: 允许别的设备连接 and its paired devices; on 设备 since owner 2026-11-03 (on 应用与启动 before). main 必败
+test('finds 允许别的设备连接 and the paired devices on 设备, not on 应用与启动', () => {
   // Codex 审查 269-2: the link has its own section (remote-access-panel.test.tsx checks each entry lands in its section)
-  const link = findEntries(entries, '连接链接').find(entry => entry.destination.page === 'application');
-  assert.deepEqual(link?.destination, {page: 'application', section: '连接链接', field: '连接链接', reveal: undefined, guide: undefined});
-  assert.equal(findEntries(entries, '生成连接链接')[0]?.destination.section, '连接链接');
-  assert.equal(findEntries(entries, '撤销')[0]?.destination.section, '已配对的设备');
-  assert.equal(findEntries(entries, '设备名字')[0]?.destination.section, '允许别的设备连接');
+  const link = findEntries(entries, '连接链接').find(entry => entry.kind === 'setting');
+  assert.deepEqual(link?.destination, {page: 'devices', section: '连接链接', field: '连接链接', reveal: undefined, guide: undefined});
+  for (const [query, section] of [['生成连接链接', '连接链接'], ['撤销', '已配对的设备'], ['已配对的设备', '已配对的设备'], ['设备名字', '允许别的设备连接'], ['改端口', '允许别的设备连接'], ['开启远程', '允许别的设备连接']]) {
+    assert.deepEqual([findEntries(entries, query!)[0]?.destination.page, findEntries(entries, query!)[0]?.destination.section], ['devices', section], query);
+  }
+  const sections = ['允许别的设备连接', '连接链接', '已配对的设备'];
+  assert.equal(entries.some(entry => entry.destination.page === 'application' && sections.includes(entry.destination.section ?? '')), false);
 });
