@@ -55,7 +55,7 @@ function memoryRegistry(box: SecretBox, status: RegistryStatus = 'ok') {
 type Call = { options: RemoteConnectOptions; resolve(link: RemoteLink): void; reject(error: Error): void; aborted: () => boolean; at: number };
 type FakeLink = RemoteLink & { end(code: RemoteConnectCode): void; closeSpy: ReturnType<typeof vi.fn>; emitError(error: Error): void };
 
-function harness(options: { box?: SecretBox; status?: RegistryStatus } = {}) {
+function harness(options: { box?: SecretBox; status?: RegistryStatus; log?: (event: string, fields: Record<string, string | number>) => void; localNetworkPrivacy?: boolean } = {}) {
   const box = options.box ?? plainSecretBox();
   const { registry, seed } = memoryRegistry(box, options.status);
   const calls: Call[] = [];
@@ -100,6 +100,7 @@ function harness(options: { box?: SecretBox; status?: RegistryStatus } = {}) {
   const states: DevicesState[] = [];
   const devices = createDeviceConnections({
     registry, connector, box, client: { version: '0.9.0', protocolVersion: PROTOCOL_VERSION }, hostname: () => 'x'.repeat(60),
+    ...(options.log ? { log: options.log } : {}), ...(options.localNetworkPrivacy ? { localNetworkPrivacy: true } : {}),
   });
   devices.onView(change => views.push(change));
   devices.onState(state => states.push(state));
@@ -117,7 +118,8 @@ function harness(options: { box?: SecretBox; status?: RegistryStatus } = {}) {
 }
 type Harness = ReturnType<typeof harness>;
 const flush = async (): Promise<void> => { for (let index = 0; index < 30; index++) await Promise.resolve(); };
-const failWith = (code: RemoteConnectCode, stage: 'socket' | 'handshake' | 'pairing' | 'hello' = 'socket') => new RemoteConnectError(code, stage);
+const failWith = (code: RemoteConnectCode, stage: 'socket' | 'handshake' | 'pairing' | 'hello' = 'socket', detail?: { httpStatus?: number; sysCode?: string }) =>
+  new RemoteConnectError(code, stage, detail);
 async function readyOn(h: Harness, device: StoredDevice): Promise<FakeLink> {
   await h.devices.switchTo(device.deviceId);
   const link = h.link({ machineId: device.deviceId });
@@ -641,5 +643,71 @@ describe('removing', () => {
     expect(h.calls).toHaveLength(0);
     expect(h.registry.list()).toEqual([]);
     await expect(h.devices.remove('local')).rejects.toMatchObject({ code: 'local_device' });
+  });
+});
+
+// 0.9.0 Mac 验收 S-1': a failed add left nothing in devices.log, and an address macOS's local network privacy blocks reads as
+// the network's fault.
+describe('why an address failed', () => {
+  const blocked = () => failWith('unreachable', 'socket', { sysCode: 'EHOSTUNREACH' });
+
+  it('logs each failed address and the failed add without the address, and flags a LAN address macOS 15 may have blocked', async () => {
+    const lines: Array<[string, Record<string, string | number>]> = [];
+    const h = harness({ log: (event, fields) => lines.push([event, fields]), localNetworkPrivacy: true });
+    const id = randomUUID();
+    const adding = h.devices.add({ link: pairingLink(id, { addresses: [r1, r2] }) });
+    await flush();
+    vi.advanceTimersByTime(40);
+    h.calls[0]!.reject(blocked());
+    await flush();
+    h.calls[1]!.reject(blocked());
+    // Tailscale's interface is a VPN, not a local network: only the LAN address is flagged.
+    await expect(adding).resolves.toEqual({ kind: 'failed', code: 'unreachable', attempts: [{ route: r1, code: 'unreachable' }, { route: r2, code: 'unreachable', localNetwork: true }] });
+    const short = id.slice(0, 8);
+    expect(lines).toEqual([
+      ['device-route-failed', { id: short, kind: 'tailscale', code: 'unreachable', stage: 'socket', sys: 'EHOSTUNREACH', ms: 40 }],
+      ['device-route-failed', { id: short, kind: 'lan', code: 'unreachable', stage: 'socket', sys: 'EHOSTUNREACH', ms: 0 }],
+      ['device-add-failed', { id: short, code: 'unreachable', routes: 2 }],
+    ]);
+    expect(JSON.stringify(lines)).not.toContain(r2.host);
+  });
+
+  it('flags nothing before macOS 15 or elsewhere, logs a refusal\'s HTTP status, and logs no cancelled add', async () => {
+    const lines: Array<[string, Record<string, string | number>]> = [];
+    const h = harness({ log: (event, fields) => lines.push([event, fields]) });
+    const a = h.add({ routes: [r1, r2] });
+    await h.devices.switchTo(a.deviceId);
+    h.calls[0]!.reject(failWith('forbidden', 'socket', { httpStatus: 403 }));
+    await flush();
+    h.calls[1]!.reject(blocked());
+    await flush();
+    expect(h.devices.state().active.failure?.attempts).toEqual([{ route: r1, code: 'forbidden' }, { route: r2, code: 'unreachable' }]);
+    const short = a.deviceId.slice(0, 8);
+    expect(lines.filter(([event]) => event === 'device-route-failed').map(([, fields]) => fields)).toEqual([
+      { id: short, kind: 'tailscale', code: 'forbidden', stage: 'socket', http: 403, ms: 0 },
+      { id: short, kind: 'lan', code: 'unreachable', stage: 'socket', sys: 'EHOSTUNREACH', ms: 0 },
+    ]);
+    expect(lines.at(-1)).toEqual(['device-failed', { id: short, code: 'forbidden' }]);
+    // Trying again every so often: an address that fails the same way is not logged again, one that changes is.
+    lines.length = 0;
+    const tried = h.calls.length;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.calls).toHaveLength(tried + 1);
+    h.calls[tried]!.reject(failWith('forbidden', 'socket', { httpStatus: 403 }));
+    await flush();
+    h.calls[tried + 1]!.reject(failWith('timeout'));
+    await flush();
+    expect(lines).toEqual([
+      ['device-route-failed', { id: short, kind: 'lan', code: 'timeout', stage: 'socket', ms: 0 }],
+      ['device-failed', { id: short, code: 'forbidden' }],
+    ]);
+    await h.devices.switchTo('local');
+    lines.length = 0;
+    const adding = h.devices.add({ link: pairingLink(randomUUID()) });
+    await flush();
+    h.devices.cancelAdd();
+    h.calls.at(-1)!.reject(failWith('aborted'));
+    await expect(adding).resolves.toMatchObject({ kind: 'failed', code: 'aborted' });
+    expect(lines).toEqual([]);
   });
 });

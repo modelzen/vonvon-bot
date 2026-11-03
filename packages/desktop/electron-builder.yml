@@ -78,6 +78,10 @@ mac:
     - zh_TW
   icon: assets/macos-icon.icns
   category: public.app-category.developer-tools
+  # macOS 15 asks before an app reaches the local network (adding a device by its LAN or ZeroTier-type address); this is
+  # the sentence the question shows.
+  extendInfo:
+    NSLocalNetworkUsageDescription: Vonvon Bot 要连接你在同一个网络里添加的设备。Vonvon Bot connects to the devices you add on your network.
   target:
     - dmg
     - zip

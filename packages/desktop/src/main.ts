@@ -1,5 +1,5 @@
 import { mkdirSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, release } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { app, autoUpdater, BrowserWindow, dialog, Menu, net, powerMonitor, safeStorage, type WebContents } from 'electron';
@@ -617,6 +617,8 @@ export async function startDesktop(): Promise<void> {
       registry, connector: secureConnector(), box,
       client: { version: app.getVersion(), protocolVersion: PROTOCOL_VERSION },
       log: deviceLog,
+      // macOS 15 is Darwin 24.
+      localNetworkPrivacy: process.platform === 'darwin' && Number(release().split('.')[0]) >= 24,
     });
     devices.setLocal({ status: 'online', serverInfo: owner.serverInfo });
     powerMonitor.on('resume', onResume);
