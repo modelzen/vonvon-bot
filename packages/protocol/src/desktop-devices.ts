@@ -18,8 +18,10 @@ export type DeviceRoute = z.infer<typeof deviceRouteSchema>;
 /** What stops a device from being connected until it is paired again; `key_unreadable` is never written to disk. */
 export const deviceProblemSchema = z.enum(["revoked", "identity_changed", "unknown_client", "key_unreadable"]);
 export type DeviceProblem = z.infer<typeof deviceProblemSchema>;
-/** `code` is a RemoteConnectCode of the desktop, read as an open string. */
-export const routeFailureSchema = z.object({ route: deviceRouteSchema, code: z.string() }).strict();
+/** `code` is a RemoteConnectCode of the desktop, read as an open string. `localNetwork`: macOS 15+ may have blocked this
+ * local network address for the app (an immediate EHOSTUNREACH on a LAN or overlay route; Tailscale's VPN interface is not
+ * a local network). */
+export const routeFailureSchema = z.object({ route: deviceRouteSchema, code: z.string(), localNetwork: z.literal(true).optional() }).strict();
 export type RouteFailure = z.infer<typeof routeFailureSchema>;
 export const deviceRowStatusSchema = z.enum(["online", "connecting", "reconnecting", "offline", "maintenance", "revoked", "needs-pairing", "unknown"]);
 export type DeviceRowStatus = z.infer<typeof deviceRowStatusSchema>;
