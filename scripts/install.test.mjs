@@ -157,7 +157,7 @@ cp "$source" "$out"`);
     curls: async () => (await readFile(join(shims, 'curl.log'), 'utf8').catch(() => '')).split('\n').filter(Boolean),
     run(script, env = {}, input) {
       const full = { ...process.env, HOME: home, PATH: f.path, ...env };
-      for (const name of ['VONVON_HOME', 'VONVON_ALLOW_ROOT', 'XDG_CONFIG_HOME', 'ZDOTDIR', 'VONVON_SERVICE']) if (!(name in env)) delete full[name];
+      for (const name of ['VONVON_HOME', 'XDG_CONFIG_HOME', 'ZDOTDIR', 'VONVON_SERVICE']) if (!(name in env)) delete full[name];
       return new Promise(resolve => {
         const child = execFile(SH, input === undefined ? [join(scripts, script)] : ['-s'], { env: full, timeout: 60_000 }, (error, stdout, stderr) => resolve({ code: error ? error.code : 0, stdout, stderr }));
         if (input !== undefined) child.stdin.end(input);
@@ -290,19 +290,21 @@ test('a package with a path out of its directory, or a link, is refused before a
   assert.equal(await g.exists(join(g.root, 'releases', '1.0.0')), false);
 });
 
-test('root is refused before the network, unless VONVON_ALLOW_ROOT=1', async t => {
+// owner 2026-11-03: root installs too; the script only says what that means, Claude's full access above all
+test('root installs too, after a notice; an install that is there already gets no notice', async t => {
   const f = await fixture(t);
   await f.ready();
   await shim(f.shims, 'id', `case "$1" in -u) echo 0 ;; *) echo root ;; esac`);
   let run = await f.run('install.sh');
-  assert.equal(run.code, 2);
-  // devices.md §15「安装脚本：root」, with the script's own address in place of …; a direct SSH login, not su or sudo, so
-  // the account's systemd is there and the service starts at boot (fixes-0-9-0)
-  assert.equal(run.stderr, '你正在用 root 运行。Vonvon Bot 会以这个账号运行 AI 代理，建议用普通用户：先 `useradd -m -s /bin/bash vonvon`，给它设密码（`passwd vonvon`）或放好 SSH 公钥，再用这个账号直接 SSH 登录、运行安装命令；不要用 su 或 sudo 切过去，那样装好后不会开机自动启动。说明见 https://vonvon.cc/guide/remote/#no-root 。坚持用 root：`VONVON_ALLOW_ROOT=1 sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/install.sh)"`。\n');
-  assert.deepEqual(await f.curls(), []);
-  run = await f.run('install.sh', { VONVON_ALLOW_ROOT: '1' });
   assert.equal(run.code, 0, run.stderr);
-  assert.match(run.stdout, /以 root 继续/);
+  // devices.md §15「安装脚本：root」, with the script's own address in place of …
+  const notice = '你正在用 root 安装，Bot 和它启动的 AI 代理都会有整台机器的权限。用 Claude 时「完全访问」在 root 下用不了（Claude Code 不允许），要用就换普通用户装，说明见 https://vonvon.cc/guide/remote/#no-root 。\n';
+  assert.ok(run.stdout.startsWith(notice), run.stdout);
+  assert.equal(run.stderr, '');
+  run = await f.run('install.sh');
+  assert.equal(run.code, 0, run.stderr);
+  assert.match(run.stdout, /已经装过/);
+  assert.equal(run.stdout.includes('root'), false, run.stdout);
 });
 
 // review F5: sudo keeps the user's HOME (macOS, sudo -s, sudo -E), and root writing there takes the user's files
@@ -312,7 +314,7 @@ test('root with a HOME that is not its own is refused by both scripts, before an
   await shim(f.shims, 'id', `case "$1" in -u) echo 0 ;; *) echo root ;; esac`);
   // a HOME this process does not own: one that is not there (a HOME owned by another user needs a second account)
   const other = join(f.base, 'someone-else');
-  let run = await f.run('install.sh', { VONVON_ALLOW_ROOT: '1', HOME: other });
+  let run = await f.run('install.sh', { HOME: other });
   assert.equal(run.code, 2, run.stderr);
   assert.match(run.stderr, /HOME（.*someone-else）不是 root 的，没有安装。.*`sudo -H` 或 `su -`/);
   assert.deepEqual(await f.curls(), []);
@@ -321,7 +323,7 @@ test('root with a HOME that is not its own is refused by both scripts, before an
   assert.match(run.stderr, /不是 root 的，什么都没删/);
   assert.equal(await f.exists(other), false);
   // root's own HOME is fine
-  run = await f.run('install.sh', { VONVON_ALLOW_ROOT: '1' });
+  run = await f.run('install.sh');
   assert.equal(run.code, 0, run.stderr);
   run = await f.run('uninstall.sh');
   assert.equal(run.code, 0, run.stderr);
@@ -536,8 +538,9 @@ test('on a Mac both scripts point to the desktop installer and exit 2: nothing w
   await f.ready();
   // no temporary directory either
   await shim(f.shims, 'mktemp', `echo "$*" >> '${f.shims}/mktemp.log'; exit 1`);
-  for (const env of [{}, { VONVON_ALLOW_ROOT: '1' }]) {
-    const run = await f.run('install.sh', env);
+  // once as a user, then as root (the id shim at the end of the first round)
+  for (let round = 0; round < 2; round++) {
+    const run = await f.run('install.sh');
     assert.equal(run.code, 2, run.stderr);
     assert.equal(run.stdout, '');
     // devices.md §15「安装脚本：在 Mac 上」
