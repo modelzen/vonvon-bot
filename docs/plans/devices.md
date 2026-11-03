@@ -423,7 +423,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 
 提纲：
 1. 这是什么：一台设备上的 Vonvon Bot，用别的电脑上的 Vonvon Bot 桌面端来管。什么时候需要（服务器上 24 小时跑、代码在服务器上、几台电脑、团队共用）。
-2. 装：**Mac、Windows 下载桌面端安装包**（https://vonvon.cc/get/），它自带服务端，装好打开就是一台能被连的设备，不用命令行；**Linux 一行命令只装服务端**（`curl … | sh`），装完 `vonvon --version`；在 Mac 上跑这条命令只会提示去下载安装包（owner 2026-11-01）。Linux 一段写：**不要用 root 装**（为什么、怎么建普通用户）；只支持 glibc 发行版（Alpine 等 musl 不支持）；首次安装的信任根是 HTTPS 和 dl.vonvon.cc；装完会自动开 linger，退出登录也照常跑。**Mac、Windows 当设备要保持这个用户登录着**（可以锁屏；重启后要有人登录一次）：Mac 打开"登录时启动"；Windows 这一批不做登录自启，要 Vonvon Bot 开着。
+2. 装：**Mac、Windows 下载桌面端安装包**（https://vonvon.cc/get/），它自带服务端，装好打开就是一台能被连的设备，不用命令行；**Linux 一行命令只装服务端**（`curl … | sh`），装完 `vonvon --version`；在 Mac 上跑这条命令只会提示去下载安装包（owner 2026-11-01）。Linux 一段写：~~不要用 root 装~~（2026-11-03 去掉：root 照装，不提示）；只支持 glibc 发行版（Alpine 等 musl 不支持）；首次安装的信任根是 HTTPS 和 dl.vonvon.cc；装完会自动开 linger，退出登录也照常跑。**Mac、Windows 当设备要保持这个用户登录着**（可以锁屏；重启后要有人登录一次）：Mac 打开"登录时启动"；Windows 这一批不做登录自启，要 Vonvon Bot 开着。
 3. 让它能被连上：先把两台设备放进同一个安全网络——推荐 Tailscale（装、登录、`tailscale ip -4`；大陆用户可能延迟高，也可以用局域网）；然后 Linux 上 运行 `vonvon remote enable` 从列出的地址里选一个（脚本里 `vonvon remote enable <ip>`，Tailscale 用户可以写 `vonvon remote enable "$(tailscale ip -4)"`；蒲公英、ZeroTier、EasyTier 这类组网工具选它的虚拟地址；只能开一个，再开一个就换掉原来的，已配对的设备粘一次新链接更新地址），Mac、Windows 在桌面端设置 →"应用与启动"→"允许别的设备连接"里选一个地址；公网地址的风险和为什么不建议；100.x 地址不一定是 Tailscale（运营商 CGNAT）。
 4. 配对：Linux 上 `vonvon pair` 拿链接，Mac、Windows 在桌面端点"生成连接链接"；客户端设置 → 设备 → 添加 → 粘贴 → 起名；链接 10 分钟有效、只用一次；一台客户端一条；链接会进你的 Agent 的对话记录；配对成功后被连的那台会提示，不是你就撤销。
 5. 切换和日常：切换设备、"在 <设备> 上把 Codex 配置好"是什么意思、选目录选的是那台设备的、托管安装装在那台设备上。

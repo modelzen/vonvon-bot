@@ -16,7 +16,7 @@
 - daemon 隐藏命令 `vonvon __standalone-setup --install-root <根> --version <v> [--json]` 和 `vonvon __standalone-teardown --install-root <根> [--json]`（`D/cli/commands/standalone-setup.ts`）：切 `current`、写启动器、写 / 删 PATH 块。
 - PATH 块的文本和拼接逻辑从 `DT/cli-registration.ts` 挪到 `P/cli-path-block.ts`，桌面端和服务端写**同一块**（COEX-2）。
 - `vonvon service install --linger --json` 的两处改动（LINGER-1）：linger 没开成不再非零退出；环境性拒绝带 `fallback: 'detached'` 和稳定的 `reason`。
-- `daemon run`、`service install` 在 root 下打一行警告。
+- `daemon run`、`service install` 在 root 下不警告（2026-11-03 改，原来打一行警告）。
 - 脚本测试：`scripts/install.test.mjs`（`node --test`，在 `mkdtemp` 的 HOME 里真跑 `sh`）。
 - `D/service/current-release.ts`（C5）如果 I3 还没合入就由本片建。
 
@@ -151,7 +151,7 @@ root 警告：2026-11-03 去掉（owner：和 Paseo、Orca 一样不提示）。
 
 ### 5.1 `scripts/install.test.mjs`（`node --test`，`npm test` 已包含 `scripts/*.test.mjs`）
 
-跑法：`flock /tmp/vonvon-heavy.lock node --test scripts/install.test.mjs`。每个用例 `mkdtemp` 一个根 `R`，里面 `home/`、`cdn/`、`shims/`、`scripts/`；子进程用 `execFile('sh', [R/scripts/install.sh], { env: { ...process.env, HOME: R/home, PATH: R/shims + ':' + process.env.PATH, VONVON_ALLOW_ROOT: … } })`，`HOME` 只出现在这个 `env` 对象里。结束 `rm(R, { recursive: true })`（`R` 来自 `mkdtemp`）。
+跑法：`flock /tmp/vonvon-heavy.lock node --test scripts/install.test.mjs`。每个用例 `mkdtemp` 一个根 `R`，里面 `home/`、`cdn/`、`shims/`、`scripts/`；子进程用 `execFile('sh', [R/scripts/install.sh], { env: { ...process.env, HOME: R/home, PATH: R/shims + ':' + process.env.PATH } })`（2026-11-03 起不再有 `VONVON_ALLOW_ROOT`），`HOME` 只出现在这个 `env` 对象里。结束 `rm(R, { recursive: true })`（`R` 来自 `mkdtemp`）。
 
 夹具：
 - 测试里 `generateKeyPairSync('ed25519')` 现生成钥匙；`R/scripts/install.sh` 是仓库脚本的副本，`# BEGIN VONVON PUBKEY` 到 `# END VONVON PUBKEY` 之间换成测试公钥的 PEM。**没有别的改动**：`BASE_URL` 不换，靠 `curl` 替身映射。
@@ -203,7 +203,7 @@ root 警告：2026-11-03 去掉（owner：和 Paseo、Orca 一样不提示）。
 | `cli-path-block.test.ts`（`packages/protocol/test/`） | `spliceBlock` 四种：无标记追加、有标记替换、`null` 删除、标记残缺（只有 begin）→ 追加完整块并保留原文；`startupBlock` 文本和旧 `DT/cli-registration.ts` 的 snapshot 一致 | 是 |
 | `cli-registration.test.ts`（desktop，已有） | 不改断言，改 import 后仍绿 | 否 |
 | `service-command.test.ts`（扩） | `--linger --json`、`enableLinger` 注入失败 → stdout `ok: true, linger: 'off', lingerUser`、exit 0；文字版 exit 0 且含 `loginctl enable-linger`；`userManagerHint` 三种 → `--json` 的 `error.reason` 分别是 `no_systemd`/`user_instance_down`/`no_runtime_dir`，`fallback: 'detached'`，exit 4；launchd 无 GUI → 照旧 `failed`、没有 `fallback`（I2a 去掉了 `no_gui_session`）；`lingerUser` 含空格 → 字段省略 | 是 |
-| `cli-root-warning.test.ts` | 注入 `getuid: () => 0` → `daemon run` 的 stderr 第一行含 "root"；`service install --json` 的 `notes` 含那句 | 是 |
+| ~~`cli-root-warning.test.ts`~~ | 2026-11-03 去掉：root 下不再警告（原来注入 `getuid: () => 0` 查 stderr 和 `notes`） | 否 |
 
 ### 5.3 `install.ps1` 静态测试（`scripts/install-ps1.test.mjs`，JP-VPS 没有 pwsh）
 
@@ -242,7 +242,7 @@ JP-VPS 自测：
 
 ## 7. 文档
 
-- `docs/product.md` 3.3（磁盘上的位置）：加服务端安装根、`releases/<v>`、`current`、`bin/vonvon`、PATH 块两边共用；3.10：加"只装服务端"的一段（只在 Linux、一行命令、装成后台服务、装不了服务时直接启动并说明、root 默认拒绝、已装过就跳过、在 Mac 上只提示去下载桌面端安装包）和卸载保留数据目录；3.11：加"安装脚本核对发布清单的哈希，有 OpenSSL 3 再验签名"。
+- `docs/product.md` 3.3（磁盘上的位置）：加服务端安装根、`releases/<v>`、`current`、`bin/vonvon`、PATH 块两边共用；3.10：加"只装服务端"的一段（只在 Linux、一行命令、装成后台服务、装不了服务时直接启动并说明、root 照装不提示（2026-11-03 改，原来默认拒绝）、已装过就跳过、在 Mac 上只提示去下载桌面端安装包）和卸载保留数据目录；3.11：加"安装脚本核对发布清单的哈希，有 OpenSSL 3 再验签名"。
 - `docs/architecture.md`：加安装布局一段，指向 I3 §4.1 的 C5。
 - `README.md`：安装一节加服务端的一行命令（URL 等 I5 的 CDN 路径）。
 - `docs/plans/devices.md` §7.3 加一行指到本文 §4.6。
