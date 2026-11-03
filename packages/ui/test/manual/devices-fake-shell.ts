@@ -23,18 +23,20 @@ const tailscale = {host: '100.64.0.10', port: 7767, kind: 'tailscale'}, lan = {h
 const info = (version: string, protocolVersion: number) => ({type: 'serverInfo', machineId: A, version, protocolVersion, deviceName: '机房', platform: 'linux', capabilities: ['device']});
 /** A 60-character name with no break in it: rows wrap it, the header button and menus cut it short. */
 const LONG_NAME = 'MacBook-Pro-of-a-colleague-with-a-really-long-hostname-2026x';
-type Extra = {name?: string; localOnly?: boolean; adding?: object; many?: boolean};
+/** `localCurrent`: this computer is shown, with the others in the list; `web`: the browser, no devices in the shell;
+ * `firstUse`: no Bots yet (the tabs are hidden). */
+type Extra = {name?: string; localOnly?: boolean; localCurrent?: boolean; adding?: object; many?: boolean; web?: boolean; firstUse?: boolean};
 const state = (active: object, status = 'online', extra: Extra = {}) => ({
   v: 1, revision: 1, client: {version: '0.9.1', protocolVersion: 2}, registry: 'ok', secureStorage: true,
   devices: extra.localOnly ? [{id: 'local', name: '这台电脑', current: true, status: 'online', platform: 'macos', version: '0.9.1', routes: []}] : [
-    {id: 'local', name: '这台电脑', current: false, status: 'online', platform: 'macos', version: '0.9.1', routes: []},
-    {id: A, name: extra.name ?? '机房 Linux', current: true, status, platform: 'linux', version: '0.9.1', routes: [tailscale, lan]},
+    {id: 'local', name: '这台电脑', current: Boolean(extra.localCurrent), status: 'online', platform: 'macos', version: '0.9.1', routes: []},
+    {id: A, name: extra.name ?? '机房 Linux', current: !extra.localCurrent, status: extra.localCurrent ? 'online' : status, platform: 'linux', version: '0.9.1', routes: [tailscale, lan]},
     {id: B, name: '家里的 Windows', current: false, status: 'revoked', platform: 'windows', version: '0.9.0', routes: [lan]},
     {id: C, name: '办公室 Mac', current: false, status: 'unknown', platform: 'macos', version: '0.9.1', lastConnectedAt: now - 3 * 3_600_000, routes: [lan]},
     // Codex 审查 304: enough devices that the list scrolls
     ...extra.many ? Array.from({length: 12}, (_, index) => ({id: `44444444-4444-4444-8444-${String(index).padStart(12, '0')}`, name: `测试设备 ${index + 1}`, current: false, status: 'unknown', platform: 'linux', version: '0.9.1', lastConnectedAt: now - 3_600_000, routes: [lan]})) : [],
   ],
-  active: extra.localOnly ? {id: 'local', attempt: 0, phase: 'ready', mode: 'full', serverInfo: {...info('0.9.1', 2), machineId: 'local', deviceName: '办公室 Mac', platform: 'macos'}} : {id: A, attempt: 0, ...active},
+  active: extra.localOnly || extra.localCurrent ? {id: 'local', attempt: 0, phase: 'ready', mode: 'full', serverInfo: {...info('0.9.1', 2), machineId: 'local', deviceName: '办公室 Mac', platform: 'macos'}} : {id: A, attempt: 0, ...active},
   ...(extra.adding ? {adding: extra.adding} : {}),
 });
 const snapshot = {
@@ -46,9 +48,9 @@ const snapshot = {
 const preview = {ok: true, deviceId: C, name: '办公室 Mac', routes: [tailscale, lan], expiresAt: now + 8 * 60_000, repair: false};
 
 /** `add`: what adding answers; none, it never answers (still connecting). */
-function install(input: {state: unknown; snapshot: unknown; preview: unknown; add?: unknown}) {
+function install(input: {state: unknown; snapshot: unknown; preview: unknown; add?: unknown; web?: boolean}) {
   // What the desktop's preload marks, once there is a document.
-  document.addEventListener('readystatechange', () => { document.documentElement.dataset.desktopChrome = 'silver'; }, {once: true});
+  if (!input.web) document.addEventListener('readystatechange', () => { document.documentElement.dataset.desktopChrome = 'silver'; }, {once: true});
   const never = () => new Promise(() => {});
   const client = new Proxy({}, {get: (_target, key) => key === 'then' ? undefined
     : key === 'watchSnapshots' ? (listener: (value: unknown) => void) => { setTimeout(() => listener(input.snapshot)); return () => {}; }
@@ -57,7 +59,7 @@ function install(input: {state: unknown; snapshot: unknown; preview: unknown; ad
     state: async () => input.state, onState: (listener: (value: unknown) => void) => { listener(input.state); return () => {}; }, clientFor: () => client,
     inspect: async () => input.preview, add: input.add === undefined ? never : async () => input.add, cancelAdd: async () => {}, rename: async () => {}, remove: never, switchTo: async () => {}, retry: async () => {},
   };
-  Object.assign(window, {vonvonClient: client, vonvonShell: {devices, onQuitRequested: () => () => {}, onDesktopUpdate: () => () => {}, onLocalDeviceEvent: () => () => {}, openExternal: async () => {}}});
+  Object.assign(window, {vonvonClient: client, vonvonShell: {...input.web ? {} : {devices}, onQuitRequested: () => () => {}, onDesktopUpdate: () => () => {}, onLocalDeviceEvent: () => () => {}, openExternal: async () => {}}});
 }
 
 /** Each menu item: is what sits at its centre the item itself (Codex 审查 235-4: a sticky heading covered them)? */
@@ -69,6 +71,7 @@ const menuHits = (page: import('playwright').Page) => page.evaluate(() => [...do
 type Page = import('playwright').Page;
 type Scene = {name: string; active: object; status?: string; width?: number; extra?: Extra; preview?: unknown; add?: unknown; steps?: (page: Page) => Promise<unknown>};
 const ready = {phase: 'ready', mode: 'full', serverInfo: info('0.9.1', 2)};
+const trigger = (page: Page) => page.getByRole('button', {name: /点击切换$/});
 const devicesPage = async (page: Page) => {
   await page.getByRole('button', {name: '设置', exact: true}).click();
   await page.getByRole('button', {name: /^设备/}).click();
@@ -131,7 +134,8 @@ const scenes: Scene[] = [
   {name: 'devices-720', active: ready, width: 720, steps: devicesPage},
   {name: 'switcher-long-name', active: ready, extra: {name: LONG_NAME}, steps: async page => {
     await devicesPage(page);
-    await page.getByRole('button', {name: /点击切换$/}).click();
+    await trigger(page).click();
+    return {width: (await trigger(page).boundingBox())!.width, title: await trigger(page).getAttribute('title'), menuHits: await menuHits(page)};
   }},
   {name: 'cannot-connect-720', status: 'connecting', width: 720, active: cannotConnect},
   {name: 'maintenance-720', status: 'maintenance', width: 720, active: {phase: 'ready', mode: 'maintenance', serverInfo: info('0.8.2', 1)}},
@@ -194,6 +198,81 @@ const scenes: Scene[] = [
     const afterSecond = await open();
     return {afterCancel, openedAgain, afterTabOut, afterSecond};
   }},
+  // 2026-11-03: the switcher at the top-left, in the brand's place, like a workspace switcher.
+  {name: 'switcher-local-only', active: ready, extra: {localOnly: true}, steps: page => trigger(page).click()},
+  {name: 'switcher-local-current', active: ready, extra: {localCurrent: true}},
+  {name: 'switcher-remote-home', active: ready, steps: page => page.locator('.device-switcher__button').evaluate(button => getComputedStyle(button).backgroundColor)},
+  {name: 'switcher-menu', active: ready, steps: async page => { await trigger(page).click(); return menuHits(page); }},
+  {name: 'switcher-reconnecting', status: 'reconnecting', active: {phase: 'reconnecting', mode: 'full', attempt: 1, retryAt: now + 60_000, serverInfo: info('0.9.1', 2)},
+    steps: page => trigger(page).evaluate(button => button.textContent)},
+  {name: 'switcher-720', active: ready, width: 720, extra: {name: LONG_NAME}, steps: async page => {
+    await trigger(page).click();
+    return page.evaluate(() => ({
+      triggerRight: document.querySelector('.device-switcher__button')!.getBoundingClientRect().right,
+      navLeft: document.querySelector('.today-primary-nav')!.getBoundingClientRect().left,
+      menuRight: document.querySelector('.device-switcher__menu')!.getBoundingClientRect().right,
+      nameCut: (name => name.scrollWidth > name.clientWidth)(document.querySelector('.device-switcher__name')!),
+    }));
+  }},
+  {name: 'switcher-add-device', active: ready, steps: async page => {
+    await trigger(page).click();
+    await page.getByRole('menuitem', {name: '添加设备…'}).click();
+    await page.getByRole('dialog').waitFor();
+    await page.screenshot({path: join(out, 'switcher-add-device-dialog.png')});
+    await page.keyboard.press('Escape');
+    await page.getByRole('dialog').waitFor({state: 'detached'});
+    return page.evaluate(() => document.activeElement?.getAttribute('aria-label'));
+  }},
+  {name: 'switcher-keyboard', active: ready, steps: async page => {
+    const focused = () => page.evaluate(() => document.activeElement?.textContent);
+    const open = () => page.locator('.device-switcher__menu').count();
+    await trigger(page).focus();
+    await page.keyboard.press('Enter');
+    const f1 = await focused();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    const f2 = await focused();
+    await page.keyboard.press('End');
+    const f3 = await focused();
+    await page.keyboard.press('Escape');
+    const afterEscape = await page.evaluate(() => document.activeElement?.getAttribute('aria-label'));
+    const openAfterEscape = await open();
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Tab');
+    const afterTab = await open();
+    await trigger(page).focus();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Shift+Tab');
+    const afterShiftTab = await open();
+    const focusAfterShiftTab = await page.evaluate(() => document.activeElement?.getAttribute('aria-label'));
+    await trigger(page).focus();
+    await page.keyboard.press('ArrowUp');
+    const arrowUp = await focused();
+    await page.keyboard.press('ArrowDown');
+    const wrapped = await focused();
+    return {f1, f2, f3, afterEscape, openAfterEscape, afterTab, afterShiftTab, focusAfterShiftTab, arrowUp, wrapped};
+  }},
+  {name: 'switcher-many', active: ready, extra: {many: true}, steps: async page => {
+    await trigger(page).click();
+    return page.evaluate(() => {
+      const list = document.querySelector('.device-switcher__list')!;
+      const manage = [...document.querySelectorAll('.device-switcher__menu [role="menuitem"]')].find(item => item.textContent === '管理设备…')!;
+      const box = manage.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return {listScrolls: list.scrollHeight > list.clientHeight, manageVisible: Boolean(hit && manage.contains(hit))};
+    });
+  }},
+  // 评审 2026-11-03: in first use the tabs are hidden and the brand is gone, so 设置 needs its own way back to 此刻.
+  {name: 'first-use-settings', active: ready, extra: {localOnly: true, firstUse: true}, steps: async page => {
+    await page.getByRole('button', {name: '设置', exact: true}).click();
+    const back = await page.locator('.today-back button').textContent();
+    await page.screenshot({path: join(out, 'first-use-settings-back.png')});
+    await page.locator('.today-back button').click();
+    return {back, then: await page.locator('main').getAttribute('aria-label'), tabs: await page.locator('.today-primary-nav').count()};
+  }},
+  {name: 'web-brand', active: ready, extra: {web: true}, steps: page => page.evaluate(() => ({
+    brand: document.querySelector('.today-brand')?.getAttribute('aria-label'), switcher: document.querySelectorAll('.device-switcher').length,
+  }))},
   {name: 'cannot-connect', status: 'connecting', active: cannotConnect},
   {name: 'maintenance', status: 'maintenance', active: {phase: 'ready', mode: 'maintenance', serverInfo: info('0.8.2', 1)}},
   {name: 'reconnecting-banner', status: 'reconnecting', active: {phase: 'reconnecting', mode: 'full', attempt: 1, retryAt: now + 60_000, serverInfo: info('0.9.1', 2)}},
@@ -203,7 +282,7 @@ try {
   for (const scene of scenes) {
     const page = await browser.newPage({viewport: {width: scene.width ?? 1100, height: 760}});
     page.on('pageerror', error => console.error(scene.name, error.message));
-    await page.addInitScript(install, {state: state(scene.active, scene.status, scene.extra), snapshot, preview: scene.preview ?? preview, ...(scene.add ? {add: scene.add} : {})});
+    await page.addInitScript(install, {state: state(scene.active, scene.status, scene.extra), snapshot: scene.extra?.firstUse ? {...snapshot, agents: []} : snapshot, preview: scene.preview ?? preview, ...(scene.add ? {add: scene.add} : {}), web: Boolean(scene.extra?.web)});
     await page.goto(`http://127.0.0.1:${port}/index.html`);
     await page.waitForTimeout(800);
     const result = await scene.steps?.(page).catch(error => { console.error(scene.name, 'step failed:', (error as Error).message.split('\n')[0]); return undefined; });

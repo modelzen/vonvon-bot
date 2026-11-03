@@ -19,9 +19,9 @@ export function platformIcon(platform?: string): LucideIcon {
 export function clientIcon(kind?: string): LucideIcon {
   return ({desktop: Laptop, cli: Terminal, web: Globe} as Record<string, LucideIcon>)[kind ?? ''] ?? MonitorSmartphone;
 }
-/** The square tile a device row starts with. */
-export function DeviceTile({icon: Icon, large = false}: {icon: LucideIcon; large?: boolean}) {
-  return <span className={large ? 'device-tile device-tile--lg' : 'device-tile'} aria-hidden="true"><Icon size={large ? 18 : 16} strokeWidth={1.7}/></span>;
+/** The square tile a device row starts with; `small` in the header switcher's menu. */
+export function DeviceTile({icon: Icon, large = false, small = false}: {icon: LucideIcon; large?: boolean; small?: boolean}) {
+  return <span className={large ? 'device-tile device-tile--lg' : small ? 'device-tile device-tile--sm' : 'device-tile'} aria-hidden="true"><Icon size={large ? 18 : small ? 15 : 16} strokeWidth={1.7}/></span>;
 }
 
 /** The copy marks commands with backticks; they show as code. */
