@@ -91,10 +91,11 @@ export function stageView({state, now, adding, repairOf, actions, pasteRef}: Sta
     actions: <Button onClick={actions.cancel}>取消</Button>,
   };
   const expired = state.preview ? minutesLeft(state.preview, now) === 0 : true;
+  const hints = state.stage === 'failed' ? routeHints(state.attempts, name) : [];
   if (state.stage === 'failed') return {
     body: <div className="device-add">
       <Problem><CopyText text={failureCopy(state.code, name)}/></Problem>
-      {state.attempts.length > 0 && <ul className="device-hints">{routeHints(state.attempts, name).map((hint, index) => <li key={index}><CopyText text={hint}/></li>)}</ul>}
+      {hints.length > 0 && <ul className="device-hints">{hints.map((hint, index) => <li key={index}><CopyText text={hint}/></li>)}</ul>}
     </div>,
     actions: NEW_LINK_CODES.has(state.code) ? <Button variant="primary" onClick={actions.reset}>粘贴新链接</Button> : <>
       <Button onClick={actions.close}>关闭</Button>

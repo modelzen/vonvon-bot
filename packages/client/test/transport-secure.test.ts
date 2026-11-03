@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
+import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import { CLOSE_CODES, PROTOCOL_VERSION } from "@vonvon/protocol";
 import {
   closeBody, createResponder, decodeFrame, encodeFrame, FRAME, generateStaticKey, HANDSHAKE_TIMEOUT_REASON, type Channel, type StaticKey,
 } from "@vonvon/protocol/secure-channel";
 import { ConnectionError } from "../src/client.js";
-import { connectSecure, SecureChannelError, webBinarySocket, type BinarySocket, type SecureChannelErrorCode } from "../src/transport-secure.js";
+import { connectSecure, nodeBinarySocket, SecureChannelError, webBinarySocket, type BinarySocket, type SecureChannelErrorCode } from "../src/transport-secure.js";
 
 // devices-2 第 5 节, in process: a pair of fake binary sockets, and a fake device built from the protocol's responder.
 // main 必败: there was no secure transport.
@@ -19,6 +19,9 @@ class End implements BinarySocket {
   closedWith: { code: number; reason: string } | undefined;
   private messages: Array<(bytes: Uint8Array) => void> = [];
   private closes: Array<(code: number, reason: string) => void> = [];
+  private data: Array<() => void> = [];
+  /** Part of a message reaches the other end: bytes, but no whole frame yet. */
+  trickle(): void { queueMicrotask(() => { for (const listener of this.other.data) listener(); }); }
   send(bytes: Uint8Array): void {
     if (!this.open) throw new Error("socket closed");
     const copy = Buffer.from(bytes);
@@ -36,6 +39,7 @@ class End implements BinarySocket {
   onClose(listener: (code: number, reason: string) => void): void { this.closes.push(listener); }
   onError(): void { /* never errors */ }
   isOpen(): boolean { return this.open; }
+  onData(listener: () => void): void { this.data.push(listener); }
 }
 const socketPair = (): [End, End] => {
   const client = new End();
@@ -245,12 +249,106 @@ describe("an open connection", () => {
     expect(client.closedWith?.code).toBe(1001);
   });
 
+  // 0.9.0 Mac 验收 B-1: an 875 KB snapshot over a relay at 20 KB/s took longer than 30 seconds, so the client cut a live
+  // connection, reconnected and asked again, for ever.
+  it("stays open while a long message is still arriving, and gives up 30 seconds after its last bytes", async () => {
+    vi.useFakeTimers();
+    const { options, served, device } = setup();
+    const connection = await connectSecure(options);
+    let ended: SecureChannelError | undefined;
+    void connection.closed.then(error => { ended = error; });
+    served.state.muted = true;
+    for (let second = 0; second < 90; second += 10) {
+      device.trickle();
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(ended).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(ended).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(ended).toMatchObject({ code: "timeout", stage: "open" });
+  });
+
   it("answers a device ping with a pong", async () => {
     const { options, served } = setup();
     const connection = await connectSecure(options);
     served.sendFrame(FRAME.ping);
     await vi.waitFor(() => expect(served.controls).toContain(FRAME.pong));
     connection.close();
+  });
+});
+
+// 0.9.0 Mac 验收: the device sends each picture once per connection, then its reference. main 必败: a reference was not
+// put back, so no picture showed after the first snapshot.
+describe("pictures sent once", () => {
+  const BOT = `data:image/png;base64,${"B".repeat(1_000)}`;
+  const GROUP = `data:image/png;base64,${"G".repeat(500)}`;
+  const snapshot = (revision: number, agent: object, groups: object[]) => ({
+    revision, observedAt: 1, stale: false, host: { kind: "starting" },
+    agents: [{ id: "cli_a", name: "A", enabled: true, running: true, connection: "connected", activation: "active", ...agent }],
+    groups: groups.map((group, index) => ({ id: `oc_${index}`, name: `群${index}`, ...group })), memberships: [], tools: [], jobs: [],
+    application: { platform: "linux", version: "0.9.0", loginItem: false, dataPath: "/tmp" },
+  });
+  const event = (payload: object) => ({ type: "event", event: "snapshot", payload });
+  const pictures = (value: { agents: Array<Record<string, unknown>>; groups: Array<Record<string, unknown>> }) =>
+    [...value.agents, ...value.groups].map(item => [item.avatarDataUrl ?? null, "avatarRef" in item]);
+  const answered = async () => {
+    const requests: Array<{ id: string; method: string }> = [];
+    const { served, options } = setup({ request: frame => { requests.push(frame); } });
+    const connection = await connectSecure(options);
+    return { served, connection, requests };
+  };
+
+  it("learns them from a push and from a reply the revision check drops, puts them back, and drops a reference it never got", async () => {
+    const { served, connection, requests } = await answered();
+    const seen: Array<Parameters<typeof pictures>[0]> = [];
+    connection.client.watchSnapshots(value => { seen.push(value as never); });
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    served.reply(event(snapshot(2, { avatarDataUrl: BOT, avatarRef: "rB" }, [{ avatarRef: "rG" }])));
+    served.reply({ type: "response", id: requests[0]?.id, method: "snapshot", payload: snapshot(1, { avatarRef: "rB" }, [{ avatarDataUrl: GROUP, avatarRef: "rG" }]) });
+    served.reply(event(snapshot(3, { avatarRef: "rB" }, [{ avatarRef: "rG" }, { avatarRef: "never" }])));
+    await vi.waitFor(() => expect(seen).toHaveLength(2));
+    expect(seen.map(value => (value as unknown as { revision: number }).revision)).toEqual([2, 3]);
+    expect(pictures(seen[0] as never)).toEqual([[BOT, false], [null, false]]);
+    expect(pictures(seen[1] as never)).toEqual([[BOT, false], [GROUP, false], [null, false]]);
+    connection.close();
+  });
+
+  it("learns them from the reply to a watch that already gave up, and from a reply it hands back", async () => {
+    const { served, connection, requests } = await answered();
+    const stop = connection.client.watchSnapshots(() => { throw new Error("stopped"); });
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    stop();
+    served.reply({ type: "response", id: requests[0]?.id, method: "snapshot", payload: snapshot(1, { avatarDataUrl: BOT, avatarRef: "rB" }, []) });
+    const asked = connection.client.snapshot();
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    served.reply({ type: "response", id: requests[1]?.id, method: "snapshot", payload: snapshot(1, { avatarRef: "rB" }, [{ avatarDataUrl: GROUP, avatarRef: "rG" }, { avatarRef: "rG" }]) });
+    expect(pictures(await asked as never)).toEqual([[BOT, false], [GROUP, false], [GROUP, false]]);
+    connection.close();
+  });
+});
+
+describe("nodeBinarySocket", () => {
+  it("tells the bytes of a message as they arrive", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise<void>(resolve => server.once("listening", () => resolve()));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    server.once("connection", socket => socket.once("message", () => socket.send(Buffer.alloc(64, 7))));
+    const ws = new NodeWebSocket(`ws://127.0.0.1:${address.port}/`);
+    try {
+      await new Promise<void>((resolve, reject) => { ws.once("open", () => resolve()); ws.once("error", reject); });
+      const socket = nodeBinarySocket(ws);
+      let bytes = 0;
+      socket.onData?.(() => { bytes++; });
+      const message = new Promise<Uint8Array>(resolve => socket.onMessage(resolve));
+      socket.send(new Uint8Array([1]));
+      expect((await message).byteLength).toBe(64);
+      expect(bytes).toBeGreaterThan(0);
+    } finally {
+      ws.close();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
   });
 });
 

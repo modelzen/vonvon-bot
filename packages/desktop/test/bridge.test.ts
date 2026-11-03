@@ -1091,6 +1091,57 @@ describe('devices-ui-1a views', () => {
     await h.bridge.dispose();
   });
 
+  // 0.9.0 Mac 验收 S-4: `vonvon daemon stop` while another device was shown, then back here within the shell's minute of
+  // reconnecting. The page built again asked the closed connection and stayed loading, 启动 daemon out of reach.
+  it('gives a page built again for this computer its last snapshot while the shell reconnects to a daemon stopped from outside', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    h.actions.recoverConnection.mockReturnValue(true);
+    h.emitSnapshot({ revision: 5 });
+    await h.devs.show(remoteView(REMOTE_A, remoteClient()));
+    // The closed client refuses every request with a plain Error.
+    h.snapshot.mockRejectedValue(new Error('Daemon connection closed'));
+    h.emitError(new ConnectionError('Daemon connection closed'));
+    expect(h.devs.devices.setLocal).toHaveBeenLastCalledWith({ status: 'connecting' });
+    h.webContents.send.mockClear();
+    await h.devs.show({ kind: 'local' });
+    expect(h.events()).toEqual([{ type: 'reattached', view: 'local' }, { type: 'snapshot', view: 'local', value: { revision: 5 } }]);
+    expect(await h.invoke(desktopChannels.snapshot)).toEqual({ ok: true, value: { revision: 5 } });
+    expect(h.actions.connectionLost).not.toHaveBeenCalled();
+    // A minute on the shell gives up while this computer is shown: it says so itself, and the row goes offline.
+    expect(h.bridge.deferLocalLost()).toBe(false);
+    expect(h.devs.devices.setLocal).toHaveBeenLastCalledWith({ status: 'offline' });
+    // 启动 daemon, or the shell found one started from the command line.
+    h.webContents.send.mockClear();
+    await h.bridge.replaceOwner(candidate(async () => ({ revision: 1 })).owner);
+    expect(h.events()).toEqual([{ type: 'reattached', view: 'local' }, { type: 'snapshot', view: 'local', value: { revision: 1 } }]);
+    expect(h.devs.devices.setLocal).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'online' }));
+    await h.bridge.dispose();
+  });
+
+  // 0.9.0 Mac 验收 B-1: three requests for a snapshot of 875 KB on every switch, over a relay at 20 KB/s.
+  it('asks a remote device for its snapshot before the binding does, and shares that answer with the new page', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    const a = remoteClient(3);
+    let release!: (value: unknown) => void;
+    a.calls.snapshot.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }) as never);
+    const watch = vi.fn(a.calls.watchSnapshots);
+    Object.assign(a.client, { watchSnapshots: watch });
+    await h.devs.show(remoteView(REMOTE_A, a));
+    expect(a.calls.snapshot.mock.invocationCallOrder[0]).toBeLessThan(watch.mock.invocationCallOrder[0]!);
+    const page = h.invokeAs(REMOTE_A, desktopChannels.snapshot);
+    await settle();
+    expect(a.calls.snapshot).toHaveBeenCalledOnce();
+    release({ revision: 3 });
+    expect(await page).toEqual({ ok: true, value: { revision: 3 } });
+    expect(h.events()).toEqual([{ type: 'reattached', view: REMOTE_A }, { type: 'snapshot', view: REMOTE_A, value: { revision: 3 } }]);
+    // Shown: the page's requests go to the device again.
+    expect(await h.invokeAs(REMOTE_A, desktopChannels.snapshot)).toMatchObject({ ok: true });
+    expect(a.calls.snapshot).toHaveBeenCalledTimes(2);
+    await h.bridge.dispose();
+  });
+
   it('shows no error and asks nothing of the shell when a remote connection drops', async () => {
     const h = harness();
     await h.invoke(desktopChannels.subscribe);

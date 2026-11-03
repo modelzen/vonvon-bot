@@ -184,6 +184,11 @@ export function installBridge(
   let localGen = 0;
   /** The local connection was lost while a remote device was shown: reported once the page is back here. */
   let localLostPending = false;
+  /** `localDaemon` closed, whoever handles it (an expected stop, the shell reconnecting): it answers nothing now. */
+  let localDead = false;
+  /** The first snapshot a switch to a remote device waits for: the new page's own first request shares it, not another
+   * one of hundreds of KB over a slow link (0.9.0 Mac 验收 B-1). */
+  let firstSnapshot: { session: ViewSession; value: Promise<DesktopSnapshot> } | undefined;
   /** The last snapshot of this computer's connection. A page built again for this computer while its daemon is stopped
    * or lost gets it, as the one page kept it before devices, with 启动 daemon still there (Codex 审查 235-1). */
   let localSnapshot: DesktopSnapshot | undefined;
@@ -239,7 +244,11 @@ export function installBridge(
    * device is shown, only once the page is back here. */
   function localLost(error: ConnectionError, from: AttachedDaemon): void {
     if (disposed || from !== localDaemon) return;
-    if (actions.isExpectedDisconnect() || actions.recoverConnection(from.identity)) return;
+    // A page built again for this computer gets the last snapshot from here on, also while the shell reconnects: asking
+    // the closed connection left it loading with 启动 daemon out of reach (0.9.0 Mac 验收 S-4).
+    localDead = true;
+    if (actions.isExpectedDisconnect()) return;
+    if (actions.recoverConnection(from.identity)) { devices.setLocal({ status: 'connecting' }); return; }
     devices.setLocal({ status: 'offline' });
     if (view.kind !== 'local') { localLostPending = true; return; }
     report(error);
@@ -253,7 +262,7 @@ export function installBridge(
 
   /** Stopped here, lost, or between two connections: nothing to ask for a snapshot. */
   function localDown(): boolean {
-    return !localDaemon || stoppedStatus !== undefined || connectionLost || localLostPending;
+    return !localDaemon || localDead || stoppedStatus !== undefined || connectionLost || localLostPending;
   }
 
   function viewId(): ViewId {
@@ -354,14 +363,19 @@ export function installBridge(
     view = { kind: 'remote', session };
     // A device of another protocol pushes no snapshots and answers no snapshot request.
     if (session.mode === 'maintenance') { send({ type: 'reattached', view: session.id }); return; }
+    // Asked before the binding's watch asks as well: the page shows once the first of the two has come.
+    const first = session.client.snapshot();
+    firstSnapshot = { session, value: first };
+    const settled = (): void => { if (firstSnapshot?.value === first) firstSnapshot = undefined; };
     let binding: Binding;
     try { binding = bind({ view: session.id, client: session.client }, true); }
-    catch { return; }
+    catch { void first.catch(() => {}).finally(settled); return; }
     viewBinding = binding;
     let initial: DesktopSnapshot;
     // Lost again right away: the connections say waiting next.
-    try { initial = await session.client.snapshot(); }
+    try { initial = await first; }
     catch { binding.dispose(); if (viewBinding === binding) viewBinding = null; return; }
+    finally { settled(); }
     if (disposed || seq !== viewSeq) { binding.dispose(); return; }
     send({ type: 'reattached', view: session.id });
     binding.activate(initial);
@@ -399,8 +413,11 @@ export function installBridge(
   const noArg = (_: unknown): undefined => undefined;
   const onNavigation = (): void => { subscribed = false; };
   try {
-    registerClient(desktopChannels.snapshot, 0, noArg, () =>
-      view.kind === 'local' && localDown() && localSnapshot ? Promise.resolve(localSnapshot) : client().snapshot());
+    registerClient(desktopChannels.snapshot, 0, noArg, () => {
+      if (view.kind === 'local' && localDown() && localSnapshot) return Promise.resolve(localSnapshot);
+      if (view.kind === 'remote' && firstSnapshot?.session === view.session) return firstSnapshot.value;
+      return client().snapshot();
+    });
     registerClient(desktopChannels.run, 1, value => commandSchema.parse(value), value => {
       if (value.type !== 'restartHost') return client().run(value);
       if (view.kind !== 'local') {
@@ -471,7 +488,7 @@ export function installBridge(
     }, async value => {
       devices.setLocal({ status: 'connecting' });
       try { return machineReplySchema.parse(await actions.startHost(value.bot)); }
-      catch (error) { if (!localDaemon) devices.setLocal({ status: 'offline' }); else devices.setLocal({ status: 'online' }); throw error; }
+      catch (error) { devices.setLocal({ status: localDown() ? 'offline' : 'online' }); throw error; }
     });
     register(desktopChannels.service, 1, value => {
       localOnly();
@@ -585,6 +602,7 @@ export function installBridge(
         }
         localDaemon = next;
         localWatch = watchLocal(next);
+        localDead = false;
         stoppedStatus = undefined;
         connectionLost = false;
         localLostPending = false;
@@ -608,6 +626,8 @@ export function installBridge(
       return () => { localOwnerListeners.delete(listener); };
     },
     deferLocalLost() {
+      // The shell gave up reconnecting: 这台电脑 was "connecting" until now.
+      devices.setLocal({ status: 'offline' });
       if (view.kind === 'local') return false;
       localLostPending = true;
       return true;

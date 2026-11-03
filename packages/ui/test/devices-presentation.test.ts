@@ -48,6 +48,9 @@ it('gives a hint per kind of address', () => {
   expect(routeHint(tailscale, 'forbidden', X)).toContain('重新生成连接链接');
   expect(routeHint(tailscale, 'refused', X)).toMatch(/看看。那台设备上的 Vonvon Bot 可能没在运行/);
   expect(routeHint(tailscale, 'device_identity_changed', X)).toContain('100.64.0.10:7767 上的 Vonvon Bot 不是「X」');
+  // 0.9.0 Mac 验收 S-1: an address that answered and refused gets no hint about reaching it.
+  expect(routeHints(['pairing_failed', 'rate_limited', 'client_revoked', 'remote_disabled', 'protocol_mismatch', 'handshake_failed'].map(code => ({route: tailscale, code})), X)).toEqual([]);
+  expect(routeHints(['timeout', 'device_identity_changed'].map(code => ({route: tailscale, code})), X)).toHaveLength(2);
   expect(routeHints([{route: tailscale, code: 'timeout'}, {route: {...tailscale, kind: 'lan'}, code: 'timeout'}], X)).toHaveLength(2);
 });
 
