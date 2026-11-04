@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -100,7 +100,9 @@ console.error('cli-stderr'); process.exitCode = process.argv.includes('--fail') 
     };
     const args = ['two words', '中文 & !', 'hello&world', 'literal-%VONVON_CLI_ARG%', '', 'a"b', 'C:\\ends with slash\\', '--read-input'];
     const direct = await run(f.launcher, args);
-    expect(JSON.parse(direct.stdout)).toEqual({ args, input: 'piped input 中文', mode: '1', cwd: f.home });
+    const received = JSON.parse(direct.stdout);
+    // Hosted Windows TEMP may use an 8.3 username; Node reports the same directory with its long name.
+    expect({ ...received, cwd: await realpath(received.cwd) }).toEqual({ args, input: 'piped input 中文', mode: '1', cwd: await realpath(f.home) });
     expect(direct.stderr.trim()).toBe('cli-stderr');
     const cmd = await run(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'vonvon --json']);
     expect(JSON.parse(cmd.stdout).args).toEqual(['--json']);
