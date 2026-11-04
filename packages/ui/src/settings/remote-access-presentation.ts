@@ -90,7 +90,7 @@ export const disableCurrentText = (where: Where): string =>
 /** A1 4.5: another address replaces the open one; the paired devices follow by pasting a new link. */
 export function switchText(where: Where, from: AddressRow, to: string, paired: number): string {
   if (from.current) return `你现在就是通过 ${from.host} 连着${whereName(where)}的。换成 ${to} 后这台电脑会马上断开，要在${whereName(where)}上生成新链接、粘到"添加设备"里更新地址。`;
-  const follow = paired ? `已配对的 ${paired} 台设备要换到新地址：在下面生成连接链接，粘到那台电脑的 Vonvon Bot → 设置 → 设备 → 添加，只会更新地址，不用重新配对。` : '';
+  const follow = paired ? `已配对的 ${paired} 台设备要换到新地址：在下面生成连接链接，粘到那台电脑的 Vonvon Bot → 设置 → 设备连接 → 添加，只会更新地址，不用重新配对。` : '';
   return `换成 ${to} 后，${from.host} 不再接受连接，经它连着的设备会马上断开。${follow}`;
 }
 /** 0.9.0 Windows 验收 322: the first 开启 makes Windows ask about its firewall. 取消 leaves block rules that only deleting
@@ -101,7 +101,7 @@ export const portHint = (where: Where): string => where.platform === 'windows'
   ? `${where.isRemote ? '' : WINDOWS_FIREWALL}${onDeviceText(where, 'Windows 上这一版改不了端口；端口被别的程序占着时，关掉那个程序后会自己开始。')}`
   : onDeviceText(where, '要改端口，在终端运行 `vonvon remote port <端口>`；改完已配对的设备要粘一次新链接。');
 export const NO_ADDRESS = '这台设备现在没有别的设备能连过来的地址。';
-export const LINK_HELP = '把这条链接粘到另一台电脑的 Vonvon Bot → 设置 → 设备 → 添加。10 分钟内有效，只能用一次，别发给别人。';
+export const LINK_HELP = '把这条链接粘到另一台电脑的 Vonvon Bot → 设置 → 设备连接 → 添加。10 分钟内有效，只能用一次，别发给别人。';
 export const LINK_EXPIRED = '链接过期了，再生成一个。';
 /** Codex 审查 267-2、269-1: the address or port the link was made on changed, or it stopped listening. */
 export const LINK_MOVED = '地址变了，刚才那条链接用不了了，再生成一个。';

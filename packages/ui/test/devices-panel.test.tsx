@@ -72,7 +72,7 @@ it('puts 允许别的设备连接 of the device shown under the list', () => {
 
 it('gives the web page (no list) a 设备 page with only 允许别的设备连接', () => {
   const html = renderToStaticMarkup(<ClientProvider client={newClient()}><DraftGuardProvider><DevicesPanel/></DraftGuardProvider></ClientProvider>);
-  expect(html).toContain('<h1>设备</h1>');
+  expect(html).toContain('<h1>设备连接</h1>');
   expect(html).toContain(SERVED);
   expect(text(html)).toContain('允许别的设备连接本机');
   expect(html).not.toContain('添加设备');

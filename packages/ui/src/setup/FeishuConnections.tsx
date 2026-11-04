@@ -10,7 +10,7 @@ import {stepDescription, type SetupChecklistProps} from './SetupChecklist';
 import {useSetupStatus, type SetupRead} from './useSetupStatus';
 import './feishu-connections.css';
 
-type Props = SetupChecklistProps & {onOpenGroups?: () => void};
+type Props = SetupChecklistProps & {onOpenGroups?: () => void; initialAgentId?: AgentId};
 
 function botSummary(agent: Agent, read: SetupRead | undefined): string {
   if (!agent.enabled) return '未启用';
@@ -21,17 +21,16 @@ function botSummary(agent: Agent, read: SetupRead | undefined): string {
 }
 
 /** Existing bindings use the compact management view; first-time setup keeps its checklist. */
-export function FeishuConnections({snapshot, ready, busy, run, onRegister, onOpenGroups, onNotice}: Props) {
+export function FeishuConnections({snapshot, ready, busy, run, onRegister, onOpenGroups, onNotice, initialAgentId}: Props) {
   const {reads, recheck} = useSetupStatus(snapshot.agents.map(agent => agent.id));
-  const [selected, setSelected] = useState<AgentId | undefined>(snapshot.agents[0]?.id);
+  const [selected, setSelected] = useState<AgentId | undefined>(initialAgentId ?? snapshot.agents[0]?.id);
   const [working, setWorking] = useState<string>();
   const client = useClient();
   const shell = useShellCapabilities();
-  const agent = snapshot.agents.find(agent => agent.id === selected) ?? snapshot.agents[0];
-  if (!agent) return null;
-  const read = reads[agent.id];
+  const agent = selected ? snapshot.agents.find(agent => agent.id === selected) : snapshot.agents[0];
+  const read = agent ? reads[agent.id] : undefined;
   const credentialsRejected = read?.status?.credentials.ok === false && !read.status.credentials.unreachable;
-  const steps = botSteps(agent, read?.status, read?.problem).map(step =>
+  const steps = (agent ? botSteps(agent, read?.status, read?.problem) : []).map(step =>
     credentialsRejected && step.id === 'callback' && !step.done
       ? {...step, status: '等待凭据恢复', tone: 'neutral' as const, detail: '先完成飞书应用的重新扫码，再检测卡片回调配置。', actions: []}
       : step);
@@ -69,13 +68,13 @@ export function FeishuConnections({snapshot, ready, busy, run, onRegister, onOpe
       <div className="feishu-connections__bots" role="group" aria-label="选择 Bot">
         {snapshot.agents.map(bot => <button key={bot.id} type="button"
           className={`feishu-connections__bot${!bot.enabled ? ' is-disabled' : ''}`}
-          aria-pressed={bot.id === agent.id} title={bot.name} onClick={() => setSelected(bot.id)}>
+          aria-pressed={bot.id === agent?.id} title={bot.name} onClick={() => setSelected(bot.id)}>
           <AgentAvatar agent={bot}/>
           <span className="feishu-connections__bot-copy"><strong>{bot.name}</strong><small>{botSummary(bot, reads[bot.id])}</small></span>
         </button>)}
       </div>
     </div>
-    <section className="feishu-connections__checks" aria-label={`${agent.name} 的配置检查`}>
+    {agent ? <section className="feishu-connections__checks" aria-label={`${agent.name} 的配置检查`}>
       <div className="feishu-connections__checks-heading">
         <div className="feishu-connections__checks-title">
           <h2>配置检查</h2>
@@ -119,7 +118,7 @@ export function FeishuConnections({snapshot, ready, busy, run, onRegister, onOpe
           </li>;
         })}
       </ol>
-    </section>
+    </section> : <p role="status">所选 Bot 暂不可用。请等待列表更新，或在上方选择其他 Bot。</p>}
     <p className="feishu-connections__footnote">企业租户里新权限可能要管理员审核。</p>
   </section>;
 }

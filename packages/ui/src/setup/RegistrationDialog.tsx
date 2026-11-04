@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState, type ReactNode} from 'react';
 import {ArrowRight, Check, ChevronDown, Copy, ExternalLink, RefreshCw} from 'lucide-react';
-import type {Job} from '@vonvon/protocol';
+import type {AgentId, Job} from '@vonvon/protocol';
 import {useShellCapabilities} from '../client-context';
 import {Button} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
@@ -12,7 +12,7 @@ import './registration-dialog.css';
 
 export function RegistrationDialog({modal, job, busy, feedback, onClose, onRetry, onChecklist}: {
   modal: RegisterModal; job?: Job; busy: boolean; feedback?: ReactNode;
-  onClose: () => void; onRetry: () => void; onChecklist: () => void;
+  onClose: () => void; onRetry: () => void; onChecklist: (agentId: AgentId) => void;
 }) {
   const [ready, setReady] = useState(false);
   const grant = Boolean(modal.agentId);
@@ -23,7 +23,7 @@ export function RegistrationDialog({modal, job, busy, feedback, onClose, onRetry
     footer={<>
       <span className="registration-footer-status">{grant || complete ? <><Check size={13} aria-hidden="true"/>{modal.refresh ? '凭据已刷新' : 'Bot 已注册'}</> : busy || activating ? '请稍候' : modal.refresh ? '扫码后自动刷新凭据' : '扫码后自动进入下一步'}</span>
       <Button size="sm" variant="ghost" disabled={busy || activating} onClick={onClose}>{grant ? '稍后配置' : complete ? '完成' : '取消'}</Button>
-      {grant && <Button size="sm" variant={ready ? 'primary' : 'secondary'} onClick={onChecklist}>检查连接<ArrowRight size={13} aria-hidden="true"/></Button>}
+      {grant && <Button size="sm" variant={ready ? 'primary' : 'secondary'} onClick={() => onChecklist(modal.agentId!)}>检查连接<ArrowRight size={13} aria-hidden="true"/></Button>}
     </>}>
     <div className="registration-content">
       {!modal.refresh && <div className="registration-steps" aria-label={grant ? '第 2 步：开通权限' : '第 1 步：扫码注册'}>
