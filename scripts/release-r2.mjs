@@ -71,6 +71,11 @@ export async function loadR2Client(input, { env = process.env, sdk } = {}) {
       if (status === 404) return null;
       const timedOut = abortSignal.aborted || ['TimeoutError', 'AbortError'].includes(error?.name) || error?.code === 'ETIMEDOUT';
       const safe = new Error(timedOut ? `R2 request timed out (connect/idle limit or ${Math.ceil(timeoutMs / 1000)}s transfer deadline)` : `R2 request failed${Number.isInteger(status) ? ` (HTTP ${status})` : ''}`);
+      const attempts = error?.$metadata?.attempts;
+      if (Number.isSafeInteger(attempts) && attempts > 0) {
+        safe.attempts = attempts;
+        safe.message += ` (SDK attempts: ${attempts})`;
+      }
       safe.status = status;
       throw safe;
     }
@@ -356,6 +361,14 @@ export async function syncR2Mirror({ dir, plan, planSHA256, config: input, clien
       const body = await localBytes(dir, object);
       const stop = transferProgress(object, 'upload', { log, onProgress });
       try {
+        await assertNotCancelled(cancelFile);
+        if (mutable) {
+          // HEAD/local verification can overlap a newer publication. Recheck both
+          // sources after capturing this object's ETag, without ever refreshing it.
+          // A subsequent script change then fails the original conditional PUT.
+          await assertCanonicalStable(plan, fetchImpl);
+          await assertTargetUnchanged(client, stableSnapshot);
+        }
         await assertNotCancelled(cancelFile);
         await client.put(object.key, body, { ...(previous ? { ifMatch: previous.etag } : { ifNoneMatch: '*' }), contentType: object.contentType, cacheControl: mutable ? MUTABLE : IMMUTABLE });
       } catch (error) {
