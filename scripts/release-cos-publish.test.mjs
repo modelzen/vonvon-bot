@@ -9,6 +9,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appendLedger, fixReleaseHeaders, NO_CDN, planPublish, promoteRelease, readCosWriteConfig, reverifyRelease, rollbackRelease, uploadRelease } from './release-cos-publish.mjs';
 import { COS_SDK_LOCKFILE } from './release-cos-evidence.mjs';
+import { BYPASS_CDN } from './release-cdn.mjs';
 import { DEFAULT_MANIFEST_URL, validateReleaseInventory, verifyPublicRelease, verifyVersionedRelease } from './verify-public-release.mjs';
 
 // Hermetic: a fake SDK client backed by an in-memory bucket, a fake public endpoint serving that
@@ -21,6 +22,7 @@ const immutable = 'public, max-age=31536000, immutable';
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const zipFile = `Vonvon-Bot-${version}-universal.zip`, dmgFile = `Vonvon-Bot-${version}-universal.dmg`, feedFile = `feed-${version}.json`;
 const confirm = `确认 ${version} ${sha} 发布到 stable`;
+const bypassCdn = { provider: 'tencent', mutablePolicy: 'bypass' };
 const manifestBytes = v => Buffer.from(JSON.stringify({ version: v, feedURL: new URL(`feed-${v}.json`, base).href }, null, 2) + '\n');
 const feedBytes = v => Buffer.from(JSON.stringify({ url: new URL(`Vonvon-Bot-${v}-universal.zip`, base).href, name: `Vonvon Bot ${v}`, notes: 'Release notes.', pub_date: '2026-10-27T00:00:00.000Z' }, null, 2) + '\n');
 
@@ -112,6 +114,8 @@ async function world(t, settings = {}) {
     assert.equal(options.redirect, 'error');
     fetched.push(url);
     const object = objects.get(new URL(url).pathname.slice(1));
+    const injected = settings.onFetch?.(url, options, object);
+    if (injected) return injected;
     if (!object) return new Response('<Error><Code>NoSuchKey</Code></Error>', { status: 404, headers: { 'content-type': 'application/xml' } });
     return new Response(object.bytes, { status: 200, headers: { 'content-type': object.contentType ?? 'application/octet-stream', 'cache-control': object.cacheControl ?? '' } });
   };
@@ -557,7 +561,7 @@ test('credential settings are environment variable names in a separate, matching
     [{ ...valid, secretKey: 'SENTINEL-WRITE-KEY' }, /unexpected fields/],
     [{ ...valid, secretIdEnv: undefined }, /environment variable names/],
     [{ ...valid, prefix: 'bot/mac/beta/' }, /stable bucket/],
-    [{ ...valid, cdn: { domain: 'dl.vonvon.cc' } }, /CDN refresh is not implemented/],
+    [{ ...valid, cdn: { domain: 'dl.vonvon.cc' } }, /CDN configuration supports only/],
   ]) {
     await assert.rejects(readCosWriteConfig('/external/cos-write.json', { readJSON: read(config) }), caught => {
       assert.match(caught.message, error);
@@ -1080,4 +1084,80 @@ test('two-architecture plan or upload fails closed when evidence is missing or c
     await assert.rejects(w.upload({'first-release':true, 'plan-sha256':sha256}));
     assert.equal(w.writes().length, 0);
   });
+});
+
+test('CDN bypass publication and rollback verify public bytes and record the actual policy without a purge', async t => {
+  const w = await world(t, { objects: published069(), writeConfig: { cdn: bypassCdn } });
+  const { sha256: hash, plan } = await w.plan();
+  assert.equal(plan.promote.cdn, BYPASS_CDN);
+  await w.upload({ 'plan-sha256': hash });
+  const receipt = await w.promote({ 'plan-sha256': hash });
+  assert.equal(receipt.status, 'published');
+  assert.equal(receipt.cdn, BYPASS_CDN);
+  assert.equal(receipt.cdnVerification.publicManifestSHA256, digest(manifestBytes(version)));
+  assert.deepEqual(receipt.cdnVerification.policy, bypassCdn);
+  const rollback = await w.rollback({ 'plan-sha256': hash, 'restore-previous': true });
+  assert.equal(rollback.cdn, BYPASS_CDN);
+  assert.equal(rollback.cdnVerification.publicManifestSHA256, digest(manifestBytes('0.6.9')));
+  assert.ok(w.fetched.every(url => new URL(url).search === ''), 'verification must not hide stale cache with a query nonce');
+});
+
+test('CDN plan refuses cached mutable responses before any upload, including negative caching', async t => {
+  for (const missing of [false, true]) await t.test(missing ? 'cached 404' : 'cached 200', async t2 => {
+    const w = await world(t2, {
+      objects: missing ? [] : published069(), writeConfig: { cdn: bypassCdn },
+      onFetch: url => url === DEFAULT_MANIFEST_URL ? new Response(missing ? '' : manifestBytes('0.6.9'), {
+        status: missing ? 404 : 200, headers: { 'content-type': 'application/json', 'cache-control': 'no-cache', 'x-cache-lookup': 'Cache Hit' },
+      }) : undefined,
+    });
+    await assert.rejects(w.plan(missing ? { 'first-release': true } : {}), /cached mutable/);
+    assert.equal(w.writes().length, 0);
+  });
+});
+
+test('CDN stale bytes after a successful COS write fail publication and remain recoverable', async t => {
+  for (const cachedHeader of [false, true]) await t.test(cachedHeader ? 'cache-hit header' : 'stale bytes with no-cache header', async t2 => {
+    let stale = false;
+    const w = await world(t2, {
+      objects: published069(), writeConfig: { cdn: bypassCdn },
+      onPut: params => { if (params.Key === `${PREFIX}manifest.json`) stale = true; },
+      onFetch: url => stale && url === DEFAULT_MANIFEST_URL ? new Response(manifestBytes('0.6.9'), {
+        headers: { 'content-type': 'application/json', 'cache-control': 'no-cache', ...(cachedHeader ? { 'x-cache-lookup': 'Cache Hit' } : {}) },
+      }) : undefined,
+    });
+    const { sha256: hash } = await w.plan();
+    await w.upload({ 'plan-sha256': hash });
+    await assert.rejects(w.promote({ 'plan-sha256': hash }), /Public verification failed/);
+    assert.equal((await w.receipt('publish-receipt.json')).status, 'manifest-written-public-verification-failed');
+    assert.deepEqual(w.objects.get(`${PREFIX}manifest.json`).bytes, manifestBytes(version), 'the correct origin write is retained, with no automatic rollback');
+    stale = false;
+    assert.equal((await w.reverify({ 'plan-sha256': hash })).status, 'published');
+  });
+});
+
+test('CDN rollback rejects a stale edge response and succeeds only when the saved bytes become visible', async t => {
+  let stale = false;
+  const w = await world(t, {
+    objects: published069(), writeConfig: { cdn: bypassCdn },
+    onFetch: url => stale && url === DEFAULT_MANIFEST_URL ? new Response(manifestBytes(version), { headers: { 'content-type': 'application/json', 'cache-control': 'no-cache' } }) : undefined,
+  });
+  const { sha256: hash } = await w.plan();
+  await w.upload({ 'plan-sha256': hash });
+  await w.promote({ 'plan-sha256': hash });
+  stale = true;
+  await assert.rejects(w.rollback({ 'plan-sha256': hash, 'restore-previous': true }), /does not equal the saved previous manifest/);
+  await assert.rejects(w.receipt('rollback-receipt.json'), { code: 'ENOENT' });
+  stale = false;
+  assert.equal((await w.rollback({ 'plan-sha256': hash, 'restore-previous': true })).action, 'already-restored');
+});
+
+test('recovery cannot silently remove the CDN verification declared by the reviewed plan', async t => {
+  const w = await world(t, { objects: published069(), writeConfig: { cdn: bypassCdn } });
+  const { sha256: hash } = await w.plan();
+  await w.upload({ 'plan-sha256': hash });
+  await w.promote({ 'plan-sha256': hash });
+  const config = JSON.parse(await readFile(w.writeConfigPath));
+  delete config.cdn;
+  await writeFile(w.writeConfigPath, JSON.stringify(config));
+  await assert.rejects(w.rollback({ 'plan-sha256': hash, 'restore-previous': true }), /CDN policy changed/);
 });
