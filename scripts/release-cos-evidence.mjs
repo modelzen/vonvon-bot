@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { basename, dirname, isAbsolute, join } from 'node:path';
+import { readReleaseCdnPolicy } from './release-cdn.mjs';
 
 // Read-only: no upload, object mutation, CDN action, or credential output.
 // Changing the pinned SDK version is a reviewed code change, never a runtime option.
@@ -27,6 +28,7 @@ export async function readCosConfig(configPath, { readJSON = defaultReadJSON } =
   try { config = await readJSON(configPath); } catch { throw new Error('Cannot read COS read-only configuration'); }
   if (!isStableCosTarget(config) || !isAbsolute(config.ledgerFile ?? '')) throw new Error('COS configuration must identify the stable bucket, prefix, public URL and absolute ledgerFile');
   assertCredentialEnvNames(config);
+  readReleaseCdnPolicy(config.cdn);
   return config;
 }
 
