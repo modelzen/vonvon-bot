@@ -151,7 +151,7 @@ it('says on the settings home which entry holds the new version', () => {
   expect(home('有新版本 0.7.1')).toContain('有新版本 0.7.1');
   expect(home('上次更新没装上')).toContain('上次更新没装上');
   expect(home()).not.toContain('有新版本');
-  expect(home()).toContain('后台运行与更新');
+  expect(home()).toContain('软件更新、后台运行与启动设置');
 });
 
 // devices-ui-1b; owner 2026-11-03 moved 允许别的设备连接 to 设备, so the web page has the page too (main 必败: it had none).
@@ -159,11 +159,11 @@ it('puts 设备 first in 连接与应用, on the web page with only 允许别的
   const home = (devices?: boolean) => renderToStaticMarkup(<SettingsHome devices={devices} onNavigate={() => {}} onFeature={() => {}}/>);
   const sections = (devices?: boolean) => home(devices)
     .split('<section class="today-settings-section"').slice(1).map(section => [...section.matchAll(/<strong>([^<]+)<\/strong>/g)].map(match => match[1]));
-  const both = [['Provider', '工具与连接', '决策模型', '用量'], ['设备', '飞书连接', '导入 Bridge', '应用与启动', '状态与诊断']];
+  const both = [['Provider', '工具', '决策模型', '用量'], ['设备连接', '飞书连接', 'Bridge 导入', '应用与启动', '诊断']];
   expect(sections()).toEqual(both);
   expect(sections(true)).toEqual(both);
-  const desktop = home(true).split('<strong>设备</strong>')[1]!;
-  expect(desktop.slice(0, desktop.indexOf('</small>'))).toContain('加别的设备、切换着管理，允许别的设备连接');
-  const web = home().split('<strong>设备</strong>')[1]!;
-  expect(web.slice(0, web.indexOf('</small>'))).toBe('<small>允许别的设备连接');
+  const desktop = home(true).split('<strong>设备连接</strong>')[1]!;
+  expect(desktop.slice(0, desktop.indexOf('</small>'))).toContain('连接其他设备，管理对当前设备的访问');
+  const web = home().split('<strong>设备连接</strong>')[1]!;
+  expect(web.slice(0, web.indexOf('</small>'))).toBe('<small>管理对当前设备的访问');
 });

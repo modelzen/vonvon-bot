@@ -1,7 +1,7 @@
 import {GlowButton} from '../GlowButton';
 import {ArrowRight, QrCode} from 'lucide-react';
 import {useState} from 'react';
-import {toolSteps} from '@vonvon/protocol';
+import {toolSteps, type AgentId} from '@vonvon/protocol';
 import {Button} from '../reference/components/ui';
 import {BridgeImportPanel} from './BridgeImportPanel';
 import {FeishuConnections} from './FeishuConnections';
@@ -15,6 +15,7 @@ type Props = SetupChecklistProps & {
   onProviderPrepared?: (provider: SetupProvider) => void;
   onCreateBot?: (provider: SetupProvider) => void;
   initialProvider?: SetupProvider;
+  initialAgentId?: AgentId;
 };
 export function WelcomeSetup(props: Props) {
   const hasBots = props.snapshot.agents.length > 0;
@@ -27,7 +28,8 @@ export function WelcomeSetup(props: Props) {
     setPrepared({provider, signature: providerSignature(props.snapshot.tools.find(tool => tool.tool === provider))});
     props.onProviderPrepared?.(provider);
   }
-  if (connected && hasBots) return <FeishuConnections {...props}/>;
+  // A targeted repair must not become the first-use flow just because no group is bound yet.
+  if (props.initialAgentId || (connected && hasBots)) return <FeishuConnections {...props}/>;
   return <div className="welcome-setup">
     {!connected && <BridgeImportPanel ready={props.ready} busy={props.busy} platform={props.snapshot.application.platform}/>}
     {!connected && <SetupProgress step={needsProvider ? 1 : hasBots ? 3 : 2}/>}

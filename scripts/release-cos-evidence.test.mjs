@@ -45,6 +45,12 @@ test('credential settings are variable names only and are reported for stripping
   await assert.rejects(readCosConfig('/external/cos.json', { readJSON: async () => ({ ...withNames, secretKeyEnv: 'AKID-inline-secret-value' }) }), error => !error.message.includes('AKID'));
 });
 
+test('read configuration validates an optional CDN policy instead of silently accepting unsupported settings', async () => {
+  const cdn = { provider: 'tencent', mutablePolicy: 'bypass' };
+  assert.deepEqual((await readCosConfig('/external/cos.json', { readJSON: async () => ({ ...config, cdn }) })).cdn, cdn);
+  await assert.rejects(readCosConfig('/external/cos.json', { readJSON: async () => ({ ...config, cdn: { provider: 'tencent', mutablePolicy: 'refresh' } }) }), /CDN configuration/);
+});
+
 test('the official SDK is loaded only from a pinned tool prefix', async t => {
   const root = await mkdtemp(join(tmpdir(), 'cos-sdk-'));
   assert.ok(basename(root).startsWith('cos-sdk-'));

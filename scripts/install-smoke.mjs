@@ -56,11 +56,13 @@ export function curlShim({ realCurl, port, log }) {
   return `#!/bin/sh
 printf '%s\\n' "$*" >> ${quoted(log)}
 proto=''
+format=''
 out=''
 url=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --proto) proto=$2; shift ;;
+    --write-out) format=$2; shift ;;
     -o) out=$2; shift ;;
     https://*|http://*) url=$1 ;;
   esac
@@ -72,7 +74,8 @@ case "$url" in
   *) echo "install-smoke: not the release address: $url" >&2; exit 6 ;;
 esac
 if [ -z "$out" ]; then echo "install-smoke: no -o" >&2; exit 2; fi
-exec ${quoted(realCurl)} -fsS --max-time 120 -o "$out" "http://127.0.0.1:${port}/script/$path"
+if [ -n "$format" ]; then set -- --write-out "$format"; else set --; fi
+exec ${quoted(realCurl)} -fsS --max-time 120 "$@" -o "$out" "http://127.0.0.1:${port}/script/$path"
 `;
 }
 

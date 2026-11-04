@@ -197,7 +197,7 @@ export function BotConnectionSettings({agent, disabled, onError, onSetup, onRefr
       {read.problem && read.status && <p className="setup-step-warning" role="status">读不到最新权限状态：{read.problem}</p>}
       <ScopeGrantRowContent read={read} disabled={disabled} onError={onError} onOpened={() => setOpenedGrant(true)}/>
       <SettingsRow title="刷新飞书凭据" description="重新扫码，保留群聊、会话和设置。" trailing={<Button size="sm" disabled={disabled} onClick={onRefreshCredentials}>重新扫码</Button>}/>
-      <SettingsRow title="状态与诊断" description="查看连接问题与运行日志。" trailing={<Button size="sm" onClick={onDiagnostics}>查看</Button>}/>
+      <SettingsRow title="诊断" description="查看连接问题与运行日志。" trailing={<Button size="sm" onClick={onDiagnostics}>查看</Button>}/>
     </SettingsGroup>
   </details>;
 }
