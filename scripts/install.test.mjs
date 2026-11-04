@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createHash, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
 import { once } from 'node:events';
-import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -16,11 +16,18 @@ import { fileEntries } from './package-tools.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BASE = 'https://dl.vonvon.cc/bot/server';
+const GLOBAL = /^GLOBAL_BASE_URL="([^"]+)"$/m.exec(await readFile(new URL('./install.sh', import.meta.url), 'utf8'))[1];
 const SH = '/bin/sh';
 /** The launcher __standalone-setup writes (packages/daemon/src/cli/commands/standalone-setup.ts), checked below. */
 const LAUNCHER = '#!/bin/sh\n# Vonvon Bot server CLI v1\nroot="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"\nPATH="$root/current/node/bin:$PATH"\nexport PATH\nexec "$root/current/node/bin/node" "$root/current/app/bin/vonvon.mjs" "$@"\n';
 /** Whether install.sh, run with the fixture's PATH below, finds OpenSSL 3: macOS has LibreSSL in /usr/bin, Homebrew's is elsewhere. */
 const openssl3 = (() => { try { return /^OpenSSL [3-9]/.test(execFileSync('openssl', ['version'], { encoding: 'utf8', env: { ...process.env, PATH: '/usr/bin:/bin' } })); } catch { return false; } })();
+const availableOpenSSL = (() => {
+  try {
+    const executable = execFileSync('/bin/sh', ['-c', 'command -v openssl'], { encoding: 'utf8' }).trim();
+    return /^OpenSSL [3-9]/.test(execFileSync(executable, ['version'], { encoding: 'utf8' })) ? executable : undefined;
+  } catch { return undefined; }
+})();
 
 /**
  * The fake app/bin/vonvon.mjs: records its arguments; setup switches `current` and writes the launcher for real. A
@@ -63,6 +70,7 @@ async function fixture(t, { uname = ['Linux', 'x86_64'] } = {}) {
   t.after(() => rm(base, { recursive: true, force: true }));
   const home = join(base, 'home');
   const cdn = join(base, 'cdn');
+  const globalCdn = join(base, 'global');
   const shims = join(base, 'shims');
   const scripts = join(base, 'scripts');
   for (const dir of [home, cdn, shims, scripts]) await mkdir(dir, { recursive: true });
@@ -80,14 +88,45 @@ while [ $# -gt 0 ]; do
   case "$1" in -o) out=$2; shift ;; https://*) url=$1 ;; esac
   shift
 done
-case "$url" in ${BASE}/*) source='${cdn}/'"\${url#${BASE}/}" ;; *) exit 6 ;; esac
+case "$url" in ${BASE}/*) source='${cdn}/'"\${url#${BASE}/}" ;; ${GLOBAL}/*) source='${globalCdn}/'"\${url#${GLOBAL}/}" ;; *) exit 6 ;; esac
 [ -f "$source" ] || exit 22
-cp "$source" "$out"`);
+cp "$source" "$out"
+printf '200'`);
   const setUname = async ([system, machine]) => shim(shims, 'uname', `case "$1" in -s) echo '${system}' ;; -m) echo '${machine}' ;; *) echo '${system}' ;; esac`);
   await setUname(uname);
   const root = join(home, '.local', 'share', 'vonvon-bot', 'server');
   const f = {
-    base, home, cdn, shims, root, keys, setUname,
+    base, home, cdn, globalCdn, shims, root, keys, setUname,
+    mirror: () => cp(cdn, globalCdn, { recursive: true }),
+    async network(scenario) {
+      // The stand-in is the curl process itself (no child sleep), so loser cancellation is observable.
+      await writeFile(join(shims, 'curl'), `#!${process.execPath}\n` + `
+const fs = require('node:fs'), path = require('node:path');
+const args = process.argv.slice(2), url = args.find(arg => arg.startsWith('https://'));
+const out = args[args.indexOf('-o') + 1];
+const origin = url?.startsWith(${JSON.stringify(BASE + '/')}) ? 'domestic' : url?.startsWith(${JSON.stringify(GLOBAL + '/')}) ? 'global' : '';
+if (!origin || !out) process.exit(6);
+const kind = url.endsWith('/stable/manifest.json') ? 'manifest' : 'package';
+const event = { origin, kind, url, pid: process.pid, at: Date.now() };
+fs.appendFileSync(${JSON.stringify(join(base, 'network-events.jsonl'))}, JSON.stringify(event) + '\\n');
+fs.appendFileSync(${JSON.stringify(join(shims, 'curl.log'))}, args.join(' ') + '\\n');
+const answer = ${JSON.stringify(scenario)}[origin]?.[kind] ?? {};
+setTimeout(() => {
+  const prefix = origin === 'domestic' ? ${JSON.stringify(BASE)} : ${JSON.stringify(GLOBAL)};
+  const directory = origin === 'domestic' ? ${JSON.stringify(cdn)} : ${JSON.stringify(globalCdn)};
+  const file = path.join(directory, url.slice(prefix.length + 1));
+  if (!fs.existsSync(file)) process.exit(22);
+  let body = fs.readFileSync(file);
+  if (answer.corrupt) body[0] ^= 1;
+  if (answer.partial) body = body.subarray(0, answer.partial);
+  fs.writeFileSync(out, body);
+  process.stdout.write(String(answer.status ?? 200));
+  process.exit(answer.code ?? 0);
+}, answer.delay ?? 0);
+`);
+      await chmod(join(shims, 'curl'), 0o755);
+    },
+    events: async () => (await readFile(join(base, 'network-events.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line)),
     path: `${shims}:/usr/bin:/bin`,
     /** A package for `target` from a fake tree; `extra` adds archive members by hand (name → body or { link }). */
     async release(version = '1.0.0', target = 'linux-x64', { extra = [], tree = {} } = {}) {
@@ -156,10 +195,11 @@ cp "$source" "$out"`);
     calls: async () => (await readFile(join(base, 'calls.log'), 'utf8').catch(() => '')).split('\n').filter(Boolean),
     curls: async () => (await readFile(join(shims, 'curl.log'), 'utf8').catch(() => '')).split('\n').filter(Boolean),
     run(script, env = {}, input) {
+      const started = Date.now();
       const full = { ...process.env, HOME: home, PATH: f.path, ...env };
       for (const name of ['VONVON_HOME', 'XDG_CONFIG_HOME', 'ZDOTDIR', 'VONVON_SERVICE']) if (!(name in env)) delete full[name];
       return new Promise(resolve => {
-        const child = execFile(SH, input === undefined ? [join(scripts, script)] : ['-s'], { env: full, timeout: 60_000 }, (error, stdout, stderr) => resolve({ code: error ? error.code : 0, stdout, stderr }));
+        const child = execFile(SH, input === undefined ? [join(scripts, script)] : ['-s'], { env: full, timeout: 60_000 }, (error, stdout, stderr) => resolve({ code: error ? error.code : 0, stdout, stderr, elapsed: Date.now() - started }));
         if (input !== undefined) child.stdin.end(input);
       });
     },
@@ -192,12 +232,15 @@ test('installs: checks the signed manifest and the hash, unpacks, sets up, insta
   assert.equal(await f.exists(join(f.root, 'releases', '1.0.0.part')), false);
   assert.deepEqual(await f.calls(), [`__standalone-setup --install-root ${f.root} --release 1.0.0 --json`, 'service install --linger --json']);
   const curls = await f.curls();
-  assert.equal(curls.length, 2);
-  for (const line of curls) assert.match(line, /^--proto =https --tlsv1\.2 -fsSL --retry 3 --retry-delay 2 -o /);
-  assert.match(curls[0], /\/stable\/manifest\.json$/);
-  assert.ok(curls[1].endsWith(`${BASE}/1.0.0/vonvon-server-1.0.0-linux-x64.tar.gz`));
+  assert.equal(curls.length, 3);
+  for (const line of curls) assert.match(line, /^--proto =https --tlsv1\.2 -f(?:sS|S --progress-bar) --connect-timeout 5 /);
+  assert.equal(curls.filter(line => line.endsWith('/stable/manifest.json')).length, 2);
+  const archiveRequest = curls.find(line => line.endsWith('.tar.gz'));
+  assert.ok(archiveRequest.endsWith(`${BASE}/1.0.0/vonvon-server-1.0.0-linux-x64.tar.gz`));
+  assert.match(archiveRequest, /--speed-limit 1 --speed-time 15/);
+  assert.doesNotMatch(archiveRequest, /--max-time/);
   // the temporary directory is gone
-  const temporary = /-o (\S+)\/manifest\.json/.exec(curls[0])?.[1];
+  const temporary = /-o (\S+)\/(?:domestic|global)\/manifest\.json/.exec(curls[0])?.[1];
   assert.ok(temporary && !(await f.exists(temporary)));
 });
 
@@ -225,7 +268,7 @@ test('without OpenSSL 3 the signature is not checked, and the script says so; wi
   assert.equal(run.code, 4);
   assert.match(run.stderr, /签名不对/);
   assert.equal(await bad.exists(join(bad.root, 'releases')), false);
-  assert.equal((await bad.curls()).length, 1);
+  assert.equal((await bad.curls()).length, 2);
 });
 
 test('a manifest that is not exactly the C1 shape is refused before the package is fetched', async t => {
@@ -249,7 +292,7 @@ test('a manifest that is not exactly the C1 shape is refused before the package 
     await f.publish(payload);
     const run = await f.run('install.sh');
     assert.equal(run.code, 4, `${name}: ${run.stderr}`);
-    assert.equal((await f.curls()).length, 1, name);
+    assert.equal((await f.curls()).length, 2, name);
     assert.equal(await f.exists(join(f.root, 'releases')), false, name);
   }
   // notes, the one optional key, last
@@ -270,6 +313,111 @@ test('a package that does not match the manifest is refused: hash, then size, an
   assert.equal(run.code, 4);
   assert.match(run.stderr, /大小/);
   assert.doesNotMatch(run.stderr, /sha512/);
+});
+
+test('a ready overseas manifest wins without waiting for a stalled domestic connection and reaps its curl', async t => {
+  const f = await fixture(t);
+  await f.ready(); await f.mirror();
+  await f.network({ domestic: { manifest: { delay: 30_000 } } });
+  const run = await f.run('install.sh');
+  assert.equal(run.code, 0, run.stderr);
+  const events = await f.events();
+  assert.ok(run.elapsed < 5000, JSON.stringify(run));
+  const domestic = events.find(event => event.origin === 'domestic' && event.kind === 'manifest');
+  const archive = events.find(event => event.kind === 'package');
+  assert.equal(archive.origin, 'global');
+  assert.ok(archive.at - domestic.at < 1800, JSON.stringify(events));
+  assert.throws(() => process.kill(domestic.pid, 0), { code: 'ESRCH' });
+  assert.equal(events.filter(event => event.kind === 'package').length, 1);
+  assert.equal(await readlink(join(f.root, 'current')), 'releases/1.0.0');
+});
+
+test('terminating an installer during parallel probes stops both owned curl children', async t => {
+  const f = await fixture(t);
+  await f.ready(); await f.mirror();
+  await f.network({ domestic: { manifest: { delay: 30_000 } }, global: { manifest: { delay: 30_000 } } });
+  const child = spawn(SH, [join(f.base, 'scripts', 'install.sh')], { env: { ...process.env, HOME: f.home, PATH: f.path }, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => child.kill('SIGTERM'));
+  const closed = once(child, 'close');
+  let events = [];
+  for (const deadline = Date.now() + 4000; Date.now() < deadline;) {
+    events = await f.events().catch(() => []);
+    if (events.length === 2) break;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.equal(events.length, 2);
+  child.kill('SIGTERM');
+  const [code] = await closed;
+  assert.equal(code, 130);
+  for (const event of events) assert.throws(() => process.kill(event.pid, 0), { code: 'ESRCH' });
+  assert.deepEqual(await f.calls(), []);
+});
+
+test('domestic manifest arriving during the short preference window keeps the artifact domestic', async t => {
+  const f = await fixture(t);
+  await f.ready(); await f.mirror();
+  await f.network({ domestic: { manifest: { delay: 150 } } });
+  const run = await f.run('install.sh');
+  assert.equal(run.code, 0, run.stderr);
+  assert.deepEqual((await f.events()).filter(event => event.kind === 'package').map(event => event.origin), ['domestic']);
+});
+
+test('a fast malformed mirror manifest cannot win over a slower valid domestic manifest', async t => {
+  const f = await fixture(t);
+  await f.ready(); await f.mirror();
+  await f.network({ domestic: { manifest: { delay: 450 } }, global: { manifest: { corrupt: true } } });
+  const run = await f.run('install.sh');
+  assert.equal(run.code, 0, run.stderr);
+  assert.deepEqual((await f.events()).filter(event => event.kind === 'package').map(event => event.origin), ['domestic']);
+});
+
+test('parallel selection verifies the actual Ed25519 signature before a mirror can win', { skip: !availableOpenSSL }, async t => {
+  const f = await fixture(t);
+  await f.ready(); await f.mirror();
+  const executable = `'${availableOpenSSL.replaceAll("'", "'\\''")}'`;
+  await shim(f.shims, 'openssl', `exec ${executable} "$@"`);
+  const file = join(f.globalCdn, 'stable', 'manifest.json');
+  const envelope = JSON.parse(await readFile(file, 'utf8'));
+  envelope.signature = Buffer.alloc(64).toString('base64');
+  await writeFile(file, JSON.stringify(envelope));
+  await f.network({ domestic: { manifest: { delay: 450 } } });
+  const run = await f.run('install.sh');
+  assert.equal(run.code, 0, run.stderr);
+  assert.doesNotMatch(run.stdout, /没能核对发布签名/);
+  assert.deepEqual((await f.events()).filter(event => event.kind === 'package').map(event => event.origin), ['domestic']);
+});
+
+test('a redirect response cannot win even if its body contains an otherwise valid signed manifest', async t => {
+  const f = await fixture(t);
+  await f.ready(); await f.mirror();
+  await f.network({ domestic: { manifest: { status: 302 } } });
+  const run = await f.run('install.sh');
+  assert.equal(run.code, 0, run.stderr);
+  assert.deepEqual((await f.events()).filter(event => event.kind === 'package').map(event => event.origin), ['global']);
+});
+
+test('an interrupted or corrupt artifact restarts from the other trusted source and verifies the whole file', async t => {
+  for (const answer of [{ partial: 32, code: 28 }, { corrupt: true }]) {
+    const f = await fixture(t);
+    await f.ready(); await f.mirror();
+    await f.network({ domestic: { package: answer }, global: { manifest: { delay: 150 } } });
+    const run = await f.run('install.sh');
+    assert.equal(run.code, 0, run.stderr);
+    assert.deepEqual((await f.events()).filter(event => event.kind === 'package').map(event => event.origin), ['domestic', 'global']);
+    assert.equal(await readlink(join(f.root, 'current')), 'releases/1.0.0');
+    assert.ok((await f.curls()).filter(line => line.endsWith('.tar.gz')).every(line => !line.includes('--continue-at')));
+  }
+});
+
+test('both corrupt artifact copies fail closed before extraction or setup', async t => {
+  const f = await fixture(t);
+  await f.ready(); await f.mirror();
+  await f.network({ domestic: { package: { corrupt: true } }, global: { package: { corrupt: true } } });
+  const run = await f.run('install.sh');
+  assert.equal(run.code, 4, run.stderr);
+  assert.match(run.stderr, /sha512/);
+  assert.deepEqual(await f.calls(), []);
+  assert.equal(await f.exists(join(f.root, 'releases')), false);
 });
 
 test('a package with a path out of its directory, or a link, is refused before anything lands', async t => {
@@ -507,7 +655,7 @@ test('a setup that fails keeps the release; the next run skips the download and 
   await rm(join(f.shims, 'curl.log'));
   run = await f.run('install.sh');
   assert.equal(run.code, 0, run.stderr);
-  assert.deepEqual((await f.curls()).length, 1);
+  assert.deepEqual((await f.curls()).length, 2);
   assert.match(run.stdout, /不再下载/);
 });
 

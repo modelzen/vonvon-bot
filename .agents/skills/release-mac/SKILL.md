@@ -9,12 +9,12 @@ description: 发布 Vonvon Bot：固定版本与 main SHA，编排 macOS、Windo
 
 ## 默认发布入口
 
-普通双平台发版默认按 [双平台编排](../../../docs/release-orchestration.md) 执行，不要求用户点名本技能或优化方案：
+普通三平台发版默认按 [三平台编排](../../../docs/release-orchestration.md) 执行，不要求用户点名本技能或优化方案：
 
-1. 固定 owner 验收过的 main 完整 SHA 和两平台同一新版本。用 `scripts/release-all.mjs build`（中断用 `resume`）准备候选；Windows 完成后自动下载，与 Mac 等待重叠，下载子进程默认复用现有代理。
-2. 用 `scripts/release-publish.mjs plan --out "$OUT"` 生成统一上传计划。展示版本、来源、对象摘要及计划哈希；本轮已授权完整发布时，直接执行 `upload --out "$OUT" --plan-sha256 "$PLAN_SHA256"`，Mac/Windows 上传并行。
+1. 固定 owner 验收过的 main 完整 SHA 和三平台同一新版本。用 `scripts/release-all.mjs build`（中断用 `resume`）准备候选；Windows 完成后自动下载，与 Mac 等待重叠，下载子进程默认复用现有代理。
+2. 用 `scripts/release-publish.mjs plan --out "$OUT"` 生成统一上传计划。展示版本、来源、对象摘要及计划哈希；本轮已授权完整发布时，直接执行 `upload --out "$OUT" --plan-sha256 "$PLAN_SHA256"`，Mac/Windows/Linux 版本化对象并行上传；源码启用 R2 镜像时，同一计划还包含 Linux 镜像上传。
 3. 展示公网验证回执，按上面的候选确认规则取得最终确认。用 `promote --out "$OUT" --plan-sha256 "$PLAN_SHA256" --owner-confirmation "$OWNER_MESSAGE"` 切 stable；原样传 owner 回复，不能合成授权文字。
-4. `promote` 自动收集 `release-handoff.json`；按官网既有发布工具消费六个下载入口、更新日志、测试、部署预演和部署，再核对页面入口。完整发布请求已包含官网更新，不再额外询问同一部署。完成状态与临时源码清理分别记录。
+4. `promote` 自动收集 `release-handoff.json`；按官网既有发布工具消费四个桌面安装包入口、Linux 安装命令、更新日志、测试、部署预演和部署，再核对页面入口。完整发布请求已包含官网更新，不再额外询问同一部署。完成状态与临时源码清理分别记录。
 
 失败后使用原 OUT/版本/SHA，先 `status`，再重跑失败子命令；不得因网络失败重建已验证候选。旧手工候选没有编排状态时，才用下面的底层 helper 诊断与恢复。
 
@@ -57,22 +57,25 @@ description: 发布 Vonvon Bot：固定版本与 main SHA，编排 macOS、Windo
 
 ## 公开发布与撤回
 
-COS 写入只用 `scripts/release-cos-publish.mjs`，不得现场拼命令直接上传，用法见 [workflow.md](references/workflow.md)。先跑它的 `plan`，COS 零写入：核对本地证据和 `--local-only`，取线上 manifest 新快照，重算最高历史版本，确认 bucket 从未开启版本控制，把每个写操作写进 `OUT/publish-plan.json` 并打印它的 SHA-256。先展示 `plan` 的输出和这个哈希，再在本轮已获准的上传范围内用该哈希跑 `upload`；完整发布已授权上传，不重复提问；`upload` 只传版本化对象，带 `x-cos-forbid-overwrite: true`，不碰 manifest。写入的 key 另配 `--cos-write-config`，和只读枚举的 `--cos-config` 分开，写入、切换前都查 `--cancel-file`。只问 profile／配置路径，不索要密钥明文，不回显凭据文件，不把密钥放命令行；COS 凭据（启用了 CDN 时还有 CDN 凭据）分别确认存在和权限。
+COS 写入只用 `scripts/release-cos-publish.mjs`，不得现场拼命令直接上传，用法见 [workflow.md](references/workflow.md)。先跑它的 `plan`，COS 零写入：核对本地证据和 `--local-only`，取线上 manifest 新快照，重算最高历史版本，确认 bucket 从未开启版本控制，把每个写操作写进 `OUT/publish-plan.json` 并打印它的 SHA-256。先展示 `plan` 的输出和这个哈希，再在本轮已获准的上传范围内用该哈希跑 `upload`；完整发布已授权上传，不重复提问；`upload` 只传版本化对象，带 `x-cos-forbid-overwrite: true`，不碰 manifest。写入的 key 另配 `--cos-write-config`，和只读枚举的 `--cos-config` 分开，写入、切换前都查 `--cancel-file`。只问 profile／配置路径，不索要密钥明文，不回显凭据文件，不把密钥放命令行；COS 写入凭据与 R2 镜像凭据分别确认存在和权限；CDN bypass 模式不需要每次发版调用刷新 API。
 
 版本化 ZIP/feed/DMG 上传后，`upload` 用 `scripts/verify-public-release.mjs --versioned-only` 核验公网 HTTPS、完整 SHA-256 和每个对象的响应头（表见 workflow.md），通过后追加台账并打印它输出的 JSON（版本、源码 SHA、公证 submission ID、公开 URL 和哈希）。把这份 JSON 展示给 owner，再按本文开头那条规则取得确认，才可用 `promote` 最后切 stable manifest，`--owner-confirmation` 原样填 owner 那条消息。工具将回复绑定准确计划；带 `--reviewed-plan` 时接受简短肯定回复，旧完整格式也兼容。工具核不了是谁发的，只能填本文开头规则认的 owner 原话。使用 `scripts/verify-public-release.mjs` 复核固定 URL，不能跟随重定向或加随机 query 绕缓存；必须看到它的成功输出才算通过，不能只看退出码。只有公网复核通过才报告发布完成，并持久保存发布回执（`promote` 写 `OUT/publish-receipt.json`；复核失败时它不自动撤回，打印撤回命令并以非零退出）。复核因为网络抖动这类一时的原因失败，或者 `promote` 中途断了，用同一个计划哈希跑 `reverify` 补完复核和回执，它不写 COS；不再跑 `promote`。
 
-manifest 使用 `Cache-Control: no-cache` 和 `application/json`，如果启用了 CDN 就配短 TTL／重验证；版本化文件使用 `public, max-age=31536000, immutable`，feed 也必须是 `application/json`。头传错了按 workflow.md 用 `fix-headers` 只改元数据，不覆盖字节、不废版本号。更新格式保持 Squirrel.Mac 的 manifest `{version, feedURL}`、feed `{url, name, notes, pub_date}`，同源 HTTPS。回滚只恢复事先验证并保存在计划里的旧 manifest（`rollback --restore-previous`；首发用 `rollback --delete-first-release-manifest` 只删 manifest；启用了 CDN 就刷新）以停推，`--dry-run` 只打印、不留记录；撤回过的候选不能再 `plan`、`upload`、`promote`；已升级客户端不降级，修复版必须高于**曾发布的最高版本**。
+manifest 使用 `Cache-Control: no-cache` 和 `application/json`；启用腾讯 CDN 时只支持显式的 `cdn: {provider: "tencent", mutablePolicy: "bypass"}`，可变对象及错误响应不缓存，具体路径和首次迁移步骤见 workflow.md；版本化文件使用 `public, max-age=31536000, immutable`，feed 也必须是 `application/json`。头传错了按 workflow.md 用 `fix-headers` 只改元数据，不覆盖字节、不废版本号。更新格式保持 Squirrel.Mac 的 manifest `{version, feedURL}`、feed `{url, name, notes, pub_date}`，同源 HTTPS。回滚只恢复事先验证并保存在计划里的旧 manifest（`rollback --restore-previous`；首发用 `rollback --delete-first-release-manifest` 只删 manifest；CDN bypass 下复核固定 URL，不做例行刷新）以停推，`--dry-run` 只打印、不留记录；撤回过的候选不能再 `plan`、`upload`、`promote`；已升级客户端不降级，修复版必须高于**曾发布的最高版本**。
 
 ## Linux 服务端包
 
 0.9.0 起每次发布同时发 Linux 服务端的两个包（linux-x64、linux-arm64），版本号和 macOS、Windows 相同。不是 Linux 的机器装桌面端安装包，里面带着服务端。
 
 - 签名钥匙：服务端的发布清单用单独的 Ed25519 钥匙签名，不和 Windows 的更新钥匙共用。第一次发布前，在 owner 的 Mac 上用 `node scripts/server-update-signing.mjs create-key --out <外部绝对路径>` 生成一次（文件 0600，已存在就拒绝），把它打印的 base64 公钥写进 `packages/daemon/server-update.json` 的 `publicKey`，PEM 写进 `scripts/install.sh` 的 `# BEGIN VONVON PUBKEY` 块，走 PR 合入后再从那个 main SHA 发布。私钥不进仓库，不贴、不打印；备份方式由 owner 定。
-- 发布配置：默认 `~/.config/vonvon-release/cos-server.json`（或 `--server-cos-config`），只写 bucket、region、`prefix: "bot/server/"`、`publicBaseURL: "https://dl.vonvon.cc/bot/server"`、凭据的环境变量名和 `updatePrivateKeyFile`（私钥的绝对路径，0600）。0.9.0 起这个文件必须在，最晚在 `plan` 之前建好：没有它，或者 `release-all` 的状态里没有打好的服务端包，`plan` 直接拒绝，不能只发 macOS 和 Windows；按以前的规则存下、没有服务端的计划，`upload`、`promote` 也拒绝，配好后重新 `plan`。0.9.0 以前的版本没有这个文件时，`plan` 写明"服务端未配置"，只发 macOS 和 Windows。
+- 发布配置：默认 `~/.config/vonvon-release/cos-server.json`（或 `--server-cos-config`），只写 bucket、region、`prefix: "bot/server/"`、`publicBaseURL: "https://dl.vonvon.cc/bot/server"`、凭据的环境变量名和 `updatePrivateKeyFile`（私钥的绝对路径，0600），启用 CDN 时另加上述 `cdn` 策略。0.9.0 起这个文件必须在，最晚在 `plan` 之前建好：没有它，或者 `release-all` 的状态里没有打好的服务端包，`plan` 直接拒绝，不能只发 macOS 和 Windows；按以前的规则存下、没有服务端的计划，`upload`、`promote` 也拒绝，配好后重新 `plan`。0.9.0 以前的版本没有这个文件时，`plan` 写明"服务端未配置"，只发 macOS 和 Windows。
 - 构建：`release-all.mjs build` 在两个 Mac 架构之后把两个包打进 `OUT/server/`（`vonvon-server-<v>-linux-x64.tar.gz`、`…-linux-arm64.tar.gz` 和构建记录 `vonvon-server-<v>-build.json`），Node 按 `scripts/server-node.json` 的钉值核过才用，缓存在 `OUT/node-cache`。构建记录的 `updateKey` 必须是 `release`：带 `--update-public-key` 打的测试包（`test`）和仓库里还没有公钥时打的包（`none`），`plan` 一律拒绝。
 - `plan`：签一份 stable 清单（`OUT/server/stable-manifest.json`，只签一次，之后复用），核对私钥、`server-update.json`、包里的公钥和 `install.sh` 里的公钥是同一把，读一次线上的 stable 快照；线上比这次新、同版本却是另一份、或者 `publishedAt` 不比这次早，都拒绝。给 owner 看的除了 macOS、Windows 的对象，还有服务端两个包的 sha512 和大小、未签名的 `<v>/manifest.json`、签名清单的 `publishedAt` 和要切的三个 stable 对象，都在同一个计划哈希里。
 - `upload`：两个包、构建记录和未签名清单写到 `bot/server/<v>/`，禁止覆盖，逐个公网复核，回执是 `OUT/server/server-publish-receipt.json`。经 #322／Paseo 的发布任务做到这里就停。
 - `promote`：排在 macOS、Windows 之后，先写 `install.sh`、`uninstall.sh`，最后写签名清单 `bot/server/stable/manifest.json`，都是 `no-cache`。写第一个对象之前读一次线上清单，必须还是 `plan` 时的那份（重跑时也可以已经是这次的），不是就三个对象一个都不写；写清单之前再读一次，和 `plan` 时不同就停。切 stable 的确认规则和本文开头那条一样。只有服务端没切成时，用同一个计划哈希重跑 `promote`：已经切好的 macOS、Windows 只复核、不再写。回执是 `OUT/server/server-stable-receipt.json`；`release-handoff.json` 的 `server` 一项带安装命令和两个包，0.9.0 起 `readyForWebsite` 要等这份回执是 `published`。
+- R2 镜像：源码 `packages/daemon/server-update.json` 的 `mirrorBaseURLs` 与构建记录必须一致。启用了镜像时，统一 `plan` 必须读取 `~/.config/vonvon-release/r2-linux.json`（或 `--r2-config`），其中 `publicBaseURL` 必须与包内镜像完全相同，不能临时去掉镜像绕过配置；配置哈希和镜像完整计划一起绑定 owner 看过的统一计划。只复制 Linux 包、原签名清单和脚本，不上传桌面包，不重签或改写规范 URL。外部配置和固定 SDK 安装见 [workflow.md](references/workflow.md#linux-r2-镜像)。
+- R2 顺序与回执：版本化对象与三平台 COS 上传并行，完整字节公开验证通过后才可切 stable；R2 stable 在 COS 服务端 stable 公开验证后同步。`server/r2-publish-receipt.json`、`server/r2-stable-receipt.json` 必须与内外两层计划哈希、版本、源码及对象摘要匹配。镜像失败时保留其余回执，同一个计划续跑；官网交接必须等待镜像验证成功，不能只凭 COS 成功宣告整轮完成。最终 stable 确认仍遵守本文开头的准确候选规则，续跑同一候选沿用已取得的原始回复。
+- 官网安装命令：使用 `release-handoff.json` 的 `server.installCommand` 完整多行内容，或同一 `OUT/linux-install-command.sh` 的内容。该命令最外层就并行获取完整安装脚本，不可替换成单域名 `curl`。0.9.1 旧包的更新器与旧安装脚本仍为单源，复制到 R2 不会改变行为；双源能力随包含新代码的正式包和脚本发布，不用开发脚本覆盖旧正式版本。
 - 回退：装好的服务端不接受比自己见过的更低的版本，所以 stable 不能指回旧版本；有问题就发一个版本号更高的修复版。
 - 证据：两个包的 sha512 和大小、未签名清单、签名清单的 `publishedAt`、两份回执。
 

@@ -4,7 +4,7 @@ import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {createRequire} from 'node:module';
-import {createServer,request,type IncomingMessage,type RequestOptions,type Server} from 'node:http';
+import {Agent,createServer,request,type IncomingMessage,type RequestOptions,type Server} from 'node:http';
 import {gzipSync} from 'node:zlib';
 import {CURRENT_APP_INSTALLER_FILE_NAME} from 'builder-util-runtime';
 import type {ProviderRuntimeOptions} from 'electron-updater/out/providers/Provider.js';
@@ -156,6 +156,10 @@ async function differentialFixture(options:{architecture?:'x64'|'arm64';missingC
   const installerPath=new URL(payload.url).pathname;
   const oldMapPath=installerPath.replaceAll('1.1.0','1.0.0')+'.blockmap';
   const requests:HttpRecord[]=[];
+  // Electron net owns a persistent network session. Reuse the Node fixture's
+  // connection too, keeping fresh socket fd allocation out of the downloader's
+  // asynchronous file cleanup when differential download falls back to full.
+  const agent=new Agent({keepAlive:true,maxSockets:1});
   const server=createServer((req,res)=>{
     const path=new URL(req.url!,'http://localhost').pathname;
     // Copy the primitive Range value now; the downloader reuses its headers object.
@@ -178,6 +182,7 @@ async function differentialFixture(options:{architecture?:'x64'|'arm64';missingC
     return send(206,options.corruptRange?Buffer.alloc(body.length):body,`bytes ${start}-${end}/${newInstaller.length}`);
   });
   servers.push(server);
+  server.on('close',()=>agent.destroy());
   await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
   const address=server.address();if(!address||typeof address==='string')throw Error('Missing fixture server address');
   const require=createRequire(import.meta.url),adapter=require('electron-updater/out/ElectronAppAdapter.js'),{AppUpdater}=require('electron-updater/out/AppUpdater.js');
@@ -195,7 +200,7 @@ async function differentialFixture(options:{architecture?:'x64'|'arm64';missingC
     // Inherited request/download/downloadToBuffer retain real streaming/hash logic.
     // No redirects/uploads in this fixture; those Electron-only request methods
     // are intentionally not emulated by the Node socket adapter.
-    return request({hostname:'127.0.0.1',port:address.port,path:opts.path,method:opts.method,headers:{...opts.headers},agent:false},callback) as unknown as ReturnType<ElectronHttpExecutor['createRequest']>;
+    return request({hostname:'127.0.0.1',port:address.port,path:opts.path,method:opts.method,headers:{...opts.headers},agent},callback) as unknown as ReturnType<ElectronHttpExecutor['createRequest']>;
   });
   const runtimeSpy=vi.spyOn(AppUpdater.prototype,'createProviderRuntimeOptions');
   const driver=createWindowsUpdateDriver(publicKey,architecture);
@@ -243,7 +248,10 @@ it.each(['missingCache','failRange','corruptRange'] as const)('falls back to a v
   expect(h.full()).toEqual([expect.objectContaining({status:200,bytes:newInstaller.length})]);
   if(failure==='missingCache')expect(h.ranges()).toHaveLength(0);
   else expect(h.ranges().length).toBeGreaterThan(0);
-  if(failure==='failRange')expect(h.ranges().some(r=>r.status===416)).toBe(true);
+  if(failure==='failRange'){
+    expect(h.ranges().some(r=>r.status===416)).toBe(true);
+    expect(h.logger.error).toHaveBeenCalledWith(expect.stringContaining('fallback to full download: HttpError: 416'));
+  }
   expect(h.ranges().every(r=>/^bytes=\d+-\d+$/.test(r.range!))).toBe(true);
   expect(h.logger.error).toHaveBeenCalledWith(expect.stringContaining('fallback to full download'));
   expect(readFileSync(h.installerPathOnDisk())).toEqual(newInstaller);

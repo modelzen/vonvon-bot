@@ -89,6 +89,10 @@ node scripts/release-publish.mjs status --out "$OUT"
 
 服务端的 stable 不能回退：装好的服务端只接受比当前和见过的最高版本都新的版本，签名清单的 `publishedAt` 也只能往后。发现问题就发一个版本号更高的修复版，不把 stable 指回旧版本。
 
+国内下载域名继续使用 `dl.vonvon.cc`；COS 存原文件，国内 CDN 提供下载。海外镜像只存 Linux 两个包、原签名清单和脚本，不复制 Mac、Windows 安装包。镜像使用相同的字节和相对路径，不重签清单、不改清单里的规范 URL。统一发布计划带 `candidate.r2` 时，官网交接还要求 `server/r2-stable-receipt.json` 的公开验证成功，且内外两层计划哈希、版本、源码和 stable 对象摘要全部匹配。
+
+双源逻辑随新安装脚本和服务端包发布。现有 0.9.1 的更新器仍只用国内源，把 0.9.1 文件复制到 R2 不能改变它的行为；不要独立发布开发分支安装脚本。安装命令、选择策略和旧版本边界见 [Linux 服务端安装](server-install.md)。
+
 ## 官网交接
 
 ```sh
@@ -98,6 +102,10 @@ node scripts/release-all.mjs collect --out /absolute/persistent/release-X.Y.Z
 `release-handoff.json` 从已有公开验证回执收集下载入口及尺寸/哈希，不拼接猜测已发布 URL。新 Windows 候选不再生成 ZIP：两个 Mac DMG 加两个 Windows Setup，共四个用户入口；旧版六入口回执仍可读取。只有两平台同版本、同源码、Windows run 成功且下载来源匹配、Mac 版本化验证通过且 stable 回执为 `published` 时，`readyForWebsite` 才为 `true`；0.9.0 起（0.9.0 以前是统一计划里有服务端时），还要服务端 stable 回执为 `published` 且属于这份计划。`server` 一项给出 Linux 的安装命令和两个包，不进 `downloads`：官网的下载入口仍是 macOS 和 Windows 安装包。新 Windows 候选另外生成架构独立的签名更新清单，统一计划绑定其字节与旧 stable 快照；owner 确认后，在安装包公网验证完成的基础上提升 `stable/x64/update.json` 与 `stable/arm64/update.json`。两份 feed 均验证后写独立 `windows-update-publish-receipt.json`，官网只有匹配此回执才宣告应用内更新可用。缺少阶段只输出未完成状态；版本、来源或 URL 矛盾直接失败。
 
 官网消费 `downloads` 更新发布配置，再走网站既有测试、部署预演和部署；owner 的完整发布请求已包括官网更新，不重复请求同一部署授权。`evidence` 保存本机证据路径，不能原样复制到公开网站。编排脚本不会自动修改网站或报告部署成功。发布完成后保留 OUT，只用 `git worktree remove` 清理本次状态记录的源码 worktree；临时根按 skill 删除规则处理。
+
+旧安装包由独立的每日存储维护处理，规则见 [发布存储保留策略](release-storage-retention.md)：本地最近 3 版完整包包含 Linux 两架构，COS 三端和 R2 统一保留最近 5 版并叠加引用与时间保护；证据、回执和哈希长期留存。维护不切 stable，也不能依赖 CDN 缓存来补偿删除源文件。
+
+Linux 的复制按钮读取 `server.installCommand` 的完整多行字符串；相同内容保存到 `OUT/linux-install-command.sh`，便于核对与复制。它由 `scripts/install-command.mjs` 从已测试的 `scripts/install-bootstrap.sh` 生成，最外层就并行获取国内、海外两个完整安装脚本，没有单源引导依赖。不要折叠换行或替换回旧的单域名 `curl` 命令，也不要将本机的 `evidence.linuxInstallCommand` 路径当成公开 URL。双源下载可用性须在新脚本、包和镜像全部上线后另行验收。
 
 ## 验证依据
 
