@@ -2083,3 +2083,7 @@ Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bo
 ## 2026-11-02 桌面更新检查频率
 
 - [x] 按 owner 确认改为启动完成 2 分钟、此后固定 90 分钟，北京时间 05:00～次日 02:00 自动检查；夜间跳过保留各自节奏，唤醒时补一次已到期检查。首次失败也继续循环，手动检查不受时段限制。方案与验收要点见 `docs/plans/desktop-update-cadence.md`；本次自测、独立审查及三平台 CI 证据记录在 PR，仅合入 dev。
+
+## 2026-11-04 Windows 命令行
+
+- [x] 按 owner 要求补齐 Windows 桌面端的 `vonvon` 注册，复用安装包内 Electron 和 daemon CLI，提供原生 Console 入口和当前用户 PATH；保留其他 PATH 条目，支持中文安装目录和 PATH 修复，无需系统 Node。计划见 `docs/plans/windows-cli.md`，使用见 `docs/windows-cli.md`。原生终端、隔离注册表测试与 CI 证据随本次 PR 记录；安装包和 owner 验收另行记录。

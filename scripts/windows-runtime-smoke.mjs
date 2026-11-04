@@ -61,6 +61,10 @@ export async function verifyWindowsRuntime(appDirectory, { timeoutMs = 90000, re
     const { stdout } = await exec(executable, [cli, 'daemon', 'status', '--json'], { env, windowsHide: true, timeout: 10000, maxBuffer: 16384 });
     const status = JSON.parse(stdout);
     if (!status.running || status.pid !== child.pid || status.listen !== ready.listen) throw new Error('Packaged daemon authenticated status failed');
+    // Exercise the public Console launcher as well as direct Electron, without registering a real user PATH.
+    const launcher = join(appDirectory, 'resources/cli/vonvon.exe');
+    const launched = JSON.parse((await exec(launcher, ['daemon', 'status', '--json'], { env, windowsHide: true, timeout: 15000, maxBuffer: 16384 })).stdout);
+    if (!launched.running || launched.pid !== child.pid || launched.listen !== ready.listen) throw new Error('Packaged vonvon launcher authenticated status failed');
     const response = await fetch(`http://${ready.listen}/`, { signal: AbortSignal.timeout(10000) });
     if (!response.ok || !(await response.text()).includes('<html')) throw new Error('Packaged daemon did not serve the built UI');
     const provider = await verifyPackagedProvider(ready.listen, home, fixture);
@@ -68,7 +72,7 @@ export async function verifyWindowsRuntime(appDirectory, { timeoutMs = 90000, re
     await boundedWait(closed, 10000);
     if (!exit || exit.code !== 0) throw new Error('Packaged daemon shutdown was not confirmed');
     success = true;
-    return { runtimeStarted: true, authenticatedStatus: true, builtUiServed: true, cleanShutdown: true, provider };
+    return { runtimeStarted: true, authenticatedStatus: true, cliLauncher: true, builtUiServed: true, cleanShutdown: true, provider };
   } finally {
     if (!exit && child.pid) {
       if (!child.stdin.destroyed) child.stdin.end('shutdown\n');
