@@ -23,6 +23,30 @@ export interface WindowsUpdateDriver {
 export function allowedWindowsUpdateRequest(value:string):boolean {
   try {const url=new URL(value);return url.origin==='https://dl.vonvon.cc'&&url.pathname.startsWith('/bot/windows/')&&!url.username&&!url.password;}catch{return false;}
 }
+const guardedRangeExecutors=new WeakSet<object>();
+/** electron-updater 6.8.11 rejects a failed single range but still pipes its body and advances to the next COPY.
+ * Report that HTTP error through the request instead, before the differential callback can touch the failed response.
+ * The updater retains its ordinary full-download fallback and final integrity checks. */
+export function rejectFailedWindowsRanges(executor:Pick<ProviderRuntimeOptions['executor'],'createRequest'>):void {
+  if(guardedRangeExecutors.has(executor))return;
+  guardedRangeExecutors.add(executor);
+  const createRequest=executor.createRequest.bind(executor);
+  executor.createRequest=(options,callback)=>{
+    const range=Object.entries(options.headers??{}).some(([key,value])=>key.toLowerCase()==='range'&&Boolean(value));
+    if(!range)return createRequest(options,callback);
+    let failed=false;
+    const request=createRequest(options,response=>{
+      if(failed)return;
+      if((response.statusCode??0)<400)return callback(response);
+      failed=true;
+      // Aborting can emit a response error; this response deliberately has no downloader listeners.
+      response.on('error',()=>{});
+      try {request.emit('error',new Error(`Differential update request failed: HTTP ${response.statusCode}`));}
+      finally {request.abort();}
+    });
+    return request;
+  };
+}
 /** The provider returns only metadata decoded from a verified, architecture-specific envelope. */
 export function createWindowsUpdateDriver(publicKey?:string,architecture=process.arch):NsisUpdater {
   class SignedProvider extends GenericProvider {
@@ -30,6 +54,7 @@ export function createWindowsUpdateDriver(publicKey?:string,architecture=process
       // COS/CDN may reject multipart Range or return only its first range.
       // Keep differential downloads, but fetch each changed range separately.
       super({provider:'generic',url:WINDOWS_UPDATE_URL},updater,{...runtime,isUseMultipleRangeRequest:false});
+      rejectFailedWindowsRanges(runtime.executor);
     }
     override async getLatestVersion() {
       if(!publicKey||!['x64','arm64'].includes(architecture))throw Error('Windows update trust is not configured');
