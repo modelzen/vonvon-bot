@@ -96,7 +96,7 @@ it.each([
   ['missing', 'unknown'], ['installed', 'unknown'], ['installed', 'signedOut'],
 ] as const)('keeps scan unavailable while Provider is %s / %s', (installation, authentication) => {
   const data = snapshot([tool('codex', installation, authentication)]);
-  const first = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenEnvironment: () => {}, onNotice: () => {}}));
+  const first = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenProviders: () => {}, onNotice: () => {}}));
   expect(first.some(node => node.type === ProviderSetup)).toBe(true);
   expect(first.some(node => node.props.children === '添加 Bot')).toBe(false);
   expect(first.some(node => node.props['data-testid'] === 'bridge-import')).toBe(false); // nested BridgeImportPanel remains reachable
@@ -112,7 +112,7 @@ it.each([
 it('changes Provider explicitly, then Continue opens Bot creation with the same Provider', () => {
   const data = snapshot([tool('codex', 'installed', 'signedIn'), tool('claude', 'installed', 'signedIn')]);
   resetRender();
-  let welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenEnvironment: () => {}, onNotice: () => {}}));
+  let welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenProviders: () => {}, onNotice: () => {}}));
   const setup = welcome.find(node => node.type === ProviderSetup)!;
   expect(setup).toBeTruthy();
   resetRender();
@@ -128,7 +128,7 @@ it('changes Provider explicitly, then Continue opens Bot creation with the same 
   const card = nodes(ProviderPreparation({...setup.props, provider: 'claude'} as any));
   button(card, '继续').props.onClick();
   resetRender();
-  welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenEnvironment: () => {}, onNotice: () => {}}));
+  welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenProviders: () => {}, onNotice: () => {}}));
   expect(welcome.some(node => node.props.children === '添加 Bot')).toBe(true);
   button(welcome, '添加 Bot').props.onClick();
   expect(harness.onCreateBot).toHaveBeenCalledWith('claude');
@@ -138,7 +138,7 @@ it('changes Provider explicitly, then Continue opens Bot creation with the same 
 it('keeps existing Bot Feishu checks and group action after Provider is ready', () => {
   const data = snapshot([tool('codex', 'installed', 'signedIn')], [bot]);
   resetRender();
-  const welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onOpenGroups: () => {}, onOpenEnvironment: () => {}, onNotice: () => {}}));
+  const welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onOpenGroups: () => {}, onOpenProviders: () => {}, onNotice: () => {}}));
   expect(welcome.some(node => node.props.children === '选择群聊')).toBe(true);
   expect(welcome.some(node => node.type.name === 'SetupChecklist' && node.props.botsOnly)).toBe(true);
   expect(welcome.some(node => node.type.name === 'BridgeImportPanel')).toBe(true);

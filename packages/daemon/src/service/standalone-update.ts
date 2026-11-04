@@ -1,5 +1,5 @@
-import { createHash, randomBytes } from 'node:crypto';
-import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -11,7 +11,8 @@ import { STEADY_OWNER_MS } from '../host/restart';
 import { extractTarGz, removeStaging } from './archive';
 import { isCompleteRelease, readCurrent, switchCurrent, VERSION } from './current-release';
 import { nearestPackageRoot } from './distribution';
-import { fetchManifest, ManifestError, readServerUpdateConfig, serverTarget, type Fetch, type Manifest, type ServerUpdateConfig } from './standalone-manifest';
+import { expectedURL, fetchManifestFromSources, ManifestError, readServerUpdateConfig, serverSources, serverTarget, type Fetch, type Manifest, type ServerUpdateConfig } from './standalone-manifest';
+import { downloadServerArtifact, ServerDownloadError } from './standalone-transport';
 import { acquireUpdateLock, finishOwnedUpdate, isNewer, livePid, readUpdateStatus, tryUpdateLock, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from './update';
 
 /**
@@ -23,7 +24,7 @@ export type Refusal = 'rollback' | 'signature' | 'network' | 'config' | 'state';
 export const REFUSAL_TEXT: Record<Refusal, string> = {
   signature: '没查到新版本：发布清单的签名不对，没有应用',
   rollback: '没查到新版本：发布清单比上次看到的旧，没有应用',
-  network: '没查到新版本：连不上 dl.vonvon.cc',
+  network: '没查到新版本：连不上下载源',
   config: '没查到新版本：这个服务端包没有带发布清单的公钥',
   state: '没查到新版本：读写不了本机的更新记录 update-state.json，没有应用',
 };
@@ -108,19 +109,34 @@ async function withStateLock<T>(installRoot: string, work: () => Promise<T>): Pr
   finally { release(); }
 }
 
-async function readManifest(deps: StandaloneDeps): Promise<{ check: StandaloneCheck; manifest?: Manifest }> {
+async function readManifest(deps: StandaloneDeps): Promise<{ check: StandaloneCheck; manifest?: Manifest; sourceBaseURLs?: string[] }> {
   const base = { current: deps.currentVersion, latest: null, hasUpdate: false, channel: 'stable' as const };
   const config = (deps.config ?? packagedUpdateConfig)();
   if (!config) {
     log.warn(EVENTS, 'update-config-missing', {});
     return { check: { ...base, refused: 'config' } };
   }
+  // Read the rollback floor before racing: an old but correctly signed mirror must not cancel a usable primary.
+  // Recheck under the same lock after selection below, since another process may advance the floor meanwhile.
+  let floor: UpdateState;
+  try { floor = await inTurn(() => withStateLock(deps.installRoot, () => readState(deps.installRoot, deps.currentVersion))); }
+  catch (error) {
+    if (error instanceof StateUnusable) return { check: { ...base, refused: 'state' } };
+    throw error;
+  }
   let manifest: Manifest;
-  try { manifest = await fetchManifest(config, deps.fetch); }
+  let sourceBaseURLs: string[];
+  try {
+    const selected = await fetchManifestFromSources(config, deps.fetch, { accept: candidate => {
+      if (candidate.publishedAt < floor.lastPublishedAt || isNewer(floor.highestSeen, candidate.version)) throw new ManifestError('rollback');
+    } });
+    manifest = selected.manifest;
+    sourceBaseURLs = [selected.sourceBaseURL, ...serverSources(config).filter(source => source !== selected.sourceBaseURL)];
+  }
   catch (error) {
     const reason = error instanceof ManifestError ? error.reason : 'http';
     log.warn(EVENTS, 'update-manifest-refused', { reason });
-    return { check: { ...base, refused: reason === 'http' ? 'network' : 'signature' } };
+    return { check: { ...base, refused: reason === 'http' ? 'network' : reason === 'rollback' ? 'rollback' : 'signature' } };
   }
   return inTurn(() => withStateLock(deps.installRoot, async () => {
     const state = await readState(deps.installRoot, deps.currentVersion);
@@ -134,7 +150,7 @@ async function readManifest(deps: StandaloneDeps): Promise<{ check: StandaloneCh
       lastPublishedAt: Math.max(state.lastPublishedAt, manifest.publishedAt), lastCheckAt: (deps.now ?? Date.now)(),
     });
     // latest even when it is this version: the page shows "已是最新 0.9.0".
-    return { check: { ...base, latest: manifest.version, hasUpdate: isNewer(manifest.version, deps.currentVersion) }, manifest };
+    return { check: { ...base, latest: manifest.version, hasUpdate: isNewer(manifest.version, deps.currentVersion) }, manifest, sourceBaseURLs };
   })).catch(error => { if (error instanceof StateUnusable) return { check: { ...base, refused: 'state' as const } }; throw error; });
 }
 
@@ -244,7 +260,7 @@ export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): {
   const step = (detail: UpdateStatus['detail'], extra: Partial<UpdateStatus> = {}): UpdateStatus => write({ phase: 'installing', from, at, detail, ...extra });
   write(status);
 
-  const download = async (manifest: Manifest, version: string): Promise<void> => {
+  const download = async (manifest: Manifest, version: string, sourceBaseURLs: string[]): Promise<void> => {
     const target = serverTarget(platform, deps.arch);
     if (!target) throw new Failure(`这台电脑（${platform}-${deps.arch ?? process.arch}）没有对应的服务端包。`);
     const file = manifest.files[target];
@@ -254,31 +270,16 @@ export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): {
     try {
       await mkdir(staging, { recursive: true });
       const archive = join(staging, 'download.tar.gz');
-      let response: Response;
-      try { response = await fetcher(file.url, { signal: AbortSignal.timeout(600_000) }); }
-      catch (error) { throw new Failure(`下载失败：${error instanceof Error ? error.message : String(error)}`); }
-      const length = response.headers.get('content-length');
-      if (response.status !== 200 || !response.body || (length !== null && Number(length) !== file.size)) {
-        await response.body?.cancel().catch(() => undefined);
-        throw new Failure(response.status !== 200 ? `下载失败：HTTP ${response.status}` : '下载的大小和发布清单不一致');
-      }
-      const hash = createHash('sha512');
-      let transferred = 0;
-      let reported = 0;
-      const handle = await open(archive, 'wx', 0o600);
       try {
-        for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-          transferred += chunk.byteLength;
-          if (transferred > file.size) throw new Failure('下载的大小和发布清单不一致');
-          hash.update(chunk);
-          await handle.write(chunk);
-          if (transferred - reported >= 1024 * 1024) { reported = transferred; step('downloading', { progress: { transferred, total: file.size } }); }
-        }
+        await downloadServerArtifact({ file, destination: archive, fetcher,
+          urls: sourceBaseURLs.map(source => expectedURL(source, version, target)),
+          onRetry: () => { step('downloading', { progress: { transferred: 0, total: file.size } }); },
+          onProgress: transferred => { step('downloading', { progress: { transferred, total: file.size } }); },
+          onVerifying: transferred => { step('verifying', { progress: { transferred, total: file.size } }); },
+        });
       } catch (error) {
-        throw error instanceof Failure ? error : new Failure(`下载失败：${error instanceof Error ? error.message : String(error)}`);
-      } finally { await handle.close(); }
-      step('verifying', { progress: { transferred, total: file.size } });
-      if (transferred !== file.size || hash.digest('hex') !== file.sha512) throw new Failure('下载内容和发布清单不一致');
+        throw error instanceof ServerDownloadError ? new Failure(error.message) : error;
+      }
       log.info(EVENTS, 'update-standalone-downloaded', { version, size: file.size });
       step('unpacking');
       await (deps.extract ?? extractTarGz)(archive, staging);
@@ -310,14 +311,14 @@ export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): {
           throw new Failure(previous ? `本机没有 ${version}，只能降到保留着的上一版 ${previous}。` : `本机没有 ${version}，也没有保留着的上一版。`);
         }
       } else {
-        const { check, manifest } = await readManifest(deps);
-        if (check.refused || !manifest) throw new Failure(REFUSAL_TEXT[check.refused ?? 'network']);
+        const { check, manifest, sourceBaseURLs } = await readManifest(deps);
+        if (check.refused || !manifest || !sourceBaseURLs) throw new Failure(REFUSAL_TEXT[check.refused ?? 'network']);
         if (options.version && options.version !== manifest.version) throw new Failure(`发布清单上的版本是 ${manifest.version}，不是 ${options.version}。`);
         if (!check.hasUpdate) return write({ phase: 'done', ok: true, from, to: manifest.version, at, message: '已是最新' });
         version = manifest.version;
         // Downloaded before and not switched to: used as it is.
         if (await isCompleteRelease(root, version)) await removeStaging(root, version);
-        else await download(manifest, version);
+        else await download(manifest, version, sourceBaseURLs);
       }
       // A rollback goes back to the release running now, not to what `current` named: that may be `version` itself
       // (a switch whose restart did not happen, or the install script's).

@@ -40,7 +40,7 @@ it('uses the design 第 15 节 words for the remote service', () => {
 });
 
 // Codex review 244: toolSteps speaks of this computer whichever device is shown; the page says each step of 「X」
-it('says every tool step of a remote device of 「X」, and leaves this computer\'s as they were', () => {
+it('names the inspected device and Provider settings without changing tool status', () => {
   const installs = ['missing', 'installed', 'unknown'] as const;
   const auths = ['signedOut', 'signedIn', 'notRequired', 'unknown'] as const;
   const tool = (name: 'codex' | 'claude', installation: ToolState['installation'], authentication: ToolState['authentication'], old: boolean): ToolState =>
@@ -48,16 +48,22 @@ it('says every tool step of a remote device of 「X」, and leaves this computer
   let instructions = 0;
   for (const installation of installs) for (const authentication of auths) for (const old of [false, true]) for (const claudeChecking of [false, true]) {
     const steps = toolSteps([tool('codex', installation, authentication, old), tool('claude', installation, authentication, false)], {claudeChecking}).steps;
-    expect(toolStepsOn(LOCAL_ACTIVE_DEVICE, steps)).toEqual(steps);
+    toolStepsOn(LOCAL_ACTIVE_DEVICE, steps).forEach((shown, index) => {
+      const original = steps[index]!;
+      expect(shown).toMatchObject({id: original.id, title: original.title, status: original.status, tone: original.tone, done: original.done});
+      expect(shown.detail ?? '').not.toContain('本机环境');
+      for (const action of shown.actions) if (action.kind === 'environment') expect(action.label).toBe('打开「Provider」设置');
+    });
     for (const step of toolStepsOn(remote, steps)) {
       const words = [step.detail ?? '', ...step.actions.map(action => action.label)].join(' ');
       expect(words, `${step.id} ${installation} ${authentication} ${old}`).not.toContain('本机');
-      if (/终端|工具/.test(words)) { instructions++; expect(words).toContain('「Linux 主机」'); }
+      if (/终端|工具|Provider/.test(words)) { instructions++; expect(words).toContain('「Linux 主机」'); }
     }
   }
   expect(instructions).toBeGreaterThan(0);
   // one pass: a device whose name has 本机 in it keeps its name
-  expect(onDeviceText({isRemote: true, name: '本机房'}, '在本机环境里装，要用本机的 npm')).toBe('在「本机房」的「工具与连接」里装，要用「本机房」上的 npm');
+  expect(onDeviceText({isRemote: true, name: '本机房'}, '在本机环境里装，要用本机的 npm')).toBe('在「本机房」的「工具」里装，要用「本机房」上的 npm');
+  expect(onDeviceText({isRemote: true, name: '本机房'}, '在本机环境里装，要用本机的 npm', 'providers')).toBe('在「本机房」的 Provider 设置里装，要用「本机房」上的 npm');
   expect(onDeviceText(LOCAL_ACTIVE_DEVICE, '请在终端运行 brew upgrade codex')).toBe('请在终端运行 brew upgrade codex');
   expect(onDeviceText(remote, '请在终端运行 brew upgrade codex')).toBe('请在「Linux 主机」的终端运行 brew upgrade codex');
 });

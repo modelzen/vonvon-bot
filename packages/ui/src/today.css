@@ -64,7 +64,11 @@ html, body { min-width: 320px; min-height: 0; }
 .today-entity-row .collaboration-avatar { width: 32px; height: 32px; border-radius: var(--control-radius, 8px); }
 .today-settings-home { display: grid; gap: 20px; }
 .today-settings-row { min-height: 64px; cursor: pointer; }
-.today-setting-icon { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: var(--control-radius, 8px); color: var(--color-text-secondary); background: var(--color-surface-muted); }
+.today-setting-icon { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 7px; color: var(--color-text-secondary); background: var(--color-surface-muted); }
+.today-setting-icon[data-page="providers"], .today-setting-icon[data-page="secrets"] { color: #8254cc; background: #efe8fa; }
+.today-setting-icon[data-page="environment"], .today-setting-icon[data-page="setup"] { color: #226bc0; background: #e8f0fc; }
+.today-setting-icon[data-page="usage"], .today-setting-icon[data-page="bridgeImport"] { color: #247e76; background: #e6f2f0; }
+.today-setting-icon[data-page="devices"], .today-setting-icon[data-page="application"], .today-setting-icon[data-page="diagnostics"] { color: #68686e; background: #eeeef1; }
 .today-empty { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px; border: 1px solid var(--color-border); border-radius: var(--card-radius, 12px); background: var(--color-surface); }
 .today-empty p { margin: 0; font-size: 12px; color: var(--color-text-secondary); }
 .secrets-cli-help { margin-top: 8px; }
@@ -187,11 +191,6 @@ html, body { min-width: 320px; min-height: 0; }
 .today-page-heading--actions > .ui-button { flex: none; }
 .today-settings-section { display: grid; gap: 8px; }
 .today-settings-section > h2 { margin: 0 12px; color: var(--color-text-secondary); font-size: 12px; font-weight: 500; }
-.today-setting-icon { color: white; background: var(--color-icon-grey); }
-.today-setting-icon[data-page=providers],.today-setting-icon[data-page=secrets] { background: var(--color-icon-purple); }
-.today-setting-icon[data-page=environment],.today-setting-icon[data-page=setup] { background: var(--color-accent); }
-.today-setting-icon[data-page=usage] { background: #287d72; }
-.today-setting-icon[data-page=bridgeImport] { background: #387baa; }
 .today-window .ui-page-header { padding: 0; border: 0; background: transparent; box-shadow: none; }
 .today-window .ui-page-header h1 { font-size: var(--font-size-page-title); line-height: 1.3; font-weight: 600; }
 .today-window .ui-page-header__description { font-size: 12px; max-width: 58ch; line-height: 1.6; }

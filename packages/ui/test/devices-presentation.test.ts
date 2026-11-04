@@ -147,7 +147,7 @@ it('lets only upgrades through while the versions cannot work together', async (
 // still on the other computer, has it (审查 P3). main 必败
 it('sends people to 设置 → 设备 to make a link, or to 应用与启动 on 0.9.0', () => {
   for (const words of [copy.pasteHelp, linkPreviewCopy('invalid_link', X), failureCopy('invalid_link', X)]) {
-    expect(words).toContain('设置 → 设备 →「允许别的设备连接」里点「生成连接链接」（0.9.0 版在「应用与启动」页）');
+    expect(words).toContain('设置 → 设备连接 →「允许别的设备连接」里点「生成连接链接」（0.9.0 版在「应用与启动」页）');
     expect(words.replace('（0.9.0 版在「应用与启动」页）', '')).not.toContain('应用与启动');
   }
   const src = new URL('../src/', import.meta.url);

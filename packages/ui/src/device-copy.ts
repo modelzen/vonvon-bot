@@ -44,22 +44,27 @@ export const QUIT_KEEPS_DAEMON = {lead: '退出桌面应用不会停止后台：
  * remote device is shown. Both stay the same whichever device is looked at, so they speak of 本机 and 在终端运行; this
  * computer keeps them as they are.
  */
-export function onDeviceText(where: Where, text: string): string {
-  if (!where.isRemote) return text;
+export function onDeviceText(where: Where, text: string, environment: 'tools' | 'providers' = 'tools'): string {
+  if (!where.isRemote) return environment === 'providers' ? text.replaceAll('本机环境', '「Provider」设置') : text;
   const name = whereName(where);
   // One pass, so a device whose name has 本机 in it is not rewritten again.
-  const said: Record<string, string> = {本机环境: `${name}的「工具与连接」`, 本机的: `${name}上的`, 本机: name, 在终端运行: `在${name}的终端运行`, 在终端里运行: `在${name}的终端运行`,
+  const said: Record<string, string> = {本机环境: environment === 'providers' ? `${name}的 Provider 设置` : `${name}的「工具」`, 本机的: `${name}上的`, 本机: name, 在终端运行: `在${name}的终端运行`, 在终端里运行: `在${name}的终端运行`,
     '没装 Node.js 的话，装': '没装 Node.js 的话，在那台设备上装'};
   return text.replace(/本机环境|本机的|本机|在终端里?运行|没装 Node\.js 的话，装/g, words => said[words] ?? words);
 }
 /** The 状态与诊断 page's tool steps on 「X」: each instruction and the button to its tools page name it (review 244). */
 export function toolStepsOn(where: Where, steps: readonly SetupStep[]): SetupStep[] {
-  if (!where.isRemote) return [...steps];
-  return steps.map(step => ({
-    ...step,
-    ...(step.detail ? {detail: onDeviceText(where, step.detail)} : {}),
-    actions: step.actions.map(action => action.kind === 'environment' ? {...action, label: `查看${whereName(where)}的工具`} : action),
-  }));
+  return steps.map(step => {
+    const provider = step.id === 'codex' || step.id === 'claude';
+    const destination = where.isRemote ? `${whereName(where)}的 Provider 设置` : '「Provider」设置';
+    const detail = step.detail && onDeviceText(where, step.detail, provider ? 'providers' : 'tools');
+    return {...step,
+      ...(detail ? {detail} : {}),
+      actions: step.actions.map(action => action.kind === 'environment'
+        ? {...action, label: provider ? `打开${destination}` : where.isRemote ? `查看${whereName(where)}的工具` : action.label}
+        : action),
+    };
+  });
 }
 /** The footer of the 状态与诊断 page's group of the device's tools. */
 export const diagnosticsToolsFooter = (where: Where): string =>

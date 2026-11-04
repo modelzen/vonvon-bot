@@ -1,6 +1,6 @@
 #!/bin/sh
 # Vonvon Bot 服务端的安装脚本，只用于 Linux（glibc），docs/plans/server-2-install-scripts.md 4.1：
-#   sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/install.sh)"
+#   scripts/install-bootstrap.sh 的完整命令并行取得本脚本，再运行完整文件。
 # 装到 ~/.local/share/vonvon-bot/server，数据目录是 ~/.vonvon-bot。已经装过服务端就什么都不动。
 # Mac、Windows 用桌面端安装包（里面带着服务端）：不是 Linux 就什么都不做、退出 2（owner 2026-11-01）。
 # 用 root 运行也照装，不另外提示，和 Paseo、Orca 一样（owner 2026-11-03）。
@@ -9,6 +9,7 @@
 set -eu
 
 BASE_URL="https://dl.vonvon.cc/bot/server"
+GLOBAL_BASE_URL="https://vonvon-linux-download.amber2clay.workers.dev/bot/server"
 GUIDE_URL="https://vonvon.cc/docs/remote/"
 DESKTOP_DOWNLOAD="https://vonvon.cc/get/"
 SERVER_MARKER="# Vonvon Bot server CLI v1"
@@ -36,8 +37,79 @@ show_output() {
   if [ -s "$2" ]; then cat "$2" >&2; fi
 }
 
+# 小文件限制总时长；大文件只限制连接和无数据的时间，慢但持续下载可以一直进行。
 download() {
-  curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 -o "$2" "$1" </dev/null
+  curl --proto '=https' --tlsv1.2 -fS --progress-bar --connect-timeout 5 --speed-limit 1 --speed-time 15 --max-filesize "$3" --write-out '%{http_code}' -o "$2" "$1" </dev/null >"$2.http" &
+  ACTIVE_DOWNLOAD_PID=$!
+  if wait "$ACTIVE_DOWNLOAD_PID"; then download_status=0; else download_status=$?; fi
+  ACTIVE_DOWNLOAD_PID=''
+  if [ "$download_status" = 0 ] && [ "$(cat "$2.http")" != 200 ]; then download_status=22; fi
+  return "$download_status"
+}
+
+stop_probes() {
+  for probe_pid in ${PROBE_PIDS:-}; do kill "$probe_pid" 2>/dev/null || true; done
+  for probe_pid in ${PROBE_PIDS:-}; do wait "$probe_pid" 2>/dev/null || true; done
+  PROBE_PIDS=''
+}
+
+cleanup_downloads() {
+  stop_probes
+  if [ -n "${ACTIVE_DOWNLOAD_PID:-}" ]; then
+    kill "$ACTIVE_DOWNLOAD_PID" 2>/dev/null || true
+    wait "$ACTIVE_DOWNLOAD_PID" 2>/dev/null || true
+  fi
+  rm -rf -- "${TMP:?}"
+}
+
+# 每个候选有独立文件和校验过程；只有完整、通过校验的清单才可以赢。
+probe_manifest() {
+  TMP=$2
+  curl_pid=''
+  trap 'probe_code=$?; if [ -n "$curl_pid" ]; then kill "$curl_pid" 2>/dev/null || true; wait "$curl_pid" 2>/dev/null || true; fi; printf "%s\n" "$probe_code" >"$TMP/exit"' EXIT
+  trap 'exit 130' HUP INT TERM
+  curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 5 --max-time 8 --max-filesize 65536 --write-out '%{http_code}' -o "$TMP/manifest.json" "$1/stable/manifest.json" </dev/null >"$TMP/http-status" &
+  curl_pid=$!
+  wait "$curl_pid" || exit 3
+  curl_pid=''
+  [ "$(cat "$TMP/http-status")" = 200 ] || exit 3
+  validate_manifest
+  : >"$TMP/ready"
+}
+
+read_manifest() {
+  mkdir "$TMP/domestic" "$TMP/global"
+  PROBE_PIDS=''
+  probe_manifest "$BASE_URL" "$TMP/domestic" 2>"$TMP/domestic/error" &
+  PROBE_PIDS=$!
+  probe_manifest "$GLOBAL_BASE_URL" "$TMP/global" 2>"$TMP/global/error" &
+  PROBE_PIDS="$PROBE_PIDS $!"
+  preference_ticks=0
+  chosen=''
+  while :; do
+    if [ -f "$TMP/domestic/ready" ]; then chosen=domestic; break; fi
+    if [ -f "$TMP/global/ready" ]; then
+      # 国内源已经失败，或海外源就绪后给国内的约 300 ms 优先时间已经结束。
+      if [ -f "$TMP/domestic/exit" ] || [ "$preference_ticks" -ge 3 ]; then chosen=global; break; fi
+      preference_ticks=$((preference_ticks + 1))
+    fi
+    if [ -f "$TMP/domestic/exit" ] && [ -f "$TMP/global/exit" ]; then break; fi
+    sleep 0.1
+  done
+  stop_probes
+  if [ -z "$chosen" ]; then
+    for candidate in domestic global; do
+      if [ "$(cat "$TMP/$candidate/exit" 2>/dev/null || true)" = 4 ]; then
+        cat "$TMP/$candidate/error" >&2
+        fail 4 "两个下载源都没有可用的发布清单，没有安装。"
+      fi
+    done
+    fail 3 "下载发布清单失败：国内和海外源都没有返回有效清单。"
+  fi
+  if [ "$chosen" = domestic ]; then DOWNLOAD_BASE_URL=$BASE_URL; else DOWNLOAD_BASE_URL=$GLOBAL_BASE_URL; fi
+  mv "$TMP/$chosen/manifest.json" "$TMP/manifest.json"
+  validate_manifest
+  if [ "$chosen" = domestic ]; then say "已连接国内下载源。"; else say "已连接海外下载源。"; fi
 }
 
 # 安装根里的 bin/vonvon 是服务端的启动器，而且能运行。
@@ -70,7 +142,7 @@ already_installed() {
 
 need_tools() {
   missing=''
-  for tool in curl tar mktemp sed grep head tr wc find mkdir mv rm uname; do
+  for tool in curl tar mktemp sed grep head tr wc find mkdir mv rm uname cat sleep; do
     command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
   done
   command -v sha512sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || missing="$missing sha512sum（或 shasum）"
@@ -114,8 +186,7 @@ base64_decode() {
 }
 
 # 签名清单（server-3 C1）：信封是 JSON.stringify 的紧凑 JSON，payload 的键顺序固定，所以能用字面匹配逐项核对。
-read_manifest() {
-  download "$BASE_URL/stable/manifest.json" "$TMP/manifest.json" || fail 3 "下载发布清单失败：$BASE_URL/stable/manifest.json"
+validate_manifest() {
   size=$(wc -c <"$TMP/manifest.json" | tr -d ' ')
   if [ "$size" -gt 65536 ]; then fail 4 "发布清单太大（$size 字节），没有安装。"; fi
   if [ "$(wc -l <"$TMP/manifest.json" | tr -d ' ')" -gt 1 ]; then fail 4 "发布清单的格式不对，没有安装。"; fi
@@ -168,10 +239,30 @@ remove_part() {
 }
 
 fetch_release() {
-  download "$URL" "$TMP/package.tar.gz" || fail 3 "下载安装包失败：$URL"
-  got=$(wc -c <"$TMP/package.tar.gz" | tr -d ' ')
-  if [ "$got" != "$SIZE" ]; then fail 4 "下载的安装包大小（$got 字节）和发布清单（$SIZE 字节）不一致，没有安装。"; fi
-  if [ "$(sha512_of "$TMP/package.tar.gz")" != "$SHA" ]; then fail 4 "下载内容和发布清单不一致（sha512 不对），没有安装。"; fi
+  if [ "$DOWNLOAD_BASE_URL" = "$BASE_URL" ]; then fallback_base=$GLOBAL_BASE_URL; else fallback_base=$BASE_URL; fi
+  download_code=3
+  download_error="下载安装包失败：国内和海外源都无法完成下载。"
+  # 重试固定的已验签版本；跨源从头写文件，绝不把不同响应盲目拼接。
+  for source_base in "$DOWNLOAD_BASE_URL" "$fallback_base"; do
+    if [ "$source_base" = "$fallback_base" ]; then say "正在尝试另一个下载源…"; fi
+    if download "$source_base/${URL#"$BASE_URL/"}" "$TMP/package.tar.gz" "$SIZE"; then
+      got=$(wc -c <"$TMP/package.tar.gz" | tr -d ' ')
+      if [ "$got" != "$SIZE" ]; then
+        download_code=4
+        download_error="下载的安装包大小（$got 字节）和发布清单（$SIZE 字节）不一致，没有安装。"
+      elif [ "$(sha512_of "$TMP/package.tar.gz")" != "$SHA" ]; then
+        download_code=4
+        download_error="下载内容和发布清单不一致（sha512 不对），没有安装。"
+      else
+        DOWNLOAD_BASE_URL=$source_base
+        return 0
+      fi
+    elif [ "$?" = 63 ]; then
+      download_code=4
+      download_error="下载的安装包超过发布清单里的大小，没有安装。"
+    fi
+  done
+  fail "$download_code" "$download_error"
 }
 
 unpack_release() {
@@ -310,8 +401,10 @@ main() {
   if [ -n "${VONVON_HOME:-}" ]; then say "安装脚本不看 VONVON_HOME，数据目录用 ~/.vonvon-bot。"; fi
   unset VONVON_HOME
   TMP=$(mktemp -d) || fail 2 "建不了临时目录。"
-  trap 'rm -rf -- "${TMP:?}"' EXIT
+  PROBE_PIDS=''
+  trap 'cleanup_downloads' EXIT
   trap 'exit 130' HUP INT TERM
+  say "正在连接下载服务…"
   read_manifest
   say "正在安装 Vonvon Bot 服务端 ${VERSION}（${TARGET}）…"
   RELEASE="$ROOT/releases/$VERSION"
@@ -324,7 +417,7 @@ main() {
     fetch_release
     unpack_release
   fi
-  if [ "$SIGNATURE_CHECKED" != yes ]; then say "这台机器没有 openssl 3，没能核对发布签名；已核对下载内容的哈希，来源是 https://dl.vonvon.cc。"; fi
+  if [ "$SIGNATURE_CHECKED" != yes ]; then say "这台机器没有 openssl 3，没能核对发布签名；已核对下载内容的哈希，来源是 ${DOWNLOAD_BASE_URL%/bot/server}。"; fi
   set_up
   install_service
   finish

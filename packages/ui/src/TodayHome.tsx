@@ -1,4 +1,4 @@
-import {Activity, ArrowRight, ChartNoAxesColumn, ChevronRight, Cpu, Download, Link, MonitorSmartphone, Settings2, Wrench, type LucideIcon} from 'lucide-react';
+import {Activity, ArrowRight, ChartNoAxesColumn, ChevronRight, Cpu, Download, Link, MonitorSmartphone, Power, Wrench, type LucideIcon} from 'lucide-react';
 import type {DesktopSnapshot} from '@vonvon/protocol';
 import {NowBotList} from './NowBotList';
 import {NowActivity} from './NowActivity';
@@ -20,16 +20,19 @@ export function TodayHome({snapshot, onSetup, onRegister, onOpenUsage, disabled}
   </div>;
 }
 
-const settingsEntries: {page: Page; title: string; description: string; icon: LucideIcon}[] = [
-  {page: 'providers', title: 'Provider', description: 'Codex 与 Claude 的安装、本机配置和模型', icon: Cpu},
-  {page: 'environment', title: '工具与连接', description: '飞书 CLI 与 MCP 连接', icon: Wrench},
-  {page: 'secrets', title: '决策模型', description: '模型服务与密钥', icon: Cpu},
-  {page: 'usage', title: '用量', description: '额度与使用记录', icon: ChartNoAxesColumn},
-  {page: 'devices', title: '设备', description: '加别的设备、切换着管理，允许别的设备连接', icon: MonitorSmartphone},
-  {page: 'setup', title: '飞书连接', description: '应用权限与连接状态', icon: Link},
-  {page: 'bridgeImport', title: '导入 Bridge', description: '迁移已有的 Bot、群聊和设置', icon: Download},
-  {page: 'application', title: '应用与启动', description: '后台运行与更新', icon: Settings2},
-  {page: 'diagnostics', title: '状态与诊断', description: '连接、日志与恢复', icon: Activity},
+function DecisionBranchIcon({size = 17, strokeWidth = 1.7}: {size?: number; strokeWidth?: number}) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10m0-4c7 0 12-1 12-5"/></svg>;
+}
+const settingsEntries: {page: Page; title: string; description: string; icon: LucideIcon | typeof DecisionBranchIcon}[] = [
+  {page: 'providers', title: 'Provider', description: '执行任务的服务、运行组件与模型', icon: Cpu},
+  {page: 'environment', title: '工具', description: '飞书 CLI 账号授权与 MCP 连接', icon: Wrench},
+  {page: 'secrets', title: '决策模型', description: '智能群的回应、回复位置与新话题判断', icon: DecisionBranchIcon},
+  {page: 'usage', title: '用量', description: '额度、使用记录与智能判断次数', icon: ChartNoAxesColumn},
+  {page: 'devices', title: '设备连接', description: '连接其他设备，管理对当前设备的访问', icon: MonitorSmartphone},
+  {page: 'setup', title: '飞书连接', description: 'Bot 的应用权限、事件与连接检查', icon: Link},
+  {page: 'bridgeImport', title: 'Bridge 导入', description: '迁移旧 Bridge 数据，查看进度与结果', icon: Download},
+  {page: 'application', title: '应用与启动', description: '软件更新、后台运行与启动设置', icon: Power},
+  {page: 'diagnostics', title: '诊断', description: '运行状态、未回复原因、日志与恢复', icon: Activity},
 ];
 /** `devices`: the desktop's devices page also adds and switches devices; the web page's has only 允许别的设备连接 (owner
  * 2026-11-03 moved it there from 应用与启动). */
@@ -37,8 +40,8 @@ export function SettingsHome({onNavigate, onFeature, updateNotice, devices}: {on
   const where = useActiveDevice();
   // The Provider page is the shown device's: 「X」's configuration on a remote one.
   const entries = settingsEntries
-    .map(item => item.page === 'devices' && !devices ? {...item, description: '允许别的设备连接'} : item)
-    .map(item => item.page === 'providers' && where.isRemote ? {...item, description: `Codex 与 Claude 的安装、${whereName(where)}上的配置和模型`} : item);
+    .map(item => item.page === 'devices' && !devices ? {...item, description: '管理对当前设备的访问'} : item)
+    .map(item => item.page === 'providers' && where.isRemote ? {...item, description: `执行任务的服务、${whereName(where)}上的组件与模型`} : item);
   return <section className="today-settings-home"><header className="today-page-heading"><h1>设置</h1></header>
     {[{label: '模型与工具', entries: entries.slice(0, 4)}, {label: '连接与应用', entries: entries.slice(4)}].map(section => <section className="today-settings-section" aria-label={section.label} key={section.label}><h2>{section.label}</h2><div className="today-list-surface">{section.entries.map(item => <button type="button" className="today-settings-row" key={item.page} onClick={() => onNavigate(item.page)}>
       <span className="today-setting-icon" data-page={item.page}><item.icon size={17} strokeWidth={1.7}/></span><span className="today-entity-copy"><strong>{item.title}</strong><small>{item.page === 'application' && updateNotice ? updateNotice : item.description}</small></span>{item.page === 'application' && updateNotice && <span className="today-update-dot" aria-hidden="true"/>}<ChevronRight size={14}/>

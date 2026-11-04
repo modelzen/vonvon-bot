@@ -23,5 +23,5 @@ export function serverRequired(version) {
 }
 /** Where the error for a missing server part sends the release operator. */
 export const SERVER_SETUP_DOC = 'docs/release-orchestration.md「Linux 服务端包」和 release-mac skill 的同名一节';
-export const installCommand = `sh -c "$(curl -fsSL ${SERVER_BASE_URL}/install.sh)"`;
+// The installation command embeds both initial script sources; see install-command.mjs.
 export const uninstallCommand = `sh -c "$(curl -fsSL ${SERVER_BASE_URL}/uninstall.sh)"`;

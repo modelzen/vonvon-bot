@@ -8,6 +8,7 @@ import { assertCredentialEnvNames, cosCredentialEnvNames, loadPinnedSdk } from '
 import { assertSecureTransport, cachePolicy } from './verify-public-release.mjs';
 import { validateWindowsInventory, verifyWindowsArtifacts } from './package-windows.mjs';
 import { resolveDownloadEnvironment } from './release-network.mjs';
+import { readReleaseCdnPolicy, releaseCdnDescription, withReleaseCdnVerification } from './release-cdn.mjs';
 import { signWindowsUpdate, verifyWindowsUpdate, publicKeyFromPrivate, normalizeWindowsPublicKey } from './windows-update-signing.mjs';
 
 const exec = promisify(execFile);
@@ -35,13 +36,14 @@ export function validateBuildRun(run) {
 export async function readWindowsCosConfig(path) {
   if (!isAbsolute(path ?? '')) throw new Error('Use an absolute external --cos-config path');
   const config = JSON.parse(await readFile(path, 'utf8'));
-  const fields = ['bucket', 'region', 'prefix', 'publicBaseURL', 'secretIdEnv', 'secretKeyEnv', 'securityTokenEnv', 'sdkModule', 'updatePrivateKeyFile'];
+  const fields = ['bucket', 'region', 'prefix', 'publicBaseURL', 'secretIdEnv', 'secretKeyEnv', 'securityTokenEnv', 'sdkModule', 'updatePrivateKeyFile', 'cdn'];
   if (!config || Object.keys(config).some(key => !fields.includes(key)) ||
       !/^[a-z0-9-]+-\d+$/.test(config.bucket ?? '') || !/^[a-z]+-[a-z]+(?:-\d+)?$/.test(config.region ?? '') ||
       config.prefix !== 'bot/windows/' || config.publicBaseURL !== baseURL || !config.secretIdEnv || !config.secretKeyEnv) {
     throw new Error('Windows COS config must specify bot/windows/ and its fixed public base URL, with credential variable names only');
   }
   assertCredentialEnvNames(config);
+  readReleaseCdnPolicy(config.cdn);
   if (config.updatePrivateKeyFile !== undefined && !isAbsolute(config.updatePrivateKeyFile)) throw new Error('Windows update signing key must use an absolute external file path');
   return config;
 }
@@ -143,6 +145,7 @@ async function assertNotCancelled(cancelFile) {
 }
 
 export async function publishWindowsObjects({ out, inventory, config, client, fetchImpl = fetch, log = console.log, cancelFile }) {
+  fetchImpl = withReleaseCdnVerification(fetchImpl, config.cdn);
   await assertNotCancelled(cancelFile);
   const lockPath = join(out, '.windows-publish.lock');
   const lock = await open(lockPath, 'wx');
@@ -174,7 +177,7 @@ export async function publishWindowsObjects({ out, inventory, config, client, fe
     await assertNotCancelled(cancelFile);
     const verified = await verifyWindowsPublic(objects, { fetchImpl });
     const receipt = { version: inventory.version, sourceSha: inventory.sourceSha, architecture: inventory.architecture, signed: false,
-      updatesEnabled: inventory.updatesEnabled, verifiedAt: new Date().toISOString(), objects: verified };
+      updatesEnabled: inventory.updatesEnabled, cdn: releaseCdnDescription(config.cdn), verifiedAt: new Date().toISOString(), objects: verified };
     await assertNotCancelled(cancelFile);
     await writeFile(join(out, 'windows-publish-receipt.json'), json(receipt));
     return receipt;
@@ -182,7 +185,8 @@ export async function publishWindowsObjects({ out, inventory, config, client, fe
 }
 
 /** Prepare exact signed bytes locally; stable URLs are part of the owner-reviewed plan. */
-export async function planWindowsUpdates({ out, inventory, env = process.env, privateKeyFile, notes, previous, fetchImpl = fetch }) {
+export async function planWindowsUpdates({ out, inventory, env = process.env, privateKeyFile, notes, previous, fetchImpl = fetch, cdn }) {
+  fetchImpl = withReleaseCdnVerification(fetchImpl, cdn);
   validateWindowsInventory(inventory);
   if (!inventory.updatesEnabled) return [];
   const feeds = [];
@@ -215,7 +219,7 @@ export async function planWindowsUpdates({ out, inventory, env = process.env, pr
 }
 const compareVersion = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
 async function windowsFeedSnapshot(url, fetchImpl) {
-  const response = await fetchImpl(url, { redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(15000) });
+  const response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(15000) });
   if (response.status === 404) return { status: 404 };
   if (response.status !== 200 || response.redirected) throw new Error('Cannot read the existing Windows update feed');
   if (!response.body) throw new Error('Windows update feed has no body');
@@ -228,11 +232,12 @@ async function windowsFeedSnapshot(url, fetchImpl) {
 }
 /** Called only by the unified reviewed promote stage, after public installer verification. */
 export async function promoteWindowsUpdates({ out, inventory, feeds, config, env = process.env, ownerConfirmation, planSHA256, notes, client, fetchImpl = fetch, cancelFile }) {
+  fetchImpl = withReleaseCdnVerification(fetchImpl, config.cdn);
   if (!inventory.updatesEnabled) return;
   const expected = await planWindowsUpdates({ out, inventory, env, privateKeyFile: config.updatePrivateKeyFile, notes, previous: feeds, fetchImpl });
   if (json(expected) !== json(feeds) || !/^[a-f0-9]{64}$/.test(planSHA256 ?? '')) throw new Error('Windows update plan changed since owner review');
   await verifyWindowsPublic(windowsObjectPlan(inventory), { fetchImpl });
-  const receipt = { version: inventory.version, sourceSha: inventory.sourceSha, updatesEnabled: true, planSHA256, feeds: [], ownerConfirmation };
+  const receipt = { version: inventory.version, sourceSha: inventory.sourceSha, updatesEnabled: true, planSHA256, cdn: releaseCdnDescription(config.cdn), feeds: [], ownerConfirmation };
   for (const feed of feeds) {
     await assertNotCancelled(cancelFile);
     const body = await readFile(join(out, feed.file));

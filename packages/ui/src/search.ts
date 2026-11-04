@@ -72,7 +72,8 @@ const globalGroups: readonly {page: Page; section: string; fields: readonly Targ
   {page: 'devices', section: '已配对的设备', fields: [item('已配对的设备', ['已配对的客户端', '撤销', '撤销设备', '客户端', '谁连着这台'], {field: ''})]},
   {page: 'application', section: '软件更新', fields: [item('桌面版', [], {field: ''}), item('更新状态', [], {field: ''}), item('可用版本', [], {field: ''}), item('检查更新', ['检查桌面更新']), item('下载更新', [], {guide: '有可用更新时显示下载操作。'}), item('重启升级', ['安装更新'], {field: '重启升级', guide: '下载完成后显示重启升级，会中断正在进行的对话。'}), item('发布说明')]},
   {page: 'application', section: '外部 Core / CLI', fields: [item('Core 来源'), item('当前版本'), item('可用版本'), item('检查 Core 更新'), item('更新外部 Core'), item('更新进度', ['查看 Core 更新进度'])]},
-  {page: 'application', section: 'Codex 可执行文件', fields: [item('Codex 可执行文件', ['执行文件路径', '执行程序'], {field: ''}), item('已保存路径', ['Codex 路径']), item('当前路径配置'), item('本次所选', ['选择 Codex 可执行文件', '选择文件', '更改路径']), item('恢复自动检测'), item('未绑定工作目录时的运行后备'), item('保存路径', ['Codex 可执行文件路径'], {field: '本次所选', guide: '更改路径后，在弹窗中保存。'})]},
+  {page: 'providers', section: 'Codex 可执行文件', fields: [item('Codex 可执行文件', ['执行文件路径', '执行程序'], {field: ''}), item('已保存路径', ['Codex 路径']), item('当前路径配置'), item('本次所选', ['选择 Codex 可执行文件', '选择文件', '更改路径']), item('恢复自动检测'), item('保存路径', ['Codex 可执行文件路径'], {field: '本次所选', guide: '更改路径后，在弹窗中保存。'})].map(field => ({...field, reveal: 'codex' as const}))},
+  {page: 'application', section: '运行后备', fields: [item('未绑定工作目录时的运行后备')]},
   // The section is the page's own name: 本机环境 would be wrong while a remote device is shown (owner 2026-11-02).
   {page: 'environment', section: '工具与连接', fields: [item('重新检测', ['本机环境'])]},
   ...(['Codex', 'Claude'] as const).map(section => ({page: 'providers' as const, section, fields: ['安装', '更新', '配置', '检查配置', '安装托管副本', '重新安装最新版', '停用托管副本', '安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', ...(section === 'Codex' ? ['后端状态', '后端版本'] : ['Claude Agent SDK', '安装后端', '检查后端版本', '更新后端', '卸载后端'])].map(title => item(`${title} ${section}`, [title, ...(formerly[title] ? [formerly[title]] : [])], {field: '', reveal: section === 'Codex' ? 'codex' : 'claude', guide: '在 Provider 详情查看状态和可用操作。'}))})),
@@ -99,19 +100,19 @@ export function searchEntries(snapshot: DesktopSnapshot, capabilities: {external
   const pages: readonly {id: string; title: string; aliases: readonly string[]; page: Page; view?: CollaborationView}[] = [
     {id: 'home', title: '此刻', aliases: ['首页', '概览'], page: 'home'},
     {id: 'agents', title: 'Bot', aliases: ['机器人', '注册 Bot', '添加 Bot', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
-    {id: 'bridgeImport', title: '导入 Bridge', aliases: ['feishu-codex-bridge', 'Feishu Codex Bridge', '迁移', '旧版导入', '恢复导入'], page: 'bridgeImport'},
-    {id: 'setup', title: '连接与设置', aliases: ['首次运行清单', '后端', '准备执行工具', '扫码', '开权限', '一键开权限', '事件订阅', '卡片回调', '发布版本', '长连接'], page: 'setup'},
+    {id: 'bridgeImport', title: 'Bridge 导入', aliases: ['导入 Bridge', 'feishu-codex-bridge', 'Feishu Codex Bridge', '迁移', '旧版导入', '恢复导入'], page: 'bridgeImport'},
+    {id: 'setup', title: '飞书连接', aliases: ['连接与设置', '首次运行清单', '后端', '准备执行工具', '扫码', '开权限', '一键开权限', '事件订阅', '卡片回调', '发布版本', '长连接'], page: 'setup'},
     {id: 'groups', title: '群组', aliases: ['飞书群', '群聊', '已连接飞书群', '群设置'], page: 'collaboration', view: 'groups'},
     {id: 'projects', title: '项目管理', aliases: ['项目', '共享项目'], page: 'collaboration', view: 'projects'},
-    {id: 'usage', title: 'Codex 用量', aliases: ['账号', '套餐', '限额', '活动', '热力图', '判断次数', '智能模式'], page: 'usage'},
+    {id: 'usage', title: '用量', aliases: ['Codex 用量', '账号', '套餐', '限额', '活动', '热力图', '判断次数', '智能模式'], page: 'usage'},
     {id: 'providers', title: 'Provider', aliases: ['Codex', 'Claude', '模型来源', '安装', '登录', '授权'], page: 'providers'},
-    {id: 'environment', title: '工具与连接', aliases: ['本机环境', '飞书 CLI', 'MCP'], page: 'environment'},
+    {id: 'environment', title: '工具', aliases: ['工具与连接', '本机环境', '飞书 CLI', 'MCP'], page: 'environment'},
     {id: 'application', title: '应用与启动', aliases: ['版本', '更新', '后台服务'], page: 'application'},
     {id: 'secrets', title: '决策模型', aliases: ['key', 'API key', 'TypeSafe', 'OpenRouter', 'Vercel', '自定义接口', 'Jev', 'System One', '密钥'], page: 'secrets'},
-    {id: 'diagnostics', title: '状态与诊断', aliases: ['日志', '数据目录', '连接', '没回的消息', '缺的权限'], page: 'diagnostics'},
+    {id: 'diagnostics', title: '诊断', aliases: ['状态与诊断', '日志', '数据目录', '连接', '没回的消息', '缺的权限'], page: 'diagnostics'},
     // Only the desktop adds and switches devices; every page has 允许别的设备连接 there (found by its own entry, above). 服务器 is a
     // search word only, never on the page.
-    {id: 'devices', title: '设备', aliases: [...capabilities.devices ? ['添加设备', '切换设备'] : [], '远程', '连接链接', '配对', 'Tailscale', '服务器'], page: 'devices'},
+    {id: 'devices', title: '设备连接', aliases: ['设备', '多设备', ...capabilities.devices ? ['添加设备', '切换设备'] : [], '远程', '连接链接', '配对', 'Tailscale', '服务器'], page: 'devices'},
   ];
   const entries: SearchEntry[] = pages.map(page => ({id: page.id, title: page.title, context: '页面', aliases: page.aliases, destination: {page: page.page, view: page.view, selection: page.view ? {kind: 'overview'} : undefined}, kind: 'page'}));
   for (const group of globalGroups.filter(group => group.section !== '外部 Core / CLI' || capabilities.externalCoreAvailable)) group.fields.forEach((field, index) => entries.push({
@@ -121,8 +122,8 @@ export function searchEntries(snapshot: DesktopSnapshot, capabilities: {external
     const base: Destination = {page: 'collaboration', view: 'agents', selection: {kind: 'agent', id: agent.id}};
     entries.push({id: agent.id, title: agent.name, context: 'Bot', aliases: [agent.id], destination: base, kind: 'item'});
     entries.push({id: `${agent.id}-settings`, title: 'Bot 设置', context: agent.name, aliases: ['机器人设置', 'Bot 权限'], destination: {...base, detail: {kind: 'agent-settings'}}, kind: 'setting'});
-    entries.push({id: `${agent.id}-diagnostics`, title: 'Bot 状态', context: `状态与诊断 · ${agent.name}`, aliases: ['连接', '缺的权限', '没回的消息'], destination: {page: 'diagnostics', section: diagnosticsSection(agent.id)}, kind: 'setting'});
-    for (const title of ['智能群关注状态', '自定义智能提示词']) entries.push({id: `${agent.id}-${title}`, title, context: `状态与诊断 · ${agent.name}`, aliases: [], destination: {page: 'diagnostics', section: diagnosticsSection(agent.id), field: title}, kind: 'setting'});
+    entries.push({id: `${agent.id}-diagnostics`, title: 'Bot 状态', context: `诊断 · ${agent.name}`, aliases: ['连接', '缺的权限', '没回的消息'], destination: {page: 'diagnostics', section: diagnosticsSection(agent.id)}, kind: 'setting'});
+    for (const title of ['智能群关注状态', '自定义智能提示词']) entries.push({id: `${agent.id}-${title}`, title, context: `诊断 · ${agent.name}`, aliases: [], destination: {page: 'diagnostics', section: diagnosticsSection(agent.id), field: title}, kind: 'setting'});
     for (const group of agentGroups) {
       const destination: Destination = {...base, detail: {kind: 'agent-settings'}, section: group.title, reveal: group.reveal};
       entries.push({id: `${agent.id}-${group.title}`, title: group.title, context: `Bot 设置 · ${agent.name}`, aliases: group.aliases ?? [], destination, kind: 'setting'});

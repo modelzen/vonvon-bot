@@ -10,6 +10,7 @@ import {settingAnchor} from '../search';
 import {OperationActivity} from '../management/OperationActivity';
 import {preferredProvider, providerBackends, providerIcons, providerInstalled, providerAuthenticated, providerNames, providerSignature, type SetupProvider} from './provider-state';
 import {useProviderSetup} from './useProviderSetup';
+import {CodexPathSettings} from '../settings/SettingsPanel';
 import './provider-setup.css';
 
 type Props = {snapshot: DesktopSnapshot; ready: boolean; busy: boolean; run: (command: Command) => Promise<CommandResult>; onContinue?: (provider: SetupProvider) => void; initialProvider?: SetupProvider};
@@ -188,6 +189,7 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
         {managedCodex && installed && <p className="provider-check">正在执行的任务不会中断；完成后，下一轮对话会使用更新的 Codex。</p>}
         {provider === 'claude' && <p className="provider-check">更新或重装 SDK 后，请到「应用与启动」重启后台服务，以加载新版本。</p>}
       </div>
+      {provider === 'codex' && <details className="provider-cli provider-codex-advanced"><summary>高级设置</summary><CodexPathSettings/></details>}
       {provider === 'claude' && <details className="provider-cli"><summary>Claude Code · {cliLabel}</summary><p>在 Claude Code 里配置好账号或自定义 API，Vonvon 用{whereName(where)}上已有的配置。</p>
         <dl><div><dt>安装来源</dt><dd>{!source ? '正在检测…' : source.installation === 'managed' ? 'Vonvon 管理' : source?.installation === 'external' ? existing : '未检测到'}</dd></div>{source?.version && <div><dt>当前版本</dt><dd>{source.version}</dd></div>}{source?.executable && <div><dt>安装位置</dt><dd>{source.executable}</dd></div>}{source?.latestVersion && <div><dt>最新版本</dt><dd>{source.latestVersion}</dd></div>}</dl>
         <div className="provider-management-actions"><Button size="sm" disabled={disabled || installing || !source} onClick={() => void manageCli(source?.installation === 'missing' ? 'install' : 'update')}>{source?.installation === 'missing' ? '安装 Claude Code' : '更新 Claude Code'}</Button>
