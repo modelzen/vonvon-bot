@@ -48,9 +48,9 @@ const run = vi.fn(async () => ({kind: 'applied', revision: 1} as const));
 const onRegister = vi.fn();
 const onOpenGroups = vi.fn();
 const onNotice = vi.fn();
-function render(value: DesktopSnapshot = snapshot) {
+function render(value: DesktopSnapshot = snapshot, initialAgentId?: Agent['id']) {
   h.index = 0;
-  return nodes(FeishuConnections({snapshot: value, ready: true, busy: false, run, onRegister, onOpenGroups, onOpenEnvironment: () => {}, onNotice}));
+  return nodes(FeishuConnections({snapshot: value, initialAgentId, ready: true, busy: false, run, onRegister, onOpenGroups, onOpenProviders: () => {}, onNotice}));
 }
 const section = (all: Element[]) => all.find(node => node.type === 'section' && String(node.props['aria-label'] ?? '').endsWith('的配置检查'))!;
 const button = (all: Element[], label: string) => all.find(node => node.props.onClick && (text(node.props.children) === label || node.props['aria-label'] === label))!;
@@ -187,4 +187,29 @@ it('offers reauthorization for invalid credentials and waits before offering dow
   for (const label of ['一键开权限', '打开事件设置', '打开回调设置', '我已配置', '打开开发者后台']) {
     expect(button(all, label)).toBeUndefined();
   }
+});
+
+
+it('opens the requested Bot before any group is bound and still allows switching Bots', async () => {
+  h.reads[second.id] = {status: {...done(second.id), credentials: {ok: false, reason: '凭据失效'}}, checking: false} satisfies SetupRead;
+  const unbound = {...snapshot, memberships: []};
+  let all = render(unbound, second.id);
+  expect(section(all).props['aria-label']).toBe('二号 Bot 的配置检查');
+  button(all, '重新扫码').props.onClick(); await flush();
+  expect(onRegister).toHaveBeenCalledExactlyOnceWith(second.id);
+  all.find(node => node.type === 'button' && node.props.title === '一号 Bot')!.props.onClick();
+  all = render(unbound, second.id);
+  expect(section(all).props['aria-label']).toBe('一号 Bot 的配置检查');
+});
+
+it('does not substitute the first Bot when the requested Bot has not arrived or was removed', () => {
+  let all = render({...snapshot, agents: [first]}, second.id);
+  expect(section(all)).toBeUndefined();
+  expect(text(all)).toContain('所选 Bot 暂不可用');
+  all = render(snapshot, second.id);
+  expect(section(all).props['aria-label']).toBe('二号 Bot 的配置检查');
+  all = render({...snapshot, agents: [first]}, second.id);
+  expect(section(all)).toBeUndefined();
+  all.find(node => node.type === 'button' && node.props.title === '一号 Bot')!.props.onClick();
+  expect(section(render({...snapshot, agents: [first]}, second.id)).props['aria-label']).toBe('一号 Bot 的配置检查');
 });

@@ -184,7 +184,7 @@ test('Provider searches open Provider details while Feishu CLI stays in tools', 
   assert.equal(findEntries(entries, 'Claude Agent SDK')[0]?.destination.page, 'providers');
 });
 
-test('Codex executable path editing searches open the application control', () => {
+test('Codex executable path editing searches open Provider while fallback stays in application', () => {
   for (const [query, field] of [
     ['Codex 可执行文件', ''],
     ['已保存路径', '已保存路径'],
@@ -192,13 +192,16 @@ test('Codex executable path editing searches open the application control', () =
     ['选择 Codex 可执行文件', '本次所选'],
     ['保存路径', '本次所选'],
     ['恢复自动检测', '恢复自动检测'],
-    ['未绑定工作目录时的运行后备', '未绑定工作目录时的运行后备'],
   ]) {
     const destination = findEntries(entries, query!)[0]?.destination;
-    assert.equal(destination?.page, 'application', query);
+    assert.equal(destination?.page, 'providers', query);
     assert.equal(destination?.section, 'Codex 可执行文件', query);
     assert.equal(destination?.field, field, query);
+    assert.equal(destination?.reveal, 'codex', query);
   }
+  const fallback = findEntries(entries, '未绑定工作目录时的运行后备')[0]?.destination;
+  assert.equal(fallback?.page, 'application');
+  assert.equal(fallback?.section, '运行后备');
   assert.equal(findEntries(entries, '安装位置 Codex')[0]?.destination.page, 'providers');
 });
 
@@ -440,4 +443,11 @@ test('finds 允许别的设备连接 and the paired devices on 设备, not on �
   }
   const sections = ['允许别的设备连接', '连接链接', '已配对的设备'];
   assert.equal(entries.some(entry => entry.destination.page === 'application' && sections.includes(entry.destination.section ?? '')), false);
+});
+
+test('renamed settings remain discoverable by their previous labels', () => {
+  for (const [query, id, title] of [['工具与连接', 'environment', '工具'], ['状态与诊断', 'diagnostics', '诊断'], ['导入 Bridge', 'bridgeImport', 'Bridge 导入'], ['设备', 'devices', '设备连接'], ['连接与设置', 'setup', '飞书连接'], ['Codex 用量', 'usage', '用量']]) {
+    const entry = findEntries(entries, query!).find(entry => entry.id === id);
+    assert.equal(entry?.title, title, query);
+  }
 });

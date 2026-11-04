@@ -74,7 +74,7 @@ import {newTag, sumCounts, useNewCounts} from './new-counts';
 import {ShareUsagePanel, UsagePanel} from './management/UsagePanel';
 import {EnvironmentPanel} from './management/EnvironmentPanel';
 import {ProviderManager} from './setup/ProviderSetup';
-import {type SetupProvider} from './setup/provider-state';
+import {providerNames, type SetupProvider} from './setup/provider-state';
 import {WelcomeSetup} from './setup/WelcomeSetup';
 import {BridgeImportPanel} from './setup/BridgeImportPanel';
 import {TodayHome, SettingsHome} from './TodayHome';
@@ -163,6 +163,7 @@ function DesktopApp() {
   const latestSnapshot = useRef<DesktopSnapshot | undefined>(undefined);
   const [route, setRoute] = useState<CollaborationRoute>(initialRoute);
   const [setupProvider, setSetupProvider] = useState<SetupProvider>();
+  const [setupAgentId, setSetupAgentId] = useState<AgentId>();
   const [page, setPage] = useState<Page>("home");
   const [externalCoreAvailable, setExternalCoreAvailable] = useState(false);
   const connectedVersion = snapshot?.host.kind === 'connected' ? snapshot.host.version : undefined;
@@ -261,7 +262,7 @@ function DesktopApp() {
       {
         let ancestor: HTMLElement | null = section;
         while (ancestor) {
-          if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
+          if (ancestor instanceof HTMLDetailsElement && !ancestor.open) ancestor.open = true;
           ancestor = ancestor.parentElement;
         }
       }
@@ -274,7 +275,7 @@ function DesktopApp() {
       // A matching field may live in a nested disclosure (for example machine runtime details).
       let disclosure = candidate?.closest('details');
       while (disclosure) {
-        disclosure.open = true;
+        if (!disclosure.open) disclosure.open = true;
         disclosure = disclosure.parentElement?.closest('details') ?? null;
       }
       if (candidate?.closest('[hidden]')) return false;
@@ -444,10 +445,23 @@ function DesktopApp() {
       setNotice(undefined);
     });
   }
-  function openPage(next: Page) { navigate(() => { setModal(current => current?.kind === 'join' && current.suspended ? null : current); setJoinedTarget(undefined); setPage(next); setFeatureId(undefined); setSettingsReturn(undefined); }); }
+  function openPage(next: Page, destination?: Destination) {
+    navigate(() => {
+      setModal(current => current?.kind === 'join' && current.suspended ? null : current);
+      setJoinedTarget(undefined); setPage(next); setFeatureId(undefined); setSettingsReturn(undefined);
+      setSetupAgentId(next === 'setup' && destination?.selection?.kind === 'agent' ? destination.selection.id : undefined);
+      setSearchTarget(destination?.section ? destination : undefined);
+    });
+  }
+  function openSetup(agentId?: AgentId) {
+    openPage('setup', agentId ? {page: 'setup', selection: {kind: 'agent', id: agentId}} : undefined);
+  }
+  function openProviders(provider?: SetupProvider) {
+    openPage('providers', provider ? {page: 'providers', reveal: provider, section: providerNames[provider]} : undefined);
+  }
   // devices-ui-3: the paired toast sits outside App and asks for 设备 → 已配对的设备 this way (on 应用与启动 until 2026-11-03).
   const openSetting = useRef<(destination: Destination) => void>(() => undefined);
-  openSetting.current = destination => { navigate(() => { setModal(current => current?.kind === 'join' && current.suspended ? null : current); setJoinedTarget(undefined); setPage(destination.page); setFeatureId(undefined); setSettingsReturn(undefined); setSearchTarget(destination.section ? destination : undefined); }); };
+  openSetting.current = destination => { navigate(() => { setModal(current => current?.kind === 'join' && current.suspended ? null : current); setJoinedTarget(undefined); setPage(destination.page); setSetupAgentId(undefined); setFeatureId(undefined); setSettingsReturn(undefined); setSearchTarget(destination.section ? destination : undefined); }); };
   useEffect(() => {
     const open = (event: Event) => { const detail = (event as CustomEvent<Destination | undefined>).detail; if (detail?.page) openSetting.current(detail); };
     window.addEventListener(OPEN_SETTING_EVENT, open);
@@ -475,6 +489,7 @@ function DesktopApp() {
       setJoinedTarget(undefined);
       setModal(current => current?.kind === 'join' && current.suspended ? null : current);
       setPage(entry.destination.page);
+      setSetupAgentId(undefined);
       setSettingsReturn(undefined);
       setFeatureId(undefined);
       const target = routeFromSearch(entry.destination, snapshot);
@@ -547,14 +562,14 @@ function DesktopApp() {
       ? `${group?.name ?? '飞书群'} · ${agent?.name ?? 'Bot'}`
       : (agent?.name ?? group?.name ?? project?.name ?? (view === "agents" ? "Bot" : view === "groups" ? "群组" : "项目管理")),
     setup: "飞书连接",
-    bridgeImport: "导入 Bridge",
-    environment: "工具与连接",
+    bridgeImport: "Bridge 导入",
+    environment: "工具",
     providers: "Provider",
     usage: "用量",
     application: "应用与启动",
     secrets: "决策模型",
-    diagnostics: "状态与诊断",
-    devices: "设备",
+    diagnostics: "诊断",
+    devices: "设备连接",
   };
   const host = snapshot.host;
   const ready = host.kind === "connected";
@@ -842,7 +857,7 @@ function DesktopApp() {
                   </SettingsGroup>
                   <BotConnectionSettings key={`connection-${agent.id}`} agent={agent} disabled={busy || !ready}
                     onError={message => setNotice({message, error: true})}
-                    onSetup={() => openPage("setup")}
+                    onSetup={() => openSetup(agent.id)}
                     onRefreshCredentials={() => void register(agent.id)}
                     onDiagnostics={() => { openPage("diagnostics"); setSearchTarget({page: "diagnostics", section: diagnosticsSection(agent.id)}); }}/>
                   <SettingsPanel
@@ -913,11 +928,11 @@ function DesktopApp() {
               )}
             </>
           )}
-          {(page === "setup" || (page === "home" && !snapshot.agents.length)) && <WelcomeSetup initialProvider={setupProvider} onProviderPrepared={setSetupProvider} onCreateBot={provider => void register(undefined, provider)} onOpenGroups={() => snapshot.agents.length === 1 ? openJoin(snapshot.agents[0]!.id, undefined, setupProvider) : openList("agents")} snapshot={snapshot} ready={ready} busy={busy} run={run} onRegister={agentId => void register(agentId)} onOpenEnvironment={() => openPage("environment")} onNotice={(message, error) => setNotice({message, error})}/>}
-          {page === "bridgeImport" && <section className="welcome-setup" aria-label="导入 Bridge"><header className="today-page-heading"><h1>导入 Bridge</h1></header><BridgeImportPanel ready={ready} busy={busy} platform={snapshot.application.platform} showUnavailable/></section>}
+          {(page === "setup" || (page === "home" && !snapshot.agents.length)) && <WelcomeSetup key={setupAgentId ?? "global"} initialAgentId={setupAgentId} initialProvider={setupProvider} onProviderPrepared={setSetupProvider} onCreateBot={provider => void register(undefined, provider)} onOpenGroups={() => snapshot.agents.length === 1 ? openJoin(snapshot.agents[0]!.id, undefined, setupProvider) : openList("agents")} snapshot={snapshot} ready={ready} busy={busy} run={run} onRegister={agentId => void register(agentId)} onOpenProviders={openProviders} onNotice={(message, error) => setNotice({message, error})}/>}
+          {page === "bridgeImport" && <section className="welcome-setup" aria-label="Bridge 导入"><header className="today-page-heading"><h1>Bridge 导入</h1></header><BridgeImportPanel ready={ready} busy={busy} platform={snapshot.application.platform} showUnavailable/></section>}
           {page === "providers" && <ProviderManager snapshot={snapshot} ready={ready} busy={busy} run={run} reveal={searchTarget?.reveal === 'codex' ? 'codex' : searchTarget?.reveal === 'claude' ? 'claude' : undefined}/>}
           {page === "environment" && <><EnvironmentPanel reveal={searchTarget?.reveal} request={client.environment}/></>}
-          {page === "usage" && <UsagePanel request={client.collaboration} onOpenEnvironment={() => openPage('environment')} onOpenShare={() => setModal({kind: 'shareUsage'})}/>}
+          {page === "usage" && <UsagePanel request={client.collaboration} onOpenProviders={() => openProviders('codex')} onOpenShare={() => setModal({kind: 'shareUsage'})}/>}
           {page === "application" && (
             <div className="application-page">
               <header className="application-heading today-page-heading"><h1>应用与启动</h1></header>
@@ -949,7 +964,7 @@ function DesktopApp() {
           {page === "secrets" && <SecretsPanel onOpenProviders={() => openPage("providers")} onOpenApplication={() => openPage("application")}
             onOpenLogs={() => { openPage("diagnostics"); setSearchTarget({page: "diagnostics", section: "daemon 日志"}); }}/>}
           {page === "diagnostics" && <DiagnosticsPanel snapshot={snapshot} ready={ready} busy={busy} run={run}
-            onOpenSetup={() => openPage("setup")} onOpenEnvironment={() => openPage("environment")} onOpenSecrets={() => openPage("secrets")}
+            onOpenSetup={openSetup} onOpenProviders={openProviders} onOpenSecrets={() => openPage("secrets")}
             onNotice={(message, error) => setNotice({message, error})}/>}
           </>}
         </div>
@@ -963,7 +978,7 @@ function DesktopApp() {
       })()}
       {modal?.kind === 'register' && <RegistrationDialog modal={modal} job={registration} busy={busy || registrationBusy} feedback={feedback}
         onClose={() => void closeModal()} onRetry={() => void retryRegistration()}
-        onChecklist={() => {++modalGeneration.current; setModal(null); openPage('setup');}}/>}
+        onChecklist={agentId => {++modalGeneration.current; setModal(null); openSetup(agentId);}}/>}
       <Dialog
         open={modal !== null && modal.kind !== "deleteAgent" && modal.kind !== "join" && modal.kind !== 'selectJoinBot' && modal.kind !== 'register'}
         onClose={() => void closeModal()}

@@ -47,7 +47,7 @@ export function DevicesPanel() {
   const devices = useShellCapabilities()?.devices;
   const listed = Boolean(state && devices);
   return <section className="devices-page" aria-label="设备">
-    {state && devices ? <DeviceList state={state} devices={devices}/> : <header className="today-page-heading"><div><h1>设备</h1></div></header>}
+    {state && devices ? <DeviceList state={state} devices={devices}/> : <header className="today-page-heading"><div><h1>设备连接</h1></div></header>}
     {/* The list already says to use Tailscale; once is enough on one page. */}
     <RemoteAccessPanel tailscaleAdvice={!listed}/>
   </section>;
@@ -73,7 +73,7 @@ function DeviceList({state, devices}: {state: DevicesState; devices: DevicesShel
   };
   const localName = state.active.id === 'local' ? state.active.serverInfo?.deviceName : undefined;
   return <>
-    <header className="today-page-heading today-page-heading--actions"><div><h1>设备</h1></div>
+    <header className="today-page-heading today-page-heading--actions"><div><h1>设备连接</h1></div>
       <Button disabled={Boolean(blocked)} title={blocked} onClick={() => setDialog({})}>添加设备</Button>
     </header>
     <p className="device-page-intro">{copy.panelIntro}</p>
