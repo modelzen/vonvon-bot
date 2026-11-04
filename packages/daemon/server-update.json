@@ -1,4 +1,5 @@
 {
   "publicKey": "5ndbqSZ5/Y1yJ6oJ4lRM+oRxogGPlfBJko76kIK7GoU=",
-  "baseURL": "https://dl.vonvon.cc/bot/server"
+  "baseURL": "https://dl.vonvon.cc/bot/server",
+  "mirrorBaseURLs": ["https://vonvon-linux-download.amber2clay.workers.dev/bot/server"]
 }

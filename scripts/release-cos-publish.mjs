@@ -7,6 +7,7 @@ import { parseArgs, promisify } from 'node:util';
 import { checkVersionGate, compareVersions, validateFirstRelease } from './release-mac.mjs';
 import { assertCredentialEnvNames, COS_SDK_VERSION, cosCredentialEnvNames, isStableCosTarget, loadPinnedSdk, readCosConfig, readCosReleaseEvidence } from './release-cos-evidence.mjs';
 import { assertSecureTransport, cachePolicy, DEFAULT_MANIFEST_URL, readStableManifest, releaseArchitectures, validateManifest, validateReleaseInventory } from './verify-public-release.mjs';
+import { NO_CDN, readReleaseCdnPolicy, releaseCdnDescription, withReleaseCdnVerification } from './release-cdn.mjs';
 
 // The only COS writer for releases. plan and reverify write nothing to COS; upload writes the three
 // versioned objects named in an owner-reviewed plan; promote writes bot/mac/stable/manifest.json and
@@ -14,7 +15,7 @@ import { assertSecureTransport, cachePolicy, DEFAULT_MANIFEST_URL, readStableMan
 const manifestURL = DEFAULT_MANIFEST_URL;
 const immutableCache = 'public, max-age=31536000, immutable';
 const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-export const NO_CDN = '未启用 CDN，未刷新';
+export { NO_CDN };
 const names = { plan: 'publish-plan.json', uploadState: 'publish-upload-state.json', uploadReceipt: 'upload-receipt.json', publishReceipt: 'publish-receipt.json', rollbackReceipt: 'rollback-receipt.json', fixReceipt: 'fix-headers-receipt.json', lock: '.publish.lock' };
 const scriptPath = fileURLToPath(import.meta.url);
 const verifyScript = join(dirname(scriptPath), 'verify-public-release.mjs');
@@ -63,14 +64,14 @@ function versionedObjects(version, architectures = ['universal']) {
   ]);
 }
 
-const writeConfigFields = ['bucket', 'region', 'prefix', 'publicManifestURL', 'secretIdEnv', 'secretKeyEnv', 'securityTokenEnv', 'sdkModule'];
+const writeConfigFields = ['bucket', 'region', 'prefix', 'publicManifestURL', 'secretIdEnv', 'secretKeyEnv', 'securityTokenEnv', 'sdkModule', 'cdn'];
 /** The write key lives in its own external file; like --cos-config it holds only variable names. */
 export async function readCosWriteConfig(configPath, { readJSON = async path => JSON.parse(await readFile(path, 'utf8')) } = {}) {
   if (!isAbsolute(configPath ?? '')) throw new Error('Publishing requires an absolute --cos-write-config file outside the repository');
   let config;
   try { config = await readJSON(configPath); } catch { throw new Error('Cannot read COS write configuration'); }
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('COS write configuration must be a JSON object');
-  if (Object.hasOwn(config, 'cdn')) throw new Error('CDN refresh is not implemented; add a reviewed refresh step before configuring a CDN');
+  readReleaseCdnPolicy(config.cdn);
   if (Object.keys(config).some(key => !writeConfigFields.includes(key))) throw new Error('COS write configuration has unexpected fields; it may hold only target settings and credential environment variable names');
   if (!isStableCosTarget(config)) throw new Error('COS write configuration must identify the stable bucket, region, prefix and public URL');
   assertCredentialEnvNames(config);
@@ -100,6 +101,7 @@ async function openContext(command, options, dependencies) {
   if (!isAbsolute(options.out ?? '')) throw new Error('Supply --out as the absolute evidence directory written by release-mac');
   const readConfig = await readCosConfig(options['cos-config']);
   const writeConfig = await readCosWriteConfig(options['cos-write-config']);
+  if (readConfig.cdn && JSON.stringify(readReleaseCdnPolicy(readConfig.cdn)) !== JSON.stringify(readReleaseCdnPolicy(writeConfig.cdn))) throw new Error('Read-only and write COS configurations disagree about CDN policy');
   if (readConfig.bucket !== writeConfig.bucket || readConfig.region !== writeConfig.region || readConfig.prefix !== writeConfig.prefix) throw new Error('Read-only and write COS configurations must name the same stable bucket, region and prefix');
   const readNames = cosCredentialEnvNames(readConfig), writeNames = cosCredentialEnvNames(writeConfig);
   if (writeNames.some(name => readNames.includes(name))) throw new Error('The write key must use environment variables separate from the read-only enumeration key');
@@ -116,7 +118,7 @@ async function openContext(command, options, dependencies) {
     command, options, dependencies, env, version: options.version, sha: options.sha, out: resolve(options.out), readConfig, writeConfig, configHashes,
     // Verification children never see either key.
     childEnv: Object.fromEntries(Object.entries(env).filter(([name]) => !secrets.has(name))),
-    fetchImpl: dependencies.fetchImpl ?? fetch, execute: dependencies.execFile ?? exec, log: dependencies.log ?? console.log, now: dependencies.now ?? (() => new Date()),
+    fetchImpl: withReleaseCdnVerification(dependencies.fetchImpl ?? fetch, writeConfig.cdn), execute: dependencies.execFile ?? exec, log: dependencies.log ?? console.log, now: dependencies.now ?? (() => new Date()),
   };
 }
 
@@ -267,7 +269,7 @@ async function buildPlan(context, flags) {
       step: objects.length + 1, operation: 'PutObject', key: `${prefix}manifest.json`, file: 'manifest.json', url: manifestURL, size: manifestRecord.size, sha256: manifestRecord.sha256,
       headers: { ...manifestHeaders, ...(snapshot.status === 404 ? { 'x-cos-forbid-overwrite': 'true' } : {}) },
       requires: 'the owner\'s own stable confirmation in their Codex App session, the unchanged live manifest snapshot above and a passing --versioned-only',
-      cdn: NO_CDN, afterPromote: 'full verify-public-release must print "publiclyVerified": true',
+      cdn: releaseCdnDescription(context.writeConfig.cdn), afterPromote: 'full verify-public-release must print "publiclyVerified": true',
     },
     rollback: snapshot.status === 200
       ? { command: 'rollback --restore-previous', operation: 'PutObject', key: `${prefix}manifest.json`, size: snapshot.size, sha256: snapshot.sha256, headers: manifestHeaders, untouched: 'versioned objects and the ledger' }
@@ -303,6 +305,10 @@ async function readReviewedPlan(context, expected, { recovery = false } = {}) {
   if (sha256(bytes) !== expected) throw new Error(`${names.plan} differs from --plan-sha256; use the plan the owner reviewed`);
   const plan = JSON.parse(bytes.toString('utf8'));
   if (plan.planFormat !== 1 || plan.version !== context.version || plan.sourceCommit !== context.sha) throw new Error('The reviewed plan belongs to a different version or source SHA');
+  // Recovery may add the stricter CDN verification after a DNS migration, but cannot disable
+  // a CDN policy that was part of the reviewed candidate just by editing a local config.
+  if (plan.promote?.cdn !== releaseCdnDescription(context.writeConfig.cdn)
+    && !(recovery && plan.promote?.cdn === NO_CDN && context.writeConfig.cdn)) throw new Error('CDN policy changed since the reviewed plan; recovery cannot disable its verification');
   if (plan.target?.readConfigSHA256 !== context.configHashes.readConfigSHA256 || plan.target?.writeConfigSHA256 !== context.configHashes.writeConfigSHA256) {
     // Once stable serves the release plan cannot run again, so recovery accepts edited configs for the same target.
     if (!recovery || plan.target?.targetSHA256 !== targetIdentity(context.writeConfig)) throw new Error('COS configuration files changed since the reviewed plan; run plan again');
@@ -466,6 +472,12 @@ async function publishReceipt(context, expected, purpose) {
 async function finishPublication(context, plan, expected, receipt) {
   let publicVerification;
   try {
+    if (context.writeConfig.cdn) {
+      const visible = await liveDigest(context);
+      if (visible.status !== 200 || visible.size !== plan.promote.size || visible.sha256 !== plan.promote.sha256) throw new Error('CDN public manifest does not serve the promoted bytes');
+      receipt.cdn = releaseCdnDescription(context.writeConfig.cdn);
+      receipt.cdnVerification = { policy: readReleaseCdnPolicy(context.writeConfig.cdn), publicManifestSHA256: visible.sha256, checkedAt: context.now().toISOString(), scope: 'client-visible endpoint; remote CDN rules require separate deployment verification' };
+    }
     publicVerification = await runVerify(context, 'full');
     assertReportCovers(publicVerification, [...plan.upload, plan.promote]);
   } catch (error) { publicVerification = { publiclyVerified: false, error: error.message }; }
@@ -516,7 +528,7 @@ export async function promoteRelease(options, dependencies = {}) {
       ownerConfirmation: confirmation,
       ownerConfirmationMode: options['reviewed-plan'] ? 'reviewed-plan' : 'explicit-source',
       ownerConfirmationRule: 'Recorded verbatim. The tool cannot verify who sent it; only the owner\'s own message in their Codex App session counts.',
-      cdn: NO_CDN, versionedVerification: versioned, ledgerRecordsVersion: true,
+      cdn: releaseCdnDescription(context.writeConfig.cdn), versionedVerification: versioned, ledgerRecordsVersion: true,
     };
     // Written before the switch, so an interrupted promote can still be re-verified or rolled back.
     await writeAtomic(join(context.out, names.publishReceipt), json(receipt));
@@ -535,7 +547,7 @@ export async function promoteRelease(options, dependencies = {}) {
       write = 'already-written-with-these-bytes';
     }
     Object.assign(receipt.manifest, { write, writtenAt: context.now().toISOString() });
-    context.log(`CDN: ${NO_CDN}`);
+    context.log(`CDN: ${releaseCdnDescription(context.writeConfig.cdn)}`);
     return finishPublication(context, plan, expected, receipt);
   });
 }
@@ -578,14 +590,14 @@ export async function rollbackRelease(options, dependencies = {}) {
       action = current.status === 200 && current.sha256 === previous.sha256 ? 'already-restored' : ours ? 'restore' : undefined;
       if (!action) throw new Error('The live stable manifest is neither this release nor the saved previous manifest; investigate before writing');
       context.log(action === 'restore'
-        ? `Will PutObject ${key} with the saved previous manifest (version ${previous.version}, ${previous.size} bytes, SHA-256 ${previous.sha256}); Cache-Control: no-cache; Content-Type: application/json. Versioned objects and the ledger stay untouched. CDN: ${NO_CDN}`
+        ? `Will PutObject ${key} with the saved previous manifest (version ${previous.version}, ${previous.size} bytes, SHA-256 ${previous.sha256}); Cache-Control: no-cache; Content-Type: application/json. Versioned objects and the ledger stay untouched. CDN: ${releaseCdnDescription(context.writeConfig.cdn)}`
         : 'Stable already serves the saved previous manifest; nothing will be written, only verified and recorded');
     } else {
       if (previous.status !== 404) throw new Error('--delete-first-release-manifest applies only when the reviewed plan found no stable manifest; use --restore-previous');
       action = current.status === 404 ? 'already-deleted' : ours ? 'delete' : undefined;
       if (!action) throw new Error('The live stable manifest is not this release; investigate before deleting anything');
       context.log(action === 'delete'
-        ? `Will DeleteObject ${key} only; versioned objects and the ledger stay untouched; then the public manifest must return HTTP 404. CDN: ${NO_CDN}`
+        ? `Will DeleteObject ${key} only; versioned objects and the ledger stay untouched; then the public manifest must return HTTP 404. CDN: ${releaseCdnDescription(context.writeConfig.cdn)}`
         : 'The public stable manifest already returns HTTP 404; nothing will be deleted, only verified and recorded');
     }
     if (options['dry-run']) return { action: 'dry-run', planned: action };
@@ -608,7 +620,9 @@ export async function rollbackRelease(options, dependencies = {}) {
     }
     const receipt = { receipt: 'rollback', mode: restore ? 'restore-previous' : 'delete-first-release-manifest', action, version: context.version, sourceCommit: context.sha, planSHA256: expected,
       before: { status: current.status, ...(current.sha256 ? { sha256: current.sha256 } : {}) },
-      after: restore ? { status: 200, sha256: previous.sha256 } : { status: 404 }, untouched: 'versioned objects and the ledger', cdn: NO_CDN, completedAt: context.now().toISOString() };
+      after: restore ? { status: 200, sha256: previous.sha256 } : { status: 404 }, untouched: 'versioned objects and the ledger', cdn: releaseCdnDescription(context.writeConfig.cdn),
+      ...(context.writeConfig.cdn ? { cdnVerification: { policy: readReleaseCdnPolicy(context.writeConfig.cdn), publicStatus: after.status, ...(after.sha256 ? { publicManifestSHA256: after.sha256 } : {}) } } : {}),
+      completedAt: context.now().toISOString() };
     await writeAtomic(join(context.out, names.rollbackReceipt), json(receipt));
     context.log(`Rollback ${action}; the public stable manifest is ${restore ? 'the saved previous manifest' : 'HTTP 404'}. Receipt saved as ${names.rollbackReceipt}`);
     return receipt;
@@ -659,7 +673,7 @@ reverify     --plan-sha256 HASH. Makes no COS write. When stable already serves 
 rollback     --plan-sha256 HASH and exactly one of --restore-previous (write back the manifest bytes saved in the plan) or --delete-first-release-manifest (delete only manifest.json when the plan found none). Needs this output's publish-receipt.json and judges the live manifest by its raw SHA-256. Prints the action first; --dry-run stops there and records nothing. Versioned objects and the ledger are never touched; a rolled-back candidate cannot be planned, uploaded or promoted again.
 fix-headers  --plan-sha256 HASH --cancel-file /absolute/path. Only for objects this output uploaded and only while their public bytes match the plan. Same-key PUT Object - Copy with x-cos-metadata-directive: Replaced and the planned headers; bytes unchanged, then --versioned-only must pass again with the same full SHA-256.
 
-The write key comes from environment variables named in --cos-write-config (same bucket, region and prefix as --cos-config, separate variables, pinned cos-nodejs-sdk-v5@${COS_SDK_VERSION} installed with npm ci from scripts/cos-sdk/package-lock.json). Keys each command needs in its environment: plan, upload and promote both (plan reads bucket versioning with the write key); rollback --delete-first-release-manifest both (it lists COS after the delete); rollback --restore-previous and fix-headers only the write key; reverify and rollback --dry-run neither. A command stops at once when a key it uses is missing and never requires one it does not use. Neither key reaches child processes or output. TLS trust-store overrides and redirects are refused. CDN refresh is not implemented; a cdn setting is refused. A .publish.lock whose recorded process is no longer running is removed automatically.`;
+The write key comes from environment variables named in --cos-write-config (same bucket, region and prefix as --cos-config, separate variables, pinned cos-nodejs-sdk-v5@${COS_SDK_VERSION} installed with npm ci from scripts/cos-sdk/package-lock.json). Keys each command needs in its environment: plan, upload and promote both (plan reads bucket versioning with the write key); rollback --delete-first-release-manifest both (it lists COS after the delete); rollback --restore-previous and fix-headers only the write key; reverify and rollback --dry-run neither. A command stops at once when a key it uses is missing and never requires one it does not use. Neither key reaches child processes or output. TLS trust-store overrides and redirects are refused. Optional cdn: {provider:"tencent",mutablePolicy:"bypass"} requires separately verified CDN rules: mutable manifests/scripts and their error responses must bypass cache; immutable versioned files follow origin headers. Mutable public responses are checked without cache-busting; no routine CDN refresh is issued. Clear any previously cached mutable objects when first enabling the policy. A .publish.lock whose recorded process is no longer running is removed automatically.`;
 
 const invokedPath = process.argv[1] ? await realpath(resolve(process.argv[1])).catch(() => null) : null;
 if (invokedPath && invokedPath === await realpath(scriptPath)) {

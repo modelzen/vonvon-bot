@@ -9,7 +9,8 @@ import { assertOutputLocation, canonicalPath, checkVersionGate, compareVersions,
 import { cosCredentialEnvNames, readCosConfig, readCosReleaseEvidence } from './release-cos-evidence.mjs';
 import { checkedProductVersion } from './product-version.mjs';
 import { STABLE_RECEIPT, UPLOAD_RECEIPT } from './publish-server.mjs';
-import { PUBLISHED_TARGETS, SERVER_BASE_URL, archiveName, installCommand, serverRequired } from './server-constants.mjs';
+import { PUBLISHED_TARGETS, SERVER_BASE_URL, archiveName, serverRequired } from './server-constants.mjs';
+import { linuxInstallCommand } from './install-command.mjs';
 import { assertSecureTransport, readStableManifest, validateReleaseInventory } from './verify-public-release.mjs';
 
 const repository = 'modelzen/vonvon-bot', workflow = 'windows-release.yml';
@@ -554,14 +555,36 @@ export async function collectRelease({ out }, dependencies = {}) {
     serverPackages.push({ target, file, url: object.url, bytes: object.bytes, sha256: object.sha256 });
   }
   const serverStableVerified = !!serverUpload && serverStable?.status === 'published' && serverStable.planSHA256 === (plan ? digest(await readFile(join(out, 'publication-plan.json'))) : undefined);
+  const mirrorExpected = !!plan?.candidate?.r2;
+  const mirrorReceiptFile = mirrorExpected ? join(out, 'server', 'r2-stable-receipt.json') : null;
+  const mirrorReceipt = mirrorReceiptFile ? await readOptional(mirrorReceiptFile) : undefined;
+  let mirrorVerified = false;
+  if (mirrorReceipt?.status === 'verified') {
+    const expected = plan.candidate.r2, stableObjects = expected.plan?.stable;
+    if (mirrorReceipt.schemaVersion !== 1 || mirrorReceipt.mode !== 'stable' || mirrorReceipt.version !== state.version || mirrorReceipt.sourceSha !== state.sha ||
+        mirrorReceipt.publicationPlanSHA256 !== digest(await readFile(join(out, 'publication-plan.json'))) || mirrorReceipt.planSHA256 !== expected.planSHA256 ||
+        expected.planSHA256 !== digest(json(expected.plan)) || expected.plan.version !== state.version || expected.plan.sourceSha !== state.sha ||
+        !Array.isArray(stableObjects) || stableObjects.length !== 3 || !Array.isArray(mirrorReceipt.verification) || mirrorReceipt.verification.length !== stableObjects.length ||
+        !['install.sh', 'uninstall.sh', 'stable-manifest.json'].every(file => {
+          const object = stableObjects.find(item => item.file === file), verified = mirrorReceipt.verification.find(item => item.file === file);
+          return object && verified && verified.url === object.url && verified.bytes === object.bytes && Number.isSafeInteger(verified.bytes) && verified.bytes > 0 &&
+            /^[a-f0-9]{64}$/.test(verified.sha256) && verified.sha256 === object.sha256;
+        })) throw new Error('R2 stable receipt differs from the reviewed publication plan');
+    mirrorVerified = true;
+  }
+  // Keep the website's string field, but derive it from the tested inline bootstrap instead of a single-source curl.
+  const installCommand = serverExpected ? await linuxInstallCommand() : undefined;
+  const installCommandFile = serverExpected ? join(out, 'linux-install-command.sh') : null;
+  if (installCommandFile) await writeFile(installCommandFile, installCommand, { mode: 0o600 });
   const handoff = { format: 1, version: state.version, sourceSha: state.sha, readyForWebsite: macVerified && stableVerified && !!windows && downloads.length === 2 + windowsArchitectures.length && (!windows.updatesEnabled || updatesVerified)
-      && (!serverExpected || serverStableVerified),
+      && (!serverExpected || serverStableVerified) && (!mirrorExpected || mirrorVerified),
     mac: { versionedVerified: macVerified, stableVerified, notarization: mac?.notarization ?? stable?.notarization ?? null },
     windows: { published: !!windows, signed: false, updatesEnabled: updatesVerified, ...(updatesVerified ? { updateFeeds: updates.feeds } : {}) }, downloads,
     // Linux only: Mac and Windows install the desktop app, which carries its server (owner 2026-11-01).
-    server: serverExpected ? { published: !!serverUpload, stableVerified: serverStableVerified, installCommand, packages: serverPackages } : null,
+    server: serverExpected ? { published: !!serverUpload, stableVerified: serverStableVerified, mirrorVerified: mirrorExpected ? mirrorVerified : null, installCommand, packages: serverPackages } : null,
     evidence: { mac: state.macRelease ? join(state.macRelease, 'upload-receipt.json') : null, stable: state.macRelease ? join(state.macRelease, 'publish-receipt.json') : null,
-      windows: join(out, 'windows', 'windows-publish-receipt.json'), server: serverExpected ? join(out, 'server', STABLE_RECEIPT) : null } };
+      windows: join(out, 'windows', 'windows-publish-receipt.json'), server: serverExpected ? join(out, 'server', STABLE_RECEIPT) : null,
+      linuxInstallCommand: installCommandFile, r2: mirrorReceiptFile } };
   await atomicJSON(join(out, 'release-handoff.json'), handoff);
   runtime(dependencies).log(json(handoff));
   return handoff;

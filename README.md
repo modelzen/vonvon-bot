@@ -11,11 +11,7 @@ The port is based on `modelzen/vonvon-bot` commit `fab5237`. `packages/protocol/
 ## 安装
 
 - Mac、Windows：从 https://vonvon.cc/get/ 下载桌面端安装包，里面带着服务端。
-- Linux（glibc，x64 或 arm64）只装服务端，0.9.0 起可用：
-
-  ```sh
-  sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/install.sh)"
-  ```
+- Linux（glibc，x64 或 arm64）只装服务端，0.9.0 起可用：从 [官网下载页](https://vonvon.cc/get/) 复制完整安装命令。双源安装方式和发布状态边界见 [Linux 服务端安装](docs/server-install.md)。
 
   装到 `~/.local/share/vonvon-bot/server`，数据在 `~/.vonvon-bot`。卸载用 `sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/uninstall.sh)"`，数据目录留着。这条命令只给 Linux，在 Mac 上运行只提示去下载安装包。
 
