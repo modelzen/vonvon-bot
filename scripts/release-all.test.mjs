@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { buildRelease, collectRelease, inspectRunners, jobTimings, prepareRelease, releaseStatus, runReleaseChild, windowsRunTitle, workflowLabels } from './release-all.mjs';
+import { linuxInstallCommand } from './install-command.mjs';
 
 const sha = 'a'.repeat(40), version = '1.2.3', VERSION = version, hash = value => createHash('sha256').update(value).digest('hex');
 const save = (path, value) => writeFile(path, JSON.stringify(value));
@@ -581,10 +582,46 @@ test('from 0.9.0 the website handoff always waits for the server stable, even wh
   await save(join(h.options.out, 'server', 'server-stable-receipt.json'), { version, sourceSha: sha, planSHA256, status: 'published' });
   const ready = await collectRelease({ out: h.options.out }, h.dependencies);
   assert.equal(ready.readyForWebsite, true);
-  assert.equal(ready.server.installCommand, 'sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/install.sh)"');
+  assert.equal(ready.server.installCommand, await linuxInstallCommand());
+  assert.match(ready.server.installCommand, /^sh <<'VONVON_INSTALL'\n/);
+  assert.match(ready.server.installCommand, /domestic='https:\/\/dl\.vonvon\.cc\/bot\/server'/);
+  assert.match(ready.server.installCommand, /global='https:\/\/vonvon-linux-download\.amber2clay\.workers\.dev\/bot\/server'/);
+  assert.equal(ready.evidence.linuxInstallCommand, join(h.options.out, 'linux-install-command.sh'));
+  assert.equal(await readFile(ready.evidence.linuxInstallCommand, 'utf8'), ready.server.installCommand);
   assert.deepEqual(ready.server.packages.map(item => item.target), ['linux-x64', 'linux-arm64']);
   assert.equal(ready.downloads.some(item => item.platform === 'server'), false, 'the website download list stays macOS and Windows');
   objects[1].url = 'https://example.com/elsewhere';
   await save(join(h.options.out, 'server', 'server-publish-receipt.json'), { version, sourceSha: sha, objects });
   await assert.rejects(collectRelease({ out: h.options.out }, h.dependencies), /Server receipt lacks/);
+});
+
+test('website handoff with an R2 plan waits for matching stable mirror verification and rejects contradictory receipts', async t => {
+  const h = await fixture(t); await buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies); await receipts(h, true);
+  const mirror = 'https://vonvon-linux-download.amber2clay.workers.dev/bot/server';
+  const stable = ['install.sh', 'uninstall.sh', 'stable-manifest.json'].map(file => ({ file, url: `${mirror}/${file === 'stable-manifest.json' ? 'stable/manifest.json' : file}`, bytes: 10, sha256: hash(file) }));
+  const plan = { version, sourceSha: sha, stable };
+  const nestedHash = hash(`${JSON.stringify(plan, null, 2)}\n`);
+  const planPath = join(h.options.out, 'publication-plan.json');
+  await save(planPath, { format: 1, candidate: { server: { version }, r2: { plan, planSHA256: nestedHash } } });
+  await serverReceipts(h);
+  const missing = await collectRelease({ out: h.options.out }, h.dependencies);
+  assert.equal(missing.readyForWebsite, false); assert.equal(missing.server.mirrorVerified, false);
+  const file = join(h.options.out, 'server', 'r2-stable-receipt.json');
+  const receipt = { schemaVersion: 1, status: 'verified', version, sourceSha: sha, mode: 'stable', planSHA256: nestedHash, publicationPlanSHA256: hash(await readFile(planPath)), verification: stable };
+  for (const status of ['sync-started', 'failed']) {
+    await save(file, { ...receipt, status });
+    assert.equal((await collectRelease({ out: h.options.out }, h.dependencies)).readyForWebsite, false);
+  }
+  await save(file, receipt);
+  const ready = await collectRelease({ out: h.options.out }, h.dependencies);
+  assert.equal(ready.readyForWebsite, true); assert.equal(ready.server.mirrorVerified, true); assert.equal(ready.evidence.r2, file);
+  for (const change of [
+    { publicationPlanSHA256: '0'.repeat(64) }, { planSHA256: '0'.repeat(64) }, { version: '1.2.2' }, { sourceSha: '0'.repeat(40) },
+    { verification: stable.slice(1) }, { verification: [stable[0], stable[0], stable[2]] },
+    { verification: stable.map((object, index) => index ? object : { ...object, sha256: '0'.repeat(64) }) },
+    { verification: stable.map((object, index) => index ? object : { ...object, url: 'https://wrong.example/install.sh' }) },
+  ]) {
+    await save(file, { ...receipt, ...change });
+    await assert.rejects(collectRelease({ out: h.options.out }, h.dependencies), /R2 stable receipt differs/);
+  }
 });
