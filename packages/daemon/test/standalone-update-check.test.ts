@@ -49,6 +49,33 @@ describe('checkStandaloneUpdate', () => {
     publish('1.0.1', 1);
     expect(await checkStandaloneUpdate(deps)).toMatchObject({ latest: '1.0.1', hasUpdate: false });
   });
+  it('does not roll the recorded version back when only a stale mirror is reachable', async () => {
+    const { deps, publish, state, installRoot, cdn } = setup();
+    await mkdir(installRoot, { recursive: true });
+    publish('1.0.2', 2000);
+    await checkStandaloneUpdate(deps);
+    const mirror = 'https://mirror.example.test/bot/server';
+    cdn.routes.delete(MANIFEST);
+    cdn.routes.set(`${mirror}/stable/manifest.json`, { body: signManifest(manifestPayload('1.0.1', 1000), keys.privateKey) });
+    expect(await checkStandaloneUpdate({ ...deps, config: () => ({ ...keys.config, mirrorBaseURLs: [mirror] }) })).toMatchObject({ latest: null, refused: 'rollback' });
+    expect(await state()).toMatchObject({ highestSeen: '1.0.2', lastPublishedAt: 2000 });
+  });
+  it('does not let a fast stale mirror cancel the slower domestic source with a usable update', async () => {
+    const { deps, publish, state, installRoot, cdn } = setup();
+    await mkdir(installRoot, { recursive: true });
+    publish('1.0.2', 2000);
+    await checkStandaloneUpdate(deps);
+    const mirror = 'https://mirror.example.test/bot/server';
+    cdn.routes.set(`${mirror}/stable/manifest.json`, { body: signManifest(manifestPayload('1.0.1', 1000), keys.privateKey) });
+    publish('1.0.3', 3000);
+    const checked = await checkStandaloneUpdate({ ...deps, config: () => ({ ...keys.config, mirrorBaseURLs: [mirror] }), fetch: async (url, init) => {
+      if (url.startsWith(BASE)) await new Promise(resolve => setTimeout(resolve, 500));
+      expect(init?.signal?.aborted).toBe(false);
+      return cdn.fetch(url);
+    } });
+    expect(checked).toMatchObject({ latest: '1.0.3', hasUpdate: true });
+    expect(await state()).toMatchObject({ highestSeen: '1.0.3', lastPublishedAt: 3000 });
+  });
   it('tells a missing key, a bad signature and no network apart', async () => {
     const { deps, publish, installRoot } = setup();
     await mkdir(installRoot, { recursive: true });
@@ -95,11 +122,13 @@ describe('checkStandaloneUpdate', () => {
     await writeFile(join(installRoot, 'update-state.json'), JSON.stringify({ v: 1, highestSeen: '1.0.0', lastPublishedAt: 0, lastCheckAt: 0 }));
     const held: Array<() => void> = [];
     let free = false;
+    let fetched = false;
     vi.doMock('node:fs/promises', async original => {
       const fs = await original<typeof import('node:fs/promises')>();
       const readFile = async (...args: Parameters<typeof fs.readFile>) => {
         const data = await fs.readFile(...args);
-        if (String(args[0]).endsWith('update-state.json') && !free) await new Promise<void>(resolve => held.push(resolve));
+        // Pause the read/write transaction after fetching, not the new read-only floor snapshot before selection.
+        if (String(args[0]).endsWith('update-state.json') && fetched && !free) await new Promise<void>(resolve => held.push(resolve));
         return data;
       };
       return { ...fs, readFile, default: { ...fs, readFile } };
@@ -107,7 +136,10 @@ describe('checkStandaloneUpdate', () => {
     const daemon = async (version: string, publishedAt: number) => {
       vi.resetModules();
       const instance = await import('../src/service/standalone-update');
-      return instance.checkStandaloneUpdate({ ...deps, fetch: async () => new Response(signManifest(manifestPayload(version, publishedAt), keys.privateKey)) });
+      return instance.checkStandaloneUpdate({ ...deps, fetch: async () => {
+        fetched = true;
+        return new Response(signManifest(manifestPayload(version, publishedAt), keys.privateKey));
+      } });
     };
     try {
       const high = daemon('1.0.2', 2000);
@@ -143,11 +175,11 @@ describe('scheduleStandaloneChecks', () => {
     await vi.advanceTimersByTimeAsync(59_000);
     expect(cdn.requests).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1000);
-    expect(cdn.requests).toHaveLength(1);
+    await vi.waitFor(() => expect(cdn.requests).toHaveLength(1));
     await vi.advanceTimersByTimeAsync(23 * 3_600_000);
     expect(cdn.requests).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(3_600_000);
-    expect(cdn.requests).toHaveLength(2);
+    await vi.waitFor(() => expect(cdn.requests).toHaveLength(2));
     stop();
     await vi.advanceTimersByTimeAsync(48 * 3_600_000);
     expect(cdn.requests).toHaveLength(2);

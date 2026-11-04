@@ -223,10 +223,10 @@ export function EnvironmentPanel({ request, reveal }: Props) {
     onUninstall: setBackendDisable,
   };
 
-  return <section className="environment-panel" aria-label={where.isRemote ? `${whereName(where)}的工具与连接` : "本机环境"} id={settingAnchor('工具与连接')}>
+  return <section className="environment-panel" aria-label={where.isRemote ? `${whereName(where)}的工具` : "工具"} id={settingAnchor('工具与连接')}>
     <header className="environment-lead today-page-heading">
-      <h1>工具与连接</h1>
-      <IconButton label="重新检测" title={where.isRemote ? `重新检测${whereName(where)}的工具与连接` : "重新检测本机工具与连接"} disabled={busy} onClick={() => void refresh()}><RefreshCw size={15}/></IconButton>
+      <h1>工具</h1>
+      <IconButton label="重新检测" title={where.isRemote ? `重新检测${whereName(where)}的工具` : "重新检测本机工具"} disabled={busy} onClick={() => void refresh()}><RefreshCw size={15}/></IconButton>
     </header>
     {where.isRemote && <p className="environment-notice" role="note">{remoteToolsNote(where)}</p>}
     {notice && <p className="environment-notice" role="status">{onDeviceText(where, notice)}</p>}

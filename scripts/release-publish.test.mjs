@@ -373,3 +373,146 @@ test('the server plan is part of the review: a changed server candidate stops up
   await assert.rejects(uploadPublication(f.options, f.dependencies), /changed since review|differs/);
   assert.deepEqual(f.calls, []);
 });
+
+async function withR2(f) {
+  const publicBaseURL = 'https://fixture.workers.dev/bot/server';
+  const configPath = join(f.out, 'r2-linux.json');
+  const config = { endpoint: `https://${'b'.repeat(32)}.r2.cloudflarestorage.com`, bucket: 'fixture-linux', publicBaseURL, accessKeyIdEnv: 'R2_ID', secretAccessKeyEnv: 'R2_SECRET', sdkModule: '/private/tools/node_modules/@aws-sdk/client-s3' };
+  await save(configPath, config);
+  f.serverPlan.mirrorBaseURLs = [publicBaseURL];
+  f.dependencies.r2ConfigPath = configPath;
+  f.dependencies.env.R2_ID = 'r2-private'; f.dependencies.env.R2_SECRET = 'r2-private';
+  f.dependencies.macDependencies.env.R2_ID = 'r2-private'; f.dependencies.macDependencies.env.R2_SECRET = 'r2-private';
+  await mkdir(join(f.out, 'server'), { recursive: true });
+  f.dependencies.planR2 = async input => {
+    assert.deepEqual(input.serverPlan, f.serverPlan);
+    assert.equal(input.config.publicBaseURL, publicBaseURL);
+    return { schemaVersion: 1, kind: 'r2-linux-mirror', version: f.version, sourceSha: sha, publicKey: 'fixture', publishedAt: f.serverPlan.publishedAt,
+      target: { endpoint: config.endpoint, bucket: config.bucket, publicBaseURL },
+      versioned: f.serverPlan.versioned.filter(item => !item.file.endsWith('-build.json')).map(item => ({ ...item, url: item.url.replace('https://dl.vonvon.cc/bot/server', publicBaseURL) })),
+      stable: f.serverPlan.stable.map(item => ({ ...item, url: item.url.replace('https://dl.vonvon.cc/bot/server', publicBaseURL) })),
+    };
+  };
+  f.dependencies.syncR2 = async ({ plan, planSHA256, mode, env, cancelFile }) => {
+    assert.deepEqual(env, { R2_ID: 'r2-private', R2_SECRET: 'r2-private' });
+    assert.equal(cancelFile, join(f.out, 'CANCEL'));
+    assert.equal(planSHA256, hash(json(plan)));
+    f.calls.push(`r2-${mode}`);
+    await f.flags.r2?.(mode);
+    return { schemaVersion: 1, status: 'verified', version: f.version, planSHA256, mode, objects: plan[mode].map(({ file }) => ({ file, action: 'uploaded' })), verification: plan[mode] };
+  };
+  const plan = await planPublication(f.options, f.dependencies);
+  f.options['plan-sha256'] = plan.planSHA256;
+  return { ...f, r2ConfigPath: configPath, r2Config: config };
+}
+
+test('enabled packaged mirrors require the matching config, and pin both config and mirror plan', async t => {
+  const f = await fixture(t, true, true);
+  f.serverPlan.mirrorBaseURLs = ['https://fixture.workers.dev/bot/server'];
+  f.dependencies.r2ConfigPath = join(f.out, 'missing-r2-linux.json');
+  await assert.rejects(planPublication(f.options, f.dependencies), /ENOENT|r2-linux/);
+  assert.deepEqual(f.calls, []);
+  const g = await withR2(f);
+  const plan = JSON.parse(await readFile(join(g.out, 'publication-plan.json'), 'utf8'));
+  assert.equal(plan.configs.r2.sha256, hash(await readFile(g.r2ConfigPath)));
+  assert.equal(plan.candidate.r2.planSHA256, hash(json(plan.candidate.r2.plan)));
+  assert.equal(plan.candidate.r2.plan.target.publicBaseURL, g.r2Config.publicBaseURL);
+  g.serverPlan.mirrorBaseURLs = ['https://different.workers.dev/bot/server'];
+  await assert.rejects(planPublication(g.options, g.dependencies), /must exactly match/);
+  assert.deepEqual(g.calls, []);
+});
+
+test('R2 is isolated, uploads before stable, and promotes only after canonical COS', async t => {
+  const f = await withR2(await fixture(t, true, true));
+  await uploadPublication(f.options, f.dependencies);
+  assert.equal(f.calls.includes('r2-versioned'), true);
+  assert.equal(f.calls.includes('r2-stable'), false);
+  await promotePublication(f.options, f.dependencies);
+  assert.deepEqual(f.calls.slice(-5), ['promote', 'windows-promote', 'server-promote', 'r2-stable', 'collect']);
+  const receipt = JSON.parse(await readFile(join(f.out, 'server/r2-stable-receipt.json'), 'utf8'));
+  assert.equal(receipt.status, 'verified');
+  assert.equal(receipt.publicationPlanSHA256, f.options['plan-sha256']);
+  assert.equal(receipt.sourceSha, sha);
+  assert.equal(receipt.verification.length, 3);
+  assert.deepEqual((await publicationStatus(f.options)).r2, { publicBaseURL: f.r2Config.publicBaseURL, uploadStatus: 'verified', stableStatus: 'verified' });
+});
+
+test('failed R2 versioned upload blocks all stable and reruns only the failed branch', async t => {
+  const f = await withR2(await fixture(t, true, true));
+  f.flags.r2 = async () => { throw new Error('PRIVATE-SDK-SECRET'); };
+  await assert.rejects(uploadPublication(f.options, f.dependencies), error => /R2 publication helper failed/.test(error.message) && !error.message.includes('PRIVATE'));
+  assert.equal((await publicationStatus(f.options)).r2.uploadStatus, 'failed');
+  await assert.rejects(promotePublication(f.options, f.dependencies), /required before stable/);
+  assert.equal(f.calls.includes('promote'), false);
+  f.flags.r2 = undefined;
+  const before = f.calls.length;
+  await uploadPublication(f.options, f.dependencies);
+  assert.deepEqual(f.calls.slice(before), ['r2-versioned']);
+});
+
+test('failed R2 stable leaves no website handoff and same-plan recovery verifies COS then mirror', async t => {
+  const f = await withR2(await fixture(t, true, true));
+  await uploadPublication(f.options, f.dependencies);
+  f.flags.r2 = async mode => { if (mode === 'stable') throw new Error('PRIVATE-SDK-SECRET'); };
+  await assert.rejects(promotePublication(f.options, f.dependencies), error => /R2 Linux mirror publication failed/.test(error.message) && !error.message.includes('PRIVATE'));
+  assert.equal(f.calls.includes('collect'), false);
+  assert.equal((await publicationStatus(f.options)).r2.stableStatus, 'failed');
+  f.flags.r2 = undefined;
+  const before = f.calls.length;
+  await promotePublication(f.options, f.dependencies);
+  assert.deepEqual(f.calls.slice(before), ['verify-stable', 'windows-promote', 'server-promote', 'r2-stable', 'collect']);
+  assert.equal(f.calls.filter(value => value === 'promote').length, 1);
+});
+
+test('R2 config drift, forged receipts, missing owner confirmation and changed mirror plan cannot bypass review', async t => {
+  const f = await withR2(await fixture(t, true, true));
+  const original = await readFile(f.r2ConfigPath);
+  await writeFile(f.r2ConfigPath, Buffer.concat([original, Buffer.from('\n')]));
+  await assert.rejects(uploadPublication(f.options, f.dependencies), /configuration changed since review/);
+  assert.deepEqual(f.calls, []);
+  await writeFile(f.r2ConfigPath, original);
+  await uploadPublication(f.options, f.dependencies);
+  const before = f.calls.length;
+  await assert.rejects(promotePublication({ ...f.options, 'owner-confirmation': undefined }, f.dependencies), /R2 stable requires/);
+  assert.equal(f.calls.length, before);
+  const receiptPath = join(f.out, 'server/r2-publish-receipt.json'), receipt = JSON.parse(await readFile(receiptPath, 'utf8'));
+  receipt.verification[0].sha256 = '0'.repeat(64); await save(receiptPath, receipt);
+  await assert.rejects(promotePublication(f.options, f.dependencies), /R2 upload verification differs/);
+  assert.equal(f.calls.length, before);
+  f.serverPlan.publishedAt += 1;
+  await assert.rejects(uploadPublication(f.options, f.dependencies), /changed since review/);
+});
+
+test('Mac stable re-verification and recovery snapshots retain configured CDN bypass checks', async t => {
+  const f = await withR2(await fixture(t, true, true));
+  for (const path of [join(f.out, 'readonly.json'), f.options['cos-write-config']]) {
+    const config = JSON.parse(await readFile(path, 'utf8'));
+    await save(path, { ...config, cdn: { provider: 'tencent', mutablePolicy: 'bypass' } });
+  }
+  f.dependencies.macDependencies.fetchImpl = async () => new Response('same bytes', { headers: { 'cache-control': 'no-cache', age: '3600', 'x-cache-lookup': 'Cache Hit' } });
+  f.options['plan-sha256'] = (await planPublication(f.options, f.dependencies)).planSHA256;
+  await uploadPublication(f.options, f.dependencies);
+  await promotePublication(f.options, f.dependencies);
+  f.dependencies.verifyPublicMac = async ({ fetchImpl }) => { await fetchImpl('https://dl.vonvon.cc/bot/mac/stable/manifest.json', { redirect: 'error' }); return { publiclyVerified: true }; };
+  await assert.rejects(promotePublication(f.options, f.dependencies), /nonzero or invalid Age/);
+  const receiptPath = join(f.macOut, 'publish-receipt.json'), receipt = JSON.parse(await readFile(receiptPath, 'utf8'));
+  await save(receiptPath, { ...receipt, status: 'write-started' });
+  f.dependencies.readLiveManifest = async ({ fetchImpl }) => { await fetchImpl('https://dl.vonvon.cc/bot/mac/stable/manifest.json', { redirect: 'error' }); };
+  await assert.rejects(promotePublication(f.options, f.dependencies), /nonzero or invalid Age/);
+});
+
+test('failed re-verification invalidates a previous ready handoff and status also checks mirror receipts', async t => {
+  const f = await withR2(await fixture(t, true, true));
+  await uploadPublication(f.options, f.dependencies);
+  await promotePublication(f.options, f.dependencies);
+  const handoffPath = join(f.out, 'release-handoff.json');
+  await save(handoffPath, { readyForWebsite: true });
+  assert.equal((await publicationStatus(f.options)).website, 'handoff-ready; deployment not verified');
+  f.flags.r2 = async mode => { if (mode === 'stable') throw new Error('verification failed'); };
+  await assert.rejects(promotePublication(f.options, f.dependencies), /R2 Linux mirror publication failed/);
+  assert.equal(JSON.parse(await readFile(handoffPath, 'utf8')).readyForWebsite, false);
+  assert.equal((await publicationStatus(f.options)).website, 'not-ready');
+  // A legacy/stale handoff must not contradict the current failed mirror receipt either.
+  await save(handoffPath, { readyForWebsite: true });
+  assert.equal((await publicationStatus(f.options)).website, 'not-ready');
+});

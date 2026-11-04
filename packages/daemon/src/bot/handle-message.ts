@@ -34,6 +34,7 @@ import { registerVoiceConsole } from './voice-console';
 import { createVoiceService } from '../voice/service';
 import { ingestVoice, createIntakeQueue, type IngestedContext } from '../voice/inbound';
 import type { VoiceReply } from '../voice/types';
+import { VoiceMessages } from '../voice/messages';
 import { steerWithDeadline, isRejectedSteer } from './steer-delivery';
 import { TurnCardEvents, type SteerCardEvent } from './turn-card-events';
 import { runSegment } from '../card/run-segment';
@@ -321,11 +322,11 @@ import {
   BACKFILL_MAX,
   OPENING_MAIN_MAX,
   STREAMING_RECHECK_MS,
-  fetchChatContext,
+  fetchChatContext as pullChatContext,
   fetchMessageMeta,
   fetchTopicLastBot,
-  fetchQuotedMessage,
-  fetchThreadContext,
+  fetchQuotedMessage as pullQuotedMessage,
+  fetchThreadContext as pullThreadContext,
   keepRecent,
   OPENING_MAX,
   weaveQuote,
@@ -1656,6 +1657,22 @@ export function createOrchestrator(
   // then commits it to LIVE — concurrent clicks cannot erase one another.
   const writePreferences = createAppPreferencesWriter({ cfg });
   const voice = createVoiceService(cfg, writePreferences);
+  const voiceMessages = new VoiceMessages();
+  // A known transcript remains text when Feishu later returns the audio in
+  // a quote, topic opening or history backfill. Read access still goes through
+  // the ordinary fetch, so a missing/deleted message is never resurrected.
+  const fetchQuotedMessage: typeof pullQuotedMessage = async (...args) => {
+    const message = await pullQuotedMessage(...args);
+    return message ? voiceMessages.context(message) : message;
+  };
+  const fetchThreadContext: typeof pullThreadContext = async (...args) => {
+    const pulled = await pullThreadContext(...args);
+    return { ...pulled, messages: pulled.messages.map(message => voiceMessages.context(message)) };
+  };
+  const fetchChatContext: typeof pullChatContext = async (...args) => {
+    const pulled = await pullChatContext(...args);
+    return { ...pulled, messages: pulled.messages.map(message => voiceMessages.context(message)) };
+  };
   const orderContext = createIntakeQueue();
   const orderTurns = createIntakeQueue();
   // pendingPolicy is read per-message (settings card can change it live)
@@ -2626,14 +2643,63 @@ export function createOrchestrator(
       if (remaining) intakeChats.set(chatId, remaining); else intakeChats.delete(chatId);
     }
   }
-  const onMessage = (msg: NormalizedMessage): Promise<void> => duringIntake(msg.chatId, () => handleMessage(msg));
-  const handleMessage = async (msg: NormalizedMessage): Promise<void> => {
+  // ASR must precede text routing without pinning the SDK's per-chat queue.
+  // Only a place with pending audio is held; sibling topics and card actions
+  // remain available, and later text cannot overtake an earlier voice message.
+  type IntakeStatus = Pick<ActiveState, 'intakeCancelled'>;
+  const pendingVoiceIntake = new Map<string, Promise<void>>();
+  const pendingVoiceMessages = new Map<string, Set<IntakeStatus>>();
+  function cancelIntake(state: ActiveState): void {
+    if (state.intakeCancelled) return;
+    state.intakeCancelled = true;
+    // Include messages received before this run was reserved. Only the entries
+    // already waiting at Stop are cancelled; a later resend remains eligible.
+    for (const [place, running] of active) {
+      if (running === state) for (const pending of pendingVoiceMessages.get(place) ?? []) pending.intakeCancelled = true;
+    }
+  }
+  const onMessage = (msg: NormalizedMessage): Promise<void> => {
     if (seenInbound.seen(msg.messageId)) {
       log.info('intake', 'reject', { reason: 'duplicate', msgId: msg.messageId });
-      return;
+      return Promise.resolve();
     }
+    if (recalledSkip(msg)) return Promise.resolve();
+    const place = msg.threadId ?? msg.chatId;
+    const previous = pendingVoiceIntake.get(place);
+    const owner = active.get(place);
+    if (msg.rawContentType !== 'audio' && !previous) return duringIntake(msg.chatId, () => handleMessage(msg, owner));
+    const status: IntakeStatus = { intakeCancelled: owner?.intakeCancelled };
+    const pending = pendingVoiceMessages.get(place) ?? new Set<IntakeStatus>();
+    pending.add(status);
+    pendingVoiceMessages.set(place, pending);
+    const task = duringIntake(msg.chatId, () => (previous ?? Promise.resolve()).then(() => handleMessage(msg, status)))
+      .finally(() => {
+        pending.delete(status);
+        if (!pending.size) pendingVoiceMessages.delete(place);
+      });
+    const tail = task.catch(() => undefined);
+    pendingVoiceIntake.set(place, tail);
+    void tail.then(() => { if (pendingVoiceIntake.get(place) === tail) pendingVoiceIntake.delete(place); });
+    void trackTask(task);
+    return Promise.resolve();
+  };
+  async function intakeStoppedBeforeText(msg: NormalizedMessage, owner?: IntakeStatus): Promise<boolean> {
+    if (shuttingDown || recalledSkip(msg)) return true;
+    if (!owner?.intakeCancelled) return false;
+    await channel.send(msg.chatId, { markdown: '排队期间会话已停止，请重发本条消息。' },
+      { replyTo: msg.messageId, replyInThread: Boolean(msg.threadId) }).catch(() => undefined);
+    return true;
+  }
+  async function transcribeMessage(msg: NormalizedMessage, owner?: IntakeStatus, project?: Project): Promise<NormalizedMessage | undefined> {
+    const ingested = await orStop<IngestedContext | undefined>(ingestVoice(channel, msg, {
+      transcribe: (audio, durationMs) => voice.transcribe(audio, durationMs, project?.presentation?.voiceEnabled),
+    }), undefined);
+    if (!ingested || await intakeStoppedBeforeText(msg, owner)) return undefined;
+    return voiceMessages.remember(msg, ingested);
+  }
+  const handleMessage = async (msg: NormalizedMessage, intakeOwner?: IntakeStatus): Promise<void> => {
     // Feishu does not keep events in order: a recall can come before its message (s15).
-    if (recalledSkip(msg)) return;
+    if (await intakeStoppedBeforeText(msg, intakeOwner)) return;
     // No message text (3.5); the ids' last 6 characters match the 状态与诊断 page's 消息尾号.
     log.info('intake', 'recv', {
       senderType: rawSender(msg)?.sender_type,
@@ -2649,24 +2715,49 @@ export function createOrchestrator(
     // before any reply, record, watermark or note; its topic message is answered (s14d).
     if (msg.chatType === 'p2p') {
       if (await syncCopy.skip(msg, true)) return;
+      if (!fromBot(msg) && msg.rawContentType === 'audio') {
+        const textMessage = await transcribeMessage(msg, intakeOwner);
+        if (!textMessage) return;
+        msg = textMessage;
+      }
       if (!fromBot(msg) && typedCandidate(msg) && asks.dmText({ openId: msg.senderId, text: msg.content.trim(), messageId: msg.messageId, createTime: msg.createTime })) return;
       await handleDmConsole(channel, cfg, msg);
       return;
     }
 
-    const project = await getProjectByChatId(msg.chatId);
+    let project = await getProjectByChatId(msg.chatId);
     // @门：没 @ 时只在「项目群 + 免@ 适用」才响应。免@默认开,但 multi 仅话题内、
     // single 整群;非项目群一律不响应非 @ 消息。Another bot's message never is (s22:
     // rule mode's bots do not see each other). Who an unnamed message is for (三条
     // 底线) is looked up below, after the cheap gates; this is what may be for it.
     // A smart group's every message from a person may be (s25).
-    const smart = project !== undefined && sessionModeOf(project) === 'smart';
+    let smart = project !== undefined && sessionModeOf(project) === 'smart';
     const bot = fromBot(msg);
     const wakeable = bot && smart && msg.mentionedBot;
-    const maybe = !bot && (msg.mentionedBot || Boolean(project && (smart || shouldRespondWithoutMention(project, msg)
+    let maybe = !bot && (msg.mentionedBot || Boolean(project && (smart || shouldRespondWithoutMention(project, msg)
       || (noMentionOf(project) && quotedId(msg) !== undefined))));
-    // A smart group's unnamed message is looked up for a copy in its lane, off this chat's queue (s25).
-    if (await syncCopy.skip(msg, (smart ? msg.mentionedBot : maybe) || resumePublications.has(msg.chatId))) return;
+    // Audio may contain a command, so only metadata can exclude it before ASR.
+    const voiceCandidate = msg.rawContentType === 'audio' && !bot && Boolean(project && (msg.mentionedBot || smart
+      || (noMentionOf(project) && !msg.mentionAll && !msg.mentions.some(mention => !mention.isBot))));
+    // Resolve audio copies before spending a transcription on the duplicate.
+    if (await syncCopy.skip(msg, voiceCandidate || (smart ? msg.mentionedBot : maybe) || resumePublications.has(msg.chatId))) return;
+    if (voiceCandidate && project && project.enabled !== false
+      && !resumePublications.has(msg.chatId) && !projectMutations.has(msg.chatId)
+      && isChatAllowed(cfg, msg.chatId) && isUserAllowedInProject(cfg, project, msg.senderId)) {
+      // The audience gates do not need the spoken words: a voice in another
+      // bot's topic is rejected before downloading, just like other media.
+      if (!smart && !msg.mentionedBot && !(await forThisBot(msg, project, false))) return;
+      intakeOwner ??= active.get(msg.threadId ?? msg.chatId);
+      const textMessage = await transcribeMessage(msg, intakeOwner, project);
+      if (!textMessage) return;
+      msg = textMessage;
+      // An external settings edit may have landed while recognition was pending.
+      project = await getProjectByChatId(msg.chatId);
+      if (await intakeStoppedBeforeText(msg, intakeOwner)) return;
+      smart = project !== undefined && sessionModeOf(project) === 'smart';
+      maybe = msg.mentionedBot || Boolean(project && (smart || shouldRespondWithoutMention(project, msg)
+        || (noMentionOf(project) && quotedId(msg) !== undefined)));
+    }
     // Every message of a smart group is a line its judgements may read, said to this bot or not (product.md 3.5).
     if (smart && isChatAllowed(cfg, msg.chatId)) {
       recent.add(msg.threadId ?? msg.chatId, lineOfMessage(msg, names.peek(msg.senderId) ?? msg.senderName ?? '某人', quotedLine(recent, msg)));
@@ -2980,6 +3071,7 @@ export function createOrchestrator(
     noteRecalled(id);
     // Out of what later judgements read; a judgement made for it stops (its landing checks again).
     recent.remove(id);
+    voiceMessages.forget(id);
     smartLanes.abort(id);
     let dropped = 0;
     for (const state of active.values()) {
@@ -3066,7 +3158,7 @@ export function createOrchestrator(
    * The group's only bot looks nothing up and answers as before s22.
    * 'me': it names this bot; 'nobody': the mode decides; undefined: not answered.
    */
-  async function forThisBot(msg: NormalizedMessage, project: Project): Promise<'me' | 'nobody' | undefined> {
+  async function forThisBot(msg: NormalizedMessage, project: Project, textReady = true): Promise<'me' | 'nobody' | undefined> {
     let info: Promise<ChatInfo> | undefined;
     const chat = (): Promise<ChatInfo> => (info ??= topicCtx.chatInfo(msg.chatId));
     const who = await audienceOf(msg, { noMention: noMentionOf(project) }, {
@@ -3087,7 +3179,8 @@ export function createOrchestrator(
         noteNotReplied(msg, 'lookup-failed', { detail: who.why === 'quote' ? '引用的消息' : '话题里谁在说话' });
         return undefined;
       case 'nobody': {
-        if (!shouldRespondWithoutMention(project, msg)) return undefined;
+        // Audio intake checks the same audience first, then this content gate after ASR.
+        if (textReady && !shouldRespondWithoutMention(project, msg)) return undefined;
         // A main-area command or /goal of a 多会话 group (nothing else gets here): each bot would answer it.
         if (!msg.threadId && ruleKind(project) === 'multi' && !(await lonely(msg.chatId))) {
           log.info('intake', 'audience', { to: 'other', by: 'command-needs-at', ref });
@@ -3243,8 +3336,12 @@ export function createOrchestrator(
         .then(() => AT_HINT_NOTE(otherBotNames(roster.peek(msg.chatId), { openId: channel.botIdentity?.openId, appId: channel.rawClient?.appId })))
         .catch(() => AT_HINT_NOTE([]))
       : undefined;
-    const audioProject = msg.rawContentType === 'audio' ? await getProjectByChatId(msg.chatId) : undefined;
-    const ingested = msg.rawContentType === 'audio' ? await ingestVoice(channel, msg, { transcribe: (audio, durationMs) => voice.transcribe(audio, durationMs, audioProject?.presentation?.voiceEnabled) }) : { text };
+    const preparedVoice = voiceMessages.get(msg);
+    // Successful voice already took the same escaping/command path as text.
+    // Failed recognition retains its explicit audio fallback, never as a command.
+    const ingested = preparedVoice
+      ? { ...preparedVoice, text: preparedVoice.voice?.transcribed ? text : preparedVoice.text }
+      : { text };
     let body = ingested.text;
     if (messageHasFiles(msg)) {
       const { files, failed } = await collectInboundFiles(channel, msg);
@@ -7325,7 +7422,7 @@ export function createOrchestrator(
     // 让位给运行期 interrupt（launchRun 每轮重装）。
     state.interrupt = () => {
       if (!q.cancel()) return;
-      state.intakeCancelled = true;
+      cancelIntake(state);
       active.delete(activeKey);
       if (opts.knownThreadId) sessions.delete(opts.knownThreadId);
       // 还没跑过任何 turn：直接回收进程。持久化记录保留，重发消息经 resume 兜底。
@@ -7555,7 +7652,7 @@ export function createOrchestrator(
     /** Ends the run with the turns queued behind it (the loop's stops below): people are asked to resend under `target`,
      * a scheduled turn settled by `scheduledWhy` (askAgain). */
     const dropQueue = (scheduledWhy: string, target: string | undefined, facts: Record<string, boolean>): void => {
-      state.intakeCancelled = true;
+      cancelIntake(state);
       if (scheduledWhy === 'occupied') state.evictedDrop = true;
       dropCompact(state);
       const dropped = askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了', scheduledWhy);
@@ -7689,7 +7786,7 @@ export function createOrchestrator(
         // review 260: the ⏹ entry comes only once the card is created and the topic adopted (Feishu calls, seconds when
         // Feishu is slow); a stop or the shutdown meanwhile interrupts the turn through this one, as soon as it has its id.
         const early = createEarlyInterrupt({ turnId: () => run.turnId(), abort: (tid) => void opts.thread.abort(tid).catch(() => undefined) });
-        state.interrupt = () => { state.intakeCancelled = true; early.interrupt(); };
+        state.interrupt = () => { cancelIntake(state); early.interrupt(); };
         activity?.end();
         activity = createRunActivity(opts.chatId);
         const render = new RunRender();
@@ -7912,7 +8009,7 @@ export function createOrchestrator(
           forceStop: resolveStop,
         });
         disposeInterrupt = stopper.dispose;
-        state.interrupt = () => { askTurn?.close('stopped'); state.intakeCancelled = true; stopper.interrupt(); };
+        state.interrupt = () => { askTurn?.close('stopped'); cancelIntake(state); stopper.interrupt(); };
         const idleMs = currentIdleMs();
         const idlePause = createIdlePause();
         state.idlePause = idlePause;
@@ -9557,7 +9654,7 @@ export function createOrchestrator(
     };
     const dropped = { queued: 0, held: 0, compacts: 0 };
     for (const state of active.values()) {
-      state.intakeCancelled = true;
+      cancelIntake(state);
       dropped.queued += state.queue.length;
       dropped.held += state.deferred?.length ?? 0;
       if (state.compactAfter) dropped.compacts++;

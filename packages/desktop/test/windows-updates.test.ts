@@ -4,14 +4,26 @@ import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {createRequire} from 'node:module';
+import {Agent,createServer,request,type IncomingMessage,type RequestOptions,type Server} from 'node:http';
+import {gzipSync} from 'node:zlib';
+import {CURRENT_APP_INSTALLER_FILE_NAME} from 'builder-util-runtime';
+import type {ProviderRuntimeOptions} from 'electron-updater/out/providers/Provider.js';
+import type {AppAdapter} from 'electron-updater/out/AppAdapter.js';
+import {ElectronHttpExecutor} from 'electron-updater/out/electronHttpExecutor.js';
 import {afterEach,expect,it,vi} from 'vitest';
-import {WindowsDesktopUpdater,createWindowsUpdateDriver,windowsUpdateConfiguration,verifyWindowsInstaller,allowedWindowsUpdateRequest,type WindowsUpdateDriver} from '../src/windows-updates.js';
+import {WindowsDesktopUpdater,createWindowsUpdateDriver,windowsUpdateConfiguration,verifyWindowsInstaller,allowedWindowsUpdateRequest,rejectFailedWindowsRanges,type WindowsUpdateDriver} from '../src/windows-updates.js';
 import {signWindowsUpdate,type WindowsUpdateManifest} from '../src/windows-update-manifest.mjs';
 
 const keys=generateKeyPairSync('ed25519');
 const publicKey=keys.publicKey.export({type:'spki',format:'pem'}).toString(),privateKey=keys.privateKey.export({type:'pkcs8',format:'pem'}).toString();
 const bytes=Buffer.from('fixture installer'),roots:string[]=[];
-afterEach(()=>{vi.restoreAllMocks();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
+const servers:Server[]=[];
+afterEach(async()=>{
+  for(const server of servers.splice(0))await new Promise<void>((resolve,reject)=>{
+    server.close(error=>error?reject(error):resolve());server.closeAllConnections();
+  });
+  vi.restoreAllMocks();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});
+});
 function manifest(version='1.1.0',architecture:'x64'|'arm64'='x64'):WindowsUpdateManifest{return {schemaVersion:1,product:'vonvon-bot',version,architecture,url:`https://dl.vonvon.cc/bot/windows/${version}/Vonvon-Bot-Setup-${version}-${architecture}.exe`,size:bytes.length,sha512:createHash('sha512').update(bytes).digest('base64'),notes:'改进 Windows 升级'};}
 function info(payload:WindowsUpdateManifest){return {version:payload.version,files:[{url:payload.url,sha512:payload.sha512,size:payload.size}],signedUpdate:signWindowsUpdate(payload,privateKey)};}
 class Driver extends EventEmitter {
@@ -117,4 +129,193 @@ it('enables only a packaged configuration containing one valid Ed25519 public ke
   writeFileSync(path,JSON.stringify({publicKey}));expect(await windowsUpdateConfiguration({appPath:h.root,isPackaged:true})).toEqual({publicKey});
   expect(await windowsUpdateConfiguration({appPath:h.root,isPackaged:false})).toEqual({});
   for(const config of [{publicKey:'invalid'},{publicKey,publisherName:'Legacy'},{}]){writeFileSync(path,JSON.stringify(config));expect(await windowsUpdateConfiguration({appPath:h.root,isPackaged:true})).toEqual({});}
+});
+
+// Keep these cases in the Windows CI/release regression file. Only the Electron
+// app/session and socket transport are adapted: the signed Provider, NSIS driver,
+// cache discovery, blockmap planner, differential/full download and hashes are real.
+const blockSize=4096;
+const oldChunks=Array.from({length:10},(_,i)=>Buffer.alloc(blockSize,i+1));
+const newChunks=oldChunks.map((chunk,i)=>[1,5,9].includes(i)?Buffer.alloc(blockSize,i+101):chunk);
+const oldInstaller=Buffer.concat(oldChunks),newInstaller=Buffer.concat(newChunks);
+function blockmap(chunks:Buffer[]):Buffer {
+  return gzipSync(JSON.stringify({version:'2',files:[{name:'file',offset:0,
+    checksums:chunks.map(chunk=>createHash('sha256').update(chunk).digest('base64')),
+    sizes:chunks.map(chunk=>chunk.length)}]}));
+}
+type HttpRecord={path:string;range?:string;status:number;bytes:number;contentRange?:string};
+it.each(['range','Range','RANGE'])('rejects HTTP 416 before the differential callback can advance for %s headers',async header=>{
+  let respond!: (response:IncomingMessage)=>void;
+  const response=Object.assign(new EventEmitter(),{statusCode:416});
+  const request=Object.assign(new EventEmitter(),{abort:vi.fn(()=>{
+    response.emit('aborted');response.emit('error',new Error('aborted response'));
+    request.emit('error',new Error('aborted request'));
+  })});
+  const executor={createRequest:vi.fn((_options:unknown,callback:(response:IncomingMessage)=>void)=>{
+    respond=callback;return request as unknown as ReturnType<ElectronHttpExecutor['createRequest']>;
+  })};
+  rejectFailedWindowsRanges(executor);
+  rejectFailedWindowsRanges(executor); // A refreshed Provider must not stack wrappers.
+  const advance=vi.fn();
+  const pending=new Promise<void>((_resolve,reject)=>executor.createRequest({headers:{[header]:'bytes=0-4095'}},advance).on('error',reject));
+  respond(response as unknown as IncomingMessage);
+  respond(response as unknown as IncomingMessage); // A late duplicate response must not abort twice.
+  await expect(pending).rejects.toThrow('HTTP 416');
+  expect(advance).not.toHaveBeenCalled();
+  expect(request.abort).toHaveBeenCalledTimes(1);
+});
+it.each([{headers:{Range:'bytes=0-4095'},statusCode:206},{headers:{},statusCode:200},{headers:{},statusCode:416}])('leaves ordinary responses unchanged: %j',({headers,statusCode})=>{
+  let respond!: (response:IncomingMessage)=>void;
+  const request=Object.assign(new EventEmitter(),{abort:vi.fn()});
+  const executor={createRequest:vi.fn((_options:unknown,callback:(response:IncomingMessage)=>void)=>{
+    respond=callback;return request as unknown as ReturnType<ElectronHttpExecutor['createRequest']>;
+  })};
+  rejectFailedWindowsRanges(executor);
+  const receive=vi.fn(),error=vi.fn();
+  expect(executor.createRequest({headers},receive)).toBe(request);
+  request.on('error',error);
+  const response={statusCode} as IncomingMessage;respond(response);
+  expect(receive).toHaveBeenCalledExactlyOnceWith(response);
+  expect(error).not.toHaveBeenCalled();expect(request.abort).not.toHaveBeenCalled();
+});
+async function differentialFixture(options:{architecture?:'x64'|'arm64';missingCache?:boolean;cachedBlockmap?:boolean;failRange?:boolean;rangeFailureStatus?:number;corruptRange?:boolean;corruptFull?:boolean;signedSize?:number;freshSockets?:boolean}={}) {
+  const architecture=options.architecture??'x64';
+  const root=mkdtempSync(join(tmpdir(),'windows-differential-'));roots.push(root);
+  const cache=join(root,'cache','fixture-updater');mkdirSync(cache,{recursive:true});
+  if(!options.missingCache)writeFileSync(join(cache,CURRENT_APP_INSTALLER_FILE_NAME),oldInstaller);
+  if(options.cachedBlockmap)writeFileSync(join(cache,'current.blockmap'),blockmap(oldChunks));
+  const configPath=join(root,'app-update.yml');writeFileSync(configPath,'updaterCacheDirName: fixture-updater\n');
+  const payload={...manifest('1.1.0',architecture),size:options.signedSize??newInstaller.length,
+    sha512:createHash('sha512').update(newInstaller).digest('base64')};
+  const installerPath=new URL(payload.url).pathname;
+  const oldMapPath=installerPath.replaceAll('1.1.0','1.0.0')+'.blockmap';
+  const requests:HttpRecord[]=[];
+  // Exercise both persistent connections and fresh sockets: fallback must not
+  // rely on socket reuse to avoid races with differential file cleanup.
+  const agent=new Agent({keepAlive:true,maxSockets:1});
+  const server=createServer((req,res)=>{
+    const path=new URL(req.url!,'http://localhost').pathname;
+    // Copy the primitive Range value now; the downloader reuses its headers object.
+    const range=req.headers.range;
+    const send=(status:number,body:Buffer,contentRange?:string)=>{
+      requests.push({path,range,status,bytes:body.length,contentRange});
+      res.writeHead(status,{'Content-Length':body.length,'Accept-Ranges':'bytes',...(contentRange?{'Content-Range':contentRange}:{})});res.end(body);
+    };
+    if(path===`/bot/windows/stable/${architecture}/update.json`)return send(200,Buffer.from(JSON.stringify(signWindowsUpdate(payload,privateKey))));
+    if(path===oldMapPath)return send(200,blockmap(oldChunks));
+    if(path===installerPath+'.blockmap')return send(200,blockmap(newChunks));
+    if(path!==installerPath)return send(404,Buffer.alloc(0));
+    if(!range)return send(200,options.corruptFull?Buffer.alloc(newInstaller.length):newInstaller);
+    const match=/^bytes=(\d+)-(\d+)$/.exec(range);
+    // Deliberately reject multipart Range; full GET remains available for fallback.
+    if(options.failRange)return send(options.rangeFailureStatus??416,Buffer.from('range unavailable'));
+    if(!match)return send(416,Buffer.alloc(0));
+    const start=Number(match[1]),end=Number(match[2]);
+    if(start>end||end>=newInstaller.length)return send(416,Buffer.alloc(0));
+    const body=newInstaller.subarray(start,end+1);
+    return send(206,options.corruptRange?Buffer.alloc(body.length):body,`bytes ${start}-${end}/${newInstaller.length}`);
+  });
+  servers.push(server);
+  server.on('close',()=>agent.destroy());
+  await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const address=server.address();if(!address||typeof address==='string')throw Error('Missing fixture server address');
+  const require=createRequire(import.meta.url),adapter=require('electron-updater/out/ElectronAppAdapter.js'),{AppUpdater}=require('electron-updater/out/AppUpdater.js');
+  const app:AppAdapter={version:'1.0.0',name:'fixture',isPackaged:true,appUpdateConfigPath:configPath,
+    userDataPath:join(root,'userData'),baseCachePath:join(root,'cache'),whenReady:async()=>{},relaunch:vi.fn(),quit:vi.fn(),onQuit:vi.fn()};
+  vi.spyOn(adapter,'ElectronAppAdapter').mockImplementation(function(){return app;});
+  let guard:((details:{url:string},callback:(result:{cancel:boolean})=>void)=>void)|undefined;
+  const onBeforeRequest=vi.fn((_filter:unknown,listener:NonNullable<typeof guard>)=>{guard=listener;});
+  vi.spyOn(AppUpdater.prototype,'netSession','get').mockReturnValue({webRequest:{onBeforeRequest}});
+  vi.spyOn(ElectronHttpExecutor.prototype,'createRequest').mockImplementation((opts:RequestOptions,callback:(response:IncomingMessage)=>void)=>{
+    const logicalUrl=`${opts.protocol}//${opts.hostname}${opts.path}`;
+    let cancelled=true;guard?.({url:logicalUrl},result=>{cancelled=result.cancel;});
+    if(cancelled)throw Error(`Blocked fixture request: ${logicalUrl}`);
+    // The product URL and guard remain intact; only sockets use loopback HTTP.
+    // Inherited request/download/downloadToBuffer retain real streaming/hash logic.
+    // No redirects/uploads in this fixture; those Electron-only request methods
+    // are intentionally not emulated by the Node socket adapter.
+    return request({hostname:'127.0.0.1',port:address.port,path:opts.path,method:opts.method,headers:{...opts.headers},agent:options.freshSockets?false:agent},callback) as unknown as ReturnType<ElectronHttpExecutor['createRequest']>;
+  });
+  const runtimeSpy=vi.spyOn(AppUpdater.prototype,'createProviderRuntimeOptions');
+  const driver=createWindowsUpdateDriver(publicKey,architecture);
+  const runtime=runtimeSpy.mock.results[0]!.value as ProviderRuntimeOptions;
+  const provider=await (driver as unknown as {clientPromise:Promise<{runtimeOptions:ProviderRuntimeOptions;isUseMultipleRangeRequest:boolean}>}).clientPromise;
+  const logger={info:vi.fn(),warn:vi.fn(),error:vi.fn(),debug:vi.fn()};driver.logger=logger;
+  const quitAndInstall=vi.spyOn(driver,'quitAndInstall').mockImplementation(()=>{}),beforeInstall=vi.fn(async()=>{});
+  const updater=new WindowsDesktopUpdater({current:'1.0.0',publicKey,architecture,driver,beforeInstall});
+  const installerPathOnDisk=()=> (driver as unknown as {installerPath:string}).installerPath;
+  return {root,driver,provider,runtime,onBeforeRequest,updater,payload,requests,logger,quitAndInstall,beforeInstall,oldMapPath,installerPathOnDisk,
+    ranges:()=>requests.filter(r=>r.path===installerPath&&r.range),full:()=>requests.filter(r=>r.path===installerPath&&!r.range)};
+}
+
+it('overrides only multiple Range through createWindowsUpdateDriver and retains the supplied runtime',async()=>{
+  const h=await differentialFixture();
+  expect(h.runtime.isUseMultipleRangeRequest).toBe(true);
+  expect(h.provider.runtimeOptions).toEqual({...h.runtime,isUseMultipleRangeRequest:false});
+  expect(h.provider.runtimeOptions).not.toBe(h.runtime);
+  expect(h.provider.runtimeOptions.executor).toBe(h.runtime.executor);
+  expect(h.provider.runtimeOptions.platform).toBe(h.runtime.platform);
+  expect(h.provider.isUseMultipleRangeRequest).toBe(false);
+  expect(h.driver.disableDifferentialDownload).toBe(false);
+  expect(h.onBeforeRequest).toHaveBeenCalledWith({urls:['<all_urls>']},expect.any(Function));
+});
+it.each(['x64','arm64'] as const)('reconstructs %s through the real signed Provider and NSIS downloader using only single ranges',async architecture=>{
+  const h=await differentialFixture({architecture,cachedBlockmap:architecture==='arm64'});
+  expect(await h.updater.check()).toMatchObject({state:'available'});
+  expect(await h.updater.install()).toMatchObject({state:'downloaded'});
+  expect(h.full()).toHaveLength(0);
+  expect(h.ranges().map(r=>({range:r.range,status:r.status,bytes:r.bytes,contentRange:r.contentRange}))).toEqual([1,5,9].map(i=>({
+    range:`bytes=${i*blockSize}-${(i+1)*blockSize-1}`,status:206,bytes:blockSize,
+    contentRange:`bytes ${i*blockSize}-${(i+1)*blockSize-1}/${newInstaller.length}`,
+  })));
+  expect(h.requests.some(r=>r.path===h.oldMapPath)).toBe(architecture==='x64');
+  const rebuilt=readFileSync(h.installerPathOnDisk());
+  expect(rebuilt.length).toBe(h.payload.size);
+  expect(createHash('sha512').update(rebuilt).digest('base64')).toBe(h.payload.sha512);
+  expect(h.requests.reduce((total,r)=>total+r.bytes,0)).toBeLessThan(newInstaller.length);
+  expect(h.beforeInstall).not.toHaveBeenCalled();expect(h.quitAndInstall).not.toHaveBeenCalled();
+  await h.updater.install();expect(h.beforeInstall).toHaveBeenCalledTimes(1);expect(h.quitAndInstall).toHaveBeenCalledWith(false,true);
+});
+it.each(['missingCache','failRange','corruptRange'] as const)('falls back to a verified full installer after %s',async failure=>{
+  const h=await differentialFixture({[failure]:true,freshSockets:true});
+  await h.updater.check();expect(await h.updater.install()).toMatchObject({state:'downloaded'});
+  expect(h.full()).toEqual([expect.objectContaining({status:200,bytes:newInstaller.length})]);
+  if(failure==='missingCache')expect(h.ranges()).toHaveLength(0);
+  else expect(h.ranges().length).toBeGreaterThan(0);
+  if(failure==='failRange'){
+    expect(h.ranges()).toEqual([expect.objectContaining({status:416})]);
+    expect(h.logger.error).toHaveBeenCalledWith(expect.stringContaining('fallback to full download: Error: Differential update request failed: HTTP 416'));
+  }
+  expect(h.ranges().every(r=>/^bytes=\d+-\d+$/.test(r.range!))).toBe(true);
+  expect(h.logger.error).toHaveBeenCalledWith(expect.stringContaining('fallback to full download'));
+  expect(readFileSync(h.installerPathOnDisk())).toEqual(newInstaller);
+  expect(await verifyWindowsInstaller(h.installerPathOnDisk(),h.payload)).toBe(true);
+  await h.updater.install();expect(h.quitAndInstall).toHaveBeenCalledTimes(1);
+});
+it.each([416,500].flatMap(status=>[false,true].map(freshSockets=>({status,freshSockets}))))('stops after one failed range and verifies full fallback: %j',async({status,freshSockets})=>{
+  const h=await differentialFixture({failRange:true,rangeFailureStatus:status,freshSockets});
+  await h.updater.check();expect(await h.updater.install()).toMatchObject({state:'downloaded'});
+  expect(h.ranges()).toEqual([expect.objectContaining({status})]);
+  expect(h.full()).toEqual([expect.objectContaining({status:200,bytes:newInstaller.length})]);
+  expect(await verifyWindowsInstaller(h.installerPathOnDisk(),h.payload)).toBe(true);
+  expect(h.logger.error).not.toHaveBeenCalledWith(expect.stringContaining('cannot close'));
+});
+it('rejects a corrupt full installer after an HTTP range failure',async()=>{
+  const h=await differentialFixture({failRange:true,corruptFull:true,freshSockets:true});
+  await h.updater.check();await expect(h.updater.install()).rejects.toThrow('下载或签名校验失败');
+  expect(h.ranges()).toEqual([expect.objectContaining({status:416})]);
+  expect(h.full()).toHaveLength(1);
+  expect(h.beforeInstall).not.toHaveBeenCalled();expect(h.quitAndInstall).not.toHaveBeenCalled();
+});
+it.each(['hash','size'] as const)('rejects a full fallback with the wrong final %s before installation',async kind=>{
+  const h=await differentialFixture({missingCache:true,corruptFull:kind==='hash',signedSize:kind==='size'?newInstaller.length+1:undefined});
+  await h.updater.check();await expect(h.updater.install()).rejects.toThrow('下载或签名校验失败');
+  expect(h.full()).toHaveLength(1);
+  expect(h.beforeInstall).not.toHaveBeenCalled();expect(h.quitAndInstall).not.toHaveBeenCalled();
+});
+it.each(['same-size','truncated'] as const)('rechecks the real reconstructed cache and refuses %s tampering before installation',async kind=>{
+  const h=await differentialFixture();await h.updater.check();await h.updater.install();
+  writeFileSync(h.installerPathOnDisk(),Buffer.alloc(kind==='same-size'?newInstaller.length:newInstaller.length-1));
+  await expect(h.updater.install()).rejects.toThrow('签名校验');
+  expect(h.beforeInstall).not.toHaveBeenCalled();expect(h.quitAndInstall).not.toHaveBeenCalled();
 });
