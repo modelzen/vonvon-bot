@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
-import { Client, withTenantToken } from '@larksuiteoapi/node-sdk';
+import { Client, withTenantToken, type NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import { projectRevision } from '../src/admin/collaboration';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
@@ -80,6 +80,9 @@ const fake = vi.hoisted(() => ({
   liveCards: [] as { id: number; card: unknown }[],
   bots: '1',
   judge: vi.fn(),
+  voice: vi.fn(async (_channel: unknown, msg: NormalizedMessage) => ({
+    text: '语音正文', voice: { messageId: msg.messageId, text: '语音正文', transcribed: true },
+  })),
   judgeDeps: undefined as JudgeDeps | undefined,
   judgeShutdown: vi.fn(async () => {}),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
@@ -106,6 +109,7 @@ vi.mock('../src/project/registry', async original => ({ ...await original<object
 vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: (id: string) => ({ id, listModels: async () => [], listThreads: async () => [{ sessionId: 'past' }], readHistory: fake.readHistory, startThread, fullAccessOnly: () => fake.fullOnly }) }));
 vi.mock('../src/bot/session-store', async original => ({ ...await original<object>(), getSession: async (key: string) => { await fake.sessionReads(key); await fake.hold; return fake.sessions[key]; }, upsertSession: async () => undefined }));
 vi.mock('../src/bot/session-title-coordinator', () => ({ SessionTitleCoordinator: class { startRecovery() {} async shutdown() {} } }));
+vi.mock('../src/voice/inbound', async original => ({ ...await original<object>(), ingestVoice: fake.voice }));
 vi.mock('../src/judge/judge', async original => ({
   ...await original<object>(),
   createJudge: (deps: JudgeDeps) => { fake.judgeDeps = deps; return { judge: fake.judge, warm: () => {}, shutdown: () => fake.judgeShutdown() }; },
@@ -187,6 +191,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   asked.clear();
   fake.judgeShutdown.mockImplementation(async () => {});
+  fake.voice.mockReset().mockImplementation(async (_channel, msg) => ({
+    text: '语音正文', voice: { messageId: msg.messageId, text: '语音正文', transcribed: true },
+  }));
   events = [];
   fake.inputs = [];
   fake.sessions = {};
@@ -226,6 +233,236 @@ beforeEach(() => {
   orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { attention: new FocusEverywhere() });
 });
 afterEach(async () => { setDiagnosticsSink(undefined); await orchestrator.shutdown(); });
+
+describe('voice uses the text intake path', () => {
+  const audio = (options: Parameters<typeof says>[1] = {}): EventMessage => ({
+    ...says('', options), message_type: 'audio', content: JSON.stringify({ file_key: 'voice_fixture', duration: 3000 }),
+  });
+  const transcript = (m: EventMessage, text: string) => ({
+    text, voice: { messageId: idOf(m), text, transcribed: true },
+  });
+  const panels = (card: unknown) => (card as { body: { elements: Array<{ element_id?: string; elements?: Array<{ text: { content: string } }> }> } })
+    .body.elements.filter(element => element.element_id?.startsWith('voice_')).map(element => element.elements?.[0]?.text.content);
+
+  it('judges the words and spoken name, then reuses the same transcript for execution and reply cards', async () => {
+    const m = audio();
+    const text = '小码，帮忙看一下登录接口的错误';
+    fake.voice.mockResolvedValueOnce(transcript(m, text));
+    await send(m);
+    const { req } = await judged(m);
+    expect(req.message.text).toBe(text);
+    expect(req.why).toBe('真人叫了你的完整名字');
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'salience', expect.objectContaining({ kind: 'name' }));
+    await decide(m, result('main'));
+    await vi.waitFor(() => expect(fake.finals).toHaveLength(1));
+    expect(fake.inputs).toHaveLength(1);
+    expect(fake.inputs[0]).toContain(text);
+    expect(fake.inputs[0]).not.toContain('[语音]');
+    expect(fake.inputs[0]).not.toContain(INITIATIVE_NOTE);
+    expect(panels(fake.cards[0]![2])).toEqual([text]);
+    expect(panels(fake.finals[0])).toEqual([text]);
+    await send(m);
+    expect(fake.voice).toHaveBeenCalledOnce();
+    expect(fake.inputs).toHaveLength(1);
+  });
+
+  it('keeps a skipped voice transcript in the next judgement and in history fetched for execution', async () => {
+    const first = audio();
+    const text = '部署之后登录接口一直返回 500';
+    fake.voice.mockResolvedValueOnce(transcript(first, text));
+    await send(first);
+    await decide(first, result('skip'));
+    await vi.waitFor(() => expect(records().map(record => record.reason)).toContain('judge-skip'));
+    // Feishu still returns an audio attachment. The locally known transcript must win.
+    fake.list.mockResolvedValue({ code: 0, data: { items: [{
+      message_id: idOf(first), create_time: first.create_time, msg_type: 'audio', body: { content: first.content },
+      sender: { id: 'ou_owner', id_type: 'open_id', sender_type: 'user' },
+    }], has_more: false } });
+    const next = says('小码，刚才说的故障请帮忙查一下');
+    await send(next);
+    expect((await judged(next)).req.context).toContainEqual(expect.objectContaining({ id: idOf(first), text }));
+    await decide(next, result('main'));
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
+    expect(fake.inputs[0]).toContain(text);
+    expect(fake.inputs[0]).not.toContain('[语音]');
+    expect(fake.voice).toHaveBeenCalledOnce();
+  });
+
+  it('routes a transcribed /help through the same command handler as typed text', async () => {
+    const m = audio();
+    fake.voice.mockResolvedValueOnce(transcript(m, '/help'));
+    await send(m);
+    await vi.waitFor(() => expect(fake.cardCreate).toHaveBeenCalledOnce());
+    await send(says('/help'));
+    expect(fake.cardCreate).toHaveBeenCalledTimes(2);
+    expect(fake.cardCreate.mock.calls[0]).toEqual(fake.cardCreate.mock.calls[1]);
+    expect(fake.judge).not.toHaveBeenCalled();
+    expect(fake.inputs).toEqual([]);
+    expect(fake.voice).toHaveBeenCalledOnce();
+  });
+
+  it('recognizes unmentioned commands in a no-mention multi group without turning ordinary voice into a topic', async () => {
+    fake.project = { ...base, kind: 'multi', smart: false, noMention: true };
+    const command = audio();
+    fake.voice.mockResolvedValueOnce(transcript(command, '/help'));
+    await send(command);
+    await vi.waitFor(() => expect(fake.cardCreate).toHaveBeenCalledOnce());
+    expect(fake.reply).toHaveBeenCalledWith(expect.objectContaining({ path: { message_id: idOf(command) } }));
+    const chatter = audio();
+    fake.voice.mockResolvedValueOnce(transcript(chatter, '只是和群友聊几句'));
+    await send(chatter);
+    await vi.waitFor(() => expect(fake.voice).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(fake.cardCreate).toHaveBeenCalledOnce();
+    expect(fake.judge).not.toHaveBeenCalled();
+    expect(fake.inputs).toEqual([]);
+    expect(fake.cards).toEqual([]);
+  });
+
+  it('does not transcribe an unmentioned main-area voice when the rule group requires mentions', async () => {
+    fake.project = { ...base, kind: 'multi', smart: false, noMention: false };
+    const m = audio();
+    fake.voice.mockResolvedValueOnce(transcript(m, '/help'));
+    await send(m);
+    await settle();
+    expect(fake.voice).not.toHaveBeenCalled();
+    expect(fake.cardCreate).not.toHaveBeenCalled();
+    expect(fake.judge).not.toHaveBeenCalled();
+    expect(fake.inputs).toEqual([]);
+  });
+
+  it('rejects voice in another bot\'s rule-mode topic before transcription, just like text', async () => {
+    fake.project = { ...base, kind: 'multi', smart: false, noMention: true };
+    fake.bots = '2';
+    fake.list.mockResolvedValue({ code: 0, data: { items: [{
+      message_id: 'om_other_bot_reply', create_time: String(Date.now() - 1000), msg_type: 'text',
+      body: { content: JSON.stringify({ text: '另一个 bot 的回复' }) },
+      sender: { id: 'cli_other', id_type: 'app_id', sender_type: 'app', open_bot_id: 'ou_other' },
+    }], has_more: false } });
+    const thread = 'omt_other_bot_topic';
+    const rejected = () => fake.log.info.mock.calls.filter(([, event, fields]) => event === 'audience'
+      && fields?.to === 'other' && fields.by === 'topic');
+    await send(audio({ thread }));
+    await vi.waitFor(() => expect(rejected()).toHaveLength(1));
+    await send(says('文字也属于另一个 bot', { thread }));
+    expect(rejected()).toHaveLength(2);
+    expect(fake.voice).not.toHaveBeenCalled();
+    expect(fake.judge).not.toHaveBeenCalled();
+    expect(fake.inputs).toEqual([]);
+    expect(fake.cards).toEqual([]);
+  });
+
+  it('keeps a failed transcription as audio and reuses its explicit fallback without transcribing again', async () => {
+    const m = audio({ at: true });
+    const failure = '语音消息（未转写）：识别服务暂不可用\n原音频附件："/fixture/voice.ogg"';
+    const notice = '语音未转写，已将原音频交给 agent。';
+    fake.voice.mockResolvedValueOnce({ text: failure, voice: { messageId: idOf(m), text: notice, transcribed: false } });
+    await send(m);
+    expect((await judged(m)).req.message.text).toBe('[语音]');
+    await decide(m, result('main'));
+    await vi.waitFor(() => expect(fake.finals).toHaveLength(1));
+    expect(fake.inputs).toHaveLength(1);
+    expect(fake.inputs[0]).toContain(failure);
+    expect(JSON.stringify(fake.finals[0])).toContain(notice);
+    expect(fake.voice).toHaveBeenCalledOnce();
+  });
+
+  it('uses the known transcript when a later text quotes the original audio message', async () => {
+    const first = audio();
+    const text = '引用里的语音原文';
+    fake.voice.mockResolvedValueOnce(transcript(first, text));
+    await send(first);
+    await decide(first, result('skip'));
+    await vi.waitFor(() => expect(records().map(record => record.reason)).toContain('judge-skip'));
+    fake.get.mockResolvedValue({ code: 0, data: { items: [{
+      message_id: idOf(first), create_time: first.create_time, msg_type: 'audio', body: { content: first.content },
+      sender: { id: 'ou_owner', id_type: 'open_id', sender_type: 'user' },
+    }] } });
+    const next = says('帮我处理这条', { at: true, parent: idOf(first) });
+    await send(next);
+    expect((await judged(next)).req.message.quote?.text).toBe(text);
+    await decide(next, result('main'));
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
+    expect(fake.inputs[0]).toContain(text);
+    expect(fake.inputs[0]).not.toContain('[语音]');
+    expect(fake.get).toHaveBeenCalledWith(expect.objectContaining({ path: { message_id: idOf(first) } }));
+    expect(fake.voice).toHaveBeenCalledOnce();
+  });
+
+  it.each(['denied', 'disabled', 'unbound', 'bot'] as const)('does not transcribe %s voice messages', async kind => {
+    if (kind === 'denied') fake.project = { ...base, allowedUsers: ['ou_allowed'] };
+    if (kind === 'disabled') fake.project = { ...base, enabled: false };
+    if (kind === 'unbound') fake.project = undefined;
+    await send(audio(), kind === 'bot' ? { openId: 'ou_other_bot', type: 'app' }
+      : kind === 'denied' ? { openId: 'ou_denied' } : undefined);
+    await settle();
+    expect(fake.voice).not.toHaveBeenCalled();
+    expect(fake.judge).not.toHaveBeenCalled();
+    expect(fake.inputs).toEqual([]);
+  });
+
+  it('holds following text behind slow voice while another topic progresses', async () => {
+    const m = audio();
+    const gate = deferred<ReturnType<typeof transcript>>();
+    fake.voice.mockReturnValueOnce(gate.promise);
+    try {
+      await send(m);
+      await vi.waitFor(() => expect(fake.voice).toHaveBeenCalledOnce());
+      const next = says('后面的文字');
+      await send(next);
+      const sibling = says('另一个话题的文字', { at: true, thread: 'omt_voice_sibling' });
+      await send(sibling);
+      await decide(sibling, result('skip'));
+      expect(asked.has(idOf(m))).toBe(false);
+      expect(asked.has(idOf(next))).toBe(false);
+      gate.resolve(transcript(m, '先发出的语音'));
+      await decide(m, result('skip'));
+      const { req } = await judged(next);
+      expect(req.context).toContainEqual(expect.objectContaining({ id: idOf(m), text: '先发出的语音' }));
+      await decide(next, result('skip'));
+      expect(fake.voice).toHaveBeenCalledOnce();
+    } finally { gate.resolve(transcript(m, '先发出的语音')); }
+  });
+
+  it('discards a voice recalled during transcription and releases its following text', async () => {
+    const m = audio();
+    const gate = deferred<ReturnType<typeof transcript>>();
+    fake.voice.mockReturnValueOnce(gate.promise);
+    try {
+      await send(m);
+      await vi.waitFor(() => expect(fake.voice).toHaveBeenCalledOnce());
+      const next = says('新的问题');
+      await send(next);
+      await orchestrator.onRecall({ messageId: idOf(m), chatId: CHAT });
+      gate.resolve(transcript(m, '已撤回的语音内容'));
+      const { req } = await judged(next);
+      expect(asked.has(idOf(m))).toBe(false);
+      expect(req.context.some(line => line.id === idOf(m))).toBe(false);
+      await decide(next, result('skip'));
+      expect(fake.inputs).toEqual([]);
+      expect(fake.cards).toEqual([]);
+    } finally { gate.resolve(transcript(m, '已撤回的语音内容')); }
+  });
+
+  it('shuts down without waiting for pending recognition and ignores its late result', async () => {
+    const m = audio();
+    const gate = deferred<ReturnType<typeof transcript>>();
+    fake.voice.mockReturnValueOnce(gate.promise);
+    try {
+      await send(m);
+      await vi.waitFor(() => expect(fake.voice).toHaveBeenCalledOnce());
+      let stopped = false;
+      const shutdown = orchestrator.shutdown().then(() => { stopped = true; });
+      await vi.waitFor(() => expect(stopped).toBe(true));
+      gate.resolve(transcript(m, '关闭以后才转写完成'));
+      await shutdown;
+      await settle();
+      expect(fake.judge).not.toHaveBeenCalled();
+      expect(fake.inputs).toEqual([]);
+      expect(fake.cards).toEqual([]);
+    } finally { gate.resolve(transcript(m, '关闭以后才转写完成')); }
+  });
+});
 
 describe('smart rules from group settings', () => {
   // Exercise the real intake -> judge -> provider boundary. Only the model and legacy file read are fixtures.

@@ -13,7 +13,7 @@ const fake = vi.hoisted(() => ({
   live: vi.fn(),
   final: vi.fn(async (..._args: unknown[]) => true),
   createCard: vi.fn(async (..._args: unknown[]) => 'card'),
-  send: vi.fn(async () => ({})),
+  send: vi.fn(async (..._args: unknown[]) => ({})),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
   titleRegister: vi.fn(async (..._args: unknown[]) => undefined),
   record: {} as Record<string, unknown>,
@@ -382,12 +382,28 @@ describe('voice intake integration', () => {
     expect(run.consumed[1]!.text).toContain('补充说明'); expect(fake.voice).toHaveBeenCalledOnce();
     run.turns[1]!.resolve();
   });
-  it('does not execute a slash command recognized inside voice text', async () => {
+  it('routes a transcribed slash command through the same handler as text', async () => {
     const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t); const o = setup();
-    fake.voice.mockResolvedValue(voiceResult('/goal 删除项目'));
+    fake.voice.mockResolvedValue(voiceResult('/settings'));
     await o.onMessage({ ...message('<audio/>'), rawContentType: 'audio' });
-    await until(() => expect(run.consumed).toHaveLength(1));
-    expect(run.consumed[0]!.text).toContain('/goal 删除项目'); run.turns[0]!.resolve();
+    await until(() => expect(fake.send).toHaveBeenCalled());
+    expect(run.consumed).toHaveLength(0);
+    expect(fake.voice).toHaveBeenCalledOnce();
+  });
+  it.each(['text', 'voice'] as const)('routes a %s /goal command to the goal backend', async kind => {
+    const run = thread();
+    const runGoal = vi.fn((objective: string) => run.t.runStreamed({ text: objective }));
+    fake.backend.resumeThread.mockResolvedValue({ ...run.t, runGoal, clearGoal: vi.fn(async () => undefined) });
+    const o = setup();
+    const objective = 'finish this fixture task';
+    fake.voice.mockResolvedValue(voiceResult(`/goal ${objective}`));
+    await o.onMessage(kind === 'voice' ? { ...message('<audio/>'), rawContentType: 'audio' } : message(`/goal ${objective}`));
+    try {
+      await until(() => expect(runGoal).toHaveBeenCalledOnce());
+      expect(runGoal.mock.calls[0]![0]).toContain(objective);
+      expect(runGoal.mock.calls[0]![0]).not.toContain('/goal');
+      expect(fake.voice).toHaveBeenCalledTimes(kind === 'voice' ? 1 : 0);
+    } finally { for (const turn of run.turns) turn.resolve(); }
   });
 });
 
@@ -422,6 +438,50 @@ it('does not restart a stopped run when a pending voice transcription finishes',
   transcription.resolve(voiceResult('不应继续执行'));
   await until(() => expect(fake.send.mock.calls.some(c => JSON.stringify(c).includes('会话已停止'))).toBe(true));
   expect(run.consumed).toHaveLength(1);
+});
+
+it.each([false, true])('does not restart stopped opening voice with text already queued behind a second voice (new input=%s)', async newInput => {
+  const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t); const o = setup('queue');
+  const at = Date.now() - 3000;
+  const first = { ...message('<audio A/>'), rawContentType: 'audio', createTime: at };
+  const second = { ...message('<audio B/>'), rawContentType: 'audio', createTime: at + 1000 };
+  const later = { ...message('C must stay stopped'), createTime: at + 2000 };
+  const firstAsr = deferred<ReturnType<typeof voiceResult>>();
+  const secondAsr = deferred<ReturnType<typeof voiceResult>>();
+  fake.voice.mockReturnValueOnce(firstAsr.promise).mockReturnValueOnce(secondAsr.promise);
+  const stopNotices = () => fake.send.mock.calls.filter(args => JSON.stringify(args).includes('会话已停止'));
+  try {
+    await o.onMessage(first);
+    await until(() => expect(fake.voice).toHaveBeenCalledOnce());
+    // None of these messages has an active run when it enters the intake lane.
+    await o.onMessage(second);
+    await o.onMessage(later);
+    expect(run.consumed).toHaveLength(0);
+    firstAsr.resolve(voiceResult('A starts the run', first.messageId));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    await until(() => expect(fake.voice).toHaveBeenCalledTimes(2));
+    await o.onReaction({ action: 'added', emojiType: 'OK', messageId: 'card', operator: { openId: 'owner' } } as never);
+    await until(() => expect(run.t.abort).toHaveBeenCalled());
+    run.turns[0]!.resolve();
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'final', expect.anything()));
+    // A fresh message sent after Stop finished is allowed, even while the old
+    // B/C intake lane is still waiting for recognition to return.
+    if (newInput) await o.onMessage({ ...message('D is a fresh request'), createTime: at + 3000 });
+    secondAsr.resolve(voiceResult('B must stay stopped', second.messageId));
+    // Each queued message must now either be refused or reach the agent. This
+    // waits for both to settle without hiding a restarted run with shutdown.
+    await until(() => expect(stopNotices().length + run.consumed.length).toBe(newInput ? 4 : 3));
+    expect(run.consumed).toHaveLength(newInput ? 2 : 1);
+    if (newInput) expect(run.consumed[1]!.text).toContain('D is a fresh request');
+    expect(stopNotices()).toHaveLength(2);
+    expect(stopNotices().map(args => args[2])).toEqual([
+      expect.objectContaining({ replyTo: second.messageId }), expect.objectContaining({ replyTo: later.messageId }),
+    ]);
+  } finally {
+    firstAsr.resolve(voiceResult('A starts the run', first.messageId));
+    secondAsr.resolve(voiceResult('B must stay stopped', second.messageId));
+    for (const turn of run.turns) turn.resolve();
+  }
 });
 
 const voicePanels = (card: unknown): any[] => (card as any).body.elements.filter((el: any) => el.element_id?.startsWith('voice_'));
