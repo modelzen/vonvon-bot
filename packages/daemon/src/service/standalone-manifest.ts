@@ -1,6 +1,7 @@
 import { createPublicKey, verify, type KeyObject } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
+import { fetchWithAbort, firstUsableSource, SERVER_CONNECT_MS, SERVER_SOURCE_GRACE_MS, untilAbort } from './standalone-transport';
 
 /**
  * The signed stable manifest of the standalone server (server-3 C1, C2): `{ payload, signature }`, both base64, the
@@ -40,14 +41,25 @@ const payloadSchema = z.object({
 }).strict();
 export type Manifest = z.infer<typeof payloadSchema>;
 
-export type ManifestFailure = 'too_large' | 'envelope' | 'signature' | 'schema' | 'url' | 'http';
+export type ManifestFailure = 'too_large' | 'envelope' | 'signature' | 'schema' | 'url' | 'http' | 'rollback';
 export class ManifestError extends Error {
   constructor(readonly reason: ManifestFailure) { super(`standalone manifest refused: ${reason}`); }
 }
 
 /** `packages/daemon/server-update.json`, copied into each package as `app/server-update.json` (C2). */
-export type ServerUpdateConfig = { key: KeyObject; baseURL: string };
-const configSchema = z.object({ publicKey: z.string(), baseURL: z.string().regex(/^https?:\/\/[^\s/]+(\/[^\s]*[^\s/])?$/) }).strict();
+export type ServerUpdateConfig = { key: KeyObject; baseURL: string; mirrorBaseURLs?: string[] };
+const baseAddress = (value: string, httpsOnly = false): boolean => {
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'https:' || (!httpsOnly && url.protocol === 'http:')) &&
+      !url.username && !url.password && !url.search && !url.hash &&
+      url.href.replace(/\/$/, '') === value && !/%|\s/.test(value);
+  } catch { return false; }
+};
+const configSchema = z.object({
+  publicKey: z.string(), baseURL: z.string().refine(value => baseAddress(value)),
+  mirrorBaseURLs: z.array(z.string().refine(value => baseAddress(value, true))).max(2).optional(),
+}).strict().refine(config => new Set([config.baseURL, ...config.mirrorBaseURLs ?? []]).size === 1 + (config.mirrorBaseURLs?.length ?? 0));
 // The DER prefix of an Ed25519 SubjectPublicKeyInfo; desktop/windows-update-manifest.mjs takes PEM keys. Copied, not
 // imported: the daemon does not depend on the desktop package.
 const SPKI_ED25519 = Buffer.from('302a300506032b6570032100', 'hex');
@@ -66,7 +78,7 @@ export function publicKeyFromRaw(base64: string): KeyObject {
 export function readServerUpdateConfig(file: string): ServerUpdateConfig | null {
   try {
     const config = configSchema.parse(JSON.parse(readFileSync(file, 'utf8')));
-    return { key: publicKeyFromRaw(config.publicKey), baseURL: config.baseURL };
+    return { key: publicKeyFromRaw(config.publicKey), baseURL: config.baseURL, ...(config.mirrorBaseURLs ? { mirrorBaseURLs: config.mirrorBaseURLs } : {}) };
   } catch { return null; }
 }
 
@@ -93,13 +105,16 @@ export function parseSignedManifest(bytes: Uint8Array, config: ServerUpdateConfi
 
 export type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
 
-/** Reads the stable manifest: no redirects (its address is fixed), 15 s, at most 64 KiB. */
-export async function fetchManifest(config: ServerUpdateConfig, fetcher: Fetch = fetch): Promise<Manifest> {
+/** Each configured transport serves the same canonical, signed manifest; transport URLs do not enter its payload. */
+export const serverSources = (config: ServerUpdateConfig): string[] => [...new Set([config.baseURL, ...config.mirrorBaseURLs ?? []])];
+export type ManifestSource = { manifest: Manifest; sourceBaseURL: string };
+
+async function readManifestSource(config: ServerUpdateConfig, source: string, fetcher: Fetch, signal: AbortSignal): Promise<Manifest> {
   let response: Response;
-  try { response = await fetcher(manifestURL(config.baseURL), { signal: AbortSignal.timeout(15_000), redirect: 'error', headers: { 'cache-control': 'no-cache' } }); }
+  try { response = await fetchWithAbort(fetcher, manifestURL(source), { signal, redirect: 'error', headers: { 'cache-control': 'no-cache' } }); }
   catch { throw new ManifestError('http'); }
   if (response.status !== 200 || !response.body) {
-    await response.body?.cancel().catch(() => undefined);
+    void response.body?.cancel().catch(() => undefined);
     throw new ManifestError('http');
   }
   const chunks: Uint8Array[] = [];
@@ -107,15 +122,51 @@ export async function fetchManifest(config: ServerUpdateConfig, fetcher: Fetch =
   const reader = response.body.getReader();
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await untilAbort(reader.read(), signal);
       if (done) break;
       length += value.byteLength;
-      if (length > MAX_ENVELOPE) { await reader.cancel().catch(() => undefined); throw new ManifestError('too_large'); }
+      if (length > MAX_ENVELOPE) throw new ManifestError('too_large');
       chunks.push(value);
     }
   } catch (error) {
     if (error instanceof ManifestError) throw error;
     throw new ManifestError('http');
+  } finally {
+    void reader.cancel().catch(() => undefined);
+    try { reader.releaseLock(); } catch { /* A pending adapter read is cancelled above. */ }
   }
   return parseSignedManifest(Buffer.concat(chunks), config);
+}
+
+/** Parallel tiny probes, each bounded including body time; a usable mirror never waits for the primary timeout. */
+export async function fetchManifestFromSources(config: ServerUpdateConfig, fetcher: Fetch = fetch, options: {
+  timeoutMs?: number; graceMs?: number;
+  /** A valid signature does not make a stale mirror eligible; callers can enforce their recorded rollback floor. */
+  accept?: (manifest: Manifest) => void;
+} = {}): Promise<ManifestSource> {
+  try {
+    const result = await firstUsableSource(serverSources(config), async (source, signal) => {
+      const controller = new AbortController();
+      const aborted = (): void => { controller.abort(signal.reason); };
+      signal.addEventListener('abort', aborted, { once: true });
+      if (signal.aborted) aborted();
+      const timer = setTimeout(() => { controller.abort(); }, options.timeoutMs ?? SERVER_CONNECT_MS);
+      try {
+        const manifest = await readManifestSource(config, source, fetcher, controller.signal);
+        options.accept?.(manifest);
+        return manifest;
+      }
+      finally { clearTimeout(timer); signal.removeEventListener('abort', aborted); }
+    }, options.graceMs ?? SERVER_SOURCE_GRACE_MS);
+    return { manifest: result.value, sourceBaseURL: result.source };
+  } catch (error) {
+    const failures: unknown[] = error instanceof AggregateError ? error.errors : [error];
+    // If a source returned untrusted data, do not mislabel all-source failure as a mere connection problem.
+    throw failures.find(failure => failure instanceof ManifestError && failure.reason !== 'http') ?? new ManifestError('http');
+  }
+}
+
+/** Backward-compatible API for callers that only need the verified manifest. */
+export async function fetchManifest(config: ServerUpdateConfig, fetcher: Fetch = fetch): Promise<Manifest> {
+  return (await fetchManifestFromSources(config, fetcher)).manifest;
 }
