@@ -217,6 +217,16 @@ function answered(run: ReturnType<typeof thread>, text = '用方案 B') {
 }
 
 describe('typed ask messages at intake', () => {
+  it.each([undefined, 'topic'])('accepts a transcribed answer in %s through the text answer path', async threadId => {
+    const run = thread(); const o = await started(run, { threadId });
+    await visible(run);
+    fake.voice.mockImplementation(async (_channel, msg) => voiceResult('用方案 B', msg.messageId));
+    await o.onMessage(message('<audio/>', { threadId, rawContentType: 'audio' }));
+    await until(() => answered(run));
+    expect(fake.voice).toHaveBeenCalledOnce();
+    run.turns[0]!.resolve();
+  });
+
   it.each([undefined, 'topic'])('consumes the answer in %s, without steering', async threadId => {
     const run = thread(); const o = await started(run, { threadId });
     await visible(run);
@@ -610,6 +620,16 @@ describe('s33b sensitive ask intake', () => {
     await visible(run, sensitive);
     await until(() => expect(fake.sendManaged.mock.calls.some(args => args[5] === 'open_id')).toBe(true));
   }
+
+  it('accepts a transcribed private answer before the DM console', async () => {
+    const run = thread(); const o = await started(run, { threadId: undefined });
+    await secretVisible(run);
+    fake.voice.mockImplementation(async (_channel, msg) => voiceResult('private answer', msg.messageId));
+    await o.onMessage(message('<audio/>', { chatType: 'p2p', chatId: 'dm', threadId: undefined, rawContentType: 'audio' }));
+    await until(() => answered(run, 'private answer'));
+    expect(fake.voice).toHaveBeenCalledOnce();
+    run.turns[0]!.resolve();
+  });
 
   it('answers in p2p before the console, and falls back when no card waits', async () => {
     const run = thread(); const o = await started(run, { threadId: undefined });
