@@ -56,7 +56,7 @@ it('asks about the risk for CGNAT and public, about switching when others may be
   expect(risky).toMatchObject({confirm: {kind: 'risk', text: expect.stringMatching(/^这是公网地址。/), also: expect.stringContaining('已配对的 2 台设备要换到新地址')}});
   expect(enableStep(rows, '100.64.0.10', local, 0)).toEqual({request: {type: 'enable', host: '100.64.0.10'}});
   expect(enableStep(rows, '100.64.0.10', local, 3)).toEqual({confirm: {kind: 'switch', host: '100.64.0.10',
-    text: '换成 100.64.0.10 后，192.168.1.9 不再接受连接，经它连着的设备会马上断开。已配对的 3 台设备要换到新地址：在下面生成连接链接，粘到那台电脑的 Vonvon Bot → 设置 → 设备 → 添加，只会更新地址，不用重新配对。'}});
+    text: '换成 100.64.0.10 后，192.168.1.9 不再接受连接，经它连着的设备会马上断开。已配对的 3 台设备要换到新地址：在下面生成连接链接，粘到那台电脑的 Vonvon Bot → 设置 → 设备连接 → 添加，只会更新地址，不用重新配对。'}});
   // ticked or not
   if (!('confirm' in risky)) throw new Error('no confirmation');
   expect(confirmedRequest(risky.confirm, false)).toBeUndefined();
