@@ -7,6 +7,7 @@ import { access, open, readFile, rename, stat, unlink, writeFile } from 'node:fs
 import { isAbsolute, join } from 'node:path';
 import { assertCredentialEnvNames, cosCredentialEnvNames, loadPinnedSdk } from './release-cos-evidence.mjs';
 import { cachePolicy } from './verify-public-release.mjs';
+import { readReleaseCdnPolicy, releaseCdnDescription, withReleaseCdnVerification } from './release-cdn.mjs';
 import { PUBLISHED_TARGETS, SERVER_BASE_URL, SERVER_PREFIX, SERVER_SCRIPTS, archiveName } from './server-constants.mjs';
 import { compareVersions, installScriptBaseURL, installScriptKey, publicKeyForms, publicKeyFromPrivate, signServerManifest, unsignedManifest, verifyServerManifest } from './server-manifest.mjs';
 
@@ -39,13 +40,14 @@ export async function readServerCosConfig(path) {
   if (!isAbsolute(path ?? '')) throw new Error('服务端的 COS 配置要用外部文件的绝对路径（--server-cos-config）');
   let config;
   try { config = JSON.parse(await readFile(path, 'utf8')); } catch { throw new Error('读不了服务端的 COS 配置'); }
-  const fields = ['bucket', 'region', 'prefix', 'publicBaseURL', 'secretIdEnv', 'secretKeyEnv', 'securityTokenEnv', 'sdkModule', 'updatePrivateKeyFile'];
+  const fields = ['bucket', 'region', 'prefix', 'publicBaseURL', 'secretIdEnv', 'secretKeyEnv', 'securityTokenEnv', 'sdkModule', 'updatePrivateKeyFile', 'cdn'];
   if (!config || typeof config !== 'object' || Array.isArray(config) || Object.keys(config).some(key => !fields.includes(key))
       || !/^[a-z0-9-]+-\d+$/.test(config.bucket ?? '') || !/^[a-z]+-[a-z]+(?:-\d+)?$/.test(config.region ?? '')
       || config.prefix !== SERVER_PREFIX || config.publicBaseURL !== SERVER_BASE_URL || !config.secretIdEnv || !config.secretKeyEnv) {
     throw new Error(`服务端的 COS 配置只能写 ${SERVER_PREFIX} 和 ${SERVER_BASE_URL}，凭据只写环境变量名`);
   }
   assertCredentialEnvNames(config);
+  readReleaseCdnPolicy(config.cdn);
   // Only this path, no environment variable: one way in for the key (4.2).
   if (!isAbsolute(config.updatePrivateKeyFile ?? '')) throw new Error('updatePrivateKeyFile 要写服务端签名私钥文件的绝对路径');
   let info;
@@ -65,7 +67,7 @@ function readSummary(summary, { version, sha }) {
 
 /** The live object at `url`: 404, or its bytes (at most `limit`). Never follows a redirect. */
 async function publicSnapshot(url, fetchImpl, limit) {
-  const response = await fetchImpl(url, { redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(15_000) });
+  const response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(15_000) });
   if (response.status === 404) { await response.body?.cancel().catch(() => {}); return { status: 404 }; }
   if (response.status !== 200 || response.redirected || !response.body) throw new Error(`读不到线上的 ${url}（HTTP ${response.status}）`);
   const chunks = []; let size = 0;
@@ -97,6 +99,7 @@ export async function stableSnapshot(fetchImpl, publicKey) {
  * the live stable seen when the owner reviewed it is kept, not read again.
  */
 export async function planServerPublication({ dir, version, sha, config, readSource, previous, notes, fetchImpl = fetch, now = Date.now }) {
+  fetchImpl = withReleaseCdnVerification(fetchImpl, config.cdn);
   let summary;
   try { summary = JSON.parse(await readFile(join(dir, buildReport(version)), 'utf8')); }
   catch { throw new Error(`没有 ${buildReport(version)}：先用 release-all build 打服务端包`); }
@@ -113,6 +116,18 @@ export async function planServerPublication({ dir, version, sha, config, readSou
   if (committed.baseURL !== SERVER_BASE_URL || summary.update?.baseURL !== SERVER_BASE_URL || installScriptBaseURL(install) !== SERVER_BASE_URL) {
     throw new Error(`服务端包、server-update.json 或 install.sh 的下载地址不是 ${SERVER_BASE_URL}，不能发布`);
   }
+
+  const mirrors = value => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.length > 2 || new Set(value).size !== value.length) throw new Error('Invalid server mirrorBaseURLs');
+    for (const address of value) {
+      let url; try { url = new URL(address); } catch { throw new Error('Invalid server mirrorBaseURLs'); }
+      if (url.protocol !== 'https:' || url.origin === new URL(SERVER_BASE_URL).origin || url.username || url.password || url.port || url.pathname !== '/bot/server' || url.search || url.hash || url.href !== address) throw new Error('Invalid server mirrorBaseURLs');
+    }
+    return value;
+  };
+  const mirrorBaseURLs = mirrors(committed.mirrorBaseURLs);
+  if (JSON.stringify(mirrorBaseURLs) !== JSON.stringify(mirrors(summary.update?.mirrorBaseURLs))) throw new Error('服务端包的 mirrorBaseURLs 和发布源码 SHA 不一致，不能省略已启用的镜像');
 
   const packages = [];
   for (const target of PUBLISHED_TARGETS) {
@@ -149,6 +164,8 @@ export async function planServerPublication({ dir, version, sha, config, readSou
   const unsigned = await readFile(join(dir, 'manifest.json'));
   return {
     version, sourceSha: sha, publicKey: key.base64, publishedAt: payload.publishedAt,
+    ...(mirrorBaseURLs.length ? { mirrorBaseURLs } : {}),
+    ...(config.cdn ? { cdn: releaseCdnDescription(config.cdn) } : {}),
     versioned: [
       ...packages.map(item => ({ file: item.file, key: `${SERVER_PREFIX}${version}/${item.file}`, url: files[item.target].url, contentType: 'application/gzip', bytes: item.bytes, sha256: item.sha256, sha512: item.sha512 })),
       object(buildReport(version), `${SERVER_PREFIX}${version}/${buildReport(version)}`, 'application/json', report, { sha512: hash(report, 'sha512') }),
@@ -190,7 +207,7 @@ export async function serverCosClient(config, env) {
 export async function verifyServerPublic(objects, { fetchImpl = fetch, kind = 'versioned' } = {}) {
   const results = [];
   for (const object of objects) {
-    const response = await fetchImpl(object.url, { redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(300_000) });
+    const response = await fetchImpl(object.url, { redirect: 'error', signal: AbortSignal.timeout(300_000) });
     if (response.status !== 200 || response.redirected || !response.body) throw new Error(`公网下载失败：${object.url}（HTTP ${response.status}）`);
     if (response.headers.get('content-type')?.split(';')[0].trim() !== object.contentType.split(';')[0]) throw new Error(`公网的 Content-Type 不对：${object.url}`);
     if (Number(response.headers.get('content-length')) !== object.bytes) throw new Error(`公网内容不一致（大小）：${object.url}`);
@@ -217,6 +234,7 @@ const withoutBody = items => items.map(({ body: _body, ...rest }) => rest);
  * verified on the public address.
  */
 export async function publishServerObjects({ dir, plan, config, client, env = process.env, fetchImpl = fetch, log = console.log, cancelFile }) {
+  fetchImpl = withReleaseCdnVerification(fetchImpl, config.cdn);
   await assertNotCancelled(cancelFile);
   const lockPath = join(dir, '.server-publish.lock');
   const lock = await open(lockPath, 'wx').catch(() => { throw new Error('服务端上传的锁还在：先查记录的进程是否已经结束'); });
@@ -249,7 +267,7 @@ export async function publishServerObjects({ dir, plan, config, client, env = pr
     }
     await assertNotCancelled(cancelFile);
     const objects = withoutBody(await verifyServerPublic(plan.versioned, { fetchImpl }));
-    const receipt = { version: plan.version, sourceSha: plan.sourceSha, verifiedAt: new Date().toISOString(), objects };
+    const receipt = { version: plan.version, sourceSha: plan.sourceSha, cdn: releaseCdnDescription(config.cdn), verifiedAt: new Date().toISOString(), objects };
     await atomic(join(dir, UPLOAD_RECEIPT), receipt);
     return receipt;
   } finally { await lock.close(); await unlink(lockPath); }
@@ -269,6 +287,7 @@ async function liveManifestAsReviewed(plan, fetchImpl, candidateSHA256) {
  * is read again right before the manifest replaces it. An already switched stable is only checked again.
  */
 export async function promoteServerStable({ dir, plan, config, client, env = process.env, ownerConfirmation, planSHA256, cancelFile, readSource, fetchImpl = fetch, log = console.log }) {
+  fetchImpl = withReleaseCdnVerification(fetchImpl, config.cdn);
   if (!/^[a-f0-9]{64}$/.test(planSHA256 ?? '')) throw new Error('切服务端 stable 要带 owner 看过的计划哈希');
   await verifyServerPublic(plan.versioned, { fetchImpl });
   const bodies = {};
@@ -285,7 +304,7 @@ export async function promoteServerStable({ dir, plan, config, client, env = pro
     const live = await publicSnapshot(object.url, fetchImpl, 1024 * 1024);
     if (live.status !== 200 || live.sha256 !== object.sha256) pending.push(object);
   }
-  const receipt = { version: plan.version, sourceSha: plan.sourceSha, planSHA256, ownerConfirmation: ownerConfirmation ?? null };
+  const receipt = { version: plan.version, sourceSha: plan.sourceSha, planSHA256, cdn: releaseCdnDescription(config.cdn), ownerConfirmation: ownerConfirmation ?? null };
   if (pending.length) {
     if (!ownerConfirmation?.trim()) throw new Error('切服务端 stable 要 owner 对这份候选的确认（--owner-confirmation）；什么都没写');
     // The scripts carry the key and address of the manifest they come with: none is written over a stable that moved on.

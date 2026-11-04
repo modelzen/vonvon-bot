@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { downloadBuild, publishWindowsObjects, validateBuildRun, windowsObjectPlan, planWindowsUpdates, promoteWindowsUpdates } from './publish-windows.mjs';
+import { readWindowsCosConfig, downloadBuild, publishWindowsObjects, validateBuildRun, windowsObjectPlan, planWindowsUpdates, promoteWindowsUpdates } from './publish-windows.mjs';
 import { createWindowsInventory } from './package-windows.mjs';
 
 const sourceSha = 'a'.repeat(40), version = '0.7.6';
@@ -249,4 +249,25 @@ test('Windows stable refuses changed signed bytes, changed live snapshot, or unp
   await assert.rejects(promoteWindowsUpdates({ ...g, ownerConfirmation: '确认' }), /signature/); assert.equal(g.writes.length, 0);
   const j = await updateFixture(t); j.store.delete(windowsObjectPlan(j.inventory)[0].url);
   await assert.rejects(promoteWindowsUpdates({ ...j, ownerConfirmation: '确认' }), /Public download failed/); assert.equal(j.writes.length, 0);
+});
+
+test('Windows CDN config and promotion verify ordinary exact public responses', async t => {
+  const h = await updateFixture(t), cdn = { provider: 'tencent', mutablePolicy: 'bypass' };
+  const path = join(h.out, 'cos-windows.json');
+  const config = { ...h.config, prefix: 'bot/windows/', publicBaseURL: 'https://dl.vonvon.cc/bot/windows/', secretIdEnv: 'WIN_ID', secretKeyEnv: 'WIN_KEY', cdn };
+  await writeFile(path, JSON.stringify(config));
+  assert.deepEqual((await readWindowsCosConfig(path)).cdn, cdn);
+  await writeFile(path, JSON.stringify({ ...config, cdn: { provider: 'other', mutablePolicy: 'bypass' } }));
+  await assert.rejects(readWindowsCosConfig(path), /CDN configuration supports only/);
+  const fetchImpl = async (url, options) => {
+    assert.equal(options.cache, undefined);
+    assert.equal(options.headers, undefined);
+    const response = await h.fetchImpl(url);
+    if (url.includes('/stable/') && response.status === 200) response.headers.set('age', '60');
+    return response;
+  };
+  await assert.rejects(promoteWindowsUpdates({ ...h, config, fetchImpl, ownerConfirmation: 'ok' }), /nonzero or invalid Age/);
+  assert.notEqual(JSON.parse(await readFile(join(h.out, 'windows-update-publish-receipt.json'), 'utf8')).status, 'published');
+  const result = await promoteWindowsUpdates({ ...h, config, ownerConfirmation: 'ok' });
+  assert.match(result.cdn, /腾讯 CDN/);
 });
