@@ -35,7 +35,8 @@ const NPM = 'lib/node_modules/npm';
 /**
  * The manifest key and address each package carries as app/server-update.json (docs/plans/server-3-update-engine.md C2).
  * The release build copies packages/daemon/server-update.json; `--update-public-key` (raw base64 or SPKI PEM) and
- * `--update-base-url` make a test build, marked `updateKey: "test"`, which publishing refuses. A committed key that is
+ * `--update-base-url` make a test build, marked `updateKey: "test"`, which publishing refuses. Test builds omit the
+ * production mirrors so checks against a test key or source cannot reach them. A committed key that is
  * not one yet (the placeholder before the signing key exists) marks the build `updateKey: "none"`.
  */
 export async function serverUpdateConfig({ publicKeyFile, baseURL } = {}) {
@@ -44,8 +45,10 @@ export async function serverUpdateConfig({ publicKeyFile, baseURL } = {}) {
   const publicKey = text.startsWith('-----BEGIN') ? createPublicKey(text).export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64') : text;
   const valid = Buffer.from(publicKey, 'base64').length === 32 && Buffer.from(publicKey, 'base64').toString('base64') === publicKey;
   if (publicKeyFile && !valid) throw new Error(`${publicKeyFile} is not an Ed25519 public key`);
+  const testBuild = Boolean(publicKeyFile || baseURL);
   const config = { publicKey, baseURL: baseURL ?? committed.baseURL };
-  return { config, updateKey: publicKeyFile || baseURL ? 'test' : valid ? 'release' : 'none' };
+  if (!testBuild && committed.mirrorBaseURLs !== undefined) config.mirrorBaseURLs = committed.mirrorBaseURLs;
+  return { config, updateKey: testBuild ? 'test' : valid ? 'release' : 'none' };
 }
 
 /** Downloads a pinned Node file once into `cache`; every use checks it against scripts/server-node.json. */
