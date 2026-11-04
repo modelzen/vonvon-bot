@@ -1,8 +1,10 @@
 import { chmod, lstat, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { CLI_PATH_BLOCK_BEGIN, CLI_PATH_BLOCK_END, shellStartupFiles, spliceBlock, startupBlock } from '@vonvon/protocol';
 import { classifyDistribution } from '../../daemon/src/service/distribution.js';
+import { windowsCliPath, type WindowsCliPath } from './windows-cli-path.js';
 
 export type CliRegistration = { kind: 'ready'; bin: string; message: string } | { kind: 'error'; message: string };
 export interface CliRegistrationOptions {
@@ -12,7 +14,11 @@ export interface CliRegistrationOptions {
   resources: string;
   packaged: boolean;
   zdotdir?: string;
+  windowsPath?: WindowsCliPath;
+  windowsCliSha256?: string;
 }
+
+declare const __VONVON_WINDOWS_CLI_SHA256__: string | undefined;
 
 const marker = 'Vonvon Bot managed CLI v1';
 
@@ -21,8 +27,8 @@ function errorMessage(error: unknown): string { return error instanceof Error ? 
 function missing(error: unknown): boolean { return (error as NodeJS.ErrnoException).code === 'ENOENT'; }
 
 function location(options: CliRegistrationOptions): { bin: string; wrapper: string; cli: string } {
-  const bin = join(options.home, '.local', 'share', 'vonvon-bot', 'bin');
-  return { bin, wrapper: join(bin, 'vonvon'), cli: join(options.resources, 'daemon', 'bin', 'vonvon.mjs') };
+  const bin = options.platform === 'win32' ? join(options.resources, 'cli') : join(options.home, '.local', 'share', 'vonvon-bot', 'bin');
+  return { bin, wrapper: join(bin, options.platform === 'win32' ? 'vonvon.exe' : 'vonvon'), cli: join(options.resources, 'daemon', 'bin', 'vonvon.mjs') };
 }
 
 function wrapperBody(options: CliRegistrationOptions, cli: string): string {
@@ -58,15 +64,28 @@ function updatedStartup(before: string, bin: string, path: string): string {
 
 async function validateDistribution(options: CliRegistrationOptions, cli: string): Promise<void> {
   if (!options.packaged) throw new Error('开发版本无法注册命令行工具。');
-  if (options.platform !== 'darwin') throw new Error(`不支持的平台：${options.platform}`);
+  if (options.platform !== 'darwin' && options.platform !== 'win32') throw new Error(`不支持的平台：${options.platform}`);
   if (classifyDistribution(join(options.resources, 'daemon')).kind !== 'bundled') throw new Error('桌面版未包含有效的 Vonvon Bot 命令行分发。');
   if (!(await stat(options.executable)).isFile() || !(await stat(cli)).isFile()) throw new Error('桌面命令行程序不是普通文件。');
+}
+
+async function validateWindowsLauncher(options: CliRegistrationOptions, launcher: string): Promise<void> {
+  const expected = options.windowsCliSha256 ?? (typeof __VONVON_WINDOWS_CLI_SHA256__ === 'undefined' ? undefined : __VONVON_WINDOWS_CLI_SHA256__);
+  try {
+    if (expected && (await lstat(launcher)).isFile() && createHash('sha256').update(await readFile(launcher)).digest('hex') === expected) return;
+  } catch (error) { if (!missing(error)) throw error; }
+  throw new Error('Windows 命令行入口缺失或已损坏，请重新安装桌面版。');
 }
 
 export async function observeCli(options: CliRegistrationOptions): Promise<CliRegistration> {
   try {
     const { bin, wrapper, cli } = location(options);
     await validateDistribution(options, cli);
+    if (options.platform === 'win32') {
+      await validateWindowsLauncher(options, wrapper);
+      if (!await (options.windowsPath ?? windowsCliPath()).contains(bin)) throw new Error('Windows 用户 PATH 尚未注册。');
+      return { kind: 'ready', bin, message: '命令行工具已安装。请关闭并重新打开终端后使用 vonvon。' };
+    }
     const actual = await regularText(wrapper);
     if (actual !== wrapperBody(options, cli)) throw new Error(actual === undefined ? '命令行工具尚未注册。' : `现有命令行入口不属于当前桌面版：${wrapper}`);
     const info = await lstat(wrapper);
@@ -83,6 +102,12 @@ export async function registerCli(options: CliRegistrationOptions): Promise<CliR
   try {
     const { bin, wrapper, cli } = location(options);
     await validateDistribution(options, cli);
+    if (options.platform === 'win32') {
+      await validateWindowsLauncher(options, wrapper);
+      const path = options.windowsPath ?? windowsCliPath();
+      if (!await path.contains(bin)) await path.add(bin);
+      return await observeCli(options);
+    }
     const body = wrapperBody(options, cli);
     const prior = await regularText(wrapper);
     if (prior !== undefined && !prior.includes(marker)) throw new Error(`发现其他程序的文件，未覆盖：${wrapper}`);
