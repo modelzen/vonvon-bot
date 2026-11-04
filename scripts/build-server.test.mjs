@@ -70,8 +70,25 @@ test('server-update.json: the committed key makes a release build, a key or addr
     assert.deepEqual(await serverUpdateConfig({ publicKeyFile: join(root, file), baseURL: 'http://127.0.0.1:9/bot/server' }), { config: { publicKey: raw, baseURL: 'http://127.0.0.1:9/bot/server' }, updateKey: 'test' });
   }
   assert.equal((await serverUpdateConfig({ baseURL: 'http://127.0.0.1:9/bot/server' })).updateKey, 'test');
+  assert.equal((await serverUpdateConfig({ baseURL: 'http://127.0.0.1:9/bot/server' })).config.mirrorBaseURLs, undefined);
+  assert.equal((await serverUpdateConfig({ publicKeyFile: join(root, 'key.txt') })).config.mirrorBaseURLs, undefined);
   await writeFile(join(root, 'bad.txt'), 'not a key');
   await assert.rejects(serverUpdateConfig({ publicKeyFile: join(root, 'bad.txt') }), /not an Ed25519 public key/);
+});
+
+test('a release archive carries the committed trusted mirrors for later standalone updates', async t => {
+  const root = await scratch(t);
+  const { app, linux } = await sources(root);
+  const committed = JSON.parse(await readFile(new URL('../packages/daemon/server-update.json', import.meta.url), 'utf8'));
+  const { config } = await serverUpdateConfig();
+  assert.ok(committed.mirrorBaseURLs.length > 0, 'the Linux release has a global mirror');
+  await writeFile(join(app, 'server-update.json'), JSON.stringify(config));
+  const out = join(root, 'release');
+  await assembleRelease({ app, runtime: linux, target: 'linux-x64', version: '0.9.0', nodeVersion: '24.0.0' }, out);
+  const archive = join(root, 'release.tar.gz');
+  await writeTarGz(out, await fileEntries(out), archive, 1_700_000_000);
+  const packaged = JSON.parse(execFileSync('tar', ['-xOzf', archive, 'app/server-update.json'], { encoding: 'utf8' }));
+  assert.deepEqual(packaged, committed);
 });
 
 test('checkServerTree refuses what must not ship', async t => {
