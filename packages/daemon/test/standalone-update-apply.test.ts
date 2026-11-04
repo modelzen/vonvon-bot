@@ -96,6 +96,29 @@ describe('startStandaloneUpdate', () => {
     expect(await readlink(join(installRoot, 'current'))).toBe('releases/1.0.0');
     expect(restarts).toEqual([]);
   });
+  it('applies a package from the selected mirror while its signed URL stays canonical', async () => {
+    const { installRoot, deps, cdn } = await setup();
+    const mirror = 'https://mirror.example.test/bot/server';
+    cdn.routes.set(`${mirror}/stable/manifest.json`, cdn.routes.get(`${BASE}/stable/manifest.json`)!);
+    cdn.routes.delete(`${BASE}/stable/manifest.json`);
+    cdn.routes.set(URL_1_0_1.replace(BASE, mirror), cdn.routes.get(URL_1_0_1)!);
+    const result = await startStandaloneUpdate({}, { ...deps, config: () => ({ ...keys.config, mirrorBaseURLs: [mirror] }), requestRestart: undefined }).done;
+    expect(result).toMatchObject({ phase: 'done', to: '1.0.1' });
+    expect(cdn.requests).toContain(URL_1_0_1.replace(BASE, mirror));
+    expect(cdn.requests).not.toContain(URL_1_0_1);
+    expect(await readlink(join(installRoot, 'current'))).toBe('releases/1.0.1');
+  });
+  it('falls back to the trusted mirror after a domestic package failure and preserves verification', async () => {
+    const { installRoot, deps, cdn } = await setup();
+    const mirror = 'https://mirror.example.test/bot/server';
+    cdn.routes.set(`${mirror}/stable/manifest.json`, cdn.routes.get(`${BASE}/stable/manifest.json`)!);
+    cdn.routes.set(URL_1_0_1.replace(BASE, mirror), cdn.routes.get(URL_1_0_1)!);
+    cdn.routes.set(URL_1_0_1, { status: 503, body: 'unavailable' });
+    const result = await startStandaloneUpdate({}, { ...deps, config: () => ({ ...keys.config, mirrorBaseURLs: [mirror] }), requestRestart: undefined }).done;
+    expect(result).toMatchObject({ phase: 'done', to: '1.0.1' });
+    expect(cdn.requests.filter(url => url.endsWith('.tar.gz'))).toEqual([URL_1_0_1, URL_1_0_1.replace(BASE, mirror)]);
+    expect(await readlink(join(installRoot, 'current'))).toBe('releases/1.0.1');
+  });
   it('refuses a length the manifest does not give without reading the body', async () => {
     const { deps, cdn } = await setup();
     let read = false;
