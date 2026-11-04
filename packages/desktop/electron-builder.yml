@@ -50,6 +50,11 @@ extraResources:
       - "**/*"
 npmRebuild: false
 win:
+  extraResources:
+    - from: stage/cli
+      to: cli
+      filter:
+        - vonvon.exe
   publish:
     provider: generic
     url: https://dl.vonvon.cc/bot/windows/stable/
