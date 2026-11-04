@@ -7,6 +7,7 @@ import { checkedProductVersion } from '../../scripts/product-version.mjs';
 import { stageDaemon } from '../../scripts/stage-daemon.mjs';
 import { normalizeWindowsPublicKey } from './src/windows-update-manifest.mjs';
 import { assertNoBundledClaude } from '../../scripts/desktop-backend-policy.mjs';
+import { buildWindowsCli } from '../../scripts/build-windows-cli.mjs';
 
 const version = await checkedProductVersion();
 const root = dirname(fileURLToPath(import.meta.url));
@@ -41,6 +42,8 @@ await access(join(ui, 'index.html'));
 await access(join(root, 'assets/tray.png'));
 await access(join(root, 'assets/macos-icon.png'));
 await mkdir(dist, { recursive: true });
+const windowsCli = join(dist, 'cli');
+const windowsCliSha256 = process.platform === 'win32' ? await buildWindowsCli(windowsCli) : undefined;
 await build({
   absWorkingDir: root,
   entryPoints: { main: 'src/main.ts', preload: 'src/preload.ts' },
@@ -51,7 +54,7 @@ await build({
   target: 'node22',
   format: 'cjs',
   external: ['electron'],
-  define: { 'process.env.NODE_ENV': '"production"' },
+  define: { 'process.env.NODE_ENV': '"production"', __VONVON_WINDOWS_CLI_SHA256__: JSON.stringify(windowsCliSha256) ?? 'undefined' },
 });
 await writeFile(join(dist, 'update-config.json'), JSON.stringify(updateConfig) + '\n');
 await writeFile(join(dist, 'windows-update-config.json'), JSON.stringify(windowsUpdateConfig) + '\n');
@@ -59,6 +62,7 @@ await rm(stage, { recursive: true, force: true });
 await mkdir(join(stage, 'desktop'), { recursive: true });
 await mkdir(join(stage, 'dist'), { recursive: true });
 await mkdir(join(stage, 'assets'), { recursive: true });
+if (windowsCliSha256) await cp(windowsCli, join(stage, 'cli'), { recursive: true });
 await cp(join(dist, 'main.cjs'), join(stage, 'desktop/main.cjs'));
 await cp(join(dist, 'preload.cjs'), join(stage, 'desktop/preload.cjs'));
 await cp(join(dist, 'update-config.json'), join(stage, 'dist/update-config.json'));

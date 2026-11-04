@@ -111,7 +111,7 @@ describe('desktop CLI registration', () => {
   it('rejects development builds, other platforms and incomplete distributions without creating command entries', async () => {
     const { options, wrapper } = await fixture();
     expect(await registerCli({ ...options, packaged: false })).toMatchObject({ kind: 'error' });
-    expect(await registerCli({ ...options, platform: 'win32' })).toEqual({ kind: 'error', message: '不支持的平台：win32' });
+    expect(await registerCli({ ...options, platform: 'aix' })).toEqual({ kind: 'error', message: '不支持的平台：aix' });
     expect(await observeCli({ ...options, platform: 'linux' })).toEqual({ kind: 'error', message: '不支持的平台：linux' });
     await rm(join(options.resources, 'daemon', 'dist', 'cli.js'));
     expect(await registerCli(options)).toMatchObject({ kind: 'error' });
