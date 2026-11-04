@@ -289,3 +289,45 @@ test('cos-server.json names the server prefix and address, credential variables 
   await save(f.config);
   await assert.rejects(readServerCosConfig(path), /0600/);
 });
+
+test('server plan binds packaged mirrors to the release source and rejects an omitted mirror', async t => {
+  const f = await fixture(t), mirror = 'https://fixture.workers.dev/bot/server';
+  const committed = JSON.parse(f.sources['packages/daemon/server-update.json']);
+  f.sources['packages/daemon/server-update.json'] = Buffer.from(JSON.stringify({ ...committed, mirrorBaseURLs: [mirror] }));
+  await assert.rejects(f.plan(), /mirrorBaseURLs.*不一致/);
+  f.summary.update.mirrorBaseURLs = [mirror];
+  await writeFile(join(f.dir, `vonvon-server-${version}-build.json`), JSON.stringify(f.summary));
+  assert.deepEqual((await f.plan()).mirrorBaseURLs, [mirror]);
+  f.summary.update.mirrorBaseURLs = ['http://invalid.example/bot/server'];
+  await writeFile(join(f.dir, `vonvon-server-${version}-build.json`), JSON.stringify(f.summary));
+  await assert.rejects(f.plan(), /Invalid server mirrorBaseURLs/);
+});
+
+test('server CDN config is explicit and ordinary GET refuses cached or stale mutable bytes', async t => {
+  const f = await fixture(t), cdn = { provider: 'tencent', mutablePolicy: 'bypass' };
+  const path = join(f.root, 'cos-cdn.json');
+  await writeFile(path, JSON.stringify({ ...f.config, cdn }));
+  assert.deepEqual((await readServerCosConfig(path)).cdn, cdn);
+  await writeFile(path, JSON.stringify({ ...f.config, cdn: { provider: 'tencent', mutablePolicy: 'ttl' } }));
+  await assert.rejects(readServerCosConfig(path), /CDN configuration supports only/);
+  f.config.cdn = cdn;
+  const planned = await f.plan();
+  await f.upload(planned);
+  const ordinary = async (url, options) => {
+    assert.equal(options.cache, undefined);
+    assert.equal(options.headers, undefined);
+    const response = await f.cos.fetchImpl(url);
+    if (url.endsWith('/install.sh') && response.status === 200) response.headers.set('X-Cache-Lookup', 'Cache Hit');
+    return response;
+  };
+  await assert.rejects(f.promote(planned, { ownerConfirmation: 'ok', fetchImpl: ordinary }), /cached mutable response/);
+  assert.notEqual(JSON.parse(await readFile(join(f.dir, STABLE_RECEIPT), 'utf8')).status, 'published');
+  const fixed = await f.promote(planned, { ownerConfirmation: 'ok' });
+  assert.match(fixed.cdn, /腾讯 CDN/);
+  const stale = async (url, options) => {
+    assert.equal(options.cache, undefined);
+    if (url.endsWith('/install.sh')) return new Response('stale script', { headers: { 'content-type': 'text/plain', 'content-length': '12', 'cache-control': 'no-cache' } });
+    return f.cos.fetchImpl(url);
+  };
+  await assert.rejects(f.promote(planned, { ownerConfirmation: 'ok', fetchImpl: stale }), /公网内容不一致/);
+});

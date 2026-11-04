@@ -26,7 +26,11 @@ export function allowedWindowsUpdateRequest(value:string):boolean {
 /** The provider returns only metadata decoded from a verified, architecture-specific envelope. */
 export function createWindowsUpdateDriver(publicKey?:string,architecture=process.arch):NsisUpdater {
   class SignedProvider extends GenericProvider {
-    constructor(_config:unknown,updater:AppUpdater,runtime:ProviderRuntimeOptions) {super({provider:'generic',url:WINDOWS_UPDATE_URL},updater,runtime);}
+    constructor(_config:unknown,updater:AppUpdater,runtime:ProviderRuntimeOptions) {
+      // COS/CDN may reject multipart Range or return only its first range.
+      // Keep differential downloads, but fetch each changed range separately.
+      super({provider:'generic',url:WINDOWS_UPDATE_URL},updater,{...runtime,isUseMultipleRangeRequest:false});
+    }
     override async getLatestVersion() {
       if(!publicKey||!['x64','arm64'].includes(architecture))throw Error('Windows update trust is not configured');
       const raw=await this.httpRequest(new URL(`${architecture}/update.json`,WINDOWS_UPDATE_URL));

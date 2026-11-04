@@ -1585,7 +1585,7 @@ function SessionPanel({
     </>
   );
 }
-export function HostPanel({
+export function CodexPathPanel({
   view,
   refresh,
 }: {
@@ -1636,7 +1636,6 @@ export function HostPanel({
   return (
     <SettingsGroup
       label="Codex 可执行文件"
-        id={settingAnchor("Codex 可执行文件")}
       footer={
         execution.access.kind === "readonly"
           ? execution.access.message
@@ -1677,16 +1676,63 @@ export function HostPanel({
           恢复自动检测
         </Button>
       </div>
-      <SettingsRow
-        title="未绑定工作目录时的运行后备"
-        value={view.runtime.fallbackCwd}
-      />
       <ActionNotice message={notice} />
       <Dialog open={pathDraft !== null} onClose={() => setPathDraft(null)} title="Codex 可执行文件路径" footer={<><Button onClick={() => setPathDraft(null)}>取消</Button><Button disabled={!pathDraft?.trim()} onClick={() => {if (pathDraft !== null) void savePath(pathDraft);}}>保存路径</Button></>}>
         <FormField label="绝对路径"><input aria-label="Codex 可执行文件绝对路径" value={pathDraft ?? ""} onChange={event => setPathDraft(event.target.value)} /></FormField>
       </Dialog>
     </SettingsGroup>
   );
+}
+/** The executable override is a host setting, presented with the Codex Provider. */
+export async function readCodexPathView(client: Pick<VonvonClient, 'settings'>, signal?: AbortSignal, timeoutMs = 10000): Promise<HostSettingsView> {
+  if (signal?.aborted) throw new Error('读取已取消。');
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  try {
+    const reply = await Promise.race([
+      client.settings({type: 'read', scope: {kind: 'host'}}),
+      new Promise<never>((_, reject) => {timer = setTimeout(() => reject(new Error('读取超时，请重新读取路径配置。')), timeoutMs);}),
+      new Promise<never>((_, reject) => {
+        onAbort = () => reject(new Error('读取已取消。'));
+        signal?.addEventListener('abort', onAbort, {once: true});
+      }),
+    ]);
+    if (signal?.aborted) throw new Error('读取已取消。');
+    if (reply.kind !== 'view' || !isHostView(reply.view)) throw new Error(reply.kind === 'refused' ? reply.message : '无法读取 Codex 路径配置。');
+    return reply.view;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener('abort', onAbort);
+  }
+}
+export function CodexPathSettings() {
+  const client = useClient();
+  const [view, setView] = useState<HostSettingsView>();
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const activeRead = useRef<AbortController | null>(null);
+  const refresh = useCallback(async () => {
+    activeRead.current?.abort();
+    const controller = new AbortController();
+    activeRead.current = controller;
+    setLoading(true);
+    setError('');
+    try {
+      const next = await readCodexPathView(client, controller.signal);
+      if (!controller.signal.aborted) setView(next);
+    } catch (failure) {if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : '无法读取 Codex 路径配置。');}
+    finally {if (!controller.signal.aborted) setLoading(false);}
+  }, [client]);
+  useEffect(() => {void refresh(); return () => activeRead.current?.abort();}, [refresh]);
+  return <section id={settingAnchor('Codex 可执行文件')} aria-label="Codex 可执行文件">
+    {view ? <CodexPathPanel view={view} refresh={refresh}/> : <SettingsGroup label="Codex 可执行文件"><SettingsRow title={loading ? '正在读取路径配置…' : '路径配置暂不可用'} /></SettingsGroup>}
+    {error && view && <InlineNotice title="路径配置暂不可用" tone="warning">{error}</InlineNotice>}
+    {error && !view && <InlineNotice title="路径配置暂不可用" tone="warning">{error}</InlineNotice>}
+    <div className="provider-management-actions"><Button size="sm" disabled={loading} onClick={() => void refresh()}>重新读取路径配置</Button></div>
+  </section>;
+}
+export function HostPanel({view}: {view: HostSettingsView}) {
+  return <SettingsGroup label="运行后备" id={settingAnchor('运行后备')}><SettingsRow title="未绑定工作目录时的运行后备" value={view.runtime.fallbackCwd}/></SettingsGroup>;
 }
 export function SettingsPanel(props: PanelProps) {
   const {target} = props;
@@ -1785,7 +1831,7 @@ function ScopedSettingsPanel(props: PanelProps) {
   ) : isProjectView(view) && props.scope === 'project' ? (
     <ProjectPanel view={view} refresh={refresh} onOpenSecrets={props.onOpenSecrets} />
   ) : isHostView(view) ? (
-    <HostPanel view={view} refresh={refresh} />
+    <HostPanel view={view} />
   ) : null;
   return (
     <>
