@@ -103,6 +103,8 @@ node scripts/release-all.mjs collect --out /absolute/persistent/release-X.Y.Z
 
 官网消费 `downloads` 更新发布配置，再走网站既有测试、部署预演和部署；owner 的完整发布请求已包括官网更新，不重复请求同一部署授权。`evidence` 保存本机证据路径，不能原样复制到公开网站。编排脚本不会自动修改网站或报告部署成功。发布完成后保留 OUT，只用 `git worktree remove` 清理本次状态记录的源码 worktree；临时根按 skill 删除规则处理。
 
+旧安装包由独立的每日存储维护处理，规则见 [发布存储保留策略](release-storage-retention.md)：本地最近 3 版完整包包含 Linux 两架构，COS 三端和 R2 统一保留最近 5 版并叠加引用与时间保护；证据、回执和哈希长期留存。维护不切 stable，也不能依赖 CDN 缓存来补偿删除源文件。
+
 Linux 的复制按钮读取 `server.installCommand` 的完整多行字符串；相同内容保存到 `OUT/linux-install-command.sh`，便于核对与复制。它由 `scripts/install-command.mjs` 从已测试的 `scripts/install-bootstrap.sh` 生成，最外层就并行获取国内、海外两个完整安装脚本，没有单源引导依赖。不要折叠换行或替换回旧的单域名 `curl` 命令，也不要将本机的 `evidence.linuxInstallCommand` 路径当成公开 URL。双源下载可用性须在新脚本、包和镜像全部上线后另行验收。
 
 ## 验证依据
