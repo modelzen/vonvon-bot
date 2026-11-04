@@ -57,7 +57,7 @@ export function JudgeUsageRows({read, onRead, compact = false, disabled = false,
   const bots = botTotals(view?.days ?? []);
   const sources = judgeSourceTotals(view?.days ?? []);
   const empty = view && !view.unreadBots && !view.botsUnreadable && view.days.every(day => day.total === 0);
-  const logNote = '原因在状态与诊断页底部的 daemon 日志（judge usage-unreadable）。';
+  const logNote = '原因在诊断页底部的 daemon 日志（judge usage-unreadable）。';
   const dailyRows = view?.days.filter((day, index) => index === 0 || day.total > 0).map(day => <SettingsRow key={day.date}
     title={dayLabel(day.date, view.days[0]?.date ?? day.date)} value={`${day.total} 次`}
     description={empty ? '只有智能群会判断。' : sourcesText(day)}/>);
@@ -76,7 +76,7 @@ export function JudgeUsageRows({read, onRead, compact = false, disabled = false,
       <details className="usage-details judge-daily-details"><summary>每日记录</summary>{dailyRows}</details>
     </> : dailyRows}
     {view && view.unreadBots > 0 && <SettingsRow title={`有 ${view.unreadBots} 个 Bot 的判断次数读不了`} description={logNote}/>}
-    {view?.botsUnreadable && <SettingsRow title="Bot 列表读不了，判断次数都没算进来" description="原因在状态与诊断页底部的 daemon 日志（judge usage-bots-unreadable）。"/>}
+    {view?.botsUnreadable && <SettingsRow title="Bot 列表读不了，判断次数都没算进来" description="原因在诊断页底部的 daemon 日志（judge usage-bots-unreadable）。"/>}
     {bots.length > 0 && <details className={`usage-details${compact ? ' judge-daily-details' : ''}`}><summary>按 Bot 看</summary>
       {bots.map(bot => <SettingsRow key={bot.agentId} title={bot.agentName} value={`今天 ${bot.today} 次 · 14 天 ${bot.total} 次`}/>)}
     </details>}

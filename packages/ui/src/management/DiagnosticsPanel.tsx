@@ -1,8 +1,9 @@
+import type {SetupProvider} from '../setup/provider-state';
 import {ChevronDown, RefreshCw} from 'lucide-react';
 import {useRef, useState, type ReactNode} from 'react';
 import {
   CUSTOM_PROMPT_NOTICE, NOT_REPLIED_TEXT, OPTIONAL_SCOPE_EFFECTS, SCOPE_DENIAL_PLACE_TEXT, backendLabel, botSteps, connectionStep, crashText, formatTime, toolSteps,
-  type AdminSetupStatus, type Agent, type Command, type CommandResult, type CrashEntry, type DesktopSnapshot, type DirectoryProblem, type Membership, type NotReplied, type SetupStep, type StepAction, type StepTone,
+  type AdminSetupStatus, type Agent, type AgentId, type Command, type CommandResult, type CrashEntry, type DesktopSnapshot, type DirectoryProblem, type Membership, type NotReplied, type SetupStep, type StepAction, type StepTone,
 } from '@vonvon/protocol';
 import {useActiveDevice, useClient, useShellCapabilities} from '../client-context';
 import {diagnosticsToolsFooter, onDeviceText, toolStepsOn, whereName} from '../device-copy';
@@ -62,7 +63,7 @@ export function setupView(agent: Agent, read: SetupRead | undefined): {badge: Re
 }
 
 function NotRepliedList({records, agent, snapshot, now}: {records: readonly NotReplied[]; agent: Agent; snapshot: DesktopSnapshot; now: number}) {
-  // What to do next says 本机环境; a remote device's says 「X」 (owner 2026-11-02).
+  // Provider remediation names its settings page and the device being inspected.
   const device = useActiveDevice();
   if (!records.length) return <>暂无未回复记录。<details className="diagnostics-note"><summary>记录范围</summary><p>记录被 @、群设置要求回复、智能判断后未回复，以及主动接话后未发送的消息。重启后台服务后清空。</p></details></>;
   const groups = new Map(snapshot.groups.map(group => [group.id as string, group.name]));
@@ -77,7 +78,7 @@ function NotRepliedList({records, agent, snapshot, now}: {records: readonly NotR
     return <li key={`${record.at}-${record.ref ?? ''}-${record.reason}`}>
       <span className="diagnostics-replies__head"><time>{formatTime(record.at, {now})}</time><strong>{text.reason(record)}</strong>{record.count > 1 && <span>{record.count} 次</span>}</span>
       <span>{where}</span>
-      <span>{onDeviceText(device, text.next(record, {id: agent.id, several: snapshot.agents.length > 1}, snapshot.tools.find(tool => tool.tool === (record.backend ?? 'codex'))?.command))}</span>
+      <span>{onDeviceText(device, text.next(record, {id: agent.id, several: snapshot.agents.length > 1}, snapshot.tools.find(tool => tool.tool === (record.backend ?? 'codex'))?.command), record.reason === 'codex-too-old' || record.reason === 'tool-missing' ? 'providers' : 'tools')}</span>
     </li>;
   })}</ul>;
 }
@@ -200,10 +201,10 @@ function CrashBars({snapshot, ready, busy, run}: {snapshot: DesktopSnapshot; rea
 /** 状态与诊断 (product.md 3.1 item 8): the red bar of a crash pause, the shown device's tools (「X」 on a remote one),
  * its decision models' keys (s23g2) and the daemon's crashes, then each bot's connection, setup, scopes, tools, misplaced
  * group directories, recent not-replied messages and crashes, with the daemon log beside the machine details. */
-export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpenEnvironment, onOpenSecrets, onNotice}: {
+export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpenProviders, onOpenSecrets, onNotice}: {
   snapshot: DesktopSnapshot; ready: boolean; busy: boolean;
   run: (command: Command) => Promise<CommandResult>;
-  onOpenSetup: () => void; onOpenEnvironment: () => void; onOpenSecrets: () => void;
+  onOpenSetup: (agentId: AgentId) => void; onOpenProviders: (provider?: SetupProvider) => void; onOpenSecrets: () => void;
   onNotice: (message: string, error: boolean) => void;
 }) {
   const client = useClient();
@@ -230,20 +231,19 @@ export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpe
     await run({type: 'refresh'});
     await Promise.all([...snapshot.agents.map(agent => recheck(agent.id)), secrets.reader.read()]);
   }
-  function act(action: StepAction) {
+  function act(action: StepAction, provider?: SetupProvider) {
     if (action.kind === 'claudeLogin') void claudeLogin.check(true);
-    else if (action.kind === 'codexLogin') onOpenEnvironment();
-    else onOpenEnvironment();
+    else onOpenProviders(provider);
   }
   function toolAction(step: SetupStep) {
     const action = step.actions[0];
     if (!action) return null;
-    return <Button size="sm" loading={action.kind === 'claudeLogin' && claudeLogin.checking} disabled={busy || !ready} onClick={() => act(action)}>{action.label}</Button>;
+    return <Button size="sm" loading={action.kind === 'claudeLogin' && claudeLogin.checking} disabled={busy || !ready} onClick={() => act(action, step.id === 'codex' || step.id === 'claude' ? step.id : undefined)}>{action.label}</Button>;
   }
   const crashes = snapshot.application.crashes;
   return <div className="page-stack diagnostics-page diagnostics-layout">
     <header className="diag-heading today-page-heading" id={settingAnchor('诊断概况')}>
-      <div><h1>状态与诊断</h1><p><span data-search-title="daemon 版本">后台 {host.kind === 'connected' ? host.version : '未连接'}</span><span>·</span><span data-search-title="最近读取">最近读取 {snapshot.observedAt ? formatTime(snapshot.observedAt) : '尚未读取'}</span></p></div>
+      <div><h1>诊断</h1><p><span data-search-title="daemon 版本">后台 {host.kind === 'connected' ? host.version : '未连接'}</span><span>·</span><span data-search-title="最近读取">最近读取 {snapshot.observedAt ? formatTime(snapshot.observedAt) : '尚未读取'}</span></p></div>
       <div className="diag-heading-actions"><IconButton size="sm" variant="ghost" label="重新检查" title="刷新快照、飞书设置与密钥状态" loading={checking} disabled={busy || !ready} onClick={() => void recheckAll().catch(error => onNotice(error instanceof Error ? error.message : '重新检查没有完成。', true))}><RefreshCw size={16} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>
     </header>
     <CrashBars snapshot={snapshot} ready={ready} busy={busy} run={run}/>
@@ -261,7 +261,7 @@ export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpe
       </details>
     </SettingsGroup>
     <section className="diag-bots" aria-label="Bot 状态"><div className="diag-section-heading"><h2>Bot 状态</h2><span>{snapshot.agents.length} 个 Bot</span></div>
-      <div className="diag-bot-list">{!snapshot.agents.length && <p className="diag-empty">尚未添加 Bot。添加后会显示连接状态和诊断记录。</p>}{snapshot.agents.map(agent => <BotDiagnostics key={agent.id} agent={agent} snapshot={snapshot} read={reads[agent.id]} tools={tools} onOpenSetup={onOpenSetup} onError={message => onNotice(message, true)}/>)}</div>
+      <div className="diag-bot-list">{!snapshot.agents.length && <p className="diag-empty">尚未添加 Bot。添加后会显示连接状态和诊断记录。</p>}{snapshot.agents.map(agent => <BotDiagnostics key={agent.id} agent={agent} snapshot={snapshot} read={reads[agent.id]} tools={tools} onOpenSetup={() => onOpenSetup(agent.id)} onError={message => onNotice(message, true)}/>)}</div>
     </section>
   </div>;
 }
