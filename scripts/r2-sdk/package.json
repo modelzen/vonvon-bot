@@ -1,0 +1,8 @@
+{
+  "name": "vonvon-release-r2-sdk",
+  "private": true,
+  "description": "Pinned official S3 SDK for the Linux R2 mirror. Copy this manifest and lockfile to a private tool prefix and run npm ci there.",
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1161.0"
+  }
+}
