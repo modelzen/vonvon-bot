@@ -1,3 +1,4 @@
+import type {SetupProvider} from './provider-state';
 import {GlowButton} from '../GlowButton';
 import {RefreshCw} from 'lucide-react';
 import {useState, type ReactNode} from 'react';
@@ -33,20 +34,20 @@ export type SetupChecklistProps = {
   snapshot: DesktopSnapshot; ready: boolean; busy: boolean;
   run: (command: Command) => Promise<CommandResult>;
   onRegister: (agentId?: AgentId) => void;
-  onOpenEnvironment: () => void;
+  onOpenProviders: (provider?: SetupProvider) => void;
   onNotice: (message: string, error: boolean) => void;
   compact?: boolean;
   botsOnly?: boolean;
 };
 
-export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEnvironment, onNotice, compact = false, botsOnly = false}: SetupChecklistProps) {
+export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenProviders, onNotice, compact = false, botsOnly = false}: SetupChecklistProps) {
   const client = useClient();
   const shell = useShellCapabilities();
   const {reads, recheck} = useSetupStatus(snapshot.agents.map(agent => agent.id));
   const where = useActiveDevice();
   const claudeLogin = useClaudeLoginCheck(botsOnly ? [] : snapshot.tools, message => onNotice(message, true));
   const [working, setWorking] = useState<string>();
-  async function act(action: StepAction, agentId?: AgentId) {
+  async function act(action: StepAction, agentId?: AgentId, provider?: SetupProvider) {
     const key = `${agentId ?? 'tools'}:${action.kind}`;
     setWorking(key);
     try {
@@ -57,8 +58,8 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
         case 'confirmCallback':
           if (agentId) { await client.admin({type: 'confirmCardCallback', agentId, confirmed: action.confirmed}); await recheck(agentId); }
           break;
-        case 'environment': onOpenEnvironment(); break;
-        case 'codexLogin': onOpenEnvironment(); break;
+        case 'environment': onOpenProviders(provider); break;
+        case 'codexLogin': onOpenProviders('codex'); break;
         case 'claudeLogin': await claudeLogin.check(true); break;
         // Installing from the web page drops the connection for a few seconds; the snapshot shows the result.
         case 'serviceInstall': onNotice(await toggleService(true, client, shell), false); break;
@@ -79,10 +80,10 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
         <StatusBadge tone={step.tone}>{step.status}</StatusBadge>
         {step.actions.map(action => action.kind === 'serviceRecheck'
           ? <IconButton key={action.kind + action.label} size="sm" variant="ghost" label={action.label} title={action.label}
-            loading={working === `${agentId ?? 'tools'}:${action.kind}`} disabled={busy || !ready} onClick={() => void act(action, agentId)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
+            loading={working === `${agentId ?? 'tools'}:${action.kind}`} disabled={busy || !ready} onClick={() => void act(action, agentId, step.id === 'codex' || step.id === 'claude' ? step.id : undefined)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
           : <Button key={action.kind + action.label} size="sm" variant={action.kind === 'serviceInstall' && action.primary ? 'primary' : undefined}
           loading={working === `${agentId ?? 'tools'}:${action.kind}` || (action.kind === 'claudeLogin' && claudeLogin.checking)}
-          disabled={busy || !ready} onClick={() => void act(action, agentId)}>{action.label}</Button>)}
+          disabled={busy || !ready} onClick={() => void act(action, agentId, step.id === 'codex' || step.id === 'claude' ? step.id : undefined)}>{action.label}</Button>)}
       </span>}/>;
   }
   // A remote device's tool steps say 「X」 where toolSteps says 本机 (review 244, as on the 状态与诊断 page).
