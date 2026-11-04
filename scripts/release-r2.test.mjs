@@ -280,7 +280,7 @@ test('official SDK adapter uses explicit credentials, conditional Put and safe e
   const commands = [];
   class Command { constructor(input) { this.input = input; } }
   class Client {
-    constructor(options) { assert.deepEqual(options.requestHandler, { connectionTimeout: 15_000, socketTimeout: 60_000 }); assert.deepEqual(options.credentials, { accessKeyId: 'secret-id', secretAccessKey: 'secret-key' }); }
+    constructor(options) { assert.equal(options.maxAttempts, 3); assert.deepEqual(options.requestHandler, { connectionTimeout: 15_000, socketTimeout: 60_000 }); assert.deepEqual(options.credentials, { accessKeyId: 'secret-id', secretAccessKey: 'secret-key' }); }
     async send(command) { commands.push(command.input); return { ETag: '"abc"', ContentLength: 3, Body: Readable.from([Buffer.from('abc')]) }; }
     destroy() {}
   }
@@ -305,7 +305,8 @@ test('stable manifest CAS stays bound to the original snapshot across the final 
   let reads = 0;
   f.client.head = async key => {
     const result = await head(key);
-    if (key === stableKey && ++reads === 4) f.seed(f.plan.stable.at(-1), newer);
+    const scriptsWritten = ['bot/server/install.sh', 'bot/server/uninstall.sh'].every(script => f.calls.some(call => call[0] === 'put' && call[1] === script));
+    if (key === stableKey && scriptsWritten && ++reads === 1) f.seed(f.plan.stable.at(-1), newer);
     return result;
   };
   await assert.rejects(f.sync(), /stable changed concurrently/);
@@ -346,4 +347,112 @@ test('SDK timeouts are identified without exposing the SDK error detail', async 
   class Client { async send() { throw Object.assign(new Error('private signed URL'), { name: 'TimeoutError' }); } }
   const client = await loadR2Client(config, { env: { TEST_R2_ID: 'id', TEST_R2_SECRET: 'key' }, sdk: { S3Client: Client, HeadObjectCommand: Command } });
   await assert.rejects(client.head('test'), error => /timed out.*15s transfer deadline/.test(error.message) && !error.message.includes('private'));
+});
+
+test('script HEAD cannot adopt a newer release ETag after the initial manifest guard', async t => {
+  for (const file of ['install.sh', 'uninstall.sh']) await t.test(file, async t => {
+    const f = await fixture(t);
+    await f.sync({ mode: 'versioned' });
+    const object = f.plan.stable.find(object => object.file === file);
+    const newerScript = Buffer.from(`#!/bin/sh\necho newer ${file}\n`);
+    const files = Object.fromEntries(Object.entries(f.payload.files).map(([target, value]) => [target, { ...value, url: `${SERVER_BASE_URL}/0.9.2/${archiveName('0.9.2', target)}` }]));
+    const newerManifest = f.signed({ version: '0.9.2', files, publishedAt: f.payload.publishedAt + 1 });
+    const head = f.client.head;
+    let raced = false;
+    f.client.head = async key => {
+      if (key === object.key && !raced) {
+        raced = true;
+        f.seed(object, newerScript);
+        f.seed(f.plan.stable.at(-1), newerManifest);
+      }
+      return head(key);
+    };
+    await assert.rejects(f.sync({ mode: 'stable' }), /stable changed concurrently/);
+    assert.deepEqual(f.store.get(object.key).body, newerScript);
+    assert.deepEqual(f.store.get(stableKey).body, newerManifest);
+    assert.equal(f.calls.some(call => call[0] === 'put' && call[1] === object.key), false);
+  });
+});
+
+test('canonical source is checked again after capturing each mutable object ETag', async t => {
+  for (const file of ['install.sh', 'uninstall.sh', 'stable-manifest.json']) await t.test(file, async t => {
+    const f = await fixture(t);
+    await f.sync({ mode: 'versioned' });
+    const object = f.plan.stable.find(object => object.file === file);
+    const head = f.client.head;
+    let manifestReads = 0, raced = false;
+    f.client.head = async key => {
+      const result = await head(key);
+      // The stable manifest also has guard HEADs. Its ordinary object HEAD is the
+      // second consecutive HEAD after the preceding script has been uploaded.
+      const scriptWrites = f.calls.filter(call => call[0] === 'put' && ['bot/server/install.sh', 'bot/server/uninstall.sh'].includes(call[1])).length;
+      const candidateHead = file === 'stable-manifest.json' ? key === stableKey && scriptWrites === 2 && ++manifestReads === 2 : key === object.key;
+      if (candidateHead && !raced) {
+        raced = true;
+        f.canonical.get(object.key).body = Buffer.from('canonical source advanced');
+      }
+      return result;
+    };
+    await assert.rejects(f.sync({ mode: 'stable' }), /length differs|remote bytes differ/);
+    assert.equal(raced, true);
+    assert.equal(f.calls.some(call => call[0] === 'put' && call[1] === object.key), false);
+  });
+});
+
+test('a script change after the final manifest guard is still protected by the captured ETag', async t => {
+  const f = await fixture(t);
+  await f.sync({ mode: 'versioned' });
+  const object = f.plan.stable[0];
+  f.seed(object, Buffer.from('old script'));
+  const capturedETag = f.store.get(object.key).etag;
+  const head = f.client.head;
+  const newerScript = Buffer.from('newer script written after guard');
+  let captured = false, raced = false;
+  f.client.head = async key => {
+    const result = await head(key);
+    if (key === object.key) captured = true;
+    else if (key === stableKey && captured && !raced) { raced = true; f.seed(object, newerScript); }
+    return result;
+  };
+  await assert.rejects(f.sync({ mode: 'stable' }), error => error.status === 412);
+  assert.equal(raced, true);
+  const attempt = f.calls.find(call => call[0] === 'put' && call[1] === object.key);
+  assert.equal(attempt[2].ifMatch, capturedETag);
+  assert.deepEqual(f.store.get(object.key).body, newerScript);
+});
+
+test('SDK retry diagnostics stay bounded and sanitized without an outer PUT retry', async () => {
+  const sent = [];
+  class Command { constructor(input) { this.input = input; } }
+  class Client {
+    constructor(options) { assert.equal(options.maxAttempts, 3); assert.equal(options.requestHandler.socketTimeout, 60_000); }
+    async send(command) {
+      sent.push(command.input);
+      throw Object.assign(new Error('private signed URL and secret'), { name: 'TimeoutError', $metadata: { attempts: 3 } });
+    }
+  }
+  const client = await loadR2Client(config, { env: { TEST_R2_ID: 'id', TEST_R2_SECRET: 'key' }, sdk: { S3Client: Client, PutObjectCommand: Command } });
+  await assert.rejects(client.put('bot/server/install.sh', Buffer.from('candidate'), { ifMatch: '"captured-etag"', cacheControl: mutable, contentType: 'text/plain; charset=utf-8' }), error => {
+    assert.equal(error.attempts, 3);
+    assert.match(error.message, /R2 request timed out.*SDK attempts: 3/);
+    assert.doesNotMatch(error.message, /private|secret|signed URL/);
+    return true;
+  });
+  assert.equal(sent.length, 1, 'the SDK owns its bounded retry budget; the adapter must not multiply it');
+  assert.equal(sent[0].IfMatch, '"captured-etag"');
+});
+
+test('CANCEL arriving during the final mutable guards prevents its conditional PUT', async t => {
+  const f = await fixture(t), path = join(f.dir, 'CANCEL');
+  await f.sync({ mode: 'versioned' });
+  const head = f.client.head, object = f.plan.stable[0];
+  let captured = false;
+  f.client.head = async key => {
+    const result = await head(key);
+    if (key === object.key) captured = true;
+    else if (key === stableKey && captured) await writeFile(path, 'stop');
+    return result;
+  };
+  await assert.rejects(f.sync({ mode: 'stable', cancelFile: path }), /stopped by CANCEL/);
+  assert.equal(f.calls.some(call => call[0] === 'put' && call[1] === object.key), false);
 });
