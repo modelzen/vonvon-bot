@@ -102,6 +102,7 @@ describe('the bot-session column (unit)', () => {
       'snapshot.get': request('snapshot', { type: 'get' }),
       'admin.negotiate': request('admin', { type: 'negotiate', capabilities: ['cli'] }),
       'command.listGroupMembers': request('command', { type: 'listGroupMembers', agentId: BOT, groupId: GROUP }),
+      'command.feishuRead': request('command', { type: 'feishuRead', tool: 'feishu_doc', args: { doc: 'dox' } }),
       'memory.list': request('memory', { type: 'list', scope: project }),
       'memory.add': request('memory', { type: 'add', scope: project, text: '周四发版' }),
       'memory.edit': request('memory', { type: 'edit', scope: project, itemId: 'mem_1', revision: 1, text: '周五发版' }),
@@ -143,7 +144,7 @@ describe('the bot-session column (unit)', () => {
         : cell === 'not-group' ? expect.objectContaining({ ok: false, code: 'not-group' }) : { ok: false, code: 'permission_denied', message: SESSION_DENIED });
     }
     // asked only for the whitelist's ★ requests
-    expect(askBot.mock.calls.every(([, , action]) => action.kind === 'schedule' || action.kind === 'memory')).toBe(true);
+    expect(askBot.mock.calls.every(([, , action]) => action.kind === 'feishuRead' || action.kind === 'schedule' || action.kind === 'memory')).toBe(true);
   });
 
   it('refuses a comment\'s schedules with the not-group sentence', async () => {
@@ -539,6 +540,31 @@ describe('a Bot session against the daemon', () => {
       expect(groupMembers).toHaveBeenLastCalledWith('cli_other', GROUP, 'next');
       await client.close();
     } finally { await fixture.close(); }
+  });
+
+  // dm-agent 7.2, 7.3: `vonvon feishu`, by who asks. main 必败: there was no such command
+  it('keeps a Feishu read to the session\'s Bot and chat, and only a private chat may name another', async () => {
+    const read = (agentId?: string) => request('command', { type: 'feishuRead', ...(agentId ? { agentId } : {}), tool: 'feishu_doc', args: { doc: 'dox' } });
+    const asked = vi.fn(async () => ({ ok: true, role: 'admin', openId: 'ou_a' } as SessionAuthz));
+    const all = { ...deps, askBot: asked };
+    const named = { ok: true, feishu: { bot: BOT, only: GROUP } };
+    expect(await authorize(peer('group'), read(), all)).toMatchObject(named);
+    expect(await authorize(peer('group'), read(BOT), all)).toMatchObject(named);
+    expect(await authorize(peer('group'), read('cli_other'), all)).toMatchObject({ ok: false, code: 'permission_denied' });
+    expect(await authorize(peer('dm'), read('cli_other'), all)).toMatchObject({ ok: true, feishu: { prefer: BOT } });
+    expect(await authorize(peer('dm'), read(), all)).toMatchObject({ ok: true, feishu: { prefer: BOT } });
+    expect(asked).toHaveBeenCalledWith(BOT, 'ses_0123456789abcdef', { kind: 'feishuRead' });
+    // a comment is told no by the table, its Bot not asked
+    asked.mockClear();
+    expect(await authorize(peer('comment'), read(), all)).toMatchObject({ ok: false, code: 'permission_denied' });
+    expect(asked).not.toHaveBeenCalled();
+    // the Bot's no stands: a member's private chat, a group's ended turn
+    expect(await authorize(peer('dm'), read('cli_other'), { ...deps, askBot: botSays({ ok: false, reason: 'not-admin', message: '不是管理员' }) })).toMatchObject({ ok: false, code: 'permission_denied' });
+    expect(await authorize(peer('group'), read(), { ...deps, askBot: botSays({ ok: false, reason: 'turn-ended', message: SESSION_TURN_ENDED }) })).toMatchObject({ ok: false, code: 'permission_denied', message: SESSION_TURN_ENDED });
+    // an owner's `--scope` is one group: its own Bot, that chat, the reading Bot checks the chat
+    const scoped = { principal: { kind: 'owner' as const, via: 'local' as const }, protocolVersion: 2, negotiated: true, scope: { bot: BOT, group: GROUP } };
+    expect(await authorize(scoped, read(), deps)).toMatchObject(named);
+    expect(await authorize(scoped, read('cli_other'), deps)).toMatchObject({ ok: false });
   });
 
   it('checks --scope at negotiate against the session', async () => {

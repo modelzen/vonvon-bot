@@ -7,7 +7,8 @@ import { spawnProcess } from '../platform/spawn';
 import { log } from '../core/logger';
 import { withoutSessionMarkers } from '../config/session-env';
 import { loadBots, type BotEntry } from '../config/bots';
-import { askBotOver, createAdminIpcCaller, createHostIpcResponder, type AdminIpcCaller } from '../admin/ipc';
+import { askBotOver, createAdminIpcCaller, createHostIpcResponder, FEISHU_READ_IPC_MS, type AdminIpcCaller } from '../admin/ipc';
+import { hostFeishuRead } from '../admin/feishu-route';
 import { createSessionTokens } from '../host/session-tokens';
 import { AdminWriteError } from '../admin/ops';
 import { createAdminService } from '../admin/service';
@@ -142,6 +143,8 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   const ownership = new WeakMap<ChildProcess, ChildOwnership>();
   const errors: unknown[] = [];
   let api: Awaited<ReturnType<typeof startApi>> | undefined;
+  /** Stands once the API does; a child's read may come before it (dm-agent 7.3). */
+  let adminService!: ReturnType<typeof createAdminService>;
   /** devices-4a 4.1: the bots' session tokens, which the API checks a session's hello against; in memory only. */
   const sessionTokens = createSessionTokens();
   const children = new Map<string, Child>(bots.map((bot) => [bot.appId, newChild(bot, true)]));
@@ -326,6 +329,10 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
         return token;
       },
       revokeSessionToken: async sessionId => { if (issued.delete(sessionId)) sessionTokens.revoke(sessionId); },
+      feishuRead: (bot, request) => hostFeishuRead({ appId, tokens: sessionTokens, read: async (reach, read) => {
+        if (!adminService?.feishuRead) throw new Error('The daemon is still starting');
+        return adminService.feishuRead(reach, read);
+      } }, bot, request),
     }, msg => { if (proc.connected) proc.send(msg); }).onMessage);
     proc.on('message', (message: unknown) => {
       if (c.proc !== proc) return;
@@ -471,7 +478,6 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
 
     const byAppId = (botId: string): Child | undefined => children.get(botId);
     const hostPause = paused ? options.crash?.pause ?? { since: supervisorStartedAt, crashes: CRASH_PAUSE_COUNT } : undefined;
-    let adminService: ReturnType<typeof createAdminService>;
     migration.bind({
       start: async (appId, fallback) => {
         if (fallback) importCodex.set(appId, fallback);
@@ -600,6 +606,12 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           // A crash-paused bot is not running either; its pause is shown on the bot itself. A stopping one drains and says no.
           if (!child?.enabled || child.pause || child.stopping || !child.proc || !child.ipc) return botNotRunning();
           return child.ipc.call({ kind: 'schedule', actor, request }) as Promise<ScheduleReply>;
+        },
+        executeFeishuRead: async (botId, request) => {
+          const child = byAppId(botId);
+          // Stopped, paused or draining: the same to whoever asked (7.3, "Bot B 没在运行").
+          if (!child?.enabled || child.pause || child.stopping || !child.proc || !child.ipc) return undefined;
+          return child.ipc.call({ kind: 'feishuRead', request }, FEISHU_READ_IPC_MS);
         },
         executeSettingsRead: async (botId, op) => {
           const child = byAppId(botId);

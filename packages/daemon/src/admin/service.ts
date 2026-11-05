@@ -2,7 +2,9 @@ import { pendingGroupsFile, readPendingGroups, type PendingGroup } from '../proj
 import type { CollaborationRequest } from './collaboration';
 import {runtimeDistribution} from '../service/distribution';
 import { createSettingsService } from './settings-service';
-import { admitLibraryWorkspace, createHostLibrary, type AdminLibraryOp, type HostLibrary } from './library';
+import { admitLibraryWorkspace, botLabel, createHostLibrary, type AdminLibraryOp, type HostLibrary } from './library';
+import { routeFeishuRead, type FeishuReach } from './feishu-route';
+import type { FeishuReadReply, FeishuReadRequest } from '../feishu-read/reader';
 import { isProjectId, readLibrary } from '../project/library';
 import { projectRevision, projectView } from './collaboration';
 import { AdminWriteError } from './ops';
@@ -131,6 +133,8 @@ export interface AdminService {
   pendingGroups?(botId: string): Promise<{ groups: PendingGroup[] }>;
   joinedGroups?(botId: string, cursor?: string): Promise<JoinedGroups>;
   groupMembers?(botId: string, chatId: string, cursor?: string): Promise<GroupMembers>;
+  /** dm-agent 7.3: a Feishu read, on the Bot `reach` comes to (admin/feishu-route.ts). Refusals are replies, not errors. */
+  feishuRead?(reach: FeishuReach, request: Omit<FeishuReadRequest, 'only'>): Promise<FeishuReadReply>;
   bindGroup?(botId: string, input: BindGroupInput): Promise<AdminProject>;
   getVoice(botId: string): Promise<VoiceView>;
   setVoice(botId: string, action: VoiceAction): Promise<void>;
@@ -468,6 +472,8 @@ export interface AdminServiceDeps {
   executeLibrary?: (botId: string, op: AdminLibraryOp) => Promise<unknown>;
   /** Forwards a scheduled-task request to the bot process; a bot that is not running replies `refused bot-not-running`. */
   executeSchedule?: (botId: string, actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
+  /** Runs a Feishu read in the bot's process, undefined when it has none: its answer is unchecked until the route parses it. */
+  executeFeishuRead?: (botId: string, request: FeishuReadRequest) => Promise<unknown>;
   /** 实时运行状态（daemon 进程内：本进程 channel / 子进程 IPC）。返回 undefined
    * 或缺省 → 回退锁文件探测（该 bot 不归本 daemon 管，如未激活的 bot）。 */
   liveStatus?: (botId: string) => Promise<BotLiveStatus | undefined>;
@@ -699,6 +705,16 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async groupMembers(botId, chatId, cursor) {
       if (!deps.executeGroups) throw new NotWiredYetError('群成员');
       return parseGroupMembers(await deps.executeGroups(botId, { kind: 'groupMembers', chatId, cursor }));
+    },
+    async feishuRead(reach, request) {
+      const execute = deps.executeFeishuRead;
+      if (!execute) throw new NotWiredYetError('飞书读取');
+      return routeFeishuRead({
+        bots: async () => (await loadBots()).bots.map(bot => ({ id: bot.appId, label: botLabel(bot), name: bot.name })),
+        chats: async botId => (await listProjectsIn(botPaths(botId).projectsFile)).map(project => project.chatId),
+        running: async botId => (await runState(botId)).running,
+        execute,
+      }, reach, request);
     },
     async bindGroup(botId, input) {
       if (!deps.executeGroups) throw new NotWiredYetError('绑定群聊');

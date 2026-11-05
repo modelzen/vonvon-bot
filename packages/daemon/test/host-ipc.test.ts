@@ -7,14 +7,16 @@ describe('host IPC', () => {
   afterEach(() => { vi.useRealTimers(); });
   const wired = (appId = 'cli_x') => {
     const tokens = createSessionTokens();
+    const feishuRead = vi.fn<HostApi['feishuRead']>(async () => ({ ok: true, result: { text: '正文' } }));
     const api: HostApi = {
       issueSessionToken: async input => { if (input.appId !== appId) throw new Error('not this process\'s bot'); return tokens.issue(input); },
       revokeSessionToken: async sessionId => { tokens.revoke(sessionId); },
+      feishuRead,
     };
     let caller: ReturnType<typeof createHostIpcCaller>;
     const responder = createHostIpcResponder(api, msg => queueMicrotask(() => caller.onMessage(msg)));
     caller = createHostIpcCaller(msg => queueMicrotask(() => responder.onMessage(msg)));
-    return { caller, tokens, responder };
+    return { caller, tokens, responder, feishuRead };
   };
 
   it('issues a token for the bot\'s own session and revokes it', async () => {
@@ -33,12 +35,27 @@ describe('host IPC', () => {
     expect(tokens.size()).toBe(0);
     // what is not a host request is not answered at all
     const send = vi.fn();
-    const other = createHostIpcResponder({ issueSessionToken: vi.fn(), revokeSessionToken: vi.fn() }, send);
+    const other = createHostIpcResponder({ issueSessionToken: vi.fn(), revokeSessionToken: vi.fn(), feishuRead: vi.fn() }, send);
     other.onMessage({ fcb: 'fcb.admin.req', id: 1, op: { kind: 'issueSessionToken' } });
     other.onMessage({ fcb: HOST_IPC_REQ, id: 'x', op: {} });
     await Promise.resolve();
     expect(send).not.toHaveBeenCalled();
     expect(responder).toBeDefined();
+  });
+
+  it('carries a private chat\'s read and its answer; what the host does not know is refused (dm-agent 7.3)', async () => {
+    const { caller, feishuRead } = wired();
+    const session = 'ses_0123456789abcdef';
+    expect(await caller.feishuRead('Bot B', { sessionId: session, tool: 'feishu_doc', args: { doc: 'dox' } })).toEqual({ ok: true, result: { text: '正文' } });
+    expect(feishuRead).toHaveBeenCalledWith('Bot B', { sessionId: session, tool: 'feishu_doc', args: { doc: 'dox' } });
+    feishuRead.mockResolvedValueOnce({ ok: false, kind: 'not-shared', message: '这篇文档还没分享给 Bot。' });
+    expect(await caller.feishuRead(undefined, { sessionId: session, tool: 'feishu_doc', args: {} })).toEqual({ ok: false, kind: 'not-shared', message: '这篇文档还没分享给 Bot。' });
+    expect(feishuRead).toHaveBeenLastCalledWith(undefined, { sessionId: session, tool: 'feishu_doc', args: {} });
+    feishuRead.mockClear();
+    await expect(caller.feishuRead(undefined, { sessionId: 'not-a-session', tool: 'feishu_doc', args: {} })).rejects.toThrow();
+    // `only` is the host's to set, not something a process asks for
+    await expect(caller.feishuRead(undefined, { sessionId: session, tool: 'feishu_doc', args: {}, only: 'oc_x' } as never)).rejects.toThrow();
+    expect(feishuRead).not.toHaveBeenCalled();
   });
 
   it('gives up on a host that does not answer', async () => {

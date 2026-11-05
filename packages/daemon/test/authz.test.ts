@@ -32,7 +32,7 @@ it('lets the owner do everything, a connection of another protocol only the main
 it('gives a group session only what its work needs, and the not-dm sentence for the settings writes', () => {
   const cells = (want: (cell: string) => boolean) => [...RULES].filter(([, rule]) => want(rule.places.group)).map(([kind]) => kind).sort();
   expect(cells(cell => cell === 'host')).toEqual(['admin.negotiate', 'command.listGroupMembers', 'snapshot.get']);
-  expect(cells(cell => cell === 'bot')).toEqual(['memory.add', 'memory.archive', 'memory.edit', 'memory.list',
+  expect(cells(cell => cell === 'bot')).toEqual(['command.feishuRead', 'memory.add', 'memory.archive', 'memory.edit', 'memory.list',
     'schedule.create', 'schedule.delete', 'schedule.edit', 'schedule.list', 'schedule.pause', 'schedule.resume', 'schedule.runNow']);
   expect(cells(cell => cell === 'not-dm')).toEqual(['collaboration.createProject', 'collaboration.editProject', 'command.setPermission', 'command.setResponse',
     'settings.act.adminMember', 'settings.act.commentInstructions', 'settings.act.projectAudience', 'settings.act.projectMember', 'settings.act.voice',
