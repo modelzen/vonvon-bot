@@ -45,7 +45,7 @@ const commentsInput = z.object({ doc: reference.describe('文档、表格、多�
   type: z.enum(['doc', 'docx', 'sheet', 'file', 'slides', 'bitable']).describe('裸 token 的类型，默认 docx，不是新版文档时要写；给链接时不用写').optional(),
   comment: z.string().min(1).max(200).describe('评论的 id，给了就只读这条评论的全部回复').optional(),
   solved: z.boolean().describe('true 只读已解决的，false 只读未解决的，不写都读').optional(), limit: limit(100).describe('最多几条，默认一页读得下的都给').optional(), cursor: cursor.optional() }).strict();
-const docMediaInput = z.object({ token: z.string().min(1).max(400).describe('feishu_doc 结果里 <img token="…"> 或 <source token="…"> 的 token，也可以是 feishu_comments 结果里 images 的 token'),
+const docMediaInput = z.object({ token: z.string().min(1).max(400).describe('feishu_doc 结果里 <img src="…"> 的 src 或 <source token="…"> 的 token，也可以是 feishu_comments 结果里 images 的 token'),
   name: z.string().min(1).max(200).describe('存成什么文件名，不写就用原来的').optional() }).strict();
 const docEditInput = z.object({ doc: reference.describe('文档或知识库页面的链接，或者它的 token'),
   action: z.enum(['append', 'insert', 'replace']).describe('append 追加到文末；insert 插到 block 后面；replace 换掉 pattern 或 block'),
@@ -67,7 +67,7 @@ const definitions = [
   { name: 'feishu_folder', input: folderInput, description: '看飞书云空间文件夹里有什么，可以翻页。不写 folder 列 Bot 自己的根目录，别人分享给 Bot 的文件夹不在那里，要给链接。结果带名字、类型和 token：文件夹接着用这个工具，其他类型用对应的工具读。' },
   { name: 'feishu_wiki', input: wikiInput, description: '看飞书知识库的目录：列出 Bot 能看到的知识库，或一个知识库、一个页面下面的页面，可以翻页。结果的 token 用来往下列，hasChildren 说明下面还有；objToken 和 type 用来读页面内容，比如 docx 用 feishu_doc。' },
   { name: 'feishu_comments', input: commentsInput, description: '读一篇文档的评论和回复，可以翻页。一条评论带它引用的原文、是否解决和回复；moreReplies 为真时，用 comment 读这条评论的全部回复。Bot 要有这篇文档的阅读权限。' },
-  { name: 'feishu_doc_media', input: docMediaInput, description: '下载飞书文档里的图片和附件，返回本机路径。先用 feishu_doc 读文档，图片是 <img token="…">，附件是 <source token="…">，把 token 传进来。Bot 要有这篇文档的阅读权限。' },
+  { name: 'feishu_doc_media', input: docMediaInput, description: '下载飞书文档里的图片和附件，返回本机路径。先用 feishu_doc 读文档，图片是 <img src="…">，附件是 <source token="…">，把 src 或 token 传进来。Bot 要有这篇文档的阅读权限。' },
   { name: 'feishu_search', input: searchInput, description: '按关键词搜飞书消息。' },
 ] as const satisfies readonly { name: string; input: z.ZodObject; description: string }[];
 

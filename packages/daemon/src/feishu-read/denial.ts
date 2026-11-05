@@ -30,10 +30,10 @@ const AREAS: Record<ReadArea, { scopes: readonly string[]; effect: string }> = {
 /** The sentence that closes a missing-scope reply: an administrator of vonvon may not reach the Feishu console (7.5). */
 export const AFTER_GRANT = '开通后要发布新版本才生效；打不开这个链接，就转给这个飞书应用的管理员。';
 
-/** Feishu's "no access to this object". Measured for a document not shared with a bot: 3380004 (docs_ai), 1770032 (raw_content), 91403 (bitable); the rest from its docs. */
-const NOT_SHARED_CODES: ReadonlySet<number> = new Set([3380004, 1770032, 1310213, 1061004, 1069902, 131006, 91403]);
-/** Measured for a made-up id (3380002, 99992402, 1770001, 131005, 91402), the rest from the same docs. */
-const NOT_FOUND_CODES: ReadonlySet<number> = new Set([3380002, 99992402, 1770001, 1770002, 1310214, 1061003, 1061007, 131005, 91402, 230001, 230110]);
+/** Feishu's "no access to this object". Measured for a document not shared with a bot: 3380004 (docs_ai), 1770032 (raw_content), 91403 (bitable), 1069303 (comments); the rest from its docs. */
+const NOT_SHARED_CODES: ReadonlySet<number> = new Set([3380004, 1770032, 1310213, 1061004, 1069303, 1069902, 131006, 91403]);
+/** Measured for a made-up id (3380002, 99992402, 1770001, 131005, 91402, 1061002 for a folder, 1069307 for comments), the rest from the same docs. */
+const NOT_FOUND_CODES: ReadonlySet<number> = new Set([3380002, 99992402, 1770001, 1770002, 1310214, 1061002, 1061003, 1061007, 1069307, 131005, 91402, 230001, 230110]);
 /** The Bot is not in that chat (230002), or the chat has left it (232011). */
 const OUT_OF_CHAT_CODES: ReadonlySet<number> = new Set([230002, 232011]);
 
@@ -83,10 +83,12 @@ export function refusalOf(context: DenialContext, area: ReadArea, failure: unkno
   const editing = area === 'docEdit';
   if (error && NOT_SHARED_CODES.has(error.code)) return new FeishuReadRefused(NOT_SHARED_PLACES[area]?.(context.botName()) ?? notSharedReply(context.botName(), editing ? '编辑' : '阅读'), 'not-shared');
   if (error && OUT_OF_CHAT_CODES.has(error.code)) return new FeishuReadRefused(`「${context.botName()}」不在这个群里，读不到。`);
-  if (error && NOT_FOUND_CODES.has(error.code)) {
+  // A download's 404 has no Feishu body to read.
+  const gone = !error && (failure as { response?: { status?: number } } | null)?.response?.status === 404;
+  if (gone || error && NOT_FOUND_CODES.has(error.code)) {
     const what = area === 'folder' ? '这个文件夹，看看链接和 token 对不对' : area === 'wiki' ? '这个知识库或页面，看看链接和 id 对不对'
       : area === 'doc' || editing || area === 'sheet' || area === 'base' || area === 'drive' || area === 'comments' || area === 'docMedia' ? '这个文档或文件，看看链接和 token 对不对' : '这条内容，看看 id 对不对';
-    return new FeishuReadRefused(`找不到${what}（飞书错误码 ${error.code}）。`, 'not-found');
+    return new FeishuReadRefused(`找不到${what}${error ? `（飞书错误码 ${error.code}）` : ''}。`, 'not-found');
   }
   if (error) return new FeishuReadRefused(`飞书拒绝了这次${editing ? '修改' : '读取'}（错误码 ${error.code}${error.msg ? `：${error.msg}` : ''}）。`);
   log.warn('feishu-read', 'read-failed', { area, err: String(failure) });

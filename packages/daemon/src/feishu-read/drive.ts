@@ -148,7 +148,7 @@ export async function readComments(deps: ReadDeps, request: CommentsRequest): Pr
 /** A picture or attachment of a document, by the token `feishu_doc` shows; the document's own link gets it nowhere. */
 export async function readDocMedia(deps: ReadDeps, request: DocMediaRequest): Promise<{ path: string; name: string }> {
   const { kind, token } = parseRef(request.token);
-  if (kind) throw new FeishuReadRefused('这里要图片或附件的 token，不是链接：用 feishu_doc 读文档，token 在结果的 <img token="…"> 和 <source token="…"> 里。');
+  if (kind) throw new FeishuReadRefused('这里要图片或附件的 token，不是链接：用 feishu_doc 读文档，token 在结果的 <img src="…"> 和 <source token="…"> 里。');
   const res = await ask(deps, 'docMedia', () => deps.channel.rawClient.drive.v1.media.download({ path: { file_token: token } }), 60_000);
   return saveDownload(res, token, request);
 }
