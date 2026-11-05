@@ -1,14 +1,20 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ModelInfo, Query } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as backendLoader from '../src/agent/backend-loader';
 import { ClaudeAgentBackend, type ClaudeSdkFacade } from '../src/agent/claude-agent/backend';
+import { discoverProviderModels } from '../src/admin/model-catalog';
+
+const home = vi.hoisted(() => ({ path: '' }));
+vi.mock('node:os', async importOriginal => ({ ...await importOriginal<typeof import('node:os')>(), homedir: () => home.path }));
 
 let directory: string;
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), 'claude-model-cache-'));
+  home.path = join(directory, 'home');
+  mkdirSync(home.path);
   vi.stubEnv('CLAUDE_CONFIG_DIR', directory);
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }); });
@@ -22,6 +28,66 @@ function fixture(discover: () => Promise<ModelInfo[]>) {
 }
 
 describe('Claude native model catalog cache', () => {
+  it('accepts first discovery when the CLI creates a global file containing only runtime state', async () => {
+    const { backend } = fixture(async () => {
+      writeFileSync(join(directory, '.claude.json'), JSON.stringify({ numStartups: 1, cachedGrowthBookFeaturesAt: Date.now() }));
+      return catalog('first-run-model');
+    });
+    await backend.listModels();
+    expect(backend.peekModels()?.[0]?.id).toBe('first-run-model');
+  });
+
+  it.each(['default', 'custom'] as const)('retains native discovery when the CLI rewrites its %s runtime caches', async location => {
+    if (location === 'default') vi.stubEnv('CLAUDE_CONFIG_DIR', '');
+    const file = join(location === 'default' ? home.path : directory, '.claude.json');
+    const account = { accountUuid: 'account-a', organizationUuid: 'org-a' };
+    writeFileSync(file, JSON.stringify({ oauthAccount: account, numStartups: 1 }));
+    const discover = vi.fn(async () => {
+      writeFileSync(file, JSON.stringify({ oauthAccount: { ...account, profileFetchedAt: Date.now() },
+        numStartups: 2, cachedGrowthBookFeaturesAt: Date.now(), additionalModelOptionsAnsweredAt: Date.now() }));
+      return catalog('native-account-model');
+    });
+    const { backend } = fixture(discover);
+    vi.spyOn(backend, 'doctor').mockResolvedValue({ ok: true, version: '0.3.296' });
+    expect(await discoverProviderModels('claude-agent', () => backend)).toMatchObject({ models: [{ id: 'native-account-model' }] });
+    writeFileSync(file, JSON.stringify({ oauthAccount: account, numStartups: 3 }));
+    expect(backend.peekModels()?.[0]?.id).toBe('native-account-model');
+    await backend.listModels();
+    expect(discover).toHaveBeenCalledOnce();
+  });
+
+  it.each(['default', 'custom', 'legacy'] as const)('invalidates native metadata when the %s config changes account or API key', async location => {
+    if (location === 'default') vi.stubEnv('CLAUDE_CONFIG_DIR', '');
+    const file = location === 'default' ? join(home.path, '.claude.json')
+      : join(directory, location === 'legacy' ? '.config.json' : '.claude.json');
+    const state = { oauthAccount: { accountUuid: 'a', organizationUuid: 'org' }, primaryApiKey: 'fixture-key-a' };
+    writeFileSync(file, JSON.stringify(state));
+    const discover = vi.fn(async () => catalog('native'));
+    const { backend } = fixture(discover);
+    await backend.listModels();
+    for (const next of [
+      { ...state, oauthAccount: { ...state.oauthAccount, accountUuid: 'b' } },
+      { ...state, oauthAccount: { ...state.oauthAccount, organizationUuid: 'other-org' } },
+      { ...state, primaryApiKey: 'fixture-key-b' },
+    ]) {
+      writeFileSync(file, JSON.stringify(next));
+      expect(backend.peekModels()).toBeUndefined();
+      await backend.listModels();
+    }
+    expect(discover).toHaveBeenCalledTimes(4);
+  });
+
+  it('rejects a discovery for an account that changes while it is running', async () => {
+    const file = join(directory, '.claude.json');
+    writeFileSync(file, JSON.stringify({ oauthAccount: { accountUuid: 'before' } }));
+    const { backend } = fixture(async () => {
+      writeFileSync(file, JSON.stringify({ oauthAccount: { accountUuid: 'after' } }));
+      return catalog('previous-account-model');
+    });
+    await backend.listModels();
+    expect(backend.peekModels()).toBeUndefined();
+  });
+
   it('shares discovery and successful catalogs between backend instances and refreshes explicitly', async () => {
     let resolve!: (value: ModelInfo[]) => void;
     const discover = vi.fn(() => new Promise<ModelInfo[]>(r => { resolve = r; }));
