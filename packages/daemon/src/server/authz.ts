@@ -293,6 +293,7 @@ async function sessionActionOf(request: Request, principal: BotSessionPrincipal,
     }
     case 'memory': {
       const memory = request.payload;
+      if (memory.type === 'seen' && memory.page.kind === 'dm') return dmPersonRead(memory.page.botId, memory.page.openId, principal);
       if (memory.type === 'seen' || memory.type === 'newCounts') return { kind: 'adminRead' };
       if (memory.type === 'dmPeople') return denied(OTHER_DM);
       // A transfer lands elsewhere than it starts: either end may be another Bot's.
@@ -311,8 +312,17 @@ async function sessionActionOf(request: Request, principal: BotSessionPrincipal,
         default: return { kind: 'memory', op: 'manage', target: memoryTarget(memory.scope), ...across };
       }
     }
+    case 'contextPreview': {
+      const { agentId, place } = request.payload;
+      return place.kind === 'dm' ? dmPersonRead(agentId, place.openId, principal) : { kind: 'adminRead' };
+    }
     default: return { kind: 'adminRead' };
   }
+}
+
+/** One person's private chat, as a read of their memory: each person's is their own (4.5a), whatever else names it. */
+function dmPersonRead(botId: string, openId: string, principal: BotSessionPrincipal): SessionAction | Decision {
+  return botId === principal.appId ? { kind: 'memory', op: 'read', target: { kind: 'dm', openId } } : denied(OTHER_DM);
 }
 
 /** Whether a memory is the session's own Bot's: its own, or a project one of its groups is bound to. */
