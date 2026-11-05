@@ -57,6 +57,19 @@ describe('settings writes and the administrators', () => {
     expect(await setup(dm, said(ADMIN)).ask({ kind: 'adminRead' })).toEqual({ ok: true, role: 'admin', openId: ADMIN, name: '某人' });
     expect(await setup(group, said(OWNER)).ask({ kind: 'adminRead' })).toMatchObject({ ok: false, reason: 'not-dm' });
   });
+
+  // dm-agent 7.3: `vonvon feishu` reads with the tools' own checks: a private chat's as an admin's turn, a group's in its turn, a comment's never
+  it('lets the command line read Feishu where the tools do, in a turn that stands', async () => {
+    const read = { kind: 'feishuRead' } as const;
+    expect(await setup(dm, said(ADMIN)).ask(read)).toEqual({ ok: true, role: 'admin', openId: ADMIN, name: '某人' });
+    expect(await setup(dm, said(MEMBER)).ask(read)).toMatchObject({ ok: false, reason: 'not-admin' });
+    expect(await setup(group, said(MEMBER)).ask(read)).toMatchObject({ ok: true, openId: MEMBER });
+    expect(await setup(group, null).ask(read)).toEqual(ended);
+    expect(await setup({ kind: 'doc', docId: 'd1' }, said(OWNER)).ask(read)).toMatchObject({ ok: false, reason: 'not-dm' });
+    const dropped = setup(group, said(MEMBER));
+    dropped.scope?.close();
+    expect(await dropped.ask(read)).toEqual(ended);
+  });
 });
 
 describe('a turn that is over', () => {

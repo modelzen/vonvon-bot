@@ -12,7 +12,9 @@ import type { ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
 import type { ScheduleActor } from '../admin/schedule-commands';
 import { isAdmin, type AppConfig } from '../config/schema';
 import { createCommandTools } from '../agent/entry/command-tools';
-import { createFeishuReader } from '../feishu-read/reader';
+import { createFeishuReader, type FeishuReadReply, type FeishuReadRequest } from '../feishu-read/reader';
+import { createFeishuCalls, createFeishuReads } from '../agent/entry/feishu-tools';
+import type { ApiRequest } from '../feishu-read/api';
 import { createMemoryWriter } from './memory-writer';
 import { createFirstHello } from './first-hello';
 import { dmPersonOf, getProjectByChatId, listProjects } from '../project/registry';
@@ -54,6 +56,9 @@ export interface BridgeHandle {
   collaboration: (request: CollaborationRequest) => Promise<unknown>;
   adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | Project>;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
+  /** A read this Bot runs as itself, the host asking (dm-agent 7.3). */
+  feishuRead: (request: FeishuReadRequest) => Promise<FeishuReadReply>;
+  feishuApi: (request: ApiRequest) => Promise<FeishuReadReply>;
   /** The host's workspace fan-out for this bot (admin/library.ts `AdminLibraryOp`). */
   libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
@@ -100,20 +105,22 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   const host = opts.host;
   // A revoke lost at shutdown is fine: the host drops all of this bot's tokens when its process exits.
   const sessions = host ? { revoke: (sessionId: string) => { void host.revokeSessionToken(sessionId).catch(() => undefined); } } : undefined;
+  const feishu = createFeishuReader({ channel, app });
+  const members = async (chatId: string, cursor?: string): Promise<GroupMembers> => {
+    const result = await createGroupExecutor(channel, identity)({ kind: 'groupMembers', chatId, cursor });
+    if (!('members' in result)) throw new Error('Invalid members reply');
+    return result;
+  };
   const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), ...(sessions ? { sessions } : {}),
     memoryPlace: turn => memory.placeOf(turn), tools: createCommandTools({
-    appId: app.id, memory, feishu: createFeishuReader({ channel, app }), groupTier: chatId => orchestrator.permissionOf(chatId),
+    appId: app.id, memory, feishu, groupTier: chatId => orchestrator.permissionOf(chatId),
     schedule: { execute: (actor, request) => orchestrator.scheduleAs(actor, request) },
     groups: async cursor => {
       const result = await createGroupExecutor(channel, identity)({ kind: 'joinedGroups', cursor });
       if (!('groups' in result)) throw new Error('Invalid group reply');
       return result;
     },
-    members: async (chatId, cursor) => {
-      const result = await createGroupExecutor(channel, identity)({ kind: 'groupMembers', chatId, cursor });
-      if (!('members' in result)) throw new Error('Invalid members reply');
-      return result;
-    },
+    members, ...(host ? { route: (bot, request) => host.feishuRead(bot, request), routeApi: (bot, request) => host.feishuApi(bot, request) } : {}),
   }) });
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
     { entries, memory, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}) });
@@ -251,7 +258,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       void task.then(() => groupTasks.delete(task), () => groupTasks.delete(task));
       return task;
     };
-    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, firstHello: firstHello.attempt, shutdown };
+    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, feishuRead: createFeishuReads({ feishu, members }), feishuApi: createFeishuCalls(feishu), firstHello: firstHello.attempt, shutdown };
   } catch (error) {
     try { await shutdown(); }
     catch (cleanupError) {

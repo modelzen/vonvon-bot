@@ -18,6 +18,8 @@ export interface SessionTokens {
    * request on a connection made with its token is one; a snapshot pushed to that connection is not.
    */
   active(sessionId: string, use?: boolean): boolean;
+  /** What a standing session is, by its id alone: for the host's own checks of a request its bot process sends (dm-agent 7.3). No use noted. */
+  session(sessionId: string): SessionRecord | undefined;
   /** Told each session that ends (revoked, replaced, its bot's process gone, found idle): the connections made with its token close. */
   onEnd(listener: (sessionId: string) => void): () => void;
   size(): number;
@@ -82,6 +84,7 @@ export function createSessionTokens(opts: { now?: () => number; idleMs?: number 
     revoke(sessionId) { end(sessionId); },
     revokeAll(appId) { for (const [id, entry] of [...records]) if (entry.record.appId === appId) end(id); },
     active(sessionId, use = false) { return live(sessionId, use) !== undefined; },
+    session(sessionId) { const record = live(sessionId, false); return record && { ...record }; },
     onEnd(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     size() { return records.size; },
   };
