@@ -246,6 +246,13 @@ describe('the tools in each place (dm-agent 7.3)', () => {
     expect(await s.call('feishu_messages', { chat: 'oc_other' })).toMatchObject({ ok: false, message: expect.stringContaining('读不了别的群') });
     expect(s.route).not.toHaveBeenCalled();
   });
+  it('a group named instead of its id is told where ids are, before Feishu is asked', async () => {
+    const s = session(P2P, { route: false });
+    for (const name of ['feishu_messages', 'feishu_chat', 'feishu_members', 'feishu_search'] as const) {
+      const reply = await s.call(name, { chat: '项目周报群', ...name === 'feishu_search' ? { query: '周报' } : {} });
+      expect(reply).toMatchObject({ ok: false, message: expect.stringContaining('feishu groups') });
+    }
+  });
   it('without a host a private chat reads as its own Bot, and another Bot is not running', async () => {
     const s = session(P2P, { route: false });
     expect(await s.call('feishu_messages', { chat: GROUP })).toMatchObject({ ok: true, result: { messages: [{ text: '你好' }] } });
