@@ -91,7 +91,7 @@ function checked(request: ScheduleRequest): ScheduleRequest {
 }
 
 const STATES = { active: '已启用', finished: '已结束' } as const;
-const PAUSED = { manual: '已暂停（手动）', failures: '已暂停（连续失败）', unavailable: '已暂停（群已解绑）' } as const;
+const PAUSED = { manual: '已暂停（手动）', failures: '已暂停（连续失败）', unavailable: '已暂停（群已解绑）', 'admin-removed': '已暂停（创建人已不是管理员）' } as const;
 const STATUS = { done: '完成', failed: '失败', missed: '错过', skipped: '跳过', interrupted: '中断' } as const;
 const SKIPPED = { running: '上一次还没跑完', disabled: '群已停用', updating: '群正在修改', held: '群正在修改' } as const;
 const BY = { shutdown: '停机', crash: '崩溃', user: '手动停止' } as const;
@@ -134,12 +134,15 @@ function runLines(task: ScheduledTaskView): string[] {
   ];
 }
 
-/** listBot: the tasks under their group; a group no longer bound shows by its id. */
+/** listBot: the tasks under their group or private chat; a group no longer bound shows by its id. */
 function groupLines(tasks: readonly ScheduledTaskView[], names: ReadonlyMap<string, string>): string[] {
-  return [...new Set(tasks.map(task => task.chatId))].flatMap(chatId => [
-    names.has(chatId) ? `群 ${names.get(chatId)}（${chatId}）` : `群 ${chatId}（没有绑定）`,
-    ...tasks.filter(task => task.chatId === chatId).map(task => `  ${taskLine(task)}`),
-  ]);
+  return [...new Set(tasks.map(task => task.chatId))].flatMap(chatId => {
+    const inChat = tasks.filter(task => task.chatId === chatId), dm = inChat[0]?.dm;
+    return [
+      dm ? `私聊${dm.name ? ` · ${dm.name}` : ''}（${chatId}）` : names.has(chatId) ? `群 ${names.get(chatId)}（${chatId}）` : `群 ${chatId}（没有绑定）`,
+      ...inChat.map(task => `  ${taskLine(task)}`),
+    ];
+  });
 }
 
 /** These also take the raw id of a group no longer bound, whose tasks list --all still shows; the rest would act in it. */

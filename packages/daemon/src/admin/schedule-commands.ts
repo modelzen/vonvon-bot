@@ -11,12 +11,15 @@ import type { StoredTask } from '../bot/schedule/types';
 
 /**
  * Who asks. `chat`: a person in a group turn; `session`: the same person's turn through a Bot session's command line
- * (devices-4b 4.4), with the same rights, recorded as made from the terminal; `scheduled`: the task's own unattended run;
- * `local`: the owner on this machine.
+ * (devices-4b 4.4), with the same rights, recorded as made from the terminal; `dm`: a private chat's turn, a person's or
+ * their task's (dm-agent 6.3), by its tools or (`via: 'cli'`) its command line, which reaches every chat of every Bot;
+ * an actor from another Bot's private chat has no `openId`, that being its own Bot's (6.4); `scheduled`: a group task's
+ * own unattended run; `local`: the owner on this machine.
  */
 export type ScheduleActor =
   | { kind: 'chat'; openId: string; name?: string; role: 'owner' | 'admin' | 'member'; chatId: string; topicId?: string; messageId?: string; text?: string }
   | { kind: 'session'; openId: string; name?: string; role: 'owner' | 'admin' | 'member'; chatId: string; messageId?: string }
+  | { kind: 'dm'; via: 'chat' | 'cli'; openId?: string; name?: string; chatId: string; messageId?: string; text?: string }
   | { kind: 'scheduled'; taskId: string; runId: string; chatId: string }
   | { kind: 'local'; via: 'desktop' | 'cli' };
 
@@ -28,6 +31,11 @@ export interface ScheduleCommandsDeps {
   hostTimeZone: () => string;
   /** Defaults 20 per group, 200 per bot. */
   limits?: { perChat: number; perBot: number };
+  /**
+   * What a chat is to this Bot: a private chat with its person, a bound group, or none it can post in. Only a private
+   * chat's command line can name a chat nothing else has checked.
+   */
+  chatOf?(chatId: string): { kind: 'dm'; name?: string } | { kind: 'group' } | undefined;
 }
 
 export interface ScheduleCommands {
@@ -56,6 +64,8 @@ const RUN_NOW_REFUSALS: Record<Exclude<RunNowResult['kind'], 'started'>, FixedRe
   running: 'running', 'not-started': 'bot-not-running', 'not-found': 'not-found',
 };
 const MAX_CREATOR_TEXT = 500; // scheduleCreatorSchema.text
+/** A private chat's command line named a chat this Bot has no window on. */
+const NO_CHAT = '这个 Bot 不在这个群里，也没有这个私聊，任务建不了。';
 
 const refused = (reason: ScheduleRefusal, message: string): Refused => ({ kind: 'refused', reason, message });
 const refuse = (reason: FixedRefusal): Refused => refused(reason, scheduleRefusalMessages[reason]);
@@ -92,7 +102,7 @@ const outsideUnion = (_actor: never): undefined => undefined;
 /** Who may create (3.13): the local owner, or a person with a role of the table. A chat role outside it (a bot's turn) may not. */
 function mayCreate(actor: ScheduleActor): actor is Creator {
   switch (actor.kind) {
-    case 'local': return true;
+    case 'local': case 'dm': return true;
     // A member without an openId could never manage the task it made: no openId, no task.
     case 'chat': case 'session': return actor.role === 'owner' || actor.role === 'admin' || (actor.role === 'member' && !!actor.openId);
     case 'scheduled': return false;
@@ -102,18 +112,21 @@ function mayCreate(actor: ScheduleActor): actor is Creator {
 
 function creator(actor: Creator): StoredTask['createdBy'] {
   if (actor.kind === 'local') return { via: actor.via };
+  const who = actor.kind !== 'dm' ? { via: actor.kind === 'session' ? 'cli' as const : 'chat' as const, openId: actor.openId, role: actor.role }
+    // An admin on the Bot of the private chat, and only there (dm-agent 13): without an open_id no role either.
+    : { via: actor.via, ...(actor.openId ? { openId: actor.openId, role: 'admin' as const } : {}) };
   return {
-    via: actor.kind === 'session' ? 'cli' : 'chat', openId: actor.openId, role: actor.role,
+    ...who,
     ...(actor.name ? { name: actor.name } : {}),
     ...(actor.messageId ? { messageId: actor.messageId } : {}),
-    ...(actor.kind === 'chat' && actor.text ? { text: clampUnits(actor.text, MAX_CREATOR_TEXT) } : {}),
+    ...(actor.kind !== 'session' && actor.text ? { text: clampUnits(actor.text, MAX_CREATOR_TEXT) } : {}),
   };
 }
 
 /** Section 3.13 "谁能做什么" for a task this group already has: who may touch it with `action`. */
 function denial(actor: ScheduleActor, action: TaskAction, task: StoredTask): FixedRefusal | undefined {
   switch (actor.kind) {
-    case 'local': return undefined;
+    case 'local': case 'dm': return undefined;
     case 'scheduled': return (action === 'edit' || action === 'delete') && task.id === actor.taskId ? undefined : 'scheduled-run-scope';
     case 'chat': case 'session':
       if (actor.role === 'owner' || actor.role === 'admin') return undefined;
@@ -128,7 +141,7 @@ export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleComm
   const limits = deps.limits ?? { perChat: 20, perBot: 200 };
 
   /** Never throws: a stored zone this Intl does not know (a hand edit, another ICU) leaves the next run unknown and is described in the host's zone. */
-  function toView(task: StoredTask, now: number): ScheduledTaskView {
+  function toView(task: StoredTask, now: number, chatOf = deps.chatOf): ScheduledTaskView {
     const { cursor, inflight, noticePending: _pending, noticeSince: _since, ...stored } = task;
     const host = deps.hostTimeZone();
     let nextRunAt: number | undefined;
@@ -137,11 +150,15 @@ export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleComm
     try { describe = describeSpec(task.spec, task.timeZone, host, now); } catch { describe = describeSpec(task.spec, host, host, now); }
     // Records are stored as they settle: an interrupted run lands after the skip it caused. Views show them by time.
     const recent = [...stored.recent].sort((a, b) => (a.startedAt ?? a.slot) - (b.startedAt ?? b.slot));
-    return { ...stored, recent, botId: deps.botId, ...(nextRunAt === undefined ? {} : { nextRunAt }), running: !!inflight, describe };
+    const chat = chatOf?.(task.chatId);
+    const dm = chat?.kind === 'dm' ? { dm: { ...(chat.name ? { name: chat.name } : {}) } } : {};
+    return { ...stored, ...dm, recent, botId: deps.botId, ...(nextRunAt === undefined ? {} : { nextRunAt }), running: !!inflight, describe };
   }
-  const tasksReply = (tasks: StoredTask[], now: number): ScheduleReply => (
-    { kind: 'tasks', tasks: tasks.map(task => toView(task, now)), now, timeZone: deps.hostTimeZone() }
-  );
+  // Once a chat: chatOf reads the project file.
+  function tasksReply(tasks: StoredTask[], now: number): ScheduleReply {
+    const chats = new Map([...new Set(tasks.map(task => task.chatId))].map(chatId => [chatId, deps.chatOf?.(chatId)]));
+    return { kind: 'tasks', tasks: tasks.map(task => toView(task, now, chatId => chats.get(chatId))), now, timeZone: deps.hostTimeZone() };
+  }
   const taskReply = (task: StoredTask, now: number): ScheduleReply => ({ kind: 'task', task: toView(task, now) });
 
   /** One config write. `fn` throws an Answer to refuse without writing; a write that lands wakes the scheduler. */
@@ -178,7 +195,7 @@ export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleComm
     };
     return write((tasks, touch) => {
       if (tasks.filter(other => other.chatId === task.chatId).length >= limits.perChat) {
-        throw new Answer(refused('task-limit', `本群已有 ${limits.perChat} 个任务，先删掉不用的。`));
+        throw new Answer(refused('task-limit', `${deps.chatOf?.(task.chatId)?.kind === 'dm' ? '这个私聊' : '本群'}已有 ${limits.perChat} 个任务，先删掉不用的。`));
       }
       if (tasks.length >= limits.perBot) throw new Answer(refused('task-limit', `这个 Bot 已有 ${limits.perBot} 个任务，先删掉不用的。`));
       touch(task);
@@ -252,13 +269,16 @@ export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleComm
       }
       const request = parsed.data;
       const now = deps.now();
-      if (request.action === 'listBot') return actor.kind === 'local' ? tasksReply(store.all(), now) : refuse('not-group');
-      if (actor.kind !== 'local' && request.chatId !== actor.chatId) return refuse('not-group');
+      // The owner, and a private chat's turn (dm-agent 8): a task of any chat of this Bot, by its id only in that chat.
+      const anyChat = actor.kind === 'local' || actor.kind === 'dm';
+      if (request.action === 'listBot') return anyChat ? tasksReply(store.all(), now) : refuse('not-group');
+      if (!anyChat && request.chatId !== actor.chatId) return refuse('not-group');
       if (request.action === 'list') {
         return tasksReply(store.byChat(request.chatId).filter(task => actor.kind !== 'scheduled' || task.id === actor.taskId), now);
       }
       if (request.action === 'create') {
         if (actor.kind === 'scheduled') return refuse('no-human-create');
+        if (actor.kind === 'dm' && deps.chatOf && !deps.chatOf(request.chatId)) return refused('not-found', NO_CHAT);
         // The nearest text of section 16: a chat role outside the table is a turn no present person started.
         return mayCreate(actor) ? create(actor, request, now) : refuse('not-human-turn');
       }

@@ -18,7 +18,7 @@ export interface ScheduleStore {
 }
 
 // Reuse protocol validation while storing only the persistent subset of its view.
-const taskSchema = scheduledTaskViewSchema.omit({ nextRunAt: true, running: true, describe: true, botId: true });
+const taskSchema = scheduledTaskViewSchema.omit({ nextRunAt: true, running: true, describe: true, botId: true, dm: true });
 const runtimeSchema = z.object({
   cursor: z.number().int(),
   inflight: z.object({ runId: z.string(), slot: z.number().int(), trigger: z.enum(['schedule', 'catchUp', 'manual']), startedAt: z.number().int(), revision: z.string() }).strict().optional(),

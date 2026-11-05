@@ -133,7 +133,7 @@ function taskView(task: ScheduledTaskView, { actor, where, steered }: Turn, leve
     placement: placement.kind === 'topic' ? { kind: 'topic', here: !!where.topicId && placement.topicId === where.topicId } : placement,
     running: task.running, instruction, ...clipped,
     createdBy: { via, ...(role ? { role } : {}), ...(creator ? { name: creator } : {}),
-      ...(actor.kind === 'chat' && !steered ? { mine: !!actor.openId && openId === actor.openId } : {}), ...(text ? { text: cut(text) } : {}) },
+      ...((actor.kind === 'chat' || actor.kind === 'dm') && !steered ? { mine: !!actor.openId && openId === actor.openId } : {}), ...(text ? { text: cut(text) } : {}) },
     ...(last ? { lastResult: { status: last.status, at: last.at, excerpt: cut(last.excerpt), ...(last.link ? { link: last.link } : {}) } } : {}),
     recent: lastRuns(task.recent, level?.runs).map(({ messageId: _message, topicId: _topic, error, ...run }) =>
       error === undefined || (level && !level.errors) ? run : { ...run, error }),
@@ -141,10 +141,10 @@ function taskView(task: ScheduledTaskView, { actor, where, steered }: Turn, leve
 }
 
 const nextAt = (ms: number, zone: string) => `${formatAt(ms, zone, zone).slice(5)}（${zone}）`;
-function headline(reply: ScheduleReply, done: string): string {
+function headline(reply: ScheduleReply, turn: Turn, done: string): string {
   switch (reply.kind) {
     case 'refused': return reply.message;
-    case 'tasks': return `现在 ${formatAt(reply.now, reply.timeZone, reply.timeZone)}（${reply.timeZone}）· 本群 ${reply.tasks.length} 个任务`;
+    case 'tasks': return `现在 ${formatAt(reply.now, reply.timeZone, reply.timeZone)}（${reply.timeZone}）· ${turn.actor.kind === 'dm' ? '这个私聊' : '本群'} ${reply.tasks.length} 个任务`;
     case 'task': {
       const { task } = reply;
       return `${done}：${task.name} · ${task.describe}${task.nextRunAt === undefined ? '' : ` · 下次 ${nextAt(task.nextRunAt, task.timeZone)}`}`;
@@ -157,7 +157,7 @@ function headline(reply: ScheduleReply, done: string): string {
 }
 /** One line, then the reply as JSON, each task in {@link taskView}; a list over {@link LIST_BYTES} goes out cut and says so. */
 function answer(reply: ScheduleReply, turn: Turn, done = ''): string {
-  const line = headline(reply, done);
+  const line = headline(reply, turn, done);
   const say = (shown: unknown, first = line) => `${first}\n${JSON.stringify(shown)}`;
   switch (reply.kind) {
     case 'tasks': {

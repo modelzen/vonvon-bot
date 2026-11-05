@@ -206,6 +206,7 @@ describe('output', () => {
       task({ id: 'st_2', name: '巡检', describe: '每 30 分钟', state: 'paused', pausedReason: 'failures', nextRunAt: undefined, lastResult: { at: Date.UTC(2026, 10, 1, 1, 30), status: 'failed', excerpt: '' } }),
       task({ id: 'st_3', name: '周报', state: 'paused', pausedReason: 'unavailable', nextRunAt: undefined }),
       task({ id: 'st_4', name: '发版提醒', describe: '11 月 1 日 14:00 一次', state: 'finished', nextRunAt: undefined }),
+      task({ id: 'st_5', name: '周报', state: 'paused', pausedReason: 'admin-removed', nextRunAt: undefined }),
     ]));
     await h.run('list', {});
     expect(h.out()).toBe([
@@ -214,6 +215,7 @@ describe('output', () => {
       'st_2 巡检 · 每 30 分钟 · 已暂停（连续失败） · 上次 失败 11-01 09:30',
       'st_3 周报 · 每个工作日 09:00 · 已暂停（群已解绑） · 上次 完成 11-01 09:00',
       'st_4 发版提醒 · 11 月 1 日 14:00 一次 · 已结束 · 上次 完成 11-01 09:00',
+      'st_5 周报 · 每个工作日 09:00 · 已暂停（创建人已不是管理员） · 上次 完成 11-01 09:00',
     ].join('\n') + '\n');
   });
 
@@ -223,6 +225,13 @@ describe('output', () => {
     expect(h.requests).toEqual([{ action: 'listBot' }]);
     expect(h.out().split('\n')).toEqual(['群 研发群（oc_group）', `  ${'st_0123456789abcdef 日报 · 每个工作日 09:00 · 下次 11-02 09:00 · 已启用 · 上次 完成 11-01 09:00'}`, '群 oc_gone（没有绑定）', '  st_9 日报 · 每个工作日 09:00 · 已暂停（群已解绑）', '']);
     expect(await h.failure('list', { all: true })).toMatchObject({ exitCode: 2 }); // --group 研发群 and --all
+  });
+
+  // dm-agent 8. main 必败: a private chat read as a group no longer bound
+  it('--all puts a private chat\'s tasks under its person', async () => {
+    const h = harness(() => tasks([task({ id: 'st_1', chatId: 'oc_p2p', dm: { name: '张三' }, lastResult: undefined }), task({ id: 'st_2', chatId: 'oc_p2p_b', dm: {}, lastResult: undefined })]));
+    await h.run('list', { group: undefined, all: true });
+    expect(h.out().split('\n').filter(line => !line.startsWith('  '))).toEqual(['私聊 · 张三（oc_p2p）', '私聊（oc_p2p_b）', '']);
   });
 
   it('--json prints the reply as it is, after ok: true', async () => {

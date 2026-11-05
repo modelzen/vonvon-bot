@@ -3,6 +3,7 @@ import type { AgentThread } from '../src/agent/types';
 import { createAgentEntries, NOT_DM_MESSAGE, SESSION_TURN_ENDED, type AgentPlace, type TurnFacts } from '../src/agent/entry/registry';
 import { decisionMessages, type MemoryPlace } from '../src/bot/memory-authority';
 import { scheduleRefusalMessages } from '../src/admin/schedule-commands';
+import { sessionAuthzSchema } from '../src/admin/ipc';
 
 vi.mock('../src/core/logger', () => ({ log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() } }));
 
@@ -128,11 +129,24 @@ describe('a private chat\'s turn', () => {
     expect(await setup(group, task(ADMIN)).ask({ kind: 'settingsWrite' })).toMatchObject({ ok: false, reason: 'not-dm' });
   });
 
+  // dm-agent 8. main 必败: a task's run came as `scheduled`, a person's as `session`, and neither reaches another chat
   it('runs a task\'s and a person\'s tasks alike, with neither of a group task\'s limits', async () => {
-    expect(await setup(dm, task(ADMIN)).ask({ kind: 'schedule', action: 'create' })).toMatchObject({ ok: true, actor: { kind: 'scheduled', chatId: 'oc_dm' } });
-    expect(await setup(dm, task(ADMIN)).ask({ kind: 'schedule', action: 'edit', taskId: 'st_2' })).toMatchObject({ ok: true });
-    expect(await setup(dm, said(ADMIN)).ask({ kind: 'schedule', action: 'create' })).toMatchObject({ ok: true, actor: { kind: 'session', role: 'admin', chatId: 'oc_dm' } });
+    const asTask = { kind: 'dm', via: 'cli', openId: ADMIN, chatId: 'oc_dm' };
+    expect((await setup(dm, task(ADMIN)).ask({ kind: 'schedule', action: 'create' })) as { actor: object }).toMatchObject({ ok: true, actor: asTask });
+    expect(await setup(dm, task(ADMIN)).ask({ kind: 'schedule', action: 'edit', taskId: 'st_2' })).toMatchObject({ ok: true, actor: asTask });
+    // only a person's message is a task's origin; the text is not the command line's, as on a group's session actor
+    expect(await setup(dm, said(ADMIN)).ask({ kind: 'schedule', action: 'create' }))
+      .toEqual({ ok: true, role: 'admin', openId: ADMIN, name: '某人', actor: { kind: 'dm', via: 'cli', openId: ADMIN, name: '某人', chatId: 'oc_dm', messageId: 'om_1' } });
     expect(await setup(dm, said(MEMBER)).ask({ kind: 'schedule', action: 'list' })).toMatchObject({ ok: false, reason: 'not-admin' });
+  });
+
+  it('hands the host only a shape it takes, never a local actor', () => {
+    const answer = { ok: true, role: 'admin', openId: ADMIN };
+    const actor = { kind: 'dm', via: 'cli', openId: ADMIN, chatId: 'oc_dm' };
+    expect(sessionAuthzSchema.safeParse({ ...answer, actor }).success).toBe(true);
+    expect(sessionAuthzSchema.safeParse({ ...answer, actor: { ...actor, via: 'chat' } }).success).toBe(false);
+    expect(sessionAuthzSchema.safeParse({ ...answer, actor: { ...actor, text: '原话' } }).success).toBe(false);
+    expect(sessionAuthzSchema.safeParse({ ...answer, actor: { kind: 'local', via: 'cli' } }).success).toBe(false);
   });
 
   it('refuses a turn nobody asked for, and one that ended', async () => {

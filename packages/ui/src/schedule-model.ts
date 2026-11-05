@@ -10,7 +10,7 @@ export const scheduleNotRunning = 'Bot 没在运行，任务暂时看不到；�
 export const scheduleConflict = '别人改过了，已刷新成现在的内容；你刚才填的在下面，要的话再改一次。';
 export const scheduleFooter = (device: string) => `${device}关机、睡眠，或 Vonvon 没在运行时，任务不会运行。错过的只补最近一次（7 天内），更早的记为"错过"。`;
 export const runStatusText = {done: '完成', failed: '失败', missed: '错过', skipped: '跳过', interrupted: '中断'} as const;
-const pausedText = {manual: '已暂停：手动', failures: '已暂停：连续失败', unavailable: '已暂停：群已解绑'} as const;
+const pausedText = {manual: '已暂停：手动', failures: '已暂停：连续失败', unavailable: '已暂停：群已解绑', 'admin-removed': '已暂停：创建人已不是管理员'} as const;
 
 export const refusalText = (reply: Extract<ScheduleReply, {kind: 'refused'}>) => reply.reason === 'bot-not-running' ? scheduleNotRunning : reply.message;
 /** A list reply as the page shows it; anything but tasks or a refusal is a broken reply. */
