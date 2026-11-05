@@ -170,6 +170,12 @@ export const FEISHU_TOOL_SCOPE_EFFECTS: Record<string, string> = {
   "sheets:spreadsheet:read": "读不了表格",
   "bitable:app:readonly": "读不了多维表格",
   "drive:file:download": "下载不了云空间文件",
+  "slides:presentation:read": "读不了幻灯片",
+  "mindnote:node:read": "读不了思维笔记",
+  "board:whiteboard:node:read": "读不了画板",
+  "minutes:minutes:readonly": "读不了妙记",
+  "minutes:minutes.transcript:export": "读不了妙记",
+  "docs:doc:readonly": "读不了旧版文档",
   "search:message": "搜不了消息",
 };
 export const SCOPE_DENIAL_PLACE_TEXT: Record<ScopeDenialPlace, string> = {
