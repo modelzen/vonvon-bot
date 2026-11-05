@@ -20,6 +20,7 @@ const pending = (slice: ParitySlice, note: string): ParityEntry => ({ reason: 'p
 const dead = (slice: ParitySlice, note = 'the daemon answers unsupported'): ParityEntry => ({ reason: 'dead', slice, note });
 
 export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
+  'command.setAgentBadgeNumber': { reason: 'client-only', note: 'the printed employee number on the home page badge' },
   'command.setResponse': { reason: 'superseded', note: 'settings.save.project response (settings set)' },
   'command.setPermission': { reason: 'superseded', note: 'settings.save.project permission (settings set)' },
 

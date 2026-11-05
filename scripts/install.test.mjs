@@ -9,6 +9,7 @@ import { once } from 'node:events';
 import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { text as streamText } from 'node:stream/consumers';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { PUBLISHED_TARGETS, archiveName, tarHeader, writeTarGz } from './build-server.mjs';
@@ -913,7 +914,6 @@ test('uninstall: nothing runs and no unit, but the daemon in daemon.pid still ru
 const LINUX_PROC = { skip: process.platform !== 'linux' && 'reads /proc' };
 const runningRefused = pid => `还有程序在用安装目录里的文件运行（进程 ${pid}），可能是用别的数据目录启动的服务端，安装目录没删。先停掉它们：\`kill ${pid}\`，等它们退出后再运行一次卸载。\n`;
 function fromRoot(t) {
-  const sleep = execFileSync(SH, ['-c', 'command -v sleep'], { encoding: 'utf8' }).trim();
   return {
     async installed() {
       const f = await fixture(t);
@@ -923,14 +923,17 @@ function fromRoot(t) {
       await writeFile(join(f.home, '.vonvon-bot', 'config.json'), '{}');
       return f;
     },
-    /** A copy of sleep in the install root, started detached for another data directory, as `VONVON_HOME=… vonvon daemon start` would. */
+    /** A detached executable in the install root, waiting on stdin for another data directory. */
     async start(f) {
-      const program = join(f.root, 'releases', '1.0.0', 'node', 'bin', 'sleep');
-      await copyFile(sleep, program);
+      const program = join(f.root, 'releases', '1.0.0', 'node', 'bin', 'sh');
+      await copyFile(SH, program);
       await chmod(program, 0o755);
-      const child = spawn(program, ['120'], { stdio: 'ignore', detached: true, env: { ...process.env, VONVON_HOME: join(f.base, 'other-data') } });
+      // A spawn event alone does not mean the program has finished starting. In particular,
+      // Ubuntu's uutils sleep can reject its own executable name if it is unlinked during startup.
+      const child = spawn(program, ['-c', 'printf ready; exec 1>&-; read -r line'], { stdio: ['pipe', 'pipe', 'ignore'], detached: true, env: { ...process.env, VONVON_HOME: join(f.base, 'other-data') } });
       t.after(() => child.kill('SIGKILL'));
       await once(child, 'spawn');
+      assert.equal(await streamText(child.stdout), 'ready');
       return { child, program };
     },
     async stop(child) {

@@ -32,6 +32,11 @@ describe("pinned contract extraction", () => {
     }]};
     expect(adminStateSchema.parse(state)).toEqual(state);
     expect(adminReplySchema.parse({kind:"state",state}).state).toEqual(state);
+    for (const enabled of [true, false]) {
+      const project = {...state.bots[0]!.projects[0]!, enabled};
+      const withFlag = {...state, bots: [{...state.bots[0]!, projects: [project]}]};
+      expect(adminReplySchema.parse({kind:"state", state:withFlag}).state).toEqual(withFlag);
+    }
     expect(adminStateSchema.parse({...state,bots:[{...state.bots[0],projects:[],projectsError:"corrupt"}]}).bots[0]?.projectsError).toBe("corrupt");
   });
   it("parses each V3 request and reply variant", () => {
