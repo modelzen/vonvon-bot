@@ -306,7 +306,7 @@ import {
 } from './session-title';
 import { lineOfMessage, quotedLine, RecentLines, type RecentLine } from './recent-lines';
 import { JudgeBudget, SmartLanes, JUDGE_GLANCE_CAP, JUDGE_BUDGET, JUDGE_BUDGET_WINDOW_MS, type LaneEntry, type LaneKind } from './smart-intake';
-import { Attention, outcomeOf, type PlaceRef, type PlaceView, type LookKind } from './attention';
+import { Attention, outcomeOf, type PlaceRef, type PlaceView, type LookKind, type AttentionTicket, type AttentionGroupToken } from './attention';
 import { handleDmConsole } from './dm-console';
 import { createSyncCopyGate } from './sync-copy';
 import { fetchInteractiveCardText, isDegradedCardContent } from './card-content';
@@ -528,6 +528,7 @@ export { BACKEND_PROBE_TIMEOUT_MS, probeBackends, validateBackendSwitch } from '
  * requester and enqueue clock travel with the input so completion @ mentions,
  * manual-reminder ownership and long-task timing never leak from turn one. */
 export interface QueuedTurn {
+  attentionAcceptance?: AttentionAcceptance;
   voice?: VoiceReply;
   input: AgentInput;
   /** Un-woven SDK message source used only if this becomes the first accepted
@@ -816,8 +817,15 @@ interface ActiveState {
   evictedDrop?: true;
 }
 
+interface AttentionAcceptance {
+  accept(): void;
+  opened(topicId: string): void;
+}
+
 /** Inputs a synthetic turn (🔁 重试) carries that a real message would not. */
 interface TurnExtra {
+  /** A smart judgement's one-use acknowledgement of actual session intake. */
+  attentionAcceptance?: AttentionAcceptance;
   /** Local image paths to send instead of downloading the message's own. */
   images?: string[];
   /** Clean label for titles and reminders, instead of the prompt text. */
@@ -838,6 +846,9 @@ interface TurnExtra {
 /** A smart group's message on its lane (s25). */
 interface SmartItem extends LaneEntry {
   at: number;
+  attentionGroup?: AttentionGroupToken;
+  /** One short-lived continuation opportunity after a real reply. */
+  priority?: true;
   wake?: true;
   msg: NormalizedMessage;
   variant: JudgeVariant;
@@ -1337,6 +1348,7 @@ export function createOrchestrator(
       // Expiry notifies the observer synchronously, which publishes and rearms once.
       // Budget-only deadlines still need a fresh publication when no place expired.
       if (!attention.expire(time.now())) publishAttention();
+      smartLanes.rearmWhere(() => true);
     }, Math.max(1, next - now));
   }
   const placeOf = (msg: NormalizedMessage): PlaceRef => ({ chatId: msg.chatId, place: msg.threadId ?? msg.chatId });
@@ -1830,8 +1842,8 @@ export function createOrchestrator(
     }).catch(fail));
   }
   /** This bot opened `topicId` (a reply in thread, or a resumed session's topic). */
-  function noteOpenedTopic(chatId: string, topicId: string, first: TopicSighting['first']): void {
-    attention.replied({ chatId, place: topicId }, time.now());
+  function noteOpenedTopic(chatId: string, topicId: string, first: TopicSighting['first'], accepted?: AttentionAcceptance): void {
+    accepted?.opened(topicId);
     smartLanes.rearm(topicId);
     if (topics) void trackTask(topics.note(chatId, { topicId, at: Date.now(), from: { kind: 'self' }, first }));
   }
@@ -2072,10 +2084,11 @@ export function createOrchestrator(
   /** Judgements by place, off the SDK's per-chat queue (smart-intake.ts). */
   const smartLanes = new SmartLanes<SmartItem, SmartVerdict>({
     judge: judgeSmart,
+    priority: entry => entry.priority === true,
     due: (place, waiting, now) => {
-      if (attention.state(place)?.mode === 'focus') return undefined;
-      const at = attention.due(place, waiting.map((w) => w.at), now)!;
-      if (at > now) return at;
+      if (waiting.some(item => item.entry.priority)) return undefined;
+      const at = attention.due(place, waiting.map((w) => w.at), now);
+      if (at === undefined || at > now) return at;
       const { msg } = waiting[0]!.entry;
       if (budget.used(msg.chatId, now) < JUDGE_GLANCE_CAP) return at;
       const until = budget.freeAt(msg.chatId, now, JUDGE_GLANCE_CAP);
@@ -2111,39 +2124,33 @@ export function createOrchestrator(
     },
   };
 
-  function submitSmart(msg: NormalizedMessage, salience: Salience, mine?: boolean): void {
+  function submitSmart(msg: NormalizedMessage, salience: Salience): void {
     const kind: LaneKind = salience.kind === 'at-me' || salience.kind === 'quote-me' ? 'named' : salience.kind === 'name' ? 'aside' : 'chat';
     if (shuttingDown) {
       if (kind === 'named') droppedReplies?.appendSync(originOf(msg, !msg.threadId));
       return;
     }
     const now = time.now();
-    attention.arrive(placeOf(msg), now, mine === undefined ? undefined : { mine });
-    const item: SmartItem = { at: now, id: msg.messageId, place: msg.threadId ?? msg.chatId, kind, msg,
-      variant: msg.threadId ? 'topic' : 'main', ...(salience.kind !== 'plain' ? { signal: salience.kind } : {}), ...(salience.kind === 'quote-me' ? { quoteBy: salience.by } : {}) };
+    const ref = placeOf(msg);
+    attention.arrive(ref, now);
+    const priority = kind === 'chat' && attention.followup(ref, now, msg.senderId);
+    const item: SmartItem = { at: now, attentionGroup: attention.captureGroup(msg.chatId), id: msg.messageId, place: msg.threadId ?? msg.chatId, kind, msg,
+      variant: msg.threadId ? 'topic' : 'main', ...(priority ? { priority: true as const } : {}), ...(salience.kind !== 'plain' ? { signal: salience.kind } : {}), ...(salience.kind === 'quote-me' ? { quoteBy: salience.by } : {}) };
     if (kind === 'named') item.ack = trackTask(addReaction(msg.messageId, 'THINKING'));
     smartLanes.submit(item);
   }
 
-  function submitWake(msg: NormalizedMessage, mine?: boolean): void {
+  function submitWake(msg: NormalizedMessage): void {
     if (recalled.has(msg.messageId)) return;
     if (shuttingDown) {
       log.info('intake', 'bot-wake-dropped', { ref: msg.messageId.slice(-6), why: 'shutdown' });
       return;
     }
     const now = time.now();
-    attention.arrive(placeOf(msg), now, mine === undefined ? undefined : { mine });
-    const item: SmartItem = { at: now, id: msg.messageId, place: msg.threadId ?? msg.chatId, kind: 'aside', wake: true, msg,
+    attention.arrive(placeOf(msg), now);
+    const item: SmartItem = { at: now, attentionGroup: attention.captureGroup(msg.chatId), id: msg.messageId, place: msg.threadId ?? msg.chatId, kind: 'aside', wake: true, msg,
       variant: msg.threadId ? 'topic' : 'main' };
     smartLanes.submit(item);
-  }
-
-  async function topicMine(msg: NormalizedMessage): Promise<boolean | undefined> {
-    if (!msg.threadId || attention.state(msg.threadId)) return undefined;
-    const t = await topics?.get(msg.chatId, msg.threadId);
-    const mine = Boolean(t && (t.sessions.length || t.openedBy?.kind === 'self'));
-    if (mine) log.info('intake', 'attention-recover', { ref: msg.messageId.slice(-6), place: 'topic' });
-    return mine;
   }
 
   function forgetAttention(chatId: string, why: 'mode' | 'unbind' | 'prompt'): void {
@@ -2219,6 +2226,7 @@ export function createOrchestrator(
       if (old.length) log.info('intake', 'unjudged', { ref: item.msg.messageId.slice(-6), place: where, why: 'old', n: old.length });
       if (!look.length) return { kind: 'drop' };
       attention.glanced(ref, now);
+      smartLanes.rearmWhere(entry => entry.msg.chatId === ref.chatId);
       log.info('intake', 'attention', { ref: item.msg.messageId.slice(-6), place: where, kind, mode: before?.mode ?? 'watch', intervalMs: before?.intervalMs, n: look.length, old: old.length });
       why = whyLooking(before, kind, now, look.length);
     }
@@ -2236,7 +2244,12 @@ export function createOrchestrator(
             : item.signal === 'name' || item.kind === 'aside' ? 'name' : glance ? 'glance' : 'focus',
           ...(item.kind === 'chat' && glance ? { messageCount: Math.min(10_000, look.length) } : {}),
         });
-        if (verdict.result.promptHash && attention.notePrompt(ref.chatId, verdict.result.promptHash)) forgetAttention(ref.chatId, 'prompt');
+        if (verdict.result.promptHash && attention.isCurrentGroup(ref.chatId, item.attentionGroup)
+          && attention.notePrompt(ref.chatId, verdict.result.promptHash)) {
+          forgetAttention(ref.chatId, 'prompt');
+          attention.arrive(ref, time.now());
+          item.attentionGroup = attention.captureGroup(ref.chatId);
+        }
         attention.verdict(ref, kind, outcomeOf(verdict.result), now);
         const why = unjudgedAnswer(item, verdict.result.error?.kind);
         if (why) {
@@ -2449,7 +2462,7 @@ export function createOrchestrator(
       }
     } finally {
       dropAck(item);
-      if (attention.state(item.place)?.mode === 'focus') smartLanes.rearm(item.place);
+      smartLanes.rearmWhere(entry => entry.msg.chatId === item.msg.chatId);
     }
   }
 
@@ -2623,12 +2636,33 @@ export function createOrchestrator(
       recent.addOwn(place, msg.chatId, { id: actId, at: actAt, text: landed });
     }
     if (decision !== 'topic') takeUpTo({ chatId: msg.chatId, place }, trig.createTime);
-    attention.replied({ chatId: msg.chatId, place }, time.now());
+    const accepted = acceptAttention({ chatId: msg.chatId, place }, under?.senderId ?? trig.senderId, !wake, item.attentionGroup);
     log.info('intake', 'judge-landed', { ref, decision, variant, ...(look ? { glance: true, looked: look.length } : {}), ...(trig !== msg ? { trigger: trig.messageId.slice(-6) } : {}), ...(wake ? { wake: true } : {}), ...(under ? { anchor: under.id.slice(-6) } : {}) });
-    const extra = wake ? { wake: { name: wake.sender.name ?? '' } } : initiative ? { initiative: true as const } : undefined;
+    const extra: TurnExtra = { attentionAcceptance: accepted, ...(wake ? { wake: { name: wake.sender.name ?? '' } } : initiative ? { initiative: true as const } : {}) };
     if (decision === 'topic') startTopicDirectly(msg, text, project, false, extra, under);
     else void trackTask(handleTurn(trig, turnText, ts.sessionKey, !trig.threadId, project, ts, extra)
       .catch((err) => log.fail('intake', err)));
+  }
+
+  /** Hold a specific reply's ticket through host startup and asynchronous topic creation. */
+  function acceptAttention(ref: PlaceRef, senderId: string | undefined, participation: boolean, group: AttentionGroupToken | undefined): AttentionAcceptance {
+    let accepted = false;
+    let ticket: AttentionTicket | undefined;
+    let topicId: string | undefined;
+    const inherit = (): void => {
+      if (topicId && ticket && attention.isCurrentGroup(ref.chatId, group)) attention.openedTopic(ref.chatId, topicId, ticket, time.now());
+    };
+    return {
+      accept: () => {
+        if (accepted || shuttingDown || !attention.isCurrentGroup(ref.chatId, group)) return;
+        accepted = true;
+        if (!participation) return;
+        ticket = attention.replied(ref, time.now(), { senderId });
+        inherit();
+        smartLanes.rearmWhere(entry => entry.msg.chatId === ref.chatId);
+      },
+      opened: id => { topicId = id; inherit(); },
+    };
   }
 
   // ── inbound messages ──────────────────────────────────────────────
@@ -2790,7 +2824,7 @@ export function createOrchestrator(
         log.info('intake', 'bot-wake-superseded', { ref, at: 'intake' });   // 重推，或真人那一轮已织进会话；不记诊断
         return;
       }
-      submitWake(msg, await topicMine(msg));
+      submitWake(msg);
       return;
     }
     if (!maybe) return;
@@ -2977,7 +3011,7 @@ export function createOrchestrator(
       // Smart: every human topic message is judged; named signals only shorten the wait.
       if (smart && !goalObjective) {
         if (await alreadySeen(msg, ts.sessionKey)) return;
-        submitSmart(msg, await classifySalience(msg), await topicMine(msg));
+        submitSmart(msg, await classifySalience(msg));
         return;
       }
       if (await refuseUnavailableTier(msg, project, ts)) return;
@@ -3490,6 +3524,7 @@ export function createOrchestrator(
         try {
           entries?.noteSteer(cur.thread, { openId: msg.senderId, kind: askRequesterKind(msg) });
           await steerWithDeadline(cur.thread, { text: woven.text, images }, tid);
+          extra?.attentionAcceptance?.accept();
           const split = steerReply?.accept(msg.messageId, woven.voice);
           if (!split && woven.voice) voiceReply?.add(woven.voice);
           log.info('intake', 'steer', { tid, images: images?.length ?? 0 });
@@ -3640,6 +3675,7 @@ export function createOrchestrator(
         ...(extra?.scheduled ? { scheduled: extra.scheduled } : {}),
       });
       dropRetries(sessionKey);
+      extra?.attentionAcceptance?.accept();
       log.info('intake', 'queued', { depth: existing.queue.length });
       return;
     }
@@ -3942,6 +3978,7 @@ export function createOrchestrator(
         if (sessions.get(sessionKey) !== thread) reserved.evicted = true;
         launchOpts = {
           smart: project && sessionModeOf(project) === 'smart' ? true : undefined,
+          attentionAcceptance: extra?.attentionAcceptance,
           chatId: msg.chatId,
           replyTo,
           origin,
@@ -4223,7 +4260,7 @@ export function createOrchestrator(
    * Detached — onMessage must return fast (see {@link handleTurn}); a new
    * topic has a unique reply target so no same-topic reservation is needed.
    * `under`: the earlier line the smart mode opens it on instead (s25b). */
-  function startTopicDirectly(msg: NormalizedMessage, text: string, project?: Project, goal?: boolean, extra?: Pick<TurnExtra, 'initiative' | 'wake'>, under?: RecentLine): void {
+  function startTopicDirectly(msg: NormalizedMessage, text: string, project?: Project, goal?: boolean, extra?: Pick<TurnExtra, 'initiative' | 'wake' | 'attentionAcceptance'>, under?: RecentLine): void {
     // When this start ends, the registry or Feishu knows the topic under that line, or it did not open (anchorLine put it in).
     const opened = (): void => { if (under) openingUnder.delete(under.id); };
     if (resumePublications.has(msg.chatId) || projectMutations.has(msg.chatId)) {
@@ -4326,6 +4363,7 @@ export function createOrchestrator(
       }
       const launchOpts: LaunchOpts = {
         smart: project && sessionModeOf(project) === 'smart' ? true : undefined,
+        attentionAcceptance: extra?.attentionAcceptance,
         chatId: msg.chatId,
         replyTo: anchor?.id ?? msg.messageId,
         triggerId: msg.messageId,
@@ -7245,6 +7283,7 @@ export function createOrchestrator(
   }
 
   interface LaunchOpts {
+    attentionAcceptance?: AttentionAcceptance;
     /** Only group-message launches have a sender to notify if preparation is cut short. */
     origin?: DroppedOrigin;
     voice?: VoiceReply;
@@ -7689,6 +7728,7 @@ export function createOrchestrator(
         input: { text: opts.firstText, images: opts.images },
         voice: opts.voice,
         titleSource: opts.titleSource,
+        attentionAcceptance: opts.attentionAcceptance,
         requesterOpenId: opts.requesterOpenId, requesterKind: opts.requesterKind,
         requesterName: opts.requesterName,
         requestedAt: opts.requestedAt ?? Date.now(),
@@ -7827,7 +7867,7 @@ export function createOrchestrator(
               topicThreadId = key;
               rc.threadId = key;
               await persist(key);
-              if (opts.openTopic) noteOpenedTopic(opts.chatId, tid, opts.openTopic);
+              if (opts.openTopic) noteOpenedTopic(opts.chatId, tid, opts.openTopic, opts.attentionAcceptance);
             }
           } else {
             topicThreadId = activeKey;
@@ -8057,6 +8097,7 @@ export function createOrchestrator(
           if (!firstEvAt) firstEvAt = tEv;
           const et = (ev as { type?: string }).type;
           if (et === 'turn_started') {
+            currentTurn.attentionAcceptance?.accept();
             // The host took the input: only now do it and the history woven into
             // it count as seen (a refused turn/start or a crash before here leaves
             // both for the next back-fill and a re-push).
@@ -8557,7 +8598,7 @@ export function createOrchestrator(
           topicThreadId = key;
           card.threadId = key;
           await persist(key);
-          if (opts.openTopic) noteOpenedTopic(opts.chatId, tid, opts.openTopic);
+          if (opts.openTopic) noteOpenedTopic(opts.chatId, tid, opts.openTopic, opts.attentionAcceptance);
         }
       } else {
         topicThreadId = activeKey;
@@ -8790,6 +8831,7 @@ export function createOrchestrator(
           continue;
         }
         if (ev.type === 'turn_started') {
+          opts.attentionAcceptance?.accept();
           askTurn?.finishParent();
           if (unseen && topicThreadId) markSeen(topicThreadId, unseen, opts.seenHow);
           unseen = undefined;

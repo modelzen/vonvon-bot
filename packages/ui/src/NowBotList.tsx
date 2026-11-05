@@ -1,9 +1,10 @@
 import {useEffect, useState} from 'react';
+import {Popover} from '@base-ui/react/popover';
 import {BadgeRack, NowBotBadge} from './NowBotBadge';
 import {BOT_ACTIVITY_STALE_MS, BOT_LATEST_ACTION_SHOWN_MS, type Agent, type BotActivity, type BotLatestAction, type DesktopSnapshot, type Group, type Membership} from '@vonvon/protocol';
 import {GroupAvatar} from './GroupAvatar';
 import {BadgeName} from './BadgeName';
-import {nowGroupAttention} from './now-attention';
+import {nowGroupAttention, type NowAttention} from './now-attention';
 import {badgeTenure} from './badge-content';
 import './now-bots.css';
 
@@ -20,6 +21,27 @@ function BadgeGroupSummary({group, motion}: {group: Group; motion: boolean}) {
     <GroupAvatar group={group}/>
     <BadgeName text={group.name} active={active} motion={motion} tooltip={!motion}/>
   </summary>;
+}
+
+function AttentionStatus({name, reading}: {name: string; reading: NowAttention}) {
+  const [open, setOpen] = useState(false);
+  return <Popover.Root open={open} onOpenChange={setOpen}>
+    <Popover.Trigger className="badge-group-status" aria-label={`${name}：${reading.showMeter ? `群注意力${reading.score === undefined ? '' : ` ${reading.score} / 100`}，` : ''}${reading.label}`}
+      openOnHover delay={200} closeDelay={120}
+      onFocus={event => {if (event.currentTarget.matches(':focus-visible')) setOpen(true);}}>
+      {reading.showMeter && <span className="now-attention-meter" data-unknown={reading.level === undefined} data-score={reading.score} aria-hidden="true">
+        {[1, 2, 3, 4].map(level => <i key={level} data-on={reading.level !== undefined && level <= reading.level}/>)}
+      </span>}
+      <span>{reading.label}</span>
+    </Popover.Trigger>
+    <Popover.Portal><Popover.Positioner side="top" align="start" sideOffset={7} collisionPadding={12} className="now-attention-positioner">
+      <Popover.Popup className="now-attention-tooltip" initialFocus={false} finalFocus={false}>
+        <Popover.Title>{reading.showMeter ? '群注意力' : '聊天方式'}</Popover.Title>
+        <Popover.Description>{reading.description}</Popover.Description>
+        {reading.showMeter && <p>主区和话题共用群注意力；Bot 接话后升高，随后逐步下降，30 分钟后保留 10 分的低度留意。普通消息合批查看。</p>}
+      </Popover.Popup>
+    </Popover.Positioner></Popover.Portal>
+  </Popover.Root>;
 }
 
 function badgeConnection(agent: Agent, live: boolean, stale: boolean): string {
@@ -96,16 +118,11 @@ export function NowBotList({snapshot, connected, disabled, onChangeNumber}: {
             {bindings.map(binding => {
               const group = snapshot.groups.find(item => item.id === binding.groupId) ?? {id: binding.groupId, name: binding.name};
               const avatarDataUrl = group.avatarDataUrl ?? binding.avatarDataUrl;
-              const reading = nowGroupAttention(agent, binding, connected, snapshot.stale, now);
+              const reading = nowGroupAttention(agent, binding, connected, snapshot.stale, now, snapshot.attentionModel === 'group');
               return <li key={group.id}>
                 <details className="badge-group-row">
                   <BadgeGroupSummary group={{...group, avatarDataUrl}} motion={motionAllowed}/>
-                  <div className="badge-group-status">
-                    {reading.showMeter && <span className="now-attention-meter" data-unknown={reading.level === undefined} aria-hidden="true">
-                      {[1, 2, 3, 4].map(level => <i key={level} data-on={reading.level !== undefined && level <= reading.level}/>)}
-                    </span>}
-                    <span>{reading.label}</span>
-                  </div>
+                  <AttentionStatus name={group.name} reading={reading}/>
                 </details>
               </li>;
             })}

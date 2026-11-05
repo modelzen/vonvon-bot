@@ -2,6 +2,13 @@
 .now-attention-meter > i {display:block;flex:1;height:4px;border-radius:2px;background:var(--color-border-strong)}
 .now-attention-meter > i[data-on=true] {background:var(--color-accent);opacity:.8}
 .now-attention-meter[data-unknown=true] {opacity:.45}
+.badge-group-status {padding:0;border:0;background:none;font-family:inherit;text-align:left;cursor:pointer;border-radius:3px}
+.badge-group-status:focus-visible {outline:2px solid var(--color-focus);outline-offset:3px}
+.now-attention-positioner {z-index:100}
+.now-attention-tooltip {max-width:min(280px,calc(100vw - 24px));padding:10px 12px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-surface);color:var(--color-text);box-shadow:0 4px 18px #0000001a;font-size:12px;line-height:1.6}
+.now-attention-tooltip h2,.now-attention-tooltip p {margin:0}
+.now-attention-tooltip h2 {margin-bottom:4px;font-size:12px}
+.now-attention-tooltip p + p {margin-top:6px;color:var(--color-text-secondary)}
 
 .now-bot-empty {
   margin: 0;
@@ -13,3 +20,5 @@
 @media (max-width: 560px) {
   .now-attention-meter { width: 36px; gap: 2px; }
 }
+
+.now-attention-meter[data-score="10"] > i:first-child {background:linear-gradient(to right,var(--color-accent) 40%,var(--color-border-strong) 40%);opacity:.8}

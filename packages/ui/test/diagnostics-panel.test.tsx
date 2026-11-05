@@ -213,26 +213,29 @@ it('lists the groups an older version put in a wrong directory, only when there 
   expect(render([agent])).not.toContain('群目录');
 });
 
-it('shows every smart group once with actual main/topic state, budget and old prompt notice; rules stay absent', () => {
-  const snap = snapshot([{...agent, diagnostics: {notReplied: [], deniedScopes: [], attention: [{groupId: 'oc_bound_group', main: {mode: 'watch', intervalMs: 180000}, focusedTopics: 2, watchedTopics: 1, budget: {kind: 'no-glance', until: now + 60000}}], customPromptGroups: ['oc_bound_group']}}]);
+it('shows every smart group once with one group score, budget and old prompt notice; rules stay absent', () => {
+  const snap = snapshot([{...agent, diagnostics: {notReplied: [], deniedScopes: [], attention: [{groupId: 'oc_bound_group', group: {score: 50, intervalMs: 180000, updatedAt: now}, main: {mode: 'watch', intervalMs: 180000}, focusedTopics: 2, watchedTopics: 1, budget: {kind: 'no-glance', until: now + 60000}}], customPromptGroups: ['oc_bound_group']}}]);
   snap.memberships[0]!.conversation = 'smart';
+  snap.memberships[0]!.enabled = true;
   const html = renderToStaticMarkup(<ClientProvider client={client}><DiagnosticsPanel snapshot={snap} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenProviders={() => {}} onOpenSecrets={() => {}} onNotice={() => {}}/></ClientProvider>);
-  expect(html).toContain('主区留意（间隔 180 秒）');
-  expect(html).toContain('话题专注 2 个、留意 1 个');
-  expect(html).toContain('暂停扫一眼');
+  expect(html).toContain('50 / 100 · 普通查看暂缓');
+  expect(html).not.toContain('话题专注 2 个');
+  expect(html).toContain('批量查看暂缓');
   expect(html).toContain('你的自定义提示词保持原样');
-  expect(render([agent])).not.toContain('智能群关注状态');
-  for (const title of ['智能群关注状态', '自定义智能提示词']) expect(findEntries(searchEntries(snap), title).some(entry => entry.destination.section === diagnosticsSection(agent.id))).toBe(true);
+  expect(render([agent])).not.toContain('智能群注意力');
+  for (const title of ['智能群注意力', '自定义智能提示词']) expect(findEntries(searchEntries(snap), title).some(entry => entry.destination.section === diagnosticsSection(agent.id))).toBe(true);
 });
 
 it('distinguishes a new daemon with empty attention from an old daemon without the field', () => {
   const show = (attention?: []) => {
     const snap = snapshot([{...agent, diagnostics: {notReplied: [], deniedScopes: [], ...(attention ? {attention} : {})}}]);
+    snap.attentionModel = 'group';
     snap.memberships[0]!.conversation = 'smart';
+    snap.memberships[0]!.enabled = true;
     return renderToStaticMarkup(<ClientProvider client={client}><DiagnosticsPanel snapshot={snap} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenProviders={() => {}} onOpenSecrets={() => {}} onNotice={() => {}}/></ClientProvider>);
   };
-  expect(show([])).toContain('主区尚无关注状态');
-  expect(show()).toContain('daemon 未提供关注状态');
+  expect(show([])).toContain('10 / 100 · 低度留意');
+  expect(show()).toContain('当前版本未提供注意力状态');
 });
 
 // Codex review 244: a remote device's tools were explained as this computer's (这台电脑, 查看本机环境, 在终端运行 codex …)

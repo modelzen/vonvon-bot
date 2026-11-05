@@ -44,7 +44,7 @@ describe('local WebSocket handshake', () => {
       const client = await socketClient(fixture.api.port, fixture.credential);
       await client.ready();
       expect(client.frames[0]).toMatchObject({ protocolVersion: PROTOCOL_VERSION, deviceName: expect.any(String), platform: expect.any(String), principal: 'owner:local' });
-      expect(client.frames[0]).toHaveProperty('capabilities', expect.arrayContaining(['device', 'session-scope']));
+      expect(client.frames[0]).toHaveProperty('capabilities', expect.arrayContaining(['device', 'session-scope', 'attention.group']));
       expect(await client.call({ type: 'request', id: 's', method: 'admin', payload: { type: 'daemonStatus' } })).toMatchObject({ payload: { status: { startedAt: FIXTURE_STARTED_AT } } });
       const negotiate = (id: string) => ({ type: 'request' as const, id, method: 'admin' as const, payload: { type: 'negotiate' as const, capabilities: ['device'] } });
       expect(await client.call(negotiate('n1'))).toMatchObject({ type: 'response', payload: { kind: 'negotiated', principal: 'owner:local', scope: null } });
@@ -62,7 +62,7 @@ describe('local WebSocket handshake', () => {
       await new Promise(resolve => setTimeout(resolve, 0));
       const client = await socketClient(fixture.api.port, fixture.credential);
       await client.ready();
-      expect((client.frames[0] as { capabilities: string[] }).capabilities).toEqual(['device', 'session-scope', ...update]);
+      expect((client.frames[0] as { capabilities: string[] }).capabilities).toEqual(['device', 'session-scope', 'attention.group', ...update]);
       await client.close();
     } finally { await fixture.close(); }
   });
@@ -71,9 +71,9 @@ describe('local WebSocket handshake', () => {
   it('offers the desktop update on macOS and Linux only', async () => {
     // after the fixture's module, which mocks the paths http.ts reads
     const { capabilities } = await import('../src/server/http');
-    expect(capabilities('bundled', false, 'darwin')).toEqual(['device', 'session-scope', 'update.bundled']);
-    expect(capabilities('bundled', true, 'linux')).toEqual(['device', 'session-scope', 'remote', 'update.bundled']);
-    expect(capabilities('bundled', false, 'win32')).toEqual(['device', 'session-scope']);
+    expect(capabilities('bundled', false, 'darwin')).toEqual(['device', 'session-scope', 'attention.group', 'update.bundled']);
+    expect(capabilities('bundled', true, 'linux')).toEqual(['device', 'session-scope', 'attention.group', 'remote', 'update.bundled']);
+    expect(capabilities('bundled', false, 'win32')).toEqual(['device', 'session-scope', 'attention.group']);
     expect(capabilities('standalone', false, 'win32')).toContain('update.standalone');
   });
 
@@ -157,4 +157,18 @@ describe('local WebSocket handshake', () => {
     } finally { await fixture.close(); }
   });
 
+});
+
+it('advertises and marks unified attention only for a snapshot client that opted in', async () => {
+  const fixture = await startFixture();
+  try {
+    const client = await socketClient(fixture.api.port, fixture.credential);
+    await client.ready();
+    expect((client.frames[0] as {capabilities: string[]}).capabilities).toContain('attention.group');
+    const old = await client.call({type: 'request', id: 'old-attention', method: 'snapshot', payload: {type: 'get'}});
+    expect(old.type === 'response' && old.method === 'snapshot' && old.payload.attentionModel).toBeUndefined();
+    const opted = await client.call({type: 'request', id: 'group-attention', method: 'snapshot', payload: {type: 'get', groupAttention: true}});
+    expect(opted.type === 'response' && opted.method === 'snapshot' && opted.payload.attentionModel).toBe('group');
+    await client.close();
+  } finally {await fixture.close();}
 });
