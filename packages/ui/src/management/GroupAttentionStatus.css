@@ -39,8 +39,8 @@
   cursor: help;
 }
 .group-attention__dial { grid-area: 1 / 1; width: 88px; height: 88px; overflow: visible; }
-.group-attention__dial > circle { stroke: color-mix(in srgb, var(--attention-color) 14%, transparent); }
-.group-attention__dial > circle.is-lit { stroke: var(--attention-color); }
+.group-attention__dial circle { stroke: color-mix(in srgb, var(--attention-color) 14%, transparent); }
+.group-attention__dial circle.is-lit { stroke: var(--attention-color); }
 .group-attention__dial > .group-attention__dial-center { fill: var(--color-surface); stroke: none; }
 .group-attention__dial-tick { stroke: color-mix(in srgb, var(--attention-color) 35%, transparent); stroke-width: 1; }
 .group-attention__heading { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; color: var(--color-text-secondary); font-size: 11px; font-weight: 500; }

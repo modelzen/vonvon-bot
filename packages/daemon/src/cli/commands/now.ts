@@ -22,9 +22,8 @@ function activityLine(activity: BotActivity, group: string, now: number): string
 }
 function attentionText(attention: GroupAttention, now: number): string | undefined {
   const parts: string[] = [];
-  if (attention.main) parts.push(attention.main.mode === 'focus' ? '主区专注' : `主区留意（间隔 ${since(attention.main.intervalMs)}）`);
-  if (attention.focusedTopics) parts.push(`${attention.focusedTopics} 个话题专注`);
-  if (attention.watchedTopics) parts.push(`${attention.watchedTopics} 个话题留意`);
+  if (attention.group) parts.push(`群注意力 ${attention.group.score}/100（${attention.group.score === 100 ? '短批查看' : `间隔 ${since(attention.group.intervalMs)}`}）`);
+  else parts.push('群注意力暂不可用');
   if (attention.budget && attention.budget.until > now) parts.push(attention.budget.kind === 'named-only' ? '判断额度满了，只看直接找它的' : '判断额度满了，暂缓查看');
   return parts.length ? parts.join('、') : undefined;
 }
@@ -37,7 +36,7 @@ function botView(agent: Agent, snapshot: DesktopSnapshot, now: number) {
   const latest = diagnostics?.latestAction && now - diagnostics.latestAction.at < BOT_LATEST_ACTION_SHOWN_MS ? diagnostics.latestAction : undefined;
   const lines = activities.map(activity => activityLine(activity, groupName(snapshot, activity.groupId), now));
   const attending = attention.flatMap(each => { const text = attentionText(each, now); return text ? [`${groupName(snapshot, each.groupId)} ${text}`] : []; });
-  if (attending.length) lines.push(`  关注：${attending.join('；')}`);
+  if (attending.length) lines.push(`  注意力：${attending.join('；')}`);
   if (latest) lines.push(`  刚刚：在 ${groupName(snapshot, latest.groupId)} ${latest.kind === 'replied' ? '回复了' : '记了一条记忆'}`);
   return {
     lines: lines.length ? [`${agent.name}（${agent.id}）`, ...lines] : [],

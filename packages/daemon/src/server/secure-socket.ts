@@ -17,6 +17,7 @@ import { createRemoteOutbox } from './remote-outbox';
 import type { PeerHub } from './peer-hub';
 import type { Principal } from './principal';
 import { formatAddress, type Peer } from './ws';
+import { attentionFrame } from './attention-compat';
 
 /** Before a connection is authenticated no frame may be larger: `ws`'s `maxPayload` is per server, so each frame is
  * checked here (devices 4.3; D3 caps how many such connections there are). */
@@ -95,6 +96,7 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
     let clientKind: Hello['clientKind'] | undefined;
     let principal: Principal = { kind: 'unpaired' };
     let protocolVersion = 0;
+    let groupAttention = false;
     let negotiated: { capabilities: readonly string[]; scope: Scope | null } | undefined;
     let timer: NodeJS.Timeout | undefined;
     /** The key message 1 authenticated: the one a pairing registers (a pairing request carries none). */
@@ -107,12 +109,14 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
       return true;
     };
     // This socket's own: a picture counts as sent once its frame is queued here, ahead of any reference to it.
-    const outbox = createRemoteOutbox({ write: value => frame(FRAME.json, Buffer.from(JSON.stringify(value), 'utf8')), ping: () => frame(FRAME.ping) });
+    const outbox = createRemoteOutbox({ write: value => frame(FRAME.json, Buffer.from(JSON.stringify(attentionFrame(value, groupAttention)), 'utf8')), ping: () => frame(FRAME.ping) });
     const { send } = outbox;
     const peer: Peer = {
       id: randomUUID(), get open() { return phase === 'ready' && !detached && socket.readyState === WebSocket.OPEN; }, get clientKind() { return clientKind; },
       get principal() { return principal; }, get protocolVersion() { return protocolVersion; }, get clientId() { return clientId; },
       get capabilities() { return negotiated?.capabilities ?? []; }, get scope() { return negotiated?.scope ?? null; }, get negotiated() { return negotiated !== undefined; },
+      get groupAttention() { return groupAttention; },
+      enableGroupAttention() { groupAttention = true; },
       address, ...(options.listenerId === undefined ? {} : { listener: options.listenerId }),
       negotiate(capabilities, scope) {
         if (negotiated) return false;

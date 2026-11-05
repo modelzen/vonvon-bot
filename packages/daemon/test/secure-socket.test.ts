@@ -456,7 +456,7 @@ describe('the daemon', () => {
     const jobs = vi.spyOn(Jobs.prototype, 'detach');
     const logs = vi.spyOn(LogFollowers.prototype, 'detach');
     const connection = await connect({ port, device }, { pairing: { inviteId: invite.id, inviteSecret: invite.secret, clientName: '探针' } });
-    expect(connection.serverInfo).toMatchObject({ principal: 'owner:paired', capabilities: ['device', 'session-scope'] });
+    expect(connection.serverInfo).toMatchObject({ principal: 'owner:paired', capabilities: ['device', 'session-scope', 'attention.group'] });
     expect(await connection.client.admin({ type: 'daemonStatus' })).toMatchObject({ kind: 'daemonStatus', status: { startedAt: expect.any(Number) } });
     expect(await connection.client.device({ type: 'clients' })).toMatchObject({ kind: 'clients', clients: [{ name: '探针', invitedBy: 'local' }] });
     connection.close();
@@ -666,4 +666,28 @@ describe('a remote connection on a slow link', () => {
     expect(await client.read()).toMatchObject({ type: 'event', event: 'snapshot', payload: { revision: 6 } });
     expect(await client.read()).toEqual({ control: FRAME.ping });
   });
+});
+
+it('projects group attention for an old secure client and opts a new client in from advertised capabilities', async () => {
+  const snapshot: DesktopSnapshot = {attentionModel: 'group', revision: 1, observedAt: 1, stale: false, host: {kind: 'starting'},
+    agents: [], groups: [], memberships: [], tools: [], jobs: [], application: {platform: 'linux', version: 'test', loginItem: false, dataPath: ''}};
+  const h = await harness({
+    info: peer => ({type: 'serverInfo', protocolVersion: 2, version: 'test', capabilities: ['attention.group'], principal: principalWire(peer.principal)}),
+    request: async (peer, request) => {
+      if (request.method === 'snapshot') peer.send({type: 'response', id: request.id, method: 'snapshot', payload: snapshot});
+    },
+  });
+  const {clientKey, connection} = await paired(h);
+  expect((await connection.client.snapshot()).attentionModel).toBe('group');
+  await connection.client.close();
+  const old = await raw(h, clientKey);
+  await old.handshake(); old.json(hello);
+  expect(await old.read()).toMatchObject({type: 'serverInfo'});
+  old.json({type: 'request', id: 'legacy', method: 'snapshot', payload: {type: 'get'}});
+  const legacy = await old.read();
+  expect(legacy).toMatchObject({type: 'response', id: 'legacy', payload: {revision: 1}});
+  expect((legacy.payload as DesktopSnapshot).attentionModel).toBeUndefined();
+  old.json({type: 'request', id: 'new', method: 'snapshot', payload: {type: 'get', groupAttention: true}});
+  const reply = await old.read();
+  expect(reply).toMatchObject({type: 'response', id: 'new', payload: {attentionModel: 'group'}});
 });

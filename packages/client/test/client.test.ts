@@ -10,7 +10,7 @@ import { connectLocal, RpcError } from "../src/index.js";
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0)) await close(); });
 
-async function fixture(onRequest: (socket: WebSocket, frame: {id:string;method:string;payload:unknown}) => void) {
+async function fixture(onRequest: (socket: WebSocket, frame: {id:string;method:string;payload:unknown}) => void, capabilities: string[] = []) {
   const home = await mkdtemp(join(tmpdir(), "vonvon-client-"));
   const server = new WebSocketServer({host:"127.0.0.1",port:0,perMessageDeflate:false});
   await new Promise<void>(resolve => server.once("listening", resolve));
@@ -26,7 +26,7 @@ async function fixture(onRequest: (socket: WebSocket, frame: {id:string;method:s
       if (!authenticated) {
         expect(frame).toEqual({type:"hello",protocolVersion:PROTOCOL_VERSION,clientKind:"cli",credential:"a".repeat(64)});
         authenticated = true;
-        socket.send(JSON.stringify({type:"serverInfo",machineId:randomUUID(),version:"1",protocolVersion:PROTOCOL_VERSION}));
+        socket.send(JSON.stringify({type:"serverInfo",machineId:randomUUID(),version:"1",protocolVersion:PROTOCOL_VERSION, capabilities}));
         return;
       }
       onRequest(socket, frame);
@@ -152,7 +152,7 @@ it("keeps observer failures inspectable while allowing RPC to complete", async (
   await client.close();
 });
 
-it("connects through the browser WebSocket API with the web hello", async () => {
+it.each([{capabilities: []}, {capabilities: ["attention.group"]}])("connects through the browser WebSocket API and negotiates supported snapshot fields ($capabilities)", async ({capabilities}) => {
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0, perMessageDeflate: false });
   await new Promise<void>(resolve => server.once("listening", resolve));
   const address = server.address();
@@ -165,8 +165,12 @@ it("connects through the browser WebSocket API with the web hello", async () => 
       if (!authenticated) {
         expect(frame).toEqual({ type: "hello", protocolVersion: PROTOCOL_VERSION, clientKind: "web", credential });
         authenticated = true;
-        socket.send(JSON.stringify({ type: "serverInfo", machineId: randomUUID(), version: "1", protocolVersion: PROTOCOL_VERSION }));
+        socket.send(JSON.stringify({ type: "serverInfo", machineId: randomUUID(), version: "1", protocolVersion: PROTOCOL_VERSION, capabilities }));
         return;
+      }
+      if (frame.method === "snapshot") {
+        expect(frame.payload).toEqual({type: "get", ...(capabilities.length ? {groupAttention: true} : {})});
+        socket.send(JSON.stringify({type: "response", id: frame.id, method: "snapshot", payload: snapshot(1)}));
       }
       if (frame.method === "admin") socket.send(JSON.stringify({ type: "response", id: frame.id, method: "admin", payload: { kind: "state", state } }));
     });
@@ -175,6 +179,32 @@ it("connects through the browser WebSocket API with the web hello", async () => 
   const { connectBrowser } = await import("../src/browser.js");
   const { client, serverInfo } = await connectBrowser({ url: `ws://127.0.0.1:${address.port}`, credential });
   expect(serverInfo).toMatchObject({ type: "serverInfo", protocolVersion: PROTOCOL_VERSION });
+  await client.snapshot();
   expect(await client.admin({ type: "state" })).toEqual({ kind: "state", state });
   await client.close();
+});
+
+it.each([{capabilities: []}, {capabilities: ['attention.group']}])('requests group attention only when the loopback daemon advertised it ($capabilities)', async ({capabilities}) => {
+  const requests: unknown[] = [];
+  const options = await fixture((socket, frame) => {
+    requests.push(frame.payload);
+    socket.send(JSON.stringify({type: 'response', id: frame.id, method: 'snapshot', payload: snapshot(1)}));
+  }, capabilities);
+  const {client} = await connectLocal(options);
+  await client.snapshot();
+  expect(requests).toEqual([{type: 'get', ...(capabilities.length ? {groupAttention: true} : {})}]);
+  await client.close();
+});
+
+it('delivers the negotiated attention model even when an initial legacy event has the same revision', async () => {
+  const options = await fixture((socket, frame) => {
+    socket.send(JSON.stringify({type: 'event', event: 'snapshot', payload: snapshot(1)}));
+    socket.send(JSON.stringify({type: 'response', id: frame.id, method: 'snapshot', payload: {...snapshot(1), attentionModel: 'group'}}));
+  }, ['attention.group']);
+  const {client} = await connectLocal(options);
+  const seen: Array<string | undefined> = [];
+  const stop = client.watchSnapshots(value => seen.push(value.attentionModel));
+  await expect.poll(() => seen.at(-1)).toBe('group');
+  expect(seen).toEqual([undefined, 'group']);
+  stop(); await client.close();
 });

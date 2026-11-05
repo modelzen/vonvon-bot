@@ -6,6 +6,7 @@ import { handleMessage } from './message-loop';
 import { createPeerHub, type PeerHub } from './peer-hub';
 import type { JobPeer } from './jobs';
 import type { Principal } from './principal';
+import { attentionFrame } from './attention-compat';
 import { SESSION_TOKEN_PREFIX, type SessionTokens } from '../host/session-tokens';
 
 export interface Peer extends JobPeer {
@@ -15,6 +16,8 @@ export interface Peer extends JobPeer {
   readonly principal: Principal; readonly protocolVersion: number;
   /** What admin.negotiate recorded, empty and null until then; `negotiate` answers false when this connection already did. */
   readonly capabilities: readonly string[]; readonly scope: Scope | null; readonly negotiated: boolean;
+  readonly groupAttention?: boolean;
+  enableGroupAttention?(): void;
   negotiate(capabilities: readonly string[], scope: Scope | null): boolean;
   /** The remote end, `ip:port` (`[ip]:port` for IPv6). */
   readonly address: string;
@@ -73,11 +76,13 @@ export function createSocketServer(options: { server: Server; credential: string
     let clientKind: Hello['clientKind'] | undefined;
     let principal: Principal = { kind: 'unpaired' };
     let protocolVersion = 0;
+    let groupAttention = false;
     let negotiated: { capabilities: readonly string[]; scope: Scope | null } | undefined;
     const send = (value: Response | ErrorEnvelope | Event | ServerInfo): void => {
       if (socket.readyState !== WebSocket.OPEN) return;
       if (socket.bufferedAmount > 8_000_000) { socket.close(1013, 'slow_consumer'); detach(); return; }
-      const frame = protocolVersion === 1 ? forProtocol1(value) : value;
+      const shown = attentionFrame(value, groupAttention);
+      const frame = protocolVersion === 1 ? forProtocol1(shown) : shown;
       if (frame === undefined) return;
       socket.send(JSON.stringify(frame), error => { if (error) { socket.terminate(); detach(); } });
     };
@@ -85,6 +90,8 @@ export function createSocketServer(options: { server: Server; credential: string
       id: randomUUID(), get open() { return authenticated && !detached && socket.readyState === WebSocket.OPEN; }, get clientKind() { return clientKind; },
       get principal() { return principal; }, get protocolVersion() { return protocolVersion; },
       get capabilities() { return negotiated?.capabilities ?? []; }, get scope() { return negotiated?.scope ?? null; }, get negotiated() { return negotiated !== undefined; },
+      get groupAttention() { return groupAttention; },
+      enableGroupAttention() { groupAttention = true; },
       address: formatAddress(upgrade?.socket.remoteAddress, upgrade?.socket.remotePort),
       negotiate(capabilities, scope) {
         if (negotiated) return false;

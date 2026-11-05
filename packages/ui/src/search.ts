@@ -123,7 +123,7 @@ export function searchEntries(snapshot: DesktopSnapshot, capabilities: {external
     entries.push({id: agent.id, title: agent.name, context: 'Bot', aliases: [agent.id], destination: base, kind: 'item'});
     entries.push({id: `${agent.id}-settings`, title: 'Bot 设置', context: agent.name, aliases: ['机器人设置', 'Bot 权限'], destination: {...base, detail: {kind: 'agent-settings'}}, kind: 'setting'});
     entries.push({id: `${agent.id}-diagnostics`, title: 'Bot 状态', context: `诊断 · ${agent.name}`, aliases: ['连接', '缺的权限', '没回的消息'], destination: {page: 'diagnostics', section: diagnosticsSection(agent.id)}, kind: 'setting'});
-    for (const title of ['智能群关注状态', '自定义智能提示词']) entries.push({id: `${agent.id}-${title}`, title, context: `诊断 · ${agent.name}`, aliases: [], destination: {page: 'diagnostics', section: diagnosticsSection(agent.id), field: title}, kind: 'setting'});
+    for (const title of ['智能群注意力', '自定义智能提示词']) entries.push({id: `${agent.id}-${title}`, title, context: `诊断 · ${agent.name}`, aliases: [], destination: {page: 'diagnostics', section: diagnosticsSection(agent.id), field: title}, kind: 'setting'});
     for (const group of agentGroups) {
       const destination: Destination = {...base, detail: {kind: 'agent-settings'}, section: group.title, reveal: group.reveal};
       entries.push({id: `${agent.id}-${group.title}`, title: group.title, context: `Bot 设置 · ${agent.name}`, aliases: group.aliases ?? [], destination, kind: 'setting'});
