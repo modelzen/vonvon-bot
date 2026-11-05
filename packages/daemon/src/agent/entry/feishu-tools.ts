@@ -1,3 +1,4 @@
+import { groupIdSchema } from '@vonvon/protocol';
 import { z } from 'zod';
 import { feishuMembers, type FeishuMembers } from '../../admin/structured-commands';
 import { AdminWriteError } from '../../admin/write-error';
@@ -19,7 +20,7 @@ import { ToolRefusal, type AgentTool, type ToolContext } from './tools';
  * 私聊的通用工具 `feishu_api`（F7，第 7.6 节）也在这里，群和评论没有；写了别的 Bot 时同样经 host 走到那个 Bot 的进程。
  */
 
-const chat = z.string().min(1).max(200).describe('群的 chat_id；不写就是当前这个群');
+const chat = z.string().min(1).max(200).describe('群的 id（oc_ 开头，不是群名）；不写就是当前这个群');
 const cursor = z.string().min(1).max(4000).describe('上一次结果里的 cursor，读下一段时原样传回来');
 const limit = (max: number) => z.number().int().min(1).max(max);
 const reference = z.string().min(1).max(2000);
@@ -69,7 +70,7 @@ const apiInput = z.object({ method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELE
   params: z.record(z.string(), z.union([apiValue, z.array(apiValue).max(200)])).describe('查询参数，比如 page_size、page_token、user_id_type').optional(),
   body: z.record(z.string(), z.unknown()).describe('请求体，一个 JSON 对象').optional(),
   bot: z.string().min(1).max(200).describe('用这台电脑上哪个 Bot 的身份，写 App ID 或名字；不写就是当前 Bot').optional() }).strict();
-const searchInput = z.object({ query: z.string().min(1).max(500), chat: chat.describe('只搜这个群的 chat_id；群会话里只搜本群').optional(), limit: limit(20).describe('一页几条，默认 20').optional(), cursor: cursor.optional() }).strict();
+const searchInput = z.object({ query: z.string().min(1).max(500), chat: chat.describe('只搜这个群，写 oc_ 开头的 id；群会话里只搜本群').optional(), limit: limit(20).describe('一页几条，默认 20').optional(), cursor: cursor.optional() }).strict();
 /** A private chat's only (7.3). */
 const bot = z.string().min(1).max(200).describe('用这台电脑上哪个 Bot 的身份读，写名字或 App ID。不写时，读群用绑了这个群的 Bot，优先当前 Bot；其余用当前 Bot').optional();
 const withBot = (input: z.ZodObject) => input.extend({ bot });
@@ -117,6 +118,7 @@ export function feishuToolSpecs(tools: { feishuEdit?: boolean; feishuApi?: boole
 }
 
 const NOT_THIS_CHAT = '群里只能读本群的内容，读不了别的群。';
+const NOT_A_CHAT_ID = 'chat 要写 oc_ 开头的群 id，不是群名。用 "$VONVON_CLI" feishu groups 查这个 Bot 所在的群。';
 const denied = () => new ToolRefusal({ ok: false, code: 'refused', message: '目标不存在或没有权限。' });
 const refusal = (message: string) => new ToolRefusal({ ok: false, code: 'refused', message });
 const READ_ONLY_TIER = '这个群是只读档，改不了文档。要改，请管理员在 Vonvon Bot 客户端里调高这个群的权限。';
@@ -212,7 +214,10 @@ interface ReadRoute {
 
 /** The chat a read is on: a read kept to a chat (a group's session, 7.2) takes no other, and says so before Feishu is asked. */
 function chatIn(requested: string | undefined, only: string | undefined): { chat?: string; only?: string } {
-  if (!only) return requested ? { chat: requested } : {};
+  if (!only) {
+    if (requested && !groupIdSchema.safeParse(requested).success) throw new FeishuReadRefused(NOT_A_CHAT_ID);
+    return requested ? { chat: requested } : {};
+  }
   if (requested && requested !== only) throw new FeishuReadRefused(NOT_THIS_CHAT);
   return { chat: only, only };
 }
