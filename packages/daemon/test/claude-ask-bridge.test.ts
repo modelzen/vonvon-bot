@@ -71,7 +71,7 @@ describe('Claude ask bridge', () => {
     const ask = bridge('permission', { command: 'rm -r x' }, access, { decisionReason: 'safety' });
     expect(ask.request).toMatchObject({ kind: 'permission', permissionMode: 'full', detail: '工具：Bash\nrm -r x\n原因：safety' });
     expect(ask.toResult(answered({ kind: 'permission', decision: 'allow-once' }))).toEqual({ behavior: 'allow', updatedInput: { command: 'rm -r x' } });
-    expect(ask.toResult(answered({ kind: 'permission', decision: 'deny' }))).toEqual({ behavior: 'deny', message: '主人或管理员拒绝了这一步。换个办法，或者停下来说明。' });
+    expect(ask.toResult(answered({ kind: 'permission', decision: 'deny' }))).toEqual({ behavior: 'deny', message: '管理员拒绝了这一步。换个办法，或者停下来说明。' });
     expect(ask.toResult({ kind: 'unanswered', reason: 'timeout' })).toEqual({ behavior: 'deny', message: '没人允许这一步，这一步不做。换个办法，或者停下来说明。' });
     expect(bridge('permission', { command: 'x'.repeat(600) }).request).toMatchObject({ detail: `工具：Bash\n${'x'.repeat(500)}\n原因：命中了设置里的规则` });
   });

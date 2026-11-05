@@ -129,9 +129,8 @@ export async function registerBotFromCredentials(
 }
 
 /**
- * 把扫码人 open_id 落成 owner+admin，merge 进既有 preferences（保留 base 的其它字段
- * 与 access 字段，幂等：admins 去重）。owner 恒入 admins（与 schema 注释
- * 「ownerOpenId 恒为 admin」一致）。
+ * 把扫码人 open_id 落成创建者和第一个管理员，merge 进既有 preferences（保留 base 的
+ * 其它字段与 access 字段，幂等：admins 去重）。
  */
 function withOwnerAdmin(base: AppPreferences | undefined, ownerOpenId: string): AppPreferences {
   const access = base?.access;

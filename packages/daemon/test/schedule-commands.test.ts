@@ -70,7 +70,7 @@ describe('who may do what', () => {
       { action: 'pause', chatId: G, taskId: 'st_theirs' }, { action: 'resume', chatId: G, taskId: 'st_theirs' },
       { action: 'delete', chatId: G, taskId: 'st_theirs', revision: 'rev-st_theirs' }, { action: 'runNow', chatId: G, taskId: 'st_theirs' },
     ] satisfies ScheduleRequest[]) {
-      expect(await f.run(member, request)).toEqual(refusal('not-task-owner', '这个任务是别人建的，只有建它的人、主人和管理员能改。'));
+      expect(await f.run(member, request)).toEqual(refusal('not-task-owner', '这个任务是别人建的，只有建它的人和管理员能改。'));
     }
     expect(f.scheduler.runNow).not.toHaveBeenCalled();
     expect(await f.run(member, { action: 'edit', chatId: G, taskId: 'st_mine', revision: 'rev-st_mine', patch: { name: '我的' } })).toMatchObject({ kind: 'task', task: { name: '我的' } });
@@ -118,7 +118,7 @@ describe('who may do what', () => {
       { kind: 'Chat', openId: 'ou_x', role: 'owner', chatId: G },
       { kind: 'chat', openId: '', role: 'member', chatId: G }, // could never manage what it made
     ] as unknown as ScheduleActor[]) {
-      const notOwner = refusal('not-task-owner', '这个任务是别人建的，只有建它的人、主人和管理员能改。');
+      const notOwner = refusal('not-task-owner', '这个任务是别人建的，只有建它的人和管理员能改。');
       expect(await f.run(actor, { action: 'edit', chatId: G, taskId: 'st_theirs', revision: 'rev-st_theirs', patch: { name: '改过' } })).toEqual(notOwner);
       expect(await f.run(actor, { action: 'runNow', chatId: G, taskId: 'st_theirs' })).toEqual(notOwner);
       expect(await f.run(actor, { action: 'delete', chatId: G, taskId: 'st_theirs', revision: 'rev-st_theirs' })).toEqual(notOwner);
@@ -133,7 +133,7 @@ describe('who may do what', () => {
     const session: ScheduleActor = { kind: 'session', openId: 'ou_member', name: '成员甲', role: 'member', chatId: G, messageId: 'om_1' };
     expect(await f.run(session, create())).toMatchObject({ kind: 'task', task: { createdBy: { via: 'cli', openId: 'ou_member', name: '成员甲', role: 'member', messageId: 'om_1' } } });
     expect((await f.onDisk()).at(-1)!.createdBy).toEqual({ via: 'cli', openId: 'ou_member', name: '成员甲', role: 'member', messageId: 'om_1' });
-    expect(await f.run(session, { action: 'delete', chatId: G, taskId: 'st_theirs', revision: 'rev-st_theirs' })).toEqual(refusal('not-task-owner', '这个任务是别人建的，只有建它的人、主人和管理员能改。'));
+    expect(await f.run(session, { action: 'delete', chatId: G, taskId: 'st_theirs', revision: 'rev-st_theirs' })).toEqual(refusal('not-task-owner', '这个任务是别人建的，只有建它的人和管理员能改。'));
     expect(await f.run(session, { action: 'list', chatId: OTHER })).toEqual(refusal('not-group', '定时任务只能在群里管；要看别的群的任务去那个群说，或者用桌面端。'));
     expect(await f.run(session, { action: 'listBot' })).toMatchObject(refusal('not-group'));
     expect(await f.run({ ...session, role: 'admin', openId: 'ou_admin' }, { action: 'delete', chatId: G, taskId: 'st_theirs', revision: 'rev-st_theirs' })).toEqual({ kind: 'deleted', taskId: 'st_theirs' });

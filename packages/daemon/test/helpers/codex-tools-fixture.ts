@@ -96,7 +96,7 @@ export function codexToolsFixture() {
   dirs.push(dir);
   vi.stubEnv('CODEX_BIN', writeNodeExecutable(dir, 'codex', FAKE).bin);
   const execute = vi.fn<ScheduleCommands['execute']>(async () => ({ kind: 'tasks', tasks: [], now: 0, timeZone: 'Asia/Shanghai' }));
-  const entries = createAgentEntries({ appId: 'bot', isAdmin: id => id === OWNER, isOwner: id => id === OWNER,
+  const entries = createAgentEntries({ appId: 'bot', isAdmin: id => id === OWNER,
     tools: [sessionInfoTool, ...createScheduleTools({ commands: { execute }, now: () => 0, hostTimeZone: () => 'Asia/Shanghai' })] });
   const read = (file: string): Record<string, unknown>[] => {
     try { return readFileSync(join(dir, file), 'utf8').trim().split('\n').map(line => JSON.parse(line)); } catch { return []; }

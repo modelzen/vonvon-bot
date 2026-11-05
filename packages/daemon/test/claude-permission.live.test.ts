@@ -216,7 +216,7 @@ async function advanced(native: Record<string, unknown>, setup?: (dir: string, c
       const value = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value;
     } }) satisfies Query;
   } };
-  const entries = tools ? createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true, tools }) : undefined;
+  const entries = tools ? createAgentEntries({ appId: 'fixture', isAdmin: () => true, tools }) : undefined;
   const entry = entries?.issue({ kind: 'p2p' });
   const table = permissionTable('claude-agent'), effect = table.effect(table.parseCustom(native));
   const thread = await new ClaudeAgentBackend(async () => facade, () => undefined).startThread({ cwd, ...effect, native, model: process.env.ANTHROPIC_MODEL ?? 'haiku', entry });

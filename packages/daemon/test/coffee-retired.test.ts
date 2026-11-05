@@ -36,7 +36,7 @@ afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 // JSON, the way loadConfig hands it over.
 const STORED = JSON.stringify({
   accounts: { app: { id: 'cli_fixture', secret: 'secret', tenant: 'feishu' } },
-  preferences: { access: { ownerOpenId: 'ou_owner' }, cliBridge: { enabled: true, notifyScope: 'bound_projects' } },
+  preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'], adminsVersion: 2 }, cliBridge: { enabled: true, notifyScope: 'bound_projects' } },
 });
 
 function cfg(): AppConfig {

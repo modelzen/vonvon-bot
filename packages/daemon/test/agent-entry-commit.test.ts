@@ -21,7 +21,7 @@ function fixture(run: AgentTool['run']) {
   const thread: AgentThread = { sessionId: 'fixture', isAlive: vi.fn(() => true), close: async () => {},
     runStreamed: () => { throw Error('unused'); }, runGoal: () => { throw Error('unused'); },
     clearGoal: async () => {}, abort: async () => {}, steer: async () => {}, compact: async () => ({ compacted: false, usage: null }) };
-  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => flags.admin, isOwner: () => false,
+  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => flags.admin,
     chatSettingsOn: () => flags.enabled, tools: [{ name: 't_set', description: 'fixture', class: 'settings', input: z.object({}), run }] });
   const entry = entries.issue({ kind: 'p2p' }); entry.attach(thread);
   const scope = entries.openTurn(thread, { requesterOpenId: 'admin', requesterKind: 'user', triggerMessageId: 'm1', retry: false, wake: false, initiative: false });

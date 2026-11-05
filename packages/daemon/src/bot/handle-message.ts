@@ -4,7 +4,6 @@ import type { MemoryWriter } from './memory-writer';
 import { redactAgentEvents } from '../core/token-redact';
 import { buildJudgeFacts, judgeFactRead, sameNameWord } from './judge-facts';
 import { bareText, smartSalience, type Salience, type SalienceDeps } from './salience';
-import { getAppRoleSnapshot, trustedFeishuAdmins } from '../config/app-roles';
 import { createChatPeople } from './chat-people';
 import { findHandoffs, handoffSendResult, type HandoffSendResult, handoffText, handoffNote, ambiguousNote, ambiguousPersonNote, overNote, incompleteNote, otherBotNames, HANDOFF_SEND_MS, type HandoffMiss } from './bot-handoff';
 import { AskCoordinator, type AskTurn } from './ask-coordinator';
@@ -111,11 +110,10 @@ import {
   isChatAllowed,
   isUserAllowedInProject,
   normalizeRunIdleTimeoutSeconds,
-  resolveOwner,
+  primaryAdmin,
   COMPLETION_REMINDER_LONG_TASK_MAX_MINUTES,
   COMPLETION_REMINDER_LONG_TASK_MIN_MINUTES,
   secretKeyForApp,
-  type AppAccess,
   type AppConfig,
   type AppPreferences,
   type CommentsConfig,
@@ -178,7 +176,6 @@ import {
 import { log, withTrace } from '../core/logger';
 import {
   AUTO_COMPACT_RETIRED,
-  buildAddAdminCard,
   buildAddAllowedCard,
   buildAdminsCard,
   buildCommentPromptCard,
@@ -309,6 +306,7 @@ import { lineOfMessage, quotedLine, RecentLines, type RecentLine } from './recen
 import { JudgeBudget, SmartLanes, JUDGE_GLANCE_CAP, JUDGE_BUDGET, JUDGE_BUDGET_WINDOW_MS, type LaneEntry, type LaneKind } from './smart-intake';
 import { Attention, outcomeOf, type PlaceRef, type PlaceView, type LookKind } from './attention';
 import { handleDmConsole } from './dm-console';
+import { upgradeAdmins } from '../config/admins-upgrade';
 import { createSyncCopyGate } from './sync-copy';
 import { fetchInteractiveCardText, isDegradedCardContent } from './card-content';
 import {
@@ -3207,12 +3205,12 @@ export function createOrchestrator(
     }
   }
 
-  /** 非管理员触发 owner-only 命令(/resume、/new、/clear)时的统一无权限提示。
-   * design §5: 管理类命令仅 bot owner(=admins[]) 可用；对话类(/model、/help)对所有人开放。 */
+  /** 非管理员触发管理命令(/resume、/new、/clear)时的统一无权限提示。
+   * 管理类命令仅管理员可用；对话类(/model、/help)对所有人开放。 */
   async function denyAdminCommand(msg: NormalizedMessage, cmd: 'resume' | 'clear' | 'new'): Promise<void> {
     const why = cmd === 'clear' || cmd === 'new' ? '主区的会话是大家共用的。' : '';
     await channel
-      .send(msg.chatId, { markdown: `⚠️ \`/${cmd}\` 只有主人和管理员能用。${why}` }, { replyTo: msg.messageId })
+      .send(msg.chatId, { markdown: `⚠️ \`/${cmd}\` 只有管理员能用。${why}` }, { replyTo: msg.messageId })
       .catch(() => undefined);
     log.info('intake', 'cmd-denied', { cmd });
   }
@@ -5502,21 +5500,16 @@ export function createOrchestrator(
   // DM management console buttons (design §3.1). Admin-gated; sub-views patch
   // the same card in place, each carrying a ⬅️ 菜单 back button.
   const dmAdmin = (openId?: string): boolean => isAdmin(cfg, openId ?? '');
-  /** product.md 3.7: only the owner changes this machine's administrators, here as by chat and the command line (audit 252-1). */
-  const dmOwner = (openId?: string): boolean => Boolean(openId) && resolveOwner(cfg) === openId;
-  const administratorIds = (): (string | undefined)[] => {
-    const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
-    return [roles?.ownerOpenId, ...trustedFeishuAdmins(roles), cfg.preferences?.access?.ownerOpenId, ...(cfg.preferences?.access?.admins ?? [])];
-  };
-  /** The administrators card as the clicker may use it: the owner adds and removes, an admin only reads. */
-  const adminsCard = async (evt: CardActionEvent): Promise<CardObject> =>
-    buildAdminsCard(cfg, await namesWithOperator(evt, administratorIds()), { editable: dmOwner(evt.operator?.openId) });
   // DM cards are CardKit entities (sendManagedCard); update them via the
   // settle-then-cardkit path so the click's callback acks first. Passing the
   // whole evt lets settleUpdate self-heal an orphaned (post-restart) card by
   // re-posting to evt.chatId.
   const patch = (evt: CardActionEvent, c: object | (() => object | Promise<object>)): void => {
     void settleUpdate(evt.messageId, c, evt.chatId);
+  };
+  const showAdmins = ({ evt }: { evt: CardActionEvent }): void => {
+    if (!dmAdmin(evt.operator?.openId)) return;
+    patch(evt, async () => buildAdminsCard(cfg, await namesWithOperator(evt, cfg.preferences?.access?.admins ?? [])));
   };
   /** An old in-group settings card clicked (s1b): it becomes the not-dm sentence, nothing is written. */
   const refuseGroupSettingsCard = (evt: CardActionEvent): void => {
@@ -6392,58 +6385,12 @@ export function createOrchestrator(
     .on(GS.modelDefaultSubmit, ({ evt }) => refuseGroupSettingsCard(evt))
     // ── 权限管理回调（admins 全局 / 项目响应白名单）。均 dmAdmin 门控（私聊管理台）。
     // 列表卡用 patch 原地重渲染（纯按钮不锁）；加人是 form 提交，结果发**新卡**（旧表单
-    // 留痕），规避 select 锁卡。owner 恒在 admins 名单顶、不可删。
-    .on(DM.admins, ({ evt }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      patch(evt, () => adminsCard(evt));
-    })
-    .on(DM.addAdminForm, ({ evt }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      // An admin's click on an owner's card (a forwarded or older one): the list back, read-only.
-      if (!dmOwner(evt.operator?.openId)) { patch(evt, () => adminsCard(evt)); return; }
-      patch(evt, async () => {
-        const all = await fetchAllProjectMembers(channel);
-        const members = all.filter((m) => !isAdmin(cfg, m.openId)); // 排除已是 admin/owner 的
-        return buildAddAdminCard(members);
-      });
-    })
-    .on(DM.addAdminSubmit, ({ evt, formValue }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      const owner = dmOwner(evt.operator?.openId);
-      const manual = String(formValue?.open_id ?? '').trim();
-      const id = manual.startsWith('ou_') ? manual : pickOpenId(formValue);
-      log.info('console', 'admin-add', { picked: id?.slice(-6) ?? null, ...(owner ? {} : { refused: 'not-owner' }) });
-      void trackTask((async () => {
-        if (id && owner) {
-          await writePreferences((preferences) => {
-            const access: AppAccess = { ...(preferences.access ?? {}) };
-            access.ownerOpenId ??= cfg.preferences?.access?.admins?.[0];
-            access.admins = Array.from(new Set([...(access.admins ?? []), id]));
-            preferences.access = access;
-          }).catch((e) => log.fail('console', e, { phase: 'save-config' }));
-        }
-        await sendManagedCard(channel, evt.chatId, await adminsCard(evt)).catch((e) => log.fail('console', e, { phase: 'admin-add-result' }));
-      })());
-    })
-    .on(DM.rmAdmin, ({ evt, value }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      const owner = dmOwner(evt.operator?.openId);
-      const id = typeof value.u === 'string' ? value.u : '';
-      if (!owner) log.info('console', 'admin-remove', { refused: 'not-owner' });
-      patch(evt, async () => {
-        const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
-        const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
-        if (owner && id && id !== resolveOwner(cfg) && id !== scanner && !trustedFeishuAdmins(roles).includes(id)) {
-          await writePreferences((preferences) => {
-            const access: AppAccess = { ...(preferences.access ?? {}) };
-            access.ownerOpenId ??= cfg.preferences?.access?.admins?.[0];
-            access.admins = (access.admins ?? []).filter((x) => x !== id);
-            preferences.access = access;
-          }).catch((e) => log.fail('console', e, { phase: 'save-config' }));
-        }
-        return adminsCard(evt);
-      });
-    })
+    // 留痕），规避 select 锁卡。
+    .on(DM.admins, showAdmins)
+    // The list changes in the client and the terminal only (product.md section 6): an old card's buttons just redraw it.
+    .on(DM.addAdminForm, showAdmins)
+    .on(DM.addAdminSubmit, showAdmins)
+    .on(DM.rmAdmin, showAdmins)
     .on(DM.allowlist, ({ evt, value }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
       const name = typeof value.n === 'string' ? value.n : '';
@@ -6858,8 +6805,8 @@ export function createOrchestrator(
     }
   }
   async function collaboration(request: CollaborationRequest): Promise<unknown> {
-    const owner = resolveOwner(cfg);
-    if (!owner) throw new AdminWriteError('请先给这个 Bot 配置飞书管理员');
+    const admin = primaryAdmin(cfg);
+    if (!admin) throw new AdminWriteError('请先给这个 Bot 添加管理员');
     if (request.action === 'usage') return { data: await fetchUsageBundle(request.force) };
     if (request.action === 'createProject') {
       const signature = JSON.stringify(request);
@@ -6878,7 +6825,7 @@ export function createOrchestrator(
       const result = serialCreate(async signal => {
         const directory = request.directory === undefined ? undefined : await realpath(request.directory);
         if (directory !== undefined && !(await stat(directory)).isDirectory()) throw new AdminWriteError('所选文件夹不是目录');
-        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, name: request.name, ownerOpenId: owner, existingPath: directory, project: request.project, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, judge: request.judge, mode: bindModeFor(request.backend), signal });
+        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, name: request.name, ownerOpenId: admin, existingPath: directory, project: request.project, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, judge: request.judge, mode: bindModeFor(request.backend), signal });
         return { ok: true, project: projectView(project) };
       }).catch((error: unknown) => {
         // Every refusal crosses IPC as the bot's own word; a result not known stays a plain error, which the RPC
@@ -6933,7 +6880,7 @@ export function createOrchestrator(
           let warning: string | undefined;
           try {
             if (project.origin === 'joined') { await leaveChat(channel, project.chatId); groupEffect = 'left'; }
-            else { await transferOwnership(channel, project.chatId, owner); groupEffect = 'transferred'; }
+            else { await transferOwnership(channel, project.chatId, admin); groupEffect = 'transferred'; }
           } catch (error) { groupEffect = 'failed'; warning = error instanceof Error ? error.message : '飞书群操作失败'; }
           return { ok: true, groupEffect, ...(warning ? { warning } : {}) };
         }
@@ -7033,7 +6980,7 @@ export function createOrchestrator(
       if (!current || projectMutations.has(project.chatId) || projectRevision(current) !== projectRevision(project)) throw new AdminWriteError('项目已改变，请刷新后重试');
       const key = ruleKind(project) === 'single' ? perm.sessionKey : `desktop-resume:${project.chatId}`;
       if (active.has(key) || intakeChats.has(project.chatId) || pendingTopics.has(project.chatId)) throw new AdminWriteError('会话正在运行');
-      const reserved: ActiveState = { queue: [], requesterOpenId: owner, requesterKind: 'user', smart: sessionModeOf(project) === 'smart' };
+      const reserved: ActiveState = { queue: [], requesterOpenId: admin, requesterKind: 'user', smart: sessionModeOf(project) === 'smart' };
       active.set(key, reserved);
       if (ruleKind(project) !== 'single') resumePublications.add(project.chatId);
       let publishedKey: string | undefined;
@@ -7098,7 +7045,7 @@ export function createOrchestrator(
     if (!record || record.detached) throw new AdminWriteError('此会话已归档或不属于当前项目，请开始新会话');
     const key = record.threadId;
     const state = active.get(key);
-    if (request.action === 'context') return { threadId: key, usage: lastUsage.get(key) ?? null, run: state ? { id: runId(state), goal: state.isGoal === true, canStop: Boolean(state.interrupt), canEndGoal: Boolean(state.endGoal), canRemind: state.requesterOpenId === owner && reminderButtonOffered(state.presentation ?? cfg, state) && !state.isGoal, reminderRequested: state.completionReminderRequested === true, subagents: (state.subagents?.() ?? []).map(({ id, name, task, status, stoppable }) => ({ id, name, task, status, stoppable })) } : null };
+    if (request.action === 'context') return { threadId: key, usage: lastUsage.get(key) ?? null, run: state ? { id: runId(state), goal: state.isGoal === true, canStop: Boolean(state.interrupt), canEndGoal: Boolean(state.endGoal), canRemind: state.requesterOpenId === admin && reminderButtonOffered(state.presentation ?? cfg, state) && !state.isGoal, reminderRequested: state.completionReminderRequested === true, subagents: (state.subagents?.() ?? []).map(({ id, name, task, status, stoppable }) => ({ id, name, task, status, stoppable })) } : null };
     if (request.action === 'stopSubagent') {
       if (!state || runId(state) !== request.runId) throw new AdminWriteError('原任务已经结束，请刷新');
       if (!state.run?.stopSubagent) throw new AdminWriteError('这个任务不支持单独停止子 agent');
@@ -7111,7 +7058,7 @@ export function createOrchestrator(
       if (request.action === 'stop') { if (!state.interrupt) throw new AdminWriteError('任务正在准备，请稍后停止'); state.interrupt(); }
       else if (request.action === 'endGoal') { if (!state.endGoal) throw new AdminWriteError('当前不是目标任务'); state.endGoal(); }
       else {
-        if (state.requesterOpenId !== owner || !reminderButtonOffered(state.presentation ?? cfg, state) || state.isGoal) throw new AdminWriteError('仅任务发起人可设置本次完成提醒，且需开启手动提醒模式');
+        if (state.requesterOpenId !== admin || !reminderButtonOffered(state.presentation ?? cfg, state) || state.isGoal) throw new AdminWriteError('仅任务发起人可设置本次完成提醒，且需开启手动提醒模式');
         state.completionReminderRequested = request.requested;
         refreshCompletionReminderCards();
       }
@@ -7122,7 +7069,7 @@ export function createOrchestrator(
     const sessionBackend = backendFor(record.backend);
     if (request.action === 'startGoal' && sessionBackend.capabilities?.goal === false) throw new AdminWriteError('当前后端不支持自主目标');
     if (request.action === 'compact' && sessionBackend.capabilities?.compact === false) throw new AdminWriteError('当前后端不支持手动压缩');
-    const reserved: ActiveState = { queue: [], requesterOpenId: owner, requesterKind: 'user', smart: sessionModeOf(project) === 'smart', isGoal: request.action === 'startGoal' };
+    const reserved: ActiveState = { queue: [], requesterOpenId: admin, requesterKind: 'user', smart: sessionModeOf(project) === 'smart', isGoal: request.action === 'startGoal' };
     active.set(key, reserved);
     let launched = false;
     let compacted: AgentThread | undefined;
@@ -7170,7 +7117,7 @@ export function createOrchestrator(
       }
       const root = await channel.send(project.chatId, { markdown: `桌面端启动目标：${request.objective}` }, replyTo ? { replyTo, replyInThread: true } : undefined);
       launched = true;
-      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, model: record.model, effort: record.effort, serviceTier: record.serviceTier, flat: ruleKind(project) === 'single', backendId: sessionBackend.id, requesterOpenId: owner, requesterKind: 'user', titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
+      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, model: record.model, effort: record.effort, serviceTier: record.serviceTier, flat: ruleKind(project) === 'single', backendId: sessionBackend.id, requesterOpenId: admin, requesterKind: 'user', titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
       return { ok: true, threadId: key };
     } finally {
       if (!launched && active.get(key) === reserved) active.delete(key);
@@ -9269,9 +9216,9 @@ export function createOrchestrator(
         return;
       }
       const admin = isAdmin(cfg, op);
-      const to = admin ? op : resolveOwner(cfg);
+      const to = admin ? op : primaryAdmin(cfg);
       if (!to) {
-        log.info('intake', 'bot-added-no-owner', tail);
+        log.info('intake', 'bot-added-no-admin', tail);
         return;
       }
       const [info, mode, adderName] = await Promise.all([
@@ -9316,10 +9263,10 @@ export function createOrchestrator(
         hasOtherBots: mode.ok && mode.bots !== undefined ? mode.bots > 1 : undefined,
         fullOnly, addedBy: admin ? undefined : { name: adderName } });
       const sent = await orStop(sendManagedCard(channel, to, card, undefined, false, 'open_id').then(() => 'yes', error => {
-        log.fail('intake', error, { phase: 'bot-added-bindcard', to: admin ? 'adder' : 'owner' });
+        log.fail('intake', error, { phase: 'bot-added-bindcard', to: admin ? 'adder' : 'admin' });
         return 'no';
       }), 'unknown');
-      log.info('intake', 'bot-added', { ...tail, to: admin ? 'adder' : 'owner', topic,
+      log.info('intake', 'bot-added', { ...tail, to: admin ? 'adder' : 'admin', topic,
         named: Boolean(name), adderNamed: Boolean(adderName), sent });
     }).catch(error => log.fail('intake', error, { phase: 'bot-added' }));
   }
@@ -9988,6 +9935,8 @@ export function createOrchestrator(
   }
   return {
     initialize: async () => {
+      // A failure leaves the list as it is and the next start tries again.
+      await upgradeAdmins(cfg, writePreferences).catch(error => log.fail('setup', error, { phase: 'admins-upgrade' }));
       const result = await materializeGroupSettings({ cfg, backendFor });
       if (result.updated.length || result.deferred.length) log.info('settings', 'group-settings-materialized', { updated: result.updated.length, deferred: result.deferred.length });
       // In the background: listing a provider's models can cold-spawn it, and a bot must start without its private chat.
