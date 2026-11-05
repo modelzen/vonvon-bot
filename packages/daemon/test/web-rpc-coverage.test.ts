@@ -168,7 +168,8 @@ else process.exit(0);
         { type: 'listJoinedGroups', agentId }, { type: 'listGroupMembers', agentId, groupId, cursor: 'members-page' }, { type: 'bindGroup', agentId, groupId, projectName, folder: { kind: 'existing', folderToken }, tool: 'codex', conversation: 'threads' },
         { type: 'setResponse', membershipId: JSON.stringify([agentId, groupId]), response: 'all' },
         { type: 'setPermission', membershipId: JSON.stringify([agentId, groupId]), administrator: 'write', network: true },
-        { type: 'setAgentEnabled', agentId, enabled: true }, { type: 'deleteAgent', agentId }, { type: 'cancelJob', jobId: operationId },
+        { type: 'setAgentEnabled', agentId, enabled: true }, {type: 'setAgentBadgeNumber', agentId, badgeNumber: '007'},
+        { type: 'deleteAgent', agentId }, { type: 'cancelJob', jobId: operationId },
       ],
       settings: [
         { type: 'read', scope: { kind: 'host' } },

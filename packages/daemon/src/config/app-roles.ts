@@ -17,7 +17,7 @@ export const APP_ROLE_RETRY_MS = APP_ROLE_CACHE_MS / 2;
 export const APP_ROLE_TRUST_MS = 2 * APP_ROLE_CACHE_MS;
 const snapshotSchema = z.object({
   appId: z.string().min(1), tenant: z.enum(['feishu', 'lark']),
-  fetchedAt: z.number().finite().nonnegative(), ownerOpenId: z.string().min(1).optional(),
+  fetchedAt: z.number().finite().nonnegative(), ownerOpenId: z.string().min(1).optional(), ownerName: z.string().optional(),
   admins: z.array(z.string().min(1)),
 });
 export type AppRoleSnapshot = z.infer<typeof snapshotSchema>;
@@ -43,7 +43,7 @@ export function trustedFeishuAdmins(snapshot: AppRoleSnapshot | undefined, now =
 
 const tokenSchema = z.object({ code: z.literal(0), tenant_access_token: z.string().min(1) });
 const infoSchema = z.object({ code: z.literal(0), data: z.object({ app: z.object({
-  owner: z.object({ owner_id: z.string().min(1), type: z.number() }),
+  owner: z.object({ owner_id: z.string().min(1), type: z.number(), name: z.string().nullish() }),
 }) }) });
 const collaboratorsSchema = z.object({ code: z.literal(0), data: z.object({
   collaborators: z.array(z.object({ type: z.enum(['administrator', 'developer', 'operator', 'owner']), user_id: z.string().min(1) })),
@@ -66,7 +66,7 @@ export async function fetchAppRoles(app: AppCredentials, secret: string, signal:
   ]);
   const owner = info.data.app.owner;
   return { appId: app.id, tenant: app.tenant,
-    ...(owner.type === 2 ? { ownerOpenId: owner.owner_id } : {}),
+    ...(owner.type === 2 ? { ownerOpenId: owner.owner_id, ...(owner.name?.trim() ? { ownerName: owner.name.trim() } : {}) } : {}),
     admins: [...new Set(collaborators.data.collaborators.filter(person => person.type === 'administrator' || person.type === 'developer').map(person => person.user_id))],
   };
 }

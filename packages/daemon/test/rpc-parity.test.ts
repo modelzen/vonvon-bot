@@ -33,6 +33,7 @@ function inventory(folderToken: string) {
     ['POST no-mention', 'command', { type: 'setResponse', membershipId, response: 'all' }],
     ['POST backend', 'admin', { type: 'switchBackend', agentId: bot.appId, projectName: project.name, backend: 'claude-agent' }],
     ['PATCH bot', 'command', { type: 'setAgentEnabled', agentId: bot.appId, enabled: true }],
+    ['Set printed badge number', 'command', { type: 'setAgentBadgeNumber', agentId: bot.appId, badgeNumber: '0012345' }],
     ['DELETE bot', 'command', { type: 'deleteAgent', agentId: bot.appId }],
     ['POST collaboration', 'collaboration', { action: 'project', agentId: bot.appId, groupId: project.chatId, projectName: project.name }],
     ['GET account usage', 'collaboration', { action: 'usage', force: false }],
@@ -67,8 +68,10 @@ function inventory(folderToken: string) {
 describe('route inventory parity', () => {
   it('calls every replacement route through real WebSocket and parses its reply schema', async () => {
     let active = false;
+    let badgeNumber: string | undefined;
     const setPermissionMode = vi.fn(async () => undefined);
-    const service = fakeService({ setPermissionMode, listBots: async () => [{ ...bot, active }], listProjects: async () => [project], setBotEnabled: async (_id, enabled) => { active = enabled; return { ok: true, activation: 'applied', message: '' }; },
+    const service = fakeService({ setPermissionMode, listBots: async () => [{ ...bot, active, badgeNumber }], listProjects: async () => [project], setBotEnabled: async (_id, enabled) => { active = enabled; return { ok: true, activation: 'applied', message: '' }; },
+      setBotBadgeNumber: async (_id, value) => { badgeNumber = value; return {ok: true}; },
       pendingGroups: async () => ({ groups: [] }), joinedGroups: async () => ({ groups: [] }), bindGroup: async () => project,
       collaboration: async () => ({ project: { name: project.name, chatId: project.chatId, cwd: project.cwd, kind: project.kind, backend: project.backend, enabled: true, revision: 'project-token' } }),
       settings: { read: async () => host, save: async () => ({ kind: 'saved', section: { scope: { kind: 'host' }, section: 'execution', value: host.sections.execution }, effects: [] }), act: async () => ({ kind: 'unavailable', reason: { kind: 'readonly', reason: 'owner-offline', message: 'fixture' } }), models: async query => ({ backend: query.backend, models: [], state: 'unavailable', source: 'backend-provided', observedAt: new Date().toISOString(), titleEfforts: [] }) },
@@ -83,6 +86,12 @@ describe('route inventory parity', () => {
         const frame = await client.call(request);
         expect(frame.type, String(route)).toBe('response');
         expect(responseSchema.safeParse(frame).success, String(route)).toBe(true);
+        if (route === 'Set printed badge number') {
+          expect(frame).toMatchObject({payload: {kind: 'applied'}});
+          expect(client.frames.slice(0, client.frames.indexOf(frame))).toContainEqual(expect.objectContaining({
+            event: 'snapshot', payload: expect.objectContaining({agents: [expect.objectContaining({badgeNumber: '0012345'})]}),
+          }));
+        }
         if (frame.type === 'response' && frame.method === 'settings' && frame.payload.kind === 'saved' && frame.payload.result.kind === 'saved') expect(frame.payload.result.section.value.revision).toBe('section-token');
         if (route === 'PATCH bot') {
           const snapshotIndex = client.frames.findIndex(frame => frame.type === 'event' && frame.event === 'snapshot' && frame.payload.agents[0]?.enabled);
