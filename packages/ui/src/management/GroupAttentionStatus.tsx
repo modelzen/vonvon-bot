@@ -2,17 +2,15 @@ import {useEffect, useState} from 'react';
 import {Popover} from '@base-ui/react/popover';
 import {Info} from 'lucide-react';
 import type {Agent, Membership} from '@vonvon/protocol';
+import {nowGroupAttention, type NowAttention} from '../now-attention';
 import './GroupAttentionStatus.css';
 
-// Display-only equivalents of the existing main-area tiers, not a new attention
-// algorithm or a reply probability. Topics keep their independent state.
-const watchScores: Readonly<Record<number, number>> = {60_000: 75, 180_000: 50, 300_000: 25};
-
 /** A read-only view of the selected Bot's live attention in this group. */
-export function GroupAttentionStatus({agent, membership, connected}: {
+export function GroupAttentionStatus({agent, membership, connected, attentionModel}: {
   agent?: Agent;
   membership?: Membership;
   connected: boolean;
+  attentionModel?: 'group';
 }) {
   const [, updateClock] = useState(0);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -30,50 +28,27 @@ export function GroupAttentionStatus({agent, membership, connected}: {
   }, [until]);
 
   if (membership && membership.conversation !== 'smart') return null;
-  const unavailable = !matching ? '暂无关注状态'
-    : !connected ? '连接已断开，暂无关注状态'
-    : !agent.enabled || !agent.running ? 'Bot 未运行'
-    : agent.connection !== 'connected' ? '连接已断开，暂无关注状态'
-    : membership.stale ? '群状态暂不可读'
-    : membership.enabled === false ? '项目已停用，暂停关注'
-    : membership.enabled === undefined ? '项目状态暂不可读'
-    : !agent.diagnostics?.attention ? '当前版本未提供关注状态'
-    : until !== undefined && until <= now ? '关注状态待更新'
-    : undefined;
-  const budget = state?.budget?.kind;
-  const paused = budget === 'no-glance';
-  const interval = state?.main?.intervalMs;
-  const intervalText = interval !== undefined && interval % 60_000 === 0
-    ? `${interval / 60_000} 分钟` : `${(interval ?? 0) / 1000} 秒`;
-
-  const namedOnly = budget === 'named-only';
-  const focus = state?.main?.mode === 'focus';
-  // A supported, current snapshot can legitimately have no main-area record
-  // before the next arrival. Keep this idle state separate from missing data.
-  const idle = !unavailable && !state?.main && !namedOnly && !paused;
-  const score = unavailable ? undefined : namedOnly ? 0 : !state?.main ? 0
-    : focus ? 100 : paused ? 0 : watchScores[state.main.intervalMs];
-  const status = unavailable ?? (namedOnly ? '仅处理真人直接找它的消息'
-    : focus ? '专注中' : paused ? '暂停扫视' : idle ? '待互动' : '留意中');
-  const description = unavailable ? undefined
-    : namedOnly ? '@、引用或回复 Bot 发起的话题根消息仍会判断。'
-    : focus ? '新消息到达就判断是否接话。'
-    : paused ? '判断额度暂满，恢复后继续查看。'
-    : idle ? '收到主区消息后，关注度自动更新。'
-    : `攒一批消息再看 · 当前间隔 ${intervalText}`;
-
-  const tone = score === undefined ? 'unknown' : idle ? 'idle' : score === 0 ? 'paused' : focus ? 'focus' : 'watch';
+  const reading: NowAttention = matching
+    ? nowGroupAttention(agent, membership, connected, false, now, attentionModel === 'group')
+    : {label: '待更新', description: '暂无注意力状态。', tone: 'unknown', showMeter: true};
+  const {score, tone, label: status, description} = reading;
   const segmentLength = Math.PI * 68 / 4;
-  return <section className="group-attention" data-tone={tone} aria-label="主区关注度">
+  return <section className="group-attention" data-tone={tone} aria-label="群注意力">
     <div className="group-attention__reading">
       <Popover.Root open={helpOpen} onOpenChange={setHelpOpen}>
-        <Popover.Trigger className="group-attention__metric" aria-label={`主区关注度 ${score === undefined ? '未知' : `${score} / 100`}，${status}。查看数值说明`} openOnHover delay={200} closeDelay={120}
+        <Popover.Trigger className="group-attention__metric" aria-label={`群注意力 ${score === undefined ? '未知' : `${score} / 100`}，${status}。查看数值说明`} openOnHover delay={200} closeDelay={120}
           onFocus={event => {if (event.currentTarget.matches(':focus-visible')) setHelpOpen(true);}}>
           <svg className="group-attention__dial" viewBox="0 0 88 88" aria-hidden="true">
             <circle className="group-attention__dial-center" cx="44" cy="44" r="28"/>
-            {[0, 1, 2, 3].map(index => <circle key={index} className={score !== undefined && score >= (index + 1) * 25 ? 'is-lit' : ''}
-              cx="44" cy="44" r="34" fill="none" strokeWidth="4" strokeLinecap="round"
-              strokeDasharray={`${segmentLength - 6} ${segmentLength * 3 + 6}`} transform={`rotate(${-85 + index * 90} 44 44)`}/>)}
+            {[0, 1, 2, 3].map(index => {
+              const fill = score === undefined ? 0 : Math.min(1, Math.max(0, (score - index * 25) / 25));
+              return <g key={index} transform={`rotate(${-85 + index * 90} 44 44)`}>
+                <circle cx="44" cy="44" r="34" fill="none" strokeWidth="4" strokeLinecap="round"
+                  strokeDasharray={`${segmentLength - 6} ${segmentLength * 3 + 6}`}/>
+                {fill > 0 && <circle className="is-lit" cx="44" cy="44" r="34" fill="none" strokeWidth="4" strokeLinecap="round"
+                  strokeDasharray={`${(segmentLength - 6) * fill} ${segmentLength * 4}`}/>}
+              </g>;
+            })}
             {[0, 90, 180, 270].map(angle => <path className="group-attention__dial-tick" key={angle} d="M44 2v3" transform={`rotate(${angle} 44 44)`}/>)}
           </svg>
           <span className="group-attention__value"><strong>{score ?? '—'}</strong>{score !== undefined && <span>/ 100</span>}</span>
@@ -82,21 +57,19 @@ export function GroupAttentionStatus({agent, membership, connected}: {
         <Popover.Portal>
           <Popover.Positioner side="bottom" align="start" sideOffset={8} className="group-attention__positioner">
             <Popover.Popup className="group-attention__help" initialFocus={false} finalFocus={false}>
-              <Popover.Title className="group-attention__help-title">关注度随互动自动变化</Popover.Title>
+              <Popover.Title className="group-attention__help-title">群注意力随互动自动变化</Popover.Title>
               <dl>
-                <div><dt>100</dt><dd>专注，来消息就判断</dd></div>
-                <div><dt>75 / 50 / 25</dt><dd>留意，间隔 1 / 3 / 5 分钟</dd></div>
-                <div><dt>0</dt><dd>待互动或暂停主动查看，仍处理真人直接找它的消息</dd></div>
+                <div><dt>100</dt><dd>接话后 2 分钟内，普通消息短暂合批</dd></div>
+                <div><dt>75 / 50 / 25</dt><dd>接话后 2–10 / 10–20 / 20–30 分钟，按 1 / 3 / 5 分钟节奏合批</dd></div>
+                <div><dt>10</dt><dd>30 分钟未接话，低度留意；有新消息时仍会查看</dd></div>
               </dl>
-              <Popover.Description>按现有档位折算，不代表回复概率。话题单独关注；消息多时会提前查看。</Popover.Description>
+              <Popover.Description>主区和话题共用注意力，只有 Bot 实际接话才升高。普通消息合批查看；真人 @、引用和短期接续优先。没有待看消息时不调用判断模型。</Popover.Description>
             </Popover.Popup>
           </Popover.Positioner>
         </Popover.Portal>
       </Popover.Root>
-      <div className="group-attention__copy"><span className="group-attention__heading">主区关注度</span><strong className="group-attention__status"><span aria-hidden="true"/>{status}</strong>{description && <p>{description}</p>}
-        {!unavailable && !namedOnly && state && <p className="group-attention__topics">话题：{state.focusedTopics} 个专注 · {state.watchedTopics} 个{paused ? '暂停扫视' : '留意'}</p>}
+      <div className="group-attention__copy"><span className="group-attention__heading">群注意力</span><strong className="group-attention__status"><span aria-hidden="true"/>{status}</strong>{description && <p>{description}</p>}
       </div>
     </div>
-    {!unavailable && paused && <p className="group-attention__note">扫视已暂停，专注中的位置仍会判断新消息。</p>}
   </section>;
 }
