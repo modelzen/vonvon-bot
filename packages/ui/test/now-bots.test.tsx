@@ -18,7 +18,7 @@ const snapshot = (agent: Agent, memberships: Membership[] = [member]) => desktop
   agents: [agent], groups: [{id: member.groupId, name: member.name}], memberships, tools: [], jobs: [],
   application: {platform: 'macos', version: 'test', loginItem: false, dataPath: '/tmp/now'},
 });
-const badgeActions = {onChangeNumber: async () => undefined, onRegister: () => {}, disabled: false, connected: true};
+const badgeActions = {onChangeNumber: async () => undefined, disabled: false, connected: true};
 beforeEach(() => {vi.useFakeTimers(); vi.setSystemTime(now);});
 afterEach(() => {vi.useRealTimers();});
 
@@ -111,7 +111,6 @@ it('keeps a long-running tool live through heartbeats without making it the newe
 
 it('counts each bound group once on both sides of the badge', () => {
   const html = renderToStaticMarkup(<NowBotList snapshot={snapshot(acting(activity({phase: 'tool', toolKind: 'search'})), [member, member])} {...badgeActions}/>);
-  expect(html).toContain('添加 Bot');
   expect(html).toContain('aria-expanded="false"');
   expect(html).toContain('Vonvon 所在群，可上下滚动');
   expect(html).toContain('href="https://applink.feishu.cn/client/bot/open?appId=cli_now"');
