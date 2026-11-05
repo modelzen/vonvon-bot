@@ -10,6 +10,7 @@
 .bot-group-list__row + .bot-group-list__row::before { content: ''; position: absolute; left: 56px; right: 16px; top: 0; border-top: 1px solid var(--color-border); }
 .bot-group-list__identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .bot-group-list__identity .collaboration-avatar { height: 30px; width: 30px; flex-shrink: 0; border-radius: 8px; }
+.bot-group-list__identity .collaboration-avatar.agent { border-radius: 50%; }
 .bot-group-list__identity strong { font-size: 13px; font-weight: 600; line-height: 1.5; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .bot-group-list__row[data-unavailable] .bot-group-list__identity strong { color: var(--color-text-tertiary); }
 .bot-group-list__provider { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--color-text-secondary); }

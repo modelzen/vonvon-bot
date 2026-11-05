@@ -114,7 +114,7 @@ test('old daemons without projects still support the group tree and group search
 });
 
 test('the Bot page has four panes, 任务 after 记忆', () => {
-  assert.deepEqual(agentPanes.map(pane => pane.label), ['群聊', '记忆', '任务', '设置']);
+  assert.deepEqual(agentPanes.map(pane => pane.label), ['聊天', '记忆', '任务', '设置']);
   assert.deepEqual(routeDetail({kind: 'agent', id: agentId, pane: {kind: 'schedule'}}), {kind: 'overview'});
 });
 
