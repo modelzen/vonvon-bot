@@ -4,15 +4,18 @@ import { Readable } from 'node:stream';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { createCommandTools } from '../src/agent/entry/command-tools';
-import { feishuDocToolNames, feishuReadToolNames, feishuToolNames } from '../src/agent/entry/feishu-tools';
+import { feishuDocToolNames, feishuReadToolNames, feishuToolNames, feishuToolSpecs } from '../src/agent/entry/feishu-tools';
+import { offeredTool } from '../src/agent/codex-appserver/dynamic-tools';
+import { escapeInboundMarkers } from '../src/bot/hidden-blocks';
 import { createAgentEntries, type AgentPlace } from '../src/agent/entry/registry';
 import { TOOL_RESULT_BYTES } from '../src/agent/entry/tools';
 import type { AgentThread, PermissionMode } from '../src/agent/types';
-import { BITABLE_READ_SCOPES, COMMENT_READ_SCOPES, DOC_EDIT_SCOPES, DOC_MEDIA_SCOPES, DOC_READ_SCOPES, DRIVE_READ_SCOPES, FEISHU_TOOL_SCOPES, GRANT_SCOPES, MESSAGE_SEARCH_SCOPES, REQUIRED_SCOPES, SCOPE_LABELS, SHEET_READ_SCOPES, WIKI_READ_SCOPES } from '../src/config/scopes';
+import { BITABLE_READ_SCOPES, BOARD_READ_SCOPES, COMMENT_READ_SCOPES, DOC_EDIT_SCOPES, DOC_MEDIA_SCOPES, DOC_READ_SCOPES, DRIVE_READ_SCOPES, FEISHU_TOOL_SCOPES, GRANT_SCOPES, LEGACY_DOC_READ_SCOPES, MESSAGE_SEARCH_SCOPES, MINDNOTE_READ_SCOPES, MINUTES_READ_SCOPES, REQUIRED_SCOPES, SCOPE_LABELS, SHEET_READ_SCOPES, SLIDES_READ_SCOPES, WIKI_READ_SCOPES } from '../src/config/scopes';
 import { inboundChatDir } from '../src/bot/media';
 import { AFTER_GRANT, notSharedReply, readableFailure, readOnlyReply, refusalOf, type ReadArea } from '../src/feishu-read/denial';
 import { parseRef } from '../src/feishu-read/documents';
 import { createFeishuReader } from '../src/feishu-read/reader';
+import { FEISHU_TOOL_SCOPE_EFFECTS } from '@vonvon/protocol';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs');
@@ -40,6 +43,7 @@ function channel(calls: Record<string, (...args: never[]) => unknown> = {}) {
     docx: { v1: { chatAnnouncementBlock: { list: fake('announcement') } } },
     wiki: { v2: { space: { getNode: fake('node') } } },
     drive: { v1: { file: { download: fake('download') }, media: { download: fake('media') } } },
+    minutes: { v1: { minuteTranscript: { get: fake('transcript') } } },
   };
   return { client, channel: { rawClient: client, botIdentity: { openId: 'ou_me', name: '小码' } } as unknown as LarkChannel };
 }
@@ -296,7 +300,7 @@ describe('feishu_doc', () => {
     await expect(sheet.read.doc({ doc: 'https://x.feishu.cn/wiki/w' })).rejects.toThrow('feishu_sheet');
     await expect(sheet.read.doc({ doc: 'https://x.feishu.cn/sheets/s' })).rejects.toThrow('feishu_sheet');
     await expect(sheet.read.doc({ doc: 'https://x.feishu.cn/base/b' })).rejects.toThrow('feishu_base');
-    await expect(sheet.read.doc({ doc: 'https://x.feishu.cn/slides/s' })).rejects.toThrow('现在读不了');
+    await expect(sheet.read.doc({ doc: 'https://x.feishu.cn/slides/s' })).rejects.toThrow('feishu_slides');
     await expect(sheet.read.doc({ doc: '不是链接 也不是 token' })).rejects.toThrow('认不出');
   });
   it('pages a long document within the limit, and the parts add up to the whole', async () => {
@@ -476,6 +480,219 @@ describe('feishu_base', () => {
   });
 });
 
+describe('old documents', () => {
+  const OLD = '/open-apis/doc/v2/doccnOld/raw_content';
+
+  // Codex 审查任务 349 必败: a scope the new APIs lack stopped a document only the old API reads
+  it('reads an old document by its bare token without the scopes of the new ones', async () => {
+    const old = { '/doc/v2/': { code: 0, data: { content: '旧版正文' } } };
+    const noDocx = reader({ request: routes({ '/docs_ai/': denied('docx:document:readonly'), '/docx/': denied('docx:document:readonly'), ...old }) });
+    expect(await noDocx.read.doc({ doc: 'docFixture' })).toEqual({ text: '旧版正文' });
+    const noWiki = reader({ request: routes({ '/docs_ai/': { code: 1770002, msg: 'not found' }, '/docx/': { code: 1770002, msg: 'not found' }, ...old }), node: async () => denied('wiki:wiki:readonly') });
+    expect(await noWiki.read.doc({ doc: 'docFixture' })).toEqual({ text: '旧版正文' });
+  });
+
+  it('keeps the missing scope when the old API does not know the token either', async () => {
+    const t = reader({ request: routes({ '/docs_ai/': denied('docx:document:readonly'), '/docx/': denied('docx:document:readonly'), '/doc/v2/': { code: 95006, msg: 'not found' } }) });
+    await expect(t.read.doc({ doc: 'docFixture' })).rejects.toMatchObject({ kind: 'scope' });
+  });
+
+  it('reads a /docs/ link through their own API, and goes on with its cursor', async () => {
+    const whole = '旧'.repeat(100_000);
+    const { read, client } = reader({ request: routes({ '/doc/v2/': { code: 0, data: { content: whole } } }) });
+    const first = await read.doc({ doc: 'https://x.feishu.cn/docs/doccnOld' });
+    expect(client.request.mock.calls[0]![0 as never]).toMatchObject({ method: 'GET', url: OLD });
+    expect(first.cursor).toMatch(/^legacy:\d+$/);
+    const rest = await read.doc({ doc: 'https://x.feishu.cn/docs/doccnOld', cursor: first.cursor });
+    expect(first.text + rest.text).toBe(whole);
+    expect(rest.cursor).toBeUndefined();
+  });
+  it('reads a knowledge-base page that is one', async () => {
+    const { read } = reader({ node: async () => ({ data: { node: { obj_token: 'doccnOld', obj_type: 'doc' } } }), request: routes({ '/doc/v2/': { code: 0, data: { content: '正文' } } }) });
+    expect(await read.doc({ doc: 'https://x.feishu.cn/wiki/wik' })).toEqual({ text: '正文' });
+  });
+  it('tries a bare token as one last, as a comment gives it, and keeps the first refusal if it is not one', async () => {
+    const missing = { code: 1770002, msg: 'not found' };
+    const found = reader({ node: async () => missing, request: routes({ '/docs_ai/': missing, '/docx/': missing, '/doc/v2/': { code: 0, data: { content: '旧正文' } } }) });
+    expect(await found.read.doc({ doc: 'doccnOld' })).toEqual({ text: '旧正文' });
+    const lost = reader({ node: async () => missing, request: routes({ '/docs_ai/': missing, '/docx/': missing, '/doc/v2/': missing }) });
+    await expect(lost.read.doc({ doc: 'doccnOld' })).rejects.toThrow('找不到这个文档或文件');
+  });
+  it('says what is missing with the scope of old documents', async () => {
+    const { read } = reader({ request: async () => denied('docs:doc:readonly') });
+    await expect(read.doc({ doc: 'https://x.feishu.cn/docs/doccnOld' })).rejects.toThrow(/读取旧版文档内容.*读不了旧版文档/);
+  });
+  it('cannot be changed', async () => {
+    const { read, client } = reader();
+    await expect(read.docEdit({ doc: 'https://x.feishu.cn/docs/doccnOld', action: 'append', content: 'x' })).rejects.toThrow('旧版文档');
+    expect(client.request).not.toHaveBeenCalled();
+  });
+});
+
+describe('feishu_slides', () => {
+  const xml = (content: string) => ({ code: 0, data: { xml_presentation: { content, presentation_id: 'sld', revision_id: 3 } } });
+  it('reads the whole deck as XML', async () => {
+    const { read, client } = reader({ request: routes({ '/xml_presentations/': xml('<presentation><slide>第一页</slide></presentation>') }) });
+    expect(await read.slides({ slides: 'https://x.feishu.cn/slides/sld' })).toEqual({ text: '<presentation><slide>第一页</slide></presentation>' });
+    expect(client.request.mock.calls[0]![0 as never]).toMatchObject({ method: 'GET', url: '/open-apis/slides_ai/v1/xml_presentations/sld' });
+  });
+  it('pages a long deck with nothing lost or repeated, under the registry\'s limit', async () => {
+    const whole = `<slide>${'字'.repeat(120_000)}</slide>`;
+    const { read } = reader({ request: routes({ '/xml_presentations/': xml(whole) }) });
+    let joined = '', cursor: string | undefined, parts = 0;
+    do {
+      const part = await read.slides({ slides: 'sld', ...(cursor ? { cursor } : {}) });
+      expect(Buffer.byteLength(JSON.stringify(part))).toBeLessThan(TOOL_RESULT_BYTES);
+      joined += part.text;
+      cursor = part.cursor;
+      parts++;
+    } while (cursor);
+    expect(joined).toBe(whole);
+    expect(parts).toBeGreaterThan(1);
+  });
+  it('refuses a bad cursor without asking Feishu, and escapes vonvon\'s markers', async () => {
+    const { read, client } = reader();
+    await expect(read.slides({ slides: 'sld', cursor: 'x' })).rejects.toThrow('cursor 不对');
+    expect(client.request).not.toHaveBeenCalled();
+    const marked = reader({ request: routes({ '/xml_presentations/': xml('前<vonvon-memory>后') }) });
+    expect((await marked.read.slides({ slides: 'sld' })).text).toBe(escapeInboundMarkers('前<vonvon-memory>后'));
+  });
+  it('asks for its scope, says when it is not shared, and reads through a knowledge-base page', async () => {
+    await expect(reader({ request: async () => denied('slides:presentation:read') }).read.slides({ slides: 'sld' })).rejects.toThrow(/读不了幻灯片.*q=slides%3Apresentation%3Aread/);
+    await expect(reader({ request: async () => ({ code: 1061004, msg: 'forbidden' }) }).read.slides({ slides: 'https://x.feishu.cn/slides/sld' })).rejects.toThrow('这份幻灯片还没分享给 Bot');
+    const node = reader({ node: async () => ({ data: { node: { obj_token: 'sldReal', obj_type: 'slides' } } }), request: routes({ '/xml_presentations/sldReal': xml('<p/>') }) });
+    expect(await node.read.slides({ slides: 'https://x.feishu.cn/wiki/wik' })).toEqual({ text: '<p/>' });
+  });
+  it('sends another kind to its tool', async () => {
+    await expect(reader().read.slides({ slides: 'https://x.feishu.cn/docx/dox' })).rejects.toThrow('feishu_doc');
+    await expect(reader({ node: async () => ({ data: { node: { obj_token: 'm', obj_type: 'mindnote' } } }) }).read.doc({ doc: 'https://x.feishu.cn/wiki/wik' })).rejects.toThrow('feishu_mindnote');
+  });
+});
+
+describe('feishu_mindnote', () => {
+  const words = (content: string) => [{ element_type: 'text', text: { content } }];
+  const answer = (nodes: unknown[]) => routes({ '/mindnotes/': { code: 0, data: { nodes } } });
+  it('turns the nodes into a tree, siblings in Feishu\'s order', async () => {
+    const { read, client } = reader({ request: answer([
+      { node_id: 'b', parent_id: 'a', texts: words('子一'), finish: true },
+      { node_id: 'a', texts: words('中心'), notes: words('要点'), images: [{ token: 'img1' }] },
+      { node_id: 'c', parent_id: 'b', texts: [...words('孙'), { element_type: 'link', link: { url: 'https://example.com' } }] },
+      { node_id: 'd', parent_id: 'a', texts: words('子二') },
+    ]) });
+    expect((await read.mindnote({ mindnote: 'https://x.feishu.cn/mindnotes/mnd' })).text).toBe(['- 中心', '  备注：要点', '  [图片 img1]', '  - [已完成] 子一', '    - 孙https://example.com', '  - 子二'].join('\n'));
+    expect(client.request.mock.calls[0]![0 as never]).toMatchObject({ method: 'GET', url: '/open-apis/mindnote/v1/mindnotes/mnd/nodes' });
+  });
+  it('loses no node to a missing parent or a loop', async () => {
+    const { read } = reader({ request: answer([{ node_id: 'x', parent_id: 'y', texts: words('环一') }, { node_id: 'y', parent_id: 'x', texts: words('环二') }, { node_id: 'z', parent_id: 'gone', texts: words('孤') }]) });
+    const { text } = await read.mindnote({ mindnote: 'mnd' });
+    for (const part of ['环一', '环二', '孤']) expect(text).toContain(part);
+  });
+  it('holds a very deep tree', async () => {
+    const nodes = Array.from({ length: 20_000 }, (_, index) => ({ node_id: `n${index}`, ...(index ? { parent_id: `n${index - 1}` } : {}), texts: words('节') }));
+    const { read } = reader({ request: answer(nodes) });
+    expect((await read.mindnote({ mindnote: 'mnd' })).cursor).toBeDefined();
+  });
+  it('pages a long one', async () => {
+    const { read } = reader({ request: answer(Array.from({ length: 30_000 }, (_, index) => ({ node_id: `n${index}`, texts: words('一段不短的文字') }))) });
+    const first = await read.mindnote({ mindnote: 'mnd' });
+    const rest = await read.mindnote({ mindnote: 'mnd', cursor: first.cursor! });
+    expect(rest.text.length).toBeGreaterThan(0);
+    expect(rest.text.startsWith(first.text)).toBe(false);
+  });
+  it('says what a made-up one is, and asks for its scope', async () => {
+    await expect(reader({ request: async () => ({ code: 3410003, msg: 'resource not found' }) }).read.mindnote({ mindnote: 'https://x.feishu.cn/mindnotes/mnd' })).rejects.toThrow('找不到这个文档或文件');
+    await expect(reader({ request: async () => denied('mindnote:node:read') }).read.mindnote({ mindnote: 'mnd' })).rejects.toThrow('读不了思维笔记');
+  });
+});
+
+describe('feishu_board', () => {
+  const answer = (nodes: unknown[]) => routes({ '/whiteboards/': { code: 0, data: { nodes } } });
+  it('reads top to bottom, with sections, sticky notes, images, tables and code, and leaves out what only draws', async () => {
+    const { read, client } = reader({ request: answer([
+      { id: 'low', type: 'text_shape', y: 300, x: 0, text: { text: '下面' } },
+      { id: 'sec', type: 'section', y: 0, x: 0, section: { title: '第一区' } },
+      { id: 'in', type: 'composite_shape', parent_id: 'sec', y: 10, x: 10, text: { text: '区里\n两行' } },
+      { id: 'blank', type: 'composite_shape', y: 20, x: 0, text: { text: '' } },
+      { id: 'note', type: 'sticky_note', y: 100, x: 0, text: { text: '记一下' }, sticky_note: {} },
+      { id: 'pic', type: 'image', y: 110, x: 0, image: { token: 'img1' } },
+      { id: 'tab', type: 'table', y: 120, x: 0, table: { title: '排期', cells: [{ row_index: 1, col_index: 0, text: { text: '丙' } }, { row_index: 0, col_index: 1, text: { text: '乙' } }, { row_index: 0, col_index: 0, text: { text: '甲' } }] } },
+      { id: 'uml', type: 'svg', y: 200, x: 0, syntax: { code: 'graph TD\n  A-->B' } },
+    ]) });
+    expect((await read.board({ board: 'https://x.feishu.cn/board/brd' })).text).toBe(['[分区] 第一区', '  区里 两行', '[便签] 记一下', '[图片 img1]', '[表格] 排期', '甲 | 乙', '丙', 'graph TD', '  A-->B', '下面'].join('\n'));
+    expect(client.request.mock.calls[0]![0 as never]).toMatchObject({ method: 'GET', url: '/open-apis/board/v1/whiteboards/brd/nodes' });
+  });
+  it('says what the connectors join, by the text of each end', async () => {
+    const { read } = reader({ request: answer([
+      { id: 'a', type: 'text_shape', text: { text: '开始' } },
+      { id: 'b', type: 'text_shape', y: 1, text: { text: '结束' } },
+      { id: 'l1', type: 'connector', connector: { start: { attached_object: { id: 'a' } }, end: { attached_object: { id: 'b' } }, captions: { data: [{ text: '通过' }] } } },
+      { id: 'l2', type: 'connector', connector: { start_object: { id: 'b' }, end_object: { id: 'gone' } } },
+      { id: 'l3', type: 'connector', connector: {} },
+    ]) });
+    expect((await read.board({ board: 'brd' })).text).toBe(['开始', '结束', '', '连线：', '开始 → 结束：通过', '结束 → （没有文字的节点）'].join('\n'));
+  });
+  it('follows a mind map on a board', async () => {
+    const { read } = reader({ request: answer([{ id: 'root', type: 'mind_map', text: { text: '主题' } }, { id: 'n', type: 'mind_map', y: 1, mind_map_node: { parent_id: 'root' }, text: { text: '分支' } }]) });
+    expect((await read.board({ board: 'brd' })).text).toBe('主题\n  分支');
+  });
+  it('asks for its scope', async () => {
+    await expect(reader({ request: async () => denied('board:whiteboard:node:read') }).read.board({ board: 'brd' })).rejects.toThrow('读不了画板');
+  });
+});
+
+describe('feishu_minutes', () => {
+  const transcript = (body: string) => async () => ({ headers: {}, getReadableStream: () => Readable.from([Buffer.from(body)]) });
+  const details = { code: 0, data: { minute: { token: 'obc', title: '周会', duration: '60000', url: 'https://x.feishu.cn/minutes/obc' } } };
+  it('reads the details and the transcript, the speaker and the time asked for', async () => {
+    const { read, client } = reader({ request: routes({ '/minutes/v1/minutes/obc': details }), transcript: transcript('张三 00:01\n大家好') });
+    expect(await read.minutes({ minutes: 'https://x.feishu.cn/minutes/obc?from=x' })).toEqual({ minute: details.data.minute, text: '张三 00:01\n大家好' });
+    expect(client.request.mock.calls[0]![0 as never]).toMatchObject({ method: 'GET', url: '/open-apis/minutes/v1/minutes/obc' });
+    expect(client.minutes.v1.minuteTranscript.get.mock.calls[0]![0 as never]).toEqual({ path: { minute_token: 'obc' }, params: { need_speaker: true, need_timestamp: true, file_format: 'txt' } });
+  });
+  it('pages the transcript; the details come once', async () => {
+    const whole = '说'.repeat(100_000);
+    const { read, client } = reader({ request: routes({ '/minutes/': details }), transcript: transcript(whole) });
+    const first = await read.minutes({ minutes: 'obc' });
+    const rest = await read.minutes({ minutes: 'obc', cursor: first.cursor! });
+    expect(first.minute).toBeDefined();
+    expect(rest).toEqual({ text: whole.slice(first.text.length) });
+    expect(client.request).toHaveBeenCalledTimes(1);
+  });
+  it('joins a character the stream split', async () => {
+    const bytes = Buffer.from('妙记');
+    const { read } = reader({ request: routes({ '/minutes/': details }), transcript: async () => ({ headers: {}, getReadableStream: () => Readable.from([bytes.subarray(0, 2), bytes.subarray(2)]) }) });
+    expect((await read.minutes({ minutes: 'obc' })).text).toBe('妙记');
+  });
+  it('asks for the whole group when the transcript is refused, its body being a stream', async () => {
+    const refused = Object.assign(new Error('400'), { response: { data: Readable.from([JSON.stringify(denied('minutes:minutes.transcript:export'))]) } });
+    const { read } = reader({ request: routes({ '/minutes/': details }), transcript: async () => { throw refused; } });
+    await expect(read.minutes({ minutes: 'obc' })).rejects.toThrow(/读不了妙记.*minutes%3Aminutes%3Areadonly%2Cminutes%3Aminutes\.transcript%3Aexport/);
+  });
+  it('says when it is not shared', async () => {
+    await expect(reader({ request: async () => ({ code: 1061004, msg: 'forbidden' }) }).read.minutes({ minutes: 'https://x.feishu.cn/minutes/obc' })).rejects.toThrow('这条妙记还没分享给 Bot');
+  });
+});
+
+describe('the new readers in each place', () => {
+  const GROUP: AgentPlace = { kind: 'group', chatId: HERE };
+  const calls = { request: routes({ '/xml_presentations/': { code: 0, data: { xml_presentation: { content: '<p/>' } } } }) };
+  it('read in a group of any tier, a private chat and a comment; not in a stranger\'s private chat', async () => {
+    const dm: AgentPlace = { kind: 'p2p', chatId: 'oc_dm' };
+    expect(await tools(calls, GROUP, { admin: false, tier: 'qa' }).call('feishu_slides', { slides: 'sld' })).toEqual({ ok: true, result: { text: '<p/>' } });
+    expect(await tools(calls, dm).call('feishu_slides', { slides: 'sld' })).toMatchObject({ ok: true });
+    expect(await tools(calls, { kind: 'doc', docId: 'd' }).inTurn('feishu_slides', { slides: 'sld' })).toMatchObject({ ok: true });
+    expect(await tools(calls, dm, { admin: false }).call('feishu_slides', { slides: 'sld' })).toMatchObject({ ok: false, code: 'refused' });
+  });
+  it('are in the document column, for both providers', () => {
+    for (const name of ['feishu_slides', 'feishu_mindnote', 'feishu_board', 'feishu_minutes']) {
+      expect(feishuDocToolNames.has(name)).toBe(true);
+      expect(feishuReadToolNames.has(name)).toBe(true);
+      expect(feishuToolSpecs({ documentsOnly: true }).map(tool => tool.name)).toContain(name);
+      expect(offeredTool('vonvon_bot', name)).toBe(true);
+    }
+  });
+});
+
 describe('feishu_drive_file', () => {
   it('saves the file under the name Feishu gives', async () => {
     const { read } = reader({ download: download('字节', { 'content-disposition': `attachment; filename*=UTF-8''%E6%8A%A5%E5%91%8A.pdf` }) });
@@ -543,7 +760,7 @@ describe('feishu_folder', () => {
     const t = reader();
     await expect(t.read.folder({ folder: 'https://x.feishu.cn/docx/dox' })).rejects.toThrow('feishu_doc');
     await expect(t.read.folder({ folder: 'https://x.feishu.cn/wiki/wik' })).rejects.toThrow('feishu_wiki');
-    await expect(t.read.folder({ folder: 'https://x.feishu.cn/slides/s' })).rejects.toThrow('其他类型');
+    await expect(t.read.folder({ folder: 'https://x.feishu.cn/slides/s' })).rejects.toThrow('feishu_slides');
     expect(t.client.request).not.toHaveBeenCalled();
     await expect(t.read.doc({ doc: 'https://x.feishu.cn/drive/folder/fld' })).rejects.toThrow('feishu_folder');
     await expect(t.read.doc({ doc: 'https://x.feishu.cn/wiki/space/123' })).rejects.toThrow('feishu_wiki');
@@ -755,6 +972,12 @@ describe('parseRef', () => {
     expect(parseRef('https://x.feishu.cn/base/bas?table=tblA&view=vewB')).toEqual({ kind: 'bitable', token: 'bas', tableId: 'tblA', viewId: 'vewB' });
     expect(parseRef('https://x.feishu.cn/bitable/bas')).toEqual({ kind: 'bitable', token: 'bas' });
     expect(parseRef('https://x.feishu.cn/wiki/wik?table=tblA')).toEqual({ kind: 'wiki', token: 'wik', tableId: 'tblA' });
+    expect(parseRef('https://x.feishu.cn/slides/sld')).toEqual({ kind: 'slides', token: 'sld' });
+    expect(parseRef('https://x.feishu.cn/mindnotes/mnd')).toEqual({ kind: 'mindnote', token: 'mnd' });
+    expect(parseRef('https://x.feishu.cn/board/brd')).toEqual({ kind: 'board', token: 'brd' });
+    expect(parseRef('https://x.feishu.cn/whiteboard/brd')).toEqual({ kind: 'board', token: 'brd' });
+    expect(parseRef('https://x.feishu.cn/minutes/obc?from=link')).toEqual({ kind: 'minutes', token: 'obc' });
+    expect(parseRef('https://x.feishu.cn/docs/doc')).toEqual({ kind: 'doc', token: 'doc' });
     expect(parseRef('https://x.feishu.cn/drive/folder/fld?from=a')).toEqual({ kind: 'folder', token: 'fld' });
     expect(parseRef('https://x.feishu.cn/wiki/space/123')).toEqual({ kind: 'space', token: '123' });
     expect(parseRef('https://x.feishu.cn/wiki/settings/123')).toEqual({ kind: 'space', token: '123' });
@@ -957,6 +1180,13 @@ describe('feishu_doc_edit', () => {
 });
 
 describe('the permission groups (6.5)', () => {
+  it('give each new kind of content its scopes, and a label and an effect for each', () => {
+    const groups = [SLIDES_READ_SCOPES, MINDNOTE_READ_SCOPES, BOARD_READ_SCOPES, MINUTES_READ_SCOPES, LEGACY_DOC_READ_SCOPES];
+    for (const scope of groups.flat()) {
+      expect(FEISHU_TOOL_SCOPES as readonly string[]).toContain(scope);
+      expect(FEISHU_TOOL_SCOPE_EFFECTS[scope], scope).toBeTruthy();
+    }
+  });
   it('leave the required scopes alone', () => {
     for (const scope of FEISHU_TOOL_SCOPES) {
       expect(REQUIRED_SCOPES as readonly string[]).not.toContain(scope);

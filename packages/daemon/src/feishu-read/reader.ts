@@ -1,5 +1,6 @@
 import { callApi, type ApiRequest, type ApiResult } from './api';
 import { readBase, type BaseRequest } from './base';
+import { readBoard, readMindnote, readMinutes, readSlides, type BoardRequest, type MindnoteRequest, type MinutesRequest, type SlidesRequest } from './canvases';
 import { readComments, readDocMedia, readFolder, readWiki, type CommentsRequest, type DocMediaRequest, type FolderRequest, type WikiRequest } from './drive';
 import { editDoc, readDoc, readDriveFile, readSheet, type DocEditRequest, type DocEditResult, type DocRequest, type DriveFileRequest, type SheetRequest } from './documents';
 import { readChat, readFile, readMessage, readMessages, searchMessages, type ChatRequest, type FileRequest, type MessageRequest, type MessagesRequest, type SearchRequest } from './messages';
@@ -20,6 +21,10 @@ export interface FeishuReader {
   doc(request: DocRequest): ReturnType<typeof readDoc>;
   sheet(request: SheetRequest): ReturnType<typeof readSheet>;
   base(request: BaseRequest): ReturnType<typeof readBase>;
+  slides(request: SlidesRequest): ReturnType<typeof readSlides>;
+  mindnote(request: MindnoteRequest): ReturnType<typeof readMindnote>;
+  board(request: BoardRequest): ReturnType<typeof readBoard>;
+  minutes(request: MinutesRequest): ReturnType<typeof readMinutes>;
   driveFile(request: DriveFileRequest): ReturnType<typeof readDriveFile>;
   folder(request: FolderRequest): ReturnType<typeof readFolder>;
   wiki(request: WikiRequest): ReturnType<typeof readWiki>;
@@ -41,6 +46,10 @@ export function createFeishuReader(deps: ReadDeps): FeishuReader {
     doc: request => readDoc(deps, request),
     sheet: request => readSheet(deps, request),
     base: request => readBase(deps, request),
+    slides: request => readSlides(deps, request),
+    mindnote: request => readMindnote(deps, request),
+    board: request => readBoard(deps, request),
+    minutes: request => readMinutes(deps, request),
     driveFile: request => readDriveFile(deps, request),
     folder: request => readFolder(deps, request),
     wiki: request => readWiki(deps, request),
