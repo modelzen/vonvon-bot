@@ -20,6 +20,7 @@ import { isProjectId } from '../project/library';
 import { createAgentEntries, type AgentEntries } from '../agent/entry/registry';
 import { log } from '../core/logger';
 import { createOrchestrator } from './handle-message';
+import { writeSessionCli } from '../agent/session-cli';
 import { createTopicRegistry } from './topic-registry';
 import type { BotIdentity } from '../config/bots';
 import { adoptAdminSessions } from './session-store';
@@ -115,8 +116,9 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       return result;
     },
   }) });
+  const sessionCli = await writeSessionCli();
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
-    { entries, memory, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}) });
+    { entries, memory, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}), ...(sessionCli ? { sessionCli } : {}) });
   const firstHello = createFirstHello({ cfg: opts.cfg, appSecret: opts.appSecret, channel, write: orchestrator.writePreferences });
   const roles = createAppRoleRefresher(app, opts.appSecret);
   await roles.refresh();

@@ -16,8 +16,9 @@ import { assemble, judgeContext, loadContextSources, openingInstructions, planTu
 import { groupSkillProfile } from '../agent/group-skills';
 import { completeBuiltinPackage, ensureBuiltinPackage } from '../agent/builtin-skills/package';
 import { builtinSkillsOfSet } from '../agent/builtin-skills/registry';
+import { sessionCliEnv } from '../agent/session-cli';
 import type { SessionProfile } from '../agent/session-profile';
-import { SESSION_ENV, SESSION_SCOPE_ENV, sessionScope } from '../config/session-env';
+import { SESSION_BOT_ENV, SESSION_ENV, SESSION_SCOPE_ENV, sessionScope } from '../config/session-env';
 import type { HostApi } from '../admin/ipc';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
@@ -1133,11 +1134,14 @@ export function createOrchestrator(
   options?: { entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
     /** devices-4a 4.3: where each new session's token comes from (the host, over IPC). Without it a session gets none (tests). */
     host?: Pick<HostApi, 'issueSessionToken'>;
+    /** The launcher this Bot wrote for its sessions (agent/session-cli.ts); without one a session's PATH stays as it was. */
+    sessionCli?: string;
     /** A shutdown's two waits (owner 2026-11-02); tests shorten them. */
     shutdownTiming?: { interruptGraceMs?: number; drainMs?: number } },
 ): Orchestrator {
   const entries = options?.entries;
   const host = options?.host;
+  const sessionCli = options?.sessionCli;
   const memory = options?.memory;
   const bindingBot = options?.bot ? { ...options.bot } : undefined;
   /** Lazily-constructed backends by id — one instance per backend for the whole
@@ -1455,7 +1459,7 @@ export function createOrchestrator(
   /**
    * The token a new session's `vonvon` commands carry (devices 5.3), in place of the bare marker, and beside it the
    * `--scope` its command line copies: a group's reach is its group, a comment's the bot. A private chat has one reach
-   * and needs no `--scope` (dm-agent 6.1).
+   * and needs no `--scope` (dm-agent 6.1); it sees every Bot, so its command line is told which one is its own.
    */
   async function sessionEnv(api: Pick<HostApi, 'issueSessionToken'>, sessionId: string, place: AgentPlace): Promise<Record<string, string>> {
     const chatId = place.kind !== 'doc' && place.chatId ? place.chatId : undefined;
@@ -1463,7 +1467,7 @@ export function createOrchestrator(
       appId: cfg.accounts.app.id, place: place.kind === 'p2p' ? 'dm' : place.kind === 'group' ? 'group' : 'comment', sessionId,
       ...(chatId ? { chatId } : {}),
     });
-    return place.kind === 'p2p' ? { [SESSION_ENV]: token } : { [SESSION_ENV]: token, [SESSION_SCOPE_ENV]: sessionScope(cfg.accounts.app.id, place.kind === 'group' ? chatId : undefined) };
+    return place.kind === 'p2p' ? { [SESSION_ENV]: token, [SESSION_BOT_ENV]: cfg.accounts.app.id } : { [SESSION_ENV]: token, [SESSION_SCOPE_ENV]: sessionScope(cfg.accounts.app.id, place.kind === 'group' ? chatId : undefined) };
   }
   /** Where a session of `chatId` runs: a private chat's row answers for a real p2p chat, so its token and its tools are a private chat's. */
   const sessionPlace = (project: Project | undefined, chatId: string): AgentPlace => ({ kind: project?.dm ? 'p2p' : 'group', chatId });
@@ -1489,7 +1493,9 @@ export function createOrchestrator(
       try {
         // devices 5.3: the session's shell gets its token, never the bare marker; no token, no session (the host is gone).
         const session = entry && host ? await sessionEnv(host, entry.sessionId, place) : undefined;
-        thread = await create({...opts, ...(entry ? {entry} : {}), ...(session ? {profile: withSessionEnv(opts.profile, session)} : {})});
+        // Every session finds `vonvon`, whichever Provider and place (dm-agent 9).
+        const env = { ...(sessionCli ? sessionCliEnv(sessionCli) : {}), ...session };
+        thread = await create({...opts, ...(entry ? {entry} : {}), ...(Object.keys(env).length ? {profile: withSessionEnv(opts.profile, env)} : {})});
         entry?.attach(thread);
       }
       catch (error) { entry?.revoke('start-failed'); throw error; }

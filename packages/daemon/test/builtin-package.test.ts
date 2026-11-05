@@ -72,6 +72,16 @@ describe('builtin capability package', () => {
     expect(await ensureBuiltinPackage('example', 'group', [])).toEqual({ path: first.path, changed: true });
     expect((await stat(first.path)).isDirectory()).toBe(true);
   });
+  // dm-agent 9: `vonvon-feishu` took over from `vonvon-feishu-message`; an upgraded Bot must not keep offering both.
+  it.each(['group', 'dm'] as const)('drops the old Feishu skill from an upgraded %s package', async set => {
+    const { ensureBuiltinPackage } = await setup();
+    const { builtinSkillsOfSet } = await import('../src/agent/builtin-skills/registry');
+    const { path } = await ensureBuiltinPackage('example', set, [...builtinSkillsOfSet('group').slice(0, 1), { name: 'vonvon-feishu-message', title: 't', description: 'old', body: 'old' }]);
+    const old = join(path, 'skills', 'vonvon-feishu-message', 'SKILL.md');
+    expect(await ensureBuiltinPackage('example', set, builtinSkillsOfSet(set))).toEqual({ path, changed: true });
+    await expect(stat(old)).rejects.toMatchObject({ code: 'ENOENT' });
+    for (const skill of builtinSkillsOfSet(set)) expect(await readFile(join(path, 'skills', skill.name, 'SKILL.md'), 'utf8')).toContain(skill.name);
+  });
   // s1b: the files are read-only, and one a person made writable and changed is written over by the next session.
   it('writes a hand-edited SKILL.md over again, read-only', async () => {
     const { ensureBuiltinPackage, skill } = await setup();

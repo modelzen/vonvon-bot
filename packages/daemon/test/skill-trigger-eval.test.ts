@@ -34,7 +34,7 @@ describe('the skill trigger eval', () => {
 
   it('passes a negative case only when the run was seen through and opened nothing', async () => {
     expect(await runCase('codex', backend({ type: 'done' }), profile, negative, {}, rollout())).toMatchObject({ observed: true, verdict: 'ok' });
-    expect(await runCase('codex', backend({ type: 'done' }), profile, negative, {}, rollout({ opened: ['vonvon-feishu-message'] }))).toMatchObject({ verdict: 'miss' });
+    expect(await runCase('codex', backend({ type: 'done' }), profile, negative, {}, rollout({ opened: ['vonvon-feishu'] }))).toMatchObject({ verdict: 'miss' });
     expect(await runCase('codex', backend({ type: 'done' }), profile, positive, {}, rollout({ opened: ['vonvon-schedule'] }))).toMatchObject({ verdict: 'ok' });
     expect(await runCase('codex', backend({ type: 'done' }), profile, positive, {}, rollout())).toMatchObject({ verdict: 'miss' });
     let handler: ((message: SDKMessage) => void) | undefined;
@@ -52,6 +52,6 @@ describe('the skill trigger eval', () => {
     expect(verdictOf(null, ['vonvon-schedule'], 'error: x', false)).toBe('miss');
     expect(verdictOf('vonvon-schedule', ['vonvon-schedule'], 'timeout', false)).toBe('ok');
     expect(verdictOf('vonvon-schedule', [], 'timeout', true)).toBe('invalid');
-    expect(verdictOf('vonvon-schedule', ['vonvon-feishu-message'], 'stopped-after-skill', true)).toBe('miss');
+    expect(verdictOf('vonvon-schedule', ['vonvon-feishu'], 'stopped-after-skill', true)).toBe('miss');
   });
 });

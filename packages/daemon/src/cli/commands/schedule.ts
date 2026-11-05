@@ -9,7 +9,7 @@ export type ScheduleTarget = {
   every?: string; daily?: string; weekly?: string; at?: string; cron?: string;
 };
 
-const NOT_FOUND = '本群没有这个任务。';
+const NOT_FOUND = '这里没有这个任务。';
 const WHEN_FORMS = '--every 30m、--daily 09:00、--weekly mon,wed@10:00、--at "2026-11-01 14:00" 或 --cron "0 9 * * 1-5"';
 const later = (what: string): string => `可能已经${what}，运行 vonvon schedule list 查看。`;
 /** What each action is called in errors, the reply it expects, and what a lost reply may have done. */

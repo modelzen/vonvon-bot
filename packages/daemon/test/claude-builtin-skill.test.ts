@@ -58,7 +58,7 @@ it.each([['qa', undefined], ['write', undefined], ['full', undefined], ['qa', { 
       expect(options.plugins).toEqual([{ type: 'local', path: PACKAGE, skipMcpDiscovery: true }]);
       expect(options.settings).toMatchObject({ ...AUTO_COMPACT_SETTINGS, enabledPlugins: { 'vonvon@inline': true } });
       if (native) expect(options.settings).toHaveProperty('plansDirectory');
-      expect(options.skills).toEqual(['own-skill', 'vonvon:vonvon-schedule', 'vonvon:vonvon-feishu-message']);
+      expect(options.skills).toEqual(['own-skill', 'vonvon:vonvon-schedule', 'vonvon:vonvon-feishu', 'vonvon:vonvon-config']);
     }
   });
 
@@ -70,6 +70,13 @@ it.each(['qa', 'write', 'full'] as const)('hands over none of it without the pac
     expect(options.settings).toEqual(AUTO_COMPACT_SETTINGS);
     expect(options.skills).toEqual(['own-skill']);
   }
+});
+
+// dm-agent 9: the launcher's PATH replaces the process's, and comes after what the session must not lose.
+it.each(['start', 'resume'] as const)('hands a session\'s PATH and VONVON_CLI to the Claude process on %s', async action => {
+  const env = { PATH: '/data/bin:/usr/bin', VONVON_CLI: '/data/bin/vonvon' };
+  const options = await open(fixture(), action, { ...profile(true), env }, 'full');
+  expect(options.env).toMatchObject({ ...env, CLAUDE_CODE_DISABLE_CRON: '1', FEISHU_CODEX_BRIDGE: '1' });
 });
 
 it('adds no whitelist where the group has none, so every skill stays listed', async () => {

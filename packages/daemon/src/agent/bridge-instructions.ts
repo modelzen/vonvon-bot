@@ -1,4 +1,4 @@
-/** The one line on files every turn keeps (s1b): the rest of how a reply renders is the vonvon-feishu-message skill's. */
+/** The one line on files every turn keeps (s1b): the rest of how a reply renders is the vonvon-feishu skill's. */
 export const FILE_DELIVERY = '要把本地文件给用户，就写 [文件名](绝对路径)，vonvon 会发附件；不要用飞书 CLI 或接口去上传。';
 
 /**
@@ -15,7 +15,7 @@ export const MEMORY_CONVENTION = [
  * Bridge-scoped developer guidance, injected ONLY into threads this bridge starts (never the user's own codex/claude
  * usage), and only what every turn must keep (s1b, owner 2026-11-02): that the reply becomes a Feishu message, the
  * privacy red lines, the memory convention, which settings update counts, and one line on files. How cards, pictures,
- * files and layout render is the `vonvon-feishu-message` skill's (builtin-skills/feishu-message.ts), which a group's
+ * files and layout render is the `vonvon-feishu` skill's (builtin-skills/feishu.ts), which a group's
  * session opens when it needs it; the file line stays here because lark-cli's own skills also teach "sending a file",
  * and a model that did not open vonvon's would upload as the owner. Claude Code and Codex list each skill's name and
  * description themselves, so the skills are not named here. Shared verbatim by every backend — codex passes it as

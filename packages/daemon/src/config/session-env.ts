@@ -9,6 +9,13 @@ export const SESSION_ENV = 'VONVON_SESSION';
  * whatever it says.
  */
 export const SESSION_SCOPE_ENV = 'VONVON_SCOPE';
+/**
+ * The Bot a private chat's session belongs to. It reads every Bot (dm-agent 6.1), so its command line needs telling which
+ * one a command with no `--bot` means: itself. Not a permission, like {@link SESSION_SCOPE_ENV}.
+ */
+export const SESSION_BOT_ENV = 'VONVON_BOT';
+/** The full path of the launcher `<data>/bin/vonvon` (agent/session-cli.ts), for a shell whose PATH lost it. */
+export const SESSION_CLI_ENV = 'VONVON_CLI';
 /** `bot=<appId>` in a comment, `bot=<appId>,group=<chatId>` in a group: the most a session reaches. A private chat gets none (dm-agent 6.1). */
 export function sessionScope(appId: string, chatId?: string): string {
   return chatId ? `bot=${appId},group=${chatId}` : `bot=${appId}`;
@@ -26,6 +33,6 @@ export function inBotSession(env: NodeJS.ProcessEnv = process.env): boolean {
  * and the command line refuses its own internal commands where it sees them (devices-4a 4.9).
  */
 export function withoutSessionMarkers(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const { [SESSION_ENV]: _session, [SESSION_SCOPE_ENV]: _scope, FEISHU_CODEX_BRIDGE: _bridge, ...rest } = env;
+  const { [SESSION_ENV]: _session, [SESSION_SCOPE_ENV]: _scope, [SESSION_BOT_ENV]: _bot, FEISHU_CODEX_BRIDGE: _bridge, ...rest } = env;
   return rest;
 }
