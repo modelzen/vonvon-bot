@@ -3,7 +3,8 @@ import type { JoinedGroups } from '../../admin/groups';
 import { feishuGroups, type FeishuMembers } from '../../admin/structured-commands';
 import type { MemoryWriter } from '../../bot/memory-writer';
 import type { ScheduleCommands } from '../../admin/schedule-commands';
-import type { FeishuReader } from '../../feishu-read/reader';
+import type { FeishuReader, FeishuReadReply } from '../../feishu-read/reader';
+import type { RoutedApi, RoutedRead } from '../../admin/feishu-route';
 import type { PermissionMode } from '../types';
 import { createFeishuTools } from './feishu-tools';
 import { createMemoryTools } from './memory-tools';
@@ -19,6 +20,9 @@ export function createCommandTools(deps: {
   feishu?: FeishuReader;
   /** A group's permission tier now: feishu_doc_edit goes round the sandbox, so it checks itself (dm-agent 7.2). */
   groupTier?(chatId: string): Promise<PermissionMode | undefined>;
+  /** A private chat's Feishu reads, through the host to whichever Bot it picks (dm-agent 7.3). */
+  route?(bot: string | undefined, request: RoutedRead): Promise<FeishuReadReply>;
+  routeApi?(bot: string, request: RoutedApi): Promise<FeishuReadReply>;
   /** 给了就多注册 memory_add / memory_update / memory_forget / memory_list（§3.3） */
   memory?: MemoryWriter;
   /** 给了就多注册 schedule_* 七个工具（定时任务总设计第 10 节） */

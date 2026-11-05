@@ -17,7 +17,6 @@ export interface ApiRequest {
   path: string;
   params?: Record<string, ApiValue | ApiValue[]>;
   body?: Record<string, unknown>;
-  bot?: string;
 }
 /** Feishu's text, or where a binary answer was saved. */
 export type ApiResult = string | { path: string; name: string; bytes: number; contentType?: string };
@@ -36,10 +35,8 @@ const refused = (message: string): FeishuReadRefused => new FeishuReadRefused(me
 /** Feishu's text unchanged but for vonvon's own markers, the boundary every read has (cleanText would also redo its white space). */
 const textOf = (body: Buffer): string => escapeInboundMarkers(body.subarray(0, TEXT_BYTES).toString('utf8'));
 
-/** Only the session's Bot until F2 routes `bot` to another one's process. */
-function thisBot(deps: ReadDeps, bot: string | undefined): void {
-  if (bot && bot !== deps.app.id && bot !== deps.channel.botIdentity?.name) throw refused('现在只能用当前这个 Bot 的身份调，不能换别的 Bot。');
-}
+/** Whether `bot` is surely the one this process is. A name may be another's too: that is the host's to tell, as for any other Bot (dm-agent 7.3). */
+export const isThisBot = (deps: ReadDeps, bot: string): boolean => bot === deps.app.id;
 
 /** `path` as it may be sent: the host stays this Bot's tenant's, because the SDK only takes a URL as it is from `http`. */
 export function checkedPath(path: string): string {
@@ -88,7 +85,7 @@ function failureOf(deps: ReadDeps, request: ApiRequest, failure: unknown): Feish
   const { response, message } = failure as { response?: { data?: unknown; status?: number }; message?: unknown };
   if (typeof message === 'string' && message.includes('maxContentLength')) return refused(`响应超过 ${MAX_FILE_BYTES / 1024 / 1024} MB 上限，存不下。缩小范围再调。`);
   // The SDK gets its token first, and says so when it cannot: the call itself never went out.
-  if (typeof message === 'string' && message.startsWith('failed to get ')) return refused(`没拿到这个 Bot 的飞书令牌，这次调用没有发出去。飞书的原话：${message}`);
+  if (typeof message === 'string' && message.startsWith('failed to get ')) return refused(`没拿到 Bot「${denialContext(deps).botName()}」的飞书令牌，这次调用没有发出去。飞书的原话：${message}`);
   if (response) return failed(deps, request, bodyOf(response.data), response.status);
   log.warn('feishu-read', 'api-failed', { method: request.method, err: String(failure) });
   return noAnswer(request);
@@ -121,7 +118,6 @@ async function saved(body: Buffer, headers: unknown): Promise<ApiResult> {
 }
 
 export async function callApi(deps: ReadDeps, request: ApiRequest, beforeSend: () => void = () => undefined): Promise<ApiResult> {
-  thisBot(deps, request.bot);
   const url = checkedPath(request.path);
   const { method, params, body } = request;
   beforeSend();

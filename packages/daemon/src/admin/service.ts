@@ -2,7 +2,10 @@ import { pendingGroupsFile, readPendingGroups, type PendingGroup } from '../proj
 import type { CollaborationRequest } from './collaboration';
 import {runtimeDistribution} from '../service/distribution';
 import { createSettingsService } from './settings-service';
-import { admitLibraryWorkspace, createHostLibrary, type AdminLibraryOp, type HostLibrary } from './library';
+import { admitLibraryWorkspace, botLabel, createHostLibrary, type AdminLibraryOp, type HostLibrary } from './library';
+import { routeFeishuApi, routeFeishuRead, type FeishuReach } from './feishu-route';
+import type { ApiRequest } from '../feishu-read/api';
+import type { FeishuReadReply, FeishuReadRequest } from '../feishu-read/reader';
 import { isProjectId, readLibrary } from '../project/library';
 import { projectRevision, projectView } from './collaboration';
 import { AdminWriteError } from './ops';
@@ -133,6 +136,10 @@ export interface AdminService {
   pendingGroups?(botId: string): Promise<{ groups: PendingGroup[] }>;
   joinedGroups?(botId: string, cursor?: string): Promise<JoinedGroups>;
   groupMembers?(botId: string, chatId: string, cursor?: string): Promise<GroupMembers>;
+  /** dm-agent 7.3: a Feishu read, on the Bot `reach` comes to (admin/feishu-route.ts). Refusals are replies, not errors. */
+  feishuRead?(reach: FeishuReach, request: Omit<FeishuReadRequest, 'only'>): Promise<FeishuReadReply>;
+  /** dm-agent 7.6: `feishu_api` on the Bot named. A private chat's tool only, through the host: no RPC reaches it. */
+  feishuApi?(bot: string, request: ApiRequest): Promise<FeishuReadReply>;
   bindGroup?(botId: string, input: BindGroupInput): Promise<AdminProject>;
   getVoice(botId: string): Promise<VoiceView>;
   setVoice(botId: string, action: VoiceAction): Promise<void>;
@@ -472,6 +479,9 @@ export interface AdminServiceDeps {
   executeLibrary?: (botId: string, op: AdminLibraryOp) => Promise<unknown>;
   /** Forwards a scheduled-task request to the bot process; a bot that is not running replies `refused bot-not-running`. */
   executeSchedule?: (botId: string, actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
+  /** Runs a Feishu read in the bot's process, undefined when it has none: its answer is unchecked until the route parses it. */
+  executeFeishuRead?: (botId: string, request: FeishuReadRequest) => Promise<unknown>;
+  executeFeishuApi?: (botId: string, request: ApiRequest) => Promise<unknown>;
   /** Tells a running bot that its scopes look granted; it sends what it still owes its creator (dm-agent 第一次见面). */
   firstHello?: (botId: string) => Promise<void>;
   /** 实时运行状态（daemon 进程内：本进程 channel / 子进程 IPC）。返回 undefined
@@ -607,6 +617,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     return { running: false };
   }
 
+  const routeBots = async () => (await loadBots()).bots.map(bot => ({ id: bot.appId, label: botLabel(bot), name: bot.name }));
   async function runState(botId: string): Promise<BotLiveStatus> {
     const live = await deps.liveStatus?.(botId).catch(() => undefined);
     return live ?? lockFileRunState(botId);
@@ -713,6 +724,21 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async groupMembers(botId, chatId, cursor) {
       if (!deps.executeGroups) throw new NotWiredYetError('群成员');
       return parseGroupMembers(await deps.executeGroups(botId, { kind: 'groupMembers', chatId, cursor }));
+    },
+    async feishuApi(bot, request) {
+      const execute = deps.executeFeishuApi;
+      if (!execute) throw new NotWiredYetError('飞书接口');
+      return routeFeishuApi({ bots: routeBots, execute }, bot, request);
+    },
+    async feishuRead(reach, request) {
+      const execute = deps.executeFeishuRead;
+      if (!execute) throw new NotWiredYetError('飞书读取');
+      return routeFeishuRead({
+        bots: routeBots,
+        chats: async botId => (await listProjectsIn(botPaths(botId).projectsFile)).map(project => project.chatId),
+        running: async botId => (await runState(botId)).running,
+        execute,
+      }, reach, request);
     },
     async bindGroup(botId, input) {
       if (!deps.executeGroups) throw new NotWiredYetError('绑定群聊');
