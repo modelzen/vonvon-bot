@@ -34,14 +34,34 @@ describe('writing project memory', () => {
     expect(add({ place: 'dm' }, 'x', { project: 'prj_00000002' })).toMatchObject({ allow: true, scope: { projectId: 'prj_00000002' } });
     expect(add({ place: 'dm' }, 'x', { project: 'prj_00000009' })).toEqual({ allow: false, reason: 'not-allowed-here' });
   });
-  it('has no project to write to for a group without one, or a DM with several', () => {
+  it('has no project to write to for a group without one', () => {
     expect(add({}, 'x', undefined, 'tool', {})).toEqual({ allow: false, reason: 'no-project' });
-    expect(add({ place: 'dm' }, 'x', 'project')).toEqual({ allow: false, reason: 'no-project' });
-    expect(add({ place: 'dm' }, 'x', 'project', 'tool', { botProjectIds: ['prj_00000003'] })).toMatchObject({ allow: true, scope: { projectId: 'prj_00000003' } });
   });
   it('refuses a comment, and a turn that is no longer the running one', () => {
     expect(add({ place: 'comment' })).toEqual({ allow: false, reason: 'not-allowed-here' });
     expect(add({ active: false })).toEqual({ allow: false, reason: 'not-allowed-here' });
+  });
+});
+
+describe('writing private-chat memory (dm-agent 5)', () => {
+  const own = { kind: 'dm', openId: 'ou_owner' };
+  it('lands in the person\'s own memory unless a project is named, a hidden block too', () => {
+    expect(add({ place: 'dm' }, 'x')).toMatchObject({ allow: true, scope: own, trust: 'trusted', actorOpenId: 'ou_owner' });
+    expect(add({ place: 'dm' }, 'x', 'dm')).toMatchObject({ allow: true, scope: own });
+    expect(add({ place: 'dm' }, 'x', undefined, 'hidden_block')).toMatchObject({ allow: true, scope: own });
+    // main 必败: with one bound project a private word went to a memory the groups read
+    expect(add({ place: 'dm' }, 'x', 'project', 'tool', { botProjectIds: ['prj_00000003'] })).toMatchObject({ allow: true, scope: own });
+  });
+  it('stays here when the Bot memory gate fails, with the reason', () => {
+    expect(add({ place: 'dm', typed: false }, 'x', 'bot')).toMatchObject({ allow: true, scope: own, downgraded: 'not-typed' });
+  });
+  it('marks what no person said as the bot\'s own, and refuses a turn with no person', () => {
+    expect(add({ place: 'dm', kind: 'initiative' })).toMatchObject({ allow: true, scope: own, trust: 'untrusted', actorRole: 'bot' });
+    expect(add({ place: 'dm', openId: undefined })).toEqual({ allow: false, reason: 'not-allowed-here' });
+  });
+  it('is nobody\'s in a group or a comment', () => {
+    expect(add({}, 'x', 'dm')).toEqual({ allow: false, reason: 'not-allowed-here' });
+    expect(add({ place: 'comment' }, 'x', 'dm')).toEqual({ allow: false, reason: 'not-allowed-here' });
   });
 });
 

@@ -122,7 +122,7 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
   // (groupMemoryReply); the files' export and an entry's history, with its authors and earlier texts, are a private chat's.
   ...rows('memory', 'list add edit archive', { dm: 'bot', group: 'bot', comment: 'deny' }),
   ...rows('memory', 'export events', DM_READ),
-  ...rows('memory', 'restore promote move branchRename branchMerge branchDelete confirm purge undo reseal seen newCounts'),
+  ...rows('memory', 'restore promote move branchRename branchMerge branchDelete confirm purge undo reseal seen newCounts dmPeople'),
   ...rows('contextPreview', 'get'),
   ...rows('schedule', 'list create edit pause resume delete runNow', { dm: 'not-group', group: 'bot', comment: 'not-group' }),
   ...rows('schedule', 'listBot', { dm: 'not-group', group: 'deny', comment: 'not-group' }),
@@ -434,6 +434,8 @@ function memoryInReach(request: MemoryRequest, principal: BotSessionPrincipal, s
   // s1b: a group session reads the entries as memory_list shows them, the authors and the archived ones left out.
   const ok: Decision = who === 'session' && principal.place === 'group'
     ? { ok: true, narrow: <T>(payload: T): T => groupMemoryReply(payload as MemoryReply) as T } : { ok: true };
+  // Who has a private chat with this bot: the owner's too, and only of the bot in reach.
+  if (request.type === 'dmPeople') return who === 'owner' && request.botId === principal.appId && scope?.group === undefined ? ok : outOfReach();
   // newCounts and seen name no memory: the owner's, and a session's row denies them.
   if (!('scope' in request)) return who === 'owner' ? ok : outOfReach();
   const projects = new Set(groups.flatMap(group => group.projectId ? [group.projectId] : []));
