@@ -14,6 +14,7 @@ import { isAdmin, type AppConfig } from '../config/schema';
 import { createCommandTools } from '../agent/entry/command-tools';
 import { createFeishuReader } from '../feishu-read/reader';
 import { createMemoryWriter } from './memory-writer';
+import { createFirstHello } from './first-hello';
 import { dmPersonOf, getProjectByChatId, listProjects } from '../project/registry';
 import { isProjectId } from '../project/library';
 import { createAgentEntries, type AgentEntries } from '../agent/entry/registry';
@@ -58,6 +59,8 @@ export interface BridgeHandle {
   settings: HostSettings;
   /** Scheduled tasks over the wire (admin/ipc.ts `AdminScheduleOp`), run as the local owner or a Bot session's turn. */
   schedule: (actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
+  /** Tries the first private message to the creator, when the bot still owes one; the host calls it once the scopes are in. */
+  firstHello: () => Promise<void>;
   /** Teardown: drop the long connection first, cut the running turns short and close every agent session (no orphan
    *  app-servers). `reason`, read as the cards end, says why on them. Idempotent enough for a signal handler. */
   shutdown: (reason?: () => StopReason) => Promise<void>;
@@ -114,6 +117,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   }) });
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
     { entries, memory, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}) });
+  const firstHello = createFirstHello({ cfg: opts.cfg, appSecret: opts.appSecret, channel, write: orchestrator.writePreferences });
   const roles = createAppRoleRefresher(app, opts.appSecret);
   await roles.refresh();
   let rolesStopped = false;
@@ -123,7 +127,8 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     const remaining = cached ? cached.fetchedAt + APP_ROLE_CACHE_MS - Date.now() : 0;
     // No fresh result (the last refresh failed, or none ever came): try again sooner, within the trust window (252-4).
     rolesTimer = setTimeout(() => {
-      void roles.refresh().then(() => { if (!rolesStopped) scheduleRoles(); });
+      // The same slow beat brings the bot's first hello: nothing tells a running process that the app was published.
+      void roles.refresh().then(() => { void firstHello.attempt(); if (!rolesStopped) scheduleRoles(); });
     }, remaining > 0 && remaining <= APP_ROLE_CACHE_MS ? remaining : APP_ROLE_RETRY_MS);
     rolesTimer.unref();
   };
@@ -134,6 +139,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   const shutdown = (reason?: () => StopReason): Promise<void> => {
     if (closing) return closing;
     rolesStopped = true;
+    firstHello.stop();
     clearTimeout(rolesTimer);
     const rolesClosing = roles.stop();
     // s18c: stop taking events first. One that comes after this is not acknowledged, so Feishu pushes it again to the
@@ -235,6 +241,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     orchestrator.replyDropped();
     // Scheduled runs post to Feishu: the tick starts once connected, after the crashed runs are recorded.
     await orchestrator.scheduler.start();
+    void firstHello.attempt();
 
     const executeGroup = createGroupExecutor(channel, identity, opts.cfg.preferences?.projectsRootDir);
     const adminGroups: BridgeHandle['adminGroups'] = op => {
@@ -244,7 +251,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       void task.then(() => groupTasks.delete(task), () => groupTasks.delete(task));
       return task;
     };
-    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, shutdown };
+    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, firstHello: firstHello.attempt, shutdown };
   } catch (error) {
     try { await shutdown(); }
     catch (cleanupError) {

@@ -213,6 +213,7 @@ describe('registerBotFromCredentials · ownerOpenId（扫码人 = owner+admin）
     const cfg = JSON.parse(readFileSync(botPaths('cli_owner123456').configFile, 'utf8'));
     expect(cfg.preferences.access.ownerOpenId).toBe('ou_scanner');
     expect(cfg.preferences.access.admins).toContain('ou_scanner');
+    expect(cfg.preferences.access.firstHelloPending).toBe(true); // the first hello is owed to a new bot only
   });
 
   it('ownerOpenId 为空 → 拒绝保存无人可管理的配置', async () => {
@@ -276,6 +277,15 @@ describe('targeted credential refresh', () => {
     expect(f.preserved.slice(0, 3).map(file => readFileSync(file, 'utf8'))).toEqual(f.before.slice(0, 3));
     expect(readFileSync(paths.secretsFile, 'utf8')).not.toContain('replacement');
     expect(JSON.stringify(result)).not.toContain('replacement');
+  });
+
+  it('does not make a greeted bot new again', async () => {
+    const f = await fixture();
+    const config = JSON.parse(readFileSync(f.files.configFile, 'utf8'));
+    delete config.preferences.access.firstHelloPending;
+    writeFileSync(f.files.configFile, JSON.stringify(config));
+    await refreshBotCredentials(f.appId, f.options, vi.fn(async () => f.creds), okValidate);
+    expect(JSON.parse(readFileSync(f.files.configFile, 'utf8')).preferences.access.firstHelloPending).toBeUndefined();
   });
 
   it.each(['wrong-app', 'wrong-tenant', 'abort', 'stale', 'rejected'] as const)('refuses %s without writing any encrypted data', async failure => {

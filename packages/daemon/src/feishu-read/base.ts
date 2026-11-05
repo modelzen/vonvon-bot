@@ -4,7 +4,8 @@ import { ask, jsonBytes, RESULT_BUDGET, type ReadDeps } from './shared';
 
 export interface BaseCondition { field: string; operator: string; value?: string[] }
 export interface BaseFilter { conjunction?: 'and' | 'or'; conditions: BaseCondition[] }
-export interface BaseRequest {
+export interface PageRequest { limit?: number; cursor?: string }
+export interface BaseRequest extends PageRequest {
   base: string;
   /** Without it: the tables if there is no table, else the records. */
   what?: 'tables' | 'fields' | 'views' | 'records';
@@ -12,15 +13,13 @@ export interface BaseRequest {
   view?: string;
   fields?: string[];
   filter?: BaseFilter;
-  limit?: number;
-  cursor?: string;
 }
 /** Items as Feishu gave them: what a cell holds depends on the field's type, and the model reads it as it is. */
 export interface BasePage { items: unknown[]; total?: number; cursor?: string }
 
 /** Feishu's page: the same size every time, so a cursor's place in one stays right whatever `limit` asks for next. */
 const PAGE_SIZE = 100;
-interface FeishuPage { code?: number; data?: { items?: unknown[]; has_more?: boolean; page_token?: string; total?: number } }
+export interface FeishuPage { code?: number; data?: { items?: unknown[]; has_more?: boolean; page_token?: string; total?: number } }
 
 /** A page may not fit one result, so the cursor is where in which Feishu page: `<items to skip>:<page_token>`. */
 function pagePlace(cursor: string | undefined): { skip: number; pageToken?: string } {
@@ -31,7 +30,7 @@ function pagePlace(cursor: string | undefined): { skip: number; pageToken?: stri
 }
 
 /** One Feishu page from the cursor's place, as much of it as fits. */
-async function pageOf(request: BaseRequest, call: (pageToken: string | undefined) => Promise<FeishuPage>): Promise<BasePage> {
+export async function pageOf(request: PageRequest, call: (pageToken: string | undefined) => Promise<FeishuPage>, tooBig = '这一条太大，一次读不完。读记录时用 fields 少读几列。'): Promise<BasePage> {
   const { skip, pageToken } = pagePlace(request.cursor);
   const data = (await call(pageToken)).data;
   const found = data?.items ?? [];
@@ -44,7 +43,7 @@ async function pageOf(request: BaseRequest, call: (pageToken: string | undefined
     const clean = cleanCell(found[index]);
     used += jsonBytes(clean);
     if (used > RESULT_BUDGET) {
-      if (!items.length) throw new FeishuReadRefused('这一条太大，一次读不完。读记录时用 fields 少读几列。');
+      if (!items.length) throw new FeishuReadRefused(tooBig);
       return { items, ...total, cursor: here(index) };
     }
     items.push(clean);

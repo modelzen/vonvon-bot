@@ -67,7 +67,7 @@ export type SessionAuthz =
   | { ok: true; role: 'owner' | 'admin' | 'member' | 'bot'; openId?: string; /** the person's union_id (dm-agent 6.4): what another Bot of the same developer can use */ unionId?: string; name?: string; actor?: Extract<ScheduleActor, { kind: 'session' | 'scheduled' | 'dm' }>; memory?: MemoryLanding }
   | { ok: false; reason: string; message: string };
 export type AdminSessionOp = { kind: 'authorizeSessionCall'; sessionId: string; action: SessionAction };
-export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | { kind: 'status' };
+export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | { kind: 'status' } | { kind: 'firstHello' };
 
 export interface AdminIpcRequest {
   fcb: typeof ADMIN_IPC_REQ;
