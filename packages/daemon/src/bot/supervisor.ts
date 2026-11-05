@@ -601,6 +601,10 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           if (!child?.enabled || child.pause || child.stopping || !child.proc || !child.ipc) return botNotRunning();
           return child.ipc.call({ kind: 'schedule', actor, request }) as Promise<ScheduleReply>;
         },
+        firstHello: async (botId) => {
+          const child = byAppId(botId);
+          if (child?.enabled && !child.pause && !child.stopping && child.proc && child.ipc) await child.ipc.call({ kind: 'firstHello' });
+        },
         executeSettingsRead: async (botId, op) => {
           const child = byAppId(botId);
           if (!child?.enabled || !child.proc || !child.ipc) throw new AdminWriteError('这个 Bot 没在运行');

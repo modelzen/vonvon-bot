@@ -38,7 +38,7 @@ export function allowedExternalUrl(value: string, kind: ExternalUrlKind): string
             !new Set(["/client/chat/open", "/client/thread/open"]).has(url.pathname)) return null;
         break;
       case "bot-chat":
-        if (url.hostname !== "applink.feishu.cn" || url.pathname !== "/client/bot/open" || !/^cli_[A-Za-z0-9_-]+$/.test(url.searchParams.get('appId') ?? '') || [...url.searchParams.keys()].some(key => key !== 'appId') || url.hash) return null;
+        if (!new Set(["applink.feishu.cn", "applink.larksuite.com"]).has(url.hostname) || url.pathname !== "/client/bot/open" || !/^cli_[A-Za-z0-9_-]+$/.test(url.searchParams.get('appId') ?? '') || [...url.searchParams.keys()].some(key => key !== 'appId') || url.hash) return null;
         break;
       case "releases":
         if (url.hostname !== "vonvon.cc" || url.pathname !== "/changelog/") return null;
@@ -95,6 +95,7 @@ export function groupUrl(groupId: string, threadId?: string): string {
   return `https://applink.feishu.cn/client/chat/open?openChatId=${group}`;
 }
 
-export function botChatUrl(botId: string): string {
-  return `https://applink.feishu.cn/client/bot/open?appId=${encodeURIComponent(botId)}`;
+/** The bot's private chat in the Feishu or Lark client. */
+export function botChatUrl(botId: string, tenant: "feishu" | "lark"): string {
+  return `https://applink.${tenant === "lark" ? "larksuite.com" : "feishu.cn"}/client/bot/open?appId=${encodeURIComponent(botId)}`;
 }
