@@ -3,7 +3,6 @@ import {BadgeRack, NowBotBadge} from './NowBotBadge';
 import {BOT_ACTIVITY_STALE_MS, BOT_LATEST_ACTION_SHOWN_MS, type Agent, type BotActivity, type BotLatestAction, type DesktopSnapshot, type Group, type Membership} from '@vonvon/protocol';
 import {GroupAvatar} from './GroupAvatar';
 import {BadgeName} from './BadgeName';
-import {GlowButton} from './GlowButton';
 import {nowGroupAttention} from './now-attention';
 import {badgeTenure} from './badge-content';
 import './now-bots.css';
@@ -53,8 +52,8 @@ export function nowBotLatestAction(agent: Agent, members: readonly Membership[],
   return members.some(member => member.agentId === agent.id && member.groupId === action.groupId && member.enabled === true && !member.stale) ? action : undefined;
 }
 
-export function NowBotList({snapshot, connected, onRegister, disabled, onChangeNumber}: {
-  snapshot: DesktopSnapshot; connected: boolean; onRegister: () => void; disabled: boolean;
+export function NowBotList({snapshot, connected, disabled, onChangeNumber}: {
+  snapshot: DesktopSnapshot; connected: boolean; disabled: boolean;
   onChangeNumber: (agentId: Agent['id'], value: string) => Promise<string | undefined>;
 }) {
   const [, tick] = useState(0);
@@ -82,7 +81,6 @@ export function NowBotList({snapshot, connected, onRegister, disabled, onChangeN
     return () => window.clearTimeout(timer);
   }, [snapshot, live, now]);
   return <section className="today-home-section now-bot-list" aria-label="你的 Bot">
-    <header><h2>你的 Bot</h2><GlowButton disabled={disabled} onClick={onRegister}>添加 Bot</GlowButton></header>
       {snapshot.agents.length ? <BadgeRack>{snapshot.agents.map((agent, index) => {
         const bindings = [...new Map(snapshot.memberships.filter(member => member.agentId === agent.id).map(member => [member.groupId, member])).values()];
         const confirmed = live && !agent.readError && bindings.every(member => !member.stale);
