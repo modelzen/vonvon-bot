@@ -64,9 +64,17 @@ export async function collaborationRpc(service: AdminService, directory: Directo
     return { kind: 'read', value: collaborationReplySchema.parse({ kind: 'providerModels', backend: request.backend, state: result.models.length ? 'ready' : 'unavailable', models: result.models, ...(result.message ? { message: result.message } : {}) }) };
   }
   if (request.action === 'usage') {
-    try { return { kind: 'read', value: collaborationReplySchema.parse({ kind: 'usage', data: await service.accountUsage(request.force) }) }; }
+    const claude = request.backend === 'claude-agent';
+    const provider = claude ? 'Claude' : 'Codex';
+    try { return { kind: 'read', value: collaborationReplySchema.parse({ kind: 'usage', data: await service.accountUsage(request.force, request.backend ?? 'codex-appserver') }) }; }
     catch (error) {
-      throw new RpcError(error instanceof UsageError ? 'usage_unavailable' : 'operation_failed', error instanceof UsageError ? usageErrorMessages(`${toolCommand('codex')} login`)[error.kind] : '读取 Codex 用量失败');
+      const messages: Record<UsageErrorKind, string> = claude ? {
+        'no-auth': '这台设备上没有可读取的 Claude 订阅凭据，请在该设备上运行 Claude Code 检查配置。',
+        'api-key-mode': '当前 Claude 用的是 API 接入，没有订阅额度可读。',
+        'need-relogin': `Claude 的订阅凭据过期了，在终端运行 \`${toolCommand('claude')}\` 更新配置后再看。`,
+        transient: '暂时无法读取 Claude 用量，请稍后重试。',
+      } : usageErrorMessages(`${toolCommand('codex')} login`);
+      throw new RpcError(error instanceof UsageError ? 'usage_unavailable' : 'operation_failed', error instanceof UsageError ? messages[error.kind] : `读取 ${provider} 用量失败`);
     }
   }
   await requireRunningAgent(service, request.agentId);
