@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -200,6 +200,16 @@ describe('ensureDmProject', () => {
     await ensure();
     expect(stored().map(row => row.chatId)).toEqual(['oc_demo', dmChatId(APP)]);
     expect((await listProjects()).map(row => row.name)).toEqual(['demo']);
+  });
+  it('brings a moved-away Bot folder back through its record, so a new group can still use it', async () => {
+    registered();
+    await ensure();
+    const bot = join(fixture.root, 'projects', 'jojo');
+    renameSync(bot, join(work, 'moved'));
+    await ensure();
+    expect(statSync(join(bot, 'dm')).isDirectory()).toBe(true);
+    const prepared = await withBotGroupBinding(botIdentity(entry), { chatId: 'oc_after', name: 'after', projectsRootDir: join(fixture.root, 'projects') }, scope => scope.prepareDefault());
+    expect(prepared.cwd.startsWith(bot)).toBe(true);
   });
   it('keeps the people and the settings on the next start, and works out no defaults', async () => {
     registered();
