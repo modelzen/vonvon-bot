@@ -1,0 +1,68 @@
+name: CI performance experiment
+on:
+  push:
+    branches: [codex/ci-performance-benchmark]
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: windows-baseline-1, os: windows-2025, workers: 1}
+          - {name: windows-candidate-2, os: windows-2025, workers: 2}
+          - {name: windows-candidate-2-repeat, os: windows-2025, workers: 2}
+          - {name: linux-baseline-2, os: ubuntu-latest, workers: 2}
+          - {name: linux-candidate-4, os: ubuntu-latest, workers: 4}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 43cbd167ee396c33decf6818ebb681dc01f4ff4e
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Measure unchanged daemon suite
+        shell: bash
+        env:
+          BENCHMARK_WORKERS: ${{ matrix.workers }}
+          BENCHMARK_NAME: ${{ matrix.name }}
+        run: |
+          node --input-type=module <<'JS'
+          import { spawnSync } from 'node:child_process';
+          import { writeFileSync } from 'node:fs';
+          import { availableParallelism } from 'node:os';
+          import { createPlan, packages } from './.github/scripts/ci-run.mjs';
+          const windows = process.platform === 'win32';
+          const plan = createPlan('full', packages);
+          const command = windows ? plan.find(c => c.executable === 'npm' && c.args[0] === '--workspace' && c.args[1] === 'packages/daemon' && c.args.includes('test')) : {args:['--workspace','packages/daemon','run','test','--']};
+          if (!command) throw new Error('Missing exact Windows daemon suite');
+          const args = [...command.args, '--maxWorkers=' + process.env.BENCHMARK_WORKERS];
+          const started = performance.now();
+          const result = spawnSync(windows ? 'npm.cmd' : 'npm', args, {shell:windows, encoding:'utf8', maxBuffer:64*1024*1024});
+          const wallSeconds = (performance.now() - started) / 1000;
+          const log = (result.stdout || '') + (result.stderr || '');
+          writeFileSync('benchmark-test.log', log);
+          const clean = log.replace(/\x1b\[[0-9;]*m/g, '');
+          const summary = clean.split(/\r?\n/).filter(l => /Test Files|Tests  |Duration/.test(l));
+          const report = {name:process.env.BENCHMARK_NAME, source:'43cbd167ee396c33decf6818ebb681dc01f4ff4e', platform:process.platform, cpus:availableParallelism(), node:process.version, workers:Number(process.env.BENCHMARK_WORKERS), args, status:result.status, signal:result.signal, wallSeconds, summary};
+          writeFileSync('benchmark-result.json', JSON.stringify(report,null,2));
+          console.log(JSON.stringify(report,null,2));
+          if (result.error) throw result.error;
+          process.exit(result.status ?? 1);
+          JS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            benchmark-result.json
+            benchmark-test.log
+          retention-days: 7
