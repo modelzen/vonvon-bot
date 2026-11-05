@@ -468,6 +468,8 @@ export interface AdminServiceDeps {
   executeLibrary?: (botId: string, op: AdminLibraryOp) => Promise<unknown>;
   /** Forwards a scheduled-task request to the bot process; a bot that is not running replies `refused bot-not-running`. */
   executeSchedule?: (botId: string, actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
+  /** Tells a running bot that its scopes look granted; it sends what it still owes its creator (dm-agent 第一次见面). */
+  firstHello?: (botId: string) => Promise<void>;
   /** 实时运行状态（daemon 进程内：本进程 channel / 子进程 IPC）。返回 undefined
    * 或缺省 → 回退锁文件探测（该 bot 不归本 daemon 管，如未激活的 bot）。 */
   liveStatus?: (botId: string) => Promise<BotLiveStatus | undefined>;
@@ -895,6 +897,10 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       // config.json 里的应用不是这个 Bot 的（文件被换过）也不写，免得把别的应用的名字记到它头上。
       if (validation.ok && entry && app.id === entry.appId && !deps.readonlyPreview) {
         await syncBotName('setup-status', botIdentity(entry), entry.botName, validation.botName);
+      }
+      // The client watches this while the user publishes, so the hello need not wait for the bot's own slow check.
+      if (validation.ok && validation.missingScopes?.length === 0 && cfg.preferences?.access?.firstHelloPending && !deps.readonlyPreview) {
+        void deps.firstHello?.(app.id).catch(() => undefined);
       }
 
       return {
