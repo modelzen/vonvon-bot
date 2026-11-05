@@ -32,7 +32,7 @@ const driveInput = z.object({ file: reference.describe('云空间文件的链接
 const docEditInput = z.object({ doc: reference.describe('文档或知识库页面的链接，或者它的 token'),
   action: z.enum(['append', 'insert', 'replace']).describe('append 追加到文末；insert 插到 block 后面；replace 换掉 pattern 或 block'),
   content: z.string().min(1).max(100_000).describe('新内容，Markdown'),
-  block: z.string().min(1).max(200).describe('块的 id，在 feishu_doc 的结果里。insert 时插在它后面，replace 时换掉整个块').optional(),
+  block: z.string().min(1).max(200).describe('块的 id，在 feishu_doc 的结果里，改过文档后要重新读一次。insert 时插在它后面，replace 时换掉整个块').optional(),
   pattern: z.string().min(1).max(2000).describe('replace 时要换掉的一段行内文字，不跨段；文档里每一处都会被换').optional() }).strict();
 const searchInput = z.object({ query: z.string().min(1).max(500), chat: chat.describe('只搜这个群的 chat_id；群会话里只搜本群').optional(), limit: limit(20).describe('一页几条，默认 20').optional(), cursor: cursor.optional() }).strict();
 
