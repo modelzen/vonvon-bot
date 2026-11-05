@@ -34,6 +34,9 @@ export const configSkill: BuiltinSkill = {
 - \`--dm\`：这个 Bot 的私聊，比如 \`vonvon settings get --dm\`、\`vonvon schedule list --dm\`。
 - 人的 id 按 Bot 分：往 Bot B 的名单里写人，用 \`vonvon feishu members <群> --bot B\` 查到的 id。
 
+## 写文字
+\`settings set\` 的值是 JSON 或普通文字。普通文字里的 \`\\n\` 不是换行，会原样存进去。要换行就写成带双引号的 JSON 字符串：\`vonvon settings set --group X smartRules.respond='"第一段\\n\\n第二段"'\`。
+
 ## 改完什么时候生效
 群设置改完下一轮生效。Skill 和 MCP 要等新会话。
 
