@@ -11,7 +11,7 @@ import { TOOL_RESULT_BYTES, type ToolContext } from '../src/agent/entry/tools';
 import type { AgentThread } from '../src/agent/types';
 import { createBridgeChannel, sdkLogger } from '../src/bot/bridge-channel';
 import { callApi, checkedPath, type ApiRequest } from '../src/feishu-read/api';
-import { AFTER_GRANT } from '../src/feishu-read/denial';
+import { AFTER_GRANT, FeishuReadRefused } from '../src/feishu-read/denial';
 import { createFeishuReader } from '../src/feishu-read/reader';
 
 vi.mock('../src/config/paths', async () => {
@@ -269,12 +269,13 @@ describe('through the real SDK', () => {
   const servers: Server[] = [];
   let apps = 0;
   afterEach(() => { for (const server of servers.splice(0)) server.close(); vi.restoreAllMocks(); });
-  async function feishu(answer: RequestListener, logger: ConstructorParameters<typeof Client>[0]['logger'] = sdkLogger) {
+  async function feishu(answer: RequestListener, logger: ConstructorParameters<typeof Client>[0]['logger'] = sdkLogger, token: { status?: number; body: object } = { body: { code: 0, tenant_access_token: TOKEN, expire: 7200 } }) {
     const seen: { url: string; authorization?: string; body: string }[] = [];
     const server = createServer((req: IncomingMessage, res) => {
       if (req.url?.includes('tenant_access_token')) {
+        res.statusCode = token.status ?? 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ code: 0, tenant_access_token: TOKEN, expire: 7200 }));
+        res.end(JSON.stringify(token.body));
         return;
       }
       const chunks: Buffer[] = [];
@@ -305,6 +306,29 @@ describe('through the real SDK', () => {
     const { deps } = await feishu(refusedJson(400, { code: 99991672, msg: 'required: [calendar:calendar:readonly]' }));
     await expect(callApi(deps, LIST)).rejects.toMatchObject({ kind: 'scope', message: expect.stringContaining('calendar%3Acalendar%3Areadonly') });
   });
+  // Codex 审查任务 351 必败: no answer, or "may have taken effect", for a call that never went out
+  it.each([
+    ['in an answer that went through', {}],
+    ['behind an HTTP error', { status: 401 }],
+  ])('says when it could not get its token, %s', async (_case, extra) => {
+    const { deps, seen } = await feishu(() => undefined, sdkLogger, { ...extra, body: { code: 10015, msg: 'wrong app secret' } });
+    const failure = await callApi(deps, { method: 'POST', path: '/open-apis/bitable/v1/apps/x/tables', body: {} }).catch((error: unknown) => error as Error);
+    expect(failure).toBeInstanceOf(FeishuReadRefused);
+    expect((failure as Error).message).toContain('wrong app secret');
+    expect((failure as Error).message).not.toContain('生效');
+    expect(seen).toHaveLength(0);
+  });
+
+  // Codex 审查任务 351 必败: told to share a document when the API was about a wiki space's settings
+  it('does not name a cause it cannot know for a permission any API may refuse', async () => {
+    const { deps } = await feishu(refusedJson(400, { code: 131006, msg: 'wiki space permission denied' }));
+    const failure = await callApi(deps, { method: 'PUT', path: '/open-apis/wiki/v2/spaces/s/setting', body: {} }).catch((error: unknown) => error as FeishuReadRefused);
+    expect(failure.message).toContain('wiki space permission denied');
+    expect(failure.message).toContain('别的情况');
+    expect(failure.message).not.toContain('这篇文档还没分享给 Bot');
+    expect(failure.kind).toBe('not-shared');
+  });
+
   it('keeps the bytes of a binary answer', async () => {
     const bytes = Buffer.from([0, 255, 1, 254, 2, 253]);
     const { deps } = await feishu((_req, res) => { res.setHeader('content-type', 'application/octet-stream'); res.end(bytes); });
