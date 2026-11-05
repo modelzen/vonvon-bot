@@ -49,14 +49,15 @@ export function AdministratorRows({view, readonly, busy, onRemove}: {view: Agent
 }
 
 /** The candidates first (the creator, whom Feishu names, who was turned away), then a group and one of its members. */
-function AddAdminDialog({agent, view, onPick, onClose, busy}: {
-  agent: Agent; view: AgentSettingsView; onPick: (openId: string) => void; onClose: () => void; busy: boolean;
+function AddAdminDialog({agent, view, onPick, onClose, busy, failure}: {
+  agent: Agent; view: AgentSettingsView; onPick: (openId: string) => void; onClose: () => void; busy: boolean; failure?: string;
 }) {
   const client = useClient();
   const [query, setQuery] = useState('');
   const [groups, setGroups] = useState<Listing<Group>>({kind: 'idle'});
   const [group, setGroup] = useState<string>();
   const [members, setMembers] = useState<Listing<Member>>({kind: 'idle'});
+  const membersRead = useRef(0);
   const listed = view.administrators.openIds;
   const match = (name: string) => !query.trim() || name.toLowerCase().includes(query.trim().toLowerCase());
   const loadGroups = useCallback(async (cursor?: string) => {
@@ -67,13 +68,16 @@ function AddAdminDialog({agent, view, onPick, onClose, busy}: {
       setGroups(previous => ({kind: 'ready', items: [...cursor && previous.kind === 'ready' ? previous.items : [], ...reply.groups.map(item => ({id: item.id, name: item.name}))], next: reply.nextCursor}));
     } catch (failure) { setGroups({kind: 'failed', message: failure instanceof Error ? failure.message : '无法读取飞书群。'}); }
   }, [client, agent.id]);
+  // Only the latest read may answer: a slower one for the group left behind would list its people under this one.
   const loadMembers = useCallback(async (groupId: string, cursor?: string) => {
+    const request = ++membersRead.current;
     setMembers(previous => cursor && previous.kind === 'ready' ? previous : {kind: 'loading'});
     try {
       const reply = await client.run({type: 'listGroupMembers', agentId: agent.id, groupId: groupIdSchema.parse(groupId), ...(cursor ? {cursor} : {})});
+      if (request !== membersRead.current) return;
       if (reply.kind !== 'members') throw new Error('message' in reply ? reply.message : '无法读取群成员。');
       setMembers(previous => ({kind: 'ready', items: [...cursor && previous.kind === 'ready' ? previous.items : [], ...reply.members], next: reply.nextCursor}));
-    } catch (failure) { setMembers({kind: 'failed', message: failure instanceof Error ? failure.message : '无法读取群成员。'}); }
+    } catch (failure) { if (request === membersRead.current) setMembers({kind: 'failed', message: failure instanceof Error ? failure.message : '无法读取群成员。'}); }
   }, [client, agent.id]);
   useEffect(() => { void loadGroups(); }, [loadGroups]);
   const candidates = (view.administrators.candidates ?? []).filter(item => match(item.name));
@@ -81,6 +85,7 @@ function AddAdminDialog({agent, view, onPick, onClose, busy}: {
   return <Dialog open size="md" title={<span className="admin-dialog-title">添加管理员<span className="admin-bot-title"><AgentAvatar agent={agent}/><span>{agent.name}</span></span></span>}
     onClose={busy ? undefined : onClose} footer={<Button disabled={busy} onClick={onClose}>关闭</Button>}>
     <div className="admin-dialog">
+      {failure && <InlineNotice tone="warning" title="没有添加成">{failure}</InlineNotice>}
       <input className="admin-search" aria-label="搜索" placeholder="搜索姓名" autoComplete="off" value={query} onChange={event => setQuery(event.target.value)}/>
       <h3>候选人</h3>
       <CandidateRows candidates={candidates} total={view.administrators.candidates?.length ?? 0} busy={busy} onPick={onPick}/>
@@ -91,7 +96,8 @@ function AddAdminDialog({agent, view, onPick, onClose, busy}: {
         <select aria-label="选择群" value={group ?? ''} onChange={event => {
           const next = event.target.value;
           setGroup(next || undefined);
-          if (next) void loadMembers(next); else setMembers({kind: 'idle'});
+          if (next) void loadMembers(next);
+          else { membersRead.current++; setMembers({kind: 'idle'}); }
         }}>
           <option value="">选择一个群</option>
           {groups.items.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
@@ -140,7 +146,8 @@ function BotAdministrators({agent}: {agent: Agent}) {
       const reply = await client.settings({type: 'act', action: {kind: 'adminMember', botId: agent.id, openId, membership, revision: view.administrators.revision}});
       const failure = errorText(reply);
       setMessage(failure);
-      if (!failure) await load();
+      // A refused write may be an old revision: the fresh one lets the next try go through.
+      await load();
       return !failure;
     } catch (failure) { setMessage(failure instanceof Error ? failure.message : '没有改成。'); return false; }
     finally { setBusy(false); }
@@ -148,13 +155,13 @@ function BotAdministrators({agent}: {agent: Agent}) {
   return <SettingsGroup className="admin-bot" label={<span className="admin-bot-title"><AgentAvatar agent={agent}/><span>{agent.name}</span></span>}
     action={<span className="admin-bot-actions">
       <IconButton size="sm" variant="ghost" label="重新读取" title="重新读取这个 Bot 的管理员" onClick={() => void load()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
-      <Button size="sm" disabled={!view || Boolean(readonly) || busy} title={readonly} onClick={() => { void load(); setAdding(true); }}>添加管理员</Button>
+      <Button size="sm" disabled={!view || Boolean(readonly) || busy} title={readonly} onClick={() => { setMessage(undefined); void load(); setAdding(true); }}>添加管理员</Button>
     </span>}
     footer={readonly ?? message}>
     {read.kind === 'loading' && <SettingsRow title="正在读取…"/>}
     {read.kind === 'failed' && <SettingsRow title="读取失败" description={read.message}/>}
     {view && <AdministratorRows view={view} readonly={readonly} busy={busy} onRemove={(openId, name) => setRemoving({openId, name})}/>}
-    {adding && view && <AddAdminDialog agent={agent} view={view} busy={busy} onClose={() => setAdding(false)} onPick={openId => void change(openId, 'present').then(done => { if (done) setAdding(false); })}/>}
+    {adding && view && <AddAdminDialog agent={agent} view={view} busy={busy} failure={message} onClose={() => setAdding(false)} onPick={openId => void change(openId, 'present').then(done => { if (done) setAdding(false); })}/>}
     <ConfirmDialog open={Boolean(removing)} title={removing ? `移除管理员「${removing.name}」？` : ''} tone="danger" confirmLabel="移除" pending={removing?.pending}
       description="这个人正在跑的私聊会停下，私聊定时任务会暂停。以后再加回来，暂停的任务也要手动恢复。"
       onCancel={() => setRemoving(undefined)}
