@@ -6,7 +6,7 @@
 
 管理员私聊 Bot 时，Agent 能换一个 Bot 的身份读飞书、调飞书接口；没写 `bot` 时，host 按群的绑定找 Bot，读不到时告诉它还有哪些 Bot。Agent 在 shell 里也能用 `vonvon feishu` 读，结果和工具一样。缺权限的回复写的是真正去读的那个 Bot 的名字和链接。
 
-依赖 F1、F3、F4、F5、F6（#716）、F7（#718）、C1（#715），都在基线里。
+依赖 F1、F3、F4、F5、F6（#716）、F7（#718）、C1（#715），都在基线里；C2（#719）也已 merge 进来。
 
 ## 2. 范围
 
@@ -72,7 +72,7 @@
 
 ## 9. 风险和行数
 
-产品代码约 730 行（+600 −133），测试约 700 行（+688 −16），另有这份计划。不超过约 1,500 行的审查上限（产品代码算），测试按模块看。风险在权限和进程边界一类，要多角度审查。最容易错的是 `feishu_api` 的 guard 过不了进程，和 `only` 被请求方带进来；第 8 节都列了。
+产品代码约 730 行（+600 −133），测试约 710 行（+690 −17），另有这份计划。不超过约 1,500 行的审查上限（产品代码算），测试按模块看。风险在权限和进程边界一类，要多角度审查。最容易错的是 `feishu_api` 的 guard 过不了进程，和 `only` 被请求方带进来；第 8 节都列了。
 
 ## PR 描述草稿
 
@@ -98,14 +98,14 @@
 
 ### 跑过的命令和结果
 
-JP-VPS，都用 `flock /tmp/vonvon-heavy.lock`，merge 完 F6、F7 之后的版本：
+JP-VPS，都用 `flock /tmp/vonvon-heavy.lock`，merge 完 F6、F7、C2 之后的版本（`ca5d293b`）：
 
 - `npm run typecheck`：`packages/protocol`、`packages/client`、`packages/ui`、`packages/desktop`、`packages/daemon` 都通过。
 - `npx vitest run`（`packages/protocol`）：改完 `rpc-kinds` 的数之后 17 个文件，122 条通过。
-- `npx vitest run`（`packages/daemon` 第一批 23 个文件，权限、IPC、工具、命令行、飞书读取）：624 条通过。
-- `npx vitest run`（`packages/daemon` 第二批 12 个文件，`s47-tools`、`comments`、`supervisor-*`、`schedule-rpc`、`cli-*` 等）：1 条失败，137 条通过。
+- `npx vitest run`（`packages/daemon` 第一批 23 个文件，权限、IPC、工具、命令行、飞书读取）：629 条通过。
+- `npx vitest run`（`packages/daemon` 第二批 15 个文件，`s47-tools`、`comments`、`supervisor-*`、`schedule-*`、`cli-*` 等）：1 条失败，216 条通过。
 - 失败的是 `T/bridge-session-memory.test.ts` 的 `counts each project once…`：普通成员私聊 `memory add --bot` 期望落到自己的记忆，实际被拒。这一片没碰它：在没有 F2 的集成分支上（临时 worktree）跑同一个文件，同样失败。原因是 C1 给私聊记忆的命令行加了 `dmTurn`，D3 的这条测试没跟着改。
-- `T/cli-json.test.ts`：2 条通过，151 秒。
+- `T/cli-json.test.ts`：2 条通过，150 秒。
 - 反证，改完马上还原：去掉跨 Bot 前的 `guard()`（4 条失败）；host 不查位置（4 条失败）；群的读取不带 `only`（1 条失败）；群能指定别的 Bot（1 条失败）；缺权限回复不写名字（2 条失败）。
 - lint：`packages/daemon` 没有 lint 脚本，没跑。
 
