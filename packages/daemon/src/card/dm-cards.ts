@@ -180,7 +180,7 @@ export function buildDmMenuCard(opts: { version?: string } = {}): CardObject {
   const { version } = opts;
   return card(
     [
-      md('私聊用于**建项目和管理**；具体任务请到项目群里 @我。'),
+      md('直接跟我说就行。这里是常用入口。'),
       hr(),
       // 两行按钮固定宽度、左对齐；两行宽度配平后总长相等、右边缘对齐（见 MENU_BTN_W_*）。
       actionsFixed([
