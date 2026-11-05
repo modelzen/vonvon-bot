@@ -101,11 +101,8 @@ const commentRow = (comment: DocComment, names: Names) => ({ id: comment.comment
 
 const COMMENT_TOO_BIG = '这一条评论太大，一次读不完。用 comment 只读这条的回复。';
 const COMMENT_TYPES: ReadonlySet<string> = new Set<CommentFileType>(['doc', 'docx', 'sheet', 'file', 'slides', 'bitable']);
-/** Links `parseRef` leaves as `other` that do have comments; a mind note has none. */
-const typeOfLink = (ref: DocRef, link: string): string | undefined => {
-  if (ref.kind !== 'other') return ref.kind && COMMENT_TYPES.has(ref.kind) ? ref.kind : undefined;
-  return /\/docs\//.test(link) ? 'doc' : /\/slides\//.test(link) ? 'slides' : undefined;
-};
+/** A mind note, a board and a minute have no comments here. */
+const typeOfLink = (ref: DocRef): string | undefined => ref.kind && COMMENT_TYPES.has(ref.kind) ? ref.kind : undefined;
 
 /** A document's comments, or one comment's replies. `type` is what a bare token is; a link and a knowledge-base page say. */
 export async function readComments(deps: ReadDeps, request: CommentsRequest): Promise<BasePage> {
@@ -130,7 +127,7 @@ export async function readComments(deps: ReadDeps, request: CommentsRequest): Pr
   };
   if (ref.kind === 'wiki') return fromNode();
   if (ref.kind) {
-    const type = typeOfLink(ref, request.doc);
+    const type = typeOfLink(ref);
     if (!type) throw new FeishuReadRefused('这个链接没有评论可读：给文档、表格、多维表格、幻灯片、云空间文件或知识库页面。');
     return list(type, ref.token);
   }

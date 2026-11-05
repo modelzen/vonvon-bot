@@ -108,6 +108,16 @@ const feishuTurnMessages = {
 function feishuRefused(reason: keyof typeof feishuTurnMessages): Failure {
   return { ok: false, code: 'refused', reason, message: feishuTurnMessages[reason] };
 }
+/** feishu_api's own sentences: nothing here is about settings or a document. */
+const feishuApiMessages = {
+  'unknown-origin': 'vonvon 认不出这次调用是哪一轮发起的，没有调飞书。请对方重新说一遍。',
+  'turn-ended': '发起这次调用的那一轮已经结束了，没有调飞书。请对方重新说一遍。',
+  'not-human-turn': '这一轮不是管理员发消息或管理员的定时任务触发的，不能调飞书接口。',
+  'not-admin': '只有管理员的私聊能调飞书接口。',
+};
+function feishuApiRefused(reason: keyof typeof feishuApiMessages): Failure {
+  return { ok: false, code: 'refused', reason, message: feishuApiMessages[reason] };
+}
 interface TurnAuth {
   id: number;
   facts: TurnFacts;
@@ -258,6 +268,15 @@ export function createAgentEntries(opts: {
     if (!auth) return feishuRefused('unknown-origin');
     if (!auth.active || grant.turn !== auth) return feishuRefused('turn-ended');
   }
+  /** feishu_api: the entry alive and this turn going, then {@link dmTurn} in its own words. The place is `places: ['p2p']`, looked at before this. */
+  function authorizeFeishuApi(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
+    if (grant.thread && !grant.thread.isAlive()) revoke(grant);
+    if (grant.phase === 'revoked') return failure('revoked');
+    if (!auth) return feishuApiRefused('unknown-origin');
+    if (!auth.active || grant.turn !== auth) return feishuApiRefused('turn-ended');
+    const refusal = dmTurn(auth);
+    return refusal && feishuApiRefused(refusal.reason === 'not-human-turn' ? 'not-human-turn' : 'not-admin');
+  }
   /** The tools' `ctx.admin` (a private chat's queries of its Bot's groups) and a private chat's requests through the command line. */
   function adminTurn(grant: Grant): Failure | undefined {
     const turn = grant.turn;
@@ -324,17 +343,18 @@ export function createAgentEntries(opts: {
       const memory = tool.class === 'memory';
       const schedule = tool.class === 'schedule';
       const document = tool.class === 'document' && (tool.writes === true || grant.place.kind === 'doc');
-      const gated = settings || memory || schedule || document;
+      const feishuApi = tool.class === 'feishu-api';
+      const gated = settings || memory || schedule || document || feishuApi;
       const taskId = schedule && args && typeof args === 'object' && 'taskId' in args ? args.taskId : undefined;
       // Claude's tool-use id, or the Codex turn id its turn/start answered with (定时任务 T3b): both noted by noteToolUse.
       const auth = origin?.toolUseId ? grant.origins.get(origin.toolUseId) : undefined;
       const authNow = (): Failure | undefined => memory ? authorizeMemory(grant, auth)
         : schedule ? authorizeSchedule(grant, auth, tool.action, taskId)
-          : document ? authorizeFeishu(grant, auth) : authorizeNow(grant, auth);
+          : document ? authorizeFeishu(grant, auth) : feishuApi ? authorizeFeishuApi(grant, auth) : authorizeNow(grant, auth);
       if (gated) {
         const refusal = authNow();
         const known = origin?.toolUseId && (grant.origins.has(origin.toolUseId) || grant.pruned.has(origin.toolUseId));
-        if (refusal?.reason === 'unknown-origin' && known) return finishLog(schedule ? scheduleRefused('turn-ended') : document ? feishuRefused('turn-ended') : refused('turn-ended'));
+        if (refusal?.reason === 'unknown-origin' && known) return finishLog(schedule ? scheduleRefused('turn-ended') : document ? feishuRefused('turn-ended') : feishuApi ? feishuApiRefused('turn-ended') : refused('turn-ended'));
         if (refusal) return finishLog(refusal);
         if (settings && grant.settingRunning && grant.queue.length >= 8) return finishLog(failure('busy'));
       }
@@ -372,7 +392,7 @@ export function createAgentEntries(opts: {
         const onTurnAbort = () => {
           if (committed) return;
           // 记忆类：插话也会触发这个信号，但那一轮没结束，只影响落点，不打断调用；任务类插话后只剩 list
-          if (memory || schedule || document) { const refusal = authNow(); if (refusal) stop(refusal); }
+          if (memory || schedule || document || feishuApi) { const refusal = authNow(); if (refusal) stop(refusal); }
           else stop(authNow() ?? refused('turn-ended'));
         };
         const timer = setTimeout(() => stop(failure('timeout')), Math.max(0, deadline - Date.now()));
@@ -433,7 +453,8 @@ export function createAgentEntries(opts: {
               log.fail('agent.tool-failed', error, { tool: name });
               settle(!committed ? failure('failed') : { ok: false, code: 'failed', message: schedule
                 ? '提交时出错，任务可能已经改了。先用 schedule_list 查一下，再决定要不要重试。'
-                : document ? '提交时出错，文档可能已经改了。先用 feishu_doc 读一下，再决定要不要重试。' : '提交时出错，设置可能已经改了。先查一下现在的设置，再决定要不要重试。' });
+                : document ? '提交时出错，文档可能已经改了。先用 feishu_doc 读一下，再决定要不要重试。'
+                  : feishuApi ? '调用时出错，这次调用可能已经生效了。先查一下，再决定要不要重试。' : '提交时出错，设置可能已经改了。先查一下现在的设置，再决定要不要重试。' });
             }
           }
         }

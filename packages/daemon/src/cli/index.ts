@@ -627,6 +627,14 @@ feishuRead('base <base>', "Read a multi-dimensional table's tables, fields, view
   .option('--fields <names>', 'Only these fields, comma separated').option('--filter <json>', 'Records to keep, as JSON: {"conjunction":"and","conditions":[{"field":"…","operator":"is","value":["…"]}]}').option(...FEISHU_LIMIT).option(...FEISHU_CURSOR)
   .action(async (base: string, options: FeishuOptions & { what?: string; table?: string; view?: string; fields?: string; filter?: string }) => { await readFeishu('feishu_base',
     { base, what: options.what, table: options.table, view: options.view, fields: options.fields?.split(','), filter: options.filter === undefined ? undefined : await (await import('./commands/feishu')).jsonArgument('--filter', options.filter), limit: options.limit, cursor: options.cursor }, options); });
+feishuRead('slides <slides>', 'Read a slide deck whole, as XML; give its link or token').option(...FEISHU_CURSOR)
+  .action((slides: string, options: FeishuOptions) => readFeishu('feishu_slides', { slides, cursor: options.cursor }, options));
+feishuRead('mindnote <mindnote>', 'Read a mind note, as indented text; give its link or token').option(...FEISHU_CURSOR)
+  .action((mindnote: string, options: FeishuOptions) => readFeishu('feishu_mindnote', { mindnote, cursor: options.cursor }, options));
+feishuRead('board <board>', "Read a whiteboard's text and links; give its link or token").option(...FEISHU_CURSOR)
+  .action((board: string, options: FeishuOptions) => readFeishu('feishu_board', { board, cursor: options.cursor }, options));
+feishuRead('minutes <minutes>', "Read a Minutes recording's details and transcript; give its link or token").option(...FEISHU_CURSOR)
+  .action((minutes: string, options: FeishuOptions) => readFeishu('feishu_minutes', { minutes, cursor: options.cursor }, options));
 feishuRead('drive <file>', 'Download a cloud-drive file, and print where it went; give its link or token').option(...FEISHU_NAME)
   .action((file: string, options: FeishuOptions) => readFeishu('feishu_drive_file', { file, name: options.name }, options));
 feishuRead('folder [folder]', "List a cloud-drive folder; give its link or token, or none for the bot's own root").option(...FEISHU_LIMIT).option(...FEISHU_CURSOR)

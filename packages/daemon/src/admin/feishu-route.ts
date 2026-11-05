@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { REFUSAL_KINDS } from '../feishu-read/denial';
+import type { ApiRequest } from '../feishu-read/api';
 import type { FeishuReadReply, FeishuReadRequest } from '../feishu-read/reader';
 import type { SessionTokens } from '../host/session-tokens';
 
@@ -8,6 +9,7 @@ import type { SessionTokens } from '../host/session-tokens';
  * itself and a read of what only another Bot can see goes to that Bot's process, which answers in its own name (7.5: its
  * link, its name to share with). A private chat's tools and `vonvon feishu` come through here; a group's and a comment's
  * tools read in their own process and never do. A group's command line comes with `bot` and `only` set by authz.
+ * `feishu_api` naming another Bot (7.6) comes here too, a private chat's only, and has no way in from the command line.
  */
 
 /**
@@ -26,11 +28,21 @@ export interface FeishuRouteDeps {
 }
 /** A session's read as its Bot process sends it to the host: `sessionId` is what the host checks. */
 export type RoutedRead = Omit<FeishuReadRequest, 'only'> & { sessionId: string };
+/** A session's `feishu_api` call on another Bot, the same way. */
+export interface RoutedApi { sessionId: string; request: ApiRequest }
+export interface FeishuApiRouteDeps extends Pick<FeishuRouteDeps, 'bots'> {
+  /** The call in that Bot's process; undefined when it has none. */
+  execute(botId: string, request: ApiRequest): Promise<unknown>;
+}
 
 export const feishuReadReplySchema: z.ZodType<FeishuReadReply> = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true), result: z.unknown() }).strict(),
   z.object({ ok: z.literal(false), kind: z.enum(REFUSAL_KINDS), message: z.string().min(1) }).strict(),
 ]);
+const apiValue = z.union([z.string(), z.number(), z.boolean()]);
+/** Its shape as it crosses processes; what may be sent is `checkedPath`'s, in the Bot that sends it. */
+export const apiRequestSchema: z.ZodType<ApiRequest> = z.object({ method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']), path: z.string().min(1).max(2000),
+  params: z.record(z.string(), z.union([apiValue, z.array(apiValue)])).optional(), body: z.record(z.string(), z.unknown()).optional() }).strict();
 
 const refused = (message: string, kind: Extract<FeishuReadReply, { ok: false }>['kind'] = 'other'): FeishuReadReply => ({ ok: false, kind, message });
 export const botNotRunning = (bot: string): string => `Bot ${bot} 没在运行。`;
@@ -73,22 +85,33 @@ async function othersLine(target: RouteBot, bots: readonly RouteBot[], deps: Fei
   return ` 这台电脑上还有别的 Bot：${shown.join('、')}。可以换一个读：工具写 bot 参数，命令行写 --bot。`;
 }
 
-/** Never throws for a read that did not happen: a Bot gone in the middle of it is an answer like any other refusal. */
+/** What a Bot's process answered: a Bot gone in the middle of it is an answer like any other refusal. */
+async function answerOf(target: RouteBot, ask: () => Promise<unknown>, lost: (cause: string) => string): Promise<FeishuReadReply> {
+  try {
+    const answer = await ask();
+    return answer === undefined ? refused(botNotRunning(target.label)) : feishuReadReplySchema.parse(answer);
+  } catch (error) {
+    return refused(lost(error instanceof Error ? error.message : String(error)), 'no-answer');
+  }
+}
+
+/** Never throws for a read that did not happen. */
 export async function routeFeishuRead(deps: FeishuRouteDeps, reach: FeishuReach, request: Omit<FeishuReadRequest, 'only'>): Promise<FeishuReadReply> {
   const bots = await deps.bots();
   const chat = typeof request.args.chat === 'string' ? request.args.chat : undefined;
   const target = await targetOf(reach, chat, bots, deps);
   if ('ok' in target) return target;
-  let reply: FeishuReadReply;
-  try {
-    const answer = await deps.execute(target.id, { ...request, ...(reach.only ? { only: reach.only } : {}) });
-    if (answer === undefined) return refused(botNotRunning(target.label));
-    reply = feishuReadReplySchema.parse(answer);
-  } catch (error) {
-    return refused(`Bot ${target.label} 这次没读成：${error instanceof Error ? error.message : String(error)}`, 'no-answer');
-  }
+  const reply = await answerOf(target, () => deps.execute(target.id, { ...request, ...(reach.only ? { only: reach.only } : {}) }), cause => `Bot ${target.label} 这次没读成：${cause}`);
   if (reply.ok || reach.bot !== undefined || target.id !== reach.prefer || !ANOTHER_MAY_READ.has(reply.kind)) return reply;
   return { ...reply, message: `${reply.message}${await othersLine(target, bots, deps)}` };
+}
+
+/** 7.6: the Bot named, or none. Only a GET surely changed nothing, so a lost answer says what it does not know, as the call itself does. */
+export async function routeFeishuApi(deps: FeishuApiRouteDeps, bot: string, request: ApiRequest): Promise<FeishuReadReply> {
+  const target = named(await deps.bots(), bot);
+  if ('ok' in target) return target;
+  return answerOf(target, () => deps.execute(target.id, request), cause => request.method === 'GET' ? `Bot ${target.label} 这次没调成：${cause}`
+    : `Bot ${target.label} 没有回话，不知道这次调用生效没有。先查一下，再决定要不要重试。`);
 }
 
 /**
@@ -96,9 +119,18 @@ export async function routeFeishuRead(deps: FeishuRouteDeps, reach: FeishuReach,
  * is checked again where a Bot process cannot speak for itself. The session must be one of this process's, a private
  * chat's, and still standing; a group's or a comment's never gets past this, whatever its process sends.
  */
-export async function hostFeishuRead(host: { appId: string; tokens: Pick<SessionTokens, 'session'>; read(reach: FeishuReach, request: Omit<FeishuReadRequest, 'only'>): Promise<FeishuReadReply> },
+export async function hostFeishuRead(host: DmHost & { read(reach: FeishuReach, request: Omit<FeishuReadRequest, 'only'>): Promise<FeishuReadReply> },
   bot: string | undefined, { sessionId, ...request }: RoutedRead): Promise<FeishuReadReply> {
-  const session = host.tokens.session(sessionId);
-  if (session?.appId !== host.appId || session.place !== 'dm') return refused(SESSION_REFUSED);
-  return host.read({ prefer: host.appId, ...(bot !== undefined ? { bot } : {}) }, request);
+  return inPrivateChat(host, sessionId) ? host.read({ prefer: host.appId, ...(bot !== undefined ? { bot } : {}) }, request) : refused(SESSION_REFUSED);
+}
+
+/** `feishu_api`'s: the same check. The turn was its tool's, under the commit guard (7.6). */
+export async function hostFeishuApi(host: DmHost & { api(bot: string, request: ApiRequest): Promise<FeishuReadReply> }, bot: string, { sessionId, request }: RoutedApi): Promise<FeishuReadReply> {
+  return inPrivateChat(host, sessionId) ? host.api(bot, request) : refused(SESSION_REFUSED);
+}
+
+interface DmHost { appId: string; tokens: Pick<SessionTokens, 'session'> }
+function inPrivateChat({ appId, tokens }: DmHost, sessionId: string): boolean {
+  const session = tokens.session(sessionId);
+  return session?.appId === appId && session.place === 'dm';
 }
