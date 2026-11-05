@@ -2,7 +2,7 @@ import {runtimeDistribution} from '../src/service/distribution';
 import { rmSync, existsSync } from 'node:fs';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, botDir, useBotDir } from '../src/config/paths';
-import { loadBots } from '../src/config/bots';
+import { ensureRegistry, loadBots } from '../src/config/bots';
 import { seedBots } from './helpers/bot-fixture';
 import { addProject } from '../src/project/registry';
 import { upsertSession } from '../src/bot/session-store';
@@ -98,6 +98,25 @@ beforeEach(async () => {
 
 afterAll(() => {
   rmSync(paths.appDir, { recursive: true, force: true });
+});
+
+it('persists unique badges on legacy registrations and serializes competing edits without a bot restart', async () => {
+  const service = createAdminService();
+  const {bots} = await ensureRegistry();
+  expect(bots).toHaveLength(2);
+  expect(new Set(bots.map(bot => bot.badgeNumber)).size).toBe(2);
+  expect(bots.every(bot => /^\d{1,7}$/.test(bot.badgeNumber ?? ''))).toBe(true);
+  expect((await ensureRegistry()).bots).toEqual(bots);
+
+  const [first, second] = await Promise.all([
+    service.setBotBadgeNumber(BOT_A, '0001234'),
+    service.setBotBadgeNumber(BOT_B, '0001234'),
+  ]);
+  expect(first).toEqual({ok: true});
+  expect(second).toEqual({ok: false, reason: '这个工号已有 Bot 使用。'});
+  expect(await service.setBotBadgeNumber(BOT_A, '00012345')).toMatchObject({ok: false});
+  expect((await loadBots()).bots[0]).toEqual({...bots[0], badgeNumber: '0001234'});
+  expect((await loadBots()).bots[1]).toEqual(bots[1]);
 });
 
 describe('V2 foreground status regression', () => {

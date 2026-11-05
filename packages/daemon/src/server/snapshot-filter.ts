@@ -49,7 +49,10 @@ export function filterSnapshot(snapshot: DesktopSnapshot, principal: BotSessionP
 
 /** What a Bot session reads of the daemon's state: a private chat's as {@link filterSnapshot} cuts it, a group's and a comment's far less. */
 export function sessionSnapshot(snapshot: DesktopSnapshot, principal: BotSessionPrincipal, scope: Scope | null): DesktopSnapshot {
-  return principal.place === 'dm' ? filterSnapshot(snapshot, principal, scope) : placeSnapshot(snapshot, principal);
+  if (principal.place !== 'dm') return placeSnapshot(snapshot, principal);
+  const shown = filterSnapshot(snapshot, principal, scope);
+  // The desktop badge labels the Feishu app owner. Keep that person's name out of bot-session CLI reads.
+  return { ...shown, agents: shown.agents.map(({ ownerName: _ownerName, ...agent }) => agent) };
 }
 
 /**

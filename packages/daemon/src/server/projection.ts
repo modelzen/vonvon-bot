@@ -14,7 +14,16 @@ export function projectState(state: AdminState, previous: DesktopSnapshot, pendi
     const agentId = agentIdSchema.parse(bot.appId);
     const duplicate = new Set(bot.projects.map(project => project.chatId)).size !== bot.projects.length;
     const readError = ('projectsError' in bot ? bot.projectsError : undefined) ?? (duplicate ? '同一个 Bot 存在冲突的群绑定，请在内核中修复。' : undefined);
-    agents.push({ id: agentId, name: bot.botName || bot.name, ...(bot.avatarDataUrl ? { avatarDataUrl: bot.avatarDataUrl } : {}), enabled: bot.active, running: bot.running, connection: bot.connection ?? (bot.running ? 'unknown' : 'disconnected'), activation: pending.has(bot.appId) || bot.active !== bot.running ? 'restartRequired' : 'active', ...(readError ? { readError } : {}) });
+    agents.push({
+      id: agentId, name: bot.botName || bot.name,
+      ...(bot.badgeNumber ? { badgeNumber: bot.badgeNumber } : {}),
+      ...(bot.registeredAt !== undefined ? { registeredAt: bot.registeredAt } : {}),
+      ...(bot.ownerName ? { ownerName: bot.ownerName } : {}),
+      ...(bot.avatarDataUrl ? { avatarDataUrl: bot.avatarDataUrl } : {}),
+      enabled: bot.active, running: bot.running, connection: bot.connection ?? (bot.running ? 'unknown' : 'disconnected'),
+      activation: pending.has(bot.appId) || bot.active !== bot.running ? 'restartRequired' : 'active',
+      ...(readError ? { readError } : {}),
+    });
     if (readError) {
       for (const member of previous.memberships.filter(member => member.agentId === bot.appId)) {
         memberships.push({ ...member, stale: true });
