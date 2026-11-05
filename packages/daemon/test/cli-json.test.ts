@@ -27,7 +27,7 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['memory', 'archive', 'x', '--revision', '1'], 2], [['memory', 'reseal'], 2], [['memory', 'branch-rename', 'a', 'b'], 2], [['memory', 'branch-merge', 'a', 'b'], 2],
   [['memory', 'events', 'x'], 2], [['memory', 'restore', 'x', '--revision', '1'], 2], [['memory', 'confirm', 'x', '--revision', '1'], 2],
   [['memory', 'promote', 'x', '--revision', '1'], 2], [['memory', 'move', 'x', '--revision', '1', '--to', 'p'], 2], [['memory', 'purge', 'x'], 2],
-  [['memory', 'undo', 'e'], 2], [['memory', 'branch-delete', 'a'], 2],
+  [['memory', 'undo', 'e'], 2], [['memory', 'branch-delete', 'a'], 2], [['memory', 'people'], 2],
   // C5: a write goes through the daemon only, so with none running it is 3; the old name of archive still works
   [['memory', 'add', 'x', '--project', 'p'], 3], [['memory', 'forget', 'x', '--revision', '1', '--project', 'p'], 3],
   // Codex review 251-1: given --scope, the reads that fall back to the files want the daemon instead (no project p: 2 without it)

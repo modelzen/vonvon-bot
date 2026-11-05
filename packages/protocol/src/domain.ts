@@ -138,17 +138,6 @@ export type HostState = z.infer<typeof hostStateSchema>;
  * the picture went out earlier on the same connection. The client library puts the picture back and drops this before
  * anyone reads the snapshot; a reader that does not know it sees no picture (0.9.0 Mac 验收: avatars over a slow link). */
 const avatarRef = z.string().optional();
-export const agentSchema = z.object({
-  id: agentIdSchema, name: z.string(), avatarDataUrl: z.string().optional(), avatarRef,
-  enabled: z.boolean(), running: z.boolean(), connection: z.string(),
-  activation: z.enum(["active", "restartRequired"]), readError: z.string().optional(),
-  /** The bot's recent not-replied messages and scope denials; absent when it has none. */
-  diagnostics: botDiagnosticsSchema.optional(),
-  /** This bot alone stopped restarting after 3 crashes in 10 minutes (s18a); absent from older daemons. */
-  paused: crashPauseSchema.optional(),
-  lockHeld: lockHeldSchema.optional(),
-});
-export type Agent = z.infer<typeof agentSchema>;
 /** A group directory an older version left in the wrong place (s36c2d): a bot's own directory, the projects root
  * itself, in the data directory outside `projects/`, or a folder above the data directory. */
 export const directoryProblemSchema = z.enum(["botRoot", "projectsRoot", "dataDir", "dataDirParent"]);
@@ -174,6 +163,20 @@ export const membershipSchema = z.object({
   stale: z.boolean(),
 });
 export type Membership = z.infer<typeof membershipSchema>;
+export const agentSchema = z.object({
+  id: agentIdSchema, name: z.string(), avatarDataUrl: z.string().optional(), avatarRef,
+  enabled: z.boolean(), running: z.boolean(), connection: z.string(),
+  activation: z.enum(["active", "restartRequired"]), readError: z.string().optional(),
+  /** The bot's recent not-replied messages and scope denials; absent when it has none. */
+  diagnostics: botDiagnosticsSchema.optional(),
+  /** This bot alone stopped restarting after 3 crashes in 10 minutes (s18a); absent from older daemons. */
+  paused: crashPauseSchema.optional(),
+  lockHeld: lockHeldSchema.optional(),
+  /** This Bot's private chat, with the synthetic group id `oc_dm_<appId>`. Beside `memberships`, so no group list, group
+   * directory or search picks it up; absent until the Bot has run once, and from older daemons. */
+  dm: membershipSchema.optional(),
+});
+export type Agent = z.infer<typeof agentSchema>;
 /** A library project and the bindings that share it, as the snapshot shows them. */
 export const snapshotProjectSchema = z.object({
   id: projectIdSchema, name: z.string(), revision: z.number().int().min(1),

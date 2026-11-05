@@ -31,9 +31,11 @@ import {
   type ResolvedCompletionReminderConfig,
 } from '../config/schema';
 import {
+  dmProject,
   noMentionOf,
   sessionModeOf,
   listProjectsIn,
+  type Project,
   type SessionMode,
 } from '../project/registry';
 import { isRetiredKey, listSessionsIn } from '../bot/session-store';
@@ -138,6 +140,8 @@ export interface AdminService {
   listBots(): Promise<AdminBot[]>;
   /** 某 bot 的项目列表（含话题数等聚合字段），对齐 DM 📁 项目列表。 */
   listProjects(botId: string): Promise<AdminProject[]>;
+  /** 这个 Bot 的私聊那一行，不在 listProjects 里；Bot 还没跑过时没有。 */
+  dmRow?(botId: string): Promise<AdminProject | undefined>;
   /** 单个项目详情；不存在返回 undefined。 */
   getProject(botId: string, name: string): Promise<AdminProject | undefined>;
   /** 🧠 切换项目后端（写）。与 DM dm.proj.backend.submit 同一套校验+落盘。 */
@@ -510,6 +514,30 @@ const MAX_PENDING_GROUPS = 1000;
  * 注册表/会话文件（复用 registry / session-store / store 模块的显式路径导出，
  * 不自己解析 JSON；不碰全局 currentBotDir）；写路径与实时状态由 deps 注入。
  */
+/** A project row with its effective values, before the counts and the avatar that depend on who is asking. */
+function adminRow(p: Project): Omit<AdminProject, 'sessionCount'> {
+  const permission = groupPermission(p);
+  return {
+    name: p.name,
+    enabled: p.enabled !== false,
+    chatId: p.chatId,
+    cwd: p.cwd,
+    ...(isProjectId(p.projectId) ? { projectId: p.projectId } : {}),
+    blank: p.blank,
+    branch: p.branch,
+    kind: sessionModeOf(p),
+    origin: p.origin ?? 'created',
+    noMention: noMentionOf(p),
+    mode: permission.effect.mode,
+    guestMode: permission.effect.mode,
+    network: permission.effect.network,
+    // What the group's sessions actually start on: its own backend, else Codex (s36d2).
+    backend: groupBackendId(p),
+    allowedUsersCount: p.allowedUsers?.length ?? 0,
+    createdAt: p.createdAt,
+  };
+}
+
 export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
   let activationQueue: Promise<unknown> = Promise.resolve();
   const codexTools = deps.codexTools ?? new CodexSetupService();
@@ -554,25 +582,9 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     const problems = await legacyDirectoryProblems(projects.map(p => p.cwd), await directoryContext(undefined, await configuredProjectsRoots(files.configFile)))
       .catch(() => projects.map(() => undefined));
     const result = projects.map((p, index) => ({
+      ...adminRow(p),
       avatarDataUrl: groupAvatars.get(botId, p.chatId),
-      name: p.name,
-      enabled: p.enabled !== false,
-      chatId: p.chatId,
-      cwd: p.cwd,
-      ...(isProjectId(p.projectId) ? { projectId: p.projectId } : {}),
-      blank: p.blank,
-      branch: p.branch,
-      kind: sessionModeOf(p),
-      origin: p.origin ?? 'created',
-      noMention: noMentionOf(p),
-      mode: groupPermission(p).effect.mode,
-      guestMode: groupPermission(p).effect.mode,
-      network: groupPermission(p).effect.network,
-      // What the group's sessions actually start on: its own backend, else Codex (s36d2).
-      backend: groupBackendId(p),
-      allowedUsersCount: p.allowedUsers?.length ?? 0,
       sessionCount: p.chatId ? (countByChat.get(p.chatId) ?? 0) : 0,
-      createdAt: p.createdAt,
       ...(problems[index] ? { directoryProblem: problems[index] } : {}),
     }));
     for (const project of projects) if (project.chatId) void groupAvatars.refresh(botId, project.chatId);
@@ -748,6 +760,15 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
 
     listProjects(botId: string): Promise<AdminProject[]> {
       return projectsWithCounts(botId);
+    },
+
+    async dmRow(botId: string): Promise<AdminProject | undefined> {
+      const files = botPaths(botId);
+      const row = await dmProject(files.projectsFile);
+      if (!row) return undefined;
+      const chats = new Set(Object.keys(row.dm?.people ?? {}));
+      const sessions = await listSessionsIn(files.sessionsFile);
+      return { ...adminRow(row), sessionCount: sessions.filter(session => chats.has(session.chatId) && !isRetiredKey(session.threadId)).length };
     },
 
     async getProject(botId: string, name: string): Promise<AdminProject | undefined> {

@@ -8,18 +8,22 @@ import {Button, InlineNotice} from './reference/components/ui';
 import {ConfirmDialog} from './reference/components/ui/Dialog';
 import {ScheduleForm} from './ScheduleForm';
 import {ScheduleRuns} from './ScheduleRuns';
-import {listOf, refusalText, scheduleFooter, scheduleSummary, type ScheduleList, type ScheduleSend} from './schedule-model';
+import {dmChats, useDmPeople} from './dm-people';
+import {dmScheduleSummary, dmTasksOf, listOf, refusalText, scheduleFooter, scheduleSummary, type ScheduleList, type ScheduleSend} from './schedule-model';
 import './schedule.css';
 
 export type ScheduleSession = {write: ScheduleSend; stop(): void};
-/** Reads the group's tasks now and every `everyMs` until stopped (no push, overview section 12); each write reads them again once answered. */
-export function startScheduleSession(send: ScheduleSend, chatId: string, show: {list: (list: ScheduleList) => void; error: (message: string) => void}, everyMs = 10_000): ScheduleSession {
+/**
+ * Reads the group's tasks now and every `everyMs` until stopped (no push, overview section 12); each write reads them
+ * again once answered. No `chatId`: the private chat's tasks, which live on each person's chat, from the Bot's whole list.
+ */
+export function startScheduleSession(send: ScheduleSend, chatId: string | undefined, show: {list: (list: ScheduleList) => void; error: (message: string) => void}, everyMs = 10_000): ScheduleSession {
   let latest = 0;
   let stopped = false;
   async function read() {
     const mine = ++latest;
     try {
-      const list = listOf(await send({action: 'list', chatId}));
+      const list = chatId === undefined ? dmTasksOf(listOf(await send({action: 'listBot'}))) : listOf(await send({action: 'list', chatId}));
       if (!stopped && mine === latest) show.list(list);
     } catch (failure) {
       if (!stopped && mine === latest) show.error(failure instanceof Error && failure.message ? failure.message : '任务读取失败。');
@@ -41,16 +45,17 @@ type RowAction = 'edit' | 'pause' | 'resume' | 'runNow' | 'delete' | 'expand';
  * The list as it reads: one row a task, its buttons, and the opened task's runs. A refused list replaces the page, so there is no 新建.
  * 已结束 has no 恢复: the daemon leaves a finished task as it is, and a new time in 编辑 starts it again.
  */
-export function ScheduleTaskList({list, deviceTitle, expanded, busy, notices, onCreate, onAction}: {
+export function ScheduleTaskList({list, deviceTitle, expanded, busy, notices, onCreate, onAction, dm, noCreate}: {
   list: ScheduleList; deviceTitle: string; expanded?: string; busy?: string; notices: Readonly<Record<string, string>>;
   onCreate: () => void; onAction: (action: RowAction, task: ScheduledTaskView) => void;
+  dm?: boolean; noCreate?: boolean;
 }) {
   if (list.kind === 'loading') return <p className="group-control-note" role="status">正在读取任务…</p>;
   if (list.kind === 'refused') return <p className="group-control-note" role="status">{list.message}</p>;
   const {tasks, now, timeZone} = list.reply;
-  return <SettingsGroup label="任务" action={<Button size="sm" icon={<Plus size={13} aria-hidden="true"/>} onClick={onCreate}>新建</Button>} footer={scheduleFooter(deviceTitle)}>
+  return <SettingsGroup label="任务" action={<Button size="sm" disabled={noCreate} icon={<Plus size={13} aria-hidden="true"/>} onClick={onCreate}>新建</Button>} footer={scheduleFooter(deviceTitle)}>
     {tasks.length ? tasks.map(task => <Fragment key={task.id}>
-      <SettingsRow title={task.name} description={scheduleSummary(task, timeZone, now)} trailing={<>
+      <SettingsRow title={task.name} description={(dm ? dmScheduleSummary : scheduleSummary)(task, timeZone, now)} trailing={<>
         <Button size="sm" variant="ghost" aria-expanded={expanded === task.id} onClick={() => onAction('expand', task)}>记录</Button>
         <Button size="sm" disabled={busy === task.id} onClick={() => onAction('edit', task)}>编辑</Button>
         {task.state !== 'finished' && <Button size="sm" disabled={busy === task.id} onClick={() => onAction(task.state === 'active' ? 'pause' : 'resume', task)}>{task.state === 'active' ? '暂停' : '恢复'}</Button>}
@@ -59,7 +64,7 @@ export function ScheduleTaskList({list, deviceTitle, expanded, busy, notices, on
       </>}/>
       {notices[task.id] && <p className="group-control-note schedule-note" role="status">{notices[task.id]}</p>}
       {expanded === task.id && <ScheduleRuns task={task} hostZone={timeZone} now={now}/>}
-    </Fragment>) : <SettingsRow title="这个群还没有任务"/>}
+    </Fragment>) : <SettingsRow title={dm ? '私聊里还没有任务' : '这个群还没有任务'}/>}
   </SettingsGroup>;
 }
 
@@ -82,9 +87,14 @@ export function ScheduleDeleteDialog({task, send, onClose}: {task: ScheduledTask
     pending={pending} error={error} onCancel={onClose} onConfirm={() => void confirm()}/>;
 }
 
-/** The group page's 任务 tab: every write goes through `client.schedule`; refusals show where the action was. */
-export function ScheduleTab({botId, chatId, deviceTitle}: {botId: string; chatId: string; deviceTitle: string}) {
+/**
+ * The group page's 任务 tab: every write goes through `client.schedule`; refusals show where the action was. `dm`: the
+ * private chat's, with no `chatId`: every person's tasks together, and a new one asks whose chat it posts to.
+ */
+export function ScheduleTab({botId, chatId, dm, deviceTitle}: {botId: string; chatId?: string; dm?: boolean; deviceTitle: string}) {
   const client = useClient();
+  const {people, error: peopleError} = useDmPeople(dm ? botId : undefined);
+  const chats = dm ? dmChats(people ?? []) : undefined;
   const [list, setList] = useState<ScheduleList>({kind: 'loading'});
   const [error, setError] = useState('');
   const [form, setForm] = useState<{task?: ScheduledTaskView; hostTimeZone: string}>();
@@ -113,13 +123,15 @@ export function ScheduleTab({botId, chatId, deviceTitle}: {botId: string; chatId
     if (action === 'expand') setExpanded(current => current === task.id ? undefined : task.id);
     else if (action === 'edit') setForm({task, hostTimeZone: list.kind === 'tasks' ? list.reply.timeZone : task.timeZone});
     else if (action === 'delete') setDeleting(task);
-    else void act(task, {action, chatId, taskId: task.id}, action === 'runNow' ? '已开始运行，结果会发到群里。' : '');
+    else void act(task, {action, chatId: task.chatId, taskId: task.id}, action === 'runNow' ? `已开始运行，结果会发到${dm ? '私聊' : '群'}里。` : '');
   }
   return <section id={settingAnchor('任务')} aria-label="任务">
     {error && <InlineNotice title="任务读取未完成" tone="warning">{error}</InlineNotice>}
-    <ScheduleTaskList list={list} deviceTitle={deviceTitle} expanded={expanded} busy={busy} notices={notices} onAction={onAction}
+    <ScheduleTaskList list={list} deviceTitle={deviceTitle} expanded={expanded} busy={busy} notices={notices} onAction={onAction} dm={dm} noCreate={chats?.length === 0}
       onCreate={() => list.kind === 'tasks' && setForm({hostTimeZone: list.reply.timeZone})}/>
-    {form && <ScheduleForm chatId={chatId} task={form.task} hostTimeZone={form.hostTimeZone} send={write} onClose={() => setForm(undefined)}/>}
+    {dm && (peopleError ? <p className="group-control-note" role="status">{peopleError}</p>
+      : people && !chats?.length && <p className="group-control-note" role="status">要有管理员先在飞书里和这个 Bot 说过话，才能给 TA 的私聊建任务。</p>)}
+    {form && <ScheduleForm chatId={chatId} chats={chats} task={form.task} hostTimeZone={form.hostTimeZone} send={write} onClose={() => setForm(undefined)}/>}
     {deleting && <ScheduleDeleteDialog key={deleting.id} task={deleting} send={write} onClose={() => setDeleting(undefined)}/>}
   </section>;
 }

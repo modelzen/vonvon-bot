@@ -205,8 +205,9 @@ const access = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("writable") }),
   z.object({
     kind: z.literal("readonly"),
-    /** `not-dm`: a Bot's group session reads its group's settings, which only a private chat changes (devices 5.2). */
-    reason: z.enum(["preview", "owner-offline", "unsupported-host", "stale", "not-dm"]),
+    /** `not-dm`: a Bot's group session reads its group's settings, which only a private chat changes (devices 5.2).
+     * `dm-fixed`: a section the private chat does not have, whoever asks (dm-agent 4.2). */
+    reason: z.enum(["preview", "owner-offline", "unsupported-host", "stale", "not-dm", "dm-fixed"]),
     message: z.string(),
   }),
 ]);

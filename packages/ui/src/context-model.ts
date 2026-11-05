@@ -4,7 +4,7 @@ import type {ContextPreviewReply, ContextSectionKey, MemoryItem} from '@vonvon/p
 export const INSTRUCTION_FILES_NOTE = '模型还会读项目自己的 AGENTS.md / CLAUDE.md，vonvon 不显示也不改。';
 
 const label: Record<ContextSectionKey, string> = {
-  identity: '身份行', role: '角色设定', supplement: '本项目的补充职责', botMemory: 'Bot 记忆', projectMemory: '项目记忆',
+  identity: '身份行', role: '角色设定', supplement: '本项目的补充职责', botMemory: 'Bot 记忆', projectMemory: '项目记忆', dmMemory: '私聊记忆',
 };
 /** Where 去改 / 去看 leads for a row. */
 export type PanelTarget = 'role' | 'supplement' | 'botMemory' | 'projectMemory';
@@ -29,7 +29,7 @@ export function panelRows(reply: ContextPreviewReply): PanelRow[] {
     if (session.legacy) return {live: '旧版（升级前开场）', liveWarn: true};
     const entry = live?.get(key);
     if (!entry) return {live: '没有'};
-    const count = key === 'botMemory' ? `${entry.items ?? 0} 条` : key === 'projectMemory' ? `${entry.items ?? 0} 条` : '✓';
+    const count = key === 'botMemory' || key === 'projectMemory' || key === 'dmMemory' ? `${entry.items ?? 0} 条` : '✓';
     return entry.stale ? {live: `${count === '✓' ? `版本 ${entry.version.slice(0, 6)}` : count}，还没收到，下一轮生效`, liveWarn: true} : {live: count};
   };
   return [
@@ -56,7 +56,7 @@ export function lastTurnLines(turn: LastTurn): {head: string; used: string[]; mi
     ...(missed ? {missed} : {}),
   };
 }
-export const injectedLine = (turn: LastTurn): string => `注入：Bot 记忆 ${turn.items.bot} 条 · 项目记忆 可信 ${turn.items.trusted} / 待确认 ${turn.items.untrusted}`;
+export const injectedLine = (turn: LastTurn, memory = '项目记忆'): string => `注入：Bot 记忆 ${turn.items.bot} 条 · ${memory} 可信 ${turn.items.trusted} / 待确认 ${turn.items.untrusted}`;
 
 /** The newest `lastTurn` among several bindings' previews (a project can have several groups and Bots). */
 export function newestTurn(replies: ReadonlyArray<{label: string; reply?: ContextPreviewReply}>): {label: string; turn: LastTurn} | undefined {

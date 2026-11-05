@@ -368,6 +368,22 @@ describe('the private-chat row (dm-agent 4.2)', () => {
     expect(await save(owner, section, patch)).toMatchObject({ kind: 'rejected', fields: [{ message: '私聊只能改模型、速度、可选模型和技能' }] });
     expect(await dmProject()).toEqual(before);
   });
+  // dm-agent 10 (D4). main 必败: the view called them writable and only a save was refused
+  it('reads its fixed sections as read-only, and what it may change as writable', async () => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    const view = await owner.read(dm) as ProjectSettingsView;
+    const access = (key: keyof ProjectSettingsView['sections']) => view.sections[key]?.access;
+    for (const key of ['permission', 'workspace', 'response', 'run', 'role', 'smartRules', 'presentation', 'judge'] as const) expect(access(key)).toMatchObject({ kind: 'readonly', reason: 'dm-fixed' });
+    for (const key of ['model', 'speed', 'modelAccess', 'skills'] as const) expect(access(key)).toEqual({ kind: 'writable' });
+  });
+  it('does not follow the Bot\'s default model: what it took at creation is its own (4.1)', async () => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    const model = async () => (await owner.read(dm) as ProjectSettingsView).sections.model.effective.selection;
+    const before = await model();
+    cfg.preferences = { ...cfg.preferences, defaults: { ...cfg.preferences?.defaults, model: { kind: 'known', id: 'another-model', effort: 'low' } } } as never;
+    expect(await model()).toEqual(before);
+    expect((await dmProject())?.modelAccess?.models).toEqual(['fixture-model']);
+  });
   it('member actions do not reach it', async () => {
     const { owner } = await fixture({ discoverSkills: async () => [] });
     expect(await owner.act({ kind: 'projectAudience', botId, projectName: dmChatId(botId), audience: 'all', revision: 'x' } as never)).toMatchObject({ kind: 'rejected' });

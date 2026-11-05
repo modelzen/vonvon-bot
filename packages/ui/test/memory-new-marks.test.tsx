@@ -71,8 +71,9 @@ it('shows the counts on the navigation, in the project list and in the Bot list,
   expect(list.match(/ · 新 /g)).toHaveLength(1);
   expect(newTag(2)).toBe('新 2'); expect(newTag(0)).toBe(''); expect(newTag(undefined)).toBe('');
   expect(sumCounts({a: 2, b: 3})).toBe(5);
-  expect(countsOf({kind: 'newCounts', projects: {p: 1}, bots: {b: 2}})).toEqual({projects: {p: 1}, bots: {b: 2}});
-  expect(countsOf({kind: 'purged'})).toEqual({projects: {}, bots: {}});
+  expect(countsOf({kind: 'newCounts', projects: {p: 1}, bots: {b: 2}, dm: {b: 3}})).toEqual({projects: {p: 1}, bots: {b: 2}, dm: {b: 3}});
+  expect(countsOf({kind: 'newCounts', projects: {}, bots: {}})).toEqual({projects: {}, bots: {}, dm: {}}); // an older daemon
+  expect(countsOf({kind: 'purged'})).toEqual({projects: {}, bots: {}, dm: {}});
 });
 
 const reply = (over: Partial<ContextPreviewReply> = {}): ContextPreviewReply => ({
