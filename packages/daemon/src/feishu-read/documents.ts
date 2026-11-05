@@ -11,9 +11,9 @@ export interface DocEditRequest { doc: string; action: 'append' | 'insert' | 're
 export interface DocEditResult { result: 'success' | 'partial_success'; updatedBlocks?: number; newBlocks?: string[]; warnings?: string[]; tips?: string; note?: string }
 
 /** What a link says it is; a bare token says nothing. */
-type RefKind = 'docx' | 'wiki' | 'sheet' | 'file' | 'other';
-export interface DocRef { kind?: RefKind; token: string; sheetId?: string }
-const KINDS: Record<string, RefKind> = { docx: 'docx', docs: 'other', wiki: 'wiki', sheets: 'sheet', file: 'file', base: 'other', bitable: 'other', slides: 'other', mindnotes: 'other' };
+type RefKind = 'docx' | 'wiki' | 'sheet' | 'bitable' | 'file' | 'other';
+export interface DocRef { kind?: RefKind; token: string; sheetId?: string; tableId?: string; viewId?: string }
+const KINDS: Record<string, RefKind> = { docx: 'docx', docs: 'other', wiki: 'wiki', sheets: 'sheet', file: 'file', base: 'bitable', bitable: 'bitable', slides: 'other', mindnotes: 'other' };
 
 /** A Feishu link or a bare token. Only the token leaves here: nothing is fetched from what the link's host says. */
 export function parseRef(ref: string): DocRef {
@@ -22,16 +22,16 @@ export function parseRef(ref: string): DocRef {
   let url: URL | undefined;
   try { url = new URL(text.includes('://') ? text : `https://${text}`); } catch { /* the refusal below */ }
   const match = url && /\/(docx|docs|wiki|sheets|file|base|bitable|slides|mindnotes)\/([\w-]+)/.exec(url.pathname);
-  if (!url || !match) throw new FeishuReadRefused('认不出这个链接：给飞书文档、表格或文件的链接，或者它的 token。');
-  const sheetId = url.searchParams.get('sheet');
-  return { kind: KINDS[match[1]!]!, token: match[2]!, ...(sheetId ? { sheetId } : {}) };
+  if (!url || !match) throw new FeishuReadRefused('认不出这个链接：给飞书文档、表格、多维表格或文件的链接，或者它的 token。');
+  const sheetId = url.searchParams.get('sheet'), tableId = url.searchParams.get('table'), viewId = url.searchParams.get('view');
+  return { kind: KINDS[match[1]!]!, token: match[2]!, ...(sheetId ? { sheetId } : {}), ...(tableId ? { tableId } : {}), ...(viewId ? { viewId } : {}) };
 }
 
 /** Which tool reads a node of this type, for the sentence that sends the model there. */
 function wrongKind(kind: string): FeishuReadRefused {
-  const toolOf: Record<string, string> = { docx: 'feishu_doc', sheet: 'feishu_sheet', file: 'feishu_drive_file' };
+  const toolOf: Record<string, string> = { docx: 'feishu_doc', sheet: 'feishu_sheet', bitable: 'feishu_base', file: 'feishu_drive_file' };
   const tool = toolOf[kind];
-  return new FeishuReadRefused(tool ? `这不是这个工具读的类型，用 ${tool}。` : `这种云文档（${kind}）现在读不了，只能读新版文档、表格和云空间文件。`);
+  return new FeishuReadRefused(tool ? `这不是这个工具读的类型，用 ${tool}。` : `这种云文档（${kind}）现在读不了，只能读新版文档、表格、多维表格和云空间文件。`);
 }
 
 /** A knowledge-base page's real object. */
@@ -46,7 +46,7 @@ async function wikiNode(deps: ReadDeps, token: string): Promise<{ kind: string; 
  * Read `ref` as a `want`: a knowledge-base link through its node. A bare token may be a knowledge-base page's, so when
  * it is not found as it stands it gets the node lookup too, and a token that is neither keeps the first refusal.
  */
-async function reading<T>(deps: ReadDeps, ref: DocRef, want: 'docx' | 'sheet' | 'file', read: (token: string) => Promise<T>): Promise<T> {
+export async function reading<T>(deps: ReadDeps, ref: DocRef, want: 'docx' | 'sheet' | 'bitable' | 'file', read: (token: string) => Promise<T>): Promise<T> {
   const fromNode = async (): Promise<T> => {
     const node = await wikiNode(deps, ref.token);
     if (node.kind !== want) throw wrongKind(node.kind);
@@ -187,11 +187,11 @@ export async function editDoc(deps: ReadDeps, request: DocEditRequest, beforeWri
   });
 }
 
-/** Cells as they came, with Feishu's text through the same boundary as everything else read. */
-function cleanCell(cell: unknown): unknown {
+/** Cells as they came, with Feishu's text through the same boundary as everything else read; a base's field names are text too. */
+export function cleanCell(cell: unknown): unknown {
   if (typeof cell === 'string') return escapeInboundMarkers(cell);
   if (Array.isArray(cell)) return cell.map(cleanCell);
-  if (cell && typeof cell === 'object') return Object.fromEntries(Object.entries(cell).map(([key, value]) => [key, cleanCell(value)]));
+  if (cell && typeof cell === 'object') return Object.fromEntries(Object.entries(cell).map(([key, value]) => [escapeInboundMarkers(key), cleanCell(value)]));
   return cell;
 }
 

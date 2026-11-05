@@ -8,7 +8,7 @@ import { ToolRefusal, type AgentTool, type ToolContext } from './tools';
 
 /**
  * 飞书读取工具（dm-agent 7.1、7.2）：Claude 的 MCP 和 Codex 的 dynamicTools 共用这一份定义。工具不走沙箱，范围在这里
- * 守：群会话只读本群的消息、文件、公告、成员，文档、表格、云空间不按群隔离；私聊看这一轮是不是管理员的；评论会话只有文档
+ * 守：群会话只读本群的消息、文件、公告、成员，文档、表格、多维表格、云空间不按群隔离；私聊看这一轮是不是管理员的；评论会话只有文档
  * 这一列（第 7.4 节）。跨 Bot 是 F2。结果就是内容本身，不加标注。改文档的 `feishu_doc_edit`（F3）也在这里，只读档不给。
  */
 
@@ -28,6 +28,15 @@ const membersInput = z.object({ chat: chat.optional(), cursor: cursor.optional()
 const docInput = z.object({ doc: reference.describe('文档或知识库页面的链接，或者它的 token'), cursor: cursor.optional() }).strict();
 const sheetInput = z.object({ sheet: reference.describe('表格的链接，或者它的 token'),
   range: z.string().min(1).max(200).describe('要读的区域，比如 <sheetId>!A1:D20；不写就列出有哪些工作表和它们的 id').optional(), cursor: cursor.optional() }).strict();
+const baseCondition = z.object({ field: z.string().min(1).max(200).describe('字段名'),
+  operator: z.enum(['is', 'isNot', 'contains', 'doesNotContain', 'isEmpty', 'isNotEmpty', 'isGreater', 'isGreaterEqual', 'isLess', 'isLessEqual']),
+  value: z.array(z.string().max(2000)).max(50).describe('比较的值，一律写成字符串；日期写 ["ExactDate","<毫秒时间戳>"]；isEmpty、isNotEmpty 不写').optional() }).strict();
+const baseInput = z.object({ base: reference.describe('多维表格的链接，或者它的 token；链接里的 table、view 会用上'),
+  what: z.enum(['tables', 'fields', 'views', 'records']).describe('读什么：tables 数据表，fields 字段，views 视图，records 记录。不写时，有 table 读记录，没有就列数据表').optional(),
+  table: z.string().min(1).max(200).describe('数据表的 id（tbl 开头）').optional(), view: z.string().min(1).max(200).describe('视图的 id（vew 开头），写了 filter 时不起作用').optional(),
+  fields: z.array(z.string().min(1).max(200)).min(1).max(200).describe('只读这些字段，写字段名').optional(),
+  filter: z.object({ conjunction: z.enum(['and', 'or']).describe('默认 and').optional(), conditions: z.array(baseCondition).min(1).max(50) }).strict().describe('筛选记录，范围是整张数据表').optional(),
+  limit: limit(100).describe('最多几条，默认一页读得下的都给').optional(), cursor: cursor.optional() }).strict();
 const driveInput = z.object({ file: reference.describe('云空间文件的链接，或者它的 token'), name: z.string().min(1).max(200).describe('存成什么文件名，不写就用原来的').optional() }).strict();
 const docEditInput = z.object({ doc: reference.describe('文档或知识库页面的链接，或者它的 token'),
   action: z.enum(['append', 'insert', 'replace']).describe('append 追加到文末；insert 插到 block 后面；replace 换掉 pattern 或 block'),
@@ -44,13 +53,14 @@ const definitions = [
   { name: 'feishu_members', input: membersInput, description: '查询群成员，失败不会伪装成空列表。' },
   { name: 'feishu_doc', input: docInput, description: '读飞书文档或知识库页面，返回文字内容；Bot 要有这篇文档的阅读权限。' },
   { name: 'feishu_sheet', input: sheetInput, description: '读飞书表格：列出工作表，或读一个区域；Bot 要有这张表的阅读权限。' },
+  { name: 'feishu_base', input: baseInput, description: '读飞书多维表格：列出数据表、字段和视图，或读记录，可以按视图和条件筛选、翻页；Bot 要有这个多维表格的阅读权限。' },
   { name: 'feishu_drive_file', input: driveInput, description: '下载飞书云空间里的文件，返回本机路径；Bot 要有这个文件的阅读权限。' },
   { name: 'feishu_search', input: searchInput, description: '按关键词搜飞书消息。' },
 ] as const satisfies readonly { name: string; input: z.ZodObject; description: string }[];
 
 export const feishuToolNames: ReadonlySet<string> = new Set(definitions.map(tool => tool.name));
 /** The document column of 7.2: all a comment's session reads, there being no chat for it to read. */
-export const feishuDocToolNames: ReadonlySet<string> = new Set(['feishu_doc', 'feishu_sheet', 'feishu_drive_file']);
+export const feishuDocToolNames: ReadonlySet<string> = new Set(['feishu_doc', 'feishu_sheet', 'feishu_base', 'feishu_drive_file']);
 /** Not among {@link feishuToolNames}: a session gets it by `tools.feishuEdit`, its tier's call. */
 export const FEISHU_DOC_EDIT = 'feishu_doc_edit';
 const docEditDescription = '改飞书新版文档：追加、插入、替换选中的内容，身份是 Bot 自己。表格和多维表格改不了。Bot 要有这篇文档的编辑权限。';
@@ -153,6 +163,7 @@ export function createFeishuTools(deps: { members(chatId: string, cursor?: strin
     members,
     tool<typeof docInput>('feishu_doc', args => reader.doc(args)),
     tool<typeof sheetInput>('feishu_sheet', args => reader.sheet(args)),
+    tool<typeof baseInput>('feishu_base', args => reader.base(args)),
     tool<typeof driveInput>('feishu_drive_file', (args, ctx) => reader.driveFile({ ...args, ...savedIn(ctx) })),
     tool<typeof searchInput>('feishu_search', (args, ctx) => reader.search({ ...args, ...chatOf(args.chat, ctx) })),
     docEditTool(reader, deps.groupTier),

@@ -140,10 +140,12 @@ export const V1_OPTIONAL_SCOPES = [
  * with what is missing and a link (dm-agent 7.5), and everything else still works.
  *   - `docs:document.content:read` = docs_ai fetch, `docx:document:readonly` = the raw_content fallback;
  *   - `sheets:spreadsheet:read` = a spreadsheet's sheets and a range's values;
+ *   - `bitable:app:readonly` = a base's tables, fields, views and records (measured 2026-11-05: this one scope covers them all);
  *   - `drive:file:download` = a Drive file's bytes.
  */
 export const DOC_READ_SCOPES = ['docs:document.content:read', 'docx:document:readonly', 'wiki:wiki:readonly'] as const;
 export const SHEET_READ_SCOPES = ['sheets:spreadsheet:read'] as const;
+export const BITABLE_READ_SCOPES = ['bitable:app:readonly'] as const;
 export const DRIVE_READ_SCOPES = ['drive:file:download'] as const;
 /** Changing a document as the Bot (the tool comes with F3). */
 export const DOC_EDIT_SCOPES = ['docx:document:write_only'] as const;
@@ -156,6 +158,7 @@ export const FEISHU_TOOL_SCOPES = [
   ...DOC_READ_SCOPES,
   ...DOC_EDIT_SCOPES,
   ...SHEET_READ_SCOPES,
+  ...BITABLE_READ_SCOPES,
   ...DRIVE_READ_SCOPES,
   ...MESSAGE_SEARCH_SCOPES,
 ] as const;
@@ -211,6 +214,7 @@ export const SCOPE_LABELS: Record<string, string> = {
   'docs:document.content:read': '读取文档内容',
   'docx:document:readonly': '读取文档纯文本',
   'sheets:spreadsheet:read': '读取表格内容',
+  'bitable:app:readonly': '读取多维表格内容',
   'drive:file:download': '下载云空间文件',
   'docx:document:write_only': '修改 Bot 有编辑权限的文档',
   'search:message': '搜索消息',
