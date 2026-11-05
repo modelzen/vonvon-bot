@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
-import { createNameBook, withDeadline } from '../src/bot/names';
+import { createNameBook, createPersonNames, resolveNames, withDeadline } from '../src/bot/names';
 import { log } from '../src/core/logger';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 
@@ -225,5 +225,39 @@ describe('withDeadline (s23f2: a late answer is logged, not dropped)', () => {
     d.resolve('answer');
     await vi.advanceTimersByTimeAsync(0);
     expect(late()).toEqual([]);
+  });
+});
+
+describe('resolveNames and createPersonNames', () => {
+  it('asks contact 50 ids at a time, and a failing chunk costs only its own names', async () => {
+    const ids = Array.from({ length: 120 }, (_, i) => `ou_${i}`);
+    const { ch, batch } = channel({ contact: Object.fromEntries(ids.map((id) => [id, `name ${id}`])) });
+    const found = await resolveNames(ch, ids);
+    expect(batch.mock.calls.map(([call]) => (call as { params: { user_ids: string[] } }).params.user_ids.length)).toEqual([50, 50, 20]);
+    expect(found.size).toBe(120);
+    batch.mockRejectedValueOnce(new Error('boom'));
+    expect((await resolveNames(ch, ids)).size).toBe(70);
+  });
+
+  it('keeps answers and misses for a while, asks again after, and keeps a name a failed read could not renew', async () => {
+    let now = 1_000;
+    const { ch, batch } = channel({ contact: { ou_a: '甲' } });
+    const names = createPersonNames(ch, { now: () => now, ttlMs: 60_000 });
+    expect([...await names(['ou_a', 'ou_b', 'ou_a'])]).toEqual([['ou_a', '甲']]);
+    await names(['ou_a', 'ou_b']);
+    expect(batch).toHaveBeenCalledTimes(1);
+    now += 60_001;
+    batch.mockRejectedValueOnce(new Error('down'));
+    expect([...await names(['ou_a'])]).toEqual([['ou_a', '甲']]);
+    expect(batch).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers with what it has when Feishu is slower than the deadline', async () => {
+    let release!: () => void;
+    const { ch } = channel({ contact: { ou_a: '甲' }, slow: undefined });
+    (ch as unknown as { rawClient: { contact: { v3: { user: { batch: () => Promise<unknown> } } } } }).rawClient.contact.v3.user.batch = () => new Promise((resolve) => { release = () => resolve({ code: 0, data: { items: [{ open_id: 'ou_a', name: '甲' }] } }); });
+    const names = createPersonNames(ch, { deadlineMs: 5 });
+    expect((await names(['ou_a'])).size).toBe(0);
+    release();
   });
 });

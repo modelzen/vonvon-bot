@@ -2,7 +2,8 @@ import { buildAdminsCard, DM } from '../src/card/dm-cards';
 import * as appRoles from '../src/config/app-roles';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { paths } from '../src/config/paths';
+import { join } from 'node:path';
+import { botPaths, paths } from '../src/config/paths';
 import { saveConfig, loadConfig } from '../src/config/store';
 import { createAppPreferencesWriter, createAdminWriteExecutor } from '../src/admin/ops';
 import { createSettingsOwner, type SettingsOwnerDeps } from '../src/admin/settings';
@@ -635,14 +636,22 @@ describe('the administrators', () => {
   const remove = async (owner: Awaited<ReturnType<typeof fixture>>['owner'], openId: string) =>
     owner.act({ kind: 'adminMember', botId, openId, membership: 'absent', revision: (await list(owner)).administrators.revision });
 
-  it('shows what Feishu names as such, none of it on the list or the card', async () => {
+  it('shows what Feishu names as candidates, none of it on the list or the card', async () => {
     const roles = vi.spyOn(appRoles, 'getAppRoleSnapshot').mockReturnValue({
-      appId: botId, tenant: 'feishu', fetchedAt: Date.now(), ownerOpenId: 'ou_feishu_owner', admins: ['ou_feishu_admin'],
+      appId: botId, tenant: 'feishu', fetchedAt: Date.now(), ownerOpenId: 'ou_feishu_owner', admins: ['ou_feishu_admin', 'ou_feishu_unnamed'],
     });
     try {
       await access(['ou_owner', 'ou_admin']);
-      const view = await list((await fixture()).owner);
-      expect(view.administrators).toMatchObject({ feishu: { ownerOpenId: 'ou_feishu_owner', adminOpenIds: ['ou_feishu_admin'] }, scannerOpenId: 'ou_owner', openIds: ['ou_owner', 'ou_admin'] });
+      const personNames = vi.fn(async () => new Map([['ou_admin', '张三'], ['ou_owner', '李四'], ['ou_feishu_owner', '王五'], ['ou_feishu_admin', '赵六']]));
+      const view = await list((await fixture({ personNames })).owner);
+      expect(view.administrators.openIds).toEqual(['ou_owner', 'ou_admin']);
+      expect(view.administrators.names).toEqual({ ou_owner: '李四', ou_admin: '张三' });
+      // the people on the list are not offered again; one Feishu will not name is not offered at all
+      expect(view.administrators.candidates).toEqual([
+        { openId: 'ou_feishu_owner', name: '王五', sources: ['feishu'] },
+        { openId: 'ou_feishu_admin', name: '赵六', sources: ['feishu'] },
+      ]);
+      expect(personNames).toHaveBeenCalledTimes(1);
       expect(view.ownerOpenId).toBe('ou_owner');
       const card = JSON.stringify(buildAdminsCard(cfg, new Map([['ou_admin', '张三'], ['ou_owner', '李四']])));
       expect(card).toContain('张三');
@@ -650,8 +659,23 @@ describe('the administrators', () => {
       expect(card).not.toContain('feishu');
       // product.md section 6: read-only, whoever looks
       for (const action of ['rmAdmin', 'addAdminForm']) expect(card).not.toContain(`"a":"${DM[action as keyof typeof DM]}"`);
-      expect(card).toContain('名单在 Vonvon Bot 客户端或终端里改。');
+      expect(card).toContain('名单在 Vonvon Bot 的「设置 → 管理员」或终端里改。');
     } finally { roles.mockRestore(); }
+  });
+
+  // dm-agent 3.4: the creator is always there, whatever Feishu says of them
+  it('offers the creator after they were removed, by name or as 创建者, and the people turned away', async () => {
+    await access(['ou_admin']);
+    await mkdir(botPaths(botId).dir, { recursive: true });
+    await writeFile(join(botPaths(botId).dir, 'dm-refused.json'), JSON.stringify({ v: 1, people: [{ openId: 'ou_refused', name: '孙七', at: Date.now() }, { openId: 'ou_old', name: '很久以前', at: 1 }] }));
+    const stopped = (await list((await fixture()).owner)).administrators;
+    expect(stopped.names).toEqual({});
+    expect(stopped.candidates).toEqual([
+      { openId: 'ou_owner', name: '创建者', sources: ['creator'] },
+      { openId: 'ou_refused', name: '孙七', sources: ['refused'], at: expect.any(Number) },
+    ]);
+    const running = (await list((await fixture({ personNames: async () => new Map([['ou_owner', '李四']]) })).owner)).administrators;
+    expect(running.candidates?.[0]).toEqual({ openId: 'ou_owner', name: '李四', sources: ['creator'] });
   });
 
   // dm-agent 3.3. main 必败: the creator and Feishu's people could not be removed here
