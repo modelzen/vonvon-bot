@@ -261,7 +261,6 @@ describe('the bot-session column (unit)', () => {
     const wide = [
       request('settings', { type: 'save', edit: { scope: { kind: 'agent', botId: BOT }, section: 'cards', revision: 'r1', patch: { showToolCalls: true } } }),
       request('settings', { type: 'act', action: { kind: 'voice', botId: BOT, action: { action: 'enable' } } }),
-      request('settings', { type: 'act', action: { kind: 'adminMember', botId: BOT, openId: 'ou_0123456789abcdef', membership: 'present', revision: 'r' } }),
       request('settings', { type: 'act', action: { kind: 'commentInstructions', botId: BOT, revision: 'r', content: { kind: 'default' } } }),
       request('collaboration', { action: 'createProject', agentId: BOT, name: 'New', folder: { kind: 'default' }, tool: 'codex', conversation: 'shared' }),
     ];
@@ -357,7 +356,6 @@ describe('the bot-session column (unit)', () => {
       return { decision, action: askBot.mock.calls[0]?.[2] };
     };
     const act = (action: object) => request('settings', { type: 'act', action });
-    expect((await asked('dm', act({ kind: 'adminMember', botId: BOT, openId: 'ou_0123456789abcdef', membership: 'present', revision: 'r' }))).action).toEqual({ kind: 'adminMember' });
     expect((await asked('dm', act({ kind: 'voice', botId: BOT, action: { action: 'enable' } }))).action).toEqual({ kind: 'settingsWrite' });
     expect((await asked('dm', request('collaboration', { action: 'createProject', agentId: BOT, name: 'P', folder: { kind: 'default' }, tool: 'codex', conversation: 'shared' }))).action).toEqual({ kind: 'settingsWrite' });
     // devices-4b 4.5a: a private chat's reads, as settings_get and the group lists are an admin's there
@@ -372,8 +370,6 @@ describe('the bot-session column (unit)', () => {
     // a task the Bot process let through without an actor does not run
     expect((await asked('group', request('schedule', { botId: BOT, request: { action: 'list', chatId: GROUP } }), ownerTurn)).decision).toEqual(ended);
     // its refusals: the sentence word for word, the code the command line knows for its place
-    const notOwner = await asked('dm', act({ kind: 'adminMember', botId: BOT, openId: 'ou_0123456789abcdef', membership: 'present', revision: 'r' }), { ok: false, reason: 'not-owner', message: '本机管理员名单只有飞书应用的拥有者能改。' });
-    expect(notOwner.decision).toEqual({ ok: false, code: 'permission_denied', message: '本机管理员名单只有飞书应用的拥有者能改。', details: { reason: 'not-owner' } });
     const notGroup = await asked('group', request('schedule', { botId: BOT, request: { action: 'list', chatId: GROUP } }), { ok: false, reason: 'not-group', message: scheduleRefusalMessages['not-group'] });
     expect(notGroup.decision).toMatchObject({ ok: false, code: 'not-group' });
     const switchOff = await asked('dm', settingsSave('研发'), { ok: false, reason: 'switch-off', message: '关了' });
@@ -597,11 +593,11 @@ describe('a Bot session against the daemon', () => {
       skills: [{ path: '/w/skills/review', name: 'review', description: '审查', source: 'workspace', enabled: true }],
       members: { openIds: ['ou_a'], revision: 'm2', roster: { state: 'complete', entries: [{ openId: 'ou_a', name: '小A', kind: 'person' }], otherBots: false } },
     };
-    const act = vi.fn(async (action: { kind: string }) => action.kind === 'adminMember' ? { kind: 'saved', view: agent, effects: [], warnings: [] } : { kind: 'conflict', view: project });
+    const act = vi.fn(async (action: { kind: string }) => action.kind === 'voice' ? { kind: 'saved', view: agent, effects: [], warnings: [] } : { kind: 'conflict', view: project });
     const settings = { act, read: async () => { throw new Error('unused'); }, save: async () => { throw new Error('unused'); }, models: async () => { throw new Error('unused'); } };
     const fixture = await startFixture(fakeService({ listProjects: async (appId: string) => appId === BOT ? projects : [], settings } as unknown as Parameters<typeof fakeService>[0]),
       undefined, undefined, undefined, botSays(ownerTurn));
-    const admin = { type: 'request', id: 'a', method: 'settings', payload: { type: 'act', action: { kind: 'adminMember', botId: BOT, openId: 'ou_0123456789abcdef', membership: 'present', revision: 'a1' } } } as unknown as Request;
+    const admin = { type: 'request', id: 'a', method: 'settings', payload: { type: 'act', action: { kind: 'voice', botId: BOT, action: { action: 'enable' } } } } as unknown as Request;
     const member = { type: 'request', id: 'm', method: 'settings', payload: { type: 'act', action: { kind: 'projectMember', botId: BOT, projectName: '研发', openId: 'ou_0123456789abcdef', membership: 'present', revision: 'm1' } } } as unknown as Request;
     // the frame as the client takes it: its schema checked
     const acted = (frame: unknown): Extract<SettingsReply, { kind: 'acted' }>['result'] => {

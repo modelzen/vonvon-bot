@@ -34,7 +34,7 @@ async function owner(overrides: Partial<SettingsOwnerDeps> = {}) {
 beforeEach(async () => {
   await rm(paths.appDir, { recursive: true, force: true });
   await mkdir(paths.appDir, { recursive: true });
-  cfg = JSON.parse(JSON.stringify({ accounts: { app: { id: botId, tenant: 'feishu', secret: { source: 'exec', id: 'fixture-secret' } } }, secrets: { providers: { sentinel: { source: 'env', allowlist: ['SECRET'] } } }, futureRoot: 17, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_admin'], future: 3 }, cliBridge: { enabled: false, presence: { future: 9 } }, comments: { future: 'retain' }, futurePreference: true } }));
+  cfg = JSON.parse(JSON.stringify({ accounts: { app: { id: botId, tenant: 'feishu', secret: { source: 'exec', id: 'fixture-secret' } } }, secrets: { providers: { sentinel: { source: 'env', allowlist: ['SECRET'] } } }, futureRoot: 17, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner', 'ou_admin'], future: 3 }, cliBridge: { enabled: false, presence: { future: 9 } }, comments: { future: 'retain' }, futurePreference: true } }));
   await saveConfig(cfg);
   await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false });
   await addProject({ name: 'other', chatId: 'oc_other', cwd: '/tmp/other', createdAt: 2, blank: false, noMention: false, mode: 'qa', network: false });
@@ -160,7 +160,6 @@ it('CARD-017 CARD-018 handles members, audience and immutable owner with persist
   expect((await settings.act({ kind: 'projectAudience', botId, projectName: 'demo', audience: 'all', revision: p.members.revision })).kind).toBe('saved');
   expect((await getProjectByName('demo'))?.allowedUsers).toEqual([]);
   let a = await settings.read(agent) as AgentSettingsView;
-  expect((await settings.act({ kind: 'adminMember', botId, openId: 'ou_owner', membership: 'absent', revision: a.administrators.revision })).kind).toBe('rejected');
   expect((await settings.act({ kind: 'adminMember', botId, openId: 'ou_test', membership: 'present', revision: a.administrators.revision })).kind).toBe('saved');
   a = await settings.read(agent) as AgentSettingsView;
   expect(a.administrators.openIds).toContain('ou_test');

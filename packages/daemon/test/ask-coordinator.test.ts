@@ -30,7 +30,7 @@ function fixture() {
   let dmCounter = 0;
   const messageCreate = vi.fn(async (_input: unknown) => ({ data: { message_id: `dm-${++dmCounter}` } }));
   const channel = { send, rawClient: { cardkit: { v1: { card: { create, update } } }, im: { v1: { message: { reply, create: messageCreate } } } } };
-  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['admin'] } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner', 'admin'] } } };
   const coordinator = new AskCoordinator(channel as unknown as LarkChannel, cfg, { peek: id => `name-${id}` });
   const response = vi.fn<NonNullable<AgentRun['respondToAsk']>>(async () => {});
   const run: AgentRun = { turnId: () => 'turn', events: (async function* () {})(), respondToAsk: response };

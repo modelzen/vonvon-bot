@@ -80,7 +80,7 @@ export function bridgeAsk(id: string, ask: 'choices' | 'confirmation' | 'permiss
     return { request, toResult(resolution) {
       if (resolution.kind === 'unanswered') return deny('没人允许这一步，这一步不做。换个办法，或者停下来说明。');
       return resolution.answer.kind === 'permission' && resolution.answer.decision === 'allow-once'
-        ? { behavior: 'allow', updatedInput: input } : deny('主人或管理员拒绝了这一步。换个办法，或者停下来说明。');
+        ? { behavior: 'allow', updatedInput: input } : deny('管理员拒绝了这一步。换个办法，或者停下来说明。');
     } };
   } catch {
     return undefined;

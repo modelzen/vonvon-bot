@@ -60,8 +60,6 @@ export const NOT_DM_COMMENT_MESSAGE = '评论里不能改设置。私聊我可�
 export const notDmMessage = (place: 'group' | 'dm' | 'comment' | AgentPlace['kind']): string => place === 'comment' || place === 'doc' ? NOT_DM_COMMENT_MESSAGE : NOT_DM_MESSAGE;
 /** devices 15, 这一轮已结束: a Bot session's command line called when no turn of its session is going (or its Bot process is gone). */
 export const SESSION_TURN_ENDED = '这次调用对应的那一轮对话已经结束，不能再改设置。';
-/** devices 3.7: only the owner's turn changes this machine's administrators (devices-4b 4.2). */
-export const NOT_OWNER_MESSAGE = '本机管理员名单只有飞书应用的拥有者能改。';
 /** A session's call is not tied to a tool use: a turn not known, ended or a session gone all read as the turn having ended. */
 const ENDED = new Set(['revoked', 'unknown-origin', 'turn-ended']);
 const messages = {
@@ -69,10 +67,10 @@ const messages = {
   revoked: '这条会话的 vonvon 工具已经失效（会话结束了，或者 daemon 重启过）。不要重试，接着做别的。',
   'unknown-tool': '没有这个工具。',
   'not-dm': NOT_DM_MESSAGE,
-  'not-human-turn': '这一轮不是主人或管理员发消息直接触发的，不能改设置。',
+  'not-human-turn': '这一轮不是管理员发消息直接触发的，不能改设置。',
   'turn-ended': '发起这次改动的那一轮已经结束了，不能改设置。请对方重新说一遍。',
   'unknown-origin': 'vonvon 认不出这次改动是哪一轮发起的，不能改设置。请对方重新说一遍。',
-  'not-admin': '只有主人和管理员发消息触发的那一轮能改设置。',
+  'not-admin': '只有管理员发消息触发的那一轮能改设置。',
   'switch-off': '主人关了私聊里的“聊天改设置”，要改请去桌面端或网页。',
   'not-group': scheduleRefusalMessages['not-group'],
   'no-human-create': scheduleRefusalMessages['no-human-create'],
@@ -142,7 +140,6 @@ const placed = (tool: AgentTool, place: AgentPlace): boolean => !tool.places || 
 export function createAgentEntries(opts: {
   appId: string;
   isAdmin(openId: string): boolean;
-  isOwner(openId: string): boolean;
   chatSettingsOn?(): boolean;
   tools?: readonly AgentTool[];
   /** devices-4a 4.3: told once when a session ends, so the host drops its token (best effort: it never throws). */
@@ -238,10 +235,10 @@ export function createAgentEntries(opts: {
     if (!turn.human) return refused('not-human-turn');
     if (!opts.isAdmin(turn.facts.requesterOpenId ?? '')) return refused('not-admin');
   }
-  const roleOf = (auth: TurnAuth): MemoryTurn['role'] => {
+  const roleOf = (auth: TurnAuth): Exclude<MemoryTurn['role'], 'owner'> => {
     const openId = auth.facts.requesterOpenId ?? '';
     if (auth.facts.requesterKind !== 'user' || !openId) return 'bot';
-    return opts.isOwner(openId) ? 'owner' : opts.isAdmin(openId) ? 'admin' : 'member';
+    return opts.isAdmin(openId) ? 'admin' : 'member';
   };
   /** Who the command core sees: the task's own run, or the person of this turn with where they are now. */
   function scheduleActor(grant: Grant, auth: TurnAuth): Exclude<ScheduleActor, { kind: 'local' }> {
@@ -368,7 +365,7 @@ export function createAgentEntries(opts: {
           }
           if (schedule && auth) ctx.schedule = () => ({ actor: scheduleActor(grant, auth), where: auth.facts.where?.() ?? { inTopic: false }, steered: auth.steered });
           if (gated && auth) {
-            if (settings) ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: opts.isOwner(auth.facts.requesterOpenId ?? '') ? 'owner' : 'admin' };
+            if (settings) ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: 'admin' };
             ctx.commit = async write => {
               check(0);
               let guarded = false;
@@ -475,10 +472,9 @@ export function createAgentEntries(opts: {
     const auth = grant.turn;
     const who = (turn: TurnAuth): { role: MemoryTurn['role']; openId?: string } => ({ role: roleOf(turn), ...(turn.facts.requesterOpenId ? { openId: turn.facts.requesterOpenId } : {}) });
     switch (action.kind) {
-      case 'settingsWrite': case 'adminMember': {
+      case 'settingsWrite': {
         const failure = authorizeNow(grant, auth);
         if (failure || !auth) return denial(failure ?? refused('unknown-origin'));
-        if (action.kind === 'adminMember' && !opts.isOwner(auth.facts.requesterOpenId ?? '')) return { ok: false, reason: 'not-owner', message: NOT_OWNER_MESSAGE };
         return { ok: true, ...who(auth) };
       }
       case 'adminRead': {

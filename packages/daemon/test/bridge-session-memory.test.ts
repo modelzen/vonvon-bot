@@ -50,7 +50,7 @@ const OWNER = 'ou_owner';
 const MEMBER = 'ou_member';
 const DEV = 'prj_0000000a';
 const OPS = 'prj_0000000b';
-const cfg = { accounts: { app: { id: APP, secret: 'x', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: OWNER } } } as AppConfig;
+const cfg = { accounts: { app: { id: APP, secret: 'x', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: OWNER, admins: [OWNER] } } } as AppConfig;
 const row = (name: string, chatId: string, projectId?: string) => ({ name, chatId, cwd: `/w/${name}`, blank: false, createdAt: 1, ...(projectId ? { projectId } : {}) });
 const storeProjects = (projects: object[]) => writeFile(paths.projectsFile, JSON.stringify({ version: 1, projects }));
 const thread = (): AgentThread => ({
@@ -89,7 +89,7 @@ describe('a private chat\'s session and its bot\'s projects, as the bridge wires
   it('adds, edits and archives the memory of a project its bot is bound to, on the owner\'s turn', async () => {
     await storeProjects([row('研发', 'oc_dev', DEV), row('运营', 'oc_ops', OPS)]);
     const chat = privateChat(await bridge(), OWNER, '记住 研发周四发版');
-    const owner = { role: 'owner', openId: OWNER };
+    const owner = { role: 'admin', openId: OWNER };
     expect(await chat.ask({ type: 'add', scope: { kind: 'project', projectId: DEV }, text: '周四发版' })).toMatchObject({ ok: true, grant: { ...owner,
       memory: { scope: { kind: 'project', projectId: DEV }, trust: 'trusted', actor: owner, source: { botId: APP, chatId: 'oc_dm', messageId: 'om_1' } } } });
     expect(await chat.ask({ type: 'edit', scope: { kind: 'project', projectId: OPS }, itemId: `p_${OPS}:000001`, revision: 1, text: '周五发版' }))

@@ -41,7 +41,7 @@ beforeEach(async () => {
   for (const [chatId, enabled] of [['oc_a', true], ['oc_off', false]] as const) {
     await registry.addProject({ name: chatId, chatId, cwd: join(root, 'workspace'), blank: false, createdAt: 1, kind: 'single', enabled });
   }
-  const cfg: AppConfig = { accounts: { app: { id: 'cli_schedule_pause', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'cli_schedule_pause', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] } } };
   o = (await import('../src/bot/handle-message')).createOrchestrator({ send } as never, cfg, join(root, 'workspace'));
 });
 afterEach(async () => {

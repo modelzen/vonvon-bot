@@ -10,7 +10,7 @@ import {
   isChatAllowed,
   isUserAllowed,
   isUserAllowedInProject,
-  resolveOwner,
+  primaryAdmin,
   type AppConfig,
 } from '../src/config/schema';
 
@@ -76,32 +76,27 @@ describe('config schema helpers', () => {
     expect(isChatAllowed(cfg({ access: { allowedChats: [] } }), 'oc_1')).toBe(true);
   });
 
-  it('owner is always admin; admins 空时收紧为「仅 owner」', () => {
-    // 空 config(无 owner 无 admins)→ 收紧:无人是 admin（不再 fail-open）
+  it('isAdmin looks at the list only: the creator off it is nobody (main 必败)', () => {
     expect(isAdmin(cfg(), 'ou_x')).toBe(false);
-    // owner 恒为 admin，即使 admins 数组为空
-    const ownerOnly = cfg({ access: { ownerOpenId: 'ou_owner', admins: [] } });
-    expect(isAdmin(ownerOnly, 'ou_owner')).toBe(true);
-    expect(isAdmin(ownerOnly, 'ou_other')).toBe(false);
-    // owner + 额外 admin 都算 admin
-    const withAdmin = cfg({ access: { ownerOpenId: 'ou_owner', admins: ['ou_a'] } });
-    expect(isAdmin(withAdmin, 'ou_owner')).toBe(true);
-    expect(isAdmin(withAdmin, 'ou_a')).toBe(true);
-    expect(isAdmin(withAdmin, 'ou_b')).toBe(false);
+    expect(isAdmin(cfg({ access: { ownerOpenId: 'ou_creator', admins: [] } }), 'ou_creator')).toBe(false);
+    const list = cfg({ access: { ownerOpenId: 'ou_creator', admins: ['ou_a'] } });
+    expect(isAdmin(list, 'ou_creator')).toBe(false);
+    expect(isAdmin(list, 'ou_a')).toBe(true);
+    expect(isAdmin(list, 'ou_b')).toBe(false);
+    expect(isAdmin(list, '')).toBe(false);
   });
 
-  it('resolveOwner: explicit ownerOpenId, else first admin (老 config 回退)', () => {
-    expect(resolveOwner(cfg())).toBeUndefined();
-    expect(resolveOwner(cfg({ access: { ownerOpenId: 'ou_owner' } }))).toBe('ou_owner');
-    // 老 config 无 ownerOpenId → 回退首个 admin
-    expect(resolveOwner(cfg({ access: { admins: ['ou_first', 'ou_second'] } }))).toBe('ou_first');
-    // ownerOpenId 优先于 admins[0]
-    expect(resolveOwner(cfg({ access: { ownerOpenId: 'ou_owner', admins: ['ou_first'] } }))).toBe('ou_owner');
+  it('primaryAdmin: the creator while on the list, else the first on it', () => {
+    expect(primaryAdmin(cfg())).toBeUndefined();
+    expect(primaryAdmin(cfg({ access: { ownerOpenId: 'ou_creator' } }))).toBeUndefined();
+    expect(primaryAdmin(cfg({ access: { admins: ['ou_first', 'ou_second'] } }))).toBe('ou_first');
+    expect(primaryAdmin(cfg({ access: { ownerOpenId: 'ou_creator', admins: ['ou_first', 'ou_creator'] } }))).toBe('ou_creator');
+    expect(primaryAdmin(cfg({ access: { ownerOpenId: 'ou_creator', admins: ['ou_first'] } }))).toBe('ou_first');
   });
 
   it('isUserAllowedInProject: admin 豁免 / 空名单=所有人 / 命中或拒绝', () => {
-    const c = cfg({ access: { ownerOpenId: 'ou_owner', admins: ['ou_admin'] } });
-    // admin/owner 恒豁免，即使不在白名单
+    const c = cfg({ access: { ownerOpenId: 'ou_owner', admins: ['ou_owner', 'ou_admin'] } });
+    // admin 恒豁免，即使不在白名单
     expect(isUserAllowedInProject(c, { allowedUsers: ['ou_u'] }, 'ou_owner')).toBe(true);
     expect(isUserAllowedInProject(c, { allowedUsers: ['ou_u'] }, 'ou_admin')).toBe(true);
     // 空名单 / 缺省 = 所有人
