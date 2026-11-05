@@ -7,7 +7,7 @@ import {
   agentIdSchema, FULL_ACCESS_WARNING, groupIdSchema, jobIdSchema, membershipIdSchema, settingsReplySchema,
   type AdminSetupStatus, type Agent, type DesktopSnapshot, type Job, type Membership, type SettingsReply, type ToolState,
 } from '@vonvon/protocol';
-import { pickBot, withDaemon, type Daemon } from '../src/cli/daemon-client';
+import { pickBot, setCliContext, withDaemon, type Daemon } from '../src/cli/daemon-client';
 import { runBotAdd, runBotList, runBotRepairDir, runBotStatus, type AddDependencies } from '../src/cli/commands/bot';
 import { runGroupBind, runGroupJoined, runGroupPending } from '../src/cli/commands/group';
 import { parseAssignments, runSettingsGet, runSettingsSet } from '../src/cli/commands/settings';
@@ -46,6 +46,21 @@ it('picks a bot by id or a unique name and lists the choices otherwise', () => {
   expect(pickBot([a, b, c], '支付')).toBe(c);
   expect(() => pickBot([a, b, c], 'Vonvon Bot')).toThrow('有 2 个 Bot 都叫「Vonvon Bot」，用 id 指定：cli_a、cli_b');
   expect(() => pickBot([a], 'x')).toThrow('没有找到 Bot「x」。现有的 Bot：Vonvon Bot（cli_a）');
+});
+
+// dm-agent 9: a private chat sees every Bot, and with no --bot it means its own. main 必败: it asked which.
+it('takes a private chat\'s own Bot without --bot, and only there', () => {
+  const [a, b] = [agent('cli_a'), agent('cli_b', '支付')];
+  const running = process.env;
+  try {
+    setCliContext({ env: { VONVON_SESSION: 'vs1.x', VONVON_BOT: 'cli_b' } });
+    expect(pickBot([a, b])).toBe(b);
+    expect(pickBot([a, b], 'cli_a')).toBe(a);
+    setCliContext({ env: { VONVON_SESSION: 'vs1.x', VONVON_BOT: 'cli_gone' } });
+    expect(() => pickBot([a, b])).toThrow('有 2 个 Bot，用 --bot 指定');
+    setCliContext({ env: { VONVON_BOT: 'cli_b' } });
+    expect(() => pickBot([a, b])).toThrow('有 2 个 Bot，用 --bot 指定');
+  } finally { setCliContext({ env: running }); }
 });
 
 it('bot repair-dir says how many directories it recorded and which will be made again (s36c2d)', async () => {

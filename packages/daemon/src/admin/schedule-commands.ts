@@ -60,12 +60,15 @@ export const scheduleRefusalMessages: Record<FixedRefusal, string> = {
   'bot-not-running': 'Bot 没在运行，任务暂时看不到；启动后再来。',
   'topic-pending': '话题还没建好，稍等几秒再试。',
 };
-const RUN_NOW_REFUSALS: Record<Exclude<RunNowResult['kind'], 'started'>, FixedRefusal> = {
-  running: 'running', 'not-started': 'bot-not-running', 'not-found': 'not-found',
+const RUN_NOW_REFUSALS: Record<Exclude<RunNowResult['kind'], 'started' | 'not-found'>, FixedRefusal> = {
+  running: 'running', 'not-started': 'bot-not-running',
 };
 const MAX_CREATOR_TEXT = 500; // scheduleCreatorSchema.text
 /** A private chat's command line named a chat this Bot has no window on. */
 const NO_CHAT = '这个 Bot 不在这个群里，也没有这个私聊，任务建不了。';
+
+/** `not-found`'s words where the chat is a private chat. */
+export const DM_NOT_FOUND = '这个私聊没有这个任务。';
 
 const refused = (reason: ScheduleRefusal, message: string): Refused => ({ kind: 'refused', reason, message });
 const refuse = (reason: FixedRefusal): Refused => refused(reason, scheduleRefusalMessages[reason]);
@@ -137,6 +140,8 @@ function denial(actor: ScheduleActor, action: TaskAction, task: StoredTask): Fix
 
 /** The only entry that changes schedules.json on a user's behalf (terminal, desktop and agent tools). */
 export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleCommands {
+  const inDm = (chatId: string): boolean => deps.chatOf?.(chatId)?.kind === 'dm';
+  const notFound = (chatId: string): Refused => inDm(chatId) ? refused('not-found', DM_NOT_FOUND) : refuse('not-found');
   const { store, scheduler } = deps;
   const limits = deps.limits ?? { perChat: 20, perBot: 200 };
 
@@ -176,7 +181,7 @@ export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleComm
   /** The task again inside the write: it may have gone since the first look. */
   function find(tasks: StoredTask[], request: { chatId: string; taskId: string }): StoredTask {
     const task = tasks.find(candidate => candidate.id === request.taskId && candidate.chatId === request.chatId);
-    if (!task) throw new Answer(refuse('not-found'));
+    if (!task) throw new Answer(notFound(request.chatId));
     return task;
   }
 
@@ -195,7 +200,7 @@ export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleComm
     };
     return write((tasks, touch) => {
       if (tasks.filter(other => other.chatId === task.chatId).length >= limits.perChat) {
-        throw new Answer(refused('task-limit', `${deps.chatOf?.(task.chatId)?.kind === 'dm' ? '这个私聊' : '本群'}已有 ${limits.perChat} 个任务，先删掉不用的。`));
+        throw new Answer(refused('task-limit', `${inDm(task.chatId) ? '这个私聊' : '本群'}已有 ${limits.perChat} 个任务，先删掉不用的。`));
       }
       if (tasks.length >= limits.perBot) throw new Answer(refused('task-limit', `这个 Bot 已有 ${limits.perBot} 个任务，先删掉不用的。`));
       touch(task);
@@ -284,7 +289,7 @@ export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleComm
       }
       // By id only among this group's tasks: another group's id reads as missing, not as forbidden.
       const task = store.get(request.taskId);
-      if (!task || task.chatId !== request.chatId) return refuse('not-found');
+      if (!task || task.chatId !== request.chatId) return notFound(request.chatId);
       const denied = denial(actor, request.action, task);
       if (denied) return refuse(denied);
       switch (request.action) {
@@ -307,6 +312,7 @@ export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleComm
         });
         case 'runNow': {
           const result = scheduler.runNow(task.id);
+          if (result.kind === 'not-found') return notFound(request.chatId);
           return result.kind === 'started' ? { kind: 'started', taskId: task.id, runId: result.runId } : refuse(RUN_NOW_REFUSALS[result.kind]);
         }
         default: { const exhaustive: never = request; return exhaustive; }

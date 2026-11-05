@@ -3,7 +3,7 @@ import { badArgs, CommandError, rpcErrorKind } from './command-error';
 import { connectLocal, ConnectionError, RpcError, type VonvonClient } from '@vonvon/client';
 import { backendLabel, conversationCopy, PROTOCOL_VERSION, requestSchema, type Agent, type Membership, type Scope, type ServerInfo } from '@vonvon/protocol';
 import { paths } from '../config/paths';
-import { inBotSession, SESSION_ENV } from '../config/session-env';
+import { inBotSession, SESSION_BOT_ENV, SESSION_ENV } from '../config/session-env';
 import { looksLikeSessionToken, SESSION_TOKEN_INVALID } from '../host/session-tokens';
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { PidLockError, readRunningPidLock } from '../server/pid-lock';
@@ -206,7 +206,7 @@ export function want<R extends { kind: string }, K extends R['kind']>(what: stri
 
 export const NO_BOT = '还没有 Bot。运行 vonvon bot add 在终端里扫码注册，或者在网页里注册（vonvon open）。';
 
-/** No "current bot": only a single bot is picked without --bot. By id first, then by name (`memory --bot` gets the files' bots too). */
+/** No "current bot": without --bot, only a single bot is picked, or a private chat's own. By id first, then by name (`memory --bot` gets the files' bots too). */
 export function pickBot<A extends { id: string; name: string }>(agents: readonly A[], wanted?: string): A {
   const [only] = agents;
   if (!only) throw badArgs(NO_BOT);
@@ -214,6 +214,8 @@ export function pickBot<A extends { id: string; name: string }>(agents: readonly
   const list = agents.map(agent => `${printable(agent.name)}（${agent.id}）`).join('、');
   if (wanted === undefined) {
     if (agents.length === 1) return only;
+    const own = inBotSession(context.env) ? agents.find(agent => agent.id === context.env[SESSION_BOT_ENV]) : undefined;
+    if (own) return own;
     throw badArgs(`有 ${agents.length} 个 Bot，用 --bot 指定：${list}`);
   }
   const byId = agents.find(agent => agent.id === wanted);

@@ -23,7 +23,7 @@ import { findTranscript, scanTranscript } from './transcript';
 import { FEISHU_API, FEISHU_DOC_EDIT, feishuReadToolNames } from '../entry/feishu-tools';
 import { scheduleToolNames } from '../entry/schedule-tools';
 import { toolReplyText } from '../entry/tools';
-import { builtinSkillsOfSet } from '../builtin-skills/registry';
+import { builtinSkillNames } from '../builtin-skills/registry';
 
 /** Config the backend hands the thread to stand up its persistent query(). */
 export interface ClaudeThreadConfig {
@@ -119,12 +119,12 @@ export const AUTO_COMPACT_SETTINGS = {
 /**
  * vonvon's builtin capability package is the plugin `vonvon` (builtin-skills/package.ts). Loaded from a directory its
  * id is `vonvon@inline`. A workspace's `.claude/settings.json` can turn it off; enabling it in the flag settings, which
- * outrank project and local settings, beats that (both measured, product.md 9.22). A group's skill whitelist gets its
- * skills too.
+ * outrank project and local settings, beats that (both measured, product.md 9.22). A session's skill whitelist gets
+ * its skills too: all of them, a name its package does not have matching nothing.
  */
 const BUILTIN_PLUGIN = 'vonvon';
 export const BUILTIN_PLUGIN_ID = `${BUILTIN_PLUGIN}@inline`;
-export const BUILTIN_SKILL_NAMES = builtinSkillsOfSet('group').map(skill => `${BUILTIN_PLUGIN}:${skill.name}`);
+export const BUILTIN_SKILL_NAMES = builtinSkillNames().map(name => `${BUILTIN_PLUGIN}:${name}`);
 
 /** Hard ceiling on a manual /compact (a summarization turn) so a wedged process
  * can't hang the「压缩中」card forever. Mirrors codex's COMPACT_TIMEOUT_MS. */
