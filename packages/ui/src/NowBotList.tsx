@@ -23,6 +23,23 @@ function BadgeGroupSummary({group, motion}: {group: Group; motion: boolean}) {
   </summary>;
 }
 
+function badgeConnection(agent: Agent, live: boolean, stale: boolean): string {
+  if (agent.readError) return '配置读取失败';
+  if (!agent.enabled) return '已停用';
+  if (!live) return stale ? '待更新' : '已断开';
+  if (!agent.running) return '未运行';
+  switch (agent.connection) {
+    case 'connected': return '已连接';
+    case 'connecting': return '连接中';
+    case 'reconnecting': return '重连中';
+    case 'failed': return '连接失败';
+    case 'idle':
+    case 'stopped':
+    case 'disconnected': return '未连接';
+    default: return '待更新';
+  }
+}
+
 export function nowBotActivities(agent: Agent, members: readonly Membership[], live: boolean, now: number): BotActivity[] {
   if (!live || !agent.enabled || !agent.running || agent.connection !== 'connected' || agent.readError) return [];
   return (agent.diagnostics?.activities ?? []).filter(item => now - (item.observedAt ?? item.updatedAt) < BOT_ACTIVITY_STALE_MS
@@ -68,11 +85,12 @@ export function NowBotList({snapshot, connected, onRegister, disabled, onChangeN
     <header><h2>你的 Bot</h2><GlowButton disabled={disabled} onClick={onRegister}>添加 Bot</GlowButton></header>
       {snapshot.agents.length ? <BadgeRack>{snapshot.agents.map((agent, index) => {
         const bindings = [...new Map(snapshot.memberships.filter(member => member.agentId === agent.id).map(member => [member.groupId, member])).values()];
-        const groupSummary = `已加入 ${bindings.length} 个群`;
-        const available = live && agent.enabled && agent.running && agent.connection === 'connected' && !agent.readError;
-        const connectionStatus=agent.readError?'配置读取失败':!agent.enabled?'已停用':!live?(snapshot.stale?'待更新':'已断开'):!agent.running?'未运行':available?'已连接':agent.connection==='reconnecting'?'重连中':'未连接';
+        const confirmed = live && !agent.readError && bindings.every(member => !member.stale);
+        let groupSummary = `已加入 ${bindings.length} 个群`;
+        if (!confirmed) groupSummary = bindings.length ? `上次记录 ${bindings.length} 个群` : '群数待更新';
+        const connectionStatus = badgeConnection(agent, live, snapshot.stale);
         return <NowBotBadge key={agent.id} agent={agent} index={index} groupSummary={groupSummary}
-          status={connectionStatus} tone={available ? 'online' : 'offline'}
+          status={connectionStatus} tone={connectionStatus === '已连接' ? 'online' : 'offline'}
           ownerName={agent.ownerName} tenure={badgeTenure(agent.registeredAt, now)}
           jobNumber={agent.badgeNumber} editable={live && !disabled && !!agent.badgeNumber}
           onJobChange={value => onChangeNumber(agent.id, value)}
@@ -93,7 +111,7 @@ export function NowBotList({snapshot, connected, onRegister, disabled, onChangeN
                 </details>
               </li>;
             })}
-            {!bindings.length && <li className="badge-no-groups">暂无已绑定的群</li>}
+            {!bindings.length && <li className="badge-no-groups">{confirmed ? '暂无已绑定的群' : '群列表待更新'}</li>}
         </NowBotBadge>;
       })}</BadgeRack> : <p className="now-bot-empty">添加 Bot，在飞书里开始交流。</p>}
   </section>;

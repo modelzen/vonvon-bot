@@ -6,6 +6,7 @@ import { scopeSchema } from "./device.js";
 
 export const adminProjectSchema = z.object({
   avatarDataUrl: z.string().optional(),
+  enabled: z.boolean().optional(),
   name: z.string(), chatId: z.string(), cwd: z.string(), blank: z.boolean(),
   branch: z.string().optional(), kind: z.enum(["multi", "single", "smart"]),
   origin: z.enum(["created", "joined"]), noMention: z.boolean(),
