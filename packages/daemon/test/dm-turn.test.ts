@@ -383,7 +383,7 @@ describe('an administrator taken off the list', () => {
     await until(() => expect(fake.voice).toHaveBeenCalled());
     await remove(o, OWNER);
     send.mockClear();
-    heard.resolve({ text: '语音的话' }); await pending; await tick();
+    heard.resolve({ text: '语音的话' }); await pending; await settled();
     expect(be.startThread).not.toHaveBeenCalled();
     // Stopped at the door of the turn, before a session is asked for: nothing to tell.
     expect(send).not.toHaveBeenCalled();
