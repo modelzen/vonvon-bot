@@ -343,6 +343,8 @@ describe('an administrator taken off the list', () => {
     await o.onMessage(message('排着的')); await tick();
     expect((await remove(o, OWNER)).kind).toBe('saved');
     await until(() => expect(run.t.close).toHaveBeenCalled());
+    // Stopped as a stop is, not only cut off by the close.
+    expect(run.t.abort).toHaveBeenCalled();
     await tick();
     expect(run.consumed).toHaveLength(1); expect(revoked).toHaveLength(1);
     send.mockClear();
@@ -380,8 +382,23 @@ describe('an administrator taken off the list', () => {
     const pending = o.onMessage(message('', { rawContentType: 'audio' }));
     await until(() => expect(fake.voice).toHaveBeenCalled());
     await remove(o, OWNER);
+    send.mockClear();
     heard.resolve({ text: '语音的话' }); await pending; await tick();
     expect(be.startThread).not.toHaveBeenCalled();
+    // Stopped at the door of the turn, before a session is asked for: nothing to tell.
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it.each(['steer', 'queue'] as const)('neither steers nor queues words transcribed after the removal, a turn running (%s)', async policy => {
+    const run = thread(), heard = deferred<unknown>(); backend(run); const { o } = await app(policy);
+    await o.onMessage(message('干活')); await until(() => expect(run.consumed).toHaveLength(1));
+    fake.voice.mockImplementationOnce(() => heard.promise);
+    const pending = o.onMessage(message('', { rawContentType: 'audio' }));
+    await until(() => expect(fake.voice).toHaveBeenCalled());
+    await remove(o, OWNER);
+    heard.resolve({ text: '语音的话' }); await pending; await settled();
+    expect(run.t.steer).not.toHaveBeenCalled();
+    expect(run.consumed).toHaveLength(1);
   });
 
   it('gets the window back when put on the list again, on the same session', async () => {
