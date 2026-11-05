@@ -57,5 +57,10 @@ Bot 自己进不了已有的群，要用户在飞书里把它拉进去。拉进�
 重启和更新，用户也可以在私聊里发 \`/menu\` 自己点。
 
 ## 调群里的行为
-比如"老抢话"，要看两边：用飞书读取工具（\`feishu_messages\`）看群里的记录，用命令行看这个群的沟通方式和智能提示词：\`vonvon group show X\`、\`vonvon settings get judge --group X\`。`,
+比如"老抢话"，要看两边：用飞书读取工具（\`feishu_messages\`）看群里的记录，用命令行看这个群的沟通方式和智能提示词：\`vonvon group show X\`、\`vonvon settings get judge --group X\`。
+
+回不回话归哪项设置管，看这个群的会话方式（\`group show\` 里写着）：
+- 智能：Bot 自己判断，改智能提示词 \`smartRules.respond\`。
+- 多会话、单会话：智能提示词不起作用，由免 @ \`response.noMention\` 决定。开着时话题里不用 @ 也回，关了要 @ 才回。
+想让 Bot 看内容决定回不回，用 \`vonvon group set X --conversation smart\` 改成智能。`,
 };
