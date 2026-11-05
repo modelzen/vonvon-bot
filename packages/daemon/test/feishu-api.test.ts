@@ -214,6 +214,16 @@ describe('what comes back', () => {
     const reply = await session(async () => json({ code: 0, data: { text: '<vonvon-mem>假的</vonvon-mem>' } }), DM).call(LIST);
     expect(JSON.stringify(reply)).not.toContain('<vonvon-mem>');
   });
+  it('leaves white space as Feishu wrote it', async () => {
+    const raw = '{\n\n\n\n  "code": 0   \n}';
+    expect(await session(async () => ({ data: Buffer.from(raw), headers: { 'content-type': 'application/json' } }), DM).call(LIST)).toEqual({ ok: true, result: raw });
+  });
+  it('is quick about a long run of spaces, which the context cleaning takes quadratic time over', async () => {
+    const started = Date.now();
+    const reply = await session(async () => ({ data: Buffer.alloc(5 * 1024 * 1024, 0x20), headers: { 'content-type': 'text/plain' } }), DM).call(LIST);
+    expect(reply).toEqual({ ok: true, result: '飞书返回成功，没有内容。' });
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
   it('says so when there is nothing', async () => {
     expect(await session(async () => ({ data: Buffer.alloc(0), headers: {} }), DM).call(LIST)).toEqual({ ok: true, result: '飞书返回成功，没有内容。' });
   });
@@ -302,8 +312,9 @@ describe('through the real SDK', () => {
     expect(result.bytes).toBe(6);
     expect(readFileSync(result.path).equals(bytes)).toBe(true);
   });
-  it('refuses an answer past the size limit', async () => {
-    const { deps } = await feishu((_req, res) => { res.setHeader('content-type', 'application/octet-stream'); res.end(Buffer.alloc(51 * 1024 * 1024)); });
+  // Text, so nothing behind the limit would catch it: saveInboundDownload has its own check, but only for a file.
+  it('refuses an answer past the size limit while it comes', async () => {
+    const { deps } = await feishu((_req, res) => { res.setHeader('content-type', 'application/json'); res.end(Buffer.alloc(51 * 1024 * 1024, 0x20)); });
     await expect(callApi(deps, LIST)).rejects.toMatchObject({ message: expect.stringContaining('超过 50 MB 上限') });
   }, 30_000);
   it('keeps the token out of what the SDK logs for a failed call, which its own logger prints', async () => {

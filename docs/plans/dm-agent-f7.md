@@ -48,7 +48,7 @@
 4. `rawClient.request`：`responseType: 'arraybuffer'`，`maxContentLength: MAX_FILE_BYTES`，`$return_headers: true`，`paramsSerializer` 写成 `a=1&a=2`（SDK 自己的调用也是这样）。
 5. 总时限 60 秒，到了 `abort`。commit 之后 registry 的 70 秒不再打断，所以这里要自己限。
 6. 成功：`content-disposition` 是 attachment，或类型不是文本，就存文件，回 `{ path, name, bytes, contentType }`；否则文本。没有类型时看字节里有没有 NUL。文本里 `code` 非 0 按失败算。
-7. 文本过 `cleanText`（和别的读取工具同一道边界），`sliceText` 按 `RESULT_BUDGET` 切，切了就在最前面写一行说明。说明放前面，免得显示结果的那一层再切掉尾巴。
+7. 文本只过 `escapeInboundMarkers`（和别的读取工具同一道标记边界），不用 `cleanText`：回的是原文，空白不动，它的空白正则在长空白串上是平方复杂度。只解码开头 `2 * RESULT_BUDGET` 字节，`code` 只在 1 MB 以内的响应里查，50 MB 的响应不会卡住 Bot 进程。`sliceText` 按 `RESULT_BUDGET` 切，切了就在最前面写一行说明。说明放前面，免得显示结果的那一层再切掉尾巴。
 
 **错误（`D/feishu-read/denial.ts` 的 `apiRefusalOf`）。**
 
@@ -93,7 +93,7 @@
 
 ## 9. 风险和行数
 
-约 720 行，其中测试约 400 行，这一片的计划约 130 行。
+约 790 行：产品代码约 260 行，测试约 375 行，这一片的计划约 150 行。
 
 - **内存：** 响应整个读进内存，最多 50 MB，一个会话同时最多 4 个调用。换来的是不用写流的限速和错误处理；下载大文件本来也有专门工具。
 - **改到共享代码：** `registry.ts` 的改动和 C1 重叠，F5、F6 改 `feishu-tools.ts`，都只是加行。
@@ -118,13 +118,20 @@
 
 **跑过的命令和结果**
 
-见本节末尾"命令和结果"。
+- `npx tsc --noEmit -p .`（`packages/daemon`）：通过。这个包没有单独的 lint 脚本。
+- `npx vitest run` 跑 `feishu-api`、`feishu-read`、`dm-turn`、`schedule-profile`、`codex-dynamic-tools`、`claude-schedule-entry`：6 个文件，227 个用例全过。
+- 用到 registry、channel、工具表和下载的 31 个测试文件：29 个通过，2 个跳过，831 passed，38 skipped。这一轮在最后一次修改之前跑的，最后一次只改 `feishu-read/api.ts`，上一条覆盖了它。
+- 变异检查 14 处（去掉 logger、位置、管理员检查、路径解码、abort、大小上限等）：全部被测试抓到。
+- 本机假服务器加默认 logger：能复现 stdout 里的 `Authorization: Bearer ...`；换成 `sdkLogger` 后没有。
+- 真实 Codex 0.163.0 app-server 的 `thread/start` 接受带 `feishu_api` 的工具表（隔离的 HOME，没有模型请求），坏 schema 的对照组被拒。
+- 真实 Claude Agent SDK 的 `tool()`、`createSdkMcpServer`：`tools/list` 列得出，`tools/call` 校验参数。
 
 **和计划不一样的地方**
 
 都是纯技术取舍：
 
 - 响应用 `arraybuffer` 整个读进内存，不用流。
+- 文本不过 `cleanText`，只过 `escapeInboundMarkers`：要回原文，而且 `cleanText` 的空白正则在长空白串上是平方复杂度。
 - `body` 只收 JSON 对象。SDK 的 `Client.request` 用 `Object.assign({}, data)` 处理 body，数组会变成对象，所以 schema 直接拒绝。
 - `path` 里不许有 `?`、`#`，查询参数写进 `params`。
 - `feishu_api` 新开一个工具类 `feishu-api`，没有借用 `document`，因为检查函数和出错文字都不一样。
