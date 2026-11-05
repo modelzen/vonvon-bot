@@ -94,6 +94,12 @@ describe('config schema helpers', () => {
     expect(primaryAdmin(cfg({ access: { ownerOpenId: 'ou_creator', admins: ['ou_first'] } }))).toBe('ou_first');
   });
 
+  it('isUserAllowedInProject: 私聊那一行只认管理员，名单是空的也一样（dm-agent 5）', () => {
+    const c = cfg({ access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] } });
+    expect(isUserAllowedInProject(c, { dm: { people: {} } }, 'ou_owner')).toBe(true);
+    expect(isUserAllowedInProject(c, { dm: { people: {} } }, 'ou_x')).toBe(false);
+  });
+
   it('isUserAllowedInProject: admin 豁免 / 空名单=所有人 / 命中或拒绝', () => {
     const c = cfg({ access: { ownerOpenId: 'ou_owner', admins: ['ou_owner', 'ou_admin'] } });
     // admin 恒豁免，即使不在白名单

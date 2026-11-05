@@ -372,8 +372,8 @@ describe('the bot-session column (unit)', () => {
     // its refusals: the sentence word for word, the code the command line knows for its place
     const notGroup = await asked('group', request('schedule', { botId: BOT, request: { action: 'list', chatId: GROUP } }), { ok: false, reason: 'not-group', message: scheduleRefusalMessages['not-group'] });
     expect(notGroup.decision).toMatchObject({ ok: false, code: 'not-group' });
-    const switchOff = await asked('dm', settingsSave('研发'), { ok: false, reason: 'switch-off', message: '关了' });
-    expect(switchOff.decision).toEqual({ ok: false, code: 'permission_denied', message: '关了', details: { reason: 'switch-off' } });
+    const closed = await asked('dm', settingsSave('研发'), { ok: false, reason: 'turn-ended', message: '结束了' });
+    expect(closed.decision).toEqual({ ok: false, code: 'permission_denied', message: '结束了', details: { reason: 'turn-ended' } });
   });
 
   // devices-4b 4.5a (SEC-4): a private chat reads the bot's settings as settings_get shows them

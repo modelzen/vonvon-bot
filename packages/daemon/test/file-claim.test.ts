@@ -25,6 +25,14 @@ describe('fileClaimMode (product.md 3.12)', () => {
     expect(fileClaimMode(cfg(), p, record, 'ou_owner')).toBe('write');
   });
 
+  // dm-agent 5: a private chat's row is an administrators' place; the group list has no say in it, and no member gets in.
+  it('in a private chat, takes the present administrator only, whatever the list of groups says', () => {
+    const dm = project({ dm: { people: {} } });
+    expect(fileClaimMode(cfg({ admins: ['ou_admin'], allowedChats: ['oc_other'] }), dm, record, 'ou_admin')).toBe('write');
+    expect(fileClaimMode(cfg({ allowedChats: ['oc_other'] }), dm, record, 'ou_someone')).toBeUndefined();
+    expect(fileClaimMode(cfg(), dm, record, 'ou_someone')).toBeUndefined();
+  });
+
   it('refuses a chat outside the app allowlist, an unbound, disabled or moved project, and no clicker', () => {
     expect(fileClaimMode(cfg({ allowedChats: ['oc_other'] }), project(), record, 'ou_someone')).toBeUndefined();
     expect(fileClaimMode(cfg(), undefined, record, 'ou_someone')).toBeUndefined();

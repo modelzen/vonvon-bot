@@ -31,7 +31,7 @@ function world() {
   const data = root();
   const library = libraryLocation(data);
   const memory = createMemoryWriter({ botId: 'cli_a', botDirectory: join(data, 'bots', 'cli_a'), library, projectIdOf: async chatId => chatId === 'oc_a' ? PROJECT : undefined });
-  const tools = createCommandTools({ appId: 'cli_a', memory, settings: {} as never, projects: async () => [], groups: async () => ({ groups: [] }) as never, members: async () => ({ members: [] }) as never });
+  const tools = createCommandTools({ appId: 'cli_a', memory, groups: async () => ({ groups: [] }) as never, members: async () => ({ members: [] }) as never });
   const entries = createAgentEntries({ appId: 'cli_a', tools, isAdmin: id => id === 'ou_o' });
   function session(place: AgentPlace, turn: TurnFacts) {
     const entry = entries.issue(place); const t = thread(); entry.attach(t);
@@ -47,7 +47,7 @@ function world() {
 
 describe('the memory tools through the registry', () => {
   it('are registered only when a writer is given, and the comment session gets just the list', () => {
-    const base = { appId: 'cli_a', settings: {} as never, projects: async () => [], groups: async () => ({}) as never, members: async () => ({}) as never };
+    const base = { appId: 'cli_a', groups: async () => ({}) as never, members: async () => ({}) as never };
     expect(createCommandTools(base).map(tool => tool.name)).not.toContain('memory_add');
     const w = world();
     const group = w.session({ kind: 'group', chatId: 'oc_a' }, facts());
@@ -101,7 +101,7 @@ describe('the memory tools through the registry', () => {
 });
 
 describe('what the model is told', () => {
-  const descriptions = (): string => createCommandTools({ appId: 'x', memory: {} as never, settings: {} as never, projects: async () => [], groups: async () => ({}) as never, members: async () => ({}) as never })
+  const descriptions = (): string => createCommandTools({ appId: 'x', memory: {} as never, groups: async () => ({}) as never, members: async () => ({}) as never })
     .filter(tool => tool.name.startsWith('memory_')).map(tool => tool.description).join('\n');
   it('says: remember in your own words in the reply; pick the branch from the list; not a receipt, not where it was kept', () => {
     const text = descriptions();

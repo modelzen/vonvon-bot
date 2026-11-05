@@ -17,12 +17,11 @@ vi.mock('../src/config/paths', async original => ({ ...await original<object>(),
 } }));
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 function fixture(run: AgentTool['run']) {
-  const flags = { admin: true, enabled: true };
+  const flags = { admin: true };
   const thread: AgentThread = { sessionId: 'fixture', isAlive: vi.fn(() => true), close: async () => {},
     runStreamed: () => { throw Error('unused'); }, runGoal: () => { throw Error('unused'); },
     clearGoal: async () => {}, abort: async () => {}, steer: async () => {}, compact: async () => ({ compacted: false, usage: null }) };
-  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => flags.admin,
-    chatSettingsOn: () => flags.enabled, tools: [{ name: 't_set', description: 'fixture', class: 'settings', input: z.object({}), run }] });
+  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => flags.admin, tools: [{ name: 't_set', description: 'fixture', class: 'settings', input: z.object({}), run }] });
   const entry = entries.issue({ kind: 'p2p' }); entry.attach(thread);
   const scope = entries.openTurn(thread, { requesterOpenId: 'admin', requesterKind: 'user', triggerMessageId: 'm1', retry: false, wake: false, initiative: false });
   entry.noteToolUse('u1');
@@ -34,7 +33,6 @@ const changes: [string, (f: ReturnType<typeof fixture>) => void, string][] = [
   ['turn close', f => f.scope.close(), 'turn-ended'],
   ['another person steers', f => f.entries.noteSteer(f.thread, { openId: 'other', kind: 'user' }), 'not-human-turn'],
   ['administrator removed', f => { f.flags.admin = false; }, 'not-admin'],
-  ['switch off', f => { f.flags.enabled = false; }, 'switch-off'],
   ['grant revoked', f => f.entry.revoke('closed'), 'revoked'],
   ['thread died', f => { vi.mocked(f.thread.isAlive).mockReturnValue(false); }, 'revoked'],
   ['turn replaced', f => { f.entries.openTurn(f.thread, { requesterOpenId: 'admin', requesterKind: 'user', triggerMessageId: 'm2', retry: false, wake: false, initiative: false }); }, 'turn-ended'],
