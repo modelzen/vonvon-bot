@@ -92,6 +92,7 @@ const message = (chatId: string): NormalizedMessage => ({ messageId: `om_${chatI
 const edit = async (chatId: string) => o.collaboration({ action: 'editProject', projectName: chatId, chatId, enabled: true,
   expectedRevision: (await import('../src/admin/collaboration')).projectRevision((await registry.getProjectByChatId(chatId))!) });
 /** A claimed run of a daily task in `chatId`, as the scheduler hands it over. */
+const gate = (chatId: string) => fake.deps!.gate(chatId, { createdBy: { via: 'cli' } });
 const job = (chatId: string): ScheduledJob => ({
   task: { id: 'st_00000000000000b1', chatId, revision: 'r1', name: '日报', instruction: '写今天的日报', spec: { kind: 'daily', time: '09:00' },
     timeZone: 'UTC', placement: { kind: 'follow' }, state: 'active', createdBy: { via: 'cli' }, createdAt: 1, updatedAt: 1,
@@ -107,21 +108,21 @@ it('a run in group A locks only group A, and holds its scheduled tasks for a min
   await o.onMessage(message('oc_a'));
   await vi.waitFor(() => expect(fake.card).toHaveBeenCalled());
   await expect(edit('oc_b')).resolves.toMatchObject({ ok: true });
-  expect(fake.deps!.gate('oc_a')).toBe('ok');
+  expect(gate('oc_a')).toBe('ok');
   await expect(edit('oc_a')).rejects.toThrow('Agent 正在执行任务');
-  expect([fake.deps!.gate('oc_a'), fake.deps!.gate('oc_b')]).toEqual(['held', 'ok']);
+  expect([gate('oc_a'), gate('oc_b')]).toEqual(['held', 'ok']);
   const later = Date.now() + 60_000;
   vi.spyOn(Date, 'now').mockReturnValue(later);
-  expect(fake.deps!.gate('oc_a')).toBe('ok');
+  expect(gate('oc_a')).toBe('ok');
 });
 
 it('the library workspace check looks at the groups of that project only, and holds them', async () => {
   await o.onMessage(message('oc_a'));
   await vi.waitFor(() => expect(fake.card).toHaveBeenCalled());
   expect(await o.libraryExecute({ kind: 'libraryWorkspaceCheck', projectId: 'prj_0000000b' })).toEqual({ busy: false });
-  expect(fake.deps!.gate('oc_b')).toBe('ok');
+  expect(gate('oc_b')).toBe('ok');
   expect(await o.libraryExecute({ kind: 'libraryWorkspaceCheck', projectId: 'prj_0000000a' })).toEqual({ busy: true });
-  expect(fake.deps!.gate('oc_a')).toBe('held');
+  expect(gate('oc_a')).toBe('held');
 });
 
 it('a scheduled run of group B, while its session starts, locks group B only', async () => {
@@ -129,7 +130,7 @@ it('a scheduled run of group B, while its session starts, locks group B only', a
   void fake.deps!.run(job('oc_b'));
   await vi.waitFor(() => expect(fake.backend.startThread).toHaveBeenCalled());
   await expect(edit('oc_a')).resolves.toMatchObject({ ok: true });
-  expect(fake.deps!.gate('oc_a')).toBe('ok');
+  expect(gate('oc_a')).toBe('ok');
   await expect(edit('oc_b')).rejects.toThrow('Agent 正在执行任务');
 });
 
@@ -138,7 +139,7 @@ it('a scheduled run of group B in a new topic, once running, locks group B only'
   void fake.deps!.run({ ...run, task: { ...run.task, placement: { kind: 'newTopic' } } });
   await vi.waitFor(() => expect(fake.card).toHaveBeenCalled());
   await expect(edit('oc_a')).resolves.toMatchObject({ ok: true });
-  expect(fake.deps!.gate('oc_a')).toBe('ok');
+  expect(gate('oc_a')).toBe('ok');
   await expect(edit('oc_b')).rejects.toThrow('Agent 正在执行任务');
 });
 
@@ -165,5 +166,5 @@ it('a /new in group B, while its session starts, still locks every group', async
   await o.onMessage({ ...message('oc_b'), content: '/new' });
   await vi.waitFor(() => expect(fake.backend.startThread).toHaveBeenCalled());
   await expect(edit('oc_a')).rejects.toThrow('Agent 正在执行任务');
-  expect(fake.deps!.gate('oc_a')).toBe('held');
+  expect(gate('oc_a')).toBe('held');
 });
