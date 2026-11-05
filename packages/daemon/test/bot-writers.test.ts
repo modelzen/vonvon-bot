@@ -52,6 +52,61 @@ async function successful(root: string, code: string) {
 }
 
 describe('real bot writer ownership', () => {
+  it('draws 50 unique short numbers, then issues consecutive badges across processes without recycling retired numbers', async () => {
+    const root = await home();
+    const bots = Array.from({length: 50}, (_, i) => ({appId: 'legacy' + i, name: 'legacy' + i, tenant: 'feishu', createdAt: 1}));
+    const manual = {appId: 'manual', name: 'manual', tenant: 'feishu', createdAt: 1, badgeNumber: '10001'};
+    await writeFile(join(root, 'bots.json'), JSON.stringify({version: 1, bots: [...bots, manual]}));
+    await successful(root, 'await m.ensureRegistry()');
+    const migrated = await registry(root);
+    const pool: string[] = migrated.bots.slice(0, 50).map((bot: {badgeNumber: string}) => bot.badgeNumber);
+    expect(new Set(pool).size).toBe(50);
+    expect(pool.every(number => /^\d{3,4}$/.test(number))).toBe(true);
+    expect(pool).toEqual(expect.arrayContaining(['007', '404', '1024', '2048', '2333', '3141', '4242', '9527']));
+    expect(migrated.bots[50]).toEqual(manual);
+    // Simulate rows assigned by the old build that had not yet saved issuance history.
+    delete migrated.badgeIssuance;
+    await writeFile(join(root, 'bots.json'), JSON.stringify(migrated));
+    await successful(root, `await m.setBotBadgeNumber('legacy0','0000001');
+      const row=(await m.loadBots()).bots.find(b=>b.appId==='legacy1');
+      await m.removeBot(m.botIdentity(row),{isRunning:async()=>false,cleanup:async()=>{}});`);
+    await Promise.all(['alpha', 'beta'].map(id => successful(root, register(id))));
+    let saved = await registry(root);
+    const automatic: string[] = saved.bots.filter((bot: {appId: string}) => ['alpha', 'beta'].includes(bot.appId)).map((bot: {badgeNumber: string}) => bot.badgeNumber);
+    expect(automatic.sort()).toEqual(['10000', '10002']);
+    expect(saved.badgeIssuance).toEqual({usedFavorites: expect.arrayContaining(pool), nextSequential: 10003});
+    // Manually reclaim a retired favorite, while a duplicate of a currently worn number is refused.
+    const changes = JSON.parse(await successful(root, `console.log(JSON.stringify([
+      await m.setBotBadgeNumber('alpha', ${JSON.stringify(pool[0])}),
+      await m.setBotBadgeNumber('beta', ${JSON.stringify(pool[0])}),
+    ]))`));
+    expect(changes).toEqual([{ok: true}, {ok: false, reason: '这个工号已有 Bot 使用。'}]);
+    await successful(root, register('gamma'));
+    saved = await registry(root);
+    expect(saved.bots.find((bot: {appId: string}) => bot.appId === 'gamma').badgeNumber).toBe('10003');
+    expect(saved.bots.find((bot: {appId: string}) => bot.appId === 'legacy0').badgeNumber).toBe('0000001');
+  });
+
+  it('commits the last sequential number only with its registration and refuses exhaustion before provisioning another bot', async () => {
+    const root = await home();
+    const bots = Array.from({length: 50}, (_, i) => ({appId: 'bot' + i, name: 'bot' + i, tenant: 'feishu', createdAt: 1}));
+    await writeFile(join(root, 'bots.json'), JSON.stringify({version: 1, bots}));
+    await successful(root, 'await m.ensureRegistry()');
+    const seeded = await registry(root);
+    seeded.badgeIssuance.nextSequential = 9_999_999;
+    await writeFile(join(root, 'bots.json'), JSON.stringify(seeded));
+    const interrupted = await run(root, `await m.registerBotEntry(${identity('last')},async()=>{throw Error('account failure')});`).done;
+    expect(interrupted.stderr).toContain('account failure');
+    expect((await registry(root)).badgeIssuance.nextSequential).toBe(9_999_999);
+    await successful(root, register('last'));
+    const final = await registry(root);
+    expect(final.bots.at(-1).badgeNumber).toBe('9999999');
+    const refused = await run(root, register('after')).done;
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain('自动工号已发完');
+    expect(await registry(root)).toEqual(final);
+  });
+
   it('does not retain prior entries in a later missing registry in the same loaded module', async () => {
     const root = await home();
     const output = await successful(root, register('temporary') + `require('node:fs').unlinkSync(${JSON.stringify(join(root, 'bots.json'))});process.stdout.write(JSON.stringify(await m.loadBots()));`);

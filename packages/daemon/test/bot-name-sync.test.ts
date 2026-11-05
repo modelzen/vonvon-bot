@@ -37,7 +37,7 @@ vi.mock('../src/config/paths', async () => {
 });
 
 import { ensureOnboarded } from '../src/bot/onboarding';
-import { botIdentity, loadBots, removeBot, setBotActivation, updateBotName, type BotEntry } from '../src/config/bots';
+import { botIdentity, ensureRegistry, loadBots, removeBot, setBotActivation, updateBotName, type BotEntry } from '../src/config/bots';
 import { paths } from '../src/config/paths';
 import { seedBots } from './helpers/bot-fixture';
 
@@ -56,12 +56,18 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('the display name follows a rename in Feishu', () => {
+  beforeEach(async () => {
+    // First startup assigns legacy bots a badge. Measure name-sync writes after that migration.
+    await ensureRegistry();
+  });
+
   it('saves the new name at startup and leaves the handle and appId', async () => {
+    const before = (await loadBots()).bots[0]!;
     mocks.validate.mockResolvedValue({ ok: true, botName: '小码', missingScopes: [] });
     const ready = await ensureOnboarded({ bot: bot.appId });
     expect(ready?.identity).toEqual({ appId: bot.appId, tenant: 'feishu', createdAt: 1, registrationId: 'reg-1' });
     const saved = (await loadBots()).bots;
-    expect(saved).toEqual([{ ...bot, botName: '小码' }]);
+    expect(saved).toEqual([{ ...before, botName: '小码' }]);
     expect(mocks.info).toHaveBeenCalledWith('onboard', 'bot-name-synced', { appId: bot.appId, from: 'Vonvon Bot 6', to: '小码' });
   });
 
