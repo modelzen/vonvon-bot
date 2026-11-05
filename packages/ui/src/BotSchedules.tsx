@@ -8,11 +8,13 @@ import {ScheduleDeleteDialog} from './ScheduleTab';
 import {listOf, scheduleSummary, type ScheduleList} from './schedule-model';
 
 export type ScheduleGroup = {chatId: string; name: string; memberId?: MembershipId; tasks: ScheduledTaskView[]};
-/** This Bot's tasks by group. A group it is no longer bound to has no page to open, and may have no name left. */
+/** This Bot's tasks by group. A group it is no longer bound to has no page to open, and may have no name left; nor has a private chat yet (D4). */
 export function scheduleGroups(tasks: readonly ScheduledTaskView[], agentId: AgentId, snapshot: DesktopSnapshot): ScheduleGroup[] {
   const byChat = new Map<string, ScheduledTaskView[]>();
   for (const task of tasks) byChat.set(task.chatId, [...byChat.get(task.chatId) ?? [], task]);
   return [...byChat].map(([chatId, tasks]) => {
+    const dm = tasks[0]?.dm;
+    if (dm) return {chatId, tasks, name: dm.name ? `私聊 · ${dm.name}` : '私聊'};
     const group = snapshot.groups.find(item => item.id === chatId);
     const member = snapshot.memberships.find(item => item.agentId === agentId && item.groupId === chatId);
     return {chatId, tasks, memberId: group && member?.id, name: group ? `${group.name}${member ? '' : '（已解绑）'}` : '已解绑的群'};

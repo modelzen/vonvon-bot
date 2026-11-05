@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { scheduleReplySchema, type ScheduleReply, type ScheduleRequest } from '@vonvon/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createScheduleCommands, type ScheduleActor } from '../src/admin/schedule-commands';
+import { createScheduleCommands, type ScheduleActor, type ScheduleCommandsDeps } from '../src/admin/schedule-commands';
 import type { RunNowResult, Scheduler } from '../src/bot/schedule/scheduler';
 import { createScheduleStore } from '../src/bot/schedule/store';
 import { ceilToMinute } from '../src/bot/schedule/time';
@@ -30,7 +30,7 @@ const create = (patch: Partial<Extract<ScheduleRequest, { action: 'create' }>> =
 
 const dirs: string[] = [];
 afterEach(async () => { await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
-async function setup(initial: StoredTask[] = [], runNow: RunNowResult = { kind: 'not-started' }) {
+async function setup(initial: StoredTask[] = [], runNow: RunNowResult = { kind: 'not-started' }, chatOf?: ScheduleCommandsDeps['chatOf']) {
   const dir = await mkdtemp(join(tmpdir(), 'schedule-commands-')); dirs.push(dir);
   const file = join(dir, 'schedules.json');
   if (initial.length) await writeFile(file, JSON.stringify({ version: 1, tasks: initial }));
@@ -38,7 +38,7 @@ async function setup(initial: StoredTask[] = [], runNow: RunNowResult = { kind: 
   const store = createScheduleStore(file, { now: () => clock, log, diagnostics: vi.fn() });
   await store.load();
   const scheduler = { start: vi.fn(async () => {}), stop: vi.fn(), drain: vi.fn(async () => {}), wake: vi.fn(), runNow: vi.fn((_id: string) => runNow) } satisfies Scheduler;
-  const commands = createScheduleCommands({ store, scheduler, botId: 'bot-test', now: () => clock, hostTimeZone: () => HOST });
+  const commands = createScheduleCommands({ store, scheduler, botId: 'bot-test', now: () => clock, hostTimeZone: () => HOST, ...(chatOf ? { chatOf } : {}) });
   /** Every reply must pass the strict protocol schema: no cursor, inflight or notice fields leak into a view. */
   const run = async (actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply> => scheduleReplySchema.parse(await commands.execute(actor, request));
   const onDisk = async (): Promise<StoredTask[]> => JSON.parse(await readFile(file, 'utf8')).tasks;
@@ -46,6 +46,84 @@ async function setup(initial: StoredTask[] = [], runNow: RunNowResult = { kind: 
 }
 const refusal = (reason: string, message?: string) => ({ kind: 'refused', reason, ...(message === undefined ? {} : { message }) });
 const taskIdOf = (reply: ScheduleReply): string => (reply.kind === 'task' ? reply.task.id : `no task: ${reply.kind}`);
+
+// dm-agent 8. main 必败: there was no `dm` actor, and every chat but the actor's read as not-group
+describe('a private chat', () => {
+  const DM = 'oc_p2p';
+  const person: ScheduleActor = { kind: 'dm', via: 'cli', openId: 'ou_admin', name: '张三', chatId: DM };
+  const elsewhere: ScheduleActor = { kind: 'dm', via: 'cli', name: '张三', chatId: 'oc_p2p_of_another_bot' };
+  const chats: ScheduleCommandsDeps['chatOf'] = chatId => chatId === DM ? { kind: 'dm', name: '张三' } : chatId === G ? { kind: 'group' } : undefined;
+
+  it('reaches every chat of its Bot, with every action, a task\'s id only in its own chat', async () => {
+    const f = await setup([stored('st_a'), stored('st_b', { chatId: OTHER }), stored('st_c', { chatId: DM })], { kind: 'started', runId: 'r1' });
+    expect(await f.run(person, { action: 'listBot' })).toMatchObject({ kind: 'tasks', tasks: [{ id: 'st_a' }, { id: 'st_b' }, { id: 'st_c' }] });
+    expect(await f.run(person, { action: 'list', chatId: OTHER })).toMatchObject({ kind: 'tasks', tasks: [{ id: 'st_b' }] });
+    expect(await f.run(person, { action: 'edit', chatId: G, taskId: 'st_a', revision: 'rev-st_a', patch: { name: '改过' } })).toMatchObject({ kind: 'task', task: { name: '改过' } });
+    expect(await f.run(person, { action: 'pause', chatId: G, taskId: 'st_a' })).toMatchObject({ kind: 'task', task: { state: 'paused' } });
+    expect(await f.run(person, { action: 'resume', chatId: G, taskId: 'st_a' })).toMatchObject({ kind: 'task', task: { state: 'active' } });
+    expect(await f.run(person, { action: 'runNow', chatId: OTHER, taskId: 'st_b' })).toMatchObject({ kind: 'started' });
+    expect(await f.run(person, { action: 'delete', chatId: OTHER, taskId: 'st_b', revision: 'rev-st_b' })).toEqual({ kind: 'deleted', taskId: 'st_b' });
+    expect(await f.run(person, { action: 'pause', chatId: G, taskId: 'st_c' })).toMatchObject(refusal('not-found'));
+  });
+
+  it('makes a group\'s task as a plain group task, its creator the person with no group role of their own', async () => {
+    const f = await setup([], undefined, chats);
+    const made = await f.run(person, create({ chatId: G }));
+    expect(made).toMatchObject({ kind: 'task', task: { chatId: G, createdBy: { via: 'cli', openId: 'ou_admin', role: 'admin', name: '张三' } } });
+    expect(made).not.toHaveProperty('task.dm');
+  });
+
+  it('keeps the person\'s words and message when a tool made it', async () => {
+    const f = await setup([], undefined, chats);
+    const made = await f.run({ ...person, via: 'chat', messageId: 'om_1', text: '每天汇总' }, create({ chatId: DM }));
+    expect(made).toMatchObject({ kind: 'task', task: { dm: { name: '张三' }, createdBy: { via: 'chat', messageId: 'om_1', text: '每天汇总' } } });
+  });
+
+  it('records a task from another Bot\'s private chat by name alone (6.4)', async () => {
+    const f = await setup([], undefined, chats);
+    const made = await f.run(elsewhere, create({ chatId: G }));
+    expect(made).toMatchObject({ kind: 'task', task: { createdBy: { via: 'cli', name: '张三' } } });
+    expect((await f.onDisk())[0]?.createdBy).toEqual({ via: 'cli', name: '张三' });
+  });
+
+  it('refuses a chat this Bot has no window on, the private-chat row\'s own id among them; the owner is not asked', async () => {
+    const f = await setup([], undefined, chats);
+    expect(await f.run(person, create({ chatId: 'oc_nowhere' }))).toEqual(refusal('not-found', '这个 Bot 不在这个群里，也没有这个私聊，任务建不了。'));
+    expect(await f.onDisk().catch(() => [])).toEqual([]);
+    expect(await f.run(local, create({ chatId: 'oc_nowhere' }))).toMatchObject({ kind: 'task' });
+  });
+
+  it('marks a private chat\'s task in every view, and stores no mark', async () => {
+    const chatOf = vi.fn(chats!);
+    const f = await setup([stored('st_a', { chatId: DM }), stored('st_b', { chatId: DM }), stored('st_c')], undefined, chatOf);
+    const listed = await f.run(local, { action: 'listBot' });
+    expect(listed).toMatchObject({ kind: 'tasks', tasks: [{ id: 'st_a', dm: { name: '张三' } }, { id: 'st_b', dm: { name: '张三' } }, { id: 'st_c' }] });
+    expect(listed.kind === 'tasks' && listed.tasks[2]).not.toHaveProperty('dm');
+    expect(chatOf).toHaveBeenCalledTimes(2); // once a chat: it reads the project file
+    const unknown = vi.fn(() => undefined);
+    const gone = await setup([stored('st_a', { chatId: OTHER }), stored('st_b', { chatId: OTHER })], undefined, unknown);
+    await gone.run(local, { action: 'listBot' });
+    expect(unknown).toHaveBeenCalledOnce();
+    await f.run(local, { action: 'pause', chatId: DM, taskId: 'st_a' });
+    expect((await f.onDisk())[0]).not.toHaveProperty('dm');
+  });
+
+  it('says the private chat in its limit, and a group\'s words stay', async () => {
+    const full = (chatId: string) => Array.from({ length: 2 }, (_, index) => stored(`st_${index}`, { chatId }));
+    const limited = async (chatId: string) => {
+      const dir = await mkdtemp(join(tmpdir(), 'schedule-commands-')); dirs.push(dir);
+      const file = join(dir, 'schedules.json');
+      await writeFile(file, JSON.stringify({ version: 1, tasks: full(chatId) }));
+      const store = createScheduleStore(file, { now: () => NOW, log, diagnostics: vi.fn() });
+      await store.load();
+      const scheduler = { start: vi.fn(async () => {}), stop: vi.fn(), drain: vi.fn(async () => {}), wake: vi.fn(), runNow: vi.fn() } satisfies Scheduler;
+      return createScheduleCommands({ store, scheduler, botId: 'bot-test', now: () => NOW, hostTimeZone: () => HOST, chatOf: chats, limits: { perChat: 2, perBot: 200 } })
+        .execute(person, create({ chatId }));
+    };
+    expect(await limited(DM)).toMatchObject(refusal('task-limit', '这个私聊已有 2 个任务，先删掉不用的。'));
+    expect(await limited(G)).toMatchObject(refusal('task-limit', '本群已有 2 个任务，先删掉不用的。'));
+  });
+});
 
 describe('who may do what', () => {
   it.each([['owner', owner], ['admin', admin]] as const)('lets the %s do every group action on anyone\'s task', async (_name, actor) => {

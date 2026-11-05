@@ -52,7 +52,8 @@ function savedSession(): string {
 it.each([
   ['a group, schedule on', { kind: 'group', chatId: 'oc_group' }, true, 7],
   ['a group, schedule off', { kind: 'group', chatId: 'oc_group' }, false, 0],
-  ['a private chat, schedule on', { kind: 'p2p', chatId: 'oc_dm' }, true, 0],
+  ['a private chat, schedule on', { kind: 'p2p', chatId: 'oc_dm' }, true, 7],
+  ['a private chat, schedule off', { kind: 'p2p', chatId: 'oc_dm' }, false, 0],
 ] as const)('lists the schedule tools in vonvon_bot for %s', async (_case, place, schedule, count) => {
   for (const action of ['start', 'resume'] as const) {
     const f = fixture(), entry = grant(place), cwd = savedSession();

@@ -238,11 +238,18 @@ async function authorizeSession(principal: BotSessionPrincipal, peer: Pick<Peer,
 
 /**
  * dm-agent 6.4: a Feishu open_id is its app's. A person's id written into another Bot's list has to be one that Bot found,
- * and a new group pulls in who asked: by open_id on the session's own Bot, by union_id on another (the same developer's
- * Bots share it; no union_id, no group). Last, for the Feishu call the check takes.
+ * a task made on another Bot says who by name alone, and a new group pulls in who asked: by open_id on the session's own
+ * Bot, by union_id on another (the same developer's Bots share it; no union_id, no group). Last, for the Feishu call the
+ * check takes.
  */
 async function acrossBots(principal: BotSessionPrincipal, request: Request, decision: Extract<Decision, { ok: true }>, deps: AuthzDeps): Promise<Decision> {
   const nameOf = async (bot: string): Promise<string> => await deps.botName?.(bot).catch(() => bot) ?? bot;
+  if (request.method === 'schedule') {
+    const actor = decision.grant?.actor;
+    if (actor?.kind !== 'dm' || request.payload.botId === principal.appId) return decision;
+    const { openId: _openId, messageId: _messageId, ...named } = actor;
+    return { ...decision, grant: { ...decision.grant!, actor: named } };
+  }
   if (request.method === 'collaboration' && request.payload.action === 'createProject') {
     const { agentId } = request.payload, { openId, unionId } = decision.grant ?? {};
     const invitee: GroupInvitee | undefined = agentId === principal.appId ? openId ? { idType: 'open_id', id: openId } : undefined
