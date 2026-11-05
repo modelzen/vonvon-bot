@@ -502,6 +502,21 @@ export async function dmProject(file?: string): Promise<Project | undefined> {
   return (await read(file)).find(isDmRow);
 }
 
+/** The person whose private chat `chatId` is, as `row` remembers them. */
+export const dmPersonOf = (row: Pick<Project, 'dm'> | undefined, chatId: string): DmPerson | undefined =>
+  row?.dm && Object.hasOwn(row.dm.people, chatId) ? row.dm.people[chatId] : undefined;
+
+/** Everyone who has talked to the bot in private, each once, earliest first. */
+export async function dmPersonList(file?: string): Promise<DmPerson[]> {
+  const people = new Map<string, DmPerson>();
+  for (const person of Object.values((await dmProject(file))?.dm?.people ?? {})) {
+    const known = people.get(person.openId);
+    const name = person.name ?? known?.name;
+    people.set(person.openId, { openId: person.openId, ...(name ? { name } : {}), at: Math.min(person.at, known?.at ?? person.at) });
+  }
+  return [...people.values()].sort((a, b) => a.at - b.at || a.openId.localeCompare(b.openId));
+}
+
 /** Add the private-chat row unless the bot has one; the row the file ends up with. */
 export function addDmProject(input: Project, target?: RegistryLocation): Promise<Project> {
   const row = structuredClone(input);

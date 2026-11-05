@@ -1,17 +1,19 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { rm } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AppConfig } from '../src/config/schema';
 import { saveConfig } from '../src/config/store';
 import { readDropped } from '../src/bot/restart-dropped';
-import type { AgentEvent, AgentInput, StartThreadOptions } from '../src/agent/types';
+import { parseAskRequest, type AgentEvent, type AgentInput, type StartThreadOptions } from '../src/agent/types';
 import type { HostApi } from '../src/admin/ipc';
 import { paths } from '../src/config/paths';
 import { dmChatId, dmProject } from '../src/project/registry';
 import { getSession, listSessions, upsertSession } from '../src/bot/session-store';
 import { createAgentEntries, type AgentEntries } from '../src/agent/entry/registry';
 import { createOrchestrator } from '../src/bot/handle-message';
+import { dmMemoryLocation, MemoryStore } from '../src/bot/memory-store';
+import { botRoot } from '../src/bot/role-files';
 import { seedBots } from './helpers/bot-fixture';
 
 // dm-agent 5 (D2): an administrator's private chat is an Agent's window, through the real orchestrator, session store,
@@ -176,6 +178,24 @@ describe('who gets in, in what order', () => {
     run.turns[0]!.resolve();
   });
 
+  // dm-agent 5 (D3). main 必败: a session's opening had no private-chat memory.
+  it('opens each administrator\'s session with their own memory and not the other\'s', async () => {
+    const remember = (openId: string, text: string) => new MemoryStore(dmMemoryLocation(botRoot(APP), openId)).add({ text, trust: 'trusted', actor: { role: 'admin', openId },
+      source: { via: 'tool', botId: APP, actorRole: 'admin', actorOpenId: openId } });
+    await remember(OWNER, '主人的私聊记忆'); await remember(ADMIN, '管理员的私聊记忆');
+    const first = thread('native-1'), second = thread('native-2'), be = backend(first, second); const { o } = await app();
+    await o.onMessage(message('帮我看看'));
+    await until(() => expect(first.consumed).toHaveLength(1));
+    await o.onMessage(message('我也看看', { chatId: B, senderId: ADMIN, senderName: 'Admin' }));
+    await until(() => expect(second.consumed).toHaveLength(1));
+    const opening = (index: number) => (be.startThread.mock.calls[index][0] as StartThreadOptions).profile?.instructions ?? '';
+    expect(opening(0)).toContain('主人的私聊记忆');
+    expect(opening(0)).not.toContain('管理员的私聊记忆');
+    expect(opening(1)).toContain('管理员的私聊记忆');
+    expect(opening(1)).not.toContain('主人的私聊记忆');
+    first.turns[0]!.resolve(); second.turns[0]!.resolve();
+  });
+
   it('takes no bot, and refuses someone else before anything is transcribed', async () => {
     const be = backend(thread()); const { o } = await app();
     await o.onMessage(message('hi', { senderId: 'ou_bot', raw: { sender: { sender_type: 'app' } } } as never));
@@ -277,6 +297,25 @@ describe('a turn going on in a private chat', () => {
     run.turns[0]!.resolve();
   });
 
+  it('keeps a /goal turn\'s sensitive question in this window: no other administrator gets it (main 必败)', async () => {
+    const run = thread(); backend(run); const { o } = await app();
+    const request = parseAskRequest({ id: 'ask-1', title: '需要你决定', acceptedConsequence: '继续', declinedConsequence: '暂停', kind: 'choices',
+      questions: [{ id: 'password', title: '密码', detail: '填写密码', selection: 'text', sensitive: true }] });
+    const end = deferred<void>();
+    Object.assign(run.t, { clearGoal: async () => undefined, runGoal: () => ({ turnId: () => 'goal-1', respondToAsk: async () => undefined, events: (async function* (): AsyncGenerator<AgentEvent> {
+      yield { type: 'turn_started', turnId: 'goal-1' };
+      yield { type: 'ask', request };
+      await end.promise;
+      yield { type: 'done', turnId: 'goal-1' };
+    })() }) });
+    await o.onMessage(message('/goal 改完'));
+    await until(() => expect(fake.cards.some(card => card.chatId === A && card.json.includes('填写密码'))).toBe(true));
+    await tick();
+    expect(fake.cards.filter(card => card.chatId === ADMIN)).toEqual([]);
+    expect(said()).not.toContain(ADMIN);
+    end.resolve();
+  });
+
   it('holds /new until the turn ends; then the next words go to a new session and the old one stays attributed', async () => {
     const first = thread('native-old'), second = thread('native-new'); backend(first, second); const { o } = await app();
     await o.onMessage(message('旧的')); await until(() => expect(first.consumed).toHaveLength(1));
@@ -368,6 +407,23 @@ describe('an administrator taken off the list', () => {
     await until(() => expect(send).toHaveBeenCalled());
     await tick();
     expect(run.consumed).toHaveLength(1);
+  });
+
+  it.each(['sessionsFile', 'projectsFile'] as const)('stops the turn and revokes the token though %s cannot be read', async file => {
+    const run = thread(); backend(run); const { o } = await app();
+    await o.onMessage(message('干活')); await until(() => expect(run.consumed).toHaveLength(1));
+    await o.onMessage(message('排着的')); await tick();
+    const view = await o.settings.read({ kind: 'agent', botId: APP }) as { administrators: { revision: string } };
+    const kept = await readFile(paths[file], 'utf8');
+    await writeFile(paths[file], '{');
+    try {
+      expect((await o.settings.act({ kind: 'adminMember', botId: APP, openId: OWNER, membership: 'absent', revision: view.administrators.revision })).kind).toBe('saved');
+      await until(() => expect(run.t.abort).toHaveBeenCalled());
+      await until(() => expect(run.t.close).toHaveBeenCalled());
+      expect(revoked).toHaveLength(1);
+      await tick();
+      expect(run.consumed).toHaveLength(1);
+    } finally { await writeFile(paths[file], kept); }
   });
 
   it('leaves another administrator\'s window alone', async () => {

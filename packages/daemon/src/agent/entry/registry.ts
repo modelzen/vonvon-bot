@@ -543,7 +543,7 @@ export function createAgentEntries(opts: {
         if (action.op === 'manage') {
           if (!dm) return denial(notDm(grant.place));
           const by = actorOf(turn);
-          return { ok: true, ...who(auth), memory: { scope: action.target, trust: by.trust, actor: writer(by), source } };
+          return { ok: true, ...who(auth), memory: { scope: action.target, trust: by.trust, actor: writer(by), source, ...(otherBot ? { otherBot } : {}) } };
         }
         // A private chat reaches every project (dm-agent 6.1), not only those of its Bot's groups.
         const reached = dm && target.kind === 'project' ? { ...place, botProjectIds: [...place.botProjectIds ?? [], target.projectId] } : place;

@@ -251,6 +251,14 @@ describe('comment instructions file lifecycle', () => {
     expect(readFileSync(master, 'utf8')).toBe(edited);
   });
 
+  it('moves a file still holding the default that could not read a base on to the new one', () => {
+    const seeded = DEFAULT_COMMENT_INSTRUCTIONS.replace('feishu_base 读多维表格，', '').replace('现在能读，不能改；', '现在不能改，多维表格的内容也读不到；');
+    expect(seeded).not.toBe(DEFAULT_COMMENT_INSTRUCTIONS);
+    expect(currentCommentInstructions(seeded)).toBe(DEFAULT_COMMENT_INSTRUCTIONS);
+    expect(DEFAULT_COMMENT_INSTRUCTIONS).toContain('feishu_base');
+    expect(DEFAULT_COMMENT_INSTRUCTIONS).not.toContain('读不到');
+  });
+
   it('does NOT overwrite an existing blank/whitespace master file (uses default for the run, leaves file intact)', async () => {
     const root = tmp();
     const master = join(root, 'comment-instructions.md');

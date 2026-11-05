@@ -1,5 +1,5 @@
 import type { TenantBrand } from '../config/schema';
-import { buildScopeGrantUrl, DOC_EDIT_SCOPES, DOC_READ_SCOPES, DRIVE_READ_SCOPES, labelScope, MESSAGE_SEARCH_SCOPES, SHEET_READ_SCOPES } from '../config/scopes';
+import { BITABLE_READ_SCOPES, buildScopeGrantUrl, DOC_EDIT_SCOPES, DOC_READ_SCOPES, DRIVE_READ_SCOPES, labelScope, MESSAGE_SEARCH_SCOPES, SHEET_READ_SCOPES } from '../config/scopes';
 import { log } from '../core/logger';
 import { withDeadline } from '../bot/names';
 import { feishuError, scopeDenial } from '../utils/feishu-error';
@@ -10,7 +10,7 @@ import { feishuError, scopeDenial } from '../utils/feishu-error';
  */
 
 /** What a read touches: the scopes it needs and what is lost without them. */
-export type ReadArea = 'history' | 'resource' | 'chat' | 'announcement' | 'doc' | 'docEdit' | 'sheet' | 'drive' | 'search';
+export type ReadArea = 'history' | 'resource' | 'chat' | 'announcement' | 'doc' | 'docEdit' | 'sheet' | 'base' | 'drive' | 'search';
 const AREAS: Record<ReadArea, { scopes: readonly string[]; effect: string }> = {
   history: { scopes: ['im:message:readonly'], effect: '读不了群里的消息' },
   resource: { scopes: ['im:resource'], effect: '下载不了消息里的图片和文件' },
@@ -19,16 +19,17 @@ const AREAS: Record<ReadArea, { scopes: readonly string[]; effect: string }> = {
   doc: { scopes: DOC_READ_SCOPES, effect: '读不了文档和知识库' },
   docEdit: { scopes: DOC_EDIT_SCOPES, effect: '改不了文档' },
   sheet: { scopes: SHEET_READ_SCOPES, effect: '读不了表格' },
+  base: { scopes: BITABLE_READ_SCOPES, effect: '读不了多维表格' },
   drive: { scopes: DRIVE_READ_SCOPES, effect: '下载不了云空间文件' },
   search: { scopes: MESSAGE_SEARCH_SCOPES, effect: '搜不了消息' },
 };
 /** The sentence that closes a missing-scope reply: an administrator of vonvon may not reach the Feishu console (7.5). */
 export const AFTER_GRANT = '开通后要发布新版本才生效；打不开这个链接，就转给这个飞书应用的管理员。';
 
-/** Feishu's "no access to this object". Measured for a document not shared with a bot: 3380004 (docs_ai), 1770032 (raw_content); the rest from its docs. */
+/** Feishu's "no access to this object". Measured for a document not shared with a bot: 3380004 (docs_ai), 1770032 (raw_content), 91403 (bitable); the rest from its docs. */
 const NOT_SHARED_CODES: ReadonlySet<number> = new Set([3380004, 1770032, 1310213, 1061004, 1069902, 131006, 91403]);
-/** Measured for a made-up id (3380002, 99992402, 1770001, 131005), the rest from the same docs. */
-const NOT_FOUND_CODES: ReadonlySet<number> = new Set([3380002, 99992402, 1770001, 1770002, 1310214, 1061003, 1061007, 131005, 230001, 230110]);
+/** Measured for a made-up id (3380002, 99992402, 1770001, 131005, 91402), the rest from the same docs. */
+const NOT_FOUND_CODES: ReadonlySet<number> = new Set([3380002, 99992402, 1770001, 1770002, 1310214, 1061003, 1061007, 131005, 91402, 230001, 230110]);
 /** The Bot is not in that chat (230002), or the chat has left it (232011). */
 const OUT_OF_CHAT_CODES: ReadonlySet<number> = new Set([230002, 232011]);
 
@@ -74,7 +75,7 @@ export function refusalOf(context: DenialContext, area: ReadArea, failure: unkno
   if (error && NOT_SHARED_CODES.has(error.code)) return new FeishuReadRefused(notSharedReply(context.botName(), editing ? '编辑' : '阅读'), 'not-shared');
   if (error && OUT_OF_CHAT_CODES.has(error.code)) return new FeishuReadRefused(`「${context.botName()}」不在这个群里，读不到。`);
   if (error && NOT_FOUND_CODES.has(error.code)) {
-    const what = area === 'doc' || editing || area === 'sheet' || area === 'drive' ? '这个文档或文件，看看链接和 token 对不对' : '这条内容，看看 id 对不对';
+    const what = area === 'doc' || editing || area === 'sheet' || area === 'base' || area === 'drive' ? '这个文档或文件，看看链接和 token 对不对' : '这条内容，看看 id 对不对';
     return new FeishuReadRefused(`找不到${what}（飞书错误码 ${error.code}）。`, 'not-found');
   }
   if (error) return new FeishuReadRefused(`飞书拒绝了这次${editing ? '修改' : '读取'}（错误码 ${error.code}${error.msg ? `：${error.msg}` : ''}）。`);

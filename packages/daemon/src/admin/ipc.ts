@@ -59,6 +59,8 @@ export interface MemoryLanding {
   trust: 'trusted' | 'untrusted';
   actor: { role: 'owner' | 'admin' | 'member' | 'bot'; openId?: string };
   source: { botId: string; turn?: NonNullable<MemorySource['turn']>; chatId?: string; messageId?: string; downgraded?: MemoryDowngrade; actorName?: string };
+  /** dm-agent 6.4: the write touches another Bot's memory, so a transferred item leaves its open_id behind. */
+  otherBot?: boolean;
 }
 /** The Bot process's answer: who started the turn (and for a task its actor, for a memory write where it lands), or the refusal with the tools' sentence. */
 export type SessionAuthz =
@@ -252,6 +254,7 @@ export const sessionAuthzSchema: z.ZodType<SessionAuthz> = z.discriminatedUnion(
         chatId: short.optional(), messageId: short.optional(), downgraded: z.enum(['member', 'not-human-turn', 'steered', 'not-typed', 'not-in-message', 'quota']).optional(),
         actorName: z.string().max(200).optional(),
       }).strict(),
+      otherBot: z.boolean().optional(),
     }).strict().optional(),
   }).strict(),
   z.object({ ok: z.literal(false), reason: short, message: z.string().min(1).max(500) }).strict(),

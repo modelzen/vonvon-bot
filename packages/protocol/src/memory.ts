@@ -129,6 +129,8 @@ export const memoryRequestSchema = z.discriminatedUnion("type", [
   ])}).strict(),
   /** 导航、项目列表、Bot 列表上"新"的条数：每个项目、每个 Bot 各一个数 */
   z.object({type:z.literal("newCounts")}).strict(),
+  /** 私聊记忆页的人：这个 Bot 的私聊里出现过的每个人（`dm.people`），各自几条。移出管理员不删人也不删记忆 */
+  z.object({type:z.literal("dmPeople"),botId:id}).strict(),
 ]);
 export type MemoryRequest = z.infer<typeof memoryRequestSchema>;
 
@@ -158,6 +160,7 @@ export const memoryReplySchema = z.discriminatedUnion("kind", [
   }),
   z.object({kind:z.literal("seen"),at:z.number()}),
   z.object({kind:z.literal("newCounts"),projects:z.record(z.string(),z.number().int().nonnegative()),bots:z.record(z.string(),z.number().int().nonnegative())}),
+  z.object({kind:z.literal("dmPeople"),people:z.array(z.object({openId:z.string(),name:z.string().optional(),at:z.number(),used:z.number().int().nonnegative()}))}),
   z.object({kind:z.literal("item"),item:memoryItemSchema,branchApplied:z.string().optional(),newBranch:z.boolean().optional()}),
   z.object({kind:z.literal("conflict"),current:memoryItemSchema.optional(),message:z.string()}),
   z.object({kind:z.literal("refused"),reason:memoryRefusalSchema,message:z.string()}),

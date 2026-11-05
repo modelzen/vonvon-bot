@@ -14,7 +14,7 @@ import { isAdmin, type AppConfig } from '../config/schema';
 import { createCommandTools } from '../agent/entry/command-tools';
 import { createFeishuReader } from '../feishu-read/reader';
 import { createMemoryWriter } from './memory-writer';
-import { listProjects } from '../project/registry';
+import { dmPersonOf, getProjectByChatId, listProjects } from '../project/registry';
 import { isProjectId } from '../project/library';
 import { createAgentEntries, type AgentEntries } from '../agent/entry/registry';
 import { log } from '../core/logger';
@@ -89,6 +89,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     botId: app.id,
     projectIdOf: async chatId => (await listProjects()).find(project => project.chatId === chatId)?.projectId,
     botProjectIds: async () => [...new Set((await listProjects()).flatMap(project => isProjectId(project.projectId) ? [project.projectId] : []))],
+    dmPersonOf: async chatId => dmPersonOf(await getProjectByChatId(chatId), chatId)?.openId,
   });
   // 咖啡一下 (the local Claude Code / Codex hook relay) left v1 in s02b: no
   // service and no socket; s02c deleted D/cli-bridge. Since s02c2 the installed

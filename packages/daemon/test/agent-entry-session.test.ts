@@ -166,7 +166,7 @@ describe('a private chat\'s turn', () => {
     const f = setup(dm, said(ADMIN, '你好'), { memoryPlace: { botProjectIds: ['prj_0000000a'] } });
     expect(await f.ask({ kind: 'memory', op: 'add', target: { kind: 'bot' }, text: '先写结论', otherBot: true })).toEqual({ ok: false, reason: 'not-allowed-here', message: decisionMessages['not-allowed-here'] });
     // its own Bot's goes where the tools would put it
-    expect(await f.ask({ kind: 'memory', op: 'add', target: { kind: 'bot' }, text: '先写结论' })).toMatchObject({ ok: true, memory: { scope: { kind: 'project', projectId: 'prj_0000000a' }, source: { downgraded: 'not-in-message' } } });
+    expect(await f.ask({ kind: 'memory', op: 'add', target: { kind: 'bot' }, text: '先写结论' })).toMatchObject({ ok: true, memory: { scope: { kind: 'dm' }, source: { downgraded: 'not-in-message' } } });
   });
 
   it('lands the page\'s other buttons where the request says, as the person who asked', async () => {

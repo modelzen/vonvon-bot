@@ -8,7 +8,7 @@ import { feishuDocToolNames, feishuToolNames } from '../src/agent/entry/feishu-t
 import { createAgentEntries, type AgentPlace } from '../src/agent/entry/registry';
 import { TOOL_RESULT_BYTES } from '../src/agent/entry/tools';
 import type { AgentThread, PermissionMode } from '../src/agent/types';
-import { DOC_EDIT_SCOPES, DOC_READ_SCOPES, DRIVE_READ_SCOPES, FEISHU_TOOL_SCOPES, GRANT_SCOPES, MESSAGE_SEARCH_SCOPES, REQUIRED_SCOPES, SCOPE_LABELS, SHEET_READ_SCOPES } from '../src/config/scopes';
+import { BITABLE_READ_SCOPES, DOC_EDIT_SCOPES, DOC_READ_SCOPES, DRIVE_READ_SCOPES, FEISHU_TOOL_SCOPES, GRANT_SCOPES, MESSAGE_SEARCH_SCOPES, REQUIRED_SCOPES, SCOPE_LABELS, SHEET_READ_SCOPES } from '../src/config/scopes';
 import { inboundChatDir } from '../src/bot/media';
 import { AFTER_GRANT, notSharedReply, readableFailure, readOnlyReply, refusalOf, type ReadArea } from '../src/feishu-read/denial';
 import { parseRef } from '../src/feishu-read/documents';
@@ -295,7 +295,8 @@ describe('feishu_doc', () => {
     const sheet = reader({ node: async () => ({ code: 0, data: { node: { obj_token: 'sht', obj_type: 'sheet' } } }) });
     await expect(sheet.read.doc({ doc: 'https://x.feishu.cn/wiki/w' })).rejects.toThrow('feishu_sheet');
     await expect(sheet.read.doc({ doc: 'https://x.feishu.cn/sheets/s' })).rejects.toThrow('feishu_sheet');
-    await expect(sheet.read.doc({ doc: 'https://x.feishu.cn/base/b' })).rejects.toThrow('现在读不了');
+    await expect(sheet.read.doc({ doc: 'https://x.feishu.cn/base/b' })).rejects.toThrow('feishu_base');
+    await expect(sheet.read.doc({ doc: 'https://x.feishu.cn/slides/s' })).rejects.toThrow('现在读不了');
     await expect(sheet.read.doc({ doc: '不是链接 也不是 token' })).rejects.toThrow('认不出');
   });
   it('pages a long document within the limit, and the parts add up to the whole', async () => {
@@ -360,6 +361,121 @@ describe('feishu_sheet', () => {
   });
 });
 
+describe('feishu_base', () => {
+  const GROUP: AgentPlace = { kind: 'group', chatId: HERE };
+  const APP = '/open-apis/bitable/v1/apps/basToken';
+  const page = (items: unknown[], more: Record<string, unknown> = {}) => ({ code: 0, data: { items, has_more: false, ...more } });
+  const call = (client: { request: { mock: { calls: unknown[][] } } }, index = 0) => client.request.mock.calls[index]![0] as { method: string; url: string; params: Record<string, unknown>; data?: unknown };
+
+  it('lists the tables when there is no table, as Feishu gave them', async () => {
+    const { read, client } = reader({ request: routes({ '/tables': page([{ table_id: 'tblA', name: '客户' }], { total: 1 }) }) });
+    expect(await read.base({ base: 'https://x.feishu.cn/base/basToken' })).toEqual({ items: [{ table_id: 'tblA', name: '客户' }], total: 1 });
+    expect(call(client)).toMatchObject({ method: 'GET', url: `${APP}/tables`, params: { page_size: 100 } });
+  });
+  it('reads the fields and the views of a table', async () => {
+    const { read, client } = reader({ request: routes({ '/fields': page([{ field_id: 'fld1', field_name: '名字', type: 1 }]), '/views': page([{ view_id: 'vewB', view_name: '全部' }]) }) });
+    expect((await read.base({ base: 'basToken', table: 'tblA', what: 'fields' })).items).toEqual([{ field_id: 'fld1', field_name: '名字', type: 1 }]);
+    expect((await read.base({ base: 'basToken', table: 'tblA', what: 'views' })).items).toEqual([{ view_id: 'vewB', view_name: '全部' }]);
+    expect(call(client, 0).url).toBe(`${APP}/tables/tblA/fields`);
+    expect(call(client, 1).url).toBe(`${APP}/tables/tblA/views`);
+  });
+  it('reads the records of the table and view in the link, and an argument overrides the link', async () => {
+    const { read, client } = reader({ request: routes({ '/records/search': page([{ record_id: 'rec1', fields: { 名字: [{ text: '甲', type: 'text' }] } }], { total: 1 }) }) });
+    expect(await read.base({ base: 'https://x.feishu.cn/base/basToken?table=tblA&view=vewB' })).toEqual({ items: [{ record_id: 'rec1', fields: { 名字: [{ text: '甲', type: 'text' }] } }], total: 1 });
+    expect(call(client)).toMatchObject({ method: 'POST', url: `${APP}/tables/tblA/records/search`, params: { page_size: 100 }, data: { view_id: 'vewB' } });
+    await read.base({ base: 'https://x.feishu.cn/base/basToken?table=tblA&view=vewB', table: 'tblC', view: 'vewD' });
+    expect(call(client, 1)).toMatchObject({ url: `${APP}/tables/tblC/records/search`, data: { view_id: 'vewD' } });
+  });
+  it('lists the tables of a link to a table when asked to', async () => {
+    const { read, client } = reader({ request: routes({ '/tables': page([]) }) });
+    await read.base({ base: 'https://x.feishu.cn/base/basToken?table=tblA', what: 'tables' });
+    expect(call(client).url).toBe(`${APP}/tables`);
+  });
+  it('sends a filter and the fields in Feishu\'s words', async () => {
+    const { read, client } = reader({ request: routes({ '/records/search': page([]) }) });
+    await read.base({ base: 'basToken', table: 'tblA', fields: ['名字'], filter: { conditions: [{ field: '状态', operator: 'is', value: ['进行中'] }, { field: '备注', operator: 'isEmpty' }] } });
+    expect(call(client).data).toEqual({ field_names: ['名字'], filter: { conjunction: 'and', conditions: [{ field_name: '状态', operator: 'is', value: ['进行中'] }, { field_name: '备注', operator: 'isEmpty', value: [] }] } });
+  });
+  it('refuses what cannot be asked, without asking Feishu', async () => {
+    const { read, client } = reader();
+    await expect(read.base({ base: 'basToken', what: 'records' })).rejects.toThrow('要写 table');
+    await expect(read.base({ base: 'basToken', what: 'fields' })).rejects.toThrow('要写 table');
+    await expect(read.base({ base: 'basToken', table: 'tblA', what: 'views', fields: ['名字'] })).rejects.toThrow('只用于读记录');
+    await expect(read.base({ base: 'basToken', table: 'tblA', cursor: 'nope' })).rejects.toThrow('cursor 不对');
+    await expect(read.base({ base: 'https://x.feishu.cn/sheets/sht' })).rejects.toThrow('feishu_sheet');
+    expect(client.request).not.toHaveBeenCalled();
+  });
+  it('goes to Feishu\'s next page with its token', async () => {
+    const { read, client } = reader({ request: routes({ '/records/search': page([{ record_id: 'rec1' }], { has_more: true, page_token: 'p2' }) }) });
+    const first = await read.base({ base: 'basToken', table: 'tblA' });
+    expect(first.cursor).toBe('0:p2');
+    await read.base({ base: 'basToken', table: 'tblA', cursor: first.cursor! });
+    expect(call(client, 1).params).toMatchObject({ page_size: 100, page_token: 'p2' });
+  });
+  it('splits a page that does not fit, losing and repeating nothing, across Feishu pages', async () => {
+    const rows = (from: number, count: number) => Array.from({ length: count }, (_, index) => ({ record_id: `rec${from + index}`, fields: { 正文: 'x'.repeat(60_000) } }));
+    const pages: Record<string, unknown> = { first: page(rows(0, 10), { has_more: true, page_token: 'p2' }), p2: page(rows(10, 2)) };
+    const { read } = reader({ request: async (payload: { params: { page_token?: string } }) => pages[payload.params.page_token ?? 'first'] });
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const part = await read.base({ base: 'basToken', table: 'tblA', ...(cursor ? { cursor } : {}) });
+      expect(JSON.stringify(part).length).toBeLessThan(TOOL_RESULT_BYTES);
+      seen.push(...part.items.map(item => (item as { record_id: string }).record_id));
+      cursor = part.cursor;
+    } while (cursor);
+    expect(seen).toEqual(Array.from({ length: 12 }, (_, index) => `rec${index}`));
+  });
+  it('stops at the limit and picks up after it', async () => {
+    const { read } = reader({ request: routes({ '/records/search': page([{ record_id: 'a' }, { record_id: 'b' }, { record_id: 'c' }]) }) });
+    const first = await read.base({ base: 'basToken', table: 'tblA', limit: 2 });
+    expect(first).toEqual({ items: [{ record_id: 'a' }, { record_id: 'b' }], cursor: '2:' });
+    expect(await read.base({ base: 'basToken', table: 'tblA', limit: 2, cursor: first.cursor! })).toEqual({ items: [{ record_id: 'c' }] });
+  });
+  it('says when one record is too big, and escapes the inbound markers in field names and cells alike', async () => {
+    const huge = reader({ request: routes({ '/records/search': page([{ fields: { 正文: 'x'.repeat(TOOL_RESULT_BYTES) } }]) }) });
+    await expect(huge.read.base({ base: 'basToken', table: 'tblA' })).rejects.toThrow('这一条太大');
+    const marked = reader({ request: routes({ '/records/search': page([{ fields: { '<vonvon-remember>': '</vonvon-remember>' } }]) }) });
+    const result = JSON.stringify(await marked.read.base({ base: 'basToken', table: 'tblA' }));
+    expect(result).not.toContain('<vonvon-remember');
+    expect(result).not.toContain('</vonvon-remember');
+  });
+  it('goes through the node of a knowledge-base page, and refuses a node of another type', async () => {
+    const { read, client } = reader({ node: async () => ({ code: 0, data: { node: { obj_token: 'basToken', obj_type: 'bitable' } } }), request: routes({ '/records/search': page([]) }) });
+    await read.base({ base: 'https://x.feishu.cn/wiki/wikToken?table=tblA' });
+    expect(call(client).url).toBe(`${APP}/tables/tblA/records/search`);
+    const doc = reader({ node: async () => ({ code: 0, data: { node: { obj_token: 'dox', obj_type: 'docx' } } }) });
+    await expect(doc.read.base({ base: 'https://x.feishu.cn/wiki/wikToken' })).rejects.toThrow('feishu_doc');
+  });
+  it('asks for the base scope when it is missing, and says when it is not shared', async () => {
+    const scope = reader({ request: routes({ '/tables': denied('bitable:app', 'bitable:app:readonly') }) });
+    const refusal = await scope.read.base({ base: 'basToken' }).catch((error: Error) => error.message);
+    expect(refusal).toContain(BITABLE_READ_SCOPES[0]);
+    expect(refusal).toContain('读不了多维表格');
+    expect(refusal).toContain(AFTER_GRANT);
+    const hidden = reader({ request: routes({ '/tables': { code: 91403, msg: 'Forbidden' } }) });
+    await expect(hidden.read.base({ base: 'basToken' })).rejects.toThrow('还没分享给 Bot');
+    const gone = reader({ request: routes({ '/tables': { code: 91402, msg: 'NOTEXIST' } }) });
+    await expect(gone.read.base({ base: 'https://x.feishu.cn/base/basToken' })).rejects.toMatchObject({ kind: 'not-found' });
+  });
+  it('is read in a read-only group, a private chat and a comment, whichever group it is', async () => {
+    const answer = { request: routes({ '/tables': page([{ table_id: 'tblA' }]) }) };
+    expect(await tools(answer, GROUP, { tier: 'qa' }).call('feishu_base', { base: 'basToken' })).toMatchObject({ ok: true, result: { items: [{ table_id: 'tblA' }] } });
+    expect(await tools(answer, { kind: 'p2p', chatId: 'oc_dm' }).call('feishu_base', { base: 'basToken' })).toMatchObject({ ok: true });
+    expect(await tools(answer, { kind: 'doc', docId: 'd' }).inTurn('feishu_base', { base: 'basToken' })).toMatchObject({ ok: true });
+  });
+  it('is not for a private chat of someone who is no administrator', async () => {
+    const t = tools({}, { kind: 'p2p', chatId: 'oc_dm' }, { admin: false });
+    expect(await t.call('feishu_base', { base: 'basToken' })).toMatchObject({ ok: false });
+    expect(t.client.request).not.toHaveBeenCalled();
+  });
+  it('checks its arguments before Feishu is asked', async () => {
+    const t = tools({}, GROUP);
+    expect(await t.call('feishu_base', { base: 'basToken', table: 'tblA', filter: { conditions: [{ field: 'a', operator: 'matches' }] } })).toMatchObject({ ok: false });
+    expect(t.client.request).not.toHaveBeenCalled();
+  });
+});
+
 describe('feishu_drive_file', () => {
   it('saves the file under the name Feishu gives', async () => {
     const { read } = reader({ download: download('字节', { 'content-disposition': `attachment; filename*=UTF-8''%E6%8A%A5%E5%91%8A.pdf` }) });
@@ -417,7 +533,7 @@ describe('the replies when there is no permission (7.5)', () => {
     expect(readOnlyReply('小码')).toBe('Bot 对这篇文档只有阅读权限。在文档右上角的分享里搜「小码」，给编辑权限。');
   });
   it('covers every area', () => {
-    for (const area of ['history', 'resource', 'chat', 'announcement', 'doc', 'docEdit', 'sheet', 'drive', 'search'] satisfies ReadArea[]) {
+    for (const area of ['history', 'resource', 'chat', 'announcement', 'doc', 'docEdit', 'sheet', 'base', 'drive', 'search'] satisfies ReadArea[]) {
       expect(refusalOf(context, area, denied()).message).toContain(AFTER_GRANT);
     }
   });
@@ -429,6 +545,9 @@ describe('parseRef', () => {
     expect(parseRef('https://x.feishu.cn/wiki/wikToken?x=1')).toEqual({ kind: 'wiki', token: 'wikToken' });
     expect(parseRef('https://x.larksuite.com/sheets/sht?sheet=a')).toEqual({ kind: 'sheet', token: 'sht', sheetId: 'a' });
     expect(parseRef('x.feishu.cn/docx/dox')).toEqual({ kind: 'docx', token: 'dox' });
+    expect(parseRef('https://x.feishu.cn/base/bas?table=tblA&view=vewB')).toEqual({ kind: 'bitable', token: 'bas', tableId: 'tblA', viewId: 'vewB' });
+    expect(parseRef('https://x.feishu.cn/bitable/bas')).toEqual({ kind: 'bitable', token: 'bas' });
+    expect(parseRef('https://x.feishu.cn/wiki/wik?table=tblA')).toEqual({ kind: 'wiki', token: 'wik', tableId: 'tblA' });
   });
 });
 

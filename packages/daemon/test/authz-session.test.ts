@@ -230,6 +230,11 @@ describe('the bot-session column (unit)', () => {
     expect(await authorize(scoped, settingsSave('运营'), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
     expect(await authorize(scoped, request('schedule', { botId: BOT, request: { action: 'list', chatId: OTHER } }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
     expect(await authorize(scoped, request('memory', { type: 'list', scope: { kind: 'dm', botId: BOT, openId: 'ou_a' } }), deps)).toMatchObject({ ok: false });
+    // dm-agent 5: who has a private chat, as a private chat's memory: the whole bot in reach, and no session
+    expect(await authorize(scoped, request('memory', { type: 'dmPeople', botId: BOT }), deps)).toMatchObject({ ok: false });
+    expect(await authorize(owner({ bot: 'cli_other' }), request('memory', { type: 'dmPeople', botId: BOT }), deps)).toMatchObject({ ok: false });
+    expect(await authorize(owner({ bot: BOT }), request('memory', { type: 'dmPeople', botId: BOT }), deps)).toEqual({ ok: true });
+    expect(await authorize(peer('dm', { bot: BOT }), request('memory', { type: 'dmPeople', botId: BOT }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
     // the place rules are a session's: the owner writes its group's settings, and reads them whole
     expect(await authorize(scoped, settingsSave('研发'), deps)).toEqual({ ok: true });
     const read = await authorize(scoped, request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: '研发' } }), deps);
@@ -356,7 +361,7 @@ describe('the bot-session column (unit)', () => {
       'environment.profileList', 'environment.profileUse', 'environment.profileAdd', 'environment.profileInit', 'environment.profileInitStatus', 'environment.profileInitCancel',
       'admin.secrets', 'admin.setSecret', 'admin.removeSecret', 'admin.testSecret',
       'device.status', 'device.enable', 'device.disable', 'device.setPort', 'device.pair', 'device.clients', 'device.renameClient', 'device.revokeClient', 'device.rename',
-      'settings.act.adminMember',
+      'settings.act.adminMember', 'memory.dmPeople',
     ]);
     const onHost = new Set(['snapshot.get', 'admin.negotiate', 'admin.daemonStatus']);
     for (const [kind, rule] of RULES) expect(rule.places.dm, kind).toBe(refused.has(kind) ? 'deny' : onHost.has(kind) ? 'host' : 'bot');
@@ -429,6 +434,28 @@ describe('the bot-session column (unit)', () => {
       expect(await said({ type: 'restore', scope: { kind: 'bot', botId: 'cli_other' }, itemId: 'mem_1', revision: 1 })).toEqual({ kind: 'memory', op: 'manage', target: { kind: 'bot' }, otherBot: true });
       // what names no memory is a private chat's turn like any other
       expect(await said({ type: 'newCounts' })).toEqual({ kind: 'adminRead' });
+    });
+
+    // dm-agent 6.4. Codex 审查任务 346 必败: only where a transfer starts was looked at
+    it('counts where a transfer ends, not only where it starts', async () => {
+      const askBot = botSays({ ok: true, role: 'admin', openId: 'ou_admin', memory: { scope: { kind: 'bot' }, trust: 'trusted', actor: { role: 'admin' }, source: { botId: BOT } } });
+      const said = async (payload: object) => { askBot.mockClear(); await authorize(peer('dm'), request('memory', payload), { ...deps, askBot }); return askBot.mock.calls[0]?.[2]; };
+      const own = { kind: 'project', projectId: 'prj_0000000a' } as const;
+      const manage = { kind: 'memory', op: 'manage' };
+      expect(await said({ type: 'promote', scope: own, itemId: 'mem_1', revision: 1, botId: 'cli_other' })).toEqual({ ...manage, target: own, otherBot: true });
+      expect(await said({ type: 'promote', scope: own, itemId: 'mem_1', revision: 1, botId: BOT })).toEqual({ ...manage, target: own });
+      expect(await said({ type: 'move', scope: { kind: 'bot', botId: BOT }, itemId: 'mem_1', revision: 1, to: { projectId: 'prj_elsewhere' } })).toEqual({ ...manage, target: { kind: 'bot' }, otherBot: true });
+      expect(await said({ type: 'move', scope: { kind: 'bot', botId: BOT }, itemId: 'mem_1', revision: 1, to: { projectId: own.projectId } })).toEqual({ ...manage, target: { kind: 'bot' } });
+    });
+
+    // dm-agent 6.4. Codex 审查任务 346 必败: it landed in the other Bot's memory/dm/<this Bot's open_id>, which nothing reads
+    it('refuses a private chat memory of another Bot, its open_id being another app\'s', async () => {
+      const askBot = botSays({ ok: true, role: 'admin', openId: 'ou_admin' });
+      for (const memory of [{ type: 'add', text: 'x' }, { type: 'list' }, { type: 'archive', itemId: 'mem_1', revision: 1 }, { type: 'restore', itemId: 'mem_1', revision: 1 }]) {
+        const decision = await authorize(peer('dm'), request('memory', { ...memory, scope: { kind: 'dm', botId: 'cli_other', openId: 'ou_admin' } }), { ...deps, askBot, memoryItem: async () => undefined });
+        expect(decision).toMatchObject({ ok: false, code: 'permission_denied' });
+      }
+      expect(askBot).not.toHaveBeenCalled();
     });
   });
 
