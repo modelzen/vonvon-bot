@@ -1,11 +1,11 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { rm } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AppConfig } from '../src/config/schema';
 import { saveConfig } from '../src/config/store';
 import { readDropped } from '../src/bot/restart-dropped';
-import type { AgentEvent, AgentInput, StartThreadOptions } from '../src/agent/types';
+import { parseAskRequest, type AgentEvent, type AgentInput, type StartThreadOptions } from '../src/agent/types';
 import { paths } from '../src/config/paths';
 import { dmChatId, dmProject } from '../src/project/registry';
 import { getSession, listSessions, upsertSession } from '../src/bot/session-store';
@@ -262,6 +262,25 @@ describe('a turn going on in a private chat', () => {
     run.turns[0]!.resolve();
   });
 
+  it('keeps a /goal turn\'s sensitive question in this window: no other administrator gets it (main 必败)', async () => {
+    const run = thread(); backend(run); const { o } = await app();
+    const request = parseAskRequest({ id: 'ask-1', title: '需要你决定', acceptedConsequence: '继续', declinedConsequence: '暂停', kind: 'choices',
+      questions: [{ id: 'password', title: '密码', detail: '填写密码', selection: 'text', sensitive: true }] });
+    const end = deferred<void>();
+    Object.assign(run.t, { clearGoal: async () => undefined, runGoal: () => ({ turnId: () => 'goal-1', respondToAsk: async () => undefined, events: (async function* (): AsyncGenerator<AgentEvent> {
+      yield { type: 'turn_started', turnId: 'goal-1' };
+      yield { type: 'ask', request };
+      await end.promise;
+      yield { type: 'done', turnId: 'goal-1' };
+    })() }) });
+    await o.onMessage(message('/goal 改完'));
+    await until(() => expect(fake.cards.some(card => card.chatId === A && card.json.includes('填写密码'))).toBe(true));
+    await tick();
+    expect(fake.cards.filter(card => card.chatId === ADMIN)).toEqual([]);
+    expect(said()).not.toContain(ADMIN);
+    end.resolve();
+  });
+
   it('holds /new until the turn ends; then the next words go to a new session and the old one stays attributed', async () => {
     const first = thread('native-old'), second = thread('native-new'); backend(first, second); const { o } = await app();
     await o.onMessage(message('旧的')); await until(() => expect(first.consumed).toHaveLength(1));
@@ -353,6 +372,23 @@ describe('an administrator taken off the list', () => {
     await until(() => expect(send).toHaveBeenCalled());
     await tick();
     expect(run.consumed).toHaveLength(1);
+  });
+
+  it.each(['sessionsFile', 'projectsFile'] as const)('stops the turn and revokes the token though %s cannot be read', async file => {
+    const run = thread(); backend(run); const { o } = await app();
+    await o.onMessage(message('干活')); await until(() => expect(run.consumed).toHaveLength(1));
+    await o.onMessage(message('排着的')); await tick();
+    const view = await o.settings.read({ kind: 'agent', botId: APP }) as { administrators: { revision: string } };
+    const kept = await readFile(paths[file], 'utf8');
+    await writeFile(paths[file], '{');
+    try {
+      expect((await o.settings.act({ kind: 'adminMember', botId: APP, openId: OWNER, membership: 'absent', revision: view.administrators.revision })).kind).toBe('saved');
+      await until(() => expect(run.t.abort).toHaveBeenCalled());
+      await until(() => expect(run.t.close).toHaveBeenCalled());
+      expect(revoked).toHaveLength(1);
+      await tick();
+      expect(run.consumed).toHaveLength(1);
+    } finally { await writeFile(paths[file], kept); }
   });
 
   it('leaves another administrator\'s window alone', async () => {
