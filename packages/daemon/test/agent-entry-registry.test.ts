@@ -51,6 +51,18 @@ describe('entry lifecycle and authorization', () => {
     expect(JSON.stringify([aa, bb])).not.toMatch(/private-chat|private-dm|admin|m1/);
     entries.closeAll('shutdown');
   });
+  // dm-agent 6.3. main 必败: a private chat's task was told it may not
+  it('says a private chat\'s task may use the command line, while its creator is an admin', async () => {
+    const task: TurnFacts = { requesterOpenId: 'admin', requesterKind: 'user', retry: false, initiative: false, wake: false, scheduled: { taskId: 'st_1', runId: 'run_1' } };
+    let admin = true;
+    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => admin });
+    const entry = entries.issue({ kind: 'p2p', chatId: 'private-dm' }), t = thread();
+    entry.attach(t); entries.openTurn(t, task);
+    expect(await entry.call('session_info', {})).toEqual({ ok: true, result: { v: 1, place: 'p2p', turn: 'other', settings: { allowed: true } } });
+    admin = false;
+    expect(await entry.call('session_info', {})).toEqual({ ok: true, result: { v: 1, place: 'p2p', turn: 'other', settings: { allowed: false, reason: 'not-admin' } } });
+    entries.closeAll('shutdown');
+  });
   it.each(['group', 'doc', 'p2p'] as const)('discovers settings writers only in DM, including pending %s entries', async kind => {
     const write = vi.fn(async () => 'changed');
     const f = setup({ place: { kind }, attached: false, open: false, run: write });
