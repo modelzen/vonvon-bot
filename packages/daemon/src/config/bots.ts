@@ -47,7 +47,30 @@ export interface BotsRegistry extends GroupNamespaceState {
   current?: string;
   bots: BotEntry[];
   allocations?: Record<string, Allocation>;
+  /** Automatic issuance history survives a bot being renumbered or removed. */
+  badgeIssuance?: BadgeIssuance;
 }
+
+interface BadgeIssuance {
+  usedFavorites: string[];
+  /** One past the maximum means the sequential range is exhausted. */
+  nextSequential: number;
+}
+
+const BADGE_FAVORITES = [
+  // Powers of two and familiar HTTP status codes.
+  '128', '256', '512', '1024', '2048', '4096', '8192', '200', '404', '418',
+  // Mathematical constants, the first primes, Ramanujan's number and Kaprekar's constant.
+  '314', '3141', '2718', '1618', '1414', '1732', '2236', '2357', '1729', '6174',
+  // Books, films and games: Bond, the answer to everything, Star Trek, System Shock and more.
+  '007', '042', '1138', '1984', '2001', '2010', '1701', '0451', '1985', '9527',
+  // Lucky numbers and Chinese homophones.
+  '168', '518', '520', '521', '666', '777', '888', '999', '1314', '1688',
+  // Internet favorites, runs and repeating digits.
+  '2333', '4242', '1234', '4321', '1111', '2222', '3333', '6666', '8888', '9999',
+];
+const firstSequentialBadge = 10_000;
+const lastSequentialBadge = 9_999_999;
 
 const emptyRegistry = (): BotsRegistry => ({ version: 1, bots: [] });
 
@@ -160,24 +183,49 @@ export function ensureRegistry(): Promise<BotsRegistry> {
         pending.push(bot);
       }
     }
-    if (pending.length) {
+    const issuance = badgeIssuanceFor(registry);
+    if (pending.length || issuance.usedFavorites.length !== (registry.badgeIssuance?.usedFavorites.length ?? 0)) {
       for (const bot of pending) {
-        bot.badgeNumber = allocateBadgeNumber(claimed);
+        bot.badgeNumber = allocateBadgeNumber(issuance, claimed);
         claimed.add(bot.badgeNumber);
       }
+      registry.badgeIssuance = issuance;
       await publish(registry);
     }
     return registry;
   });
 }
 
-function allocateBadgeNumber(claimed: ReadonlySet<string>): string {
-  const favorites = ['007', '404', '1024', '2048', '2333', '3141', '4242', '9527'];
-  const available = favorites.filter(number => !claimed.has(number));
-  if (available.length) return available[randomInt(available.length)]!;
-  let number = randomInt(1000, 10000);
-  while (claimed.has(String(number))) number = number === 9_999_999 ? 1000 : number + 1;
-  return String(number);
+/** Work on a copy: the next number is committed in the same publish as its bot. */
+function badgeIssuanceFor(registry: BotsRegistry, newManualNumber?: string): BadgeIssuance {
+  const stored = registry.badgeIssuance;
+  if (stored !== undefined && (!stored || !Array.isArray(stored.usedFavorites)
+    || stored.usedFavorites.length > BADGE_FAVORITES.length || !stored.usedFavorites.every(number => BADGE_FAVORITES.includes(number))
+    || !Number.isInteger(stored.nextSequential) || stored.nextSequential < firstSequentialBadge || stored.nextSequential > lastSequentialBadge + 1)) {
+    throw new Error('工号发放记录损坏，请检查 Bot 注册表。');
+  }
+  const used = new Set(stored?.usedFavorites);
+  for (const bot of registry.bots) {
+    if (bot.badgeNumber && BADGE_FAVORITES.includes(bot.badgeNumber)) used.add(bot.badgeNumber);
+  }
+  if (newManualNumber && BADGE_FAVORITES.includes(newManualNumber)) used.add(newManualNumber);
+  return {usedFavorites: [...used], nextSequential: stored?.nextSequential ?? firstSequentialBadge};
+}
+
+function allocateBadgeNumber(issuance: BadgeIssuance, claimed: ReadonlySet<string>): string {
+  const available = BADGE_FAVORITES.filter(number => !issuance.usedFavorites.includes(number));
+  if (available.length) {
+    const number = available[randomInt(available.length)]!;
+    issuance.usedFavorites.push(number);
+    return number;
+  }
+  for (let number = issuance.nextSequential; number <= lastSequentialBadge; number++) {
+    if (!claimed.has(String(number))) {
+      issuance.nextSequential = number + 1;
+      return String(number);
+    }
+  }
+  throw new Error('自动工号已发完（上限 9999999），无法分配新的工号。');
 }
 
 export function setBotBadgeNumber(appId: string, badgeNumber: string): Promise<{ok: true} | {ok: false; reason: string}> {
@@ -189,6 +237,7 @@ export function setBotBadgeNumber(appId: string, badgeNumber: string): Promise<{
       return {ok: false, reason: '这个工号已有 Bot 使用。'};
     }
     if (entry.badgeNumber !== badgeNumber) {
+      registry.badgeIssuance = badgeIssuanceFor(registry, badgeNumber);
       entry.badgeNumber = badgeNumber;
       await publish(registry);
     }
@@ -368,6 +417,9 @@ export function registerBotEntry(
     if (previous && imported) throw new Error('Imported bot already registered');
     if (previous) return { kind: 'already-registered', entry: previous };
     if (!SafeAppIdSchema.safeParse(identity.appId).success) throw new Error('Invalid bot app ID');
+    const issuance = badgeIssuanceFor(registry);
+    const claimed = new Set(registry.bots.flatMap(bot => bot.badgeNumber ? [bot.badgeNumber] : []));
+    const badgeNumber = allocateBadgeNumber(issuance, claimed);
     const snapshot = await loadConfig(botPaths(identity.appId).configFile);
     const preferences = structuredClone(isComplete(snapshot) ? snapshot.preferences : identity.initialPreferences);
     const allocations = registry.allocations ?? {};
@@ -386,12 +438,12 @@ export function registerBotEntry(
     const pending = allocation;
     allocation = await directoryError(pending.handle, () => materializeBot(registry, pending));
     await publish(registry);
-    const claimed = new Set(registry.bots.flatMap(bot => bot.badgeNumber ? [bot.badgeNumber] : []));
-    const entry: BotEntry = { appId: identity.appId, tenant: identity.tenant, botName: identity.botName, badgeNumber: allocateBadgeNumber(claimed),
+    const entry: BotEntry = { appId: identity.appId, tenant: identity.tenant, botName: identity.botName, badgeNumber,
       name: allocation.handle, createdAt: Date.now(), registrationId: imported?.registrationId ?? randomUUID() };
     await persistAccount(Object.freeze({ entry: Object.freeze({ ...entry }), snapshot: structuredClone(snapshot),
       preferences: structuredClone(preferences), namespaceRoot: allocation.namespaceRoot }));
     registry.bots.push(entry);
+    registry.badgeIssuance = issuance;
     registry.current ??= entry.appId;
     await publish(registry);
     return { kind: 'registered', entry };
@@ -407,6 +459,7 @@ export function reserveImportedBots(appIds: readonly string[], reserve: () => Pr
 }
 export function unregisterImportedBots(entries: readonly {appId: string; registrationId: string; handle?: string}[]): Promise<void> {
   return ownBots(async registry => {
+    registry.badgeIssuance = badgeIssuanceFor(registry);
     for (const entry of entries) {
       const existing = registry.bots.find(bot => bot.appId === entry.appId);
       if (existing && existing.registrationId !== entry.registrationId) throw new Error('Imported registration ownership changed');
@@ -481,6 +534,7 @@ export function removeBot(
     if (activeBots(registry).some(bot => bot.appId === identity.appId)) return { kind: 'active' };
     const allocation = registry.allocations?.[entry.appId];
     if (allocation) validateAccountClaim(registry, allocation, entry);
+    registry.badgeIssuance = badgeIssuanceFor(registry);
     await callbacks.cleanup();
     registry.bots = registry.bots.filter(bot => bot !== entry);
     if (registry.current === entry.appId) registry.current = registry.bots[0]?.appId;
