@@ -80,7 +80,7 @@
 
 ## 9. 风险和行数
 
-产品代码 +151 -61，测试约 +520 -25（含新文件 `T/dm-schedule.test.ts`）。风险在合入门禁和错误路径一类：`dm` actor 绕过了 chat 检查，要多角度审查。最容易漏的是跨 Bot 留下 open_id，和定时回合的发起人是空的，第 8 节都列了。
+产品代码 +151 -61，测试 +533 -32（含新文件 `T/dm-schedule.test.ts`）。风险在合入门禁和错误路径一类：`dm` actor 绕过了 chat 检查，要多角度审查。最容易漏的是跨 Bot 留下 open_id，和定时回合的发起人是空的，第 8 节都列了。
 
 ## PR 描述草稿
 
@@ -103,7 +103,16 @@
 
 ### 跑过的命令和结果
 
-@@RESULTS@@
+JP-VPS，都用 `flock /tmp/vonvon-heavy.lock`，测试用隔离的 `HOME`、`VONVON_HOME`，在 merge 集成分支（`08af903f`）之后跑：
+
+- `npx tsc --noEmit -p .`：`packages/protocol`、`packages/daemon`、`packages/ui`、`packages/client` 都通过。
+- `npm run lint`：`packages/protocol`、`packages/ui` 通过。`packages/daemon` 没有 lint 脚本，没跑。
+- `npx vitest run`（`packages/daemon` 的 72 个相关文件，引用了任务、私聊入口或 `authz` 的都算）：72 个文件，1356 条通过。
+- `npx vitest run`（`packages/protocol`）：17 个文件，122 条通过。
+- `npx vitest run`（`packages/ui` 的 6 个任务相关文件）：31 条通过。
+- 变异检查，merge 之前逐处改回去再跑测试：8 处抓到 7 处（私聊开话题、门不判 `admin-removed`、门不看创建人、移除不暂停、`dmRunner` 不取私聊的人、`dmShut` 放过定时回合、`failSlot` 不暂停）。没抓到的是 `chatType: 'p2p'`：运行路径上没有代码读 `chatType`，位置由 `project.dm` 决定，所以改成 `group` 没有可见差别。这一行照设计写，但目前只是标注。
+
+全量测试交给 CI。
 
 ### 和计划不一样的地方
 
@@ -119,12 +128,14 @@
 - `notifyAutoPause` 改了私聊的文字；群任务没有 `openId` 但有名字时写名字。设计只说不 @。
 - 设计写的 `vonvon schedule create`，实际命令是 `vonvon schedule add`。C3 的 skill 要写 `add`。
 - 回合的 `requesterKind` 留在 `unknown`，记忆按 Bot 写的算，不改。
+- `chatType` 按 `project.dm` 取了，但它只在收消息的入口用，运行路径不读，真正决定私聊运行的是 `project.dm`。
 
 ### 还没验过的项
 
 - 没有在真飞书上跑过：私聊建任务、到点发在私聊、移除管理员、跨 Bot 建任务。都是用真 orchestrator 加假 channel 测的。
 - 桌面端的"私聊 · 张三"只有组件测试，没有在真窗口里看过。
 - macOS、Windows 没跑，全量测试留给 CI。
+- 暂停写失败时由门接住这条路径，只有 scheduler 的单元测试，没有用真的写失败跑过。
 
 ### 独立审查结论
 
