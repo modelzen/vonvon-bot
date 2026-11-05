@@ -17,7 +17,7 @@ export const configSkill: BuiltinSkill = {
 要协作的工作尽量放在群里，群里还有别的人和别的 Bot，可以提一句。这只是引导，用户要在这里做，就在这里做。
 
 ## 命令在哪
-直接写 \`vonvon\`。找不到时用 \`"$VONVON_CLI"\`，里面是完整路径；PowerShell 里写 \`& $env:VONVON_CLI\`。
+用 \`"$VONVON_CLI"\`，里面是运行你的这个 vonvon 的完整路径；PowerShell 里写 \`& $env:VONVON_CLI\`。PATH 上的 \`vonvon\` 可能是另一份安装，这个变量是空的才直接写它。下面写的 \`vonvon\` 都指这条命令。
 
 ## 先看现状
 设置项会变，不要背，先看再改：
@@ -33,6 +33,9 @@ export const configSkill: BuiltinSkill = {
 - \`--group X\`：一个群，写群名或 \`oc_\` 开头的 id；别的 Bot 的群要同时写 \`--bot\`。
 - \`--dm\`：这个 Bot 的私聊，比如 \`vonvon settings get --dm\`、\`vonvon schedule list --dm\`。
 - 人的 id 按 Bot 分：往 Bot B 的名单里写人，用 \`vonvon feishu members <群> --bot B\` 查到的 id。
+
+## 写文字
+\`settings set\` 的值是 JSON 或普通文字。普通文字里的 \`\\n\` 不是换行，会原样存进去。要换行就写成带双引号的 JSON 字符串：\`vonvon settings set --group X smartRules.respond='"第一段\\n\\n第二段"'\`。
 
 ## 改完什么时候生效
 群设置改完下一轮生效。Skill 和 MCP 要等新会话。

@@ -449,7 +449,7 @@ export function builtinSkillsOfSet(set: 'group' | 'dm'): BuiltinSkill[] {
 - **`vonvon` 要保证找得到**：桌面版启动时已经注册命令（`packages/desktop/src/cli-registration.ts`：Mac 写进 shell 启动文件，Windows 写用户 PATH），Linux 服务端也有 PATH 块。但这靠会话的 shell 读到那些文件：注册可能失败，开发版不注册，非登录的 shell 不读，daemon 在注册之前起来时也拿不到新的 PATH。修法不依赖它们：
   - Bot 进程启动时写启动器 `<data>/bin/vonvon`（Windows 写 `vonvon.cmd`，旁边再放一个 `vonvon`：Claude 在 Windows 上的 Bash 是 Git Bash，不认 `.cmd`），内容是 `process.execPath` 加 `selfEntry()`，daemon 带 `ELECTRON_RUN_AS_NODE` 时也写进去。每次启动重写，升级后跟着变。写失败只记日志，这个 Bot 的会话不设这两个变量，和以前一样。
   - **所有会话**（不只私聊）都找得到：Bot 启动时把这个目录加到自己进程的 `PATH` 最前面，会话继承；`profile.env` 设 `VONVON_CLI=<完整路径>`。不用 `profile.env` 设 `PATH`：Codex 的 `shell_environment_policy.set` 是整个替换，会丢掉 Provider 给子进程补的工具目录（Codex 自己的目录、nvm）。
-  - `vonvon-config` 直接写 `vonvon`，找不到时用 `$VONVON_CLI`。
+  - `vonvon-config` 写 `"$VONVON_CLI"`，变量是空的才写 `vonvon`：登录 shell 会重排 `PATH`，排前面的可能是另一份安装（Mac 验收 356）。
   - 验收时 Mac、Windows、Linux 各用两家跑一次 `vonvon --version`。
 
 ## 10. 界面（D4）
