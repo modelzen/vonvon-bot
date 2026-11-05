@@ -364,7 +364,8 @@ import {
 import { createEarlyInterrupt, createGracefulInterrupt, createIdlePause, Semaphore, withIdleTimeout, type IdlePause } from './watchdog';
 import { createBotRoster } from './bot-roster';
 import { readResponseRoster, responseMemberLabel } from './response-members';
-import { createNameBook, fetchChatMembers, resolveNames, withDeadline } from './names';
+import { createNameBook, createPersonNames, fetchChatMembers, resolveNames, withDeadline } from './names';
+import { createDmRefusal } from './dm-refused';
 
 /** 所有项目群成员的并集（去重）—— admins 加人的候选源（admins 通常是项目相关的人）。
  * 逐群调 fetchChatMembers，失败的群跳过；不含 bot/应用（接口保证）。 */
@@ -9405,6 +9406,8 @@ export function createOrchestrator(
    * 非管理员回拒绝文案（同 handleDmConsole 语义）。事件不带 chat_id，发送走
    * receive_id_type=open_id。
    */
+  /** What a non-administrator gets in a private chat and the list the client picks administrators from (dm-agent 3.5). */
+  const dmRefusal = createDmRefusal({ channel, appId: cfg.accounts.app.id });
   const onBotMenu = async (evt: { openId?: string; eventKey?: string; eventId?: string }): Promise<void> => {
     const op = evt.openId;
     if (!op) return;
@@ -9413,16 +9416,7 @@ export function createOrchestrator(
     if (evt.eventId && seenInbound.seen(`menu:${evt.eventId}`)) return;
     log.info('intake', 'bot-menu', { key: evt.eventKey, op: op.slice(-6) });
     if (!isAdmin(cfg, op)) {
-      await channel.rawClient.im.v1.message
-        .create({
-          params: { receive_id_type: 'open_id' },
-          data: {
-            receive_id: op,
-            msg_type: 'text',
-            content: JSON.stringify({ text: '⛔ 仅管理员可在私聊里管理项目。' }),
-          },
-        })
-        .catch(() => undefined);
+      await dmRefusal({ openId: op });
       return;
     }
     const sendDm = (c: object) => sendManagedCard(channel, op, c, undefined, false, 'open_id');
@@ -9676,7 +9670,8 @@ export function createOrchestrator(
   // 首次真实调用会自动重试，fallback 绝不被钉死（listModels 包装层也不缓存）。
   void trackTask(backend.listModels().catch((err) => log.fail('agent', err, { phase: 'models-prewarm' })));
 
-  const settings = createSettingsOwner({ responseRoster: (chatId) => orStop(readResponseRoster(channel, roster, chatId), { state: 'unavailable', entries: [], otherBots: false }), cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, refreshCompletionReminders: refreshCompletionReminderCards });
+  const personNames = createPersonNames(channel);
+  const settings = createSettingsOwner({ personNames, responseRoster: (chatId) => orStop(readResponseRoster(channel, roster, chatId), { state: 'unavailable', entries: [], otherBots: false }), cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, refreshCompletionReminders: refreshCompletionReminderCards });
   const executeAdminWrite = createAdminWriteExecutor({ cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, settings });
   const adminExecute = async (op: AdminWriteOp): Promise<AdminWriteResult> => {
     const result = await executeAdminWrite(op);

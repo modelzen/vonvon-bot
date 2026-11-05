@@ -2,7 +2,7 @@ import {useEffect, useId, useRef, useState} from 'react';
 import {BorderBeam} from 'border-beam';
 import {
   Activity, AppWindow, ArrowRight, Bot, Brain, Cable, ChartColumn, Cpu, FolderOpen,
-  Info, LayoutGrid, PanelTop, Search, Settings2, Users, X, type LucideIcon,
+  Info, LayoutGrid, PanelTop, Search, Settings2, UserRoundCog, Users, X, type LucideIcon,
 } from 'lucide-react';
 import {Dialog} from './reference/components/ui/Dialog';
 import {findEntries, type SearchEntry} from './search';
@@ -18,7 +18,7 @@ function Highlight({text, query}: {text: string; query: string}) {
 const pageIcons: Record<string, LucideIcon> = {
   agents: LayoutGrid, groups: Users, projects: FolderOpen, usage: ChartColumn,
   providers: Cpu, environment: Cable, application: AppWindow, secrets: Brain,
-  diagnostics: Activity, setup: Cable,
+  diagnostics: Activity, setup: Cable, administrators: UserRoundCog,
 };
 function ResultIcon({entry}: {entry: SearchEntry}) {
   const selection = entry.destination.selection?.kind;

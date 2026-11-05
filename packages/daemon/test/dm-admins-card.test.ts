@@ -78,7 +78,7 @@ describe('the private chat\'s administrators card', () => {
     try {
       await orchestrator.dispatcher.handle(event());
       const card = await patched();
-      expect(card).toContain('名单在 Vonvon Bot 客户端或终端里改。');
+      expect(card).toContain('名单在 Vonvon Bot 的「设置 → 管理员」或终端里改。');
       expect(card).not.toContain(DM.addAdminSubmit);
       expect(await saved()).toEqual([CREATOR, ADMIN, OTHER_ADMIN]);
       expect(fixture.send).not.toHaveBeenCalled();
