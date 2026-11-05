@@ -33,13 +33,24 @@ describe('real configured Provider discovery', () => {
     expect(html).not.toContain('usage-heatmap__grid');
     expect(c.collaboration).not.toHaveBeenCalled();
   });
-  it('shows API accounts without fabricating subscription use and never requests Claude quota', async () => {
-    const c = client({'codex-appserver': login('codex-appserver', 'notRequired', 'api'), 'claude-agent': login('claude-agent', 'signedIn', 'subscription')});
+  it('shows API accounts without requesting subscription quota', async () => {
+    const c = client({'codex-appserver': login('codex-appserver', 'notRequired', 'api'), 'claude-agent': login('claude-agent', 'signedIn', 'api')});
     const updates: any[] = [];
     await readNowProviders(c, update => updates.push(update));
     expect(updates.filter(item => item.kind === 'provider')).toHaveLength(2);
     expect(c.collaboration).not.toHaveBeenCalled();
     expect(vi.mocked(c.environment).mock.calls.filter(([request]) => request.type === 'backendLogin').every(([request]) => request.type === 'backendLogin' && !request.refresh)).toBe(true);
+  });
+  it('reads Claude subscription quota from the connected daemon', async () => {
+    const c = client({'claude-agent': login('claude-agent')});
+    const updates: Parameters<Parameters<typeof readNowProviders>[1]>[0][] = [];
+    await readNowProviders(c, update => updates.push(update));
+    expect(c.collaboration).toHaveBeenCalledExactlyOnceWith({action: 'usage', force: false, backend: 'claude-agent'});
+    expect(updates).toContainEqual({kind: 'provider', provider: {id: 'claude-agent', name: 'Claude', account: {kind: 'subscription'}, data}});
+    const html = renderToStaticMarkup(<NowUsageBody provider={{id: 'claude-agent', name: 'Claude', account: {kind: 'subscription'}, data}}/>);
+    expect(html).toContain('Claude 当前用量');
+    expect(html).toContain('32');
+    expect(html).toContain('5 小时限额');
   });
   it('publishes Codex without waiting for slow Claude and reuses the existing usage RPC', async () => {
     let resolve!: (value: unknown) => void;

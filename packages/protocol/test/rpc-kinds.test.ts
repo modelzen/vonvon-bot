@@ -7,7 +7,7 @@ it("names every request once, nested variants by their own field", () => {
   expect(new Set(kinds).size).toBe(kinds.length);
   for (const entry of entries) expect(entry.kind.startsWith(`${entry.method}.${entry.type}`)).toBe(true);
   for (const kind of [
-    "snapshot.get", "contextPreview.get", "command.bindGroup", "schedule.create", "schedule.listBot", "memory.newCounts",
+    "snapshot.get", "contextPreview.get", "command.bindGroup", "command.setAgentBadgeNumber", "schedule.create", "schedule.listBot", "memory.newCounts",
     "settings.read.host", "settings.save.session", "settings.act.adminMember", "settings.sessions",
     "machine.mcp.add", "machine.service.start", "machine.bridgeImport.rollback", "machine.stopHost",
   ]) expect(kinds).toContain(kind);
@@ -17,8 +17,8 @@ it("names every request once, nested variants by their own field", () => {
   // devices 8.4: the eleven dead kinds left, the nine device kinds and admin.negotiate came; C5 added memory.branchDelete.
   // devices-ui-2 4.9: environment.installCodex and environment.startCodexLogin left too. devices-ui-4 added
   // machine.desktopUpdateReport. main 必败: 152 kinds, none of them device
-  // dm-agent 7.3: command.feishuRead
-  expect(kinds).toHaveLength(153);
+  // dm-agent 7.3: command.feishuRead. Badges added command.setAgentBadgeNumber.
+  expect(kinds).toHaveLength(154);
   for (const kind of ["device.pair", "device.setPort", "admin.negotiate", "memory.branchDelete", "machine.desktopUpdateReport"]) expect(kinds).toContain(kind);
   for (const kind of ["machine.repairCli", "collaboration.openGroup", "environment.installCodex", "environment.startCodexLogin"]) expect(kinds).not.toContain(kind);
 });

@@ -24,7 +24,18 @@ export function projectState(state: AdminState, previous: DesktopSnapshot, pendi
     // failed keeps the one the client has, as the groups below do.
     const previousDm = previous.agents.find(agent => agent.id === agentId)?.dm;
     const dm = readError ? (previousDm && { ...previousDm, stale: true }) : 'dm' in bot && bot.dm ? membershipOf(agentId, bot.dm) : undefined;
-    agents.push({ id: agentId, name: bot.botName || bot.name, ...(bot.avatarDataUrl ? { avatarDataUrl: bot.avatarDataUrl } : {}), enabled: bot.active, running: bot.running, connection: bot.connection ?? (bot.running ? 'unknown' : 'disconnected'), activation: pending.has(bot.appId) || bot.active !== bot.running ? 'restartRequired' : 'active', ...(readError ? { readError } : {}), ...(dm ? { dm } : {}) });
+    agents.push({
+      id: agentId, name: bot.botName || bot.name,
+      ...(bot.badgeNumber ? { badgeNumber: bot.badgeNumber } : {}),
+      ...(bot.registeredAt !== undefined ? { registeredAt: bot.registeredAt } : {}),
+      ...(bot.ownerName ? { ownerName: bot.ownerName } : {}),
+      ...(bot.tenant ? { tenant: bot.tenant } : {}),
+      ...(bot.avatarDataUrl ? { avatarDataUrl: bot.avatarDataUrl } : {}),
+      enabled: bot.active, running: bot.running, connection: bot.connection ?? (bot.running ? 'unknown' : 'disconnected'),
+      activation: pending.has(bot.appId) || bot.active !== bot.running ? 'restartRequired' : 'active',
+      ...(readError ? { readError } : {}),
+      ...(dm ? { dm } : {}),
+    });
     if (readError) {
       for (const member of previous.memberships.filter(member => member.agentId === bot.appId)) {
         memberships.push({ ...member, stale: true });

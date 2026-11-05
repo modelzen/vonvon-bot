@@ -113,7 +113,7 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
   ...rows('snapshot', 'get', 'host'),
   ...rows('command', 'refresh listPendingGroups listJoinedGroups bindGroup cancelJob', DM_ONLY),
   // A private chat may disable another Bot, not its own: authorizeSession refuses that (dm-agent 6.2).
-  ...rows('command', 'setAgentEnabled', DM_ONLY),
+  ...rows('command', 'setAgentEnabled setAgentBadgeNumber', DM_ONLY),
   ...rows('command', 'listGroupMembers', { dm: 'bot', group: 'host', comment: 'deny' }),
   // dm-agent 7.3: a group within its own chat and its turn, a private chat on any Bot here. A comment's tools are its own.
   ...rows('command', 'feishuRead', { dm: 'bot', group: 'bot', comment: 'deny' }),
@@ -466,7 +466,7 @@ function commandInReach(command: Command, session: boolean, own: (botId: string)
     case 'refresh': return ok;
     case 'restartHost': case 'cancelJob': return session ? outOfReach() : ok;
     case 'registerAgent': return outOfReach();
-    case 'refreshAgentCredentials': case 'setAgentEnabled': case 'deleteAgent': return own(command.agentId) ? botWide() : outOfReach();
+    case 'refreshAgentCredentials': case 'setAgentEnabled': case 'setAgentBadgeNumber': case 'deleteAgent': return own(command.agentId) ? botWide() : outOfReach();
     case 'bindGroup': case 'listGroupMembers': return own(command.agentId) && reaches(command.groupId) ? ok : outOfReach();
     case 'feishuRead': return command.agentId === undefined || own(command.agentId) ? feishu : outOfReach();
     case 'setResponse': case 'setPermission': {

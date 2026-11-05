@@ -27,8 +27,8 @@ export function loginFromAccount(account: ClaudeAccount | undefined, command = '
     ...(/^[a-zA-Z0-9_-]{1,80}$/.test(provider) ? {account: {kind: 'api' as const, apiProvider: provider}} : {}),
   };
   if (account.subscriptionType) {
-    const plan = account.subscriptionType.toLowerCase();
-    const kind = plan === 'free' ? 'free' : ['pro', 'max', 'team', 'enterprise'].includes(plan) ? 'subscription' : 'unknown';
+    const plan = account.subscriptionType.trim().toLowerCase().replace(/\s+/g, '_');
+    const kind = plan === 'free' ? 'free' : 'subscription';
     return { state: 'signedIn', message: `已登录 claude.ai 账号（${account.subscriptionType}）。`, account: {kind, ...(/^[a-z0-9_-]{1,80}$/.test(plan) ? {planType: plan} : {}), apiProvider: 'firstParty'} };
   }
   const source = [account.apiKeySource, account.tokenSource].find(value => value && value !== 'none');
