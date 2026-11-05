@@ -5,6 +5,7 @@ import {modeToConversation, type Agent, type Conversation, type DesktopSnapshot,
 import {useActiveDevice, useClient, useShellCapabilities} from './client-context';
 import {whereName} from './device-copy';
 import {AgentAvatar} from './AgentAvatar';
+import {dmTitle} from './BotGroupList';
 import {GroupAvatar} from './GroupAvatar';
 import {NavigationIndicator} from './NavigationIndicator';
 import {GroupUsage} from './GroupUsage';
@@ -149,9 +150,9 @@ export function GroupWorkspace({member, agent, group, snapshot, dmMode, initialT
   return <div className="group-design-workspace">
     <header id={settingAnchor("群设置")} className="config-header">
       <div className="config-header-identity">
-        <div className="config-group-title"><GroupAvatar group={group} large dm={dmMode}/><h2>{dmMode ? <span>{group.name}</span> : <button type="button" className="config-group-link" title="在飞书打开此群" aria-label={`在飞书打开 ${group.name}`} onClick={() => void openExternalUrl(groupUrl(group.id),'group',shell).catch(error => setError(String(error.message ?? error)))}><span>{group.name}</span><ArrowUpRight size={14} aria-hidden="true"/></button>}</h2></div>
-        <span className="config-context-divider" aria-hidden="true"/>
-        {dmMode ? <span className="header-bot-select" title={agent.name}><AgentAvatar agent={agent}/><span className="header-bot-select-value">{agent.name}</span></span> : <Select.Root items={groupBots.map(({item,bot}) => ({value:item.id,label:bot.name}))} value={member.id} onValueChange={value => {
+        <div className="config-group-title">{dmMode ? <AgentAvatar agent={agent} large/> : <GroupAvatar group={group} large/>}<h2>{dmMode ? <span>{dmTitle(agent)}</span> : <button type="button" className="config-group-link" title="在飞书打开此群" aria-label={`在飞书打开 ${group.name}`} onClick={() => void openExternalUrl(groupUrl(group.id),'group',shell).catch(error => setError(String(error.message ?? error)))}><span>{group.name}</span><ArrowUpRight size={14} aria-hidden="true"/></button>}</h2></div>
+        {!dmMode && <span className="config-context-divider" aria-hidden="true"/>}
+        {!dmMode && <Select.Root items={groupBots.map(({item,bot}) => ({value:item.id,label:bot.name}))} value={member.id} onValueChange={value => {
           if (!value || value === member.id) return;
           const selected = groupBots.find(({item}) => item.id === value);
           if (selected) guard.navigate(() => onBot(selected.item));

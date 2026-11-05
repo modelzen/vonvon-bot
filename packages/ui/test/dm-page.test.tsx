@@ -39,7 +39,9 @@ it('puts the private chat at the very top of the group list, with its Provider a
   expect(html.indexOf('私聊')).toBeLessThan(html.indexOf('研发群'));
   expect(html).toContain('bot-group-list__count">1<');
   expect(html).toContain('aria-label="设置 小支 的私聊，Provider：Claude"');
-  expect(html.match(/bot-group-list__mode">[^<]/g)).toHaveLength(1); // the group's; the private chat's cell is empty
+  expect(html).toContain('和 小支 的私聊');
+  expect(html).toContain('bot-group-list__mode">仅管理员<');
+  expect(html).toContain('collaboration-avatar agent');
   expect(html.match(/<button[^>]*bot-group-list__row/g)).toHaveLength(2);
 });
 
