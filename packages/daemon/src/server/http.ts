@@ -295,7 +295,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
         case 'environment': return finish(peer, await environmentRpc(options.service, jobs, peer, request.payload, environment), payload => ({ type: 'response', id, method: 'environment', payload }));
         case 'machine': return finish(peer, await machineRpc(options.service, options.control, port, request.payload, { launcher: serviceActions, snapshots, root: home, bridgeImport: options.bridgeImport, environment,
           bundled: { peer, update: bundled, distribution: () => installed, clients } }), payload => ({ type: 'response', id, method: 'machine', payload }));
-        case 'command': return finish(peer, await commandRpc({ service: options.service, jobs, peer, owner: ownerOf(peer), directory, snapshots, control: options.control, port }, request.payload), payload => ({ type: 'response', id, method: 'command', payload: shown(payload) }));
+        case 'command': return finish(peer, await commandRpc({ service: options.service, jobs, peer, owner: ownerOf(peer), directory, snapshots, control: options.control, port, ...(decision.feishu ? { feishu: decision.feishu } : {}) }, request.payload), payload => ({ type: 'response', id, method: 'command', payload: shown(payload) }));
         case 'library': return finish(peer, await libraryRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'library', payload: shown(payload) }));
         // devices-4b 4.5: a Bot session's write lands where its Bot process said, as its turn's person.
         case 'memory': return finish(peer, await memoryRpc(options.service, request.payload, {

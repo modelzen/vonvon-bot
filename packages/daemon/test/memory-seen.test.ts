@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { memoryReplySchema, memoryRequestSchema, type MemoryReply, type MemoryRequest } from '@vonvon/protocol';
 import { memoryAction, type MemoryAdminDeps } from '../src/admin/memory';
-import { MemoryStore, projectMemoryLocation } from '../src/bot/memory-store';
+import { dmMemoryLocation, MemoryStore, projectMemoryLocation } from '../src/bot/memory-store';
 import { libraryLocation } from '../src/project/library';
 
 const roots: string[] = [];
@@ -111,5 +111,23 @@ describe('the 新 marks (§5.8)', () => {
     expect(memoryReplySchema.safeParse(reply).success).toBe(true);
     await call({ type: 'seen', page: { kind: 'project', projectId: PROJECT.id } });
     expect(await call({ type: 'newCounts' })).toEqual({ kind: 'newCounts', projects: {}, bots: {} });
+  });
+
+  // dm-agent 10 (D4). main 必败: a private chat's list carried no marks and the page could not be marked seen
+  it('marks a private chat\'s memory person by person, and seeing one leaves the other new', async () => {
+    const { call, data, clock } = setup();
+    const directory = join(data, 'bots', 'cli_a');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'projects.json'), JSON.stringify({ projects: [{ name: '私聊', chatId: 'oc_dm_cli_a', cwd: '/work/dm', blank: true, createdAt: 1, dm: { people: { oc_a: { openId: 'ou_a', at: 1 }, oc_b: { openId: 'ou_b', at: 2 } } } }] }));
+    const scope = (openId: string) => ({ kind: 'dm', botId: 'cli_a', openId }) as const;
+    clock.at = 2_000;
+    for (const openId of ['ou_a', 'ou_b']) await new MemoryStore(dmMemoryLocation(directory, openId), { now: () => clock.at }).add(written(`${openId} 的事`));
+    const people = async () => { const reply = await call({ type: 'dmPeople', botId: 'cli_a' }); return reply.kind === 'dmPeople' ? reply.people.map(person => [person.openId, person.fresh]) : []; };
+    expect(await people()).toEqual([['ou_a', 1], ['ou_b', 1]]);
+    expect(list(await call({ type: 'list', scope: scope('ou_a') })).newIds).toHaveLength(1);
+    clock.at = 3_000;
+    expect(memoryReplySchema.safeParse(await call({ type: 'seen', page: scope('ou_a') })).success).toBe(true);
+    expect(list(await call({ type: 'list', scope: scope('ou_a') })).newIds).toEqual([]);
+    expect(await people()).toEqual([['ou_a', 0], ['ou_b', 1]]);
   });
 });

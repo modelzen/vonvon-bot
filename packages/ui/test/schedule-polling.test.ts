@@ -80,3 +80,13 @@ it('shows a stopped bot as its sentence, and a failed read as an error that keep
   expect(show.list).toHaveBeenCalledOnce();
   session.stop();
 });
+
+// dm-agent 10 (D4). main 必败: a session read one chat
+it('reads the Bot\'s whole list for the private chat\'s page and keeps its private tasks only', async () => {
+  const send = vi.fn(async (_request: ScheduleRequest): Promise<ScheduleReply> => tasksReply([scheduleTask({id: 'st_group'}), scheduleTask({id: 'st_dm', chatId: 'oc_p2p', dm: {name: '张三'}})]));
+  const session = startScheduleSession(send, undefined, show);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(send).toHaveBeenCalledExactlyOnceWith({action: 'listBot'});
+  expect(show.list.mock.calls[0]?.[0].reply.tasks.map((task: {id: string}) => task.id)).toEqual(['st_dm']);
+  session.stop();
+});

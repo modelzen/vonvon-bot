@@ -127,6 +127,7 @@ else process.exit(0);
   const groupMembers = vi.fn(async (_agent: string, _group: string, _cursor?: string) => ({ members, nextCursor: 'members-next' }));
   const service = fakeService({
     listBots: async () => [bot],
+    feishuRead: async () => ({ ok: true, result: { title: 'fixture' } }),
     listProjects: async () => [{ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }],
     pendingGroups: async () => ({ groups: [] }),
     joinedGroups: async () => ({ groups: [] }),
@@ -165,7 +166,7 @@ else process.exit(0);
       command: [
         { type: 'refresh' }, { type: 'listPendingGroups', agentId },
         { type: 'registerAgent' }, { type: 'refreshAgentCredentials', agentId }, { type: 'restartHost' },
-        { type: 'listJoinedGroups', agentId }, { type: 'listGroupMembers', agentId, groupId, cursor: 'members-page' }, { type: 'bindGroup', agentId, groupId, projectName, folder: { kind: 'existing', folderToken }, tool: 'codex', conversation: 'threads' },
+        { type: 'listJoinedGroups', agentId }, { type: 'listGroupMembers', agentId, groupId, cursor: 'members-page' }, { type: 'feishuRead', agentId, tool: 'feishu_doc', args: { doc: 'dox' } }, { type: 'bindGroup', agentId, groupId, projectName, folder: { kind: 'existing', folderToken }, tool: 'codex', conversation: 'threads' },
         { type: 'setResponse', membershipId: JSON.stringify([agentId, groupId]), response: 'all' },
         { type: 'setPermission', membershipId: JSON.stringify([agentId, groupId]), administrator: 'write', network: true },
         { type: 'setAgentEnabled', agentId, enabled: true }, { type: 'deleteAgent', agentId }, { type: 'cancelJob', jobId: operationId },
@@ -227,6 +228,7 @@ else process.exit(0);
           if (key === 'environment.backendInstallStatus') expect(frame).toMatchObject({ payload: { kind: 'backendInstallStatus', operation: null } });
           if (key === 'machine.mcp') expect(frame).toMatchObject({ payload: { type: 'mcp', provider: 'claude', status: 'ready', entries: [] } });
           if (key === 'collaboration.stopSubagent') expect(frame).toMatchObject({ type: 'response', method: 'collaboration', payload: { kind: 'applied' } });
+          if (key === 'command.feishuRead') expect(frame).toMatchObject({ type: 'response', method: 'command', payload: { kind: 'feishuRead', result: { title: 'fixture' } } });
           if (key === 'command.listGroupMembers') expect(frame).toMatchObject({ type: 'response', method: 'command', payload: { kind: 'members', members, nextCursor: 'members-next' } });
         }
       }

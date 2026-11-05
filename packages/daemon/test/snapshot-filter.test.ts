@@ -44,6 +44,20 @@ describe('filterSnapshot', () => {
   });
 });
 
+// dm-agent 10. main 必败: there was no private chat in the snapshot to leave out
+describe('the private chat in a snapshot', () => {
+  const dm = { id: 'x', agentId: 'cli_x', groupId: 'oc_dm_cli_x', name: '私聊' };
+  const withDm = { ...snapshot, agents: snapshot.agents.map(agent => agent.id === 'cli_x' ? { ...agent, dm } : agent) } as unknown as DesktopSnapshot;
+  it('stays for the whole bot and goes for a reach of one group', () => {
+    expect(filterSnapshot(withDm, principal('dm'), { bot: 'cli_x' }).agents[0]?.dm).toEqual(dm);
+    expect(filterSnapshot(withDm, principal('group'), { bot: 'cli_x', group: 'oc_a' }).agents[0]).not.toHaveProperty('dm');
+  });
+  it('reaches a private chat\'s session and no group\'s', () => {
+    expect(sessionSnapshot(withDm, principal('dm')).agents[0]?.dm).toEqual(dm);
+    expect(sessionSnapshot(withDm, principal('group')).agents[0]).not.toHaveProperty('dm');
+  });
+});
+
 // s1b: a group's session reads the least its command line resolves names with. main 必败: it read its group's folder,
 // tier, backend, jobs, recent conversations, tools and the data path.
 describe('sessionSnapshot', () => {

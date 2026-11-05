@@ -1,15 +1,17 @@
 import { scheduleRequestSchema, type Agent, type DesktopSnapshot, type ScheduleReply, type ScheduleRequest, type ScheduleRunRecord, type ScheduleSpec, type ScheduledTaskView } from '@vonvon/protocol';
 import { badArgs, CommandError } from '../command-error';
 import { formatAt, normalizeTimeZone, parseCron, parseLocal } from '../../bot/schedule/time';
-import { pickBot, pickGroup, print, want, withDaemon, type Daemon, type Io } from '../daemon-client';
+import { dmChatId } from '../../project/registry';
+import { pickBot, pickGroup, print, want, withDaemon, type Call, type Daemon, type Io } from '../daemon-client';
 
 export type ScheduleAction = 'list' | 'add' | 'edit' | 'pause' | 'resume' | 'delete' | 'run' | 'runs';
 export type ScheduleTarget = {
-  bot?: string; group?: string; all?: boolean; taskId?: string; instruction?: string; name?: string; revision?: string; tz?: string; newTopic?: boolean; follow?: boolean;
+  bot?: string; group?: string; all?: boolean; dm?: boolean; to?: string; taskId?: string; instruction?: string; name?: string; revision?: string; tz?: string; newTopic?: boolean; follow?: boolean;
   every?: string; daily?: string; weekly?: string; at?: string; cron?: string;
 };
 
 const NOT_FOUND = '这里没有这个任务。';
+const NOT_FOUND_DM = '这个 Bot 的私聊没有这个任务。';
 const WHEN_FORMS = '--every 30m、--daily 09:00、--weekly mon,wed@10:00、--at "2026-11-01 14:00" 或 --cron "0 9 * * 1-5"';
 const later = (what: string): string => `可能已经${what}，运行 vonvon schedule list 查看。`;
 /** What each action is called in errors, the reply it expects, and what a lost reply may have done. */
@@ -161,11 +163,39 @@ function chatOf(snapshot: Pick<DesktopSnapshot, 'memberships' | 'projects'>, bot
   return !bound && (session || UNBOUND.has(action)) && /^oc_/.test(group) ? group : pickGroup(memberships, bot, group).groupId;
 }
 
+/**
+ * `add --dm`: whose private chat a new task posts to (dm-agent 10). The owner's terminal is in no chat: `--to`, or the one
+ * admin there is; someone no longer an admin stays listed in their memory and takes no new task. A private chat's turn
+ * posts to its own chat, which the daemon reads from the row's id; another person's private chat is not its to name.
+ */
+async function dmChatToPost(call: Call, bot: Agent, to: string | undefined, session: boolean): Promise<string> {
+  if (session) {
+    if (to !== undefined) throw badArgs('在私聊里建的任务发回这个私聊，不用 --to。');
+    return dmChatId(bot.id);
+  }
+  const { people } = want('读取私聊的人', await call('读取私聊的人', c => c.memory({ type: 'dmPeople', botId: bot.id })), 'dmPeople');
+  const open = people.filter(person => person.chatId !== undefined && person.admin !== false);
+  const label = (person: { openId: string; name?: string }): string => person.name ? `${person.name}（${person.openId}）` : person.openId;
+  if (to !== undefined) {
+    const person = people.find(person => person.openId === to);
+    if (!person?.chatId) throw badArgs(`${to} 没有和这个 Bot 私聊过。用 vonvon memory people 看私聊过的人。`);
+    if (person.admin === false) throw new CommandError('refused', `${label(person)} 已经不是管理员，不能给他建任务。`);
+    return person.chatId;
+  }
+  const [only] = open;
+  if (!only) throw badArgs('这个 Bot 还没有可以发的私聊：要有管理员先在飞书里和它说过话。');
+  if (open.length > 1) throw badArgs(`这个 Bot 有 ${open.length} 位管理员的私聊，用 --to 指定发给谁：${open.map(label).join('、')}`);
+  return only.chatId!;
+}
+
 /** In a Bot's session the connection carries the session's token and `--scope`, and the daemon judges (devices-4a 4.9). */
 export async function runSchedule(action: ScheduleAction, target: ScheduleTarget, io: Io, daemon: Daemon = withDaemon): Promise<void> {
   const all = action === 'list' && Boolean(target.all);
   if (all && target.group !== undefined) throw badArgs('--group 和 --all 只能选一个。');
-  if (!all && target.group === undefined) throw badArgs(`要给 --group <群>（群 id oc_… 或项目名）${action === 'list' ? '，或者用 --all 看这个 Bot 的全部任务' : ''}。`);
+  if (target.dm && (target.group !== undefined || target.all)) throw badArgs('--dm 是这个 Bot 的私聊，不和 --group、--all 一起用。');
+  if (target.dm && (target.newTopic || target.follow)) throw badArgs('私聊的任务不开话题。');
+  if (target.to !== undefined && !target.dm) throw badArgs('--to 只和 --dm 一起用。');
+  if (!all && !target.dm && target.group === undefined) throw badArgs(`要给 --group <群>（群 id oc_… 或项目名）${action === 'list' ? '，或者用 --all 看这个 Bot 的全部任务' : ''}。`);
   const tz = zoneOf(target.tz);
   const spec = action === 'add' || action === 'edit' ? timeOption(target, action === 'add') : undefined;
   const name = words('--name ', target.name, 40);
@@ -191,7 +221,18 @@ export async function runSchedule(action: ScheduleAction, target: ScheduleTarget
     };
     if (all) return { reply: await send({ action: 'listBot' }), names: new Map(snapshot.memberships.filter(m => m.agentId === bot.id).map(m => [m.groupId, m.name])) };
     const session = info !== undefined && 'principal' in info && info.principal?.startsWith('bot-session:') === true;
-    const chatId = chatOf(snapshot, bot, target.group!, action, session);
+    // Private tasks live on each person's chat: from the Bot's whole list, as the task page's 私聊 group reads them.
+    const dmTasks = async () => {
+      const tasks = want(ACTIONS.list.what, await send({ action: 'listBot' }, ACTIONS.list), 'tasks');
+      return { ...tasks, tasks: tasks.tasks.filter(task => task.dm) };
+    };
+    if (target.dm && action === 'list') return { reply: await dmTasks(), names: new Map() };
+    const dmTask = async () => {
+      const found = (await dmTasks()).tasks.find(task => task.id === taskId);
+      if (!found) throw new CommandError('refused', `${what}没有完成：${NOT_FOUND_DM}`);
+      return found.chatId;
+    };
+    const chatId = !target.dm ? chatOf(snapshot, bot, target.group!, action, session) : action === 'add' ? await dmChatToPost(call, bot, target.to, session) : await dmTask();
     // A list before the change itself is only a read: a lost reply to it changed nothing.
     const list = async () => want(ACTIONS.list.what, await send({ action: 'list', chatId }, ACTIONS.list), 'tasks');
     const find = async () => {
@@ -228,9 +269,9 @@ export async function runSchedule(action: ScheduleAction, target: ScheduleTarget
   const done = want(what, reply, kind);
   let human: string[];
   if (done.kind === 'tasks') {
-    human = done.tasks.length ? names ? groupLines(done.tasks, names) : done.tasks.map(taskLine) : [all ? '这个 Bot 还没有定时任务。' : '本群还没有定时任务。'];
+    human = done.tasks.length ? names ? groupLines(done.tasks, names) : done.tasks.map(taskLine) : [target.dm ? '这个 Bot 的私聊还没有定时任务。' : all ? '这个 Bot 还没有定时任务。' : '本群还没有定时任务。'];
   } else if (done.kind === 'task') human = action === 'runs' ? runLines(done.task) : [taskLine(done.task)];
   else if (done.kind === 'deleted') human = [`已删除 ${done.taskId}，连同它的运行记录。`];
-  else human = [`已开始运行 ${done.taskId}，结果会发在群里。`];
+  else human = [`已开始运行 ${done.taskId}，结果会发在${target.dm ? '私聊' : '群'}里。`];
   print(io, human, done);
 }

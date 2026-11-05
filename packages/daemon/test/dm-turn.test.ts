@@ -370,6 +370,56 @@ describe('a turn going on in a private chat', () => {
   });
 });
 
+describe('the page changing what a private chat runs on (dm-agent 4.1)', () => {
+  const model = (id: string) => ({ id, displayName: id, description: '', supportedEfforts: ['medium' as const], defaultEffort: 'medium' as const, isDefault: false, hidden: false });
+  /** The page's save: the row's list, and its live thread gone, as settings.save does. */
+  const save = async (run: Run, models: string[]) => {
+    const stored = JSON.parse(await readFile(paths.projectsFile, 'utf8')) as { projects: { dm?: unknown; backend?: string; modelAccess?: unknown }[] };
+    Object.assign(stored.projects.find(row => row.dm)!, { backend: BE, modelAccess: { backend: BE, models, efforts: ['medium'], defaultModel: models[0]!, defaultEffort: 'medium' } });
+    await writeFile(paths.projectsFile, JSON.stringify(stored));
+    run.t.isAlive = () => false;
+  };
+  it('moves to the row\'s default when the model in use is taken off the list, in the same session', async () => {
+    const first = thread('native-1'), again = thread('native-1'), be = backend(first, again); be.listModels = async () => [model('old'), model('new')];
+    const { o } = await app();
+    await o.onMessage(message('第一句')); await until(() => expect(first.consumed).toHaveLength(1));
+    first.turns[0]!.resolve(); await settled();
+    await upsertSession({ ...(await getSession(A))!, model: 'old', effort: 'medium' });
+    await save(first, ['new']);
+    await o.onMessage(message('第二句')); await until(() => expect(again.consumed).toHaveLength(1));
+    expect(await getSession(A)).toMatchObject({ sessionId: 'native-1', model: 'new', effort: 'medium' });
+    expect(be.resumeThread.mock.calls.at(-1)?.[0]).toMatchObject({ model: 'new' });
+    expect(be.startThread).toHaveBeenCalledOnce();
+    expect(said()).not.toContain('已不在本群可用范围');
+    again.turns[0]!.resolve();
+  });
+  it('starts over on the new Provider, saying so, when the row moved to another', async () => {
+    const first = thread('native-claude'), second = thread('native-new'), be = backend(first, second); be.listModels = async () => [model('new')];
+    const { o } = await app();
+    await o.onMessage(message('第一句')); await until(() => expect(first.consumed).toHaveLength(1));
+    first.turns[0]!.resolve(); await settled();
+    await upsertSession({ ...(await getSession(A))!, backend: 'claude-agent', model: 'sonnet', effort: 'medium' });
+    await save(first, ['new']);
+    await o.onMessage(message('第二句')); await until(() => expect(second.consumed).toHaveLength(1));
+    expect(be.resumeThread).not.toHaveBeenCalled();
+    expect(be.startThread).toHaveBeenCalledTimes(2);
+    expect(await getSession(A)).toMatchObject({ backend: BE, sessionId: 'native-new', model: 'new' });
+    expect(said()).not.toContain('已不在本群可用范围');
+    second.turns[0]!.resolve();
+  });
+  it('leaves a session alone while its model stays on the list', async () => {
+    const first = thread('native-1'), again = thread('native-1'), be = backend(first, again); be.listModels = async () => [model('old'), model('new')];
+    const { o } = await app();
+    await o.onMessage(message('第一句')); await until(() => expect(first.consumed).toHaveLength(1));
+    first.turns[0]!.resolve(); await settled();
+    await upsertSession({ ...(await getSession(A))!, model: 'old', effort: 'medium' });
+    await save(first, ['new', 'old']);
+    await o.onMessage(message('第二句')); await until(() => expect(again.consumed).toHaveLength(1));
+    expect(await getSession(A)).toMatchObject({ model: 'old' });
+    again.turns[0]!.resolve();
+  });
+});
+
 describe('/resume in a private chat', () => {
   it('lists this person\'s sessions, parked ones too, and nothing else (main 必败)', async () => {
     const run = thread('mine'), be = backend(run); const { o } = await app();

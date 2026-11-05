@@ -107,10 +107,7 @@ sessionCliEnv(cli, env?, platform?): Record<string, string> // PATH 和 VONVON_C
 
 - `npm ci`、`npm run build`：通过。
 - `packages/daemon` 的 `npx tsc --noEmit`：通过。daemon 没有 lint 配置，lint 不适用。
-- `npx vitest run` 这片相关的 21 个测试文件，共 476 个，连跑 3 次：
-  - 两次 475 过、1 败；一次 474 过、2 败。
-  - 每次都败的：`bridge-session-memory.test.ts` 的 "counts each project once and reads the table every..."。在未改动的基线上同样失败（`git archive HEAD` 到临时目录跑的），不是这片造成的，这片没动它。F2 分支的 `2ed1fafc` 改了这条测试，合入后要再看一次。
-  - 败过一次的：`dm-turn.test.ts` 的 "stops by the card's reaction..."，等第二句超时。之后 2 次整组和 4 次单跑都过。这个测试用固定的 150ms 等待，疑似并发负载下的偶发；没有在基线上复现过，不算证实。
+- merge F2、D4 之后，这片改过的测试文件加 `bridge-session-memory`、`dm-turn` 共 17 个文件 398 个测试全过。之前基线失败的 `bridge-session-memory` 由 F2 修好。merge 前 `dm-turn.test.ts` 的 "stops by the card's reaction..." 偶发超时过一次（固定 150ms 等待，疑似并发负载），之后没再出现。
 - 临时测试：群的 `vonvon-schedule` 正文和改之前一字不差；经启动器跑真实 CLI，路径带空格，裸名 `vonvon --version` 和 `"$VONVON_CLI" --version` 都通；两项都没留在仓库。
 - 反证，改完都已还原：去掉 `sessionCliEnv` 接线 5 个失败；Skill 里 `add` 改回 `create` 2 个失败；私聊去掉 `configSkill` 2 个失败；`pickBot` 去掉私聊分支 1 个失败。
 
@@ -136,9 +133,9 @@ sessionCliEnv(cli, env?, platform?): Record<string, string> // PATH 和 VONVON_C
 
 **依赖**
 
-- D4 的 `--dm`：`vonvon-config` 已写，`T/builtin-skill-text.test.ts` 的 `ARRIVES` 名单先放行，CLI 有了之后这个名单会变红，要删掉。
-- F2 的 `vonvon feishu` 命令、工具的 `bot` 参数和跨 Bot 路由：文字按 `dm-agent.md` 第 7.3 节写，F2 合入前不成立。合入后 merge 集成分支再对一次。
-- 用 `git merge-tree` 试过：F2 和这片没有冲突；D4 只冲突 `packages/daemon/src/cli/commands/schedule.ts`，这片改了 `NOT_FOUND`，D4 加了 `NOT_FOUND_DM`。
+- D4 的 `--dm`：F2、D4 都已合入集成分支，这片 merge 过，`T/builtin-skill-text.test.ts` 的提前放行名单已删，Skill 里的命令和参数都由这个测试对着真实 CLI 核对。
+- F2 的 `vonvon feishu` 命令、工具的 `bot` 参数和跨 Bot 路由：已在集成分支上，文字和实现一致。
+- merge 时只有 `packages/daemon/src/cli/commands/schedule.ts` 冲突：这片改了 `NOT_FOUND`，D4 加了 `NOT_FOUND_DM`，两句都留。
 
 **独立审查结论：** 待 Codex 审查
 
