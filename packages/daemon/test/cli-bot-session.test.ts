@@ -151,8 +151,20 @@ describe('a Bot session\'s command line', () => {
     try {
       const token = d.fixture.sessionTokens.issue({ appId: BOT, place: 'dm', chatId: 'oc_dm', sessionId: 'ses_1111111111111111' });
       const added = await run(d.fixture.home, d.home, ['settings', 'act', 'admin', 'add', 'ou_0123456789abcdef', '--scope', `bot=${BOT}`], { VONVON_SESSION: token });
-      expect(added, added.stderr).toMatchObject({ code: 4, json: { ok: false, error: { kind: 'refused', message: '修改设置失败：这个操作不能从 Bot 会话里做。' } } });
+      expect(added, added.stderr).toMatchObject({ code: 4, json: { ok: false, error: { kind: 'refused', message: '修改设置失败：管理员名单只能在 Vonvon Bot 客户端的「设置 → 管理员」或终端里改，聊天里不能改。' } } });
       expect(act).not.toHaveBeenCalled();
+    } finally { await d.close(); }
+  }, 60_000);
+
+  // dm-agent 6.1. main 必败: a private chat's command needed --scope, and a Bot with no groups read as bindings hidden
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('needs no --scope in a private chat, and reads a Bot with no groups as having none', async () => {
+    const d = await daemon({ listProjects: async () => [] }, async () => ({ ok: true, role: 'admin', openId: 'ou_admin' }));
+    try {
+      const token = d.fixture.sessionTokens.issue({ appId: BOT, place: 'dm', chatId: 'oc_dm', sessionId: 'ses_1111111111111111' });
+      const set = await run(d.fixture.home, d.home, ['group', 'set', '研发', '--disable', '--bot', BOT], { VONVON_SESSION: token });
+      expect(set.json.error?.message, set.stderr).toContain('研发');
+      expect(set.json.error?.message).not.toContain('不能从 Bot 会话里做');
+      expect(set.json.error?.reason).not.toBe('scope_required');
     } finally { await d.close(); }
   }, 60_000);
 

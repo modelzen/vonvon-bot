@@ -83,6 +83,11 @@ describe('rememberDmChat', () => {
     await rememberDmChat('oc_a', 'ou_a', '张三丰');
     expect(stored()[0]!.dm!.people).toEqual({ oc_a: { openId: 'ou_a', name: '张三丰', at }, oc_b: { openId: 'ou_b', at: expect.any(Number) } });
   });
+  it('keeps a person\'s union_id once a message carried it', async () => {
+    await rememberDmChat('oc_a', 'ou_a', undefined, 'on_a');
+    await rememberDmChat('oc_a', 'ou_a', '张三');
+    expect(stored()[0]!.dm!.people.oc_a).toMatchObject({ openId: 'ou_a', unionId: 'on_a', name: '张三' });
+  });
   it('does not write when nothing changed', async () => {
     await rememberDmChat('oc_a', 'ou_a', '张三');
     // A marker a write would drop: it serializes the rows again.

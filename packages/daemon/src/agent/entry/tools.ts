@@ -52,7 +52,7 @@ export function toolReplyText(reply: AgentToolReply): string {
 export const sessionInfoTool: AgentTool = {
   name: 'session_info',
   class: 'read',
-  description: '查这条会话在 vonvon 里属于哪里（群、私聊还是文档评论），以及现在这一轮是不是有人发消息触发的。平时不用调。',
+  description: '查这条会话在 vonvon 里属于哪里（群、私聊还是文档评论），以及现在这一轮是不是有人发消息触发的；私聊里还回这一轮能不能用 vonvon 命令行改设置。平时不用调。',
   input: z.object({}).strict(),
   async run() { throw new Error('session_info is evaluated by the registry'); },
 };
