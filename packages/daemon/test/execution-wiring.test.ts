@@ -311,7 +311,7 @@ describe('s39a production profile delivery', () => {
     fake.project = { ...fake.project, cwd, directories: { workspaces: { primary: cwd, additional: [extra] } } };
   });
   afterEach(async () => { await rm(root, { recursive: true }); });
-  const roots = (extra: string, repo: string) => [{ path: extra, access: 'write' }, { path: repo, access: 'write' }];
+  const roots = (extra: string, repo: string) => [{ path: expect.stringContaining('chats'), access: 'read' }, { path: extra, access: 'write' }, { path: repo, access: 'write' }];
   it('delivers only group workspaces and inherited repositories to a new topic', async () => {
     await setup({ directories: { workspaces: { primary: botExtra, additional: [botExtra] }, repositories: [repository] } }).onMessage(message('new topic'));
     await vi.waitFor(() => expect(codex.startThread).toHaveBeenCalled());

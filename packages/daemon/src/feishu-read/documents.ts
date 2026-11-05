@@ -5,7 +5,7 @@ import { ask, cleanText, jsonBytes, RESULT_BUDGET, sliceText, textOffset, type R
 
 export interface DocRequest { doc: string; cursor?: string }
 export interface SheetRequest { sheet: string; range?: string; cursor?: string }
-export interface DriveFileRequest { file: string; name?: string }
+export interface DriveFileRequest { file: string; name?: string; saveIn?: string }
 
 /** What a link says it is; a bare token says nothing. */
 type RefKind = 'docx' | 'wiki' | 'sheet' | 'file' | 'other';
@@ -165,8 +165,8 @@ export async function readDriveFile(deps: ReadDeps, request: DriveFileRequest): 
   return reading(deps, parseRef(request.file), 'file', async token => {
     const res = await ask(deps, 'drive', () => deps.channel.rawClient.drive.v1.file.download({ path: { file_token: token } }), 60_000);
     const name = cleanFileName(request.name ?? downloadName(res.headers)) || 'file';
-    await prepareInboundDir();
-    const saved = await saveInboundDownload(res, token, name);
+    await prepareInboundDir(request.saveIn);
+    const saved = await saveInboundDownload(res, token, name, request.saveIn);
     if ('reason' in saved) throw new FeishuReadRefused(`没下载成：${saved.reason}。`);
     return { path: saved.path, name: saved.name };
   });
