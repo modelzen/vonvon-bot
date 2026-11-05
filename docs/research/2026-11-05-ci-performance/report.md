@@ -37,10 +37,10 @@ Bridge 最近三次成功的 Cross-platform CI 全程为 130/93/197 秒；Site �
 | Windows 基线 | 1 | 686.917 | 22 文件通过；278 passed / 8 skipped |
 | Windows 候选 | 2 | 351.147 | 22 文件通过；278 passed / 8 skipped |
 | Windows 候选复跑 | 2 | 359.305 | 22 文件通过；278 passed / 8 skipped |
-| Linux 基线 | 2 | 636.240 | 508 文件通过 / 12 skipped；8247 passed / 152 skipped |
+| Linux 基线 | 2 | 636.245 | 508 文件通过 / 12 skipped；8247 passed / 152 skipped |
 | Linux 候选（拒绝） | 4 | 434.485 | 2 文件失败 / 506 passed / 12 skipped；2 tests failed |
 
-Windows 两次减少 335.771/327.612 秒（48.88%/47.69%），无新增跳过。基线与历史 Windows 专项 695.63/699.07 秒接近。每组的 `benchmark-result.json`、完整测试日志在实验 artifacts 中，记录参数、源码、Node、CPU、退出码、signal 和统计。
+Windows 两次减少 335.8/327.6 秒（48.88%/47.69%），无新增跳过。基线与历史 Windows 专项 695.63/699.07 秒接近。每组的 `benchmark-result.json`、完整测试日志在实验 artifacts 中，记录参数、源码、Node、CPU、退出码、signal 和统计。
 
 Linux 四 worker 失败：`daemon-cli` 生命周期测试超过 20 秒；`secrets-get` 的非阻塞测试用时 1188.71 ms，违反 `<1000 ms` 断言。不能用放宽断言或超时来宣称优化成功；保留双核 Linux 原值。
 
