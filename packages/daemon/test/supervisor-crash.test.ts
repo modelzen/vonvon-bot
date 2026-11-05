@@ -391,7 +391,7 @@ describe('the owner\'s private message (s18b)', () => {
       void init;
       return { status: 200, json: async () => body } as Response;
     }) as typeof fetch;
-    const notifier = createCrashNotifier({ root: f.root, log: { info() {}, warn() {}, fail() {} }, fetchImpl, loadSender: async appId => ({ appId, tenant: 'feishu', appSecret: 's', openId: 'ou_owner' }) });
+    const notifier = createCrashNotifier({ root: f.root, log: { info() {}, warn() {}, fail() {} }, fetchImpl, loadSender: async appId => ({ appId, tenant: 'feishu', appSecret: 's', openIds: ['ou_owner'] }) });
     vi.mocked(startApi).mockRejectedValueOnce(new Error('listen EADDRINUSE'));
     const control = { requested: false, waitForRequest: () => new Promise<void>(() => {}), requestStop() {}, requestRestart() {}, completeShutdown: async (release: () => Promise<void>) => release(), dispose() {} };
     await expect(runSupervisor([{ appId: A, name: 'a', tenant: 'feishu', createdAt: 0 }], {

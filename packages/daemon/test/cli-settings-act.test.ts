@@ -70,7 +70,7 @@ describe('settings act voice', () => {
 
 describe('settings act admin', () => {
   // main 必败
-  it('reads the revision first unless given one, and prints who is an administrator and why', async () => {
+  it('reads the revision first unless given one, and prints who is an administrator', async () => {
     const after = agentView({ administrators: { ...agentView().administrators, openIds: ['ou_owner', 'ou_local', 'ou_x'], revision: 'a2' } });
     const h = harness(request => request.type === 'act' ? savedWith(after) : { kind: 'view', view: agentView() });
     await runSettingsAdmin('add', 'ou_x', {}, h.io(), h.daemon);
@@ -78,7 +78,7 @@ describe('settings act admin', () => {
       { type: 'read', scope: { kind: 'agent', botId: 'cli_a' } },
       { type: 'act', action: { kind: 'adminMember', botId: 'cli_a', openId: 'ou_x', membership: 'present', revision: 'a1' } },
     ]);
-    expect(h.out()).toBe('已加上管理员 ou_x。\n管理员：ou_owner（主人、扫码的人）、ou_fs（飞书管理员）、ou_local（本机加的）、ou_x（本机加的）\n');
+    expect(h.out()).toBe('已加上管理员 ou_x。\n管理员：ou_owner（创建者）、ou_local、ou_x\n');
     h.send.mockClear(); h.clear();
     await runSettingsAdmin('remove', 'ou_local', { revision: 'a0' }, h.io(true), h.daemon);
     expect(h.send.mock.calls.map(([request]) => request)).toEqual([{ type: 'act', action: { kind: 'adminMember', botId: 'cli_a', openId: 'ou_local', membership: 'absent', revision: 'a0' } }]);
@@ -302,7 +302,7 @@ describe('settings get: what the buttons change (4.4)', () => {
     expect(h.out()).toBe([
       'Bot Test（cli_a）的设置',
       '语音转文字：开（飞书语音权限：已开通）',
-      '管理员：ou_owner（主人、扫码的人）、ou_fs（飞书管理员）、ou_local（本机加的）',
+      '管理员：ou_owner（创建者）、ou_local',
       '管理员改动：vonvon settings act admin add|remove <openId> --bot cli_a',
       `评论指令：自定义「${Array.from(custom.content.text).slice(0, 40).join('')}…」`, '',
     ].join('\n'));

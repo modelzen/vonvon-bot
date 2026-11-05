@@ -137,7 +137,7 @@ const BOT = { openId: 'ou_bot', name: '小码' };
 const APP = 'cli_fixture';
 const CHAT = 'oc_demo';
 const base = { name: 'demo', chatId: CHAT, cwd: workspace, kind: 'single', smart: true, mode: 'full', network: false };
-const cfg: AppConfig & { preferences: NonNullable<AppConfig["preferences"]> } = { accounts: { app: { id: APP, secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
+const cfg: AppConfig & { preferences: NonNullable<AppConfig["preferences"]> } = { accounts: { app: { id: APP, secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, completionReminder: { mode: 'manual' } } };
 const channel = {
   send: fake.send, botIdentity: BOT,
   rawClient: { appId: APP, request: fake.request, cardkit: { v1: { card: { create: fake.cardCreate } } }, im: { v1: {
@@ -610,7 +610,7 @@ describe('smart mode intake (s25)', () => {
 
   it('keeps an initiative run outside human settings authority', async () => {
     await orchestrator.shutdown();
-    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true });
+    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true });
     const issue = vi.spyOn(entries, 'issue'), open = vi.spyOn(entries, 'openTurn'), checked = vi.fn();
     orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { attention: new FocusEverywhere(), entries });
     fake.events = async function* () {

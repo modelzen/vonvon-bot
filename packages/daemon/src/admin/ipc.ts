@@ -39,13 +39,12 @@ export type AdminScheduleOp = { kind: 'schedule'; actor: ScheduleActor; request:
 export type SessionMemoryTarget = { kind: 'bot' } | { kind: 'project'; projectId: string } | { kind: 'dm'; openId: string };
 /**
  * devices-4b 4.1: what a Bot session's ★ request asks of its Bot process, which answers with the tools' own checks for the
- * session's current turn. `settingsWrite`: authorizeNow; `adminMember`: that and the owner's turn; `adminRead`: the private
+ * session's current turn. `settingsWrite`: authorizeNow; `adminRead`: the private
  * chat's read-only queries (the tools' `ctx.admin`); `memory`: authorizeMemory, then memory-authority's decideAdd (where it
  * lands) or decideEdit (the item as the host read it); `schedule`: authorizeSchedule.
  */
 export type SessionAction =
   | { kind: 'settingsWrite' }
-  | { kind: 'adminMember' }
   | { kind: 'adminRead' }
   | { kind: 'memory'; op: 'read'; target: SessionMemoryTarget }
   | { kind: 'memory'; op: 'add'; target: SessionMemoryTarget; text: string }

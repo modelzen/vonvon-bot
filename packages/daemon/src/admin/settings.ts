@@ -7,7 +7,7 @@ import type { AgentBackend, ModelInfo, ReasoningEffort } from '../agent/types';
 import { backendIds } from '../agent';
 import { parseModelId } from '../agent/model-id';
 import { permissionTable, PermissionInputError, tableEnv, tierInfo, TIER_NETWORK } from '../agent/permission';
-import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, getShowToolCalls, resolveOwner, type AppConfig, type AppPreferences } from '../config/schema';
+import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, getShowToolCalls, type AppConfig, type AppPreferences } from '../config/schema';
 import { paths } from '../config/paths';
 import { admitDirectorySettings, resolveProjectsRootDir } from '../config/directories';
 import { botBackendId, groupBackendId, groupPermission, resolveCommentsExecution, resolveModelPreference, resolveProjectModelAccess, projectModelAllowed, projectSpeedAllowed } from '../config/execution';
@@ -27,6 +27,7 @@ import { probeBackends, SMART_NO_MENTION_REFUSED, type AppPreferencesWriter } fr
 import { parseSettingsAction, parseSettingsEdit, SettingsInputError } from './settings-parse';
 import type * as T from './settings-types';
 import { offlineModelCatalog, rememberModelCatalog } from './model-catalog';
+import { log } from '../core/logger';
 import { supplementOf } from '../bot/context-assembly';
 import { botFiles, readRole, readSoulText, readText, roleDraft, roleProblem, updateRole, waitForBotFiles } from '../bot/role-files';
 import { loadBots } from '../config/bots';
@@ -64,6 +65,12 @@ export interface SettingsOwnerDeps {
   localEditing?: boolean;
   discoverSkills?: typeof discoverGroupSkills;
   writePreferences: AppPreferencesWriter;
+  /**
+   * Told once a person's off the list (dm-agent 3.3 steps 3 to 5), in this Bot process, after the write; a failure is only
+   * logged. D2 stops the turns of their private chat, clears its queue and revokes its sessions' tokens, C2 pauses their
+   * private-chat tasks; until then nobody passes this.
+   */
+  adminRemoved?(openId: string): void | Promise<void>;
   backendFor: (id: string) => AgentBackend;
   evictLiveSessionsForChat: (chatId: string) => Promise<void>;
   voiceAction?: (action: VoiceAction) => Promise<void>;
@@ -676,12 +683,13 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           ...(draft ? { draft } : {}),
           headed: roleView.headed, oversized: roleView.oversized, mergedNotice: roleView.mergedNotice, integrity: roleView.integrity,
         },
-        ownerOpenId: resolveOwner(cfg) ?? null,
+        // The one who scanned the bot in, a label only; what Feishu names is no administrator, only who may be picked.
+        ownerOpenId: cfg.preferences?.access?.ownerOpenId ?? null,
         administrators: {
           feishu: { ownerOpenId: roles?.ownerOpenId ?? null, adminOpenIds: [...trustedFeishuAdmins(roles)] },
-          scannerOpenId: cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0] ?? null,
+          scannerOpenId: cfg.preferences?.access?.ownerOpenId ?? null,
           openIds: [...(cfg.preferences?.access?.admins ?? [])],
-          revision: settingsRevision([botId, resolveOwner(cfg), cfg.preferences?.access?.admins ?? []])
+          revision: settingsRevision([botId, cfg.preferences?.access?.admins ?? []])
         },
         voice: voiceView(cfg),
         commentInstructions: {
@@ -1188,24 +1196,28 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             throw error instanceof VoiceActionRefused ? new SettingsInputError(error.message) : error;
           });
           break;
-        case 'adminMember':
+        case 'adminMember': {
+          let removed = false;
           await deps.writePreferences(p => {
-            check([botId, resolveOwner(cfg), p.access?.admins ?? []], action.revision);
-            const roles = getAppRoleSnapshot(botId, cfg.accounts.app.tenant);
-            const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
-            if (action.membership === 'absent' && (action.openId === resolveOwner(cfg) || action.openId === scanner || trustedFeishuAdmins(roles).includes(action.openId)))
-              throw new SettingsInputError('飞书应用管理员和注册者不能在本机移除');
+            check([botId, p.access?.admins ?? []], action.revision);
             const admins = new Set(p.access?.admins ?? []);
             if (action.membership === 'present')
               admins.add(action.openId);
-            else
-              admins.delete(action.openId);
+            else {
+              if (admins.size === 1 && admins.has(action.openId))
+                throw new SettingsInputError('至少要有一个管理员。');
+              removed = admins.delete(action.openId);
+            }
             p.access = {
               ...p.access,
               admins: [...admins]
             };
           });
+          // The list is written and the door shut: what follows only tidies up, so its failure changes nothing.
+          if (removed)
+            await Promise.resolve().then(() => deps.adminRemoved?.(action.openId)).catch((error: unknown) => log.fail('settings', error, { phase: 'admin-removed' }));
           break;
+        }
         case 'projectAudience':
         case 'projectMember':
           await changeProject(action.projectName, p => {

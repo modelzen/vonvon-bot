@@ -179,7 +179,7 @@ export async function setup(kind: 'single' | 'multi' | 'smart', opts: { entries?
   fake.listSessions.mockReset().mockResolvedValue([]);
   fake.chatGet.mockReset().mockImplementation(async () => ({ code: 0, data: { chat_mode: fake.topicGroup ? 'topic' : 'group' } }));
   const { createOrchestrator } = await import('../../src/bot/handle-message');
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: 'steer', access: { ownerOpenId: 'owner' }, ...opts.preferences } };
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: 'steer', access: { ownerOpenId: 'owner', admins: ['owner'] }, ...opts.preferences } };
   const channel = { send: fake.send, rawClient: { im: { v1: {
     message: { get: fake.messageGet, list: fake.topicList, reply: fake.reply },
     chat: { get: fake.chatGet },
