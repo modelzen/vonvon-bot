@@ -42,6 +42,7 @@ describe('Claude login mapping', () => {
   it('exposes only safe account type and does not guess a subscription from OAuth', () => {
     expect(loginFromAccount({subscriptionType: 'free'})).toMatchObject({account: {kind: 'free', planType: 'free'}});
     expect(loginFromAccount({subscriptionType: 'max'})).toMatchObject({account: {kind: 'subscription', planType: 'max'}});
+    expect(loginFromAccount({subscriptionType: 'Claude Ultra', apiProvider: 'firstParty'})).toMatchObject({account: {kind: 'subscription', planType: 'claude_ultra'}});
     expect(loginFromAccount({tokenSource: 'CLAUDE_CODE_OAUTH_TOKEN'})).toMatchObject({account: {kind: 'unknown'}});
     expect(loginFromEnv({CLAUDE_CODE_OAUTH_TOKEN: 'secret-fixture'}, 'x')).toMatchObject({account: {kind: 'unknown'}});
     expect(JSON.stringify(loginFromEnv({ANTHROPIC_API_KEY: 'secret-fixture'}, 'x'))).not.toContain('secret-fixture');
