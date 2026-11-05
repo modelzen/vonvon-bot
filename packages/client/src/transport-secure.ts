@@ -238,7 +238,7 @@ export async function connectSecure(options: SecureConnectOptions): Promise<Secu
         });
       },
     };
-    const client = createClient(connection);
+    const client = createClient(connection, serverInfo.capabilities);
     pingTimer = setInterval(() => { try { sendFrame(FRAME.ping); } catch { /* the close reports it */ } }, ping);
     pingTimer.unref?.();
     armSilence();

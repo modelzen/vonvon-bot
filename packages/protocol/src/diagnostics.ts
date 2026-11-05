@@ -31,6 +31,10 @@ export type DeniedScope = z.infer<typeof deniedScopeSchema>;
 const attentionPlaceSchema = z.object({ mode: z.enum(["focus", "watch"]), intervalMs: z.number().finite().nonnegative() }).strict();
 export const groupAttentionSchema = z.object({
   groupId: z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/),
+  group: z.object({
+    score: z.union([z.literal(10), z.literal(25), z.literal(50), z.literal(75), z.literal(100)]),
+    intervalMs: z.number().finite().nonnegative(), updatedAt: z.number().finite().nonnegative(),
+  }).strict().optional(),
   main: attentionPlaceSchema.optional(), focusedTopics: z.number().int().nonnegative(), watchedTopics: z.number().int().nonnegative(),
   budget: z.object({ kind: z.enum(["no-glance", "named-only"]), until: z.number().finite().nonnegative() }).strict().optional(),
 }).strict();

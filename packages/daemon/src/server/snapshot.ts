@@ -58,6 +58,7 @@ export async function createSnapshotStore(options: {
   const root = options.root ?? paths.appDir;
   const base = { platform: hostPlatform(), version, dataPath: paths.appDir } as const;
   let snapshot: DesktopSnapshot = {
+    attentionModel: 'group',
     revision: 0, observedAt: 0, stale: false,
     host: { kind: 'connected', ownership: 'owned', version },
     agents: [], groups: [], memberships: [], tools: [], jobs: [],
