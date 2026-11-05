@@ -96,7 +96,7 @@ export const dmFeishuSkill: BuiltinSkill = {
 ${READING}
 
 ## 能读到哪里
-\`chat\` 可以写本机任何 Bot 所在的群，群的 id（\`oc_\` 开头）用 \`vonvon group list\` 查；不写就是这个私聊。这个 Bot 不在那个群时，工具换成在群里的 Bot 去读，也可以用参数 \`bot\` 指定。
+\`chat\` 可以写本机任何 Bot 所在的群，群的 id（\`oc_\` 开头）用 \`vonvon group list\` 查，还没绑定的群用 \`vonvon feishu groups\` 查；不写就是这个私聊。这个 Bot 不在那个群时，工具换成在群里的 Bot 去读，也可以用参数 \`bot\` 指定。
 文档、表格、多维表格和云空间不按群分，这个 Bot 读得到的都能读。读不到时回复里列出本机别的 Bot，用 \`bot\` 换一个。
 
 ## 改飞书里的内容
