@@ -1,11 +1,27 @@
 import {useEffect, useState} from 'react';
 import {BadgeRack, NowBotBadge} from './NowBotBadge';
-import {BOT_ACTIVITY_STALE_MS, BOT_LATEST_ACTION_SHOWN_MS, type Agent, type BotActivity, type BotLatestAction, type DesktopSnapshot, type Membership} from '@vonvon/protocol';
+import {BOT_ACTIVITY_STALE_MS, BOT_LATEST_ACTION_SHOWN_MS, type Agent, type BotActivity, type BotLatestAction, type DesktopSnapshot, type Group, type Membership} from '@vonvon/protocol';
 import {GroupAvatar} from './GroupAvatar';
+import {BadgeName} from './BadgeName';
 import {GlowButton} from './GlowButton';
 import {nowGroupAttention} from './now-attention';
 import {badgeTenure} from './badge-content';
 import './now-bots.css';
+
+function BadgeGroupSummary({group, motion}: {group: Group; motion: boolean}) {
+  const [hovered, setHovered] = useState(false);
+  const [keyboardFocused, setKeyboardFocused] = useState(false);
+  const active = hovered || keyboardFocused;
+  return <summary data-read-name={active || undefined}
+    onPointerEnter={event => setHovered(event.pointerType !== 'touch')}
+    onPointerLeave={() => setHovered(false)}
+    onPointerDown={() => setKeyboardFocused(false)}
+    onFocus={event => setKeyboardFocused(event.currentTarget.matches(':focus-visible'))}
+    onBlur={() => setKeyboardFocused(false)}>
+    <GroupAvatar group={group}/>
+    <BadgeName text={group.name} active={active} motion={motion} tooltip={!motion}/>
+  </summary>;
+}
 
 export function nowBotActivities(agent: Agent, members: readonly Membership[], live: boolean, now: number): BotActivity[] {
   if (!live || !agent.enabled || !agent.running || agent.connection !== 'connected' || agent.readError) return [];
@@ -67,7 +83,7 @@ export function NowBotList({snapshot, connected, onRegister, disabled, onChangeN
               const reading = nowGroupAttention(agent, binding, connected, snapshot.stale, now);
               return <li key={group.id}>
                 <details className="badge-group-row">
-                  <summary><GroupAvatar group={{...group, avatarDataUrl}}/><span>{group.name}</span></summary>
+                  <BadgeGroupSummary group={{...group, avatarDataUrl}} motion={motionAllowed}/>
                   <div className="badge-group-status">
                     {reading.showMeter && <span className="now-attention-meter" data-unknown={reading.level === undefined} aria-hidden="true">
                       {[1, 2, 3, 4].map(level => <i key={level} data-on={reading.level !== undefined && level <= reading.level}/>)}
