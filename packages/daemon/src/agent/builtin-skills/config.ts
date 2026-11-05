@@ -17,7 +17,7 @@ export const configSkill: BuiltinSkill = {
 要协作的工作尽量放在群里，群里还有别的人和别的 Bot，可以提一句。这只是引导，用户要在这里做，就在这里做。
 
 ## 命令在哪
-直接写 \`vonvon\`。找不到时用 \`"$VONVON_CLI"\`，里面是完整路径；PowerShell 里写 \`& $env:VONVON_CLI\`。
+用 \`"$VONVON_CLI"\`，里面是运行你的这个 vonvon 的完整路径；PowerShell 里写 \`& $env:VONVON_CLI\`。PATH 上的 \`vonvon\` 可能是另一份安装，这个变量是空的才直接写它。下面写的 \`vonvon\` 都指这条命令。
 
 ## 先看现状
 设置项会变，不要背，先看再改：

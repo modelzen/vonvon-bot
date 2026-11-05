@@ -134,6 +134,7 @@ describe('the config builtin skill', () => {
     expect(builtinSkillsOfSet('group').map(skill => skill.name)).not.toContain(configSkill.name);
   });
   it('teaches finding the command, looking first, the targets, when a change takes effect and how a Bot gets in a group', () => {
+    expect(configSkill.body).toContain('用 `"$VONVON_CLI"`，');
     for (const words of ['`"$VONVON_CLI"`', '`vonvon --help`', '`vonvon bot list`', '`vonvon group list`', '`vonvon settings get`', '不要背', '`--bot B`', '`--group X`', '`--dm`', '这个 Bot，就是你自己',
       '群设置改完下一轮生效', 'Skill 和 MCP 要等新会话', 'Bot 自己进不了已有的群']) expect(configSkill.body).toContain(words);
   });
