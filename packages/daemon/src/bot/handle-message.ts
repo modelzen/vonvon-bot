@@ -4522,7 +4522,7 @@ export function createOrchestrator(
         // button's callback value (`b`), so the pick → readHistory → rebind path
         // stays on the same backend that listed the sessions.
         const be = groupBackend(project);
-        const listed = await be.listThreads(cwd, project?.dm ? DM_RESUME_SCAN : undefined);
+        const listed = await (project?.dm ? be.listThreads(cwd, DM_RESUME_SCAN) : be.listThreads(cwd));
         // Sessions another place of this group holds are left off (s15f): resuming one here
         // would give it two writers. The key being resumed may pick its own again.
         const records = await listSessions();
