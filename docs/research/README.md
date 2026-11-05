@@ -1,5 +1,7 @@
 # 调研记录
 
+- [2026-11-05 CI 耗时与 worker 实测](2026-11-05-ci-performance/report.md)：100 条历史运行按 scope 分组；固定源码对照确认 Windows daemon 双 worker 提速约 48%，Linux 四 worker 有失败，保留原配置。
+
 - [2026-11-04 下载分发接入与验收](2026-11-04-download-distribution/report.md)：境内 COS/CDN 小流量包、海外 Linux R2、并行选源与真实下载记录；上线边界见报告。
 
 - [2026-10-30 Windows 安装与应用内升级方案](2026-10-30-windows-install-update/report.md)：核对 0.7.8、Clash Verge Rev 2.5.8、CC Switch 4.0.21；建议免费更新签名、首次简短安装向导、后续应用内更新及取消新增 Windows ZIP；仅方案，未实施或发布。
