@@ -19,7 +19,6 @@ const snapshot = (agent: Agent, memberships: Membership[] = [member]) => desktop
   application: {platform: 'macos', version: 'test', loginItem: false, dataPath: '/tmp/now'},
 });
 const badgeActions = {onChangeNumber: async () => undefined, onRegister: () => {}, disabled: false, connected: true};
-const joinedRoster = (members: Membership[]) => new Map([[bot.id, members.map(group => ({id: group.groupId, name: group.name, bound: true}))]]);
 beforeEach(() => {vi.useFakeTimers(); vi.setSystemTime(now);});
 afterEach(() => {vi.useRealTimers();});
 
@@ -110,14 +109,14 @@ it('keeps a long-running tool live through heartbeats without making it the newe
   expect(nowBotActivities(acting(older), [member], true, now + 60_000)).toEqual([]);
 });
 
-it('keeps the binding count distinct from the joined count while the Feishu roster is unavailable', () => {
-  const html = renderToStaticMarkup(<NowBotList snapshot={snapshot(acting(activity({phase: 'tool', toolKind: 'search'})), [member, member])} joinedGroups={new Map()} {...badgeActions}/>);
+it('counts each bound group once on both sides of the badge', () => {
+  const html = renderToStaticMarkup(<NowBotList snapshot={snapshot(acting(activity({phase: 'tool', toolKind: 'search'})), [member, member])} {...badgeActions}/>);
   expect(html).toContain('添加 Bot');
   expect(html).toContain('aria-expanded="false"');
   expect(html).toContain('Vonvon 所在群，可上下滚动');
   expect(html).toContain('href="https://applink.feishu.cn/client/bot/open?appId=cli_now"');
   expect(html).toContain('放大 Vonvon 的飞书二维码');
-  expect(html).toContain('已绑定 1 个群');
+  expect(html).toContain('已加入 1 个群');
   expect(html.match(/<summary>/g)).toHaveLength(1);
   expect(html).toContain('设计讨论');
   expect(html).not.toContain('持续更新');
@@ -127,7 +126,7 @@ it('keeps the binding count distinct from the joined count while the Feishu rost
 
 it('uses connection state rather than tool activity and labels the registered owner', () => {
   const render = (agent: Agent, stale = false) => renderToStaticMarkup(<NowBotList snapshot={{...snapshot({...agent, ownerName: '小王', registeredAt:now-86_400_000*10, badgeNumber:'000421'}), stale}}
-    joinedGroups={joinedRoster([member])} {...badgeActions}/>);
+    {...badgeActions}/>);
   const html = render(acting(activity()));
   const [front, back] = html.split('class="badge-face badge-back"');
   expect(front).toContain('已连接，已加入 1 个群，在职第 11 天');
@@ -148,21 +147,22 @@ it('counts the joining date and turns over at local midnight without waiting 24 
 });
 it('keeps every distinct group available directly on the back, including when the list overflows',()=>{
   const groups=Array.from({length:12},(_,i)=>membershipSchema.parse({...member,groupId:'oc_design_'+i,name:'设计讨论 '+i}));
-  const render=(members:Membership[])=>renderToStaticMarkup(<NowBotList snapshot={snapshot(bot,members)} joinedGroups={joinedRoster(members)} {...badgeActions}/>);
+  const render=(members:Membership[])=>renderToStaticMarkup(<NowBotList snapshot={snapshot(bot,members)} {...badgeActions}/>);
   const html=render(groups);
   expect(html).toContain('已加入 12 个群');
   expect(html).toContain('设计讨论 11');
   expect(html.match(/<summary>/g)).toHaveLength(12);
-  expect(render([])).toContain('还没有加入群聊');
+  expect(render([])).toContain('暂无已绑定的群');
 });
 
-it('includes joined but unbound Feishu groups in the front count and the back directory', () => {
-  const unbound = membershipSchema.parse({...member, groupId: 'oc_unbound'});
-  const joined = [{id: member.groupId, name: member.name, bound: true}, {id: unbound.groupId, name: '新加入的群', bound: false}];
-  const html = renderToStaticMarkup(<NowBotList snapshot={snapshot(bot)} joinedGroups={new Map([[bot.id, joined]])} {...badgeActions}/>);
-  expect(html).toContain('已加入 2 个群');
-  expect(html).toContain('新加入的群');
-  expect(html).toContain('未绑定');
+it('never counts or lists a group that has no binding to this Bot', () => {
+  const snap = snapshot(bot);
+  snap.groups.push({id:'oc_unbound', name:'只在飞书加入的群'});
+  const html = renderToStaticMarkup(<NowBotList snapshot={snap} {...badgeActions}/>);
+  expect(html).toContain('已加入 1 个群');
+  expect(html).toContain(member.name);
+  expect(html).not.toContain('只在飞书加入的群');
+  expect(html.match(/<summary>/g)).toHaveLength(1);
 });
 
 it('labels a stopped connection on a disabled bot as disabled, and reuses communication copy', () => {

@@ -3,7 +3,6 @@ import type {AgentId, DesktopSnapshot} from '@vonvon/protocol';
 import {NowBotList} from './NowBotList';
 import {NowActivity} from './NowActivity';
 import {NowUsage} from './NowUsage';
-import {useBadgeJoinedGroups} from './useBadgeJoinedGroups';
 import {uiFeatures} from './features';
 import type {Page} from './collaboration-model';
 import {useActiveDevice, useClient} from './client-context';
@@ -19,14 +18,10 @@ export function TodayHome({snapshot, onSetup, onRegister, onOpenUsage, disabled}
   }
   const attention = snapshot.agents.filter(bot => bot.readError || (bot.enabled && (!bot.running || bot.connection !== 'connected')));
   const connected = snapshot.host.kind === 'connected' && !snapshot.stale;
-  const joinedGroups = useBadgeJoinedGroups(
-    client, snapshot.agents.filter(bot => bot.enabled && bot.running).map(bot => bot.id),
-    connected, snapshot.agents.some(bot => bot.badgeNumber !== undefined),
-  );
   return <div className="today-home">
     <header className="today-intro"><h1>此刻</h1>{snapshot.stale && <span role="status">正在更新…</span>}</header>
     {!snapshot.stale && attention.length > 0 && <button type="button" className="today-connection-note" onClick={onSetup}><span className="today-state-dot"/><span>{attention.length} 个 Bot 需要检查连接</span><ArrowRight size={14}/></button>}
-    <NowBotList snapshot={snapshot} joinedGroups={joinedGroups} connected={connected} onRegister={onRegister} onChangeNumber={changeNumber} disabled={disabled}/>
+    <NowBotList snapshot={snapshot} connected={connected} onRegister={onRegister} onChangeNumber={changeNumber} disabled={disabled}/>
     <NowActivity snapshot={snapshot}/>
     <NowUsage disabled={!connected} onOpenUsage={onOpenUsage}/>
   </div>;

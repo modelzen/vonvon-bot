@@ -82,7 +82,7 @@ describe('RPC owner admission', () => {
         if (index === 1) expect(result).toMatchObject({ payload: { kind: 'groups', groups: [{ id: 'oc_group' }], nextCursor: 'next' } });
       }
       expect(pendingGroups).toHaveBeenCalledWith(bot.appId);
-      expect(joinedGroups).toHaveBeenCalledWith(bot.appId, 'opaque', undefined);
+      expect(joinedGroups).toHaveBeenCalledWith(bot.appId, 'opaque');
       expect(bindGroup).toHaveBeenCalledWith(bot.appId, { chatId: 'oc_group', projectName: 'Project', directory: await realpath(homedir()), backend: 'codex-appserver', kind: 'multi' });
       expect(collaboration).toHaveBeenNthCalledWith(1, bot.appId, { action: 'compact', chatId: 'oc_group', projectName: 'Project', threadId: 'omt_thread' });
       expect(collaboration).toHaveBeenNthCalledWith(2, bot.appId, expect.objectContaining({ action: 'createProject', name: 'Project', directory: await realpath(homedir()), kind: 'multi', backend: 'codex-appserver' }));
