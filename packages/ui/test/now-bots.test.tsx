@@ -8,13 +8,13 @@ import {nowAttentionSummary, nowGroupAttention} from '../src/now-attention';
 const now = new Date('2026-10-26T06:00:00Z').getTime();
 const bot: Agent = {id: agentIdSchema.parse('cli_now'), name: 'Vonvon', enabled: true, running: true, connection: 'connected', activation: 'active'};
 const member = membershipSchema.parse({id: '["cli_now","oc_now"]', agentId: bot.id, groupId: 'oc_now', name: '设计讨论', directory: '/tmp/now', backend: 'codex-appserver', conversation: 'smart', response: 'mention', permission: {administrator: 'full', member: 'full', network: false}, stale: false, enabled: true});
-const state = (fields: Partial<GroupAttention> = {}): GroupAttention => ({groupId: member.groupId, main: {mode: 'watch', intervalMs: 180_000}, focusedTopics: 0, watchedTopics: 0, ...fields});
+const state = (fields: Partial<GroupAttention> = {}): GroupAttention => ({groupId: member.groupId, group: {score: 50, intervalMs: 180_000, updatedAt: now}, main: {mode: 'watch', intervalMs: 180_000}, focusedTopics: 0, watchedTopics: 0, ...fields});
 const withAttention = (attention: GroupAttention[] | undefined): Agent => ({...bot, diagnostics: {notReplied: [], deniedScopes: [], ...(attention === undefined ? {} : {attention})}});
 const read = (fields: Partial<GroupAttention> = {}) => nowGroupAttention(withAttention([state(fields)]), member, true, false, now);
 const activity = (fields: Partial<BotActivity> = {}): BotActivity => ({id: 'af563d24-6dce-4af7-a418-258d2eaf6325', groupId: member.groupId, phase: 'thinking', startedAt: now - 1000, updatedAt: now, ...fields});
 const acting = (...activities: BotActivity[]): Agent => ({...withAttention([state()]), diagnostics: {notReplied: [], deniedScopes: [], attention: [state()], activities}});
 const snapshot = (agent: Agent, memberships: Membership[] = [member]) => desktopSnapshotSchema.parse({
-  revision: 1, observedAt: now, stale: false, host: {kind: 'connected', ownership: 'owned', version: 'test'},
+  attentionModel: 'group', revision: 1, observedAt: now, stale: false, host: {kind: 'connected', ownership: 'owned', version: 'test'},
   agents: [agent], groups: [{id: member.groupId, name: member.name}], memberships, tools: [], jobs: [],
   application: {platform: 'macos', version: 'test', loginItem: false, dataPath: '/tmp/now'},
 });
@@ -22,28 +22,26 @@ const badgeActions = {onChangeNumber: async () => undefined, disabled: false, co
 beforeEach(() => {vi.useFakeTimers(); vi.setSystemTime(now);});
 afterEach(() => {vi.useRealTimers();});
 
-it.each([[60_000, 3, '1 分钟'], [180_000, 2, '3 分钟'], [300_000, 1, '5 分钟']] as const)('maps the existing %i ms watch tier to %i segments', (intervalMs, level, time) => {
-  const reading = read({main: {mode: 'watch', intervalMs}});
-  expect(reading).toMatchObject({label: '留意中', tone: 'watch', level, showMeter: true});
-  expect(reading.description).toContain(time);
+it.each([[100, 5_000, 4], [75, 60_000, 3], [50, 180_000, 2], [25, 300_000, 1], [10, 300_000, 0.4]] as const)('maps group score %i to its own meter level', (score, intervalMs, level) => {
+  const reading = read({group: {score, intervalMs, updatedAt: now}});
+  expect(reading).toMatchObject({score, level, showMeter: true});
+  expect(reading.label).toBe(score === 100 ? '专注中' : score === 10 ? '低度留意' : '留意中');
 });
 
-it('aggregates a focused topic without saying every message is immediately judged', () => {
-  const reading = read({focusedTopics: 1});
-  expect(reading).toMatchObject({label: '专注中', tone: 'focus', level: 4});
-  expect(reading.description).toContain('正在跟进群里的部分讨论');
-  expect(reading.description).not.toContain('主区有新消息');
-  expect(reading.description).not.toContain('1 个');
+it('uses the same group score regardless of main or topic legacy fields', () => {
+  const reading = read({group: {score: 10, intervalMs: 300_000, updatedAt: now}, main: {mode: 'focus', intervalMs: 60_000}, focusedTopics: 2});
+  expect(reading).toMatchObject({label: '低度留意', tone: 'idle', level: 0.4});
+  expect(reading.description).toContain('约 20 秒');
+  expect(read({main: undefined, focusedTopics: 2})).toMatchObject({score: 50, tone: 'watch', level: 2});
 });
 
-it('keeps unsupported intervals and unknown topic intervals out of the meter', () => {
-  expect(read({main: {mode: 'watch', intervalMs: 120_000}})).toMatchObject({label: '留意中', level: undefined});
-  expect(read({main: undefined, watchedTopics: 2})).toMatchObject({label: '留意中', tone: 'watch'});
-  expect(read({main: undefined, watchedTopics: 2}).level).toBeUndefined();
+it('does not invent group attention from a legacy-only daemon record', () => {
+  expect(read({group: undefined, main: {mode: 'focus', intervalMs: 60_000}, focusedTopics: 99})).toMatchObject({label: '待更新', tone: 'unknown'});
+  expect(read({group: undefined}).score).toBeUndefined();
 });
 
 it('distinguishes an empty valid snapshot from missing diagnostics', () => {
-  expect(nowGroupAttention(withAttention([]), member, true, false, now)).toMatchObject({label: '待互动', level: 0, tone: 'idle'});
+  expect(nowGroupAttention(withAttention([]), member, true, false, now, true)).toMatchObject({label: '低度留意', level: 0.4, tone: 'idle'});
   expect(nowGroupAttention(withAttention(undefined), member, true, false, now)).toMatchObject({label: '待更新', tone: 'unknown'});
   expect(nowGroupAttention(bot, member, true, false, now).level).toBeUndefined();
   const wrong = {...member, agentId: agentIdSchema.parse('cli_other')};
@@ -67,12 +65,10 @@ it.each([
   expect(reading.label).not.toBe('专注中');
 });
 
-it('preserves active focus under the scan cap, but not under named-only restrictions', () => {
-  expect(read({budget: {kind: 'no-glance', until: now + 1000}})).toMatchObject({level: 0, tone: 'paused'});
-  expect(read({focusedTopics: 1, budget: {kind: 'no-glance', until: now + 1000}})).toMatchObject({level: 4, tone: 'focus'});
-  const named = read({focusedTopics: 1, budget: {kind: 'named-only', until: now + 1000}});
-  expect(named).toMatchObject({level: 0, tone: 'paused'});
-  expect(named.description).toContain('引用或回复 Bot 发起的话题根消息');
+it.each(['no-glance', 'named-only'] as const)('keeps the real score visible while the %s budget pauses judgement', kind => {
+  const reading = read({group: {score: 75, intervalMs: 60_000, updatedAt: now}, budget: {kind, until: now + 1000}});
+  expect(reading).toMatchObject({score: 75, level: 3, tone: 'paused'});
+  expect(reading.budgetNote).toContain(kind === 'named-only' ? '仅真人 @' : '批量查看暂缓');
 });
 
 it.each(['no-glance', 'named-only'] as const)('does not infer recovery from the expired %s budget', kind => {
@@ -86,7 +82,7 @@ it.each([['threads', '独立话题'], ['shared', '连续交谈']] as const)('sho
 });
 
 it('counts groups once and uses compact, factual attention summaries', () => {
-  expect(nowAttentionSummary([read({focusedTopics: 1}), read()], 2)).toBe('专注 1 · 留意 1');
+  expect(nowAttentionSummary([read({group: {score: 100, intervalMs: 5_000, updatedAt: now}}), read()], 2)).toBe('专注 1 · 留意 1');
   expect(nowAttentionSummary([read({budget: {kind: 'no-glance', until: now + 1}})], 1)).toBe('1 个群');
 });
 
@@ -118,9 +114,10 @@ it('counts each bound group once on both sides of the badge', () => {
   expect(html).toContain('已加入 1 个群');
   expect(html.match(/<summary>/g)).toHaveLength(1);
   expect(html).toContain('设计讨论');
+  expect(html).toContain('aria-label="设计讨论：群注意力 50 / 100，留意中"');
   expect(html).not.toContain('持续更新');
   expect(html).not.toContain('当前间隔');
-  expect(html).not.toMatch(/role="slider"|\/ 100/);
+  expect(html).not.toContain('role="slider"');
 });
 
 it('uses connection state rather than tool activity and labels the registered owner', () => {
@@ -176,4 +173,9 @@ it('distinguishes unavailable data from zero bindings and a known disconnected s
 it('labels a stopped connection on a disabled bot as disabled, and reuses communication copy', () => {
   expect(nowGroupAttention({...bot, enabled: false, connection: 'stopped'}, member, false, false, now).label).toBe('已停用');
   expect(nowGroupAttention(bot, {...member, conversation: 'threads'}, true, false, now).description).toContain('主区 @ Bot 开启新话题');
+});
+
+it('keeps an old daemon empty array unknown until the group model is advertised in the snapshot', () => {
+  expect(nowGroupAttention(withAttention([]), member, true, false, now)).toMatchObject({tone: 'unknown', label: '待更新'});
+  expect(nowGroupAttention(withAttention([]), member, true, false, now, true)).toMatchObject({score: 10, label: '低度留意'});
 });
