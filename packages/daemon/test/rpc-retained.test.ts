@@ -174,6 +174,30 @@ describe('retained settings behavior over real WebSocket', () => {
 });
 
 describe('retained Codex usage behavior over real WebSocket', () => {
+  it('routes Claude usage to the host account without requiring any Bot', async () => {
+    const calls: unknown[] = [];
+    const bundle = { profile: { topInvocations: [], dailyBuckets: [] }, usage: { planType: 'max', main: { primary: { usedPercent: 2, windowSeconds: 18000 }, secondary: { usedPercent: 91, windowSeconds: 604800 } }, extras: [], fetchedAt: 1 } };
+    const fixture = await startFixture(fakeService({ listBots: async () => [], accountUsage: async (force, backend) => { calls.push([force, backend]); return bundle; } }));
+    const client = await socketClient(fixture.api.port, fixture.credential);
+    try {
+      await client.ready();
+      const frame = await client.call({ type: 'request', id: 'claude-usage', method: 'collaboration', payload: { action: 'usage', force: false, backend: 'claude-agent' } });
+      expect(frame).toMatchObject({ type: 'response', method: 'collaboration', payload: { kind: 'usage', data: bundle } });
+      expect(calls).toEqual([[false, 'claude-agent']]);
+    } finally { await client.close(); await fixture.close(); }
+  });
+
+  it('reports Claude-specific errors without exposing credentials', async () => {
+    const fixture = await startFixture(fakeService({ accountUsage: async () => { throw new UsageError('need-relogin', privateText); } }));
+    const client = await socketClient(fixture.api.port, fixture.credential);
+    try {
+      await client.ready();
+      const frame = await client.call({ type: 'request', id: 'claude-error', method: 'collaboration', payload: { action: 'usage', force: false, backend: 'claude-agent' } });
+      expect(frame).toMatchObject({ type: 'error', code: 'usage_unavailable', message: expect.stringContaining('Claude 的订阅凭据过期') });
+      expect(JSON.stringify(frame)).not.toMatch(/secret|Bearer|Codex|\/private\/auth\.json/i);
+    } finally { await client.close(); await fixture.close(); }
+  });
+
   it('works with zero bots, forwards both force values, and retains the full bundle', async () => {
     const forces: boolean[] = [];
     const bundle = { profile: { displayName: 'Local account', topInvocations: [{ name: 'plugin-a', count: 2, kind: 'plugin' as const }], dailyBuckets: [{ date: '2026-10-10', tokens: 42 }] }, usage: { planType: 'plus', main: { name: 'main', primary: { usedPercent: 25, windowSeconds: 18000, resetAt: 12345 } }, extras: [{ name: 'secondary', secondary: { usedPercent: 50 } }], fetchedAt: 67890 } };
