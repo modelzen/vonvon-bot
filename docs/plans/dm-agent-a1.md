@@ -113,7 +113,7 @@ export async function upgradeAdmins(cfg: AppConfig, write: AppPreferencesWriter)
 
 ## 9. 风险和行数
 
-估计源码约 150 行净减，测试改动面大（约 60 个文件），多是把 fixture 里的创建者写进名单、去掉 `isOwner`。
+源码改 16 个文件，净减约 90 行。测试改动面大（约 80 个文件），多是把 fixture 里的创建者写进名单、去掉 `isOwner`。
 
 - 升级前跑不到 `initialize` 的 Bot（比如启动就崩）名单没升级，崩溃通知发给现有名单；名单空时跳过，记 `no-admin`。
 - 升级以后，只靠飞书名单当管理员的人失去权限，owner 已接受（设计 3.2）。
