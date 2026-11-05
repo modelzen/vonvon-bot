@@ -6,6 +6,7 @@ import type { FeishuReach } from '../../admin/feishu-route';
 import type { AdminService } from '../../admin/service';
 import type { ShutdownControl } from '../../host/lifecycle';
 import type { DirectoryBrowser } from '../directory-browser';
+import { feishuReadProblem } from '../../agent/entry/feishu-tools';
 import { RpcError, unsupported } from '../errors';
 import type { Jobs, JobPeer } from '../jobs';
 import type { PeerOwner } from '../peer-label';
@@ -52,6 +53,8 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
     }
     case 'feishuRead': {
       if (!service.feishuRead) return unsupported();
+      const problem = feishuReadProblem(request);
+      if (problem) throw new RpcError('invalid_request', problem);
       const reply = await service.feishuRead({ ...(request.agentId ? { bot: request.agentId } : {}), ...options.feishu }, { tool: request.tool, args: request.args });
       return { kind: 'read', value: reply.ok ? { kind: 'feishuRead', result: reply.result } : { kind: 'refused', code: 'feishu_read_refused', message: reply.message } };
     }

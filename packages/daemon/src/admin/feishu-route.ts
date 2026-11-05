@@ -129,8 +129,9 @@ export async function hostFeishuApi(host: DmHost & { api(bot: string, request: A
   return inPrivateChat(host, sessionId) ? host.api(bot, request) : refused(SESSION_REFUSED);
 }
 
-interface DmHost { appId: string; tokens: Pick<SessionTokens, 'session'> }
+interface DmHost { appId: string; tokens: Pick<SessionTokens, 'session' | 'active'> }
+/** A call let through is the session's use, as the command line's is: a long-lived chat's tools would expire otherwise. */
 function inPrivateChat({ appId, tokens }: DmHost, sessionId: string): boolean {
   const session = tokens.session(sessionId);
-  return session?.appId === appId && session.place === 'dm';
+  return session?.appId === appId && session.place === 'dm' && tokens.active(sessionId, true);
 }

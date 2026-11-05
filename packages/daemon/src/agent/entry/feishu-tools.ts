@@ -251,13 +251,19 @@ function readsOf({ members, feishu: reader }: ReadDeps): Partial<Reads> {
   };
 }
 
+/** What is wrong with a read's arguments: the command line's to hear before any Bot is asked. */
+export function feishuReadProblem({ tool, args }: Pick<FeishuReadRequest, 'tool' | 'args'>): string | undefined {
+  const parsed = definitions.find(item => item.name === tool)?.input.safeParse(args);
+  return !parsed || parsed.success ? undefined : `参数不对：${parsed.error.issues.map(issue => `${issue.path.join('.') || '<root>'}：${issue.code}`).join('；')}。`;
+}
+
 function perform(reads: Partial<Reads>, { tool, args, only }: FeishuReadRequest): Promise<unknown> {
   const definition = definitions.find(item => item.name === tool);
   const run = definition && reads[definition.name] as ((args: unknown, only: string | undefined) => Promise<unknown>) | undefined;
   if (!definition || !run) throw new FeishuReadRefused(`没有 ${tool} 这个读取工具。`);
-  const parsed = definition.input.safeParse(args);
-  if (!parsed.success) throw new FeishuReadRefused(`参数不对：${parsed.error.issues.map(issue => `${issue.path.join('.') || '<root>'}：${issue.code}`).join('；')}。`);
-  return run(parsed.data, only);
+  const problem = feishuReadProblem({ tool, args });
+  if (problem) throw new FeishuReadRefused(problem);
+  return run(definition.input.parse(args), only);
 }
 
 /**

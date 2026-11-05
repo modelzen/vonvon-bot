@@ -35,8 +35,8 @@ const refused = (message: string): FeishuReadRefused => new FeishuReadRefused(me
 /** Feishu's text unchanged but for vonvon's own markers, the boundary every read has (cleanText would also redo its white space). */
 const textOf = (body: Buffer): string => escapeInboundMarkers(body.subarray(0, TEXT_BYTES).toString('utf8'));
 
-/** Whether `bot` is the one this process is: any other's call goes through the host to that Bot's (dm-agent 7.3). */
-export const isThisBot = (deps: ReadDeps, bot: string): boolean => bot === deps.app.id || bot === deps.channel.botIdentity?.name;
+/** Whether `bot` is surely the one this process is. A name may be another's too: that is the host's to tell, as for any other Bot (dm-agent 7.3). */
+export const isThisBot = (deps: ReadDeps, bot: string): boolean => bot === deps.app.id;
 
 /** `path` as it may be sent: the host stays this Bot's tenant's, because the SDK only takes a URL as it is from `http`. */
 export function checkedPath(path: string): string {
