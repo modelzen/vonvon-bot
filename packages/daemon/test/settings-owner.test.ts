@@ -8,7 +8,7 @@ import { createAppPreferencesWriter, createAdminWriteExecutor } from '../src/adm
 import { createSettingsOwner, type SettingsOwnerDeps } from '../src/admin/settings';
 import { parseSettingsEdit, parseSettingsAction, parseModelQuery } from '../src/admin/settings-parse';
 import type { AgentSettingsView, ProjectSettingsView, SessionSettingsView } from '../src/admin/settings-types';
-import { addProject, getProjectByName, updateProject } from '../src/project/registry';
+import { addDmProject, addProject, dmChatId, dmProject, getProjectByName, updateProject } from '../src/project/registry';
 import { getSession, RETIRED_KEY_TEXT, upsertSession } from '../src/bot/session-store';
 import { createAdminIpcCaller, createAdminIpcResponder } from '../src/admin/ipc';
 import type { AppConfig } from '../src/config/schema';
@@ -307,6 +307,62 @@ it('s31c: a full-only backend refuses unavailable tiers and custom, while unrela
   expect((await getProjectByName('demo'))?.mode).toBe('full');
 });
 // main 必败: choosing 完全访问 for a group said nothing about group members (devices 第 15 节, devices-ui-2 4.10)
+describe('the private-chat row (dm-agent 4.2)', () => {
+  const dm = { kind: 'project' as const, botId, projectName: dmChatId(botId) };
+  beforeEach(async () => {
+    await addDmProject({ name: '私聊', chatId: dmChatId(botId), cwd: '/tmp/dm', blank: true, origin: 'created', kind: 'single', noMention: true, mode: 'full', network: true, createdAt: 1, backend: 'codex-appserver',
+      modelAccess: { backend: 'codex-appserver', models: ['fixture-model'], efforts: ['high'] }, dm: { people: { oc_a: { openId: 'ou_a', at: 1 }, oc_b: { openId: 'ou_b', at: 2 } } } });
+  });
+  const save = async (owner: Awaited<ReturnType<typeof fixture>>['owner'], section: string, patch: unknown) => {
+    const view = await owner.read(dm) as ProjectSettingsView;
+    const current = view.sections[section as keyof ProjectSettingsView['sections']];
+    return owner.save({ scope: dm, section, revision: current?.revision ?? 'x', patch } as never);
+  };
+  it('reads by oc_dm_<appId>, with no roster to ask Feishu for', async () => {
+    const responseRoster = vi.fn(async () => { throw new Error('not a group'); });
+    const { owner } = await fixture({ responseRoster, discoverSkills: async () => [] });
+    const view = await owner.read(dm) as ProjectSettingsView;
+    expect(view.identity.chatId).toBe(dmChatId(botId));
+    expect(responseRoster).not.toHaveBeenCalled();
+  });
+  it('is not a group name: a name finds nothing', async () => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    await expect(owner.read({ ...dm, projectName: '私聊' })).rejects.toThrow('项目不存在');
+  });
+  it('saves skills and the allowset, and rebinds each person\'s chat', async () => {
+    const evictLiveSessionsForChat = vi.fn(async (_chatId: string) => {});
+    const { owner } = await fixture({ evictLiveSessionsForChat, discoverSkills: async () => [] });
+    expect((await save(owner, 'skills', { disabledPaths: ['/x'] })).kind).toBe('saved');
+    expect((await dmProject())?.skills?.disabledPaths).toEqual(['/x']);
+    expect(evictLiveSessionsForChat.mock.calls.map(([chat]) => chat).sort()).toEqual(['oc_a', 'oc_b']);
+    expect((await save(owner, 'modelAccess', { efforts: ['low', 'high'] })).kind).toBe('saved');
+    const row = await dmProject();
+    expect(row?.modelAccess?.efforts).toEqual(['low', 'high']);
+    expect(row?.mode).toBe('full');
+    expect(row?.chatId).toBe(dmChatId(botId));
+    expect(row?.dm?.people.oc_a?.openId).toBe('ou_a');
+  });
+  it('saves the model and the speed', async () => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    expect((await save(owner, 'model', { selection: { kind: 'explicit', model: 'fixture-model', effort: 'high' } })).kind).toBe('saved');
+    expect((await dmProject())?.defaultModel).toBe('fixture-model');
+    expect((await save(owner, 'speed', { tier: 'fast' })).kind).toBe('saved');
+    expect((await dmProject())?.serviceTier).toBe('fast');
+  });
+  it.each([['permission', { mode: 'qa' }], ['workspace', { primary: '/tmp/x' }], ['response', { noMention: false }], ['run', { pendingPolicy: 'queue' }], ['role', { supplement: 'x' }],
+    ['smartRules', { respond: 'x' }], ['presentation', { voiceEnabled: false }], ['judge', { selection: { kind: 'default' } }]])('refuses %s', async (section, patch) => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    const before = await dmProject();
+    expect(await save(owner, section, patch)).toMatchObject({ kind: 'rejected', fields: [{ message: '私聊只能改模型、速度、可选模型和技能' }] });
+    expect(await dmProject()).toEqual(before);
+  });
+  it('member actions do not reach it', async () => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    expect(await owner.act({ kind: 'projectAudience', botId, projectName: dmChatId(botId), audience: 'all', revision: 'x' } as never)).toMatchObject({ kind: 'rejected' });
+    expect((await dmProject())?.allowedUsers).toBeUndefined();
+  });
+});
+
 describe('完全访问 group warning', () => {
   it('only a group\'s full tier carries the warning', () => {
     expect(permissionTiers({ platform: 'linux', group: true }).map(tier => tier.warning)).toEqual([undefined, undefined, FULL_ACCESS_WARNING]);
