@@ -123,7 +123,8 @@ export interface Project {
    * {@link listProjectsIn}. `people` is keyed by Feishu's p2p chat_id, one entry per admin who has written to the bot. */
   dm?: { people: Record<string, DmPerson> };
 }
-export interface DmPerson { openId: string; name?: string; at: number }
+/** `unionId`: from the Feishu event; another Bot pulls this person into a group by it (dm-agent 6.4). */
+export interface DmPerson { openId: string; unionId?: string; name?: string; at: number }
 
 /** The display name of the private-chat row. Never looked up: a group may be called this too. */
 export const DM_PROJECT_NAME = '私聊';
@@ -517,16 +518,16 @@ export function addDmProject(input: Project, target?: RegistryLocation): Promise
  * Remember which private chat is whose: written before a person's first turn, so a scheduled task finds its way back
  * from the chat id. Writes nothing when the row already says so.
  */
-export async function rememberDmChat(chatId: string, openId: string, name?: string): Promise<void> {
+export async function rememberDmChat(chatId: string, openId: string, name?: string, unionId?: string): Promise<void> {
   return ownProjects(async location => {
     const projects = await read(location.file);
     const row = projects.find(isDmRow);
     if (!row?.dm) throw new Error('私聊项目不存在');
     row.dm.people ??= {};
     const known = Object.hasOwn(row.dm.people, chatId) ? row.dm.people[chatId] : undefined;
-    if (known?.openId === openId && (name === undefined || known.name === name)) return;
-    const shown = name ?? known?.name;
-    row.dm.people[chatId] = { openId, ...(shown === undefined ? {} : { name: shown }), at: known?.at ?? Date.now() };
+    if (known?.openId === openId && (name === undefined || known.name === name) && (unionId === undefined || known.unionId === unionId)) return;
+    const shown = name ?? known?.name, union = unionId ?? known?.unionId;
+    row.dm.people[chatId] = { openId, ...(union === undefined ? {} : { unionId: union }), ...(shown === undefined ? {} : { name: shown }), at: known?.at ?? Date.now() };
     await write(location, projects);
   });
 }

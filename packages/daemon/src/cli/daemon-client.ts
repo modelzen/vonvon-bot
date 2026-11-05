@@ -38,8 +38,8 @@ export const printable = (text: string): string => text.replace(CONTROL, '');
 /** devices 15. */
 const SESSION_TOKEN_MISSING = '这是 Bot 会话，但没有有效的会话令牌，不能以主人身份运行。';
 
-/** What every command's connection carries (devices-4a 4.9): the global `--scope`, and the environment it runs in. */
-const context: { scope?: Scope; env: NodeJS.ProcessEnv } = { env: process.env };
+/** What every command's connection carries (devices-4a 4.9): the global `--scope`, the environment it runs in, and whether the daemon took it for a private chat's session. */
+const context: { scope?: Scope; env: NodeJS.ProcessEnv; dm?: boolean } = { env: process.env };
 /** index.ts sets the parsed `--scope` before a command runs; tests set both. */
 export function setCliContext(next: { scope?: Scope | undefined; env?: NodeJS.ProcessEnv }): void {
   if ('scope' in next) { if (next.scope) context.scope = next.scope; else delete context.scope; }
@@ -168,8 +168,9 @@ export async function withDaemon<T>(fn: (call: Call, info?: ServerInfo) => Promi
   try {
     if (inBotSession(context.env) || context.scope) {
       const scope = context.scope;
+      // A private chat's session has no `--scope` (dm-agent 6.1): it negotiates without one.
       const refusal = await call('核对范围', c => c.admin({ type: 'negotiate', capabilities: ['cli'], ...(scope ? { scope } : {}) })
-        .then(() => undefined, (error: unknown) => { if (error instanceof RpcError) return error; throw error; }));
+        .then(reply => { context.dm = reply?.kind === 'negotiated' && reply.principal === 'bot-session:dm'; }, (error: unknown) => { if (error instanceof RpcError) return error; throw error; }));
       if (refusal) throw new CommandError(rpcErrorKind(refusal.code), refusal.message, { reason: refusal.code });
     }
     return await fn(call, serverInfo);
@@ -233,9 +234,10 @@ export function runningBot(agents: readonly Agent[], wanted?: string): Agent {
 /**
  * s1b: a group's (or a comment's) Bot session reads a snapshot with no bindings in it, so it cannot name a group. True
  * there; a command then lets the daemon say why not (群里不能改设置), or refuses as the daemon would, never "没有绑定".
+ * A private chat reads them all: a Bot with none has none (dm-agent 6.1).
  */
 export const bindingsHidden = (memberships: readonly Membership[], bot: Agent): boolean =>
-  inBotSession(context.env) && !memberships.some(membership => membership.agentId === bot.id);
+  inBotSession(context.env) && !context.dm && !memberships.some(membership => membership.agentId === bot.id);
 /** The daemon's words for what a Bot session may not do (server/authz.ts SESSION_DENIED). */
 const SESSION_DENIED = '这个操作不能从 Bot 会话里做。';
 

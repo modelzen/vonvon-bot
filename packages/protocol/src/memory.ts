@@ -38,6 +38,8 @@ export const memorySourceSchema = z.object({
   botId: z.string(),
   turn: z.object({kind:memoryTurnKindSchema,steered:z.boolean()}).optional(),
   actorOpenId: z.string().optional(),
+  /** Who wrote it, from another Bot's private chat: their open_id means nothing to this Bot, so the name stands instead (dm-agent 6.4). */
+  actorName: z.string().optional(),
   actorRole: memoryActorRoleSchema,
   chatId: z.string().optional(),
   messageId: z.string().optional(),

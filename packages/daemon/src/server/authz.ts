@@ -1,13 +1,14 @@
 import {
   MAINTENANCE_KINDS, PROTOCOL_VERSION, rpcKindOf,
-  type AgentSettingsView, type CollaborationReply, type Command, type CommandResult, type DesktopSnapshot, type LibraryReply, type MemoryItem, type MemoryReply, type MemoryRequest,
-  type MemoryScopeRef, type ProjectSettingsView, type Request, type ScheduleReply, type Scope, type SettingsReply, type SettingsScope,
+  type CollaborationReply, type Command, type CommandResult, type DesktopSnapshot, type LibraryReply, type MemoryItem, type MemoryReply, type MemoryRequest,
+  type MemoryScopeRef, type Request, type ScheduleReply, type Scope, type SettingsReply, type SettingsScope,
 } from '@vonvon/protocol';
 import { notDmMessage, SESSION_TURN_ENDED } from '../agent/entry/registry';
 import { sessionTurnEnded, type SessionAction, type SessionAuthz } from '../admin/ipc';
 import { scheduleRefusalMessages } from '../admin/schedule-commands';
 import { bridgeVersion } from '../core/version';
 import { SESSION_TOKEN_INVALID } from '../host/session-tokens';
+import { cannotInvite, type GroupInvitee } from '../project/lifecycle';
 import { RpcError } from './errors';
 import { filterSnapshot, scopedOwner, sessionGroups, sessionSnapshot, type BotSessionPrincipal } from './snapshot-filter';
 import type { Peer } from './ws';
@@ -19,15 +20,16 @@ export type SessionPlace = BotSessionPrincipal['place'];
 export type PlaceRule = 'host' | 'bot' | 'deny' | 'not-dm' | 'not-group';
 /** `maintenance`: a connection of another protocol may ask it. `botSession` sums up `places`: `bot` if any place asks the Bot process. */
 export interface Rule { owner: 'allow'; botSession: BotSessionRule; maintenance: boolean; places: Readonly<Record<SessionPlace, PlaceRule>> }
-/** Who started the turn behind a Bot session's ★ request, as its Bot process answered: a task's actor, where a memory write lands. */
+/** Who started the turn behind a Bot session's ★ request, as its Bot process answered: a task's actor, where a memory write lands, the person's ids. */
 export type SessionGrant = Omit<Extract<SessionAuthz, { ok: true }>, 'ok'>;
 export type DenialCode = 'permission_denied' | 'protocol_mismatch' | 'scope_required' | 'not-dm' | 'not-group' | 'not_in_session' | 'session_token_invalid';
 /**
- * `narrow`: what of the reply a Bot session gets (its bot, its groups); `grant`: a ★ request's turn.
- * `details` goes into the error envelope (a `protocol_mismatch` names both versions).
+ * `narrow`: what of the reply a Bot session gets (a group's its bot and group); `grant`: a ★ request's turn; `invitee`:
+ * whom a group made from a private chat pulls in (dm-agent 6.4). `details` goes into the error envelope (a
+ * `protocol_mismatch` names both versions).
  */
 export type Decision =
-  | { ok: true; grant?: SessionGrant; narrow?: <T>(payload: T) => T }
+  | { ok: true; grant?: SessionGrant; narrow?: <T>(payload: T) => T; invitee?: GroupInvitee }
   | { ok: false; code: DenialCode; message: string; details?: Record<string, unknown> };
 /** A settings view as a reply carries it (read's; an act's is a bot's or a group's). */
 type SettingsView = Extract<SettingsReply, { kind: 'view' }>['view'];
@@ -38,7 +40,8 @@ export interface BoundGroup { name: string; chatId: string; projectId?: string }
  * session against. `sessionActive`: whether a session's token still stands, its use noted (devices 5.3: it ends with the
  * session or its bot's process), asked before every request on a connection made with it. `askBot` (D4b): the session's
  * Bot process judges a ★ request for its current turn; without it every ★ request is refused. `memoryItem`: an item as
- * stored, whose author and place decideEdit looks at.
+ * stored, whose author and place decideEdit looks at. `botName`: what a refusal calls a bot. `knowsMember` (dm-agent 6.4):
+ * whether a bot finds this open_id among the members of its group, asked of the bot: open_ids are per app.
  */
 export interface AuthzDeps {
   groupsOf?(appId: string): Promise<readonly BoundGroup[]>;
@@ -46,20 +49,38 @@ export interface AuthzDeps {
   sessionActive?(sessionId: string): boolean;
   askBot?(appId: string, sessionId: string, action: SessionAction): Promise<SessionAuthz>;
   memoryItem?(scope: MemoryScopeRef, itemId: string): Promise<Pick<MemoryItem, 'scope' | 'source'> | undefined>;
+  botName?(appId: string): Promise<string>;
+  knowsMember?(appId: string, projectName: string, openId: string): Promise<boolean>;
 }
 
 /**
- * devices 15: the sentences a Bot session's command line reads. No skill teaches the command line (settings-dm-only), so
- * the refusal of a call without `--scope` says what to add: the `VONVON_SCOPE` the session was given, as it is.
+ * devices 15: the sentences a Bot session's command line reads. In a group or a comment no skill teaches the command line
+ * (settings-dm-only), so the refusal of a call without `--scope` says what to add: the `VONVON_SCOPE` the session was
+ * given, as it is. A private chat has neither (dm-agent 6.1).
  */
 export const SCOPE_MISSING = '这次调用来自 Bot 会话，要带上 `--scope "$VONVON_SCOPE"`（vonvon 给这条会话设好的范围，照抄，不要自己拼），不能比会话本身的范围大。';
 export const scopeExceeded = (bot: string, group: string): string => `范围超过了这条会话（只能是 bot=${bot}, group=${group}）。改用 \`--scope "$VONVON_SCOPE"\`，不要重试更大的范围。`;
 export const SESSION_DENIED = '这个操作不能从 Bot 会话里做。';
+/** dm-agent 6.2: what a private chat may not do, and where to do it instead. */
+export const DM_ELSEWHERE = '这件事要在 Vonvon Bot 客户端或终端里做，私聊里做不了。';
+const DM_SERVICE = '这件事要在 Vonvon Bot 客户端或终端里做，私聊里做不了。要重启或更新，也可以发 /menu，人点卡片上的按钮。';
+const DM_KEYS = 'API key 要在 Vonvon Bot 客户端的密钥页或终端里填，聊天里不收、不显示 key。';
+const DM_ADMINS = '管理员名单只能在 Vonvon Bot 客户端的「设置 → 管理员」或终端里改，聊天里不能改。';
+export const DM_OWN_BOT = '这个私聊就跑在这个 Bot 上，不能在这里停用它。要在 Vonvon Bot 客户端或终端里做。';
+/** dm-agent 6.4. */
+export const foreignOpenId = (bot: string): string => `这个 ID 不是 Bot ${bot} 查到的。用 \`vonvon feishu members --bot ${bot}\` 查。`;
+export const memberUnchecked = (bot: string): string => `现在核对不了这个 ID 是不是 Bot ${bot} 查到的，没有改。先确认 Bot ${bot} 在运行，再试一次。`;
+function dmRefusal(kind: string): string {
+  if (kind === 'settings.act.adminMember') return DM_ADMINS;
+  if (/^admin\.(secrets|setSecret|removeSecret|testSecret)$/.test(kind)) return DM_KEYS;
+  if (kind === 'command.restartHost' || /^machine\.(service\.|setServiceSkipped|startHost|stopHost|checkCoreUpdate|applyCoreUpdate|coreUpdateStatus|desktopUpdateReport|status)/.test(kind)) return DM_SERVICE;
+  return DM_ELSEWHERE;
+}
 const MAINTENANCE = new Set<string>(MAINTENANCE_KINDS);
 const PLACES = ['dm', 'group', 'comment'] as const;
 const ALL = (cell: PlaceRule): Record<SessionPlace, PlaceRule> => ({ dm: cell, group: cell, comment: cell });
-/** A private chat's read: its Bot process asks whose turn it is. A group and a comment get none (s1b: a group's whitelist). */
-const DM_READ = { dm: 'bot', group: 'deny', comment: 'deny' } as const;
+/** A private chat's: its Bot process asks whose turn it is. A group and a comment get none (s1b: a group's whitelist). */
+const DM_ONLY = { dm: 'bot', group: 'deny', comment: 'deny' } as const;
 /** A settings write: only a private chat's turn may, the group and the comment read the not-dm sentence (devices 5.2). */
 const WRITE = { dm: 'bot', group: 'not-dm', comment: 'not-dm' } as const;
 const rows = (method: string, types: string, cell: PlaceRule | Readonly<Record<SessionPlace, PlaceRule>> = 'deny'): Array<[string, Rule]> => types.split(/\s+/).filter(Boolean).map(type => {
@@ -78,74 +99,81 @@ const rows = (method: string, types: string, cell: PlaceRule | Readonly<Record<S
  * own members (`command.listGroupMembers`), and what the command line itself runs on (`admin.negotiate`, a
  * `snapshot.get` cut to the names it resolves). A settings write reads the not-dm sentence; anything else is refused
  * with words that say nothing of what is there.
+ *
+ * A private chat's cells are a blacklist (dm-agent 6.2, owner 2026-11-05): `bot` for every row of every Bot of this
+ * computer but the `deny` ones, which say where to do it instead (dmRefusal). Only what a connection needs before any turn
+ * is `host`. This table keeps an Agent from doing the wrong thing; it is no security boundary, a full-access session
+ * can read the local credential (6.1). A row a private chat may not have is written `deny` below, and a new row is
+ * refused there too until it is written.
  */
 export const RULES: ReadonlyMap<string, Rule> = new Map([
   ...rows('snapshot', 'get', 'host'),
-  ...rows('command', 'refresh listPendingGroups listJoinedGroups', DM_READ),
+  ...rows('command', 'refresh listPendingGroups listJoinedGroups bindGroup cancelJob', DM_ONLY),
+  // A private chat may disable another Bot, not its own: authorizeSession refuses that (dm-agent 6.2).
+  ...rows('command', 'setAgentEnabled', DM_ONLY),
   ...rows('command', 'listGroupMembers', { dm: 'bot', group: 'host', comment: 'deny' }),
-  ...rows('command', 'registerAgent refreshAgentCredentials restartHost bindGroup setAgentEnabled deleteAgent cancelJob'),
+  ...rows('command', 'registerAgent refreshAgentCredentials restartHost deleteAgent'),
   // The desktop's older permission and reply switches: settings writes, which the command line makes as settings set.
-  ...rows('command', 'setResponse setPermission', { dm: 'deny', group: 'not-dm', comment: 'not-dm' }),
-  ...rows('settings', 'read.host save.host'),
-  // Settings are a private chat's, read and written (settings-dm-only: no group session has settings_get either). A group
-  // and a comment read none: `settings set` and `settings act` read before they write, so these reads answer with the
-  // write's sentence (a private chat's turn may do both).
+  ...rows('command', 'setResponse setPermission', WRITE),
+  ...rows('settings', 'read.host save.host', DM_ONLY),
+  // Settings are a private chat's, read and written (settings-dm-only). A group and a comment read none: `settings set`
+  // and `settings act` read before they write, so these reads answer with the write's sentence.
   ...rows('settings', 'read.agent read.session read.project', WRITE),
-  ...rows('settings', 'models sessions', DM_READ),
+  ...rows('settings', 'models sessions', DM_ONLY),
   ...rows('settings', 'save.agent save.project save.session act.voice act.projectMember act.projectAudience act.commentInstructions', WRITE),
   // product.md section 6: the list changes in the client and the terminal only, never by chat.
   ...rows('settings', 'act.adminMember', { dm: 'deny', group: 'not-dm', comment: 'not-dm' }),
-  ...rows('collaboration', 'history context project providerModels', { dm: 'host', group: 'deny', comment: 'deny' }),
-  // The owner's whole provider account (plan, daily use, use outside vonvon), which no tool shows a session.
-  ...rows('collaboration', 'usage'),
+  ...rows('collaboration', 'history context project providerModels', DM_ONLY),
+  // The owner's whole provider account (plan, daily use, use outside vonvon), which a group never shows.
+  ...rows('collaboration', 'usage', DM_ONLY),
   ...rows('collaboration', 'createProject editProject', WRITE),
-  ...rows('collaboration', 'removeProject clear compact resume startGoal stop stopSubagent endGoal reminder shareUsage'),
-  ...rows('environment', `scan backendCatalog backendVersion backendInstall backendInstallStatus cancelBackendInstall backendUninstall backendLogin
-    install update toolInstallStatus cancelInstall uninstall authStatus startLogin loginStatus cancelLogin
+  ...rows('collaboration', 'removeProject clear compact resume startGoal stop stopSubagent endGoal reminder shareUsage', DM_ONLY),
+  ...rows('environment', 'scan backendCatalog backendVersion authStatus backendInstallStatus toolInstallStatus loginStatus', DM_ONLY),
+  ...rows('environment', `backendInstall cancelBackendInstall backendUninstall backendLogin install update cancelInstall uninstall startLogin cancelLogin
     profileList profileUse profileAdd profileInit profileInitStatus profileInitCancel`),
-  ...rows('machine', `mcp.list mcp.add mcp.remove bridgeImport.detect bridgeImport.preflight bridgeImport.start bridgeImport.status bridgeImport.rollback
-    status service.install service.start service.stop service.uninstall setServiceSkipped startHost stopHost logs
+  ...rows('machine', 'mcp.list mcp.add mcp.remove logs', DM_ONLY),
+  // `status` carries the service's definition and log paths: `service status` is refused in every session (product.md 3.7).
+  ...rows('machine', `bridgeImport.detect bridgeImport.preflight bridgeImport.start bridgeImport.status bridgeImport.rollback
+    status service.install service.start service.stop service.uninstall setServiceSkipped startHost stopHost
     checkCoreUpdate applyCoreUpdate coreUpdateStatus`),
   // U4: the owner's, and of the owner's connections only this computer's desktop shell (rpc/machine.ts checks which).
   ...rows('machine', 'desktopUpdateReport'),
   ...rows('admin', `judgeUsage state diagnosis hostDoctor setupStatus cardCallbackStatus confirmCardCallback codexSetup logs followLogs
-    switchBackend secrets setSecret removeSecret testSecret`),
-  // A session's command line never asks daemonStatus (`vonvon daemon status` reads the lock there); its paths are the owner's.
+    switchBackend`, DM_ONLY),
+  ...rows('admin', 'secrets setSecret removeSecret testSecret'),
+  // A group's command line never asks daemonStatus (`vonvon daemon status` reads the lock there); its paths are the owner's.
   ...rows('admin', 'daemonStatus', { dm: 'host', group: 'deny', comment: 'deny' }),
   ...rows('admin', 'negotiate', 'host'),
-  ...rows('directory', 'list suggest choose'),
-  // The library's projects with their folders: a session's command line finds its project's name in the snapshot.
-  ...rows('library', 'list', { dm: 'host', group: 'deny', comment: 'deny' }),
-  ...rows('library', 'workspace rename previous delete'),
+  ...rows('directory', 'list suggest choose', DM_ONLY),
+  ...rows('library', 'list workspace rename previous delete', DM_ONLY),
   // What memory_list, memory_add, memory_update and memory_forget do: the Bot process says where a write lands and
   // whether an item may be changed (memory-authority, D4b). A group reads the entries as memory_list shows them
   // (groupMemoryReply); the files' export and an entry's history, with its authors and earlier texts, are a private chat's.
   ...rows('memory', 'list add edit archive', { dm: 'bot', group: 'bot', comment: 'deny' }),
-  ...rows('memory', 'export events', DM_READ),
-  ...rows('memory', 'restore promote move branchRename branchMerge branchDelete confirm purge undo reseal seen newCounts'),
-  ...rows('contextPreview', 'get'),
-  ...rows('schedule', 'list create edit pause resume delete runNow', { dm: 'not-group', group: 'bot', comment: 'not-group' }),
-  ...rows('schedule', 'listBot', { dm: 'not-group', group: 'deny', comment: 'not-group' }),
+  ...rows('memory', 'export events restore promote move branchRename branchMerge branchDelete confirm purge undo reseal seen newCounts', DM_ONLY),
+  ...rows('contextPreview', 'get', DM_ONLY),
+  ...rows('schedule', 'list create edit pause resume delete runNow', { dm: 'bot', group: 'bot', comment: 'not-group' }),
+  ...rows('schedule', 'listBot', { dm: 'bot', group: 'deny', comment: 'not-group' }),
   ...rows('device', 'status enable disable setPort pair clients renameClient revokeClient rename'),
 ]);
 
 const denied = (message: string): Decision => ({ ok: false, code: 'permission_denied', message });
 const OUT_OF_REACH = '这次调用碰到了这条 Bot 会话范围以外的 Bot、群或项目。';
 const outOfReach = (): Decision => denied(OUT_OF_REACH);
-/** devices 5.3: a reach of one group (a private chat or the owner given `--scope … group=`) moves only that group. */
+/** devices 5.3: a reach of one group (the owner given `--scope … group=`) moves only that group. */
 export const ONE_GROUP_ONLY = '这次调用的 `--scope` 只到一个群：不能改整个 Bot 的设置，也不能建新群。';
 /** A connection of another protocol refused this many requests in a row is closed (4001, devices 4.7). */
 export const MAINTENANCE_STRIKES = 20;
 
 /**
- * devices 5.3, at `admin.negotiate`: a Bot session's `--scope` must be there, name its bot, and be no wider than the
- * session (a group session's own group; a comment no group). It may narrow a private chat to one group. The owner's
- * scope is recorded as given.
+ * devices 5.3, at `admin.negotiate`: a group's or a comment's `--scope` must be there, name its bot, and be no wider than
+ * the session (a group session's own group; a comment no group). A private chat has one reach and needs none: one given
+ * does nothing (dm-agent 6.1). The owner's scope is recorded as given.
  */
 export function checkSessionScope(principal: Peer['principal'], scope: Scope | null): void {
-  if (principal.kind !== 'bot-session') return;
+  if (principal.kind !== 'bot-session' || principal.place === 'dm') return;
   if (!scope) throw new RpcError('scope_required', SCOPE_MISSING);
-  const limit = principal.place === 'group' ? principal.chatId ?? '' : principal.place === 'dm' ? '（私聊会话，不限群）' : '（评论会话，不带群）';
+  const limit = principal.place === 'group' ? principal.chatId ?? '' : '（评论会话，不带群）';
   const wider = scope.bot !== principal.appId
     || principal.place === 'group' && (scope.group === undefined || scope.group !== principal.chatId)
     || principal.place === 'comment' && scope.group !== undefined;
@@ -180,17 +208,18 @@ async function authorizeSession(principal: BotSessionPrincipal, peer: Pick<Peer,
   if (!peer.negotiated && kind !== 'admin.daemonStatus' && kind !== 'admin.negotiate') return { ok: false, code: 'scope_required', message: SCOPE_MISSING };
   const cell = rule.places[principal.place];
   switch (cell) {
-    case 'deny': return denied(SESSION_DENIED);
+    case 'deny': return denied(principal.place === 'dm' ? dmRefusal(kind) : SESSION_DENIED);
     case 'not-dm': return { ok: false, code: 'not-dm', message: notDmMessage(principal.place) };
     case 'not-group': return { ok: false, code: 'not-group', message: scheduleRefusalMessages['not-group'] };
     case 'host': case 'bot': break;
   }
+  if (principal.place === 'dm' && request.method === 'command' && request.payload.type === 'setAgentEnabled' && request.payload.agentId === principal.appId) return denied(DM_OWN_BOT);
   // The host's half first: what is out of the session's reach never reaches its Bot process.
   const decision = await withinReach(principal, peer.scope, 'session', request, deps);
   if (!decision.ok || cell === 'host') return decision;
   // ★ (devices 5.2): who started this turn and whether it is still going, the Bot process says with the tools' own checks.
   // No Bot process to ask, no answer, an error: refused as a turn that ended, never let through.
-  const action = await sessionActionOf(request, deps);
+  const action = await sessionActionOf(request, principal, deps);
   if ('ok' in action) return action;
   const answer = deps.askBot ? await deps.askBot(principal.appId, principal.sessionId, action).catch(sessionTurnEnded) : sessionTurnEnded();
   if (!answer.ok) {
@@ -201,7 +230,30 @@ async function authorizeSession(principal: BotSessionPrincipal, peer: Pick<Peer,
   // A task runs as the actor the Bot process gave and a memory write lands where it said: without them, nothing runs.
   const missing = action.kind === 'schedule' ? !grant.actor : action.kind === 'memory' && action.op !== 'read' && !grant.memory;
   if (missing) return { ok: false, code: 'permission_denied', message: SESSION_TURN_ENDED, details: { reason: 'turn-ended' } };
-  return { ...decision, grant };
+  return principal.place === 'dm' ? acrossBots(principal, request, { ...decision, grant }, deps) : { ...decision, grant };
+}
+
+/**
+ * dm-agent 6.4: a Feishu open_id is its app's. A person's id written into another Bot's list has to be one that Bot found,
+ * and a new group pulls in who asked: by open_id on the session's own Bot, by union_id on another (the same developer's
+ * Bots share it; no union_id, no group). Last, for the Feishu call the check takes.
+ */
+async function acrossBots(principal: BotSessionPrincipal, request: Request, decision: Extract<Decision, { ok: true }>, deps: AuthzDeps): Promise<Decision> {
+  const nameOf = async (bot: string): Promise<string> => await deps.botName?.(bot).catch(() => bot) ?? bot;
+  if (request.method === 'collaboration' && request.payload.action === 'createProject') {
+    const { agentId } = request.payload, { openId, unionId } = decision.grant ?? {};
+    const invitee: GroupInvitee | undefined = agentId === principal.appId ? openId ? { idType: 'open_id', id: openId } : undefined
+      : unionId ? { idType: 'union_id', id: unionId } : undefined;
+    return invitee ? { ...decision, invitee } : denied(cannotInvite(await nameOf(agentId)));
+  }
+  if (request.method !== 'settings' || request.payload.type !== 'act') return decision;
+  const action = request.payload.action;
+  if (action.kind !== 'projectMember' || action.membership !== 'present' || action.botId === principal.appId) return decision;
+  // No answer is no yes: the Bot may be stopped, or Feishu slow.
+  const known = await Promise.resolve(deps.knowsMember?.(action.botId, action.projectName, action.openId)).catch(() => null);
+  if (known) return decision;
+  const bot = await nameOf(action.botId);
+  return denied(known === null ? memberUnchecked(bot) : foreignOpenId(bot));
 }
 
 const memoryTarget = (scope: MemoryScopeRef): Extract<SessionAction, { kind: 'memory'; op: 'read' }>['target'] =>
@@ -209,16 +261,15 @@ const memoryTarget = (scope: MemoryScopeRef): Extract<SessionAction, { kind: 'me
 
 /**
  * devices-4b 4.3: a ★ row's request as the check its Bot process runs. Settings writes and new or edited groups are
- * authorizeNow's; a private chat's reads `ctx.admin`'s; memory and tasks
- * their own. An item to change is read here, so the Bot process can judge it as its tools do.
+ * authorizeNow's; memory and tasks their own; everything else a private chat may ask is `adminRead`, its turn going
+ * (dm-agent 6.3). An item to change is read here, so the Bot process can judge it as its tools do.
  */
-async function sessionActionOf(request: Request, deps: AuthzDeps): Promise<SessionAction | Decision> {
+async function sessionActionOf(request: Request, principal: BotSessionPrincipal, deps: AuthzDeps): Promise<SessionAction | Decision> {
   switch (request.method) {
     case 'settings': {
       const payload = request.payload;
       return payload.type === 'save' || payload.type === 'act' ? { kind: 'settingsWrite' } : { kind: 'adminRead' };
     }
-    case 'command': return { kind: 'adminRead' };
     case 'collaboration': return { kind: 'settingsWrite' };
     case 'schedule': {
       const task = request.payload.request;
@@ -226,18 +277,28 @@ async function sessionActionOf(request: Request, deps: AuthzDeps): Promise<Sessi
     }
     case 'memory': {
       const memory = request.payload;
+      if (memory.type === 'seen' || memory.type === 'newCounts') return { kind: 'adminRead' };
+      const otherBot = principal.place === 'dm' && !await ownMemory(memory.scope, principal.appId, deps);
+      const across = otherBot ? { otherBot } : {};
       switch (memory.type) {
         case 'list': case 'export': case 'events': return { kind: 'memory', op: 'read', target: memoryTarget(memory.scope) };
-        case 'add': return { kind: 'memory', op: 'add', target: memoryTarget(memory.scope), text: memory.text };
+        case 'add': return { kind: 'memory', op: 'add', target: memoryTarget(memory.scope), text: memory.text, ...across };
         case 'edit': case 'archive': {
           const item = await deps.memoryItem?.(memory.scope, memory.itemId);
           if (!item) return denied('没有这条记忆。');
-          return { kind: 'memory', op: 'edit', item: { scope: item.scope, source: item.source }, ...(memory.type === 'edit' && memory.text !== undefined ? { text: memory.text } : {}) };
+          return { kind: 'memory', op: 'edit', item: { scope: item.scope, source: item.source }, ...(memory.type === 'edit' && memory.text !== undefined ? { text: memory.text } : {}), ...across };
         }
+        default: return { kind: 'memory', op: 'manage', target: memoryTarget(memory.scope), ...across };
       }
     }
+    default: return { kind: 'adminRead' };
   }
-  return denied(SESSION_DENIED);
+}
+
+/** Whether a memory is the session's own Bot's: its own, or a project one of its groups is bound to. */
+async function ownMemory(scope: MemoryScopeRef, appId: string, deps: AuthzDeps): Promise<boolean> {
+  if (scope.kind !== 'project') return scope.botId === appId;
+  return (await deps.groupsOf?.(appId) ?? []).some(group => group.projectId === scope.projectId);
 }
 
 /** A session a settings request names by its thread: a `session` scope, or a session's model list. */
@@ -251,9 +312,14 @@ function threadNamed(request: Request): string | undefined {
 
 /**
  * The groups a session (or an owner's `--scope`) reaches, and the request checked against them. A reach of one group (a
- * group session; a private chat or an owner narrowed with `group=`) names only sessions of that group's project.
+ * group session; an owner narrowed with `group=`) names only sessions of that group's project. A private chat reaches
+ * every Bot, group and project, so there is nothing to check (dm-agent 6.1); `--scope` means nothing to it, and an owner's
+ * `--scope` without a group, which stands as a private chat (scopedOwner), is still kept to its bot.
  */
 async function withinReach(principal: BotSessionPrincipal, scope: Scope | null, who: Who, request: Request, deps: AuthzDeps): Promise<Decision> {
+  if (who === 'session' && principal.place === 'dm') {
+    return request.method === 'snapshot' ? { ok: true, narrow: <T>(payload: T): T => sessionSnapshot(payload as DesktopSnapshot, principal) as T } : { ok: true };
+  }
   const reaches = sessionGroups(principal, scope);
   const groups = principal.place === 'comment' ? [] : (await deps.groupsOf?.(principal.appId) ?? []).filter(group => reaches(group.chatId));
   const thread = threadNamed(request);
@@ -277,17 +343,14 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
   const own = (botId: string): boolean => botId === principal.appId;
   const chats = new Set(groups.map(group => group.chatId));
   const reaches = sessionGroups(principal, scope);
-  // devices 5.3: a reach of one group (a group session; a private chat or the owner given `group=`) moves only that
-  // group, whoever's turn it is: nothing of the whole bot, and no new group.
+  // devices 5.3: a reach of one group (a group session; the owner given `group=`) moves only that group: nothing of the
+  // whole bot, and no new group.
   const wholeBot = principal.place === 'dm' && scope?.group === undefined;
   const botWide = (): Decision => wholeBot ? ok : denied(ONE_GROUP_ONLY);
   const named = (projectName: string, groupId?: string): boolean => groups.some(group => group.name === projectName && (groupId === undefined || group.chatId === groupId));
   const narrow = (cut: (payload: never) => unknown): Decision => ({ ok: true, narrow: <T>(payload: T): T => cut(payload as never) as T });
-  /** A settings reply's views as settings_get shows them: read's, and those a saved or conflicting act answers with. */
-  const settingsShown = (decision: Decision): Decision => !decision.ok || !session ? decision
-    : narrow((reply: SettingsReply) => sessionReply(reply, principal.place === 'group'));
   switch (request.method) {
-    case 'snapshot': return narrow((snapshot: DesktopSnapshot) => (session ? sessionSnapshot : filterSnapshot)(snapshot, principal, scope));
+    case 'snapshot': return narrow((snapshot: DesktopSnapshot) => session ? sessionSnapshot(snapshot, principal) : filterSnapshot(snapshot, principal, scope));
     case 'admin': {
       // A session's row lets through only daemonStatus and negotiate, which name no bot; the owner's name theirs.
       const admin = request.payload;
@@ -301,7 +364,7 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
       const payload = request.payload;
       const scoped = (target: SettingsScope): boolean => target.kind === 'host' ? !session : own(target.botId) && (target.kind !== 'project' || named(target.projectName));
       switch (payload.type) {
-        case 'read': return scoped(payload.scope) ? settingsShown(ok) : outOfReach();
+        case 'read': return scoped(payload.scope) ? ok : outOfReach();
         case 'save': {
           if (!scoped(payload.edit.scope)) return outOfReach();
           return payload.edit.scope.kind === 'agent' ? botWide() : ok;
@@ -309,9 +372,8 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
         case 'act': {
           const action = payload.action;
           if (!own(action.botId)) return outOfReach();
-          // Codex review 239-2 / 240-1: a saved or conflicting act answers with the whole view, cut as read's is.
-          if ('projectName' in action) return named(action.projectName) ? settingsShown(ok) : outOfReach();
-          return settingsShown(botWide());
+          if ('projectName' in action) return named(action.projectName) ? ok : outOfReach();
+          return botWide();
         }
         case 'models': return own(payload.query.botId) ? ok : outOfReach();
         case 'sessions': {
@@ -378,7 +440,7 @@ function commandInReach(command: Command, session: boolean, own: (botId: string)
     }
     case 'listPendingGroups': case 'listJoinedGroups':
       if (!own(command.agentId)) return outOfReach();
-      // A private chat's own joined and pending groups (D4b asks whose turn it is); a group session's only its own.
+      // The owner's within a `--scope`: the reply cut to what it reaches.
       return narrow((result: CommandResult) => result.kind === 'groups' ? { ...result, groups: result.groups.filter(group => reaches(group.id)) }
         : result.kind === 'pendingGroups' ? { ...result, groups: result.groups.filter(group => reaches(group.chatId)) } : result);
   }
@@ -395,40 +457,8 @@ function membershipOf(id: string): { agentId: string; groupId: string } | undefi
 }
 
 /**
- * A session reads settings as settings_get does, in a private chat only: its sections, and nothing the tool leaves out
- * but what the view's schema requires. The judge prompt, the skills and their paths, the bot's profile, the roster's
- * names, which decision models have a key (the keystore's), the role draft and the administrators' names and who may be added
- * stay out: the command line reaches no further than the tools (devices 5; devices-4b 4.5a, SEC-4).
- */
-function sessionView(view: SettingsView, group: boolean): SettingsView {
-  // A group session reads no settings (settings-dm-only: read.* and act are refused before): fail closed if one comes.
-  if (group || view.scope.kind === 'host') throw new RpcError('permission_denied', OUT_OF_REACH);
-  if (view.scope.kind === 'project') {
-    const project = view as ProjectSettingsView;
-    const { roster: _names, ...members } = project.members;
-    const shown: ProjectSettingsView = { scope: project.scope, sections: project.sections, identity: project.identity, members };
-    return shown;
-  }
-  if (view.scope.kind === 'session') return view;
-  const agent = view as AgentSettingsView;
-  const { openIds, revision } = agent.administrators;
-  const shown: AgentSettingsView = { scope: agent.scope, sections: agent.sections, ownerOpenId: agent.ownerOpenId, administrators: { openIds, revision },
-    voice: agent.voice, commentInstructions: agent.commentInstructions };
-  return shown;
-}
-
-/** Every view a settings reply carries, as a session reads it: read's, and the bot's or group's a saved or conflicting act answers with. */
-function sessionReply(reply: SettingsReply, group: boolean): SettingsReply {
-  if (reply.kind === 'view') return { ...reply, view: sessionView(reply.view, group) };
-  if (reply.kind !== 'acted') return reply;
-  const result = reply.result;
-  if (result.kind !== 'saved' && result.kind !== 'conflict') return reply;
-  return { ...reply, result: { ...result, view: sessionView(result.view, group) as typeof result.view } };
-}
-
-/**
- * Memory of this bot and of the projects of the groups reached. A private chat's memory is reached from a private chat's
- * session (its Bot process then keeps it to the turn's own person) and by the owner, while no group is named.
+ * Memory of this bot and of the projects of the groups reached. A private chat's memory is reached by the owner, while no
+ * group is named; a private chat's session never comes here (withinReach), its Bot process keeps it to the turn's own person.
  */
 function memoryInReach(request: MemoryRequest, principal: BotSessionPrincipal, scope: Scope | null, groups: readonly BoundGroup[], who: Who): Decision {
   // s1b: a group session reads the entries as memory_list shows them, the authors and the archived ones left out.

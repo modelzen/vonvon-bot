@@ -87,7 +87,7 @@ async function newCounts(deps: MemoryAdminDeps): Promise<MemoryReply> {
   return { kind: 'newCounts', projects, bots };
 }
 
-/** The memory a decision names, as a request names it: the bot's own for its memory and its private chats. */
+/** The memory a decision names, as a request names it: `botId`'s for its memory and its private chats. */
 const landedRef = (scope: MemoryItemScope, botId: string): MemoryScopeRef =>
   scope.kind === 'project' ? scope : scope.kind === 'bot' ? { kind: 'bot', botId } : { kind: 'dm', botId, openId: scope.openId };
 
@@ -104,7 +104,8 @@ export async function memoryAction(request: MemoryRequest, deps: MemoryAdminDeps
   // The owner at the desktop or the terminal is trusted; a session's turn as its Bot process decided.
   const trust = landing?.trust ?? 'trusted';
   const botIdOf = (scope: MemoryScopeRef): string => scope.kind === 'project' ? '' : scope.botId;
-  const scope = landing ? landedRef(landing.scope, landing.source.botId) : request.scope;
+  // The bot the request names, not the session's: a private chat reaches them all (dm-agent 6.1).
+  const scope = landing ? landedRef(landing.scope, request.scope.kind === 'project' ? landing.source.botId : request.scope.botId) : request.scope;
   const store = await memoryStoreFor(scope, deps);
   const checked = (reply: MemoryReply): MemoryReply => memoryReplySchema.parse(reply);
   switch (request.type) {
