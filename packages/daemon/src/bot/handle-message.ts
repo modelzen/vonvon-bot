@@ -7787,8 +7787,8 @@ export function createOrchestrator(
       const said = new Set(opts.recallsShown);
       let fromQueue = false;
       let replyInThread = opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId));
-      // The chat's one person, a person's message or their task alike: on the row since their first message (dm-agent 6.4).
-      const dmUnionId = (await getProjectByChatId(opts.chatId).catch(() => undefined))?.dm?.people[opts.chatId]?.unionId;
+      // On the row since their first message (dm-agent 6.4). Whoever a turn runs as: a task's creator need not be this chat's person.
+      const dmPeople = Object.values((await getProjectByChatId(opts.chatId).catch(() => undefined))?.dm?.people ?? {});
       for (;;) {
         let turnInput = currentTurn.input;
         // In flight from here, through the preparation below, not only once turn/start went out (review 260).
@@ -7797,6 +7797,7 @@ export function createOrchestrator(
         state.requesterKind = currentTurn.requesterKind;
         const scheduled = currentTurn.scheduled;
         state.scheduled = scheduled ? true : undefined;
+        const dmUnionId = dmPeople.find(person => person.openId === currentTurn.requesterOpenId)?.unionId;
         turnScope = entries?.openTurn(opts.thread, {
           requesterOpenId: currentTurn.requesterOpenId, requesterKind: currentTurn.requesterKind,
           triggerMessageId: currentTurn.seen?.id ?? currentTurn.triggerMessageId, retry: currentTurn.replayText !== undefined,

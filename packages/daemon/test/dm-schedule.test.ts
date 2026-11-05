@@ -154,13 +154,27 @@ describe('a private chat\'s task running', () => {
     await expect(result).resolves.toMatchObject({ status: 'done' });
   });
 
+  // Codex 审查任务 352 必败: the turn's open_id was its creator's and its union_id the chat's person's, so another Bot's group invited the wrong one
+  it('carries the union_id of who it runs as, not of the chat\'s person', async () => {
+    const { run, turn, as } = await app();
+    await rememberDmChat(A, OWNER, '主人', 'on_owner');
+    await rememberDmChat(B, ADMIN, '管理员', 'on_admin');
+    const task = await made(as(dm(OWNER, A), create(B)));
+    const result = fake.deps!.run(job(task));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    expect(turn.mock.calls[0]?.[1]).toMatchObject({ requesterOpenId: OWNER, requesterUnionId: 'on_owner' });
+    run.ends[0]!();
+    await expect(result).resolves.toMatchObject({ status: 'done' });
+  });
+
   it('runs as the chat\'s person when this Bot has no open_id for who made it: the desktop, another Bot\'s private chat', async () => {
     const { run, turn, as } = await app();
+    await rememberDmChat(B, ADMIN, '管理员', 'on_admin');
     const task = await made(as({ kind: 'dm', via: 'cli', name: '张三', chatId: 'oc_p2p_of_another_bot' }, create(B)));
     expect(task.createdBy).toEqual({ via: 'cli', name: '张三' });
     const result = fake.deps!.run(job(task));
     await until(() => expect(run.consumed).toHaveLength(1));
-    expect(turn.mock.calls[0]?.[1]).toMatchObject({ requesterOpenId: ADMIN });
+    expect(turn.mock.calls[0]?.[1]).toMatchObject({ requesterOpenId: ADMIN, requesterUnionId: 'on_admin' });
     run.ends[0]!();
     await expect(result).resolves.toMatchObject({ status: 'done' });
   });
@@ -248,4 +262,3 @@ it('fails a task of a private chat the Bot no longer knows as unbound', async ()
   await app();
   expect(fake.deps!.gate('oc_p2p_gone', { createdBy: { via: 'cli', openId: OWNER } })).toBe('unbound');
 });
-
