@@ -76,7 +76,7 @@ const FETCH_DEADLINE_MS = 10_000;
 const OPENER_DEADLINE_MS = 3000;
 /** Pulls and lookups get cards in the send format, so another bot's answer is
  * readable; without it a 2.0 or CardKit card is only its title (e10). */
-const CARD_CONTENT = 'user_card_content';
+export const CARD_CONTENT = 'user_card_content';
 
 /** The scope this app requests for reading chat history with its own identity (config/scopes.ts). */
 const HISTORY_SCOPE = 'im:message:readonly';
@@ -114,8 +114,9 @@ export interface ContextMessage {
 }
 
 /** Subset of the `im.v1.message.get` / `.list` item shape we read. */
-interface RawMsgItem {
+export interface RawMsgItem {
   message_id?: string;
+  chat_id?: string;
   msg_type?: string;
   create_time?: string;
   deleted?: boolean;
@@ -150,17 +151,17 @@ function isOpenId(idType: string | undefined): boolean {
 }
 
 /** This bot as a sender: its open_id (what `open_bot_id` carries) and its app id (an app sender's `id`). */
-interface Me {
+export interface Me {
   openId?: string;
   appId?: string;
 }
 
-function meOf(channel: LarkChannel): Me {
+export function meOf(channel: LarkChannel): Me {
   return { openId: channel.botIdentity?.openId, appId: channel.rawClient.appId };
 }
 
 /** Who sent an item; undefined for a system notice (it has no sender). */
-function kindOf(s: RawMsgItem['sender'], me: Me): ContextMessage['from'] | undefined {
+export function kindOf(s: RawMsgItem['sender'], me: Me): ContextMessage['from'] | undefined {
   if (s?.sender_type === 'user') return 'user';
   if (s?.sender_type !== 'app') return undefined;
   return (me.openId && s.open_bot_id === me.openId) || (me.appId && s.id === me.appId) ? 'self' : 'bot';
@@ -530,7 +531,7 @@ function warnContextFailed(c: Container, failure: unknown): void {
   log.warn('intake', event, { ...where(c), err });
 }
 
-function toContextMessage(item: RawMsgItem, me: Me, names?: NameBook): ContextMessage {
+export function toContextMessage(item: RawMsgItem, me: Me, names?: NameBook): ContextMessage {
   const id = item.sender?.id ?? '';
   const name = item.sender?.sender_name || names?.peek(id) || (id ? `用户${id.slice(-4)}` : '某人');
   // An @ to this bot becomes the line's "→ @你"; its token is left out of the text.
