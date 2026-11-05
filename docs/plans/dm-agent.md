@@ -18,7 +18,7 @@ owner 2026-11-05 定，经过六轮讨论。产品行为写在 `docs/product.md`
 不做：
 
 - 影子索引和记忆优化（owner 以后做，这批的读取工具是它的基础）。
-- 通用的飞书 API 工具；改文档以外的飞书写操作，包括改表格和多维表格（下一批）。lark-cli 本身不动，owner 以后整理。
+- 通用的飞书 API 工具；改文档以外的飞书写操作，包括改表格和多维表格（下一批，这两种这批能读）。lark-cli 本身不动，owner 以后整理。
 - 设置回执卡和撤销（3.7 已推迟）。
 - 群里改设置。
 - 按人分权限。
@@ -280,6 +280,7 @@ open_id 按应用分。A 里查到的 id，写进 B 的白名单、拉进 B 的�
 | `DOC_READ_SCOPES` | 云文档读取，加已有的 `wiki:wiki:readonly` | 读不了文档和知识库 |
 | `DOC_EDIT_SCOPES` | 云文档编辑 | 改不了文档 |
 | `SHEET_READ_SCOPES` | 表格读取 | 读不了表格 |
+| `BITABLE_READ_SCOPES` | `bitable:app:readonly` | 读不了多维表格 |
 | `DRIVE_READ_SCOPES` | 云空间文件下载 | 下载不了云空间文件 |
 | `MESSAGE_SEARCH_SCOPES` | `search:message` | 搜不了消息 |
 
@@ -291,7 +292,7 @@ open_id 按应用分。A 里查到的 id，写进 B 的白名单、拉进 B 的�
 
 状态接口的 `scopes` 加 `missingTools`（缺的 `FEISHU_TOOL_SCOPES`）和 `toolsGrantUrl`（只预选缺的）。状态与诊断页的权限行里加一行"飞书文档能力"，缺时给这个链接，开通后要发布新版本。这一行不算未就绪，不进开通向导。工具缺权限时照第 7.5 节回复。
 
-## 7. 飞书工具（F1、F2、F3）
+## 7. 飞书工具（F1、F2、F3、F4）
 
 ### 7.1 工具
 
@@ -306,6 +307,7 @@ open_id 按应用分。A 里查到的 id，写进 B 的白名单、拉进 B 的�
 | `feishu_members` | 群成员 | 已有 | 已有 |
 | `feishu_doc` | 文档和知识库页面，转成文本 | `docs_ai/v1/documents/:id/fetch`，回退 `docx/v1/documents/:id/raw_content`；知识库先解析节点 | 可选 |
 | `feishu_sheet` | 表格区域 | `sheets` 接口 | 可选 |
+| `feishu_base` | 多维表格的数据表、字段、视图和记录，记录可按视图和条件筛选（F4） | `bitable/v1/apps/:app_token/...`，记录走 `records/search` | 可选 |
 | `feishu_drive_file` | 下载云空间文件 | `drive` 接口 | 可选 |
 | `feishu_search` | 搜消息 | `im/v1/messages/search` | 可选，待实测 |
 | `feishu_doc_edit` | 改文档：追加、插入、替换选中内容（F3） | `docs_ai/v1/documents/:id` 的更新接口，机器人身份用不了就走 `docx/v1/documents/:id/blocks` | 可选 |
@@ -314,7 +316,7 @@ open_id 按应用分。A 里查到的 id，写进 B 的白名单、拉进 B 的�
 
 ### 7.2 能读到哪里
 
-| 位置 | 消息、文件、公告、成员 | 文档、表格、云空间 |
+| 位置 | 消息、文件、公告、成员 | 文档、表格、多维表格、云空间 |
 |---|---|---|
 | 群会话 | 只有本群。`chat` 参数给别的群直接拒绝；`feishu_message` 取回来后核对 `chat_id` 是本群，不是就拒绝 | Bot 读得到的都能读 |
 | 私聊会话 | 本机任何 Bot 所在的任何群 | 同左，可以指定用哪个 Bot 读 |
@@ -342,7 +344,7 @@ open_id 按应用分。A 里查到的 id，写进 B 的白名单、拉进 B 的�
 
 - `profileOf(…, 'comment')` 打开 `tools.feishu` 和 `tools.feishuEdit`。评论会话的位置是 `{ kind: 'doc', docId }`，工具走一个新的 `authorizeFeishu`：入口活着、这一轮还在，只放第 7.2 节里文档这一列的工具。评论 @bot 只响应管理员（`handle-message.ts:9001`），这条不变。
 - `DEFAULT_COMMENT_INSTRUCTIONS` 的"怎么做"改成：用 vonvon 的飞书工具读和改这篇文档，身份是 Bot 自己；Bot 没有权限时在回复里说清楚要用户做什么，不要换别的身份去读或改。"不要删被评论的原文"这条留着。用户改过的指令文件不动。
-- 表格上的评论：能读，不能改，回复里说明。多维表格这一批没有读取工具，读不到也改不了，回复里说明。读多维表格和改它们留到下一批，那时再把 Bot 身份的工具补全。
+- 表格和多维表格上的评论：能读（多维表格用 F4 的 `feishu_base`），不能改，回复里说明。改它们留到下一批，那时再把 Bot 身份的工具补全。
 
 ### 7.5 缺权限和实测
 
@@ -431,6 +433,7 @@ export function builtinSkillsOfSet(set: 'group' | 'dm'): BuiltinSkill[] {
 | C1 | 权限表：一种范围、不能做的、这一轮、id 规则、建群拉人 | D2 | 500 |
 | F2 | `vonvon feishu` 命令、跨 Bot 路由、缺权限的回复 | F1、C1 | 500 |
 | F3 | 改文档工具、评论会话接上读和改、默认指令 | F1 | 400 |
+| F4 | 多维表格读取工具 `feishu_base` | F1、F3 | 300 |
 | C2 | 定时任务 | C1 | 400 |
 | D4 | 私聊页面和 `--dm` | D1、D3、C2 | 500 |
 | C3 | 3 个 Skill、启动器和会话 PATH、`docs/` | F1、C1 | 300 |
