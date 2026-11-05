@@ -168,6 +168,24 @@ describe('a Bot session\'s command line', () => {
     } finally { await d.close(); }
   }, 60_000);
 
+  // dm-agent 8. main 必败: the Bot process's `dm` actor was no answer the host took
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('makes a group\'s task from a private chat, as its person, with no --scope', async () => {
+    const actor = { kind: 'dm', via: 'cli', openId: 'ou_admin', name: '张三', chatId: 'oc_dm' } as const;
+    const task = { id: 'st_1', botId: BOT, chatId: GROUP, revision: 'r', name: 'probe', instruction: '巡检', spec: { kind: 'every', minutes: 60 }, timeZone: 'UTC', placement: { kind: 'follow' }, state: 'active',
+      createdBy: { via: 'cli' }, createdAt: 1, updatedAt: 1, running: false, counts: { runs: 0, missed: 0, skipped: 0, consecutiveFailures: 0 }, recent: [], describe: '每 60 分钟' };
+    const executeSchedule = vi.fn(async (_bot: string, _actor: unknown, request: { action: string }) => request.action === 'create' ? { kind: 'task' as const, task: task as ScheduledTaskView } : { kind: 'tasks' as const, tasks: [], now: 1, timeZone: 'UTC' });
+    const d = await daemon({ executeSchedule }, async () => ({ ok: true, role: 'admin', openId: 'ou_admin', actor }));
+    try {
+      const token = d.fixture.sessionTokens.issue({ appId: BOT, place: 'dm', chatId: 'oc_dm', sessionId: 'ses_1111111111111111' });
+      const add = await run(d.fixture.home, d.home, ['schedule', 'add', '巡检', '--bot', BOT, '--group', '运营', '--name', 'probe', '--every', '1h'], { VONVON_SESSION: token });
+      expect(add, add.stderr).toMatchObject({ code: 0 });
+      expect(executeSchedule).toHaveBeenLastCalledWith(BOT, actor, expect.objectContaining({ action: 'create', chatId: OTHER }));
+      // its own private chat by id, which no list of groups has
+      expect(await run(d.fixture.home, d.home, ['schedule', 'list', '--bot', BOT, '--group', 'oc_dm'], { VONVON_SESSION: token })).toMatchObject({ code: 0 });
+      expect(executeSchedule).toHaveBeenLastCalledWith(BOT, actor, { action: 'list', chatId: 'oc_dm' });
+    } finally { await d.close(); }
+  }, 60_000);
+
   // main 必败: these ran in a session
   it('refuses the local-only commands in a session, naming them, and runs the rest', async () => {
     const { home, root } = await emptyHome();

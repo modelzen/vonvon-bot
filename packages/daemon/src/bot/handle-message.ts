@@ -244,6 +244,7 @@ import { getSecret } from '../config/keystore';
 import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import {
+  dmPersonOf,
   dmProject,
   getProjectByChatId,
   getProjectByChatIdSync,
@@ -1192,8 +1193,8 @@ export function createOrchestrator(
     const assembled = sources ? assemble(sources, project ? 'work' : 'comment') : undefined;
     const nonce = newNonce();
     const skills = project ? await groupSkillProfile({ backend, cwd, directories: execution.workspaces.additional, disabledPaths: project.skills?.disabledPaths }) : undefined;
-    // A bound group's and a private chat's sessions get the schedule tools (3.13; hidden in a private chat until C2) and the
-    // Feishu read tools (dm-agent 7.2), read-only tier too; a comment's never do.
+    // A bound group's and a private chat's sessions get the schedule tools (3.13) and the Feishu read tools (dm-agent 7.2),
+    // read-only tier too; a comment's never do.
     const schedule = Boolean(project) && place !== 'comment';
     // A comment's session has the document column, and the edit tool when it is on a docx (7.4); a group's edits in any tier but read-only (7.2).
     const comment = place === 'comment';
@@ -1464,6 +1465,8 @@ export function createOrchestrator(
   const sessionPlace = (project: Project | undefined, chatId: string): AgentPlace => ({ kind: project?.dm ? 'p2p' : 'group', chatId });
   /** Whether the person of a private chat is still on the list. Asked where a turn or a session starts: the list can change while one is on its way (dm-agent 3.3). */
   const dmOpen = (project: Project): boolean => isAdmin(cfg, project.dm?.people[project.chatId]?.openId ?? '');
+  /** Who a private chat's task runs as (dm-agent 6.3): its creator, or when this Bot has no open_id for them (the desktop, another Bot's private chat) the chat's person. */
+  const dmRunner = (task: Pick<StoredTask, 'createdBy'>, project: Project): string => task.createdBy.openId ?? dmPersonOf(project, project.chatId)?.openId ?? '';
   /** The profile a thread was actually started with: a permission save can swap in a rebuilt one (and its opening). */
   const profileUsed = new WeakMap<AgentThread, object>();
   /** A save can finish while a provider is starting, before eviction can see its thread. */
@@ -3366,29 +3369,31 @@ export function createOrchestrator(
     const project = getProjectByChatIdSync(task.chatId);
     const reason = project && tierUnavailable(project);
     const now = Date.now();
-    if (!reason || shuttingDown || now - (gateFailureNoted.get(task.id) ?? -Infinity) < 60 * 60_000) return;
+    if (!project || !reason || shuttingDown || now - (gateFailureNoted.get(task.id) ?? -Infinity) < 60 * 60_000) return;
     gateFailureNoted.set(task.id, now);
     // A text message's `<at>` is a real mention and no at-guard reads it; the task's name is anybody's words, so no tag
     // in it survives (as in the scheduled topic's root). Only the name: an unclosed tag would run to the end of the sentence.
-    const text = `⏰ 定时任务「${plainTaskName(task.name)}」这次没跑：本群的权限档现在用不了（${reason.replace(/。$/, '')}）。连续 10 次会自动暂停。`;
+    const text = `⏰ 定时任务「${plainTaskName(task.name)}」这次没跑：${project.dm ? '私聊' : '本群'}的权限档现在用不了（${reason.replace(/。$/, '')}）。连续 10 次会自动暂停。`;
     void trackTask(sayInMain(task.chatId, { text }, text).catch(error => {
       if (gateFailureNoted.get(task.id) === now) gateFailureNoted.delete(task.id); // the next failure tries again
       log.fail('schedule', error, { phase: 'gate-notice', taskId: task.id });
     }));
   }
 
-  /** The scheduler paused a task after 10 failures in a row: one post in the main area, the creator at-ed when known.
+  /** The scheduler paused a task after 10 failures in a row: one post in the main area, the creator at-ed when known; a
+   * private chat has only them to tell, and a task made from another Bot's private chat only their name (dm-agent 6.4).
    * Throws when it is not sent, so the scheduler keeps the notice pending and tries again. */
   async function notifyAutoPause(task: StoredTask): Promise<void> {
     const project = await getProjectByChatId(task.chatId);
     if (!project || project.enabled === false) return; // the bot says nothing in a group it no longer serves
     const failure = [...task.recent].reverse().find(run => run.status === 'failed' || run.by === 'crash');
     const why = (failure?.error ?? '运行中 Bot 进程退出了').replace(/。$/, '');
-    const { openId, name } = task.createdBy;
+    const { name } = task.createdBy, openId = project.dm ? undefined : task.createdBy.openId;
     // Feishu's post format reads a text element as plain text (not tried here); the name is anybody's words, so no tag
     // stays in it either way.
     const head = `定时任务「${plainTaskName(task.name)}」连续 10 次失败，已自动暂停。`;
-    const tail = `看一下：${why}。到群设置的"任务"里能恢复。`;
+    const named = name && !openId && !project.dm ? `${plainTaskName(name)} ` : '';
+    const tail = `${named}看一下：${why}。${project.dm ? '跟我说一声，或者到 Bot 页的"任务"里' : '到群设置的"任务"里'}能恢复。`;
     const row = openId ? [{ tag: 'text', text: head }, { tag: 'at', user_id: openId }, { tag: 'text', text: ` ${tail}` }] : [{ tag: 'text', text: head + tail }];
     await sayInMain(task.chatId, { post: { zh_cn: { content: [row] } } }, openId ? `${head}@${name ?? '创建人'} ${tail}` : head + tail);
   }
@@ -3561,10 +3566,11 @@ export function createOrchestrator(
     return refused !== undefined;
   }
 
-  /** Past the door and removed since (dm-agent 3.3): the first gate said yes to someone the list no longer has. */
+  /** Past the door and removed since (dm-agent 3.3): the first gate said yes to someone the list no longer has. A task's run has its creator as sender. */
   function dmShut(project: Project | undefined, msg: NormalizedMessage, extra?: TurnExtra): boolean {
-    if (!project?.dm || extra?.scheduled || isAdmin(cfg, msg.senderId)) return false;
+    if (!project?.dm || isAdmin(cfg, msg.senderId)) return false;
     log.info('intake', 'reject', { reason: 'dm-admin-removed', ref: msg.messageId.slice(-6) });
+    dropScheduled(extra, SCHEDULE_UPDATING);
     return true;
   }
 
@@ -5504,10 +5510,12 @@ export function createOrchestrator(
   }
 
   /** Whether a scheduled task of the group may start now (bot/schedule/scheduler.ts): turnRefusal's states, a desktop
-   * hold, then the tier. Synchronous, as the scheduler decides in place. */
-  function scheduleGate(chatId: string): 'ok' | 'disabled' | 'updating' | 'held' | 'unbound' | 'tier-unavailable' {
+   * hold, then the tier; a private chat's also that the chat's person and the one it runs as are still admins (dm-agent 6.3).
+   * Synchronous, as the scheduler decides in place. */
+  function scheduleGate(chatId: string, task: Pick<StoredTask, 'createdBy'>): 'ok' | 'disabled' | 'updating' | 'held' | 'unbound' | 'tier-unavailable' | 'admin-removed' {
     const project = getProjectByChatIdSync(chatId);
     if (!project) return 'unbound';
+    if (project.dm && !(dmOpen(project) && isAdmin(cfg, dmRunner(task, project)))) return 'admin-removed';
     if (project.enabled === false) return 'disabled';
     if (projectMutations.has(chatId) || resumePublications.has(chatId)) return 'updating';
     if ((firingHolds.get(chatId) ?? 0) > Date.now()) return 'held';
@@ -9794,7 +9802,8 @@ export function createOrchestrator(
     const orLogged = <T,>(read: Promise<T>, fallback: T): Promise<T> => read.catch((error: unknown) => { log.fail('project', error, { phase: 'dm-close' }); return fallback; });
     const people = (await orLogged(dmProject(), undefined))?.dm?.people ?? {};
     for (const [chatId, person] of Object.entries(people)) if (person.openId === openId) chats.add(chatId);
-    if (!chats.size) return;
+    const pauseTasks = (): Promise<void> => pauseDmTasks(openId, chats).catch((error: unknown) => log.fail('schedule', error, { phase: 'admin-removed' }));
+    if (!chats.size) return pauseTasks();
     const records = await orLogged(listSessions(), []);
     for (const chatId of chats) {
       entries?.revokeChat(chatId);
@@ -9818,7 +9827,22 @@ export function createOrchestrator(
       }
       log.info('console', 'dm-closed', { chat: chatId.slice(-6), keys: keys.size });
     }
-    // C2 pauses this person's private-chat tasks here, `pausedReason: 'admin-removed'`.
+    await pauseTasks();
+  }
+  /** A removed admin's private-chat tasks pause (dm-agent 3.3): those in their chats and those they made in another's. A group's stay, they are the group's. */
+  async function pauseDmTasks(openId: string, chats: ReadonlySet<string>): Promise<void> {
+    await loadStore();
+    const theirs = (task: StoredTask): boolean => task.state === 'active'
+      && (chats.has(task.chatId) || (task.createdBy.openId === openId && scheduleChat(task.chatId)?.kind === 'dm'));
+    if (!scheduleStore.all().some(theirs)) return;
+    await scheduleStore.mutateConfig((tasks, touch) => {
+      for (const task of tasks) {
+        if (!theirs(task)) continue;
+        task.state = 'paused';
+        task.pausedReason = 'admin-removed';
+        touch(task);
+      }
+    });
   }
   const personNames = createPersonNames(channel);
   const settings = createSettingsOwner({ personNames, adminRemoved: endDmOf, responseRoster: (chatId) => orStop(readResponseRoster(channel, roster, chatId), { state: 'unavailable', entries: [], otherBots: false }), cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, refreshCompletionReminders: refreshCompletionReminderCards });
@@ -9965,15 +9989,18 @@ export function createOrchestrator(
         topicId = key;
       } else fallback = true;
     }
-    const newTopic = !topicId && (task.placement.kind === 'newTopic' || ruleKind(placed) === 'multi' || await orStop(topicCtx.noMainArea(chatId), false));
+    // A private chat opens no topic for a run (dm-agent 8): its main area's one session, whatever the task says.
+    const newTopic = !topicId && !placed.dm && (task.placement.kind === 'newTopic' || ruleKind(placed) === 'multi' || await orStop(topicCtx.noMainArea(chatId), false));
     // Unbound, disabled or edited while Feishu and the disk answered: the run uses none of what it read (T2 4.2).
     const project = await getProjectByChatId(chatId);
     if (refusedTurn(project, chatId, { scheduled: hook }) || !project || projectSettingsRevision(project) !== projectSettingsRevision(placed)) return void hook.settle(SCHEDULE_UPDATING);
     if (shuttingDown) return void hook.settle({ status: 'interrupted', by: 'shutdown' });
     if (newTopic) return startScheduledTopic(hook, project, fallback);
     const text = scheduledHeader(hook.job, hostTimeZone(), fallback);
+    // A group's run has no sender. A private chat's has its person's rights, read off the turn (dm-agent 6.3).
+    const sender = project.dm ? { senderId: dmRunner(task, project), ...(task.createdBy.name ? { senderName: task.createdBy.name } : {}) } : { senderId: '' };
     const msg: NormalizedMessage = {
-      messageId: `vsched_${task.id}_${hook.job.slot}`, chatId, chatType: 'group', senderId: '', content: text, rawContentType: 'text',
+      messageId: `vsched_${task.id}_${hook.job.slot}`, chatId, chatType: project.dm ? 'p2p' : 'group', ...sender, content: text, rawContentType: 'text',
       resources: [], mentions: [], mentionAll: false, mentionedBot: false, createTime: Date.now(), ...(topicId ? { threadId: topicId } : {}),
     };
     await handleTurn(msg, text, topicId ?? chatId, !topicId, project, turnPerm(project), { scheduled: hook, queueOnly: true, summary: `定时任务「${plainTaskName(task.name)}」` });
@@ -10061,7 +10088,17 @@ export function createOrchestrator(
     maxInflight: () => Math.max(1, Math.floor(getMaxConcurrentRuns(cfg) / 2)),
     log, diagnostics: scheduleDiagnostic,
   });
-  const scheduleCommands = createScheduleCommands({ store: scheduleStore, scheduler, botId: cfg.accounts.app.id, now: () => Date.now(), hostTimeZone });
+  /** What a chat is to this Bot, for the task commands. The private-chat row's own id (`oc_dm_…`) is nowhere to post. An unreadable project file reads as no chat: the view must not throw. */
+  function scheduleChat(chatId: string): { kind: 'dm'; name?: string } | { kind: 'group' } | undefined {
+    let project: Project | undefined;
+    try { project = getProjectByChatIdSync(chatId); }
+    catch (error) { log.fail('schedule', error, { phase: 'chat-of' }); return undefined; }
+    if (!project?.dm) return project && { kind: 'group' };
+    const person = dmPersonOf(project, chatId);
+    const name = person && (person.name ?? names.peek(person.openId));
+    return person && { kind: 'dm', ...(name ? { name } : {}) };
+  }
+  const scheduleCommands = createScheduleCommands({ store: scheduleStore, scheduler, botId: cfg.accounts.app.id, now: () => Date.now(), hostTimeZone, chatOf: scheduleChat });
   let storeLoaded: ReturnType<typeof scheduleStore.load> | undefined;
   const loadStore = (): ReturnType<typeof scheduleStore.load> => (storeLoaded ??= scheduleStore.load());
   const scheduleAs = async (actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply> => {

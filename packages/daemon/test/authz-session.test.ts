@@ -482,12 +482,13 @@ describe('the bot-session column (unit)', () => {
     expect(askBot).not.toHaveBeenCalled();
   });
 
+  const asked = async (place: SessionPlace, star: Request, answer: SessionAuthz = ownerTurn) => {
+    const askBot = botSays(answer);
+    const decision = await authorize(peer(place), star, { ...deps, askBot });
+    return { decision, action: askBot.mock.calls[0]?.[2] };
+  };
+
   it('maps each ★ request to the check its Bot process runs, and passes its refusal on word for word', async () => {
-    const asked = async (place: SessionPlace, star: Request, answer: SessionAuthz = ownerTurn) => {
-      const askBot = botSays(answer);
-      const decision = await authorize(peer(place), star, { ...deps, askBot });
-      return { decision, action: askBot.mock.calls[0]?.[2] };
-    };
     const act = (action: object) => request('settings', { type: 'act', action });
     expect((await asked('dm', act({ kind: 'voice', botId: BOT, action: { action: 'enable' } }))).action).toEqual({ kind: 'settingsWrite' });
     expect((await asked('dm', request('collaboration', { action: 'createProject', agentId: BOT, name: 'P', folder: { kind: 'default' }, tool: 'codex', conversation: 'shared' }))).action).toEqual({ kind: 'settingsWrite' });
@@ -509,6 +510,27 @@ describe('the bot-session column (unit)', () => {
     expect(closed.decision).toEqual({ ok: false, code: 'permission_denied', message: '结束了', details: { reason: 'turn-ended' } });
   });
 
+  // dm-agent 6.4 and 8. main 必败: an open_id of the session's Bot landed in another Bot's schedules.json
+  it('takes the open_id off a task a private chat makes on another Bot, and keeps the name', async () => {
+    const actor = { kind: 'dm', via: 'cli', openId: 'ou_owner', name: '张三', chatId: 'oc_p2p', messageId: 'om_1' } as const;
+    const create = (botId: string) => request('schedule', { botId, request: { action: 'create', chatId: GROUP, name: '日报', instruction: 'x', spec: { kind: 'daily', time: '09:00' } } });
+    const made = (await asked('dm', create('cli_other'), { ok: true, role: 'admin', openId: 'ou_owner', actor })).decision;
+    expect(made).toMatchObject({ ok: true, grant: { actor: { kind: 'dm', via: 'cli', name: '张三', chatId: 'oc_p2p' } } });
+    expect((made as { grant: { actor: object } }).grant.actor).not.toHaveProperty('openId');
+    expect((made as { grant: { actor: object } }).grant.actor).not.toHaveProperty('messageId');
+    expect((await asked('dm', create(BOT), { ok: true, role: 'admin', openId: 'ou_owner', actor })).decision).toMatchObject({ ok: true, grant: { actor } });
+  });
+
+  it('reaches every chat of every Bot from a private chat, and a group\'s to its own', async () => {
+    const named = (botId: string, chatId: string) => request('schedule', { botId, request: { action: 'list', chatId } });
+    const actor = { kind: 'dm', via: 'cli', openId: 'ou_owner', chatId: 'oc_p2p' } as const;
+    const answer = { ok: true, role: 'admin', openId: 'ou_owner', actor } as const;
+    for (const each of [named('cli_other', 'oc_elsewhere'), named(BOT, OTHER), request('schedule', { botId: 'cli_other', request: { action: 'listBot' } })]) {
+      expect((await asked('dm', each, answer)).decision).toMatchObject({ ok: true });
+    }
+    expect((await asked('group', named(BOT, OTHER), answer)).decision).toMatchObject({ ok: false, code: 'permission_denied' });
+    expect((await asked('group', named('cli_other', GROUP), answer)).decision).toMatchObject({ ok: false, code: 'permission_denied' });
+  });
 });
 
 describe('a Bot session against the daemon', () => {
