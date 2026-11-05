@@ -47,19 +47,22 @@ export type SessionAction =
   | { kind: 'settingsWrite' }
   | { kind: 'adminRead' }
   | { kind: 'memory'; op: 'read'; target: SessionMemoryTarget }
-  | { kind: 'memory'; op: 'add'; target: SessionMemoryTarget; text: string }
-  | { kind: 'memory'; op: 'edit'; item: Pick<MemoryItem, 'scope' | 'source'>; text?: string }
+  /** `otherBot`: a private chat writing another Bot's memory (dm-agent 6.4): its person's open_id is not written there. */
+  | { kind: 'memory'; op: 'add'; target: SessionMemoryTarget; text: string; otherBot?: boolean }
+  | { kind: 'memory'; op: 'edit'; item: Pick<MemoryItem, 'scope' | 'source'>; text?: string; otherBot?: boolean }
+  /** The page's other buttons (restore, move, merge a branch…), a private chat's only (dm-agent 6.2). */
+  | { kind: 'memory'; op: 'manage'; target: SessionMemoryTarget; otherBot?: boolean }
   | { kind: 'schedule'; action: ScheduleRequest['action']; taskId?: string };
 /** Where a session's memory write lands and as whom (memory-authority's decision), with the source fields the tools write. */
 export interface MemoryLanding {
   scope: MemoryItemScope;
   trust: 'trusted' | 'untrusted';
   actor: { role: 'owner' | 'admin' | 'member' | 'bot'; openId?: string };
-  source: { botId: string; turn?: NonNullable<MemorySource['turn']>; chatId?: string; messageId?: string; downgraded?: MemoryDowngrade };
+  source: { botId: string; turn?: NonNullable<MemorySource['turn']>; chatId?: string; messageId?: string; downgraded?: MemoryDowngrade; actorName?: string };
 }
 /** The Bot process's answer: who started the turn (and for a task its actor, for a memory write where it lands), or the refusal with the tools' sentence. */
 export type SessionAuthz =
-  | { ok: true; role: 'owner' | 'admin' | 'member' | 'bot'; openId?: string; actor?: Extract<ScheduleActor, { kind: 'session' | 'scheduled' }>; memory?: MemoryLanding }
+  | { ok: true; role: 'owner' | 'admin' | 'member' | 'bot'; openId?: string; /** the person's union_id (dm-agent 6.4): what another Bot of the same developer can use */ unionId?: string; name?: string; actor?: Extract<ScheduleActor, { kind: 'session' | 'scheduled' }>; memory?: MemoryLanding }
   | { ok: false; reason: string; message: string };
 export type AdminSessionOp = { kind: 'authorizeSessionCall'; sessionId: string; action: SessionAction };
 export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | { kind: 'status' };
@@ -232,7 +235,7 @@ const short = z.string().min(1).max(200);
 /** The answer as the host takes it: anything else, a local actor above all, is refused. */
 export const sessionAuthzSchema: z.ZodType<SessionAuthz> = z.discriminatedUnion('ok', [
   z.object({
-    ok: z.literal(true), role: z.enum(['owner', 'admin', 'member', 'bot']), openId: short.optional(),
+    ok: z.literal(true), role: z.enum(['owner', 'admin', 'member', 'bot']), openId: short.optional(), unionId: short.optional(), name: z.string().max(200).optional(),
     actor: z.discriminatedUnion('kind', [
       // A bot's turn may list its group's tasks: no openId then (and as a member it may create none).
       z.object({ kind: z.literal('session'), openId: z.string().max(200), role: z.enum(['owner', 'admin', 'member']), chatId: short, name: z.string().max(200).optional(), messageId: short.optional() }).strict(),
@@ -247,6 +250,7 @@ export const sessionAuthzSchema: z.ZodType<SessionAuthz> = z.discriminatedUnion(
       source: z.object({
         botId: short, turn: z.object({ kind: z.enum(['human', 'wake', 'initiative', 'retry', 'bot']), steered: z.boolean() }).strict().optional(),
         chatId: short.optional(), messageId: short.optional(), downgraded: z.enum(['member', 'not-human-turn', 'steered', 'not-typed', 'not-in-message', 'quota']).optional(),
+        actorName: z.string().max(200).optional(),
       }).strict(),
     }).strict().optional(),
   }).strict(),

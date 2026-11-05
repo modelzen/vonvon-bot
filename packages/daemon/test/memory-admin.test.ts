@@ -27,6 +27,14 @@ const bot = { kind: 'bot', botId: 'cli_a' } as const;
 const item = (reply: MemoryReply) => { if (reply.kind !== 'item') throw new Error(`expected item, got ${reply.kind}`); return reply; };
 
 describe('the memory RPC on the files', () => {
+  // dm-agent 6.4. main 必败: a landing wrote into the session's own Bot, whichever Bot the request named
+  it('lands a private chat\'s write in the Bot it names, with the person\'s name and no open_id of another app', async () => {
+    const { call } = setup('cli', { scope: { kind: 'bot' }, trust: 'trusted', actor: { role: 'admin' }, source: { botId: 'cli_own', actorName: '张三' } });
+    const added = item(await call({ type: 'add', scope: bot, text: '周四发版' }));
+    expect(added.item).toMatchObject({ trust: 'trusted', source: { botId: 'cli_own', actorRole: 'admin', actorName: '张三' } });
+    expect(added.item.source).not.toHaveProperty('actorOpenId');
+  });
+
   it('lists an empty project with its fixed branches and its limit from the library', async () => {
     const { call } = setup();
     const reply = await call({ type: 'list', scope: project });
