@@ -20,6 +20,8 @@ const fake = vi.hoisted(() => ({
   history: vi.fn(async (..._args: unknown[]) => ({ messages: [] as unknown[], ok: true, complete: true })),
 }));
 vi.mock('../src/bot/steer-delivery', async original => { const real = await original<typeof import('../src/bot/steer-delivery')>(); return { ...real, steerWithDeadline: (thread: any, input: any, id: string) => real.steerWithDeadline(thread, input, id, undefined, 150) }; });
+// F1's profileOf prepares the download folder on the real disk, which fake timers do not wait for.
+vi.mock('../src/bot/media', async original => ({ ...await original<object>(), prepareInboundDir: async () => {} }));
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 // Queue timing uses a deterministic profile; filesystem profile delivery has its own tests.

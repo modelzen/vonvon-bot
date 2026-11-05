@@ -124,6 +124,8 @@ export async function setAnnouncement(channel: Pick<LarkChannel, 'rawClient'>, p
  * `git rev-parse`).
  */
 export async function refreshBranch(channel: LarkChannel, project: Project): Promise<void> {
+  // A private chat has no announcement, and its row is written by chat, not by name (dm-agent 4.2).
+  if (project.dm) return;
   const branch = await currentBranch(project.cwd); // null when not a git repo
   if ((branch ?? '—') === (project.branch ?? '—')) return;
   log.info('project', 'branch-change', { name: project.name, from: project.branch ?? '—', to: branch ?? '—' });

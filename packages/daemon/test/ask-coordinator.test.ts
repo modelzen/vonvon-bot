@@ -419,8 +419,10 @@ it('rejects reused request identity across parent boundaries without answering t
 function sensitive(id = 'secret'): Extract<AskRequest, { kind: 'choices' }> {
   return { ...choices(id), questions: [{ id: 'secret-q', title: '密码', detail: '', selection: 'text', sensitive: true }] };
 }
-function dmInput(openId = 'starter', text = '机密答案', createTime = Date.now()) {
-  return { openId, text, messageId: 'typed-dm', createTime };
+/** A reply to the card this person got; a fixture's first question reaches owner, admin and starter in that order. */
+const DM_CARD: Record<string, string> = { owner: 'dm-1', admin: 'dm-2', starter: 'dm-3' };
+function dmInput(openId = 'starter', text = '机密答案', createTime = Date.now(), quoted = DM_CARD[openId]!) {
+  return { openId, text, quoted, createTime };
 }
 function secretSubmission(id = 'secret', text = '机密答案') {
   return { value: { a: 'ask_submit', requestId: id, decision: 'submit' }, formValue: { q0: text }, chatId: 'p2p-chat' };
@@ -460,13 +462,14 @@ describe('s33b sensitive DM coordination', () => {
       const held = deferred<{ data: { message_id: string } }>();
       f.messageCreate.mockReturnValueOnce(held.promise);
       const turn = f.open(); turn.enqueue(sensitive()); await flush();
-      expect(f.coordinator.dmText(dmInput('owner'))).toBe(false);
+      expect(f.coordinator.dmText(dmInput('owner', '早了', Date.now(), 'late-owner'))).toBe(false);
       await vi.advanceTimersByTimeAsync(1000); held.resolve({ data: { message_id: 'late-owner' } }); await flush();
-      expect(f.coordinator.dmText(dmInput('owner', 'old', Date.now() - 1))).toBe(false);
-      expect(f.coordinator.dmText({ openId: 'owner', text: 'missing timestamp', messageId: 'old' })).toBe(false);
-      expect(f.coordinator.dmText(dmInput('owner', ' \n '))).toBe(false);
+      const replyAt = (text: string, at = Date.now()) => dmInput('owner', text, at, 'late-owner');
+      expect(f.coordinator.dmText(replyAt('old', Date.now() - 1))).toBe(false);
+      expect(f.coordinator.dmText({ openId: 'owner', text: 'missing timestamp', quoted: 'late-owner' })).toBe(false);
+      expect(f.coordinator.dmText(replyAt(' \n '))).toBe(false);
       const answer = '机'.repeat(4001);
-      expect(f.coordinator.dmText(dmInput('owner', ` ${answer} `))).toBe(true); await flush();
+      expect(f.coordinator.dmText(replyAt(` ${answer} `))).toBe(true); await flush();
       expect(f.response).toHaveBeenCalledExactlyOnceWith('secret', { kind: 'answered', answer: { kind: 'text', text: '机'.repeat(4000) } });
       expect(info).toHaveBeenCalledWith('card', 'ask-dm-typed', { len: 4000 });
       for (const calls of [f.create.mock.calls, f.update.mock.calls, f.send.mock.calls, f.messageCreate.mock.calls, info.mock.calls]) expect(JSON.stringify(calls)).not.toContain(answer.slice(0, 100));
@@ -475,20 +478,20 @@ describe('s33b sensitive DM coordination', () => {
     } finally { info.mockRestore(); }
   });
 
-  it('deduplicates multiple-question guidance and rechecks authorization before counting waiting DMs', async () => {
+  it('takes only a reply to the person\'s own card, whichever of several questions it is', async () => {
     const f = fixture(); const one = f.open('one'); const two = f.open('two');
     one.enqueue(sensitive('one')); two.enqueue(sensitive('two')); await flush();
-    expect(f.coordinator.dmText(dmInput('admin'))).toBe(true);
-    expect(f.coordinator.dmText(dmInput('admin'))).toBe(true); await flush();
-    const guidance = f.messageCreate.mock.calls.filter(([input]) => JSON.stringify(input).includes('有 2 个问题'));
-    expect(guidance).toHaveLength(1);
-    expect(guidance[0]).toEqual([expect.objectContaining({ params: { receive_id_type: 'open_id' }, data: expect.objectContaining({ receive_id: 'admin', msg_type: 'text' }) })]);
+    // Plain words, a reply to another message, a reply to someone else's card: none of them answers (main 必败).
+    expect(f.coordinator.dmText(dmInput('admin', '普通的话', Date.now(), 'om_other'))).toBe(false);
+    expect(f.coordinator.dmText(dmInput('admin', '不是我的卡', Date.now(), 'dm-1'))).toBe(false);
     expect(f.response).not.toHaveBeenCalled();
+    expect(f.messageCreate.mock.calls.filter(([input]) => JSON.stringify(input).includes('个问题'))).toEqual([]);
+    expect(f.coordinator.dmText(dmInput('admin', '第二题', Date.now(), 'dm-5'))).toBe(true); await flush();
+    expect(f.response).toHaveBeenCalledExactlyOnceWith('two', { kind: 'answered', answer: { kind: 'text', text: '第二题' } });
     f.cfg.preferences!.access!.admins = [];
-    const count = f.messageCreate.mock.calls.length;
-    expect(f.coordinator.dmText(dmInput('admin'))).toBe(false); expect(f.messageCreate).toHaveBeenCalledTimes(count);
+    expect(f.coordinator.dmText(dmInput('admin', '第一题', Date.now(), 'dm-2'))).toBe(false);
     expect(f.submit('one', 'dm-2', 'admin', secretSubmission('one'))).toBe('denied');
-    expect(f.response).not.toHaveBeenCalled();
+    expect(f.response).toHaveBeenCalledOnce();
     f.coordinator.shutdown(); expect(f.pause.held).toBe(false);
   });
 
@@ -497,9 +500,9 @@ describe('s33b sensitive DM coordination', () => {
     const own = f.open('own'); const bot = f.open('bot', 'bot');
     own.enqueue(sensitive('own')); bot.enqueue(sensitive('bot')); await flush();
     f.cfg.preferences!.access!.admins = [];
-    expect(f.coordinator.dmText(dmInput())).toBe(true);
+    expect(f.coordinator.dmText(dmInput('starter', '机密答案', Date.now(), 'dm-1'))).toBe(true);
     expect(f.response).toHaveBeenCalledExactlyOnceWith('own', { kind: 'answered', answer: { kind: 'text', text: '机密答案' } });
-    expect(f.coordinator.dmText(dmInput())).toBe(false); f.coordinator.shutdown();
+    expect(f.coordinator.dmText(dmInput('starter', '机密答案', Date.now(), 'dm-1'))).toBe(false); f.coordinator.shutdown();
   });
 
   it('settles all failed deliveries and empty eligibility immediately, while partial failures remain answerable', async () => {
@@ -517,7 +520,7 @@ describe('s33b sensitive DM coordination', () => {
     const partialTurn = partial.open(); partialTurn.enqueue(sensitive()); await flush();
     expect(partial.response).not.toHaveBeenCalled(); expect(partial.send).not.toHaveBeenCalled();
     expect(partial.update).not.toHaveBeenCalled(); expect(partial.reply).toHaveBeenCalledTimes(2);
-    expect(partial.coordinator.dmText(dmInput('admin'))).toBe(true); partialTurn.close('stopped');
+    expect(partial.coordinator.dmText(dmInput('admin', '机密答案', Date.now(), 'dm-1'))).toBe(true); partialTurn.close('stopped');
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -526,7 +529,7 @@ describe('s33b sensitive DM coordination', () => {
     const held = [deferred<{ data: { message_id: string } }>(), deferred<{ data: { message_id: string } }>()];
     f.messageCreate.mockReturnValueOnce(held[0]!.promise).mockReturnValueOnce(held[1]!.promise);
     const turn = f.open(); turn.enqueue(sensitive()); await flush();
-    if (winner === 'answered') expect(f.coordinator.dmText(dmInput())).toBe(true);
+    if (winner === 'answered') expect(f.coordinator.dmText(dmInput('starter', '机密答案', Date.now(), 'dm-1'))).toBe(true);
     else if (winner === 'timeout') await vi.advanceTimersByTimeAsync(15 * 60_000);
     else if (winner === 'shutdown') f.coordinator.shutdown();
     else turn.close('stopped');
@@ -534,7 +537,7 @@ describe('s33b sensitive DM coordination', () => {
     expect(f.update).toHaveBeenCalledTimes(4);
     expect(f.submit('secret', 'late-1', 'owner', secretSubmission())).toBe('inactive');
     expect(f.submit('secret', 'late-2', 'admin', secretSubmission())).toBe('inactive');
-    expect(f.coordinator.dmText(dmInput('owner'))).toBe(false); expect(f.response).toHaveBeenCalledOnce();
+    expect(f.coordinator.dmText(dmInput('owner', '机密答案', Date.now(), 'late-1'))).toBe(false); expect(f.response).toHaveBeenCalledOnce();
     expect(f.pause.held).toBe(false); expect(vi.getTimerCount()).toBe(0); turn.close('stopped');
   });
 
@@ -543,10 +546,10 @@ describe('s33b sensitive DM coordination', () => {
     const held = [deferred<{ data: { message_id: string } }>(), deferred<{ data: { message_id: string } }>()];
     f.messageCreate.mockReturnValueOnce(held[0]!.promise).mockReturnValueOnce(held[1]!.promise);
     const turn = f.open(); turn.enqueue(sensitive()); await flush();
-    expect(f.coordinator.dmText(dmInput())).toBe(true);
+    expect(f.coordinator.dmText(dmInput('starter', '机密答案', Date.now(), 'dm-1'))).toBe(true);
     held[0]!.reject(new Error('late delivery rejected')); held[1]!.reject(new Error('late delivery rejected')); await flush();
     expect(f.response).toHaveBeenCalledOnce(); expect(f.update).toHaveBeenCalledTimes(2); expect(f.fault).not.toHaveBeenCalled();
-    expect(f.coordinator.dmText(dmInput('owner'))).toBe(false); turn.close('stopped'); expect(vi.getTimerCount()).toBe(0);
+    expect(f.coordinator.dmText(dmInput('owner', '机密答案', Date.now(), 'late-1'))).toBe(false); turn.close('stopped'); expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(['click', 'typed', 'timeout', 'stopped', 'shutdown'] as const)('allows only %s to win a race with all other terminal paths', async winner => {
@@ -578,5 +581,29 @@ describe('s33b sensitive DM coordination', () => {
     expect(f.coordinator.dmText(dmInput())).toBe(false); await flush();
     expect(f.response).not.toHaveBeenCalled(); expect(f.create).toHaveBeenCalledTimes(4);
     expect(f.pause.held).toBe(false); expect(f.submit('first', 'dm-3', 'starter', secretSubmission('first'))).toBe('inactive'); turn.close('stopped');
+  });
+});
+
+describe('a private chat\'s own question (dm-agent 5)', () => {
+  const ownTurn = (f: ReturnType<typeof fixture>) => f.coordinator.openTurn({ run: f.run, sessionKey: 'session', placement: { chatId: 'chat', replyTo: 'trigger', replyInThread: false, own: true },
+    initiator: { kind: 'user', openId: 'starter' }, idlePause: f.pause, waiting: f.waiting, fault: f.fault });
+
+  it('goes to the window it was asked in, to nobody else: no @, no other admin\'s private chat, a sensitive one with its form (main 必败)', async () => {
+    const f = fixture(); const turn = ownTurn(f); turn.enqueue(sensitive()); await flush();
+    expect(f.create).toHaveBeenCalledOnce(); expect(f.messageCreate).not.toHaveBeenCalled();
+    expect(f.reply.mock.calls.filter(([input]) => input.data.msg_type === 'post')).toEqual([]);
+    const card = JSON.stringify(f.create.mock.calls[0]);
+    expect(card).toContain('form'); expect(card).not.toContain('不在群里显示'); expect(card).not.toContain('可回答');
+    expect(f.waiting).toHaveBeenLastCalledWith(expect.stringContaining('name-starter'), undefined);
+    expect(f.submit('secret', 'msg-1', 'starter', { ...secretSubmission(), chatId: 'chat' })).toBe('accepted');
+    expect(f.response).toHaveBeenCalledExactlyOnceWith('secret', { kind: 'answered', answer: { kind: 'choices', answers: [{ questionId: 'secret-q', text: '机密答案' }] } });
+    turn.close('turn-ended');
+  });
+
+  it('takes typed words as the answer, a sensitive question too: nobody else reads this window', async () => {
+    const f = fixture(); const turn = ownTurn(f); turn.enqueue(sensitive()); await flush();
+    expect(f.typed()).toBe('answered');
+    expect(f.response).toHaveBeenCalledExactlyOnceWith('secret', { kind: 'answered', answer: { kind: 'text', text: '我的回答' } });
+    turn.close('turn-ended');
   });
 });

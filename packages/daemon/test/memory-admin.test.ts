@@ -133,3 +133,39 @@ describe('the memory RPC on the files', () => {
     }
   });
 });
+
+// dm-agent 5 (D3): what the private chat's memory page reads. main 必败.
+describe('the people of a private chat', () => {
+  const dm = (openId: string) => ({ kind: 'dm', botId: 'cli_a', openId }) as const;
+  const seed = (data: string, people: object): void => {
+    mkdirSync(join(data, 'bots', 'cli_a'), { recursive: true });
+    writeFileSync(join(data, 'bots', 'cli_a', 'projects.json'), JSON.stringify({ projects: [
+      { name: '私聊', chatId: 'oc_dm_cli_a', cwd: '/work/dm', blank: true, createdAt: 1, dm: { people } },
+    ] }));
+  };
+
+  it('lists each person of dm.people once, earliest first, with what they have', async () => {
+    const { call, data } = setup();
+    seed(data, { oc_p2p_b: { openId: 'ou_b', at: 20 }, oc_p2p_a: { openId: 'ou_a', name: '张三', at: 10 }, oc_p2p_a2: { openId: 'ou_a', at: 30 } });
+    await call({ type: 'add', scope: dm('ou_a'), text: 'A 的事' });
+    await call({ type: 'add', scope: dm('ou_a'), text: 'A 的另一件事' });
+    expect(await call({ type: 'dmPeople', botId: 'cli_a' })).toEqual({ kind: 'dmPeople', people: [
+      { openId: 'ou_a', name: '张三', at: 10, used: 2 }, { openId: 'ou_b', at: 20, used: 0 },
+    ] });
+  });
+
+  it('has nobody for a bot without a private chat yet, and refuses a bot that does not exist', async () => {
+    const { call } = setup();
+    expect(await call({ type: 'dmPeople', botId: 'cli_a' })).toEqual({ kind: 'dmPeople', people: [] });
+    await expect(call({ type: 'dmPeople', botId: 'cli_x' })).rejects.toThrow();
+  });
+
+  it('keeps each person\'s entries in their own file, listed by their own scope', async () => {
+    const { call } = setup();
+    await call({ type: 'add', scope: dm('ou_a'), text: 'A 的事' });
+    await call({ type: 'add', scope: dm('ou_b'), text: 'B 的事' });
+    const reply = await call({ type: 'list', scope: dm('ou_b') });
+    expect(reply).toMatchObject({ kind: 'list', used: 1, limit: 50 });
+    expect(JSON.stringify(reply)).not.toContain('A 的事');
+  });
+});

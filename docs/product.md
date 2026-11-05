@@ -161,7 +161,7 @@ Provider 的名称不绑定特定品牌。Codex 可执行文件路径配置归�
     memory/usage.json           哪条被用过，尽力写
     memory/integrity.json       bot.json 和 SOUL.md 写完后的哈希，对不上就告警
     memory/originals/           迁移时备份的旧 SOUL.md、AGENTS.md
-    memory/dm/<open_id>.json    每个管理员的私聊记忆
+    memory/dm/<open_id>/        每个管理员的私聊记忆，四个文件和 Bot 记忆一样
     groups/<chatId>/
       SMART.md                  本群智能提示词覆盖
       skills.json  mcp.json     {"add": [...], "remove": [...]}

@@ -6,10 +6,9 @@ import { log, withTrace } from '../core/logger';
 import { bridgeVersion } from '../core/version';
 
 /**
- * p2p (DM) console. Admin-gated (design §5: only admins may create / manage
- * projects). Card-first: any message opens the interactive menu; create / list /
- * remove all happen via card buttons (dm.* actions in handle-message). The
- * console never runs codex.
+ * The private chat's `/menu`. Admin-gated. Card-first: create / list / remove all
+ * happen via card buttons (dm.* actions in handle-message). Everything else a
+ * person writes here goes to their Agent (dm-agent 5); the console runs no session.
  */
 export async function handleDmConsole(channel: LarkChannel, cfg: AppConfig, msg: NormalizedMessage): Promise<void> {
   await withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {

@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { botMemoryLocation, MemoryStore, projectMemoryLocation } from '../src/bot/memory-store';
+import { botMemoryLocation, MemoryStore, projectMemoryLocation, dmMemoryLocation } from '../src/bot/memory-store';
 import { libraryLocation } from '../src/project/library';
 import { deliveredIds, recordUsage, settleTurn } from '../src/bot/turn-usage';
 import { parseUsageMarkers } from '../src/bot/usage-marker';
@@ -63,6 +63,15 @@ describe('the end of a turn', () => {
 
   it('counts a turn without a marker as using nothing', () => {
     expect(settleTurn(context(), '这一轮没用记忆', 5).context.lastTurn).toEqual({ at: 5, injected: 3, used: [] });
+  });
+
+  it('writes a private chat\'s use into its own usage.json (dm-agent 5)', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'usage-marker-')));
+    roots.push(dir);
+    const dm = new MemoryStore(dmMemoryLocation(join(dir, 'bots', 'cli_a'), 'ou_a'));
+    const delivered = { ...context(), memory: { dm: { storeId: 'd_ou_a', branches: [], items: { 'd_ou_a:k2qa': ['x', '其他', 1 as const] as [string, string, 0 | 1] } } } };
+    await recordUsage(delivered, ['d_ou_a:k2qa'], { dm });
+    expect(Object.keys(await dm.readUsage())).toEqual(['d_ou_a:k2qa']);
   });
 
   it('writes usage.json of the memory each id came from, and nothing for an unmarked turn', async () => {
