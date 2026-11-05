@@ -78,7 +78,7 @@ vi.mock('../src/card/run-card-stream', () => ({
 import { createOrchestrator, failureReason } from '../src/bot/handle-message';
 
 const base = { name: 'demo', chatId: 'oc_demo', cwd: workspace, kind: 'multi', noMention: false, mode: 'qa', network: false };
-const cfg = (allowedChats?: string[]): AppConfig => ({ accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', ...(allowedChats ? { allowedChats } : {}) }, completionReminder: { mode: 'manual' } } });
+const cfg = (allowedChats?: string[]): AppConfig => ({ accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'], ...(allowedChats ? { allowedChats } : {}) }, completionReminder: { mode: 'manual' } } });
 const channel = { send: fake.send, rawClient: { im: { v1: { messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) }, message: { get: async () => ({ data: { items: [{ thread_id: 'omt_opened_topic' }] } }) } } } } };
 let orchestrator: ReturnType<typeof createOrchestrator>;
 let events: DiagnosticsEvent[] = [];

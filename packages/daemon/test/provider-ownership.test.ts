@@ -128,7 +128,7 @@ function message(text: string): NormalizedMessage {
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
 function setup(policy: 'steer' | 'queue' = 'steer') {
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' } } };
   const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'new-topic' }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
@@ -146,7 +146,7 @@ function channel() {
     messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) },
   } } } };
 }
-const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } } };
+const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' } } };
 type GroupState = 'present' | 'missing' | 'permission-denied';
 interface Shell {
   child: ChildProcess;

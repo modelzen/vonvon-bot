@@ -39,7 +39,7 @@ async function bot(): Promise<void> {
   const hostApi = createHostIpcCaller(send);
   process.on('message', hostApi.onMessage);
   const entries = createAgentEntries({
-    appId: APP_ID, isAdmin: id => id === ADMIN, isOwner: () => false, chatSettingsOn: () => true,
+    appId: APP_ID, isAdmin: id => id === ADMIN, chatSettingsOn: () => true,
     sessions: { revoke: sessionId => { void hostApi.revokeSessionToken(sessionId).catch(() => {}); } },
     memoryPlace: async () => ({ chatProjectId: PROJECT_A }),
   });

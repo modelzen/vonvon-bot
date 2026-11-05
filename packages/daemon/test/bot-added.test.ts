@@ -20,7 +20,7 @@ const fixture = vi.hoisted(() => ({ send: vi.fn<(...args: unknown[]) => Promise<
 vi.mock('../src/card/managed', () => ({ sendManagedCard: fixture.send, updateManagedCard: vi.fn() }));
 vi.mock('../src/core/logger', () => ({ log: { info: fixture.info, warn: vi.fn(), fail: fixture.fail }, withTrace: (_: unknown, run: () => unknown) => run() }));
 vi.mock('../src/agent', async original => ({ ...await original<object>(), isBackendEntryInstalled: () => true, createBackend: () => ({ id: 'codex-appserver', displayName: 'Codex', listModels: async () => [], fullAccessOnly: () => fixture.fullOnly }) }));
-const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_admin'] } } };
+const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner', 'ou_admin'] } } };
 const file = pendingGroupsFile(paths.projectsFile);
 const pending = () => readPendingGroups(file);
 const stall = () => new Promise<never>(() => {});
@@ -56,7 +56,7 @@ it('s36b 2: sends an administrator their own card', async () => {
 });
 it('s36b 3: retains a guest addition and tells the owner who invited it (main fails)', async () => {
   const { app } = harness(); await app.onBotAddedToChat(event('ou_guest'));
-  expect(fixture.send.mock.calls[0]?.[1]).toBe('ou_owner'); expect(card()).toContain('访客'); expect(card()).toContain('拉我的不是主人或管理员'); expect(await pending()).toEqual([expect.objectContaining({ operator: 'ou_guest' })]);
+  expect(fixture.send.mock.calls[0]?.[1]).toBe('ou_owner'); expect(card()).toContain('访客'); expect(card()).toContain('拉我的不是管理员'); expect(await pending()).toEqual([expect.objectContaining({ operator: 'ou_guest' })]);
 });
 it('s36b 4: missing contact and member names fall back to 有人 (main fails)', async () => {
   const h = harness(); h.batch.mockRejectedValue(new Error('contact')); h.get.mockRejectedValue(new Error('members'));
@@ -92,8 +92,8 @@ it('s36b 12: hung group information expires after three seconds (main fails)', a
   const h = harness(); h.isInChat.mockResolvedValue({ code: 0, data: { is_in_chat: false } }); h.getChatInfo.mockImplementation(stall); vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
   const added = h.app.onBotAddedToChat(event()); await vi.waitFor(() => expect(h.getChatInfo).toHaveBeenCalled()); await vi.advanceTimersByTimeAsync(3000); await added; expect(card()).toContain('一个群（没读到群名）');
 });
-it('s36b 13: with no owner, keeps the candidate without sending', async () => {
-  const { app } = harness({ accounts: cfg.accounts }); await app.onBotAddedToChat(event('ou_guest')); expect(fixture.send).not.toHaveBeenCalled(); expect(await pending()).toHaveLength(1); logged('bot-added-no-owner');
+it('s36b 13: with no administrator, keeps the candidate without sending', async () => {
+  const { app } = harness({ accounts: cfg.accounts }); await app.onBotAddedToChat(event('ou_guest')); expect(fixture.send).not.toHaveBeenCalled(); expect(await pending()).toHaveLength(1); logged('bot-added-no-admin');
 });
 it('s36b 14: a failed private card leaves the candidate and logs the recipient', async () => {
   fixture.send.mockRejectedValue(new Error('private chat unavailable')); const { app } = harness(); await app.onBotAddedToChat(event()); expect(await pending()).toHaveLength(1); expect(fixture.fail).toHaveBeenCalledWith('intake', expect.any(Error), expect.objectContaining({ phase: 'bot-added-bindcard', to: 'adder' }));

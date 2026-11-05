@@ -157,7 +157,7 @@ function coordinatorFixture(run: AgentRun) {
     cardkit: { v1: { card: { create: async () => ({ data: { card_id: `card-${++cards}` } }), update: async () => ({}) } } },
     im: { v1: { message: { reply: async () => ({ data: { message_id: `message-${cards}` } }) } } },
   } };
-  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] } } };
   const coordinator = new AskCoordinator(channel as unknown as LarkChannel, cfg, { peek: () => 'Owner' });
   cleanup.push(async () => coordinator.shutdown());
   const pause = createIdlePause();

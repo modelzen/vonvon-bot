@@ -90,7 +90,7 @@ import type { ShutdownControl } from '../src/host/lifecycle';
 
 const cfg: AppConfig = {
   accounts: { app: { id: 'startup-drain', secret: 'fixture', tenant: 'feishu' } },
-  preferences: { access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } },
+  preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' } },
 };
 
 function deferred<T>() {

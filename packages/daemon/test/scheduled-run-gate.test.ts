@@ -52,7 +52,7 @@ beforeEach(async () => {
   registry = await import('../src/project/registry');
   file = (await import('../src/config/paths')).botPaths(APP).schedulesFile;
   mkdirSync(dirname(file), { recursive: true });
-  const cfg: AppConfig = { accounts: { app: { id: APP, secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } };
+  const cfg: AppConfig = { accounts: { app: { id: APP, secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] } } };
   const { createOrchestrator } = await import('../src/bot/handle-message');
   o = createOrchestrator({ send } as never, cfg, join(root, 'workspace'));
 });

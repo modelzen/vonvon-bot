@@ -92,7 +92,7 @@ function message(text: string): NormalizedMessage {
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
 function setup(showModel: 'off' | 'running' | 'always' = 'always') {
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { showModel, access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { showModel, access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' } } };
   const channel = { send: fake.send, rawClient: { im: { v1: { messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };

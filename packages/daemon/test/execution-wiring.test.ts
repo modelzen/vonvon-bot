@@ -123,7 +123,7 @@ function message(text: string, threadId?: string): NormalizedMessage {
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
 function setup(preferences: AppPreferences = {}, createdTopicId?: string) {
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' }, ...preferences } };
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] }, ...preferences } };
   const ok = async () => ({ code: 0, data: { message_id: `om_${++seq}`, items: [] } });
   const channel = { send: fake.send, rawClient: {
     cardkit: { v1: { card: { create: async ({ data }: { data: { data: string } }) => { fake.cards.push(data.data); return { data: { card_id: 'card' } }; } } } },
@@ -311,7 +311,8 @@ describe('s39a production profile delivery', () => {
     fake.project = { ...fake.project, cwd, directories: { workspaces: { primary: cwd, additional: [extra] } } };
   });
   afterEach(async () => { await rm(root, { recursive: true }); });
-  const roots = (extra: string, repo: string) => [{ path: expect.stringContaining('chats'), access: 'read' }, { path: extra, access: 'write' }, { path: repo, access: 'write' }];
+  const commentRoots = (extra: string, repo: string) => [{ path: extra, access: 'write' }, { path: repo, access: 'write' }];
+  const roots = (extra: string, repo: string) => [{ path: expect.stringContaining('chats'), access: 'read' }, ...commentRoots(extra, repo)];
   it('delivers only group workspaces and inherited repositories to a new topic', async () => {
     await setup({ directories: { workspaces: { primary: botExtra, additional: [botExtra] }, repositories: [repository] } }).onMessage(message('new topic'));
     await vi.waitFor(() => expect(codex.startThread).toHaveBeenCalled());
@@ -374,12 +375,12 @@ describe('s39a production profile delivery', () => {
     const o = setup(preferences);
     const event = { fileType: 'docx', fileToken: 'fixture-doc', commentId: 'comment', replyId: 'one', mentionedBot: true, operator: { openId: 'owner' }, timestamp: Date.now() };
     await o.onComment(event);
-    expect(codex.startThread).toHaveBeenCalledWith(expect.objectContaining({ cwd, profile: expect.objectContaining({ additionalRoots: roots(extra, repository) }) }));
+    expect(codex.startThread).toHaveBeenCalledWith(expect.objectContaining({ cwd, profile: expect.objectContaining({ additionalRoots: commentRoots(extra, repository) }) }));
     // A new orchestrator forces native resume without changing the comment cwd.
     await o.shutdown();
     const resumed = setup({ ...preferences, comments: { model: 'gpt-old' } });
     await resumed.onComment({ ...event, replyId: 'two' });
-    expect(codex.resumeThread).toHaveBeenCalledWith(expect.objectContaining({ cwd, profile: expect.objectContaining({ additionalRoots: roots(extra, repository) }) }));
+    expect(codex.resumeThread).toHaveBeenCalledWith(expect.objectContaining({ cwd, profile: expect.objectContaining({ additionalRoots: commentRoots(extra, repository) }) }));
   });
 
 });

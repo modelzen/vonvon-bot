@@ -20,7 +20,7 @@ function memoryTool(run: AgentTool['run'] = async (_args, ctx) => ({ turn: ctx.t
   return { name: 't_mem', class: 'memory', description: 'fixture memory', input: z.object({}), run };
 }
 function setup(options: { place?: AgentPlace; facts?: TurnFacts; run?: AgentTool['run']; owner?: string; admin?: string[] } = {}) {
-  const entries = createAgentEntries({ appId: 'fixture', isAdmin: id => (options.admin ?? ['ou_o']).includes(id), isOwner: id => id === (options.owner ?? 'ou_o'), tools: [read, memoryTool(options.run)] });
+  const entries = createAgentEntries({ appId: 'fixture', isAdmin: id => (options.admin ?? ['ou_o']).includes(id), tools: [read, memoryTool(options.run)] });
   const entry = entries.issue(options.place ?? { kind: 'group', chatId: 'oc_a' });
   const t = thread();
   entry.attach(t);
@@ -38,8 +38,8 @@ describe('memory tools are authorized by class, not by role', () => {
       facts: { kind: 'human', steered: false, role: 'member', openId: 'ou_m', place: 'group', chatId: 'oc_a', active: true, typed: true, triggerText: '记住 发版改到周四', botWrites: 0 },
     } });
   });
-  it('knows the owner, an admin and a bot-woken turn', async () => {
-    expect(await setup({ facts: { ...member, requesterOpenId: 'ou_o' } }).call()).toMatchObject({ result: { facts: { role: 'owner', kind: 'human' }, turn: { role: 'owner' } } });
+  it('knows an admin and a bot-woken turn', async () => {
+    expect(await setup({ facts: { ...member, requesterOpenId: 'ou_o' } }).call()).toMatchObject({ result: { facts: { role: 'admin', kind: 'human' }, turn: { role: 'admin' } } });
     expect(await setup({ admin: ['ou_a'], facts: { ...member, requesterOpenId: 'ou_a' } }).call()).toMatchObject({ result: { facts: { role: 'admin' } } });
     expect(await setup({ facts: { ...member, requesterKind: 'bot', wake: true } }).call()).toMatchObject({ result: { facts: { role: 'bot', kind: 'wake' } } });
     expect(await setup({ facts: { ...member, initiative: true } }).call()).toMatchObject({ result: { facts: { kind: 'initiative' } } });

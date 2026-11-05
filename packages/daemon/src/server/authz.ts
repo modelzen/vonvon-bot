@@ -92,7 +92,9 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
   // write's sentence (a private chat's turn may do both).
   ...rows('settings', 'read.agent read.session read.project', WRITE),
   ...rows('settings', 'models sessions', DM_READ),
-  ...rows('settings', 'save.agent save.project save.session act.voice act.adminMember act.projectMember act.projectAudience act.commentInstructions', WRITE),
+  ...rows('settings', 'save.agent save.project save.session act.voice act.projectMember act.projectAudience act.commentInstructions', WRITE),
+  // product.md section 6: the list changes in the client and the terminal only, never by chat.
+  ...rows('settings', 'act.adminMember', { dm: 'deny', group: 'not-dm', comment: 'not-dm' }),
   ...rows('collaboration', 'history context project providerModels', { dm: 'host', group: 'deny', comment: 'deny' }),
   // The owner's whole provider account (plan, daily use, use outside vonvon), which no tool shows a session.
   ...rows('collaboration', 'usage'),
@@ -207,15 +209,14 @@ const memoryTarget = (scope: MemoryScopeRef): Extract<SessionAction, { kind: 'me
 
 /**
  * devices-4b 4.3: a ★ row's request as the check its Bot process runs. Settings writes and new or edited groups are
- * authorizeNow's (the administrators also the owner's turn); a private chat's reads `ctx.admin`'s; memory and tasks
+ * authorizeNow's; a private chat's reads `ctx.admin`'s; memory and tasks
  * their own. An item to change is read here, so the Bot process can judge it as its tools do.
  */
 async function sessionActionOf(request: Request, deps: AuthzDeps): Promise<SessionAction | Decision> {
   switch (request.method) {
     case 'settings': {
       const payload = request.payload;
-      if (payload.type === 'act') return { kind: payload.action.kind === 'adminMember' ? 'adminMember' : 'settingsWrite' };
-      return payload.type === 'save' ? { kind: 'settingsWrite' } : { kind: 'adminRead' };
+      return payload.type === 'save' || payload.type === 'act' ? { kind: 'settingsWrite' } : { kind: 'adminRead' };
     }
     case 'command': return { kind: 'adminRead' };
     case 'collaboration': return { kind: 'settingsWrite' };

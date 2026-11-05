@@ -25,7 +25,7 @@ vi.mock('../src/config/keystore', async original=>({...await original<object>(),
 vi.mock('../src/card/managed', () => ({ sendManagedCard: fixture.send, updateManagedCard: vi.fn(async () => true) }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} }, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
 
-const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } };
+const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] } } };
 const bot = { appId: 'cli_fixture', tenant: 'feishu' as const, createdAt: 1, registrationId: 'fixture' };
 beforeEach(async () => {
   await seedBots({ version: 1, bots: [{ ...bot, name: 'fixture' }] });
@@ -161,7 +161,7 @@ it('answers a click delivered again after its group was created with the created
   } finally { await orchestrator.shutdown(); }
 });
 
-it('allows a Feishu application administrator into the DM project creation action', async () => {
+it('keeps a Feishu application administrator off the list out of the DM project creation action (main 必败)', async () => {
   const roles = vi.spyOn(appRoles, 'getAppRoleSnapshot').mockReturnValue({
     appId: bot.appId, tenant: 'feishu', fetchedAt: Date.now(), ownerOpenId: 'ou_app_owner', admins: ['ou_app_admin'],
   });
@@ -170,8 +170,8 @@ it('allows a Feishu application administrator into the DM project creation actio
     const event = submit('Application administrator');
     event.operator = { openId: 'ou_app_admin' };
     await orchestrator.dispatcher.handle(event);
-    expect(await reply(1)).toContain('已创建项目');
-    expect(fake.creates()[0]?.data).toMatchObject({ user_id_list: ['ou_app_admin'] });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(fake.creates()).toEqual([]);
   } finally { await orchestrator.shutdown(); roles.mockRestore(); }
 });
 
