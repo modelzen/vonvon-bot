@@ -407,6 +407,40 @@ describe('the page changing what a private chat runs on (dm-agent 4.1)', () => {
     expect(said()).not.toContain('已不在本群可用范围');
     second.turns[0]!.resolve();
   });
+  it('/new starts on the row\'s default when the model in use left the list, not on a model its first turn would refuse', async () => {
+    const first = thread('native-1'), second = thread('native-2'), be = backend(first, second); be.listModels = async () => [model('old'), model('new')];
+    const { o } = await app();
+    await o.onMessage(message('第一句')); await until(() => expect(first.consumed).toHaveLength(1));
+    first.turns[0]!.resolve(); await settled();
+    await upsertSession({ ...(await getSession(A))!, model: 'old', effort: 'medium' });
+    await save(first, ['new']);
+    await o.onMessage(message('/new')); await until(async () => expect((await getSession(A))?.sessionId).toBe('native-2'));
+    expect(be.startThread.mock.calls.at(-1)?.[0]).toMatchObject({ model: 'new', effort: 'medium' });
+    await o.onMessage(message('第二句')); await until(() => expect(second.consumed).toHaveLength(1));
+    expect(said()).not.toContain('已不在本群可用范围');
+    second.turns[0]!.resolve();
+  });
+  it('/new goes to the row\'s Provider when the session is on another', async () => {
+    const first = thread('native-claude'), second = thread('native-new'), be = backend(first, second); be.listModels = async () => [model('new')];
+    const { o } = await app();
+    await o.onMessage(message('第一句')); await until(() => expect(first.consumed).toHaveLength(1));
+    first.turns[0]!.resolve(); await settled();
+    await upsertSession({ ...(await getSession(A))!, backend: 'claude-agent', model: 'sonnet', effort: 'medium' });
+    await save(first, ['new']);
+    await o.onMessage(message('/new')); await until(async () => expect((await getSession(A))?.sessionId).toBe('native-new'));
+    expect(await getSession(A)).toMatchObject({ backend: BE, model: 'new', effort: 'medium' });
+    expect(said()).not.toContain('已不在本群可用范围');
+  });
+  it('/new keeps the model in use while it stays on the list', async () => {
+    const first = thread('native-1'), second = thread('native-2'), be = backend(first, second); be.listModels = async () => [model('old'), model('new')];
+    const { o } = await app();
+    await o.onMessage(message('第一句')); await until(() => expect(first.consumed).toHaveLength(1));
+    first.turns[0]!.resolve(); await settled();
+    await upsertSession({ ...(await getSession(A))!, model: 'old', effort: 'medium' });
+    await save(first, ['new', 'old']);
+    await o.onMessage(message('/new')); await until(async () => expect((await getSession(A))?.sessionId).toBe('native-2'));
+    expect(be.startThread.mock.calls.at(-1)?.[0]).toMatchObject({ model: 'old' });
+  });
   it('leaves a session alone while its model stays on the list', async () => {
     const first = thread('native-1'), again = thread('native-1'), be = backend(first, again); be.listModels = async () => [model('old'), model('new')];
     const { o } = await app();

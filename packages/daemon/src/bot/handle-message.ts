@@ -4830,7 +4830,7 @@ export function createOrchestrator(
   /**
    * `/new` or `/clear` (single-session groups only, admin-gated): park the current session
    * and rebind the group to a BRAND-NEW backend thread, preserving the session's
-   * model / effort / backend. The parked thread stays on disk (resumable via
+   * model / effort / backend while the group's list allows them. The parked thread stays on disk (resumable via
    * `/resume`) — non-destructive; Feishu chat history is untouched, and the card
    * says so. Reserves the session SYNCHRONOUSLY (like {@link runCompact}) so a
    * message racing in through the SDK's per-chat queue waits (then runs on the new
@@ -4861,15 +4861,18 @@ export function createOrchestrator(
         // Route by the session's backend (fall back to the project's) — a fresh
         // codex thread for a codex session, claude for a claude one. The cwd is the
         // group's current one, not the record's (s36d2).
-        const be = sessionBackendOf(rec, project);
+        const held = sessionBackendOf(rec, project);
+        // What the group's list no longer holds would be refused at the first turn, and this command is the way out of that.
+        const stays = !project?.modelAccess || projectModelAllowed(project, held.id, rec?.model, rec?.effort, await listModels(held));
+        const be = stays ? held : groupBackend(project);
         const cwd = workCwd(project, rec);
         // Carry the session's chosen model/effort into the new thread so /clear
         // resets the CONVERSATION, not the user's model pick; a session without one
         // starts on the default, as its next turn would. Tier (mode/network) comes
         // from the caller's live perm.
-        let model = rec?.model;
-        let effort = rec?.effort;
-        let modelCustom = rec?.modelCustom;
+        let model = stays ? rec?.model : undefined;
+        let effort = stays ? rec?.effort : undefined;
+        let modelCustom = stays ? rec?.modelCustom : undefined;
         if (!model) {
           const prefer = modelPrefOf(project, be.id);
           const picked = await pickGroupDefault(project, be, prefer);
