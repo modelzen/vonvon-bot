@@ -94,7 +94,7 @@ Bot 的群列表最上面多一行"私聊"，打开是和群一样的工作区�
 3. 让两个管理员各私聊一次并记一条，到记忆标签看两个人，打开一个，"新"消失。
 4. 到任务标签新建，选一位管理员，到时间看结果发到他的私聊。到 Bot 的任务页点这条，回到私聊页。
 5. `vonvon settings get --dm --bot <bot>`；`vonvon settings set 'permission.mode="read"' --dm --bot <bot>` 被拒。
-6. `vonvon schedule add --dm --to <openId> --name 早报 --instruction 发今天的安排 --daily 09:00 --bot <bot>`，再 `vonvon schedule list --dm --bot <bot>`。
+6. `vonvon schedule add --dm --to <openId> --name 早报 --daily 09:00 --bot <bot> 发今天的安排`，再 `vonvon schedule list --dm --bot <bot>`。
 
 ### 跑过的命令和结果
 
