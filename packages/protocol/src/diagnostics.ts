@@ -170,6 +170,11 @@ export const FEISHU_TOOL_SCOPE_EFFECTS: Record<string, string> = {
   "sheets:spreadsheet:read": "读不了表格",
   "bitable:app:readonly": "读不了多维表格",
   "drive:file:download": "下载不了云空间文件",
+  "space:document:retrieve": "看不了云空间文件夹里有什么",
+  "wiki:space:retrieve": "看不了知识库和它的目录",
+  "wiki:node:retrieve": "看不了知识库和它的目录",
+  "docs:document.comment:read": "读不了文档评论",
+  "docs:document.media:download": "下载不了文档里的图片和附件",
   "search:message": "搜不了消息",
 };
 export const SCOPE_DENIAL_PLACE_TEXT: Record<ScopeDenialPlace, string> = {

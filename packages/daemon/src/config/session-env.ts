@@ -9,7 +9,7 @@ export const SESSION_ENV = 'VONVON_SESSION';
  * whatever it says.
  */
 export const SESSION_SCOPE_ENV = 'VONVON_SCOPE';
-/** `bot=<appId>` in a private chat or a comment, `bot=<appId>,group=<chatId>` in a group: the most a session reaches. */
+/** `bot=<appId>` in a comment, `bot=<appId>,group=<chatId>` in a group: the most a session reaches. A private chat gets none (dm-agent 6.1). */
 export function sessionScope(appId: string, chatId?: string): string {
   return chatId ? `bot=${appId},group=${chatId}` : `bot=${appId}`;
 }

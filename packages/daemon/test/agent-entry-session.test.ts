@@ -43,9 +43,9 @@ afterEach(() => { vi.clearAllMocks(); });
 
 describe('settings writes and the administrators', () => {
   it('lets an admin\'s private-chat turn write settings, not a member\'s', async () => {
-    expect(await setup(dm, said(OWNER)).ask({ kind: 'settingsWrite' })).toEqual({ ok: true, role: 'admin', openId: OWNER });
-    expect(await setup(dm, said(ADMIN)).ask({ kind: 'settingsWrite' })).toEqual({ ok: true, role: 'admin', openId: ADMIN });
-    expect(await setup(dm, said(MEMBER)).ask({ kind: 'settingsWrite' })).toEqual({ ok: false, reason: 'not-admin', message: '只有管理员发消息触发的那一轮能改设置。' });
+    expect(await setup(dm, said(OWNER)).ask({ kind: 'settingsWrite' })).toEqual({ ok: true, role: 'admin', openId: OWNER, name: '某人' });
+    expect(await setup(dm, said(ADMIN)).ask({ kind: 'settingsWrite' })).toEqual({ ok: true, role: 'admin', openId: ADMIN, name: '某人' });
+    expect(await setup(dm, said(MEMBER)).ask({ kind: 'settingsWrite' })).toEqual({ ok: false, reason: 'not-admin', message: '只有管理员发消息触发的那一轮，或者管理员建的私聊定时任务，能改设置。' });
     expect(await setup(group, said(OWNER)).ask({ kind: 'settingsWrite' })).toEqual({ ok: false, reason: 'not-dm', message: NOT_DM_MESSAGE });
     expect(await setup(dm, { ...said(OWNER), requesterKind: 'bot', wake: true }).ask({ kind: 'settingsWrite' })).toMatchObject({ ok: false, reason: 'not-human-turn' });
   });
@@ -53,7 +53,7 @@ describe('settings writes and the administrators', () => {
   // devices-4b 4.5a: a private chat's read-only queries are the owner's or an admin's, as ctx.admin is for the tools
   it('lets a private chat read the bot\'s settings and groups on an admin\'s turn only', async () => {
     expect(await setup(dm, said(MEMBER)).ask({ kind: 'adminRead' })).toMatchObject({ ok: false, reason: 'not-admin' });
-    expect(await setup(dm, said(ADMIN)).ask({ kind: 'adminRead' })).toEqual({ ok: true, role: 'admin', openId: ADMIN });
+    expect(await setup(dm, said(ADMIN)).ask({ kind: 'adminRead' })).toEqual({ ok: true, role: 'admin', openId: ADMIN, name: '某人' });
     expect(await setup(group, said(OWNER)).ask({ kind: 'adminRead' })).toMatchObject({ ok: false, reason: 'not-dm' });
   });
 });
@@ -84,13 +84,13 @@ describe('a turn that is over', () => {
 describe('scheduled tasks', () => {
   it('gives a group member\'s turn the session actor, as the tools give the chat actor, without the message text', async () => {
     const f = setup(group, said(MEMBER, '每天九点发日报'));
-    expect(await f.ask({ kind: 'schedule', action: 'create' })).toEqual({ ok: true, role: 'member', openId: MEMBER,
+    expect(await f.ask({ kind: 'schedule', action: 'create' })).toEqual({ ok: true, role: 'member', openId: MEMBER, name: '某人',
       actor: { kind: 'session', openId: MEMBER, role: 'member', chatId: 'oc_y', name: '某人', messageId: 'om_1' } });
     expect(await setup(group, said(OWNER)).ask({ kind: 'schedule', action: 'list' })).toMatchObject({ ok: true, actor: { kind: 'session', role: 'admin' } });
   });
 
-  it('refuses outside a group, and keeps a task\'s own run to itself', async () => {
-    expect(await setup(dm, said(OWNER)).ask({ kind: 'schedule', action: 'list' })).toEqual({ ok: false, reason: 'not-group', message: scheduleRefusalMessages['not-group'] });
+  it('refuses in a comment, and keeps a group task\'s own run to itself', async () => {
+    expect(await setup({ kind: 'doc', docId: 'd1' }, said(OWNER)).ask({ kind: 'schedule', action: 'list' })).toEqual({ ok: false, reason: 'not-group', message: scheduleRefusalMessages['not-group'] });
     const run: TurnFacts = { retry: false, initiative: false, wake: false, scheduled: { taskId: 'st_1', runId: 'run_1' } };
     expect(await setup(group, run).ask({ kind: 'schedule', action: 'create' })).toMatchObject({ ok: false, reason: 'no-human-create' });
     expect(await setup(group, run).ask({ kind: 'schedule', action: 'edit', taskId: 'st_2' })).toMatchObject({ ok: false, reason: 'scheduled-run-scope' });
@@ -100,11 +100,87 @@ describe('scheduled tasks', () => {
   });
 });
 
+// dm-agent 6.3. main 必败: a private chat's task was no human turn, and a task or a memory of another Bot had no way through
+describe('a private chat\'s turn', () => {
+  const task = (creator: string): TurnFacts => ({ requesterOpenId: creator, requesterKind: 'user', retry: false, initiative: false, wake: false, scheduled: { taskId: 'st_1', runId: 'run_1' } });
+  const everything = [{ kind: 'settingsWrite' }, { kind: 'adminRead' }] as const;
+
+  it('lets a task of this private chat do what its creator may, while the creator is an admin', async () => {
+    for (const action of everything) {
+      expect(await setup(dm, task(ADMIN)).ask(action)).toMatchObject({ ok: true, role: 'admin', openId: ADMIN });
+      expect(await setup(dm, task(MEMBER)).ask(action)).toMatchObject({ ok: false, reason: 'not-admin' });
+      // no creator on the turn, no rights
+      expect(await setup(dm, { retry: false, initiative: false, wake: false, scheduled: { taskId: 'st_1', runId: 'run_1' } }).ask(action)).toMatchObject({ ok: false, reason: 'not-admin' });
+    }
+    expect(await setup(group, task(ADMIN)).ask({ kind: 'settingsWrite' })).toMatchObject({ ok: false, reason: 'not-dm' });
+  });
+
+  it('runs a task\'s and a person\'s tasks alike, with neither of a group task\'s limits', async () => {
+    expect(await setup(dm, task(ADMIN)).ask({ kind: 'schedule', action: 'create' })).toMatchObject({ ok: true, actor: { kind: 'scheduled', chatId: 'oc_dm' } });
+    expect(await setup(dm, task(ADMIN)).ask({ kind: 'schedule', action: 'edit', taskId: 'st_2' })).toMatchObject({ ok: true });
+    expect(await setup(dm, said(ADMIN)).ask({ kind: 'schedule', action: 'create' })).toMatchObject({ ok: true, actor: { kind: 'session', role: 'admin', chatId: 'oc_dm' } });
+    expect(await setup(dm, said(MEMBER)).ask({ kind: 'schedule', action: 'list' })).toMatchObject({ ok: false, reason: 'not-admin' });
+  });
+
+  it('refuses a turn nobody asked for, and one that ended', async () => {
+    const wake = { ...said(ADMIN), requesterKind: 'bot' as const, wake: true };
+    for (const action of [...everything, { kind: 'schedule', action: 'list' }, { kind: 'memory', op: 'read', target: { kind: 'bot' } }] as const) {
+      expect(await setup(dm, wake).ask(action)).toMatchObject({ ok: false, reason: 'not-human-turn' });
+      const f = setup(dm, task(ADMIN));
+      f.scope!.close();
+      expect(await f.ask(action)).toEqual(ended);
+    }
+  });
+
+  it('keeps memory to an admin\'s turn, where a group\'s members may read theirs', async () => {
+    expect(await setup(dm, said(MEMBER)).ask({ kind: 'memory', op: 'read', target: { kind: 'bot' } })).toMatchObject({ ok: false, reason: 'not-admin' });
+    expect(await setup(group, said(MEMBER)).ask({ kind: 'memory', op: 'read', target: { kind: 'bot' } })).toMatchObject({ ok: true });
+  });
+
+  it('says on its grant who asked, the union_id another Bot pulls them in by', async () => {
+    expect(await setup(dm, { ...said(ADMIN), requesterUnionId: 'on_person' }).ask({ kind: 'settingsWrite' })).toEqual({ ok: true, role: 'admin', openId: ADMIN, unionId: 'on_person', name: '某人' });
+  });
+
+  it('writes any project the request names, not only those of this Bot\'s groups', async () => {
+    const f = setup(dm, said(ADMIN, '记住 周四发版'), { memoryPlace: { botProjectIds: ['prj_0000000a'] } });
+    expect(await f.ask({ kind: 'memory', op: 'add', target: { kind: 'project', projectId: 'prj_elsewhere' }, text: '周四发版', otherBot: true }))
+      .toMatchObject({ ok: true, memory: { scope: { kind: 'project', projectId: 'prj_elsewhere' } } });
+    const item = { scope: { kind: 'project' as const, projectId: 'prj_elsewhere' }, source: { via: 'tool' as const, botId: 'cli_y', actorRole: 'admin' as const } };
+    expect(await f.ask({ kind: 'memory', op: 'edit', item, otherBot: true })).toMatchObject({ ok: true, memory: { scope: item.scope } });
+    // a group's stays to its own
+    expect(await setup(group, said(ADMIN)).ask({ kind: 'memory', op: 'add', target: { kind: 'project', projectId: 'prj_elsewhere' }, text: 'x' })).toMatchObject({ ok: false, reason: 'not-allowed-here' });
+  });
+
+  // dm-agent 6.4
+  it('writes another Bot\'s memory under a name, no open_id', async () => {
+    const f = setup(dm, said(ADMIN, '记住 先写结论'));
+    const landed = await f.ask({ kind: 'memory', op: 'add', target: { kind: 'bot' }, text: '先写结论', otherBot: true });
+    expect(landed).toMatchObject({ ok: true, memory: { scope: { kind: 'bot' }, trust: 'trusted', actor: { role: 'admin' }, source: { actorName: '某人' } } });
+    expect((landed as { memory: { actor: object } }).memory.actor).not.toHaveProperty('openId');
+    const own = await setup(dm, said(ADMIN, '记住 先写结论')).ask({ kind: 'memory', op: 'add', target: { kind: 'bot' }, text: '先写结论' });
+    expect(own).toMatchObject({ ok: true, memory: { actor: { role: 'admin', openId: ADMIN } } });
+    expect((own as { memory: { source: object } }).memory.source).not.toHaveProperty('actorName');
+  });
+
+  it('refuses another Bot\'s memory rather than land what the gate turned down in this Bot\'s project', async () => {
+    const f = setup(dm, said(ADMIN, '你好'), { memoryPlace: { botProjectIds: ['prj_0000000a'] } });
+    expect(await f.ask({ kind: 'memory', op: 'add', target: { kind: 'bot' }, text: '先写结论', otherBot: true })).toEqual({ ok: false, reason: 'not-allowed-here', message: decisionMessages['not-allowed-here'] });
+    // its own Bot's goes where the tools would put it
+    expect(await f.ask({ kind: 'memory', op: 'add', target: { kind: 'bot' }, text: '先写结论' })).toMatchObject({ ok: true, memory: { scope: { kind: 'dm' }, source: { downgraded: 'not-in-message' } } });
+  });
+
+  it('lands the page\'s other buttons where the request says, as the person who asked', async () => {
+    expect(await setup(dm, said(ADMIN)).ask({ kind: 'memory', op: 'manage', target: { kind: 'bot' } }))
+      .toMatchObject({ ok: true, memory: { scope: { kind: 'bot' }, trust: 'trusted', actor: { role: 'admin', openId: ADMIN }, source: { botId: 'cli_x', chatId: 'oc_dm' } } });
+    expect(await setup(group, said(ADMIN)).ask({ kind: 'memory', op: 'manage', target: { kind: 'bot' } })).toMatchObject({ ok: false, reason: 'not-dm' });
+  });
+});
+
 describe('memory: where a command-line write lands, by the tools\' rules', () => {
   // devices-4b acceptance: main 必败 (D4a refused --bot outright; the tools land a member's in the project)
   it('lands a member\'s --bot in its group\'s project, untrusted, and an admin\'s typed words in the bot\'s', async () => {
     const member = setup(group, said(MEMBER, '记住 周四发版'));
-    expect(await member.ask({ kind: 'memory', op: 'add', target: { kind: 'bot' }, text: ' 周四发版 ' })).toEqual({ ok: true, role: 'member', openId: MEMBER, memory: {
+    expect(await member.ask({ kind: 'memory', op: 'add', target: { kind: 'bot' }, text: ' 周四发版 ' })).toEqual({ ok: true, role: 'member', openId: MEMBER, name: '某人', memory: {
       scope: { kind: 'project', projectId: 'prj_0000000a' }, trust: 'untrusted', actor: { role: 'member', openId: MEMBER },
       source: { botId: 'cli_x', turn: { kind: 'human', steered: false }, chatId: 'oc_y', messageId: 'om_1', downgraded: 'member' },
     } });
@@ -122,7 +198,7 @@ describe('memory: where a command-line write lands, by the tools\' rules', () =>
 
   it('gives a bot\'s turn the bot role, and a group with no project the tools\' sentence', async () => {
     const bot = setup(group, { ...said(MEMBER), requesterKind: 'bot', requesterOpenId: 'ou_bot' });
-    expect(await bot.ask({ kind: 'memory', op: 'read', target: { kind: 'project', projectId: 'prj_0000000a' } })).toEqual({ ok: true, role: 'bot', openId: 'ou_bot' });
+    expect(await bot.ask({ kind: 'memory', op: 'read', target: { kind: 'project', projectId: 'prj_0000000a' } })).toEqual({ ok: true, role: 'bot', openId: 'ou_bot', name: '某人' });
     expect(await setup(group, said(MEMBER), { memoryPlace: {} }).ask({ kind: 'memory', op: 'add', target: { kind: 'bot' }, text: 'x' }))
       .toEqual({ ok: false, reason: 'no-project', message: decisionMessages['no-project'] });
     expect(await setup(group, said(MEMBER)).ask({ kind: 'memory', op: 'add', target: { kind: 'project', projectId: 'prj_0000000b' }, text: 'x' }))
@@ -130,15 +206,16 @@ describe('memory: where a command-line write lands, by the tools\' rules', () =>
   });
 
   it('keeps a private chat\'s memory to the turn\'s own person', async () => {
-    const f = setup(dm, said(MEMBER));
-    expect(await f.ask({ kind: 'memory', op: 'read', target: { kind: 'dm', openId: MEMBER } })).toEqual({ ok: true, role: 'member', openId: MEMBER });
+    const f = setup(dm, said(ADMIN));
+    expect(await f.ask({ kind: 'memory', op: 'read', target: { kind: 'dm', openId: ADMIN } })).toEqual({ ok: true, role: 'admin', openId: ADMIN, name: '某人' });
     for (const action of [
       { kind: 'memory', op: 'read', target: { kind: 'dm', openId: OWNER } },
       { kind: 'memory', op: 'add', target: { kind: 'dm', openId: OWNER }, text: 'x' },
       { kind: 'memory', op: 'edit', item: { scope: { kind: 'dm', openId: OWNER }, source: { via: 'tool', botId: 'cli_x', actorRole: 'owner' } } },
+      { kind: 'memory', op: 'manage', target: { kind: 'dm', openId: OWNER } },
     ] as const) expect(await f.ask(action)).toEqual({ ok: false, reason: 'out-of-scope', message: decisionMessages['out-of-scope'] });
-    expect(await f.ask({ kind: 'memory', op: 'add', target: { kind: 'dm', openId: MEMBER }, text: '我喜欢短回复' }))
-      .toMatchObject({ ok: true, memory: { scope: { kind: 'dm', openId: MEMBER }, actor: { role: 'member', openId: MEMBER } } });
+    expect(await f.ask({ kind: 'memory', op: 'add', target: { kind: 'dm', openId: ADMIN }, text: '我喜欢短回复' }))
+      .toMatchObject({ ok: true, memory: { scope: { kind: 'dm', openId: ADMIN }, actor: { role: 'admin', openId: ADMIN } } });
   });
 
   it('lets a member change only its own project item, and no bot item', async () => {

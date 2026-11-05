@@ -88,7 +88,7 @@ export function parseScope(spec: string): Scope {
   if (!scope.bot) throw wrong();
   return { bot: scope.bot, ...(scope.group ? { group: scope.group } : {}) };
 }
-program.option('--scope <spec>', "The Bot session's scope, bot=<appId>[,group=<chatId>]; a Bot session's commands must carry it: --scope \"$VONVON_SCOPE\"");
+program.option('--scope <spec>', "The Bot session's scope, bot=<appId>[,group=<chatId>]; a group's or a comment's session must carry it: --scope \"$VONVON_SCOPE\". A private chat's needs none");
 program.hook('preAction', async (_command, action) => {
   const path = commandPath(action);
   const supervised = path === 'daemon run' && typeof process.send === 'function';

@@ -92,8 +92,14 @@ describe('who may do what', () => {
     expect(f.execute).not.toHaveBeenCalled();
     expect(await reply(f, 'schedule_list')).toMatchObject({ kind: 'tasks' });
   });
-  it.each([['a private chat', { kind: 'p2p', chatId: 'oc_dm' }], ['a comment', { kind: 'doc', docId: 'doc' }]] as const)('has no task tools in %s', async (_case, place) => {
-    const f = await scheduleFixture({ place });
+  // C2 lists them in a private chat, where its turn now passes (dm-agent 6.3)
+  it('lists no task tools in a private chat yet', async () => {
+    const f = await scheduleFixture({ place: { kind: 'p2p', chatId: 'oc_dm' } });
+    f.open(human());
+    expect(f.entry.tools().filter(spec => spec.name.startsWith('schedule_'))).toEqual([]);
+  });
+  it('has no task tools in a comment', async () => {
+    const f = await scheduleFixture({ place: { kind: 'doc', docId: 'doc' } });
     f.open(human());
     expect(f.entry.tools().filter(spec => spec.name.startsWith('schedule_'))).toEqual([]);
     for (const name of ['schedule_list', 'schedule_create']) {
