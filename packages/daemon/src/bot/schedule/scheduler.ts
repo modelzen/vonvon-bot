@@ -43,7 +43,7 @@ const MISSED_CAP = 10_000;            // a stored missed count of 10000 reads "1
 const MAX_ERROR_UNITS = 200;          // scheduleRunRecordSchema.error
 const MAX_EXCERPT_UNITS = 500;        // lastResult.excerpt
 const GATE_ERRORS: Record<FailGate | 'gate-error', string> = {
-  unbound: '群已解绑', 'tier-unavailable': '本群的权限档现在用不了', 'admin-removed': '创建人已不是管理员', 'gate-error': '运行前检查出错',
+  unbound: '群已解绑', 'tier-unavailable': '权限档现在用不了', 'admin-removed': '创建人已不是管理员', 'gate-error': '运行前检查出错',
 };
 const INVALID_OUTCOME = '运行结果无效';
 const SKIP_REASONS: readonly string[] = ['disabled', 'updating', 'held'] satisfies SkipGate[];

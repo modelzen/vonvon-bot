@@ -413,7 +413,7 @@ owner 2026-11-05 定（方案三）：私聊里 Bot 有权限的飞书操作都�
 
 - `placeScheduled`（`:9840`）写死的 `chatType: 'group'` 按 `project.dm` 取。`getProjectByChatId` 已经能找到私聊（第 4.2 节），`ruleKind` 是 `single`，走主区一条会话，不开话题。
 - 工具不变：在私聊里调任务工具，任务建在这个私聊。
-- 给群建任务走命令行：`vonvon schedule create --bot B --group X`。`schedule-commands.ts` 的 `ScheduleActor` 加 `kind: 'dm'`（`{ openId?, name?, chatId }`），跳过 `request.chatId !== actor.chatId` 这条。`not-group` 的文字只留给评论。
+- 给群建任务走命令行：`vonvon schedule add --bot B --group X`。`schedule-commands.ts` 的 `ScheduleActor` 加 `kind: 'dm'`（`{ openId?, name?, chatId }`），跳过 `request.chatId !== actor.chatId` 这条。`not-group` 的文字只留给评论。
 - 跨 Bot 建的任务 `createdBy` 不写 open_id（第 6.4 节）。
 - 群任务建好以后就是普通的群任务，按群的权限档跑，3.13 的规则不变。
 - `pausedReason` 加 `admin-removed`。任务页显示"创建人已不是管理员"。
@@ -429,25 +429,26 @@ owner 2026-11-05 定（方案三）：私聊里 Bot 有权限的飞书操作都�
 export function builtinSkillsOfSet(set: 'group' | 'dm'): BuiltinSkill[] {
   switch (set) {
     case 'group': return [scheduleSkill, feishuSkill];
-    case 'dm': return [scheduleSkill, feishuSkill, configSkill];
+    case 'dm': return [dmScheduleSkill, dmFeishuSkill, configSkill];
   }
 }
 ```
 
-`thread.ts:120` 的 `BUILTIN_SKILL_NAMES` 取两组的并集。
+`thread.ts:120` 的 `BUILTIN_SKILL_NAMES` 取两组的并集。两组的 `vonvon-schedule`、`vonvon-feishu` 名字相同，私聊用自己的文字：群的文字照旧不教命令行（`settings-dm-only`），私聊的任务、读取范围和写操作都和群不一样，写在一起会把另一边的规矩教给这一边。
 
-- **`vonvon-feishu`**：合并 `vonvon-feishu-message` 的卡片、图片、文件做法，加读取工具的用法。写操作照旧，不提 lark-cli 的取舍。
+- **`vonvon-feishu`**：合并 `vonvon-feishu-message` 的卡片、图片、文件做法，加读取工具的用法。写操作照旧，不提 lark-cli 的取舍。升级后老名字的 `SKILL.md` 由 `writeBuiltinPackage` 在下次开会话时清掉，不留两份。
+- **`vonvon-schedule`**：群的文字不变。私聊的写明任务建在这个私聊，给群建任务用 `vonvon schedule add --bot B --group X`，定时回合和人在场时一样。
 - **`vonvon-config`**：只教能力，不写 Agent 该怎么判断。内容：
   - `vonvon` 的完整路径；
   - 先用 `--help` 和 `vonvon bot list`、`vonvon group list`、`vonvon settings` 看现状，不要背设置项；
-  - `--bot`、`--group`、`--dm` 怎么指定目标；
+  - `--bot`、`--group`、`--dm` 怎么指定目标；不写就是这个 Bot（私聊看得到所有 Bot，会话多带一个 `VONVON_BOT`，`pickBot` 没给 `--bot` 时用它）；
   - 群设置改完下一轮生效，Skill 和 MCP 要等新会话（3.6）；
   - Bot 自己进不了已有的群，要用户拉；
   - 哪些事这里做不了，告诉用户去哪里做（第 6.2 节）；
   - 调"老抢话"这类问题要看什么：用读取工具看群里的记录，用命令行看群的沟通方式和智能提示词。
 - **`vonvon` 要保证找得到**：桌面版启动时已经注册命令（`packages/desktop/src/cli-registration.ts`：Mac 写进 shell 启动文件，Windows 写用户 PATH），Linux 服务端也有 PATH 块。但这靠会话的 shell 读到那些文件：注册可能失败，开发版不注册，非登录的 shell 不读，daemon 在注册之前起来时也拿不到新的 PATH。修法不依赖它们：
-  - Bot 进程启动时写启动器 `<data>/bin/vonvon`（Windows 写 `vonvon.cmd`），内容是 `process.execPath` 加 `selfEntry()`，daemon 带 `ELECTRON_RUN_AS_NODE` 时也写进去。每次启动重写，升级后跟着变。
-  - **所有会话**（不只私聊）的 `profile.env` 把这个目录加到 `PATH` 最前面，并设 `VONVON_CLI=<完整路径>`。两家都认 `profile.env`（Codex 的 `shell_environment_policy.set`、Claude 的 `sessionClaudeEnv`）。
+  - Bot 进程启动时写启动器 `<data>/bin/vonvon`（Windows 写 `vonvon.cmd`，旁边再放一个 `vonvon`：Claude 在 Windows 上的 Bash 是 Git Bash，不认 `.cmd`），内容是 `process.execPath` 加 `selfEntry()`，daemon 带 `ELECTRON_RUN_AS_NODE` 时也写进去。每次启动重写，升级后跟着变。写失败只记日志，这个 Bot 的会话不设这两个变量，和以前一样。
+  - **所有会话**（不只私聊）都找得到：Bot 启动时把这个目录加到自己进程的 `PATH` 最前面，会话继承；`profile.env` 设 `VONVON_CLI=<完整路径>`。不用 `profile.env` 设 `PATH`：Codex 的 `shell_environment_policy.set` 是整个替换，会丢掉 Provider 给子进程补的工具目录（Codex 自己的目录、nvm）。
   - `vonvon-config` 直接写 `vonvon`，找不到时用 `$VONVON_CLI`。
   - 验收时 Mac、Windows、Linux 各用两家跑一次 `vonvon --version`。
 

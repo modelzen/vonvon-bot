@@ -39,7 +39,7 @@ import { createCommandTools } from '../../src/agent/entry/command-tools';
 import type { SessionProfile } from '../../src/agent/session-profile';
 import type { AgentBackend, AgentEntry, AgentThread } from '../../src/agent/types';
 
-export type Skill = 'vonvon-schedule' | 'vonvon-feishu-message';
+export type Skill = 'vonvon-schedule' | 'vonvon-feishu';
 export interface Case { id: string; text: string; want: Skill | null }
 
 /** The messages: 9 for each skill, 5 that open neither (two of them near a skill's words). */
@@ -53,15 +53,15 @@ const CASES: Case[] = [
   { id: 's7', want: 'vonvon-schedule', text: '每隔两小时检查一下线上告警，有问题就在群里说' },
   { id: 's8', want: 'vonvon-schedule', text: '把周报那个任务改成每周五下午 4 点' },
   { id: 's9', want: 'vonvon-schedule', text: '部署完了，你过半小时回来看看日志有没有报错' },
-  { id: 'f1', want: 'vonvon-feishu-message', text: '用卡片总结一下这次改动：登录页改版、修了导出的乱码、接口超时从 10 秒改成 30 秒' },
-  { id: 'f2', want: 'vonvon-feishu-message', text: '把报告文件发给我' },
-  { id: 'f3', want: 'vonvon-feishu-message', text: '截个图放上来' },
-  { id: 'f4', want: 'vonvon-feishu-message', text: '把 Redis、Memcached、本地缓存三个方案的优缺点做成表格发群里' },
-  { id: 'f5', want: 'vonvon-feishu-message', text: '做一张本周的 changelog 卡片' },
-  { id: 'f6', want: 'vonvon-feishu-message', text: '把刚才生成的 CSV 导出给我下载' },
-  { id: 'f7', want: 'vonvon-feishu-message', text: '回复里把关键风险用红色标出来：数据库迁移没有回滚脚本、证书下周过期' },
-  { id: 'f8', want: 'vonvon-feishu-message', text: '画个部署架构图放到回复里' },
-  { id: 'f9', want: 'vonvon-feishu-message', text: '帮我把这周的进展整理成周报，用标题和分隔线排好版：完成支付对账、上线灰度、修复 3 个线上问题' },
+  { id: 'f1', want: 'vonvon-feishu', text: '用卡片总结一下这次改动：登录页改版、修了导出的乱码、接口超时从 10 秒改成 30 秒' },
+  { id: 'f2', want: 'vonvon-feishu', text: '把报告文件发给我' },
+  { id: 'f3', want: 'vonvon-feishu', text: '截个图放上来' },
+  { id: 'f4', want: 'vonvon-feishu', text: '把 Redis、Memcached、本地缓存三个方案的优缺点做成表格发群里' },
+  { id: 'f5', want: 'vonvon-feishu', text: '做一张本周的 changelog 卡片' },
+  { id: 'f6', want: 'vonvon-feishu', text: '把刚才生成的 CSV 导出给我下载' },
+  { id: 'f7', want: 'vonvon-feishu', text: '回复里把关键风险用红色标出来：数据库迁移没有回滚脚本、证书下周过期' },
+  { id: 'f8', want: 'vonvon-feishu', text: '画个部署架构图放到回复里' },
+  { id: 'f9', want: 'vonvon-feishu', text: '帮我把这周的进展整理成周报，用标题和分隔线排好版：完成支付对账、上线灰度、修复 3 个线上问题' },
   { id: 'n1', want: null, text: '解释一下这段代码：`const total = items.reduce((sum, item) => sum + item.price, 0)`' },
   { id: 'n2', want: null, text: '帮我看下这个 bug：登录成功后跳到了 404 页面，可能是什么原因' },
   { id: 'n3', want: null, text: '今天天气怎么样' },
@@ -70,7 +70,7 @@ const CASES: Case[] = [
 ];
 
 const APP_ID = 'cli_eval';
-const SKILLS: Skill[] = ['vonvon-schedule', 'vonvon-feishu-message'];
+const SKILLS: Skill[] = ['vonvon-schedule', 'vonvon-feishu'];
 /** A group turn as vonvon hands it over (bot/context-weave.ts): the record block, then the message. */
 const turnText = (text: string) => `[飞书 · 群「研发群」· 主区 · 你是「小码」]\n09:58 李四：下午三点发版\n[/飞书]\n${text}`;
 

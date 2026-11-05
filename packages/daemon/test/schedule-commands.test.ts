@@ -101,6 +101,15 @@ describe('a private chat', () => {
     expect(await f.run(local, create({ chatId: 'oc_nowhere' }))).toMatchObject({ kind: 'task' });
   });
 
+  it('says 这个私聊, not 本群, about a task a private chat does not have', async () => {
+    const f = await setup([stored('st_c', { chatId: DM })], { kind: 'not-found' }, chats);
+    const notFound = refusal('not-found', '这个私聊没有这个任务。');
+    expect(await f.run(person, { action: 'pause', chatId: DM, taskId: 'st_gone' })).toEqual(notFound);
+    expect(await f.run(person, { action: 'edit', chatId: DM, taskId: 'st_gone', revision: 'r', patch: { name: 'x' } })).toEqual(notFound);
+    expect(await f.run(person, { action: 'runNow', chatId: DM, taskId: 'st_c' })).toEqual(notFound);
+    expect(await f.run(person, { action: 'pause', chatId: G, taskId: 'st_gone' })).toEqual(refusal('not-found', '本群没有这个任务。'));
+  });
+
   it('marks a private chat\'s task in every view, and stores no mark', async () => {
     const chatOf = vi.fn(chats!);
     const f = await setup([stored('st_a', { chatId: DM }), stored('st_b', { chatId: DM }), stored('st_c')], undefined, chatOf);

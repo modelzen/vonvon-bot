@@ -469,7 +469,7 @@ it('checks the gate before the running rule: tier-unavailable during a run is a 
   const { scheduler, store, notifyGateFailure } = setup(undefined, { run: () => pending.promise, gate: () => gate });
   await begin(scheduler); await tick(scheduler, A + MIN);
   gate = 'tier-unavailable'; await tick(scheduler, A + 2 * MIN);
-  expect(store.get('st_test')?.recent).toContainEqual(expect.objectContaining({ status: 'failed', slot: A + 2 * MIN, error: '本群的权限档现在用不了' }));
+  expect(store.get('st_test')?.recent).toContainEqual(expect.objectContaining({ status: 'failed', slot: A + 2 * MIN, error: '权限档现在用不了' }));
   expect(store.get('st_test')?.recent).not.toContainEqual(expect.objectContaining({ reason: 'running' }));
   expect(store.get('st_test')?.counts).toMatchObject({ consecutiveFailures: 1, skipped: 0 });
   expect(notifyGateFailure).toHaveBeenCalledTimes(1);
