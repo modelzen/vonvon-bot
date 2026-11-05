@@ -147,6 +147,13 @@ export const DOC_READ_SCOPES = ['docs:document.content:read', 'docx:document:rea
 export const SHEET_READ_SCOPES = ['sheets:spreadsheet:read'] as const;
 export const BITABLE_READ_SCOPES = ['bitable:app:readonly'] as const;
 export const DRIVE_READ_SCOPES = ['drive:file:download'] as const;
+/** What a folder holds (`drive/v1/files`). */
+export const DRIVE_LIST_SCOPES = ['space:document:retrieve'] as const;
+/** The knowledge bases and their tree. Finding a page from its link is `wiki:wiki:readonly`, in {@link DOC_READ_SCOPES}. */
+export const WIKI_READ_SCOPES = ['wiki:space:retrieve', 'wiki:node:retrieve'] as const;
+/** Also in {@link COMMENT_SCOPES}, which the first link has preselected since before these tools. */
+export const COMMENT_READ_SCOPES = ['docs:document.comment:read'] as const;
+export const DOC_MEDIA_SCOPES = ['docs:document.media:download'] as const;
 /** Changing a document as the Bot (the tool comes with F3). */
 export const DOC_EDIT_SCOPES = ['docx:document:write_only'] as const;
 export const MESSAGE_SEARCH_SCOPES = ['search:message'] as const;
@@ -160,6 +167,10 @@ export const FEISHU_TOOL_SCOPES = [
   ...SHEET_READ_SCOPES,
   ...BITABLE_READ_SCOPES,
   ...DRIVE_READ_SCOPES,
+  ...DRIVE_LIST_SCOPES,
+  ...WIKI_READ_SCOPES,
+  ...COMMENT_READ_SCOPES,
+  ...DOC_MEDIA_SCOPES,
   ...MESSAGE_SEARCH_SCOPES,
 ] as const;
 
@@ -216,6 +227,10 @@ export const SCOPE_LABELS: Record<string, string> = {
   'sheets:spreadsheet:read': '读取表格内容',
   'bitable:app:readonly': '读取多维表格内容',
   'drive:file:download': '下载云空间文件',
+  'space:document:retrieve': '查看云空间文件夹里的文件',
+  'wiki:space:retrieve': '查看知识库列表',
+  'wiki:node:retrieve': '查看知识库目录',
+  'docs:document.media:download': '下载文档里的图片和附件',
   'docx:document:write_only': '修改 Bot 有编辑权限的文档',
   'search:message': '搜索消息',
 };

@@ -4,11 +4,11 @@ import { Readable } from 'node:stream';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { createCommandTools } from '../src/agent/entry/command-tools';
-import { feishuDocToolNames, feishuToolNames } from '../src/agent/entry/feishu-tools';
+import { feishuDocToolNames, feishuReadToolNames, feishuToolNames } from '../src/agent/entry/feishu-tools';
 import { createAgentEntries, type AgentPlace } from '../src/agent/entry/registry';
 import { TOOL_RESULT_BYTES } from '../src/agent/entry/tools';
 import type { AgentThread, PermissionMode } from '../src/agent/types';
-import { BITABLE_READ_SCOPES, DOC_EDIT_SCOPES, DOC_READ_SCOPES, DRIVE_READ_SCOPES, FEISHU_TOOL_SCOPES, GRANT_SCOPES, MESSAGE_SEARCH_SCOPES, REQUIRED_SCOPES, SCOPE_LABELS, SHEET_READ_SCOPES } from '../src/config/scopes';
+import { BITABLE_READ_SCOPES, COMMENT_READ_SCOPES, DOC_EDIT_SCOPES, DOC_MEDIA_SCOPES, DOC_READ_SCOPES, DRIVE_READ_SCOPES, FEISHU_TOOL_SCOPES, GRANT_SCOPES, MESSAGE_SEARCH_SCOPES, REQUIRED_SCOPES, SCOPE_LABELS, SHEET_READ_SCOPES, WIKI_READ_SCOPES } from '../src/config/scopes';
 import { inboundChatDir } from '../src/bot/media';
 import { AFTER_GRANT, notSharedReply, readableFailure, readOnlyReply, refusalOf, type ReadArea } from '../src/feishu-read/denial';
 import { parseRef } from '../src/feishu-read/documents';
@@ -39,7 +39,7 @@ function channel(calls: Record<string, (...args: never[]) => unknown> = {}) {
     im: { v1: { message: { list: fake('list'), get: fake('get') }, messageResource: { get: fake('resource') }, chat: { get: fake('chat') } } },
     docx: { v1: { chatAnnouncementBlock: { list: fake('announcement') } } },
     wiki: { v2: { space: { getNode: fake('node') } } },
-    drive: { v1: { file: { download: fake('download') } } },
+    drive: { v1: { file: { download: fake('download') }, media: { download: fake('media') } } },
   };
   return { client, channel: { rawClient: client, botIdentity: { openId: 'ou_me', name: '小码' } } as unknown as LarkChannel };
 }
@@ -518,6 +518,211 @@ describe('feishu_search', () => {
   });
 });
 
+describe('feishu_folder', () => {
+  const file = { name: '周报.docx', type: 'docx', token: 'dox1', url: 'https://x.feishu.cn/docx/dox1', modified_time: '1700000000', owner_id: 'ou_a' };
+  it('lists a folder, by link or token, and says the next page', async () => {
+    const t = reader({ request: async () => ({ code: 0, data: { files: [file, { name: '捷径', type: 'shortcut', token: 'sc1', shortcut_info: { target_type: 'docx', target_token: 'dox2' } }], has_more: true, next_page_token: 'p2' } }) });
+    const page = await t.read.folder({ folder: 'https://x.feishu.cn/drive/folder/fldToken?from=a' });
+    expect(t.client.request).toHaveBeenCalledWith({ method: 'GET', url: '/open-apis/drive/v1/files', params: { folder_token: 'fldToken', page_size: 100 } });
+    expect(page.items).toMatchObject([{ name: '周报.docx', type: 'docx', token: 'dox1', url: file.url, owner: 'ou_a', modified: expect.stringContaining('2023') }, { name: '捷径', shortcutTo: { type: 'docx', token: 'dox2' } }]);
+    expect(page.cursor).toBe('0:p2');
+    await t.read.folder({ folder: 'fldToken', cursor: page.cursor! });
+    expect(t.client.request).toHaveBeenLastCalledWith({ method: 'GET', url: '/open-apis/drive/v1/files', params: { folder_token: 'fldToken', page_size: 100, page_token: 'p2' } });
+  });
+  it('without a folder lists the Bot\'s root, and a root too long for one result goes on by skipping', async () => {
+    const big = Array.from({ length: 40 }, (_, index) => ({ ...file, token: `f${index}`, name: 'n'.repeat(TOOL_RESULT_BYTES / 20) }));
+    const t = reader({ request: async () => ({ code: 0, data: { files: big } }) });
+    const first = await t.read.folder({});
+    expect(t.client.request).toHaveBeenCalledWith({ method: 'GET', url: '/open-apis/drive/v1/files', params: { page_size: 100 } });
+    expect(first.cursor).toMatch(/^\d+:$/);
+    const second = await t.read.folder({ cursor: first.cursor! });
+    expect((second.items[0] as { token: string }).token).toBe(`f${first.items.length}`);
+    expect(JSON.stringify(first).length).toBeLessThan(TOOL_RESULT_BYTES);
+  });
+  it('sends another kind of link to its tool, without asking Feishu', async () => {
+    const t = reader();
+    await expect(t.read.folder({ folder: 'https://x.feishu.cn/docx/dox' })).rejects.toThrow('feishu_doc');
+    await expect(t.read.folder({ folder: 'https://x.feishu.cn/wiki/wik' })).rejects.toThrow('feishu_wiki');
+    await expect(t.read.folder({ folder: 'https://x.feishu.cn/slides/s' })).rejects.toThrow('其他类型');
+    expect(t.client.request).not.toHaveBeenCalled();
+    await expect(t.read.doc({ doc: 'https://x.feishu.cn/drive/folder/fld' })).rejects.toThrow('feishu_folder');
+    await expect(t.read.doc({ doc: 'https://x.feishu.cn/wiki/space/123' })).rejects.toThrow('feishu_wiki');
+  });
+  it('says a folder is not shared in a folder\'s words, and a made-up one is not found', async () => {
+    await expect(reader({ request: async () => ({ code: 1061004, msg: 'forbidden' }) }).read.folder({ folder: 'fld' })).rejects.toThrow('这个文件夹还没分享给 Bot。在文件夹右上角的分享里搜「小码」');
+    await expect(reader({ request: async () => ({ code: 1061003, msg: 'not found' }) }).read.folder({ folder: 'fld' })).rejects.toThrow('找不到这个文件夹');
+  });
+});
+
+describe('feishu_wiki', () => {
+  const page = { title: '入门', node_token: 'wikA', obj_token: 'doxA', obj_type: 'docx', node_type: 'origin', has_child: true, obj_edit_time: '1700000000' };
+  const located = async () => ({ data: { node: { obj_token: 'doxA', obj_type: 'docx', space_id: '123', node_token: 'wikA' } } });
+  it('lists the knowledge bases the Bot can see', async () => {
+    const t = reader({ request: async () => ({ code: 0, data: { items: [{ space_id: '123', name: '产品库', description: '说明', space_type: 'team', visibility: 'private' }], has_more: true, page_token: 'p2' } }) });
+    expect(await t.read.wiki({})).toEqual({ items: [{ id: '123', name: '产品库', description: '说明', type: 'team', visibility: 'private' }], cursor: '0:p2' });
+    expect(t.client.request).toHaveBeenCalledWith({ method: 'GET', url: '/open-apis/wiki/v2/spaces', params: { page_size: 50 } });
+  });
+  it('lists a knowledge base from its link or id, without looking for a page', async () => {
+    const t = reader({ request: async () => ({ code: 0, data: { items: [page] } }) });
+    const { items } = await t.read.wiki({ wiki: 'https://x.feishu.cn/wiki/space/123' });
+    expect(items).toMatchObject([{ title: '入门', token: 'wikA', objToken: 'doxA', type: 'docx', hasChildren: true, edited: expect.stringContaining('2023') }]);
+    await t.read.wiki({ wiki: '123' });
+    await t.read.wiki({ wiki: 'https://x.feishu.cn/wiki/settings/123' });
+    for (const call of t.client.request.mock.calls) expect(call).toEqual([{ method: 'GET', url: '/open-apis/wiki/v2/spaces/123/nodes', params: { page_size: 50 } }]);
+    expect(t.client.wiki.v2.space.getNode).not.toHaveBeenCalled();
+  });
+  it('lists the pages under a page, finding its knowledge base first', async () => {
+    const t = reader({ node: located, request: async () => ({ code: 0, data: { items: [] } }) });
+    await t.read.wiki({ wiki: 'https://x.feishu.cn/wiki/wikA' });
+    await t.read.wiki({ wiki: 'wikA' });
+    expect(t.client.wiki.v2.space.getNode).toHaveBeenCalledWith({ params: { token: 'wikA' } });
+    expect(t.client.request).toHaveBeenLastCalledWith({ method: 'GET', url: '/open-apis/wiki/v2/spaces/123/nodes', params: { parent_node_token: 'wikA', page_size: 50 } });
+  });
+  it('follows a shortcut to where it points', async () => {
+    const t = reader({ node: async () => ({ data: { node: { obj_token: 'dox', obj_type: 'docx', space_id: '1', node_token: 'wikS', origin_space_id: '2', origin_node_token: 'wikO' } } }), request: async () => ({ code: 0, data: { items: [] } }) });
+    await t.read.wiki({ wiki: 'wikS' });
+    expect(t.client.request).toHaveBeenCalledWith({ method: 'GET', url: '/open-apis/wiki/v2/spaces/2/nodes', params: { parent_node_token: 'wikO', page_size: 50 } });
+  });
+  it('asks for the wiki scopes, and says a base is not open to the Bot in a base\'s words', async () => {
+    const t = reader({ request: async () => denied('wiki:wiki', 'wiki:wiki:readonly', 'wiki:space:retrieve') });
+    const missing = await t.read.wiki({}).catch((failure: Error) => failure.message);
+    expect(missing).toContain(encodeURIComponent(WIKI_READ_SCOPES.join(',')));
+    expect(missing).toContain(AFTER_GRANT);
+    await expect(reader({ request: async () => ({ code: 131006, msg: 'permission denied' }) }).read.wiki({ wiki: '123' })).rejects.toThrow('这个知识库还没对 Bot 开放');
+    await expect(reader({ request: async () => ({ code: 131005, msg: 'not found' }) }).read.wiki({ wiki: '123' })).rejects.toThrow('找不到这个知识库或页面');
+  });
+  it('sends a folder link to its tool', async () => {
+    await expect(reader().read.wiki({ wiki: 'https://x.feishu.cn/drive/folder/fld' })).rejects.toThrow('feishu_folder');
+  });
+});
+
+describe('feishu_comments', () => {
+  const reply = (id: string, words: string, user = 'ou_a') => ({ reply_id: id, user_id: user, create_time: 1_700_000_000, content: { elements: [{ type: 'text_run', text_run: { text: words } }] } });
+  const comment = { comment_id: 'c1', quote: '原文', is_whole: false, is_solved: true, has_more: true,
+    reply_list: { replies: [{ ...reply('r1', '看这里 '), content: { elements: [{ type: 'text_run', text_run: { text: '看这里 ' } }, { type: 'person', person: { user_id: 'ou_b' } }, { type: 'docs_link', docs_link: { url: 'https://x.feishu.cn/docx/d' } }] }, extra: { image_list: ['img1'] } }, reply('r2', '好')] } };
+  const names = (client: { contact?: unknown }) => { client.contact = { v3: { user: { batch: async () => ({ data: { items: [{ open_id: 'ou_a', name: '张三' }, { open_id: 'ou_b', name: '李四' }] } }) } } }; };
+  it('turns a document\'s comments into readable rows, with real names when they can be had', async () => {
+    const t = reader({ request: async () => ({ code: 0, data: { items: [comment], has_more: true, page_token: 'p2' } }) });
+    names(t.client as never);
+    const page = await t.read.comments({ doc: 'https://x.feishu.cn/docx/doxToken' });
+    expect(t.client.request).toHaveBeenCalledWith({ method: 'GET', url: '/open-apis/drive/v1/files/doxToken/comments', params: { file_type: 'docx', user_id_type: 'open_id', page_size: 100 } });
+    expect(page.cursor).toBe('0:p2');
+    expect(page.items).toMatchObject([{ id: 'c1', quote: '原文', whole: false, solved: true, moreReplies: true, replies: [
+      { id: 'r1', sender: '张三', senderId: 'ou_a', time: expect.stringContaining('2023'), text: '看这里 @李四https://x.feishu.cn/docx/d', images: ['img1'] }, { id: 'r2', text: '好' }] }]);
+  });
+  it('keeps the open_id when a name cannot be had', async () => {
+    const t = reader({ request: async () => ({ code: 0, data: { items: [comment] } }) });
+    expect((await t.read.comments({ doc: 'dox' })).items).toMatchObject([{ replies: [{ sender: 'ou_a', text: '看这里 @ou_bhttps://x.feishu.cn/docx/d' }, { sender: 'ou_a' }] }]);
+  });
+  it('filters on solved, and reads one comment\'s replies', async () => {
+    const t = reader({ request: async () => ({ code: 0, data: { items: [reply('r3', '第三条')], has_more: true, page_token: 'p2' } }) });
+    await t.read.comments({ doc: 'dox', solved: false });
+    expect(t.client.request).toHaveBeenLastCalledWith({ method: 'GET', url: '/open-apis/drive/v1/files/dox/comments', params: { file_type: 'docx', user_id_type: 'open_id', is_solved: false, page_size: 100 } });
+    const replies = await t.read.comments({ doc: 'dox', comment: 'c1' });
+    expect(t.client.request).toHaveBeenLastCalledWith({ method: 'GET', url: '/open-apis/drive/v1/files/dox/comments/c1/replies', params: { file_type: 'docx', user_id_type: 'open_id', page_size: 100 } });
+    expect(replies).toMatchObject({ items: [{ id: 'r3', text: '第三条' }], cursor: '0:p2' });
+    await expect(t.read.comments({ doc: 'dox', comment: 'c1', solved: true })).rejects.toThrow('solved 只用于');
+  });
+  it.each([['https://x.feishu.cn/sheets/t', 'sheet'], ['https://x.feishu.cn/base/t', 'bitable'], ['https://x.feishu.cn/file/t', 'file'], ['https://x.feishu.cn/docs/t', 'doc'], ['https://x.feishu.cn/slides/t', 'slides']])('takes the file type from %s', async (link, type) => {
+    const t = reader({ request: async () => ({ code: 0, data: { items: [] } }) });
+    await t.read.comments({ doc: link });
+    expect(t.client.request).toHaveBeenCalledWith(expect.objectContaining({ url: '/open-apis/drive/v1/files/t/comments', params: expect.objectContaining({ file_type: type }) }));
+  });
+  it('takes a bare token\'s type from the request', async () => {
+    const t = reader({ request: async () => ({ code: 0, data: { items: [] } }) });
+    await t.read.comments({ doc: 'tok', type: 'sheet' });
+    expect(t.client.request).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ file_type: 'sheet' }) }));
+  });
+  it('reads a knowledge-base page as its real object, also from a bare token that is not found as a document', async () => {
+    const node = async () => ({ data: { node: { obj_token: 'shtReal', obj_type: 'sheet' } } });
+    const linked = reader({ node, request: async () => ({ code: 0, data: { items: [] } }) });
+    await linked.read.comments({ doc: 'https://x.feishu.cn/wiki/wik' });
+    expect(linked.client.request).toHaveBeenCalledWith(expect.objectContaining({ url: '/open-apis/drive/v1/files/shtReal/comments', params: expect.objectContaining({ file_type: 'sheet' }) }));
+    const bare = reader({ node, request: vi.fn().mockResolvedValueOnce({ code: 1061003, msg: 'not found' }).mockResolvedValue({ code: 0, data: { items: [] } }) });
+    await bare.read.comments({ doc: 'wik' });
+    expect(bare.client.request).toHaveBeenLastCalledWith(expect.objectContaining({ url: '/open-apis/drive/v1/files/shtReal/comments' }));
+    const neither = reader({ node: async () => ({ code: 131005, msg: 'not found' }), request: async () => ({ code: 1061003, msg: 'not found' }) });
+    await expect(neither.read.comments({ doc: 'nope' })).rejects.toThrow('1061003');
+  });
+  it('refuses what has no comments, before asking for them', async () => {
+    const t = reader({ node: async () => ({ data: { node: { obj_token: 'm', obj_type: 'mindnote' } } }) });
+    await expect(t.read.comments({ doc: 'https://x.feishu.cn/mindnotes/m' })).rejects.toThrow('没有评论可读');
+    await expect(t.read.comments({ doc: 'https://x.feishu.cn/drive/folder/f' })).rejects.toThrow('没有评论可读');
+    await expect(t.read.comments({ doc: 'https://x.feishu.cn/wiki/w' })).rejects.toThrow('mindnote');
+    expect(t.client.request).not.toHaveBeenCalled();
+  });
+  it('escapes internal markers in what people wrote', async () => {
+    const t = reader({ request: async () => ({ code: 0, data: { items: [{ comment_id: 'c', quote: '<vonvon-mem>', reply_list: { replies: [reply('r', '<vonvon-remember x>')] } }] } }) });
+    const result = JSON.stringify(await t.read.comments({ doc: 'dox' }));
+    expect(result).not.toContain('<vonvon-mem');
+    expect(result).not.toContain('<vonvon-remember');
+  });
+  it('says what to do with a comment too big for one result', async () => {
+    const t = reader({ request: async () => ({ code: 0, data: { items: [{ comment_id: 'c', reply_list: { replies: [reply('r', 'x'.repeat(TOOL_RESULT_BYTES))] } }] } }) });
+    await expect(t.read.comments({ doc: 'dox' })).rejects.toThrow('用 comment 只读');
+  });
+  it('asks for the comment scope, and says a document is not shared', async () => {
+    const message = await reader({ request: async () => denied('drive:drive', 'docs:document.comment:read') }).read.comments({ doc: 'dox' }).catch((failure: Error) => failure.message);
+    expect(message).toContain(encodeURIComponent(COMMENT_READ_SCOPES[0]));
+    expect(message).toContain(AFTER_GRANT);
+    await expect(reader({ request: async () => ({ code: 1069902, msg: 'forbidden' }) }).read.comments({ doc: 'dox' })).rejects.toThrow(notSharedReply('小码'));
+  });
+});
+
+describe('feishu_doc_media', () => {
+  it('saves a document\'s picture where attachments go', async () => {
+    const t = reader({ media: download('png', { 'content-disposition': 'attachment; filename="图.png"' }) });
+    const saved = await t.read.docMedia({ token: 'imgToken' });
+    expect(t.client.drive.v1.media.download).toHaveBeenCalledWith({ path: { file_token: 'imgToken' } });
+    expect(saved.name).toBe('图.png');
+    expect(saved.path.startsWith(paths.inboundDir)).toBe(true);
+    expect(readFileSync(saved.path, 'utf8')).toBe('png');
+  });
+  it('uses the given name, and the group\'s folder in a group; a comment\'s session uses the shared one, like feishu_drive_file', async () => {
+    const GROUP: AgentPlace = { kind: 'group', chatId: HERE };
+    const inGroup = await tools({ media: download('x') }, GROUP, { tier: 'qa' }).call('feishu_doc_media', { token: 'imgToken', name: '封面.png' }) as { result: { path: string; name: string } };
+    expect(inGroup.result).toMatchObject({ name: '封面.png' });
+    expect(inGroup.result.path.startsWith(inboundChatDir(HERE))).toBe(true);
+    const inDoc = await tools({ media: download('x') }, { kind: 'doc', docId: 'd' }).inTurn('feishu_doc_media', { token: 'imgToken' }) as { result: { path: string } };
+    expect(inDoc.result.path.startsWith(paths.inboundDir)).toBe(true);
+    expect(inDoc.result.path.startsWith(inboundChatDir(HERE))).toBe(false);
+  });
+  it('refuses a link, saying where the token is', async () => {
+    const t = reader();
+    await expect(t.read.docMedia({ token: 'https://x.feishu.cn/docx/dox' })).rejects.toThrow('<img token=');
+    expect(t.client.drive.v1.media.download).not.toHaveBeenCalled();
+  });
+  it('holds to the size limit', async () => {
+    await expect(reader({ media: download('x', { 'content-length': String(60 * 1024 * 1024) }) }).read.docMedia({ token: 'big' })).rejects.toThrow('没下载成');
+  });
+  it('reads a refusal out of the stream a download asks for', async () => {
+    const refused = async () => { throw Object.assign(new Error('Request failed with status code 400'), { response: { status: 400, data: Readable.from([Buffer.from(JSON.stringify(denied('docs:document.media:download')))]) } }); };
+    const message = await reader({ media: refused }).read.docMedia({ token: 'img' }).catch((failure: Error) => failure.message);
+    expect(message).toContain(encodeURIComponent(DOC_MEDIA_SCOPES[0]));
+    await expect(reader({ media: async () => { throw Object.assign(new Error('403'), { response: { status: 403, data: Readable.from([Buffer.from('{"code":1061004,"msg":"forbidden"}')]) } }); } }).read.docMedia({ token: 'img' })).rejects.toThrow(notSharedReply('小码'));
+  });
+});
+
+describe('where F5\'s tools read (7.2)', () => {
+  const answers = { request: async () => ({ code: 0, data: { items: [], files: [] } }) };
+  const calls: [string, unknown][] = [['feishu_folder', {}], ['feishu_wiki', {}], ['feishu_comments', { doc: 'dox' }]];
+  it('are listed for a comment\'s session, and read in a read-only group, a private chat and a comment', async () => {
+    const GROUP: AgentPlace = { kind: 'group', chatId: HERE };
+    for (const name of ['feishu_folder', 'feishu_wiki', 'feishu_comments', 'feishu_doc_media']) {
+      expect(feishuDocToolNames).toContain(name);
+      expect(feishuReadToolNames).toContain(name);
+    }
+    for (const [name, args] of calls) {
+      expect(await tools(answers, GROUP, { tier: 'qa' }).call(name, args)).toMatchObject({ ok: true });
+      expect(await tools(answers, { kind: 'p2p', chatId: 'oc_dm' }).call(name, args)).toMatchObject({ ok: true });
+      expect(await tools(answers, { kind: 'doc', docId: 'd' }).inTurn(name, args)).toMatchObject({ ok: true });
+    }
+  });
+  it('are not for a private chat that is not an administrator\'s', async () => {
+    for (const [name, args] of calls) expect(await tools(answers, { kind: 'p2p', chatId: 'oc_dm' }, { admin: false }).call(name, args)).toMatchObject({ ok: false });
+  });
+});
+
 describe('the replies when there is no permission (7.5)', () => {
   const context = { app: { id: 'cli_fixture', tenant: 'feishu' as const }, botName: () => '小码' };
   it('links to the scope Feishu names when it is outside the area\'s group, and to the group when Feishu names none', () => {
@@ -533,7 +738,7 @@ describe('the replies when there is no permission (7.5)', () => {
     expect(readOnlyReply('小码')).toBe('Bot 对这篇文档只有阅读权限。在文档右上角的分享里搜「小码」，给编辑权限。');
   });
   it('covers every area', () => {
-    for (const area of ['history', 'resource', 'chat', 'announcement', 'doc', 'docEdit', 'sheet', 'base', 'drive', 'search'] satisfies ReadArea[]) {
+    for (const area of ['history', 'resource', 'chat', 'announcement', 'doc', 'docEdit', 'sheet', 'base', 'drive', 'folder', 'wiki', 'comments', 'docMedia', 'search'] satisfies ReadArea[]) {
       expect(refusalOf(context, area, denied()).message).toContain(AFTER_GRANT);
     }
   });
@@ -548,6 +753,9 @@ describe('parseRef', () => {
     expect(parseRef('https://x.feishu.cn/base/bas?table=tblA&view=vewB')).toEqual({ kind: 'bitable', token: 'bas', tableId: 'tblA', viewId: 'vewB' });
     expect(parseRef('https://x.feishu.cn/bitable/bas')).toEqual({ kind: 'bitable', token: 'bas' });
     expect(parseRef('https://x.feishu.cn/wiki/wik?table=tblA')).toEqual({ kind: 'wiki', token: 'wik', tableId: 'tblA' });
+    expect(parseRef('https://x.feishu.cn/drive/folder/fld?from=a')).toEqual({ kind: 'folder', token: 'fld' });
+    expect(parseRef('https://x.feishu.cn/wiki/space/123')).toEqual({ kind: 'space', token: '123' });
+    expect(parseRef('https://x.feishu.cn/wiki/settings/123')).toEqual({ kind: 'space', token: '123' });
   });
 });
 
@@ -753,9 +961,9 @@ describe('the permission groups (6.5)', () => {
       expect(SCOPE_LABELS[scope], scope).toBeTruthy();
     }
   });
-  it('stay out of the one-click link, apart from the wiki scope comments already use', () => {
+  it('stay out of the one-click link, apart from the two scopes comments already use', () => {
     for (const scope of FEISHU_TOOL_SCOPES) {
-      if (scope === 'wiki:wiki:readonly') continue;
+      if (scope === 'wiki:wiki:readonly' || scope === 'docs:document.comment:read') continue;
       expect(GRANT_SCOPES as readonly string[]).not.toContain(scope);
     }
   });
