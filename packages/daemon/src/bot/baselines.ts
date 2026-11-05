@@ -33,7 +33,7 @@ export interface AudienceLookups {
 
 const rawSenderSchema = z.object({ sender: z.object({
   sender_type: z.string().optional(),
-  sender_id: z.object({ open_id: z.string().optional(), app_id: z.string().optional() }).optional(),
+  sender_id: z.object({ open_id: z.string().optional(), union_id: z.string().optional(), app_id: z.string().optional() }).optional(),
 }).optional() });
 
 /** Parse sender identity at the raw receive-event boundary. */

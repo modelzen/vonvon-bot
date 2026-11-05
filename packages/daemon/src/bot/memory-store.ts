@@ -824,19 +824,24 @@ function sameScope(a: MemoryItemScope, b: MemoryItemScope): boolean {
  * 移层：项目 → Bot（`promoted`，只有主人）、Bot → 项目（`moved`）。两份记忆各有各的互斥，锁序不让同时拿两把，
  * 所以先在目标里加、再归档来源，不是一个原子操作：加成功、归档失败时把目标里刚加的撤掉。
  * 来源里的出处（谁说的、哪个群）原样带过去，`via` 记成 `promoted` / `moved`，`fromItemId` 指回原条目。
+ * 跨 Bot（`otherBot`）时 open_id 不带过去，那边用不了，只留名字（dm-agent 6.4）。
  */
 export async function transferItem(input: {
   from: MemoryStore; to: MemoryStore; itemId: string; revision: number; via: 'promoted' | 'moved'; branch?: string; actor: MemoryActor;
+  otherBot?: { actorName?: string };
 }): Promise<ItemResult> {
   const item = await input.from.get(input.itemId);
   if (!item) return { ok: false, reason: 'not-found', message: '没有这条记忆' };
   if (item.revision !== input.revision) return { ok: false, reason: 'conflict', message: '这条记忆已经被别处改过了', current: item };
   if (item.state !== 'active') return { ok: false, reason: 'archived', message: '这条记忆已归档' };
+  const { actorOpenId: _openId, ...withoutOpenId } = item.source;
+  const name = item.source.actorName ?? input.otherBot?.actorName;
+  const carried = input.otherBot ? { ...withoutOpenId, ...(name ? { actorName: name } : {}) } : item.source;
   const added = await input.to.add({
     text: item.text, branch: input.branch ?? item.branch, existingOnly: true, actor: input.actor,
     // 主人把它挪进 Bot 记忆，就是主人认可的；挪回项目保持原来的信任
     trust: input.via === 'promoted' ? 'trusted' : item.trust,
-    source: { ...item.source, via: input.via, fromItemId: item.id },
+    source: { ...carried, via: input.via, fromItemId: item.id },
     eventKind: input.via === 'promoted' ? 'promote' : 'move',
   });
   if (!added.ok) return added;

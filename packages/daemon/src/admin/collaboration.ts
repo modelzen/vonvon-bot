@@ -1,4 +1,5 @@
 import {groupDecisionSchema, type GroupDecision} from '@vonvon/protocol';
+import { z } from 'zod';
 import { isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
 import { sessionModeOf, type Project, type SessionMode } from '../project/registry';
@@ -6,10 +7,13 @@ import { groupBackendId } from '../config/execution';
 import { InvalidGroupInput, SMART_NO_MENTION } from './groups';
 import { SHARE_SECTIONS, type ShareSectionKey } from '../card/usage-cards';
 import { isProjectId } from '../project/library';
+import type { GroupInvitee } from '../project/lifecycle';
 
+/** Set by the daemon for a group made from a private chat: not a field any client sends (dm-agent 6.4). */
+const inviteeSchema = z.object({ idType: z.enum(['open_id', 'union_id']), id: z.string().min(1).max(200) }).strict();
 export type ProjectTarget = { projectName: string; chatId: string };
 export type CollaborationRequest =
-  | { action: 'createProject'; requestId: string; name: string; directory?: string; /** join this library project instead of making one (project/library.ts) */ project?: string; kind: SessionMode; noMention?: boolean; judge?: GroupDecision; backend: 'codex-appserver' | 'claude-agent' }
+  | { action: 'createProject'; requestId: string; name: string; directory?: string; /** join this library project instead of making one (project/library.ts) */ project?: string; kind: SessionMode; noMention?: boolean; judge?: GroupDecision; /** who the group is for; left out, the bot's primary admin */ invitee?: GroupInvitee; backend: 'codex-appserver' | 'claude-agent' }
   | ({ [K in 'project' | 'history']: { action: K } & ProjectTarget }['project' | 'history'])
   | ({ action: 'shareUsage'; sections?: ShareSectionKey[] } & ProjectTarget)
   | ({ action: 'editProject'; expectedRevision: string; directory?: string; /** 换到别的项目: this library project's id */ project?: string; kind?: SessionMode; enabled?: boolean } & ProjectTarget)
@@ -36,7 +40,7 @@ export function projectView(project: Project) {
 export function parseCollaborationRequest(raw: Record<string, unknown>): CollaborationRequest {
   const str = (key: string, max = 4096) => typeof raw[key] === 'string' && (raw[key] as string).trim().length > 0 && (raw[key] as string).length <= max && !(key === 'objective' ? /[\x00-\x08\x0b\x0c\x0e-\x1f]/ : /[\x00-\x1f]/).test(raw[key] as string);
   const allowed: Record<string, string[]> = {
-    createProject: ['requestId','name','directory','project','kind','noMention','backend','judge'], project: [], history: [], shareUsage: ['sections'],
+    createProject: ['requestId','name','directory','project','kind','noMention','backend','judge','invitee'], project: [], history: [], shareUsage: ['sections'],
     editProject: ['expectedRevision','directory','project','kind','enabled'], removeProject: ['expectedRevision'],
     context: ['threadId'], clear: ['threadId'], compact: ['threadId'], resume: ['sessionId','backend'],
     startGoal: ['threadId','objective'], stop: ['threadId','runId'], stopSubagent: ['threadId','runId','subagentId'], endGoal: ['threadId','runId'], reminder: ['threadId','runId','requested'], usage: ['force'],
@@ -47,12 +51,13 @@ export function parseCollaborationRequest(raw: Record<string, unknown>): Collabo
   const keys = ['action', ...allowed[action]!, ...(target ? ['projectName','chatId'] : [])];
   if (Object.keys(raw).some(key => !keys.includes(key)) || (target && (!str('projectName',200) || !str('chatId',204) || !/^oc_[\w-]+$/.test(raw.chatId as string)))) throw new InvalidGroupInput('项目标识无效');
   for (const key of allowed[action]!) {
-    if (key === 'sections' || key === 'judge') continue;
+    if (key === 'sections' || key === 'judge' || key === 'invitee') continue;
     if (['directory','project','kind','noMention','enabled','force'].includes(key) && raw[key] === undefined) continue;
     if (['noMention','enabled','force','requested'].includes(key)) { if (typeof raw[key] !== 'boolean') throw new InvalidGroupInput('布尔参数无效'); }
     else if (!str(key, key === 'objective' ? 16000 : 4096)) throw new InvalidGroupInput('协作参数无效');
   }
   if (raw.judge !== undefined && !groupDecisionSchema.safeParse(raw.judge).success) throw new InvalidGroupInput('决策模型设置无效');
+  if (raw.invitee !== undefined && !inviteeSchema.safeParse(raw.invitee).success) throw new InvalidGroupInput('要拉进群的人无效');
   if (raw.directory !== undefined && !isAbsolute(raw.directory as string)) throw new InvalidGroupInput('文件夹必须为绝对路径');
   if (raw.project !== undefined && !isProjectId(raw.project)) throw new InvalidGroupInput('项目标识无效');
   if (raw.project !== undefined && raw.directory !== undefined) throw new InvalidGroupInput('加入已有项目时不能再选文件夹');

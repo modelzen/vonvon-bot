@@ -83,6 +83,10 @@ it('rejects untrusted identity, extra fields and relative paths at the HTTP boun
   expect(() => parseCollaborationRequest({ action: 'context', ...target, threadId: 'oc_demo', owner: 'ou_fake' })).toThrow();
   expect(() => parseCollaborationRequest({ action: 'editProject', ...target, expectedRevision: 'revision', directory: '../escape' })).toThrow();
   expect(parseCollaborationRequest({ action: 'usage', force: true })).toEqual({ action: 'usage', force: true });
+  // dm-agent 6.4: who a new group pulls in crosses to the Bot process, and only as one of these two ids
+  const created = { action: 'createProject', requestId: 'r'.repeat(16), name: 'n', kind: 'single', backend: 'codex-appserver' };
+  expect(parseCollaborationRequest({ ...created, invitee: { idType: 'union_id', id: 'on_person' } })).toMatchObject({ invitee: { idType: 'union_id', id: 'on_person' } });
+  expect(() => parseCollaborationRequest({ ...created, invitee: { idType: 'email', id: 'on_person' } })).toThrow();
   expect(parseCollaborationRequest({ action: 'shareUsage', ...target, sections: ['stats', 'heatmap'] })).toMatchObject({ sections: ['stats', 'heatmap'] });
   expect(() => parseCollaborationRequest({ action: 'shareUsage', ...target, sections: ['unknown'] })).toThrow('分享区块无效');
   expect(() => parseCollaborationRequest({ action: 'shareUsage', ...target, sections: 'stats' })).toThrow('分享区块无效');

@@ -6,6 +6,7 @@ import type { AppConfig } from '../src/config/schema';
 import { saveConfig } from '../src/config/store';
 import { readDropped } from '../src/bot/restart-dropped';
 import { parseAskRequest, type AgentEvent, type AgentInput, type StartThreadOptions } from '../src/agent/types';
+import type { HostApi } from '../src/admin/ipc';
 import { paths } from '../src/config/paths';
 import { dmChatId, dmProject } from '../src/project/registry';
 import { getSession, listSessions, upsertSession } from '../src/bot/session-store';
@@ -110,13 +111,13 @@ const channel = { send, rawClient: { im: { v1: {
 let cfg: AppConfig;
 let opened: ReturnType<typeof createOrchestrator>[] = [];
 let revoked: string[] = [];
-async function app(policy: 'steer' | 'queue' = 'queue') {
+async function app(policy: 'steer' | 'queue' = 'queue', host?: Pick<HostApi, 'issueSessionToken'>) {
   cfg.preferences!.pendingPolicy = policy;
   await saveConfig(cfg);
   const entries: AgentEntries = createAgentEntries({ appId: APP, isAdmin: id => (cfg.preferences?.access?.admins ?? []).includes(id), tools: [],
     sessions: { revoke: sessionId => { revoked.push(sessionId); } } });
   const issue = vi.spyOn(entries, 'issue');
-  const o = createOrchestrator(channel as never, cfg, paths.appDir, undefined, { entries, bot, droppedFile: DROPPED });
+  const o = createOrchestrator(channel as never, cfg, paths.appDir, undefined, { entries, bot, droppedFile: DROPPED, ...(host ? { host } : {}) });
   opened.push(o); await o.initialize?.();
   return { o, entries, issue };
 }
@@ -148,6 +149,20 @@ afterEach(async () => { for (const o of opened) await o.shutdown(); opened = [];
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 
 describe('who gets in, in what order', () => {
+  // dm-agent 6.1 and 6.4. main 必败: VONVON_SCOPE named the private chat, and nothing kept the union_id another Bot needs
+  it('starts a private chat\'s session with its token and no scope, and tells the turn the person\'s union_id', async () => {
+    const TOKEN = `vs1.ses_0123456789abcdef.${'a'.repeat(43)}`;
+    const host = { issueSessionToken: vi.fn(async () => TOKEN) };
+    const run = thread(), be = backend(run); const { o, entries } = await app('queue', host);
+    const turn = vi.spyOn(entries, 'openTurn');
+    await o.onMessage(message('帮我看看', { raw: { sender: { sender_type: 'user', sender_id: { union_id: 'on_person' } } } }));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const env = (be.startThread.mock.calls[0][0] as StartThreadOptions).profile?.env;
+    expect(env).toMatchObject({ VONVON_SESSION: TOKEN });
+    expect(env).not.toHaveProperty('VONVON_SCOPE');
+    expect(turn.mock.calls[0]?.[1]).toMatchObject({ requesterOpenId: OWNER, requesterUnionId: 'on_person' });
+    expect((await dmProject())?.dm?.people[A]).toMatchObject({ openId: OWNER, unionId: 'on_person' });
+  });
   it('runs an administrator\'s plain words as a turn of the private chat, in place and with the fixed full tier (main 必败)', async () => {
     const run = thread(), be = backend(run); const { o, issue } = await app();
     await o.onMessage(message('帮我看看'));

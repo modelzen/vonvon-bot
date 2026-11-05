@@ -237,7 +237,7 @@ describe('desktop group commands in the owning bot', () => {
     const refused = (error: unknown) => error instanceof Error && error.message.includes('不能当工作目录') && !error.message.includes(paths.appDir) && !error.message.includes('directories.');
     await expect(joinExistingGroup(fixture.channel, { ...value, chatId: 'oc_protected' }).catch(refused)).resolves.toBe(true);
     await expect(createGroupExecutor(fixture.channel)({ kind: 'bindGroup', input: { ...input(paths.appDir), projectName: value.name, chatId: 'oc_protected_web' } }).catch(refused)).resolves.toBe(true);
-    await expect(createProject(fixture.channel, { ...value, ownerOpenId: 'ou_owner', requestId: 'protected-request', bot }).catch(refused)).resolves.toBe(true);
+    await expect(createProject(fixture.channel, { ...value, invitee: { idType: 'open_id', id: 'ou_owner' }, requestId: 'protected-request', bot }).catch(refused)).resolves.toBe(true);
     expect(fixture.message).not.toHaveBeenCalled();
     expect(fixture.create).not.toHaveBeenCalled();
     expect((await listProjects()).some(project => project.name === value.name)).toBe(false);
@@ -328,9 +328,9 @@ describe('desktop group commands in the owning bot', () => {
     const fake = fakeLark();
     const dir = await workspace();
     const target = { file: paths.projectsFile, dataRoot: paths.appDir };
-    const value = { name: `Captured ${action}`, chatId: `oc_captured_${action}`, ownerOpenId: 'ou_owner', requestId: 'original-request', requestSignature: 'original-signature', existingPath: dir, kind: 'multi' as const, backend: 'codex-appserver', bot: { ...bot } };
+    const value = { name: `Captured ${action}`, chatId: `oc_captured_${action}`, invitee: { idType: 'open_id' as const, id: 'ou_owner' }, requestId: 'original-request', requestSignature: 'original-signature', existingPath: dir, kind: 'multi' as const, backend: 'codex-appserver', bot: { ...bot } };
     const pending = action === 'join' ? joinOwnedGroup(fixture.channel, value, target) : createProject({ rawClient: fake.client }, value, target);
-    value.name = 'mutated'; value.existingPath = paths.appDir; value.backend = 'unavailable'; value.ownerOpenId = 'ou_changed'; value.requestId = 'changed-request'; value.requestSignature = 'changed-signature'; value.bot.registrationId = 'changed';
+    value.name = 'mutated'; value.existingPath = paths.appDir; value.backend = 'unavailable'; value.invitee.id = 'ou_changed'; value.requestId = 'changed-request'; value.requestSignature = 'changed-signature'; value.bot.registrationId = 'changed';
     target.file = join(paths.appDir, `wrong-${action}`, 'projects.json'); target.dataRoot = dir;
     const result = await pending;
     expect(result).toMatchObject({ name: `Captured ${action}`, cwd: await realpath(dir), backend: 'codex-appserver' });
@@ -366,7 +366,7 @@ describe('desktop group commands in the owning bot', () => {
     const value = { name: `Invalid ${kind}`, existingPath: dir, kind: 'multi' as const };
     await expect(joinExistingGroup(fixture.channel, { ...value, chatId: `oc_invalid_${kind}` })).rejects.toThrow();
     await expect(createGroupExecutor(fixture.channel)({ kind: 'bindGroup', input: { ...input(dir), projectName: value.name, chatId: `oc_invalid_web_${kind}` } })).rejects.toThrow();
-    await expect(createProject(fixture.channel, { ...value, ownerOpenId: 'ou_owner', requestId: `invalid-${kind}`, bot })).rejects.toThrow(kind === 'internal' ? '不能当工作目录' : '不存在或不是目录');
+    await expect(createProject(fixture.channel, { ...value, invitee: { idType: 'open_id', id: 'ou_owner' }, requestId: `invalid-${kind}`, bot })).rejects.toThrow(kind === 'internal' ? '不能当工作目录' : '不存在或不是目录');
     expect(await readFile(paths.projectsFile, 'utf8')).toBe(bytes);
     expect(fixture.create).not.toHaveBeenCalled();
     expect(fixture.managers).not.toHaveBeenCalled();
@@ -487,7 +487,7 @@ describe('desktop group commands in the owning bot', () => {
     provider.models = [];
     try {
       await expect(createGroupExecutor(fixture.channel)({ kind: 'bindGroup', input: { ...input(directory), chatId: 'oc_no_models', projectName: 'No models' } })).rejects.toThrow('未读取到可用模型');
-      await expect(createProject(fixture.channel, { name: 'No models', existingPath: directory, kind: 'multi', ownerOpenId: 'ou_owner', requestId: 'no-models', bot })).rejects.toThrow('未读取到可用模型');
+      await expect(createProject(fixture.channel, { name: 'No models', existingPath: directory, kind: 'multi', invitee: { idType: 'open_id', id: 'ou_owner' }, requestId: 'no-models', bot })).rejects.toThrow('未读取到可用模型');
       expect(await readFile(paths.projectsFile, 'utf8')).toBe(projects);
       expect(await readFile(paths.botsFile, 'utf8')).toBe(bots);
       expect(fixture.create).not.toHaveBeenCalled();
