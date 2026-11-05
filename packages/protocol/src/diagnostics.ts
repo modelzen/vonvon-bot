@@ -160,6 +160,18 @@ export const OPTIONAL_SCOPE_EFFECTS: Record<string, string> = {
   "im:message.group_at_msg.include_bot:readonly": "别的 Bot @ 它时收不到",
   "application:application:self_manage": "飞书里的应用管理员不能管这个 Bot",
 };
+
+/** What the Bot's Feishu tools can't do without each scope (dm-agent 6.5). */
+export const FEISHU_TOOL_SCOPE_EFFECTS: Record<string, string> = {
+  "docs:document.content:read": "读不了文档和知识库",
+  "docx:document:readonly": "读不了文档和知识库",
+  "wiki:wiki:readonly": "读不了文档和知识库",
+  "docx:document:write_only": "改不了文档",
+  "sheets:spreadsheet:read": "读不了表格",
+  "sheets:spreadsheet.meta:read": "读不了表格",
+  "drive:file:download": "下载不了云空间文件",
+  "search:message": "搜不了消息",
+};
 export const SCOPE_DENIAL_PLACE_TEXT: Record<ScopeDenialPlace, string> = {
   history: "补拉群消息时", names: "查群里人的真名时", "chat-info": "读群信息时", send: "发消息时",
 };

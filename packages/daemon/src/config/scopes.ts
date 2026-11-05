@@ -147,8 +147,18 @@ export const SHEET_READ_SCOPES = ['sheets:spreadsheet:read', 'sheets:spreadsheet
 export const DRIVE_READ_SCOPES = ['drive:file:download'] as const;
 /** Changing a document as the Bot (the tool comes with F3). */
 export const DOC_EDIT_SCOPES = ['docx:document:write_only'] as const;
-/** Not in {@link GRANT_SCOPES} yet: whether it needs approval is not known, and approval-gated scopes stay out of the one-click link (dm-agent 6.5). */
 export const MESSAGE_SEARCH_SCOPES = ['search:message'] as const;
+/**
+ * Every scope of those tools. Not in {@link GRANT_SCOPES}: Feishu rates them all 高级, and an enterprise's admin decides
+ * which scopes skip review, so they get their own pre-selected link instead of enlarging the first review (dm-agent 6.5).
+ */
+export const FEISHU_TOOL_SCOPES = [
+  ...DOC_READ_SCOPES,
+  ...DOC_EDIT_SCOPES,
+  ...SHEET_READ_SCOPES,
+  ...DRIVE_READ_SCOPES,
+  ...MESSAGE_SEARCH_SCOPES,
+] as const;
 
 /** The 3.11 optional scopes that change what the bot does in a chat, listed on the 状态与诊断 page. */
 export const CHAT_OPTIONAL_SCOPES = [...CONTACT_SCOPES, 'im:chat:readonly', ...V1_OPTIONAL_SCOPES] as const;
@@ -162,10 +172,6 @@ export const GRANT_SCOPES = [
   ...APP_VERSION_SCOPES,
   ...DISCOVERY_SCOPES,
   ...V1_OPTIONAL_SCOPES,
-  ...DOC_READ_SCOPES,
-  ...SHEET_READ_SCOPES,
-  ...DRIVE_READ_SCOPES,
-  ...DOC_EDIT_SCOPES,
 ] as const;
 
 /**
