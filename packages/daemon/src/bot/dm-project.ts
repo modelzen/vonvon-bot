@@ -15,9 +15,10 @@ export type DmProjectDefaults = Pick<Project, 'backend' | 'defaultModel' | 'defa
  */
 export async function ensureDmProject(input: { bot: BotIdentity; projectsRootDir: string | undefined; defaults: () => Promise<DmProjectDefaults> }): Promise<void> {
   try {
+    // Through the Bot's directory record even when the row exists: a folder made behind it stops the Bot's next group.
+    const cwd = await ensureBotDmDirectory(input.bot, resolveProjectsRootDir(input.projectsRootDir));
     const existing = await dmProject();
     if (existing) { await ensureDurableDirectory(existing.cwd); return; }
-    const cwd = await ensureBotDmDirectory(input.bot, resolveProjectsRootDir(input.projectsRootDir));
     const row = await addDmProject({ ...await input.defaults(), name: DM_PROJECT_NAME, chatId: dmChatId(input.bot.appId), cwd, blank: true, origin: 'created',
       kind: 'single', noMention: true, mode: 'full', network: TIER_NETWORK.full, createdAt: Date.now(), dm: { people: {} } });
     log.info('project', 'dm-project', { cwd: row.cwd, backend: row.backend });
