@@ -27,7 +27,10 @@ export type CommitGuard = () => void;
 export const TOOL_RESULT_BYTES = 256 * 1024;
 export interface AgentTool {
   name: string;
-  class: 'read' | 'settings' | 'memory' | 'schedule';
+  /** `document`: the document column of dm-agent 7.2, the Feishu tools a comment's session gets too. */
+  class: 'read' | 'settings' | 'memory' | 'schedule' | 'document';
+  /** `document` 类：这个工具改东西，所有位置都要这一轮还在（registry 的 authorizeFeishu） */
+  writes?: boolean;
   /** Where it is listed and may be called, besides what its class allows; everywhere its class allows when absent. */
   places?: readonly AgentPlace['kind'][];
   /** schedule 类：对应命令核的哪个动作，登记表按它查 3.13 的角色表 */

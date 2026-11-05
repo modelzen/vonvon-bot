@@ -162,6 +162,20 @@ it('redacts a split token in a cloud comment reply through the orchestrator', as
   } finally { await orchestrator.shutdown(); }
 });
 
+it('holds a turn open for a comment\'s run, as its person, so the document tools answer', async () => {
+  backend('codex-appserver');
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, comments: { backend: 'codex-appserver' } } };
+  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true });
+  const openTurn = vi.spyOn(entries, 'openTurn');
+  const orchestrator = createOrchestrator({} as never, cfg, paths.appDir, undefined, { entries });
+  try {
+    await orchestrator.onComment({ fileType: 'docx', fileToken: 'fixture-doc', commentId: 'turn-comment', replyId: 'one', mentionedBot: true, operator: { openId: 'ou_owner' } } as never);
+    expect(openTurn).toHaveBeenCalledOnce();
+    expect(openTurn.mock.calls[0]![1]).toMatchObject({ requesterOpenId: 'ou_owner', requesterKind: 'user', triggerMessageId: 'one' });
+    expect(openTurn.mock.results[0]!.value.presence).toBe('human');
+  } finally { await orchestrator.shutdown(); }
+});
+
 it('binds document grants to the resolved document for start, resume and failed-resume fallback', async () => {
   const codex = backend('codex-appserver');
   const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, comments: { backend: 'codex-appserver', model: 'one' } } };

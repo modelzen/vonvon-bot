@@ -37,8 +37,8 @@ function fixture() {
   const sdk = { query, listSessions: vi.fn(), getSessionInfo: vi.fn(), getSessionMessages: vi.fn(), renameSession: vi.fn(), createSdkMcpServer, tool: makeTool } satisfies ClaudeSdkFacade;
   return { registered, backend: new ClaudeAgentBackend(async () => sdk, () => undefined), options: () => options };
 }
-const profile = (schedule: boolean, feishu?: boolean): SessionProfile => ({ instructions: '', env: {}, nativeSettings: { automaticMemory: false },
-  additionalRoots: [], capabilityPackages: [], mcpServers: [], tools: { schedule, ...(feishu !== undefined ? { feishu } : {}) } });
+const profile = (schedule: boolean, feishu?: boolean, feishuEdit?: boolean): SessionProfile => ({ instructions: '', env: {}, nativeSettings: { automaticMemory: false },
+  additionalRoots: [], capabilityPackages: [], mcpServers: [], tools: { schedule, ...(feishu !== undefined ? { feishu } : {}), ...(feishuEdit !== undefined ? { feishuEdit } : {}) } });
 const grant = (place: AgentPlace) => createAgentEntries({ appId: 'fixture', isAdmin: () => true,
   tools: [sessionInfoTool, ...createScheduleTools({ commands: { execute: async () => ({ kind: 'deleted', taskId: 'x' }) } })] }).issue(place);
 function savedSession(): string {
@@ -72,6 +72,19 @@ it.each([[true, 1], [false, 0]] as const)('lists the Feishu read tools in vonvon
       : await f.backend.resumeThread({ cwd, mode: 'qa', entry, sessionId: 'saved', profile: profile(false, feishu) }));
     expect(f.registered.filter(name => name === 'feishu_doc')).toHaveLength(count);
     expect(f.registered.filter(name => name === 'feishu_members')).toHaveLength(1);
+  }
+});
+
+it.each([[true, 1], [false, 0]] as const)('lists feishu_doc_edit by the profile (tools.feishuEdit %j), and a comment\'s session only the document column', async (edit, count) => {
+  for (const action of ['start', 'resume'] as const) {
+    const f = fixture(), cwd = savedSession();
+    const entry = createAgentEntries({ appId: 'fixture', isAdmin: () => true,
+      tools: createFeishuTools({ members: async () => ({ members: [] }), feishu: {} as FeishuReader }) }).issue({ kind: 'doc', docId: 'd' });
+    threads.push(action === 'start' ? await f.backend.startThread({ cwd, mode: 'qa', entry, profile: profile(false, true, edit) })
+      : await f.backend.resumeThread({ cwd, mode: 'qa', entry, sessionId: 'saved', profile: profile(false, true, edit) }));
+    expect(f.registered.filter(name => name === 'feishu_doc_edit')).toHaveLength(count);
+    expect(f.registered.filter(name => name === 'feishu_doc')).toHaveLength(1);
+    expect(f.registered.filter(name => name === 'feishu_messages' || name === 'feishu_members')).toEqual([]);
   }
 });
 
