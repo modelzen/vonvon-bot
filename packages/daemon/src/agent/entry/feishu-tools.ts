@@ -118,7 +118,7 @@ export function feishuToolSpecs(tools: { feishuEdit?: boolean; feishuApi?: boole
 }
 
 const NOT_THIS_CHAT = '群里只能读本群的内容，读不了别的群。';
-const NOT_A_CHAT_ID = 'chat 要写 oc_ 开头的群 id，不是群名。用 "$VONVON_CLI" group list 查。';
+const NOT_A_CHAT_ID = 'chat 要写 oc_ 开头的群 id，不是群名。用 "$VONVON_CLI" feishu groups 查这个 Bot 所在的群。';
 const denied = () => new ToolRefusal({ ok: false, code: 'refused', message: '目标不存在或没有权限。' });
 const refusal = (message: string) => new ToolRefusal({ ok: false, code: 'refused', message });
 const READ_ONLY_TIER = '这个群是只读档，改不了文档。要改，请管理员在 Vonvon Bot 客户端里调高这个群的权限。';
