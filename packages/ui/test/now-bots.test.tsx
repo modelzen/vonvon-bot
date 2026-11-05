@@ -1,7 +1,9 @@
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
+import {badgeUrl} from '../src/BadgeContact';
 import {agentIdSchema, desktopSnapshotSchema, membershipSchema, type Agent, type BotActivity, type GroupAttention, type Membership} from '@vonvon/protocol';
-import {NowBotList, nowBotActivities, nowBotLatestAction} from '../src/NowBotList';
+import {NowBotList, nowBotActivities} from '../src/NowBotList';
+import {badgeTenure} from '../src/badge-content';
 import {nowAttentionSummary, nowGroupAttention} from '../src/now-attention';
 
 const now = new Date('2026-10-26T06:00:00Z').getTime();
@@ -17,6 +19,7 @@ const snapshot = (agent: Agent, memberships: Membership[] = [member]) => desktop
   agents: [agent], groups: [{id: member.groupId, name: member.name}], memberships, tools: [], jobs: [],
   application: {platform: 'macos', version: 'test', loginItem: false, dataPath: '/tmp/now'},
 });
+const badgeActions = {onChangeNumber: async () => undefined, disabled: false, connected: true};
 beforeEach(() => {vi.useFakeTimers(); vi.setSystemTime(now);});
 afterEach(() => {vi.useRealTimers();});
 
@@ -107,39 +110,80 @@ it('keeps a long-running tool live through heartbeats without making it the newe
   expect(nowBotActivities(acting(older), [member], true, now + 60_000)).toEqual([]);
 });
 
-it('keeps registration and an expandable group list without navigation links or permanent help copy', () => {
-  const html = renderToStaticMarkup(<NowBotList snapshot={snapshot(acting(activity({phase: 'tool', toolKind: 'search'})), [member, member])} connected onRegister={() => {}} disabled={false}/>);
-  expect(html).toContain('添加 Bot');
+it('counts each bound group once on both sides of the badge', () => {
+  const html = renderToStaticMarkup(<NowBotList snapshot={snapshot(acting(activity({phase: 'tool', toolKind: 'search'})), [member, member])} {...badgeActions}/>);
   expect(html).toContain('aria-expanded="false"');
-  expect(html).toContain('关注的群');
-  expect(html.match(/class="now-bot-child"/g)).toHaveLength(1);
-  expect(html).toContain('搜索中');
+  expect(html).toContain('Vonvon 所在群，可上下滚动');
+  expect(html).toContain('href="https://applink.feishu.cn/client/bot/open?appId=cli_now"');
+  expect(html).toContain('放大 Vonvon 的飞书二维码');
+  expect(html).toContain('已加入 1 个群');
+  expect(html.match(/<summary>/g)).toHaveLength(1);
+  expect(html).toContain('设计讨论');
   expect(html).not.toContain('持续更新');
   expect(html).not.toContain('当前间隔');
-  expect(html).not.toMatch(/<a\b|role="slider"|\/ 100/);
+  expect(html).not.toMatch(/role="slider"|\/ 100/);
 });
 
-it('distinguishes absent activity support from known idle and hides stale actions', () => {
-  const render = (agent: Agent, stale = false) => renderToStaticMarkup(<NowBotList snapshot={{...snapshot(agent), stale}} connected onRegister={() => {}} disabled={false}/>);
-  expect(render(bot)).not.toContain('安静等候');
-  expect(render(acting())).toContain('安静等候');
-  expect(render(acting(activity({updatedAt: now - 60_000})))).not.toContain('安静等候');
-  expect(render(acting(activity({phase: 'responding'})))).toContain('组织回复');
-  expect(render(acting(activity({phase: 'responding'})), true)).not.toContain('组织回复');
-  expect(render({...acting(activity()), enabled: false})).not.toContain('思考中');
+it('uses connection state rather than tool activity and labels the registered owner', () => {
+  const render = (agent: Agent, stale = false) => renderToStaticMarkup(<NowBotList snapshot={{...snapshot({...agent, ownerName: '小王', registeredAt:now-86_400_000*10, badgeNumber:'000421'}), stale}}
+    {...badgeActions}/>);
+  const html = render(acting(activity()));
+  const [front, back] = html.split('class="badge-face badge-back"');
+  expect(front).toContain('已连接，已加入 1 个群，在职第 11 天');
+  expect(front).toContain('No. 000421');
+  expect(front).not.toContain('小王');
+  expect(back).toContain('直属上级');
+  expect(back).toContain('小王');
+  expect(render({...acting(),enabled:false})).toContain('已停用，已加入 1 个群，在职第 11 天');
+  expect(render(bot,true)).toContain('待更新');
+  expect(render(bot)).not.toContain('组织回复');
+});
+it('counts the joining date and turns over at local midnight without waiting 24 hours',()=>{
+  const before=new Date(2026,9,24,23,59,59).getTime(),after=new Date(2026,9,25,0,0,0).getTime();
+  expect(badgeTenure(before,before)).toBe(1);
+  expect(badgeTenure(before,after)).toBe(2);
+  expect(badgeTenure(after,before)).toBeUndefined();
+  expect(badgeTenure(undefined,after)).toBeUndefined();
+});
+it('leaves the private chat off the badge: only bound groups are listed and counted', () => {
+  const dm = membershipSchema.parse({...member, id: '["cli_now","oc_dm_cli_now"]', groupId: 'oc_dm_cli_now', name: '私聊'});
+  const html = renderToStaticMarkup(<NowBotList snapshot={snapshot({...bot, dm})} {...badgeActions}/>);
+  expect(html).toContain('设计讨论');
+  expect(html).not.toContain('私聊');
 });
 
-it('shows only confirmed recent actions, with live runs taking priority', () => {
-  const latestAction = {id: '58b863f2-7ba7-4259-8c3e-4a668a2f0c37', groupId: member.groupId, kind: 'memory-saved' as const, at: now};
-  const agent: Agent = {...acting(), diagnostics: {...acting().diagnostics!, latestAction}};
-  const render = (agent: Agent) => renderToStaticMarkup(<NowBotList snapshot={snapshot(agent)} connected onRegister={() => {}} disabled={false}/>);
-  expect(render(agent)).toContain('新增了一条记忆');
-  expect(render({...agent, diagnostics: {...agent.diagnostics!, activities: [activity({phase: 'responding'})]}})).not.toContain('新增了一条记忆');
-  expect(nowBotLatestAction(agent, [member], true, now + 5 * 60_000)).toBeUndefined();
-  expect(nowBotLatestAction(agent, [{...member, stale: true}], true, now)).toBeUndefined();
-  expect(nowBotLatestAction(agent, [member], false, now)).toBeUndefined();
-  expect(nowBotLatestAction({...agent, running: false}, [member], true, now)).toBeUndefined();
-  expect(render({...agent, diagnostics: {...agent.diagnostics!, latestAction: {...latestAction, kind: 'replied'}}})).toContain('已回复');
+it('opens a Lark Bot in Lark', () => {
+  expect(badgeUrl('cli_now', 'lark')).toContain('applink.larksuite.com');
+  expect(badgeUrl('cli_now')).toContain('applink.feishu.cn');
+});
+
+it('keeps every distinct group available directly on the back, including when the list overflows',()=>{
+  const groups=Array.from({length:12},(_,i)=>membershipSchema.parse({...member,groupId:'oc_design_'+i,name:'设计讨论 '+i}));
+  const render=(members:Membership[])=>renderToStaticMarkup(<NowBotList snapshot={snapshot(bot,members)} {...badgeActions}/>);
+  const html=render(groups);
+  expect(html).toContain('已加入 12 个群');
+  expect(html).toContain('设计讨论 11');
+  expect(html.match(/<summary>/g)).toHaveLength(12);
+  expect(render([])).toContain('暂无已绑定的群');
+});
+
+it('never counts or lists a group that has no binding to this Bot', () => {
+  const snap = snapshot(bot);
+  snap.groups.push({id:'oc_unbound', name:'只在飞书加入的群'});
+  const html = renderToStaticMarkup(<NowBotList snapshot={snap} {...badgeActions}/>);
+  expect(html).toContain('已加入 1 个群');
+  expect(html).toContain(member.name);
+  expect(html).not.toContain('只在飞书加入的群');
+  expect(html.match(/<summary>/g)).toHaveLength(1);
+});
+
+it('distinguishes unavailable data from zero bindings and a known disconnected state', () => {
+  const render = (agent: Agent, members: Membership[]) =>
+    renderToStaticMarkup(<NowBotList snapshot={snapshot(agent, members)} {...badgeActions}/>);
+  expect(render({...bot, readError:'unreadable'}, [])).toContain('群数待更新');
+  expect(render(bot, [{...member, stale:true}])).toContain('上次记录 1 个群');
+  expect(render({...bot, connection:'unknown'}, [])).toContain('待更新，已加入 0 个群');
+  expect(render({...bot, connection:'connecting'}, [])).toContain('连接中，已加入 0 个群');
 });
 
 it('labels a stopped connection on a disabled bot as disabled, and reuses communication copy', () => {

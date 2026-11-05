@@ -292,6 +292,7 @@ describe('the bot-session column (unit)', () => {
       request('command', { type: 'setPermission', membershipId: membership(OTHER), administrator: 'full' }),
       request('command', { type: 'setResponse', membershipId: membership(OTHER), response: 'all' }),
       request('command', { type: 'setAgentEnabled', agentId: BOT, enabled: false }),
+      request('command', { type: 'setAgentBadgeNumber', agentId: BOT, badgeNumber: '007' }),
       request('command', { type: 'deleteAgent', agentId: BOT }),
       request('command', { type: 'refreshAgentCredentials', agentId: 'cli_other' }),
       request('command', { type: 'registerAgent' }),

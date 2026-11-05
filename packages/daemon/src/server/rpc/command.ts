@@ -78,6 +78,10 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
       else await service.setNoMention(member.agentId, member.name, request.response === 'all');
       return applied;
     }
+    case 'setAgentBadgeNumber': {
+      const result = await service.setBotBadgeNumber(request.agentId, request.badgeNumber);
+      return result.ok ? applied : {kind: 'mutation', reply: () => ({kind: 'refused', code: 'badge_number_refused', message: result.reason})};
+    }
     case 'setAgentEnabled': {
       const result = await service.setBotEnabled(request.agentId, request.enabled);
       if (!result.ok) return { kind: 'mutation', reply: () => ({ kind: 'refused', code: 'activation_failed', message: result.reason }) };

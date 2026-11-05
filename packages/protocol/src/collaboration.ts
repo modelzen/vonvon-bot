@@ -31,7 +31,7 @@ export const collaborationRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("stopSubagent"), ...sessionTarget, runId: z.string().min(1).max(256), subagentId: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("endGoal"), ...sessionTarget, runId: z.string().min(1).max(256) }).strict(),
   z.object({ action: z.literal("reminder"), ...sessionTarget, runId: z.string().min(1).max(256), requested: z.boolean() }).strict(),
-  z.object({ action: z.literal("usage"), force: z.boolean() }).strict(),
+  z.object({ action: z.literal("usage"), force: z.boolean(), backend: backend.optional() }).strict(),
   z.object({ action: z.literal("shareUsage"), ...target, sections: z.array(usageShareSectionSchema).max(5).optional() }).strict(),
 ]);
 export type CollaborationRequest = z.infer<typeof collaborationRequestSchema>;

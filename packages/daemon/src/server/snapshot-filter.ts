@@ -54,10 +54,10 @@ export function sessionSnapshot(snapshot: DesktopSnapshot, principal: BotSession
   return principal.place === 'dm' ? dmSnapshot(snapshot) : placeSnapshot(snapshot, principal);
 }
 
-/** dm-agent 6.1: a private chat reaches every Bot of this computer, so all of it but the crash reports and the diagnostics. */
+/** dm-agent 6.1: a private chat reaches every Bot of this computer, so all of it but the crash reports and the diagnostics. The desktop badge labels the Feishu app owner; that person's name stays out of a session's reads. */
 function dmSnapshot(snapshot: DesktopSnapshot): DesktopSnapshot {
   const { crashes: _crashes, ...application } = snapshot.application;
-  return { ...snapshot, agents: snapshot.agents.map(({ diagnostics: _diagnostics, ...agent }) => agent), application };
+  return { ...snapshot, agents: snapshot.agents.map(({ diagnostics: _diagnostics, ownerName: _ownerName, ...agent }) => agent), application };
 }
 
 /**

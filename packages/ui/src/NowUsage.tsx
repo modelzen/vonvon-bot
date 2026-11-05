@@ -26,14 +26,14 @@ export async function readNowProviders(client: ReaderClient, publish: (update: P
       if (login.state !== 'signedIn' && login.state !== 'notRequired' && !configuredApi) throw new Error('账户状态暂无法确认。');
       const account = login.account ?? {kind: 'unknown' as const};
       const provider: NowProvider = {id: entry.id, name: entry.displayName, account, ...(configuredApi ? {problem: '账户状态暂无法确认。'} : {})};
-      const readsUsage = entry.id === 'codex-appserver' && account.kind !== 'api';
+      const readsUsage = (entry.id === 'codex-appserver' || entry.id === 'claude-agent') && account.kind !== 'api';
       publish({kind: 'provider', provider: {...provider, loading: readsUsage}});
       if (!readsUsage) return;
       try {
-        const data = await readUsage(request => client.collaboration(request));
+        const data = await readUsage(request => client.collaboration(request), false, entry.id === 'claude-agent' ? 'claude-agent' : undefined);
         publish({kind: 'provider', provider: {...provider, data}});
-      } catch {
-        publish({kind: 'provider', provider: {...provider, problem: '暂无法刷新额度与用量。'}});
+      } catch (error) {
+        publish({kind: 'provider', provider: {...provider, problem: error instanceof Error ? error.message : '暂无法刷新额度与用量。'}});
       }
     } catch {
       publish({kind: 'failed', id: entry.id, problem: `${entry.displayName} 账户状态暂无法确认。`});
@@ -54,7 +54,7 @@ export function mergeNowProvider(previous: NowProvider[], update: ProviderUpdate
 }
 
 export function nowAccountLabel(account: BackendAccount): string {
-  const plans: Record<string, string> = {go: 'ChatGPT Go', plus: 'ChatGPT Plus', pro: 'Pro', prolite: 'Pro Lite', max: 'Max', team: 'Team', business: 'Business', enterprise: 'Enterprise', edu: 'Edu'};
+  const plans: Record<string, string> = {go: 'ChatGPT Go', plus: 'ChatGPT Plus', pro: 'Pro', prolite: 'Pro Lite', max: 'Max', claude_ultra: 'Claude Ultra', team: 'Team', business: 'Business', enterprise: 'Enterprise', edu: 'Edu'};
   if (account.kind === 'free') return '免费账户';
   if (account.kind === 'api') return 'API 接入';
   if (account.kind === 'subscription') return account.planType ? plans[account.planType] ?? account.planType : '订阅账户';
@@ -127,7 +127,7 @@ export function NowUsageBody({provider, stale = false}: {provider: NowProvider; 
     {data ? <>
       <UsageAccount data={data} provider={provider.name}/>
       <UsageProfile profile={data.profile} provider={provider.name} showDetails={false}/>
-    </> : <div className="usage-account"><p className="now-usage-empty">{provider.loading ? '正在读取用量…' : provider.problem || (provider.account.kind === 'api' ? 'API 接入暂无法读取额度与每日用量。' : provider.account.kind === 'unknown' ? '暂无账户类型与用量信息。' : '暂无法读取额度与每日用量。')}</p></div>}
+    </> : <div className="usage-account"><header className="usage-account-heading"><div className="usage-account-identity"><strong>{provider.name}</strong><span>{nowAccountLabel(provider.account)}</span></div></header><p className="now-usage-empty">{provider.loading ? '正在读取用量…' : provider.problem || (provider.account.kind === 'api' ? 'API 接入暂无法读取额度与每日用量。' : provider.account.kind === 'unknown' ? '暂无账户类型与用量信息。' : '暂无法读取额度与每日用量。')}</p></div>}
     {data && (provider.problem || stale) && <p className="now-usage-notice" role="status">{provider.problem ? '暂无法更新，显示上次读取的数据。' : '连接恢复后更新，当前为上次读取的数据。'}</p>}
   </div>;
 }

@@ -66,6 +66,8 @@ export type Tool = z.infer<typeof toolSchema>;
 
 const empty = <T extends string>(type: T) =>
   z.object({ type: z.literal(type) }).strict();
+export const MAX_BADGE_NUMBER_LENGTH = 7;
+export const badgeNumberSchema = z.string().min(1).max(MAX_BADGE_NUMBER_LENGTH).regex(/^\d+$/);
 export const commandSchema = z.discriminatedUnion("type", [
   z.object({type: z.literal("refresh"), tools: z.boolean().optional()}).strict(),
   z.object({type: z.literal("listPendingGroups"), agentId: agentIdSchema}).strict(),
@@ -129,6 +131,7 @@ export const commandSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({type:z.literal("deleteAgent"),agentId:agentIdSchema}).strict(),
+  z.object({type: z.literal("setAgentBadgeNumber"), agentId: agentIdSchema, badgeNumber: badgeNumberSchema}).strict(),
   z.object({ type: z.literal("cancelJob"), jobId: jobIdSchema }).strict(),
 ]);
 export type Command = z.infer<typeof commandSchema>;
@@ -172,11 +175,17 @@ export const agentSchema = z.object({
   id: agentIdSchema, name: z.string(), avatarDataUrl: z.string().optional(), avatarRef,
   enabled: z.boolean(), running: z.boolean(), connection: z.string(),
   activation: z.enum(["active", "restartRequired"]), readError: z.string().optional(),
+  badgeNumber: badgeNumberSchema.optional(),
   /** The bot's recent not-replied messages and scope denials; absent when it has none. */
   diagnostics: botDiagnosticsSchema.optional(),
   /** This bot alone stopped restarting after 3 crashes in 10 minutes (s18a); absent from older daemons. */
   paused: crashPauseSchema.optional(),
   lockHeld: lockHeldSchema.optional(),
+  /** Local registration date and the display name of the confirmed Feishu application owner. */
+  registeredAt: z.number().finite().nonnegative().optional(),
+  ownerName: z.string().optional(),
+  /** Which client opens this Bot; absent from older daemons, read as Feishu. */
+  tenant: z.enum(["feishu", "lark"]).optional(),
   /** This Bot's private chat, with the synthetic group id `oc_dm_<appId>`. Beside `memberships`, so no group list, group
    * directory or search picks it up; absent until the Bot has run once, and from older daemons. */
   dm: membershipSchema.optional(),
