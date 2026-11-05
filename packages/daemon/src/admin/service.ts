@@ -368,8 +368,16 @@ export interface AdminSetupStatus {
    * ④ 必需 scope 中尚未授权的（undefined = 没查成；空 = 已齐全）+ 一键授权深链。
    * missingJoinScopes 是加入现有群要的 scope（同样三态）：缺了只提醒——拉进群不会提醒绑定，查找已加入的群会失败。
    * grantUrl 始终给（预选全部 scope，缺啥点一次补齐）。
+   * missingTools 是 Bot 自己的飞书工具要的 scope，不进 grantUrl，缺的时候由 toolsGrantUrl 单独预选（dm-agent 6.5）。
    */
-  scopes: { missingRequired?: string[]; missingJoinScopes?: string[]; missingOptional?: string[]; grantUrl: string };
+  scopes: {
+    missingRequired?: string[];
+    missingJoinScopes?: string[];
+    missingOptional?: string[];
+    missingTools?: string[];
+    grantUrl: string;
+    toolsGrantUrl?: string;
+  };
   /** 开发者后台「事件与回调」配置页深链。 */
   eventConfigUrl: string;
   /** 开发者后台这个应用的首页（版本管理与发布在里面）。 */
@@ -900,7 +908,11 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
           missingRequired: validation.ok ? validation.missingScopes : undefined,
           missingJoinScopes: validation.ok ? validation.missingJoinScopes : undefined,
           missingOptional: validation.ok ? validation.missingOptional : undefined,
+          missingTools: validation.ok ? validation.missingTools : undefined,
           grantUrl: buildScopeGrantUrl(app.id, app.tenant),
+          ...(validation.ok && validation.missingTools?.length
+            ? { toolsGrantUrl: buildScopeGrantUrl(app.id, app.tenant, validation.missingTools) }
+            : {}),
         },
       };
     },
