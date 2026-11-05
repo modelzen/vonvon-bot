@@ -41,7 +41,7 @@ export { ReadScopeError } from './read-scope';
 import { findTranscript, readCustomTitle, scanTranscript } from './transcript';
 import { foldSessionMessages, mapSessionSummary } from './history';
 import { ClaudeAgentThread, NATIVE_MEMORY_OFF, NATIVE_SCHEDULING_ENV, type TranscriptMark } from './thread';
-import { claudeConfigDir, readConfiguredClaudeModel } from './configured-model';
+import { claudeAccountConfigKey, claudeConfigDir, readConfiguredClaudeModel } from './configured-model';
 import { loginFromAccount, loginFromEnv, loginUnderService, readClaudeLogin } from './login';
 import { toolCommand } from '../../environment/tool-command';
 
@@ -359,7 +359,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       /^(ANTHROPIC_|CLAUDE_CODE_|AWS_|GOOGLE_|CLOUD_ML_)/.test(key)).sort(([a], [b]) => a.localeCompare(b));
     return JSON.stringify([homedir(), dir, this.configuredModel(),
       modelFileVersion(join(dir, 'settings.json')), modelFileVersion(join(dir, '.credentials.json')),
-      modelFileVersion(join(homedir(), '.claude.json')), installedBackendVersion(SDK_PKG),
+      claudeAccountConfigKey(), installedBackendVersion(SDK_PKG),
       createHash('sha256').update(JSON.stringify(env)).digest('hex')]);
   }
 
