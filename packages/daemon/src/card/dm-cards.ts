@@ -1512,7 +1512,7 @@ export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>): Car
     ...admins.map(id => actions([md(id === ownerOpenId ? `${memberName(names, id)} · 创建者` : memberName(names, id))])),
     hr(),
     actions([button('⬅️ 设置', { a: DM.settings })]),
-    note('名单在 Vonvon Bot 客户端或终端里改。'),
+    note('名单在 Vonvon Bot 的「设置 → 管理员」或终端里改。'),
   ], { header: { title: '👮 管理员', template: 'blue' } });
 }
 
