@@ -69,7 +69,7 @@ describe('profileOf', () => {
     const { o, startThread } = orchestrator();
     await o.onMessage(message());
     await vi.waitFor(() => expect(startThread).toHaveBeenCalled());
-    expect(startThread.mock.calls[0]![0].profile?.tools).toEqual({ schedule: true });
+    expect(startThread.mock.calls[0]![0].profile?.tools).toEqual({ schedule: true, feishu: true });
     await o.shutdown();
   });
   it('gives a comment\'s session none', async () => {
@@ -77,7 +77,7 @@ describe('profileOf', () => {
     const { o, startThread } = orchestrator();
     await o.onComment({ fileType: 'docx', fileToken: 'fixture-doc', commentId: 'comment', replyId: 'one', mentionedBot: true, operator: { openId: 'owner' }, timestamp: Date.now() });
     await vi.waitFor(() => expect(startThread).toHaveBeenCalled());
-    expect(startThread.mock.calls[0]![0].profile?.tools).toEqual({ schedule: false });
+    expect(startThread.mock.calls[0]![0].profile?.tools).toEqual({ schedule: false, feishu: false });
     await o.shutdown();
   });
 });
@@ -89,9 +89,9 @@ describe('the profile on its way to a backend', () => {
     const execution = resolveExecution({ group: { cwd, mode: 'qa', directories: { workspaces: { primary: cwd, additional: [extra] } } } });
     const built = await executionSessionProfile({ execution, cwd, backend: 'claude-agent', scope: 'group', profile: { ...base, tools: { schedule: true } }, dataDir: join(root, 'data') });
     expect(built).toMatchObject({ additionalRoots: [{ path: extra, access: 'read' }], tools: { schedule: true } });
-    expect(resolveSessionProfile(built, { additionalRoots: true }).tools).toEqual({ schedule: true });
-    expect(resolveSessionProfile(base).tools).toEqual({ schedule: false });
-    expect(resolveSessionProfile().tools).toEqual({ schedule: false });
+    expect(resolveSessionProfile(built, { additionalRoots: true }).tools).toEqual({ schedule: true, feishu: false });
+    expect(resolveSessionProfile(base).tools).toEqual({ schedule: false, feishu: false });
+    expect(resolveSessionProfile().tools).toEqual({ schedule: false, feishu: false });
   });
   it('keeps dynamicTools out of the params Codex start and resume share (T3b adds them on thread/start only)', () => {
     for (const schedule of [true, false]) {

@@ -65,7 +65,7 @@ describe('s47 MCP authorization and structured commands', () => {
     for (const args of [{ edit, admin: true }, { edit, commit: true }, { edit, notAfter: Date.now() + 1e6 }]) {
       expect(await f.call('settings_set', args)).toMatchObject({ ok: false, code: 'bad-args' });
     }
-    expect(await f.call('feishu_members', { chatId: '' })).toMatchObject({ ok: false, code: 'bad-args' });
+    expect(await f.call('feishu_members', { chat: '' })).toMatchObject({ ok: false, code: 'bad-args' });
     expect(await f.call('feishu_groups', { cursor: 4 })).toMatchObject({ ok: false, code: 'bad-args' });
     expect(f.save).not.toHaveBeenCalled();
   });
@@ -119,7 +119,7 @@ describe('s47 MCP authorization and structured commands', () => {
   });
   it('has no member query in a comment', async () => {
     const f = fixture({ admin: true, place: { kind: 'doc', docId: 'doc' } });
-    expect(await f.call('feishu_members', { chatId: 'visible-chat' })).toEqual({ ok: false, code: 'unknown-tool', message: '没有这个工具。' });
+    expect(await f.call('feishu_members', { chat: 'visible-chat' })).toEqual({ ok: false, code: 'unknown-tool', message: '没有这个工具。' });
     expect(f.members).not.toHaveBeenCalled();
   });
   it('preserves administrator list pagination and shares the direct business function result', async () => {
@@ -129,15 +129,15 @@ describe('s47 MCP authorization and structured commands', () => {
   });
   it('only forwards member queries for a visible and bound group', async () => {
     const f = fixture({ admin: false, place: { kind: 'group', chatId: 'visible-chat' } });
-    expect(await f.call('feishu_members', { chatId: 'hidden-chat' })).toMatchObject({ ok: false, code: 'refused' });
-    expect(await f.call('feishu_members', { chatId: 'missing-chat' })).toMatchObject({ ok: false, code: 'refused' });
+    expect(await f.call('feishu_members', { chat: 'hidden-chat' })).toMatchObject({ ok: false, code: 'refused' });
+    expect(await f.call('feishu_members', { chat: 'missing-chat' })).toMatchObject({ ok: false, code: 'refused' });
     expect(f.members).not.toHaveBeenCalled();
-    expect(await f.call('feishu_members', { chatId: 'visible-chat', cursor: 'members-cursor' })).toEqual({ ok: true, result: await feishuMembers(f, 'visible-chat', 'members-cursor') });
+    expect(await f.call('feishu_members', { chat: 'visible-chat', cursor: 'members-cursor' })).toEqual({ ok: true, result: await feishuMembers(f, 'visible-chat', 'members-cursor') });
     expect(f.members).toHaveBeenCalledWith('visible-chat', 'members-cursor');
   });
   it('lets the owning-bot transport verify administrator queries for an unbound group', async () => {
     const f = fixture();
-    expect(await f.call('feishu_members', { chatId: 'unbound' })).toMatchObject({ ok: true });
+    expect(await f.call('feishu_members', { chat: 'unbound' })).toMatchObject({ ok: true });
     expect(f.members).toHaveBeenCalledWith('unbound', undefined);
   });
   it('keeps an empty upstream page successful and does not disguise upstream failures as empty results', async () => {
@@ -147,13 +147,13 @@ describe('s47 MCP authorization and structured commands', () => {
     f.groups.mockRejectedValueOnce(Error('upstream unavailable'));
     expect(await f.call('feishu_groups', {})).toMatchObject({ ok: false, code: 'failed' });
     f.members.mockRejectedValueOnce(Error('upstream unavailable'));
-    expect(await f.call('feishu_members', { chatId: 'visible-chat' })).toMatchObject({ ok: false, code: 'failed' });
+    expect(await f.call('feishu_members', { chat: 'visible-chat' })).toMatchObject({ ok: false, code: 'failed' });
   });
   it('does not expand group visibility when the triggering user is an administrator', async () => {
     const f = fixture({ admin: true, place: { kind: 'group', chatId: 'visible-chat' } });
     expect(await f.call('settings_get', { scope: { ...projectScope, projectName: 'hidden' } })).toMatchObject({ ok: false, code: 'unknown-tool' });
     expect(await f.call('feishu_groups', {})).toMatchObject({ ok: false, code: 'unknown-tool' });
-    expect(await f.call('feishu_members', { chatId: 'hidden-chat' })).toMatchObject({ ok: false, code: 'refused' });
+    expect(await f.call('feishu_members', { chat: 'hidden-chat' })).toMatchObject({ ok: false, code: 'refused' });
     expect(f.groups).not.toHaveBeenCalled(); expect(f.members).not.toHaveBeenCalled();
   });
   it('does not automatically retry a guarded write whose outcome is unknown', async () => {

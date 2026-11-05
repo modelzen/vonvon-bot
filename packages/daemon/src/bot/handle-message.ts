@@ -1183,12 +1183,12 @@ export function createOrchestrator(
     const assembled = sources ? assemble(sources, project ? 'work' : 'comment') : undefined;
     const nonce = newNonce();
     const skills = project ? await groupSkillProfile({ backend, cwd, directories: execution.workspaces.additional, disabledPaths: project.skills?.disabledPaths }) : undefined;
-    // A bound group's sessions get the schedule tools, read-only tier too (3.13); a comment's never do.
+    // A bound group's sessions get the schedule tools (3.13) and the Feishu read tools (dm-agent 7.2), read-only tier too; a comment's never do.
     const schedule = Boolean(project) && place !== 'comment';
     // The task skill goes with the tools (T4b); a package that cannot be written leaves the last whole one, or none.
     const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId) : [];
     const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages, mcpServers: [],
-      tools: { schedule }, ...(skills ? { skills } : {}) } : undefined;
+      tools: { schedule, feishu: schedule }, ...(skills ? { skills } : {}) } : undefined;
     const built = await executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
     if (assembled && built) openings.set(built, contextOf(assembled, nonce));
     return built;
