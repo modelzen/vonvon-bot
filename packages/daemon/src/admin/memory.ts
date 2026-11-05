@@ -1,8 +1,10 @@
+import { join } from 'node:path';
 import { memoryReplySchema, type MemoryItemScope, type MemoryReply, type MemoryRequest, type MemoryScopeRef } from '@vonvon/protocol';
 import type { MemoryLanding } from './ipc';
 import { loadBots } from '../config/bots';
 import { markSeen, marksFrom, readSeen, seenKey, type SeenPage } from './memory-seen';
 import { botDir } from '../config/paths';
+import { dmPersonList } from '../project/registry';
 import { libraryLocation, readLibrary, type LibraryLocation } from '../project/library';
 import { RpcError } from '../server/errors';
 import {
@@ -87,6 +89,16 @@ async function newCounts(deps: MemoryAdminDeps): Promise<MemoryReply> {
   return { kind: 'newCounts', projects, bots };
 }
 
+/** dm-agent 5: who the private-chat memory page lists, from the bot's `dm.people`, with what each has. Not who is an admin now. */
+async function dmPeople(botId: string, deps: MemoryAdminDeps): Promise<MemoryReply> {
+  const directory = await (deps.botDirectory ?? defaultBotDirectory)(botId);
+  const people = await Promise.all((await dmPersonList(join(directory, 'projects.json'))).map(async person => {
+    const used = await memoryStoreFor({ kind: 'dm', botId, openId: person.openId }, deps).then(store => store.read()).then(view => view.used, () => 0);
+    return { ...person, used };
+  }));
+  return { kind: 'dmPeople', people };
+}
+
 /** The memory a decision names, as a request names it: the bot's own for its memory and its private chats. */
 const landedRef = (scope: MemoryItemScope, botId: string): MemoryScopeRef =>
   scope.kind === 'project' ? scope : scope.kind === 'bot' ? { kind: 'bot', botId } : { kind: 'dm', botId, openId: scope.openId };
@@ -94,6 +106,7 @@ const landedRef = (scope: MemoryItemScope, botId: string): MemoryScopeRef =>
 export async function memoryAction(request: MemoryRequest, deps: MemoryAdminDeps = {}): Promise<MemoryReply> {
   const origin = deps.origin ?? 'ui';
   if (request.type === 'newCounts') return memoryReplySchema.parse(await newCounts(deps));
+  if (request.type === 'dmPeople') return memoryReplySchema.parse(await dmPeople(request.botId, deps));
   if (request.type === 'seen') {
     const at = (deps.now ?? Date.now)();
     await markSeen(deps.library ?? libraryLocation(), request.page, at);

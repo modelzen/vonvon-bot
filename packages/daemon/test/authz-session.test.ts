@@ -241,6 +241,11 @@ describe('the bot-session column (unit)', () => {
     expect(await authorize(scoped, settingsSave('运营'), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
     expect(await authorize(scoped, request('schedule', { botId: BOT, request: { action: 'list', chatId: OTHER } }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
     expect(await authorize(scoped, request('memory', { type: 'list', scope: { kind: 'dm', botId: BOT, openId: 'ou_a' } }), deps)).toMatchObject({ ok: false });
+    // dm-agent 5: who has a private chat, as a private chat's memory: the whole bot in reach, and no session
+    expect(await authorize(scoped, request('memory', { type: 'dmPeople', botId: BOT }), deps)).toMatchObject({ ok: false });
+    expect(await authorize(owner({ bot: 'cli_other' }), request('memory', { type: 'dmPeople', botId: BOT }), deps)).toMatchObject({ ok: false });
+    expect(await authorize(owner({ bot: BOT }), request('memory', { type: 'dmPeople', botId: BOT }), deps)).toEqual({ ok: true });
+    expect(await authorize(peer('dm', { bot: BOT }), request('memory', { type: 'dmPeople', botId: BOT }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
     // the place rules are a session's: the owner writes its group's settings, and reads them whole
     expect(await authorize(scoped, settingsSave('研发'), deps)).toEqual({ ok: true });
     const read = await authorize(scoped, request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: '研发' } }), deps);

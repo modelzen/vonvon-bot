@@ -1159,7 +1159,7 @@ export function createOrchestrator(
   /** What vonvon hands a session of `project` (a comment session when there is none): see bot/context-assembly.ts. */
   async function contextSourcesFor(project: Project | undefined, options: { skipBotMemory?: boolean } = {}) {
     const dmPerson = project?.dm?.people[project.chatId];
-    const place: ContextPlace = project?.dm ? { kind: 'dm', person: dmPerson?.name ?? (dmPerson ? names.peek(dmPerson.openId) : undefined) }
+    const place: ContextPlace = project?.dm ? { kind: 'dm', person: dmPerson?.name ?? (dmPerson ? names.peek(dmPerson.openId) : undefined), ...(dmPerson ? { openId: dmPerson.openId } : {}) }
       : project ? { kind: 'group', chatId: project.chatId, chatName: project.name } : { kind: 'comment' };
     return loadContextSources({
       appId: cfg.accounts.app.id, botName: channel.botIdentity?.name, place, ...(project ? { row: project } : {}),
@@ -1265,7 +1265,7 @@ export function createOrchestrator(
     // written since because the sources above are read now, at the start of the turn.
     const update = await planTurnUpdate(sources, assembled, delivered, Date.now(), { notices: takeMemoryNotices(thread.sessionId), hiddenBlocks: hiddenBlocksFor(backendId) });
     contextDelivered.set(thread, update.context);
-    turnStores.set(thread, { ...(assembled.cur.bot ? { bot: assembled.cur.bot.store } : {}), ...(assembled.cur.project ? { project: assembled.cur.project.store } : {}) });
+    turnStores.set(thread, { ...(assembled.cur.bot ? { bot: assembled.cur.bot.store } : {}), ...(assembled.cur.project ? { project: assembled.cur.project.store } : {}), ...(assembled.cur.dm ? { dm: assembled.cur.dm.store } : {}) });
     if (!update.text) return input;
     if (persisted) void trackTask(patchSession(key, { context: update.context }).catch(() => undefined));
     if (thread.injectContext) { await thread.injectContext(update.text); return input; }
