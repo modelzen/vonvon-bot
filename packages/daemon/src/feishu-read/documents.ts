@@ -11,9 +11,9 @@ export interface DocEditRequest { doc: string; action: 'append' | 'insert' | 're
 export interface DocEditResult { result: 'success' | 'partial_success'; updatedBlocks?: number; newBlocks?: string[]; warnings?: string[]; tips?: string; note?: string }
 
 /** What a link says it is; a bare token says nothing. */
-type RefKind = 'docx' | 'wiki' | 'sheet' | 'bitable' | 'file' | 'other';
+type RefKind = 'docx' | 'wiki' | 'sheet' | 'bitable' | 'file' | 'folder' | 'space' | 'other';
 export interface DocRef { kind?: RefKind; token: string; sheetId?: string; tableId?: string; viewId?: string }
-const KINDS: Record<string, RefKind> = { docx: 'docx', docs: 'other', wiki: 'wiki', sheets: 'sheet', file: 'file', base: 'bitable', bitable: 'bitable', slides: 'other', mindnotes: 'other' };
+const KINDS: Record<string, RefKind> = { docx: 'docx', docs: 'other', wiki: 'wiki', sheets: 'sheet', file: 'file', base: 'bitable', bitable: 'bitable', slides: 'other', mindnotes: 'other', folder: 'folder' };
 
 /** A Feishu link or a bare token. Only the token leaves here: nothing is fetched from what the link's host says. */
 export function parseRef(ref: string): DocRef {
@@ -21,25 +21,28 @@ export function parseRef(ref: string): DocRef {
   if (/^[\w-]+$/.test(text)) return { token: text };
   let url: URL | undefined;
   try { url = new URL(text.includes('://') ? text : `https://${text}`); } catch { /* the refusal below */ }
-  const match = url && /\/(docx|docs|wiki|sheets|file|base|bitable|slides|mindnotes)\/([\w-]+)/.exec(url.pathname);
+  const space = url && /\/wiki\/(?:space|settings)\/([\w-]+)/.exec(url.pathname);
+  if (space) return { kind: 'space', token: space[1]! };
+  const match = url && /\/(docx|docs|wiki|sheets|file|base|bitable|slides|mindnotes|folder)\/([\w-]+)/.exec(url.pathname);
   if (!url || !match) throw new FeishuReadRefused('认不出这个链接：给飞书文档、表格、多维表格或文件的链接，或者它的 token。');
   const sheetId = url.searchParams.get('sheet'), tableId = url.searchParams.get('table'), viewId = url.searchParams.get('view');
   return { kind: KINDS[match[1]!]!, token: match[2]!, ...(sheetId ? { sheetId } : {}), ...(tableId ? { tableId } : {}), ...(viewId ? { viewId } : {}) };
 }
 
 /** Which tool reads a node of this type, for the sentence that sends the model there. */
-function wrongKind(kind: string): FeishuReadRefused {
-  const toolOf: Record<string, string> = { docx: 'feishu_doc', sheet: 'feishu_sheet', bitable: 'feishu_base', file: 'feishu_drive_file' };
+export function wrongKind(kind: string): FeishuReadRefused {
+  const toolOf: Record<string, string> = { docx: 'feishu_doc', sheet: 'feishu_sheet', bitable: 'feishu_base', file: 'feishu_drive_file', folder: 'feishu_folder', space: 'feishu_wiki', wiki: 'feishu_wiki' };
   const tool = toolOf[kind];
-  return new FeishuReadRefused(tool ? `这不是这个工具读的类型，用 ${tool}。` : `这种云文档（${kind}）现在读不了，只能读新版文档、表格、多维表格和云空间文件。`);
+  return new FeishuReadRefused(tool ? `这不是这个工具读的类型，用 ${tool}。` : `这种云文档（${kind === 'other' ? '其他类型' : kind}）现在读不了，只能读新版文档、表格、多维表格和云空间文件。`);
 }
 
-/** A knowledge-base page's real object. */
-async function wikiNode(deps: ReadDeps, token: string): Promise<{ kind: string; token: string }> {
+/** A knowledge-base page's real object, and where the page itself is (a shortcut's being where it points). */
+export async function wikiNode(deps: ReadDeps, token: string): Promise<{ kind: string; token: string; space?: string; node?: string }> {
   const answer = await ask(deps, 'doc', () => deps.channel.rawClient.wiki.v2.space.getNode({ params: { token } }));
-  const node = (answer.data as { node?: { obj_token?: string; obj_type?: string } } | undefined)?.node;
+  const node = (answer.data as { node?: { obj_token?: string; obj_type?: string; space_id?: string; node_token?: string; origin_space_id?: string; origin_node_token?: string } } | undefined)?.node;
   if (!node?.obj_token || !node.obj_type) throw new FeishuReadRefused('找不到这个知识库页面。', 'not-found');
-  return { kind: node.obj_type, token: node.obj_token };
+  const space = node.origin_space_id || node.space_id, page = node.origin_node_token || node.node_token;
+  return { kind: node.obj_type, token: node.obj_token, ...(space ? { space } : {}), ...(page ? { node: page } : {}) };
 }
 
 /**
@@ -242,10 +245,15 @@ export async function readSheet(deps: ReadDeps, request: SheetRequest): Promise<
 export async function readDriveFile(deps: ReadDeps, request: DriveFileRequest): Promise<{ path: string; name: string }> {
   return reading(deps, parseRef(request.file), 'file', async token => {
     const res = await ask(deps, 'drive', () => deps.channel.rawClient.drive.v1.file.download({ path: { file_token: token } }), 60_000);
-    const name = cleanFileName(request.name ?? downloadName(res.headers)) || 'file';
-    await prepareInboundDir(request.saveIn);
-    const saved = await saveInboundDownload(res, token, name, request.saveIn);
-    if ('reason' in saved) throw new FeishuReadRefused(`没下载成：${saved.reason}。`);
-    return { path: saved.path, name: saved.name };
+    return saveDownload(res, token, request);
   });
+}
+
+/** A download into the folder received attachments go to, under their size limit; a comment's session has none of its own. */
+export async function saveDownload(res: Parameters<typeof saveInboundDownload>[0], token: string, request: { name?: string; saveIn?: string }): Promise<{ path: string; name: string }> {
+  const name = cleanFileName(request.name ?? downloadName(res.headers)) || 'file';
+  await prepareInboundDir(request.saveIn);
+  const saved = await saveInboundDownload(res, token, name, request.saveIn);
+  if ('reason' in saved) throw new FeishuReadRefused(`没下载成：${saved.reason}。`);
+  return { path: saved.path, name: saved.name };
 }
