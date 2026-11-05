@@ -51,7 +51,7 @@ async function bot(): Promise<void> {
   process.on('message', hostApi.onMessage);
   let switchOn = true;
   const entries = createAgentEntries({
-    appId: APP_ID, isAdmin: id => id === OWNER || id === ADMIN, chatSettingsOn: () => switchOn,
+    appId: APP_ID, isAdmin: id => id === OWNER || id === ADMIN,
     sessions: { revoke: sessionId => { void hostApi.revokeSessionToken(sessionId).catch(() => {}); } },
     memoryPlace: async turn => turn.place === 'group' ? { chatProjectId: PROJECT_A } : { botProjectIds: [PROJECT_A, PROJECT_B] },
   });

@@ -374,10 +374,12 @@ export function primaryAdmin(cfg: AppConfig): string | undefined {
  * 循环依赖。 */
 export function isUserAllowedInProject(
   cfg: AppConfig,
-  project: { allowedUsers?: string[] } | undefined,
+  project: { allowedUsers?: string[]; dm?: unknown } | undefined,
   senderId: string,
 ): boolean {
   if (isAdmin(cfg, senderId)) return true;
+  // A private chat has no allow list: its only door is the admin list (dm-agent 5).
+  if (project?.dm) return false;
   const list = project?.allowedUsers;
   if (!list || list.length === 0) return true;
   return list.includes(senderId);

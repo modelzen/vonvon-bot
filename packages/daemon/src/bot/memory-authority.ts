@@ -112,9 +112,7 @@ function targetProject(turn: MemoryTurn, place: MemoryPlace, requested: Requeste
     const allowed = turn.place === 'dm' ? (place.botProjectIds ?? []) : place.chatProjectId ? [place.chatProjectId] : [];
     return allowed.includes(requested.project) ? requested.project : 'not-allowed-here';
   }
-  if (turn.place === 'group') return place.chatProjectId ?? 'no-project';
-  const only = place.botProjectIds?.length === 1 ? place.botProjectIds[0] : undefined;
-  return only ?? 'no-project';
+  return place.chatProjectId ?? 'no-project';
 }
 
 export interface AddInput {
@@ -132,14 +130,16 @@ export function decideAdd(input: AddInput): AddDecision {
   const who = actorOf(turn);
   const written = { trust: who.trust, actorRole: who.actorRole, ...(who.actorOpenId ? { actorOpenId: who.actorOpenId } : {}) };
   const requested = input.scope;
-  if (requested === 'dm') {
-    return turn.place === 'dm' && turn.openId ? { allow: true, scope: { kind: 'dm', openId: turn.openId }, ...written } : { allow: false, reason: 'not-allowed-here' };
-  }
+  const ownMemory = (extra: { downgraded?: MemoryDowngrade } = {}): AddDecision =>
+    turn.place === 'dm' && turn.openId ? { allow: true, scope: { kind: 'dm', openId: turn.openId }, ...written, ...extra } : { allow: false, reason: 'not-allowed-here' };
+  if (requested === 'dm') return ownMemory();
   let downgraded: MemoryDowngrade | undefined;
   if (requested === 'bot' && via === 'tool') {
     downgraded = botWriteGate(turn, text);
     if (!downgraded) return { allow: true, scope: { kind: 'bot' }, ...written };
   }
+  // 私聊没有"本群的项目"：只有点名的 `{project}` 进项目，别的都留在这个人自己的记忆里，私聊的话不会掉进群能读的项目
+  if (turn.place === 'dm' && typeof requested !== 'object') return ownMemory(downgraded ? { downgraded } : {});
   const project = targetProject(turn, place, requested === 'bot' ? undefined : requested);
   if (project === 'no-project' || project === 'not-allowed-here') return { allow: false, reason: project };
   return { allow: true, scope: { kind: 'project', projectId: project }, ...written, ...(downgraded ? { downgraded } : {}) };

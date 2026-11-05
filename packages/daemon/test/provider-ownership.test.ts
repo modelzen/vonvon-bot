@@ -38,6 +38,8 @@ vi.mock('../src/config/app-roles', async original => ({
   ...await original<object>(),
   createAppRoleRefresher: () => ({ refresh: fake.refreshRoles, stop: fake.stopRoles }),
 }));
+// F1's profileOf prepares the download folder on the real disk, which fake timers do not wait for.
+vi.mock('../src/bot/media', async original => ({ ...await original<object>(), prepareInboundDir: async () => {} }));
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 vi.mock('../src/project/registry', async (original) => ({

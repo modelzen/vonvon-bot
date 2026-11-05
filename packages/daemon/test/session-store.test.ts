@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addRecall,
+  EARLIER_MAX,
   backfillFrom,
   clearSessionTitleJobKey,
   createSessionTitleJob,
@@ -72,6 +73,22 @@ function titleJob(sessionId = 'cx-title'): SessionTitleJob {
 }
 
 describe('session-store', () => {
+  // dm-agent 4.3: a private chat's /resume lists what this person parked, so a key remembers the ids it had
+  it('keeps the native sessions a key had, newest last, each once, up to the limit, across a new record and a patch', async () => {
+    await upsertSession(rec('dm', 'one'));
+    await upsertSession(rec('dm', 'two'));
+    await upsertSession(rec('dm', 'one'));
+    expect((await getSession('dm'))?.earlier).toEqual(['two']);
+    await patchSession('dm', { sessionId: 'three' });
+    expect(await getSession('dm')).toMatchObject({ sessionId: 'three', earlier: ['two', 'one'] });
+    await upsertSession(rec('dm', 'three'));
+    expect((await getSession('dm'))?.earlier).toEqual(['two', 'one']);
+    for (let i = 0; i < EARLIER_MAX + 5; i++) await upsertSession(rec('dm', `n${i}`));
+    const earlier = (await getSession('dm'))?.earlier ?? [];
+    expect(earlier).toHaveLength(EARLIER_MAX);
+    expect(earlier.at(-1)).toBe(`n${EARLIER_MAX + 3}`);
+  });
+
   it('persists a session speed override and allows returning to project inheritance', async () => {
     await upsertSession({ ...rec('speed', 'cx-speed'), serviceTier: 'ultrafast' });
     expect((await getSession('speed'))?.serviceTier).toBe('ultrafast');

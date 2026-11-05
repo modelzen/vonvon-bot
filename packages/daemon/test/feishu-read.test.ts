@@ -63,7 +63,7 @@ function tools(calls: Parameters<typeof channel>[0], place: AgentPlace, options:
   const c = channel(calls);
   const members = vi.fn(async () => ({ members: [{ openId: 'ou_a', name: '张三' }] }));
   const tier = vi.fn(async (): Promise<PermissionMode | undefined> => options.tier ?? 'full');
-  const list = createCommandTools({ appId: 'cli_fixture', settings: {} as never, projects: async () => [], groups: async () => ({ groups: [] }), members, groupTier: tier,
+  const list = createCommandTools({ appId: 'cli_fixture', groups: async () => ({ groups: [] }), members, groupTier: tier,
     feishu: createFeishuReader({ channel: c.channel, app: { id: 'cli_fixture', tenant: 'feishu' } }) });
   const entries = createAgentEntries({ appId: 'cli_fixture', isAdmin: () => options.admin ?? true, tools: list });
   const thread = { sessionId: 's', isAlive: () => true } as unknown as AgentThread;

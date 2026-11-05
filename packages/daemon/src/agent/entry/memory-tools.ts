@@ -12,7 +12,7 @@ import { ToolRefusal, type AgentTool, type ToolContext } from './tools';
 const HOW_TO_REMEMBER = [
   '只记以后还用得上的稳定内容，写陈述句；不记任务进度、密钥、临时状态。',
   '"谁该回、谁不该回、某个 bot 的职责"不记，告诉对方这要主人改补充职责。',
-  '拿不准范围就记到项目。',
+  '拿不准范围就记到项目；私聊里不用选，默认记到这个人的私聊记忆。',
   'branch 从记忆开头"分支："那一行里挑最合适的，照原样写名字；都不合适才起一个新的短名字（12 字以内，比如"发版"），意思相近的用已有的。拿不准就写"其他"。Bot 记忆里的"关于你"说的是主人；项目记忆里的"人和分工"只记人谁管什么，不记哪个 bot 该回什么。',
   '记了就在这一轮的回复里像平常说话一样带一句，比如"好，记住了""这个我记下了，以后按周四来"。',
   '没有固定格式；不逐条列记了什么，不说记在哪个项目、哪一层，不单独发一条消息。别人让你记的、你自己判断要记的都一样。',
@@ -27,7 +27,7 @@ const addInput = z.object({
 }).strict();
 const updateInput = z.object({ id: z.string().min(1).max(200), text: z.string().min(1).max(500).optional(), branch: z.string().max(100).optional(), why: z.string().max(200).optional() }).strict();
 const forgetInput = z.object({ id: z.string().min(1).max(200), why: z.string().max(200).optional() }).strict();
-const listInput = z.object({ scope: z.union([z.enum(['project', 'bot']), z.object({ project: z.string().min(1).max(100) }).strict()]).optional() }).strict();
+const listInput = z.object({ scope: z.union([z.enum(['project', 'bot', 'dm']), z.object({ project: z.string().min(1).max(100) }).strict()]).optional() }).strict();
 
 function writeContext(ctx: ToolContext, guard: () => void): WriteContext {
   const memoryTurn = ctx.memoryTurn;
@@ -48,7 +48,7 @@ function committed<T>(ctx: ToolContext, write: (context: WriteContext) => Promis
 export function createMemoryTools(writer: MemoryWriter): AgentTool[] {
   return [{
     name: 'memory_add', class: 'memory', input: addInput,
-    description: `记一条记忆。text 是一条陈述句；branch 是分支；scope 默认记到本群的项目，只有主人亲手打的跨项目要求才会进 Bot 记忆（由 vonvon 核对，不符合会记到项目）；claim 说明是"用户要我记"（asked）还是"我自己判断"（self）；why 是一句为什么记。\n${HOW_TO_REMEMBER}`,
+    description: `记一条记忆。text 是一条陈述句；branch 是分支；scope 默认记到本群的项目（私聊里是这个人的私聊记忆），只有主人亲手打的跨项目要求才会进 Bot 记忆（由 vonvon 核对，不符合会记到默认的地方）；claim 说明是"用户要我记"（asked）还是"我自己判断"（self）；why 是一句为什么记。\n${HOW_TO_REMEMBER}`,
     run: (args, ctx) => committed(ctx, context => writer.add(context, addInput.parse(args), 'tool')),
   }, {
     name: 'memory_update', class: 'memory', input: updateInput,
@@ -60,7 +60,7 @@ export function createMemoryTools(writer: MemoryWriter): AgentTool[] {
     run: (args, ctx) => committed(ctx, context => writer.forget(context, forgetInput.parse(args))),
   }, {
     name: 'memory_list', class: 'read', input: listInput,
-    description: '列出本会话能用的记忆，按分支分组，附分支名单和条数。默认列本群的项目记忆和 Bot 记忆；scope 可选 project、bot 或 {project:id}。要改、要忘一条之前先用它找 id。',
+    description: '列出本会话能用的记忆，按分支分组，附分支名单和条数。默认列本群的项目记忆和 Bot 记忆，私聊里是这个人的私聊记忆和 Bot 记忆；scope 可选 project、bot、dm 或 {project:id}。要改、要忘一条之前先用它找 id。',
     async run(args, ctx) {
       return writer.list(ctx.place, listInput.parse(args).scope);
     },

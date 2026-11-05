@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAgentEntries } from '../src/agent/entry/registry';
-import { createCommandTools } from '../src/agent/entry/command-tools';
+import { z } from 'zod';
+import { parseSettingsEdit } from '../src/admin/settings-parse';
+import type { SettingsSave } from '../src/admin/settings-types';
+import { settingsSet } from '../src/admin/structured-commands';
+import { ToolRefusal, type AgentTool } from '../src/agent/entry/tools';
 import type { AgentThread, AgentBackend } from '../src/agent/types';
 import { createSettingsOwner } from '../src/admin/settings';
 import { createAppPreferencesWriter } from '../src/admin/ops';
@@ -33,16 +37,31 @@ beforeEach(async () => {
 });
 afterEach(async () => { vi.useRealTimers(); await rm(state.root, { recursive: true, force: true }); });
 const backend: AgentBackend = { id: 'codex-appserver', displayName: 'fixture', isAvailable: async () => true, doctor: async () => ({ ok: true, version: 'fixture' }), listModels: async () => [], listThreads: async () => [], readHistory: async () => { throw Error('unused'); }, startThread: async () => { throw Error('unused'); }, resumeThread: async () => { throw Error('unused'); } };
+class NoWriteResult extends Error { constructor(readonly result: SettingsSave) { super('No write'); } }
+/** The guarded settings write under test, driven as any `class: 'settings'` tool: no Agent has this tool now (dm-agent 5). */
+function settingsTool(settings: ReturnType<typeof createSettingsOwner>): AgentTool {
+  return { name: 'settings_set', class: 'settings', description: 'fixture', input: z.object({ edit: z.unknown(), reason: z.string().optional() }).strict(),
+    async run(args, ctx) {
+      const edit = parseSettingsEdit(z.object({ edit: z.unknown() }).parse(args).edit);
+      if (!ctx.commit) throw new ToolRefusal({ ok: false, code: 'refused', message: 'fixture' });
+      try {
+        return await ctx.commit(async guard => {
+          const saved = await settingsSet(settings, edit, { beforeCommit: guard, notAfter: ctx.notAfter });
+          if (saved.kind !== 'saved') throw new NoWriteResult(saved);
+          return saved;
+        });
+      } catch (error) { if (error instanceof NoWriteResult) return error.result; throw error; }
+    } };
+}
 function fixture() {
   const writer = createAppPreferencesWriter({ cfg });
   const settings = createSettingsOwner({ cfg, writePreferences: writer, backendFor: () => backend, evictLiveSessionsForChat: async () => {} });
-  const flags = { admin: true, enabled: true };
+  const flags = { admin: true };
   const thread: AgentThread = { sessionId: 'synthetic', isAlive: () => true, close: async () => {},
     runStreamed: () => { throw Error('unused'); }, runGoal: () => { throw Error('unused'); },
     clearGoal: async () => {}, abort: async () => {}, steer: async () => {}, compact: async () => ({ compacted: false, usage: null }) };
   const pendingTools: Promise<void>[] = [];
-  const tools = createCommandTools({ appId: botId, settings, projects: listProjects,
-    groups: async () => ({ groups: [] }), members: async () => ({ members: [] }) }).map(tool => ({
+  const tools = [settingsTool(settings)].map(tool => ({
     ...tool,
     run: (...args: Parameters<typeof tool.run>) => {
       const pending = Promise.resolve(tool.run(...args));
@@ -50,8 +69,7 @@ function fixture() {
       return pending;
     },
   }));
-  const entries = createAgentEntries({ appId: botId, isAdmin: () => flags.admin,
-    chatSettingsOn: () => flags.enabled, tools });
+  const entries = createAgentEntries({ appId: botId, isAdmin: () => flags.admin, tools });
   const entry = entries.issue({ kind: 'p2p' }); entry.attach(thread);
   const scope = entries.openTurn(thread, { requesterOpenId: 'synthetic-owner', requesterKind: 'user', triggerMessageId: 'synthetic-message', retry: false, wake: false, initiative: false });
   entry.noteToolUse('synthetic-use');
@@ -59,11 +77,10 @@ function fixture() {
   // Wait for that work before checking bytes and removing its temporary data root.
   return { writer, settings, flags, entry, scope, settled: () => Promise.all(pendingTools), call: (edit: unknown) => entry.call('settings_set', { edit, reason: 'requested change' }, { toolUseId: 'synthetic-use' }) };
 }
-const interruptions = ['revoke administrator', 'close turn', 'switch off', 'revoke entry', 'deadline'] as const;
+const interruptions = ['revoke administrator', 'close turn', 'revoke entry', 'deadline'] as const;
 async function interrupt(f: ReturnType<typeof fixture>, kind: typeof interruptions[number]) {
   if (kind === 'revoke administrator') f.flags.admin = false;
   if (kind === 'close turn') f.scope.close();
-  if (kind === 'switch off') f.flags.enabled = false;
   if (kind === 'revoke entry') f.entry.revoke('closed');
   if (kind === 'deadline') await vi.advanceTimersByTimeAsync(71_000);
 }

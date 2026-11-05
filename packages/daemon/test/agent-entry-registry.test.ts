@@ -25,9 +25,8 @@ function setting(run: AgentTool['run'] = async (_args, ctx) => ctx.turn): AgentT
   return { name: 't_set', class: 'settings', description: 'fixture settings', input: z.object({}), run };
 }
 function setup(options: { place?: AgentPlace; facts?: TurnFacts; run?: AgentTool['run']; attached?: boolean; open?: boolean; codex?: boolean } = {}) {
-  const state = { admin: true, enabled: true };
-  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => state.admin,
-    chatSettingsOn: () => state.enabled, tools: [read, setting(options.run)] });
+  const state = { admin: true };
+  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => state.admin, tools: [read, setting(options.run)] });
   const entry = entries.issue(options.place ?? { kind: 'p2p' });
   const t = thread(options.codex ? false : undefined);
   if (options.attached !== false) entry.attach(t);
@@ -59,7 +58,7 @@ describe('entry lifecycle and authorization', () => {
     expect(names()).toEqual(kind === 'p2p' ? ['t_read', 't_set'] : ['t_read']);
     f.entry.attach(f.t);
     expect(await f.entry.call('t_read', {})).toEqual({ ok: true, result: 'read' });
-    f.state.admin = false; f.state.enabled = false;
+    f.state.admin = false;
     expect(names()).toEqual(kind === 'p2p' ? ['t_read', 't_set'] : ['t_read']);
     if (kind !== 'p2p') expect(await f.call()).toMatchObject(refused('not-dm'));
     expect(write).not.toHaveBeenCalled();
@@ -134,6 +133,21 @@ describe('entry lifecycle and authorization', () => {
     expect(() => entry.revoke('start-failed')).not.toThrow();
     expect(logs.fail).toHaveBeenCalledWith('agent', expect.any(Error), { phase: 'session-revoke', sessionId: entry.sessionId });
   });
+  // dm-agent 3.3: taking an administrator off the list ends their private chat's sessions, and nothing else
+  it('revokes one private chat\'s sessions at once, not another\'s or a group of the same id', async () => {
+    const revoked: string[] = [];
+    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, sessions: { revoke: id => { revoked.push(id); } } });
+    const first = entries.issue({ kind: 'p2p', chatId: 'chat-a' }), second = entries.issue({ kind: 'p2p', chatId: 'chat-a' });
+    const other = entries.issue({ kind: 'p2p', chatId: 'chat-b' }), group = entries.issue({ kind: 'group', chatId: 'chat-a' });
+    for (const entry of [first, second, other, group]) entry.attach(thread());
+    entries.revokeChat('chat-a');
+    expect(revoked.sort()).toEqual([first.sessionId, second.sessionId].sort());
+    expect(await first.call('session_info', {})).toMatchObject({ ok: false });
+    expect(await other.call('session_info', {})).toMatchObject({ ok: true });
+    expect(await group.call('session_info', {})).toMatchObject({ ok: true });
+    entries.revokeChat('chat-a'); entries.revokeChat('nobody');
+    expect(revoked).toHaveLength(2);
+  });
   it('revokes all grants and stops issuance during shutdown', async () => {
     const f = setup(); const other = f.entries.issue({ kind: 'group' }); other.attach(thread());
     f.entries.closeAll('shutdown');
@@ -155,16 +169,15 @@ describe('entry lifecycle and authorization', () => {
     const run = vi.fn(async () => 'ok'); const f = setup({ ...options, run });
     expect(await f.call()).toMatchObject(refused(reason)); expect(run).not.toHaveBeenCalled();
   });
-  it('checks current admin membership before the current switch', async () => {
-    const f = setup(); f.state.admin = false; f.state.enabled = false;
+  it('checks current admin membership on each call', async () => {
+    const f = setup(); f.state.admin = false;
     expect(await f.call()).toMatchObject(refused('not-admin'));
-    f.state.admin = true; expect(await f.call()).toMatchObject(refused('switch-off'));
-    f.state.enabled = true;
+    f.state.admin = true;
     expect(await f.call()).toMatchObject({ ok: true, result: { requesterOpenId: 'admin', role: 'admin', triggerMessageId: 'm1' } });
     f.state.admin = false; expect(await f.call()).toMatchObject(refused('not-admin'));
   });
-  it('reports not-dm first for a group without a turn and with switch off', async () => {
-    const f = setup({ place: { kind: 'group' }, open: false }); f.state.enabled = false;
+  it('reports not-dm first for a group without a turn', async () => {
+    const f = setup({ place: { kind: 'group' }, open: false });
     expect(await f.call()).toMatchObject(refused('not-dm'));
   });
   it('allows same-person steering and refuses another person', async () => {
@@ -209,7 +222,6 @@ describe('original turn ownership', () => {
     ['close', (f: ReturnType<typeof setup>) => f.scope?.close(), 'turn-ended'],
     ['other person', (f: ReturnType<typeof setup>) => f.entries.noteSteer(f.t, { openId: 'other', kind: 'user' }), 'not-human-turn'],
     ['admin removed', (f: ReturnType<typeof setup>) => { f.state.admin = false; }, 'not-admin'],
-    ['switch off', (f: ReturnType<typeof setup>) => { f.state.enabled = false; }, 'switch-off'],
     ['revoke', (f: ReturnType<typeof setup>) => f.entry.revoke('closed'), 'revoked'],
     ['thread died', (f: ReturnType<typeof setup>) => { vi.mocked(f.t.isAlive).mockReturnValue(false); }, 'revoked'],
     ['replacement', (f: ReturnType<typeof setup>) => { f.entries.openTurn(f.t, { ...person, triggerMessageId: 'm2' }); }, 'turn-ended'],
