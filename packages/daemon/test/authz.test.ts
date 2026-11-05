@@ -42,6 +42,8 @@ it('gives a group session only what its work needs, and the not-dm sentence for 
     'collaboration.context', 'collaboration.project', 'collaboration.providerModels', 'library.list', 'admin.daemonStatus', 'memory.export', 'memory.events']) {
     expect(RULES.get(kind)?.places.group, kind).toBe('deny');
   }
+  // dm-agent 3.3. main 必败: the list never changes by chat, a private chat's included
+  expect(RULES.get('settings.act.adminMember')?.places).toEqual({ dm: 'deny', group: 'not-dm', comment: 'not-dm' });
   // a private chat's cells as they were (its sessions come later); a comment's own group-less reads none of these either
   expect(RULES.get('library.list')?.places).toEqual({ dm: 'host', group: 'deny', comment: 'deny' });
   expect(RULES.get('settings.models')?.places).toEqual({ dm: 'bot', group: 'deny', comment: 'deny' });

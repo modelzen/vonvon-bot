@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentThread } from '../src/agent/types';
-import { createAgentEntries, NOT_DM_MESSAGE, NOT_OWNER_MESSAGE, SESSION_TURN_ENDED, type AgentPlace, type TurnFacts } from '../src/agent/entry/registry';
+import { createAgentEntries, NOT_DM_MESSAGE, SESSION_TURN_ENDED, type AgentPlace, type TurnFacts } from '../src/agent/entry/registry';
 import { decisionMessages, type MemoryPlace } from '../src/bot/memory-authority';
 import { scheduleRefusalMessages } from '../src/admin/schedule-commands';
 
@@ -28,7 +28,7 @@ function setup(place: AgentPlace, facts: TurnFacts | null = said(OWNER), options
   const sessions = { revoke: vi.fn() };
   const memoryPlace = vi.fn(async () => options.memoryPlace ?? { chatProjectId: 'prj_0000000a', botProjectIds: ['prj_0000000a', 'prj_0000000b'] });
   const entries = createAgentEntries({
-    appId: 'cli_x', isAdmin: id => id === OWNER || id === ADMIN, isOwner: id => id === OWNER, chatSettingsOn: () => options.switchOn ?? true, sessions, memoryPlace,
+    appId: 'cli_x', isAdmin: id => id === OWNER || id === ADMIN, chatSettingsOn: () => options.switchOn ?? true, sessions, memoryPlace,
   });
   const entry = entries.issue(place);
   const t = thread();
@@ -42,21 +42,14 @@ const ended = { ok: false, reason: 'turn-ended', message: SESSION_TURN_ENDED };
 afterEach(() => { vi.clearAllMocks(); });
 
 describe('settings writes and the administrators', () => {
-  it('lets the owner\'s and an admin\'s private-chat turn write settings, not a member\'s, and not with the switch off', async () => {
-    expect(await setup(dm, said(OWNER)).ask({ kind: 'settingsWrite' })).toEqual({ ok: true, role: 'owner', openId: OWNER });
+  it('lets an admin\'s private-chat turn write settings, not a member\'s, and not with the switch off', async () => {
+    expect(await setup(dm, said(OWNER)).ask({ kind: 'settingsWrite' })).toEqual({ ok: true, role: 'admin', openId: OWNER });
     expect(await setup(dm, said(ADMIN)).ask({ kind: 'settingsWrite' })).toEqual({ ok: true, role: 'admin', openId: ADMIN });
-    expect(await setup(dm, said(MEMBER)).ask({ kind: 'settingsWrite' })).toEqual({ ok: false, reason: 'not-admin', message: '只有主人和管理员发消息触发的那一轮能改设置。' });
+    expect(await setup(dm, said(MEMBER)).ask({ kind: 'settingsWrite' })).toEqual({ ok: false, reason: 'not-admin', message: '只有管理员发消息触发的那一轮能改设置。' });
     expect(await setup(dm, said(OWNER), { switchOn: false }).ask({ kind: 'settingsWrite' }))
       .toEqual({ ok: false, reason: 'switch-off', message: '主人关了私聊里的“聊天改设置”，要改请去桌面端或网页。' });
     expect(await setup(group, said(OWNER)).ask({ kind: 'settingsWrite' })).toEqual({ ok: false, reason: 'not-dm', message: NOT_DM_MESSAGE });
     expect(await setup(dm, { ...said(OWNER), requesterKind: 'bot', wake: true }).ask({ kind: 'settingsWrite' })).toMatchObject({ ok: false, reason: 'not-human-turn' });
-  });
-
-  // devices-4b acceptance: main 必败 (D4a let an admin's turn change the administrators as a member's ★ write)
-  it('keeps the administrators the owner\'s', async () => {
-    expect(await setup(dm, said(ADMIN)).ask({ kind: 'adminMember' })).toEqual({ ok: false, reason: 'not-owner', message: NOT_OWNER_MESSAGE });
-    expect(await setup(dm, said(OWNER)).ask({ kind: 'adminMember' })).toEqual({ ok: true, role: 'owner', openId: OWNER });
-    expect(await setup(dm, said(OWNER), { switchOn: false }).ask({ kind: 'adminMember' })).toMatchObject({ ok: false, reason: 'switch-off' });
   });
 
   // devices-4b 4.5a: a private chat's read-only queries are the owner's or an admin's, as ctx.admin is for the tools
@@ -71,7 +64,7 @@ describe('a turn that is over', () => {
   it('reads the same for a closed turn, a later call, a session never issued and one whose thread is dead', async () => {
     const f = setup(dm, said(OWNER));
     f.scope!.close();
-    for (const action of [{ kind: 'settingsWrite' }, { kind: 'adminRead' }, { kind: 'adminMember' }] as const) expect(await f.ask(action)).toEqual(ended);
+    for (const action of [{ kind: 'settingsWrite' }, { kind: 'adminRead' }] as const) expect(await f.ask(action)).toEqual(ended);
     expect(await setup(dm, null).ask({ kind: 'settingsWrite' })).toEqual(ended);
     expect(await f.entries.authorizeSessionCall('ses_0000000000000000', { kind: 'settingsWrite' })).toEqual(ended);
     const g = setup(group, said(MEMBER));
@@ -95,7 +88,7 @@ describe('scheduled tasks', () => {
     const f = setup(group, said(MEMBER, '每天九点发日报'));
     expect(await f.ask({ kind: 'schedule', action: 'create' })).toEqual({ ok: true, role: 'member', openId: MEMBER,
       actor: { kind: 'session', openId: MEMBER, role: 'member', chatId: 'oc_y', name: '某人', messageId: 'om_1' } });
-    expect(await setup(group, said(OWNER)).ask({ kind: 'schedule', action: 'list' })).toMatchObject({ ok: true, actor: { kind: 'session', role: 'owner' } });
+    expect(await setup(group, said(OWNER)).ask({ kind: 'schedule', action: 'list' })).toMatchObject({ ok: true, actor: { kind: 'session', role: 'admin' } });
   });
 
   it('refuses outside a group, and keeps a task\'s own run to itself', async () => {

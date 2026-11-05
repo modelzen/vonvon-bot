@@ -37,7 +37,7 @@ function fixture(options: { admin?: boolean; enabled?: boolean; place?: AgentPla
     runStreamed: () => { throw Error('unused'); }, runGoal: () => { throw Error('unused'); },
     clearGoal: async () => {}, abort: async () => {}, steer: async () => {}, compact: async () => ({ compacted: false, usage: null }) };
   const tools = createCommandTools({ appId: botId, settings, projects: async () => projects, groups, members });
-  const entries = createAgentEntries({ appId: botId, isAdmin: () => flags.admin, isOwner: () => false,
+  const entries = createAgentEntries({ appId: botId, isAdmin: () => flags.admin,
     chatSettingsOn: () => flags.enabled, tools });
   const entry = entries.issue(options.place ?? { kind: 'p2p' }); entry.attach(thread);
   const turn = entries.openTurn(thread, { requesterOpenId: 'synthetic', requesterKind: 'user', triggerMessageId: 'synthetic-message', retry: false, wake: false, initiative: false, ...options.facts });

@@ -237,18 +237,11 @@ function hostLines(view: HostSettingsView, section: string | undefined): string[
   return human;
 }
 
-/** Each administrator once, with where its access comes from; only 本机加的 can be removed here (the daemon refuses the rest). */
+/** The list as it is; whoever scanned the bot in carries a label and nothing more. */
 function adminList(view: AgentSettingsView): string {
-  const { administrators: admins, ownerOpenId } = view;
-  const feishu = admins.feishu?.adminOpenIds ?? [];
-  const ids = [...new Set([ownerOpenId, admins.feishu?.ownerOpenId, ...feishu, admins.scannerOpenId, ...admins.openIds].filter((id): id is string => Boolean(id)))];
-  if (!ids.length) return '还没有';
-  return ids.map(id => {
-    const roles = [
-      (id === ownerOpenId || id === admins.feishu?.ownerOpenId) && '主人', feishu.includes(id) && '飞书管理员', id === admins.scannerOpenId && '扫码的人',
-    ].filter(Boolean);
-    return `${id}（${roles.length ? roles.join('、') : '本机加的'}）`;
-  }).join('、');
+  const { administrators: { openIds }, ownerOpenId } = view;
+  if (!openIds.length) return '还没有';
+  return openIds.map(id => id === ownerOpenId ? `${id}（创建者）` : id).join('、');
 }
 
 /** An empty list lets every member in (the web page's 允许所有成员); a name comes from the group's roster when it has one. */

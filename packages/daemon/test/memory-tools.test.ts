@@ -32,7 +32,7 @@ function world() {
   const library = libraryLocation(data);
   const memory = createMemoryWriter({ botId: 'cli_a', botDirectory: join(data, 'bots', 'cli_a'), library, projectIdOf: async chatId => chatId === 'oc_a' ? PROJECT : undefined });
   const tools = createCommandTools({ appId: 'cli_a', memory, settings: {} as never, projects: async () => [], groups: async () => ({ groups: [] }) as never, members: async () => ({ members: [] }) as never });
-  const entries = createAgentEntries({ appId: 'cli_a', tools, isAdmin: id => id === 'ou_o', isOwner: id => id === 'ou_o' });
+  const entries = createAgentEntries({ appId: 'cli_a', tools, isAdmin: id => id === 'ou_o' });
   function session(place: AgentPlace, turn: TurnFacts) {
     const entry = entries.issue(place); const t = thread(); entry.attach(t);
     const scope = entries.openTurn(t, turn); entry.noteToolUse('u1');

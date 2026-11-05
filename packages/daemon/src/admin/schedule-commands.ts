@@ -44,7 +44,7 @@ type Creator = Exclude<ScheduleActor, { kind: 'scheduled' }>;
 export const scheduleRefusalMessages: Record<FixedRefusal, string> = {
   'not-group': '定时任务只能在群里管；要看别的群的任务去那个群说，或者用桌面端。',
   'not-found': '本群没有这个任务。',
-  'not-task-owner': '这个任务是别人建的，只有建它的人、主人和管理员能改。',
+  'not-task-owner': '这个任务是别人建的，只有建它的人和管理员能改。',
   'scheduled-run-scope': '定时任务运行时只能改或结束自己这一个任务。',
   'no-human-create': '定时任务运行时不能新建任务；要再来一次就改自己这个任务的时间。',
   'not-human-turn': '这一轮不是由在场的人发起的，不能改任务。',

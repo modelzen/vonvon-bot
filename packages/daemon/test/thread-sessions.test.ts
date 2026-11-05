@@ -101,7 +101,7 @@ function message(text: string, threadId?: string, extra: Partial<NormalizedMessa
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false, ...extra };
 }
 function setup(topics?: TopicRegistry) {
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] } } };
   const channel = { send: fake.send, rawClient: { appId: 'cli_me', im: { v1: { message: { get: fake.get, list: fake.list }, chat: { get: fake.chatGet }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
@@ -1168,7 +1168,7 @@ describe('/new, /compact while busy and recall notes (s15)', () => {
   it('lets only the owner and admins use /new in the main area, and explains it in a multi group', async () => {
     const o = setup();
     await o.onMessage(message('/new', undefined, { senderId: 'ou_guest' }));
-    expect(fake.send).toHaveBeenCalledWith('chat', { markdown: '⚠️ `/new` 只有主人和管理员能用。主区的会话是大家共用的。' }, expect.anything());
+    expect(fake.send).toHaveBeenCalledWith('chat', { markdown: '⚠️ `/new` 只有管理员能用。主区的会话是大家共用的。' }, expect.anything());
     fake.project = { name: 'test', chatId: 'chat', cwd: '/test', kind: 'multi' };
     await o.onMessage(message('/new'));
     expect(sent()).toContain('这个群的主区不留会话，不用 `/new`');

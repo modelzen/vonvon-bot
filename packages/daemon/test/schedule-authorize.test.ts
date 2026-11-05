@@ -31,12 +31,12 @@ const registryRefusal = (reason: string, message: string) => ({ ok: false, code:
 const creatorOf = (f: Fixture, made: ScheduleReply) => made.kind === 'task' ? f.store.get(made.task.id)?.createdBy : undefined;
 
 describe('who may do what', () => {
-  it.each([['owner', OWNER], ['admin', ADMIN]])('lets the %s do everything to anyone\'s task', async (_role, openId) => {
+  it.each([['the creator', OWNER], ['another admin', ADMIN]])('lets %s do everything to anyone\'s task', async (_role, openId) => {
     const f = await scheduleFixture({ tasks: tasks() });
     f.open(human(openId));
     const made = await reply(f, 'schedule_create', create);
     expect(made).toMatchObject({ kind: 'task', task: { name: '日报' } });
-    expect(creatorOf(f, made)).toMatchObject({ openId, role: _role });
+    expect(creatorOf(f, made)).toMatchObject({ openId, role: 'admin' });
     for (const [name, args, kind] of writes(f, 'st_theirs')) expect((await reply(f, name, args())).kind).toBe(kind);
   });
   it('lets a member do everything to their own task and nothing to another\'s', async () => {

@@ -64,7 +64,7 @@ vi.mock('../src/card/run-card-stream', () => ({
 
 const CHAT = 'oc_demo';
 const BE = 'codex-appserver';
-const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } };
+const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] } } };
 const target = { projectName: 'demo', chatId: CHAT };
 const send = vi.fn(async (..._args: unknown[]) => ({ messageId: `om_sent_${++fake.n}` }));
 // A reply in thread opens topic `omt_<the reply's id>`.

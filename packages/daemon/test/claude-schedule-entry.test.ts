@@ -37,7 +37,7 @@ function fixture() {
 }
 const profile = (schedule: boolean): SessionProfile => ({ instructions: '', env: {}, nativeSettings: { automaticMemory: false },
   additionalRoots: [], capabilityPackages: [], mcpServers: [], tools: { schedule } });
-const grant = (place: AgentPlace) => createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true,
+const grant = (place: AgentPlace) => createAgentEntries({ appId: 'fixture', isAdmin: () => true,
   tools: [sessionInfoTool, ...createScheduleTools({ commands: { execute: async () => ({ kind: 'deleted', taskId: 'x' }) } })] }).issue(place);
 function savedSession(): string {
   const root = mkdtempSync(join(tmpdir(), 't3-claude-')); roots.push(root);

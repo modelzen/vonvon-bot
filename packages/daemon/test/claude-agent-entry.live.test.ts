@@ -37,7 +37,7 @@ it.runIf(live).each([
       const value = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value;
     } }) satisfies Query;
   } };
-  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true });
+  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true });
   const entry = entries.issue({ kind: 'p2p' }), call = entry.call.bind(entry), note = entry.noteToolUse.bind(entry);
   entry.noteToolUse = id => { ids.add(id); order.push('event'); note(id); };
   entry.call = async (name, args, origin) => {
@@ -64,7 +64,7 @@ it.runIf(live)('real Claude delayed T1 settings call cannot borrow T2', { timeou
   let finished: (() => void) | undefined; const completed = new Promise<void>(resolve => { finished = resolve; });
   const tools: AgentTool[] = [{ name: 'probe_set', class: 'settings', description: 'Run the isolated authorization probe. Call once.', input: z.object({}),
     async run(_args, ctx) { invoked = true; changed?.(); await new Promise(resolve => setTimeout(resolve, 5_000)); try { return await ctx.commit?.(async guard => { guard(); commits++; return {}; }); } finally { finished?.(); } } }];
-  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true, tools });
+  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, tools });
   const entry = entries.issue({ kind: 'p2p' });
   const sdk = await loadBackendDep<ClaudeSdkFacade>('@anthropic-ai/claude-agent-sdk');
   const facade: ClaudeSdkFacade = { ...sdk, query: params => sdk.query({ ...params, options: { ...params.options, settingSources: [], strictMcpConfig: true, settings: { ...AUTO_COMPACT_SETTINGS, disableAllHooks: true } } }) };

@@ -56,7 +56,7 @@ vi.mock('../src/project/group-ops', () => ({ leaveChat: fixture.leave, transferO
 vi.mock('../src/card/managed', () => ({ sendManagedCard: fixture.send, updateManagedCard: vi.fn(async () => true) }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} }, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
 const target = { projectName: 'demo', chatId: 'oc_demo' };
-const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } };
+const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] } } };
 function backend() {
   const thread = { sessionId: 'fresh', isAlive: () => true, close: vi.fn(async () => {}), compact: vi.fn(async (): Promise<{ usage: { usedTokens: number; contextWindow: number | null } | null }> => ({ usage: { usedTokens: 20, contextWindow: 100 } })) };
   const backend = { id: 'codex-appserver', displayName: 'Codex (app-server)', listModels: async () => [{ id: 'gpt-5.5', displayName: 'GPT', supportedEfforts: ['medium' as const], defaultEffort: 'medium' as const, isDefault: true, hidden: false }], startThread: vi.fn(async () => thread), resumeThread: vi.fn(async () => thread), listThreads: vi.fn(async () => [{ sessionId: 'past', preview: 'historic', createdAt: 1, updatedAt: 2 }]), readHistory: vi.fn(async () => ({ name: 'historic', preview: '', turns: [], totalTurns: 0 })) };

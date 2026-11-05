@@ -72,7 +72,7 @@ beforeEach(async () => {
     })() }),
   };
   fake.backend.startThread.mockResolvedValue(session);
-  const cfg: AppConfig = { accounts: { app: { id: 'cli_schedule_lock', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'cli_schedule_lock', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, completionReminder: { mode: 'manual' } } };
   const channel = { send: vi.fn(async () => ({ messageId: 'om_sent' })), rawClient: { im: { v1: {
     message: { get: async () => ({ data: { items: [] } }) }, messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) },
   } } } };

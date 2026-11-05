@@ -183,7 +183,7 @@ describe('askBotOver', () => {
     const call = vi.fn(async () => answer);
     expect(await askBotOver({ call }, 'ses_1', { kind: 'schedule', action: 'create' })).toEqual(answer);
     expect(call).toHaveBeenCalledExactlyOnceWith({ kind: 'authorizeSessionCall', sessionId: 'ses_1', action: { kind: 'schedule', action: 'create' } }, SESSION_IPC_TIMEOUT_MS);
-    const refusal = { ok: false, reason: 'not-owner', message: '本机管理员名单只有飞书应用的拥有者能改。' };
-    expect(await askBotOver({ call: async () => refusal }, 'ses_1', { kind: 'adminMember' })).toEqual(refusal);
+    const refusal = { ok: false, reason: 'not-admin', message: '只有管理员发消息触发的那一轮能改设置。' };
+    expect(await askBotOver({ call: async () => refusal }, 'ses_1', { kind: 'settingsWrite' })).toEqual(refusal);
   });
 });

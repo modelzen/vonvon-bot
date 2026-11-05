@@ -50,7 +50,7 @@ function fixture() {
       return pending;
     },
   }));
-  const entries = createAgentEntries({ appId: botId, isAdmin: () => flags.admin, isOwner: () => true,
+  const entries = createAgentEntries({ appId: botId, isAdmin: () => flags.admin,
     chatSettingsOn: () => flags.enabled, tools });
   const entry = entries.issue({ kind: 'p2p' }); entry.attach(thread);
   const scope = entries.openTurn(thread, { requesterOpenId: 'synthetic-owner', requesterKind: 'user', triggerMessageId: 'synthetic-message', retry: false, wake: false, initiative: false });

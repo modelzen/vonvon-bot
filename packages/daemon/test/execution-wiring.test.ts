@@ -123,7 +123,7 @@ function message(text: string, threadId?: string): NormalizedMessage {
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
 function setup(preferences: AppPreferences = {}, createdTopicId?: string) {
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' }, ...preferences } };
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] }, ...preferences } };
   const ok = async () => ({ code: 0, data: { message_id: `om_${++seq}`, items: [] } });
   const channel = { send: fake.send, rawClient: {
     cardkit: { v1: { card: { create: async ({ data }: { data: { data: string } }) => { fake.cards.push(data.data); return { data: { card_id: 'card' } }; } } } },
