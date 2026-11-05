@@ -8,7 +8,7 @@ import { agentIdSchema, type SettingsRequest } from '@vonvon/protocol';
 import { commandFailure, CommandError } from '../src/cli/command-error';
 import { withDaemon, type Daemon } from '../src/cli/daemon-client';
 import { runSettingsSet, runSettingsAccess } from '../src/cli/commands/settings';
-import { runFeishu } from '../src/cli/commands/feishu';
+import { runFeishuGroups, runFeishuRead } from '../src/cli/commands/feishu';
 
 const scope = { kind: 'agent', botId: agentIdSchema.parse('cli_test') } as const;
 const value = { stored: { showToolCalls: true }, effective: { showToolCalls: true }, revision: 'latest', access: { kind: 'writable' }, apply: [] };
@@ -41,10 +41,10 @@ it('returns the shared access structure and Feishu pagination without converting
   await runSettingsAccess({}, h.io, h.daemon);
   expect(h.out()).toEqual({ ok: true, access: { cards: { kind: 'writable' } } });
   const groups = harness(async () => undefined);
-  await runFeishu('groups', undefined, { cursor: 'before' }, groups.io, groups.daemon);
+  await runFeishuGroups({ cursor: 'before' }, groups.io, groups.daemon);
   expect(groups.out()).toEqual({ ok: true, groups: [], nextCursor: 'next' });
   const failed = harness(async () => undefined, vi.fn(async () => { throw new Error('upstream'); }));
-  await expect(runFeishu('groups', undefined, {}, failed.io, failed.daemon)).rejects.toThrow('upstream');
+  await expect(runFeishuGroups({}, failed.io, failed.daemon)).rejects.toThrow('upstream');
 });
 it.each([['bad-args', 2], ['connection', 3], ['refused', 4], ['conflict', 5], ['outcome-unknown', 6], ['failed', 1]] as const)('serializes %s with a stable exit code', (kind, exitCode) => {
   expect(JSON.parse(JSON.stringify(commandFailure(new CommandError(kind, 'message'))))).toEqual({ ok: false, error: { kind, message: 'message' }, exitCode });
@@ -85,9 +85,9 @@ it('built CLI prints JSON on argument/connection failures without creating a dat
 }, 70_000);
 
 it('strips transport reply envelopes from member results shared with MCP', async () => {
-  const run = vi.fn(async () => ({ kind: 'members', members: [{ openId: 'synthetic-member', name: 'Fixture' }], nextCursor: 'more' }));
+  const run = vi.fn(async () => ({ kind: 'feishuRead', result: { members: [{ openId: 'synthetic-member', name: 'Fixture' }], nextCursor: 'more' } }));
   const h = harness(async () => undefined, run);
-  await runFeishu('members', 'oc_fixture', { cursor: 'page' }, h.io, h.daemon);
+  await runFeishuRead('feishu_members', { chat: 'oc_fixture', cursor: 'page' }, {}, h.io, h.daemon);
   expect(h.out()).toEqual({ ok: true, members: [{ openId: 'synthetic-member', name: 'Fixture' }], nextCursor: 'more' });
-  expect(run).toHaveBeenCalledWith({ type: 'listGroupMembers', agentId: 'cli_test', groupId: 'oc_fixture', cursor: 'page' });
+  expect(run).toHaveBeenCalledWith({ type: 'feishuRead', agentId: 'cli_test', tool: 'feishu_members', args: { chat: 'oc_fixture', cursor: 'page' } });
 });

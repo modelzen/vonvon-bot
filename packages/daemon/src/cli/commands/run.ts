@@ -9,6 +9,7 @@ import { activeBots, ensureRegistry, type BotEntry } from '../../config/bots';
 import { log } from '../../core/logger';
 import { AdminWriteError } from '../../admin/ops';
 import { createAdminIpcResponder, createHostIpcCaller, sessionTurnEnded, type HostApi } from '../../admin/ipc';
+import { hostFeishuApi, hostFeishuRead } from '../../admin/feishu-route';
 import { createSessionTokens, type SessionTokens } from '../../host/session-tokens';
 import { createAdminService } from '../../admin/service';
 import { botNotRunning } from '../../admin/schedule-commands';
@@ -121,6 +122,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
   // devices-4a 4.2: a supervised child asks the host for its sessions' tokens; alone, this process is the host and keeps them.
   let tokens: SessionTokens | undefined;
   let host: HostApi;
+  let adminService: ReturnType<typeof createAdminService> | undefined;
   if (process.send) {
     const caller = createHostIpcCaller(msg => {
       if (!process.connected) throw new Error('IPC 通道已关闭');
@@ -136,6 +138,15 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
         return own.issue(input);
       },
       revokeSessionToken: async sessionId => { own.revoke(sessionId); },
+      // Alone, the only Bot here is this one: any other is not running, which the same route says.
+      feishuRead: (bot, request) => hostFeishuRead({ appId: ownAppId, tokens: own, read: async (reach, read) => {
+        if (!adminService?.feishuRead) throw new Error('The daemon is still starting');
+        return adminService.feishuRead(reach, read);
+      } }, bot, request),
+      feishuApi: (bot, request) => hostFeishuApi({ appId: ownAppId, tokens: own, api: async (target, call) => {
+        if (!adminService?.feishuApi) throw new Error('The daemon is still starting');
+        return adminService.feishuApi(target, call);
+      } }, bot, request),
     };
   }
   try {
@@ -161,6 +172,8 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
           if (op.kind === 'libraryWorkspaceChanged' || op.kind === 'libraryWorkspaceCheck') return handle.libraryExecute(op);
           if (op.kind === 'schedule') return handle.schedule(op.actor, op.request);
           if (op.kind === 'authorizeSessionCall') return handle.entries.authorizeSessionCall(op.sessionId, op.action);
+          if (op.kind === 'feishuRead') return handle.feishuRead(op.request);
+          if (op.kind === 'feishuApi') return handle.feishuApi(op.request);
           return handle.adminExecute(op);
         },
         (msg) => void process.send?.(msg),
@@ -176,7 +189,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
         // This process is the bot's: a session's ★ request is judged here, by the same entries its tools use.
         askBot: async (appId, sessionId, action) => (appId === ownAppId ? handle.entries.authorizeSessionCall(sessionId, action) : sessionTurnEnded()),
         ...(diagnostics ? { diagnostics } : {}),
-        service: createAdminService({
+        service: adminService = createAdminService({
           executeCollaboration: async (botId, request) => {
             if (botId !== ownAppId) throw new AdminWriteError('这个 Bot 不归本进程管');
             return handle.collaboration(request);
@@ -204,6 +217,8 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
           },
           // Another registered bot is not running here: the same refusal the supervisor gives.
           executeSchedule: async (botId, actor, request) => (botId === ownAppId ? handle.schedule(actor, request) : botNotRunning()),
+          executeFeishuRead: async (botId, request) => (botId === ownAppId ? handle.feishuRead(request) : undefined),
+          executeFeishuApi: async (botId, request) => (botId === ownAppId ? handle.feishuApi(request) : undefined),
           liveStatus: async (botId) =>
             botId === ownAppId
               ? {

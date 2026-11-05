@@ -80,6 +80,11 @@ export const commandSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("listGroupMembers"), agentId: agentIdSchema, groupId: groupIdSchema, cursor: z.string().min(1).max(2048).optional() }).strict(),
+  /**
+   * dm-agent 7.3: a read of a Bot's Feishu tools, by the tool's name and its arguments, which the daemon checks as the tool
+   * does. No `agentId`: the daemon picks the Bot, the session's or the one bound to the chat asked about.
+   */
+  z.object({ type: z.literal("feishuRead"), agentId: agentIdSchema.optional(), tool: z.string().min(1).max(100), args: z.record(z.string(), z.unknown()) }).strict(),
   z
     .object({
       type: z.literal("bindGroup"),
@@ -282,6 +287,7 @@ export const commandResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("folderChosen"), folder: folderChoiceSchema }),
   z.object({ kind: z.literal("members"), members: z.array(z.object({ openId: z.string().min(1), name: z.string() })), nextCursor: z.string().optional() }),
   z.object({ kind: z.literal("groups"), groups: z.array(z.object({ id: groupIdSchema, name: z.string(), bound: z.boolean(), hasOtherBots: z.boolean().optional() })), nextCursor: z.string().optional() }),
+  z.object({ kind: z.literal("feishuRead"), result: z.unknown() }),
   z.object({ kind: z.literal("cancelled") }),
   z.object({ kind: z.literal("activationPending"), message: z.string() }),
   z.object({ kind: z.literal("refused"), code: z.string(), message: z.string() }),

@@ -1,16 +1,22 @@
 import { z } from 'zod';
 import { feishuMembers, type FeishuMembers } from '../../admin/structured-commands';
+import { AdminWriteError } from '../../admin/ops';
 import { inboundChatDir } from '../../bot/media';
 import type { PermissionMode } from '../types';
 import { FeishuReadRefused } from '../../feishu-read/denial';
-import type { FeishuReader } from '../../feishu-read/reader';
+import type { FeishuReader, FeishuReadReply, FeishuReadRequest } from '../../feishu-read/reader';
+import type { ApiRequest } from '../../feishu-read/api';
+import { botNotRunning, type RoutedApi, type RoutedRead } from '../../admin/feishu-route';
 import { ToolRefusal, type AgentTool, type ToolContext } from './tools';
 
 /**
  * 飞书读取工具（dm-agent 7.1、7.2）：Claude 的 MCP 和 Codex 的 dynamicTools 共用这一份定义。工具不走沙箱，范围在这里
  * 守：群会话只读本群的消息、文件、公告、成员，文档、表格、多维表格、云空间不按群隔离；私聊看这一轮是不是管理员的；评论会话只有文档
- * 这一列（第 7.4 节）。跨 Bot 是 F2。结果就是内容本身，不加标注。改文档的 `feishu_doc_edit`（F3）也在这里，只读档不给。
- * 私聊的通用工具 `feishu_api`（F7，第 7.6 节）也在这里，群和评论没有。
+ * 这一列（第 7.4 节）。结果就是内容本身，不加标注。改文档的 `feishu_doc_edit`（F3）也在这里，只读档不给。
+ *
+ * 跨 Bot（F2，第 7.3 节）：私聊的读取工具多一个 `bot`，经 host 走到那个 Bot 的进程，用它的身份读；群和评论没有这个参数，只在本进程读。
+ * `vonvon feishu` 和工具跑同一张表 {@link readsOf}，所以结果一样。
+ * 私聊的通用工具 `feishu_api`（F7，第 7.6 节）也在这里，群和评论没有；写了别的 Bot 时同样经 host 走到那个 Bot 的进程。
  */
 
 const chat = z.string().min(1).max(200).describe('群的 chat_id；不写就是当前这个群');
@@ -62,8 +68,11 @@ const apiInput = z.object({ method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELE
   path: z.string().min(1).max(2000).describe('接口路径，以 /open-apis/ 开头，不写域名和查询参数，路径里的 :id 换成真实的值'),
   params: z.record(z.string(), z.union([apiValue, z.array(apiValue).max(200)])).describe('查询参数，比如 page_size、page_token、user_id_type').optional(),
   body: z.record(z.string(), z.unknown()).describe('请求体，一个 JSON 对象').optional(),
-  bot: z.string().min(1).max(200).describe('用哪个 Bot 的身份，写 App ID 或名字；不写就是当前 Bot。现在只能是当前 Bot').optional() }).strict();
+  bot: z.string().min(1).max(200).describe('用这台电脑上哪个 Bot 的身份，写 App ID 或名字；不写就是当前 Bot').optional() }).strict();
 const searchInput = z.object({ query: z.string().min(1).max(500), chat: chat.describe('只搜这个群的 chat_id；群会话里只搜本群').optional(), limit: limit(20).describe('一页几条，默认 20').optional(), cursor: cursor.optional() }).strict();
+/** A private chat's only (7.3). */
+const bot = z.string().min(1).max(200).describe('用这台电脑上哪个 Bot 的身份读，写名字或 App ID。不写时，读群用绑了这个群的 Bot，优先当前 Bot；其余用当前 Bot').optional();
+const withBot = (input: z.ZodObject) => input.extend({ bot });
 
 const definitions = [
   { name: 'feishu_messages', input: messagesInput, description: '读群或话题的消息，可以按时间和游标翻页。结果带消息 id、发送人、时间和附件的 key。' },
@@ -100,9 +109,9 @@ const apiDescription = '用 Bot 自己的身份调飞书开放平台的接口，
 export const feishuReadToolNames: ReadonlySet<string> = new Set([...feishuToolNames].filter(name => name !== 'feishu_members'));
 
 /** The same tools without any provider's types, for Codex dynamicTools. */
-export function feishuToolSpecs(tools: { feishuEdit?: boolean; feishuApi?: boolean; documentsOnly?: boolean } = {}): { name: string; description: string; inputSchema: object }[] {
+export function feishuToolSpecs(tools: { feishuEdit?: boolean; feishuApi?: boolean; documentsOnly?: boolean; acrossBots?: boolean } = {}): { name: string; description: string; inputSchema: object }[] {
   const reads = definitions.filter(({ name }) => !tools.documentsOnly || feishuDocToolNames.has(name));
-  return [...reads.map(({ name, description, input }) => ({ name, description, inputSchema: z.toJSONSchema(input) })),
+  return [...reads.map(({ name, description, input }) => ({ name, description, inputSchema: z.toJSONSchema(tools.acrossBots ? withBot(input) : input) })),
     ...tools.feishuEdit ? [{ name: FEISHU_DOC_EDIT, description: docEditDescription, inputSchema: z.toJSONSchema(docEditInput) }] : [],
     ...tools.feishuApi ? [{ name: FEISHU_API, description: apiDescription, inputSchema: z.toJSONSchema(apiInput) }] : []];
 }
@@ -111,17 +120,6 @@ const NOT_THIS_CHAT = '群里只能读本群的内容，读不了别的群。';
 const denied = () => new ToolRefusal({ ok: false, code: 'refused', message: '目标不存在或没有权限。' });
 const refusal = (message: string) => new ToolRefusal({ ok: false, code: 'refused', message });
 const READ_ONLY_TIER = '这个群是只读档，改不了文档。要改，请管理员在 Vonvon Bot 客户端里调高这个群的权限。';
-
-/** A group's session is kept to its group; a private chat reads any group this Bot is in, on an administrator's turn. */
-function chatOf(requested: string | undefined, ctx: ToolContext): { chat?: string; only?: string } {
-  if (ctx.place.kind === 'group') {
-    if (requested && requested !== ctx.place.chatId) throw refusal(NOT_THIS_CHAT);
-    return { chat: ctx.place.chatId, only: ctx.place.chatId };
-  }
-  if (ctx.place.kind !== 'p2p' || !ctx.admin) throw denied();
-  const target = requested ?? ctx.place.chatId;
-  return target ? { chat: target } : {};
-}
 
 /** Documents are not kept to a group (7.2): whoever is in a place these tools are listed in reads them. A comment's turn is the registry's (authorizeFeishu). */
 function mayRead(ctx: ToolContext): void {
@@ -139,12 +137,6 @@ async function read<T>(ctx: ToolContext, run: () => Promise<T>): Promise<T> {
     if (failure instanceof FeishuReadRefused) throw refusal(failure.message);
     throw failure;
   }
-}
-
-function tool<Input extends z.ZodObject>(name: typeof definitions[number]['name'], run: (args: z.infer<Input>, ctx: ToolContext) => Promise<unknown>): AgentTool {
-  const definition = definitions.find(item => item.name === name)!;
-  return { name, ...feishuDocToolNames.has(name) ? { class: 'document' as const } : { class: 'read' as const, places: ['group', 'p2p'] as const }, description: definition.description, input: definition.input,
-    run: (args, ctx) => read(ctx, () => run(definition.input.parse(args) as z.infer<Input>, ctx)) };
 }
 
 /**
@@ -178,15 +170,27 @@ function docEditTool(reader: FeishuReader, tier: ((chatId: string) => Promise<Pe
     } };
 }
 
-/** The registry has looked at the turn (authorizeFeishuApi); it goes through `commit` because any method may change something. */
-function apiTool(reader: FeishuReader): AgentTool {
+/**
+ * The registry has looked at the turn (authorizeFeishuApi, dmTurn); it goes through `commit` because any method may change
+ * something. Another Bot's call (7.3, 7.6) is past that same guard before it leaves this process: the guard cannot cross,
+ * and the host and that Bot, which see no turn, let it through on the session alone.
+ */
+function apiTool(reader: FeishuReader, route: ReadRoute['routeApi']): AgentTool {
   return { name: FEISHU_API, class: 'feishu-api', places: ['p2p'], description: apiDescription, input: apiInput,
     async run(args, ctx) {
-      const request = apiInput.parse(args);
+      const { bot, ...request } = apiInput.parse(args);
       const commit = ctx.commit;
       if (ctx.place.kind !== 'p2p' || !commit) throw denied();
       try {
-        return await commit(guard => reader.api(request, guard));
+        if (bot === undefined || reader.isThisBot(bot)) return await commit(guard => reader.api(request, guard));
+        const { sessionId } = ctx;
+        if (!route || !sessionId) throw refusal(botNotRunning(bot));
+        return await commit(async guard => {
+          guard();
+          const reply = await route(bot, { sessionId, request });
+          if (!reply.ok) throw refusal(reply.message);
+          return reply.result;
+        });
       } catch (failure) {
         if (failure instanceof FeishuReadRefused) throw refusal(failure.message);
         throw failure;
@@ -194,46 +198,126 @@ function apiTool(reader: FeishuReader): AgentTool {
     } };
 }
 
-export function createFeishuTools(deps: { members(chatId: string, cursor?: string): Promise<FeishuMembers>; feishu?: FeishuReader;
+type Definition = typeof definitions[number];
+export type FeishuReadName = Definition['name'];
+type Reads = { [Name in FeishuReadName]: (args: z.infer<Extract<Definition, { name: Name }>['input']>, only: string | undefined) => Promise<unknown> };
+interface ReadDeps { members(chatId: string, cursor?: string): Promise<FeishuMembers>; feishu?: FeishuReader }
+/** How this process reaches the host for a private chat (7.3). No host, no other Bot. */
+interface ReadRoute {
+  /** A read: the host picks the Bot. */
+  route?(bot: string | undefined, request: RoutedRead): Promise<FeishuReadReply>;
+  /** `feishu_api` on the Bot named. */
+  routeApi?(bot: string, request: RoutedApi): Promise<FeishuReadReply>;
+}
+
+/** The chat a read is on: a read kept to a chat (a group's session, 7.2) takes no other, and says so before Feishu is asked. */
+function chatIn(requested: string | undefined, only: string | undefined): { chat?: string; only?: string } {
+  if (!only) return requested ? { chat: requested } : {};
+  if (requested && requested !== only) throw new FeishuReadRefused(NOT_THIS_CHAT);
+  return { chat: only, only };
+}
+/** A message named by id: its chat is only known once it is read, so the reader checks it against this. */
+const keptTo = (only: string | undefined): { only?: string } => only ? { only } : {};
+/** A group's downloads go to its own folder, the one its restricted sessions can read. */
+const savedIn = (only: string | undefined): { saveIn?: string } => only ? { saveIn: inboundChatDir(only) } : {};
+
+/** Each read as plain data: the tools', and what a host asks of this process for a private chat or the command line. */
+function readsOf({ members, feishu: reader }: ReadDeps): Partial<Reads> {
+  const list: Reads['feishu_members'] = ({ chat: requested, cursor }, only) => {
+    const { chat: target } = chatIn(requested, only);
+    if (!target) throw new FeishuReadRefused('要写 chat：想查哪个群。');
+    return feishuMembers({ members }, target, cursor);
+  };
+  if (!reader) return { feishu_members: list };
+  return {
+    feishu_messages: (args, only) => reader.messages({ ...args, ...chatIn(args.chat, only) }),
+    feishu_message: (args, only) => reader.message({ ...args, ...keptTo(only) }),
+    feishu_file: (args, only) => reader.file({ ...args, ...keptTo(only), ...savedIn(only) }),
+    feishu_chat: ({ chat: requested, ...rest }, only) => reader.chat({ ...rest, ...chatIn(requested, only) }),
+    feishu_members: list,
+    feishu_doc: args => reader.doc(args),
+    feishu_sheet: args => reader.sheet(args),
+    feishu_base: args => reader.base(args),
+    feishu_slides: args => reader.slides(args),
+    feishu_mindnote: args => reader.mindnote(args),
+    feishu_board: args => reader.board(args),
+    feishu_minutes: args => reader.minutes(args),
+    feishu_drive_file: (args, only) => reader.driveFile({ ...args, ...savedIn(only) }),
+    feishu_folder: args => reader.folder(args),
+    feishu_wiki: args => reader.wiki(args),
+    feishu_comments: args => reader.comments(args),
+    feishu_doc_media: (args, only) => reader.docMedia({ ...args, ...savedIn(only) }),
+    feishu_search: (args, only) => reader.search({ ...args, ...chatIn(args.chat, only) }),
+  };
+}
+
+/** What is wrong with a read's arguments: the command line's to hear before any Bot is asked. */
+export function feishuReadProblem({ tool, args }: Pick<FeishuReadRequest, 'tool' | 'args'>): string | undefined {
+  const parsed = definitions.find(item => item.name === tool)?.input.safeParse(args);
+  return !parsed || parsed.success ? undefined : `参数不对：${parsed.error.issues.map(issue => `${issue.path.join('.') || '<root>'}：${issue.code}`).join('；')}。`;
+}
+
+function perform(reads: Partial<Reads>, { tool, args, only }: FeishuReadRequest): Promise<unknown> {
+  const definition = definitions.find(item => item.name === tool);
+  const run = definition && reads[definition.name] as ((args: unknown, only: string | undefined) => Promise<unknown>) | undefined;
+  if (!definition || !run) throw new FeishuReadRefused(`没有 ${tool} 这个读取工具。`);
+  const problem = feishuReadProblem({ tool, args });
+  if (problem) throw new FeishuReadRefused(problem);
+  return run(definition.input.parse(args), only);
+}
+
+/**
+ * This process's reads for the host (dm-agent 7.3): another Bot's private chat or the command line asking, already let
+ * through there. A refusal is an answer, in this Bot's name, for the host to pass on.
+ */
+export function createFeishuReads(deps: ReadDeps): (request: FeishuReadRequest) => Promise<FeishuReadReply> {
+  const reads = readsOf(deps);
+  return request => answered(() => perform(reads, request));
+}
+
+/** `feishu_api` for the host: another Bot's private chat, its turn looked at there (7.6). Never reached by `command.feishuRead`, whose table has no such tool. */
+export const createFeishuCalls = (reader: FeishuReader) => (request: ApiRequest): Promise<FeishuReadReply> => answered(() => reader.api(request));
+
+async function answered(run: () => Promise<unknown>): Promise<FeishuReadReply> {
+  try {
+    return { ok: true, result: await run() };
+  } catch (failure) {
+    if (failure instanceof FeishuReadRefused) return { ok: false, kind: failure.kind, message: failure.message };
+    // feishu_members reads through the group commands, which refuse in their own error.
+    if (failure instanceof AdminWriteError) return { ok: false, kind: 'other', message: failure.message };
+    throw failure;
+  }
+}
+
+export function createFeishuTools(deps: ReadDeps & ReadRoute & {
   /** A group's permission tier now, for the edit tool. */
   groupTier?(chatId: string): Promise<PermissionMode | undefined> }): AgentTool[] {
-  const members = tool<typeof membersInput>('feishu_members', ({ chat: requested, cursor }, ctx) => {
-    const { chat: target } = chatOf(requested, ctx);
-    if (!target) throw refusal('要写 chat：想查哪个群。');
-    return feishuMembers(deps, target, cursor);
-  });
+  const reads = readsOf(deps);
+  /** The place's own Bot and chat. In a private chat the chat left out is that chat, of this Bot only. */
+  async function across(name: FeishuReadName, input: z.ZodObject, given: unknown, ctx: ToolContext): Promise<unknown> {
+    const { bot: named, ...args } = withBot(input).parse(given) as { bot?: string; chat?: string };
+    const here = 'chat' in input.shape && !args.chat && !named && ctx.place.chatId ? { chat: ctx.place.chatId } : {};
+    const request = { tool: name, args: { ...args, ...here } };
+    if (!deps.route || !ctx.sessionId) {
+      if (named) throw refusal(botNotRunning(named));
+      return perform(reads, request);
+    }
+    const reply = await deps.route(named, { ...request, sessionId: ctx.sessionId });
+    if (!reply.ok) throw refusal(reply.message);
+    return reply.result;
+  }
+  function tool(name: FeishuReadName): AgentTool {
+    const definition = definitions.find(item => item.name === name)!;
+    const { input, description } = definition;
+    const documents = feishuDocToolNames.has(name);
+    return { name, ...documents ? { class: 'document' as const } : { class: 'read' as const, places: ['group', 'p2p'] as const }, description, input, dmInput: withBot(input),
+      run: (args, ctx) => read(ctx, async () => {
+        if (ctx.place.kind === 'p2p') return across(name, input, args, ctx);
+        if (ctx.place.kind === 'doc' && !documents) throw denied();
+        return perform(reads, { tool: name, args: args as Record<string, unknown>, ...(ctx.place.kind === 'group' && ctx.place.chatId ? { only: ctx.place.chatId } : {}) });
+      }) };
+  }
   const reader = deps.feishu;
-  if (!reader) return [members];
-  return [
-    tool<typeof messagesInput>('feishu_messages', (args, ctx) => reader.messages({ ...args, ...chatOf(args.chat, ctx) })),
-    tool<typeof messageInput>('feishu_message', (args, ctx) => reader.message({ ...args, ...only(ctx) })),
-    tool<typeof fileInput>('feishu_file', (args, ctx) => reader.file({ ...args, ...only(ctx), ...savedIn(ctx) })),
-    tool<typeof chatInput>('feishu_chat', ({ chat: requested, ...rest }, ctx) => reader.chat({ ...rest, ...chatOf(requested, ctx) })),
-    members,
-    tool<typeof docInput>('feishu_doc', args => reader.doc(args)),
-    tool<typeof sheetInput>('feishu_sheet', args => reader.sheet(args)),
-    tool<typeof baseInput>('feishu_base', args => reader.base(args)),
-    tool<typeof slidesInput>('feishu_slides', args => reader.slides(args)),
-    tool<typeof mindnoteInput>('feishu_mindnote', args => reader.mindnote(args)),
-    tool<typeof boardInput>('feishu_board', args => reader.board(args)),
-    tool<typeof minutesInput>('feishu_minutes', args => reader.minutes(args)),
-    tool<typeof driveInput>('feishu_drive_file', (args, ctx) => reader.driveFile({ ...args, ...savedIn(ctx) })),
-    tool<typeof folderInput>('feishu_folder', args => reader.folder(args)),
-    tool<typeof wikiInput>('feishu_wiki', args => reader.wiki(args)),
-    tool<typeof commentsInput>('feishu_comments', args => reader.comments(args)),
-    tool<typeof docMediaInput>('feishu_doc_media', (args, ctx) => reader.docMedia({ ...args, ...savedIn(ctx) })),
-    tool<typeof searchInput>('feishu_search', (args, ctx) => reader.search({ ...args, ...chatOf(args.chat, ctx) })),
-    docEditTool(reader, deps.groupTier),
-    apiTool(reader),
-  ];
-}
-
-/** A group's downloads go to its own folder, the one its restricted sessions can read. */
-function savedIn(ctx: ToolContext): { saveIn?: string } {
-  return ctx.place.kind === 'group' && ctx.place.chatId ? { saveIn: inboundChatDir(ctx.place.chatId) } : {};
-}
-
-/** A message named by id: its chat is only known once it is read, so the reader checks it against this. */
-function only(ctx: ToolContext): { only?: string } {
-  return ctx.place.kind === 'group' && ctx.place.chatId ? { only: ctx.place.chatId } : {};
+  if (!reader) return [tool('feishu_members')];
+  return [...definitions.map(({ name }) => tool(name)), docEditTool(reader, deps.groupTier), apiTool(reader, deps.routeApi)];
 }
