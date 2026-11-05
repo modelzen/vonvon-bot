@@ -89,8 +89,8 @@ function GroupSettingsLoader(props: Props) {
 export function dmFixedRows(view: ProjectSettingsView): {title: string; value: string; description: string}[] {
   const {mode, options} = view.sections.permission.stored;
   return [
-    {title: '执行权限', value: options.tiers.find(tier => tier.tier === mode)?.name ?? '完全访问', description: '私聊只有这一档，不能改'},
-    {title: '目录', value: view.identity.cwd, description: '私聊自己的目录，不能改'},
+    {title: '执行权限', value: options.tiers.find(tier => tier.tier === mode)?.name ?? '完全访问', description: '私聊固定用这一档'},
+    {title: '目录', value: view.identity.cwd, description: '私聊专用，不能改'},
   ];
 }
 function DmFixedSettings({view}: {view: ProjectSettingsView}) {

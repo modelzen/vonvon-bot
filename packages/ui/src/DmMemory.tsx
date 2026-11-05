@@ -1,5 +1,4 @@
 import {useState} from 'react';
-import {ChevronRight} from 'lucide-react';
 import type {Agent} from '@vonvon/protocol';
 import {DmContextPanel} from './ContextPanel';
 import {dmPersonLabel, dmPersonRow, useDmPeople, type DmPerson} from './dm-people';
@@ -14,7 +13,7 @@ export function DmPeopleList({people, selected, onSelect}: {people: readonly DmP
   if (!people.length) return <SettingsRow title="还没有人和这个 Bot 私聊过"/>;
   return <>{people.map(person => {
     const {title, meta} = dmPersonRow(person);
-    return <SettingsRow key={person.openId} title={selected === person.openId ? <strong>{title}</strong> : title} description={meta} trailing={<ChevronRight size={14} aria-hidden="true"/>} onClick={() => onSelect(person.openId)}/>;
+    return <SettingsRow key={person.openId} title={selected === person.openId ? <strong>{title}</strong> : title} description={meta} onClick={() => onSelect(person.openId)}/>;
   })}</>;
 }
 
@@ -29,8 +28,8 @@ export function DmMemory({agent, revision, onBotProfile}: {agent: Agent; revisio
   const person = people?.find(item => item.openId === (selected ?? only));
   return <div className="dm-memory">
     {error && <InlineNotice title="读取未完成" tone="warning">{error}</InlineNotice>}
-    <SettingsGroup label="私聊的人" action={<Button size="sm" onClick={onBotProfile}>Bot 记忆</Button>}
-      footer="每个人的私聊记忆分开放，只在这个人的私聊里用。不再是管理员的人，记忆还留着。">
+    <SettingsGroup label="和谁私聊过" action={<Button size="sm" onClick={onBotProfile}>Bot 记忆</Button>}
+      footer="每个人的记忆分开放，只在和 TA 的私聊里用。不再是管理员后，记忆还留着。">
       {people ? <DmPeopleList people={people} selected={person?.openId} onSelect={setSelected}/> : !error && <SettingsRow title="正在读取…"/>}
     </SettingsGroup>
     {person && <MemoryMap key={person.openId} scope={{kind: 'dm', botId: agent.id, openId: person.openId}} rootLabel={dmPersonLabel(person)} mode="direct" memoryLabel="私聊记忆" targets={NO_TARGETS}/>}

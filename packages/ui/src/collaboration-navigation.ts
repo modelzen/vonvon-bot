@@ -6,7 +6,7 @@ import type {Destination, DetailPane, Selection} from './search';
 
 export type AgentPane = {kind: 'groups'} | {kind: 'profile'} | {kind: 'schedule'} | {kind: 'settings'};
 /** The Bot page's tabs in order; 任务 lists every group's tasks of the Bot and a row opens that group's 任务 tab. */
-export const agentPanes: readonly {kind: AgentPane['kind']; label: string}[] = [{kind: 'groups', label: '群聊'}, {kind: 'profile', label: '记忆'}, {kind: 'schedule', label: '任务'}, {kind: 'settings', label: '设置'}];
+export const agentPanes: readonly {kind: AgentPane['kind']; label: string}[] = [{kind: 'groups', label: '聊天'}, {kind: 'profile', label: '记忆'}, {kind: 'schedule', label: '任务'}, {kind: 'settings', label: '设置'}];
 /** Project memory and workspace remain reachable as secondary destinations. */
 export type ProjectPane = {kind: 'map'} | {kind: 'workspace'} | {kind: 'context'} | {kind: 'group'; tab: GroupSettingsTab};
 export type MembershipPane = {kind: 'activity'} | {kind: 'settings'};
