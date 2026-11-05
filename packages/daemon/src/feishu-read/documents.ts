@@ -127,10 +127,10 @@ export async function readDoc(deps: ReadDeps, request: DocRequest): Promise<{ te
       return part(at.source ? { source: at.source, text: await docText(deps, token, at.source) } : await anyDocText(deps, token));
     });
   } catch (failure) {
-    // A bare token may be an old document's, as a comment's file_token is: only that API knows it.
-    if (ref.kind || at.source || !(failure instanceof FeishuReadRefused) || failure.kind !== 'not-found') throw failure;
+    // A bare token may be an old document's, as a comment's file_token is: only that API knows it, under a scope of its own.
+    if (ref.kind || at.source || !(failure instanceof FeishuReadRefused) || (failure.kind !== 'not-found' && failure.kind !== 'scope')) throw failure;
     return await legacy(ref.token).catch(second => {
-      throw second instanceof FeishuReadRefused && second.kind === 'not-found' ? failure : second;
+      throw second instanceof FeishuReadRefused && (second.kind === 'not-found' || second.kind === failure.kind) ? failure : second;
     });
   }
 }
