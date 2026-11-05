@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { LarkChannel, NormalizedMessage } from '@larksuiteoapi/node-sdk';
@@ -304,12 +305,7 @@ export async function collectInboundFiles(
   }
   if (refs.length === 0) return { files: [], failed: [] };
 
-  await pruneOldMedia(paths.inboundDir);
-  try {
-    await mkdir(paths.inboundDir, { recursive: true });
-  } catch {
-    /* mkdir failure surfaces on writeFile below */
-  }
+  await prepareInboundDir();
 
   const files: InboundFile[] = [];
   const failed: FailedFile[] = [];
@@ -332,42 +328,79 @@ function downloadFailure(err: unknown): string {
   return '下载失败';
 }
 
+/**
+ * A group's folder for what its Feishu tools download. Its own, because a Codex session outside full access reads only
+ * the roots it was given, and this one must not show it every group's files.
+ */
+export function inboundChatDir(chatId: string): string {
+  return join(paths.inboundDir, 'chats', createHash('sha256').update(chatId).digest('hex').slice(0, 16));
+}
+
+/** Old downloads go, and the directory is there; a failure surfaces on the write. */
+export async function prepareInboundDir(dir: string = paths.inboundDir): Promise<void> {
+  await pruneOldMedia(dir);
+  try {
+    await mkdir(dir, { recursive: true });
+  } catch {
+    /* mkdir failure surfaces on writeFile below */
+  }
+}
+
 async function downloadOneFile(channel: LarkChannel, ref: FileRef, name: string): Promise<InboundFile | { reason: string }> {
   try {
     const res = await channel.rawClient.im.v1.messageResource.get({
       path: { message_id: ref.messageId, file_key: ref.fileKey },
       params: { type: 'file' },
     });
-    const declared = Number(readHeader(res.headers, 'content-length'));
-    if (Number.isFinite(declared) && declared > MAX_FILE_BYTES) {
-      log.warn('intake', 'file-too-large', { fileKey: ref.fileKey.slice(0, 24), bytes: declared });
-      return { reason: TOO_LARGE };
-    }
-    // file_key is globally unique per resource — prefix the (sanitized, ≤40-char)
-    // key so two uploads sharing a name never clash in the shared inboundDir.
-    const onDisk = `${safeName(ref.fileKey)}-${name}`;
-    const file = join(paths.inboundDir, onDisk);
-    await res.writeFile(file);
-    // Backstop the cap when content-length was absent: stat + drop if oversized.
-    try {
-      const st = await stat(file);
-      if (st.size > MAX_FILE_BYTES) {
-        await rm(file, { force: true });
-        log.warn('intake', 'file-too-large', { fileKey: ref.fileKey.slice(0, 24), bytes: st.size });
-        return { reason: TOO_LARGE };
-      }
-    } catch {
-      /* stat failed — keep the file rather than lose it */
-    }
-    // Display name is the SANITIZED `name` (not raw fileName): it is woven into
-    // the prompt verbatim, so a newline / control char in an uploader-controlled
-    // fileName would otherwise inject fake manifest lines (cleanFileName collapses
-    // those). Disk path stays inside inboundDir regardless.
-    return { path: file, name };
+    return await saveInboundDownload(res, ref.fileKey, name);
   } catch (err) {
     log.warn('intake', 'file-download-failed', { fileKey: ref.fileKey.slice(0, 24), err: String(err) });
     return { reason: downloadFailure(err) };
   }
+}
+
+/** A download's name as Feishu gives it (`filename*=UTF-8''…` or `filename="…"`), unsanitized. */
+export function downloadName(headers: unknown): string | undefined {
+  const disposition = readHeader(headers, 'content-disposition');
+  if (!disposition) return undefined;
+  const encoded = /filename\*=(?:UTF-8|utf-8)''([^;]+)/.exec(disposition)?.[1];
+  if (encoded) {
+    try { return decodeURIComponent(encoded.trim()); } catch { /* not encoded after all: the plain form below */ }
+  }
+  return /filename="?([^";]+)"?/.exec(disposition)?.[1]?.trim();
+}
+
+/** The extension an image download's content type says (`png` when it says none). */
+export const imageExtension = extFromHeaders;
+
+/** An SDK download into `dir` under the size cap; `name` is sanitized by the caller, it goes into the prompt. */
+export async function saveInboundDownload(res: { headers?: unknown; writeFile(path: string): Promise<unknown> }, fileKey: string, name: string, dir: string = paths.inboundDir): Promise<InboundFile | { reason: string }> {
+  const declared = Number(readHeader(res.headers, 'content-length'));
+  if (Number.isFinite(declared) && declared > MAX_FILE_BYTES) {
+    log.warn('intake', 'file-too-large', { fileKey: fileKey.slice(0, 24), bytes: declared });
+    return { reason: TOO_LARGE };
+  }
+  // file_key is globally unique per resource — prefix the (sanitized, ≤40-char)
+  // key so two uploads sharing a name never clash in the shared inboundDir.
+  const onDisk = `${safeName(fileKey)}-${name}`;
+  const file = join(dir, onDisk);
+  await res.writeFile(file);
+  // Backstop the cap when content-length was absent: stat + drop if oversized.
+  try {
+    const st = await stat(file);
+    if (st.size > MAX_FILE_BYTES) {
+      await rm(file, { force: true });
+      log.warn('intake', 'file-too-large', { fileKey: fileKey.slice(0, 24), bytes: st.size });
+      return { reason: TOO_LARGE };
+    }
+  } catch {
+    /* stat failed — keep the file rather than lose it */
+  }
+  // Display name is the SANITIZED `name` (not raw fileName): it is woven into
+  // the prompt verbatim, so a newline / control char in an uploader-controlled
+  // fileName would otherwise inject fake manifest lines (cleanFileName collapses
+  // those). Disk path stays inside inboundDir regardless.
+  return { path: file, name };
 }
 
 /** Sanitize a user filename into something safe to write AND to weave into the

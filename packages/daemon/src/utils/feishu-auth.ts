@@ -1,5 +1,5 @@
 import type { TenantBrand } from '../config/schema';
-import { CHAT_OPTIONAL_SCOPES, JOIN_GROUP_SCOPES, REQUIRED_SCOPES } from '../config/scopes';
+import { CHAT_OPTIONAL_SCOPES, FEISHU_TOOL_SCOPES, JOIN_GROUP_SCOPES, REQUIRED_SCOPES } from '../config/scopes';
 
 const ENDPOINTS: Record<TenantBrand, string> = {
   feishu: 'https://open.feishu.cn',
@@ -27,6 +27,8 @@ export interface ValidationResult {
   missingJoinScopes?: string[];
   /** {@link CHAT_OPTIONAL_SCOPES} not yet granted; same 3-state semantics. */
   missingOptional?: string[];
+  /** {@link FEISHU_TOOL_SCOPES} not yet granted; same 3-state semantics. */
+  missingTools?: string[];
 }
 
 interface TokenResp {
@@ -92,6 +94,7 @@ export async function validateAppCredentials(
     missingScopes: missing(REQUIRED_SCOPES),
     missingJoinScopes: missing(JOIN_GROUP_SCOPES),
     missingOptional: missing(CHAT_OPTIONAL_SCOPES),
+    missingTools: missing(FEISHU_TOOL_SCOPES),
   };
 }
 
