@@ -130,7 +130,7 @@ export async function registerBotFromCredentials(
 
 /**
  * 把扫码人 open_id 落成创建者和第一个管理员，merge 进既有 preferences（保留 base 的
- * 其它字段与 access 字段，幂等：admins 去重）。
+ * 其它字段与 access 字段，幂等：admins 去重）。这里是新 Bot 唯一的入口，第一次见面的待发标记也在这里写。
  */
 function withOwnerAdmin(base: AppPreferences | undefined, ownerOpenId: string): AppPreferences {
   const access = base?.access;
@@ -138,6 +138,6 @@ function withOwnerAdmin(base: AppPreferences | undefined, ownerOpenId: string): 
   admins.add(ownerOpenId);
   return {
     ...base,
-    access: { ...access, ownerOpenId, admins: [...admins] },
+    access: { ...access, ownerOpenId, admins: [...admins], firstHelloPending: true },
   };
 }

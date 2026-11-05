@@ -28,7 +28,7 @@ import { isProjectId, readLibrary, type LibraryProject } from '../project/librar
 import { createSettingsOwner, materializeGroupSettings } from '../admin/settings';
 import { snapshotDefaultJudge, snapshotProviderJudge, requireDecisionKey } from '../project/initial-settings';
 import type { HostSettings } from '../admin/settings-types';
-import type { AdminWriteResult } from '../admin/ops';
+import type { AdminWriteResult, AppPreferencesWriter } from '../admin/ops';
 import { registerVoiceConsole } from './voice-console';
 import { createVoiceService } from '../voice/service';
 import { ingestVoice, createIntakeQueue, type IngestedContext } from '../voice/inbound';
@@ -944,6 +944,8 @@ export interface Orchestrator {
   onRecall: (evt: RecallEvent) => Promise<void>;
   dispatcher: CardDispatcher;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
+  /** This bot's one writer of its preferences. */
+  writePreferences: AppPreferencesWriter;
   /** The host changed a library project's workspace: this bot's rows of it follow, their groups' sessions archived (admin/library.ts). */
   libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
@@ -10104,6 +10106,7 @@ export function createOrchestrator(
     onRecall: admitEvent(onRecall),
     dispatcher,
     adminExecute: admit(adminExecute),
+    writePreferences,
     libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
     scheduleAs: admittedScheduleAs,
