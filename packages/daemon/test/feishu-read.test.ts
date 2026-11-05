@@ -8,7 +8,7 @@ import { feishuToolNames } from '../src/agent/entry/feishu-tools';
 import { createAgentEntries, type AgentPlace } from '../src/agent/entry/registry';
 import { TOOL_RESULT_BYTES } from '../src/agent/entry/tools';
 import type { AgentThread } from '../src/agent/types';
-import { DOC_EDIT_SCOPES, DOC_READ_SCOPES, DRIVE_READ_SCOPES, GRANT_SCOPES, MESSAGE_SEARCH_SCOPES, REQUIRED_SCOPES, SCOPE_LABELS, SHEET_READ_SCOPES } from '../src/config/scopes';
+import { DOC_EDIT_SCOPES, DOC_READ_SCOPES, DRIVE_READ_SCOPES, FEISHU_TOOL_SCOPES, GRANT_SCOPES, MESSAGE_SEARCH_SCOPES, REQUIRED_SCOPES, SCOPE_LABELS, SHEET_READ_SCOPES } from '../src/config/scopes';
 import { AFTER_GRANT, readableFailure, readOnlyReply, refusalOf, type ReadArea } from '../src/feishu-read/denial';
 import { parseRef } from '../src/feishu-read/documents';
 import { createFeishuReader } from '../src/feishu-read/reader';
@@ -466,13 +466,15 @@ describe('the tools', () => {
 
 describe('the permission groups (6.5)', () => {
   it('leave the required scopes alone', () => {
-    for (const scope of [...DOC_READ_SCOPES, ...SHEET_READ_SCOPES, ...DRIVE_READ_SCOPES, ...DOC_EDIT_SCOPES, ...MESSAGE_SEARCH_SCOPES]) {
+    for (const scope of FEISHU_TOOL_SCOPES) {
       expect(REQUIRED_SCOPES as readonly string[]).not.toContain(scope);
       expect(SCOPE_LABELS[scope], scope).toBeTruthy();
     }
   });
-  it('put all but search in the one-click link', () => {
-    for (const scope of [...DOC_READ_SCOPES, ...SHEET_READ_SCOPES, ...DRIVE_READ_SCOPES, ...DOC_EDIT_SCOPES]) expect(GRANT_SCOPES as readonly string[]).toContain(scope);
-    expect(GRANT_SCOPES as readonly string[]).not.toContain('search:message');
+  it('stay out of the one-click link, apart from the wiki scope comments already use', () => {
+    for (const scope of FEISHU_TOOL_SCOPES) {
+      if (scope === 'wiki:wiki:readonly') continue;
+      expect(GRANT_SCOPES as readonly string[]).not.toContain(scope);
+    }
   });
 });
