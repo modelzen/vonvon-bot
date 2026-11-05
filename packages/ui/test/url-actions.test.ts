@@ -84,10 +84,17 @@ it("selects the link for a manual copy when the clipboard refuses", async () => 
 });
 
 it('opens the intended Bot private chat without prefilled messages or other destinations', () => {
-  const url=botChatUrl('cli_example');
+  const url=botChatUrl('cli_example','feishu');
   expect(allowedExternalUrl(url,'bot-chat')).toBe(url);
   for (const suffix of ['&text=send-this','#message','&redirect=https://evil.test']) expect(allowedExternalUrl(url+suffix,'bot-chat')).toBeNull();
-  expect(allowedExternalUrl(botChatUrl('oc_group'),'bot-chat')).toBeNull();
+  expect(allowedExternalUrl(botChatUrl('oc_group','feishu'),'bot-chat')).toBeNull();
+});
+
+it('opens a Lark bot on its own domain', () => {
+  const url=botChatUrl('cli_example','lark');
+  expect(url).toBe('https://applink.larksuite.com/client/bot/open?appId=cli_example');
+  expect(allowedExternalUrl(url,'bot-chat')).toBe(url);
+  expect(allowedExternalUrl('https://applink.example.com/client/bot/open?appId=cli_example','bot-chat')).toBeNull();
 });
 
 it('devices-ui-1b: opens Tailscale\'s download page and nothing else', () => {

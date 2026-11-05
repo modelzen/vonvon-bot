@@ -153,6 +153,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
           if (op.kind === 'status') {
             return { connection: handle.channel.getConnectionStatus?.()?.state ?? 'unknown' };
           }
+          if (op.kind === 'firstHello') return handle.firstHello();
           if (op.kind === 'collaboration') return handle.collaboration(op.request);
           if (op.kind === 'joinedGroups' || op.kind === 'groupMembers' || op.kind === 'bindGroup') return handle.adminGroups(op);
           if (op.kind === 'settingsRead') return handle.settings.read(op.scope);
@@ -184,6 +185,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
             if (botId !== ownAppId) throw new AdminWriteError('这个 Bot 不归本进程管');
             return handle.adminGroups(op);
           },
+          firstHello: async (botId) => { if (botId === ownAppId) await handle.firstHello(); },
           executeSettingsRead: async (botId, op) => {
             if (botId !== ownAppId) throw new AdminWriteError('这个 Bot 不归本进程管');
             return op.kind === 'settingsRead' ? handle.settings.read(op.scope) : handle.settings.models(op.query);

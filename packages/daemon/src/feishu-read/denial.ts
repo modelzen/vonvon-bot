@@ -1,5 +1,5 @@
 import type { TenantBrand } from '../config/schema';
-import { BITABLE_READ_SCOPES, buildScopeGrantUrl, COMMENT_READ_SCOPES, DOC_EDIT_SCOPES, DOC_MEDIA_SCOPES, DOC_READ_SCOPES, DRIVE_LIST_SCOPES, DRIVE_READ_SCOPES, labelScope, MESSAGE_SEARCH_SCOPES, SHEET_READ_SCOPES, WIKI_READ_SCOPES } from '../config/scopes';
+import { BITABLE_READ_SCOPES, BOARD_READ_SCOPES, buildScopeGrantUrl, COMMENT_READ_SCOPES, DOC_EDIT_SCOPES, DOC_MEDIA_SCOPES, DOC_READ_SCOPES, DRIVE_LIST_SCOPES, DRIVE_READ_SCOPES, labelScope, LEGACY_DOC_READ_SCOPES, MESSAGE_SEARCH_SCOPES, MINDNOTE_READ_SCOPES, MINUTES_READ_SCOPES, SHEET_READ_SCOPES, SLIDES_READ_SCOPES, WIKI_READ_SCOPES } from '../config/scopes';
 import { log } from '../core/logger';
 import { withDeadline } from '../bot/names';
 import { feishuError, scopeDenial } from '../utils/feishu-error';
@@ -10,7 +10,7 @@ import { feishuError, scopeDenial } from '../utils/feishu-error';
  */
 
 /** What a read touches: the scopes it needs and what is lost without them. */
-export type ReadArea = 'history' | 'resource' | 'chat' | 'announcement' | 'doc' | 'docEdit' | 'sheet' | 'base' | 'drive' | 'folder' | 'wiki' | 'comments' | 'docMedia' | 'search';
+export type ReadArea = 'history' | 'resource' | 'chat' | 'announcement' | 'doc' | 'docEdit' | 'sheet' | 'base' | 'drive' | 'folder' | 'wiki' | 'comments' | 'docMedia' | 'slides' | 'mindnote' | 'board' | 'minutes' | 'legacyDoc' | 'search';
 const AREAS: Record<ReadArea, { scopes: readonly string[]; effect: string }> = {
   history: { scopes: ['im:message:readonly'], effect: '读不了群里的消息' },
   resource: { scopes: ['im:resource'], effect: '下载不了消息里的图片和文件' },
@@ -21,6 +21,11 @@ const AREAS: Record<ReadArea, { scopes: readonly string[]; effect: string }> = {
   sheet: { scopes: SHEET_READ_SCOPES, effect: '读不了表格' },
   base: { scopes: BITABLE_READ_SCOPES, effect: '读不了多维表格' },
   drive: { scopes: DRIVE_READ_SCOPES, effect: '下载不了云空间文件' },
+  slides: { scopes: SLIDES_READ_SCOPES, effect: '读不了幻灯片' },
+  mindnote: { scopes: MINDNOTE_READ_SCOPES, effect: '读不了思维笔记' },
+  board: { scopes: BOARD_READ_SCOPES, effect: '读不了画板' },
+  minutes: { scopes: MINUTES_READ_SCOPES, effect: '读不了妙记' },
+  legacyDoc: { scopes: LEGACY_DOC_READ_SCOPES, effect: '读不了旧版文档' },
   folder: { scopes: DRIVE_LIST_SCOPES, effect: '看不了云空间文件夹里有什么' },
   wiki: { scopes: WIKI_READ_SCOPES, effect: '看不了知识库和它的目录' },
   comments: { scopes: COMMENT_READ_SCOPES, effect: '读不了文档评论' },
@@ -30,10 +35,10 @@ const AREAS: Record<ReadArea, { scopes: readonly string[]; effect: string }> = {
 /** The sentence that closes a missing-scope reply: an administrator of vonvon may not reach the Feishu console (7.5). */
 export const AFTER_GRANT = '开通后要发布新版本才生效；打不开这个链接，就转给这个飞书应用的管理员。';
 
-/** Feishu's "no access to this object". Measured for a document not shared with a bot: 3380004 (docs_ai), 1770032 (raw_content), 91403 (bitable), 1069303 (comments); the rest from its docs. */
-const NOT_SHARED_CODES: ReadonlySet<number> = new Set([3380004, 1770032, 1310213, 1061004, 1069303, 1069902, 131006, 91403]);
-/** Measured for a made-up id (3380002, 99992402, 1770001, 131005, 91402, 1061002 for a folder, 1069307 for comments), the rest from the same docs. */
-const NOT_FOUND_CODES: ReadonlySet<number> = new Set([3380002, 99992402, 1770001, 1770002, 1310214, 1061002, 1061003, 1061007, 1069307, 131005, 91402, 230001, 230110]);
+/** Feishu's "no access to this object". Measured for something not shared with a bot: 3380004 (docs_ai), 1770032 (raw_content), 91403 (bitable), 1069303 (comments), 3350003 (slides), 3410005 (mind notes), 2890005 (boards); the rest from its docs. */
+const NOT_SHARED_CODES: ReadonlySet<number> = new Set([3380004, 1770032, 1310213, 1061004, 1069303, 1069902, 131006, 91403, 3350003, 3410005, 2890005]);
+/** Measured for a made-up id (3380002, 99992402, 1770001, 131005, 91402, 1061002 for a folder, 1069307 for comments, 3350001 for slides, 95006 for an old document), 3410003 (mind notes) from lark-cli's docs, the rest from the same docs. */
+const NOT_FOUND_CODES: ReadonlySet<number> = new Set([3380002, 99992402, 1770001, 1770002, 1310214, 1061002, 1061003, 1061007, 1069307, 131005, 91402, 3350001, 3410003, 95006, 230001, 230110]);
 /** The Bot is not in that chat (230002), or the chat has left it (232011). */
 const OUT_OF_CHAT_CODES: ReadonlySet<number> = new Set([230002, 232011]);
 
@@ -56,6 +61,10 @@ export const notSharedReply = (bot: string, grant = '阅读'): string => `这篇
 const NOT_SHARED_PLACES: Partial<Record<ReadArea, (bot: string) => string>> = {
   folder: bot => `这个文件夹还没分享给 Bot。在文件夹右上角的分享里搜「${bot}」，给阅读权限。`,
   wiki: bot => `这个知识库还没对 Bot 开放。把「${bot}」所在的群加为知识库成员，或者把要读的页面分享给它。`,
+  slides: bot => `这份幻灯片还没分享给 Bot。在幻灯片右上角的分享里搜「${bot}」，给阅读权限。`,
+  mindnote: bot => `这份思维笔记还没分享给 Bot。在右上角的分享里搜「${bot}」，给阅读权限。`,
+  board: bot => `这个画板所在的文档还没分享给 Bot。在文档右上角的分享里搜「${bot}」，给阅读权限。`,
+  minutes: bot => `这条妙记还没分享给 Bot。在妙记右上角的分享里搜「${bot}」，给阅读权限。`,
 };
 /** The Bot can read but was asked to change it. */
 export const readOnlyReply = (bot: string): string => `Bot 对这篇文档只有阅读权限。${shared(bot, '编辑')}`;
@@ -79,6 +88,9 @@ function missingScopes(context: DenialContext, scopes: readonly string[], effect
   return `这个 Bot 的飞书应用缺权限：${scopes.map(labelScope).join('、')}，所以${effect}。开通链接：${url} ${AFTER_GRANT}`;
 }
 
+/** The areas named by a link or a token, so a not-found reply talks of those. */
+const DOCUMENT_AREAS: ReadonlySet<ReadArea> = new Set(['doc', 'docEdit', 'sheet', 'base', 'drive', 'comments', 'docMedia', 'slides', 'mindnote', 'board', 'minutes', 'legacyDoc']);
+
 /** A failed call as a refusal: `failure` is what the SDK threw, or a body with a non-zero code. */
 export function refusalOf(context: DenialContext, area: ReadArea, failure: unknown): FeishuReadRefused {
   const denial = scopeDenial(failure);
@@ -91,7 +103,7 @@ export function refusalOf(context: DenialContext, area: ReadArea, failure: unkno
   const gone = !error && (failure as { response?: { status?: number } } | null)?.response?.status === 404;
   if (gone || error && NOT_FOUND_CODES.has(error.code)) {
     const what = area === 'folder' ? '这个文件夹，看看链接和 token 对不对' : area === 'wiki' ? '这个知识库或页面，看看链接和 id 对不对'
-      : area === 'doc' || editing || area === 'sheet' || area === 'base' || area === 'drive' || area === 'comments' || area === 'docMedia' ? '这个文档或文件，看看链接和 token 对不对' : '这条内容，看看 id 对不对';
+      : DOCUMENT_AREAS.has(area) ? '这个文档或文件，看看链接和 token 对不对' : '这条内容，看看 id 对不对';
     return new FeishuReadRefused(`找不到${what}${error ? `（飞书错误码 ${error.code}）` : ''}。`, 'not-found');
   }
   if (error) return new FeishuReadRefused(`飞书拒绝了这次${editing ? '修改' : '读取'}（错误码 ${error.code}${error.msg ? `：${error.msg}` : ''}）。`);
