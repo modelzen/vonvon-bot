@@ -37,6 +37,10 @@ const baseInput = z.object({ base: reference.describe('多维表格的链接，�
   fields: z.array(z.string().min(1).max(200)).min(1).max(200).describe('只读这些字段，写字段名').optional(),
   filter: z.object({ conjunction: z.enum(['and', 'or']).describe('默认 and').optional(), conditions: z.array(baseCondition).min(1).max(50) }).strict().describe('筛选记录，范围是整张数据表').optional(),
   limit: limit(100).describe('最多几条，默认一页读得下的都给').optional(), cursor: cursor.optional() }).strict();
+const slidesInput = z.object({ slides: reference.describe('幻灯片的链接，或者它的 token'), cursor: cursor.optional() }).strict();
+const mindnoteInput = z.object({ mindnote: reference.describe('思维笔记的链接，或者它的 token'), cursor: cursor.optional() }).strict();
+const boardInput = z.object({ board: reference.describe('画板的链接，或者它的 token；文档里的画板用结果里的 token'), cursor: cursor.optional() }).strict();
+const minutesInput = z.object({ minutes: reference.describe('妙记的链接，或者它的 token'), cursor: cursor.optional() }).strict();
 const driveInput = z.object({ file: reference.describe('云空间文件的链接，或者它的 token'), name: z.string().min(1).max(200).describe('存成什么文件名，不写就用原来的').optional() }).strict();
 const folderInput = z.object({ folder: reference.describe('文件夹的链接，或者它的 token；不写就列 Bot 自己的根目录').optional(), limit: limit(100).describe('最多几条，默认一页读得下的都给').optional(), cursor: cursor.optional() }).strict();
 const wikiInput = z.object({ wiki: reference.describe('知识库的链接或 space_id，列它的第一层；页面的链接或节点 token，列它下面的子页面。不写就列 Bot 能看到的知识库').optional(),
@@ -60,9 +64,13 @@ const definitions = [
   { name: 'feishu_file', input: fileInput, description: '下载消息里的图片或文件，返回本机路径。' },
   { name: 'feishu_chat', input: chatInput, description: '读群名、群描述和群公告。' },
   { name: 'feishu_members', input: membersInput, description: '查询群成员，失败不会伪装成空列表。' },
-  { name: 'feishu_doc', input: docInput, description: '读飞书文档或知识库页面，返回文字内容；Bot 要有这篇文档的阅读权限。' },
+  { name: 'feishu_doc', input: docInput, description: '读飞书文档（新版和旧版）或知识库页面，返回文字内容；Bot 要有这篇文档的阅读权限。' },
   { name: 'feishu_sheet', input: sheetInput, description: '读飞书表格：列出工作表，或读一个区域；Bot 要有这张表的阅读权限。' },
   { name: 'feishu_base', input: baseInput, description: '读飞书多维表格：列出数据表、字段和视图，或读记录，可以按视图和条件筛选、翻页；Bot 要有这个多维表格的阅读权限。' },
+  { name: 'feishu_slides', input: slidesInput, description: '读飞书幻灯片的全文，返回 XML，太长时分段；Bot 要有这份幻灯片的阅读权限。' },
+  { name: 'feishu_mindnote', input: mindnoteInput, description: '读飞书思维笔记，返回带层级的文字，太长时分段；Bot 要有这份思维笔记的阅读权限。' },
+  { name: 'feishu_board', input: boardInput, description: '读飞书画板上的节点，返回文字和连线，太长时分段；图片只有 token。Bot 要有这个画板的阅读权限。' },
+  { name: 'feishu_minutes', input: minutesInput, description: '读飞书妙记的标题、时长等信息和文字记录，文字记录太长时分段；Bot 要有这条妙记的阅读权限。' },
   { name: 'feishu_drive_file', input: driveInput, description: '下载飞书云空间里的文件，返回本机路径；Bot 要有这个文件的阅读权限。' },
   { name: 'feishu_folder', input: folderInput, description: '看飞书云空间文件夹里有什么，可以翻页。不写 folder 列 Bot 自己的根目录，别人分享给 Bot 的文件夹不在那里，要给链接。结果带名字、类型和 token：文件夹接着用这个工具，其他类型用对应的工具读。' },
   { name: 'feishu_wiki', input: wikiInput, description: '看飞书知识库的目录：列出 Bot 能看到的知识库，或一个知识库、一个页面下面的页面，可以翻页。结果的 token 用来往下列，hasChildren 说明下面还有；objToken 和 type 用来读页面内容，比如 docx 用 feishu_doc。' },
@@ -73,7 +81,7 @@ const definitions = [
 
 export const feishuToolNames: ReadonlySet<string> = new Set(definitions.map(tool => tool.name));
 /** The document column of 7.2: all a comment's session reads, there being no chat for it to read. */
-export const feishuDocToolNames: ReadonlySet<string> = new Set(['feishu_doc', 'feishu_sheet', 'feishu_base', 'feishu_drive_file', 'feishu_folder', 'feishu_wiki', 'feishu_comments', 'feishu_doc_media']);
+export const feishuDocToolNames: ReadonlySet<string> = new Set(['feishu_doc', 'feishu_sheet', 'feishu_base', 'feishu_slides', 'feishu_mindnote', 'feishu_board', 'feishu_minutes', 'feishu_drive_file', 'feishu_folder', 'feishu_wiki', 'feishu_comments', 'feishu_doc_media']);
 /** Not among {@link feishuToolNames}: a session gets it by `tools.feishuEdit`, its tier's call. */
 export const FEISHU_DOC_EDIT = 'feishu_doc_edit';
 const docEditDescription = '改飞书新版文档：追加、插入、替换选中的内容，身份是 Bot 自己。表格和多维表格改不了。Bot 要有这篇文档的编辑权限。';
@@ -177,6 +185,10 @@ export function createFeishuTools(deps: { members(chatId: string, cursor?: strin
     tool<typeof docInput>('feishu_doc', args => reader.doc(args)),
     tool<typeof sheetInput>('feishu_sheet', args => reader.sheet(args)),
     tool<typeof baseInput>('feishu_base', args => reader.base(args)),
+    tool<typeof slidesInput>('feishu_slides', args => reader.slides(args)),
+    tool<typeof mindnoteInput>('feishu_mindnote', args => reader.mindnote(args)),
+    tool<typeof boardInput>('feishu_board', args => reader.board(args)),
+    tool<typeof minutesInput>('feishu_minutes', args => reader.minutes(args)),
     tool<typeof driveInput>('feishu_drive_file', (args, ctx) => reader.driveFile({ ...args, ...savedIn(ctx) })),
     tool<typeof folderInput>('feishu_folder', args => reader.folder(args)),
     tool<typeof wikiInput>('feishu_wiki', args => reader.wiki(args)),
