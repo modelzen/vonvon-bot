@@ -482,6 +482,21 @@ describe('feishu_base', () => {
 
 describe('old documents', () => {
   const OLD = '/open-apis/doc/v2/doccnOld/raw_content';
+
+  // Codex 审查任务 349 必败: a scope the new APIs lack stopped a document only the old API reads
+  it('reads an old document by its bare token without the scopes of the new ones', async () => {
+    const old = { '/doc/v2/': { code: 0, data: { content: '旧版正文' } } };
+    const noDocx = reader({ request: routes({ '/docs_ai/': denied('docx:document:readonly'), '/docx/': denied('docx:document:readonly'), ...old }) });
+    expect(await noDocx.read.doc({ doc: 'docFixture' })).toEqual({ text: '旧版正文' });
+    const noWiki = reader({ request: routes({ '/docs_ai/': { code: 1770002, msg: 'not found' }, '/docx/': { code: 1770002, msg: 'not found' }, ...old }), node: async () => denied('wiki:wiki:readonly') });
+    expect(await noWiki.read.doc({ doc: 'docFixture' })).toEqual({ text: '旧版正文' });
+  });
+
+  it('keeps the missing scope when the old API does not know the token either', async () => {
+    const t = reader({ request: routes({ '/docs_ai/': denied('docx:document:readonly'), '/docx/': denied('docx:document:readonly'), '/doc/v2/': { code: 95006, msg: 'not found' } }) });
+    await expect(t.read.doc({ doc: 'docFixture' })).rejects.toMatchObject({ kind: 'scope' });
+  });
+
   it('reads a /docs/ link through their own API, and goes on with its cursor', async () => {
     const whole = '旧'.repeat(100_000);
     const { read, client } = reader({ request: routes({ '/doc/v2/': { code: 0, data: { content: whole } } }) });
