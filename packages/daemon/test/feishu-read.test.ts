@@ -689,7 +689,9 @@ describe('feishu_doc_media', () => {
   });
   it('refuses a link, saying where the token is', async () => {
     const t = reader();
-    await expect(t.read.docMedia({ token: 'https://x.feishu.cn/docx/dox' })).rejects.toThrow('<img token=');
+    await expect(t.read.docMedia({ token: 'https://x.feishu.cn/docx/dox' })).rejects.toThrow('<img src=');
+    const missing = reader({ media: async () => { throw Object.assign(new Error('404'), { response: { status: 404, data: (async function* () {})() } }); } });
+    await expect(missing.read.docMedia({ token: 'boxToken' })).rejects.toMatchObject({ kind: 'not-found' });
     expect(t.client.drive.v1.media.download).not.toHaveBeenCalled();
   });
   it('holds to the size limit', async () => {
