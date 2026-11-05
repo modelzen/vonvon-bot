@@ -131,7 +131,7 @@ export interface AdminService {
   codexSetup?(opts?: { refresh?: boolean }): Promise<CodexSetup>;
   close?(): Promise<void>;
   pendingGroups?(botId: string): Promise<{ groups: PendingGroup[] }>;
-  joinedGroups?(botId: string, cursor?: string, summaryOnly?: true): Promise<JoinedGroups>;
+  joinedGroups?(botId: string, cursor?: string): Promise<JoinedGroups>;
   groupMembers?(botId: string, chatId: string, cursor?: string): Promise<GroupMembers>;
   bindGroup?(botId: string, input: BindGroupInput): Promise<AdminProject>;
   getVoice(botId: string): Promise<VoiceView>;
@@ -695,9 +695,9 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       return { groups: groups.length > MAX_PENDING_GROUPS
         ? groups.sort((a, b) => b.addedAt - a.addedAt).slice(0, MAX_PENDING_GROUPS) : groups };
     },
-    async joinedGroups(botId, cursor, summaryOnly) {
+    async joinedGroups(botId, cursor) {
       if (!deps.executeGroups) throw new NotWiredYetError('群列表');
-      return parseJoinedGroups(await deps.executeGroups(botId, { kind: 'joinedGroups', cursor, ...(summaryOnly ? {summaryOnly} : {}) }));
+      return parseJoinedGroups(await deps.executeGroups(botId, { kind: 'joinedGroups', cursor }));
     },
     async groupMembers(botId, chatId, cursor) {
       if (!deps.executeGroups) throw new NotWiredYetError('群成员');

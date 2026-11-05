@@ -78,7 +78,6 @@ export const commandSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("listJoinedGroups"),
       agentId: agentIdSchema,
-      summaryOnly: z.literal(true).optional(),
       cursor: z.string().min(1).max(2048).optional(),
     })
     .strict(),

@@ -18,8 +18,8 @@ describe('desktop companion RPC capabilities', () => {
     const fixture = await startFixture(fakeService({ listBots: async () => [bot], joinedGroups, pendingGroups, bindGroup }));
     try {
       const client = await socketClient(fixture.api.port, fixture.credential); await client.ready();
-      expect(await client.call({ type: 'request', id: 'joined', method: 'command', payload: { type: 'listJoinedGroups', agentId, cursor: 'opaque', summaryOnly: true } })).toMatchObject({ type: 'response', payload: { kind: 'groups', nextCursor: 'next', groups: [{ id: 'oc_chat' }] } });
-      expect(joinedGroups).toHaveBeenCalledWith(bot.appId, 'opaque', true);
+      expect(await client.call({ type: 'request', id: 'joined', method: 'command', payload: { type: 'listJoinedGroups', agentId, cursor: 'opaque' } })).toMatchObject({ type: 'response', payload: { kind: 'groups', nextCursor: 'next', groups: [{ id: 'oc_chat' }] } });
+      expect(joinedGroups).toHaveBeenCalledWith(bot.appId, 'opaque');
       expect(await client.call({ type: 'request', id: 'pending', method: 'command', payload: { type: 'listPendingGroups', agentId } })).toMatchObject({ type: 'response', payload: { kind: 'pendingGroups', groups: [{ chatId: 'oc_pending' }] } });
       expect(pendingGroups).toHaveBeenCalledWith(bot.appId);
       const chosen = await client.call({ type: 'request', id: 'folder', method: 'directory', payload: { type: 'choose', path: homedir() } });
