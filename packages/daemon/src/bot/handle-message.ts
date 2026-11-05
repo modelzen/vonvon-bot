@@ -28,7 +28,7 @@ import { isProjectId, readLibrary, type LibraryProject } from '../project/librar
 import { createSettingsOwner, materializeGroupSettings } from '../admin/settings';
 import { snapshotDefaultJudge, snapshotProviderJudge, requireDecisionKey } from '../project/initial-settings';
 import type { HostSettings } from '../admin/settings-types';
-import type { AdminWriteResult } from '../admin/ops';
+import type { AdminWriteResult, AppPreferencesWriter } from '../admin/ops';
 import { registerVoiceConsole } from './voice-console';
 import { createVoiceService } from '../voice/service';
 import { ingestVoice, createIntakeQueue, type IngestedContext } from '../voice/inbound';
@@ -944,6 +944,8 @@ export interface Orchestrator {
   onRecall: (evt: RecallEvent) => Promise<void>;
   dispatcher: CardDispatcher;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
+  /** This bot's one writer of its preferences. */
+  writePreferences: AppPreferencesWriter;
   /** The host changed a library project's workspace: this bot's rows of it follow, their groups' sessions archived (admin/library.ts). */
   libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
@@ -1198,13 +1200,15 @@ export function createOrchestrator(
     // A comment's session has the document column, and the edit tool when it is on a docx (7.4); a group's edits in any tier but read-only (7.2).
     const comment = place === 'comment';
     const feishuEdit = comment ? commentedFile === 'docx' : schedule && (permission ?? execution.permission) !== 'qa';
+    // The generic tool is a private chat's alone: a group cannot reach other groups or write to Feishu through it (7.6).
+    const feishuApi = schedule && Boolean(project?.dm);
     // The task skill goes with the tools (T4b); a package that cannot be written leaves the last whole one, or none.
     const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId, project?.dm ? 'dm' : 'group') : [];
     // What the Feishu tools download must be readable outside full access too.
     const downloads = schedule && project ? inboundChatDir(project.chatId) : undefined;
     if (downloads) await prepareInboundDir(downloads);
     const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: downloads ? [{ path: downloads, access: 'read' as const }] : [], capabilityPackages, mcpServers: [],
-      tools: { schedule, feishu: schedule || comment, ...(feishuEdit ? { feishuEdit } : {}), ...(comment ? { documentsOnly: true } : {}), ...(project?.dm ? { acrossBots: true } : {}) }, ...(skills ? { skills } : {}) } : undefined;
+      tools: { schedule, feishu: schedule || comment, ...(feishuEdit ? { feishuEdit } : {}), ...(feishuApi ? { feishuApi } : {}), ...(comment ? { documentsOnly: true } : {}), ...(project?.dm ? { acrossBots: true } : {}) }, ...(skills ? { skills } : {}) } : undefined;
     const built = await executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
     if (assembled && built) openings.set(built, contextOf(assembled, nonce));
     return built;
@@ -10104,6 +10108,7 @@ export function createOrchestrator(
     onRecall: admitEvent(onRecall),
     dispatcher,
     adminExecute: admit(adminExecute),
+    writePreferences,
     libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
     scheduleAs: admittedScheduleAs,

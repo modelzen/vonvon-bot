@@ -1,11 +1,11 @@
 import { rmSync } from 'node:fs';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { hostFeishuRead, routeFeishuRead, type FeishuRouteDeps, type RouteBot } from '../src/admin/feishu-route';
+import { hostFeishuApi, hostFeishuRead, routeFeishuApi, routeFeishuRead, type FeishuRouteDeps, type RoutedApi, type RouteBot } from '../src/admin/feishu-route';
 import { createAdminIpcResponder, ADMIN_IPC_REQ, ADMIN_IPC_RES, type AdminIpcOp } from '../src/admin/ipc';
 import { AdminWriteError } from '../src/admin/ops';
 import { createCommandTools } from '../src/agent/entry/command-tools';
-import { createFeishuReads, feishuToolNames, feishuToolSpecs } from '../src/agent/entry/feishu-tools';
+import { createFeishuCalls, createFeishuReads, FEISHU_API, feishuToolNames, feishuToolSpecs } from '../src/agent/entry/feishu-tools';
 import { createAgentEntries, type AgentPlace } from '../src/agent/entry/registry';
 import { toolReplyText } from '../src/agent/entry/tools';
 import type { AgentThread } from '../src/agent/types';
@@ -277,6 +277,175 @@ describe('the tools in each place (dm-agent 7.3)', () => {
   });
 });
 
+describe('feishu_api on another Bot (dm-agent 7.3, 7.6)', () => {
+  const CALL = { method: 'POST', path: '/open-apis/bitable/v1/apps/app/records', body: { fields: {} } } as const;
+  const LIST = { method: 'GET', path: '/open-apis/calendar/v4/calendars' } as const;
+  const P2P: AgentPlace = { kind: 'p2p', chatId: DM };
+  const answer = (value: unknown) => ({ data: Buffer.from(JSON.stringify(value)), headers: { 'content-type': 'application/json' } });
+  /** A session of Bot A. `sends` is its own Feishu client; `routeApi` the way to the host. */
+  function session(place: AgentPlace, options: { admin?: (openId: string) => boolean; turn?: Partial<Parameters<ReturnType<typeof createAgentEntries>['openTurn']>[1]> } = {}) {
+    const sends = vi.fn(async () => answer({ code: 0, from: 'cli_a' }));
+    const channel = { rawClient: { request: sends }, botIdentity: { openId: 'ou_me', name: 'Bot A' } } as unknown as LarkChannel;
+    const routeApi = vi.fn(async (_bot: string, _request: RoutedApi): Promise<FeishuReadReply> => ({ ok: true, result: '{"code":0,"from":"cli_b"}' }));
+    const list = createCommandTools({ appId: 'cli_a', groups: async () => ({ groups: [] }), members: async () => ({ members: [] }), feishu: createFeishuReader({ channel, app: { id: 'cli_a', tenant: 'feishu' } }), routeApi });
+    const entries = createAgentEntries({ appId: 'cli_a', isAdmin: options.admin ?? (() => true), tools: list });
+    const thread = { sessionId: 's', isAlive: () => true } as unknown as AgentThread;
+    const entry = entries.issue(place);
+    entry.attach(thread);
+    const turn = entries.openTurn(thread, { requesterOpenId: 'ou_admin', requesterKind: 'user', triggerMessageId: 'om_t', retry: false, wake: false, initiative: false, ...options.turn });
+    entry.noteToolUse('tu');
+    return { sends, routeApi, turn, entry, listed: () => entry.tools().map(tool => tool.name), call: (args: unknown) => entry.call(FEISHU_API, args, { toolUseId: 'tu' }) };
+  }
+
+  it('goes through the host with the session, the Bot it named, and the call without `bot`', async () => {
+    const s = session(P2P);
+    expect(await s.call({ ...CALL, bot: 'Bot B' })).toEqual({ ok: true, result: '{"code":0,"from":"cli_b"}' });
+    expect(s.routeApi).toHaveBeenCalledExactlyOnceWith('Bot B', { sessionId: expect.stringMatching(/^ses_/), request: CALL });
+    expect(s.sends).not.toHaveBeenCalled();
+  });
+  it('without `bot`, or naming itself, it stays in this process, the guard right before the call', async () => {
+    const s = session(P2P);
+    for (const bot of [undefined, 'cli_a', 'Bot A']) expect(await s.call({ ...LIST, ...(bot ? { bot } : {}) })).toMatchObject({ ok: true });
+    expect(s.sends).toHaveBeenCalledTimes(3);
+    expect(s.routeApi).not.toHaveBeenCalled();
+  });
+  it('says the other Bot\'s words back, and that a host with no way there has no such Bot running', async () => {
+    const s = session(P2P);
+    s.routeApi.mockResolvedValueOnce({ ok: false, kind: 'other', message: 'Bot Bot B 没在运行。' });
+    expect(await s.call({ ...CALL, bot: 'Bot B' })).toEqual({ ok: false, code: 'refused', message: 'Bot Bot B 没在运行。' });
+  });
+  it('a host that fails after the guard may have let the call through, and says so', async () => {
+    const s = session(P2P);
+    s.routeApi.mockRejectedValueOnce(new Error('vonvon 主进程 69000ms 未响应'));
+    expect(await s.call({ ...CALL, bot: 'Bot B' })).toMatchObject({ ok: false, message: expect.stringContaining('可能已经生效') });
+  });
+  it('the answer comes back though the turn ended on the way: the call was past its guard', async () => {
+    const s = session(P2P);
+    s.routeApi.mockImplementationOnce(async () => { s.turn.close(); return { ok: true, result: 'done' }; });
+    expect(await s.call({ ...CALL, bot: 'Bot B' })).toEqual({ ok: true, result: 'done' });
+  });
+  it('is no tool of a group or a comment, and refuses there whatever it is given', async () => {
+    for (const place of [{ kind: 'group', chatId: GROUP }, { kind: 'doc', docId: 'd' }] as AgentPlace[]) {
+      const s = session(place);
+      expect(s.listed()).not.toContain(FEISHU_API);
+      expect(await s.call({ ...CALL, bot: 'Bot B' })).toMatchObject({ ok: false });
+      expect(s.routeApi).not.toHaveBeenCalled();
+    }
+  });
+  describe('dmTurn stands before it leaves, in feishu_api\'s own words', () => {
+    it.each<[string, Parameters<typeof session>[1], string]>([
+      ['someone who is no administrator', { admin: () => false }, '只有管理员的私聊能调飞书接口。'],
+      ['a turn nobody typed', { turn: { wake: true } }, '这一轮不是管理员发消息或管理员的定时任务触发的，不能调飞书接口。'],
+    ])('%s', async (_case, options, words) => {
+      const s = session(P2P, options);
+      expect(await s.call({ ...CALL, bot: 'Bot B' })).toMatchObject({ ok: false, code: 'refused', message: words });
+      expect(s.routeApi).not.toHaveBeenCalled();
+    });
+    it('a turn that ended', async () => {
+      const s = session(P2P);
+      s.turn.close();
+      expect(await s.call({ ...CALL, bot: 'Bot B' })).toMatchObject({ ok: false, code: 'refused', message: '发起这次调用的那一轮已经结束了，没有调飞书。请对方重新说一遍。' });
+      expect(s.routeApi).not.toHaveBeenCalled();
+    });
+    it('an administrator removed since the turn began', async () => {
+      let admin = true;
+      const s = session(P2P, { admin: () => admin });
+      admin = false;
+      expect(await s.call({ ...CALL, bot: 'Bot B' })).toMatchObject({ ok: false, code: 'refused', message: '只有管理员的私聊能调飞书接口。' });
+      expect(s.routeApi).not.toHaveBeenCalled();
+    });
+    it('a private chat\'s task runs as its creator, an administrator', async () => {
+      const s = session(P2P, { turn: { scheduled: { taskId: 't', runId: 'r' } } });
+      expect(await s.call({ ...CALL, bot: 'Bot B' })).toMatchObject({ ok: true });
+    });
+  });
+
+  describe('the host', () => {
+    const on = (options: { stopped?: boolean; throws?: boolean; answer?: unknown } = {}) => {
+      const execute = vi.fn(async () => {
+        if (options.throws) throw new Error('timed out');
+        return options.stopped ? undefined : options.answer ?? { ok: true, result: 'called' };
+      });
+      return { execute, deps: { bots: async () => [A, B, C], execute } };
+    };
+    it('finds the Bot by id or either name, and runs the call there', async () => {
+      for (const bot of ['cli_b', 'Bot B', 'b']) {
+        const h = on();
+        expect(await routeFeishuApi(h.deps, bot, CALL)).toEqual({ ok: true, result: 'called' });
+        expect(h.execute).toHaveBeenCalledExactlyOnceWith('cli_b', CALL);
+      }
+    });
+    it('a Bot not running says so, and an unknown one lists who there is', async () => {
+      expect(await routeFeishuApi(on({ stopped: true }).deps, 'Bot B', CALL)).toEqual({ ok: false, kind: 'other', message: 'Bot Bot B 没在运行。' });
+      const h = on();
+      expect(await routeFeishuApi(h.deps, 'Bot Z', CALL)).toMatchObject({ ok: false, message: expect.stringContaining('Bot A（cli_a）') });
+      expect(h.execute).not.toHaveBeenCalled();
+    });
+    it('a lost answer to a change does not say it did not happen; a GET\'s may', async () => {
+      expect(await routeFeishuApi(on({ throws: true }).deps, 'Bot B', CALL)).toEqual({ ok: false, kind: 'no-answer', message: 'Bot Bot B 没有回话，不知道这次调用生效没有。先查一下，再决定要不要重试。' });
+      expect(await routeFeishuApi(on({ throws: true }).deps, 'Bot B', LIST)).toEqual({ ok: false, kind: 'no-answer', message: 'Bot Bot B 这次没调成：timed out' });
+      expect(await routeFeishuApi(on({ answer: { nonsense: true } }).deps, 'Bot B', CALL)).toMatchObject({ ok: false, kind: 'no-answer' });
+    });
+    it.each(['group', 'comment'] as const)('a %s session goes no further, whatever its process sends', async place => {
+      const tokens = createSessionTokens();
+      tokens.issue({ appId: 'cli_a', place, ...(place === 'comment' ? {} : { chatId: GROUP }), sessionId: SESSION });
+      const api = vi.fn(async () => ({ ok: true as const, result: 'called' }));
+      expect(await hostFeishuApi({ appId: 'cli_a', tokens, api }, 'Bot B', { sessionId: SESSION, request: CALL })).toMatchObject({ ok: false });
+      expect(api).not.toHaveBeenCalled();
+    });
+    it('nor another process\'s session, nor one whose token went; a private chat\'s of this process does', async () => {
+      const tokens = createSessionTokens();
+      tokens.issue({ appId: 'cli_a', place: 'dm', chatId: DM, sessionId: SESSION });
+      const api = vi.fn(async () => ({ ok: true as const, result: 'called' }));
+      expect(await hostFeishuApi({ appId: 'cli_other', tokens, api }, 'Bot B', { sessionId: SESSION, request: CALL })).toMatchObject({ ok: false });
+      expect(api).not.toHaveBeenCalled();
+      expect(await hostFeishuApi({ appId: 'cli_a', tokens, api }, 'Bot B', { sessionId: SESSION, request: CALL })).toEqual({ ok: true, result: 'called' });
+      tokens.revoke(SESSION);
+      expect(await hostFeishuApi({ appId: 'cli_a', tokens, api }, 'Bot B', { sessionId: SESSION, request: CALL })).toMatchObject({ ok: false });
+      expect(api).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('the Bot that runs it', () => {
+    const bot = (send: () => Promise<unknown>) => {
+      const spy = vi.fn(send);
+      const channel = { rawClient: { request: spy }, botIdentity: { openId: 'ou_b', name: 'Bot B' } } as unknown as LarkChannel;
+      return { spy, reader: createFeishuReader({ channel, app: { id: 'cli_b', tenant: 'feishu' } }) };
+    };
+    it('calls Feishu with its own client and answers with its result', async () => {
+      const b = bot(async () => answer({ code: 0, data: { ok: true } }));
+      expect(await createFeishuCalls(b.reader)(CALL)).toEqual({ ok: true, result: '{"code":0,"data":{"ok":true}}' });
+      expect(b.spy).toHaveBeenCalledOnce();
+    });
+    it('a missing scope names it and gives its link, not those of whoever asked', async () => {
+      const b = bot(async () => answer({ code: 99991672, msg: 'required: [calendar:calendar:readonly]', error: { permission_violations: [{ subject: 'calendar:calendar:readonly' }] } }));
+      const reply = await createFeishuCalls(b.reader)(LIST);
+      expect(reply).toMatchObject({ ok: false, kind: 'scope' });
+      const { message } = reply as { message: string };
+      expect(message).toContain('Bot「Bot B」的飞书应用缺权限');
+      expect(message).toContain('https://open.feishu.cn/app/cli_b/auth');
+      expect(message).not.toContain('cli_a');
+      const unnamed = bot(async () => answer({ code: 99991672, msg: '应用缺少权限' }));
+      expect(await createFeishuCalls(unnamed.reader)(LIST)).toMatchObject({ ok: false, kind: 'scope', message: expect.stringContaining('Bot「Bot B」的飞书应用缺权限') });
+    });
+    it('a document not shared names it too', async () => {
+      const b = bot(async () => answer({ code: 1069303, msg: 'forbidden' }));
+      expect(await createFeishuCalls(b.reader)(CALL)).toMatchObject({ ok: false, kind: 'not-shared', message: expect.stringContaining('「Bot B」') });
+    });
+    it('checks the path itself: the host only knows its shape', async () => {
+      const b = bot(async () => answer({ code: 0 }));
+      expect(await createFeishuCalls(b.reader)({ method: 'GET', path: '/open-apis/auth/v3/tenant_access_token' })).toMatchObject({ ok: false, message: expect.stringContaining('/open-apis/auth/') });
+      expect(b.spy).not.toHaveBeenCalled();
+    });
+    it('`command.feishuRead` has no way to it: the table of reads does not have it', async () => {
+      const b = bot(async () => answer({ code: 0 }));
+      const reads = createFeishuReads({ members: async () => ({ members: [] }), feishu: b.reader });
+      expect(await reads({ tool: FEISHU_API, args: { ...CALL } })).toMatchObject({ ok: false, message: expect.stringContaining('没有') });
+      expect(b.spy).not.toHaveBeenCalled();
+    });
+  });
+});
+
 describe('a Bot process reading for the host (dm-agent 7.3)', () => {
   const reads = (members = vi.fn(async () => ({ members: [{ openId: 'ou_b', name: '张三' }] }))) => {
     const c = feishuChannel();
@@ -406,7 +575,7 @@ describe('vonvon feishu (dm-agent 7.3)', () => {
     const { loadCommands } = await import('./helpers/cli-commands');
     const commands = await loadCommands();
     const reads = commands.filter(command => command.covers.includes('command.feishuRead')).map(command => command.path);
-    expect(reads).toEqual(expect.arrayContaining(['feishu members', 'feishu messages', 'feishu message', 'feishu file', 'feishu chat', 'feishu doc', 'feishu sheet', 'feishu base', 'feishu drive', 'feishu folder', 'feishu wiki', 'feishu comments', 'feishu doc-media', 'feishu search']));
+    expect(reads).toEqual(expect.arrayContaining(['feishu members', 'feishu messages', 'feishu message', 'feishu file', 'feishu chat', 'feishu doc', 'feishu sheet', 'feishu base', 'feishu slides', 'feishu mindnote', 'feishu board', 'feishu minutes', 'feishu drive', 'feishu folder', 'feishu wiki', 'feishu comments', 'feishu doc-media', 'feishu search']));
     expect(reads).toHaveLength(feishuToolNames.size);
     for (const path of reads) expect(commands.find(command => command.path === path)?.options).toEqual(expect.arrayContaining(['--bot', '--json']));
   });

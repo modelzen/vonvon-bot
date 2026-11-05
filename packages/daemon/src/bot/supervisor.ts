@@ -8,7 +8,7 @@ import { log } from '../core/logger';
 import { withoutSessionMarkers } from '../config/session-env';
 import { loadBots, type BotEntry } from '../config/bots';
 import { askBotOver, createAdminIpcCaller, createHostIpcResponder, FEISHU_READ_IPC_MS, type AdminIpcCaller } from '../admin/ipc';
-import { hostFeishuRead } from '../admin/feishu-route';
+import { hostFeishuApi, hostFeishuRead } from '../admin/feishu-route';
 import { createSessionTokens } from '../host/session-tokens';
 import { AdminWriteError } from '../admin/ops';
 import { createAdminService } from '../admin/service';
@@ -333,6 +333,10 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
         if (!adminService?.feishuRead) throw new Error('The daemon is still starting');
         return adminService.feishuRead(reach, read);
       } }, bot, request),
+      feishuApi: (bot, request) => hostFeishuApi({ appId, tokens: sessionTokens, api: async (target, call) => {
+        if (!adminService?.feishuApi) throw new Error('The daemon is still starting');
+        return adminService.feishuApi(target, call);
+      } }, bot, request),
     }, msg => { if (proc.connected) proc.send(msg); }).onMessage);
     proc.on('message', (message: unknown) => {
       if (c.proc !== proc) return;
@@ -477,6 +481,11 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     for (const c of children.values()) spawnChild(c);
 
     const byAppId = (botId: string): Child | undefined => children.get(botId);
+    /** A Bot's channel for a Feishu read. Stopped, paused or draining: none, the same to whoever asked (7.3, "Bot B 没在运行"). */
+    const reachable = (botId: string): AdminIpcCaller | undefined => {
+      const child = byAppId(botId);
+      return !child?.enabled || child.pause || child.stopping || !child.proc ? undefined : child.ipc;
+    };
     const hostPause = paused ? options.crash?.pause ?? { since: supervisorStartedAt, crashes: CRASH_PAUSE_COUNT } : undefined;
     migration.bind({
       start: async (appId, fallback) => {
@@ -607,11 +616,11 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           if (!child?.enabled || child.pause || child.stopping || !child.proc || !child.ipc) return botNotRunning();
           return child.ipc.call({ kind: 'schedule', actor, request }) as Promise<ScheduleReply>;
         },
-        executeFeishuRead: async (botId, request) => {
+        executeFeishuRead: async (botId, request) => reachable(botId)?.call({ kind: 'feishuRead', request }, FEISHU_READ_IPC_MS),
+        executeFeishuApi: async (botId, request) => reachable(botId)?.call({ kind: 'feishuApi', request }, FEISHU_READ_IPC_MS),
+        firstHello: async (botId) => {
           const child = byAppId(botId);
-          // Stopped, paused or draining: the same to whoever asked (7.3, "Bot B 没在运行").
-          if (!child?.enabled || child.pause || child.stopping || !child.proc || !child.ipc) return undefined;
-          return child.ipc.call({ kind: 'feishuRead', request }, FEISHU_READ_IPC_MS);
+          if (child?.enabled && !child.pause && !child.stopping && child.proc && child.ipc) await child.ipc.call({ kind: 'firstHello' });
         },
         executeSettingsRead: async (botId, op) => {
           const child = byAppId(botId);

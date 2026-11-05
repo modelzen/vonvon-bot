@@ -78,6 +78,7 @@ export type ModelDisplayMode = 'off' | 'running' | 'always';
  *   ownerOpenId   — 扫码注册的人（创建者）。只给界面的小标签和候选人用，不参与判断。
  *   admins        — 管理员名单，判断只看它（product.md 第 6 节）。至少留一个；空的是老数据。
  *   adminsVersion — 名单升级到的版本（dm-agent 3.2）。
+ *   firstHelloPending — 新注册的 Bot 还欠创建者一条私聊（dm-agent 第一次见面）。
  *   allowedUsers  — @deprecated 全局响应白名单，已由项目级 Project.allowedUsers 取代。
  *   allowedChats  — chat_ids the bot responds in. Empty = all.
  */
@@ -87,6 +88,8 @@ export interface AppAccess {
   admins?: string[];
   /** 写了 2 就不再升级，否则被移除的创建者每次启动都会被加回来（config/admins-upgrade.ts）。 */
   adminsVersion?: number;
+  /** 只有扫码注册时写，发出去就删。老 Bot 和刷新凭据都没有它，所以不会补发。 */
+  firstHelloPending?: boolean;
   /** @deprecated 已由项目级 Project.allowedUsers 取代；保留仅为兼容旧 config 解析，不再读取。 */
   allowedUsers?: string[];
   allowedChats?: string[];

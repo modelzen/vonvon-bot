@@ -69,6 +69,7 @@ describe('profileOf', () => {
     const { o, startThread } = orchestrator();
     await o.onMessage(message());
     await vi.waitFor(() => expect(startThread).toHaveBeenCalled());
+    // No `feishuApi`: the generic tool is a private chat's (dm-agent 7.6), asserted in dm-turn.test.ts.
     expect(startThread.mock.calls[0]![0].profile?.tools).toEqual({ schedule: true, feishu: true, ...edit });
     await o.shutdown();
   });

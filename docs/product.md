@@ -829,6 +829,11 @@ owner 说过"崩溃报错就好了"，让 Claude 斟酌。自动重启是 Claude
 | 读多维表格（3.5） | `bitable:app:readonly` | 可选（2026-11-05）。同上 |
 | 改文档（3.5） | 云文档编辑，权限名以实测为准 | 可选（2026-11-05）。同上 |
 | 下载云空间文件（3.5） | 云空间文件下载，权限名以实测为准 | 可选（2026-11-05）。同上 |
+| 读幻灯片（3.5） | `slides:presentation:read` | 可选（2026-11-05）。同上 |
+| 读思维笔记（3.5） | `mindnote:node:read` | 可选（2026-11-05）。同上 |
+| 读画板（3.5） | `board:whiteboard:node:read` | 可选（2026-11-05）。同上 |
+| 读妙记（3.5） | `minutes:minutes:readonly`、`minutes:minutes.transcript:export` | 可选（2026-11-05）。同上 |
+| 读旧版文档（3.5） | `docs:doc:readonly` | 可选（2026-11-05）。同上 |
 | 看云空间文件夹里有什么（3.5） | `space:document:retrieve` | 可选（2026-11-05）。同上 |
 | 看知识库和目录（3.5） | `wiki:space:retrieve`、`wiki:node:retrieve` | 可选（2026-11-05）。同上。从页面链接列目录还要上面的 `wiki:wiki:readonly` |
 | 读文档评论（3.5） | `docs:document.comment:read` | 可选（2026-11-05）。同上。开过云文档评论的已经有了 |

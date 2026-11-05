@@ -3,7 +3,8 @@ import type { CollaborationRequest } from './collaboration';
 import {runtimeDistribution} from '../service/distribution';
 import { createSettingsService } from './settings-service';
 import { admitLibraryWorkspace, botLabel, createHostLibrary, type AdminLibraryOp, type HostLibrary } from './library';
-import { routeFeishuRead, type FeishuReach } from './feishu-route';
+import { routeFeishuApi, routeFeishuRead, type FeishuReach } from './feishu-route';
+import type { ApiRequest } from '../feishu-read/api';
 import type { FeishuReadReply, FeishuReadRequest } from '../feishu-read/reader';
 import { isProjectId, readLibrary } from '../project/library';
 import { projectRevision, projectView } from './collaboration';
@@ -135,6 +136,8 @@ export interface AdminService {
   groupMembers?(botId: string, chatId: string, cursor?: string): Promise<GroupMembers>;
   /** dm-agent 7.3: a Feishu read, on the Bot `reach` comes to (admin/feishu-route.ts). Refusals are replies, not errors. */
   feishuRead?(reach: FeishuReach, request: Omit<FeishuReadRequest, 'only'>): Promise<FeishuReadReply>;
+  /** dm-agent 7.6: `feishu_api` on the Bot named. A private chat's tool only, through the host: no RPC reaches it. */
+  feishuApi?(bot: string, request: ApiRequest): Promise<FeishuReadReply>;
   bindGroup?(botId: string, input: BindGroupInput): Promise<AdminProject>;
   getVoice(botId: string): Promise<VoiceView>;
   setVoice(botId: string, action: VoiceAction): Promise<void>;
@@ -474,6 +477,9 @@ export interface AdminServiceDeps {
   executeSchedule?: (botId: string, actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
   /** Runs a Feishu read in the bot's process, undefined when it has none: its answer is unchecked until the route parses it. */
   executeFeishuRead?: (botId: string, request: FeishuReadRequest) => Promise<unknown>;
+  executeFeishuApi?: (botId: string, request: ApiRequest) => Promise<unknown>;
+  /** Tells a running bot that its scopes look granted; it sends what it still owes its creator (dm-agent 第一次见面). */
+  firstHello?: (botId: string) => Promise<void>;
   /** 实时运行状态（daemon 进程内：本进程 channel / 子进程 IPC）。返回 undefined
    * 或缺省 → 回退锁文件探测（该 bot 不归本 daemon 管，如未激活的 bot）。 */
   liveStatus?: (botId: string) => Promise<BotLiveStatus | undefined>;
@@ -599,6 +605,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     return { running: false };
   }
 
+  const routeBots = async () => (await loadBots()).bots.map(bot => ({ id: bot.appId, label: botLabel(bot), name: bot.name }));
   async function runState(botId: string): Promise<BotLiveStatus> {
     const live = await deps.liveStatus?.(botId).catch(() => undefined);
     return live ?? lockFileRunState(botId);
@@ -706,11 +713,16 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       if (!deps.executeGroups) throw new NotWiredYetError('群成员');
       return parseGroupMembers(await deps.executeGroups(botId, { kind: 'groupMembers', chatId, cursor }));
     },
+    async feishuApi(bot, request) {
+      const execute = deps.executeFeishuApi;
+      if (!execute) throw new NotWiredYetError('飞书接口');
+      return routeFeishuApi({ bots: routeBots, execute }, bot, request);
+    },
     async feishuRead(reach, request) {
       const execute = deps.executeFeishuRead;
       if (!execute) throw new NotWiredYetError('飞书读取');
       return routeFeishuRead({
-        bots: async () => (await loadBots()).bots.map(bot => ({ id: bot.appId, label: botLabel(bot), name: bot.name })),
+        bots: routeBots,
         chats: async botId => (await listProjectsIn(botPaths(botId).projectsFile)).map(project => project.chatId),
         running: async botId => (await runState(botId)).running,
         execute,
@@ -911,6 +923,10 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       // config.json 里的应用不是这个 Bot 的（文件被换过）也不写，免得把别的应用的名字记到它头上。
       if (validation.ok && entry && app.id === entry.appId && !deps.readonlyPreview) {
         await syncBotName('setup-status', botIdentity(entry), entry.botName, validation.botName);
+      }
+      // The client watches this while the user publishes, so the hello need not wait for the bot's own slow check.
+      if (validation.ok && validation.missingScopes?.length === 0 && cfg.preferences?.access?.firstHelloPending && !deps.readonlyPreview) {
+        void deps.firstHello?.(app.id).catch(() => undefined);
       }
 
       return {

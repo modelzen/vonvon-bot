@@ -142,11 +142,19 @@ export const V1_OPTIONAL_SCOPES = [
  *   - `sheets:spreadsheet:read` = a spreadsheet's sheets and a range's values;
  *   - `bitable:app:readonly` = a base's tables, fields, views and records (measured 2026-11-05: this one scope covers them all);
  *   - `drive:file:download` = a Drive file's bytes.
+ * F6's (`lark-cli schema`, not yet measured): `slides:presentation:read` = a deck's XML, `mindnote:node:read` = a mind
+ * note's nodes, `board:whiteboard:node:read` = a board's nodes, `minutes:minutes:readonly` = a minute's details and
+ * `minutes:minutes.transcript:export` = its transcript, `docs:doc:readonly` = an old document's text.
  */
 export const DOC_READ_SCOPES = ['docs:document.content:read', 'docx:document:readonly', 'wiki:wiki:readonly'] as const;
 export const SHEET_READ_SCOPES = ['sheets:spreadsheet:read'] as const;
 export const BITABLE_READ_SCOPES = ['bitable:app:readonly'] as const;
 export const DRIVE_READ_SCOPES = ['drive:file:download'] as const;
+export const SLIDES_READ_SCOPES = ['slides:presentation:read'] as const;
+export const MINDNOTE_READ_SCOPES = ['mindnote:node:read'] as const;
+export const BOARD_READ_SCOPES = ['board:whiteboard:node:read'] as const;
+export const MINUTES_READ_SCOPES = ['minutes:minutes:readonly', 'minutes:minutes.transcript:export'] as const;
+export const LEGACY_DOC_READ_SCOPES = ['docs:doc:readonly'] as const;
 /** What a folder holds (`drive/v1/files`). */
 export const DRIVE_LIST_SCOPES = ['space:document:retrieve'] as const;
 /** The knowledge bases and their tree. Finding a page from its link is `wiki:wiki:readonly`, in {@link DOC_READ_SCOPES}. */
@@ -167,6 +175,11 @@ export const FEISHU_TOOL_SCOPES = [
   ...SHEET_READ_SCOPES,
   ...BITABLE_READ_SCOPES,
   ...DRIVE_READ_SCOPES,
+  ...SLIDES_READ_SCOPES,
+  ...MINDNOTE_READ_SCOPES,
+  ...BOARD_READ_SCOPES,
+  ...MINUTES_READ_SCOPES,
+  ...LEGACY_DOC_READ_SCOPES,
   ...DRIVE_LIST_SCOPES,
   ...WIKI_READ_SCOPES,
   ...COMMENT_READ_SCOPES,
@@ -227,6 +240,12 @@ export const SCOPE_LABELS: Record<string, string> = {
   'sheets:spreadsheet:read': '读取表格内容',
   'bitable:app:readonly': '读取多维表格内容',
   'drive:file:download': '下载云空间文件',
+  'slides:presentation:read': '读取幻灯片内容',
+  'mindnote:node:read': '读取思维笔记内容',
+  'board:whiteboard:node:read': '读取画板内容',
+  'minutes:minutes:readonly': '读取妙记信息',
+  'minutes:minutes.transcript:export': '导出妙记文字记录',
+  'docs:doc:readonly': '读取旧版文档内容',
   'space:document:retrieve': '查看云空间文件夹里的文件',
   'wiki:space:retrieve': '查看知识库列表',
   'wiki:node:retrieve': '查看知识库目录',

@@ -9,7 +9,8 @@ import { z } from 'zod';
 import { SESSION_ID_RE, type SessionInput } from '../host/session-tokens';
 import { SESSION_TURN_ENDED } from '../agent/entry/registry';
 import type { FeishuReadReply, FeishuReadRequest } from '../feishu-read/reader';
-import { feishuReadReplySchema, type RoutedRead } from './feishu-route';
+import type { ApiRequest } from '../feishu-read/api';
+import { apiRequestSchema, feishuReadReplySchema, type RoutedApi, type RoutedRead } from './feishu-route';
 
 /**
  * supervisor ↔ bot 子进程的管理面 IPC（node 'ipc' stdio / process.send）。
@@ -74,9 +75,10 @@ export type AdminSessionOp = { kind: 'authorizeSessionCall'; sessionId: string; 
 /**
  * dm-agent 7.3: a read this Bot runs as itself, for the host. This channel is the parent's alone, a bot child's IPC, so the
  * request comes from the host; who may ask was settled there (feishu-route.ts), and `run.ts` answers it only when supervised.
+ * `feishuApi`: the same for `feishu_api`, which only a private chat's tool ever asks the host for (7.6).
  */
-export type AdminFeishuOp = { kind: 'feishuRead'; request: FeishuReadRequest };
-export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | AdminFeishuOp | { kind: 'status' };
+export type AdminFeishuOp = { kind: 'feishuRead'; request: FeishuReadRequest } | { kind: 'feishuApi'; request: ApiRequest };
+export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | AdminFeishuOp | { kind: 'status' } | { kind: 'firstHello' };
 
 export interface AdminIpcRequest {
   fcb: typeof ADMIN_IPC_REQ;
@@ -294,14 +296,17 @@ export const FEISHU_READ_IPC_MS = 68_000;
 export type HostIpcOp =
   | ({ kind: 'issueSessionToken' } & SessionInput)
   | { kind: 'revokeSessionToken'; sessionId: string }
-  | ({ kind: 'feishuRead'; bot?: string } & RoutedRead);
+  | ({ kind: 'feishuRead'; bot?: string } & RoutedRead)
+  | ({ kind: 'feishuApi'; bot: string } & RoutedApi);
 /** The result of a host op; a failure is the response's `error`, as on the admin channel. */
-export type HostIpcReply = { kind: 'token'; token: string } | { kind: 'ok' } | { kind: 'feishuRead'; reply: FeishuReadReply };
+export type HostIpcReply = { kind: 'token'; token: string } | { kind: 'ok' } | { kind: 'feishuRead' | 'feishuApi'; reply: FeishuReadReply };
 export interface HostApi {
   issueSessionToken(input: SessionInput): Promise<string>;
   revokeSessionToken(sessionId: string): Promise<void>;
   /** dm-agent 7.3: a private chat's read, on the Bot the host picks unless `bot` names one (feishu-route.ts). */
   feishuRead(bot: string | undefined, request: RoutedRead): Promise<FeishuReadReply>;
+  /** `feishu_api` on the Bot named, for a private chat's session of this process (7.6). */
+  feishuApi(bot: string, request: RoutedApi): Promise<FeishuReadReply>;
 }
 const HOST_CHANNELS: IpcChannels = { req: HOST_IPC_REQ, res: HOST_IPC_RES };
 const hostOpSchema = z.discriminatedUnion('kind', [
@@ -311,9 +316,10 @@ const hostOpSchema = z.discriminatedUnion('kind', [
   }).strict(),
   z.object({ kind: z.literal('revokeSessionToken'), sessionId: z.string().regex(SESSION_ID_RE) }).strict(),
   z.object({ kind: z.literal('feishuRead'), bot: z.string().min(1).max(200).optional(), sessionId: z.string().regex(SESSION_ID_RE), tool: z.string().min(1).max(100), args: z.record(z.string(), z.unknown()) }).strict(),
+  z.object({ kind: z.literal('feishuApi'), bot: z.string().min(1).max(200), sessionId: z.string().regex(SESSION_ID_RE), request: apiRequestSchema }).strict(),
 ]);
 const hostReplySchema = z.discriminatedUnion('kind', [z.object({ kind: z.literal('token'), token: z.string() }).strict(), z.object({ kind: z.literal('ok') }).strict(),
-  z.object({ kind: z.literal('feishuRead'), reply: feishuReadReplySchema }).strict()]);
+  z.object({ kind: z.enum(['feishuRead', 'feishuApi']), reply: feishuReadReplySchema }).strict()]);
 
 /** The bot process's side: `send` is process.send; feed the host's messages to `onMessage`. */
 export function createHostIpcCaller(send: (msg: IpcRequest<HostIpcOp>) => void): HostApi & { onMessage(raw: unknown): void; rejectAll(reason: string): void } {
@@ -332,6 +338,11 @@ export function createHostIpcCaller(send: (msg: IpcRequest<HostIpcOp>) => void):
       if (reply.kind !== 'feishuRead') throw new Error('The host did not answer with a read');
       return reply.reply;
     },
+    async feishuApi(bot, request) {
+      const reply = await ask({ kind: 'feishuApi', bot, ...request }, FEISHU_READ_IPC_MS + 1_000);
+      if (reply.kind !== 'feishuApi') throw new Error('The host did not answer with a call');
+      return reply.reply;
+    },
     onMessage: caller.onMessage,
     rejectAll: caller.rejectAll,
   };
@@ -347,6 +358,7 @@ export function createHostIpcResponder(api: HostApi, send: (msg: IpcResponse) =>
         const { kind: _read, bot, ...request } = op;
         return { kind: 'feishuRead', reply: await api.feishuRead(bot, request) };
       }
+      if (op.kind === 'feishuApi') return { kind: 'feishuApi', reply: await api.feishuApi(op.bot, { sessionId: op.sessionId, request: op.request }) };
       const { kind: _kind, ...input } = op;
       return { kind: 'token', token: await api.issueSessionToken(input) };
     }, send),

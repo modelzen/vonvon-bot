@@ -9,6 +9,7 @@ import {SettingsGroup, SettingsRow} from '../reference/components/system-setting
 import {Button, IconButton, StatusBadge} from '../reference/components/ui';
 import {openExternalUrl} from '../url-actions';
 import {botSteps, linuxSteps, serviceStep, toolSteps, type SetupStep, type StepAction} from '@vonvon/protocol';
+import {PrivateChatButton} from './PrivateChatButton';
 import {skipService, toggleService} from './service-toggle';
 import {useSetupStatus} from './useSetupStatus';
 import {useClaudeLoginCheck} from './useClaudeLoginCheck';
@@ -108,7 +109,10 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenPr
       const steps = botSteps(agent, read?.status, read?.problem);
       const left = steps.filter(step => !step.done).length;
       return <SettingsGroup key={agent.id} label={<>{agent.name} <StatusBadge tone={left ? 'warning' : 'success'}>{left ? `还差 ${left} 步` : '全部完成'}</StatusBadge></>}
-        action={<IconButton size="sm" variant="ghost" label="重新检测" title="重新检测" loading={read?.checking} disabled={!ready} onClick={() => void recheck(agent.id)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}
+        action={<span className="setup-step-trailing">
+          <PrivateChatButton agent={agent} status={read?.status} onNotice={onNotice}/>
+          <IconButton size="sm" variant="ghost" label="重新检测" title="重新检测" loading={read?.checking} disabled={!ready} onClick={() => void recheck(agent.id)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
+        </span>}
         footer={<>企业租户里新权限可能要管理员审核。{read?.status && read.problem ? `上次检测失败：${read.problem}` : ''}</>}>
         {steps.map((step, index) => stepRow(step, index, agent.id))}
       </SettingsGroup>;
