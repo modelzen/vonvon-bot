@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const fake = vi.hoisted(() => ({ log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() } }));
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
-import { launcherFiles, sessionCliEnv, writeSessionCli, type CliRuntime } from '../src/agent/session-cli';
+import { launcherFiles, putSessionCliOnPath, writeSessionCli, type CliRuntime } from '../src/agent/session-cli';
+import { binChildEnv } from '../src/platform/tool-path';
 
 // dm-agent 9: a session finds `vonvon` without the shell's startup files.
 const roots: string[] = [];
@@ -128,21 +129,25 @@ describe('writing it', () => {
   });
 });
 
-describe('a session\'s environment', () => {
-  it('puts the launcher\'s directory first and names the launcher', () => {
-    expect(sessionCliEnv('/data/bin/vonvon', { PATH: '/usr/bin:/bin' }, 'linux')).toEqual({ PATH: '/data/bin:/usr/bin:/bin', VONVON_CLI: '/data/bin/vonvon' });
+describe('the Bot\'s PATH, which its sessions inherit', () => {
+  const put = (cli: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platform = 'linux') => { putSessionCliOnPath(cli, env, platform); return env; };
+  it('puts the launcher\'s directory first', () => {
+    expect(put('/data/bin/vonvon', { PATH: '/usr/bin:/bin' })).toEqual({ PATH: '/data/bin:/usr/bin:/bin' });
   });
   it('does not repeat it: a daemon started from a session has it already', () => {
-    expect(sessionCliEnv('/data/bin/vonvon', { PATH: '/data/bin:/usr/bin:/data/bin' }, 'linux').PATH).toBe('/data/bin:/usr/bin');
+    expect(put('/data/bin/vonvon', { PATH: '/data/bin:/usr/bin:/data/bin' }).PATH).toBe('/data/bin:/usr/bin');
   });
   it('stands alone with no PATH to add to', () => {
-    expect(sessionCliEnv('/data/bin/vonvon', {}, 'linux').PATH).toBe('/data/bin');
+    expect(put('/data/bin/vonvon', {}).PATH).toBe('/data/bin');
   });
   it('keeps Windows\' own spelling and separator, so a child does not get two', () => {
-    expect(sessionCliEnv('C:\\data\\bin\\vonvon.cmd', { Path: 'C:\\Windows;C:\\tools' }, 'win32'))
-      .toEqual({ Path: 'C:\\data\\bin;C:\\Windows;C:\\tools', VONVON_CLI: 'C:\\data\\bin\\vonvon.cmd' });
+    expect(put('C:\\data\\bin\\vonvon.cmd', { Path: 'C:\\Windows;C:\\tools' }, 'win32')).toEqual({ Path: 'C:\\data\\bin;C:\\Windows;C:\\tools' });
   });
   it('leaves another variable called Path alone off Windows', () => {
-    expect(sessionCliEnv('/data/bin/vonvon', { Path: 'x', PATH: '/bin' }, 'linux')).toEqual({ PATH: '/data/bin:/bin', VONVON_CLI: '/data/bin/vonvon' });
+    expect(put('/data/bin/vonvon', { Path: 'x', PATH: '/bin' })).toEqual({ Path: 'x', PATH: '/data/bin:/bin' });
+  });
+  it.skipIf(process.platform === 'win32')('keeps what a Provider adds for its children: a session\'s own PATH would have replaced it', () => {
+    const { PATH } = binChildEnv('/opt/nvm/bin/codex', put('/data/bin/vonvon', { PATH: '/usr/bin:/bin' }));
+    expect(PATH?.split(':').slice(0, 4)).toEqual(['/data/bin', '/usr/bin', '/bin', '/opt/nvm/bin']);
   });
 });

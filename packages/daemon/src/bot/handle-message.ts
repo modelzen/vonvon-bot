@@ -16,9 +16,8 @@ import { assemble, judgeContext, loadContextSources, openingInstructions, planTu
 import { groupSkillProfile } from '../agent/group-skills';
 import { completeBuiltinPackage, ensureBuiltinPackage } from '../agent/builtin-skills/package';
 import { builtinSkillsOfSet } from '../agent/builtin-skills/registry';
-import { sessionCliEnv } from '../agent/session-cli';
 import type { SessionProfile } from '../agent/session-profile';
-import { SESSION_BOT_ENV, SESSION_ENV, SESSION_SCOPE_ENV, sessionScope } from '../config/session-env';
+import { SESSION_BOT_ENV, SESSION_CLI_ENV, SESSION_ENV, SESSION_SCOPE_ENV, sessionScope } from '../config/session-env';
 import type { HostApi } from '../admin/ipc';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
@@ -1515,8 +1514,8 @@ export function createOrchestrator(
       try {
         // devices 5.3: the session's shell gets its token, never the bare marker; no token, no session (the host is gone).
         const session = entry && host ? await sessionEnv(host, entry.sessionId, place) : undefined;
-        // Every session finds `vonvon`, whichever Provider and place (dm-agent 9).
-        const env = { ...(sessionCli ? sessionCliEnv(sessionCli) : {}), ...session };
+        // Every session finds `vonvon`, whichever Provider and place (dm-agent 9): on the PATH it inherits, or by this.
+        const env = { ...(sessionCli ? { [SESSION_CLI_ENV]: sessionCli } : {}), ...session };
         thread = await create({...opts, ...(entry ? {entry} : {}), ...(Object.keys(env).length ? {profile: withSessionEnv(opts.profile, env)} : {})});
         entry?.attach(thread);
       }

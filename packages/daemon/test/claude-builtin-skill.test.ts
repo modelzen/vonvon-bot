@@ -72,11 +72,11 @@ it.each(['qa', 'write', 'full'] as const)('hands over none of it without the pac
   }
 });
 
-// dm-agent 9: the launcher's PATH replaces the process's, and comes after what the session must not lose.
-it.each(['start', 'resume'] as const)('hands a session\'s PATH and VONVON_CLI to the Claude process on %s', async action => {
-  const env = { PATH: '/data/bin:/usr/bin', VONVON_CLI: '/data/bin/vonvon' };
+// dm-agent 9: the launcher's directory is on the Bot's own PATH, which the Claude process inherits.
+it.each(['start', 'resume'] as const)('hands a session\'s VONVON_CLI and the Bot\'s PATH to the Claude process on %s', async action => {
+  const env = { VONVON_CLI: '/data/bin/vonvon' };
   const options = await open(fixture(), action, { ...profile(true), env }, 'full');
-  expect(options.env).toMatchObject({ ...env, CLAUDE_CODE_DISABLE_CRON: '1', FEISHU_CODEX_BRIDGE: '1' });
+  expect(options.env).toMatchObject({ ...env, PATH: process.env.PATH, CLAUDE_CODE_DISABLE_CRON: '1', FEISHU_CODEX_BRIDGE: '1' });
 });
 
 it('adds no whitelist where the group has none, so every skill stays listed', async () => {

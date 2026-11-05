@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmod, mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { join } from 'node:path';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentEvent, StartThreadOptions } from '../src/agent/types';
 import type { SessionProfile } from '../src/agent/session-profile';
@@ -147,7 +147,7 @@ it('writes nothing for a backend that cannot take packages', async () => {
 // dm-agent 9: every session, wherever it runs and whether it starts or resumes, finds `vonvon`; both Providers read `env`.
 describe('the launcher in a session\'s env', () => {
   const CLI = join('/data', 'bin', 'vonvon');
-  const onPath = { PATH: expect.stringMatching(new RegExp(`^${join('/data', 'bin')}${delimiter}`)), VONVON_CLI: CLI };
+  const onPath = { VONVON_CLI: CLI };
   const started = async (start: (o: ReturnType<typeof createOrchestrator>) => Promise<unknown>) => {
     const { o, startThread } = orchestrator(true, { sessionCli: CLI });
     await start(o);
@@ -176,6 +176,7 @@ describe('the launcher in a session\'s env', () => {
     fake.project = group();
     const sent = codexSessionParams(await started(o => o.onMessage(message())), 'codex-cli 0.163.0', null) as Record<string, any>;
     expect(sent.config.shell_environment_policy.set).toMatchObject(onPath);
+    expect(sent.config.shell_environment_policy.set).not.toHaveProperty('PATH');
   });
   it('is left out where no launcher was written', async () => {
     fake.project = group();

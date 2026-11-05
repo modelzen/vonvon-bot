@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { paths } from '../config/paths';
-import { SESSION_CLI_ENV } from '../config/session-env';
 import { log } from '../core/logger';
 import { selfEntry } from '../core/self-entry';
 import { pathFor } from '../platform/home-path';
@@ -10,8 +9,8 @@ import { pathFor } from '../platform/home-path';
 /**
  * dm-agent 9: a session finds `vonvon` however it was started. The desktop's registration writes shell startup files, and
  * the Linux server its PATH block, but those fail, are skipped by a development build, go unread by a shell that is not a
- * login shell, and miss a daemon that started first. So each Bot writes its own launcher and puts it on its sessions' PATH.
- * Rewritten at every start, it follows an upgrade; both Providers take it from `SessionProfile.env`.
+ * login shell, and miss a daemon that started first. So each Bot writes its own launcher and puts it on its own PATH, which
+ * its sessions inherit. Rewritten at every start, it follows an upgrade; the full path reaches them by `SessionProfile.env`.
  */
 export interface CliRuntime {
   execPath: string;
@@ -93,12 +92,13 @@ export async function writeSessionCli(runtime: CliRuntime = currentRuntime(), di
 }
 
 /**
- * The launcher's directory ahead of this process's PATH, read when a session starts, and its full path. On Windows the
- * variable keeps the spelling it has here (usually `Path`), so a child environment does not end up with two.
+ * The launcher's directory ahead of this process's PATH, once, as a Bot starts. Not a session's own PATH: Codex replaces its
+ * shell's with that, losing what the Provider added for its children (its own directory, nvm's). On Windows the variable
+ * keeps the spelling it has here (usually `Path`), so a child environment does not end up with two.
  */
-export function sessionCliEnv(cli: string, env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): Record<string, string> {
+export function putSessionCliOnPath(cli: string, env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): void {
   const { delimiter, dirname } = pathFor(platform);
   const name = platform === 'win32' ? Object.keys(env).find(key => key.toUpperCase() === 'PATH') ?? 'Path' : 'PATH';
   const directory = dirname(cli);
-  return { [name]: [directory, ...(env[name] ?? '').split(delimiter).filter(entry => entry && entry !== directory)].join(delimiter), [SESSION_CLI_ENV]: cli };
+  env[name] = [directory, ...(env[name] ?? '').split(delimiter).filter(entry => entry && entry !== directory)].join(delimiter);
 }

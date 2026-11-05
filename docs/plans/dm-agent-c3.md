@@ -38,11 +38,11 @@ case 'dm': return [dmScheduleSkill, dmFeishuSkill, configSkill];
 ```ts
 launcherFiles(runtime, platform): LauncherFile[]            // 内容，纯函数
 writeSessionCli(runtime?, directory?, platform?): Promise<string | undefined>   // 不抛错
-sessionCliEnv(cli, env?, platform?): Record<string, string> // PATH 和 VONVON_CLI
+putSessionCliOnPath(cli, env?, platform?): void // Bot 启动时改这个进程的 PATH
 ```
 
 - `bridge.ts` 在建 orchestrator 之前 `await writeSessionCli()`，路径传进 `createOrchestrator` 的 `sessionCli`。
-- `createWithPermission` 把 `sessionCliEnv(sessionCli)` 和令牌一起放进 `withSessionEnv`。`PATH` 在开会话时读，因为 `profile.env` 会盖掉 `process.env` 的。
+- `bridge.ts` 写好启动器后把目录放到 Bot 进程的 `PATH` 最前面，会话继承。`createWithPermission` 只把 `VONVON_CLI` 和令牌一起放进 `withSessionEnv`。`PATH` 不进 `profile.env`，否则 Codex 那边整个替换，丢掉 Provider 补的工具目录（审查任务 355）。
 - 写法：内容没变就只补权限；变了写临时文件再 `rename`，几个 Bot 同时起来也是整份；`rename` 输给同样的内容不算失败（Windows 上目标被占用时会报错）。
 - 写失败：记 `session-cli-failed`，返回 `undefined`，这个 Bot 的会话不设这两个变量。旧的启动器不用，它可能指向已经删掉的版本。
 - sh：单引号，`'` 转义。Electron 时先 `export ELECTRON_RUN_AS_NODE`。
@@ -60,8 +60,8 @@ sessionCliEnv(cli, env?, platform?): Record<string, string> // PATH 和 VONVON_C
 - `T/builtin-skill-text.test.ts`：两组的名字和并集；群的两个 Skill 不教命令行；私聊的 `vonvon-schedule` 不说"不能建新任务"；`vonvon-feishu` 列全 12 个文档工具，`feishu_api` 只在私聊；`vonvon-config` 的能力、6.2 的清单、没有判断和风险的话；文字里的命令、选项和工具名对得上 CLI 和工具表，改名时变红。（main 必败）
 - `T/builtin-package.test.ts`：`group`、`dm` 两个包升级后都没有老名字的 `SKILL.md`。（main 必败）
 - `T/session-cli.test.ts`：启动器内容（普通路径、带空格、单引号、Electron、Windows）；真的跑一次，路径带空格、引号、中文、`$`，参数原样、退出码原样；升级后重写；内容不变不动 mtime；8 个 Bot 同时写；写失败只记日志；`sessionCliEnv` 的顺序、去重、Windows 的写法。（main 必败）
-- `T/profile-of-builtin.test.ts`：群的新会话、恢复的会话、评论的会话都带 `PATH` 和 `VONVON_CLI`，进了 Codex 的 `shell_environment_policy`；没写启动器时不带。（main 必败）
-- `T/claude-builtin-skill.test.ts`：开和恢复时 Claude 进程收到 `PATH` 和 `VONVON_CLI`。
+- `T/profile-of-builtin.test.ts`：群的新会话、恢复的会话、评论的会话都带 `VONVON_CLI`，不带 `PATH`，进了 Codex 的 `shell_environment_policy`；没写启动器时不带。（main 必败）
+- `T/claude-builtin-skill.test.ts`：开和恢复时 Claude 进程收到 Bot 的 `PATH` 和 `VONVON_CLI`。
 - `T/bridge-session-memory.test.ts`：Bot 启动写启动器并交给 orchestrator；写不了也起得来。（main 必败）
 - `T/cli-admin.test.ts`：私聊不写 `--bot` 是自己，别处照旧报错。（main 必败）
 - `T/dm-turn.test.ts`：私聊的会话带 `VONVON_BOT`。（main 必败）
@@ -118,7 +118,7 @@ sessionCliEnv(cli, env?, platform?): Record<string, string> // PATH 和 VONVON_C
 - 新增 `VONVON_BOT`，只有私聊会话带，`pickBot` 用它。私聊的快照有全部 Bot，没有它"默认目标是这个 Bot"不成立。它不是权限，`--bot` 优先。
 - Windows 除 `vonvon.cmd` 外再写一份 sh 的 `vonvon`：Claude 在 Windows 的 Bash 是 Git Bash，不认裸名 `.cmd`。
 - `.cmd` 跑的时候切到代码页 65001，跑完切回，路径有中文时才不乱码。
-- 启动器写失败时这个 Bot 的会话不设 `PATH`、`VONVON_CLI`，不退回旧的启动器，它可能指向已删的版本。
+- 启动器写失败时这个 Bot 不改 `PATH`，会话不设 `VONVON_CLI`，不退回旧的启动器，它可能指向已删的版本。
 - Windows 上用进程里原有的 `Path` 写法，避免子进程有两份。
 - `create` 改成 `add`，`dm-agent.md` 第 8 节已对齐。
 - D4 的计划说 `vonvon-config` 要教 `--dm`、`--to`，这里只教 `--dm`。D4 的 `dmChatToPost` 在 Bot 的会话里拒绝 `--to`（"在私聊里建的任务发回这个私聊，不用 --to"），而这份 Skill 只有 Bot 的会话读得到，教了也是被拒。
