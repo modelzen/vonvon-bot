@@ -2,9 +2,10 @@ import { randomBytes } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { cleanFileName, downloadName, imageExtension, MAX_FILE_BYTES, prepareInboundDir, readHeader, saveInboundDownload } from '../bot/media';
 import { withDeadline } from '../bot/names';
+import { escapeInboundMarkers } from '../bot/hidden-blocks';
 import { log } from '../core/logger';
 import { apiRefusalOf, FeishuReadRefused } from './denial';
-import { cleanText, denialContext, RESULT_BUDGET, sliceText, type ReadDeps } from './shared';
+import { denialContext, RESULT_BUDGET, sliceText, type ReadDeps } from './shared';
 
 /**
  * `feishu_api` (dm-agent 7.6): any Feishu API with the Bot's tenant token. The checks on `path` stop mistakes, they are
@@ -26,8 +27,14 @@ type RawAnswer = { data: ArrayBuffer | Uint8Array; headers: unknown };
 const CALL_MS = 60_000;
 /** How much of an error's body goes back. */
 const ERROR_BUDGET = 8 * 1024;
+/** More than a result can hold, as bytes: the rest of a long text is neither decoded nor scanned. */
+const TEXT_BYTES = 2 * RESULT_BUDGET;
+/** Feishu's errors are short: a longer answer is not parsed just to look for one. */
+const CODE_BYTES = 1024 * 1024;
 
 const refused = (message: string): FeishuReadRefused => new FeishuReadRefused(message);
+/** Feishu's text unchanged but for vonvon's own markers, the boundary every read has (cleanText would also redo its white space). */
+const textOf = (body: Buffer): string => escapeInboundMarkers(body.subarray(0, TEXT_BYTES).toString('utf8'));
 
 /** Only the session's Bot until F2 routes `bot` to another one's process. */
 function thisBot(deps: ReadDeps, bot: string | undefined): void {
@@ -65,10 +72,9 @@ function noAnswer(request: ApiRequest): FeishuReadRefused {
 
 /** A refused answer's body in Feishu's words, through the same boundary as what a read returns. */
 function failed(deps: ReadDeps, request: ApiRequest, body: Buffer, status?: number): FeishuReadRefused {
-  const text = body.toString('utf8');
-  const said = sliceText(cleanText(text), 0, ERROR_BUDGET).text;
+  const said = sliceText(textOf(body).trim(), 0, ERROR_BUDGET).text;
   const http = status ? `HTTP ${status}` : '';
-  return apiRefusalOf(denialContext(deps), parsed(text), said ? [http, said].filter(Boolean).join(' ') : `${http || '错误'}，没有内容`, request.method !== 'GET');
+  return apiRefusalOf(denialContext(deps), body.length <= CODE_BYTES ? parsed(body.toString('utf8')) : undefined, said ? [http, said].filter(Boolean).join(' ') : `${http || '错误'}，没有内容`, request.method !== 'GET');
 }
 
 function failureOf(deps: ReadDeps, request: ApiRequest, failure: unknown): FeishuReadRefused {
@@ -88,10 +94,10 @@ function isText(headers: unknown, body: Buffer): boolean {
 
 /** Feishu's text whole if it fits; else its start, saying so first, in case what shows the model the result cuts the end too. */
 function textResult(body: Buffer): string {
-  const text = cleanText(body.toString('utf8'));
-  if (!text) return '飞书返回成功，没有内容。';
+  const text = textOf(body);
+  if (!text.trim()) return '飞书返回成功，没有内容。';
   const { text: part, next } = sliceText(text, 0, RESULT_BUDGET);
-  if (next === undefined) return part;
+  if (next === undefined && body.length <= TEXT_BYTES) return part;
   const kb = (bytes: number) => Math.ceil(bytes / 1024);
   return `[结果太长，被截断了：这里是前 ${kb(Buffer.byteLength(part))} KB，一共 ${kb(body.length)} KB。缩小范围或者翻页再调，比如 page_size、page_token。]\n${part}`;
 }
@@ -125,7 +131,7 @@ export async function callApi(deps: ReadDeps, request: ApiRequest, beforeSend: (
   if (!answer) { abort.abort(); throw noAnswer(request); }
   const content = Buffer.from(answer.data as Uint8Array);
   if (!isText(answer.headers, content)) return saved(content, answer.headers);
-  const { code } = (parsed(content.toString('utf8')) ?? {}) as { code?: unknown };
+  const { code } = (content.length <= CODE_BYTES ? parsed(content.toString('utf8')) ?? {} : {}) as { code?: unknown };
   if (typeof code === 'number' && code !== 0) throw failed(deps, request, content);
   return textResult(content);
 }
