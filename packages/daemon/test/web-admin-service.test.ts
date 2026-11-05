@@ -471,6 +471,9 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     // The 3.11 optional scopes the 状态与诊断 page lists (s19).
     expect(s.scopes.missingOptional).toEqual(['contact:user.base:readonly', 'im:chat:readonly', 'im:message.group_at_msg.include_bot:readonly', 'application:application:self_manage']);
     expect(s.scopes.grantUrl).toContain('/app/cli_setupbot/auth?q=');
+    expect(s.scopes.missingTools).toContain('docs:document.content:read');
+    expect(decodeURIComponent(s.scopes.toolsGrantUrl!)).toContain('search:message');
+    expect(decodeURIComponent(s.scopes.grantUrl)).not.toContain('search:message');
     expect(s.event.state).toBe('ok');
     // 机器人进群事件没订阅：清单靠 missingOptional 提醒。
     expect(s.event.missingOptional).toContain('im.chat.member.bot.added_v1');

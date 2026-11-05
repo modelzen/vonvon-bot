@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import type { JoinedGroups } from '../../admin/groups';
-import { feishuGroups, feishuMembers, type FeishuMembers } from '../../admin/structured-commands';
+import { feishuGroups, type FeishuMembers } from '../../admin/structured-commands';
 import type { MemoryWriter } from '../../bot/memory-writer';
 import type { ScheduleCommands } from '../../admin/schedule-commands';
+import type { FeishuReader } from '../../feishu-read/reader';
+import { createFeishuTools } from './feishu-tools';
 import { createMemoryTools } from './memory-tools';
 import { createScheduleTools } from './schedule-tools';
 import { sessionInfoTool, ToolRefusal, type AgentTool } from './tools';
@@ -12,6 +14,8 @@ export function createCommandTools(deps: {
   appId: string;
   groups(cursor?: string): Promise<JoinedGroups>;
   members(chatId: string, cursor?: string): Promise<FeishuMembers>;
+  /** 给了就多注册飞书读取工具（dm-agent 第 7 节）；feishu_members 不用它，一直有 */
+  feishu?: FeishuReader;
   /** 给了就多注册 memory_add / memory_update / memory_forget / memory_list（§3.3） */
   memory?: MemoryWriter;
   /** 给了就多注册 schedule_* 七个工具（定时任务总设计第 10 节） */
@@ -29,15 +33,5 @@ export function createCommandTools(deps: {
       if (!ctx.admin || ctx.place.kind !== 'p2p') throw denied();
       return result;
     },
-  }, {
-    name: 'feishu_members', class: 'read', places: ['group', 'p2p'], description: '查询可见群的成员，失败不会伪装成空列表。',
-    input: z.object({ chatId: z.string().min(1).max(1000), cursor: z.string().max(2000).optional() }).strict(),
-    async run(args, ctx) {
-      const { chatId, cursor } = z.object({ chatId: z.string(), cursor: z.string().optional() }).parse(args);
-      if (!(ctx.admin && ctx.place.kind === 'p2p') && (ctx.place.kind !== 'group' || chatId !== ctx.place.chatId)) throw denied();
-      const result = await feishuMembers(deps, chatId, cursor);
-      if (!(ctx.admin && ctx.place.kind === 'p2p') && (ctx.place.kind !== 'group' || chatId !== ctx.place.chatId)) throw denied();
-      return result;
-    },
-  }, ...(deps.memory ? createMemoryTools(deps.memory) : []), ...(deps.schedule ? createScheduleTools({ commands: deps.schedule }) : [])];
+  }, ...createFeishuTools(deps), ...(deps.memory ? createMemoryTools(deps.memory) : []), ...(deps.schedule ? createScheduleTools({ commands: deps.schedule }) : [])];
 }
