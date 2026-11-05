@@ -49,10 +49,11 @@ describe('turn presence', () => {
     expect(f.scope.presence).toBe('none');
     expect(f.entries.memoryTurn(f.t)?.turn()).toMatchObject({ kind });
   });
-  it('a scheduled run never counts as a person for settings, even from an admin in a private chat', async () => {
+  // dm-agent 8 (owner 2026-11-05): a private chat's task reads and changes settings, as the administrator who set it.
+  it('a scheduled run in a private chat counts for settings as its administrator does', async () => {
     const f = setup({ ...person, scheduled }, { kind: 'p2p', chatId: 'oc_dm' });
     f.entry.noteToolUse('u1');
-    expect(await f.entry.call('t_set', {}, { toolUseId: 'u1' })).toMatchObject({ ok: false, code: 'refused', reason: 'not-human-turn' });
+    expect(await f.entry.call('t_set', {}, { toolUseId: 'u1' })).toEqual({ ok: true, result: 'set' });
     const human = setup(person, { kind: 'p2p', chatId: 'oc_dm' });
     human.entry.noteToolUse('u1');
     expect(await human.entry.call('t_set', {}, { toolUseId: 'u1' })).toEqual({ ok: true, result: 'set' });
