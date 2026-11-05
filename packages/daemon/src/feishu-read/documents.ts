@@ -117,18 +117,13 @@ function cleanCell(cell: unknown): unknown {
   return cell;
 }
 
-type SheetList = { title?: string; sheets: { id?: string; title?: string; rows?: number; columns?: number }[] };
+type SheetList = { sheets: { id?: string; title?: string; rows?: number; columns?: number }[] };
 type SheetRange = { range: string; rows: unknown[]; cursor?: string };
 
 async function sheetList(deps: ReadDeps, token: string): Promise<SheetList> {
   const id = encodeURIComponent(token);
-  const [meta, list] = await Promise.all([
-    ask(deps, 'sheet', () => deps.channel.rawClient.request<{ code?: number; data?: { spreadsheet?: { title?: string } } }>({ method: 'GET', url: `/open-apis/sheets/v3/spreadsheets/${id}` })),
-    ask(deps, 'sheet', () => deps.channel.rawClient.request<{ code?: number; data?: { sheets?: { sheet_id?: string; title?: string; grid_properties?: { row_count?: number; column_count?: number } }[] } }>({ method: 'GET', url: `/open-apis/sheets/v3/spreadsheets/${id}/sheets/query` })),
-  ]);
-  const title = meta.data?.spreadsheet?.title;
+  const list = await ask(deps, 'sheet', () => deps.channel.rawClient.request<{ code?: number; data?: { sheets?: { sheet_id?: string; title?: string; grid_properties?: { row_count?: number; column_count?: number } }[] } }>({ method: 'GET', url: `/open-apis/sheets/v3/spreadsheets/${id}/sheets/query` }));
   return {
-    ...(title ? { title: cleanText(title) } : {}),
     sheets: (list.data?.sheets ?? []).map(sheet => ({
       ...(sheet.sheet_id ? { id: sheet.sheet_id } : {}), ...(sheet.title ? { title: cleanText(sheet.title) } : {}),
       ...(sheet.grid_properties?.row_count !== undefined ? { rows: sheet.grid_properties.row_count } : {}),

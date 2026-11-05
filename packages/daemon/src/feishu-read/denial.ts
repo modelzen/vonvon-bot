@@ -24,8 +24,8 @@ const AREAS: Record<ReadArea, { scopes: readonly string[]; effect: string }> = {
 /** The sentence that closes a missing-scope reply: an administrator of vonvon may not reach the Feishu console (7.5). */
 export const AFTER_GRANT = '开通后要发布新版本才生效；打不开这个链接，就转给这个飞书应用的管理员。';
 
-/** Feishu's "no access to this object", from its docs; which of them a document not shared with a bot gives is not measured yet. */
-const NOT_SHARED_CODES: ReadonlySet<number> = new Set([1770032, 1310213, 1061004, 1069902, 131006, 91403]);
+/** Feishu's "no access to this object". Measured for a document not shared with a bot: 3380004 (docs_ai), 1770032 (raw_content); the rest from its docs. */
+const NOT_SHARED_CODES: ReadonlySet<number> = new Set([3380004, 1770032, 1310213, 1061004, 1069902, 131006, 91403]);
 /** Measured for a made-up id (3380002, 99992402, 1770001, 131005), the rest from the same docs. */
 const NOT_FOUND_CODES: ReadonlySet<number> = new Set([3380002, 99992402, 1770001, 1770002, 1310214, 1061003, 1061007, 131005, 230001, 230110]);
 /** The Bot is not in that chat (230002), or the chat has left it (232011). */

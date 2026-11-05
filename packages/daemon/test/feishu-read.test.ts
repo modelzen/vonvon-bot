@@ -294,11 +294,10 @@ describe('feishu_doc', () => {
 });
 
 describe('feishu_sheet', () => {
-  const spreadsheet = { code: 0, data: { spreadsheet: { title: '排期' } } };
   const sheets = { code: 0, data: { sheets: [{ sheet_id: 'a1b', title: '一月', grid_properties: { row_count: 10, column_count: 4 } }] } };
   it('lists the sheets when no range is given', async () => {
-    const { read } = reader({ request: routes({ '/sheets/query': sheets, '/sheets/v3/spreadsheets/': spreadsheet }) });
-    expect(await read.sheet({ sheet: 'https://x.feishu.cn/sheets/shtToken' })).toEqual({ title: '排期', sheets: [{ id: 'a1b', title: '一月', rows: 10, columns: 4 }] });
+    const { read } = reader({ request: routes({ '/sheets/query': sheets }) });
+    expect(await read.sheet({ sheet: 'https://x.feishu.cn/sheets/shtToken' })).toEqual({ sheets: [{ id: 'a1b', title: '一月', rows: 10, columns: 4 }] });
   });
   it('reads a range, the sheet in the link standing in for one', async () => {
     const { read, client } = reader({ request: routes({ '/values/': { code: 0, data: { valueRange: { range: 'a1b!A1:B2', values: [['甲', 1], ['乙', null]] } } } }) });
@@ -322,7 +321,7 @@ describe('feishu_sheet', () => {
     await expect(wide.read.sheet({ sheet: 'shtToken', range: 'a1b' })).rejects.toThrow('这一行太大');
   });
   it('asks for the sheet group when the scope is missing, and says when it is not shared', async () => {
-    const scope = reader({ request: routes({ '/values/': denied('sheets:spreadsheet', 'sheets:spreadsheet.meta:read') }) });
+    const scope = reader({ request: routes({ '/values/': denied('sheets:spreadsheet', 'sheets:spreadsheet:read') }) });
     const refusal = await scope.read.sheet({ sheet: 'shtToken', range: 'a1b' }).catch((error: Error) => error.message);
     for (const name of SHEET_READ_SCOPES) expect(refusal).toContain(encodeURIComponent(name));
     expect(refusal).toContain('读不了表格');
