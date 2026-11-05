@@ -874,7 +874,7 @@ describe('goal child questions across parent turns', () => {
     }
     await click('secret-first', 'chat'); expect(f.response).not.toHaveBeenCalled();
     next.release(); await until(() => expect(inNext).toBe(true)); expect(count).toBe(3);
-    await o.onMessage({ ...message(secret), chatType: 'p2p', chatId: 'p2p', threadId: undefined });
+    await o.onMessage({ ...message(secret), chatType: 'p2p', chatId: 'p2p', threadId: undefined, replyToMessageId: carrier('secret-first', 'owner') });
     expect(f.response).toHaveBeenCalledExactlyOnceWith('secret-first', { kind: 'answered', answer: { kind: 'text', text: secret } });
     await until(() => expect(count).toBe(6)); await click('secret-first', 'owner'); expect(f.response).toHaveBeenCalledTimes(1);
     fake.sessions = [{ threadId: 'topic', chatId: 'chat', cwd: '/test', sessionId: 'host', backend: 'codex', summary: '' }];

@@ -30,9 +30,10 @@ function thread(): AgentThread {
 function world() {
   const data = root();
   const library = libraryLocation(data);
-  const memory = createMemoryWriter({ botId: 'cli_a', botDirectory: join(data, 'bots', 'cli_a'), library, projectIdOf: async chatId => chatId === 'oc_a' ? PROJECT : undefined });
-  const tools = createCommandTools({ appId: 'cli_a', memory, settings: {} as never, projects: async () => [], groups: async () => ({ groups: [] }) as never, members: async () => ({ members: [] }) as never });
-  const entries = createAgentEntries({ appId: 'cli_a', tools, isAdmin: id => id === 'ou_o' });
+  const memory = createMemoryWriter({ botId: 'cli_a', botDirectory: join(data, 'bots', 'cli_a'), library, projectIdOf: async chatId => chatId === 'oc_a' ? PROJECT : undefined,
+    dmPersonOf: async chatId => ({ oc_p2p_o: 'ou_o', oc_p2p_y: 'ou_y' } as Record<string, string>)[chatId] });
+  const tools = createCommandTools({ appId: 'cli_a', memory, groups: async () => ({ groups: [] }) as never, members: async () => ({ members: [] }) as never });
+  const entries = createAgentEntries({ appId: 'cli_a', tools, isAdmin: id => id === 'ou_o' || id === 'ou_y' });
   function session(place: AgentPlace, turn: TurnFacts) {
     const entry = entries.issue(place); const t = thread(); entry.attach(t);
     const scope = entries.openTurn(t, turn); entry.noteToolUse('u1');
@@ -47,7 +48,7 @@ function world() {
 
 describe('the memory tools through the registry', () => {
   it('are registered only when a writer is given, and the comment session gets just the list', () => {
-    const base = { appId: 'cli_a', settings: {} as never, projects: async () => [], groups: async () => ({}) as never, members: async () => ({}) as never };
+    const base = { appId: 'cli_a', groups: async () => ({}) as never, members: async () => ({}) as never };
     expect(createCommandTools(base).map(tool => tool.name)).not.toContain('memory_add');
     const w = world();
     const group = w.session({ kind: 'group', chatId: 'oc_a' }, facts());
@@ -100,8 +101,25 @@ describe('the memory tools through the registry', () => {
   });
 });
 
+// dm-agent 5 (D3). main 必败: `dm` threw, a bare memory_add in a private chat wrote to the project or was refused.
+describe('the memory tools in a private chat', () => {
+  const inDm = (w: ReturnType<typeof world>, chatId: string, requesterOpenId: string) => w.session({ kind: 'p2p', chatId }, facts({ requesterOpenId }));
+  it('keep each administrator\'s to themselves, through the same tools', async () => {
+    const w = world();
+    const mine = inDm(w, 'oc_p2p_o', 'ou_o'), theirs = inDm(w, 'oc_p2p_y', 'ou_y');
+    const added = await mine.call('memory_add', { text: 'O 的私事' });
+    expect(added).toMatchObject({ ok: true, result: { ok: true, scopeApplied: 'dm', item: { scope: 'dm' } } });
+    const id = (added as { result: { item: { id: string } } }).result.item.id;
+    expect(id.startsWith('d_ou_o:')).toBe(true);
+    expect(JSON.stringify(await theirs.call('memory_list', {}))).not.toContain('O 的私事');
+    expect(await theirs.call('memory_forget', { id })).toMatchObject({ ok: true, result: { ok: false, error: 'out-of-scope' } });
+    expect(JSON.stringify(await mine.call('memory_list', { scope: 'dm' }))).toContain('O 的私事');
+    expect(await mine.call('memory_update', { id, text: 'O 改过的私事' })).toMatchObject({ ok: true, result: { ok: true } });
+  });
+});
+
 describe('what the model is told', () => {
-  const descriptions = (): string => createCommandTools({ appId: 'x', memory: {} as never, settings: {} as never, projects: async () => [], groups: async () => ({}) as never, members: async () => ({}) as never })
+  const descriptions = (): string => createCommandTools({ appId: 'x', memory: {} as never, groups: async () => ({}) as never, members: async () => ({}) as never })
     .filter(tool => tool.name.startsWith('memory_')).map(tool => tool.description).join('\n');
   it('says: remember in your own words in the reply; pick the branch from the list; not a receipt, not where it was kept', () => {
     const text = descriptions();

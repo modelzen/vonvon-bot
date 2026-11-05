@@ -266,12 +266,17 @@ export function rotateMemoryNonce(key: string): string {
 }
 export function forgetMemoryNonce(key: string): void { nonces.delete(key); }
 
-/** 隐藏块的说明（开场指令里没有 memory 工具的会话用），照 §3.4 的原文，nonce 由调用方给 */
-export function hiddenBlockInstructions(nonce: string): string {
+/** 隐藏块的说明（开场指令里没有 memory 工具的会话用），照 §3.4 的原文，nonce 由调用方给；私聊的块记进这个人的私聊记忆 */
+export function hiddenBlockInstructions(nonce: string, where: 'project' | 'dm' = 'project'): string {
   return [
     '没有 memory 工具时，把要记的东西放在回复最末尾，每条一个：',
-    `<vonvon-remember n="${nonce}" scope="project" branch="决定" claim="asked">发版改到周四</vonvon-remember>`,
-    'vonvon 会收走这个块。scope 只能是 project。branch 从项目记忆开头"分支："那一行里挑，都不合适才起一个 12 字以内的新名字。',
+    ...(where === 'dm' ? [
+      `<vonvon-remember n="${nonce}" branch="其他" claim="asked">周报要先写结论</vonvon-remember>`,
+      'vonvon 会收走这个块，记进这个人的私聊记忆。branch 从私聊记忆开头"分支："那一行里挑，都不合适才起一个 12 字以内的新名字。',
+    ] : [
+      `<vonvon-remember n="${nonce}" scope="project" branch="决定" claim="asked">发版改到周四</vonvon-remember>`,
+      'vonvon 会收走这个块。scope 只能是 project。branch 从项目记忆开头"分支："那一行里挑，都不合适才起一个 12 字以内的新名字。',
+    ]),
     '放了块的这一轮，正文里像平常说话一样带一句，比如"好，记住了"；不列记了什么、记在哪，不另发消息。',
   ].join('\n');
 }
@@ -283,7 +288,7 @@ export function hiddenBlockInstructions(nonce: string): string {
  * 只动 vonvon 自己会放的标记，别的尖括号和方括号不碰。
  */
 const INBOUND_TAG = /<(\/?)(?=vonvon-(?:remember|mem)(?![\w-]))/gi;
-const INBOUND_BRACKET = /\[(\/?)(?=\s*(?:vonvon\s*设置更新|项目记忆|Bot\s*记忆|角色设定|本项目的补充职责))/gi;
+const INBOUND_BRACKET = /\[(\/?)(?=\s*(?:vonvon\s*设置更新|项目记忆|私聊记忆|Bot\s*记忆|角色设定|本项目的补充职责))/gi;
 export function escapeInboundMarkers(text: string): string {
   if (!text) return text;
   return text.replace(INBOUND_TAG, (_all, slash: string) => `＜${slash}`).replace(INBOUND_BRACKET, (_all, slash: string) => `［${slash}`);
@@ -292,6 +297,7 @@ export function escapeInboundMarkers(text: string): string {
 // ---- 没记上的提示（§3.4 最后一条）----------------------------------------------------------------------------------------
 
 export const MEMORY_FULL_NOTICE = '项目记忆满了，记不进去；有人要你记，就说记不下了，请主人在 vonvon 里清理。';
+export const DM_MEMORY_FULL_NOTICE = '私聊记忆满了，记不进去；有人要你记，就说记不下了，请主人在 vonvon 里清理。';
 export const missedNotice = (count: number, reasons: readonly string[]): string =>
   `上一轮有 ${count} 条没记上：${[...new Set(reasons)].join('、')}。有人问起或者要用到时照实说。`;
 

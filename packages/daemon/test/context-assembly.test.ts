@@ -4,11 +4,12 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MemorySource } from '@vonvon/protocol';
 import { MEMORY_CONVENTION } from '../src/agent/bridge-instructions';
-import { assemble, contextOf, judgeContext, openingInstructions, planTurnUpdate, supplementOf, type ContextSources } from '../src/bot/context-assembly';
+import { assemble, contextOf, judgeContext, loadContextSources, openingInstructions, planTurnUpdate, supplementOf, type ContextSources } from '../src/bot/context-assembly';
 import { decisionBody } from '../src/judge/decision';
 import { libraryLocation } from '../src/project/library';
 import { parseRole } from '../src/bot/role-files';
-import { botMemoryLocation, MemoryStore, projectMemoryLocation } from '../src/bot/memory-store';
+import { DM_MEMORY_FULL_NOTICE, MEMORY_FULL_NOTICE } from '../src/bot/hidden-blocks';
+import { botMemoryLocation, dmMemoryLocation, MemoryStore, projectMemoryLocation } from '../src/bot/memory-store';
 
 const roots: string[] = [];
 const root = (): string => { const path = realpathSync(mkdtempSync(join(tmpdir(), 'context-assembly-'))); roots.push(path); return path; };
@@ -360,5 +361,88 @@ describe('what the decision model gets', () => {
     const body = decisionBody(base, '规则', 'jev-model');
     expect(JSON.stringify(body)).toContain('"background_memory":"- 发版改到周四"');
     expect(JSON.stringify(body)).toContain('只管发布');
+  });
+});
+
+// dm-agent 5 (D3). main 必败: a private chat's session had the role and Bot memory and nothing of its person's.
+describe('a private chat', () => {
+  const adminSays: MemorySource = { via: 'tool', botId: 'cli_a', actorRole: 'admin', actorOpenId: 'ou_a', chatId: 'oc_p2p_a' };
+  function dmWorld() {
+    const dir = root(), botDirectory = join(dir, 'bots', 'cli_a'), library = libraryLocation(dir);
+    return { botDirectory, library, bot: new MemoryStore(botMemoryLocation(botDirectory), { now }),
+      mine: new MemoryStore(dmMemoryLocation(botDirectory, 'ou_a'), { now }), theirs: new MemoryStore(dmMemoryLocation(botDirectory, 'ou_b'), { now }) };
+  }
+  const load = (w: ReturnType<typeof dmWorld>, openId = 'ou_a') => loadContextSources({
+    appId: 'cli_a', botName: '小支', place: { kind: 'dm', person: '张三', openId }, row: { projectId: PROJECT, supplement: '群里的补充职责' }, botDirectory: w.botDirectory, library: w.library,
+  });
+
+  it('hands over the role, the Bot memory and this person\'s memory; no supplement, no project, nobody else\'s', async () => {
+    const w = dmWorld();
+    await add(w.bot, '先写结论', '合作方式', ownerSays({ chatId: undefined }));
+    await add(w.mine, 'A 的周报发周五', '其他', adminSays);
+    await add(w.mine, '自己记的一条', '其他', { ...adminSays, actorRole: 'bot', actorOpenId: undefined }, 'untrusted');
+    await add(w.theirs, 'B 的私事', '其他', { ...adminSays, actorOpenId: 'ou_b' });
+    const a = assemble(await load(w));
+    const text = openingInstructions(a, 'n0n0n0');
+    expect(text.startsWith('你是飞书 bot「小支」。现在在和「张三」私聊。')).toBe(true);
+    const order = ['[Bot 记忆', '[私聊记忆 · 只在这个人的私聊里', '[私聊记忆 · 群友或 bot 记的'].map(needle => text.indexOf(needle));
+    expect(order.every(index => index > -1)).toBe(true);
+    expect(order).toEqual([...order].sort((x, y) => x - y));
+    expect(text).toContain('A 的周报发周五');
+    expect(text).toContain('自己记的一条');
+    expect(text).not.toContain('B 的私事');
+    expect(text).not.toContain('项目记忆');
+    expect(text).not.toContain('群里的补充职责');
+    expect(a.memory.dm?.storeId).toBe('d_ou_a');
+    expect(a.injected).toHaveLength(3);
+  });
+
+  it('has no private memory for a window with no person, in a group or in a comment', async () => {
+    const w = dmWorld();
+    await add(w.mine, 'A 的私事', '其他', adminSays);
+    const none = await loadContextSources({ appId: 'cli_a', place: { kind: 'dm' }, botDirectory: w.botDirectory, library: w.library });
+    expect(none.dmMemory).toBeUndefined();
+    const comment = assemble({ ...await load(w), place: { kind: 'comment' } }, 'comment');
+    expect(comment.dmTrusted).toBe('');
+    const group = await loadContextSources({ appId: 'cli_a', place: { kind: 'group', chatId: CHAT, chatName: '群' }, botDirectory: w.botDirectory, library: w.library });
+    expect(group.dmMemory).toBeUndefined();
+  });
+
+  it('tells the next turn what changed, as entries, and keeps what it has when the memory cannot be read', async () => {
+    const w = dmWorld();
+    const first = assemble(await load(w));
+    const context = contextOf(first, 'n1n1n1');
+    await add(w.mine, '新记的一条', '其他', adminSays);
+    const src = await load(w);
+    const update = await planTurnUpdate(src, assemble(src), context);
+    expect(update.text).toContain('[私聊记忆 · 变化 · 主人或管理员记的]');
+    expect(update.text).toContain('新记的一条');
+    const failed = { ...src, dmMemory: undefined, failed: { dm: true as const } };
+    const kept = await planTurnUpdate(failed, assemble(failed), contextOf(first, 'n1n1n1'));
+    expect(kept.text).toBeUndefined();
+    expect(kept.context.memory?.dm?.storeId).toBe('d_ou_a');
+    expect(kept.context.versions.dmMemory).toBe(first.versions.dmMemory);
+  });
+
+  it('gives it all back after a compaction, under the private chat\'s block instructions', async () => {
+    const w = dmWorld();
+    await add(w.mine, 'A 的私事', '其他', adminSays);
+    const src = await load(w), a = assemble(src);
+    const update = await planTurnUpdate(src, a, { ...contextOf(a, 'n1n1n1'), fullRedeliverDue: true }, undefined, { hiddenBlocks: true });
+    expect(update.text).toContain('A 的私事');
+    expect(update.text).toContain('记进这个人的私聊记忆');
+    expect(update.text).not.toContain('scope="project"');
+    expect(openingInstructions(a, 'n0n0n0', { hiddenBlocks: true })).toContain('记进这个人的私聊记忆');
+  });
+
+  it('says its own memory is full to a session of hidden blocks, not the project\'s', async () => {
+    const w = dmWorld();
+    const limited = new MemoryStore(dmMemoryLocation(w.botDirectory, 'ou_a', { limit: 1 }), { now });
+    await add(limited, '只有一条', '其他', adminSays);
+    const src = { ...await load(w), dmMemory: { storeId: 'd_ou_a', view: await limited.read(), store: limited } };
+    const a = assemble(src);
+    const told = await planTurnUpdate(src, a, contextOf(a, 'n1n1n1'), undefined, { hiddenBlocks: true, notices: [MEMORY_FULL_NOTICE] });
+    expect(told.text).toContain(DM_MEMORY_FULL_NOTICE);
+    expect(told.text).not.toContain(MEMORY_FULL_NOTICE);
   });
 });

@@ -9,7 +9,7 @@ import { createAppPreferencesWriter, createAdminWriteExecutor } from '../src/adm
 import { createSettingsOwner, type SettingsOwnerDeps } from '../src/admin/settings';
 import { parseSettingsEdit, parseSettingsAction, parseModelQuery } from '../src/admin/settings-parse';
 import type { AgentSettingsView, ProjectSettingsView, SessionSettingsView } from '../src/admin/settings-types';
-import { addDmProject, addProject, dmChatId, dmProject, getProjectByName, updateProject } from '../src/project/registry';
+import { addDmProject, addProject, dmChatId, dmProject, DM_PROJECT_NAME, getProjectByName, rememberDmChat, updateProject } from '../src/project/registry';
 import { getSession, RETIRED_KEY_TEXT, upsertSession } from '../src/bot/session-store';
 import { createAdminIpcCaller, createAdminIpcResponder } from '../src/admin/ipc';
 import type { AppConfig } from '../src/config/schema';
@@ -142,6 +142,17 @@ it('accepts hand-typed model ids for the project default and a topic, never for 
 
   const a = await owner.read(agent) as AgentSettingsView;
   expect((await owner.save({ scope: agent, section: 'comments', revision: a.sections.comments.revision, patch: { selection: custom } })).kind).toBe('rejected');
+});
+// dm-agent 5: a private chat's session has a row of its own, not on the group list; its model page must find it.
+it('reads a private chat\'s session through its row', async () => {
+  await addDmProject({ name: DM_PROJECT_NAME, chatId: dmChatId(botId), cwd: '/tmp/dm', blank: true, createdAt: 1, kind: 'single', mode: 'full', dm: { people: {} } });
+  await rememberDmChat('oc_p2p_fixture', 'ou_person');
+  await upsertSession({ threadId: 'oc_p2p_fixture', chatId: 'oc_p2p_fixture', sessionId: 'native-dm', backend: 'codex-appserver', cwd: '/tmp/dm', model: 'fixture-model', effort: 'high', createdAt: 1, updatedAt: 1, summary: '' });
+  const scope = { kind: 'session' as const, botId, threadId: 'oc_p2p_fixture' };
+  const { owner } = await fixture();
+  const view = await owner.read(scope) as SessionSettingsView;
+  expect(view.sections.model.stored.selection).toMatchObject({ model: 'fixture-model' });
+  expect((await owner.save({ scope, section: 'model', revision: view.sections.model.revision, patch: { selection: { kind: 'default' } } })).kind).toBe('saved');
 });
 it('refuses a session key retired in s15c, to read or to save, before touching the record', async () => {
   const retired = { kind: 'session' as const, botId, threadId: `${session.threadId}#admin` };

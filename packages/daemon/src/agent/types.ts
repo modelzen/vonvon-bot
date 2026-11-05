@@ -366,7 +366,7 @@ export class SessionInUseError extends Error {
 export type AgentToolReply =
   | { ok: true; result: unknown }
   | { ok: false; code: 'not-ready' | 'revoked' | 'unknown-tool' | 'refused' | 'bad-args' | 'busy' | 'timeout' | 'failed';
-      reason?: 'not-dm' | 'not-human-turn' | 'not-admin' | 'switch-off' | 'turn-ended' | 'unknown-origin'
+      reason?: 'not-dm' | 'not-human-turn' | 'not-admin' | 'turn-ended' | 'unknown-origin'
         | 'not-group' | 'no-human-create' | 'scheduled-run-scope'; message: string };
 
 export interface AgentEntry {
