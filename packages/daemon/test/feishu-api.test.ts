@@ -312,7 +312,7 @@ describe('through the real SDK', () => {
     ['behind an HTTP error', { status: 401 }],
   ])('says when it could not get its token, %s', async (_case, extra) => {
     const { deps, seen } = await feishu(() => undefined, sdkLogger, { ...extra, body: { code: 10015, msg: 'wrong app secret' } });
-    const failure = await callApi(deps, { method: 'POST', path: '/open-apis/bitable/v1/apps/x/tables', body: {} }).catch((error: unknown) => error as Error);
+    const failure = await callApi(deps, { method: 'POST', path: '/open-apis/bitable/v1/apps/x/tables', body: {} }).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(FeishuReadRefused);
     expect((failure as Error).message).toContain('wrong app secret');
     expect((failure as Error).message).not.toContain('生效');
@@ -322,11 +322,10 @@ describe('through the real SDK', () => {
   // Codex 审查任务 351 必败: told to share a document when the API was about a wiki space's settings
   it('does not name a cause it cannot know for a permission any API may refuse', async () => {
     const { deps } = await feishu(refusedJson(400, { code: 131006, msg: 'wiki space permission denied' }));
-    const failure = await callApi(deps, { method: 'PUT', path: '/open-apis/wiki/v2/spaces/s/setting', body: {} }).catch((error: unknown) => error as FeishuReadRefused);
-    expect(failure.message).toContain('wiki space permission denied');
-    expect(failure.message).toContain('别的情况');
-    expect(failure.message).not.toContain('这篇文档还没分享给 Bot');
-    expect(failure.kind).toBe('not-shared');
+    const failure = await callApi(deps, { method: 'PUT', path: '/open-apis/wiki/v2/spaces/s/setting', body: {} }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ kind: 'not-shared', message: expect.stringContaining('wiki space permission denied') });
+    expect((failure as Error).message).toContain('别的情况');
+    expect((failure as Error).message).not.toContain('这篇文档还没分享给 Bot');
   });
 
   it('keeps the bytes of a binary answer', async () => {
