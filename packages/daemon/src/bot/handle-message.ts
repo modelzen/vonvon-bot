@@ -260,7 +260,7 @@ import {
   type Project,
   type SessionMode,
 } from '../project/registry';
-import { bindModeFor, createProject, CreatedButUnsavedError, CreationOutcomeUnknownError, joinExistingGroup } from '../project/lifecycle';
+import { bindModeFor, createProject, CreatedButUnsavedError, CreationOutcomeUnknownError, joinExistingGroup, type GroupInvitee } from '../project/lifecycle';
 export { bindModeFor } from '../project/lifecycle';
 import { refreshBranch } from '../project/announcement';
 import { leaveChat, transferOwnership } from '../project/group-ops';
@@ -1449,7 +1449,8 @@ export function createOrchestrator(
   }
   /**
    * The token a new session's `vonvon` commands carry (devices 5.3), in place of the bare marker, and beside it the
-   * `--scope` its command line copies: a group's reach is its group, a private chat's and a comment's the bot.
+   * `--scope` its command line copies: a group's reach is its group, a comment's the bot. A private chat has one reach
+   * and needs no `--scope` (dm-agent 6.1).
    */
   async function sessionEnv(api: Pick<HostApi, 'issueSessionToken'>, sessionId: string, place: AgentPlace): Promise<Record<string, string>> {
     const chatId = place.kind !== 'doc' && place.chatId ? place.chatId : undefined;
@@ -1457,7 +1458,7 @@ export function createOrchestrator(
       appId: cfg.accounts.app.id, place: place.kind === 'p2p' ? 'dm' : place.kind === 'group' ? 'group' : 'comment', sessionId,
       ...(chatId ? { chatId } : {}),
     });
-    return { [SESSION_ENV]: token, [SESSION_SCOPE_ENV]: sessionScope(cfg.accounts.app.id, place.kind === 'group' ? chatId : undefined) };
+    return place.kind === 'p2p' ? { [SESSION_ENV]: token } : { [SESSION_ENV]: token, [SESSION_SCOPE_ENV]: sessionScope(cfg.accounts.app.id, place.kind === 'group' ? chatId : undefined) };
   }
   /** Where a session of `chatId` runs: a private chat's row answers for a real p2p chat, so its token and its tools are a private chat's. */
   const sessionPlace = (project: Project | undefined, chatId: string): AgentPlace => ({ kind: project?.dm ? 'p2p' : 'group', chatId });
@@ -2922,7 +2923,7 @@ export function createOrchestrator(
     dmChatsOf.set(msg.senderId, chats.add(msg.chatId));
     await orStop(dmReady, undefined);
     try {
-      await rememberDmChat(msg.chatId, msg.senderId, await names.senderName(msg));
+      await rememberDmChat(msg.chatId, msg.senderId, await names.senderName(msg), rawSender(msg)?.sender_id?.union_id);
       return await getProjectByChatId(msg.chatId);
     } catch (error) {
       log.fail('project', error, { phase: 'dm-remember' });
@@ -6039,7 +6040,7 @@ export function createOrchestrator(
               requestId,
               bot,
               name,
-              ownerOpenId: op,
+              invitee: { idType: 'open_id', id: op },
               existingPath: cwdIn || undefined,
               projectsRootDir: cfg.preferences?.projectsRootDir,
               kind,
@@ -6904,8 +6905,12 @@ export function createOrchestrator(
     }
   }
   async function collaboration(request: CollaborationRequest): Promise<unknown> {
-    const admin = primaryAdmin(cfg);
-    if (!admin) throw new AdminWriteError('请先给这个 Bot 添加管理员');
+    // Who a new group is for and who gets a group this Bot leaves: its primary admin, unless a private chat's creation
+    // says who asked (dm-agent 6.4), when this Bot needs no admin of its own.
+    const primary = primaryAdmin(cfg);
+    const invitee: GroupInvitee | undefined = (request.action === 'createProject' ? request.invitee : undefined) ?? (primary ? { idType: 'open_id', id: primary } : undefined);
+    if (!invitee) throw new AdminWriteError('请先给这个 Bot 添加管理员');
+    const admin = invitee.id;
     if (request.action === 'usage') return { data: await fetchUsageBundle(request.force) };
     if (request.action === 'createProject') {
       const signature = JSON.stringify(request);
@@ -6924,7 +6929,7 @@ export function createOrchestrator(
       const result = serialCreate(async signal => {
         const directory = request.directory === undefined ? undefined : await realpath(request.directory);
         if (directory !== undefined && !(await stat(directory)).isDirectory()) throw new AdminWriteError('所选文件夹不是目录');
-        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, name: request.name, ownerOpenId: admin, existingPath: directory, project: request.project, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, judge: request.judge, mode: bindModeFor(request.backend), signal });
+        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, botName: channel.botIdentity?.name, name: request.name, invitee, existingPath: directory, project: request.project, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, judge: request.judge, mode: bindModeFor(request.backend), signal });
         return { ok: true, project: projectView(project) };
       }).catch((error: unknown) => {
         // Every refusal crosses IPC as the bot's own word; a result not known stays a plain error, which the RPC
@@ -7772,6 +7777,8 @@ export function createOrchestrator(
       const said = new Set(opts.recallsShown);
       let fromQueue = false;
       let replyInThread = opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId));
+      // The chat's one person, a person's message or their task alike: on the row since their first message (dm-agent 6.4).
+      const dmUnionId = (await getProjectByChatId(opts.chatId).catch(() => undefined))?.dm?.people[opts.chatId]?.unionId;
       for (;;) {
         let turnInput = currentTurn.input;
         // In flight from here, through the preparation below, not only once turn/start went out (review 260).
@@ -7786,6 +7793,7 @@ export function createOrchestrator(
           initiative: Boolean(currentTurn.initiative), wake: Boolean(currentTurn.wake),
           ...(currentTurn.memoryTrigger ? { typed: currentTurn.memoryTrigger.typed, triggerText: currentTurn.memoryTrigger.text } : {}),
           ...(currentTurn.requesterName ? { requesterName: currentTurn.requesterName } : {}),
+          ...(dmUnionId ? { requesterUnionId: dmUnionId } : {}),
           ...(scheduled ? { scheduled: { taskId: scheduled.job.task.id, runId: scheduled.job.runId } } : {}),
           // Read when a task tool runs: a topic the bot opens is a topic at once, but has its id only after adoptThreadId.
           where: () => ({ inTopic: !isMainKey(activeKey, opts.chatId),
