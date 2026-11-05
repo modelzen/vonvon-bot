@@ -83,7 +83,7 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
   ...rows('snapshot', 'get', 'host'),
   ...rows('command', 'refresh listPendingGroups listJoinedGroups', DM_READ),
   ...rows('command', 'listGroupMembers', { dm: 'bot', group: 'host', comment: 'deny' }),
-  ...rows('command', 'registerAgent refreshAgentCredentials restartHost bindGroup setAgentEnabled deleteAgent cancelJob'),
+  ...rows('command', 'registerAgent refreshAgentCredentials restartHost bindGroup setAgentEnabled setAgentBadgeNumber deleteAgent cancelJob'),
   // The desktop's older permission and reply switches: settings writes, which the command line makes as settings set.
   ...rows('command', 'setResponse setPermission', { dm: 'deny', group: 'not-dm', comment: 'not-dm' }),
   ...rows('settings', 'read.host save.host'),
@@ -369,7 +369,7 @@ function commandInReach(command: Command, session: boolean, own: (botId: string)
     case 'refresh': return ok;
     case 'restartHost': case 'cancelJob': return session ? outOfReach() : ok;
     case 'registerAgent': return outOfReach();
-    case 'refreshAgentCredentials': case 'setAgentEnabled': case 'deleteAgent': return own(command.agentId) ? botWide() : outOfReach();
+    case 'refreshAgentCredentials': case 'setAgentEnabled': case 'setAgentBadgeNumber': case 'deleteAgent': return own(command.agentId) ? botWide() : outOfReach();
     case 'bindGroup': case 'listGroupMembers': return own(command.agentId) && reaches(command.groupId) ? ok : outOfReach();
     case 'setResponse': case 'setPermission': {
       const target = membershipOf(command.membershipId);

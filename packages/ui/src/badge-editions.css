@@ -1,0 +1,227 @@
+.badge-slot {--print:#273e5a;--secondary:#586675;--owner:#646967;--sans:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;--mono:ui-monospace,SFMono-Regular,Consolas,monospace}
+.badge-face {color:var(--print);font-family:var(--sans)}
+.badge-reports {grid-column:2 / -1;display:flex;max-width:100%;min-width:0;align-items:center;gap:5px;color:var(--owner);font:400 10px/1.4 var(--sans)}
+.badge-reports > span:first-child {white-space:nowrap;flex:none}
+.badge-name-viewport {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.badge-name-ink {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .badge-name-viewport {overflow-x:auto;scrollbar-width:none}
+}
+.badge-front-job {grid-area:number;display:inline-flex;align-items:baseline;gap:3px;color:var(--owner);font:400 10px/1.4 var(--sans);white-space:nowrap}
+.badge-front-job b {font:500 10px/1.2 var(--mono);color:var(--secondary);font-variant-numeric:tabular-nums}
+.badge-photo {grid-area:photo}.badge-name {grid-area:name;color:var(--print);margin:0;min-width:0}.badge-status {grid-area:status;min-width:0;margin:0;color:var(--secondary)}
+.badge-foot {
+  grid-area: foot;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 1px 10px;
+  padding-top: 4px;
+  color: #6b706e;
+  font: 400 10px/1.4 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.badge-foot > span { white-space: nowrap; }
+.badge-foot > span:last-child { margin-inline-start: auto; text-align: end; }
+.badge-contact .badge-link {color:var(--print)}
+.badge-back-id {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 6px;
+  min-height: 32px;
+  margin: 0 0 5px;
+}
+.badge-back-id strong {min-width:0;flex:1;color:var(--print);font-size:14px;white-space:normal;overflow-wrap:anywhere;line-height:1.17}
+.badge-job{display:flex;flex:none;flex-direction:column;align-items:flex-end;gap:1px;margin-left:auto;background:transparent;color:var(--secondary);border:0;padding:3px 0 3px 2px;cursor:pointer;font:400 9px/1.3 var(--sans)}
+.badge-job b{font:500 10px/1.15 var(--mono);letter-spacing:.02em}.badge-job:hover b,.badge-job:focus-visible b{text-decoration:underline;text-underline-offset:2px}
+.badge-job:focus-visible{outline:1px solid currentColor;outline-offset:2px}
+.badge-group-row summary {font-size:12px;color:var(--print)}.badge-group-status{color:var(--secondary)}
+
+
+.badge-slot .badge-front {
+  --photo-inset: 4px;
+  --photo-rise: clamp(9px, 1.5cqw, 13px);
+  --photo-angle: atan2(calc(0px - var(--photo-rise)), calc(var(--badge-width) - 2 * var(--photo-inset)));
+  display: grid;
+  grid-template:
+    "name   name"   auto
+    "number status" auto
+    "photo  photo"  minmax(0, 1fr)
+    "foot   foot"   auto / max-content minmax(0, 1fr);
+  row-gap: 3px;
+  padding: 21px 11px 9px;
+}
+.badge-slot .badge-name {
+  margin: 0 20px 3px 0;
+  max-inline-size: 7em;
+  font: 700 clamp(17px, 2.45cqw, 21px)/1.15 var(--sans);
+  letter-spacing: -.035em;
+}
+.badge-slot .badge-photo {
+  /* The face has a 1px border and 11px of inline padding. */
+  margin: 4px calc(var(--photo-inset) - 12px) 0;
+  border-radius: 0 0 3px 3px;
+  clip-path: polygon(0 var(--photo-rise), 100% 0, 100% 100%, 0 100%);
+}
+.badge-slot .badge-front-job {
+  align-self: end;
+  line-height: 12px;
+}
+.badge-slot .badge-status {
+  /* The lower-left pivot sits at the last digit's lower-right corner. */
+  justify-self: stretch;
+  justify-content: flex-end;
+  align-self: end;
+  min-height: 12px;
+  font-size: 10px;
+  line-height: 12px;
+  transform-origin: left bottom;
+  rotate: var(--photo-angle);
+}
+.badge-slot .badge-photo::after { border: 0; }
+.badge-slot .badge-back-id strong { font-weight: 680; }
+.badge-directory,
+.badge-panel {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+  flex-direction: column;
+}
+.badge-directory[hidden] {
+  display: none;
+}
+/* Keep an explicitly opened code upright for a camera, and a number steady
+   while typing. Ordinary backs still flip home on pointer leave. */
+.badge-slot[data-detail] .badge-hanger,
+.badge-slot[data-detail] .badge-tilt {
+  transform: none;
+}
+.badge-panel {
+  padding: 4px 1px 3px;
+}
+.badge-panel header,
+.badge-panel footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+.badge-panel header strong {
+  flex: 1;
+  min-width: 0;
+  font: 625 13px/1.35 var(--sans);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.badge-panel button {
+  min-height: 25px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  padding: 2px 5px;
+  color: var(--secondary);
+  font: 500 11px/1.4 var(--sans);
+  cursor: pointer;
+}
+.badge-panel button:focus-visible {
+  outline: 1px solid var(--print);
+}
+.badge-panel .badge-scan-code {
+  display: grid;
+  place-items: center;
+  flex: 1 1 0;
+  min-height: 0;
+  margin: 1px -4px;
+  padding: 0;
+  cursor: default;
+}
+.badge-scan-code .badge-code {
+  width: 100%;
+  max-height: 100%;
+}
+.badge-scan footer {
+  justify-content: center;
+}
+.badge-scan .badge-link {
+  font-size: 11px;
+  padding: 3px;
+}
+.badge-number-field {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+.badge-number-field label {
+  color: var(--secondary);
+  font: 500 12px/1.3 var(--mono);
+}
+.badge-number-field input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 3px 0 7px;
+  border: 0;
+  border-bottom: 1px solid #657c82;
+  border-radius: 0;
+  background: transparent;
+  color: var(--print);
+  font: 550 clamp(20px, 3.05cqw, 27px)/1.15 var(--mono);
+}
+.badge-number-field input:focus {
+  outline: none;
+  border-color: var(--print);
+  box-shadow: 0 1px var(--print);
+}
+.badge-number-field small {
+  color: #873c37;
+  font: 500 11px/1.4 var(--sans);
+}
+.badge-number-editor button[type="submit"] {
+  min-width: 48px;
+  color: #fff;
+  background: var(--print);
+}
+
+/* The roster occupies the center of each badge. The owner's credit
+   and Feishu link share a footer with the QR thumbnail. */
+.badge-slot .badge-directory:not([hidden]) {
+  display: grid;
+  grid-template:
+    "portrait name number" auto
+    "groups groups groups" minmax(0,1fr)
+    "owner owner qr" auto
+    "open open qr" auto / 24px minmax(0,1fr) auto;
+  gap: 2px 5px;
+  padding-top: 3px;
+}
+.badge-slot .badge-back-id,
+.badge-slot .badge-contact { display: contents; }
+.badge-slot .badge-back-id > .collaboration-avatar { grid-area: portrait; width: 22px; height: 22px; }
+.badge-slot .badge-back-id strong { grid-area: name; align-self: center; }
+.badge-slot .badge-job { grid-area: number; }
+.badge-slot .badge-groups-scroll {
+  grid-area: groups;
+  margin-block: 4px;
+  border-block: 1px solid #65705e35;
+}
+.badge-slot .badge-group-row summary { min-height: 30px; padding-block: 4px; }
+.badge-slot .badge-reports { grid-area: owner; align-self: end; }
+.badge-slot .badge-link { grid-area: open; justify-self: start; }
+.badge-slot .badge-qr-thumb { grid-area: qr; align-self: end; }
+.badge-slot .badge-contact small { grid-column: 1 / -1; }

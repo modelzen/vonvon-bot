@@ -37,7 +37,7 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
     case 'listJoinedGroups': {
       await requireRunningAgent(service, request.agentId);
       if (!service.joinedGroups) return unsupported();
-      const result = await service.joinedGroups(request.agentId, request.cursor);
+      const result = await service.joinedGroups(request.agentId, request.cursor, request.summaryOnly);
       return { kind: 'read', value: { kind: 'groups', groups: result.groups.map(group => ({ id: groupIdSchema.parse(group.chatId), name: group.name, bound: group.bound, ...(group.hasOtherBots === undefined ? {} : { hasOtherBots: group.hasOtherBots }) })), ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}) } };
     }
     case 'listGroupMembers': {
@@ -65,6 +65,10 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
       }
       else await service.setNoMention(member.agentId, member.name, request.response === 'all');
       return applied;
+    }
+    case 'setAgentBadgeNumber': {
+      const result = await service.setBotBadgeNumber(request.agentId, request.badgeNumber);
+      return result.ok ? applied : {kind: 'mutation', reply: () => ({kind: 'refused', code: 'badge_number_refused', message: result.reason})};
     }
     case 'setAgentEnabled': {
       const result = await service.setBotEnabled(request.agentId, request.enabled);

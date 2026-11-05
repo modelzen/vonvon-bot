@@ -1,5 +1,6 @@
 import { constants, existsSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
+import { badgeNumberSchema } from '@vonvon/protocol';
 import { lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { paths, botDir, botPaths } from './paths';
@@ -21,6 +22,8 @@ export interface BotEntry {
   /** bot display name from credential validation (best-effort, for `bots` list) */
   botName?: string;
   createdAt: number;
+  /** Printed on the badge. Keep as a string so a number such as 007 survives a save. */
+  badgeNumber?: string;
   /** New registrations get an incarnation; old rows remain absent until re-registration. */
   registrationId?: string;
   /**
@@ -147,7 +150,50 @@ function ownBots<T>(operation: (registry: BotsRegistry) => Promise<T>): Promise<
 }
 
 export function ensureRegistry(): Promise<BotsRegistry> {
-  return ownBots(async registry => registry);
+  return ownBots(async registry => {
+    const claimed = new Set<string>();
+    const pending: BotEntry[] = [];
+    for (const bot of registry.bots) {
+      if (bot.badgeNumber && badgeNumberSchema.safeParse(bot.badgeNumber).success && !claimed.has(bot.badgeNumber)) {
+        claimed.add(bot.badgeNumber);
+      } else {
+        pending.push(bot);
+      }
+    }
+    if (pending.length) {
+      for (const bot of pending) {
+        bot.badgeNumber = allocateBadgeNumber(claimed);
+        claimed.add(bot.badgeNumber);
+      }
+      await publish(registry);
+    }
+    return registry;
+  });
+}
+
+function allocateBadgeNumber(claimed: ReadonlySet<string>): string {
+  const favorites = ['007', '404', '1024', '2048', '2333', '3141', '4242', '9527'];
+  const available = favorites.filter(number => !claimed.has(number));
+  if (available.length) return available[randomInt(available.length)]!;
+  let number = randomInt(1000, 10000);
+  while (claimed.has(String(number))) number = number === 9_999_999 ? 1000 : number + 1;
+  return String(number);
+}
+
+export function setBotBadgeNumber(appId: string, badgeNumber: string): Promise<{ok: true} | {ok: false; reason: string}> {
+  return ownBots(async registry => {
+    const entry = registry.bots.find(bot => bot.appId === appId);
+    if (!entry) return {ok: false, reason: '没有找到这个 Bot，请刷新后重试。'};
+    if (!badgeNumberSchema.safeParse(badgeNumber).success) return {ok: false, reason: '请输入 1 至 7 位数字。'};
+    if (registry.bots.some(bot => bot.appId !== appId && bot.badgeNumber === badgeNumber)) {
+      return {ok: false, reason: '这个工号已有 Bot 使用。'};
+    }
+    if (entry.badgeNumber !== badgeNumber) {
+      entry.badgeNumber = badgeNumber;
+      await publish(registry);
+    }
+    return {ok: true};
+  });
 }
 
 export type BotIdentity = Readonly<Pick<BotEntry, 'appId' | 'tenant' | 'createdAt' | 'registrationId'>>;
@@ -340,7 +386,8 @@ export function registerBotEntry(
     const pending = allocation;
     allocation = await directoryError(pending.handle, () => materializeBot(registry, pending));
     await publish(registry);
-    const entry: BotEntry = { appId: identity.appId, tenant: identity.tenant, botName: identity.botName,
+    const claimed = new Set(registry.bots.flatMap(bot => bot.badgeNumber ? [bot.badgeNumber] : []));
+    const entry: BotEntry = { appId: identity.appId, tenant: identity.tenant, botName: identity.botName, badgeNumber: allocateBadgeNumber(claimed),
       name: allocation.handle, createdAt: Date.now(), registrationId: imported?.registrationId ?? randomUUID() };
     await persistAccount(Object.freeze({ entry: Object.freeze({ ...entry }), snapshot: structuredClone(snapshot),
       preferences: structuredClone(preferences), namespaceRoot: allocation.namespaceRoot }));

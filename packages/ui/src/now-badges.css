@@ -1,0 +1,116 @@
+/* A punched paper badge in a clear sleeve. The hanger rotates at the rail; the
+   face rotates separately so its clasp stays put when reading the reverse. */
+.badge-board {
+  --rail-gutter: clamp(22px, 3.3vw, 32px); --gap: clamp(13px, 2vw, 21px);
+  --ink: #242823; --muted: #62675f; --hair: #c7c9c0;
+  color:var(--ink); position:relative; container-type:inline-size; min-width:0;
+  overflow:hidden;
+}
+.badge-rail {position:relative; overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; scrollbar-width:none; scroll-snap-type:x proximity; scroll-padding-inline:var(--rail-gutter)}
+.badge-rail:focus-visible{outline:1px solid var(--color-focus,#506985);outline-offset:-2px;border-radius:6px}
+.badge-rail::-webkit-scrollbar {display:none}
+.badge-track {display:flex; align-items:flex-start; position:relative; gap:var(--gap); width:max-content; min-width:100%; padding:17px var(--rail-gutter) 19px; box-sizing:border-box}
+.badge-cable {
+  position:absolute; top:16px; inset-inline:0; height:2px; pointer-events:none;
+  background:linear-gradient(90deg,transparent,#a3a7aa 6%,#9da2a7 94%,transparent);
+  box-shadow:0 1px #ffffff85;
+}
+.badge-slot {
+  --drop:28px;--rest:-2deg;--portrait-tint:#d8ddea;
+  --badge-width: clamp(165px,calc((100cqw - 2 * var(--rail-gutter) - 3 * var(--gap))/4),195px);
+  width:var(--badge-width); flex:none;position:relative;scroll-snap-align:start;
+  padding-top:0; padding-bottom:5px;
+}
+.badge-slot[data-hanger="1"] {--drop:43px;--rest:1.8deg;--portrait-tint:#ebe2cf}
+.badge-slot[data-hanger="2"] {--drop:23px;--rest:-1.4deg;--portrait-tint:#cfdcdf}
+.badge-slot[data-hanger="3"] {--drop:36px;--rest:2.2deg;--portrait-tint:#e3d7d1}
+.badge-hanger {position:relative; padding-top:var(--drop); transform-origin:50% 0;transform:rotate(calc(var(--rest) + var(--swing,0deg)))}
+.badge-wire {
+  position:absolute; top:-1px; left:calc(50% - 1px); width:2px; height:calc(var(--drop) + 8px);
+  z-index:2; pointer-events:none; background:linear-gradient(90deg,#767c71,#c4c8bf); box-shadow:1px 0 #ffffff9c;
+}
+.badge-wire::before {
+  content:''; position:absolute; top:-2px; left:-2px; width:6px; height:5px; border-radius:2px;
+  background:linear-gradient(#e6e8e0,#74796e,#c6c8bd); border:1px solid #878c80;
+}
+.badge-clasp {
+  position:absolute; z-index:3; pointer-events:none; top:calc(var(--drop) + 3px); left:calc(50% - 3px);
+  width:6px; height:11px; border:1px solid #92978a; border-radius:4px;
+  box-shadow:inset 1px 0 1px #fff,1px 1px 1px #0002; background:linear-gradient(90deg,#c3c8bc,#e6e9e2 50%,#b4b9ac);
+}
+.badge-perspective {perspective:900px}
+.badge-tilt {transform-style:preserve-3d;transform:rotateY(var(--yaw,0deg)) rotateX(var(--pitch,0deg));transition:transform 140ms ease-out}
+.badge-flipper {position:relative;width:100%;height:clamp(246px,32cqw,270px);transform-style:preserve-3d;transform:rotateY(0deg);transition:transform 530ms cubic-bezier(.24,.74,.2,1)}
+.badge-slot[data-back] .badge-flipper {transform:rotateY(180deg)}
+.badge-slot:has(:focus-visible){z-index:4}
+.badge-face {
+  position:absolute;inset:0;display:flex;flex-direction:column;min-width:0;box-sizing:border-box;
+  padding:18px 10px 9px;border:1px solid #bac0b4;border-radius:12px;
+  color:var(--ink);font-family:inherit;text-align:left;line-height:1.35;backface-visibility:hidden;
+  background:linear-gradient(145deg,#fff 10%,#fafbf7 67%,#e8eae1);
+  box-shadow:inset 0 0 0 2px #ffffffad, 0 2px 3px -2px #1a231f52, 2px 7px 10px -6px #2631254f, 5px 14px 18px -14px #202e2180;
+}
+.badge-face::before {content:'';position:absolute;top:8px;width:15px;height:3px;left:calc(50% - 7.5px);border-radius:9px;background:#8e958a;box-shadow:inset 0 1.5px 2px #50584c88,0 1px 0 white}
+.badge-front {cursor:pointer;transform:rotateY(0deg)}
+.badge-front:focus-visible{outline:2px solid var(--color-focus,#504eef);outline-offset:2px}
+.badge-photo {position:relative;display:block;min-height:0;flex:1;overflow:hidden;border-radius:6px;background:var(--portrait-tint)}
+.badge-photo::after {content:'';position:absolute;inset:0;pointer-events:none;border:1px solid #18261e12;border-radius:inherit;background:linear-gradient(115deg,#ffffff20,transparent 38%,transparent 76%,#ffffff15)}
+.badge-photo .collaboration-avatar {display:grid;place-items:center;width:100%;height:100%;background:var(--portrait-tint);color:#576058;border-radius:0;position:relative}
+.badge-photo .collaboration-avatar svg {width:36px;height:36px;stroke-width:1.25}
+.badge-photo .collaboration-avatar img {position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 43%}
+.badge-name {font:650 clamp(16px,2.45cqw,20px)/1.18 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;letter-spacing:-.035em;margin:9px 2px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge-status {display:flex;align-items:center;gap:5px;min-height:16px;margin:0 2px;color:#575e54;font-size:11px;font-weight:500;line-height:1.35;white-space:nowrap}
+.badge-status i {width:6px;height:6px;flex:none;border-radius:50%;background:#8a9087}
+.badge-status[data-tone="online"] i{background:#438656}
+.badge-back {transform:rotateY(180deg);overflow:hidden;
+  background:radial-gradient(ellipse at var(--shine-x,30%) 18%,#fafbfdcc,transparent 58%),linear-gradient(128deg,#e8e5f1,#d5e4ee 27%,#e0eee2 48%,#f4edda 72%,#e7dbec)}
+.badge-back-id {display:flex;align-items:center;gap:6px;margin:6px 1px 9px;min-width:0}
+.badge-back-id .collaboration-avatar{width:22px;height:22px;border-radius:50%;flex:none}
+.badge-back-id strong {text-overflow:ellipsis;white-space:nowrap;overflow:hidden;font-size:13px}
+@container (max-width:610px) {
+  .badge-track{--gap:16px}
+  .badge-slot{--badge-width:clamp(166px,46cqw,196px)}.badge-flipper{height:250px}
+}
+@media(prefers-reduced-motion:reduce) {
+  .badge-flipper,.badge-slot[data-back] .badge-flipper {transform:none;transition:none}
+  .badge-back {transform:none}
+  .badge-slot:not([data-back]) .badge-back,.badge-slot[data-back] .badge-front{visibility:hidden}
+}
+
+/* Keep hit testing on the stationary register, even when the flipper is edge-on. */
+.badge-slot::before{content:'';position:absolute;inset:var(--drop) 0 0}
+.badge-slot[data-back]{z-index:2}
+.badge-front::after{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:radial-gradient(ellipse at var(--shine-x,15%) 0%,#fffffe2e,transparent 65%)}
+.badge-status>span {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge-back-id {margin:2px 1px 6px;padding-bottom:7px;border-bottom:1px solid #50604638}
+.badge-back-id .collaboration-avatar{width:23px;height:23px}
+.badge-contact .badge-link{display:inline-flex;align-items:center;gap:3px;text-align:left;color:#344633;font:500 11px/1.35 -apple-system,BlinkMacSystemFont,sans-serif;padding:4px 0;border:0;background:none;cursor:pointer}
+.badge-link:hover{text-decoration:underline;text-underline-offset:3px}
+.badge-contact {display:flex;align-items:flex-end;justify-content:space-between;gap:4px;padding:6px 0 0;border-top:1px solid #5768583b}
+.badge-link{display:inline-flex;align-items:center;gap:4px;color:#344633;text-decoration:none;font-size:12px}
+.badge-qr-thumb {padding:0;border:1px solid #56675230;border-radius:3px;background:white;cursor:zoom-in;width:36px;height:36px;flex:none;display:grid;place-items:center}
+.badge-code{display:block;width:100%;height:auto}
+.badge-face:focus-visible,.badge-qr-thumb:focus-visible,.badge-link:focus-visible{outline:2px solid var(--color-focus,#514beb);outline-offset:2px}
+/* Raise the printed surfaces just above the rotating carrier: otherwise WebKit
+   can target the carrier rather than a link printed on the reverse. */
+.badge-tilt,.badge-flipper,.badge-face[inert]{pointer-events:none}
+.badge-face:not([inert]){pointer-events:auto}
+.badge-front{transform:rotateY(0deg) translateZ(.7px)}
+.badge-back{transform:rotateY(180deg) translateZ(.7px)}
+@media(prefers-reduced-motion:reduce){.badge-front,.badge-back{transform:none}}
+.badge-back-id .collaboration-avatar{width:26px;height:26px}
+
+.badge-back-id,.badge-contact {flex:none}
+.badge-groups-scroll {flex:1 1 0;min-height:0;overflow-y:auto;overscroll-behavior-y:contain;scrollbar-width:thin;scrollbar-color:transparent transparent;scroll-padding:2px;margin:0 -4px 5px;padding:0 4px}
+.badge-groups-scroll:hover,.badge-groups-scroll:focus-within {scrollbar-color:#81928165 transparent}
+.badge-groups-scroll:focus-visible {outline:1px solid #657e6b;outline-offset:-1px;border-radius:4px}
+.badge-groups {list-style:none;margin:0;padding:0}
+.badge-groups li + li {border-top:1px solid #65705e26}
+.badge-group-row summary {display:flex;list-style:none;align-items:center;gap:7px;min-height:38px;padding:5px 1px;box-sizing:border-box;font-size:11px;font-weight:550;line-height:1.45;cursor:pointer}
+.badge-group-row summary::-webkit-details-marker{display:none}
+.badge-group-row summary>span:last-child{overflow-wrap:anywhere}
+.badge-group-row summary:focus-visible {outline:1px solid #657e6b;outline-offset:-1px;border-radius:3px}
+.badge-group-row summary .collaboration-avatar{width:20px;height:20px;border-radius:5px;flex:none}
+.badge-group-row summary .collaboration-avatar svg{width:12px;height:12px}
+.badge-group-status{display:flex;align-items:center;gap:6px;margin:-2px 0 8px 28px;min-height:16px;color:#48534a;font-size:11px;line-height:1.4;white-space:nowrap}
+.badge-no-groups{padding:12px 2px;font-size:11px;color:#536055}

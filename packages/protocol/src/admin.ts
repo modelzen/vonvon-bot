@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { agentIdSchema, distributionSchema, permissionSchema } from "./domain.js";
+import { agentIdSchema, badgeNumberSchema, distributionSchema, permissionSchema } from "./domain.js";
 import { API_KEY_MAX, keyIdSchema, secretServiceSchema, secretTestOutcomeSchema } from "./secrets.js";
 import { principalWireSchema } from "./handshake.js";
 import { scopeSchema } from "./device.js";
@@ -21,6 +21,7 @@ export type AdminProject = z.infer<typeof adminProjectSchema>;
 export const adminBotSchema = z.object({
   name: z.string(), appId: z.string(), tenant: z.enum(["feishu", "lark"]),
   botName: z.string().optional(), avatarDataUrl: z.string().optional(),
+  badgeNumber: badgeNumberSchema.optional(),
   active: z.boolean(), current: z.boolean(), running: z.boolean(),
   pid: z.number().optional(), startedAt: z.number().optional(),
   connection: z.string().optional(), completionReminder: z.object({
