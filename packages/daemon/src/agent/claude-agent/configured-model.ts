@@ -1,11 +1,32 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { z } from 'zod';
 
 /** Claude Code's user config directory (`CLAUDE_CONFIG_DIR`, else `~/.claude`). */
 export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
   const dir = env.CLAUDE_CONFIG_DIR?.trim();
   return dir || join(home, '.claude');
+}
+
+const accountConfig = z.object({
+  oauthAccount: z.object({ accountUuid: z.string().nullish(), organizationUuid: z.string().nullish() }).nullish(),
+  primaryApiKey: z.string().nullish(),
+  customApiKeyResponses: z.unknown().optional(),
+});
+
+/** Claude rewrites its global config at every startup (feature flags, model caches,
+ * usage counters). Only account identity and API-key configuration are inputs to
+ * discovery; including the file's mtime makes a successful probe invalidate itself.
+ * Keep secrets out of cache keys, and follow the CLI's custom/legacy config paths. */
+export function claudeAccountConfigKey(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
+  const legacy = join(claudeConfigDir(env, home), '.config.json');
+  const file = existsSync(legacy) ? legacy : join(env.CLAUDE_CONFIG_DIR?.trim() || home, '.claude.json');
+  try {
+    const parsed: unknown = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+    return JSON.stringify([file, createHash('sha256').update(JSON.stringify(accountConfig.parse(parsed))).digest('hex')]);
+  } catch { return JSON.stringify([file, 'unreadable']); }
 }
 
 function nonEmpty(value: unknown): string | undefined {
