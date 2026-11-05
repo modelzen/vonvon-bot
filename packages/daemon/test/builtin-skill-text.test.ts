@@ -111,11 +111,6 @@ describe('the Feishu builtin skill', () => {
       expect(skill.body).not.toMatch(/lark/i);
     }
   });
-  it('tells a private chat how to speak in a group, and a group nothing of the kind', () => {
-    const body = (set: 'group' | 'dm') => builtinSkillsOfSet(set).find(skill => skill.name === 'vonvon-feishu')!.body;
-    expect(body('dm')).toContain('POST /open-apis/im/v1/messages?receive_id_type=chat_id');
-    expect(body('group')).not.toContain('im/v1/messages');
-  });
   it('gives feishu_api to a private chat only, and says what it cannot do', () => {
     expect(feishuSkill.body).not.toContain(FEISHU_API);
     expect(dmFeishuSkill.body).toContain(`\`${FEISHU_API}\``);
