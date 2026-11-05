@@ -140,7 +140,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, focu
   const conversation = pendingConversation ?? (project ? modeToConversation(project.kind) : member.conversation);
   const conversationControl = <div className="group-conversation-layout"><section id={settingAnchor("聊天方式")} className="group-conversation-choice" aria-label="聊天方式">
     <h3>聊天方式</h3><ConversationSlider label="聊天方式" value={conversation} disabled={!available} pending={busy} onChange={next => guard.navigate(() => {void update({conversation:next});})}/>
-  </section>{conversation === 'smart' && member.conversation === 'smart' && <GroupAttentionStatus agent={agent} membership={member} connected={snapshot.host.kind === 'connected' && !snapshot.stale}/>}</div>;
+  </section>{conversation === 'smart' && member.conversation === 'smart' && <GroupAttentionStatus attentionModel={snapshot.attentionModel} agent={agent} membership={member} connected={snapshot.host.kind === 'connected' && !snapshot.stale}/>}</div>;
   return <div className="group-design-workspace">
     <header id={settingAnchor("群设置")} className="config-header">
       <div className="config-header-identity">
