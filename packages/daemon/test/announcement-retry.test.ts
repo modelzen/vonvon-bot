@@ -27,3 +27,10 @@ it('s36d1: a branch refresh, outside any creation, retries a connection that tim
     expect(updates, code).toHaveBeenCalledWith('p', { branch: 'feature' });
   }
 });
+
+it('dm-agent 5: a private chat has no announcement and no branch to keep: the row is left alone', async () => {
+  updates.mockClear();
+  const fixture = channel(new Error('never asked'));
+  await refreshBranch(fixture.channel, { ...project, dm: { people: {} } } as never);
+  expect(fixture.list).not.toHaveBeenCalled(); expect(updates).not.toHaveBeenCalled();
+});

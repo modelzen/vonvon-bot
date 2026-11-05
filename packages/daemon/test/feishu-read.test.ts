@@ -62,7 +62,7 @@ const download = (body: string, headers: Record<string, string> = {}) => async (
 function tools(calls: Parameters<typeof channel>[0], place: AgentPlace, options: { admin?: boolean } = {}) {
   const c = channel(calls);
   const members = vi.fn(async () => ({ members: [{ openId: 'ou_a', name: '张三' }] }));
-  const list = createCommandTools({ appId: 'cli_fixture', settings: {} as never, projects: async () => [], groups: async () => ({ groups: [] }), members,
+  const list = createCommandTools({ appId: 'cli_fixture', groups: async () => ({ groups: [] }), members,
     feishu: createFeishuReader({ channel: c.channel, app: { id: 'cli_fixture', tenant: 'feishu' } }) });
   const entries = createAgentEntries({ appId: 'cli_fixture', isAdmin: () => options.admin ?? true, tools: list });
   const thread = { sessionId: 's', isAlive: () => true } as unknown as AgentThread;

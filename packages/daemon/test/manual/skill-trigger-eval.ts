@@ -93,8 +93,6 @@ export function verdictOf(want: Skill | null, opened: readonly Skill[], ended: s
 function fakeEntry(calls: string[]): AgentEntry {
   const tools = createCommandTools({
     appId: APP_ID,
-    settings: {} as never,
-    projects: async () => [],
     groups: async () => ({ groups: [] }) as never,
     members: async () => ({ members: [] }) as never,
     memory: {} as never,

@@ -967,7 +967,7 @@ export interface Orchestrator {
  * message handler and the card-action dispatcher so they share that state.
  *
  * Flow (design §3):
- *   p2p                       → DM console (never runs codex).
+ *   p2p                       → an administrator's own Agent (dm-agent 5); `/menu` and the card answers stop before it.
  *   group @bot, no thread     → reply_in_thread creates the topic → run codex
  *                               (default model/effort; tune later with /model).
  *   group @bot /resume        → history picker → resume a codex thread in a new topic.

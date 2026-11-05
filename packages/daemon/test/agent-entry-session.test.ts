@@ -51,9 +51,9 @@ describe('settings writes and the administrators', () => {
   });
 
   // devices-4b 4.5a: a private chat's read-only queries are the owner's or an admin's, as ctx.admin is for the tools
-  it('lets a private chat read the bot\'s settings and groups on an admin\'s turn only, the switch not looked at', async () => {
+  it('lets a private chat read the bot\'s settings and groups on an admin\'s turn only', async () => {
     expect(await setup(dm, said(MEMBER)).ask({ kind: 'adminRead' })).toMatchObject({ ok: false, reason: 'not-admin' });
-    expect(await setup(dm, said(ADMIN), { switchOn: false }).ask({ kind: 'adminRead' })).toEqual({ ok: true, role: 'admin', openId: ADMIN });
+    expect(await setup(dm, said(ADMIN)).ask({ kind: 'adminRead' })).toEqual({ ok: true, role: 'admin', openId: ADMIN });
     expect(await setup(group, said(OWNER)).ask({ kind: 'adminRead' })).toMatchObject({ ok: false, reason: 'not-dm' });
   });
 });

@@ -17,7 +17,7 @@ vi.mock('../src/config/paths', async original => ({ ...await original<object>(),
 } }));
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 function fixture(run: AgentTool['run']) {
-  const flags = { admin: true, enabled: true };
+  const flags = { admin: true };
   const thread: AgentThread = { sessionId: 'fixture', isAlive: vi.fn(() => true), close: async () => {},
     runStreamed: () => { throw Error('unused'); }, runGoal: () => { throw Error('unused'); },
     clearGoal: async () => {}, abort: async () => {}, steer: async () => {}, compact: async () => ({ compacted: false, usage: null }) };
