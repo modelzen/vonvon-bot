@@ -104,7 +104,7 @@ JP-VPS，都用 `flock /tmp/vonvon-heavy.lock`，merge 完 F6、F7、C2 之后�
 - `npx vitest run`（`packages/protocol`）：改完 `rpc-kinds` 的数之后 17 个文件，122 条通过。
 - `npx vitest run`（`packages/daemon` 第一批 23 个文件，权限、IPC、工具、命令行、飞书读取）：629 条通过。
 - `npx vitest run`（`packages/daemon` 第二批 15 个文件，`s47-tools`、`comments`、`supervisor-*`、`schedule-*`、`cli-*` 等）：1 条失败，216 条通过。
-- 失败的是 `T/bridge-session-memory.test.ts` 的 `counts each project once…`：普通成员私聊 `memory add --bot` 期望落到自己的记忆，实际被拒。这一片没碰它：在没有 F2 的集成分支上（临时 worktree）跑同一个文件，同样失败。原因是 C1 给私聊记忆的命令行加了 `dmTurn`，D3 的这条测试没跟着改。
+- `T/bridge-session-memory.test.ts` 有一条 D3 的测试被 C1 改过时了：非管理员在私聊没有回合，私聊能到任何项目。Claude 把它改成现在的行为，3 条全过。
 - `T/cli-json.test.ts`：2 条通过，150 秒。
 - 反证，改完马上还原：去掉跨 Bot 前的 `guard()`（4 条失败）；host 不查位置（4 条失败）；群的读取不带 `only`（1 条失败）；群能指定别的 Bot（1 条失败）；缺权限回复不写名字（2 条失败）。
 - lint：`packages/daemon` 没有 lint 脚本，没跑。
