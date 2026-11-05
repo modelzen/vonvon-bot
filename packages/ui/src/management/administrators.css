@@ -1,0 +1,18 @@
+/* 管理员页（A2）：人的一行、候选人的弹窗；其余用设置页的组件 */
+.admin-bot-title {display:inline-flex;align-items:center;gap:8px;}
+.admin-dialog-title {display:inline-flex;align-items:center;gap:14px;}
+.admin-dialog-title .admin-bot-title {color:var(--color-text-secondary);font-size:13px;}
+.admin-bot-actions {display:inline-flex;align-items:center;gap:6px;}
+.admin-person {display:inline-flex;align-items:center;gap:8px;min-width:0;}
+.admin-avatar {display:grid;place-items:center;flex:none;width:24px;height:24px;border-radius:50%;background:var(--color-surface-muted);color:var(--color-text-secondary);font-size:12px;}
+.admin-name {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.admin-tag {flex:none;padding:0 6px;border-radius:4px;background:var(--color-surface-muted);color:var(--color-text-secondary);font-size:12px;line-height:18px;}
+.administrators-note {margin:0;color:var(--color-text-secondary);font-size:12px;line-height:1.5;}
+.admin-dialog {display:grid;gap:10px;}
+.admin-dialog h3 {margin:4px 0 0;font-size:13px;font-weight:600;}
+.admin-search {width:100%;box-sizing:border-box;}
+.admin-list {display:grid;gap:2px;max-height:200px;overflow:auto;}
+.admin-pick {display:flex;align-items:center;gap:8px;padding:4px 0;}
+.admin-pick .admin-person {flex:1;}
+.admin-source {color:var(--color-text-secondary);font-size:12px;}
+.admin-empty {margin:0;color:var(--color-text-secondary);font-size:12px;}
