@@ -397,8 +397,8 @@ function membershipOf(id: string): { agentId: string; groupId: string } | undefi
 /**
  * A session reads settings as settings_get does, in a private chat only: its sections, and nothing the tool leaves out
  * but what the view's schema requires. The judge prompt, the skills and their paths, the bot's profile, the roster's
- * names, which decision models have a key (the keystore's), the role draft and who of the administrators Feishu or the
- * scan made stay out: the command line reaches no further than the tools (devices 5; devices-4b 4.5a, SEC-4).
+ * names, which decision models have a key (the keystore's), the role draft and the administrators' names and who may be added
+ * stay out: the command line reaches no further than the tools (devices 5; devices-4b 4.5a, SEC-4).
  */
 function sessionView(view: SettingsView, group: boolean): SettingsView {
   // A group session reads no settings (settings-dm-only: read.* and act are refused before): fail closed if one comes.

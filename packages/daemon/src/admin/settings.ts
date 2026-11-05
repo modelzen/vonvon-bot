@@ -1,4 +1,6 @@
 import { getAppRoleSnapshot, trustedFeishuAdmins } from '../config/app-roles';
+import { readRefused } from '../bot/dm-refused';
+import { adminCandidates } from './admin-candidates';
 import { ToolRefusal } from '../agent/entry/tools';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -71,6 +73,8 @@ export interface SettingsOwnerDeps {
    * private-chat tasks; until then nobody passes this.
    */
   adminRemoved?(openId: string): void | Promise<void>;
+  /** open_id → name, read from Feishu for the administrators page; absent in a stopped Bot, which cannot ask */
+  personNames?: (openIds: readonly string[]) => Promise<ReadonlyMap<string, string>>;
   backendFor: (id: string) => AgentBackend;
   evictLiveSessionsForChat: (chatId: string) => Promise<void>;
   voiceAction?: (action: VoiceAction) => Promise<void>;
@@ -685,6 +689,12 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       }
       const text = await instructions.read();
       const roles = getAppRoleSnapshot(botId, cfg.accounts.app.tenant);
+      // Names only from Feishu (dm-agent 3.4), asked once for everyone the page shows; a stopped Bot has no way to ask.
+      const admins = cfg.preferences?.access?.admins ?? [];
+      const feishuIds = [...new Set([...(roles?.ownerOpenId ? [roles.ownerOpenId] : []), ...trustedFeishuAdmins(roles)])];
+      const refused = readRefused(botId);
+      const refusedNames = new Map(refused.map(person => [person.openId, person.name]));
+      const names = await deps.personNames?.([...new Set([...admins, ...(cfg.preferences?.access?.ownerOpenId ? [cfg.preferences.access.ownerOpenId] : []), ...feishuIds])]) ?? new Map<string, string>();
       const draft = data.role.identity.trim() ? '' : roleDraft(deps.botName ?? await registeredBotName(botId));
       return {
         scope,
@@ -696,9 +706,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         // The one who scanned the bot in, a label only; what Feishu names is no administrator, only who may be picked.
         ownerOpenId: cfg.preferences?.access?.ownerOpenId ?? null,
         administrators: {
-          feishu: { ownerOpenId: roles?.ownerOpenId ?? null, adminOpenIds: [...trustedFeishuAdmins(roles)] },
-          scannerOpenId: cfg.preferences?.access?.ownerOpenId ?? null,
-          openIds: [...(cfg.preferences?.access?.admins ?? [])],
+          openIds: [...admins],
+          names: Object.fromEntries(admins.flatMap(id => { const name = names.get(id) ?? refusedNames.get(id); return name ? [[id, name]] : []; })),
+          candidates: adminCandidates({ admins, creator: cfg.preferences?.access?.ownerOpenId, feishu: feishuIds, refused, names }),
           revision: settingsRevision([botId, cfg.preferences?.access?.admins ?? []])
         },
         voice: voiceView(cfg),

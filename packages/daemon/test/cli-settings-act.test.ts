@@ -19,7 +19,7 @@ const section = (stored: object) => ({ stored, effective: stored, revision: `rev
 const voice = { enabled: true, feishu: { state: 'granted', message: '已开通' }, result: '', grantUrl: '' };
 const agentView = (over: object = {}) => ({
   scope: { kind: 'agent', botId: 'cli_a' }, sections: {}, ownerOpenId: 'ou_owner',
-  administrators: { feishu: { ownerOpenId: 'ou_owner', adminOpenIds: ['ou_fs'] }, scannerOpenId: 'ou_owner', openIds: ['ou_owner', 'ou_local'], revision: 'a1' },
+  administrators: { openIds: ['ou_owner', 'ou_local'], revision: 'a1' },
   voice, commentInstructions: { content: { kind: 'default', text: '默认的评论指令' }, revision: 'c1', maxEditLength: 30000 },
   ...over,
 });

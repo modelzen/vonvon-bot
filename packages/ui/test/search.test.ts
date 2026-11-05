@@ -93,17 +93,13 @@ test('application search points old startup and update labels to the compact con
   assert.equal(install?.field, '重启升级');
 });
 
-test('s53: application owner and scanner search reveal their administrator rows', () => {
-  for (const [query, field] of [
-    ['飞书应用拥有者', '飞书应用拥有者'], ['飞书应用所有者', '飞书应用拥有者'],
-    ['主人', '飞书应用拥有者'], ['扫码注册者', '扫码注册者'], ['扫码人', '扫码注册者'],
-  ]) {
-    const result = findEntries(entries, query!)[0];
-    assert.equal(result?.destination.section, '管理员');
-    assert.equal(result?.destination.detail?.kind, 'agent-settings');
-    assert.equal(result?.destination.field, field);
-    assert.deepEqual(result?.destination.selection, {kind: 'agent', id: agentId});
+test('A2: the administrators have a page of their own, no longer a row in each Bot settings', () => {
+  for (const query of ['管理员', '添加管理员', '谁能私聊', '候选人']) {
+    const result = findEntries(entries, query)[0];
+    assert.equal(result?.destination.page, 'administrators', query);
   }
+  assert.equal(findEntries(entries, '扫码注册者').length, 0);
+  assert.equal(findEntries(entries, '添加管理员 Open ID').length, 0);
 });
 
 test('rare field, aliases, and multi-term scope queries resolve to their real category', () => {
