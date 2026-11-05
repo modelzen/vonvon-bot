@@ -24,11 +24,11 @@ function thread(alive = true): AgentThread {
 const said = (openId: string, text = '记住 先写结论'): TurnFacts => ({
   requesterOpenId: openId, requesterKind: 'user', triggerMessageId: 'om_1', retry: false, initiative: false, wake: false, typed: true, triggerText: text, requesterName: '某人',
 });
-function setup(place: AgentPlace, facts: TurnFacts | null = said(OWNER), options: { switchOn?: boolean; memoryPlace?: MemoryPlace } = {}) {
+function setup(place: AgentPlace, facts: TurnFacts | null = said(OWNER), options: { memoryPlace?: MemoryPlace } = {}) {
   const sessions = { revoke: vi.fn() };
   const memoryPlace = vi.fn(async () => options.memoryPlace ?? { chatProjectId: 'prj_0000000a', botProjectIds: ['prj_0000000a', 'prj_0000000b'] });
   const entries = createAgentEntries({
-    appId: 'cli_x', isAdmin: id => id === OWNER || id === ADMIN, chatSettingsOn: () => options.switchOn ?? true, sessions, memoryPlace,
+    appId: 'cli_x', isAdmin: id => id === OWNER || id === ADMIN, sessions, memoryPlace,
   });
   const entry = entries.issue(place);
   const t = thread();
@@ -42,20 +42,18 @@ const ended = { ok: false, reason: 'turn-ended', message: SESSION_TURN_ENDED };
 afterEach(() => { vi.clearAllMocks(); });
 
 describe('settings writes and the administrators', () => {
-  it('lets an admin\'s private-chat turn write settings, not a member\'s, and not with the switch off', async () => {
+  it('lets an admin\'s private-chat turn write settings, not a member\'s', async () => {
     expect(await setup(dm, said(OWNER)).ask({ kind: 'settingsWrite' })).toEqual({ ok: true, role: 'admin', openId: OWNER });
     expect(await setup(dm, said(ADMIN)).ask({ kind: 'settingsWrite' })).toEqual({ ok: true, role: 'admin', openId: ADMIN });
     expect(await setup(dm, said(MEMBER)).ask({ kind: 'settingsWrite' })).toEqual({ ok: false, reason: 'not-admin', message: '只有管理员发消息触发的那一轮能改设置。' });
-    expect(await setup(dm, said(OWNER), { switchOn: false }).ask({ kind: 'settingsWrite' }))
-      .toEqual({ ok: false, reason: 'switch-off', message: '主人关了私聊里的“聊天改设置”，要改请去桌面端或网页。' });
     expect(await setup(group, said(OWNER)).ask({ kind: 'settingsWrite' })).toEqual({ ok: false, reason: 'not-dm', message: NOT_DM_MESSAGE });
     expect(await setup(dm, { ...said(OWNER), requesterKind: 'bot', wake: true }).ask({ kind: 'settingsWrite' })).toMatchObject({ ok: false, reason: 'not-human-turn' });
   });
 
   // devices-4b 4.5a: a private chat's read-only queries are the owner's or an admin's, as ctx.admin is for the tools
-  it('lets a private chat read the bot\'s settings and groups on an admin\'s turn only, the switch not looked at', async () => {
+  it('lets a private chat read the bot\'s settings and groups on an admin\'s turn only', async () => {
     expect(await setup(dm, said(MEMBER)).ask({ kind: 'adminRead' })).toMatchObject({ ok: false, reason: 'not-admin' });
-    expect(await setup(dm, said(ADMIN), { switchOn: false }).ask({ kind: 'adminRead' })).toEqual({ ok: true, role: 'admin', openId: ADMIN });
+    expect(await setup(dm, said(ADMIN)).ask({ kind: 'adminRead' })).toEqual({ ok: true, role: 'admin', openId: ADMIN });
     expect(await setup(group, said(OWNER)).ask({ kind: 'adminRead' })).toMatchObject({ ok: false, reason: 'not-dm' });
   });
 });

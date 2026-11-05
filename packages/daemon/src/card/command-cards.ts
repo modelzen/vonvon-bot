@@ -382,7 +382,9 @@ export interface HelpCaps {
  * （能力守卫会拒），就不在速查卡里列出来——避免「列了点了才发现不支持」的不一致。
  * 缺省（undefined 或不传）= 全列（codex 行为，向后兼容）。`kind` 是群的会话方式：
  * 单会话和智能的话题里，新会话在主区的消息下开（s15）；智能没有免@（s25c）。 */
-export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = false, caps?: HelpCaps, kind: SessionMode = 'multi'): CardObject {
+/** Only a private chat has `/menu` (dm-agent 5). */
+const MENU_LINE = '· `/menu` → 常用入口：新建项目、项目列表、设置、用量、诊断、重启、更新';
+export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = false, caps?: HelpCaps, kind: SessionMode = 'multi', dm = false): CardObject {
   const showGoal = caps?.goal ?? true;
   const showCompact = caps?.compact ?? true;
   const showResume = caps?.resume ?? true;
@@ -397,14 +399,17 @@ export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = fals
     if (showCompact) lines.push(compactLine);
     if (isAdmin) lines.push(`· \`/new\`（或 \`/clear\`）→ 换一条新会话${showResume ? '，旧的能 `/resume` 回来' : ''}（飞书消息保留）`);
     if (isAdmin && showResume) lines.push('· `/resume` → 切回历史会话');
+    if (dm) lines.push(MENU_LINE);
     lines.push('· `/help` → 这张速查卡');
-    const head = kind === 'smart' ? `💬 **智能开话题** — 不用 @ 我，${SMART_NOTICE}主区一条会话；聊到新的事，我自己开话题。` : '💬 **整群一条会话** — 主区一条会话，上下文一直连着。';
+    const head = dm ? '💬 **私聊** — 直接跟我说就行。主区一条会话，上下文一直连着。'
+      : kind === 'smart' ? `💬 **智能开话题** — 不用 @ 我，${SMART_NOTICE}主区一条会话；聊到新的事，我自己开话题。` : '💬 **整群一条会话** — 主区一条会话，上下文一直连着。';
     elements.push(md(head), hr(), md(lines.join('\n')));
   } else if (scope === 'topic') {
     const lines = talkLines(kind, noMention, '继续当前会话', '我看情况回');
     if (showGoal) lines.push(goalLine);
     lines.push('· `/model` → 切换模型 / 推理强度', '· `/context` → 看上下文占比');
     if (showCompact) lines.push(compactLine);
+    if (dm) lines.push(MENU_LINE);
     lines.push('· `/help` → 这张速查卡');
     elements.push(
       md('🧵 **话题内** — 每个话题是一个独立会话。'),

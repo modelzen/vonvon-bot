@@ -71,7 +71,7 @@ const TIER_DENIED = '当前无权获取此文件：它在项目目录之外，�
 export function fileClaimMode(
   cfg: AppConfig, project: Project | undefined, record: Pick<FileContext, 'chatId' | 'cwd'>, openId: string,
 ): PermissionMode | undefined {
-  if (!openId || !isChatAllowed(cfg, record.chatId)) return undefined;
+  if (!openId || !(project?.dm || isChatAllowed(cfg, record.chatId))) return undefined;
   if (!project || project.enabled === false || project.cwd !== record.cwd) return undefined;
   if (!isUserAllowedInProject(cfg, project, openId)) return undefined;
   return groupPermission(project).effect.mode;
