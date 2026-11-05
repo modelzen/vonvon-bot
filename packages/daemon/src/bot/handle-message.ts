@@ -1306,8 +1306,8 @@ export function createOrchestrator(
    * taken off the list moves to the row's default, another Provider starts over there. True in that last case: what the
    * old one holds cannot be resumed.
    */
-  async function followDmRow(threadId: string, chatId: string, project: Project | undefined): Promise<boolean> {
-    const rec = project?.dm && project.modelAccess ? await getSession(threadId) : undefined;
+  async function followDmRow(threadId: string, chatId: string, project: Project): Promise<boolean> {
+    const rec = project.modelAccess ? await getSession(threadId) : undefined;
     if (!rec) return false;
     const be = groupBackend(project);
     const moved = rec.backend !== be.id;
@@ -3813,7 +3813,7 @@ export function createOrchestrator(
         // preIngested (handleTurn already wove them into `text`).
         const ingestP = preIngested ? Promise.resolve(preIngested) : ingestContext(msg, text, extra, goal ? undefined : project);
         let tResolveDone = tIntake;
-        const moved = await followDmRow(sessionKey, msg.chatId, project);
+        const moved = project?.dm && await followDmRow(sessionKey, msg.chatId, project);
         const resolveP = (moved ? Promise.resolve<ResolvedThread>({ thread: undefined, recreated: true, reason: 'provider-changed' }) : resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
           network: perm.network, native: perm.native, readScope: perm.readScope,
