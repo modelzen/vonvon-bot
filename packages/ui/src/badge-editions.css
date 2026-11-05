@@ -203,7 +203,7 @@
 .badge-slot .badge-directory:not([hidden]) {
   display: grid;
   grid-template:
-    "portrait name number" auto
+    "person person number" auto
     "groups groups groups" minmax(0,1fr)
     "owner owner qr" auto
     "open open qr" auto / 24px minmax(0,1fr) auto;
@@ -212,9 +212,16 @@
 }
 .badge-slot .badge-back-id,
 .badge-slot .badge-contact { display: contents; }
-.badge-slot .badge-back-id > .collaboration-avatar { grid-area: portrait; width: 22px; height: 22px; }
-.badge-slot .badge-back-id strong { grid-area: name; align-self: center; }
-.badge-slot .badge-job { grid-area: number; }
+.badge-slot .badge-back-person {
+  grid-area: person;
+  display: flex;
+  align-items: center;
+  align-self: center;
+  min-width: 0;
+  gap: 6px;
+}
+.badge-slot .badge-back-person > .collaboration-avatar { width: 22px; height: 22px; flex: none; }
+.badge-slot .badge-job { grid-area: number; align-self: center; }
 .badge-slot .badge-groups-scroll {
   grid-area: groups;
   margin-block: 4px;

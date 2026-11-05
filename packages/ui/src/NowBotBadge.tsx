@@ -136,7 +136,11 @@ export function NowBotBadge({agent, index, groupSummary, status, tone, ownerName
     if ((e.key === 'ArrowLeft' || e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') && back) {e.preventDefault(); turn(false);}
   }
   const identity = (
-    <div className="badge-back-id"><AgentAvatar agent={agent}/><strong><BadgeName text={agent.name} active={back && !detail} motion={showMotion}/></strong>
+    <div className="badge-back-id">
+      <div className="badge-back-person">
+        <AgentAvatar agent={agent}/>
+        <strong><BadgeName text={agent.name} active={back && !detail} motion={showMotion}/></strong>
+      </div>
       <button type="button" disabled={!editable} ref={numberTrigger} className="badge-job" title={editable ? '修改工号' : undefined} aria-label={agent.name+' 的工号，'+(jobNumber??'未设置')+(editable ? '，可修改' : '')}
         onClick={()=>{setDraft(jobNumber??'');setIssue('');setDetail('job');}}>No. <b>{jobNumber??'—'}</b></button>
       {ownerName && <span className="badge-reports"><span>直属上级</span><BadgeName text={ownerName} active={back && !detail} motion={showMotion}/></span>}
