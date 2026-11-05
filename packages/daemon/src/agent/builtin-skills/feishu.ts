@@ -101,6 +101,7 @@ ${READING}
 
 ## 改飞书里的内容
 ${EDITING}
+用户让你去某个群说话、把结果发到某个群：\`feishu_api\` 调 \`POST /open-apis/im/v1/messages?receive_id_type=chat_id\`，\`receive_id\` 写群的 id，消息以 Bot 身份发出。这个 Bot 要在那个群里。
 别的写操作用 \`feishu_api\`：往多维表格加记录、改表格、建文档、查日历和审批这类专门工具做不到的事。先查飞书开放平台文档（https://open.feishu.cn/document/ 下的页面，链接加 \`.md\` 能读到文本），再照文档调。身份是 Bot 自己，它只发 JSON，上传文件的接口调不了。
 
 ${REFUSALS}`,
