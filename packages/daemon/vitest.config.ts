@@ -13,9 +13,11 @@ export default defineConfig({
     // Many files launch several real provider/daemon children. Bound file-level
     // parallelism so their readiness checks do not compete with dozens of peers;
     // each test still exercises its own full process/concurrency behavior.
+    // Fixed-source Windows CI measurements passed the same suite twice with two workers
+    // in about half the time; cap at two and respect single-CPU runners.
     // A two-CPU Linux CI runner should use two workers rather than serializing
     // every file. Keep the four-worker cap and local CPU-minus-one behavior.
-    maxWorkers: win32 ? (process.env.CI === 'true' ? 1 : undefined) : Math.min(4, Math.max(1, availableParallelism() - (linuxCI ? 0 : 1))),
+    maxWorkers: win32 ? (process.env.CI === 'true' ? Math.min(2, availableParallelism()) : undefined) : Math.min(4, Math.max(1, availableParallelism() - (linuxCI ? 0 : 1))),
     // Only our own unit tests. Without this, vitest also scans the vendored
     // reference project under docs/references/** (yepanywhere etc.), which has
     // its own deps/runtime and fails to collect.

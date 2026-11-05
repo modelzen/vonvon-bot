@@ -150,6 +150,8 @@ describe('createReadonlyAdminService · 只读方法（显式路径，不碰全�
     expect(a.current).toBe(true);
     expect(a.active).toBe(true);
     expect(a.botName).toBe('阿尔法');
+    expect(a.registeredAt).toBe(1);
+    expect(b.registeredAt).toBe(2);
     expect(a.completionReminder).toEqual({ mode: 'long', longTaskMinutes: 7 });
     expect(b.completionReminder).toEqual({ mode: 'failures', longTaskMinutes: 3 });
     expect(b.current).toBe(false);

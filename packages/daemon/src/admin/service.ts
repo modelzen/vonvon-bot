@@ -19,7 +19,7 @@ import { parseJoinedGroups, parseGroupMembers, type GroupMembers, type AdminGrou
 import { voiceView } from '../voice/view';
 import type { VoiceAction, VoiceView } from '../voice/types';
 import { readFile, realpath, rm, stat } from 'node:fs/promises';
-import { botIdentity, loadBots, setBotActivation, removeBot } from '../config/bots';
+import { botIdentity, loadBots, setBotActivation, setBotBadgeNumber, removeBot } from '../config/bots';
 import { botPaths, botDir } from '../config/paths';
 import { configuredProjectsRoots, directoryContext, legacyDirectoryProblems } from '../project/directory-audit';
 import type { DirectoryProblem, ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
@@ -46,6 +46,8 @@ import { loadConfig } from '../config/store';
 import { groupBackendId, groupPermission } from '../config/execution';
 import { resolveAppSecret } from '../config/secret-resolver';
 import { createAgentAvatarProvider, createGroupAvatarProvider } from './avatar';
+import { createBadgeOwnerNames } from './badge-owner';
+import { getAppRoleSnapshot } from '../config/app-roles';
 import { diagnoseEventSubscription, type EventDiagnosis } from '../utils/event-diagnosis';
 import { diagnoseCardCallbackConfiguration, type CardCallbackConfiguration } from '../utils/card-callback-diagnosis';
 import { validateAppCredentials } from '../utils/feishu-auth';
@@ -129,7 +131,7 @@ export interface AdminService {
   executeSchedule?(botId: string, actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply>;
   /** The project library (admin/library.ts): its workspace is changed only through here. */
   library?: HostLibrary;
-  accountUsage(force: boolean): Promise<AccountUsageBundle>;
+  accountUsage(force: boolean, backend?: 'codex-appserver' | 'claude-agent'): Promise<AccountUsageBundle>;
   settings?: HostSettings;
   codexSetup?(opts?: { refresh?: boolean }): Promise<CodexSetup>;
   close?(): Promise<void>;
@@ -254,6 +256,7 @@ export interface AdminService {
   /** 宿主机体检：后端环境（复用 doctorBackends）+ Node/平台/配置目录/日志体量。绝不抛错。 */
   hostDoctor(): Promise<AdminHostDoctor>;
   setBotEnabled(appId: string, enabled: boolean): Promise<BotActivationResult>;
+  setBotBadgeNumber(appId: string, badgeNumber: string): Promise<BotMutationResult>;
   /**
    * 删除某 bot：注册表 + keystore 密钥 + 状态目录。**拒绝删除当前唯一 bot 或带
    * 运行中会话的 bot**——返回 { ok:false, reason } 让 UI 给清晰提示，绝不 throw。
@@ -284,7 +287,10 @@ export class NotWiredYetError extends Error {
 }
 
 export interface AdminBot {
+  registeredAt?: number;
+  ownerName?: string;
   name: string;
+  badgeNumber?: string;
   appId: string;
   tenant: 'feishu' | 'lark';
   botName?: string;
@@ -468,7 +474,7 @@ export interface AdminBackendCatalogEntry {
 
 /** daemon/预览两种进程形态的差异全部收进这几个注入点；读路径完全同源。 */
 export interface AdminServiceDeps {
-  fetchAccountUsage?: (force: boolean) => Promise<AccountUsageBundle>;
+  fetchAccountUsage?: (force: boolean, backend?: 'codex-appserver' | 'claude-agent') => Promise<AccountUsageBundle>;
   applyBotActivation?: (appId: string, enabled: boolean) => Promise<void>;
   executeSettingsRead?: (botId: string, op: AdminSettingsReadOp) => Promise<unknown>;
   codexTools?: CodexSetupService;
@@ -559,6 +565,10 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     return { appId: botId, tenant: cfg.accounts.app.tenant, appSecret: await resolveAppSecret(cfg) };
   };
   const avatars = createAgentAvatarProvider({ credentials });
+  const executeGroups = deps.executeGroups;
+  const owners = createBadgeOwnerNames(executeGroups
+    ? async (botId, chatId, cursor) => parseGroupMembers(await executeGroups(botId, { kind: 'groupMembers', chatId, cursor }))
+    : undefined);
   const groupAvatars = createGroupAvatarProvider({ credentials });
   /**
    * 扫码注册的新 Bot 默认启用，和用户自己打开「启用 Bot」一样：在 setBotEnabled 的同一条队列里把它加进
@@ -669,9 +679,9 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
 
   return {
     readonlyPreview: deps.readonlyPreview === true,
-    accountUsage(force) {
+    accountUsage(force, backend) {
       if (closing) return Promise.reject(new Error('daemon 正在退出'));
-      const read = Promise.resolve().then(() => (deps.fetchAccountUsage ?? fetchUsageBundle)(force));
+      const read = Promise.resolve().then(() => (deps.fetchAccountUsage ?? fetchUsageBundle)(force, backend));
       inFlightUsage.add(read);
       void read.then(
         () => { inFlightUsage.delete(read); },
@@ -684,6 +694,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     codexSetup: opts => codexTools.setup(opts),
     close: () => {
       closing ??= (async () => {
+        owners.retain(new Set());
         await Promise.allSettled([...inFlightUsage]);
         const results = await Promise.allSettled([codexTools.close(), shutdownResidentClients()]);
         for (const result of results) if (result.status === 'rejected') throw result.reason;
@@ -759,6 +770,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       const reg = await loadBots();
       const botIds = new Set(reg.bots.map(bot => bot.appId));
       avatars.retain(botIds);
+      owners.retain(botIds);
       groupAvatars.retainBots(botIds);
       const configured = reg.bots.some((b) => b.active !== undefined);
       const out: AdminBot[] = [];
@@ -766,9 +778,12 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         const [run, completionReminder] = await Promise.all([runState(b.appId), completionReminderFor(b.appId)]);
         out.push({
           name: b.name,
+          badgeNumber: b.badgeNumber,
           appId: b.appId,
           tenant: b.tenant,
           botName: b.botName,
+          registeredAt: b.createdAt,
+          ownerName: owners.get(b.appId, getAppRoleSnapshot(b.appId, b.tenant), run.running && !closing),
           avatarDataUrl: avatars.get(b.appId),
           // 与 config/bots.activeBots 同语义：从未配置过活跃集 → 回退 current。
           active: configured ? b.active === true : reg.current === b.appId,
@@ -1168,6 +1183,11 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async hostDoctor(): Promise<AdminHostDoctor> {
       const [host, backends] = await Promise.all([collectHostDoctor(), probeAllBackends()]);
       return { ...host, backends };
+    },
+
+    setBotBadgeNumber(appId, badgeNumber) {
+      if (deps.readonlyPreview) throw new NotWiredYetError('修改工号');
+      return setBotBadgeNumber(appId, badgeNumber);
     },
 
     setBotEnabled(appId: string, enabled: boolean): Promise<BotActivationResult> {
