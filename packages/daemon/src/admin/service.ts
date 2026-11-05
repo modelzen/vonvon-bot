@@ -126,7 +126,7 @@ export interface AdminService {
   executeSchedule?(botId: string, actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply>;
   /** The project library (admin/library.ts): its workspace is changed only through here. */
   library?: HostLibrary;
-  accountUsage(force: boolean): Promise<AccountUsageBundle>;
+  accountUsage(force: boolean, backend?: 'codex-appserver' | 'claude-agent'): Promise<AccountUsageBundle>;
   settings?: HostSettings;
   codexSetup?(opts?: { refresh?: boolean }): Promise<CodexSetup>;
   close?(): Promise<void>;
@@ -455,7 +455,7 @@ export interface AdminBackendCatalogEntry {
 
 /** daemon/预览两种进程形态的差异全部收进这几个注入点；读路径完全同源。 */
 export interface AdminServiceDeps {
-  fetchAccountUsage?: (force: boolean) => Promise<AccountUsageBundle>;
+  fetchAccountUsage?: (force: boolean, backend?: 'codex-appserver' | 'claude-agent') => Promise<AccountUsageBundle>;
   applyBotActivation?: (appId: string, enabled: boolean) => Promise<void>;
   executeSettingsRead?: (botId: string, op: AdminSettingsReadOp) => Promise<unknown>;
   codexTools?: CodexSetupService;
@@ -646,9 +646,9 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
 
   return {
     readonlyPreview: deps.readonlyPreview === true,
-    accountUsage(force) {
+    accountUsage(force, backend) {
       if (closing) return Promise.reject(new Error('daemon 正在退出'));
-      const read = Promise.resolve().then(() => (deps.fetchAccountUsage ?? fetchUsageBundle)(force));
+      const read = Promise.resolve().then(() => (deps.fetchAccountUsage ?? fetchUsageBundle)(force, backend));
       inFlightUsage.add(read);
       void read.then(
         () => { inFlightUsage.delete(read); },
