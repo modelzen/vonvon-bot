@@ -784,7 +784,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       let effectiveSpeed: T.SessionSpeedSetting['tier'] = s.serviceTier ?? 'standard';
       if (s.serviceTier && s.serviceTier !== 'standard') {
         const { model: storedModel, serviceTier: storedTier } = s;
-        const speedGroup = (await (deps.listProjects ?? listProjects)()).find(p => p.chatId === s.chatId);
+        const speedGroup = await readChatProject(s.chatId);
         const speedPreference = speedGroup ? resolveModelPreference({ bot: cfg.preferences, group: speedGroup }, s.backend) : undefined;
         if (!projectSpeedAllowed(speedGroup, storedModel ?? speedPreference?.model, storedTier)) effectiveSpeed = 'standard';
         const catalog = s.backend === 'codex-appserver'
@@ -793,7 +793,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         const selected = catalog?.state === 'ready' ? catalog.models.find(item => item.id === storedModel && !item.hidden) : undefined;
         if (!selected?.serviceTiers?.some(item => item.id === storedTier)) effectiveSpeed = 'standard';
       }
-      const project = (await (deps.listProjects ?? listProjects)()).find(p => p.chatId === s.chatId);
+      const project = await readChatProject(s.chatId);
       return {
         scope,
         sections: {
@@ -1130,7 +1130,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           check([botId, e.section === 'speed' ? sessionSpeedRaw(s) : sessionRaw(s)], e.revision);
           if (e.section === 'speed') {
             if (!e.patch.tier) throw new SettingsInputError('缺少速度档位');
-            const group = (await (deps.listProjects ?? listProjects)()).find(p => p.chatId === s.chatId);
+            const group = await readChatProject(s.chatId);
             const prefer = group ? resolveModelPreference({ bot: cfg.preferences, group }, s.backend) : undefined;
             await validateSpeed(e.patch.tier, s.backend, s.model ?? prefer?.model, s.modelCustom === true || (!s.model && prefer?.custom === true), s.cwd, group);
             if (e.patch.tier === 'standard') delete s.serviceTier;
@@ -1140,7 +1140,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           if (!e.patch.selection)
             throw new SettingsInputError('缺少模型选择');
           const chosen = await validateSelection(s.backend, e.patch.selection, true);
-          const group = (await (deps.listProjects ?? listProjects)()).find(p => p.chatId === s.chatId);
+          const group = await readChatProject(s.chatId);
           if (group?.modelAccess && (chosen.kind === 'default' || !projectModelAllowed(group, s.backend, chosen.model, chosen.effort, peekModels(s.backend)))) throw new SettingsInputError('请从本群允许的模型与 Effort 中选择');
           applySelection(s, chosen);
           if (chosen.kind === 'default')

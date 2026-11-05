@@ -26,8 +26,7 @@ function setting(run: AgentTool['run'] = async (_args, ctx) => ctx.turn): AgentT
 }
 function setup(options: { place?: AgentPlace; facts?: TurnFacts; run?: AgentTool['run']; attached?: boolean; open?: boolean; codex?: boolean } = {}) {
   const state = { admin: true, enabled: true };
-  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => state.admin,
-    chatSettingsOn: () => state.enabled, tools: [read, setting(options.run)] });
+  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => state.admin, tools: [read, setting(options.run)] });
   const entry = entries.issue(options.place ?? { kind: 'p2p' });
   const t = thread(options.codex ? false : undefined);
   if (options.attached !== false) entry.attach(t);

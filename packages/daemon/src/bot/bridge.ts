@@ -99,8 +99,6 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     memoryPlace: turn => memory.placeOf(turn), tools: createCommandTools({
     appId: app.id, memory,
     schedule: { execute: (actor, request) => orchestrator.scheduleAs(actor, request) },
-    settings: { read: scope => orchestrator.settings.read(scope), save: (edit, options) => orchestrator.settings.save(edit, options), models: query => orchestrator.settings.models(query), act: action => orchestrator.settings.act(action) },
-    projects: listProjects,
     groups: async cursor => {
       const result = await createGroupExecutor(channel, identity)({ kind: 'joinedGroups', cursor });
       if (!('groups' in result)) throw new Error('Invalid group reply');
