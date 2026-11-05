@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { codexSessionParams } from '../src/agent/codex-appserver/backend';
 import { offeredTool, startDynamicTools, vonvonNamespace } from '../src/agent/codex-appserver/dynamic-tools';
 import { CodexRequestScope, dynamicToolCall } from '../src/agent/codex-appserver/server-requests';
-import { FEISHU_DOC_EDIT, feishuDocToolNames, feishuToolNames } from '../src/agent/entry/feishu-tools';
+import { FEISHU_API, FEISHU_DOC_EDIT, feishuDocToolNames, feishuToolNames } from '../src/agent/entry/feishu-tools';
 import { scheduleToolNames } from '../src/agent/entry/schedule-tools';
 import type { AgentEntry, AgentThread } from '../src/agent/types';
 import { closeCodexToolFixtures, codexToolsFixture, OWNER, person, profile } from './helpers/codex-tools-fixture';
@@ -37,8 +37,14 @@ describe('dynamicTools on thread/start', () => {
     expect(names({ schedule: false, feishu: true, documentsOnly: true })).toEqual([...feishuDocToolNames]);
     expect(names({ schedule: false, feishu: true, feishuEdit: true, documentsOnly: true })).toEqual([...feishuDocToolNames, FEISHU_DOC_EDIT]);
   });
+  it('adds feishu_api only by the profile, a private chat\'s', () => {
+    const names = (tools: Parameters<typeof vonvonNamespace>[0]) => vonvonNamespace(tools).tools.map(tool => tool.name);
+    expect(names({ schedule: true, feishu: true, feishuEdit: true })).not.toContain(FEISHU_API);
+    expect(names({ schedule: false, feishu: true, documentsOnly: true })).not.toContain(FEISHU_API);
+    expect(names({ schedule: true, feishu: true, feishuEdit: true, feishuApi: true })).toContain(FEISHU_API);
+  });
   it('answers calls to the tools it offers, and no others', () => {
-    for (const tool of [...scheduleToolNames, ...feishuToolNames, FEISHU_DOC_EDIT]) expect(offeredTool('vonvon_bot', tool)).toBe(true);
+    for (const tool of [...scheduleToolNames, ...feishuToolNames, FEISHU_DOC_EDIT, FEISHU_API]) expect(offeredTool('vonvon_bot', tool)).toBe(true);
     expect(offeredTool('vonvon_bot', 'memory_add')).toBe(false);
     expect(offeredTool('other', 'feishu_doc')).toBe(false);
   });

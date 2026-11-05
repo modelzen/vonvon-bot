@@ -1,3 +1,4 @@
+import { callApi, type ApiRequest, type ApiResult } from './api';
 import { readBase, type BaseRequest } from './base';
 import { readBoard, readMindnote, readMinutes, readSlides, type BoardRequest, type MindnoteRequest, type MinutesRequest, type SlidesRequest } from './canvases';
 import { readComments, readDocMedia, readFolder, readWiki, type CommentsRequest, type DocMediaRequest, type FolderRequest, type WikiRequest } from './drive';
@@ -31,6 +32,8 @@ export interface FeishuReader {
   docMedia(request: DocMediaRequest): ReturnType<typeof readDocMedia>;
   /** The one write here (dm-agent 7.1, F3): `beforeWrite` runs right before Feishu is asked to change the document. */
   docEdit(request: DocEditRequest, beforeWrite?: () => void): Promise<DocEditResult>;
+  /** Any Feishu API, on a private chat's turn only (dm-agent 7.6, F7): `beforeSend` runs right before it is called. */
+  api(request: ApiRequest, beforeSend?: () => void): Promise<ApiResult>;
 }
 
 export function createFeishuReader(deps: ReadDeps): FeishuReader {
@@ -53,5 +56,6 @@ export function createFeishuReader(deps: ReadDeps): FeishuReader {
     comments: request => readComments(deps, request),
     docMedia: request => readDocMedia(deps, request),
     docEdit: (request, beforeWrite) => editDoc(deps, request, beforeWrite),
+    api: (request, beforeSend) => callApi(deps, request, beforeSend),
   };
 }

@@ -200,7 +200,7 @@ function extFromHeaders(headers: unknown): string {
   return 'png';
 }
 
-function readHeader(headers: unknown, name: string): string | undefined {
+export function readHeader(headers: unknown, name: string): string | undefined {
   if (!headers || typeof headers !== 'object') return undefined;
   const h = headers as { get?: (n: string) => unknown } & Record<string, unknown>;
   const raw = typeof h.get === 'function' ? h.get(name) : (h[name] ?? h[name.toLowerCase()]);
@@ -255,7 +255,7 @@ async function pruneOldMedia(dir: string): Promise<void> {
 const MAX_FILES = 9;
 /** Skip files larger than this — codex reads them within the turn; a giant
  * upload just stalls the download and fills the disk. */
-const MAX_FILE_BYTES = 50 * 1024 * 1024;
+export const MAX_FILE_BYTES = 50 * 1024 * 1024;
 const TOO_LARGE = `超过 ${MAX_FILE_BYTES / 1024 / 1024} MB 上限`;
 
 /** A downloaded inbound file: absolute local path + the original name the user

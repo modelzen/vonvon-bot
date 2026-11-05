@@ -89,6 +89,26 @@ it.each([[true, 1], [false, 0]] as const)('lists feishu_doc_edit by the profile 
   }
 });
 
+it.each([[true, 1], [false, 0]] as const)('lists feishu_api in a private chat by the profile (tools.feishuApi %j)', async (api, count) => {
+  for (const action of ['start', 'resume'] as const) {
+    const f = fixture(), cwd = savedSession();
+    const entry = createAgentEntries({ appId: 'fixture', isAdmin: () => true,
+      tools: createFeishuTools({ members: async () => ({ members: [] }), feishu: {} as FeishuReader }) }).issue({ kind: 'p2p', chatId: 'oc_dm' });
+    const tools = { ...profile(false, true), tools: { schedule: false, feishu: true, ...(api ? { feishuApi: true } : {}) } };
+    threads.push(action === 'start' ? await f.backend.startThread({ cwd, mode: 'full', entry, profile: tools })
+      : await f.backend.resumeThread({ cwd, mode: 'full', entry, sessionId: 'saved', profile: tools }));
+    expect(f.registered.filter(name => name === 'feishu_api')).toHaveLength(count);
+  }
+});
+
+it('does not list feishu_api in a group, whatever the profile says', async () => {
+  const f = fixture(), cwd = savedSession();
+  const entry = createAgentEntries({ appId: 'fixture', isAdmin: () => true,
+    tools: createFeishuTools({ members: async () => ({ members: [] }), feishu: {} as FeishuReader }) }).issue({ kind: 'group', chatId: 'oc_group' });
+  threads.push(await f.backend.startThread({ cwd, mode: 'full', entry, profile: { ...profile(false, true), tools: { schedule: false, feishu: true, feishuApi: true } } }));
+  expect(f.registered).not.toContain('feishu_api');
+});
+
 it.each([['qa', undefined], ['write', undefined], ['full', undefined], ['qa', { permissionMode: 'plan' }]] as const)(
   'turns Claude Code\'s own scheduling off in the %s tier (native %j)', async (mode: PermissionMode, native) => {
     const f = fixture();
