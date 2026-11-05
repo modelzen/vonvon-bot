@@ -2914,8 +2914,12 @@ export function createOrchestrator(
   function isMenuCommand(msg: NormalizedMessage): boolean {
     return /^\/(menu|settings)(?![\w/])/i.test(msg.content.trim());
   }
+  /** Each person's private chats since this process started: taking them off the list reaches a running turn even when the files cannot be read. */
+  const dmChatsOf = new Map<string, Set<string>>();
   /** The private chat's row as this person's chat, noted before the turn so that a task can find the chat again. Undefined when there is no row. */
   async function openDmChat(msg: NormalizedMessage): Promise<Project | undefined> {
+    const chats = dmChatsOf.get(msg.senderId) ?? new Set<string>();
+    dmChatsOf.set(msg.senderId, chats.add(msg.chatId));
     await orStop(dmReady, undefined);
     try {
       await rememberDmChat(msg.chatId, msg.senderId, await names.senderName(msg));
@@ -8732,7 +8736,7 @@ export function createOrchestrator(
     let askWaiting: string | undefined;
     let activity: ReturnType<typeof createRunActivity> | undefined;
     let askWaitingSubagentId: string | undefined;
-    const askPlacement = { chatId: opts.chatId, replyTo: opts.replyTo, replyInThread: !opts.flat };
+    const askPlacement = { chatId: opts.chatId, replyTo: opts.replyTo, replyInThread: !opts.flat, own: false };
     let lastStatus = 'active';
     let goalTokens = 0;
     let goalSeconds = 0;
@@ -8776,6 +8780,7 @@ export function createOrchestrator(
       const goalServiceTier = opts.serviceTier;
       const goalContext = await preparePersonality(opts.thread, opts.chatId, {}, opts.knownThreadId, opts.backendId);
       if (currentProject?.dm && !dmOpen(currentProject)) throw new ThreadPermissionChanged(DM_CLOSED);
+      askPlacement.own = Boolean(currentProject?.dm);
       const run = opts.thread.runGoal(goalContext.text ? `${goalContext.text}\n\n目标：${objective}` : objective,
         { serviceTier: goalServiceTier });
       state.run = run;
@@ -9775,10 +9780,14 @@ export function createOrchestrator(
 
   /** The removal's steps after the list is written (dm-agent 3.3): the door is shut already; each failure here is only logged. */
   async function endDmOf(openId: string): Promise<void> {
-    const people = (await dmProject())?.dm?.people ?? {};
-    const chats = new Set(Object.entries(people).flatMap(([chatId, person]) => person.openId === openId ? [chatId] : []));
+    const chats = new Set(dmChatsOf.get(openId));
+    dmChatsOf.delete(openId);
+    // The files only add what this process has not seen: one that cannot be read must not keep a running turn alive.
+    const orLogged = <T,>(read: Promise<T>, fallback: T): Promise<T> => read.catch((error: unknown) => { log.fail('project', error, { phase: 'dm-close' }); return fallback; });
+    const people = (await orLogged(dmProject(), undefined))?.dm?.people ?? {};
+    for (const [chatId, person] of Object.entries(people)) if (person.openId === openId) chats.add(chatId);
     if (!chats.size) return;
-    const records = await listSessions();
+    const records = await orLogged(listSessions(), []);
     for (const chatId of chats) {
       entries?.revokeChat(chatId);
       const keys = new Set([chatId, ...records.filter(rec => rec.chatId === chatId).map(rec => rec.threadId),
