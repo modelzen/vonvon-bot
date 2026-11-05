@@ -4,13 +4,13 @@ import { Readable } from 'node:stream';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { createCommandTools } from '../src/agent/entry/command-tools';
-import { feishuToolNames } from '../src/agent/entry/feishu-tools';
+import { feishuDocToolNames, feishuToolNames } from '../src/agent/entry/feishu-tools';
 import { createAgentEntries, type AgentPlace } from '../src/agent/entry/registry';
 import { TOOL_RESULT_BYTES } from '../src/agent/entry/tools';
-import type { AgentThread } from '../src/agent/types';
+import type { AgentThread, PermissionMode } from '../src/agent/types';
 import { DOC_EDIT_SCOPES, DOC_READ_SCOPES, DRIVE_READ_SCOPES, FEISHU_TOOL_SCOPES, GRANT_SCOPES, MESSAGE_SEARCH_SCOPES, REQUIRED_SCOPES, SCOPE_LABELS, SHEET_READ_SCOPES } from '../src/config/scopes';
 import { inboundChatDir } from '../src/bot/media';
-import { AFTER_GRANT, readableFailure, readOnlyReply, refusalOf, type ReadArea } from '../src/feishu-read/denial';
+import { AFTER_GRANT, notSharedReply, readableFailure, readOnlyReply, refusalOf, type ReadArea } from '../src/feishu-read/denial';
 import { parseRef } from '../src/feishu-read/documents';
 import { createFeishuReader } from '../src/feishu-read/reader';
 
@@ -59,17 +59,20 @@ const routes = (table: Record<string, unknown>) => async (payload: { url: string
 const download = (body: string, headers: Record<string, string> = {}) => async () => ({ headers,
   writeFile: async (file: string) => { const { writeFile } = await import('node:fs/promises'); await writeFile(file, body); } });
 
-function tools(calls: Parameters<typeof channel>[0], place: AgentPlace, options: { admin?: boolean } = {}) {
+function tools(calls: Parameters<typeof channel>[0], place: AgentPlace, options: { admin?: boolean; tier?: PermissionMode } = {}) {
   const c = channel(calls);
   const members = vi.fn(async () => ({ members: [{ openId: 'ou_a', name: '张三' }] }));
-  const list = createCommandTools({ appId: 'cli_fixture', settings: {} as never, projects: async () => [], groups: async () => ({ groups: [] }), members,
+  const tier = vi.fn(async (): Promise<PermissionMode | undefined> => options.tier ?? 'full');
+  const list = createCommandTools({ appId: 'cli_fixture', settings: {} as never, projects: async () => [], groups: async () => ({ groups: [] }), members, groupTier: tier,
     feishu: createFeishuReader({ channel: c.channel, app: { id: 'cli_fixture', tenant: 'feishu' } }) });
   const entries = createAgentEntries({ appId: 'cli_fixture', isAdmin: () => options.admin ?? true, tools: list });
   const thread = { sessionId: 's', isAlive: () => true } as unknown as AgentThread;
   const entry = entries.issue(place);
   entry.attach(thread);
-  entries.openTurn(thread, { requesterOpenId: 'ou_a', requesterKind: 'user', triggerMessageId: 'om_t', retry: false, wake: false, initiative: false });
-  return { ...c, members, entry, listed: () => entry.tools().map(tool => tool.name), call: (name: string, args: unknown) => entry.call(name, args) };
+  const turn = entries.openTurn(thread, { requesterOpenId: 'ou_a', requesterKind: 'user', triggerMessageId: 'om_t', retry: false, wake: false, initiative: false });
+  entry.noteToolUse('tu');
+  return { ...c, members, entry, turn, tier, listed: () => entry.tools().map(tool => tool.name), call: (name: string, args: unknown) => entry.call(name, args),
+    edit: (args: unknown) => entry.call('feishu_doc_edit', args, { toolUseId: 'tu' }), inTurn: (name: string, args: unknown) => entry.call(name, args, { toolUseId: 'tu' }) };
 }
 
 describe('feishu_messages', () => {
@@ -414,7 +417,7 @@ describe('the replies when there is no permission (7.5)', () => {
     expect(readOnlyReply('小码')).toBe('Bot 对这篇文档只有阅读权限。在文档右上角的分享里搜「小码」，给编辑权限。');
   });
   it('covers every area', () => {
-    for (const area of ['history', 'resource', 'chat', 'announcement', 'doc', 'sheet', 'drive', 'search'] satisfies ReadArea[]) {
+    for (const area of ['history', 'resource', 'chat', 'announcement', 'doc', 'docEdit', 'sheet', 'drive', 'search'] satisfies ReadArea[]) {
       expect(refusalOf(context, area, denied()).message).toContain(AFTER_GRANT);
     }
   });
@@ -431,11 +434,11 @@ describe('parseRef', () => {
 
 describe('the tools', () => {
   const GROUP: AgentPlace = { kind: 'group', chatId: HERE };
-  it('are listed in a group and a private chat, not in a comment\'s session', () => {
+  it('are listed in a group and a private chat; a comment\'s session has the document column only', () => {
     const names = [...feishuToolNames];
     expect(tools({}, GROUP).listed()).toEqual(expect.arrayContaining(names));
     expect(tools({}, { kind: 'p2p', chatId: 'oc_dm' }).listed()).toEqual(expect.arrayContaining(names));
-    expect(tools({}, { kind: 'doc', docId: 'd' }).listed().filter(name => feishuToolNames.has(name))).toEqual([]);
+    expect(tools({}, { kind: 'doc', docId: 'd' }).listed().filter(name => feishuToolNames.has(name))).toEqual([...feishuDocToolNames]);
   });
   it('need no human: a group\'s tools answer on any turn, and whatever the tier, since they do not go through the sandbox', async () => {
     const t = tools({ list: async () => ({ code: 0, data: { items: [text('om_1', '你好')] } }) }, GROUP, { admin: false });
@@ -487,6 +490,140 @@ describe('the tools', () => {
     const t = tools({ request: async () => ({ code: 0, data: { document: { content: whole } } }) }, GROUP);
     const reply = await t.call('feishu_doc', { doc: 'doxToken123' });
     expect(reply).toMatchObject({ ok: true, result: { cursor: expect.stringMatching(/^blocks:/) } });
+  });
+});
+
+describe('feishu_doc_edit', () => {
+  const GROUP: AgentPlace = { kind: 'group', chatId: HERE }, COMMENT: AgentPlace = { kind: 'doc', docId: 'dox' };
+  const done = (data: object = {}) => async () => ({ code: 0, data: { result: 'success', ...data } });
+  const append = { doc: 'https://x.feishu.cn/docx/doxToken123', action: 'append', content: '新的一段' };
+  const sent = (client: ReturnType<typeof channel>['client']) => client.request.mock.calls.map(call => (call as unknown[])[0]);
+
+  it.each([
+    ['append at the end', { action: 'append', content: 'c' }, { command: 'block_insert_after', block_id: '-1', content: 'c' }],
+    ['insert after a block', { action: 'insert', content: 'c', block: 'blk' }, { command: 'block_insert_after', block_id: 'blk', content: 'c' }],
+    ['replace inline text', { action: 'replace', content: 'c', pattern: '旧' }, { command: 'str_replace', pattern: '旧', content: 'c' }],
+    ['replace a block', { action: 'replace', content: 'c', block: 'blk' }, { command: 'block_replace', block_id: 'blk', content: 'c' }],
+  ])('sends %s to the update API as the Bot, in Markdown, on the latest revision', async (_case, args, body) => {
+    const t = tools({ request: done({ updated_blocks_count: 1, document: { new_blocks: [{ block_id: 'blk_new' }] } }) }, GROUP);
+    expect(await t.edit({ doc: 'https://x.feishu.cn/docx/doxToken123', ...args })).toEqual({ ok: true, result: { result: 'success', updatedBlocks: 1, newBlocks: ['blk_new'] } });
+    expect(sent(t.client)).toEqual([{ method: 'PUT', url: '/open-apis/docs_ai/v1/documents/doxToken123', data: { ...body, format: 'markdown', revision_id: -1 } }]);
+  });
+  it.each([
+    ['append with a place', { action: 'append', content: 'c', block: 'b' }],
+    ['insert with nowhere', { action: 'insert', content: 'c' }],
+    ['replace with nothing', { action: 'replace', content: 'c' }],
+    ['replace with both', { action: 'replace', content: 'c', block: 'b', pattern: 'p' }],
+  ])('refuses %s without asking Feishu', async (_case, args) => {
+    const t = tools({}, GROUP);
+    expect(await t.edit({ doc: 'dox', ...args })).toMatchObject({ ok: false, code: 'refused' });
+    expect(t.client.request).not.toHaveBeenCalled();
+  });
+  it('takes no empty content: it edits, it does not delete', async () => {
+    expect(await tools({}, GROUP).edit({ doc: 'dox', action: 'replace', content: '', pattern: 'p' })).toMatchObject({ ok: false, code: 'bad-args' });
+  });
+
+  it('reads code 0 with result failed and degrade_code 4030004 as a Bot that can only read (measured)', async () => {
+    const answer = async () => ({ code: 0, msg: 'success', data: { result: 'failed', warnings: ['operation degraded, degrade_code=4030004'] } });
+    expect(await tools({ request: answer }, GROUP).edit(append)).toMatchObject({ ok: false, code: 'refused', message: readOnlyReply('小码') });
+    const structured = async () => ({ code: 0, data: { result: 'failed', warnings: [{ degrade_code: 4030004 }] } });
+    expect(await tools({ request: structured }, GROUP).edit(append)).toMatchObject({ ok: false, message: readOnlyReply('小码') });
+  });
+  it('reads code 3380004 as a document not shared, and asks for what an edit needs (measured)', async () => {
+    const t = tools({ request: async () => ({ code: 3380004, msg: 'forbidden' }) }, GROUP);
+    expect(await t.edit(append)).toMatchObject({ ok: false, code: 'refused', message: notSharedReply('小码', '编辑') });
+    expect(notSharedReply('小码', '编辑')).toContain('给编辑权限');
+  });
+  it('passes on Feishu\'s words for any other failed result: neither a success nor a missing permission', async () => {
+    const t = tools({ request: async () => ({ code: 0, data: { result: 'failed', warnings: ['找不到要替换的内容'], tips: '先读一下' } }) }, GROUP);
+    const reply = await t.edit({ doc: 'dox', action: 'replace', content: 'c', pattern: 'p' });
+    expect(reply).toMatchObject({ ok: false, code: 'refused', message: expect.stringContaining('找不到要替换的内容；先读一下') });
+    expect(JSON.stringify(reply)).not.toContain('权限');
+  });
+  it('does not take an answer without a result for a change', async () => {
+    const reply = await tools({ request: async () => ({ code: 0, data: {} }) }, GROUP).edit(append);
+    expect(reply).toMatchObject({ ok: false, code: 'refused', message: expect.stringContaining('没有说改成了') });
+  });
+  it('says so when only part of it went through', async () => {
+    const reply = await tools({ request: async () => ({ code: 0, data: { result: 'partial_success', warnings: ['图片没有写入'] } }) }, GROUP).edit(append);
+    expect(reply).toMatchObject({ ok: true, result: { result: 'partial_success', warnings: ['图片没有写入'], note: expect.stringContaining('一部分') } });
+  });
+  it('answers a missing scope with the edit scope\'s link and the closing sentence', async () => {
+    const reply = await tools({ request: async () => denied('docx:document:write_only') }, GROUP).edit(append);
+    expect(reply).toMatchObject({ ok: false, code: 'refused', message: expect.stringContaining(AFTER_GRANT) });
+    expect(JSON.stringify(reply)).toContain('docx%3Adocument%3Awrite_only');
+  });
+  it('says the outcome is unknown when Feishu never answers: a blind retry would append twice', async () => {
+    const reply = await tools({ request: async () => { throw new Error('socket hang up'); } }, GROUP).edit(append);
+    expect(reply).toMatchObject({ ok: false, code: 'refused', message: expect.stringContaining('不知道改没改成') });
+  });
+
+  it('changes a knowledge-base page\'s document, and tries a bare token as one after it is not found', async () => {
+    const linked = tools({ node: async () => ({ code: 0, data: { node: { obj_token: 'doxReal', obj_type: 'docx' } } }), request: done() }, GROUP);
+    expect(await linked.edit({ ...append, doc: 'https://x.feishu.cn/wiki/wikToken' })).toMatchObject({ ok: true });
+    expect(sent(linked.client)).toMatchObject([{ url: '/open-apis/docs_ai/v1/documents/doxReal' }]);
+    let puts = 0;
+    const bare = tools({ node: async () => ({ code: 0, data: { node: { obj_token: 'doxReal', obj_type: 'docx' } } }),
+      request: async () => (++puts === 1 ? { code: 3380002, msg: 'not found' } : { code: 0, data: { result: 'success' } }) }, GROUP);
+    expect(await bare.edit({ ...append, doc: 'wikToken' })).toMatchObject({ ok: true, result: { result: 'success' } });
+    expect(sent(bare.client)).toMatchObject([{ url: '/open-apis/docs_ai/v1/documents/wikToken' }, { url: '/open-apis/docs_ai/v1/documents/doxReal' }]);
+  });
+  it('does not touch a spreadsheet or a base', async () => {
+    for (const doc of ['https://x.feishu.cn/sheets/shtToken', 'https://x.feishu.cn/base/basToken']) {
+      const t = tools({}, GROUP);
+      expect(await t.edit({ ...append, doc })).toMatchObject({ ok: false, code: 'refused' });
+      expect(t.client.request).not.toHaveBeenCalled();
+    }
+  });
+
+  it('is refused in the read-only tier, looked at when called, before Feishu is asked', async () => {
+    const t = tools({ request: done() }, GROUP, { tier: 'write' });
+    expect(await t.edit(append)).toMatchObject({ ok: true });
+    t.tier.mockResolvedValue('qa');
+    expect(await t.edit(append)).toMatchObject({ ok: false, code: 'refused', message: expect.stringContaining('只读档') });
+    t.tier.mockResolvedValue(undefined);
+    expect(await t.edit(append)).toMatchObject({ ok: false, code: 'refused' });
+    expect(t.client.request).toHaveBeenCalledOnce();
+    expect(t.tier).toHaveBeenCalledWith(HERE);
+  });
+  it('still lets a read-only group read the document', async () => {
+    const t = tools({ request: async () => ({ code: 0, data: { document: { content: '正文' } } }) }, GROUP, { tier: 'qa' });
+    expect(await t.call('feishu_doc', { doc: 'dox' })).toMatchObject({ ok: true, result: { text: '正文' } });
+  });
+  it('needs an administrator\'s turn in a private chat', async () => {
+    const place: AgentPlace = { kind: 'p2p', chatId: 'oc_dm' };
+    expect(await tools({ request: done() }, place).edit(append)).toMatchObject({ ok: true });
+    const t = tools({}, place, { admin: false });
+    expect(await t.edit(append)).toMatchObject({ ok: false, code: 'refused' });
+    expect(t.client.request).not.toHaveBeenCalled();
+  });
+
+  it('works in a comment\'s session, which has no tier', async () => {
+    const t = tools({ request: done() }, COMMENT, { tier: 'qa' });
+    expect(t.listed()).toContain('feishu_doc_edit');
+    expect(await t.edit(append)).toMatchObject({ ok: true });
+    expect(t.tier).not.toHaveBeenCalled();
+  });
+  it('holds a comment\'s session to the document column and to its turn', async () => {
+    const t = tools({ request: async () => ({ code: 0, data: { document: { content: '正文' } } }) }, COMMENT);
+    expect(await t.inTurn('feishu_doc', { doc: 'dox' })).toMatchObject({ ok: true, result: { text: '正文' } });
+    expect(await t.inTurn('feishu_messages', {})).toMatchObject({ ok: false, code: 'unknown-tool' });
+    expect(await t.inTurn('feishu_members', {})).toMatchObject({ ok: false, code: 'unknown-tool' });
+    expect(await t.call('feishu_doc', { doc: 'dox' })).toMatchObject({ ok: false, reason: 'unknown-origin', message: expect.stringContaining('文档没有动') });
+    t.turn.close();
+    t.client.request.mockClear();
+    expect(await t.inTurn('feishu_doc', { doc: 'dox' })).toMatchObject({ ok: false, reason: 'turn-ended', message: expect.stringContaining('文档没有动') });
+    expect(await t.edit(append)).toMatchObject({ ok: false, reason: 'turn-ended' });
+    expect(t.client.request).not.toHaveBeenCalled();
+  });
+  it('does not call a change that went out undone when its turn ends in flight', async () => {
+    let answer!: (value: object) => void;
+    const t = tools({ request: () => new Promise(resolve => { answer = resolve; }) }, GROUP);
+    const reply = t.edit(append);
+    await vi.waitFor(() => expect(t.client.request).toHaveBeenCalled());
+    t.turn.close();
+    answer({ code: 0, data: { result: 'success' } });
+    expect(await reply).toMatchObject({ ok: true, result: { result: 'success' } });
   });
 });
 

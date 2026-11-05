@@ -1,5 +1,5 @@
 import type { TenantBrand } from '../config/schema';
-import { buildScopeGrantUrl, DOC_READ_SCOPES, DRIVE_READ_SCOPES, labelScope, MESSAGE_SEARCH_SCOPES, SHEET_READ_SCOPES } from '../config/scopes';
+import { buildScopeGrantUrl, DOC_EDIT_SCOPES, DOC_READ_SCOPES, DRIVE_READ_SCOPES, labelScope, MESSAGE_SEARCH_SCOPES, SHEET_READ_SCOPES } from '../config/scopes';
 import { log } from '../core/logger';
 import { withDeadline } from '../bot/names';
 import { feishuError, scopeDenial } from '../utils/feishu-error';
@@ -10,13 +10,14 @@ import { feishuError, scopeDenial } from '../utils/feishu-error';
  */
 
 /** What a read touches: the scopes it needs and what is lost without them. */
-export type ReadArea = 'history' | 'resource' | 'chat' | 'announcement' | 'doc' | 'sheet' | 'drive' | 'search';
+export type ReadArea = 'history' | 'resource' | 'chat' | 'announcement' | 'doc' | 'docEdit' | 'sheet' | 'drive' | 'search';
 const AREAS: Record<ReadArea, { scopes: readonly string[]; effect: string }> = {
   history: { scopes: ['im:message:readonly'], effect: '读不了群里的消息' },
   resource: { scopes: ['im:resource'], effect: '下载不了消息里的图片和文件' },
   chat: { scopes: ['im:chat:readonly'], effect: '读不了群名和群描述' },
   announcement: { scopes: ['im:chat.announcement:read'], effect: '读不了群公告' },
   doc: { scopes: DOC_READ_SCOPES, effect: '读不了文档和知识库' },
+  docEdit: { scopes: DOC_EDIT_SCOPES, effect: '改不了文档' },
   sheet: { scopes: SHEET_READ_SCOPES, effect: '读不了表格' },
   drive: { scopes: DRIVE_READ_SCOPES, effect: '下载不了云空间文件' },
   search: { scopes: MESSAGE_SEARCH_SCOPES, effect: '搜不了消息' },
@@ -31,7 +32,8 @@ const NOT_FOUND_CODES: ReadonlySet<number> = new Set([3380002, 99992402, 1770001
 /** The Bot is not in that chat (230002), or the chat has left it (232011). */
 const OUT_OF_CHAT_CODES: ReadonlySet<number> = new Set([230002, 232011]);
 
-export type RefusalKind = 'scope' | 'not-shared' | 'not-found' | 'other';
+/** `no-answer`: Feishu's answer never came, so what was asked may still have happened. */
+export type RefusalKind = 'scope' | 'not-shared' | 'not-found' | 'no-answer' | 'other';
 /** A read refused, with the sentence for the model. It crosses to another Bot's process as its message (F2). */
 export class FeishuReadRefused extends Error {
   constructor(message: string, readonly kind: RefusalKind = 'other') { super(message); }
@@ -43,8 +45,9 @@ export interface DenialContext {
 }
 
 const shared = (bot: string, grant: string): string => `在文档右上角的分享里搜「${bot}」，给${grant}权限。`;
-export const notSharedReply = (bot: string): string => `这篇文档还没分享给 Bot。${shared(bot, '阅读')}`;
-/** The Bot can read but was asked to change it (the edit tool comes with F3). */
+/** `grant`: what the Bot needs for what it was asked, 编辑 for a change, so nobody has to share twice. */
+export const notSharedReply = (bot: string, grant = '阅读'): string => `这篇文档还没分享给 Bot。${shared(bot, grant)}`;
+/** The Bot can read but was asked to change it. */
 export const readOnlyReply = (bot: string): string => `Bot 对这篇文档只有阅读权限。${shared(bot, '编辑')}`;
 
 /**
@@ -67,15 +70,16 @@ export function refusalOf(context: DenialContext, area: ReadArea, failure: unkno
   const denial = scopeDenial(failure);
   if (denial) return new FeishuReadRefused(scopeReply(context, area, denial.accepted), 'scope');
   const error = feishuError(failure);
-  if (error && NOT_SHARED_CODES.has(error.code)) return new FeishuReadRefused(notSharedReply(context.botName()), 'not-shared');
+  const editing = area === 'docEdit';
+  if (error && NOT_SHARED_CODES.has(error.code)) return new FeishuReadRefused(notSharedReply(context.botName(), editing ? '编辑' : '阅读'), 'not-shared');
   if (error && OUT_OF_CHAT_CODES.has(error.code)) return new FeishuReadRefused(`「${context.botName()}」不在这个群里，读不到。`);
   if (error && NOT_FOUND_CODES.has(error.code)) {
-    const what = area === 'doc' || area === 'sheet' || area === 'drive' ? '这个文档或文件，看看链接和 token 对不对' : '这条内容，看看 id 对不对';
+    const what = area === 'doc' || editing || area === 'sheet' || area === 'drive' ? '这个文档或文件，看看链接和 token 对不对' : '这条内容，看看 id 对不对';
     return new FeishuReadRefused(`找不到${what}（飞书错误码 ${error.code}）。`, 'not-found');
   }
-  if (error) return new FeishuReadRefused(`飞书拒绝了这次读取（错误码 ${error.code}${error.msg ? `：${error.msg}` : ''}）。`);
+  if (error) return new FeishuReadRefused(`飞书拒绝了这次${editing ? '修改' : '读取'}（错误码 ${error.code}${error.msg ? `：${error.msg}` : ''}）。`);
   log.warn('feishu-read', 'read-failed', { area, err: String(failure) });
-  return new FeishuReadRefused('没连上飞书，稍后再试。');
+  return new FeishuReadRefused('没连上飞书，稍后再试。', 'no-answer');
 }
 
 /** Most of an error body a download's stream is read for. */

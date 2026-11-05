@@ -13,8 +13,12 @@ export interface SessionProfile {
   capabilityPackages: readonly { path: string; kind: 'builtin' }[];
   /** Explicit MCP delivery is added with capability packages in s39. */
   mcpServers: readonly { name: string }[];
-  /** vonvon's own tools beyond the always-on ones: the schedule tools (定时任务 T3) and the Feishu read tools (dm-agent 7.3), both in a bound group's sessions. */
-  tools?: { schedule: boolean; feishu?: boolean };
+  /**
+   * vonvon's own tools beyond the always-on ones: the schedule tools (定时任务 T3) and the Feishu read tools (dm-agent 7.3),
+   * both in a bound group's sessions. `feishuEdit` adds feishu_doc_edit, by the session's tier (7.2). `documentsOnly`: a
+   * comment's session, whose Feishu tools are the document column only (7.4).
+   */
+  tools?: { schedule: boolean; feishu?: boolean; feishuEdit?: boolean; documentsOnly?: boolean };
 }
 
 export interface SessionProfileCapabilities {
@@ -44,7 +48,7 @@ export function resolveSessionProfile(input?: SessionProfile, capabilities?: { a
     additionalRoots: input?.additionalRoots ?? [],
     capabilityPackages: input?.capabilityPackages ?? [],
     mcpServers: [],
-    tools: { schedule: input?.tools?.schedule ?? false, feishu: input?.tools?.feishu ?? false },
+    tools: { ...input?.tools, schedule: input?.tools?.schedule ?? false, feishu: input?.tools?.feishu ?? false },
     ...(input?.skills ? { skills: input.skills } : {}),
   };
 }

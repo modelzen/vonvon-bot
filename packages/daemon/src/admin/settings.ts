@@ -14,7 +14,7 @@ import { botBackendId, groupBackendId, groupPermission, resolveCommentsExecution
 import { isProjectId } from '../project/library';
 import { dmChatId, effectiveMode, getProjectByChatId, getProjectByName, listProjects, mutateProject, mutateProjectByChatId, noMentionOf, pendingPolicyOf, sessionModeOf, type Project, type ProjectWorkspace } from '../project/registry';
 import { getSession, listSessions, isRetiredKey, mutateSession, RETIRED_KEY_TEXT, type SessionRecord } from '../bot/session-store';
-import { DEFAULT_COMMENT_INSTRUCTIONS, saveCommentInstructions, syncAllCommentInstructions } from '../bot/comments';
+import { currentCommentInstructions, DEFAULT_COMMENT_INSTRUCTIONS, saveCommentInstructions, syncAllCommentInstructions } from '../bot/comments';
 import { voiceView } from '../voice/view';
 import { keyStatus } from './secrets';
 import { DECISION_FORMAT_LINES, DECISION_INPUT_EXAMPLE, decisionProvider, decisionProviders, keyMissingText } from '../judge/decision';
@@ -351,7 +351,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   const changeChatProject = deps.mutateChatProject ?? mutateProjectByChatId;
   const changeSession = deps.mutateSession ?? mutateSession;
   const instructions = deps.instructions ?? {
-    read: () => readFile(paths.commentInstructionsFile, 'utf8').catch(error => {
+    read: () => readFile(paths.commentInstructionsFile, 'utf8').then(currentCommentInstructions).catch(error => {
       if (error.code === 'ENOENT')
         return DEFAULT_COMMENT_INSTRUCTIONS;
       throw error;
