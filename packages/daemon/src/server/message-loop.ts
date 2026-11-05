@@ -30,6 +30,7 @@ export function handleMessage(hub: PeerHub, peer: Peer, text: string | undefined
     if (id === undefined || !options.control) { peer.close(1001, 'server_shutdown'); return; }
     const parsed = requestSchema.safeParse(raw);
     if (!parsed.success) { peer.send(errorEnvelope(id, drainingError())); return; }
+    if (parsed.data.method === 'snapshot' && parsed.data.payload.groupAttention) peer.enableGroupAttention?.();
     void options.control(peer, parsed.data).catch(error => peer.send(errorEnvelope(id, error)));
     return;
   }
@@ -41,6 +42,7 @@ export function handleMessage(hub: PeerHub, peer: Peer, text: string | undefined
   }
   const parsed = requestSchema.safeParse(raw);
   if (!parsed.success) { peer.send({ type: 'error', id, code: 'invalid_request', message: '请求参数无效。' }); return; }
+  if (parsed.data.method === 'snapshot' && parsed.data.payload.groupAttention) peer.enableGroupAttention?.();
   const completion = Promise.resolve().then(() => options.request(peer, parsed.data)).catch(error => {
     peer.send(errorEnvelope(id, error));
   });

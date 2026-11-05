@@ -19,7 +19,7 @@ const quiet20: Due = (_, waiting, now) => Math.max(now, waiting[waiting.length -
 const batch3: Due = (place, waiting, now) => waiting.length >= 3 ? now : quiet20(place, waiting, now);
 
 /** Lanes whose judgements and landings the test settles by hand. */
-function lanes(due: Due = () => undefined) {
+function lanes(due: Due = () => undefined, priority?: (entry: LaneEntry) => boolean) {
   let now = 0;
   let nextTimer = 0;
   const timers = new Map<number, { fn(): void; at: number }>();
@@ -32,6 +32,7 @@ function lanes(due: Due = () => undefined) {
   const failed: unknown[] = [];
   const tasks: Promise<unknown>[] = [];
   const lane = new SmartLanes<LaneEntry, V>({
+    priority,
     judge: (batch, signal, glance) => {
       const answer = deferred<V>();
       judging.set(batch[batch.length - 1]!.id, { batch: batch.map((e) => e.id), signal, glance, answer });
@@ -80,6 +81,48 @@ describe('JudgeBudget', () => {
 });
 
 describe('SmartLanes', () => {
+  it('coalesces synchronous rearm requests when many overdue topics start together', async () => {
+    let now = 0;
+    let calls = 0;
+    const errors: unknown[] = [];
+    const tasks: Promise<unknown>[] = [];
+    const lane: SmartLanes<LaneEntry, V> = new SmartLanes<LaneEntry, V>({
+      judge: async () => { calls++; lane.rearmWhere(() => true); return 'skip'; },
+      land: async () => {}, ordered: () => false,
+      due: () => 1_000, now: () => now, setTimer: () => 0, clearTimer: () => {},
+      fail: error => { errors.push(error); }, track: task => { tasks.push(task); },
+    });
+    for (let i = 0; i < 1_100; i++) lane.submit(entry(`m${i}`, 'chat', `topic${i}`));
+    now = 7 * 60_000;
+    lane.rearmWhere(() => true);
+    await Promise.all(tasks);
+    expect(calls).toBe(1_100);
+    expect(errors).toEqual([]);
+    lane.shutdown();
+  });
+
+  it('isolates a continuation from an older ordinary backlog and later messages', async () => {
+    const isPriority = (item: LaneEntry) => item.id === 'followup';
+    const t = lanes((place, waiting, now) => waiting.some(item => isPriority(item.entry)) || waiting[0]?.entry.id === 'inflight'
+      ? undefined : quiet20(place, waiting, now), isPriority);
+    t.lane.submit(entry('inflight'));
+    for (let i = 0; i < 20; i++) t.lane.submit(entry(`ordinary-${i}`));
+    t.lane.submit(entry('followup'));
+    t.lane.submit(entry('later-person'));
+    t.judging.get('inflight')!.answer.resolve('skip');
+    await flush();
+    expect(t.judging.get('followup')).toMatchObject({batch: ['followup'], glance: false});
+    expect(t.judging.has('later-person')).toBe(false);
+    t.judging.get('followup')!.answer.resolve('skip');
+    await flush();
+    expect(t.timers.size).toBe(1);
+    t.advance(seconds(20));
+    expect(t.judging.get('later-person')).toMatchObject({glance: true});
+    expect(t.judging.get('later-person')!.batch).toHaveLength(21);
+    expect(t.judging.get('later-person')!.batch).not.toContain('followup');
+    t.lane.shutdown();
+  });
+
   it('an aside entry is judged at once beside the unnamed batch, is never its context, and holds nothing back', async () => {
     const t = lanes();
     t.lane.submit(entry('a'));

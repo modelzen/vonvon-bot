@@ -273,6 +273,7 @@ export const jobSchema = z.discriminatedUnion("phase", [
 ]);
 export type Job = z.infer<typeof jobSchema>;
 export const desktopSnapshotSchema = z.object({
+  attentionModel: z.literal("group").optional(),
   revision: z.number(), observedAt: z.number(), stale: z.boolean(), host: hostStateSchema,
   agents: z.array(agentSchema), groups: z.array(groupSchema), memberships: z.array(membershipSchema),
   /** The project library (memory design §2.5); absent from daemons before it. */

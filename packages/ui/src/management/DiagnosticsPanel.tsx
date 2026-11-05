@@ -17,6 +17,7 @@ import {useSetupStatus, type SetupRead} from '../setup/useSetupStatus';
 import {openExternalUrl} from '../url-actions';
 import {LogPanel} from './LogPanel';
 import {KeyDiagnosticsRows, useSecrets} from './SecretsPanel';
+import {nowGroupAttention} from '../now-attention';
 import './diagnostics.css';
 
 const badge = (status: string, tone: StepTone) => <StatusBadge tone={tone} variant="pill">{status}</StatusBadge>;
@@ -124,11 +125,9 @@ function SmartDiagnostics({agent, snapshot, now}: {agent: Agent; snapshot: Deskt
   const groups = snapshot.memberships.filter(member => member.agentId === agent.id && member.conversation === 'smart');
   if (!groups.length) return null;
   return <>
-    <SettingsRow title="智能群关注状态" description={<ul className="diagnostics-scopes">{groups.map(member => {
-      const state = agent.running && agent.enabled && !member.stale ? agent.diagnostics?.attention?.find(item => item.groupId === member.groupId) : undefined;
-      const main = state?.main ? `主区${state.main.mode === 'focus' ? '专注' : `留意（间隔 ${state.main.intervalMs / 1000} 秒）`}` : '主区尚无关注状态';
-      const budget = state?.budget && state.budget.until > now ? state.budget.kind === 'no-glance' ? '；判断预算已到 45 次，暂停扫一眼' : '；判断预算已到 60 次，仅真人 @、引用或回答它的根消息仍判断' : '';
-      return <li key={member.id}>{member.name}：{!agent.enabled || !agent.running ? 'Bot 未运行' : member.stale ? '群状态暂不可读' : !agent.diagnostics?.attention ? 'daemon 未提供关注状态' : `${main}；话题专注 ${state?.focusedTopics ?? 0} 个、留意 ${state?.watchedTopics ?? 0} 个${budget}`}</li>;
+    <SettingsRow title="智能群注意力" description={<ul className="diagnostics-scopes">{groups.map(member => {
+      const reading = nowGroupAttention(agent, member, snapshot.host.kind === 'connected', snapshot.stale, now, snapshot.attentionModel === 'group');
+      return <li key={member.id}>{member.name}：{reading.score === undefined ? reading.description : `${reading.score} / 100 · ${reading.label}；${reading.description}`}</li>;
     })}</ul>}/>
     {groups.some(member => agent.diagnostics?.customPromptGroups?.includes(member.groupId)) && <SettingsRow title="自定义智能提示词" description={<ul className="diagnostics-scopes">{groups.filter(member => agent.diagnostics?.customPromptGroups?.includes(member.groupId)).map(member => <li key={member.id}>{member.name}：{CUSTOM_PROMPT_NOTICE}</li>)}</ul>}/>}
   </>;

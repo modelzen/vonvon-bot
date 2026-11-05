@@ -91,7 +91,7 @@ export type RemoteSeams = Partial<Pick<EnableDeps, 'interfaces' | 'tailscale' | 
  * the desktop app carries is updated by that app (U4), except on Windows for 0.9.0 (owner 2026-11-02).
  */
 export const capabilities = (distribution?: string, remoteOpen = false, platform: NodeJS.Platform = process.platform): string[] => [
-  'device', 'session-scope', ...remoteOpen ? ['remote'] : [],
+  'device', 'session-scope', 'attention.group', ...remoteOpen ? ['remote'] : [],
   ...distribution === 'standalone' ? ['update.standalone'] : distribution === 'global-npm' ? ['update.npm']
     : distribution === 'bundled' && platform !== 'win32' ? ['update.bundled'] : [],
 ];

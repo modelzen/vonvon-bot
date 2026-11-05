@@ -1,4 +1,5 @@
 import { FocusEverywhere } from './helpers/focus-everywhere';
+import { Attention } from '../src/bot/attention';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1707,56 +1708,201 @@ describe('attention (s25g)', () => {
   }
   beforeEach(async () => {
     timers.clear(); await orchestrator.shutdown();
+    fake.events = async function* () { yield { type: 'turn_started', turnId: 'turn-fixture' }; yield { type: 'done', turnId: 'turn-fixture' }; };
     orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { time });
   });
 
-  it('expires main focus and publishes watch without another message or model call', async () => {
+  it('waits for host acceptance before raising attention or granting a continuation', async () => {
+    const latest = () => events.flatMap(event => event.kind === 'attention' ? event.groups : []).filter(group => group.groupId === CHAT).at(-1);
+    const accepted = deferred<void>();
+    fake.events = async function* () {
+      await accepted.promise;
+      yield { type: 'turn_started', turnId: 'turn-fixture' };
+      yield { type: 'done', turnId: 'turn-fixture' };
+    };
+    const message = says('HOST_ACCEPTANCE', { at: true });
+    try {
+      await send(message); await decide(message, result('main'));
+      await vi.waitFor(() => expect(fake.inputs).toHaveLength(1)); await settle();
+      expect(latest()?.group?.score).toBe(10);
+      const early = says('NOT_ACCEPTED_YET'); await send(early); await settle();
+      expect(asked.has(idOf(early))).toBe(false);
+      accepted.resolve(); await settle();
+      expect(latest()?.group?.score).toBe(100);
+    } finally { accepted.resolve(); }
+  });
+
+  it('does not revive forgotten attention when an earlier host acceptance arrives late', async () => {
+    await orchestrator.shutdown(); timers.clear();
+    const attention = new Attention();
+    orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { time, attention });
+    const accepted = deferred<void>();
+    fake.events = async function* () {
+      await accepted.promise;
+      yield { type: 'turn_started', turnId: 'turn-fixture' };
+      yield { type: 'done', turnId: 'turn-fixture' };
+    };
+    const message = says('STALE_HOST_ACCEPTANCE', { at: true });
+    try {
+      await send(message); await decide(message, result('main'));
+      await vi.waitFor(() => expect(fake.inputs).toHaveLength(1)); await settle();
+      attention.forget(CHAT);
+      attention.arrive({ chatId: CHAT, place: CHAT }, clock);
+      accepted.resolve(); await settle();
+      expect(attention.snapshot()[0]?.group?.score).toBe(10);
+      expect(attention.followup({ chatId: CHAT, place: CHAT }, clock, 'ou_owner')).toBe(false);
+    } finally { accepted.resolve(); }
+  });
+
+  it('lets a newly changed prompt raise attention and grant its own follow-up after real acceptance', async () => {
+    await orchestrator.shutdown(); timers.clear();
+    const attention = new Attention();
+    orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { time, attention });
+    const first = says('PARTICIPATED_WITH_H1', { at: true });
+    await send(first); await decide(first, result('main', { promptHash: 'h1' }));
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(1)); await settle();
+    const previous = attention.captureGroup(CHAT);
+    expect(attention.snapshot()[0]?.group?.score).toBe(100);
+    await advance(m(3));
+    const next = says('ACCEPT_NEW_PROMPT_H2', { at: true });
+    const incoming = await receive(next, { bot: BOT });
+    await orchestrator.onMessage(incoming); await decide(next, result('main', { promptHash: 'h2' }));
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(2)); await settle();
+    expect(attention.isCurrentGroup(CHAT, previous)).toBe(false);
+    expect(attention.snapshot()[0]?.group?.score).toBe(100);
+    expect(attention.followup({ chatId: CHAT, place: CHAT }, clock, incoming.senderId)).toBe(true);
+  });
+
+  it('keeps an older in-flight judgement from warming a replacement group generation', async () => {
+    await orchestrator.shutdown(); timers.clear();
+    const attention = new Attention();
+    orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { time, attention });
+    const first = says('ESTABLISH_H1', { at: true });
+    await send(first); await decide(first, result('main', { promptHash: 'h1' }));
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(1)); await settle();
+    const delayed = says('OLD_GENERATION_JUDGEMENT', { at: true });
+    const incoming = await receive(delayed, { bot: BOT });
+    await orchestrator.onMessage(incoming); await judged(delayed);
+    attention.forget(CHAT);
+    attention.arrive({ chatId: CHAT, place: CHAT }, clock);
+    const replacement = attention.captureGroup(CHAT);
+    await decide(delayed, result('main', { promptHash: 'h1' }));
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(2)); await settle();
+    expect(attention.isCurrentGroup(CHAT, replacement)).toBe(true);
+    expect(attention.snapshot()[0]?.group?.score).toBe(10);
+    expect(attention.followup({ chatId: CHAT, place: CHAT }, clock, incoming.senderId)).toBe(false);
+  });
+
+  it('ignores a stale prompt hash when a newer judgement already reset the group', async () => {
+    await orchestrator.shutdown(); timers.clear();
+    const attention = new Attention();
+    orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { time, attention });
+    const first = says('INITIAL_PROMPT_H1', { at: true });
+    await send(first); await decide(first, result('main', { promptHash: 'h1' }));
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(1)); await settle();
+    const delayed = says('LATE_OLD_PROMPT_H1', { at: true });
+    await send(delayed); await judged(delayed);
+    const fresh = says('NEWER_PROMPT_H2', { at: true });
+    await send(fresh); await decide(fresh, result('main', { promptHash: 'h2' })); await settle();
+    const replacement = attention.captureGroup(CHAT);
+    expect(replacement).toBeDefined();
+    await decide(delayed, result('main', { promptHash: 'h1' }));
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(3)); await settle();
+    expect(attention.isCurrentGroup(CHAT, replacement)).toBe(true);
+    expect(attention.snapshot()[0]?.group?.score).toBe(100);
+  });
+
+  it('keeps a failed backend launch cold after a judgement decided to reply', async () => {
+    const latest = () => events.flatMap(event => event.kind === 'attention' ? event.groups : []).filter(group => group.groupId === CHAT).at(-1);
+    startThread.mockRejectedValueOnce(new Error('fixture backend start refused'));
+    const message = says('FAILED_START', { at: true });
+    await send(message); await decide(message, result('main'));
+    await vi.waitFor(() => expect(fake.send.mock.calls.some(call => JSON.stringify(call).includes('fixture backend start refused'))).toBe(true));
+    expect(fake.inputs).toHaveLength(0);
+    expect(latest()?.group?.score).toBe(10);
+    const ordinary = says('NO_FAILED_START_SHORTCUT'); await send(ordinary); await settle();
+    expect(asked.has(idOf(ordinary))).toBe(false);
+  });
+
+  it('keeps attention cold when a running goal refuses the judged message', async () => {
+    const latest = () => events.flatMap(event => event.kind === 'attention' ? event.groups : []).filter(group => group.groupId === CHAT).at(-1);
+    const running = deferred<void>();
+    fake.events = async function* () {
+      yield { type: 'turn_started', turnId: 'goal-fixture' };
+      yield { type: 'text', itemId: 'goal-output', text: '正在整理' };
+      await running.promise;
+      yield { type: 'done', turnId: 'goal-fixture' };
+    };
+    try {
+      await send(says('/goal 整理文档', { at: true, thread: 'omt_attention_goal' }));
+      await vi.waitFor(() => expect(fake.cards).toHaveLength(1));
+      const message = says('GOAL_REFUSED_SMART_REPLY', { at: true, thread: 'omt_attention_goal' });
+      await send(message); await decide(message, result('reply'));
+      await vi.waitFor(() => expect(JSON.stringify(fake.send.mock.calls)).toContain('目标运行中'));
+      expect(fake.inputs).toHaveLength(0);
+      expect(latest()?.group?.score).toBe(10);
+    } finally { running.resolve(); }
+  });
+
+  it('keeps a host-refused first turn cold even when its card was created', async () => {
+    const latest = () => events.flatMap(event => event.kind === 'attention' ? event.groups : []).filter(group => group.groupId === CHAT).at(-1);
+    fake.events = async function* () { yield { type: 'error', message: 'fixture host rejected input', willRetry: false }; };
+    const message = says('HOST_REFUSED_INPUT', { at: true });
+    await send(message); await decide(message, result('main'));
+    await vi.waitFor(() => expect(fake.finals).toHaveLength(1)); await settle();
+    expect(fake.inputs).toHaveLength(1);
+    expect(latest()?.group?.score).toBe(10);
+  });
+
+  it('publishes every group attention stage without another arrival or model call', async () => {
     const latest = () => events.flatMap(event => event.kind === 'attention' ? event.groups : []).filter(group => group.groupId === CHAT).at(-1);
     await focus();
-    expect(latest()?.main?.mode).toBe('focus');
+    expect(latest()?.group?.score).toBe(100);
     const calls = fake.judge.mock.calls.length;
-    await advance(m(10));
-    expect(latest()?.main?.mode).toBe('focus');
-    await advance(1);
-    expect(latest()?.main).toEqual({ mode: 'watch', intervalMs: m(3) });
-    expect(fake.judge).toHaveBeenCalledTimes(calls);
+    for (const [elapsed, score] of [[m(2), 75], [m(8), 50], [m(10), 25], [m(10), 10]] as const) {
+      await advance(elapsed);
+      expect(latest()?.group?.score).toBe(score);
+      expect(fake.judge).toHaveBeenCalledTimes(calls);
+    }
     expect(fake.inputs).toHaveLength(1);
     expect(timers.size).toBe(0);
 
-    // Returning to a quiet group still resets its watch interval and batches the message.
-    const next = says('AFTER_IDLE_FOCUS'); await send(next); await settle();
-    expect(latest()?.main).toEqual({ mode: 'watch', intervalMs: m(1) });
+    const next = says('AFTER_IDLE_GROUP'); await send(next); await settle();
+    expect(latest()?.group?.score).toBe(10);
     expect(asked.has(idOf(next))).toBe(false);
     await advance(s(20));
     expect((await judged(next)).req.message.fresh).toBe(true);
   });
 
-  it('renews the main expiry timer when the bot replies again', async () => {
+  it('renews group stage deadlines only when the bot actually replies again', async () => {
     const latest = () => events.flatMap(event => event.kind === 'attention' ? event.groups : []).at(-1);
     await focus(); await advance(m(9));
-    const again = says('RENEW_FOCUS', { at: true }); await send(again); await decide(again, result('main'));
+    const again = says('RENEW_GROUP', { at: true }); await send(again); await decide(again, result('main'));
     await vi.waitFor(() => expect(fake.inputs).toHaveLength(2)); await settle();
     expect(timers.size).toBe(1);
-    await advance(m(1));
-    expect(latest()?.main?.mode).toBe('focus');
-    await advance(m(9) + 1);
-    expect(latest()?.main?.mode).toBe('watch');
+    await advance(m(1)); expect(latest()?.group?.score).toBe(100);
+    await advance(m(1)); expect(latest()?.group?.score).toBe(75);
+    await advance(m(28)); expect(latest()?.group?.score).toBe(10);
     expect(timers.size).toBe(0);
   });
 
-  it('retains topic focus when the main area expires', async () => {
+  it('uses one group score for main and topic participation and lets old topics cool', async () => {
     const latest = () => events.flatMap(event => event.kind === 'attention' ? event.groups : []).at(-1);
     await focus();
-    const topic = says('TOPIC_STAYS_FOCUSED', { at: true, thread: 'omt_keep_focus' });
+    const topic = says('TOPIC_PARTICIPATION', { at: true, thread: 'omt_keep_focus' });
     await send(topic); await decide(topic, result('reply')); await vi.waitFor(() => expect(fake.inputs).toHaveLength(2)); await settle();
     const calls = fake.judge.mock.calls.length;
-    await advance(m(10) + 1);
-    expect(latest()).toMatchObject({ main: { mode: 'watch' }, focusedTopics: 1, watchedTopics: 0 });
+    expect(latest()?.group?.score).toBe(100);
+    await advance(m(30));
+    expect(latest()).toMatchObject({ group: { score: 10 }, focusedTopics: 0, watchedTopics: 1 });
     expect(fake.judge).toHaveBeenCalledTimes(calls);
     expect(timers.size).toBe(0);
+    const next = says('OLD_TOPIC_RETURN', { thread: 'omt_keep_focus' }); await send(next); await settle();
+    expect(asked.has(idOf(next))).toBe(false);
+    await advance(s(20)); expect((await judged(next)).req.variant).toBe('topic');
   });
 
-  it('keeps the later budget deadline when main focus expires first', async () => {
+  it('keeps budget and natural attention stage deadlines independently', async () => {
     const latest = () => events.flatMap(event => event.kind === 'attention' ? event.groups : []).at(-1);
     await focus();
     let count = 45;
@@ -1766,11 +1912,13 @@ describe('attention (s25g)', () => {
     try {
       const signal = says('KEEP_BUDGET_DEADLINE', { at: true }); await send(signal); await decide(signal, result('skip')); await settle();
       expect(timers.size).toBe(1);
-      await advance(m(10) + 1);
-      expect(latest()).toMatchObject({ main: { mode: 'watch' }, budget: { kind: 'no-glance', until } });
-      expect(timers.size).toBe(1);
+      await advance(m(10));
+      expect(latest()).toMatchObject({ group: { score: 50 }, budget: { kind: 'no-glance', until } });
       count = 0; await advance(until - clock);
       expect(latest()?.budget).toBeUndefined();
+      expect(latest()?.group?.score).toBe(50);
+      expect(timers.size).toBe(1);
+      await advance(m(15)); expect(latest()?.group?.score).toBe(10);
       expect(timers.size).toBe(0);
     } finally { used.mockRestore(); free.mockRestore(); }
   });
@@ -1815,7 +1963,7 @@ describe('attention (s25g)', () => {
     expect(req.context.filter(l => l.fresh)).toEqual([]);
     expect(logged('attention')).toContainEqual(expect.objectContaining({ kind: 'glance', mode: 'watch', n: 1, old: 0 }));
   });
-  it('44. batches three arrivals, emits one diagnostic, and backs off to three minutes', async () => {
+  it('44. batches unrelated arrivals without raising attention and uses the cold five-minute cadence', async () => {
     const a = says('BATCH_A'), b = says('BATCH_B'), c = says('BATCH_C');
     for (const msg of [a, b, c]) await send(msg); await advance(s(20));
     const { req } = await judged(c);
@@ -1826,11 +1974,12 @@ describe('attention (s25g)', () => {
     expect(noted('judge-skip')[0]).toMatchObject({ times: 3, detail: '闲聊', ref: idOf(c).slice(-6) });
     expect(homeDecisions()).toEqual([expect.objectContaining({ decision: 'skip', trigger: 'glance', messageCount: 3, messageAt: Number(c.create_time), decidedAt: clock })]);
     const d = says('BATCH_D'); await send(d); await advance(s(20)); expect(asked.has(idOf(d))).toBe(false);
-    await advance(m(3)); expect((await judged(d)).req.why).toContain('3 分钟没看这里了');
+    await advance(m(5)); expect((await judged(d)).req.why).toContain('5 分钟没看这里了');
   });
-  it('45. glances immediately when ten arrivals fill the batch', async () => {
+  it('45. batches ten arrivals without bypassing the cold-start delay', async () => {
     const msgs = Array.from({ length: 10 }, (_, i) => says(`TEN_${i}`));
     for (const msg of msgs) await send(msg); await settle();
+    expect(fake.judge).not.toHaveBeenCalled(); await advance(s(20));
     const { req } = await judged(msgs[9]!); expect(req.context.filter(l => l.fresh)).toHaveLength(9);
     expect(req.message.fresh).toBe(true); expect(logged('attention')).toContainEqual(expect.objectContaining({ n: 10 }));
   });
@@ -1847,7 +1996,7 @@ describe('attention (s25g)', () => {
   });
   it('47. falls back to the latest arrival when an anchor is only old context', async () => {
     const x = says('OLD_ANCHOR'); await send(x); await advance(s(20)); await decide(x, result('skip')); await settle();
-    const a = says('CURRENT_ANCHOR'); await send(a); await advance(m(3));
+    const a = says('CURRENT_ANCHOR'); await send(a); await advance(m(5));
     expect((await judged(a)).req.context).toContainEqual(expect.objectContaining({ id: idOf(x) }));
     await decide(a, result('main', { anchor: idOf(x) })); await vi.waitFor(() => expect(fake.cards).toHaveLength(1));
     expect(fake.cards[0]![3]).toMatchObject({ replyTo: idOf(a) }); expect(logged('anchor-not-in-batch')).toHaveLength(1);
@@ -1862,22 +2011,63 @@ describe('attention (s25g)', () => {
     expect((await judged(d)).req.variant).toBe('topic');
     expect(logged('attention')).toContainEqual(expect.objectContaining({ kind: 'focus', place: 'topic' }));
   });
-  it('49. returns main focus to watch after three skipped looks', async () => {
+  it('49. skips do not renew group attention, while ordinary hot messages still batch', async () => {
+    const latest = () => events.flatMap(event => event.kind === 'attention' ? event.groups : []).at(-1);
     await focus();
-    for (const text of ['MISS_ONE', 'MISS_TWO', 'MISS_THREE']) {
-      const msg = says(text); await send(msg); await settle(); await judged(msg); await decide(msg, result('skip')); await settle();
-    }
-    const g = says('AFTER_MISSES'); await send(g); await settle(); expect(asked.has(idOf(g))).toBe(false);
-    await advance(s(20)); expect(asked.has(idOf(g))).toBe(false); await advance(m(3));
-    expect((await judged(g)).req.message.fresh).toBe(true);
+    const first = says('ONE_FOLLOWUP'); await send(first); await settle();
+    await decide(first, result('skip')); await settle();
+    const second = says('HOT_CHAT_ONE'), third = says('HOT_CHAT_TWO');
+    await send(second); await send(third); await settle();
+    expect(asked.has(idOf(second))).toBe(false); expect(asked.has(idOf(third))).toBe(false);
+    await advance(s(5));
+    const { req } = await judged(third);
+    expect(req.context).toContainEqual(expect.objectContaining({ id: idOf(second), fresh: true }));
+    expect(asked.has(idOf(second))).toBe(false);
+    await decide(third, result('skip')); await settle();
+    expect(latest()?.group?.score).toBe(100);
+    await advance(m(2)); expect(latest()?.group?.score).toBe(75);
+    await advance(m(28)); expect(latest()?.group?.score).toBe(10);
   });
-  it('50. a named topic opening leaves pending main messages and rearms them in focus', async () => {
+  it('allows one main-area follow-up from the recent participant while other people batch', async () => {
+    await focus();
+    const other = says('ANOTHER_PERSONS_CHAT');
+    await send(other, { openId: 'ou_someone_else', type: 'user', name: '李四' });
+    await settle(); expect(asked.has(idOf(other))).toBe(false);
+    const owner = says('MY_FOLLOWUP'); await send(owner); await settle();
+    // The owner's continuation can pull the waiting batch forward, without
+    // turning every later message from either person into an immediate look.
+    expect((await judged(owner)).req.message.fresh).toBeUndefined();
+    await decide(owner, result('skip')); await settle();
+    const later = says('SECOND_FOLLOWUP'); await send(later); await settle();
+    expect(asked.has(idOf(later))).toBe(false);
+    await advance(s(5)); expect((await judged(later)).req.message.fresh).toBe(true);
+  });
+
+  it('shares the viewing cadence across topics while preserving each batch context and avoiding starvation', async () => {
+    const a = says('TOPIC_A_ONLY', { thread: 'omt_batch_a' });
+    const b = says('TOPIC_B_ONLY', { thread: 'omt_batch_b' });
+    await send(a); await send(b); await advance(s(20));
+    expect(fake.judge).toHaveBeenCalledTimes(1);
+    await decide(a, result('skip')); await settle();
+    expect(asked.has(idOf(b))).toBe(false);
+    await advance(m(6));
+    const { req } = await judged(b);
+    expect(req.variant).toBe('topic');
+    expect(req.context.some(line => line.id === idOf(a))).toBe(false);
+    expect(req.message.text).toContain('TOPIC_B_ONLY');
+    await decide(b, result('reply')); await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
+    expect(events.flatMap(event => event.kind === 'attention' ? event.groups : []).at(-1)?.group?.score).toBe(100);
+  });
+
+  it('50. a named topic opening leaves pending main messages and rearms a short batch', async () => {
     const a = says('WAIT_FOR_TOPIC'); await send(a); expect(timers.size).toBe(1);
     const n = says('请开一个话题', { at: true }); await send(n); expect((await judged(n)).req.variant).toBe('main');
     expect(asked.has(idOf(a))).toBe(false); await decide(n, result('topic'));
     await vi.waitFor(() => expect(fake.inputs).toHaveLength(1)); await settle();
-    expect((await judged(a)).req.message.fresh).toBeUndefined(); expect(logged('lane-pruned')).toEqual([]);
-    expect(logged('attention')).toContainEqual(expect.objectContaining({ kind: 'focus' }));
+    expect(asked.has(idOf(a))).toBe(false);
+    await advance(s(5));
+    expect((await judged(a)).req.message.fresh).toBe(true); expect(logged('lane-pruned')).toEqual([]);
+    expect(logged('attention')).toContainEqual(expect.objectContaining({ kind: 'glance' }));
   });
   it('51, 62. a named main reply prunes pending arrivals without spending another judgement', async () => {
     const a = says('PRUNE_PRIVATE'), n = says('MAIN_PRIVATE', { at: true }); await send(a); await send(n);
@@ -1930,18 +2120,23 @@ describe('attention (s25g)', () => {
     await decide(n, result('main')); await vi.waitFor(() => expect(fake.inputs).toHaveLength(2));
     expect(noted('judge-superseded')).toEqual([]);
   });
-  it('54. restores only topics opened by this bot or having a session, once per place', async () => {
+  it('54. historical topics retain context without restoring permanent focus', async () => {
     const reg = createTopicRegistry({ dir: mkdtempSync(join(paths.appDir, 'topics-')), sessions: async () => [{ threadId: 'omt_v', chatId: CHAT, cwd: workspace, sessionId: 'past', backend: 'codex-appserver', summary: '', createdAt: 1, updatedAt: 1 }] });
     for (const topicId of ['omt_t', 'omt_u', 'omt_v']) await reg.note(CHAT, { topicId, at: clock, from: topicId === 'omt_t' ? { kind: 'self' } : { kind: 'user', openId: 'ou_owner' } });
     await orchestrator.shutdown(); orchestrator = createOrchestrator(channel as never, cfg, workspace, reg, { time });
-    const a = says('RECOVER_MINE', { thread: 'omt_t' }); await send(a); await settle(); await judged(a);
-    expect(logged('attention-recover')).toHaveLength(1); await decide(a, result('skip')); await settle();
-    const b = says('RECOVER_AGAIN', { thread: 'omt_t' }); await send(b); await settle(); await judged(b);
-    expect(logged('attention-recover')).toHaveLength(1);
-    const c = says('OTHERS_TOPIC', { thread: 'omt_u' }); await send(c); await settle(); expect(asked.has(idOf(c))).toBe(false);
-    await advance(s(20)); expect((await judged(c)).req.message.fresh).toBe(true);
-    const d = says('SESSION_TOPIC', { thread: 'omt_v' }); await send(d); await settle(); await judged(d);
-    expect(logged('attention-recover')).toHaveLength(2);
+    const messages = ['omt_t', 'omt_u', 'omt_v'].map(thread => says('RETURN_TO_OLD_TOPIC', { thread }));
+    for (const message of messages) await send(message);
+    await settle(); expect(fake.judge).not.toHaveBeenCalled();
+    await advance(s(20));
+    expect(fake.judge.mock.calls.length).toBeGreaterThan(0);
+    expect(logged('attention-recover')).toEqual([]);
+    for (const message of messages) {
+      if (asked.has(idOf(message))) await decide(message, result('skip'));
+    }
+    await settle(); await advance(m(6));
+    for (const message of messages) expect((await judged(message)).req.variant).toBe('topic');
+    const latest = events.flatMap(event => event.kind === 'attention' ? event.groups : []).at(-1);
+    expect(latest?.group?.score).toBe(10);
   });
   it('55, 62. defers at 45 uses, drops stale arrivals when budget returns, and does not count an empty glance', async () => {
     const used = vi.spyOn(JudgeBudget.prototype, 'used').mockReturnValue(45);
@@ -1958,19 +2153,19 @@ describe('attention (s25g)', () => {
       expect(req.context.filter(l => l.fresh)).toEqual([]); expect(req.why).toContain('第一次看这里'); privateLogs([a, b]);
     } finally { used.mockRestore(); free.mockRestore(); }
   });
-  it('56. freezes focused work at exhaustion, diagnoses once, and treats a glance-cap race separately', async () => {
+  it('56. preserves natural attention at exhaustion, diagnoses once, and treats a glance-cap race separately', async () => {
     await focus(); const take = vi.spyOn(JudgeBudget.prototype, 'take').mockReturnValueOnce(false);
     try {
       const d = says('FREEZE_ME'); await send(d); await settle(); expect(asked.has(idOf(d))).toBe(false);
-      expect(logged('attention-freeze')).toHaveLength(1);
+      expect(events.flatMap(event => event.kind === 'attention' ? event.groups : []).at(-1)?.group?.score).toBe(100);
       expect(logged('unjudged')).toContainEqual(expect.objectContaining({ why: 'budget', noted: true }));
       expect(noted('judge-budget')).toHaveLength(1); expect(noted('judge-budget')[0]).toMatchObject({ times: 1 });
       expect(noted('judge-budget')[0]?.detail).toBeUndefined();
       const e = says('AFTER_FREEZE'); await send(e); await settle(); expect(asked.has(idOf(e))).toBe(false);
-      await advance(m(3)); expect((await judged(e)).req.message.fresh).toBe(true); await decide(e, result('skip')); await settle();
+      await advance(s(5)); expect((await judged(e)).req.message.fresh).toBe(true); await decide(e, result('skip')); await settle();
       take.mockReturnValueOnce(false); const f = says('CAP_RACE'); await send(f); await advance(m(6));
       expect(asked.has(idOf(f))).toBe(false); expect(logged('unjudged')).toContainEqual(expect.objectContaining({ why: 'glance-cap' }));
-      expect(logged('attention-freeze')).toHaveLength(1); expect(noted('judge-budget')).toHaveLength(1);
+      expect(logged('attention-freeze')).toEqual([]); expect(noted('judge-budget')).toHaveLength(1);
     } finally { take.mockRestore(); }
   });
   it('57. drops queued work after a switch to rules or disabling the group', async () => {
@@ -1985,7 +2180,7 @@ describe('attention (s25g)', () => {
     const a = says('HASH_FIRST'); await send(a); await advance(s(20)); await decide(a, result('main', { promptHash: 'h1' }));
     await vi.waitFor(() => expect(fake.inputs).toHaveLength(1)); await settle();
     for (const { text, hash } of [{ text: 'HASH_SAME', hash: 'h1' }, { text: 'HASH_CHANGED', hash: 'h2' }]) {
-      const msg = says(text); await send(msg); await settle(); await decide(msg, result('skip', { promptHash: hash })); await settle();
+      const msg = says(text); await send(msg); await settle(); await advance(s(5)); await decide(msg, result('skip', { promptHash: hash })); await settle();
     }
     expect(logged('attention-forget')).toContainEqual(expect.objectContaining({ why: 'prompt' }));
     const d = says('HASH_RESET'); await send(d); await settle(); expect(asked.has(idOf(d))).toBe(false);
