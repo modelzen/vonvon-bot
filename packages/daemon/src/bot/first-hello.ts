@@ -46,6 +46,7 @@ export function createFirstHello(deps: FirstHelloDeps): { attempt: () => Promise
   let lastTry = Number.NEGATIVE_INFINITY;
   let sent = false; // a failed write must not send it again
   let stopped = false;
+  let later: ReturnType<typeof setTimeout> | undefined; // the client stops asking once scopes are complete, so one told too soon tries again
 
   const send = async (openId: string): Promise<boolean> => {
     // Scopes first: a bot may be able to send long before it can read the answer.
@@ -65,16 +66,19 @@ export function createFirstHello(deps: FirstHelloDeps): { attempt: () => Promise
       log.info('setup', 'first-hello-sent', { appId });
     } catch (error) { log.info('setup', 'first-hello-later', { err: String(error) }); }
   };
-  return {
-    attempt: () => {
-      const openId = recipient(cfg);
-      if (!openId || stopped) return Promise.resolve();
-      if (running) return running;
-      if (now() - lastTry < FIRST_HELLO_RETRY_MS) return Promise.resolve();
-      lastTry = now();
-      running = run(openId).finally(() => { running = undefined; });
-      return running;
-    },
-    stop: () => { stopped = true; },
+  const attempt = (): Promise<void> => {
+    const openId = recipient(cfg);
+    if (!openId || stopped) return Promise.resolve();
+    if (running) return running;
+    const wait = lastTry + FIRST_HELLO_RETRY_MS - now();
+    if (wait > 0) {
+      later ??= setTimeout(() => { later = undefined; void attempt(); }, wait);
+      later.unref?.();
+      return Promise.resolve();
+    }
+    lastTry = now();
+    running = run(openId).finally(() => { running = undefined; });
+    return running;
   };
+  return { attempt, stop: () => { stopped = true; clearTimeout(later); } };
 }
