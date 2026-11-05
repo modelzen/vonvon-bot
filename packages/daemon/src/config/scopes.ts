@@ -134,6 +134,32 @@ export const V1_OPTIONAL_SCOPES = [
   'application:application:self_manage',
 ] as const;
 
+/**
+ * Optional scopes of the Bot's own Feishu read tools (dm-agent 6.5, 7.1; D/feishu-read). Names from a test app and
+ * the API schemas, 2026-11-05. Like the other opt-in groups, NOT in {@link REQUIRED_SCOPES}: without them a tool answers
+ * with what is missing and a link (dm-agent 7.5), and everything else still works.
+ *   - `docs:document.content:read` = docs_ai fetch, `docx:document:readonly` = the raw_content fallback;
+ *   - `sheets:spreadsheet:read` = a spreadsheet's sheets and a range's values;
+ *   - `drive:file:download` = a Drive file's bytes.
+ */
+export const DOC_READ_SCOPES = ['docs:document.content:read', 'docx:document:readonly', 'wiki:wiki:readonly'] as const;
+export const SHEET_READ_SCOPES = ['sheets:spreadsheet:read'] as const;
+export const DRIVE_READ_SCOPES = ['drive:file:download'] as const;
+/** Changing a document as the Bot (the tool comes with F3). */
+export const DOC_EDIT_SCOPES = ['docx:document:write_only'] as const;
+export const MESSAGE_SEARCH_SCOPES = ['search:message'] as const;
+/**
+ * Every scope of those tools. Not in {@link GRANT_SCOPES}: Feishu rates them all 高级, and an enterprise's admin decides
+ * which scopes skip review, so they get their own pre-selected link instead of enlarging the first review (dm-agent 6.5).
+ */
+export const FEISHU_TOOL_SCOPES = [
+  ...DOC_READ_SCOPES,
+  ...DOC_EDIT_SCOPES,
+  ...SHEET_READ_SCOPES,
+  ...DRIVE_READ_SCOPES,
+  ...MESSAGE_SEARCH_SCOPES,
+] as const;
+
 /** The 3.11 optional scopes that change what the bot does in a chat, listed on the 状态与诊断 page. */
 export const CHAT_OPTIONAL_SCOPES = [...CONTACT_SCOPES, 'im:chat:readonly', ...V1_OPTIONAL_SCOPES] as const;
 
@@ -182,6 +208,12 @@ export const SCOPE_LABELS: Record<string, string> = {
   'im:message.reactions:read': '接收表情回复事件（终态卡 👍 续轮 / 运行卡 OK 终止）',
   'im:message.group_at_msg.include_bot:readonly': '接收其他机器人 @我 的群消息',
   'application:application:self_manage': '读取应用的所有者和协作者（飞书里的管理员也能管 bot）',
+  'docs:document.content:read': '读取文档内容',
+  'docx:document:readonly': '读取文档纯文本',
+  'sheets:spreadsheet:read': '读取表格内容',
+  'drive:file:download': '下载云空间文件',
+  'docx:document:write_only': '修改 Bot 有编辑权限的文档',
+  'search:message': '搜索消息',
 };
 
 /** `<中文说明>（<token>）` for a known scope, else the raw token. */
