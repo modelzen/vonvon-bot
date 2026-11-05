@@ -167,11 +167,8 @@ describe('the two sets', () => {
 
 /**
  * What a skill's text says has to be what the CLI and the tools take, or the Agent is told a command that does not exist;
- * designs and skills went stale that way (`schedule create`). A line in {@link ARRIVES} is a flag the text names ahead of
- * the slice that adds it; it goes red once the flag is there, to be dropped.
+ * designs and skills went stale that way (`schedule create`).
  */
-const ARRIVES: Readonly<Record<string, readonly string[]>> = { 'settings get': ['--dm'], 'schedule list': ['--dm'] };
-
 function commandProblems(text: string, commands: readonly CommandInfo[]): string[] {
   const known = (path: string): boolean => commands.some(command => command.path === path || command.path.startsWith(`${path} `));
   return [...text.matchAll(/`(vonvon [^`]+)`/g)].flatMap(([, span]) => {
@@ -187,7 +184,7 @@ function commandProblems(text: string, commands: readonly CommandInfo[]): string
     const leaf = commands.find(command => command.path === path);
     const rest = words.slice(used);
     if (!leaf && rest.some(word => !word.startsWith('--'))) return [`${span}: no such command`];
-    return rest.filter(word => /^--[a-z]/.test(word) && word !== '--help' && !leaf?.options.includes(word) && !ARRIVES[path]?.includes(word)).map(flag => `${span}: ${path} takes no ${flag}`);
+    return rest.filter(word => /^--[a-z]/.test(word) && word !== '--help' && !leaf?.options.includes(word)).map(flag => `${span}: ${path} takes no ${flag}`);
   });
 }
 
@@ -202,9 +199,6 @@ describe('what the skills name', () => {
     expect(commandProblems('`vonvon schedule create --group X`', commands)).toEqual(['vonvon schedule create --group X: no such command']);
     expect(commandProblems('`vonvon group show X --nope`', commands)).toEqual(['vonvon group show X --nope: group show takes no --nope']);
     expect(commandProblems('`vonvon settings get --group X` `vonvon --help` `vonvon settings --help`', commands)).toEqual([]);
-  });
-  it('are named ahead of their slice only while the CLI lacks them', () => {
-    expect(Object.entries(ARRIVES).flatMap(([path, flags]) => flags.filter(flag => commands.find(command => command.path === path)?.options.includes(flag)))).toEqual([]);
   });
   it('are tools the sessions have', () => {
     const tools = new Set([...feishuToolNames, FEISHU_DOC_EDIT, FEISHU_API, ...scheduleToolNames]);

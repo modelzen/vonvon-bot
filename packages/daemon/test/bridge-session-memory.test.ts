@@ -7,7 +7,6 @@ import type { AgentThread } from '../src/agent/types';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { listProjects } from '../src/project/registry';
-import { decisionMessages } from '../src/bot/memory-authority';
 import { authorize, type AuthzDeps } from '../src/server/authz';
 
 /**
@@ -122,23 +121,20 @@ describe('a private chat\'s session and its bot\'s projects, as the bridge wires
       .toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'project', projectId: DEV } } } });
   });
 
-  it('counts each project once and reads the table every time: one no group binds stays out until one does', async () => {
+  it('keeps a private chat\'s words in its person\'s memory unless it names a project, any project', async () => {
     // two groups of one project, a row from before projects and one whose id is not a project's
     await storeProjects([row('研发', 'oc_dev', DEV), row('研发二群', 'oc_dev2', DEV), row('旧群', 'oc_old'), row('坏行', 'oc_bad', 'not-a-project')]);
     const entries = await bridge();
     // dm-agent 5: a --bot that fails the gate stays in the person's own memory, as memory_add does in a private chat; the bot's one project is not where private words go
-    expect(await privateChat(entries, MEMBER, '你好').ask({ type: 'add', scope: { kind: 'bot', botId: APP }, text: '周四发版' }))
-      .toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'dm', openId: MEMBER }, trust: 'untrusted', source: { downgraded: 'member' } } } });
+    expect(await privateChat(entries, OWNER, '你好').ask({ type: 'add', scope: { kind: 'bot', botId: APP }, text: '周四发版' }))
+      .toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'dm', openId: OWNER }, source: { downgraded: 'not-in-message' } } } });
+    // dm-agent 6.3: nobody but an admin has a turn here
+    expect(await privateChat(entries, MEMBER, '你好').ask({ type: 'add', scope: { kind: 'bot', botId: APP }, text: '周四发版' })).toMatchObject({ ok: false, code: 'permission_denied' });
     // a named project is still the way in
     expect(await privateChat(entries, OWNER, '记住 研发').ask({ type: 'add', scope: { kind: 'project', projectId: DEV }, text: '周四发版' }))
       .toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'project', projectId: DEV } } } });
-    // OPS is no group's of this bot: the host refuses it first, and its Bot process would too
-    const owner = privateChat(entries, OWNER, '记住 运营');
-    const add = { kind: 'memory', op: 'add', target: { kind: 'project', projectId: OPS }, text: 'x' } as const;
-    expect(await owner.ask({ type: 'add', scope: { kind: 'project', projectId: OPS }, text: 'x' })).toMatchObject({ ok: false, code: 'permission_denied' });
-    expect(await owner.bot(add)).toEqual({ ok: false, reason: 'not-allowed-here', message: decisionMessages['not-allowed-here'] });
-    await storeProjects([row('研发', 'oc_dev', DEV), row('运营', 'oc_ops', OPS)]);
-    expect(await owner.ask({ type: 'add', scope: { kind: 'project', projectId: OPS }, text: 'x' })).toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'project', projectId: OPS } } } });
+    // dm-agent 6.1: a private chat reaches every project, one none of this bot's groups binds as well
+    expect(await privateChat(entries, OWNER, '记住 运营').ask({ type: 'add', scope: { kind: 'project', projectId: OPS }, text: 'x' })).toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'project', projectId: OPS } } } });
   });
 
   // dm-agent 5: whose window this is comes from the private-chat row, as the bridge reads it.

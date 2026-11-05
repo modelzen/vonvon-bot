@@ -10,6 +10,7 @@ import {
 } from '../daemon-client';
 import { TIER_NAMES } from '../../agent/permission';
 import { keyMissingText } from '../../judge/decision';
+import { dmChatId } from '../../project/registry';
 import { readStdin } from '../../core/stdin';
 
 // Structural views of the protocol's zod objects: the daemon's own zod is v4, protocol's is v3 (see daemon-client).
@@ -22,8 +23,10 @@ type SectionSchema = { shape: Record<string, unknown>; partial(): { strict(): Ch
 type SectionView = { stored: unknown; effective: unknown; revision: string; access: { kind: 'writable' } | { kind: 'readonly'; message: string } };
 export type Kind = 'agent' | 'project' | 'session' | 'host';
 /** `host`: the machine's own settings (the web page's 本机), which need no bot (cli-6-settings 4.2). */
-export type Target = { bot?: string; group?: string; session?: string; host?: boolean; revision?: string; reason?: string };
+export type Target = { bot?: string; group?: string; session?: string; host?: boolean; dm?: boolean; revision?: string; reason?: string };
 
+/** What a private chat shows, besides the group sections it does not have: the last two are fixed (dm-agent 4.2). */
+const DM_VIEW = ['model', 'speed', 'modelAccess', 'skills', 'permission', 'workspace'];
 const TABLES: Record<Kind, Record<string, SectionSchema>> = { agent: agentSectionSchemas, project: projectEditableSchemas, session: sessionSectionSchemas, host: hostSectionSchemas };
 const sectionNames = (kind: Kind): string[] => Object.keys(TABLES[kind]);
 const FORMAT = '写成 节.项=值，例如 permission.mode=full';
@@ -34,9 +37,13 @@ const show = (value: unknown): string => typeof value === 'string' ? value : Str
 /** Checked before connecting: the protocol would refuse a blank --session, and that refusal is not the daemon's fault. */
 function scopeKind(target: Target): Kind {
   if (target.host) {
-    const others = (['bot', 'group', 'session'] as const).filter(key => target[key] !== undefined).map(key => `--${key}`);
+    const others = (['bot', 'group', 'session', 'dm'] as const).filter(key => target[key] !== undefined).map(key => `--${key}`);
     if (others.length) throw badArgs(`--host 是这台电脑的设置，不和 ${others.join('、')} 一起用。`);
     return 'host';
+  }
+  if (target.dm) {
+    if (target.group !== undefined || target.session !== undefined) throw badArgs('--dm 是这个 Bot 的私聊，不和 --group、--session 一起用。');
+    return 'project';
   }
   if (target.group !== undefined && target.session !== undefined) throw badArgs('--group 和 --session 只能选一个。');
   if (target.session !== undefined && !sessionThreadIdSchema.safeParse(target.session).success) {
@@ -124,6 +131,8 @@ export function parseAssignments(kind: Kind, assignments: readonly string[]): { 
 async function resolveScope(call: Call, target: Target): Promise<{ agent: Agent; membership?: Membership; scope: SettingsScope }> {
   const snapshot = await call('读取快照', c => c.snapshot());
   const agent = pickBot(snapshot.agents, target.bot);
+  // No membership: the private chat is in none, and goes by `oc_dm_<appId>`, whatever a group is called (dm-agent 4.2).
+  if (target.dm) return { agent, scope: { kind: 'project', botId: agent.id, projectName: dmChatId(agent.id) } };
   if (target.group !== undefined) {
     // s1b: a group's session names no group; the daemon answers its settings read with 群里不能改设置
     if (bindingsHidden(snapshot.memberships, agent)) return { agent, scope: { kind: 'project', botId: agent.id, projectName: target.group } };
@@ -140,7 +149,11 @@ const readView = async (call: Call, scope: SettingsScope): Promise<SettingsView>
 /** The machine's settings need no bot, so no snapshot either: they work before the first bot (cli-6-settings 4.2). */
 const scopeOf = async (call: Call, target: Target): Promise<SettingsScope> => target.host ? { kind: 'host' } : (await resolveScope(call, target)).scope;
 
-function header(view: SettingsView, agent: Agent, membership?: Membership): string {
+function header(view: SettingsView, agent: Agent, membership?: Membership, dm?: boolean): string {
+  if (dm) {
+    const { backend, cwd } = (view as ProjectSettingsView).identity;
+    return `Bot ${agent.name}（${agent.id}）的私聊 · ${toolLabel(backend)} · ${cwd}`;
+  }
   if (membership) return `群 ${membership.name}（${membership.groupId}）· ${toolLabel(membership.backend)} · ${conversationLabel(membership.conversation)} · ${membership.directory}`;
   if (view.scope.kind === 'session') {
     const identity = (view as SessionSettingsView).identity;
@@ -268,8 +281,8 @@ function agentExtras(view: AgentSettingsView, target: Target): string[] {
 
 const SKILL_SOURCES = { workspace: '本群工作区', user: '用户目录', provider: 'Provider' } as const;
 /** The group's skills sit in the group's view: they come from its folders and its backend. */
-function projectExtras(view: ProjectSettingsView): string[] {
-  const human = view.members ? [`响应成员：${memberList(view.members)}`] : [];
+function projectExtras(view: ProjectSettingsView, dm?: boolean): string[] {
+  const human = view.members && !dm ? [`响应成员：${memberList(view.members)}`] : [];
   const disabled = new Set(view.sections.skills?.stored.disabledPaths ?? []);
   const off = (skill: NonNullable<ProjectSettingsView['skills']>[number]) => !skill.enabled || disabled.has(skill.path);
   if (view.skills) {
@@ -282,8 +295,8 @@ function projectExtras(view: ProjectSettingsView): string[] {
 
 export async function runSettingsGet(section: string | undefined, target: Target, io: Io, daemon: Daemon = withDaemon): Promise<void> {
   const kind = scopeKind(target);
-  const names = sectionNames(kind);
-  if (section !== undefined && !names.includes(section)) throw badArgs(`没有 ${section} 这一节。可以看的有：${names.join('、')}`);
+  const names = target.dm ? DM_VIEW : sectionNames(kind);
+  if (section !== undefined && !names.includes(section)) throw badArgs(`${target.dm ? '私聊' : ''}没有 ${section} 这一节。可以看的有：${names.join('、')}`);
   if (kind === 'host') {
     const view = await daemon(call => readView(call, { kind: 'host' })) as HostSettingsView;
     return print(io, hostLines(view, section), { view });
@@ -296,7 +309,7 @@ export async function runSettingsGet(section: string | undefined, target: Target
       : undefined;
     return { agent, membership, view, sessions };
   });
-  const human = [header(view, agent, membership)];
+  const human = [header(view, agent, membership, target.dm)];
   const sections = view.sections as Record<string, SectionView>;
   const fullOnly = view.scope.kind === 'project' ? (view as ProjectSettingsView).identity.fullOnly : undefined;
   for (const name of names.filter(name => section === undefined || name === section)) {
@@ -326,7 +339,7 @@ export async function runSettingsGet(section: string | undefined, target: Target
       const permission = value.stored as ProjectSettingsView['sections']['permission']['stored'];
       const options = permission.options;
       human.push(`  权限：${options?.invalid ? '高级设置读不出来，现在按只读跑' : options?.customSummary ? `自定义（${options.customSummary}）${options.legacy ? '（从旧版的联网开关转来）' : ''}` : TIER_NAMES[permission.mode]}`);
-      if (options?.fields?.length) {
+      if (options?.fields?.length && !target.dm) {
         human.push('    高级设置（permission.custom）：');
         for (const field of options.fields) {
           const values = field.kind === 'choice' ? field.choices?.map(choice => choice.value).join(' | ')
@@ -359,7 +372,7 @@ export async function runSettingsGet(section: string | undefined, target: Target
   }
   // last, so the lines above keep their places; --json has all of it in the view already
   if (section === undefined && view.scope.kind === 'agent') human.push(...agentExtras(view as AgentSettingsView, target));
-  if (section === undefined && view.scope.kind === 'project') human.push(...projectExtras(view as ProjectSettingsView));
+  if (section === undefined && view.scope.kind === 'project') human.push(...projectExtras(view as ProjectSettingsView, target.dm));
   print(io, human, { view, ...(sessions ? { sessions } : {}) });
 }
 
@@ -528,21 +541,26 @@ export async function runSettingsCommentInstructions(source: InstructionSource, 
 
 const BACKEND_ALIASES: Record<string, string> = { codex: 'codex-appserver', claude: 'claude-agent' };
 const PURPOSES = ['project', 'session', 'comments', 'titles', 'judge'] as const;
-export type ModelsTarget = { bot?: string; backend?: string; purpose?: string; session?: string; refresh?: boolean };
+export type ModelsTarget = { bot?: string; backend?: string; purpose?: string; session?: string; refresh?: boolean; dm?: boolean };
 
 /** `settings models`: what a model picker on the settings page lists; hidden models only in --json. */
 export async function runSettingsModels(target: ModelsTarget, io: Io, daemon: Daemon = withDaemon): Promise<void> {
-  if (!target.backend?.trim()) throw badArgs('要给 --backend：codex、claude，或者 codex-appserver 这样的 id。');
-  const purpose = PURPOSES.find(purpose => purpose === target.purpose);
+  if (!target.dm && !target.backend?.trim()) throw badArgs('要给 --backend：codex、claude，或者 codex-appserver 这样的 id。');
+  if (target.dm && target.purpose !== undefined && target.purpose !== 'project') throw badArgs('--dm 列的是私聊的模型选择，不和别的 --purpose 一起用。');
+  const purpose = target.dm ? 'project' : PURPOSES.find(purpose => purpose === target.purpose);
   if (!purpose) throw badArgs(`要给 --purpose：${PURPOSES.join('、')} 选一个。`);
   if (purpose === 'session' && target.session === undefined) throw badArgs('--purpose session 要给 --session <会话的话题 id>。');
   if (target.session !== undefined && !sessionThreadIdSchema.safeParse(target.session).success) throw badArgs('--session 要填会话的话题 id（1 到 1000 个字）。');
-  const backend = Object.hasOwn(BACKEND_ALIASES, target.backend) ? BACKEND_ALIASES[target.backend]! : target.backend.trim();
-  const catalog = await daemon(async call => {
+  const given = target.backend?.trim();
+  const named = given && Object.hasOwn(BACKEND_ALIASES, given) ? BACKEND_ALIASES[given]! : given;
+  const { backend, catalog } = await daemon(async call => {
     const agent = await botOf(call, target.bot);
+    // The private chat's own Provider, unless asked about another.
+    const backend = named ?? agent.dm?.backend;
+    if (!backend) throw badArgs('这个 Bot 还没有私聊：启动过一次才有。也可以用 --backend 指定。');
     const query = { botId: agent.id, backend, purpose, ...(target.session !== undefined ? { threadId: target.session } : {}), ...(target.refresh ? { refresh: true } : {}) };
     // the bot process asks the backend for its list, which can outlast the local wait
-    return want('读取模型目录', await call('读取模型目录', c => c.settings({ type: 'models', query }), { provider: true }), 'models').catalog;
+    return { backend, catalog: want('读取模型目录', await call('读取模型目录', c => c.settings({ type: 'models', query }), { provider: true }), 'models').catalog };
   });
   if (catalog.state === 'unavailable') throw new CommandError('refused', `读不到 ${toolLabel(backend)} 的模型目录${catalog.error ? `：${catalog.error}` : '。'}`, { reason: 'models_unavailable' });
   const visible = catalog.models.filter(model => !model.hidden);

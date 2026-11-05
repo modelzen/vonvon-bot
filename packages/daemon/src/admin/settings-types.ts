@@ -171,7 +171,7 @@ export type SettingsAccess = {
   kind: 'writable';
 } | {
   kind: 'readonly';
-  reason: 'preview' | 'owner-offline' | 'unsupported-host' | 'stale';
+  reason: 'preview' | 'owner-offline' | 'unsupported-host' | 'stale' | 'dm-fixed';
   message: string;
 };
 export interface ApplyEffect {

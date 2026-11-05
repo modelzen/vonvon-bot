@@ -1,9 +1,10 @@
-import { MessageSquare } from 'lucide-react';
+import { MessageCircle, MessageSquare } from 'lucide-react';
 import type { Group } from '@vonvon/protocol';
 
-export function GroupAvatar({ group, large = false }: { group: Group; large?: boolean }) {
+export function GroupAvatar({ group, large = false, dm = false }: { group: Group; large?: boolean; dm?: boolean }) {
+  const Icon = dm ? MessageCircle : MessageSquare;
   return <span className={`collaboration-avatar group${large ? ' large' : ''}`}>
-    <MessageSquare size={large ? 24 : 16} />
+    <Icon size={large ? 24 : 16} />
     {group.avatarDataUrl && <img key={group.avatarDataUrl} alt="" aria-hidden="true"
       className="collaboration-avatar-image" data-loaded="false" src={group.avatarDataUrl}
       onLoad={event => { event.currentTarget.dataset.loaded = 'true'; }}

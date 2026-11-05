@@ -4,11 +4,13 @@ import {
   type MemoryScopeRef, type Request, type ScheduleReply, type Scope, type SettingsReply, type SettingsScope,
 } from '@vonvon/protocol';
 import { notDmMessage, SESSION_TURN_ENDED } from '../agent/entry/registry';
+import type { FeishuReach } from '../admin/feishu-route';
 import { sessionTurnEnded, type SessionAction, type SessionAuthz } from '../admin/ipc';
 import { scheduleRefusalMessages } from '../admin/schedule-commands';
 import { bridgeVersion } from '../core/version';
 import { SESSION_TOKEN_INVALID } from '../host/session-tokens';
 import { cannotInvite, type GroupInvitee } from '../project/lifecycle';
+import { dmChatId } from '../project/registry';
 import { RpcError } from './errors';
 import { filterSnapshot, scopedOwner, sessionGroups, sessionSnapshot, type BotSessionPrincipal } from './snapshot-filter';
 import type { Peer } from './ws';
@@ -25,11 +27,12 @@ export type SessionGrant = Omit<Extract<SessionAuthz, { ok: true }>, 'ok'>;
 export type DenialCode = 'permission_denied' | 'protocol_mismatch' | 'scope_required' | 'not-dm' | 'not-group' | 'not_in_session' | 'session_token_invalid';
 /**
  * `narrow`: what of the reply a Bot session gets (a group's its bot and group); `grant`: a ★ request's turn; `invitee`:
- * whom a group made from a private chat pulls in (dm-agent 6.4). `details` goes into the error envelope (a
- * `protocol_mismatch` names both versions).
+ * whom a group made from a private chat pulls in (dm-agent 6.4); `feishu`: which Bot a Feishu read runs on and the chat it
+ * is kept to (7.2, 7.3), for a caller with a place. `details` goes into the error envelope (a `protocol_mismatch` names
+ * both versions).
  */
 export type Decision =
-  | { ok: true; grant?: SessionGrant; narrow?: <T>(payload: T) => T; invitee?: GroupInvitee }
+  | { ok: true; grant?: SessionGrant; narrow?: <T>(payload: T) => T; invitee?: GroupInvitee; feishu?: FeishuReach }
   | { ok: false; code: DenialCode; message: string; details?: Record<string, unknown> };
 /** A settings view as a reply carries it (read's; an act's is a bot's or a group's). */
 type SettingsView = Extract<SettingsReply, { kind: 'view' }>['view'];
@@ -112,6 +115,8 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
   // A private chat may disable another Bot, not its own: authorizeSession refuses that (dm-agent 6.2).
   ...rows('command', 'setAgentEnabled', DM_ONLY),
   ...rows('command', 'listGroupMembers', { dm: 'bot', group: 'host', comment: 'deny' }),
+  // dm-agent 7.3: a group within its own chat and its turn, a private chat on any Bot here. A comment's tools are its own.
+  ...rows('command', 'feishuRead', { dm: 'bot', group: 'bot', comment: 'deny' }),
   ...rows('command', 'registerAgent refreshAgentCredentials restartHost deleteAgent'),
   // The desktop's older permission and reply switches: settings writes, which the command line makes as settings set.
   ...rows('command', 'setResponse setPermission', WRITE),
@@ -281,12 +286,14 @@ async function sessionActionOf(request: Request, principal: BotSessionPrincipal,
       return payload.type === 'save' || payload.type === 'act' ? { kind: 'settingsWrite' } : { kind: 'adminRead' };
     }
     case 'collaboration': return { kind: 'settingsWrite' };
+    case 'command': return request.payload.type === 'feishuRead' ? { kind: 'feishuRead' } : { kind: 'adminRead' };
     case 'schedule': {
       const task = request.payload.request;
       return { kind: 'schedule', action: task.action, ...('taskId' in task ? { taskId: task.taskId } : {}) };
     }
     case 'memory': {
       const memory = request.payload;
+      if (memory.type === 'seen' && memory.page.kind === 'dm') return dmPersonRead(memory.page.botId, memory.page.openId, principal);
       if (memory.type === 'seen' || memory.type === 'newCounts') return { kind: 'adminRead' };
       if (memory.type === 'dmPeople') return denied(OTHER_DM);
       // A transfer lands elsewhere than it starts: either end may be another Bot's.
@@ -305,8 +312,17 @@ async function sessionActionOf(request: Request, principal: BotSessionPrincipal,
         default: return { kind: 'memory', op: 'manage', target: memoryTarget(memory.scope), ...across };
       }
     }
+    case 'contextPreview': {
+      const { agentId, place } = request.payload;
+      return place.kind === 'dm' ? dmPersonRead(agentId, place.openId, principal) : { kind: 'adminRead' };
+    }
     default: return { kind: 'adminRead' };
   }
+}
+
+/** One person's private chat, as a read of their memory: each person's is their own (4.5a), whatever else names it. */
+function dmPersonRead(botId: string, openId: string, principal: BotSessionPrincipal): SessionAction | Decision {
+  return botId === principal.appId ? { kind: 'memory', op: 'read', target: { kind: 'dm', openId } } : denied(OTHER_DM);
 }
 
 /** Whether a memory is the session's own Bot's: its own, or a project one of its groups is bound to. */
@@ -332,6 +348,7 @@ function threadNamed(request: Request): string | undefined {
  */
 async function withinReach(principal: BotSessionPrincipal, scope: Scope | null, who: Who, request: Request, deps: AuthzDeps): Promise<Decision> {
   if (who === 'session' && principal.place === 'dm') {
+    if (request.method === 'command' && request.payload.type === 'feishuRead') return { ok: true, feishu: { prefer: principal.appId } };
     return request.method === 'snapshot' ? { ok: true, narrow: <T>(payload: T): T => sessionSnapshot(payload as DesktopSnapshot, principal) as T } : { ok: true };
   }
   const reaches = sessionGroups(principal, scope);
@@ -361,6 +378,8 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
   // whole bot, and no new group.
   const wholeBot = principal.place === 'dm' && scope?.group === undefined;
   const botWide = (): Decision => wholeBot ? ok : denied(ONE_GROUP_ONLY);
+  // The private chat's settings go by `oc_dm_<appId>`, no group's name (dm-agent 4.2), and only with the whole bot reached.
+  const dmRow = (projectName: string): boolean => wholeBot && projectName === dmChatId(principal.appId);
   const named = (projectName: string, groupId?: string): boolean => groups.some(group => group.name === projectName && (groupId === undefined || group.chatId === groupId));
   const narrow = (cut: (payload: never) => unknown): Decision => ({ ok: true, narrow: <T>(payload: T): T => cut(payload as never) as T });
   switch (request.method) {
@@ -373,10 +392,10 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
       if (admin.type === 'switchBackend') return named(admin.projectName) ? ok : outOfReach();
       return admin.type === 'confirmCardCallback' ? botWide() : ok;
     }
-    case 'command': return commandInReach(request.payload, session, own, reaches, botWide, narrow);
+    case 'command': return commandInReach(request.payload, session, own, reaches, botWide, narrow, feishuReach(principal));
     case 'settings': {
       const payload = request.payload;
-      const scoped = (target: SettingsScope): boolean => target.kind === 'host' ? !session : own(target.botId) && (target.kind !== 'project' || named(target.projectName));
+      const scoped = (target: SettingsScope): boolean => target.kind === 'host' ? !session : own(target.botId) && (target.kind !== 'project' || named(target.projectName) || dmRow(target.projectName));
       switch (payload.type) {
         case 'read': return scoped(payload.scope) ? ok : outOfReach();
         case 'save': {
@@ -427,7 +446,8 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
     case 'schedule': {
       const { botId, request: task } = request.payload;
       if (!own(botId)) return outOfReach();
-      if ('chatId' in task) return chats.has(task.chatId) ? ok : outOfReach();
+      // Its private chats are no group of `chats`: the whole bot reaches them, the Bot's commands check the chat is one.
+      if ('chatId' in task) return chats.has(task.chatId) || wholeBot ? ok : outOfReach();
       // listBot, which a session's row denies: the owner's, cut to the one group its --scope names.
       return scope?.group === undefined ? ok : narrow((reply: ScheduleReply) => reply.kind === 'tasks' ? { ...reply, tasks: reply.tasks.filter(item => chats.has(item.chatId)) } : reply);
     }
@@ -440,7 +460,7 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
  * is; a bot, its own and only with the whole bot reached; a group, one reached. A new bot is outside any reach.
  */
 function commandInReach(command: Command, session: boolean, own: (botId: string) => boolean, reaches: (groupId: string) => boolean,
-  botWide: () => Decision, narrow: (cut: (payload: never) => unknown) => Decision): Decision {
+  botWide: () => Decision, narrow: (cut: (payload: never) => unknown) => Decision, feishu: Decision): Decision {
   const ok: Decision = { ok: true };
   switch (command.type) {
     case 'refresh': return ok;
@@ -448,6 +468,7 @@ function commandInReach(command: Command, session: boolean, own: (botId: string)
     case 'registerAgent': return outOfReach();
     case 'refreshAgentCredentials': case 'setAgentEnabled': case 'deleteAgent': return own(command.agentId) ? botWide() : outOfReach();
     case 'bindGroup': case 'listGroupMembers': return own(command.agentId) && reaches(command.groupId) ? ok : outOfReach();
+    case 'feishuRead': return command.agentId === undefined || own(command.agentId) ? feishu : outOfReach();
     case 'setResponse': case 'setPermission': {
       const target = membershipOf(command.membershipId);
       return target && own(target.agentId) && reaches(target.groupId) ? ok : outOfReach();
@@ -458,6 +479,15 @@ function commandInReach(command: Command, session: boolean, own: (botId: string)
       return narrow((result: CommandResult) => result.kind === 'groups' ? { ...result, groups: result.groups.filter(group => reaches(group.id)) }
         : result.kind === 'pendingGroups' ? { ...result, groups: result.groups.filter(group => reaches(group.chatId)) } : result);
   }
+}
+
+/**
+ * dm-agent 7.2: a group's session, or an owner's `--scope`, reads as its own Bot and within its chat, whatever the request
+ * names: the Bot process checks the chat against `only`, also for a message known by id. A group without a chat reaches none.
+ */
+function feishuReach(principal: BotSessionPrincipal): Decision {
+  if (principal.place !== 'group') return { ok: true, feishu: { bot: principal.appId } };
+  return principal.chatId ? { ok: true, feishu: { bot: principal.appId, only: principal.chatId } } : outOfReach();
 }
 
 /** A membership's id is its bot and group (`server/projection.ts`); the command finds it by exactly that id. */

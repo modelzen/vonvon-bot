@@ -44,13 +44,26 @@ it('hands a row\'s group membership to onOpen; the route helpers keep the Bot\'s
 });
 
 // dm-agent 8. main 必败: a private chat read as 已解绑的群
-it('lists a private chat under its person; it has no page to open yet, and says why a task paused', () => {
+it('lists a private chat under its person, and says why a task paused', () => {
   const task = scheduleTask({id: 'st_dm', chatId: 'oc_p2p', dm: {name: '张三'}, name: '私聊日报', state: 'paused', pausedReason: 'admin-removed', nextRunAt: undefined});
   const nobody = scheduleTask({id: 'st_nobody', chatId: 'oc_p2p_b', dm: {}, name: '没名字的'});
   expect(scheduleGroups([task, nobody], agentId, snapshot).map(group => [group.name, group.memberId])).toEqual([['私聊 · 张三', undefined], ['私聊', undefined]]);
   const html = renderToStaticMarkup(<BotScheduleGroups list={listOf(tasksReply([task]))} agentId={agentId} snapshot={snapshot} onOpen={() => {}} onDelete={() => {}}/>);
   expect(html).toContain('私聊 · 张三');
   expect(html).toContain('已暂停：创建人已不是管理员');
+});
+
+// dm-agent 10 (D4). main 必败: a private chat's row only deleted
+it('opens a private chat\'s row on the private chat\'s page, or leaves it to delete while the Bot has no page for it', () => {
+  const task = scheduleTask({id: 'st_dm', chatId: 'oc_p2p', dm: {name: '张三'}, name: '私聊日报'});
+  const withDm = {...snapshot, agents: snapshot.agents.map(agent => ({...agent, dm: {id: 'dm'}}))} as unknown as DesktopSnapshot;
+  const onOpenDm = vi.fn(), onDelete = vi.fn();
+  const row = (from: DesktopSnapshot) => nodes(BotScheduleGroups({list: listOf(tasksReply([task])), agentId, snapshot: from, onOpen: () => {}, onOpenDm, onDelete})).find(node => node.props.title === '私聊日报')!;
+  row(withDm).props.onClick();
+  expect(onOpenDm).toHaveBeenCalledOnce();
+  expect(row(snapshot).props.onClick).toBeUndefined();
+  nodes(row(snapshot).props.trailing).find(node => node.props.children === '删除')!.props.onClick();
+  expect(onDelete).toHaveBeenCalledExactlyOnceWith(task);
 });
 
 it('lists an unbound group as 已解绑的群, whose rows delete instead of opening', () => {

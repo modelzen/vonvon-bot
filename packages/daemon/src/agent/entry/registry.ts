@@ -158,6 +158,8 @@ interface Grant {
 const PRUNED_IDS = 1024;
 /** A tool kept to some places (the settings reads, a private chat's) is neither listed nor called elsewhere. */
 const placed = (tool: AgentTool, place: AgentPlace): boolean => !tool.places || tool.places.includes(place.kind);
+/** What a tool takes in this place: a private chat's may be wider (dm-agent 7.3). */
+const inputAt = (tool: AgentTool, place: AgentPlace): AgentTool['input'] => place.kind === 'p2p' ? tool.dmInput ?? tool.input : tool.input;
 export function createAgentEntries(opts: {
   appId: string;
   isAdmin(openId: string): boolean;
@@ -366,7 +368,7 @@ export function createAgentEntries(opts: {
         if (refusal) return finishLog(refusal);
         if (settings && grant.settingRunning && grant.queue.length >= 8) return finishLog(failure('busy'));
       }
-      const parsed = tool.input.safeParse(args);
+      const parsed = inputAt(tool, grant.place).safeParse(args);
       if (!parsed.success) return finishLog({ ok: false, code: 'bad-args', message: `参数不对：${parsed.error.issues.map(i => `${i.path.join('.') || '<root>'}：${i.code}`).join('；')}。` });
       if ((!settings || !grant.settingRunning) && grant.active >= 4) return finishLog(failure('busy'));
       return new Promise<AgentToolReply>(resolve => {
@@ -414,7 +416,7 @@ export function createAgentEntries(opts: {
           if (Date.now() > deadline - reserveMs) throw new ToolRefusal(failure('timeout'));
         };
         async function execute() {
-          const ctx: ToolContext = { signal: controller.signal, place: grant.place, notAfter: deadline, get admin() { return !adminTurn(grant); }, get writeRefusal() { return authorizeNow(grant, auth); } };
+          const ctx: ToolContext = { signal: controller.signal, place: grant.place, sessionId: grant.sessionId, notAfter: deadline, get admin() { return !adminTurn(grant); }, get writeRefusal() { return authorizeNow(grant, auth); } };
           if (memory && auth) {
             ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: roleOf(auth) };
             ctx.memoryTurn = () => memoryTurnOf(grant, auth);
@@ -492,7 +494,7 @@ export function createAgentEntries(opts: {
         // 评论会话（doc）只给读类和文档这一列的工具；写记忆的和任务的在群和私聊里给；只为设置服务的读工具只在私聊里给
         return tools.filter(tool => placed(tool, grant.place) && (tool.class === 'read' || tool.class === 'document'
           || (tool.class === 'memory' || tool.class === 'schedule' ? grant.place.kind !== 'doc' : grant.place.kind === 'p2p')))
-          .map(({ name, description, input }) => ({ name, description, input }));
+          .map(tool => ({ name: tool.name, description: tool.description, input: inputAt(tool, grant.place) }));
       },
       call,
       noteToolUse(id) {
@@ -543,6 +545,11 @@ export function createAgentEntries(opts: {
       }
       case 'adminRead': {
         const failure = grant.place.kind !== 'p2p' ? notDm(grant.place) : adminTurn(grant);
+        return failure || !grant.turn ? denial(failure ?? refused('turn-ended')) : { ok: true, ...who(grant.turn) };
+      }
+      // dm-agent 7.3: a private chat's as anything else of it; a group's on a turn of its own, whoever's, as its tools are (7.2).
+      case 'feishuRead': {
+        const failure = grant.place.kind === 'p2p' ? adminTurn(grant) : grant.place.kind === 'doc' ? notDm(grant.place) : grant.turn?.active ? undefined : refused('turn-ended');
         return failure || !grant.turn ? denial(failure ?? refused('turn-ended')) : { ok: true, ...who(grant.turn) };
       }
       case 'schedule': {

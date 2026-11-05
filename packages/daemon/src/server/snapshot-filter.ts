@@ -36,7 +36,8 @@ export function filterSnapshot(snapshot: DesktopSnapshot, principal: BotSessionP
   const { projects, recentConversations, ...rest } = snapshot;
   return {
     ...rest,
-    agents: snapshot.agents.filter(agent => agent.id === appId).map(({ diagnostics: _diagnostics, ...agent }) => agent),
+    // A scope narrowed to one group does not reach the Bot's private chat.
+    agents: snapshot.agents.filter(agent => agent.id === appId).map(({ diagnostics: _diagnostics, dm, ...agent }) => ({ ...agent, ...(dm && scope?.group === undefined ? { dm } : {}) })),
     groups: snapshot.groups.filter(group => groupIds.has(group.id)),
     memberships,
     ...(projects ? { projects: projects

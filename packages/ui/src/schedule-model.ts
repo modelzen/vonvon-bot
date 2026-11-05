@@ -20,6 +20,9 @@ export function listOf(reply: ScheduleReply): ScheduleList {
   throw new Error('任务读取失败。');
 }
 
+/** The private chat's 任务 tab: the Bot's whole list, its private chats only. */
+export const dmTasksOf = (list: ScheduleList): ScheduleList => list.kind === 'tasks' ? {kind: 'tasks', reply: {...list.reply, tasks: list.reply.tasks.filter(task => task.dm)}} : list;
+
 /** 已启用, not 运行中: a run in flight is a 运行中任务 (product.md section 2). */
 export function scheduleState(task: ScheduledTaskView): string {
   return task.state === 'active' ? '已启用' : task.state === 'finished' ? '已结束' : pausedText[task.pausedReason ?? 'manual'];
@@ -53,6 +56,9 @@ export function scheduleSummary(task: ScheduledTaskView, hostZone: string, now?:
     task.lastResult && `上次 ${runStatusText[task.lastResult.status]} ${at(task.lastResult.at)}${!next && shown !== task.timeZone ? zone : ''}`,
   ].filter(Boolean).join(' · ');
 }
+
+/** One row of the private chat's list: whose chat it posts to comes first. */
+export const dmScheduleSummary = (task: ScheduledTaskView, hostZone: string, now?: number): string => `${task.dm?.name ?? '私聊'} · ${scheduleSummary(task, hostZone, now)}`;
 
 /** 在飞书打开: the link the daemon resolved for the run, else its topic; the page never builds a message link itself. */
 export function scheduleRunLink(record: ScheduleRunRecord, chatId: string): string | null {

@@ -20,6 +20,16 @@ describe('session tokens', () => {
     expect(tokens.size()).toBe(0);
   });
 
+  // dm-agent 7.3: the host looks a session up by the id a Bot process names it by, and a revoked one is gone
+  it('finds a standing session by its id, never by another\'s', () => {
+    const tokens = createSessionTokens();
+    tokens.issue(group);
+    expect(tokens.session(group.sessionId)).toMatchObject(group);
+    expect(tokens.session('ses_1111111111111111')).toBeUndefined();
+    tokens.revoke(group.sessionId);
+    expect(tokens.session(group.sessionId)).toBeUndefined();
+  });
+
   it('ends a bot\'s sessions together, and only that bot\'s', () => {
     const tokens = createSessionTokens();
     const a = tokens.issue(group);
