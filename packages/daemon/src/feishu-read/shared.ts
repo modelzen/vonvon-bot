@@ -28,7 +28,7 @@ export async function ask<T extends object>(deps: ReadDeps, area: ReadArea, call
   } catch (failure) {
     throw refusalOf(denialContext(deps), area, await readableFailure(failure));
   }
-  if (!answer) throw new FeishuReadRefused('飞书这一步超时了，稍后再试。');
+  if (!answer) throw new FeishuReadRefused('飞书这一步超时了，稍后再试。', 'no-answer');
   const { code } = answer as { code?: unknown };
   if (typeof code === 'number' && code !== 0) throw refusalOf(denialContext(deps), area, answer);
   return answer;

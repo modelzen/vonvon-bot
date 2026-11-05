@@ -98,7 +98,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   const sessions = host ? { revoke: (sessionId: string) => { void host.revokeSessionToken(sessionId).catch(() => undefined); } } : undefined;
   const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), ...(sessions ? { sessions } : {}),
     memoryPlace: turn => memory.placeOf(turn), tools: createCommandTools({
-    appId: app.id, memory, feishu: createFeishuReader({ channel, app }),
+    appId: app.id, memory, feishu: createFeishuReader({ channel, app }), groupTier: chatId => orchestrator.permissionOf(chatId),
     schedule: { execute: (actor, request) => orchestrator.scheduleAs(actor, request) },
     settings: { read: scope => orchestrator.settings.read(scope), save: (edit, options) => orchestrator.settings.save(edit, options), models: query => orchestrator.settings.models(query), act: action => orchestrator.settings.act(action) },
     projects: listProjects,

@@ -1171,9 +1171,6 @@ export function buildSessionTitleSettingsCard(
   return card(elements, { header: { title: '🏷️ 会话标题', template: 'blue' } });
 }
 
-/** 飞书 CLI（lark-cli）使用文档——评论里读/改文档依赖它。 */
-const LARK_CLI_DOC_URL = 'https://bytedance.larkoffice.com/wiki/ILuTww7Xcimb6GkhH0mcK2f4nS7';
-
 export type CommentModelFormResolution =
   | { ok: false; message: string }
   | { ok: true; model: ModelInfo; effort?: ReasoningEffort; adjusted: boolean };
@@ -1320,10 +1317,7 @@ export function buildCommentSettingsCard(
     actions([button('编辑回复规则', { a: DM.commentEditPrompt }, 'primary')]),
     hr(),
     md('📎 **文档读写能力**'),
-    note(
-      '如需读取或直接修改文档，本机还要安装并登录飞书 CLI（lark-cli）；访问权限以当前登录身份为准。' +
-        ` [查看安装与用法](${LARK_CLI_DOC_URL})`,
-    ),
+    note('Bot 用自己的身份读和改文档：在文档右上角的分享里搜 Bot 名，要读给阅读权限，要改给编辑权限。表格和多维表格现在不能改。'),
     hr(),
     actions([button('⬅️ 返回设置', { a: DM.settings })]),
   );

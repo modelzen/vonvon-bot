@@ -7,6 +7,7 @@ import type { Project } from '../../project/registry';
 import type { MemoryWriter } from '../../bot/memory-writer';
 import type { ScheduleCommands } from '../../admin/schedule-commands';
 import type { FeishuReader } from '../../feishu-read/reader';
+import type { PermissionMode } from '../types';
 import { createFeishuTools } from './feishu-tools';
 import { createMemoryTools } from './memory-tools';
 import { createScheduleTools } from './schedule-tools';
@@ -22,6 +23,8 @@ export function createCommandTools(deps: {
   members(chatId: string, cursor?: string): Promise<FeishuMembers>;
   /** 给了就多注册飞书读取工具（dm-agent 第 7 节）；feishu_members 不用它，一直有 */
   feishu?: FeishuReader;
+  /** A group's permission tier now: feishu_doc_edit goes round the sandbox, so it checks itself (dm-agent 7.2). */
+  groupTier?(chatId: string): Promise<PermissionMode | undefined>;
   /** 给了就多注册 memory_add / memory_update / memory_forget / memory_list（§3.3） */
   memory?: MemoryWriter;
   /** 给了就多注册 schedule_* 七个工具（定时任务总设计第 10 节） */

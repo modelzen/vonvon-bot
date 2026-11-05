@@ -357,6 +357,7 @@ import {
   removeCommentReaction,
   renderCommentInstructions,
   resolveComment,
+  type ResolvedTarget,
   stripMarkdown,
   SUPPORTED_FILE_TYPES,
   syncCommentInstructions,
@@ -949,6 +950,8 @@ export interface Orchestrator {
    * grant (agent/entry/schedule-tools.ts), the wire's is the local owner's or a Bot session's turn.
    */
   scheduleAs: (actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
+  /** A bound group's permission tier now; undefined for a chat not bound. */
+  permissionOf: (chatId: string) => Promise<PermissionMode | undefined>;
   /** The scheduled-task tick (bot/schedule/scheduler.ts), outside admit; bridge.ts starts it once Feishu is connected. */
   scheduler: { start(): Promise<void>; stop(): void; drain(ms: number): Promise<void> };
   /** Interrupts every turn, gives the agents a moment to end them, then closes every live session so a graceful exit
@@ -1179,21 +1182,24 @@ export function createOrchestrator(
     const context = contextDelivered.get(thread);
     return context ? { context } : {};
   };
-  async function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode, place?: 'comment') {
+  async function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode, place?: 'comment', commentedFile?: string) {
     const execution = execOf(project);
     const sources = project || place === 'comment' ? await contextSourcesFor(project) : undefined;
     const assembled = sources ? assemble(sources, project ? 'work' : 'comment') : undefined;
     const nonce = newNonce();
     const skills = project ? await groupSkillProfile({ backend, cwd, directories: execution.workspaces.additional, disabledPaths: project.skills?.disabledPaths }) : undefined;
-    // A bound group's sessions get the schedule tools (3.13) and the Feishu read tools (dm-agent 7.2), read-only tier too; a comment's never do.
+    // A bound group's sessions get the schedule tools (3.13) and the Feishu read tools (dm-agent 7.2), read-only tier too; a comment's never do schedule.
     const schedule = Boolean(project) && place !== 'comment';
+    // A comment's session has the document column, and the edit tool when it is on a docx (7.4); a group's edits in any tier but read-only (7.2).
+    const comment = place === 'comment';
+    const feishuEdit = comment ? commentedFile === 'docx' : schedule && (permission ?? execution.permission) !== 'qa';
     // The task skill goes with the tools (T4b); a package that cannot be written leaves the last whole one, or none.
     const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId) : [];
     // What the Feishu tools download must be readable outside full access too.
     const downloads = schedule && project ? inboundChatDir(project.chatId) : undefined;
     if (downloads) await prepareInboundDir(downloads);
     const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: downloads ? [{ path: downloads, access: 'read' as const }] : [], capabilityPackages, mcpServers: [],
-      tools: { schedule, feishu: schedule }, ...(skills ? { skills } : {}) } : undefined;
+      tools: { schedule, feishu: schedule || comment, ...(feishuEdit ? { feishuEdit } : {}), ...(comment ? { documentsOnly: true } : {}) }, ...(skills ? { skills } : {}) } : undefined;
     const built = await executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
     if (assembled && built) openings.set(built, contextOf(assembled, nonce));
     return built;
@@ -9013,11 +9019,14 @@ export function createOrchestrator(
         // global cap is still `sema`, acquired inside the lock.
         await withDocLock(sessionKey, async () => {
           const release = await sema.acquire();
+          let turn: TurnScope | undefined;
           try {
             if (shuttingDown) return;
-            const thread = await resolveDocThread(sessionKey, cwd, instructions, ctx.question, target.fileToken);
+            const thread = await resolveDocThread(sessionKey, cwd, instructions, ctx.question, target);
             if (shuttingDown) { await thread.close(); return; }
             const rec = await getSession(sessionKey);
+            // The document tools answer only while a turn is going (dm-agent 7.4). The person was checked above.
+            turn = entries?.openTurn(thread, { requesterOpenId: operatorId, requesterKind: 'user', triggerMessageId: evt.replyId ?? evt.commentId, retry: false, initiative: false, wake: false });
             const run = thread.runStreamed({ text: prompt }, { model: rec?.model, effort: rec?.effort });
 
             let state: RunState = initialState;
@@ -9083,6 +9092,7 @@ export function createOrchestrator(
             );
             log.info('comment', 'done', { terminal: state.terminal, timedOut, len: reply.length });
           } finally {
+            turn?.close();
             release();
           }
         });
@@ -9119,8 +9129,9 @@ export function createOrchestrator(
     cwd: string,
     instructions: string,
     question: string,
-    docId: string,
+    target: ResolvedTarget,
   ): Promise<AgentThread> {
+    const docId = target.fileToken;
     // The comment settings, else the bot default, else built in (s36d2); no tier, as before.
     const comments = resolveCommentsExecution(cfg.preferences);
     const be = backendFor(comments.backend);
@@ -9137,7 +9148,7 @@ export function createOrchestrator(
     }
     if (rec && rec.backend === be.id) {
       try {
-        const resumed = await resumeWith(be, { cwd: rec.cwd, sessionId: rec.sessionId, model, effort, profile: await profileOf(undefined, rec.cwd, be, 'full', 'comment') }, { kind: 'doc', docId });
+        const resumed = await resumeWith(be, { cwd: rec.cwd, sessionId: rec.sessionId, model, effort, profile: await profileOf(undefined, rec.cwd, be, 'full', 'comment', target.fileType) }, { kind: 'doc', docId });
         // 评论的模型来自评论设置（不是手填的）或 bot 默认
         await patchSession(sessionKey, { model, effort, modelCustom });
         trackSession(sessionKey, resumed);
@@ -9147,7 +9158,7 @@ export function createOrchestrator(
         log.fail('agent', err, { phase: 'comment-resume', sessionKey });
       }
     }
-    const fresh = await startWith(be, { cwd, model, effort, profile: await profileOf(undefined, cwd, be, 'full', 'comment') }, { kind: 'doc', docId });
+    const fresh = await startWith(be, { cwd, model, effort, profile: await profileOf(undefined, cwd, be, 'full', 'comment', target.fileType) }, { kind: 'doc', docId });
     trackSession(sessionKey, fresh);
     commentInstrUsed.set(sessionKey, instructions);
     await upsertSession({
@@ -9957,6 +9968,10 @@ export function createOrchestrator(
     libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
     scheduleAs: admittedScheduleAs,
+    permissionOf: async chatId => {
+      const project = await getProjectByChatId(chatId);
+      return project ? execOf(project).permission : undefined;
+    },
     scheduler: { start: async () => scheduler.start(await loadStore()), stop: () => scheduler.stop(), drain: ms => scheduler.drain(ms) },
     shutdown,
     // A crash before the shutdown also keeps the people's turns in flight: no card of theirs will say anything. One during
