@@ -12,6 +12,9 @@ const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
 if (manifest.scripts.test !== 'npm run test --workspaces --if-present && node --test scripts/*.test.mjs') {
   throw new Error('Root test contract changed');
 }
+if (manifest.scripts.pretest !== undefined || manifest.scripts.posttest !== undefined) {
+  throw new Error('Root test lifecycle hooks need explicit preservation before splitting');
+}
 const scriptTests = readdirSync('scripts').filter(n => n.endsWith('.test.mjs')).sort().map(n => `scripts/${n}`);
 const normal = createPlan('full', packages).flatMap(command => {
   if (command.executable !== 'npm' || JSON.stringify(command.args) !== JSON.stringify(['run', 'test'])) return [command];
