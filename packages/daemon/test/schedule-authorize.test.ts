@@ -92,12 +92,6 @@ describe('who may do what', () => {
     expect(f.execute).not.toHaveBeenCalled();
     expect(await reply(f, 'schedule_list')).toMatchObject({ kind: 'tasks' });
   });
-  // C2 lists them in a private chat, where its turn now passes (dm-agent 6.3)
-  it('lists no task tools in a private chat yet', async () => {
-    const f = await scheduleFixture({ place: { kind: 'p2p', chatId: 'oc_dm' } });
-    f.open(human());
-    expect(f.entry.tools().filter(spec => spec.name.startsWith('schedule_'))).toEqual([]);
-  });
   it('has no task tools in a comment', async () => {
     const f = await scheduleFixture({ place: { kind: 'doc', docId: 'doc' } });
     f.open(human());
@@ -108,6 +102,44 @@ describe('who may do what', () => {
     expect(f.execute).not.toHaveBeenCalled();
     const group = await scheduleFixture();
     expect(group.entry.tools().filter(spec => spec.name.startsWith('schedule_'))).toHaveLength(7);
+  });
+});
+
+// dm-agent 8. main 必败: a private chat's session listed no task tools, and a task's run came as `scheduled`
+describe('in a private chat', () => {
+  const DM = 'oc_dm', place = { kind: 'p2p', chatId: DM } as const;
+  const mine = () => [stored('st_a', { chatId: DM, createdBy: { via: 'chat', openId: ADMIN, role: 'admin' } }), stored('st_b', { chatId: DM, createdBy: { via: 'chat', openId: ADMIN, role: 'admin' } })];
+  const run = (openId: string) => ({ requesterOpenId: openId, requesterName: '张三', triggerMessageId: 'vsched_st_a_1', retry: false, initiative: false, wake: false, scheduled: { taskId: 'st_a', runId: 'run-self' } });
+
+  it('lists the task tools, and a task made there is that chat\'s and its person\'s', async () => {
+    const f = await scheduleFixture({ place });
+    f.open(human(ADMIN));
+    expect(f.entry.tools().filter(spec => spec.name.startsWith('schedule_'))).toHaveLength(7);
+    const made = await reply(f, 'schedule_create', create);
+    expect(made).toMatchObject({ kind: 'task', task: { placement: { kind: 'follow' } } });
+    expect(made.kind === 'task' && f.store.get(made.task.id)?.chatId).toBe(DM);
+    expect(creatorOf(f, made)).toEqual({ via: 'chat', openId: ADMIN, role: 'admin', name: '主人', messageId: 'om_trigger', text: '每天 9 点发日报' });
+    expect(await f.text('schedule_list')).toContain('这个私聊 1 个任务');
+  });
+
+  it('lets a task\'s own run do what its creator may: make a task, touch another (6.3)', async () => {
+    const f = await scheduleFixture({ place, tasks: mine() });
+    f.open(run(ADMIN));
+    const made = await reply(f, 'schedule_create', create);
+    expect(creatorOf(f, made)).toEqual({ via: 'chat', openId: ADMIN, role: 'admin', name: '张三' });
+    expect(await reply(f, 'schedule_list')).toMatchObject({ kind: 'tasks', tasks: [{ id: 'st_a' }, { id: 'st_b' }, {}] });
+    for (const [name, args, kind] of writes(f, 'st_b')) expect((await reply(f, name, args())).kind).toBe(kind);
+  });
+
+  it('stops a run whose creator is no admin, and a turn nobody asked for, at the registry', async () => {
+    const f = await scheduleFixture({ place, tasks: mine() });
+    f.open(run('ou_removed'));
+    f.execute.mockClear();
+    expect(await f.call('schedule_list')).toMatchObject({ ok: false, reason: 'not-admin' });
+    expect(await f.call('schedule_create', create)).toMatchObject({ ok: false, reason: 'not-admin' });
+    f.open({ ...human(ADMIN), requesterKind: 'bot', wake: true });
+    expect(await f.call('schedule_list')).toMatchObject({ ok: false, reason: 'not-human-turn' });
+    expect(f.execute).not.toHaveBeenCalled();
   });
 });
 

@@ -285,9 +285,19 @@ export function createAgentEntries(opts: {
     if (auth.facts.requesterKind !== 'user' || !openId) return 'bot';
     return opts.isAdmin(openId) ? 'admin' : 'member';
   };
-  /** Who the command core sees: the task's own run, or the person of this turn with where they are now. */
+  /**
+   * Who the command core sees: the task's own run, or the person of this turn with where they are now. A private chat's
+   * turn is its person's or their task's, the same rights (dm-agent 6.3); only a person's message is a task's origin.
+   */
   function scheduleActor(grant: Grant, auth: TurnAuth): Exclude<ScheduleActor, { kind: 'local' }> {
     const chatId = grant.place.chatId ?? '';
+    if (grant.place.kind === 'p2p') {
+      const { requesterOpenId: openId, requesterName: name, triggerMessageId: messageId, typed, triggerText, scheduled } = auth.facts;
+      return {
+        kind: 'dm', via: 'chat', chatId, ...(openId ? { openId } : {}), ...(name ? { name } : {}),
+        ...(!scheduled && messageId ? { messageId } : {}), ...(!scheduled && typed && triggerText ? { text: triggerText } : {}),
+      };
+    }
     if (auth.facts.scheduled) return { kind: 'scheduled', ...auth.facts.scheduled, chatId };
     const { facts } = auth, role = roleOf(auth), topicId = facts.where?.().topicId;
     return {
@@ -479,9 +489,9 @@ export function createAgentEntries(opts: {
         if (grant.thread && !grant.thread.isAlive()) revoke(grant);
         if (grant.phase === 'revoked') throw new ToolRefusal(failure('revoked'));
         if (grant.phase === 'capacity') return [];
-        // 评论会话（doc）只给读类和文档这一列的工具；写记忆的在群和私聊里给，任务的只在群里给；只为设置服务的读工具只在私聊里给
-        return tools.filter(tool => placed(tool, grant.place) && (tool.class === 'read' || tool.class === 'document' || (tool.class === 'memory' ? grant.place.kind !== 'doc'
-          : grant.place.kind === (tool.class === 'schedule' ? 'group' : 'p2p'))))
+        // 评论会话（doc）只给读类和文档这一列的工具；写记忆的和任务的在群和私聊里给；只为设置服务的读工具只在私聊里给
+        return tools.filter(tool => placed(tool, grant.place) && (tool.class === 'read' || tool.class === 'document'
+          || (tool.class === 'memory' || tool.class === 'schedule' ? grant.place.kind !== 'doc' : grant.place.kind === 'p2p')))
           .map(({ name, description, input }) => ({ name, description, input }));
       },
       call,
@@ -541,6 +551,10 @@ export function createAgentEntries(opts: {
         const actor = scheduleActor(grant, auth);
         // The command core checks a person's turn again by its role; a task's own run as itself (3.13).
         if (actor.kind === 'scheduled') return { ok: true, ...who(auth), actor };
+        if (actor.kind === 'dm') {
+          const { text: _text, ...person } = actor;
+          return { ok: true, ...who(auth), actor: { ...person, via: 'cli' } };
+        }
         const { openId, role, chatId, name, messageId } = actor;
         return { ok: true, ...who(auth), actor: { kind: 'session', openId, role, chatId, ...(name ? { name } : {}), ...(messageId ? { messageId } : {}) } };
       }

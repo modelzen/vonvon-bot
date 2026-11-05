@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { scheduleRunRecordSchema } from '@vonvon/protocol';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createScheduler, type Scheduler } from '../src/bot/schedule/scheduler';
 import { createScheduleStore, type ScheduleStore } from '../src/bot/schedule/store';
 import { nextSlotAfter } from '../src/bot/schedule/time';
@@ -422,6 +422,48 @@ it.each<Gate>(['disabled', 'updating', 'held', 'tier-unavailable', 'unbound'])('
   expect(store.get('st_test')?.counts).toMatchObject({ consecutiveFailures: failed ? 1 : 0, skipped: failed ? 0 : 1 });
   expect(store.get('st_test')?.recent).toContainEqual(expect.objectContaining(failed ? { status: 'failed' } : { status: 'skipped', reason: gate }));
 });
+// dm-agent 3.3 and 6.3. main 必败: no such gate; a removal missed by its Bot (stopped, or the write failed) ran on as the creator
+describe('a private chat\'s creator no longer an admin', () => {
+  it('records one failed run with the reason, pauses the task for good and tells nobody', async () => {
+    const { scheduler, store, run, notifyGateFailure, notifyAutoPause } = setup(undefined, { gate: () => 'admin-removed' });
+    await begin(scheduler); await tick(scheduler, A + MIN);
+    expect(run).not.toHaveBeenCalled();
+    expect(store.get('st_test')).toMatchObject({ state: 'paused', pausedReason: 'admin-removed' });
+    expect(store.get('st_test')?.recent).toEqual([expect.objectContaining({ status: 'failed', error: '创建人已不是管理员' })]);
+    await tick(scheduler, A + 5 * MIN);
+    expect(store.get('st_test')?.recent).toHaveLength(1);
+    expect(notifyGateFailure).not.toHaveBeenCalled();
+    expect(notifyAutoPause).not.toHaveBeenCalled();
+  });
+
+  it('passes the gate the task, whose creator it reads', async () => {
+    const gate = vi.fn((): Gate => 'ok');
+    const { scheduler } = setup(undefined, { gate });
+    await begin(scheduler); await tick(scheduler, A + MIN);
+    expect(gate).toHaveBeenCalledWith('chat-test', expect.objectContaining({ id: 'st_test', createdBy: expect.anything() }));
+  });
+
+  it('pauses a once task too, which would otherwise finish, and at the tenth failure says the same', async () => {
+    const once = setup([task({ spec: { kind: 'once', at: A + MIN } })], { gate: () => 'admin-removed' });
+    await begin(once.scheduler); await tick(once.scheduler, A + MIN);
+    expect(once.store.get('st_test')).toMatchObject({ state: 'paused', pausedReason: 'admin-removed' });
+    const tenth = setup([task({ counts: { runs: 9, missed: 0, skipped: 0, consecutiveFailures: 9 } })], { gate: () => 'admin-removed' });
+    await begin(tenth.scheduler); await tick(tenth.scheduler, A + MIN);
+    expect(tenth.store.get('st_test')).toMatchObject({ state: 'paused', pausedReason: 'admin-removed' });
+    expect(tenth.notifyAutoPause).not.toHaveBeenCalled();
+  });
+
+  it('refuses a manual run the same way and leaves a paused task paused', async () => {
+    const { scheduler, store, run } = setup([task({ state: 'paused', pausedReason: 'admin-removed' })], { gate: () => 'admin-removed' });
+    await begin(scheduler);
+    scheduler.runNow('st_test');
+    await tick(scheduler, A + MIN);
+    expect(run).not.toHaveBeenCalled();
+    expect(store.get('st_test')).toMatchObject({ state: 'paused', pausedReason: 'admin-removed' });
+    expect(store.get('st_test')?.recent).toEqual([expect.objectContaining({ status: 'failed', trigger: 'manual', error: '创建人已不是管理员' })]);
+  });
+});
+
 it('checks the gate before the running rule: tier-unavailable during a run is a counted failure, not a skip', async () => {
   const pending = deferred(); let gate: Gate = 'ok';
   const { scheduler, store, notifyGateFailure } = setup(undefined, { run: () => pending.promise, gate: () => gate });

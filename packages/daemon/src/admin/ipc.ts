@@ -64,7 +64,7 @@ export interface MemoryLanding {
 }
 /** The Bot process's answer: who started the turn (and for a task its actor, for a memory write where it lands), or the refusal with the tools' sentence. */
 export type SessionAuthz =
-  | { ok: true; role: 'owner' | 'admin' | 'member' | 'bot'; openId?: string; /** the person's union_id (dm-agent 6.4): what another Bot of the same developer can use */ unionId?: string; name?: string; actor?: Extract<ScheduleActor, { kind: 'session' | 'scheduled' }>; memory?: MemoryLanding }
+  | { ok: true; role: 'owner' | 'admin' | 'member' | 'bot'; openId?: string; /** the person's union_id (dm-agent 6.4): what another Bot of the same developer can use */ unionId?: string; name?: string; actor?: Extract<ScheduleActor, { kind: 'session' | 'scheduled' | 'dm' }>; memory?: MemoryLanding }
   | { ok: false; reason: string; message: string };
 export type AdminSessionOp = { kind: 'authorizeSessionCall'; sessionId: string; action: SessionAction };
 export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | { kind: 'status' } | { kind: 'firstHello' };
@@ -242,6 +242,7 @@ export const sessionAuthzSchema: z.ZodType<SessionAuthz> = z.discriminatedUnion(
       // A bot's turn may list its group's tasks: no openId then (and as a member it may create none).
       z.object({ kind: z.literal('session'), openId: z.string().max(200), role: z.enum(['owner', 'admin', 'member']), chatId: short, name: z.string().max(200).optional(), messageId: short.optional() }).strict(),
       z.object({ kind: z.literal('scheduled'), taskId: short, runId: short, chatId: short }).strict(),
+      z.object({ kind: z.literal('dm'), via: z.literal('cli'), openId: short.optional(), name: z.string().max(200).optional(), chatId: short, messageId: short.optional() }).strict(),
     ]).optional(),
     memory: z.object({
       scope: z.discriminatedUnion('kind', [
