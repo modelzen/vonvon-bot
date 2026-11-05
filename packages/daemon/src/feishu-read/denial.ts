@@ -121,7 +121,8 @@ export function apiRefusalOf(context: DenialContext, body: unknown, said: string
   if (denial?.accepted.length) return new FeishuReadRefused(missingScopes(context, denial.accepted.slice(0, 1), '这次调用做不了'), 'scope');
   if (denial) return new FeishuReadRefused(`这个 Bot 的飞书应用缺权限，飞书没说缺哪个。飞书的原话：${said}`, 'scope');
   const error = feishuError(body);
-  if (error && NOT_SHARED_CODES.has(error.code)) return new FeishuReadRefused(`${notSharedReply(context.botName(), writes ? '编辑' : '阅读')}飞书的原话：${said}`, 'not-shared');
+  // Any API may answer these, so which resource and what would fix it are not known here.
+  if (error && NOT_SHARED_CODES.has(error.code)) return new FeishuReadRefused(`飞书说 Bot 没有这项内容的权限。是文档、表格这类内容的话，多半是还没分享给 Bot：在右上角的分享里搜「${context.botName()}」，给${writes ? '编辑' : '阅读'}权限。别的情况看飞书的原话：${said}`, 'not-shared');
   return new FeishuReadRefused(`飞书返回了错误：${said}`);
 }
 

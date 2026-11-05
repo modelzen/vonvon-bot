@@ -77,10 +77,19 @@ function failed(deps: ReadDeps, request: ApiRequest, body: Buffer, status?: numb
   return apiRefusalOf(denialContext(deps), body.length <= CODE_BYTES ? parsed(body.toString('utf8')) : undefined, said ? [http, said].filter(Boolean).join(' ') : `${http || '错误'}，没有内容`, request.method !== 'GET');
 }
 
+/** An answer's bytes: what this call asks for, but the SDK's own token request hands back parsed JSON. */
+function bodyOf(data: unknown): Buffer {
+  if (data === undefined || data === null) return Buffer.alloc(0);
+  if (ArrayBuffer.isView(data) || data instanceof ArrayBuffer) return Buffer.from(data as Uint8Array);
+  return Buffer.from(typeof data === 'string' ? data : JSON.stringify(data));
+}
+
 function failureOf(deps: ReadDeps, request: ApiRequest, failure: unknown): FeishuReadRefused {
   const { response, message } = failure as { response?: { data?: unknown; status?: number }; message?: unknown };
   if (typeof message === 'string' && message.includes('maxContentLength')) return refused(`响应超过 ${MAX_FILE_BYTES / 1024 / 1024} MB 上限，存不下。缩小范围再调。`);
-  if (response) return failed(deps, request, Buffer.from((response.data ?? new Uint8Array()) as Uint8Array), response.status);
+  // The SDK gets its token first, and says so when it cannot: the call itself never went out.
+  if (typeof message === 'string' && message.startsWith('failed to get ')) return refused(`没拿到这个 Bot 的飞书令牌，这次调用没有发出去。飞书的原话：${message}`);
+  if (response) return failed(deps, request, bodyOf(response.data), response.status);
   log.warn('feishu-read', 'api-failed', { method: request.method, err: String(failure) });
   return noAnswer(request);
 }
