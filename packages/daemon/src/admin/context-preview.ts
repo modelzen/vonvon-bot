@@ -29,12 +29,14 @@ export interface ContextPreviewDeps {
 /** What vonvon's tools are called to the model (the memory tools of 3.3); the workspace's own skills and MCP are not listed. */
 export const VONVON_TOOL_NAMES = ['memory_add', 'memory_update', 'memory_forget', 'memory_list'] as const;
 
-const SECTIONS: readonly Section[] = ['identity', 'role', 'supplement', 'botMemory', 'projectMemory'];
+/** A preview is of a group or a comment: no private chat's memory. */
+type PreviewSection = Exclude<Section, 'dmMemory'>;
+const SECTIONS: readonly PreviewSection[] = ['identity', 'role', 'supplement', 'botMemory', 'projectMemory'];
 const USED_TEXT_CHARS = 200;
 const chars = (value: string): number => Array.from(value).length;
 
 function nextSections(src: ContextSources, a: Assembled): ContextPreviewReply['next']['sections'] {
-  const size: Record<Section, number> = {
+  const size: Record<PreviewSection, number> = {
     identity: chars(a.identity), role: chars(src.soul.trim()), supplement: chars(src.supplement.trim()),
     botMemory: chars(a.botMemory), projectMemory: chars(a.projectTrusted) + chars(a.projectUntrusted),
   };

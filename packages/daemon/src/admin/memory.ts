@@ -1,8 +1,10 @@
+import { join } from 'node:path';
 import { memoryReplySchema, type MemoryItemScope, type MemoryReply, type MemoryRequest, type MemoryScopeRef } from '@vonvon/protocol';
 import type { MemoryLanding } from './ipc';
 import { loadBots } from '../config/bots';
 import { markSeen, marksFrom, readSeen, seenKey, type SeenPage } from './memory-seen';
 import { botDir } from '../config/paths';
+import { dmPersonList } from '../project/registry';
 import { libraryLocation, readLibrary, type LibraryLocation } from '../project/library';
 import { RpcError } from '../server/errors';
 import {
@@ -87,6 +89,16 @@ async function newCounts(deps: MemoryAdminDeps): Promise<MemoryReply> {
   return { kind: 'newCounts', projects, bots };
 }
 
+/** dm-agent 5: who the private-chat memory page lists, from the bot's `dm.people`, with what each has. Not who is an admin now. */
+async function dmPeople(botId: string, deps: MemoryAdminDeps): Promise<MemoryReply> {
+  const directory = await (deps.botDirectory ?? defaultBotDirectory)(botId);
+  const people = await Promise.all((await dmPersonList(join(directory, 'projects.json'))).map(async person => {
+    const used = await memoryStoreFor({ kind: 'dm', botId, openId: person.openId }, deps).then(store => store.read()).then(view => view.used, () => 0);
+    return { ...person, used };
+  }));
+  return { kind: 'dmPeople', people };
+}
+
 /** The memory a decision names, as a request names it: `botId`'s for its memory and its private chats. */
 const landedRef = (scope: MemoryItemScope, botId: string): MemoryScopeRef =>
   scope.kind === 'project' ? scope : scope.kind === 'bot' ? { kind: 'bot', botId } : { kind: 'dm', botId, openId: scope.openId };
@@ -94,6 +106,7 @@ const landedRef = (scope: MemoryItemScope, botId: string): MemoryScopeRef =>
 export async function memoryAction(request: MemoryRequest, deps: MemoryAdminDeps = {}): Promise<MemoryReply> {
   const origin = deps.origin ?? 'ui';
   if (request.type === 'newCounts') return memoryReplySchema.parse(await newCounts(deps));
+  if (request.type === 'dmPeople') return memoryReplySchema.parse(await dmPeople(request.botId, deps));
   if (request.type === 'seen') {
     const at = (deps.now ?? Date.now)();
     await markSeen(deps.library ?? libraryLocation(), request.page, at);
@@ -108,6 +121,8 @@ export async function memoryAction(request: MemoryRequest, deps: MemoryAdminDeps
   const scope = landing ? landedRef(landing.scope, request.scope.kind === 'project' ? landing.source.botId : request.scope.botId) : request.scope;
   const store = await memoryStoreFor(scope, deps);
   const checked = (reply: MemoryReply): MemoryReply => memoryReplySchema.parse(reply);
+  const name = landing?.source.actorName;
+  const across = landing?.otherBot ? { otherBot: name ? { actorName: name } : {} } : {};
   switch (request.type) {
     case 'list': return checked(await listWithMarks(store, request.scope, deps));
     case 'add': return checked(replyOf(await store.add({
@@ -135,12 +150,12 @@ export async function memoryAction(request: MemoryRequest, deps: MemoryAdminDeps
     case 'promote': {
       if (request.scope.kind !== 'project') throw new RpcError('invalid_request', '只能把项目记忆移到 Bot 记忆');
       const to = await memoryStoreFor({ kind: 'bot', botId: request.botId }, deps);
-      return checked(replyOf(await transferItem({ from: store, to, itemId: request.itemId, revision: request.revision, via: 'promoted', actor, ...(request.branch === undefined ? {} : { branch: request.branch }) })));
+      return checked(replyOf(await transferItem({ from: store, to, itemId: request.itemId, revision: request.revision, via: 'promoted', actor, ...across, ...(request.branch === undefined ? {} : { branch: request.branch }) })));
     }
     case 'move': {
       if (request.scope.kind !== 'bot') throw new RpcError('invalid_request', '只能把 Bot 记忆移回项目');
       const to = await memoryStoreFor({ kind: 'project', projectId: request.to.projectId }, deps);
-      return checked(replyOf(await transferItem({ from: store, to, itemId: request.itemId, revision: request.revision, via: 'moved', actor, ...(request.branch === undefined ? {} : { branch: request.branch }) })));
+      return checked(replyOf(await transferItem({ from: store, to, itemId: request.itemId, revision: request.revision, via: 'moved', actor, ...across, ...(request.branch === undefined ? {} : { branch: request.branch }) })));
     }
   }
 }

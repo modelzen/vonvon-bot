@@ -5,7 +5,7 @@ import { SESSION_TURN_ENDED } from '../../agent/entry/registry';
 import { RpcError } from '../errors';
 import type { RpcOutcome } from '../rpc';
 
-const READS = new Set<MemoryRequest['type']>(['list', 'export', 'events', 'newCounts', 'seen']);
+const READS = new Set<MemoryRequest['type']>(['list', 'export', 'events', 'newCounts', 'seen', 'dmPeople']);
 
 /**
  * Reads change nothing, so they stay reads (no rebuild, no revision). Every other request writes memory files: the

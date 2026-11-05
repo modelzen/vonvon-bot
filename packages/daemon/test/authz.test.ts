@@ -42,6 +42,8 @@ it('gives a group session only what its work needs, and the not-dm sentence for 
     'collaboration.context', 'collaboration.project', 'collaboration.providerModels', 'library.list', 'admin.daemonStatus', 'memory.export', 'memory.events']) {
     expect(RULES.get(kind)?.places.group, kind).toBe('deny');
   }
+  // dm-agent 5: who has a private chat is the owner's page, no session's: another administrator's name is not this one's to read
+  expect(RULES.get('memory.dmPeople')?.places).toEqual({ dm: 'deny', group: 'deny', comment: 'deny' });
   // dm-agent 3.3. main 必败: the list never changes by chat, a private chat's included
   expect(RULES.get('settings.act.adminMember')?.places).toEqual({ dm: 'deny', group: 'not-dm', comment: 'not-dm' });
   // dm-agent 6.2: a private chat reads what a turn may; a comment's own group-less reads none of these either

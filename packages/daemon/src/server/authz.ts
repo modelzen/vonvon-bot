@@ -154,11 +154,14 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
   ...rows('contextPreview', 'get', DM_ONLY),
   ...rows('schedule', 'list create edit pause resume delete runNow', { dm: 'bot', group: 'bot', comment: 'not-group' }),
   ...rows('schedule', 'listBot', { dm: 'bot', group: 'deny', comment: 'not-group' }),
+  ...rows('memory', 'dmPeople'),
   ...rows('device', 'status enable disable setPort pair clients renameClient revokeClient rename'),
 ]);
 
 const denied = (message: string): Decision => ({ ok: false, code: 'permission_denied', message });
 const OUT_OF_REACH = '这次调用碰到了这条 Bot 会话范围以外的 Bot、群或项目。';
+/** dm-agent 6.4: a private chat with another Bot goes by that Bot's open_id, which this turn does not have. */
+const OTHER_DM = '别的 Bot 的私聊记忆这里碰不到：同一个人在不同 Bot 上的飞书 ID 不一样。';
 const outOfReach = (): Decision => denied(OUT_OF_REACH);
 /** devices 5.3: a reach of one group (the owner given `--scope … group=`) moves only that group. */
 export const ONE_GROUP_ONLY = '这次调用的 `--scope` 只到一个群：不能改整个 Bot 的设置，也不能建新群。';
@@ -278,7 +281,11 @@ async function sessionActionOf(request: Request, principal: BotSessionPrincipal,
     case 'memory': {
       const memory = request.payload;
       if (memory.type === 'seen' || memory.type === 'newCounts') return { kind: 'adminRead' };
-      const otherBot = principal.place === 'dm' && !await ownMemory(memory.scope, principal.appId, deps);
+      if (memory.type === 'dmPeople') return denied(OTHER_DM);
+      // A transfer lands elsewhere than it starts: either end may be another Bot's.
+      const end: MemoryScopeRef = memory.type === 'promote' ? { kind: 'bot', botId: memory.botId } : memory.type === 'move' ? { kind: 'project', projectId: memory.to.projectId } : memory.scope;
+      const otherBot = principal.place === 'dm' && !(await ownMemory(memory.scope, principal.appId, deps) && await ownMemory(end, principal.appId, deps));
+      if (otherBot && memory.scope.kind === 'dm') return denied(OTHER_DM);
       const across = otherBot ? { otherBot } : {};
       switch (memory.type) {
         case 'list': case 'export': case 'events': return { kind: 'memory', op: 'read', target: memoryTarget(memory.scope) };
@@ -464,6 +471,8 @@ function memoryInReach(request: MemoryRequest, principal: BotSessionPrincipal, s
   // s1b: a group session reads the entries as memory_list shows them, the authors and the archived ones left out.
   const ok: Decision = who === 'session' && principal.place === 'group'
     ? { ok: true, narrow: <T>(payload: T): T => groupMemoryReply(payload as MemoryReply) as T } : { ok: true };
+  // Who has a private chat with this bot: the owner's too, and only of the bot in reach.
+  if (request.type === 'dmPeople') return who === 'owner' && request.botId === principal.appId && scope?.group === undefined ? ok : outOfReach();
   // newCounts and seen name no memory: the owner's, and a session's row denies them.
   if (!('scope' in request)) return who === 'owner' ? ok : outOfReach();
   const projects = new Set(groups.flatMap(group => group.projectId ? [group.projectId] : []));

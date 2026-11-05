@@ -370,6 +370,7 @@ Examples:
   vonvon memory add "周四发版" --project 研发 --branch 发版
   vonvon memory archive <itemId> --project 研发 --revision <r>     # r: memory list 里的 r 数字
   vonvon memory events <itemId> --project 研发                     # 每行最后是 memory undo 要的事件 id
+  vonvon memory people --bot 小研                                  # 私聊过这个 Bot 的人，第一列是 --dm 要的 id
   vonvon memory list --bot 小研 --dm ou_xxx                        # 这个 Bot 和这个人的私聊记忆`);
 const memoryScope = (command: Command) => command.option('--project <project>', 'Project name or id (prj_…)').option('--bot <bot>', "Bot name or appId: its own memory")
   .option('--dm <openId>', "With --bot: the bot's private chat memory with this person").option(...JSON_FLAG);
@@ -379,6 +380,9 @@ type MemoryOptions = Json & { project?: string; bot?: string; dm?: string; branc
 const REVISION = ['--revision <n>', 'The revision vonvon memory list shows (r…)'] as const;
 memoryScope(covers(memory.command('list'), 'memory.list').description('List the entries by branch')).option('--all', 'Also list the archived entries; --json always has them').action(async (options: MemoryOptions) => {
   await (await memoryCommands()).runMemoryList(options, await memoryTerminal(options));
+});
+covers(memory.command('people'), 'memory.dmPeople').description("Who has talked to a bot in private, with how much memory; the id is what --dm takes").requiredOption('--bot <bot>', 'Bot name or appId').option(...JSON_FLAG).action(async (options: MemoryOptions) => {
+  await (await memoryCommands()).runMemoryPeople(options, await memoryTerminal(options));
 });
 memoryScope(covers(memory.command('export'), 'memory.export').description('One markdown document per branch')).action(async (options: MemoryOptions) => {
   await (await memoryCommands()).runMemoryExport(options, await memoryTerminal(options));

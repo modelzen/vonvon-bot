@@ -2,12 +2,12 @@ import { MEMORY_TEXT_MAX, type MemoryItem, type MemoryItemScope } from '@vonvon/
 import { log } from '../core/logger';
 import { botDir } from '../config/paths';
 import { libraryLocation, isProjectId, type LibraryLocation } from '../project/library';
-import { decideAdd, decideEdit, decisionMessages, type AddDecision, type MemoryPlace, type MemoryTurn, type RequestedScope } from './memory-authority';
+import { decideAdd, decideEdit, decisionMessages, ownDm, type AddDecision, type MemoryPlace, type MemoryTurn, type RequestedScope } from './memory-authority';
 import { normalizeBranchName } from './memory-branches';
 import { findSecretShape } from './memory-secret-shape';
 import type { FoundBlocks } from './hidden-blocks';
 import { reportLatestAction } from './diagnostics';
-import { botMemoryLocation, MemoryStore, projectMemoryLocation, type ItemResult, type MemoryActor, type Refused } from './memory-store';
+import { botMemoryLocation, dmMemoryLocation, MemoryStore, projectMemoryLocation, type ItemResult, type MemoryActor, type Refused } from './memory-store';
 
 /**
  * 记忆写入的执行层（记忆设计 §3.2、§3.3、§3.4）：memory 工具和隐藏块共用。权限表在 `memory-authority.ts`，条目库在
@@ -21,11 +21,13 @@ export interface MemoryWriterDeps {
   botDirectory?: string;
   /** 这个群绑定的项目 id；没有（旧绑定行还没迁移）返回 undefined */
   projectIdOf(chatId: string): Promise<string | undefined>;
-  /** 私聊里指定 `{project}` 时用：本 bot 有绑定的全部项目（私聊 agent 到 s49 才有） */
+  /** 私聊里指定 `{project}` 时用：本 bot 有绑定的全部项目 */
   botProjectIds?(): Promise<readonly string[]>;
+  /** 这个私聊窗口是谁的：memory_list 不是 memory 类，拿不到这一轮的事实，按窗口找人 */
+  dmPersonOf?(chatId: string): Promise<string | undefined>;
   library?: LibraryLocation;
   /** 测试用：条数上限 */
-  limits?: { project?: number; bot?: number };
+  limits?: { project?: number; bot?: number; dm?: number };
   now?: () => number;
 }
 
@@ -54,7 +56,7 @@ export type EditOutcome =
   | { ok: false; error: 'not-found' | 'out-of-scope' | 'not-yours' | 'archived' | 'conflict' | 'bad-args' | 'refused'; message: string; current?: Pick<ItemView, 'id' | 'text' | 'branch'> };
 
 export interface ListedMemory {
-  scope: 'project' | 'bot';
+  scope: 'project' | 'bot' | 'dm';
   projectId?: string;
   branches: string[];
   items: Array<{ id: string; text: string; branch: string; trust: 'trusted' | 'untrusted' }>;
@@ -97,7 +99,7 @@ export interface MemoryWriter {
   add(ctx: WriteContext, args: AddArgs, via: 'tool' | 'hidden_block'): Promise<AddOutcome>;
   update(ctx: WriteContext, args: EditArgs): Promise<EditOutcome>;
   forget(ctx: WriteContext, args: Omit<EditArgs, 'text' | 'branch'>): Promise<EditOutcome>;
-  list(place: { kind: 'group' | 'p2p' | 'doc'; chatId?: string }, scope?: 'project' | 'bot' | { project: string }): Promise<{ lists: ListedMemory[] } | { error: 'refused'; message: string }>;
+  list(place: { kind: 'group' | 'p2p' | 'doc'; chatId?: string }, scope?: 'project' | 'bot' | 'dm' | { project: string }): Promise<{ lists: ListedMemory[] } | { error: 'refused'; message: string }>;
   /** 这一轮在哪：本群绑定的项目（私聊里是本 bot 的项目）。Bot 会话的命令行写记忆时按同一个落点判（devices-4b 4.5） */
   placeOf(turn: Pick<MemoryTurn, 'chatId' | 'place'>): Promise<MemoryPlace>;
   /** 终态解析：这一轮最后一条消息里的隐藏块，逐条写。返回写成几条和没记上的原因 */
@@ -110,13 +112,12 @@ export function createMemoryWriter(deps: MemoryWriterDeps): MemoryWriter {
   const botDirectory = deps.botDirectory ?? botDir(deps.botId);
   const stores = new Map<string, MemoryStore>();
   function storeFor(scope: MemoryItemScope): MemoryStore {
-    if (scope.kind === 'dm') throw new Error('私聊记忆还没有入口');
-    const key = scope.kind === 'bot' ? 'b' : scope.projectId;
+    const key = scope.kind === 'bot' ? 'b' : scope.kind === 'dm' ? `d_${scope.openId}` : scope.projectId;
     let store = stores.get(key);
     if (!store) {
-      store = new MemoryStore(scope.kind === 'bot'
-        ? botMemoryLocation(botDirectory, deps.limits?.bot ? { limit: deps.limits.bot } : {})
-        : projectMemoryLocation(scope.projectId, { library, ...(deps.limits?.project ? { limit: deps.limits.project } : {}) }), storeOptions);
+      store = new MemoryStore(scope.kind === 'bot' ? botMemoryLocation(botDirectory, deps.limits?.bot ? { limit: deps.limits.bot } : {})
+        : scope.kind === 'dm' ? dmMemoryLocation(botDirectory, scope.openId, deps.limits?.dm ? { limit: deps.limits.dm } : {})
+          : projectMemoryLocation(scope.projectId, { library, ...(deps.limits?.project ? { limit: deps.limits.project } : {}) }), storeOptions);
       stores.set(key, store);
     }
     return store;
@@ -213,7 +214,7 @@ export function createMemoryWriter(deps: MemoryWriterDeps): MemoryWriter {
       const place = await placeOf(turn);
       // 不在本群绑定里的项目、别人的私聊记忆：不读它，不让人靠回答探出它在不在
       if (scope.kind === 'project' && !bound(turn, place).includes(scope.projectId)) return failedEdit('out-of-scope');
-      if (scope.kind === 'dm') return failedEdit('out-of-scope');
+      if (scope.kind === 'dm' && !ownDm(turn, scope.openId)) return failedEdit('out-of-scope');
       if (turn.place === 'comment') return failedEdit('refused');
       const store = storeFor(scope);
       const item = await store.get(args.id);
@@ -263,7 +264,7 @@ export function createMemoryWriter(deps: MemoryWriterDeps): MemoryWriter {
     const keep = only === undefined ? undefined : normalizeBranchName(only);
     const items = view.items.filter(item => item.state === 'active' && (keep === undefined || normalizeBranchName(item.branch) === keep));
     return {
-      scope: scope.kind === 'bot' ? 'bot' : 'project', ...(scope.kind === 'project' ? { projectId: scope.projectId } : {}),
+      scope: scope.kind, ...(scope.kind === 'project' ? { projectId: scope.projectId } : {}),
       branches: view.branches.map(branch => branch.name).filter(name => keep === undefined || normalizeBranchName(name) === keep),
       items: items.map(item => ({ id: item.id, text: item.text, branch: item.branch, trust: item.trust })),
       usage: { used: view.used, limit: view.limit },
@@ -284,6 +285,9 @@ export function createMemoryWriter(deps: MemoryWriterDeps): MemoryWriter {
         return { lists: [await listOne({ kind: 'project', projectId: scope.project })] };
       }
       const lists: ListedMemory[] = [];
+      // 私聊记忆只给这个窗口自己的人：id 不从模型来，别人的读不到
+      const person = place.kind === 'p2p' && place.chatId && (scope === undefined || scope === 'dm') ? await deps.dmPersonOf?.(place.chatId) : undefined;
+      if (person) lists.push(await listOne({ kind: 'dm', openId: person }));
       if ((scope === undefined || scope === 'project') && place.kind === 'group' && projectId) lists.push(await listOne({ kind: 'project', projectId }));
       if (scope === undefined || scope === 'bot') lists.push(await listOne({ kind: 'bot' }));
       return { lists };

@@ -4,7 +4,7 @@ import type { RawBlock } from './hidden-blocks';
 import { parseUsageBlocks, parseUsageMarkers } from './usage-marker';
 
 /** The memory stores a turn's entries came from, to put the use in the right `usage.json`. */
-export interface TurnStores { bot?: MemoryStore; project?: MemoryStore }
+export interface TurnStores { bot?: MemoryStore; project?: MemoryStore; dm?: MemoryStore }
 
 /** Every entry id the session holds as of this turn: what its opening and the updates handed over. */
 export function deliveredIds(context: SessionContext): Set<string> {
@@ -32,7 +32,7 @@ export function settleTurn(
 export async function recordUsage(context: SessionContext, used: readonly string[], stores: TurnStores | undefined): Promise<void> {
   if (!stores || !used.length) return;
   const memory: Record<string, MemoryDelivered | undefined> = context.memory ?? {};
-  for (const kind of ['bot', 'project'] as const) {
+  for (const kind of ['bot', 'project', 'dm'] as const) {
     const store = stores[kind];
     const mine = used.filter(id => memory[kind]?.items[id]);
     if (store && mine.length) await store.recordUsage(mine).catch(() => undefined);
