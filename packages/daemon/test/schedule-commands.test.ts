@@ -66,6 +66,14 @@ describe('a private chat', () => {
     expect(await f.run(person, { action: 'pause', chatId: G, taskId: 'st_c' })).toMatchObject(refusal('not-found'));
   });
 
+  // dm-agent 10 (D4). main 必败: `--dm` from a private chat was refused, and the row's own id went through from a terminal
+  it('reads the private-chat row\'s id as this chat, from a private chat; from elsewhere it names nobody', async () => {
+    const f = await setup([], undefined, chats);
+    expect(await f.run(person, create({ chatId: 'oc_dm_bot-test' }))).toMatchObject({ kind: 'task', task: { chatId: DM } });
+    expect(await f.run(elsewhere, create({ chatId: 'oc_dm_bot-test' }))).toMatchObject({ kind: 'refused', reason: 'not-found' });
+    expect(await f.run({ kind: 'local', via: 'cli' }, create({ chatId: 'oc_dm_bot-test' }))).toMatchObject({ kind: 'refused', reason: 'not-found', message: '私聊的任务要指定发给谁：选一位管理员的私聊。' });
+  });
+
   it('makes a group\'s task as a plain group task, its creator the person with no group role of their own', async () => {
     const f = await setup([], undefined, chats);
     const made = await f.run(person, create({ chatId: G }));

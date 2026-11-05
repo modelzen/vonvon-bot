@@ -10,6 +10,7 @@ import { scheduleRefusalMessages } from '../admin/schedule-commands';
 import { bridgeVersion } from '../core/version';
 import { SESSION_TOKEN_INVALID } from '../host/session-tokens';
 import { cannotInvite, type GroupInvitee } from '../project/lifecycle';
+import { dmChatId } from '../project/registry';
 import { RpcError } from './errors';
 import { filterSnapshot, scopedOwner, sessionGroups, sessionSnapshot, type BotSessionPrincipal } from './snapshot-filter';
 import type { Peer } from './ws';
@@ -292,6 +293,7 @@ async function sessionActionOf(request: Request, principal: BotSessionPrincipal,
     }
     case 'memory': {
       const memory = request.payload;
+      if (memory.type === 'seen' && memory.page.kind === 'dm') return dmPersonRead(memory.page.botId, memory.page.openId, principal);
       if (memory.type === 'seen' || memory.type === 'newCounts') return { kind: 'adminRead' };
       if (memory.type === 'dmPeople') return denied(OTHER_DM);
       // A transfer lands elsewhere than it starts: either end may be another Bot's.
@@ -310,8 +312,17 @@ async function sessionActionOf(request: Request, principal: BotSessionPrincipal,
         default: return { kind: 'memory', op: 'manage', target: memoryTarget(memory.scope), ...across };
       }
     }
+    case 'contextPreview': {
+      const { agentId, place } = request.payload;
+      return place.kind === 'dm' ? dmPersonRead(agentId, place.openId, principal) : { kind: 'adminRead' };
+    }
     default: return { kind: 'adminRead' };
   }
+}
+
+/** One person's private chat, as a read of their memory: each person's is their own (4.5a), whatever else names it. */
+function dmPersonRead(botId: string, openId: string, principal: BotSessionPrincipal): SessionAction | Decision {
+  return botId === principal.appId ? { kind: 'memory', op: 'read', target: { kind: 'dm', openId } } : denied(OTHER_DM);
 }
 
 /** Whether a memory is the session's own Bot's: its own, or a project one of its groups is bound to. */
@@ -367,6 +378,8 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
   // whole bot, and no new group.
   const wholeBot = principal.place === 'dm' && scope?.group === undefined;
   const botWide = (): Decision => wholeBot ? ok : denied(ONE_GROUP_ONLY);
+  // The private chat's settings go by `oc_dm_<appId>`, no group's name (dm-agent 4.2), and only with the whole bot reached.
+  const dmRow = (projectName: string): boolean => wholeBot && projectName === dmChatId(principal.appId);
   const named = (projectName: string, groupId?: string): boolean => groups.some(group => group.name === projectName && (groupId === undefined || group.chatId === groupId));
   const narrow = (cut: (payload: never) => unknown): Decision => ({ ok: true, narrow: <T>(payload: T): T => cut(payload as never) as T });
   switch (request.method) {
@@ -382,7 +395,7 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
     case 'command': return commandInReach(request.payload, session, own, reaches, botWide, narrow, feishuReach(principal));
     case 'settings': {
       const payload = request.payload;
-      const scoped = (target: SettingsScope): boolean => target.kind === 'host' ? !session : own(target.botId) && (target.kind !== 'project' || named(target.projectName));
+      const scoped = (target: SettingsScope): boolean => target.kind === 'host' ? !session : own(target.botId) && (target.kind !== 'project' || named(target.projectName) || dmRow(target.projectName));
       switch (payload.type) {
         case 'read': return scoped(payload.scope) ? ok : outOfReach();
         case 'save': {
@@ -433,7 +446,8 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
     case 'schedule': {
       const { botId, request: task } = request.payload;
       if (!own(botId)) return outOfReach();
-      if ('chatId' in task) return chats.has(task.chatId) ? ok : outOfReach();
+      // Its private chats are no group of `chats`: the whole bot reaches them, the Bot's commands check the chat is one.
+      if ('chatId' in task) return chats.has(task.chatId) || wholeBot ? ok : outOfReach();
       // listBot, which a session's row denies: the owner's, cut to the one group its --scope names.
       return scope?.group === undefined ? ok : narrow((reply: ScheduleReply) => reply.kind === 'tasks' ? { ...reply, tasks: reply.tasks.filter(item => chats.has(item.chatId)) } : reply);
     }

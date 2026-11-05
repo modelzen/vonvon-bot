@@ -266,6 +266,21 @@ describe('the bot-session column (unit)', () => {
     expect(await authorize(owner({ bot: BOT, group: GROUP }), settingsSave('研发'), deps)).toEqual({ ok: true });
   });
 
+  // dm-agent 10 (D4). main 必败: the private chat goes by no group's name, so no --scope reached its settings or tasks
+  it('reaches the private chat with the whole bot, and from no group', async () => {
+    const owner = (scope: Scope) => ({ principal: { kind: 'owner' as const, via: 'local' as const }, protocolVersion: 2, negotiated: true, scope });
+    const read = request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: `oc_dm_${BOT}` } });
+    const tasks = request('schedule', { botId: BOT, request: { action: 'list', chatId: 'oc_p2p_a' } });
+    const deps = { groupsOf: async () => [{ chatId: GROUP, name: '研发' }] };
+    for (const ask of [read, tasks]) {
+      expect(await authorize(owner({ bot: BOT }), ask, deps)).toEqual({ ok: true });
+      expect(await authorize(owner({ bot: BOT, group: GROUP }), ask, deps)).toMatchObject({ ok: false });
+      expect(await authorize(peer('group'), ask, deps)).toMatchObject({ ok: false });
+    }
+    // another Bot's id is no way in
+    expect(await authorize(owner({ bot: BOT }), request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: 'oc_dm_cli_other' } }), deps)).toMatchObject({ ok: false });
+  });
+
   // Codex review 229-4: the owner's --scope binds no other group, and moves no other bot's or project's things
   it('checks the owner\'s commands, admin and library requests against its --scope by their target', async () => {
     const owner = (scope: Scope) => ({ principal: { kind: 'owner' as const, via: 'local' as const }, protocolVersion: 2, negotiated: true, scope });
@@ -301,6 +316,21 @@ describe('the bot-session column (unit)', () => {
     expect(await authorize(owner({ bot: BOT }), request('command', { type: 'setAgentEnabled', agentId: BOT, enabled: false }), deps)).toEqual({ ok: true });
     expect(await authorize(owner({ bot: BOT }), bind('oc_outside'), deps)).toEqual({ ok: true });
     expect(await authorize(owner({ bot: BOT }), request('command', { type: 'deleteAgent', agentId: 'cli_other' }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
+  });
+
+  // dm-agent 4.5a: the preview and the "new" marks of a person's private chat are that person's, as their memory is.
+  it('asks its Bot process about the person a private chat\'s preview or seen page names, and refuses another Bot\'s', async () => {
+    const asked = vi.fn(async () => ({ ok: true as const, role: 'admin' as const, openId: 'ou_admin' }));
+    const ofPerson = { kind: 'memory', op: 'read', target: { kind: 'dm', openId: 'ou_b' } };
+    const page = (botId: string) => request('memory', { type: 'seen', page: { kind: 'dm', botId, openId: 'ou_b' } });
+    const preview = (agentId: string) => request('contextPreview', { type: 'get', agentId, place: { kind: 'dm', openId: 'ou_b' } });
+    for (const call of [page(BOT), preview(BOT)]) {
+      expect(await authorize(peer('dm'), call, { ...deps, askBot: asked })).toMatchObject({ ok: true });
+      expect(asked).toHaveBeenLastCalledWith(BOT, 'ses_0123456789abcdef', ofPerson);
+    }
+    asked.mockClear();
+    for (const call of [page('cli_other'), preview('cli_other')]) expect(await authorize(peer('dm'), call, { ...deps, askBot: asked })).toMatchObject({ ok: false, code: 'permission_denied' });
+    expect(asked).not.toHaveBeenCalled();
   });
 
   // dm-agent 6.1. main 必败: a private chat stopped at its own Bot, and `--scope` narrowed it

@@ -2,7 +2,8 @@ import { join } from 'node:path';
 import { memoryReplySchema, type MemoryItemScope, type MemoryReply, type MemoryRequest, type MemoryScopeRef } from '@vonvon/protocol';
 import type { MemoryLanding } from './ipc';
 import { loadBots } from '../config/bots';
-import { markSeen, marksFrom, readSeen, seenKey, type SeenPage } from './memory-seen';
+import { loadConfig } from '../config/store';
+import { markSeen, marksFrom, readSeen, seenKey } from './memory-seen';
 import { botDir } from '../config/paths';
 import { dmPersonList } from '../project/registry';
 import { libraryLocation, readLibrary, type LibraryLocation } from '../project/library';
@@ -62,11 +63,9 @@ function replyOf(result: Result): MemoryReply {
 /** One page's list with the 新 marks against the time its owner last opened it (5.8). */
 async function listWithMarks(store: MemoryStore, scope: MemoryScopeRef, deps: MemoryAdminDeps): Promise<MemoryReply> {
   const view = await store.read();
-  const page: SeenPage | undefined = scope.kind === 'project' ? { kind: 'project', projectId: scope.projectId } : scope.kind === 'bot' ? { kind: 'bot', botId: scope.botId } : undefined;
-  if (!page) return { kind: 'list', ...view };
   const library = deps.library ?? libraryLocation();
   const [seen, events] = await Promise.all([readSeen(library), store.events()]);
-  const marks = marksFrom(events, view.items, seen[seenKey(page)] ?? 0);
+  const marks = marksFrom(events, view.items, seen[seenKey(scope)] ?? 0);
   return { kind: 'list', ...view, newIds: [...marks.ids], newBranches: [...marks.branches], madeRoom: [...marks.madeRoom] };
 }
 
@@ -78,23 +77,42 @@ async function newCounts(deps: MemoryAdminDeps): Promise<MemoryReply> {
     try {
       const store = await memoryStoreFor(scope, deps);
       const [view, events] = await Promise.all([store.read(), store.events()]);
-      const key = scope.kind === 'project' ? seenKey({ kind: 'project', projectId: scope.projectId }) : scope.kind === 'bot' ? seenKey({ kind: 'bot', botId: scope.botId }) : '';
-      return marksFrom(events, view.items, seen[key] ?? 0).ids.size;
+      return marksFrom(events, view.items, seen[seenKey(scope)] ?? 0).ids.size;
     } catch { return 0; }
   };
   const projects: Record<string, number> = {};
   for (const project of (await readLibrary(library)).projects) { const n = await count({ kind: 'project', projectId: project.id }); if (n) projects[project.id] = n; }
   const bots: Record<string, number> = {};
-  for (const bot of (await loadBots()).bots) { const n = await count({ kind: 'bot', botId: bot.appId }); if (n) bots[bot.appId] = n; }
-  return { kind: 'newCounts', projects, bots };
+  const dm: Record<string, number> = {};
+  for (const bot of (await loadBots()).bots) {
+    const n = await count({ kind: 'bot', botId: bot.appId });
+    if (n) bots[bot.appId] = n;
+    const people = await peopleOf(bot.appId, deps).catch(() => []);
+    const fresh = (await Promise.all(people.map(person => count({ kind: 'dm', botId: bot.appId, openId: person.openId })))).reduce((sum, each) => sum + each, 0);
+    if (fresh) dm[bot.appId] = fresh;
+  }
+  return { kind: 'newCounts', projects, bots, ...(Object.keys(dm).length ? { dm } : {}) };
 }
 
-/** dm-agent 5: who the private-chat memory page lists, from the bot's `dm.people`, with what each has. Not who is an admin now. */
+const peopleOf = async (botId: string, deps: MemoryAdminDeps) => dmPersonList(join(await (deps.botDirectory ?? defaultBotDirectory)(botId), 'projects.json'));
+
+/**
+ * dm-agent 5: who the private-chat memory page lists, from the bot's `dm.people`, with what each has. Not who is an admin
+ * now: someone removed stays listed with their memory, and `admin` says so. A config that cannot be read says nothing.
+ */
 async function dmPeople(botId: string, deps: MemoryAdminDeps): Promise<MemoryReply> {
   const directory = await (deps.botDirectory ?? defaultBotDirectory)(botId);
-  const people = await Promise.all((await dmPersonList(join(directory, 'projects.json'))).map(async person => {
-    const used = await memoryStoreFor({ kind: 'dm', botId, openId: person.openId }, deps).then(store => store.read()).then(view => view.used, () => 0);
-    return { ...person, used };
+  const [listed, seen, admins] = await Promise.all([
+    peopleOf(botId, deps), readSeen(deps.library ?? libraryLocation()),
+    loadConfig(join(directory, 'config.json')).then(config => config.preferences?.access?.admins, () => undefined),
+  ]);
+  const people = await Promise.all(listed.map(async person => {
+    const scope: MemoryScopeRef = { kind: 'dm', botId, openId: person.openId };
+    const mem = await memoryStoreFor(scope, deps).then(async store => {
+      const [view, events] = await Promise.all([store.read(), store.events()]);
+      return { used: view.used, fresh: marksFrom(events, view.items, seen[seenKey(scope)] ?? 0).ids.size };
+    }).catch(() => ({ used: 0, fresh: 0 }));
+    return { ...person, ...mem, ...(admins ? { admin: admins.includes(person.openId) } : {}) };
   }));
   return { kind: 'dmPeople', people };
 }

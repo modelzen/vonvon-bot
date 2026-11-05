@@ -179,6 +179,9 @@ it('the leaf menu: delete, move, to Bot memory, 点成可信 for a waiting entry
   expect(leafActions({state: 'active', trust: 'untrusted'}, 'project').map(entry => entry.action)).toEqual(['move-branch', 'trust', 'to-bot', 'delete']);
   expect(leafActions({state: 'active', trust: 'trusted'}, 'bot', '支付组').map(entry => entry.label)).toContain('移回项目「支付组」');
   expect(leafActions({state: 'active', trust: 'trusted'}, 'bot').map(entry => entry.label)).toContain('移到项目…');
+  // dm-agent 10 (D4). main 必败: one person's memory had the Bot page's actions, 移到项目 among them
+  expect(leafActions({state: 'active', trust: 'trusted'}, 'dm').map(entry => entry.action)).toEqual(['move-branch', 'delete']);
+  expect(leafActions({state: 'active', trust: 'untrusted'}, 'dm').map(entry => entry.action)).toEqual(['move-branch', 'trust', 'delete']);
   expect(leafActions({state: 'active', trust: 'trusted'}, 'bot').map(entry => entry.action)).not.toContain('trust');
   expect(leafActions({state: 'archived', trust: 'trusted'}, 'project').map(entry => entry.action)).toEqual(['restore', 'purge']);
 });

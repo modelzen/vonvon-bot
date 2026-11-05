@@ -506,15 +506,16 @@ export async function dmProject(file?: string): Promise<Project | undefined> {
 export const dmPersonOf = (row: Pick<Project, 'dm'> | undefined, chatId: string): DmPerson | undefined =>
   row?.dm && Object.hasOwn(row.dm.people, chatId) ? row.dm.people[chatId] : undefined;
 
-/** Everyone who has talked to the bot in private, each once, earliest first. */
-export async function dmPersonList(file?: string): Promise<DmPerson[]> {
-  const people = new Map<string, DmPerson>();
-  for (const person of Object.values((await dmProject(file))?.dm?.people ?? {})) {
+/** Everyone who has talked to the bot in private, each once, earliest first, with the chat they used last: a person can have an old chat too. */
+export async function dmPersonList(file?: string): Promise<(DmPerson & { chatId: string })[]> {
+  const people = new Map<string, DmPerson & { chatId: string; last: number }>();
+  for (const [chatId, person] of Object.entries((await dmProject(file))?.dm?.people ?? {})) {
     const known = people.get(person.openId);
     const name = person.name ?? known?.name;
-    people.set(person.openId, { openId: person.openId, ...(name ? { name } : {}), at: Math.min(person.at, known?.at ?? person.at) });
+    const newest = !known || person.at >= known.last;
+    people.set(person.openId, { openId: person.openId, ...(name ? { name } : {}), at: Math.min(person.at, known?.at ?? person.at), chatId: newest ? chatId : known.chatId, last: Math.max(person.at, known?.last ?? person.at) });
   }
-  return [...people.values()].sort((a, b) => a.at - b.at || a.openId.localeCompare(b.openId));
+  return [...people.values()].sort((a, b) => a.at - b.at || a.openId.localeCompare(b.openId)).map(({ last: _last, ...person }) => person);
 }
 
 /** Add the private-chat row unless the bot has one; the row the file ends up with. */

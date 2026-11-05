@@ -4,7 +4,7 @@ import {useClient} from './client-context';
 import {MindMap, type MapEditStart, type MapMenuItem, type MapNode} from './MindMap';
 import {MapInlineEditor, type MapInlineEditorSession} from './MapInlineEditor';
 import {
-  archiveBranchItems, branchCanChange, branchNameProblem, branchNewCount, branchRoom, branchViews, exportFileName, joinMarks, leafActions, marksOf, moveRequest, noMarks, runMemory, sameJson, searchPlan, sourceLines, sourceProject,
+  archiveBranchItems, branchCanChange, branchNameProblem, branchNewCount, branchRoom, branchViews, exportFileName, joinMarks, leafActions, marksOf, memoryScopeKey, moveRequest, noMarks, runMemory, sameJson, searchPlan, sourceLines, sourceProject,
   type BranchView, type LeafAction, type Marks, type MemoryList,
 } from './memory-model';
 import {memoryNodes} from './memory-nodes';
@@ -14,7 +14,7 @@ import {MemoryLeafTools, undoEventFor} from './MemoryLeafTools';
 import {Button} from './reference/components/ui';
 import './mind-map.css';
 
-type Scope = Extract<MemoryScopeRef, {kind: 'project' | 'bot'}>;
+type Scope = MemoryScopeRef;
 export type MemoryTargets = {
   /** Bots a project entry can be moved into (a project with several asks which). */
   bots?: ReadonlyArray<{id: string; name: string}>;
@@ -54,7 +54,7 @@ function download(name: string, text: string) {
 /** One memory (a Bot's or a project's) as a mind map with all editing, feedback and detail actions inside its nodes (§5.7). */
 export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before = [], after = [], onLeafSelected, beforeLeafSelect, beforeInteraction, focusNew}: Props) {
   const client = useClient();
-  const scopeKey = scope.kind === 'bot' ? `bot:${scope.botId}` : `project:${scope.projectId}`;
+  const scopeKey = memoryScopeKey(scope);
   const [list, setList] = useState<MemoryList>();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState('');
@@ -110,8 +110,7 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before 
       setError(undefined);
       if (seenSent.current !== scopeKey) {
         seenSent.current = scopeKey;
-        const page = scope.kind === 'bot' ? {kind: 'bot' as const, botId: scope.botId} : {kind: 'project' as const, projectId: scope.projectId};
-        void client.memory({type: 'seen', page}).then(() => window.dispatchEvent(new Event(MEMORY_SEEN_EVENT))).catch(() => undefined);
+        void client.memory({type: 'seen', page: scope}).then(() => window.dispatchEvent(new Event(MEMORY_SEEN_EVENT))).catch(() => undefined);
       }
     } catch (failure) {if (request === serial.current) setError(failText(failure));}
     // `scope` is rebuilt by the parent every render; its key is what says the memory changed
@@ -281,7 +280,7 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before 
     onBranchEdit: beginBranchEdit,
     onBranchDelete: view => {void archiveBranch(view);},
     leafFooter: item => selected !== item.id ? undefined : <>
-      <MemoryLeafTools busy={busy} reference={scope.kind === 'project' && item.trust === 'untrusted'}
+      <MemoryLeafTools busy={busy} reference={scope.kind !== 'bot' && item.trust === 'untrusted'}
         editing={editing?.kind === 'leaf' && editing.id === item.id}
         undo={recentChange?.kind === 'confirm' && recentChange.item.id === item.id && recentChange.item.revision === item.revision ? {label: '已设为可信', run: recentChange.eventId ? undoRecent : undefined} : undefined}
         source={sourceLines(item, {bot: targets.botName, group: targets.groupName})} sourceOpen={sourceItem === item.id}

@@ -182,8 +182,25 @@ describe('the people of a private chat', () => {
     await call({ type: 'add', scope: dm('ou_a'), text: 'A 的事' });
     await call({ type: 'add', scope: dm('ou_a'), text: 'A 的另一件事' });
     expect(await call({ type: 'dmPeople', botId: 'cli_a' })).toEqual({ kind: 'dmPeople', people: [
-      { openId: 'ou_a', name: '张三', at: 10, used: 2 }, { openId: 'ou_b', at: 20, used: 0 },
+      { openId: 'ou_a', name: '张三', at: 10, chatId: 'oc_p2p_a2', used: 2, fresh: 0 }, { openId: 'ou_b', at: 20, chatId: 'oc_p2p_b', used: 0, fresh: 0 },
     ] });
+  });
+
+  // dm-agent 10 (D4). main 必败: the list said nothing of the chat, who is an admin now, or what is new
+  it('says who is still an admin, and leaves someone removed on the list with their memory', async () => {
+    const { call, data } = setup();
+    seed(data, { oc_p2p_a: { openId: 'ou_a', at: 10 }, oc_p2p_b: { openId: 'ou_b', at: 20 } });
+    await call({ type: 'add', scope: dm('ou_b'), text: 'B 走了以后还在' });
+    writeFileSync(join(data, 'bots', 'cli_a', 'config.json'), JSON.stringify({ preferences: { access: { admins: ['ou_a'] } } }));
+    expect(await call({ type: 'dmPeople', botId: 'cli_a' })).toMatchObject({ people: [{ openId: 'ou_a', admin: true }, { openId: 'ou_b', admin: false, used: 1 }] });
+  });
+
+  it('says nothing of admins when the config cannot be read', async () => {
+    const { call, data } = setup();
+    seed(data, { oc_p2p_a: { openId: 'ou_a', at: 10 } });
+    writeFileSync(join(data, 'bots', 'cli_a', 'config.json'), 'not json');
+    const reply = await call({ type: 'dmPeople', botId: 'cli_a' });
+    expect(reply.kind === 'dmPeople' && reply.people[0]).not.toHaveProperty('admin');
   });
 
   it('has nobody for a bot without a private chat yet, and refuses a bot that does not exist', async () => {

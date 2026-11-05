@@ -5,6 +5,7 @@ import {
   type ScheduledTaskView, type ScheduleRefusal, type ScheduleReply, type ScheduleRequest, type ScheduleSpec,
 } from '@vonvon/protocol';
 import type { RunNowResult, Scheduler } from '../bot/schedule/scheduler';
+import { dmChatId } from '../project/registry';
 import { clampUnits, type ScheduleStore } from '../bot/schedule/store';
 import { ceilToMinute, describeSpec, nextSlotAfter, normalizeTimeZone, validateSpec } from '../bot/schedule/time';
 import type { StoredTask } from '../bot/schedule/types';
@@ -66,6 +67,7 @@ const RUN_NOW_REFUSALS: Record<Exclude<RunNowResult['kind'], 'started'>, FixedRe
 const MAX_CREATOR_TEXT = 500; // scheduleCreatorSchema.text
 /** A private chat's command line named a chat this Bot has no window on. */
 const NO_CHAT = '这个 Bot 不在这个群里，也没有这个私聊，任务建不了。';
+const NO_DM_PERSON = '私聊的任务要指定发给谁：选一位管理员的私聊。';
 
 const refused = (reason: ScheduleRefusal, message: string): Refused => ({ kind: 'refused', reason, message });
 const refuse = (reason: FixedRefusal): Refused => refused(reason, scheduleRefusalMessages[reason]);
@@ -278,9 +280,13 @@ export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleComm
       }
       if (request.action === 'create') {
         if (actor.kind === 'scheduled') return refuse('no-human-create');
-        if (actor.kind === 'dm' && deps.chatOf && !deps.chatOf(request.chatId)) return refused('not-found', NO_CHAT);
+        // `--dm` names the private chat, not a person: from a private chat it means that one. Nothing can post to the row's own id.
+        const row = request.chatId === dmChatId(deps.botId);
+        const chatId = row && actor.kind === 'dm' ? actor.chatId : request.chatId;
+        if (actor.kind === 'local' && row) return refused('not-found', NO_DM_PERSON);
+        if (actor.kind === 'dm' && deps.chatOf && !deps.chatOf(chatId)) return refused('not-found', NO_CHAT);
         // The nearest text of section 16: a chat role outside the table is a turn no present person started.
-        return mayCreate(actor) ? create(actor, request, now) : refuse('not-human-turn');
+        return mayCreate(actor) ? create(actor, { ...request, chatId }, now) : refuse('not-human-turn');
       }
       // By id only among this group's tasks: another group's id reads as missing, not as forbidden.
       const task = store.get(request.taskId);
