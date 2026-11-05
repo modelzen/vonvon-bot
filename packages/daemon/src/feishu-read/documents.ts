@@ -11,9 +11,9 @@ export interface DocEditRequest { doc: string; action: 'append' | 'insert' | 're
 export interface DocEditResult { result: 'success' | 'partial_success'; updatedBlocks?: number; newBlocks?: string[]; warnings?: string[]; tips?: string; note?: string }
 
 /** What a link says it is; a bare token says nothing. */
-type RefKind = 'docx' | 'wiki' | 'sheet' | 'bitable' | 'file' | 'folder' | 'space' | 'other';
+type RefKind = 'docx' | 'doc' | 'wiki' | 'sheet' | 'bitable' | 'file' | 'slides' | 'mindnote' | 'board' | 'minutes' | 'folder' | 'space';
 export interface DocRef { kind?: RefKind; token: string; sheetId?: string; tableId?: string; viewId?: string }
-const KINDS: Record<string, RefKind> = { docx: 'docx', docs: 'other', wiki: 'wiki', sheets: 'sheet', file: 'file', base: 'bitable', bitable: 'bitable', slides: 'other', mindnotes: 'other', folder: 'folder' };
+const KINDS: Record<string, RefKind> = { docx: 'docx', docs: 'doc', wiki: 'wiki', sheets: 'sheet', file: 'file', base: 'bitable', bitable: 'bitable', slides: 'slides', mindnotes: 'mindnote', board: 'board', whiteboard: 'board', minutes: 'minutes', folder: 'folder' };
 
 /** A Feishu link or a bare token. Only the token leaves here: nothing is fetched from what the link's host says. */
 export function parseRef(ref: string): DocRef {
@@ -23,17 +23,19 @@ export function parseRef(ref: string): DocRef {
   try { url = new URL(text.includes('://') ? text : `https://${text}`); } catch { /* the refusal below */ }
   const space = url && /\/wiki\/(?:space|settings)\/([\w-]+)/.exec(url.pathname);
   if (space) return { kind: 'space', token: space[1]! };
-  const match = url && /\/(docx|docs|wiki|sheets|file|base|bitable|slides|mindnotes|folder)\/([\w-]+)/.exec(url.pathname);
-  if (!url || !match) throw new FeishuReadRefused('认不出这个链接：给飞书文档、表格、多维表格或文件的链接，或者它的 token。');
+  const match = url && /\/(docx|docs|wiki|sheets|file|base|bitable|slides|mindnotes|board|whiteboard|minutes|folder)\/([\w-]+)/.exec(url.pathname);
+  if (!url || !match) throw new FeishuReadRefused('认不出这个链接：给飞书文档、表格、多维表格、幻灯片、思维笔记、画板、妙记、文件或文件夹的链接，或者它的 token。');
   const sheetId = url.searchParams.get('sheet'), tableId = url.searchParams.get('table'), viewId = url.searchParams.get('view');
   return { kind: KINDS[match[1]!]!, token: match[2]!, ...(sheetId ? { sheetId } : {}), ...(tableId ? { tableId } : {}), ...(viewId ? { viewId } : {}) };
 }
 
 /** Which tool reads a node of this type, for the sentence that sends the model there. */
 export function wrongKind(kind: string): FeishuReadRefused {
-  const toolOf: Record<string, string> = { docx: 'feishu_doc', sheet: 'feishu_sheet', bitable: 'feishu_base', file: 'feishu_drive_file', folder: 'feishu_folder', space: 'feishu_wiki', wiki: 'feishu_wiki' };
+  if (kind === 'doc') return new FeishuReadRefused('这是旧版文档，用 feishu_doc 读，改不了。');
+  const toolOf: Record<string, string> = { docx: 'feishu_doc', sheet: 'feishu_sheet', bitable: 'feishu_base', file: 'feishu_drive_file', folder: 'feishu_folder', space: 'feishu_wiki', wiki: 'feishu_wiki',
+    slides: 'feishu_slides', mindnote: 'feishu_mindnote', board: 'feishu_board', minutes: 'feishu_minutes' };
   const tool = toolOf[kind];
-  return new FeishuReadRefused(tool ? `这不是这个工具读的类型，用 ${tool}。` : `这种云文档（${kind === 'other' ? '其他类型' : kind}）现在读不了，只能读新版文档、表格、多维表格和云空间文件。`);
+  return new FeishuReadRefused(tool ? `这不是这个工具读的类型，用 ${tool}。` : `这种云文档（${kind}）现在读不了。`);
 }
 
 /** A knowledge-base page's real object, and where the page itself is (a shortcut's being where it points). */
@@ -49,17 +51,18 @@ export async function wikiNode(deps: ReadDeps, token: string): Promise<{ kind: s
  * Read `ref` as a `want`: a knowledge-base link through its node. A bare token may be a knowledge-base page's, so when
  * it is not found as it stands it gets the node lookup too, and a token that is neither keeps the first refusal.
  */
-export async function reading<T>(deps: ReadDeps, ref: DocRef, want: 'docx' | 'sheet' | 'bitable' | 'file', read: (token: string) => Promise<T>): Promise<T> {
+export async function reading<T, Want extends Exclude<RefKind, 'wiki'> = Exclude<RefKind, 'wiki'>>(deps: ReadDeps, ref: DocRef, want: Want | readonly [Want, ...Want[]], read: (token: string, kind: Want) => Promise<T>): Promise<T> {
+  const wants: readonly Want[] = typeof want === 'string' ? [want] : want;
+  const wanted = (kind: string): kind is Want => (wants as readonly string[]).includes(kind);
   const fromNode = async (): Promise<T> => {
     const node = await wikiNode(deps, ref.token);
-    if (node.kind !== want) throw wrongKind(node.kind);
-    return read(node.token);
+    if (!wanted(node.kind)) throw wrongKind(node.kind);
+    return read(node.token, node.kind);
   };
   if (ref.kind === 'wiki') return fromNode();
-  if (ref.kind === 'other') throw wrongKind('其他类型');
-  if (ref.kind && ref.kind !== want) throw wrongKind(ref.kind);
+  if (ref.kind && !wanted(ref.kind)) throw wrongKind(ref.kind);
   try {
-    return await read(ref.token);
+    return await read(ref.token, ref.kind && wanted(ref.kind) ? ref.kind : wants[0]!);
   } catch (failure) {
     if (ref.kind || !(failure instanceof FeishuReadRefused) || failure.kind !== 'not-found') throw failure;
     return await fromNode().catch(second => {
@@ -68,10 +71,14 @@ export async function reading<T>(deps: ReadDeps, ref: DocRef, want: 'docx' | 'sh
   }
 }
 
-/** docs_ai's text keeps the block ids an edit needs; raw_content is the fallback. Which one a cursor's offset is in is part of it. */
-type DocSource = 'blocks' | 'plain';
+/** docs_ai's text keeps the block ids an edit needs; raw_content is the fallback; an old document has its own. Which one a cursor's offset is in is part of it. */
+type DocSource = 'blocks' | 'plain' | 'legacy';
 async function docText(deps: ReadDeps, token: string, source: DocSource): Promise<string> {
   const id = encodeURIComponent(token);
+  if (source === 'legacy') {
+    const answer = await ask(deps, 'legacyDoc', () => deps.channel.rawClient.request<{ code?: number; data?: { content?: string } }>({ method: 'GET', url: `/open-apis/doc/v2/${id}/raw_content` }));
+    return answer.data?.content ?? '';
+  }
   if (source === 'blocks') {
     const answer = await ask(deps, 'doc', () => deps.channel.rawClient.request<{ code?: number; data?: { document?: { content?: string } } }>({
       method: 'POST', url: `/open-apis/docs_ai/v1/documents/${id}/fetch`, data: {},
@@ -87,7 +94,7 @@ async function docText(deps: ReadDeps, token: string, source: DocSource): Promis
 function docCursor(cursor: string | undefined): { source?: DocSource; offset: number } {
   if (cursor === undefined) return { offset: 0 };
   const [source, offset] = cursor.split(':');
-  if (source !== 'blocks' && source !== 'plain') throw new FeishuReadRefused('cursor 不对：用上一次结果里的 cursor，原样传回来。');
+  if (source !== 'blocks' && source !== 'plain' && source !== 'legacy') throw new FeishuReadRefused('cursor 不对：用上一次结果里的 cursor，原样传回来。');
   return { source, offset: textOffset(offset) };
 }
 
@@ -108,11 +115,24 @@ async function anyDocText(deps: ReadDeps, token: string): Promise<{ source: DocS
 
 export async function readDoc(deps: ReadDeps, request: DocRequest): Promise<{ text: string; cursor?: string }> {
   const at = docCursor(request.cursor);
-  return reading(deps, parseRef(request.doc), 'docx', async token => {
-    const { source, text } = at.source ? { source: at.source, text: await docText(deps, token, at.source) } : await anyDocText(deps, token);
-    const part = sliceText(cleanText(text), at.offset);
-    return { text: part.text, ...(part.next !== undefined ? { cursor: `${source}:${part.next}` } : {}) };
-  });
+  const ref = parseRef(request.doc);
+  const part = ({ source, text }: { source: DocSource; text: string }) => {
+    const piece = sliceText(cleanText(text), at.offset);
+    return { text: piece.text, ...(piece.next !== undefined ? { cursor: `${source}:${piece.next}` } : {}) };
+  };
+  const legacy = async (token: string) => part({ source: 'legacy', text: await docText(deps, token, 'legacy') });
+  try {
+    return await reading(deps, ref, ['docx', 'doc'], async (token, kind) => {
+      if (kind === 'doc') return legacy(token);
+      return part(at.source ? { source: at.source, text: await docText(deps, token, at.source) } : await anyDocText(deps, token));
+    });
+  } catch (failure) {
+    // A bare token may be an old document's, as a comment's file_token is: only that API knows it, under a scope of its own.
+    if (ref.kind || at.source || !(failure instanceof FeishuReadRefused) || (failure.kind !== 'not-found' && failure.kind !== 'scope')) throw failure;
+    return await legacy(ref.token).catch(second => {
+      throw second instanceof FeishuReadRefused && (second.kind === 'not-found' || second.kind === failure.kind) ? failure : second;
+    });
+  }
 }
 
 interface DocEditAnswer {
