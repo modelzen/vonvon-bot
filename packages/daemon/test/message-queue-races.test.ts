@@ -119,7 +119,7 @@ function message(text: string): NormalizedMessage {
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
 function setup(policy: 'steer' | 'queue' = 'steer', entries?: AgentEntries, sessionTitles?: NonNullable<AppConfig['preferences']>['sessionTitles']) {
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' }, sessionTitles } };
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' }, sessionTitles } };
   const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'new-topic' }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
@@ -766,7 +766,7 @@ describe('watermark for interjections and queued turns (s09)', () => {
 describe('agent entry orchestration', () => {
   function human(text: string): NormalizedMessage { return { ...message(text), raw: { sender: { sender_type: 'user' } } }; }
   function entries() {
-    return createAgentEntries({ appId: 'fixture', isAdmin: id => id === 'owner', isOwner: id => id === 'owner' });
+    return createAgentEntries({ appId: 'fixture', isAdmin: id => id === 'owner' });
   }
   it('attaches a fresh group grant for resume, opens the triggering turn, and closes it on done', async () => {
     const registry = entries(), open = vi.spyOn(registry, 'openTurn');
@@ -840,7 +840,7 @@ describe('agent entry orchestration', () => {
 });
 
 it.each(['new message', '/clear'])('issues and attaches a group grant for a fresh start via %s', async path => {
-  const registry = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true });
+  const registry = createAgentEntries({ appId: 'fixture', isAdmin: () => true });
   const issue = vi.spyOn(registry, 'issue'), run = thread();
   if (path === 'new message') fake.record = { absent: true };
   else fake.projectKind = 'single';

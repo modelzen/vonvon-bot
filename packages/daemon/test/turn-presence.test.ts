@@ -19,7 +19,7 @@ const person: TurnFacts = { requesterOpenId: 'ou_admin', requesterKind: 'user', 
 const scheduled = { taskId: 'st_0123456789abcdef', runId: 'run-1' };
 const setting: AgentTool = { name: 't_set', class: 'settings', description: 'fixture settings', input: z.object({}), run: async () => 'set' };
 function setup(facts: TurnFacts, place: AgentPlace = { kind: 'group', chatId: 'oc_a' }) {
-  const entries = createAgentEntries({ appId: 'fixture', isAdmin: id => id === 'ou_admin', isOwner: () => false, tools: [setting] });
+  const entries = createAgentEntries({ appId: 'fixture', isAdmin: id => id === 'ou_admin', tools: [setting] });
   const entry = entries.issue(place);
   const t = thread();
   entry.attach(t);

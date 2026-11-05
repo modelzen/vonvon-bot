@@ -39,7 +39,7 @@ function fixture() {
 }
 const profile = (schedule: boolean, feishu?: boolean): SessionProfile => ({ instructions: '', env: {}, nativeSettings: { automaticMemory: false },
   additionalRoots: [], capabilityPackages: [], mcpServers: [], tools: { schedule, ...(feishu !== undefined ? { feishu } : {}) } });
-const grant = (place: AgentPlace) => createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true,
+const grant = (place: AgentPlace) => createAgentEntries({ appId: 'fixture', isAdmin: () => true,
   tools: [sessionInfoTool, ...createScheduleTools({ commands: { execute: async () => ({ kind: 'deleted', taskId: 'x' }) } })] }).issue(place);
 function savedSession(): string {
   const root = mkdtempSync(join(tmpdir(), 't3-claude-')); roots.push(root);
@@ -66,7 +66,7 @@ it.each([
 it.each([[true, 1], [false, 0]] as const)('lists the Feishu read tools in vonvon_bot by the profile (tools.feishu %j)', async (feishu, count) => {
   for (const action of ['start', 'resume'] as const) {
     const f = fixture(), cwd = savedSession();
-    const entry = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true,
+    const entry = createAgentEntries({ appId: 'fixture', isAdmin: () => true,
       tools: createFeishuTools({ members: async () => ({ members: [] }), feishu: {} as FeishuReader }) }).issue({ kind: 'group', chatId: 'oc_group' });
     threads.push(action === 'start' ? await f.backend.startThread({ cwd, mode: 'qa', entry, profile: profile(false, feishu) })
       : await f.backend.resumeThread({ cwd, mode: 'qa', entry, sessionId: 'saved', profile: profile(false, feishu) }));

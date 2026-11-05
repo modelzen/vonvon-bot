@@ -5,7 +5,7 @@ import type { Project } from '../src/project/registry';
 
 const cfg = (access: Record<string, unknown> = {}): AppConfig => ({
   accounts: { app: { id: 'app', secret: 'x', tenant: 'feishu' } },
-  preferences: { access: { ownerOpenId: 'ou_owner', ...access } },
+  preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'], ...access } },
 }) as AppConfig;
 const project = (fields: Partial<Project> = {}): Project => ({
   name: 'p', chatId: 'oc_chat', cwd: '/work', blank: false, createdAt: 0, mode: 'write', ...fields,

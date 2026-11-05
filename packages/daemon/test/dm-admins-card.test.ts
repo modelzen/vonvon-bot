@@ -9,10 +9,10 @@ import { DM } from '../src/card/dm-cards';
 import { seedBots } from './helpers/bot-fixture';
 import { fakeLark } from './helpers/fake-lark-http';
 
-/** audit 252-1: only the owner changes this machine's administrators, from the private chat's 设置 → 管理员 cards too. */
+/** product.md section 6: the private chat's 设置 → 管理员 card only reads, an old card's buttons included. */
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync, realpathSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
-  const appDir = realpathSync(mkdtempSync(join(tmpdir(), 'dm-admin-owner-')));
+  const appDir = realpathSync(mkdtempSync(join(tmpdir(), 'dm-admins-card-')));
   return {
     paths: { appDir, configFile: join(appDir, 'config.json'), sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'),
       botsFile: join(appDir, 'bots.json'), projectsRootDir: join(appDir, 'projects') },
@@ -29,13 +29,12 @@ vi.mock('../src/config/keystore', async original => ({ ...await original<object>
 vi.mock('../src/card/managed', () => ({ sendManagedCard: fixture.send, updateManagedCard: fixture.update }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} }, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
 
-const OWNER = 'ou_owner', ADMIN = 'ou_admin', OTHER_ADMIN = 'ou_other_admin', NEWCOMER = 'ou_newcomer';
+const CREATOR = 'ou_creator', ADMIN = 'ou_admin', OTHER_ADMIN = 'ou_other_admin', NEWCOMER = 'ou_newcomer';
 const bot = { appId: 'cli_fixture', tenant: 'feishu' as const, createdAt: 1, registrationId: 'fixture' };
 let cfg: AppConfig;
 beforeEach(async () => {
   await seedBots({ version: 1, bots: [{ ...bot, name: 'fixture' }] });
-  // No Feishu roles: the scanner is the owner, the other two this machine's own administrators.
-  cfg = { accounts: { app: { id: bot.appId, secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: OWNER, admins: [ADMIN, OTHER_ADMIN] } } };
+  cfg = { accounts: { app: { id: bot.appId, secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: CREATOR, admins: [CREATOR, ADMIN, OTHER_ADMIN] } } };
   await saveConfig(cfg);
   fixture.send.mockClear(); fixture.update.mockClear();
 });
@@ -54,55 +53,45 @@ async function patched(): Promise<string> {
   await vi.waitFor(() => expect(fixture.update).toHaveBeenCalled(), { timeout: 10_000 });
   return JSON.stringify(fixture.update.mock.calls.at(-1)?.[2]);
 }
-/** The card a form's submit sent back as a new message. */
-async function sent(): Promise<string> {
-  await vi.waitFor(() => expect(fixture.send).toHaveBeenCalled(), { timeout: 10_000 });
-  return JSON.stringify(fixture.send.mock.calls.at(-1)?.[2]);
-}
 
 describe('the private chat\'s administrators card', () => {
-  it('shows an admin who is not the owner the list read-only, and the owner the buttons', async () => {
+  // main 必败: the owner got the buttons, and an old card's still wrote
+  it('shows everyone the list read-only', async () => {
     const orchestrator = app();
     try {
-      await orchestrator.dispatcher.handle(click(ADMIN, { a: DM.admins }));
-      const readOnly = await patched();
-      expect(readOnly).toContain('本机管理员名单只有飞书应用的拥有者能改。');
-      expect(readOnly).not.toContain(DM.rmAdmin);
-      expect(readOnly).not.toContain(DM.addAdminForm);
-      fixture.update.mockClear();
-      await orchestrator.dispatcher.handle(click(OWNER, { a: DM.admins }));
-      const editable = await patched();
-      expect(editable).toContain(DM.rmAdmin);
-      expect(editable).toContain(DM.addAdminForm);
+      for (const who of [CREATOR, ADMIN]) {
+        fixture.update.mockClear();
+        await orchestrator.dispatcher.handle(click(who, { a: DM.admins }));
+        const card = await patched();
+        expect(card).not.toContain(DM.rmAdmin);
+        expect(card).not.toContain(DM.addAdminForm);
+      }
     } finally { await orchestrator.shutdown(); }
   });
 
-  it('refuses an admin who is not the owner removing another admin, and lets the owner', async () => {
+  it.each([
+    ['remove', () => click(CREATOR, { a: DM.rmAdmin, u: OTHER_ADMIN })],
+    ['open the add form', () => click(CREATOR, { a: DM.addAdminForm })],
+    ['add', () => click(CREATOR, { a: DM.addAdminSubmit }, { open_id: NEWCOMER })],
+  ])('redraws an old card\'s %s button as the read-only card and writes nothing', async (_name, event) => {
     const orchestrator = app();
     try {
-      await orchestrator.dispatcher.handle(click(ADMIN, { a: DM.rmAdmin, u: OTHER_ADMIN }));
-      expect(await patched()).toContain('本机管理员名单只有飞书应用的拥有者能改。');
-      expect(await saved()).toEqual([ADMIN, OTHER_ADMIN]);
-      expect(cfg.preferences?.access?.admins).toEqual([ADMIN, OTHER_ADMIN]);
-      fixture.update.mockClear();
-      await orchestrator.dispatcher.handle(click(OWNER, { a: DM.rmAdmin, u: OTHER_ADMIN }));
-      await patched();
-      expect(await saved()).toEqual([ADMIN]);
+      await orchestrator.dispatcher.handle(event());
+      const card = await patched();
+      expect(card).toContain('名单在 Vonvon Bot 客户端或终端里改。');
+      expect(card).not.toContain(DM.addAdminSubmit);
+      expect(await saved()).toEqual([CREATOR, ADMIN, OTHER_ADMIN]);
+      expect(fixture.send).not.toHaveBeenCalled();
     } finally { await orchestrator.shutdown(); }
   });
 
-  it('refuses an admin who is not the owner adding one, from the form or an old card, and lets the owner', async () => {
+  it('shows someone off the list nothing', async () => {
     const orchestrator = app();
     try {
-      await orchestrator.dispatcher.handle(click(ADMIN, { a: DM.addAdminForm }));
-      expect(await patched()).not.toContain(DM.addAdminSubmit);
-      await orchestrator.dispatcher.handle(click(ADMIN, { a: DM.addAdminSubmit }, { open_id: NEWCOMER }));
-      expect(await sent()).toContain('本机管理员名单只有飞书应用的拥有者能改。');
-      expect(await saved()).toEqual([ADMIN, OTHER_ADMIN]);
-      fixture.send.mockClear();
-      await orchestrator.dispatcher.handle(click(OWNER, { a: DM.addAdminSubmit }, { open_id: NEWCOMER }));
-      expect(await sent()).toContain(DM.rmAdmin);
-      expect(await saved()).toEqual([ADMIN, OTHER_ADMIN, NEWCOMER]);
+      await orchestrator.dispatcher.handle(click(NEWCOMER, { a: DM.rmAdmin, u: ADMIN }));
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(fixture.update).not.toHaveBeenCalled();
+      expect(await saved()).toEqual([CREATOR, ADMIN, OTHER_ADMIN]);
     } finally { await orchestrator.shutdown(); }
   });
 });

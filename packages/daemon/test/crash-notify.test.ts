@@ -6,13 +6,13 @@ import { crashText, type CrashEntry } from '@vonvon/protocol';
 import type { BotEntry } from '../src/config/bots';
 import { readUnsentNotices, writeNoticesSync, writeUnsentNoticesSync, type UnsentNotice, type Clock } from '../src/host/crash-store';
 
-// The owner's private messages (s18b): fake fetch, fake timers, an injected clock and senders, crash/ in a temp dir.
+// The administrators' private messages (s18b): fake fetch, fake timers, an injected clock and senders, crash/ in a temp dir.
 const f = vi.hoisted(() => ({ botDir: '' }));
 vi.mock('../src/config/paths', async original => {
   const real = await original<typeof import('../src/config/paths')>();
   return { ...real, botPaths: (appId: string) => ({ ...real.botPaths(appId), configFile: join(f.botDir, appId, 'config.json') }) };
 });
-import { botFolders, createCrashNotifier, loadOwnerSender, noticeText, sendOwnerText, type HostNotice, type LoadSender, type Sender } from '../src/host/crash-notify';
+import { botFolders, createCrashNotifier, loadAdminSender, noticeText, sendAdminText, type HostNotice, type LoadSender, type Sender } from '../src/host/crash-notify';
 
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
@@ -28,7 +28,7 @@ const bots: BotEntry[] = [
   { appId: ALONE, name: 'alone', tenant: 'feishu', createdAt: 2000 },
   { appId: EARLY, name: 'early', botName: '早到', tenant: 'feishu', createdAt: 1000 },
 ];
-const sender = (appId: string): Sender => ({ appId, tenant: 'feishu', appSecret: `secret-${appId}`, openId: `ou_owner_of_${appId}` });
+const sender = (appId: string): Sender => ({ appId, tenant: 'feishu', appSecret: `secret-${appId}`, openIds: [`ou_owner_of_${appId}`] });
 const previous: CrashEntry = { at: Date.parse('2026-10-16T05:00:00Z'), kind: 'forced', reason: '被系统强制结束', uptimeMs: 180_000 };
 const hostNotice = (fields: Partial<HostNotice> = {}): HostNotice => ({ previous, crashes: 1, resumed: false, pauseEntered: false, ...fields });
 
@@ -70,9 +70,9 @@ let root: string;
 const newLog = () => ({ info: vi.fn(), warn: vi.fn(), fail: vi.fn() });
 let logs: ReturnType<typeof newLog>;
 let senders: Record<string, Sender | string>;
-const loadSender: LoadSender = async appId => senders[appId] ?? 'no-owner';
+const loadSender: LoadSender = async appId => senders[appId] ?? 'no-admin';
 const make = (extra: Partial<Parameters<typeof createCrashNotifier>[0]> = {}) => createCrashNotifier({ root, log: logs, clock, fetchImpl, loadSender, ...extra });
-const flush = async (): Promise<void> => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
+const flush = async (): Promise<void> => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
 /** Moves the clock and the timers together. */
 const tick = async (ms: number): Promise<void> => { now += ms; up += ms; await vi.advanceTimersByTimeAsync(ms); await flush(); };
 const ctx = (paused = false, botPaused: (appId: string) => boolean = () => false) => ({ chainId: CHAIN, bots, paused, botPaused });
@@ -153,7 +153,7 @@ describe('the host\'s messages', () => {
     for (const name of [LATE, ALONE, 'not-a-bot']) mkdirSync(join(root, 'bots', name), { recursive: true });
     writeFileSync(join(root, 'bots', 'cli_file'), '');
     expect(botFolders(root).sort()).toEqual([ALONE, LATE].sort());
-    senders[LATE] = 'no-owner';
+    senders[LATE] = 'no-admin';
     const n = make();
     n.hostStarted(hostNotice({ crashes: 3, pauseEntered: true }), { chainId: CHAIN, bots: [], paused: true, botPaused: () => false, registryUnreadable: true });
     await flush();
@@ -165,13 +165,13 @@ describe('the host\'s messages', () => {
   });
 
   it('⑤ goes to the next bot that joined when the earliest cannot send, and says why', async () => {
-    senders[EARLY] = 'no-owner';
+    senders[EARLY] = 'no-admin';
     const n = make();
     n.hostStarted(hostNotice({ crashes: 2 }), ctx());
     await tick(30_000);
     expect(messages()).toMatchObject([{ body: { receive_id: `ou_owner_of_${ALONE}` } }]);
     expect(textOf(messages()[0])).toMatch(/^daemon 10 分钟内崩溃了 2 次，已自动恢复。.*最近一次的原因：/);
-    expect(logs.warn).toHaveBeenCalledWith('crash-notify', 'skipped', expect.objectContaining({ bot: EARLY, why: 'no-owner' }));
+    expect(logs.warn).toHaveBeenCalledWith('crash-notify', 'skipped', expect.objectContaining({ bot: EARLY, why: 'no-admin' }));
     await n.close();
   });
 
@@ -246,7 +246,7 @@ describe('a bot\'s messages', () => {
     const loads: string[] = [];
     const n = make({ loadSender: async appId => { loads.push(appId); return loadSender(appId); } });
     senders[LATE] = 'secret-unreadable';
-    senders[EARLY] = 'no-owner';
+    senders[EARLY] = 'no-admin';
     n.botPaused(LATE, '晚到', 3, 'z');
     n.botPaused(EARLY, '早到', 3, 'z');
     await tick(60_000);
@@ -288,8 +288,8 @@ describe('a bot\'s messages', () => {
     expect(textOf(messages()[1])).toBe('「晚到」10 分钟内崩溃了 3 次，已停止自动重启，别的 bot 照常。最近一次的原因：程序出错：TypeError: z。查完原因后在状态与诊断页点「恢复运行」。');
     // Same quota as the host's message from this bot.
     const host = make();
-    senders[EARLY] = 'no-owner';
-    senders[ALONE] = 'no-owner';
+    senders[EARLY] = 'no-admin';
+    senders[ALONE] = 'no-admin';
     host.hostStarted(hostNotice(), ctx());
     await tick(30_000);
     expect(messages()).toHaveLength(2);
@@ -325,7 +325,7 @@ describe('a bot\'s messages', () => {
 
   it('恢复运行 or a disable while the sender is being read drops the message too', async () => {
     let release: (() => void) | undefined;
-    const n = make({ loadSender: appId => new Promise(resolve => { release = () => resolve(senders[appId] ?? 'no-owner'); }) });
+    const n = make({ loadSender: appId => new Promise(resolve => { release = () => resolve(senders[appId] ?? 'no-admin'); }) });
     n.botCrashed(LATE, '晚到', 1, 'x');
     n.botStarted(LATE);
     await tick(30_000);
@@ -377,7 +377,7 @@ describe('sending', () => {
     await tick(60_000);
     if (retried) {
       expect(uuids).toHaveLength(2);
-      expect(uuids[0]).toMatch(/^vc-[0-9a-f]{32}$/);
+      expect(uuids[0]).toMatch(/^vc-[0-9a-f]{32}-[0-9a-f]{8}$/);
       expect(uuids[1]).toBe(uuids[0]);
     } else {
       expect(uuids).toHaveLength(1);
@@ -522,17 +522,17 @@ describe('sending', () => {
 
   it('a 2xx whose body cannot be read is tried again, not taken as a refusal (it may have been sent)', async () => {
     reply = call => (call.url.includes('/im/v1/messages') ? { status: 200 } : ok(call));
-    const result = await sendOwnerText(sender(LATE), 'hi', 'vc-1', new AbortController().signal, fetchImpl);
+    const result = await sendAdminText(sender(LATE), 'hi', 'vc-1', new AbortController().signal, fetchImpl);
     expect(result).toEqual({ ok: false, retry: true, status: 200 });
   });
 
-  it('sendOwnerText goes to the Lark host for a Lark bot', async () => {
-    const result = await sendOwnerText({ ...sender(LATE), tenant: 'lark' }, 'hi', 'vc-1', new AbortController().signal, fetchImpl);
+  it('sendAdminText goes to the Lark host for a Lark bot', async () => {
+    const result = await sendAdminText({ ...sender(LATE), tenant: 'lark' }, 'hi', 'vc-1', new AbortController().signal, fetchImpl);
     expect(result).toEqual({ ok: true });
     expect(calls.map(call => call.url)).toEqual([
       'https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal', 'https://open.larksuite.com/open-apis/im/v1/messages?receive_id_type=open_id',
     ]);
-    expect(calls[1]?.body).toEqual({ receive_id: `ou_owner_of_${LATE}`, msg_type: 'text', content: JSON.stringify({ text: 'hi' }), uuid: 'vc-1' });
+    expect(calls[1]?.body).toEqual({ receive_id: `ou_owner_of_${LATE}`, msg_type: 'text', content: JSON.stringify({ text: 'hi' }), uuid: expect.stringMatching(/^vc-1-[0-9a-f]{8}$/) });
   });
 });
 
@@ -565,22 +565,47 @@ describe('texts and senders', () => {
       .toBe('「晚到」刚才崩溃过一次，已自动恢复。原因：bad dir=y.json，读取b失败。');
   });
 
-  it('reads the owner, the tenant and the secret from the bot\'s config, and says why it cannot', async () => {
+  // dm-agent 3.1 (product.md 3.10). main 必败: one message went to one person
+  it('tells every administrator, each under a uuid of their own that stays the same when tried again', async () => {
+    const two: Sender = { ...sender(LATE), openIds: ['ou_a', 'ou_b'] };
+    const sentTo = (): unknown[] => messages().map(call => [call.body.receive_id, call.body.uuid]);
+    const first = await sendAdminText(two, 'hi', 'vc-1', new AbortController().signal, fetchImpl);
+    expect(first).toEqual({ ok: true });
+    expect(calls.filter(call => call.url.includes('tenant_access_token'))).toHaveLength(1);
+    const once = sentTo();
+    expect(new Set(once.map(entry => (entry as string[])[1])).size).toBe(2);
+    expect(once.every(entry => String((entry as string[])[1]).length <= 50)).toBe(true);
+    calls = [];
+    await sendAdminText({ ...two, openIds: ['ou_b', 'ou_a'] }, 'hi', 'vc-1', new AbortController().signal, fetchImpl);
+    expect(sentTo()).toEqual([once[1], once[0]]);
+  });
+
+  it('tries again when one of them failed for now, and is done when one got it and the other is refused for good', async () => {
+    const two: Sender = { ...sender(LATE), openIds: ['ou_a', 'ou_b'] };
+    reply = call => (call.body.receive_id === 'ou_b' ? { status: 500 } : ok(call));
+    expect(await sendAdminText(two, 'hi', 'vc-1', new AbortController().signal, fetchImpl)).toEqual({ ok: false, retry: true, status: 500 });
+    reply = call => (call.body.receive_id === 'ou_b' ? { status: 400, body: { code: 230013, msg: 'bot can not be seen' } } : ok(call));
+    expect(await sendAdminText(two, 'hi', 'vc-1', new AbortController().signal, fetchImpl)).toEqual({ ok: true });
+    reply = call => (call.body.receive_id ? { status: 400, body: { code: 230013, msg: 'refused' } } : ok(call));
+    expect(await sendAdminText(two, 'hi', 'vc-1', new AbortController().signal, fetchImpl)).toEqual({ ok: false, retry: false, status: 400, code: 230013, msg: 'refused' });
+  });
+
+  it('reads the administrators, the tenant and the secret from the bot\'s config, and says why it cannot', async () => {
     f.botDir = tempRoot();
     const write = (appId: string, config: unknown): void => {
       mkdirSync(join(f.botDir, appId), { recursive: true });
       writeFileSync(join(f.botDir, appId, 'config.json'), JSON.stringify(config));
     };
-    write(EARLY, { accounts: { app: { id: EARLY, secret: 'plain-secret', tenant: 'lark' } }, preferences: { access: { ownerOpenId: 'ou_owner_early' } } });
-    write(LATE, { accounts: { app: { id: LATE, secret: 'plain-secret', tenant: 'feishu' } } });
+    write(EARLY, { accounts: { app: { id: EARLY, secret: 'plain-secret', tenant: 'lark' } }, preferences: { access: { ownerOpenId: 'ou_creator', admins: ['ou_admin_a', 'ou_admin_b', 'ou_admin_a'] } } });
+    write(LATE, { accounts: { app: { id: LATE, secret: 'plain-secret', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_creator', admins: [] } } });
     write(ALONE, { accounts: { app: { id: ALONE, tenant: 'feishu' } } });
     mkdirSync(join(f.botDir, 'cli_broken'), { recursive: true });
     writeFileSync(join(f.botDir, 'cli_broken', 'config.json'), '{');
-    expect(await loadOwnerSender(EARLY)).toEqual({ appId: EARLY, tenant: 'lark', appSecret: 'plain-secret', openId: 'ou_owner_early' });
-    expect(await loadOwnerSender(LATE)).toBe('no-owner');
-    expect(await loadOwnerSender(ALONE)).toBe('config-incomplete');
-    expect(await loadOwnerSender('cli_missing')).toBe('config-incomplete');
-    expect(await loadOwnerSender('cli_broken')).toBe('config-unreadable');
+    expect(await loadAdminSender(EARLY)).toEqual({ appId: EARLY, tenant: 'lark', appSecret: 'plain-secret', openIds: ['ou_admin_a', 'ou_admin_b'] });
+    expect(await loadAdminSender(LATE)).toBe('no-admin');
+    expect(await loadAdminSender(ALONE)).toBe('config-incomplete');
+    expect(await loadAdminSender('cli_missing')).toBe('config-incomplete');
+    expect(await loadAdminSender('cli_broken')).toBe('config-unreadable');
   });
 });
 
@@ -608,7 +633,9 @@ describe('durable pause notices', () => {
     const next = make();
     next.hostStarted(hostNotice(), ctx(false, () => true));
     await flush();
-    expect(messages().map(call => call.body.uuid)).toEqual([item?.uuid, item?.uuid]);
+    const [first, second] = messages().map(call => String(call.body.uuid));
+    expect(first?.startsWith(String(item?.uuid))).toBe(true);
+    expect(second).toBe(first);
     expect(pending()).toEqual([]);
     await next.close();
   });

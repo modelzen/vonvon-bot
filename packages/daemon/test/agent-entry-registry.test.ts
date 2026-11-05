@@ -26,7 +26,7 @@ function setting(run: AgentTool['run'] = async (_args, ctx) => ctx.turn): AgentT
 }
 function setup(options: { place?: AgentPlace; facts?: TurnFacts; run?: AgentTool['run']; attached?: boolean; open?: boolean; codex?: boolean } = {}) {
   const state = { admin: true, enabled: true };
-  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => state.admin, isOwner: () => false,
+  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => state.admin,
     chatSettingsOn: () => state.enabled, tools: [read, setting(options.run)] });
   const entry = entries.issue(options.place ?? { kind: 'p2p' });
   const t = thread(options.codex ? false : undefined);
@@ -41,7 +41,7 @@ afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
 
 describe('entry lifecycle and authorization', () => {
   it('isolates places and turns without returning private identifiers', async () => {
-    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => false });
+    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true });
     const a = entries.issue({ kind: 'group', chatId: 'private-chat' });
     const b = entries.issue({ kind: 'p2p', chatId: 'private-dm' });
     const ta = thread(); a.attach(ta); b.attach(thread()); entries.openTurn(ta, person);
@@ -70,7 +70,7 @@ describe('entry lifecycle and authorization', () => {
   it.each(['group', 'doc', 'p2p'] as const)('lists and calls a private chat\'s read only there: %s', async kind => {
     const run = vi.fn(async () => 'dm read');
     const dmRead: AgentTool = { name: 't_dm_read', class: 'read', places: ['p2p'], description: 'fixture dm read', input: z.object({}), run };
-    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => false, tools: [read, dmRead] });
+    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, tools: [read, dmRead] });
     const entry = entries.issue({ kind, ...(kind === 'group' ? { chatId: 'oc_a' } : {}) });
     const t = thread(); entry.attach(t); entries.openTurn(t, person);
     expect(entry.tools().map(spec => spec.name)).toEqual(kind === 'p2p' ? ['t_read', 't_dm_read'] : ['t_read']);
@@ -89,7 +89,7 @@ describe('entry lifecycle and authorization', () => {
     expect(await f.entry.call('t_read', {})).toMatchObject({ code: 'revoked' });
   });
   it('discovers session_info before attach without including place facts', async () => {
-    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => false });
+    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true });
     const a = entries.issue({ kind: 'group', chatId: 'hidden-a' });
     const b = entries.issue({ kind: 'p2p', chatId: 'hidden-b' });
     expect(a.tools().map(spec => spec.name)).toContain('session_info');
@@ -114,7 +114,7 @@ describe('entry lifecycle and authorization', () => {
   // devices-4a 4.3: each session has its id, whose token the host drops once the session ends, however it ends. main 必败
   it('names each session and tells the host once when it ends', async () => {
     const sessions = { revoke: vi.fn() };
-    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => false, sessions });
+    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, sessions });
     const dying = entries.issue({ kind: 'group', chatId: 'oc_a' });
     const closed = entries.issue({ kind: 'p2p', chatId: 'oc_b' });
     const open = entries.issue({ kind: 'doc' });
@@ -129,7 +129,7 @@ describe('entry lifecycle and authorization', () => {
     entries.closeAll('shutdown');
     expect(sessions.revoke.mock.calls).toEqual([[dying.sessionId], [closed.sessionId], [open.sessionId]]);
     // a host that throws does not break the revoke
-    const failing = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => false, sessions: { revoke: () => { throw new Error('gone'); } } });
+    const failing = createAgentEntries({ appId: 'fixture', isAdmin: () => true, sessions: { revoke: () => { throw new Error('gone'); } } });
     const entry = failing.issue({ kind: 'p2p' });
     expect(() => entry.revoke('start-failed')).not.toThrow();
     expect(logs.fail).toHaveBeenCalledWith('agent', expect.any(Error), { phase: 'session-revoke', sessionId: entry.sessionId });
@@ -192,7 +192,7 @@ describe('entry lifecycle and authorization', () => {
     expect(reply).toMatchObject({ code: 'bad-args' }); expect(JSON.stringify(reply)).not.toContain('SECRET-XYZ');
   });
   it('caps live grants and reclaims a dead thread before issue', async () => {
-    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => false, tools: [read] });
+    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, tools: [read] });
     const dead = thread(); const first = entries.issue({ kind: 'group' }); first.attach(dead);
     for (let index = 1; index < 1024; index++) entries.issue({ kind: 'group' });
     expect(await entries.issue({ kind: 'group' }).call('t_read', {})).toMatchObject({ code: 'not-ready' });
@@ -279,7 +279,7 @@ describe('settings queues and absolute deadlines', () => {
   });
   it('limits concurrently running reads to four without affecting other grants', async () => {
     const gate = deferred(); let started = 0;
-    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => false,
+    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true,
       tools: [{ ...read, run: async () => { started++; await gate.promise; return 'read'; } }] });
     const entry = entries.issue({ kind: 'group' }); entry.attach(thread());
     const pending = Array.from({ length: 4 }, () => entry.call('t_read', {}));

@@ -80,7 +80,7 @@ vi.mock('../src/bot/onboarding', () => ({
     useBotDir('provider-lock-fixture');
     const cfg: AppConfig = {
       accounts: { app: { id: 'provider-lock-fixture', secret: 'fixture', tenant: 'feishu' } },
-      preferences: { access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } },
+      preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' } },
     };
     return { cfg, secret: 'fixture', identity: { appId: cfg.accounts.app.id, tenant: cfg.accounts.app.tenant, createdAt: 1 } } satisfies OnboardResult;
   },
