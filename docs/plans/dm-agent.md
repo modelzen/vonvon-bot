@@ -12,13 +12,13 @@ owner 2026-11-05 定，经过六轮讨论。产品行为写在 `docs/product.md`
 
 1. **管理员**：只有一种角色，是私聊唯一的门（第 3 节）。
 2. **私聊项目**：每个 Bot 一个固定的项目，私聊走和群一样的回合路径（第 4、5 节）。
-3. **飞书读取工具**：所有群和私聊都有，不依赖 lark-cli（第 7 节）。
+3. **飞书工具**：所有群、私聊和云文档评论都能读；Bot 有编辑权限的文档能直接改。一律用 Bot 自己的身份，不依赖 lark-cli，不借用户的权限（第 7 节）。
 4. **配置能力**：权限表放开到所有 Bot，加 `vonvon-config`（第 6、9 节）。
 
 不做：
 
 - 影子索引和记忆优化（owner 以后做，这批的读取工具是它的基础）。
-- 通用的飞书 API 工具、飞书写操作的内置化。lark-cli 不动，owner 以后整理。
+- 通用的飞书 API 工具；改文档以外的飞书写操作，包括改表格和多维表格（下一批）。lark-cli 本身不动，owner 以后整理。
 - 设置回执卡和撤销（3.7 已推迟）。
 - 群里改设置。
 - 按人分权限。
@@ -39,7 +39,8 @@ owner 2026-11-05 定，经过六轮讨论。产品行为写在 `docs/product.md`
 | 不能做 | 注册 Bot、改凭据；API key；管理员名单；停止、重启、升级、后台服务；配对和远程连接；删除 Bot、停用当前 Bot；Provider 和 lark-cli 登录；Bridge 导入。其余都能做，包括绑群和解绑 |
 | 人点卡片 | `/menu` 的重启、更新这些按钮不算 Agent 做的，人点照旧能用 |
 | 定时任务 | 给群建的发群里，私聊建的发私聊里。私聊任务运行时没人在场，也能读能改，按创建人的身份跑 |
-| 飞书读取工具 | 消息、话题、单条消息、图片和文件、群公告和成员、文档（含知识库）、表格、云空间文件下载、搜索消息。Skill 调工具，工具调飞书 |
+| 飞书工具 | 读：消息、话题、单条消息、图片和文件、群公告和成员、文档（含知识库）、表格、云空间文件下载、搜索消息。改：文档。Skill 调工具，工具调飞书 |
+| 飞书身份 | 读和改都用 Bot 自己的身份。Bot 能读的文档就读，能改的就改，不借用户的权限（owner 2026-11-05）。文档权限靠用户分享给 Bot |
 | 权限 | 必需的不增加；一键开通链接不放要审批的权限；缺权限时给预选好的链接，并说明要发布新版本 |
 | Skill | 3 个：`vonvon-schedule`、`vonvon-feishu`（合并原 `vonvon-feishu-message`）、`vonvon-config`（只给私聊） |
 | 风险 | 管理员让看某个群，就是管理员授权的。工具不标注"别人说的"，不做风险判断 |
@@ -272,18 +273,19 @@ open_id 按应用分。A 里查到的 id，写进 B 的白名单、拉进 B 的�
 
 ### 6.5 飞书应用权限
 
-`D/config/scopes.ts` 不动 `REQUIRED_SCOPES`。新增分组（权限名以 F1 实测为准，见第 7.4 节）：
+`D/config/scopes.ts` 不动 `REQUIRED_SCOPES`。新增分组（权限名以 F1 实测为准，见第 7.5 节）：
 
 | 分组 | 权限 | 没开时少什么 |
 |---|---|---|
 | `DOC_READ_SCOPES` | 云文档读取，加已有的 `wiki:wiki:readonly` | 读不了文档和知识库 |
+| `DOC_EDIT_SCOPES` | 云文档编辑 | 改不了文档 |
 | `SHEET_READ_SCOPES` | 表格读取 | 读不了表格 |
 | `DRIVE_READ_SCOPES` | 云空间文件下载 | 下载不了云空间文件 |
 | `MESSAGE_SEARCH_SCOPES` | `search:message` | 搜不了消息 |
 
 要审批的不进 `GRANT_SCOPES`。权限面板每组一句话，不加新的状态。
 
-## 7. 飞书读取工具（F1、F2）
+## 7. 飞书工具（F1、F2、F3）
 
 ### 7.1 工具
 
@@ -300,6 +302,7 @@ open_id 按应用分。A 里查到的 id，写进 B 的白名单、拉进 B 的�
 | `feishu_sheet` | 表格区域 | `sheets` 接口 | 可选 |
 | `feishu_drive_file` | 下载云空间文件 | `drive` 接口 | 可选 |
 | `feishu_search` | 搜消息 | `im/v1/messages/search` | 可选，待实测 |
+| `feishu_doc_edit` | 改文档：追加、插入、替换选中内容（F3） | `docs_ai/v1/documents/:id` 的更新接口，机器人身份用不了就走 `docx/v1/documents/:id/blocks` | 可选 |
 
 消息的渲染复用 `bot/context-weave.ts`，它已经能读别的 Bot 的卡片。单次结果不超过 `TOOL_RESULT_BYTES`，超了带游标。输出就是内容本身，不加"这是别人说的"这类标注。
 
@@ -309,9 +312,13 @@ open_id 按应用分。A 里查到的 id，写进 B 的白名单、拉进 B 的�
 |---|---|---|
 | 群会话 | 只有本群。`chat` 参数给别的群直接拒绝；`feishu_message` 取回来后核对 `chat_id` 是本群，不是就拒绝 | Bot 读得到的都能读 |
 | 私聊会话 | 本机任何 Bot 所在的任何群 | 同左，可以指定用哪个 Bot 读 |
-| 云文档评论 | 这批不加 | 这批不加 |
+| 云文档评论 | 没有群，这些工具不给 | 同群会话 |
 
-工具跑在 Bot 进程里，不走沙箱，所以只读档的群也能用。这正是不靠 lark-cli 的原因之一。
+文档不按群隔离：Bot 的文档权限是用户分享给它的，分享给 Bot 就是让它用（owner 2026-11-05）。
+
+工具跑在 Bot 进程里，不走沙箱，所以只读档的群也能读。这正是不靠 lark-cli 的原因之一。
+
+`feishu_doc_edit` 也不走沙箱，所以要自己守档位：`SessionProfile.tools.feishuEdit` 按这条会话的档算，只读档不给，调用时再看一次当前的档。档位变了会话本来就会重建（`createWithPermission`）。
 
 ### 7.3 接线和跨 Bot（F2）
 
@@ -323,10 +330,27 @@ open_id 按应用分。A 里查到的 id，写进 B 的白名单、拉进 B 的�
   - 路由走 `HostApi.feishuRead(botId, request)`，host 转给 B 的进程，用 B 的身份读。B 没在跑时回"Bot B 没在运行"。
 - **命令行**：`vonvon feishu messages|message|file|chat|doc|sheet|drive|search`，RPC `command.feishuRead`，权限表 `{ dm: 'bot', group: 'bot', comment: 'deny' }`，群会话按 7.2 的范围。和工具调同一组函数，`cli/parity-allowlist.ts` 过得了。
 
-### 7.4 缺权限和实测
+### 7.4 云文档评论（F3）
 
-- 缺权限时走 `utils/feishu-error.ts` 的 `scopeDenial`，工具回：少了什么、影响什么、`buildScopeGrantUrl(appId, tenant, [缺的权限])` 的链接、"开通后要发布新版本才生效；打不开这个链接，就转给这个飞书应用的管理员。"跨 Bot 时给 B 的链接。管理员不再绑定飞书身份，所以这个人可能进不了飞书后台，这句话不能省。
-- F1 开工先用测试 Bot 实测：真实文档（`docs_ai` 只用假 id 碰到过接口）、知识库、表格、云空间下载、`search:message` 能不能用机器人身份。不能用的工具不上，写进 PR。权限名以实测为准。开通权限和发版由 Mac 上的 Codex 用 ego-browser 做。
+评论会话今天的默认指令写着"用 lark-cli 读 / 改这篇文档"（`bot/comments.ts:268`），用的不是 Bot 的身份。改成：
+
+- `profileOf(…, 'comment')` 打开 `tools.feishu` 和 `tools.feishuEdit`。评论会话的位置是 `{ kind: 'doc', docId }`，工具走一个新的 `authorizeFeishu`：入口活着、这一轮还在，只放第 7.2 节里文档这一列的工具。评论 @bot 只响应管理员（`handle-message.ts:9001`），这条不变。
+- `DEFAULT_COMMENT_INSTRUCTIONS` 的"怎么做"改成：用 vonvon 的飞书工具读和改这篇文档，身份是 Bot 自己；Bot 没有权限时在回复里说清楚要用户做什么，不要换别的身份去读或改。"不要删被评论的原文"这条留着。用户改过的指令文件不动。
+- 表格和多维表格上的评论：能读，不能改，回复里说明。改它们留到下一批，那时再把 Bot 身份的写工具补全。
+
+### 7.5 缺权限和实测
+
+没有权限分两种，回复不一样：
+
+| 情况 | 工具回 |
+|---|---|
+| 应用缺权限（`utils/feishu-error.ts` 的 `scopeDenial`） | 少了什么、影响什么、`buildScopeGrantUrl(appId, tenant, [缺的权限])` 的链接、"开通后要发布新版本才生效；打不开这个链接，就转给这个飞书应用的管理员。"跨 Bot 时给 B 的链接 |
+| 应用有权限，但这篇文档没分享给 Bot | "这篇文档还没分享给 Bot。在文档右上角的分享里搜「Bot 名」，给阅读权限。" |
+| Bot 只有阅读权限，要改 | 同上，说要给编辑权限 |
+
+管理员不再绑定飞书身份，这个人可能进不了飞书后台，所以第一种的最后一句不能省。
+
+F1 开工先用测试 Bot 实测：真实文档（`docs_ai` 只用假 id 碰到过接口）、知识库、表格、云空间下载、`search:message` 能不能用机器人身份，以及机器人身份改文档走哪个接口、文档没分享时各返回什么错误码。不能用的工具不上，写进 PR。权限名以实测为准。开通权限和发版由 Mac 上的 Codex 用 ego-browser 做。
 
 ## 8. 定时任务（C2）
 
@@ -366,7 +390,11 @@ export function builtinSkillsOfSet(set: 'group' | 'dm'): BuiltinSkill[] {
   - Bot 自己进不了已有的群，要用户拉；
   - 哪些事这里做不了，告诉用户去哪里做（第 6.2 节）；
   - 调"老抢话"这类问题要看什么：用读取工具看群里的记录，用命令行看群的沟通方式和智能提示词。
-- **`vonvon` 不一定在 PATH 上**：macOS 桌面版没有注册命令。`ensureBuiltinPackage` 生成 `dm` 包时写一个启动器 `bin/vonvon`（Windows 写 `vonvon.cmd`），内容是 `process.execPath` 加 `selfEntry()`，`vonvon-config` 里写它的绝对路径。Skill 正文按 `BuiltinSkill` 的生成函数在写包时带入路径。包每次起会话时重新生成，升级后路径跟着变。
+- **`vonvon` 要保证找得到**：桌面版启动时已经注册命令（`packages/desktop/src/cli-registration.ts`：Mac 写进 shell 启动文件，Windows 写用户 PATH），Linux 服务端也有 PATH 块。但这靠会话的 shell 读到那些文件：注册可能失败，开发版不注册，非登录的 shell 不读，daemon 在注册之前起来时也拿不到新的 PATH。修法不依赖它们：
+  - Bot 进程启动时写启动器 `<data>/bin/vonvon`（Windows 写 `vonvon.cmd`），内容是 `process.execPath` 加 `selfEntry()`，daemon 带 `ELECTRON_RUN_AS_NODE` 时也写进去。每次启动重写，升级后跟着变。
+  - **所有会话**（不只私聊）的 `profile.env` 把这个目录加到 `PATH` 最前面，并设 `VONVON_CLI=<完整路径>`。两家都认 `profile.env`（Codex 的 `shell_environment_policy.set`、Claude 的 `sessionClaudeEnv`）。
+  - `vonvon-config` 直接写 `vonvon`，找不到时用 `$VONVON_CLI`。
+  - 验收时 Mac、Windows、Linux 各用两家跑一次 `vonvon --version`。
 
 ## 10. 界面（D4）
 
@@ -396,11 +424,12 @@ export function builtinSkillsOfSet(set: 'group' | 'dm'): BuiltinSkill[] {
 | D3 | 私聊记忆 | D2 | 300 |
 | C1 | 权限表：一种范围、不能做的、这一轮、id 规则、建群拉人 | D2 | 500 |
 | F2 | `vonvon feishu` 命令、跨 Bot 路由、缺权限的回复 | F1、C1 | 500 |
+| F3 | 改文档工具、评论会话接上读和改、默认指令 | F1 | 400 |
 | C2 | 定时任务 | C1 | 400 |
 | D4 | 私聊页面和 `--dm` | D1、D3、C2 | 500 |
-| C3 | 3 个 Skill、启动器、`docs/` | F1、C1 | 300 |
+| C3 | 3 个 Skill、启动器和会话 PATH、`docs/` | F1、C1 | 300 |
 
-A1、F1、D1 马上同时开，互不依赖。D2 和 A2 接着开。合计约 5,800 行。每片一个 PR 进集成分支，`claude/dm-agent-<片>` 分支、隔离 worktree，自测过就合进集成分支，全部做完再打 `frozen`。
+A1、F1、D1 马上同时开，互不依赖。D2 和 A2 接着开。合计约 6,200 行。每片一个 PR 进集成分支，`claude/dm-agent-<片>` 分支、隔离 worktree，自测过就合进集成分支，全部做完再打 `frozen`。
 
 ## 12. 验收
 
@@ -416,6 +445,8 @@ A1、F1、D1 马上同时开，互不依赖。D2 和 A2 接着开。合计约 5,
 7. 群里问 Bot"看看这篇文档"：缺权限时收到一键链接；开通发版后能读。只读档的群也能读本群消息。群会话读别的群被拒绝。
 8. 群里的 Agent 向管理员提问时，私聊里打普通的话进 Agent；回复问题卡才算回答。
 9. 升级：老 Bot 启动后私聊项目自动建好，创建者在名单里；把创建者移除再重启，不会被加回来。
+10. 云文档评论 @bot"帮我改这段"：文档分享给 Bot 可编辑时，文档改动的作者是 Bot，不是用户；只给阅读权限时，回复说要给编辑权限；没分享时，回复说要分享。被评论的原文还在。
+11. 只读档的群读得到文档，改不了。
 
 ## 13. 已知限制
 
@@ -423,6 +454,7 @@ A1、F1、D1 马上同时开，互不依赖。D2 和 A2 接着开。合计约 5,
 - 管理员名单按 Bot，权限却到整台电脑。在 A 是管理员的人，能经私聊改 B，但在 B 的群里不算管理员。页面上写明。
 - Linux 上用 root 跑时 Claude 拒绝完全访问，私聊没有低一档可退，只有 `/menu` 能用。这是 Claude 的限制，vonvon 不处理（owner 2026-11-03）。
 - 旧的 Codex 线程没有读取工具，要 `/new`。
-- 群会话能读到 Bot 读得到的所有文档，不按群隔离。
-- 用户另装的 `lark-*` Skill 还在，会话里可能同时看到两种读飞书的办法；写操作仍走它，身份是用户自己的，等 owner 以后整理。
+- 群会话能读到 Bot 读得到的所有文档，不按群隔离。文档分享给 Bot 就是让它用。
+- 表格和多维表格这批只读不改，下一批补。
+- 用户另装的 `lark-*` Skill 还在，会话里可能同时看到两种办法；文档以外的写操作仍走它，身份是用户自己的，等 owner 以后整理。
 - 飞书应用管理员的名字读不到时不进候选人，这个人私聊一次就会进。
