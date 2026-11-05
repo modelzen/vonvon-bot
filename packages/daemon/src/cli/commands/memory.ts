@@ -154,6 +154,7 @@ function show(ctx: MemoryContext, reply: MemoryReply, all = false): void {
     case 'branches': print(ctx.io, [`分支：${reply.branches.map(branch => branch.name).join('、')}${reply.moved ? `（挪了 ${reply.moved} 条）` : ''}`], reply); return;
     case 'sealed': print(ctx.io, ['已确认，可信条目恢复注入'], reply); return;
     case 'purged': print(ctx.io, ['已彻底删除'], reply); return;
+    case 'dmPeople': print(ctx.io, reply.people.length ? reply.people.map(person => `${person.openId}  ${person.name ?? '（名字未知）'}  ${person.used} 条`) : ['还没有人私聊过这个 Bot。'], { source: ctx.source, ...reply }); return;
     case 'list': {
       const human = [`${reply.used} / ${reply.limit}${reply.verified ? '' : '  （memory.json 不是 daemon 上次写的，可信条目这一轮不注入）'}`];
       for (const branch of reply.branches) {
@@ -171,6 +172,11 @@ function show(ctx: MemoryContext, reply: MemoryReply, all = false): void {
   }
 }
 
+/** Who has private-chat memory to look at: each line starts with what `--dm` takes. */
+export async function runMemoryPeople(options: { bot?: string }, terminal: MemoryTerminal): Promise<void> {
+  if (!options.bot) throw badArgs('要指定 Bot：--bot <Bot 名字或 appId>。');
+  await terminal.open('read', async ctx => show(ctx, await ctx.run({ type: 'dmPeople', botId: pickBot(await ctx.bots(), options.bot!).id })));
+}
 export async function runMemoryList(options: ListOptions, terminal: MemoryTerminal): Promise<void> {
   checkScope(options);
   await terminal.open('read', async ctx => show(ctx, await ctx.run({ type: 'list', scope: await scopeOf(options, ctx) }), Boolean(options.all)));

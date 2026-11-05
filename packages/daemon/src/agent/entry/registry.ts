@@ -39,6 +39,8 @@ export interface AgentEntries {
   /** 这一轮对记忆的事实（`memoryTurn()` 一调就绑定当前这一轮）；线程不是这个 daemon 发过入口的返回 undefined */
   memoryTurn(thread: AgentThread): TurnMemory | undefined;
   noteSteer(thread: AgentThread, sender: { openId?: string; kind: 'user' | 'bot' | 'unknown' }): void;
+  /** Every session of this private chat ends now, its token with it (dm-agent 3.3): an admin was removed. A session still starting goes too. */
+  revokeChat(chatId: string): void;
   /**
    * devices-4b 4.2: a Bot session's ★ request from its command line, judged for the session's current turn by the same
    * checks as the tools' (authorizeNow, authorizeMemory, authorizeSchedule, `ctx.admin`). Changes nothing but a dead
@@ -71,7 +73,6 @@ const messages = {
   'turn-ended': '发起这次改动的那一轮已经结束了，不能改设置。请对方重新说一遍。',
   'unknown-origin': 'vonvon 认不出这次改动是哪一轮发起的，不能改设置。请对方重新说一遍。',
   'not-admin': '只有管理员发消息触发的那一轮能改设置。',
-  'switch-off': '主人关了私聊里的“聊天改设置”，要改请去桌面端或网页。',
   'not-group': scheduleRefusalMessages['not-group'],
   'no-human-create': scheduleRefusalMessages['no-human-create'],
   'scheduled-run-scope': scheduleRefusalMessages['scheduled-run-scope'],
@@ -148,7 +149,6 @@ const placed = (tool: AgentTool, place: AgentPlace): boolean => !tool.places || 
 export function createAgentEntries(opts: {
   appId: string;
   isAdmin(openId: string): boolean;
-  chatSettingsOn?(): boolean;
   tools?: readonly AgentTool[];
   /** devices-4a 4.3: told once when a session ends, so the host drops its token (best effort: it never throws). */
   sessions?: { revoke(sessionId: string): void };
@@ -210,7 +210,6 @@ export function createAgentEntries(opts: {
     if (!auth.active || grant.turn !== auth) return refused('turn-ended');
     if (!auth.human) return refused('not-human-turn');
     if (!opts.isAdmin(auth.facts.requesterOpenId ?? '')) return refused('not-admin');
-    if (!(opts.chatSettingsOn?.() ?? true)) return refused('switch-off');
   }
   /** 记忆类工具的授权：不要求人、角色，只要求入口还活着、这一轮还在进行；人不人、什么角色只影响落点（§3.2） */
   function authorizeMemory(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
@@ -577,6 +576,7 @@ export function createAgentEntries(opts: {
         auth.controller.abort();
       }
     },
+    revokeChat(chatId) { for (const grant of [...grants]) if (grant.place.kind === 'p2p' && grant.place.chatId === chatId) revoke(grant); },
     closeAll() { shuttingDown = true; for (const grant of grants) revoke(grant); },
   };
 }

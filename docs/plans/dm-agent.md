@@ -305,6 +305,10 @@ open_id 按应用分。A 里查到的 id，写进 B 的白名单、拉进 B 的�
 | `BOARD_READ_SCOPES` | `board:whiteboard:node:read` | 读不了画板 |
 | `MINUTES_READ_SCOPES` | `minutes:minutes:readonly`、`minutes:minutes.transcript:export` | 读不了妙记 |
 | `LEGACY_DOC_READ_SCOPES` | `docs:doc:readonly` | 读不了旧版文档 |
+| `DRIVE_LIST_SCOPES` | `space:document:retrieve` | 看不了云空间文件夹里有什么 |
+| `WIKI_READ_SCOPES` | `wiki:space:retrieve`、`wiki:node:retrieve` | 看不了知识库和它的目录 |
+| `COMMENT_READ_SCOPES` | `docs:document.comment:read`，`GRANT_SCOPES` 里已有 | 读不了文档评论 |
+| `DOC_MEDIA_SCOPES` | `docs:document.media:download` | 下载不了文档里的图片和附件 |
 | `MESSAGE_SEARCH_SCOPES` | `search:message` | 搜不了消息 |
 
 这几组合成 `FEISHU_TOOL_SCOPES`，单独一个预选链接，不进 `GRANT_SCOPES`。
