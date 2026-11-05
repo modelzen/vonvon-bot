@@ -62,8 +62,12 @@ function scopesToGrant(area: ReadArea, accepted: readonly string[]): readonly st
 
 export function scopeReply(context: DenialContext, area: ReadArea, accepted: readonly string[]): string {
   const scopes = scopesToGrant(area, accepted);
+  return missingScopes(context, scopes, AREAS[area].effect);
+}
+
+function missingScopes(context: DenialContext, scopes: readonly string[], effect: string): string {
   const url = buildScopeGrantUrl(context.app.id, context.app.tenant, scopes);
-  return `这个 Bot 的飞书应用缺权限：${scopes.map(labelScope).join('、')}，所以${AREAS[area].effect}。开通链接：${url} ${AFTER_GRANT}`;
+  return `这个 Bot 的飞书应用缺权限：${scopes.map(labelScope).join('、')}，所以${effect}。开通链接：${url} ${AFTER_GRANT}`;
 }
 
 /** A failed call as a refusal: `failure` is what the SDK threw, or a body with a non-zero code. */
@@ -81,6 +85,20 @@ export function refusalOf(context: DenialContext, area: ReadArea, failure: unkno
   if (error) return new FeishuReadRefused(`飞书拒绝了这次${editing ? '修改' : '读取'}（错误码 ${error.code}${error.msg ? `：${error.msg}` : ''}）。`);
   log.warn('feishu-read', 'read-failed', { area, err: String(failure) });
   return new FeishuReadRefused('没连上飞书，稍后再试。', 'no-answer');
+}
+
+/**
+ * feishu_api's refusal (7.6): there is no scope group, so the link preselects the first scope Feishu names, any of them
+ * being enough. Everything else goes back in Feishu's words (`said`): a scope denial naming none, and any other error.
+ * `body` is Feishu's parsed answer, when it was JSON.
+ */
+export function apiRefusalOf(context: DenialContext, body: unknown, said: string, writes: boolean): FeishuReadRefused {
+  const denial = scopeDenial(body);
+  if (denial?.accepted.length) return new FeishuReadRefused(missingScopes(context, denial.accepted.slice(0, 1), '这次调用做不了'), 'scope');
+  if (denial) return new FeishuReadRefused(`这个 Bot 的飞书应用缺权限，飞书没说缺哪个。飞书的原话：${said}`, 'scope');
+  const error = feishuError(body);
+  if (error && NOT_SHARED_CODES.has(error.code)) return new FeishuReadRefused(`${notSharedReply(context.botName(), writes ? '编辑' : '阅读')}飞书的原话：${said}`, 'not-shared');
+  return new FeishuReadRefused(`飞书返回了错误：${said}`);
 }
 
 /** Most of an error body a download's stream is read for. */
