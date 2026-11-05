@@ -373,12 +373,12 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
   const SETUP_BOT = 'cli_setupbot';
   const configuredCallback = { state: 'configured', mode: 'websocket' };
 
-  function writeCompleteConfig(tenant: 'feishu' | 'lark' = 'feishu'): void {
+  function writeCompleteConfig(tenant: 'feishu' | 'lark' = 'feishu', preferences?: unknown): void {
     const dir = botPaths(SETUP_BOT).dir;
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       botPaths(SETUP_BOT).configFile,
-      JSON.stringify({ accounts: { app: { id: SETUP_BOT, secret: 'plain-secret', tenant } } }),
+      JSON.stringify({ accounts: { app: { id: SETUP_BOT, secret: 'plain-secret', tenant } }, preferences }),
     );
   }
 
@@ -431,6 +431,20 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
         { name: 'setup', appId: SETUP_BOT, tenant: 'feishu', createdAt: 3, active: false },
       ],
     });
+  });
+
+  it('tells the running bot to greet its creator once every required scope shows, and only then', async () => {
+    const granted = stubFetch({ grantedScopes: [...REQUIRED_SCOPES], eventEvents: ['im.message.receive_v1'] });
+    const firstHello = vi.fn(async () => { throw new Error('bot not running'); });
+    writeCompleteConfig('feishu', { access: { firstHelloPending: true } });
+    await createAdminService({ firstHello }).getSetupStatus(SETUP_BOT); // the default stub: nothing granted yet
+    expect(firstHello).not.toHaveBeenCalled();
+    vi.stubGlobal('fetch', granted);
+    await createAdminService({ firstHello }).getSetupStatus(SETUP_BOT);
+    expect(firstHello).toHaveBeenCalledExactlyOnceWith(SETUP_BOT);
+    writeCompleteConfig();
+    await createAdminService({ firstHello }).getSetupStatus(SETUP_BOT);
+    expect(firstHello).toHaveBeenCalledTimes(1);
   });
 
   it('全绿：密钥有效 + scope 齐全 + 事件 ok（长连接靠锁文件探测，预览态 running=false）', async () => {
