@@ -3,10 +3,10 @@ import type {MemoryEvent, MemoryItem, MemoryRequest, MemoryScopeRef} from '@vonv
 import {useClient, useShellCapabilities} from './client-context';
 import {MapInlineEditor, type MapInlineEditorSession} from './MapInlineEditor';
 import type {MapNode} from './MindMap';
-import {branchNameProblem, branchRoom, mergeTargets, moveRequest, runMemory, sourceLines, type BranchView} from './memory-model';
+import {branchNameProblem, branchRoom, memoryScopeKey, mergeTargets, moveRequest, runMemory, sourceLines, type BranchView} from './memory-model';
 import {groupUrl, openExternalUrl} from './url-actions';
 
-type Scope = Extract<MemoryScopeRef, {kind: 'project' | 'bot'}>;
+type Scope = MemoryScopeRef;
 type Targets = {
   bots?: ReadonlyArray<{id: string; name: string}>;
   projects?: ReadonlyArray<{id: string; name: string; bindings: ReadonlyArray<{agentId: string; groupId: string}>}>;
@@ -59,7 +59,7 @@ export function useMemoryDetailNodes({action, detailItem, closeAction, closeDeta
   const [eventProblem, setEventProblem] = useState('');
   const [sourceProblem, setSourceProblem] = useState('');
   const [newBranch, setNewBranch] = useState(false);
-  const scopeKey = scope.kind === 'bot' ? `bot:${scope.botId}` : `project:${scope.projectId}`;
+  const scopeKey = memoryScopeKey(scope);
   const actionKey = action?.kind === 'merge' ? `merge:${action.branch}` : action ? `${action.kind}:${action.item.id}` : '';
 
   useEffect(() => {setNewBranch(false);}, [actionKey]);

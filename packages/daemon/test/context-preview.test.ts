@@ -22,7 +22,7 @@ import { assemble, contextOf, loadContextSources, planTurnUpdate } from '../src/
 import {writeJudgeModels} from '../src/judge/global-models';
 import { contextPreview } from '../src/admin/context-preview';
 import { createLibraryProject, libraryLocation } from '../src/project/library';
-import { botMemoryLocation, MemoryStore, projectMemoryLocation } from '../src/bot/memory-store';
+import { botMemoryLocation, dmMemoryLocation, MemoryStore, projectMemoryLocation } from '../src/bot/memory-store';
 import { settleTurn } from '../src/bot/turn-usage';
 
 const CHAT = 'oc_here';
@@ -135,6 +135,32 @@ describe('contextPreview', () => {
     expect((await w.preview(true)).session!.lastTurn!.missed).toEqual(['像密钥', '项目记忆满了']);
     w.sessions([record({ context: settled })]);
     expect((await w.preview(true)).session!.lastTurn).not.toHaveProperty('missed');
+  });
+
+  // dm-agent 10 (D4). main 必败: there was no preview of a private chat
+  it('shows one person\'s private chat: their memory, no project\'s, no judge', async () => {
+    const { bot, add, library } = await world();
+    await add(bot, '大家都用的', '约定');
+    const people = { oc_old: { openId: 'ou_a', name: '张三', at: 1 }, oc_new: { openId: 'ou_a', at: 5 }, oc_b: { openId: 'ou_b', at: 2 } };
+    const rows = JSON.parse(readFileSync(join(botDir(), 'projects.json'), 'utf8')) as { projects: object[] };
+    writeFileSync(join(botDir(), 'projects.json'), JSON.stringify({ ...rows, projects: [...rows.projects, { name: '私聊', chatId: 'oc_dm_cli_a', cwd: work, blank: true, createdAt: 1, backend: 'claude-agent', dm: { people } }] }));
+    const mine = new MemoryStore(dmMemoryLocation(botDir(), 'ou_a'));
+    const source = { via: 'tool', botId: 'cli_a', actorRole: 'admin', actorOpenId: 'ou_a', chatId: 'oc_new' } as const;
+    for (const [text, trust] of [['张三的事', 'trusted'], ['张三没确认的事', 'untrusted']] as const) await mine.add({ text, branch: '其他', source, trust, actor: { role: 'admin', openId: 'ou_a' } });
+    await new MemoryStore(dmMemoryLocation(botDir(), 'ou_b')).add({ text: '别人的事', branch: '其他', source: { ...source, actorOpenId: 'ou_b' }, trust: 'trusted', actor: { role: 'admin', openId: 'ou_b' } });
+    writeFileSync(join(botDir(), 'sessions.json'), JSON.stringify({ version: 3, sessions: [
+      { threadId: 'th_old', chatId: 'oc_old', sessionId: 's1', backend: 'claude-agent', cwd: work, createdAt: 1, updatedAt: 9 },
+      { threadId: 'th_new', chatId: 'oc_new', sessionId: 's2', backend: 'claude-agent', cwd: work, createdAt: 1, updatedAt: 2 },
+    ] }));
+    const preview = (openId: string, running = true) => contextPreview({ type: 'get', agentId: 'cli_a' as never, place: { kind: 'dm', openId } }, { running, botName: '小支', library, botDirectory: botDir() });
+    const reply = contextPreviewReplySchema.parse(await preview('ou_a'));
+    expect(reply.next.sections.map(section => section.key)).toEqual(['identity', 'role', 'supplement', 'botMemory', 'dmMemory']);
+    expect(reply.next.sections.at(-1)).toMatchObject({ items: 2 });
+    expect(reply.next.items).toEqual({ bot: 1, trusted: 1, untrusted: 1 });
+    expect(reply.session?.threadId).toBe('th_new'); // the chat they use now, not an old one
+    expect(reply.judge).toMatchObject({ roleChars: 0, memoryItems: 0 });
+    expect((await preview('ou_b')).next.items).toEqual({ bot: 1, trusted: 1, untrusted: 0 });
+    await expect(preview('ou_stranger')).rejects.toThrow('这个人没有和这个 Bot 私聊过');
   });
 
   it('shows the newest live session of the group unless one is asked for', async () => {

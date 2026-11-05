@@ -46,6 +46,52 @@ function harness(settings: (request: SettingsRequest) => unknown) {
 }
 const pipe = (text: string): Stdin => ({ isTTY: false, read: async () => text });
 
+// dm-agent 10 (D4). main 必败: settings had no --dm
+describe('settings --dm', () => {
+  const dm = { kind: 'project', botId: 'cli_a', projectName: 'oc_dm_cli_a' };
+  const fixed = (stored: object) => ({ ...section(stored), access: { kind: 'readonly', reason: 'dm-fixed', message: '私聊只有完全访问一档' } });
+  const view = {
+    scope: dm, identity: { chatId: 'oc_dm_cli_a', backend: 'claude-agent', cwd: '/data/projects/dm', kind: 'single' }, members: { openIds: [], revision: 'm1' }, skills: [],
+    sections: {
+      model: section({ selection: { kind: 'default' } }), speed: section({ tier: 'inherit' }), modelAccess: section({ backend: 'claude-agent', models: ['m'], efforts: ['low'] }), skills: section({ disabledPaths: [] }),
+      permission: fixed({ mode: 'full', options: { tiers: [], fields: [{ key: 'sandbox', label: '沙盒', kind: 'switch' }] } }), workspace: fixed({ primary: '/data/projects/dm', directories: [], repositories: [] }),
+      response: fixed({ noMention: true }), judge: fixed({ selection: { kind: 'default' } }),
+    },
+  };
+  const reads = (request: SettingsRequest) => request.type === 'read' ? { kind: 'view', view } : { kind: 'saved', result: { kind: 'saved', section: {}, effects: [], warnings: [] } };
+
+  it('reads the private chat by oc_dm_<appId>, and shows only what it has', async () => {
+    const h = harness(reads);
+    await runSettingsGet(undefined, { dm: true }, h.io(), h.daemon);
+    expect(h.send).toHaveBeenCalledWith({ type: 'read', scope: dm });
+    expect(h.send.mock.calls.some(([request]) => request.type === 'sessions')).toBe(false);
+    const lines = h.out().split('\n');
+    expect(lines[0]).toBe('Bot Test（cli_a）的私聊 · Claude · /data/projects/dm');
+    for (const name of ['[model]', '[speed]', '[modelAccess]', '[skills]', '[permission]（只读：私聊只有完全访问一档）', '[workspace]（只读：私聊只有完全访问一档）']) expect(lines).toContain(name);
+    expect(h.out()).not.toContain('[response]');
+    expect(h.out()).not.toContain('[judge]');
+    expect(h.out()).not.toContain('高级设置');
+    expect(h.out()).not.toContain('响应成员');
+    expect(await h.failure(runSettingsGet('response', { dm: true }, h.io(), h.daemon))).toMatchObject({ exitCode: 2 });
+  });
+
+  it('saves through the same save, and takes no --group or --session', async () => {
+    const h = harness(reads);
+    await runSettingsSet(['model.selection={"kind":"default"}'], { dm: true }, h.io(), h.daemon);
+    expect(h.send).toHaveBeenLastCalledWith({ type: 'save', edit: expect.objectContaining({ scope: dm, section: 'model' }) });
+    for (const target of [{ dm: true, group: '研发' }, { dm: true, session: 'th_1' }, { dm: true, host: true }]) expect(await h.failure(runSettingsGet(undefined, target, h.io(), h.daemon))).toMatchObject({ exitCode: 2 });
+  });
+
+  it('lists the models of its own Provider, for the project picker', async () => {
+    const h = harness(() => ({ kind: 'models', catalog: { backend: 'claude-agent', state: 'ready', models: [] } }));
+    const dmAgent = { dm: true };
+    expect(await h.failure(runSettingsModels(dmAgent, h.io(), h.daemon))).toMatchObject({ exitCode: 2, error: { message: '这个 Bot 还没有私聊：启动过一次才有。也可以用 --backend 指定。' } });
+    await runSettingsModels({ ...dmAgent, backend: 'claude' }, h.io(), h.daemon);
+    expect(h.send).toHaveBeenLastCalledWith({ type: 'models', query: { botId: 'cli_a', backend: 'claude-agent', purpose: 'project' } });
+    expect(await h.failure(runSettingsModels({ ...dmAgent, purpose: 'judge' }, h.io(), h.daemon))).toMatchObject({ exitCode: 2 });
+  });
+});
+
 describe('settings act voice', () => {
   // main 必败: settings act did not exist
   it('refresh sends refreshPermission and prints the permission, the result and where to grant it', async () => {

@@ -179,3 +179,4 @@
 @media (pointer: coarse) {
   .config-group-link { min-height: 44px; }
 }
+.dm-memory { display: grid; gap: 16px; min-width: 0; }

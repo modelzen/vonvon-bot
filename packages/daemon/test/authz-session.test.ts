@@ -265,6 +265,21 @@ describe('the bot-session column (unit)', () => {
     expect(await authorize(owner({ bot: BOT, group: GROUP }), settingsSave('研发'), deps)).toEqual({ ok: true });
   });
 
+  // dm-agent 10 (D4). main 必败: the private chat goes by no group's name, so no --scope reached its settings or tasks
+  it('reaches the private chat with the whole bot, and from no group', async () => {
+    const owner = (scope: Scope) => ({ principal: { kind: 'owner' as const, via: 'local' as const }, protocolVersion: 2, negotiated: true, scope });
+    const read = request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: `oc_dm_${BOT}` } });
+    const tasks = request('schedule', { botId: BOT, request: { action: 'list', chatId: 'oc_p2p_a' } });
+    const deps = { groupsOf: async () => [{ chatId: GROUP, name: '研发' }] };
+    for (const ask of [read, tasks]) {
+      expect(await authorize(owner({ bot: BOT }), ask, deps)).toEqual({ ok: true });
+      expect(await authorize(owner({ bot: BOT, group: GROUP }), ask, deps)).toMatchObject({ ok: false });
+      expect(await authorize(peer('group'), ask, deps)).toMatchObject({ ok: false });
+    }
+    // another Bot's id is no way in
+    expect(await authorize(owner({ bot: BOT }), request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: 'oc_dm_cli_other' } }), deps)).toMatchObject({ ok: false });
+  });
+
   // Codex review 229-4: the owner's --scope binds no other group, and moves no other bot's or project's things
   it('checks the owner\'s commands, admin and library requests against its --scope by their target', async () => {
     const owner = (scope: Scope) => ({ principal: { kind: 'owner' as const, via: 'local' as const }, protocolVersion: 2, negotiated: true, scope });
