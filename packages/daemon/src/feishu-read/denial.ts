@@ -1,5 +1,5 @@
 import type { TenantBrand } from '../config/schema';
-import { BITABLE_READ_SCOPES, buildScopeGrantUrl, DOC_EDIT_SCOPES, DOC_READ_SCOPES, DRIVE_READ_SCOPES, labelScope, MESSAGE_SEARCH_SCOPES, SHEET_READ_SCOPES } from '../config/scopes';
+import { BITABLE_READ_SCOPES, buildScopeGrantUrl, COMMENT_READ_SCOPES, DOC_EDIT_SCOPES, DOC_MEDIA_SCOPES, DOC_READ_SCOPES, DRIVE_LIST_SCOPES, DRIVE_READ_SCOPES, labelScope, MESSAGE_SEARCH_SCOPES, SHEET_READ_SCOPES, WIKI_READ_SCOPES } from '../config/scopes';
 import { log } from '../core/logger';
 import { withDeadline } from '../bot/names';
 import { feishuError, scopeDenial } from '../utils/feishu-error';
@@ -10,7 +10,7 @@ import { feishuError, scopeDenial } from '../utils/feishu-error';
  */
 
 /** What a read touches: the scopes it needs and what is lost without them. */
-export type ReadArea = 'history' | 'resource' | 'chat' | 'announcement' | 'doc' | 'docEdit' | 'sheet' | 'base' | 'drive' | 'search';
+export type ReadArea = 'history' | 'resource' | 'chat' | 'announcement' | 'doc' | 'docEdit' | 'sheet' | 'base' | 'drive' | 'folder' | 'wiki' | 'comments' | 'docMedia' | 'search';
 const AREAS: Record<ReadArea, { scopes: readonly string[]; effect: string }> = {
   history: { scopes: ['im:message:readonly'], effect: '读不了群里的消息' },
   resource: { scopes: ['im:resource'], effect: '下载不了消息里的图片和文件' },
@@ -21,6 +21,10 @@ const AREAS: Record<ReadArea, { scopes: readonly string[]; effect: string }> = {
   sheet: { scopes: SHEET_READ_SCOPES, effect: '读不了表格' },
   base: { scopes: BITABLE_READ_SCOPES, effect: '读不了多维表格' },
   drive: { scopes: DRIVE_READ_SCOPES, effect: '下载不了云空间文件' },
+  folder: { scopes: DRIVE_LIST_SCOPES, effect: '看不了云空间文件夹里有什么' },
+  wiki: { scopes: WIKI_READ_SCOPES, effect: '看不了知识库和它的目录' },
+  comments: { scopes: COMMENT_READ_SCOPES, effect: '读不了文档评论' },
+  docMedia: { scopes: DOC_MEDIA_SCOPES, effect: '下载不了文档里的图片和附件' },
   search: { scopes: MESSAGE_SEARCH_SCOPES, effect: '搜不了消息' },
 };
 /** The sentence that closes a missing-scope reply: an administrator of vonvon may not reach the Feishu console (7.5). */
@@ -48,6 +52,11 @@ export interface DenialContext {
 const shared = (bot: string, grant: string): string => `在文档右上角的分享里搜「${bot}」，给${grant}权限。`;
 /** `grant`: what the Bot needs for what it was asked, 编辑 for a change, so nobody has to share twice. */
 export const notSharedReply = (bot: string, grant = '阅读'): string => `这篇文档还没分享给 Bot。${shared(bot, grant)}`;
+/** Where it is shared from is not a document's right-hand corner for these. */
+const NOT_SHARED_PLACES: Partial<Record<ReadArea, (bot: string) => string>> = {
+  folder: bot => `这个文件夹还没分享给 Bot。在文件夹右上角的分享里搜「${bot}」，给阅读权限。`,
+  wiki: bot => `这个知识库还没对 Bot 开放。把「${bot}」所在的群加为知识库成员，或者把要读的页面分享给它。`,
+};
 /** The Bot can read but was asked to change it. */
 export const readOnlyReply = (bot: string): string => `Bot 对这篇文档只有阅读权限。${shared(bot, '编辑')}`;
 
@@ -72,10 +81,11 @@ export function refusalOf(context: DenialContext, area: ReadArea, failure: unkno
   if (denial) return new FeishuReadRefused(scopeReply(context, area, denial.accepted), 'scope');
   const error = feishuError(failure);
   const editing = area === 'docEdit';
-  if (error && NOT_SHARED_CODES.has(error.code)) return new FeishuReadRefused(notSharedReply(context.botName(), editing ? '编辑' : '阅读'), 'not-shared');
+  if (error && NOT_SHARED_CODES.has(error.code)) return new FeishuReadRefused(NOT_SHARED_PLACES[area]?.(context.botName()) ?? notSharedReply(context.botName(), editing ? '编辑' : '阅读'), 'not-shared');
   if (error && OUT_OF_CHAT_CODES.has(error.code)) return new FeishuReadRefused(`「${context.botName()}」不在这个群里，读不到。`);
   if (error && NOT_FOUND_CODES.has(error.code)) {
-    const what = area === 'doc' || editing || area === 'sheet' || area === 'base' || area === 'drive' ? '这个文档或文件，看看链接和 token 对不对' : '这条内容，看看 id 对不对';
+    const what = area === 'folder' ? '这个文件夹，看看链接和 token 对不对' : area === 'wiki' ? '这个知识库或页面，看看链接和 id 对不对'
+      : area === 'doc' || editing || area === 'sheet' || area === 'base' || area === 'drive' || area === 'comments' || area === 'docMedia' ? '这个文档或文件，看看链接和 token 对不对' : '这条内容，看看 id 对不对';
     return new FeishuReadRefused(`找不到${what}（飞书错误码 ${error.code}）。`, 'not-found');
   }
   if (error) return new FeishuReadRefused(`飞书拒绝了这次${editing ? '修改' : '读取'}（错误码 ${error.code}${error.msg ? `：${error.msg}` : ''}）。`);

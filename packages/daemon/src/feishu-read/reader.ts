@@ -1,4 +1,5 @@
 import { readBase, type BaseRequest } from './base';
+import { readComments, readDocMedia, readFolder, readWiki, type CommentsRequest, type DocMediaRequest, type FolderRequest, type WikiRequest } from './drive';
 import { editDoc, readDoc, readDriveFile, readSheet, type DocEditRequest, type DocEditResult, type DocRequest, type DriveFileRequest, type SheetRequest } from './documents';
 import { readChat, readFile, readMessage, readMessages, searchMessages, type ChatRequest, type FileRequest, type MessageRequest, type MessagesRequest, type SearchRequest } from './messages';
 import type { ReadDeps } from './shared';
@@ -19,6 +20,10 @@ export interface FeishuReader {
   sheet(request: SheetRequest): ReturnType<typeof readSheet>;
   base(request: BaseRequest): ReturnType<typeof readBase>;
   driveFile(request: DriveFileRequest): ReturnType<typeof readDriveFile>;
+  folder(request: FolderRequest): ReturnType<typeof readFolder>;
+  wiki(request: WikiRequest): ReturnType<typeof readWiki>;
+  comments(request: CommentsRequest): ReturnType<typeof readComments>;
+  docMedia(request: DocMediaRequest): ReturnType<typeof readDocMedia>;
   /** The one write here (dm-agent 7.1, F3): `beforeWrite` runs right before Feishu is asked to change the document. */
   docEdit(request: DocEditRequest, beforeWrite?: () => void): Promise<DocEditResult>;
 }
@@ -34,6 +39,10 @@ export function createFeishuReader(deps: ReadDeps): FeishuReader {
     sheet: request => readSheet(deps, request),
     base: request => readBase(deps, request),
     driveFile: request => readDriveFile(deps, request),
+    folder: request => readFolder(deps, request),
+    wiki: request => readWiki(deps, request),
+    comments: request => readComments(deps, request),
+    docMedia: request => readDocMedia(deps, request),
     docEdit: (request, beforeWrite) => editDoc(deps, request, beforeWrite),
   };
 }
