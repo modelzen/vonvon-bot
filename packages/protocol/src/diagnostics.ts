@@ -168,7 +168,6 @@ export const FEISHU_TOOL_SCOPE_EFFECTS: Record<string, string> = {
   "wiki:wiki:readonly": "读不了文档和知识库",
   "docx:document:write_only": "改不了文档",
   "sheets:spreadsheet:read": "读不了表格",
-  "sheets:spreadsheet.meta:read": "读不了表格",
   "drive:file:download": "下载不了云空间文件",
   "search:message": "搜不了消息",
 };
