@@ -727,13 +727,15 @@ function runFailureMessage(err: unknown, dropped: number, sessionNotice?: string
 }
 
 /** Why a location's stored session couldn't be continued (see resolveThread). */
-export type RecreateReason = 'resume-failed' | 'cwd-changed';
+export type RecreateReason = 'resume-failed' | 'cwd-changed' | 'provider-changed';
+
+interface ResolvedThread { thread: AgentThread | undefined; recreated: boolean; reason?: RecreateReason }
 
 /** The run-card line for a forced session change: never switch sessions
  * silently (product.md 3.5). A topic re-weaves its recent messages into the new
  * session; the main area has nothing to re-weave. */
 export function sessionChangeNotice(reason: RecreateReason, topic: boolean): string {
-  const why = reason === 'cwd-changed' ? '本群的工作目录改了' : '原来的会话接不上了（恢复失败）';
+  const why = reason === 'cwd-changed' ? '本群的工作目录改了' : reason === 'provider-changed' ? 'Provider 换了' : '原来的会话接不上了（恢复失败）';
   const carried = topic ? '，话题里最近的消息已重新带上' : '';
   return `⚠️ ${why}，这一轮起换了一条新会话，之前的对话记不得${carried}。`;
 }
@@ -1295,6 +1297,26 @@ export function createOrchestrator(
     const models = projectModelCatalog(project, backend.id, await listModels(backend));
     if (project?.modelAccess && !models.length) throw new Error('本群没有可用的模型与 Effort 组合，请先在群设置中选择');
     return pickDefault(models, project?.modelAccess ? { ...prefer, custom: false } : prefer);
+  }
+  /**
+   * A private chat has one session and no new topic to change in, so its next turn follows the page (dm-agent 4.1): a model
+   * taken off the list moves to the row's default, another Provider starts over there. True in that last case: what the
+   * old one holds cannot be resumed.
+   */
+  async function followDmRow(threadId: string, chatId: string, project: Project | undefined): Promise<boolean> {
+    const rec = project?.dm && project.modelAccess ? await getSession(threadId) : undefined;
+    if (!rec) return false;
+    const be = groupBackend(project);
+    const moved = rec.backend !== be.id;
+    if (!moved && projectModelAllowed(project, be.id, rec.model, rec.effort, await listModels(be))) return false;
+    const prefer = modelPrefOf(project, be.id);
+    const { model, effort } = await pickGroupDefault(project, be, prefer);
+    await patchSession(threadId, { backend: be.id, model, effort, modelCustom: isCustomDefault(prefer, model) });
+    if (moved) {
+      await evictLiveSessionsForChat(chatId);
+      lastUsage.delete(threadId); // a new session: the meter starts over
+    }
+    return moved;
   }
   /** The group's backend: its own, else Codex; not the bot default (product.md 3.2). */
   function groupBackend(project: Pick<Project, 'backend'> | undefined): AgentBackend {
@@ -3786,10 +3808,11 @@ export function createOrchestrator(
         // preIngested (handleTurn already wove them into `text`).
         const ingestP = preIngested ? Promise.resolve(preIngested) : ingestContext(msg, text, extra, goal ? undefined : project);
         let tResolveDone = tIntake;
-        const resolveP = resolveThread(sessionKey, msg.chatId, {
+        const moved = await followDmRow(sessionKey, msg.chatId, project);
+        const resolveP = (moved ? Promise.resolve<ResolvedThread>({ thread: undefined, recreated: true, reason: 'provider-changed' }) : resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
           network: perm.network, native: perm.native, readScope: perm.readScope,
-        }).then((r) => {
+        })).then((r) => {
           tResolveDone = Date.now();
           return r;
         });
@@ -4201,7 +4224,7 @@ export function createOrchestrator(
     threadId: string,
     chatId: string,
     perm: TurnPerm,
-  ): Promise<{ thread: AgentThread | undefined; recreated: boolean; reason?: RecreateReason }> {
+  ): Promise<ResolvedThread> {
     let project: Project | undefined;
     const live = sessions.get(threadId);
     if (live) {

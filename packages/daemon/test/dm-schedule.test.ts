@@ -245,14 +245,15 @@ describe('an administrator taken off the list', () => {
 });
 
 describe('what a task shows', () => {
-  it('lists private chats\' tasks on the Bot with the person, and refuses the row\'s own id, which has nowhere to post', async () => {
+  it('lists private chats\' tasks on the Bot with the person, and takes the row\'s own id from a private chat only (D4)', async () => {
     const { as } = await app();
     await made(as(dm(OWNER, A), create(A)));
     await made(as(dm(OWNER, A), create(G)));
     const listed = await as({ kind: 'local', via: 'desktop' }, { action: 'listBot' });
     expect(listed).toMatchObject({ kind: 'tasks', tasks: [{ chatId: A, dm: { name: '主人' } }, { chatId: G }] });
     expect(listed.kind === 'tasks' && listed.tasks[1]).not.toHaveProperty('dm');
-    expect(await as(dm(OWNER, A), create(dmChatId(APP)))).toMatchObject({ kind: 'refused', reason: 'not-found' });
+    expect(await as(dm(OWNER, A), create(dmChatId(APP)))).toMatchObject({ kind: 'task', task: { chatId: A } });
+    expect(await as({ kind: 'local', via: 'cli' }, create(dmChatId(APP)))).toMatchObject({ kind: 'refused', reason: 'not-found' });
     expect(await as(dm(OWNER, A), create('oc_nowhere'))).toMatchObject({ kind: 'refused', reason: 'not-found' });
   });
 });

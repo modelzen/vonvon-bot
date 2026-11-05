@@ -126,6 +126,7 @@ export const memoryRequestSchema = z.discriminatedUnion("type", [
   z.object({type:z.literal("seen"),page:z.discriminatedUnion("kind",[
     z.object({kind:z.literal("bot"),botId:id}).strict(),
     z.object({kind:z.literal("project"),projectId:id}).strict(),
+    z.object({kind:z.literal("dm"),botId:id,openId:id}).strict(),
   ])}).strict(),
   /** 导航、项目列表、Bot 列表上"新"的条数：每个项目、每个 Bot 各一个数 */
   z.object({type:z.literal("newCounts")}).strict(),
@@ -159,8 +160,16 @@ export const memoryReplySchema = z.discriminatedUnion("kind", [
     madeRoom: z.array(z.string()).optional(),
   }),
   z.object({kind:z.literal("seen"),at:z.number()}),
-  z.object({kind:z.literal("newCounts"),projects:z.record(z.string(),z.number().int().nonnegative()),bots:z.record(z.string(),z.number().int().nonnegative())}),
-  z.object({kind:z.literal("dmPeople"),people:z.array(z.object({openId:z.string(),name:z.string().optional(),at:z.number(),used:z.number().int().nonnegative()}))}),
+  z.object({kind:z.literal("newCounts"),projects:z.record(z.string(),z.number().int().nonnegative()),bots:z.record(z.string(),z.number().int().nonnegative()),
+    /** 每个 Bot 的私聊记忆里新的条数，所有人加起来；旧 daemon 没有 */
+    dm:z.record(z.string(),z.number().int().nonnegative()).optional()}),
+  z.object({kind:z.literal("dmPeople"),people:z.array(z.object({openId:z.string(),name:z.string().optional(),at:z.number(),used:z.number().int().nonnegative(),
+    /** 这个人最近的一个真实私聊；发给他的定时任务就发到这里 */
+    chatId:z.string().optional(),
+    /** 现在还是不是管理员；读不到配置时省略，不当作"不是" */
+    admin:z.boolean().optional(),
+    /** 主人上次看这个人之后新写的条数 */
+    fresh:z.number().int().nonnegative().optional()}))}),
   z.object({kind:z.literal("item"),item:memoryItemSchema,branchApplied:z.string().optional(),newBranch:z.boolean().optional()}),
   z.object({kind:z.literal("conflict"),current:memoryItemSchema.optional(),message:z.string()}),
   z.object({kind:z.literal("refused"),reason:memoryRefusalSchema,message:z.string()}),

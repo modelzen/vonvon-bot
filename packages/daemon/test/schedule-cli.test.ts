@@ -39,6 +39,84 @@ function harness(reply: (request: ScheduleRequest) => ScheduleReply | Promise<Sc
 }
 const created = (request: ScheduleRequest): ScheduleReply => request.action === 'list' ? tasks([]) : { kind: 'task', task: task() };
 
+// dm-agent 10 (D4). main 必败: schedule had no --dm
+describe('--dm', () => {
+  const dmTask = (over: Partial<ScheduledTaskView> = {}) => task({ id: 'st_dm', chatId: 'oc_p2p_a', dm: { name: '张三' }, name: '早报', ...over });
+  const person = (openId: string, over: object = {}) => ({ openId, at: 1, used: 0, fresh: 0, chatId: `oc_p2p_${openId}`, admin: true, ...over });
+  function dmHarness(people: object[], reply: (request: ScheduleRequest) => ScheduleReply, principal?: string) {
+    let out = '';
+    const requests: ScheduleRequest[] = [];
+    const memory = vi.fn(async () => ({ kind: 'dmPeople', people }));
+    const client = {
+      snapshot: async () => ({ agents: [{ id: 'cli_test', name: 'Test' }], memberships: [{ agentId: 'cli_test', groupId: 'oc_group', name: '研发群' }] }),
+      schedule: async (_botId: string, request: ScheduleRequest) => { requests.push(request); return reply(request); },
+      memory, close: async () => {},
+    } as unknown as VonvonClient;
+    const daemon: Daemon = fn => withDaemon(fn, async () => ({ client, serverInfo: (principal ? { principal } : {}) as never }));
+    const run = (action: ScheduleAction, target: ScheduleTarget) => runSchedule(action, { dm: true, ...target }, { json: false, write: (text: string) => { out += text; } }, daemon);
+    const failure = async (action: ScheduleAction, target: ScheduleTarget) => commandFailure(await run(action, target).then(() => undefined, (error: unknown) => error));
+    return { run, failure, requests, memory, out: () => out };
+  }
+  const add = { name: '早报', instruction: '发今天的安排', daily: '09:00' };
+
+  it('lists the private chats\' tasks by person, and no group\'s', async () => {
+    const h = dmHarness([], () => tasks([task(), dmTask()]));
+    await h.run('list', {});
+    expect(h.requests).toEqual([{ action: 'listBot' }]);
+    expect(h.out()).toContain('私聊 · 张三（oc_p2p_a）');
+    expect(h.out()).not.toContain('群 ');
+    const empty = dmHarness([], () => tasks([task()]));
+    await empty.run('list', {});
+    expect(empty.out()).toBe('这个 Bot 的私聊还没有定时任务。\n');
+  });
+
+  it('finds a task by id among the private chats and acts on its own chat', async () => {
+    const h = dmHarness([], request => request.action === 'listBot' ? tasks([dmTask()]) : request.action === 'runNow' ? { kind: 'started', taskId: 'st_dm', runId: 'r1' } : { kind: 'task', task: dmTask() });
+    await h.run('pause', { taskId: 'st_dm' });
+    await h.run('run', { taskId: 'st_dm' });
+    expect(h.requests.filter(request => request.action !== 'listBot')).toEqual([{ action: 'pause', chatId: 'oc_p2p_a', taskId: 'st_dm' }, { action: 'runNow', chatId: 'oc_p2p_a', taskId: 'st_dm' }]);
+    expect(h.out()).toContain('结果会发在私聊里');
+    // a group's task is no private chat's, whatever its id
+    const other = dmHarness([], () => tasks([task()]));
+    expect(await other.failure('pause', { taskId: task().id })).toMatchObject({ exitCode: 4, error: { kind: 'refused', message: '暂停任务没有完成：这个 Bot 的私聊没有这个任务。' } });
+  });
+
+  it('adds to the one admin there is, or the one --to names', async () => {
+    const one = dmHarness([person('ou_a')], created);
+    await one.run('add', add);
+    expect(one.requests.at(-1)).toMatchObject({ action: 'create', chatId: 'oc_p2p_ou_a' });
+    const two = dmHarness([person('ou_a'), person('ou_b')], created);
+    await two.run('add', { ...add, to: 'ou_b' });
+    expect(two.requests.at(-1)).toMatchObject({ action: 'create', chatId: 'oc_p2p_ou_b' });
+  });
+
+  it('asks whom among several, and refuses someone no longer an admin or who never talked to it', async () => {
+    const several = dmHarness([person('ou_a', { name: '张三' }), person('ou_b'), person('ou_gone', { admin: false })], created);
+    expect(await several.failure('add', add)).toMatchObject({ exitCode: 2, error: { kind: 'bad-args', message: '这个 Bot 有 2 位管理员的私聊，用 --to 指定发给谁：张三（ou_a）、ou_b' } });
+    expect(await several.failure('add', { ...add, to: 'ou_gone' })).toMatchObject({ error: { kind: 'refused', message: 'ou_gone 已经不是管理员，不能给他建任务。' } });
+    expect(await several.failure('add', { ...add, to: 'ou_stranger' })).toMatchObject({ exitCode: 2 });
+    expect(await dmHarness([], created).failure('add', add)).toMatchObject({ exitCode: 2 });
+    expect(several.requests).toEqual([]);
+  });
+
+  it('from a private chat sends the row\'s id for the daemon to read as this chat, and asks nothing of other people\'s', async () => {
+    const h = dmHarness([person('ou_a'), person('ou_b')], created, 'bot-session:ses_0123456789abcdef');
+    await h.run('add', add);
+    expect(h.requests.at(-1)).toMatchObject({ action: 'create', chatId: 'oc_dm_cli_test' });
+    expect(h.memory).not.toHaveBeenCalled();
+    expect(await h.failure('add', { ...add, to: 'ou_b' })).toMatchObject({ exitCode: 2, error: { message: '在私聊里建的任务发回这个私聊，不用 --to。' } });
+  });
+
+  it('takes neither --group, --all nor a topic, and --to only with it', async () => {
+    const h = dmHarness([], created);
+    expect(await h.failure('list', { group: '研发群' })).toMatchObject({ exitCode: 2 });
+    expect(await h.failure('list', { all: true })).toMatchObject({ exitCode: 2 });
+    expect(await h.failure('add', { ...add, newTopic: true })).toMatchObject({ exitCode: 2, error: { message: '私聊的任务不开话题。' } });
+    expect(await h.failure('add', { ...add, dm: false, group: '研发群', to: 'ou_a' })).toMatchObject({ exitCode: 2, error: { message: '--to 只和 --dm 一起用。' } });
+    expect(h.requests).toEqual([]);
+  });
+});
+
 describe('parsing the time options', () => {
   it('refuses two time options, or none on add, with 2 and without connecting', async () => {
     const h = harness(created);

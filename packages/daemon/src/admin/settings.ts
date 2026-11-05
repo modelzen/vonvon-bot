@@ -111,6 +111,7 @@ function effect(fields: string[], when: T.ApplyEffect['when'], detail: string): 
 }
 /** What `settings save.project` takes for the private chat (dm-agent 4.2): its tier, folder and way of talking are fixed. */
 const DM_SECTIONS: ReadonlySet<string> = new Set<keyof T.ProjectSections>(['model', 'speed', 'modelAccess', 'skills']);
+const DM_FIXED: T.SettingsAccess = { kind: 'readonly', reason: 'dm-fixed', message: '私聊只有完全访问一档，目录也是固定的，只能改模型、速度、可选模型和技能' };
 const agentEffects: {
   [K in keyof T.AgentSections]: T.ApplyEffect[];
 } = {
@@ -734,7 +735,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       if (!p)
         throw new SettingsInputError('项目不存在');
       const data = await projectSettings(p);
-      const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], sectionAccess('project', key), effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' || key === 'workspace' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : key === 'workspace' ? '下一轮新开会话' : key === 'judge' ? agentEffects.judge[0]!.detail : key === 'run' && p.backend === 'claude-agent' ? 'Claude 不支持插话，运行中来的消息照样排队' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
+      const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], p.dm && !DM_SECTIONS.has(key) ? DM_FIXED : sectionAccess('project', key), effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' || key === 'workspace' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : key === 'workspace' ? '下一轮新开会话' : key === 'judge' ? agentEffects.judge[0]!.detail : key === 'run' && p.backend === 'claude-agent' ? 'Claude 不支持插话，运行中来的消息照样排队' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
       for (const key of ['profile', 'role', 'smartRules'] as const) sections[key]!.revision = settingsRevision(await sectionRaw(p, key));
       const botProfile = await legacyBotProfile(botId);
       sections.profile!.effective = { ...data.profile };

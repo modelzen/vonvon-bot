@@ -1,9 +1,11 @@
-import {MEMORY_BRANCH_COUNT_MAX, MEMORY_BRANCH_NAME_MAX, type MemoryItem, type MemoryReply, type MemoryRequest, type MemorySource} from '@vonvon/protocol';
+import {MEMORY_BRANCH_COUNT_MAX, MEMORY_BRANCH_NAME_MAX, type MemoryItem, type MemoryReply, type MemoryRequest, type MemoryScopeRef, type MemorySource} from '@vonvon/protocol';
 
 /** One branch shows its newest this many leaves; the rest sit behind 还有 N 条 (§5.7). */
 export const LEAF_LIMIT = 8;
 export type MemoryList = Extract<MemoryReply, {kind: 'list'}>;
-export type MemoryKind = 'bot' | 'project';
+export type MemoryKind = 'bot' | 'project' | 'dm';
+/** One memory, wherever a page holds on to it. */
+export const memoryScopeKey = (scope: MemoryScopeRef): string => scope.kind === 'bot' ? `bot:${scope.botId}` : scope.kind === 'project' ? `project:${scope.projectId}` : `dm:${scope.botId}:${scope.openId}`;
 
 /** A branch as the map draws it: its active entries newest first, and how many of them wait to be confirmed. */
 export type BranchView = {name: string; fixed: boolean; items: MemoryItem[]; pending: number};
@@ -85,8 +87,9 @@ export function leafActions(item: Pick<MemoryItem, 'state' | 'trust'>, kind: Mem
   if (item.state === 'archived') return [{action: 'restore', label: '恢复'}, {action: 'purge', label: '彻底删除'}];
   return [
     {action: 'move-branch', label: '移到分支…'},
-    ...(kind === 'project' && item.trust === 'untrusted' ? [{action: 'trust' as const, label: '设为可信'}] : []),
-    ...(kind === 'project' ? [{action: 'to-bot' as const, label: '移到 Bot 记忆'}] : [{action: 'to-project' as const, label: backTo ? `移回项目「${backTo}」` : '移到项目…'}]),
+    ...(kind !== 'bot' && item.trust === 'untrusted' ? [{action: 'trust' as const, label: '设为可信'}] : []),
+    // One person's private memory stays theirs: nothing moves it to the Bot or a project.
+    ...(kind === 'project' ? [{action: 'to-bot' as const, label: '移到 Bot 记忆'}] : kind === 'bot' ? [{action: 'to-project' as const, label: backTo ? `移回项目「${backTo}」` : '移到项目…'}] : []),
     {action: 'delete', label: '删除'},
   ];
 }

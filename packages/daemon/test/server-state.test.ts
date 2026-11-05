@@ -32,6 +32,22 @@ describe('lossless admin state and pinned projection', () => {
     expect(projected.agents[0]?.readError).toBe('invalid projects.json');
   });
 
+  // dm-agent 10. main 必败: the snapshot had no private chat at all
+  it('puts the private chat beside the memberships, in no group list, and keeps it stale on a failed read', async () => {
+    const row: AdminProject = { ...project, name: '私聊', chatId: 'oc_dm_cli_test', cwd: '/tmp/dm', mode: 'full', noMention: true };
+    const good = await readAdminState({ listBots: async () => [bot], listProjects: async () => [project], dmRow: async () => row });
+    const shown = projectState(good, empty, new Set());
+    expect(shown.memberships.map(member => member.groupId)).toEqual(['oc_test']);
+    expect(shown.groups.map(group => group.id)).toEqual(['oc_test']);
+    expect(shown.agents[0]?.dm).toMatchObject({ agentId: 'cli_test', groupId: 'oc_dm_cli_test', name: '私聊', directory: '/tmp/dm', backend: project.backend, stale: false });
+    expect(desktopSnapshotSchema.parse({ ...empty, ...shown }).agents[0]?.dm?.groupId).toBe('oc_dm_cli_test');
+    const bad = await readAdminState({ listBots: async () => [bot], listProjects: async () => { throw new Error('invalid projects.json'); } });
+    expect(projectState(bad, { ...empty, ...shown }, new Set()).agents[0]?.dm).toMatchObject({ groupId: 'oc_dm_cli_test', stale: true });
+    // a Bot that has not run yet has none, and a daemon's fake service without dmRow reads as that
+    const none = await readAdminState({ listBots: async () => [bot], listProjects: async () => [project] });
+    expect(projectState(none, empty, new Set()).agents[0]).not.toHaveProperty('dm');
+  });
+
   it('0.9.0 Mac 验收 B-1: puts a group\'s picture on the group once, not on each of its memberships', async () => {
     const pictured = { ...project, avatarDataUrl: 'data:image/png;base64,AAAA' };
     const state = await readAdminState({ listBots: async () => [bot, { ...bot, appId: 'cli_second' }], listProjects: async () => [pictured] });

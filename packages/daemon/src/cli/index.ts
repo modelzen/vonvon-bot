@@ -420,9 +420,9 @@ memoryScope(covers(memory.command('branch-delete <name>'), 'memory.branchDelete'
   .option('--expected <n>', 'The entry count you saw; a branch changed since is left as it is'))
   .action(async (name: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryBranchDelete(name, options, await memoryTerminal(options)); });
 const settings = program.command('settings').description('Read and change bot, group and session settings');
-type Target = Json & { bot?: string; group?: string; session?: string; host?: boolean; revision?: string; reason?: string };
+type Target = Json & { bot?: string; group?: string; session?: string; host?: boolean; dm?: boolean; revision?: string; reason?: string };
 const READ = ['settings.read.agent', 'settings.read.project', 'settings.read.session', 'settings.read.host'];
-const scoped = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--session <threadId>', 'Session thread id')
+const scoped = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--dm', "The bot's private chat (私聊), not with --group or --session").option('--session <threadId>', 'Session thread id')
   .option('--host', "This computer's own settings (the web page's 本机), for every bot; not with --bot, --group or --session").option('--json', 'Print JSON');
 scoped(covers(settings.command('get [section]'), ...READ, 'settings.sessions').description('Show settings, or one section; `get judge` also prints the whole judge prompt')).action(async (section: string | undefined, options: Target) => {
   await (await import('./commands/settings')).runSettingsGet(section, options, io(options));
@@ -444,6 +444,7 @@ Examples:
   vonvon settings set judge.selection='{"kind":"llm","model":"gpt-6-luna","effort":"low"}'
   vonvon settings set judge.selection='{"kind":"decision","provider":"typesafe","model":"jev-latest"}'   # 决策模型，各后端的群都用
   vonvon settings set --group oc_xxx judge.selection='{"kind":"default"}'   # 群里去掉覆盖，用 bot 的
+  vonvon settings set --dm model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'   # 私聊只能改 model、speed、modelAccess、skills
   vonvon settings set --host execution.codexBin=/usr/local/bin/codex      # 本机：Codex 可执行文件，null 回到自动找`)
   .action(async (assignments: string[], options: Target) => {
     await (await import('./commands/settings')).runSettingsSet(assignments, options, io(options));
@@ -474,10 +475,11 @@ covers(settingsAct.command('comment-instructions'), 'settings.act.commentInstruc
   });
 covers(settings.command('models'), 'settings.models').description("List the models a settings page's model picker offers")
   .option('--backend <backend>', 'codex, claude, or an id like codex-appserver').option('--purpose <purpose>', 'project, session, comments, titles or judge')
-  .option('--session <threadId>', 'Session thread id; needed for --purpose session').option('--refresh', 'Ask the Provider again now (刷新); without it the list it last read').option(...BOT).option(...JSON_FLAG)
+  .option('--session <threadId>', 'Session thread id; needed for --purpose session').option('--refresh', 'Ask the Provider again now (刷新); without it the list it last read')
+  .option('--dm', "The private chat's picker: its own Provider and --purpose project, unless given").option(...BOT).option(...JSON_FLAG)
   .addHelpText('after', `
 These are what a bot's model picker offers for one use; every model a Provider reports is vonvon provider models <codex|claude>.`)
-  .action(async (options: Json & { bot?: string; backend?: string; purpose?: string; session?: string; refresh?: boolean }) => {
+  .action(async (options: Json & { bot?: string; backend?: string; purpose?: string; session?: string; refresh?: boolean; dm?: boolean }) => {
     await (await import('./commands/settings')).runSettingsModels(options, io(options));
   });
 const schedule = program.command('schedule').description('List and change the scheduled tasks of a group (定时任务)')
@@ -490,9 +492,12 @@ Examples:
   vonvon schedule add --group 研发群 --name 发版提醒 --at "2026-11-01 14:00" --tz Asia/Tokyo "提醒大家 15:00 发版"
   vonvon schedule edit st_xxx --group 研发群 --revision <r> --daily 10:00   # revision 见 list --json
   vonvon schedule pause st_xxx --group 研发群
-  vonvon schedule runs st_xxx --group 研发群                # 总次数和最近 20 次`);
+  vonvon schedule runs st_xxx --group 研发群                # 总次数和最近 20 次
+  vonvon schedule list --dm                               # 这个 Bot 私聊里的任务
+  vonvon schedule add --dm --to ou_xxx --name 早报 --daily 09:00 "把今天的安排发给我"   # 只有一位管理员私聊过时可以不写 --to
+  vonvon schedule pause st_xxx --dm`);
 type ScheduleOptions = Json & Omit<ScheduleTarget, 'taskId' | 'instruction'>;
-const inGroup = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--json', 'Print JSON');
+const inGroup = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--dm', "The bot's private chat (私聊), not with --group or --all").option('--json', 'Print JSON');
 const timing = (command: Command) => command
   .option('--every <interval>', 'Every 30m or 2h').option('--daily <HH:mm>', 'Every day at this time').option('--weekly <days@HH:mm>', 'mon,wed@10:00; days mon to sun')
   .option('--at <time>', 'Once, "YYYY-MM-DD HH:mm" in --tz, else in the task\'s time zone on edit and the daemon\'s on add').option('--cron <expr>', 'Standard 5 fields, like "0 9 * * 1-5"')
@@ -503,6 +508,7 @@ const runSchedule = async (action: ScheduleAction, target: Json & ScheduleTarget
 inGroup(covers(schedule.command('list'), 'schedule.list', 'schedule.listBot').description("List a group's tasks, or with --all every group's")).option('--all', "Every group's tasks of the bot")
   .action(async (options: ScheduleOptions) => { await runSchedule('list', options); });
 timing(inGroup(covers(schedule.command('add <instruction>'), 'schedule.create').description('Add a task: --name, one time option and what to do'))).option('--new-topic', 'Post each run in a new topic')
+  .option('--to <openId>', 'With --dm: whose private chat the task posts to, an administrator who has talked to the bot')
   .action(async (instruction: string, options: ScheduleOptions) => { await runSchedule('add', { ...options, instruction }); });
 timing(inGroup(covers(schedule.command('edit <taskId> [instruction]'), 'schedule.edit').description('Change a task; give only what changes'))).requiredOption('--revision <revision>', 'The revision schedule list --json shows')
   .option('--new-topic', 'Post each run in a new topic').option('--follow', "Post each run the way the group's conversation mode does")
@@ -823,8 +829,8 @@ covers(bridgeImport.command('rollback'), 'machine.bridgeImport.rollback').descri
 const context = program.command('context').description("What the model is handed (the web page's 模型看到什么)");
 covers(context.command('show'), 'contextPreview.get').description("vonvon's own parts a new session would get, and what the session was last handed")
   .option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--comment', 'Document comments instead of a group')
-  .option('--session <threadId>', "Which session; defaults to the group's latest").option(...JSON_FLAG)
-  .action(async (options: Json & { bot?: string; group?: string; comment?: boolean; session?: string }) => { await (await import('./commands/context')).runContextShow(options, io(options)); });
+  .option('--dm <openId>', "One person's private chat instead of a group").option('--session <threadId>', "Which session; defaults to the group's latest").option(...JSON_FLAG)
+  .action(async (options: Json & { bot?: string; group?: string; comment?: boolean; dm?: string; session?: string }) => { await (await import('./commands/context')).runContextShow(options, io(options)); });
 covers(program.command('now'), 'snapshot.get').description("What each bot is doing now and which groups it attends to (the web page's 此刻)").option(...BOT).option(...JSON_FLAG)
   .action(async (options: Json & { bot?: string }) => { await (await import('./commands/now')).runNow(options.bot, io(options)); });
 covers(program.command('snapshot'), 'snapshot.get').description("The web page's whole state: a summary, or all of it with --json").option(...JSON_FLAG)
