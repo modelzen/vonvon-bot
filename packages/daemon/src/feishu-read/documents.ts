@@ -1,11 +1,14 @@
 import { cleanFileName, downloadName, prepareInboundDir, saveInboundDownload } from '../bot/media';
 import { escapeInboundMarkers } from '../bot/hidden-blocks';
-import { FeishuReadRefused } from './denial';
-import { ask, cleanText, jsonBytes, RESULT_BUDGET, sliceText, textOffset, type ReadDeps } from './shared';
+import { FeishuReadRefused, readOnlyReply } from './denial';
+import { ask, cleanText, denialContext, jsonBytes, RESULT_BUDGET, sliceText, textOffset, type ReadDeps } from './shared';
 
 export interface DocRequest { doc: string; cursor?: string }
 export interface SheetRequest { sheet: string; range?: string; cursor?: string }
 export interface DriveFileRequest { file: string; name?: string; saveIn?: string }
+/** `block` is the block to insert after or to replace; `pattern` the inline text to replace. */
+export interface DocEditRequest { doc: string; action: 'append' | 'insert' | 'replace'; content: string; block?: string; pattern?: string }
+export interface DocEditResult { result: 'success' | 'partial_success'; updatedBlocks?: number; newBlocks?: string[]; warnings?: string[]; tips?: string; note?: string }
 
 /** What a link says it is; a bare token says nothing. */
 type RefKind = 'docx' | 'wiki' | 'sheet' | 'file' | 'other';
@@ -106,6 +109,81 @@ export async function readDoc(deps: ReadDeps, request: DocRequest): Promise<{ te
     const { source, text } = at.source ? { source: at.source, text: await docText(deps, token, at.source) } : await anyDocText(deps, token);
     const part = sliceText(cleanText(text), at.offset);
     return { text: part.text, ...(part.next !== undefined ? { cursor: `${source}:${part.next}` } : {}) };
+  });
+}
+
+interface DocEditAnswer {
+  code?: number;
+  msg?: string;
+  data?: { result?: string; warnings?: unknown; tips?: string; updated_blocks_count?: number; document?: { new_blocks?: { block_id?: string }[] } };
+}
+
+/** A change is one call of docs_ai's update (dm-agent 7.1); appending is inserting after the end, `-1`. */
+function docEditBody({ action, content, block, pattern }: DocEditRequest): Record<string, unknown> {
+  const common = { content, format: 'markdown', revision_id: -1 };
+  if (action === 'append') {
+    if (block || pattern) throw new FeishuReadRefused('append 只写 content，追加在文档末尾；要放在别处用 insert。');
+    return { ...common, command: 'block_insert_after', block_id: '-1' };
+  }
+  if (action === 'insert') {
+    if (!block || pattern) throw new FeishuReadRefused('insert 要写 block：插在哪个块后面，块的 id 在 feishu_doc 的结果里。');
+    return { ...common, command: 'block_insert_after', block_id: block };
+  }
+  if (Boolean(block) === Boolean(pattern)) throw new FeishuReadRefused('replace 要写 pattern 或 block，只写一个：pattern 换一段行内文字，block 换整个块。');
+  return block ? { ...common, command: 'block_replace', block_id: block } : { ...common, command: 'str_replace', pattern };
+}
+
+const warningsOf = (data: DocEditAnswer['data']): unknown[] => {
+  const warnings = data?.warnings;
+  return Array.isArray(warnings) ? warnings : warnings === undefined || warnings === null ? [] : [warnings];
+};
+const asText = (item: unknown): string => typeof item === 'string' ? item : JSON.stringify(item);
+const WORDS_MAX = 1000;
+/** Feishu's own words about a change, for the model to pass on. */
+const feishuSaid = (parts: unknown[]): string => cleanText(parts.filter(Boolean).map(asText).join('；')).slice(0, WORDS_MAX);
+
+/** Measured 2026-11-05: a Bot that can only read gets code 0, `result: 'failed'` and this among the warnings. */
+const READ_ONLY_DEGRADE = /degrade_code\W{0,3}4030004/;
+
+/** Code 0 is not a change: only `data.result` says what happened, and anything but these two did not (or is not known to have). */
+function docEditResult(deps: ReadDeps, answer: DocEditAnswer): DocEditResult {
+  const data = answer.data, result = data?.result, warnings = warningsOf(data);
+  if (result !== 'success' && result !== 'partial_success') {
+    if (warnings.some(item => READ_ONLY_DEGRADE.test(asText(item)))) throw new FeishuReadRefused(readOnlyReply(denialContext(deps).botName()));
+    const words = feishuSaid([...warnings, data?.tips, answer.msg === 'success' ? undefined : answer.msg]);
+    throw new FeishuReadRefused(result === 'failed' ? `飞书没有改成这篇文档：${words || '它没说原因'}。` : `飞书没有说改成了（result：${String(result)}）。${words ? `${words}。` : ''}先用 feishu_doc 读一下，再决定要不要重试。`);
+  }
+  const blocks = (data?.document?.new_blocks ?? []).flatMap(block => block.block_id ? [block.block_id] : []);
+  return {
+    result,
+    ...(data?.updated_blocks_count !== undefined ? { updatedBlocks: data.updated_blocks_count } : {}),
+    ...(blocks.length ? { newBlocks: blocks } : {}),
+    ...(warnings.length ? { warnings: warnings.map(item => feishuSaid([item])) } : {}),
+    ...(data?.tips ? { tips: feishuSaid([data.tips]) } : {}),
+    ...(result === 'partial_success' ? { note: '飞书只改成了一部分。先用 feishu_doc 读一下，再决定要不要接着改。' } : {}),
+  };
+}
+
+/** Longer than a read's: Feishu rewrites blocks here. */
+const EDIT_CALL_MS = 30_000;
+
+/**
+ * Change a document as the Bot, through the same reference rules as a read. `beforeWrite` runs right before each PUT. No
+ * answer does not mean nothing happened, and a blind retry would append twice, so that refusal says to look first.
+ */
+export async function editDoc(deps: ReadDeps, request: DocEditRequest, beforeWrite: () => void = () => undefined): Promise<DocEditResult> {
+  const body = docEditBody(request);
+  return reading(deps, parseRef(request.doc), 'docx', async token => {
+    beforeWrite();
+    try {
+      const answer = await ask(deps, 'docEdit', () => deps.channel.rawClient.request<DocEditAnswer>({
+        method: 'PUT', url: `/open-apis/docs_ai/v1/documents/${encodeURIComponent(token)}`, data: body,
+      }), EDIT_CALL_MS);
+      return docEditResult(deps, answer);
+    } catch (failure) {
+      if (failure instanceof FeishuReadRefused && failure.kind === 'no-answer') throw new FeishuReadRefused('飞书没有回话，不知道改没改成。先用 feishu_doc 读一下，再决定要不要重试。');
+      throw failure;
+    }
   });
 }
 
