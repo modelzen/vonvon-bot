@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { libraryLocation } from '../src/project/library';
 import type { MemoryTurn } from '../src/bot/memory-authority';
-import { botMemoryLocation, MemoryStore, projectMemoryLocation } from '../src/bot/memory-store';
+import { botMemoryLocation, dmMemoryLocation, MemoryStore, projectMemoryLocation } from '../src/bot/memory-store';
 import { createMemoryWriter, type WriteContext } from '../src/bot/memory-writer';
 import type { FoundBlocks } from '../src/bot/hidden-blocks';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
@@ -19,13 +19,14 @@ const PROJECT = 'prj_0a1b2c3d';
 const OTHER_PROJECT = 'prj_deadbeef';
 const base: MemoryTurn = { kind: 'human', steered: false, role: 'member', openId: 'ou_m', place: 'group', chatId: 'oc_a', active: true, typed: true, triggerText: '', botWrites: 0 };
 
-function setup(options: { botId?: string; data?: string; limits?: { project?: number; bot?: number } } = {}) {
+function setup(options: { botId?: string; data?: string; limits?: { project?: number; bot?: number; dm?: number } } = {}) {
   const data = options.data ?? root();
   const library = libraryLocation(data);
   const botDirectory = join(data, 'bots', options.botId ?? 'cli_a');
   const writer = createMemoryWriter({
     botId: options.botId ?? 'cli_a', botDirectory, library, ...(options.limits ? { limits: options.limits } : {}),
     projectIdOf: async chatId => chatId === 'oc_a' || chatId === 'oc_b' ? PROJECT : chatId === 'oc_x' ? OTHER_PROJECT : undefined,
+    botProjectIds: async () => [PROJECT], dmPersonOf: async chatId => chatId === 'oc_p2p_a' ? 'ou_a' : chatId === 'oc_p2p_b' ? 'ou_b' : undefined,
   });
   const project = new MemoryStore(projectMemoryLocation(PROJECT, { library }));
   const bot = new MemoryStore(botMemoryLocation(join(data, 'bots', 'cli_a')));
@@ -356,5 +357,68 @@ describe('hidden blocks', () => {
     expect(await run(first)).toEqual({ written: 1, missed: [] });
     expect(await run(second)).toEqual({ written: 0, missed: [] });
     expect(await active(first.project)).toHaveLength(1);
+  });
+});
+
+// dm-agent 5 (D3). main 必败: storeFor threw on a private chat's memory, and a private turn wrote to the project.
+describe('a private chat\'s memory', () => {
+  const dmTurn = (openId: string): Partial<MemoryTurn> => ({ place: 'dm', role: 'admin', openId, chatId: openId === 'ou_a' ? 'oc_p2p_a' : 'oc_p2p_b' });
+  const dmStore = (data: string, openId: string) => new MemoryStore(dmMemoryLocation(join(data, 'bots', 'cli_a'), openId));
+
+  it('lands in bots/<appId>/memory/dm/<openId>, by the tool and by a hidden block, never in the project', async () => {
+    const { data, writer, project, turnContext } = setup();
+    const added = must(await writer.add(turnContext(dmTurn('ou_a')).ctx, { text: '周报先写结论' }, 'tool'));
+    expect(added).toMatchObject({ scopeApplied: 'dm', item: { scope: 'dm', branch: '其他' } });
+    expect(added.item.id.startsWith('d_ou_a:')).toBe(true);
+    const found: FoundBlocks = { remember: [{ attrs: { n: 'n1', branch: '其他' }, body: '回复用中文' }], mem: [], dropped: 0 };
+    expect(await writer.applyBlocks({ found, nonce: 'n1', ctx: turnContext(dmTurn('ou_a')).ctx })).toEqual({ written: 1, missed: [] });
+    expect((await active(dmStore(data, 'ou_a'))).map(item => item.text)).toEqual(['周报先写结论', '回复用中文']);
+    expect(await active(project)).toEqual([]);
+  });
+
+  it('keeps two administrators apart: neither can list, change or forget the other\'s, or tell it exists', async () => {
+    const { writer, turnContext } = setup();
+    const theirs = must(await writer.add(turnContext(dmTurn('ou_a')).ctx, { text: 'A 的私事' }, 'tool')).item.id;
+    const mine = must(await writer.add(turnContext(dmTurn('ou_b')).ctx, { text: 'B 的私事' }, 'tool')).item.id;
+
+    const listed = await writer.list({ kind: 'p2p', chatId: 'oc_p2p_b' });
+    expect(JSON.stringify(listed)).toContain('B 的私事');
+    expect(JSON.stringify(listed)).not.toContain('A 的私事');
+
+    const other = turnContext(dmTurn('ou_b')).ctx;
+    expect(await writer.update(other, { id: theirs, text: '改掉' })).toMatchObject({ ok: false, error: 'out-of-scope' });
+    expect(await writer.forget(other, { id: theirs })).toMatchObject({ ok: false, error: 'out-of-scope' });
+    // the same answer for one that was never there
+    expect(await writer.forget(other, { id: 'd_ou_a:zzzzzz' })).toMatchObject({ ok: false, error: 'out-of-scope' });
+    expect(await writer.update(other, { id: mine, text: 'B 改过了' })).toMatchObject({ ok: true, item: { text: 'B 改过了' } });
+    expect(JSON.stringify(await writer.list({ kind: 'p2p', chatId: 'oc_p2p_a' }))).toContain('A 的私事');
+  });
+
+  it('is out of reach from a group, and a group\'s list has none of it', async () => {
+    const { writer, turnContext } = setup();
+    const id = must(await writer.add(turnContext(dmTurn('ou_a')).ctx, { text: 'A 的私事' }, 'tool')).item.id;
+    expect(await writer.update(turnContext({ role: 'admin', openId: 'ou_a' }).ctx, { id, text: '改掉' })).toMatchObject({ ok: false, error: 'out-of-scope' });
+    expect(JSON.stringify(await writer.list({ kind: 'group', chatId: 'oc_a' }))).not.toContain('A 的私事');
+  });
+
+  it('lists the person\'s own and the Bot memory, no project; `dm` only its own; nothing for a window nobody owns', async () => {
+    const { writer, project, turnContext } = setup();
+    await project.add({ text: '项目里的事', trust: 'trusted', actor: { role: 'desktop' }, source: { via: 'ui', botId: 'cli_a', actorRole: 'desktop' } });
+    must(await writer.add(turnContext(dmTurn('ou_a')).ctx, { text: 'A 的私事' }, 'tool'));
+    const all = await writer.list({ kind: 'p2p', chatId: 'oc_p2p_a' });
+    expect('lists' in all && all.lists.map(list => list.scope)).toEqual(['dm', 'bot']);
+    expect(JSON.stringify(all)).not.toContain('项目里的事');
+    const own = await writer.list({ kind: 'p2p', chatId: 'oc_p2p_a' }, 'dm');
+    expect('lists' in own && own.lists.map(list => list.scope)).toEqual(['dm']);
+    const nobody = await writer.list({ kind: 'p2p', chatId: 'oc_p2p_x' });
+    expect('lists' in nobody && nobody.lists.map(list => list.scope)).toEqual(['bot']);
+  });
+
+  it('forgets one of its own and says when it is full, with what the bot may make room from', async () => {
+    const { data, writer, turnContext } = setup({ limits: { dm: 1 } });
+    const first = must(await writer.add(turnContext({ ...dmTurn('ou_a'), kind: 'initiative' }).ctx, { text: '自己记的' }, 'tool')).item.id;
+    expect(await writer.add(turnContext(dmTurn('ou_a')).ctx, { text: '第二条' }, 'tool')).toMatchObject({ ok: false, error: 'memory-full', candidates: [{ id: first }] });
+    must(await writer.forget(turnContext(dmTurn('ou_a')).ctx, { id: first }));
+    expect(await active(dmStore(data, 'ou_a'))).toEqual([]);
   });
 });

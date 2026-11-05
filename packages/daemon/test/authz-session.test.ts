@@ -241,6 +241,11 @@ describe('the bot-session column (unit)', () => {
     expect(await authorize(scoped, settingsSave('运营'), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
     expect(await authorize(scoped, request('schedule', { botId: BOT, request: { action: 'list', chatId: OTHER } }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
     expect(await authorize(scoped, request('memory', { type: 'list', scope: { kind: 'dm', botId: BOT, openId: 'ou_a' } }), deps)).toMatchObject({ ok: false });
+    // dm-agent 5: who has a private chat, as a private chat's memory: the whole bot in reach, and no session
+    expect(await authorize(scoped, request('memory', { type: 'dmPeople', botId: BOT }), deps)).toMatchObject({ ok: false });
+    expect(await authorize(owner({ bot: 'cli_other' }), request('memory', { type: 'dmPeople', botId: BOT }), deps)).toMatchObject({ ok: false });
+    expect(await authorize(owner({ bot: BOT }), request('memory', { type: 'dmPeople', botId: BOT }), deps)).toEqual({ ok: true });
+    expect(await authorize(peer('dm', { bot: BOT }), request('memory', { type: 'dmPeople', botId: BOT }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
     // the place rules are a session's: the owner writes its group's settings, and reads them whole
     expect(await authorize(scoped, settingsSave('研发'), deps)).toEqual({ ok: true });
     const read = await authorize(scoped, request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: '研发' } }), deps);
@@ -372,8 +377,8 @@ describe('the bot-session column (unit)', () => {
     // its refusals: the sentence word for word, the code the command line knows for its place
     const notGroup = await asked('group', request('schedule', { botId: BOT, request: { action: 'list', chatId: GROUP } }), { ok: false, reason: 'not-group', message: scheduleRefusalMessages['not-group'] });
     expect(notGroup.decision).toMatchObject({ ok: false, code: 'not-group' });
-    const switchOff = await asked('dm', settingsSave('研发'), { ok: false, reason: 'switch-off', message: '关了' });
-    expect(switchOff.decision).toEqual({ ok: false, code: 'permission_denied', message: '关了', details: { reason: 'switch-off' } });
+    const closed = await asked('dm', settingsSave('研发'), { ok: false, reason: 'turn-ended', message: '结束了' });
+    expect(closed.decision).toEqual({ ok: false, code: 'permission_denied', message: '结束了', details: { reason: 'turn-ended' } });
   });
 
   // devices-4b 4.5a (SEC-4): a private chat reads the bot's settings as settings_get shows them

@@ -79,6 +79,7 @@ function privateChat(entries: Awaited<ReturnType<typeof bridge>>, who: string, t
   };
   const peer = { principal: { kind: 'bot-session' as const, sessionId: entry.sessionId, appId: APP, place: 'dm' as const, chatId: 'oc_dm' }, protocolVersion: 2, negotiated: true, scope: { bot: APP } };
   return {
+    entry,
     ask: (payload: object) => authorize(peer, request(payload), deps),
     bot: (action: Parameters<typeof entries.authorizeSessionCall>[1]) => entries.authorizeSessionCall(entry.sessionId, action),
   };
@@ -102,9 +103,12 @@ describe('a private chat\'s session and its bot\'s projects, as the bridge wires
     // two groups of one project, a row from before projects and one whose id is not a project's
     await storeProjects([row('研发', 'oc_dev', DEV), row('研发二群', 'oc_dev2', DEV), row('旧群', 'oc_old'), row('坏行', 'oc_bad', 'not-a-project')]);
     const entries = await bridge();
-    // a member's --bot lands in the bot's one project, as memory_add does in a private chat (two would leave it nowhere)
+    // dm-agent 5: a --bot that fails the gate stays in the person's own memory, as memory_add does in a private chat; the bot's one project is not where private words go
     expect(await privateChat(entries, MEMBER, '你好').ask({ type: 'add', scope: { kind: 'bot', botId: APP }, text: '周四发版' }))
-      .toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'project', projectId: DEV }, trust: 'untrusted', source: { downgraded: 'member' } } } });
+      .toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'dm', openId: MEMBER }, trust: 'untrusted', source: { downgraded: 'member' } } } });
+    // a named project is still the way in
+    expect(await privateChat(entries, OWNER, '记住 研发').ask({ type: 'add', scope: { kind: 'project', projectId: DEV }, text: '周四发版' }))
+      .toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'project', projectId: DEV } } } });
     // OPS is no group's of this bot: the host refuses it first, and its Bot process would too
     const owner = privateChat(entries, OWNER, '记住 运营');
     const add = { kind: 'memory', op: 'add', target: { kind: 'project', projectId: OPS }, text: 'x' } as const;
@@ -112,5 +116,15 @@ describe('a private chat\'s session and its bot\'s projects, as the bridge wires
     expect(await owner.bot(add)).toEqual({ ok: false, reason: 'not-allowed-here', message: decisionMessages['not-allowed-here'] });
     await storeProjects([row('研发', 'oc_dev', DEV), row('运营', 'oc_ops', OPS)]);
     expect(await owner.ask({ type: 'add', scope: { kind: 'project', projectId: OPS }, text: 'x' })).toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'project', projectId: OPS } } } });
+  });
+
+  // dm-agent 5: whose window this is comes from the private-chat row, as the bridge reads it.
+  it('lists the memory of the person the window belongs to', async () => {
+    await storeProjects([{ ...row('私聊', 'oc_dm_cli_fixture'), dm: { people: { oc_dm: { openId: OWNER, at: 1 } } } }]);
+    const entries = await bridge();
+    const { entry } = privateChat(entries, OWNER, '记住 周报先写结论');
+    entry.noteToolUse('u1');
+    expect(await entry.call('memory_add', { text: '周报先写结论' }, { toolUseId: 'u1' })).toMatchObject({ ok: true, result: { ok: true, scopeApplied: 'dm' } });
+    expect(JSON.stringify(await entry.call('memory_list', {}, { toolUseId: 'u1' }))).toContain('周报先写结论');
   });
 });
