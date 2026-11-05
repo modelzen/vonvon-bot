@@ -455,6 +455,8 @@ describe('feishu_base', () => {
     expect(refusal).toContain(AFTER_GRANT);
     const hidden = reader({ request: routes({ '/tables': { code: 91403, msg: 'Forbidden' } }) });
     await expect(hidden.read.base({ base: 'basToken' })).rejects.toThrow('还没分享给 Bot');
+    const gone = reader({ request: routes({ '/tables': { code: 91402, msg: 'NOTEXIST' } }) });
+    await expect(gone.read.base({ base: 'basToken' })).rejects.toMatchObject({ kind: 'not-found' });
   });
   it('is read in a read-only group, a private chat and a comment, whichever group it is', async () => {
     const answer = { request: routes({ '/tables': page([{ table_id: 'tblA' }]) }) };
