@@ -143,7 +143,7 @@ describe('a Bot session\'s command line', () => {
   // product.md section 6: the list changes in the client and the terminal, never by chat. main 必败
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('refuses a private chat\'s settings act admin add before it reaches the Bot process', async () => {
     const view = (openIds: string[], revision: string) => ({ ...agentFixture, scope: { kind: 'agent', botId: BOT },
-      administrators: { feishu: { ownerOpenId: 'ou_owner', adminOpenIds: ['ou_fs'] }, scannerOpenId: 'ou_scan', openIds, revision } });
+      administrators: { openIds, revision } });
     const act = vi.fn(async () => ({ kind: 'saved', view: view(['ou_local', 'ou_0123456789abcdef'], 'a2'), effects: [], warnings: [] }));
     const settings = { act, read: async () => view(['ou_local'], 'a1'), save: async () => { throw new Error('unused'); }, models: async () => { throw new Error('unused'); } };
     // an admin's own private-chat turn, as its Bot process says

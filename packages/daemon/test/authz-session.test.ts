@@ -584,7 +584,7 @@ describe('a Bot session against the daemon', () => {
     const agent = {
       ...agentFixture, scope: { kind: 'agent', botId: BOT }, decisionModels, judgeByBackend: { 'codex-appserver': { model: 'gpt-5', source: 'bot' } },
       roleInfo: { draft: '身份草稿', headed: true, oversized: false, mergedNotice: false, integrity: 'ok' },
-      administrators: { feishu: { ownerOpenId: 'ou_owner', adminOpenIds: ['ou_fs'] }, scannerOpenId: 'ou_scan', openIds: ['ou_local', 'ou_0123456789abcdef'], revision: 'a2' },
+      administrators: { openIds: ['ou_local', 'ou_0123456789abcdef'], names: { ou_local: '张三' }, candidates: [{ openId: 'ou_cand', name: '李四', sources: ['creator'] }], revision: 'a2' },
     };
     const project = {
       scope: { kind: 'project', botId: BOT, projectName: '研发' }, decisionModels, skillsError: '读不到 /w/skills',

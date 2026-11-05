@@ -359,6 +359,7 @@ import {
   removeCommentReaction,
   renderCommentInstructions,
   resolveComment,
+  type ResolvedTarget,
   stripMarkdown,
   SUPPORTED_FILE_TYPES,
   syncCommentInstructions,
@@ -366,7 +367,8 @@ import {
 import { createEarlyInterrupt, createGracefulInterrupt, createIdlePause, Semaphore, withIdleTimeout, type IdlePause } from './watchdog';
 import { createBotRoster } from './bot-roster';
 import { readResponseRoster, responseMemberLabel } from './response-members';
-import { createNameBook, fetchChatMembers, resolveNames, withDeadline } from './names';
+import { createNameBook, createPersonNames, fetchChatMembers, resolveNames, withDeadline } from './names';
+import { createDmRefusal } from './dm-refused';
 
 /** 所有项目群成员的并集（去重）—— admins 加人的候选源（admins 通常是项目相关的人）。
  * 逐群调 fetchChatMembers，失败的群跳过；不含 bot/应用（接口保证）。 */
@@ -950,6 +952,8 @@ export interface Orchestrator {
    * grant (agent/entry/schedule-tools.ts), the wire's is the local owner's or a Bot session's turn.
    */
   scheduleAs: (actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
+  /** A bound group's permission tier now; undefined for a chat not bound. */
+  permissionOf: (chatId: string) => Promise<PermissionMode | undefined>;
   /** The scheduled-task tick (bot/schedule/scheduler.ts), outside admit; bridge.ts starts it once Feishu is connected. */
   scheduler: { start(): Promise<void>; stop(): void; drain(ms: number): Promise<void> };
   /** Interrupts every turn, gives the agents a moment to end them, then closes every live session so a graceful exit
@@ -1182,7 +1186,7 @@ export function createOrchestrator(
     const context = contextDelivered.get(thread);
     return context ? { context } : {};
   };
-  async function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode, place?: 'comment') {
+  async function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode, place?: 'comment', commentedFile?: string) {
     const execution = execOf(project);
     const sources = project || place === 'comment' ? await contextSourcesFor(project) : undefined;
     const assembled = sources ? assemble(sources, project ? 'work' : 'comment') : undefined;
@@ -1191,13 +1195,16 @@ export function createOrchestrator(
     // A bound group's and a private chat's sessions get the schedule tools (3.13; hidden in a private chat until C2) and the
     // Feishu read tools (dm-agent 7.2), read-only tier too; a comment's never do.
     const schedule = Boolean(project) && place !== 'comment';
+    // A comment's session has the document column, and the edit tool when it is on a docx (7.4); a group's edits in any tier but read-only (7.2).
+    const comment = place === 'comment';
+    const feishuEdit = comment ? commentedFile === 'docx' : schedule && (permission ?? execution.permission) !== 'qa';
     // The task skill goes with the tools (T4b); a package that cannot be written leaves the last whole one, or none.
     const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId, project?.dm ? 'dm' : 'group') : [];
     // What the Feishu tools download must be readable outside full access too.
     const downloads = schedule && project ? inboundChatDir(project.chatId) : undefined;
     if (downloads) await prepareInboundDir(downloads);
     const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: downloads ? [{ path: downloads, access: 'read' as const }] : [], capabilityPackages, mcpServers: [],
-      tools: { schedule, feishu: schedule }, ...(skills ? { skills } : {}) } : undefined;
+      tools: { schedule, feishu: schedule || comment, ...(feishuEdit ? { feishuEdit } : {}), ...(comment ? { documentsOnly: true } : {}) }, ...(skills ? { skills } : {}) } : undefined;
     const built = await executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
     if (assembled && built) openings.set(built, contextOf(assembled, nonce));
     return built;
@@ -2891,9 +2898,9 @@ export function createOrchestrator(
     await routeMessage(msg, project, smart);
   };
 
-  /** A person's private chat is a door of its own (dm-agent 3.5). A2 words the refusal and keeps the candidate; `handleDmConsole` refuses until then. */
+  /** A person's private chat is a door of its own (dm-agent 3.5): the refusal is worded and the candidate kept by {@link createDmRefusal}. */
   async function refuseDm(msg: NormalizedMessage): Promise<void> {
-    await handleDmConsole(channel, cfg, msg);
+    await dmRefusal({ openId: msg.senderId, chatId: msg.chatId, replyTo: msg.messageId });
   }
   /** A reply to the card a group's agent sent this person: only that answers it (dm-agent 5). The rest is for their own Agent. */
   function askAnswered(msg: NormalizedMessage): boolean {
@@ -9104,11 +9111,14 @@ export function createOrchestrator(
         // global cap is still `sema`, acquired inside the lock.
         await withDocLock(sessionKey, async () => {
           const release = await sema.acquire();
+          let turn: TurnScope | undefined;
           try {
             if (shuttingDown) return;
-            const thread = await resolveDocThread(sessionKey, cwd, instructions, ctx.question, target.fileToken);
+            const thread = await resolveDocThread(sessionKey, cwd, instructions, ctx.question, target);
             if (shuttingDown) { await thread.close(); return; }
             const rec = await getSession(sessionKey);
+            // The document tools answer only while a turn is going (dm-agent 7.4). The person was checked above.
+            turn = entries?.openTurn(thread, { requesterOpenId: operatorId, requesterKind: 'user', triggerMessageId: evt.replyId ?? evt.commentId, retry: false, initiative: false, wake: false });
             const run = thread.runStreamed({ text: prompt }, { model: rec?.model, effort: rec?.effort });
 
             let state: RunState = initialState;
@@ -9174,6 +9184,7 @@ export function createOrchestrator(
             );
             log.info('comment', 'done', { terminal: state.terminal, timedOut, len: reply.length });
           } finally {
+            turn?.close();
             release();
           }
         });
@@ -9210,8 +9221,9 @@ export function createOrchestrator(
     cwd: string,
     instructions: string,
     question: string,
-    docId: string,
+    target: ResolvedTarget,
   ): Promise<AgentThread> {
+    const docId = target.fileToken;
     // The comment settings, else the bot default, else built in (s36d2); no tier, as before.
     const comments = resolveCommentsExecution(cfg.preferences);
     const be = backendFor(comments.backend);
@@ -9228,7 +9240,7 @@ export function createOrchestrator(
     }
     if (rec && rec.backend === be.id) {
       try {
-        const resumed = await resumeWith(be, { cwd: rec.cwd, sessionId: rec.sessionId, model, effort, profile: await profileOf(undefined, rec.cwd, be, 'full', 'comment') }, { kind: 'doc', docId });
+        const resumed = await resumeWith(be, { cwd: rec.cwd, sessionId: rec.sessionId, model, effort, profile: await profileOf(undefined, rec.cwd, be, 'full', 'comment', target.fileType) }, { kind: 'doc', docId });
         // 评论的模型来自评论设置（不是手填的）或 bot 默认
         await patchSession(sessionKey, { model, effort, modelCustom });
         trackSession(sessionKey, resumed);
@@ -9238,7 +9250,7 @@ export function createOrchestrator(
         log.fail('agent', err, { phase: 'comment-resume', sessionKey });
       }
     }
-    const fresh = await startWith(be, { cwd, model, effort, profile: await profileOf(undefined, cwd, be, 'full', 'comment') }, { kind: 'doc', docId });
+    const fresh = await startWith(be, { cwd, model, effort, profile: await profileOf(undefined, cwd, be, 'full', 'comment', target.fileType) }, { kind: 'doc', docId });
     trackSession(sessionKey, fresh);
     commentInstrUsed.set(sessionKey, instructions);
     await upsertSession({
@@ -9494,9 +9506,11 @@ export function createOrchestrator(
    * dm.settings / dm.usage / dm.doctor / dm.reconnect / dm.update 各自直达对应卡
    * （与首页卡内同名按钮的渲染同源，单一事实源）；其它 key 或空 key 回退首页菜单卡，
    * 兼容「只配一个入口」与「私聊发任意消息→首页卡」（handleDmConsole）的旧语义。
-   * 非管理员回拒绝文案（同 handleDmConsole 语义）。事件不带 chat_id，发送走
+   * 非管理员回拒绝文案（同私聊消息，走 dmRefusal）。事件不带 chat_id，发送走
    * receive_id_type=open_id。
    */
+  /** What a non-administrator gets in a private chat and the list the client picks administrators from (dm-agent 3.5). */
+  const dmRefusal = createDmRefusal({ channel, appId: cfg.accounts.app.id });
   const onBotMenu = async (evt: { openId?: string; eventKey?: string; eventId?: string }): Promise<void> => {
     const op = evt.openId;
     if (!op) return;
@@ -9505,16 +9519,7 @@ export function createOrchestrator(
     if (evt.eventId && seenInbound.seen(`menu:${evt.eventId}`)) return;
     log.info('intake', 'bot-menu', { key: evt.eventKey, op: op.slice(-6) });
     if (!isAdmin(cfg, op)) {
-      await channel.rawClient.im.v1.message
-        .create({
-          params: { receive_id_type: 'open_id' },
-          data: {
-            receive_id: op,
-            msg_type: 'text',
-            content: JSON.stringify({ text: '⛔ 仅管理员可在私聊里管理项目。' }),
-          },
-        })
-        .catch(() => undefined);
+      await dmRefusal({ openId: op });
       return;
     }
     const sendDm = (c: object) => sendManagedCard(channel, op, c, undefined, false, 'open_id');
@@ -9798,7 +9803,8 @@ export function createOrchestrator(
     }
     // C2 pauses this person's private-chat tasks here, `pausedReason: 'admin-removed'`.
   }
-  const settings = createSettingsOwner({ adminRemoved: endDmOf, responseRoster: (chatId) => orStop(readResponseRoster(channel, roster, chatId), { state: 'unavailable', entries: [], otherBots: false }), cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, refreshCompletionReminders: refreshCompletionReminderCards });
+  const personNames = createPersonNames(channel);
+  const settings = createSettingsOwner({ personNames, adminRemoved: endDmOf, responseRoster: (chatId) => orStop(readResponseRoster(channel, roster, chatId), { state: 'unavailable', entries: [], otherBots: false }), cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, refreshCompletionReminders: refreshCompletionReminderCards });
   const executeAdminWrite = createAdminWriteExecutor({ cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, settings });
   const adminExecute = async (op: AdminWriteOp): Promise<AdminWriteResult> => {
     const result = await executeAdminWrite(op);
@@ -10084,6 +10090,10 @@ export function createOrchestrator(
     libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
     scheduleAs: admittedScheduleAs,
+    permissionOf: async chatId => {
+      const project = await getProjectByChatId(chatId);
+      return project ? execOf(project).permission : undefined;
+    },
     scheduler: { start: async () => scheduler.start(await loadStore()), stop: () => scheduler.stop(), drain: ms => scheduler.drain(ms) },
     shutdown,
     // A crash before the shutdown also keeps the people's turns in flight: no card of theirs will say anything. One during

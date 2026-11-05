@@ -98,6 +98,14 @@ function notDm(place: AgentPlace): Failure {
 function scheduleRefused(reason: keyof typeof scheduleTurnMessages): Failure {
   return { ok: false, code: 'refused', reason, message: scheduleTurnMessages[reason] };
 }
+/** The document tools' own sentences for the same two. */
+const feishuTurnMessages = {
+  'unknown-origin': 'vonvon 认不出这次操作是哪一轮发起的，文档没有动。请对方重新说一遍。',
+  'turn-ended': '发起这次操作的那一轮已经结束了，文档没有动。请对方重新说一遍。',
+};
+function feishuRefused(reason: keyof typeof feishuTurnMessages): Failure {
+  return { ok: false, code: 'refused', reason, message: feishuTurnMessages[reason] };
+}
 interface TurnAuth {
   id: number;
   facts: TurnFacts;
@@ -227,6 +235,16 @@ export function createAgentEntries(opts: {
     if (action === 'create') return refused('no-human-create');
     if ((action !== 'edit' && action !== 'delete') || taskId !== auth.facts.scheduled?.taskId) return refused('scheduled-run-scope');
   }
+  /**
+   * 文档这一列的工具（dm-agent 7.2、7.4）：入口活着、这一轮还在。谁能做看位置：评论 @bot 进来之前已经查过管理员，群和私聊的
+   * 范围在工具里守（`mayRead`、`mayEdit`）。群和私聊的读不走这里（`turnBound`），改文档和评论会话走。
+   */
+  function authorizeFeishu(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
+    if (grant.thread && !grant.thread.isAlive()) revoke(grant);
+    if (grant.phase === 'revoked') return failure('revoked');
+    if (!auth) return feishuRefused('unknown-origin');
+    if (!auth.active || grant.turn !== auth) return feishuRefused('turn-ended');
+  }
   /** The tools' `ctx.admin` (a private chat's read-only queries, settings_get): the owner's or an admin's own turn, going. */
   function adminTurn(grant: Grant): Failure | undefined {
     const turn = grant.turn;
@@ -294,16 +312,18 @@ export function createAgentEntries(opts: {
       const settings = tool.class === 'settings';
       const memory = tool.class === 'memory';
       const schedule = tool.class === 'schedule';
-      const gated = settings || memory || schedule;
+      const document = tool.class === 'document' && (tool.writes === true || grant.place.kind === 'doc');
+      const gated = settings || memory || schedule || document;
       const taskId = schedule && args && typeof args === 'object' && 'taskId' in args ? args.taskId : undefined;
       // Claude's tool-use id, or the Codex turn id its turn/start answered with (定时任务 T3b): both noted by noteToolUse.
       const auth = origin?.toolUseId ? grant.origins.get(origin.toolUseId) : undefined;
       const authNow = (): Failure | undefined => memory ? authorizeMemory(grant, auth)
-        : schedule ? authorizeSchedule(grant, auth, tool.action, taskId) : authorizeNow(grant, auth);
+        : schedule ? authorizeSchedule(grant, auth, tool.action, taskId)
+          : document ? authorizeFeishu(grant, auth) : authorizeNow(grant, auth);
       if (gated) {
         const refusal = authNow();
         const known = origin?.toolUseId && (grant.origins.has(origin.toolUseId) || grant.pruned.has(origin.toolUseId));
-        if (refusal?.reason === 'unknown-origin' && known) return finishLog(schedule ? scheduleRefused('turn-ended') : refused('turn-ended'));
+        if (refusal?.reason === 'unknown-origin' && known) return finishLog(schedule ? scheduleRefused('turn-ended') : document ? feishuRefused('turn-ended') : refused('turn-ended'));
         if (refusal) return finishLog(refusal);
         if (settings && grant.settingRunning && grant.queue.length >= 8) return finishLog(failure('busy'));
       }
@@ -341,7 +361,7 @@ export function createAgentEntries(opts: {
         const onTurnAbort = () => {
           if (committed) return;
           // 记忆类：插话也会触发这个信号，但那一轮没结束，只影响落点，不打断调用；任务类插话后只剩 list
-          if (memory || schedule) { const refusal = authNow(); if (refusal) stop(refusal); }
+          if (memory || schedule || document) { const refusal = authNow(); if (refusal) stop(refusal); }
           else stop(authNow() ?? refused('turn-ended'));
         };
         const timer = setTimeout(() => stop(failure('timeout')), Math.max(0, deadline - Date.now()));
@@ -400,7 +420,8 @@ export function createAgentEntries(opts: {
             else {
               log.fail('agent.tool-failed', error, { tool: name });
               settle(!committed ? failure('failed') : { ok: false, code: 'failed', message: schedule
-                ? '提交时出错，任务可能已经改了。先用 schedule_list 查一下，再决定要不要重试。' : '提交时出错，设置可能已经改了。先查一下现在的设置，再决定要不要重试。' });
+                ? '提交时出错，任务可能已经改了。先用 schedule_list 查一下，再决定要不要重试。'
+                : document ? '提交时出错，文档可能已经改了。先用 feishu_doc 读一下，再决定要不要重试。' : '提交时出错，设置可能已经改了。先查一下现在的设置，再决定要不要重试。' });
             }
           }
         }
@@ -427,8 +448,8 @@ export function createAgentEntries(opts: {
         if (grant.thread && !grant.thread.isAlive()) revoke(grant);
         if (grant.phase === 'revoked') throw new ToolRefusal(failure('revoked'));
         if (grant.phase === 'capacity') return [];
-        // 评论会话（doc）只给读类工具；写记忆的在群和私聊里给，任务的只在群里给；只为设置服务的读工具只在私聊里给
-        return tools.filter(tool => placed(tool, grant.place) && (tool.class === 'read' || (tool.class === 'memory' ? grant.place.kind !== 'doc'
+        // 评论会话（doc）只给读类和文档这一列的工具；写记忆的在群和私聊里给，任务的只在群里给；只为设置服务的读工具只在私聊里给
+        return tools.filter(tool => placed(tool, grant.place) && (tool.class === 'read' || tool.class === 'document' || (tool.class === 'memory' ? grant.place.kind !== 'doc'
           : grant.place.kind === (tool.class === 'schedule' ? 'group' : 'p2p'))))
           .map(({ name, description, input }) => ({ name, description, input }));
       },
