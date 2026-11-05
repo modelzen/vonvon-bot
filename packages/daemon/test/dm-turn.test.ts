@@ -171,7 +171,7 @@ describe('who gets in, in what order', () => {
     const options = be.startThread.mock.calls[0][0] as StartThreadOptions;
     expect(options.cwd).toBe((await dmProject())?.cwd);
     expect(options.mode).toBe('full');
-    expect(options.profile?.tools).toMatchObject({ feishu: true });
+    expect(options.profile?.tools).toMatchObject({ feishu: true, feishuApi: true });
     expect((await dmProject())?.dm?.people[A]).toMatchObject({ openId: OWNER });
     expect(await getSession(A)).toMatchObject({ chatId: A, sessionId: 'native-1' });
     expect((await listSessions()).some(record => record.chatId === dmChatId(APP))).toBe(false);

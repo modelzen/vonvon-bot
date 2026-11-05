@@ -1,5 +1,24 @@
+import { inspect } from 'node:util';
 import { createLarkChannel, Domain } from '@larksuiteoapi/node-sdk';
 import type { AppConfig } from '../config/schema';
+
+/** An entry as text: an Error is its name and message alone, because the SDK's request errors hold the headers they sent. */
+function logText(entry: unknown): string {
+  const text = entry instanceof Error ? `${entry.name}: ${entry.message}` : typeof entry === 'string' ? entry : inspect(entry, { depth: 3, breakLength: Infinity });
+  return text.replace(/(Bearer\s+)[^\s'"\\]+/gi, '$1[已隐藏]');
+}
+const logTexts = (entries: unknown[]): string[] => entries.flatMap(entry => Array.isArray(entry) ? logTexts(entry) : [logText(entry)]);
+/**
+ * The SDK's default logger, same outputs, minus its secrets: a failed `rawClient.request` logs the whole AxiosError, whose
+ * `request._header` and `config.headers` hold `Authorization: Bearer` (dm-agent F7).
+ */
+export const sdkLogger = {
+  error: (...entries: unknown[]) => console.log('[error]:', ...logTexts(entries)),
+  warn: (...entries: unknown[]) => console.warn('[warn]:', ...logTexts(entries)),
+  info: (...entries: unknown[]) => console.info('[info]:', ...logTexts(entries)),
+  debug: (...entries: unknown[]) => console.debug('[debug]:', ...logTexts(entries)),
+  trace: (...entries: unknown[]) => console.trace('[trace]:', ...logTexts(entries)),
+};
 
 /** Shared receive boundary: project policy is enforced by the orchestrator. */
 export function createBridgeChannel(app: AppConfig['accounts']['app'], appSecret: string) {
@@ -8,6 +27,7 @@ export function createBridgeChannel(app: AppConfig['accounts']['app'], appSecret
     appSecret: appSecret,
     domain: app.tenant === 'lark' ? Domain.Lark : Domain.Feishu,
     source: 'feishu-codex-bridge',
+    logger: sdkLogger,
     // surface raw events so card-action handlers can read form submissions
     // (action.form_value) — used by the new-project form.
     includeRawEvent: true,
