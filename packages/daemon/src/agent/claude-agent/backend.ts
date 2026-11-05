@@ -701,6 +701,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       scheduleTools: profile.tools?.schedule === true,
       feishuTools: profile.tools?.feishu === true,
       feishuEditTools: profile.tools?.feishuEdit === true,
+      feishuApiTools: profile.tools?.feishuApi === true,
       createSdkMcpServer: sdk.createSdkMcpServer,
       tool: sdk.tool,
     });
@@ -736,6 +737,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       scheduleTools: profile.tools?.schedule === true,
       feishuTools: profile.tools?.feishu === true,
       feishuEditTools: profile.tools?.feishuEdit === true,
+      feishuApiTools: profile.tools?.feishuApi === true,
       createSdkMcpServer: sdk.createSdkMcpServer,
       tool: sdk.tool,
     });

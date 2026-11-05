@@ -10,6 +10,7 @@ import { ToolRefusal, type AgentTool, type ToolContext } from './tools';
  * 飞书读取工具（dm-agent 7.1、7.2）：Claude 的 MCP 和 Codex 的 dynamicTools 共用这一份定义。工具不走沙箱，范围在这里
  * 守：群会话只读本群的消息、文件、公告、成员，文档、表格、多维表格、云空间不按群隔离；私聊看这一轮是不是管理员的；评论会话只有文档
  * 这一列（第 7.4 节）。跨 Bot 是 F2。结果就是内容本身，不加标注。改文档的 `feishu_doc_edit`（F3）也在这里，只读档不给。
+ * 私聊的通用工具 `feishu_api`（F7，第 7.6 节）也在这里，群和评论没有。
  */
 
 const chat = z.string().min(1).max(200).describe('群的 chat_id；不写就是当前这个群');
@@ -43,6 +44,12 @@ const docEditInput = z.object({ doc: reference.describe('文档或知识库页�
   content: z.string().min(1).max(100_000).describe('新内容，Markdown'),
   block: z.string().min(1).max(200).describe('块的 id，在 feishu_doc 的结果里，改过文档后要重新读一次。insert 时插在它后面，replace 时换掉整个块').optional(),
   pattern: z.string().min(1).max(2000).describe('replace 时要换掉的一段行内文字，不跨段；文档里每一处都会被换').optional() }).strict();
+const apiValue = z.union([z.string().max(4000), z.number(), z.boolean()]);
+const apiInput = z.object({ method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
+  path: z.string().min(1).max(2000).describe('接口路径，以 /open-apis/ 开头，不写域名和查询参数，路径里的 :id 换成真实的值'),
+  params: z.record(z.string(), z.union([apiValue, z.array(apiValue).max(200)])).describe('查询参数，比如 page_size、page_token、user_id_type').optional(),
+  body: z.record(z.string(), z.unknown()).describe('请求体，一个 JSON 对象').optional(),
+  bot: z.string().min(1).max(200).describe('用哪个 Bot 的身份，写 App ID 或名字；不写就是当前 Bot。现在只能是当前 Bot').optional() }).strict();
 const searchInput = z.object({ query: z.string().min(1).max(500), chat: chat.describe('只搜这个群的 chat_id；群会话里只搜本群').optional(), limit: limit(20).describe('一页几条，默认 20').optional(), cursor: cursor.optional() }).strict();
 
 const definitions = [
@@ -64,14 +71,19 @@ export const feishuDocToolNames: ReadonlySet<string> = new Set(['feishu_doc', 'f
 /** Not among {@link feishuToolNames}: a session gets it by `tools.feishuEdit`, its tier's call. */
 export const FEISHU_DOC_EDIT = 'feishu_doc_edit';
 const docEditDescription = '改飞书新版文档：追加、插入、替换选中的内容，身份是 Bot 自己。表格和多维表格改不了。Bot 要有这篇文档的编辑权限。';
+/** Not among {@link feishuToolNames} either: a session gets it by `tools.feishuApi`, a private chat's only. */
+export const FEISHU_API = 'feishu_api';
+const apiDescription = '用 Bot 自己的身份调飞书开放平台的接口，能读能写。先用专门的飞书工具；没有专门工具时，查飞书开放平台文档（https://open.feishu.cn/document/ 下的页面，链接加 .md 能读到文本），再照文档调这个工具。'
+  + '请求体只发 JSON，上传文件的接口调不了；换令牌的 /open-apis/auth/ 也调不了。结果是飞书的原文，太长时被截断，要缩小范围或翻页；二进制响应存成本机文件，返回路径和大小。缺权限时返回开通链接。';
 /** The Claude backend lists these only in sessions whose profile has `tools.feishu`; `feishu_members` is older and always listed. */
 export const feishuReadToolNames: ReadonlySet<string> = new Set([...feishuToolNames].filter(name => name !== 'feishu_members'));
 
 /** The same tools without any provider's types, for Codex dynamicTools. */
-export function feishuToolSpecs(tools: { feishuEdit?: boolean; documentsOnly?: boolean } = {}): { name: string; description: string; inputSchema: object }[] {
+export function feishuToolSpecs(tools: { feishuEdit?: boolean; feishuApi?: boolean; documentsOnly?: boolean } = {}): { name: string; description: string; inputSchema: object }[] {
   const reads = definitions.filter(({ name }) => !tools.documentsOnly || feishuDocToolNames.has(name));
   return [...reads.map(({ name, description, input }) => ({ name, description, inputSchema: z.toJSONSchema(input) })),
-    ...tools.feishuEdit ? [{ name: FEISHU_DOC_EDIT, description: docEditDescription, inputSchema: z.toJSONSchema(docEditInput) }] : []];
+    ...tools.feishuEdit ? [{ name: FEISHU_DOC_EDIT, description: docEditDescription, inputSchema: z.toJSONSchema(docEditInput) }] : [],
+    ...tools.feishuApi ? [{ name: FEISHU_API, description: apiDescription, inputSchema: z.toJSONSchema(apiInput) }] : []];
 }
 
 const NOT_THIS_CHAT = '群里只能读本群的内容，读不了别的群。';
@@ -145,6 +157,22 @@ function docEditTool(reader: FeishuReader, tier: ((chatId: string) => Promise<Pe
     } };
 }
 
+/** The registry has looked at the turn (authorizeFeishuApi); it goes through `commit` because any method may change something. */
+function apiTool(reader: FeishuReader): AgentTool {
+  return { name: FEISHU_API, class: 'feishu-api', places: ['p2p'], description: apiDescription, input: apiInput,
+    async run(args, ctx) {
+      const request = apiInput.parse(args);
+      const commit = ctx.commit;
+      if (ctx.place.kind !== 'p2p' || !commit) throw denied();
+      try {
+        return await commit(guard => reader.api(request, guard));
+      } catch (failure) {
+        if (failure instanceof FeishuReadRefused) throw refusal(failure.message);
+        throw failure;
+      }
+    } };
+}
+
 export function createFeishuTools(deps: { members(chatId: string, cursor?: string): Promise<FeishuMembers>; feishu?: FeishuReader;
   /** A group's permission tier now, for the edit tool. */
   groupTier?(chatId: string): Promise<PermissionMode | undefined> }): AgentTool[] {
@@ -167,6 +195,7 @@ export function createFeishuTools(deps: { members(chatId: string, cursor?: strin
     tool<typeof driveInput>('feishu_drive_file', (args, ctx) => reader.driveFile({ ...args, ...savedIn(ctx) })),
     tool<typeof searchInput>('feishu_search', (args, ctx) => reader.search({ ...args, ...chatOf(args.chat, ctx) })),
     docEditTool(reader, deps.groupTier),
+    apiTool(reader),
   ];
 }
 

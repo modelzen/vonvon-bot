@@ -1,4 +1,4 @@
-import { FEISHU_DOC_EDIT, feishuToolNames, feishuToolSpecs } from '../entry/feishu-tools';
+import { FEISHU_API, FEISHU_DOC_EDIT, feishuToolNames, feishuToolSpecs } from '../entry/feishu-tools';
 import { scheduleToolNames, scheduleToolSpecs } from '../entry/schedule-tools';
 import type { SessionProfile } from '../session-profile';
 import type { StartThreadOptions } from '../types';
@@ -42,5 +42,5 @@ export function startDynamicTools(opts: Pick<StartThreadOptions, 'entry' | 'prof
  * thread older than feishu_doc_edit simply does not have it; one whose tier dropped since is refused by the tool itself.
  */
 export function offeredTool(namespace: string | null | undefined, tool: string): boolean {
-  return (namespace ?? 'vonvon_bot') === 'vonvon_bot' && (scheduleToolNames.has(tool) || feishuToolNames.has(tool) || tool === FEISHU_DOC_EDIT);
+  return (namespace ?? 'vonvon_bot') === 'vonvon_bot' && (scheduleToolNames.has(tool) || feishuToolNames.has(tool) || tool === FEISHU_DOC_EDIT || tool === FEISHU_API);
 }

@@ -20,7 +20,7 @@ import { createTurnMapper, resultErrorText } from './event-map';
 import { decide, type ClaudeAccess, type ClaudePermissionOptions, type PathFs, type ToolCall } from './permission';
 import { bridgeAsk, type BridgedAsk } from './ask-bridge';
 import { findTranscript, scanTranscript } from './transcript';
-import { FEISHU_DOC_EDIT, feishuReadToolNames } from '../entry/feishu-tools';
+import { FEISHU_API, FEISHU_DOC_EDIT, feishuReadToolNames } from '../entry/feishu-tools';
 import { scheduleToolNames } from '../entry/schedule-tools';
 import { toolReplyText } from '../entry/tools';
 import { builtinSkillsOfSet } from '../builtin-skills/registry';
@@ -34,6 +34,8 @@ export interface ClaudeThreadConfig {
   feishuTools?: boolean;
   /** The session's profile has `tools.feishuEdit`: vonvon_bot lists feishu_doc_edit too. */
   feishuEditTools?: boolean;
+  /** The session's profile has `tools.feishuApi`: vonvon_bot lists feishu_api too. */
+  feishuApiTools?: boolean;
   createSdkMcpServer?: ClaudeSdkFacade['createSdkMcpServer'];
   tool?: ClaudeSdkFacade['tool'];
   /** self-assigned UUID (start: options.sessionId) or the id to resume. */
@@ -365,7 +367,7 @@ export class ClaudeAgentThread implements AgentThread {
       if (cfg.createSdkMcpServer && cfg.tool) {
         const tool = cfg.tool;
         mcpServers.vonvon_bot = cfg.createSdkMcpServer({ name: 'vonvon_bot', version: '1',
-          tools: entry.tools().filter(spec => (cfg.scheduleTools || !scheduleToolNames.has(spec.name)) && (cfg.feishuTools || !feishuReadToolNames.has(spec.name)) && (cfg.feishuEditTools || spec.name !== FEISHU_DOC_EDIT)).map(spec => tool(spec.name, spec.description, spec.input.shape, async (args, extra) => {
+          tools: entry.tools().filter(spec => (cfg.scheduleTools || !scheduleToolNames.has(spec.name)) && (cfg.feishuTools || !feishuReadToolNames.has(spec.name)) && (cfg.feishuEditTools || spec.name !== FEISHU_DOC_EDIT) && (cfg.feishuApiTools || spec.name !== FEISHU_API)).map(spec => tool(spec.name, spec.description, spec.input.shape, async (args, extra) => {
             const origin = toolOriginSchema.safeParse(extra);
             const reply = await entry.call(spec.name, args, { toolUseId: origin.success ? origin.data._meta['claudecode/toolUseId'] : undefined });
             return { content: [{ type: 'text', text: toolReplyText(reply) }], ...(!reply.ok ? { isError: true } : {}) };
