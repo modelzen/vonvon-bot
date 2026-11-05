@@ -1,0 +1,96 @@
+name: Linux shard experiment
+on:
+  push:
+    branches: [codex/linux-ci-shard-benchmark]
+permissions:
+  contents: read
+concurrency:
+  group: linux-shard-experiment
+  cancel-in-progress: true
+env:
+  BENCHMARK_SOURCE: 43cbd167ee396c33decf6818ebb681dc01f4ff4e
+jobs:
+  baseline:
+    name: Linux full baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      matrix:
+        shard: [baseline]
+    steps: &benchmark-steps
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify unchanged product source
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          git diff --exit-code "$BENCHMARK_SOURCE" HEAD -- packages scripts package.json package-lock.json
+          git diff --exit-code "$BENCHMARK_SOURCE" HEAD -- .github/scripts/ci-run.mjs
+          node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          const allowed = new Set([
+            '.github/workflows/linux-shard-experiment.yml',
+            '.github/scripts/linux-shard-benchmark.mjs',
+            '.github/scripts/verify-linux-shard-benchmark.mjs',
+            '.github/scripts/verify-linux-shard-benchmark.test.mjs',
+          ]);
+          const paths = execFileSync('git', ['diff', '--name-only', '-z', process.env.BENCHMARK_SOURCE, 'HEAD'], {encoding:'utf8'}).split('\0').filter(Boolean);
+          if (paths.some(path => !allowed.has(path))) throw new Error('Experiment includes changes outside its four files');
+          JS
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/vonvon-server-node
+          key: server-node-${{ hashFiles('scripts/server-node.json') }}
+      - name: Measure full checks
+        env:
+          BENCHMARK_PHASE: ${{ matrix.shard }}
+          VONVON_SMOKE_NODE_CACHE: ${{ runner.temp }}/vonvon-server-node
+        run: node .github/scripts/linux-shard-benchmark.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-${{ matrix.shard == '1/2' && 'shard-1' || matrix.shard == '2/2' && 'shard-2' || 'baseline' }}-${{ github.run_attempt }}
+          path: benchmark/
+          retention-days: 7
+  candidate:
+    name: Linux shard ${{ matrix.shard }}
+    needs: baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        shard: ['1/2', '2/2']
+    steps: *benchmark-steps
+  verify:
+    name: Verify identical test coverage
+    needs: [baseline, candidate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: linux-*-${{ github.run_attempt }}
+          path: comparison-input
+      - run: node .github/scripts/verify-linux-shard-benchmark.mjs comparison-input
+      - run: node --test .github/scripts/verify-linux-shard-benchmark.test.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: comparison-${{ github.run_attempt }}
+          path: comparison.json
+          retention-days: 7
