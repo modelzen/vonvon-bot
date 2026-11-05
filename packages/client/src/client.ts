@@ -79,7 +79,7 @@ export interface ClientConnection {
   restore?(frame: unknown): void;
 }
 
-export function createClient(socket: ClientConnection): VonvonClient {
+export function createClient(socket: ClientConnection, capabilities: readonly string[] = []): VonvonClient {
   const pending = new Map<string, Pending>();
   const snapshots = new Set<(value: DesktopSnapshot) => void>();
   const logs = new Set<(value: LogEventPayload) => void>();
@@ -176,14 +176,19 @@ export function createClient(socket: ClientConnection): VonvonClient {
       });
     });
   }
-  const snapshot = () => send("snapshot", {type:"get"});
+  const snapshot = () => send("snapshot", {type:"get", ...(capabilities.includes("attention.group") ? {groupAttention: true as const} : {})});
   return {
     snapshot,
     watchSnapshots(listener) {
       let active = true;
       let revision = -1;
+      let groupModel = false;
       const receive = (value: DesktopSnapshot) => {
-        if (active && value.revision > revision) { revision = value.revision; listener(value); }
+        if (active && (value.revision > revision || (value.revision === revision && !groupModel && value.attentionModel === "group"))) {
+          revision = value.revision;
+          groupModel = value.attentionModel === "group";
+          listener(value);
+        }
       };
       snapshots.add(receive);
       void snapshot().then(receive).catch(error => {

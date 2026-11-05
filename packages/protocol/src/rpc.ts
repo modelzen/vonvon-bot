@@ -16,7 +16,7 @@ import { deviceRequestSchema, deviceReplySchema } from "./device.js";
 
 const id = z.string().min(1);
 export const requestSchema = z.discriminatedUnion("method", [
-  z.object({type:z.literal("request"),id,method:z.literal("snapshot"),payload:z.object({type:z.literal("get")}).strict()}).strict(),
+  z.object({type:z.literal("request"),id,method:z.literal("snapshot"),payload:z.object({type:z.literal("get"),groupAttention:z.literal(true).optional()}).strict()}).strict(),
   z.object({type:z.literal("request"),id,method:z.literal("command"),payload:commandSchema}).strict(),
   z.object({type:z.literal("request"),id,method:z.literal("settings"),payload:settingsRequestSchema}).strict(),
   z.object({type:z.literal("request"),id,method:z.literal("collaboration"),payload:collaborationRequestSchema}).strict(),
