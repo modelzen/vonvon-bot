@@ -8,7 +8,7 @@ import { ask, cleanText, jsonBytes, RESULT_BUDGET, sliceText, textOffset, type R
 export interface Kept { only?: string }
 export interface MessagesRequest extends Kept { chat?: string; thread?: string; start?: string; end?: string; order?: 'newest' | 'oldest'; limit?: number; cursor?: string }
 export interface MessageRequest extends Kept { messageId: string; cursor?: string }
-export interface FileRequest extends Kept { messageId: string; fileKey: string; type: 'image' | 'file'; name?: string }
+export interface FileRequest extends Kept { messageId: string; fileKey: string; type: 'image' | 'file'; name?: string; saveIn?: string }
 export interface ChatRequest { chat?: string; cursor?: string }
 export interface SearchRequest { query: string; chat?: string; only?: string; limit?: number; cursor?: string }
 
@@ -20,8 +20,6 @@ export interface MessageRow {
 
 /** Per message in a list; `feishu_message` reads one whole. */
 const LIST_TEXT_MAX = 4000;
-/** One message read alone; a text message's limit is 150 KB, so this fits with room for what was forwarded in it. */
-const FULL_TEXT_MAX = 60_000;
 const SEARCH_TEXT_MAX = 2000;
 const PAGE_MAX = 50;
 /** Announcement pages read at most. */
@@ -136,12 +134,24 @@ async function getMessage(deps: ReadDeps, messageId: string, only: string | unde
   return { item, rest: items.filter(it => it !== item) };
 }
 
+/** How far a long message was read: into its text, then through what was forwarded in it. */
+function messageCursor(cursor: string | undefined): { text: number; forwarded: number } {
+  if (cursor === undefined) return { text: 0, forwarded: 0 };
+  const [kind, offset] = cursor.split(':');
+  if (kind === 'text') return { text: textOffset(offset), forwarded: 0 };
+  if (kind === 'forwarded') return { text: Number.MAX_SAFE_INTEGER, forwarded: textOffset(offset) };
+  throw new FeishuReadRefused('cursor 不对：用上一次结果里的 cursor，原样传回来。');
+}
+
 export async function readMessage(deps: ReadDeps, request: MessageRequest): Promise<{ message: MessageRow; forwarded?: MessageRow[]; cursor?: string }> {
   const { item, rest } = await getMessage(deps, request.messageId, request.only);
   const me = meOf(deps.channel);
-  const message = messageRow(item, me, FULL_TEXT_MAX);
-  if (!message) throw new FeishuReadRefused('这条消息已经撤回了，或者是系统通知。', 'not-found');
-  const skip = textOffset(request.cursor);
+  const whole = messageRow(item, me, Infinity);
+  if (!whole) throw new FeishuReadRefused('这条消息已经撤回了，或者是系统通知。', 'not-found');
+  const { text: from, forwarded: skip } = messageCursor(request.cursor);
+  const part = sliceText(whole.text, from);
+  const message = { ...whole, text: part.text };
+  if (part.next !== undefined) return { message, cursor: `text:${part.next}` };
   const forwarded: MessageRow[] = [];
   let used = jsonBytes(message);
   for (const [index, sub] of rest.entries()) {
@@ -149,7 +159,7 @@ export async function readMessage(deps: ReadDeps, request: MessageRequest): Prom
     const row = messageRow(sub, me, LIST_TEXT_MAX);
     if (!row) continue;
     used += jsonBytes(row);
-    if (used > RESULT_BUDGET) return { message, forwarded, cursor: String(index) };
+    if (used > RESULT_BUDGET) return { message, forwarded, cursor: `forwarded:${index}` };
     forwarded.push(row);
   }
   return { message, ...(rest.length ? { forwarded } : {}) };
@@ -164,8 +174,8 @@ export async function readFile(deps: ReadDeps, request: FileRequest): Promise<{ 
   const named = attachmentsOf(item)?.find(attachment => attachment.key === request.fileKey)?.name;
   const fallback = request.type === 'image' ? `image.${imageExtension(res.headers)}` : 'file';
   const name = cleanFileName(request.name ?? named ?? downloadName(res.headers)) || fallback;
-  await prepareInboundDir();
-  const saved = await saveInboundDownload(res, request.fileKey, name);
+  await prepareInboundDir(request.saveIn);
+  const saved = await saveInboundDownload(res, request.fileKey, name, request.saveIn);
   if ('reason' in saved) throw new FeishuReadRefused(`没下载成：${saved.reason}。`);
   return { path: saved.path, name: saved.name };
 }

@@ -9,6 +9,7 @@ import { createAgentEntries, type AgentPlace } from '../src/agent/entry/registry
 import { TOOL_RESULT_BYTES } from '../src/agent/entry/tools';
 import type { AgentThread } from '../src/agent/types';
 import { DOC_EDIT_SCOPES, DOC_READ_SCOPES, DRIVE_READ_SCOPES, FEISHU_TOOL_SCOPES, GRANT_SCOPES, MESSAGE_SEARCH_SCOPES, REQUIRED_SCOPES, SCOPE_LABELS, SHEET_READ_SCOPES } from '../src/config/scopes';
+import { inboundChatDir } from '../src/bot/media';
 import { AFTER_GRANT, readableFailure, readOnlyReply, refusalOf, type ReadArea } from '../src/feishu-read/denial';
 import { parseRef } from '../src/feishu-read/documents';
 import { createFeishuReader } from '../src/feishu-read/reader';
@@ -161,6 +162,24 @@ describe('feishu_message and feishu_file', () => {
     expect(result.forwarded!.map(m => m.text)).toEqual(['转发里的话', '第二句']);
   });
 
+  it('reads a long message to its end, then what was forwarded in it', async () => {
+    const body = `${'a'.repeat(70_000)}${'字'.repeat(40_000)}尾巴`;
+    const { read } = reader({ get: async () => ({ code: 0, data: { items: [text('om_l', body), text('om_s', '转发里的话', OTHER)] } }) });
+    let joined = '', cursor: string | undefined;
+    const forwarded: string[] = [];
+    do {
+      const page = await read.message({ messageId: 'om_l', ...(cursor ? { cursor } : {}) });
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(TOOL_RESULT_BYTES);
+      expect(page.message.truncated).toBeUndefined();
+      joined += page.message.text;
+      forwarded.push(...(page.forwarded ?? []).map(m => m.text));
+      cursor = page.cursor;
+    } while (cursor);
+    expect(joined).toBe(body);
+    expect(forwarded).toEqual(['转发里的话']);
+    await expect(read.message({ messageId: 'om_l', cursor: '1' })).rejects.toThrow('cursor 不对');
+  });
+
   it('pages a long forward', async () => {
     const forward = { ...text('om_f', ''), msg_type: 'merge_forward', body: { content: '{}' } };
     const subs = Array.from({ length: 120 }, (_, i) => text(`om_${i}`, '字'.repeat(3900), OTHER));
@@ -189,6 +208,14 @@ describe('feishu_message and feishu_file', () => {
     const saved = await read.file({ messageId: 'om_1', fileKey: 'file_k', type: 'file', only: HERE });
     expect(saved).toEqual({ path: join(paths.inboundDir, 'file_k-b.log'), name: 'b.log' });
     expect(readFileSync(saved.path, 'utf8')).toBe('内容');
+  });
+
+  it('saves a group\'s file in the folder it asked for', async () => {
+    const { read } = reader({ get: async () => ({ code: 0, data: { items: [text('om_1', '')] } }), resource: download('内容') });
+    const saveIn = inboundChatDir(HERE);
+    const saved = await read.file({ messageId: 'om_1', fileKey: 'file_k', type: 'file', name: 'b.log', only: HERE, saveIn });
+    expect(saved.path).toBe(join(saveIn, 'file_k-b.log'));
+    expect(saveIn).not.toBe(inboundChatDir(OTHER));
   });
 
   it('names an image by its content type, and refuses one over the size cap', async () => {

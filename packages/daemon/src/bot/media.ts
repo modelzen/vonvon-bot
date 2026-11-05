@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { LarkChannel, NormalizedMessage } from '@larksuiteoapi/node-sdk';
@@ -327,11 +328,19 @@ function downloadFailure(err: unknown): string {
   return '下载失败';
 }
 
+/**
+ * A group's folder for what its Feishu tools download. Its own, because a Codex session outside full access reads only
+ * the roots it was given, and this one must not show it every group's files.
+ */
+export function inboundChatDir(chatId: string): string {
+  return join(paths.inboundDir, 'chats', createHash('sha256').update(chatId).digest('hex').slice(0, 16));
+}
+
 /** Old downloads go, and the directory is there; a failure surfaces on the write. */
-export async function prepareInboundDir(): Promise<void> {
-  await pruneOldMedia(paths.inboundDir);
+export async function prepareInboundDir(dir: string = paths.inboundDir): Promise<void> {
+  await pruneOldMedia(dir);
   try {
-    await mkdir(paths.inboundDir, { recursive: true });
+    await mkdir(dir, { recursive: true });
   } catch {
     /* mkdir failure surfaces on writeFile below */
   }
@@ -364,8 +373,8 @@ export function downloadName(headers: unknown): string | undefined {
 /** The extension an image download's content type says (`png` when it says none). */
 export const imageExtension = extFromHeaders;
 
-/** An SDK download into {@link paths.inboundDir} under the size cap; `name` is sanitized by the caller, it goes into the prompt. */
-export async function saveInboundDownload(res: { headers?: unknown; writeFile(path: string): Promise<unknown> }, fileKey: string, name: string): Promise<InboundFile | { reason: string }> {
+/** An SDK download into `dir` under the size cap; `name` is sanitized by the caller, it goes into the prompt. */
+export async function saveInboundDownload(res: { headers?: unknown; writeFile(path: string): Promise<unknown> }, fileKey: string, name: string, dir: string = paths.inboundDir): Promise<InboundFile | { reason: string }> {
   const declared = Number(readHeader(res.headers, 'content-length'));
   if (Number.isFinite(declared) && declared > MAX_FILE_BYTES) {
     log.warn('intake', 'file-too-large', { fileKey: fileKey.slice(0, 24), bytes: declared });
@@ -374,7 +383,7 @@ export async function saveInboundDownload(res: { headers?: unknown; writeFile(pa
   // file_key is globally unique per resource — prefix the (sanitized, ≤40-char)
   // key so two uploads sharing a name never clash in the shared inboundDir.
   const onDisk = `${safeName(fileKey)}-${name}`;
-  const file = join(paths.inboundDir, onDisk);
+  const file = join(dir, onDisk);
   await res.writeFile(file);
   // Backstop the cap when content-length was absent: stat + drop if oversized.
   try {

@@ -317,6 +317,8 @@ import {
   messageHasImages,
   stripFileTokens,
   weaveFileManifest,
+  inboundChatDir,
+  prepareInboundDir,
 } from './media';
 import {
   BACKFILL_MAX,
@@ -1187,7 +1189,10 @@ export function createOrchestrator(
     const schedule = Boolean(project) && place !== 'comment';
     // The task skill goes with the tools (T4b); a package that cannot be written leaves the last whole one, or none.
     const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId) : [];
-    const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages, mcpServers: [],
+    // What the Feishu tools download must be readable outside full access too.
+    const downloads = schedule && project ? inboundChatDir(project.chatId) : undefined;
+    if (downloads) await prepareInboundDir(downloads);
+    const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: downloads ? [{ path: downloads, access: 'read' as const }] : [], capabilityPackages, mcpServers: [],
       tools: { schedule, feishu: schedule }, ...(skills ? { skills } : {}) } : undefined;
     const built = await executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
     if (assembled && built) openings.set(built, contextOf(assembled, nonce));

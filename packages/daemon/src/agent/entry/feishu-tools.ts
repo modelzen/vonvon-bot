@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { feishuMembers, type FeishuMembers } from '../../admin/structured-commands';
+import { inboundChatDir } from '../../bot/media';
 import { FeishuReadRefused } from '../../feishu-read/denial';
 import type { FeishuReader } from '../../feishu-read/reader';
 import { ToolRefusal, type AgentTool, type ToolContext } from './tools';
@@ -41,8 +42,9 @@ const definitions = [
   { name: 'feishu_search', input: searchInput, description: '按关键词搜飞书消息。' },
 ] as const satisfies readonly { name: string; input: z.ZodObject; description: string }[];
 
-/** The Claude backend lists these only in sessions whose profile has `tools.feishu`. */
 export const feishuToolNames: ReadonlySet<string> = new Set(definitions.map(tool => tool.name));
+/** The Claude backend lists these only in sessions whose profile has `tools.feishu`; `feishu_members` is older and always listed. */
+export const feishuReadToolNames: ReadonlySet<string> = new Set([...feishuToolNames].filter(name => name !== 'feishu_members'));
 
 /** The same tools without any provider's types, for Codex dynamicTools. */
 export function feishuToolSpecs(): { name: string; description: string; inputSchema: object }[] {
@@ -99,14 +101,19 @@ export function createFeishuTools(deps: { members(chatId: string, cursor?: strin
   return [
     tool<typeof messagesInput>('feishu_messages', (args, ctx) => reader.messages({ ...args, ...chatOf(args.chat, ctx) })),
     tool<typeof messageInput>('feishu_message', (args, ctx) => reader.message({ ...args, ...only(ctx) })),
-    tool<typeof fileInput>('feishu_file', (args, ctx) => reader.file({ ...args, ...only(ctx) })),
+    tool<typeof fileInput>('feishu_file', (args, ctx) => reader.file({ ...args, ...only(ctx), ...savedIn(ctx) })),
     tool<typeof chatInput>('feishu_chat', ({ chat: requested, ...rest }, ctx) => reader.chat({ ...rest, ...chatOf(requested, ctx) })),
     members,
     tool<typeof docInput>('feishu_doc', args => reader.doc(args)),
     tool<typeof sheetInput>('feishu_sheet', args => reader.sheet(args)),
-    tool<typeof driveInput>('feishu_drive_file', args => reader.driveFile(args)),
+    tool<typeof driveInput>('feishu_drive_file', (args, ctx) => reader.driveFile({ ...args, ...savedIn(ctx) })),
     tool<typeof searchInput>('feishu_search', (args, ctx) => reader.search({ ...args, ...chatOf(args.chat, ctx) })),
   ];
+}
+
+/** A group's downloads go to its own folder, the one its restricted sessions can read. */
+function savedIn(ctx: ToolContext): { saveIn?: string } {
+  return ctx.place.kind === 'group' && ctx.place.chatId ? { saveIn: inboundChatDir(ctx.place.chatId) } : {};
 }
 
 /** A message named by id: its chat is only known once it is read, so the reader checks it against this. */

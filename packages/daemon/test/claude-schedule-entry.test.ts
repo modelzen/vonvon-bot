@@ -5,6 +5,7 @@ import { createSdkMcpServer, tool, type Options, type Query, type SDKMessage } f
 import { afterEach, expect, it, vi } from 'vitest';
 import { ClaudeAgentBackend, type ClaudeSdkFacade } from '../src/agent/claude-agent/backend';
 import { claudeAccess, permissionOptions } from '../src/agent/claude-agent/permission';
+import type { FeishuReader } from '../src/feishu-read/reader';
 import { createFeishuTools } from '../src/agent/entry/feishu-tools';
 import { createAgentEntries, type AgentPlace } from '../src/agent/entry/registry';
 import { createScheduleTools } from '../src/agent/entry/schedule-tools';
@@ -66,10 +67,11 @@ it.each([[true, 1], [false, 0]] as const)('lists the Feishu read tools in vonvon
   for (const action of ['start', 'resume'] as const) {
     const f = fixture(), cwd = savedSession();
     const entry = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true,
-      tools: createFeishuTools({ members: async () => ({ members: [] }) }) }).issue({ kind: 'group', chatId: 'oc_group' });
+      tools: createFeishuTools({ members: async () => ({ members: [] }), feishu: {} as FeishuReader }) }).issue({ kind: 'group', chatId: 'oc_group' });
     threads.push(action === 'start' ? await f.backend.startThread({ cwd, mode: 'qa', entry, profile: profile(false, feishu) })
       : await f.backend.resumeThread({ cwd, mode: 'qa', entry, sessionId: 'saved', profile: profile(false, feishu) }));
-    expect(f.registered.filter(name => name === 'feishu_members')).toHaveLength(count);
+    expect(f.registered.filter(name => name === 'feishu_doc')).toHaveLength(count);
+    expect(f.registered.filter(name => name === 'feishu_members')).toHaveLength(1);
   }
 });
 
