@@ -73,6 +73,13 @@ describe('sessionSnapshot', () => {
     expect([comment.agents.map(agent => agent.id), comment.groups, comment.memberships, comment.projects]).toEqual([['cli_x'], [], [], []]);
     expect(sessionSnapshot(full, principal('dm'), { bot: 'cli_x' })).toEqual(filterSnapshot(full, principal('dm'), { bot: 'cli_x' }));
   });
+  it('keeps the Feishu owner display name on the owner surface', () => {
+    const named = { ...full, agents: full.agents.map(agent => ({ ...agent, ownerName: '示例姓名' })) };
+    for (const place of ['group', 'dm', 'comment'] as const) {
+      expect(sessionSnapshot(named, principal(place), null).agents[0]).not.toHaveProperty('ownerName');
+    }
+    expect(filterSnapshot(named, principal('dm'), null).agents[0]?.ownerName).toBe('示例姓名');
+  });
 });
 
 describe('snapshot events', () => {

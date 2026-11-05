@@ -508,6 +508,15 @@ it('s28c: joined-group hints use observed bot counts and survive the IPC parser'
   }
 });
 
+it('gets the badge directory in a single list request without fetching each chat', async () => {
+  const fixture = channelFixture();
+  const get = vi.fn();
+  Object.assign(fixture.channel.rawClient.im.v1.chat, {get});
+  const result = await createGroupExecutor(fixture.channel)({kind: 'joinedGroups', summaryOnly: true});
+  expect(parseJoinedGroups(result).groups).toEqual([expect.objectContaining({chatId: 'oc_a', bound: expect.any(Boolean)})]);
+  expect(get).not.toHaveBeenCalled();
+});
+
 it('s28c: pending groups persist and clear an observed other-bot hint', async () => {
   const file = join(paths.appDir, 'pending-hint.json');
   let hasOtherBots: boolean | undefined = true;

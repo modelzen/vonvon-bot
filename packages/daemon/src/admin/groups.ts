@@ -25,7 +25,7 @@ export interface BindGroupInput {
   noMention?: boolean;
   judge?: GroupDecision;
 }
-export type AdminGroupOp = { kind: 'joinedGroups'; cursor?: string } | { kind: 'groupMembers'; chatId: string; cursor?: string } | { kind: 'bindGroup'; input: BindGroupInput };
+export type AdminGroupOp = { kind: 'joinedGroups'; cursor?: string; summaryOnly?: true } | { kind: 'groupMembers'; chatId: string; cursor?: string } | { kind: 'bindGroup'; input: BindGroupInput };
 export interface JoinedGroups {
   groups: { chatId: string; name: string; bound: boolean; hasOtherBots?: boolean }[];
   nextCursor?: string;
@@ -162,10 +162,12 @@ export function createGroupExecutor(channel: LarkChannel, identity: BotIdentity,
       bound: projects.some(project => project.chatId === item.chat_id),
     }] : []);
     if (response.data.has_more && !response.data.page_token) refused('joined-groups', {}, '飞书群列表缺少下一页游标');
+    const pagination = response.data.has_more ? {nextCursor: response.data.page_token} : {};
+    if (op.summaryOnly) return {groups, ...pagination};
     const enriched = await Promise.all(groups.map(async group => {
       const info = await topicContext.chatInfo(group.chatId);
       return { ...group, ...(info.ok && info.bots !== undefined ? { hasOtherBots: info.bots > 1 } : {}) };
     }));
-    return { groups: enriched, ...(response.data.has_more ? { nextCursor: response.data.page_token } : {}) };
+    return { groups: enriched, ...pagination };
   };
 }

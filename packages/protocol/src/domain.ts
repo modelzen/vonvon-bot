@@ -66,6 +66,8 @@ export type Tool = z.infer<typeof toolSchema>;
 
 const empty = <T extends string>(type: T) =>
   z.object({ type: z.literal(type) }).strict();
+export const MAX_BADGE_NUMBER_LENGTH = 7;
+export const badgeNumberSchema = z.string().min(1).max(MAX_BADGE_NUMBER_LENGTH).regex(/^\d+$/);
 export const commandSchema = z.discriminatedUnion("type", [
   z.object({type: z.literal("refresh"), tools: z.boolean().optional()}).strict(),
   z.object({type: z.literal("listPendingGroups"), agentId: agentIdSchema}).strict(),
@@ -76,6 +78,7 @@ export const commandSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("listJoinedGroups"),
       agentId: agentIdSchema,
+      summaryOnly: z.literal(true).optional(),
       cursor: z.string().min(1).max(2048).optional(),
     })
     .strict(),
@@ -124,6 +127,7 @@ export const commandSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({type:z.literal("deleteAgent"),agentId:agentIdSchema}).strict(),
+  z.object({type: z.literal("setAgentBadgeNumber"), agentId: agentIdSchema, badgeNumber: badgeNumberSchema}).strict(),
   z.object({ type: z.literal("cancelJob"), jobId: jobIdSchema }).strict(),
 ]);
 export type Command = z.infer<typeof commandSchema>;
@@ -142,11 +146,15 @@ export const agentSchema = z.object({
   id: agentIdSchema, name: z.string(), avatarDataUrl: z.string().optional(), avatarRef,
   enabled: z.boolean(), running: z.boolean(), connection: z.string(),
   activation: z.enum(["active", "restartRequired"]), readError: z.string().optional(),
+  badgeNumber: badgeNumberSchema.optional(),
   /** The bot's recent not-replied messages and scope denials; absent when it has none. */
   diagnostics: botDiagnosticsSchema.optional(),
   /** This bot alone stopped restarting after 3 crashes in 10 minutes (s18a); absent from older daemons. */
   paused: crashPauseSchema.optional(),
   lockHeld: lockHeldSchema.optional(),
+  /** Local registration date and the display name of the confirmed Feishu application owner. */
+  registeredAt: z.number().finite().nonnegative().optional(),
+  ownerName: z.string().optional(),
 });
 export type Agent = z.infer<typeof agentSchema>;
 /** A group directory an older version left in the wrong place (s36c2d): a bot's own directory, the projects root
