@@ -11,6 +11,8 @@ import { dmChatId, dmProject } from '../src/project/registry';
 import { getSession, listSessions, upsertSession } from '../src/bot/session-store';
 import { createAgentEntries, type AgentEntries } from '../src/agent/entry/registry';
 import { createOrchestrator } from '../src/bot/handle-message';
+import { dmMemoryLocation, MemoryStore } from '../src/bot/memory-store';
+import { botRoot } from '../src/bot/role-files';
 import { seedBots } from './helpers/bot-fixture';
 
 // dm-agent 5 (D2): an administrator's private chat is an Agent's window, through the real orchestrator, session store,
@@ -159,6 +161,24 @@ describe('who gets in, in what order', () => {
     expect(await getSession(A)).toMatchObject({ chatId: A, sessionId: 'native-1' });
     expect((await listSessions()).some(record => record.chatId === dmChatId(APP))).toBe(false);
     run.turns[0]!.resolve();
+  });
+
+  // dm-agent 5 (D3). main 必败: a session's opening had no private-chat memory.
+  it('opens each administrator\'s session with their own memory and not the other\'s', async () => {
+    const remember = (openId: string, text: string) => new MemoryStore(dmMemoryLocation(botRoot(APP), openId)).add({ text, trust: 'trusted', actor: { role: 'admin', openId },
+      source: { via: 'tool', botId: APP, actorRole: 'admin', actorOpenId: openId } });
+    await remember(OWNER, '主人的私聊记忆'); await remember(ADMIN, '管理员的私聊记忆');
+    const first = thread('native-1'), second = thread('native-2'), be = backend(first, second); const { o } = await app();
+    await o.onMessage(message('帮我看看'));
+    await until(() => expect(first.consumed).toHaveLength(1));
+    await o.onMessage(message('我也看看', { chatId: B, senderId: ADMIN, senderName: 'Admin' }));
+    await until(() => expect(second.consumed).toHaveLength(1));
+    const opening = (index: number) => (be.startThread.mock.calls[index][0] as StartThreadOptions).profile?.instructions ?? '';
+    expect(opening(0)).toContain('主人的私聊记忆');
+    expect(opening(0)).not.toContain('管理员的私聊记忆');
+    expect(opening(1)).toContain('管理员的私聊记忆');
+    expect(opening(1)).not.toContain('主人的私聊记忆');
+    first.turns[0]!.resolve(); second.turns[0]!.resolve();
   });
 
   it('takes no bot, and refuses someone else before anything is transcribed', async () => {
