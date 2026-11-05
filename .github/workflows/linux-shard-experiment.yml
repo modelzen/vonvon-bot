@@ -57,7 +57,7 @@ jobs:
         if: always()
         with:
           name: linux-${{ matrix.shard == '1/2' && 'shard-1' || matrix.shard == '2/2' && 'shard-2' || 'baseline' }}-${{ github.run_attempt }}
-          path: benchmark/
+          path: ${{ runner.temp }}/linux-shard-benchmark-output/
           retention-days: 7
   candidate:
     name: Linux shard ${{ matrix.shard }}
