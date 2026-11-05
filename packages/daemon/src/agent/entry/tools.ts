@@ -11,6 +11,8 @@ export interface ToolContext {
   admin?: boolean;
   readonly writeRefusal?: Extract<AgentToolReply, { ok: false }>;
   place: AgentPlace;
+  /** The session's id, which its token in the host names: what a read through another Bot shows the host (dm-agent 7.3). */
+  sessionId?: string;
   turn?: { id: number; requesterOpenId: string; role: 'owner' | 'admin' | 'member' | 'bot'; triggerMessageId: string };
   /** memory 类工具：这一轮对记忆的事实，每次调用现取（提交点前的 commit guard 里再取一次） */
   memoryTurn?(): MemoryTurn | undefined;
@@ -37,6 +39,8 @@ export interface AgentTool {
   action?: ScheduleRequest['action'];
   description: string;
   input: z.ZodObject;
+  /** The input in a private chat, where it may name another Bot (dm-agent 7.3); `input` everywhere else. */
+  dmInput?: z.ZodObject;
   run(args: unknown, ctx: ToolContext): Promise<unknown>;
 }
 export type AgentToolSpec = Pick<AgentTool, 'name' | 'description' | 'input'>;

@@ -2,6 +2,7 @@ import { conversationToMode, groupIdSchema, pendingGroupsSchema, type Command, t
 import { TIER_NETWORK } from '../../agent/permission';
 import { log } from '../../core/logger';
 import { SMART_NO_MENTION } from '../../admin/groups';
+import type { FeishuReach } from '../../admin/feishu-route';
 import type { AdminService } from '../../admin/service';
 import type { ShutdownControl } from '../../host/lifecycle';
 import type { DirectoryBrowser } from '../directory-browser';
@@ -12,8 +13,11 @@ import type { RpcOutcome } from '../rpc';
 import type { SnapshotStore } from '../snapshot';
 import { requireRunningAgent } from './ownership';
 
-/** `owner`: the client the connection belongs to (devices-ui-3 `peerOwner`), which a scan it starts is kept for. */
-export async function commandRpc(options: { service: AdminService; jobs: Jobs; peer: JobPeer; owner?: PeerOwner; directory: DirectoryBrowser; snapshots: SnapshotStore; control?: ShutdownControl; port: number }, request: Command): Promise<RpcOutcome<CommandResult>> {
+/**
+ * `owner`: the client the connection belongs to (devices-ui-3 `peerOwner`), which a scan it starts is kept for. `feishu`: the
+ * Bot and chat authz keeps a Feishu read to (dm-agent 7.2).
+ */
+export async function commandRpc(options: { service: AdminService; jobs: Jobs; peer: JobPeer; owner?: PeerOwner; directory: DirectoryBrowser; snapshots: SnapshotStore; control?: ShutdownControl; port: number; feishu?: FeishuReach }, request: Command): Promise<RpcOutcome<CommandResult>> {
   const { service, jobs, peer, directory, snapshots, control, port } = options;
   const applied: RpcOutcome<CommandResult> = { kind: 'mutation', reply: snapshot => ({ kind: 'applied', revision: snapshot.revision }) };
   switch (request.type) {
@@ -45,6 +49,11 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
       if (!service.groupMembers) return unsupported();
       const result = await service.groupMembers(request.agentId, request.groupId, request.cursor);
       return { kind: 'read', value: { kind: 'members', ...result } };
+    }
+    case 'feishuRead': {
+      if (!service.feishuRead) return unsupported();
+      const reply = await service.feishuRead({ ...(request.agentId ? { bot: request.agentId } : {}), ...options.feishu }, { tool: request.tool, args: request.args });
+      return { kind: 'read', value: reply.ok ? { kind: 'feishuRead', result: reply.result } : { kind: 'refused', code: 'feishu_read_refused', message: reply.message } };
     }
     case 'bindGroup': {
       await requireRunningAgent(service, request.agentId);

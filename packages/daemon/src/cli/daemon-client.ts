@@ -47,6 +47,8 @@ export function setCliContext(next: { scope?: Scope | undefined; env?: NodeJS.Pr
 }
 /** The global `--scope` this command was given, if any. */
 export const cliScope = (): Scope | undefined => context.scope;
+/** This command runs in a Bot's session: the daemon knows which Bot it is on. */
+export const cliInSession = (): boolean => inBotSession(context.env);
 
 /**
  * devices 5.3 and 8.3: an owner's `--scope` is the daemon's to apply. A read that falls back to the files with no daemon

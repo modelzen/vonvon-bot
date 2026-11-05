@@ -8,6 +8,8 @@ import type { MemoryDowngrade, MemoryItem, MemoryItemScope, MemorySource, Schedu
 import { z } from 'zod';
 import { SESSION_ID_RE, type SessionInput } from '../host/session-tokens';
 import { SESSION_TURN_ENDED } from '../agent/entry/registry';
+import type { FeishuReadReply, FeishuReadRequest } from '../feishu-read/reader';
+import { feishuReadReplySchema, type RoutedRead } from './feishu-route';
 
 /**
  * supervisor ↔ bot 子进程的管理面 IPC（node 'ipc' stdio / process.send）。
@@ -52,7 +54,9 @@ export type SessionAction =
   | { kind: 'memory'; op: 'edit'; item: Pick<MemoryItem, 'scope' | 'source'>; text?: string; otherBot?: boolean }
   /** The page's other buttons (restore, move, merge a branch…), a private chat's only (dm-agent 6.2). */
   | { kind: 'memory'; op: 'manage'; target: SessionMemoryTarget; otherBot?: boolean }
-  | { kind: 'schedule'; action: ScheduleRequest['action']; taskId?: string };
+  | { kind: 'schedule'; action: ScheduleRequest['action']; taskId?: string }
+  /** A Feishu read from the command line (dm-agent 7.3): a group's turn or a private chat's administrator. */
+  | { kind: 'feishuRead' };
 /** Where a session's memory write lands and as whom (memory-authority's decision), with the source fields the tools write. */
 export interface MemoryLanding {
   scope: MemoryItemScope;
@@ -67,7 +71,12 @@ export type SessionAuthz =
   | { ok: true; role: 'owner' | 'admin' | 'member' | 'bot'; openId?: string; /** the person's union_id (dm-agent 6.4): what another Bot of the same developer can use */ unionId?: string; name?: string; actor?: Extract<ScheduleActor, { kind: 'session' | 'scheduled' }>; memory?: MemoryLanding }
   | { ok: false; reason: string; message: string };
 export type AdminSessionOp = { kind: 'authorizeSessionCall'; sessionId: string; action: SessionAction };
-export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | { kind: 'status' };
+/**
+ * dm-agent 7.3: a read this Bot runs as itself, for the host. This channel is the parent's alone, a bot child's IPC, so the
+ * request comes from the host; who may ask was settled there (feishu-route.ts), and `run.ts` answers it only when supervised.
+ */
+export type AdminFeishuOp = { kind: 'feishuRead'; request: FeishuReadRequest };
+export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | AdminFeishuOp | { kind: 'status' };
 
 export interface AdminIpcRequest {
   fcb: typeof ADMIN_IPC_REQ;
@@ -277,14 +286,22 @@ export const HOST_IPC_REQ = 'fcb.host.req' as const;
 export const HOST_IPC_RES = 'fcb.host.res' as const;
 /** A session does not start without its token, so a host that does not answer is given up on soon. */
 export const HOST_IPC_TIMEOUT_MS = 5_000;
+/**
+ * A Feishu read may look a message up and then download for 60 s. The tool gives up at 70 s and the command line at 75 s,
+ * so what they read is the Bot process's answer, or this limit's.
+ */
+export const FEISHU_READ_IPC_MS = 68_000;
 export type HostIpcOp =
   | ({ kind: 'issueSessionToken' } & SessionInput)
-  | { kind: 'revokeSessionToken'; sessionId: string };
+  | { kind: 'revokeSessionToken'; sessionId: string }
+  | ({ kind: 'feishuRead'; bot?: string } & RoutedRead);
 /** The result of a host op; a failure is the response's `error`, as on the admin channel. */
-export type HostIpcReply = { kind: 'token'; token: string } | { kind: 'ok' };
+export type HostIpcReply = { kind: 'token'; token: string } | { kind: 'ok' } | { kind: 'feishuRead'; reply: FeishuReadReply };
 export interface HostApi {
   issueSessionToken(input: SessionInput): Promise<string>;
   revokeSessionToken(sessionId: string): Promise<void>;
+  /** dm-agent 7.3: a private chat's read, on the Bot the host picks unless `bot` names one (feishu-route.ts). */
+  feishuRead(bot: string | undefined, request: RoutedRead): Promise<FeishuReadReply>;
 }
 const HOST_CHANNELS: IpcChannels = { req: HOST_IPC_REQ, res: HOST_IPC_RES };
 const hostOpSchema = z.discriminatedUnion('kind', [
@@ -293,13 +310,15 @@ const hostOpSchema = z.discriminatedUnion('kind', [
     place: z.enum(['dm', 'group', 'comment']), threadId: z.string().min(1).max(1000).optional(), sessionId: z.string().regex(SESSION_ID_RE),
   }).strict(),
   z.object({ kind: z.literal('revokeSessionToken'), sessionId: z.string().regex(SESSION_ID_RE) }).strict(),
+  z.object({ kind: z.literal('feishuRead'), bot: z.string().min(1).max(200).optional(), sessionId: z.string().regex(SESSION_ID_RE), tool: z.string().min(1).max(100), args: z.record(z.string(), z.unknown()) }).strict(),
 ]);
-const hostReplySchema = z.discriminatedUnion('kind', [z.object({ kind: z.literal('token'), token: z.string() }).strict(), z.object({ kind: z.literal('ok') }).strict()]);
+const hostReplySchema = z.discriminatedUnion('kind', [z.object({ kind: z.literal('token'), token: z.string() }).strict(), z.object({ kind: z.literal('ok') }).strict(),
+  z.object({ kind: z.literal('feishuRead'), reply: feishuReadReplySchema }).strict()]);
 
 /** The bot process's side: `send` is process.send; feed the host's messages to `onMessage`. */
 export function createHostIpcCaller(send: (msg: IpcRequest<HostIpcOp>) => void): HostApi & { onMessage(raw: unknown): void; rejectAll(reason: string): void } {
   const caller = createIpcCaller<HostIpcOp>(HOST_CHANNELS, send, { timeoutMs: HOST_IPC_TIMEOUT_MS, timeoutMessage: ms => `vonvon 主进程 ${ms}ms 未响应` });
-  const ask = async (op: HostIpcOp): Promise<HostIpcReply> => hostReplySchema.parse(await caller.call(op));
+  const ask = async (op: HostIpcOp, ms?: number): Promise<HostIpcReply> => hostReplySchema.parse(await caller.call(op, ms));
   return {
     async issueSessionToken(input) {
       const reply = await ask({ kind: 'issueSessionToken', ...input });
@@ -307,17 +326,27 @@ export function createHostIpcCaller(send: (msg: IpcRequest<HostIpcOp>) => void):
       return reply.token;
     },
     async revokeSessionToken(sessionId) { await ask({ kind: 'revokeSessionToken', sessionId }); },
+    async feishuRead(bot, request) {
+      // Past the host's own wait for the Bot process, so its answer gets here first.
+      const reply = await ask({ kind: 'feishuRead', ...(bot !== undefined ? { bot } : {}), ...request }, FEISHU_READ_IPC_MS + 1_000);
+      if (reply.kind !== 'feishuRead') throw new Error('The host did not answer with a read');
+      return reply.reply;
+    },
     onMessage: caller.onMessage,
     rejectAll: caller.rejectAll,
   };
 }
 
-/** The host's side, one per bot child: a request that is not one of the two ops is refused, not passed on. */
+/** The host's side, one per bot child: a request that is not one of these ops is refused, not passed on. */
 export function createHostIpcResponder(api: HostApi, send: (msg: IpcResponse) => void): { onMessage(raw: unknown): void } {
   return {
     onMessage: createIpcResponder<unknown>(HOST_CHANNELS, async (raw): Promise<HostIpcReply> => {
       const op = hostOpSchema.parse(raw);
       if (op.kind === 'revokeSessionToken') { await api.revokeSessionToken(op.sessionId); return { kind: 'ok' }; }
+      if (op.kind === 'feishuRead') {
+        const { kind: _read, bot, ...request } = op;
+        return { kind: 'feishuRead', reply: await api.feishuRead(bot, request) };
+      }
       const { kind: _kind, ...input } = op;
       return { kind: 'token', token: await api.issueSessionToken(input) };
     }, send),

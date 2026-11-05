@@ -37,9 +37,10 @@ const NOT_FOUND_CODES: ReadonlySet<number> = new Set([3380002, 99992402, 1770001
 /** The Bot is not in that chat (230002), or the chat has left it (232011). */
 const OUT_OF_CHAT_CODES: ReadonlySet<number> = new Set([230002, 232011]);
 
-/** `no-answer`: Feishu's answer never came, so what was asked may still have happened. */
-export type RefusalKind = 'scope' | 'not-shared' | 'not-found' | 'no-answer' | 'other';
-/** A read refused, with the sentence for the model. It crosses to another Bot's process as its message (F2). */
+/** `no-answer`: Feishu's answer never came, so what was asked may still have happened. `not-in-chat`: the Bot is not in that group. */
+export const REFUSAL_KINDS = ['scope', 'not-shared', 'not-in-chat', 'not-found', 'no-answer', 'other'] as const;
+export type RefusalKind = typeof REFUSAL_KINDS[number];
+/** A read refused, with the sentence for the model. It crosses to another Bot's process as its message and kind (F2). */
 export class FeishuReadRefused extends Error {
   constructor(message: string, readonly kind: RefusalKind = 'other') { super(message); }
 }
@@ -72,7 +73,8 @@ function scopesToGrant(area: ReadArea, accepted: readonly string[]): readonly st
 export function scopeReply(context: DenialContext, area: ReadArea, accepted: readonly string[]): string {
   const scopes = scopesToGrant(area, accepted);
   const url = buildScopeGrantUrl(context.app.id, context.app.tenant, scopes);
-  return `这个 Bot 的飞书应用缺权限：${scopes.map(labelScope).join('、')}，所以${AREAS[area].effect}。开通链接：${url} ${AFTER_GRANT}`;
+  // By its name: read through another Bot (7.3), "this Bot" would be the one the session is on.
+  return `Bot「${context.botName()}」的飞书应用缺权限：${scopes.map(labelScope).join('、')}，所以${AREAS[area].effect}。开通链接：${url} ${AFTER_GRANT}`;
 }
 
 /** A failed call as a refusal: `failure` is what the SDK threw, or a body with a non-zero code. */
@@ -82,7 +84,7 @@ export function refusalOf(context: DenialContext, area: ReadArea, failure: unkno
   const error = feishuError(failure);
   const editing = area === 'docEdit';
   if (error && NOT_SHARED_CODES.has(error.code)) return new FeishuReadRefused(NOT_SHARED_PLACES[area]?.(context.botName()) ?? notSharedReply(context.botName(), editing ? '编辑' : '阅读'), 'not-shared');
-  if (error && OUT_OF_CHAT_CODES.has(error.code)) return new FeishuReadRefused(`「${context.botName()}」不在这个群里，读不到。`);
+  if (error && OUT_OF_CHAT_CODES.has(error.code)) return new FeishuReadRefused(`「${context.botName()}」不在这个群里，读不到。`, 'not-in-chat');
   // A download's 404 has no Feishu body to read.
   const gone = !error && (failure as { response?: { status?: number } } | null)?.response?.status === 404;
   if (gone || error && NOT_FOUND_CODES.has(error.code)) {
