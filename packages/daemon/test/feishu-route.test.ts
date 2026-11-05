@@ -12,6 +12,7 @@ import type { AgentThread } from '../src/agent/types';
 import { runFeishuRead } from '../src/cli/commands/feishu';
 import { createFeishuReader, type FeishuReadReply } from '../src/feishu-read/reader';
 import { createSessionTokens } from '../src/host/session-tokens';
+import { commandRpc } from '../src/server/rpc/command';
 import { CommandError } from '../src/cli/command-error';
 import { setCliContext, type Daemon } from '../src/cli/daemon-client';
 
@@ -150,6 +151,17 @@ describe('the host\'s check of a session\'s read (dm-agent 7.3)', () => {
     const { reply, reads } = await ask(tokensWith(place), 'Bot B');
     expect(reply).toMatchObject({ ok: false });
     expect(reads).not.toHaveBeenCalled();
+  });
+  it('a call let through keeps the session alive, as its command line would; one refused does not', async () => {
+    let at = 0;
+    const tokens = createSessionTokens({ now: () => at, idleMs: 100 });
+    tokens.issue({ appId: 'cli_other', place: 'dm', chatId: DM, sessionId: SESSION });
+    at = 60;
+    await hostFeishuRead({ appId: 'cli_a', tokens, read: vi.fn() }, undefined, { sessionId: SESSION, tool: 'feishu_doc', args: {} });
+    expect(tokens.session(SESSION)?.lastUsedAt).toBe(0);
+    await hostFeishuApi({ appId: 'cli_other', tokens, api: async () => ({ ok: true, result: 'sent' }) }, 'Bot B', { sessionId: SESSION, request: { method: 'GET', path: '/open-apis/calendar/v4/calendars' } });
+    at = 120;
+    expect(await hostFeishuRead({ appId: 'cli_other', tokens, read: async () => ({ ok: true, result: 'read' }) }, undefined, { sessionId: SESSION, tool: 'feishu_doc', args: {} })).toEqual({ ok: true, result: 'read' });
   });
   it('nor another process\'s session, nor one whose token went', async () => {
     const other = await ask(tokensWith('dm', 'cli_other'));
@@ -303,11 +315,18 @@ describe('feishu_api on another Bot (dm-agent 7.3, 7.6)', () => {
     expect(s.routeApi).toHaveBeenCalledExactlyOnceWith('Bot B', { sessionId: expect.stringMatching(/^ses_/), request: CALL });
     expect(s.sends).not.toHaveBeenCalled();
   });
-  it('without `bot`, or naming itself, it stays in this process, the guard right before the call', async () => {
+  it('without `bot`, or naming its own id, it stays in this process, the guard right before the call', async () => {
     const s = session(P2P);
-    for (const bot of [undefined, 'cli_a', 'Bot A']) expect(await s.call({ ...LIST, ...(bot ? { bot } : {}) })).toMatchObject({ ok: true });
-    expect(s.sends).toHaveBeenCalledTimes(3);
+    for (const bot of [undefined, 'cli_a']) expect(await s.call({ ...LIST, ...(bot ? { bot } : {}) })).toMatchObject({ ok: true });
+    expect(s.sends).toHaveBeenCalledTimes(2);
     expect(s.routeApi).not.toHaveBeenCalled();
+  });
+  it('its own name is the host\'s to tell: another Bot may have it too, and nothing goes out as this one meanwhile', async () => {
+    const s = session(P2P);
+    s.routeApi.mockResolvedValueOnce({ ok: false, kind: 'other', message: '有几个 Bot 都叫 Bot A，请用 App ID 指定：cli_a、cli_b。' });
+    expect(await s.call({ ...CALL, bot: 'Bot A' })).toMatchObject({ ok: false, code: 'refused', message: expect.stringContaining('都叫 Bot A') });
+    expect(s.routeApi).toHaveBeenCalledExactlyOnceWith('Bot A', { sessionId: expect.stringMatching(/^ses_/), request: CALL });
+    expect(s.sends).not.toHaveBeenCalled();
   });
   it('says the other Bot\'s words back, and that a host with no way there has no such Bot running', async () => {
     const s = session(P2P);
@@ -547,6 +566,12 @@ describe('vonvon feishu (dm-agent 7.3)', () => {
     expect(failure).toBeInstanceOf(CommandError);
     expect((failure as CommandError).kind).toBe('refused');
     expect((failure as CommandError).message).toContain('Bot「Bot B」的飞书应用缺权限');
+  });
+  it('arguments a read cannot take are the caller\'s mistake, told before any Bot is asked', async () => {
+    const feishuRead = vi.fn();
+    const asked = commandRpc({ service: { feishuRead } } as unknown as Parameters<typeof commandRpc>[0], { type: 'feishuRead', tool: 'feishu_messages', args: { chat: GROUP, limit: 0 } });
+    await expect(asked).rejects.toMatchObject({ code: 'invalid_request', message: expect.stringContaining('参数不对') });
+    expect(feishuRead).not.toHaveBeenCalled();
   });
   it('a group id has to look like one, before anything is sent', async () => {
     const t = terminal();

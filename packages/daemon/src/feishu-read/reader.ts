@@ -35,7 +35,7 @@ export interface FeishuReader {
   docEdit(request: DocEditRequest, beforeWrite?: () => void): Promise<DocEditResult>;
   /** Any Feishu API, on a private chat's turn only (dm-agent 7.6, F7): `beforeSend` runs right before it is called. */
   api(request: ApiRequest, beforeSend?: () => void): Promise<ApiResult>;
-  /** Whether `feishu_api` naming `bot` means this very Bot, by its id or name. */
+  /** Whether `feishu_api` naming `bot` surely means this very Bot: its id. A name goes through the host, which sees every Bot's. */
   isThisBot(bot: string): boolean;
 }
 

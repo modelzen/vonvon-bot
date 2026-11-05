@@ -139,13 +139,13 @@ describe('what may be asked', () => {
     const t = session(async () => json({ code: 0 }), DM);
     expect(await t.call({ method: 'POST', path: LIST.path, body: [1] })).toMatchObject({ ok: false, code: 'bad-args' });
   });
-  it('takes this Bot by id or name; another needs a host to reach it', async () => {
+  it('takes this Bot by id; a name or another Bot needs a host to reach it', async () => {
     const t = session(async () => json({ code: 0 }), DM);
     expect(await t.call({ ...LIST, bot: 'cli_fixture' })).toMatchObject({ ok: true });
-    expect(await t.call({ ...LIST, bot: '小码' })).toMatchObject({ ok: true });
-    expect(t.spy).toHaveBeenCalledTimes(2);
+    expect(t.spy).toHaveBeenCalledOnce();
     expect(await t.call({ ...LIST, bot: 'cli_other' })).toMatchObject({ ok: false, code: 'refused', message: 'Bot cli_other 没在运行。' });
-    expect(t.spy).toHaveBeenCalledTimes(2);
+    expect(await t.call({ ...LIST, bot: '小码' })).toMatchObject({ ok: false, code: 'refused', message: 'Bot 小码 没在运行。' });
+    expect(t.spy).toHaveBeenCalledOnce();
   });
 });
 
