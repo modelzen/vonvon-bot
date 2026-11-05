@@ -42,6 +42,15 @@ const mindnoteInput = z.object({ mindnote: reference.describe('思维笔记的�
 const boardInput = z.object({ board: reference.describe('画板的链接，或者它的 token；文档里的画板用结果里的 token'), cursor: cursor.optional() }).strict();
 const minutesInput = z.object({ minutes: reference.describe('妙记的链接，或者它的 token'), cursor: cursor.optional() }).strict();
 const driveInput = z.object({ file: reference.describe('云空间文件的链接，或者它的 token'), name: z.string().min(1).max(200).describe('存成什么文件名，不写就用原来的').optional() }).strict();
+const folderInput = z.object({ folder: reference.describe('文件夹的链接，或者它的 token；不写就列 Bot 自己的根目录').optional(), limit: limit(100).describe('最多几条，默认一页读得下的都给').optional(), cursor: cursor.optional() }).strict();
+const wikiInput = z.object({ wiki: reference.describe('知识库的链接或 space_id，列它的第一层；页面的链接或节点 token，列它下面的子页面。不写就列 Bot 能看到的知识库').optional(),
+  limit: limit(100).describe('最多几条，默认一页读得下的都给').optional(), cursor: cursor.optional() }).strict();
+const commentsInput = z.object({ doc: reference.describe('文档、表格、多维表格、幻灯片、云空间文件或知识库页面的链接，或者它的 token'),
+  type: z.enum(['doc', 'docx', 'sheet', 'file', 'slides', 'bitable']).describe('裸 token 的类型，默认 docx，不是新版文档时要写；给链接时不用写').optional(),
+  comment: z.string().min(1).max(200).describe('评论的 id，给了就只读这条评论的全部回复').optional(),
+  solved: z.boolean().describe('true 只读已解决的，false 只读未解决的，不写都读').optional(), limit: limit(100).describe('最多几条，默认一页读得下的都给').optional(), cursor: cursor.optional() }).strict();
+const docMediaInput = z.object({ token: z.string().min(1).max(400).describe('feishu_doc 结果里 <img src="…"> 的 src 或 <source token="…"> 的 token，也可以是 feishu_comments 结果里 images 的 token'),
+  name: z.string().min(1).max(200).describe('存成什么文件名，不写就用原来的').optional() }).strict();
 const docEditInput = z.object({ doc: reference.describe('文档或知识库页面的链接，或者它的 token'),
   action: z.enum(['append', 'insert', 'replace']).describe('append 追加到文末；insert 插到 block 后面；replace 换掉 pattern 或 block'),
   content: z.string().min(1).max(100_000).describe('新内容，Markdown'),
@@ -63,12 +72,16 @@ const definitions = [
   { name: 'feishu_board', input: boardInput, description: '读飞书画板上的节点，返回文字和连线，太长时分段；图片只有 token。Bot 要有这个画板的阅读权限。' },
   { name: 'feishu_minutes', input: minutesInput, description: '读飞书妙记的标题、时长等信息和文字记录，文字记录太长时分段；Bot 要有这条妙记的阅读权限。' },
   { name: 'feishu_drive_file', input: driveInput, description: '下载飞书云空间里的文件，返回本机路径；Bot 要有这个文件的阅读权限。' },
+  { name: 'feishu_folder', input: folderInput, description: '看飞书云空间文件夹里有什么，可以翻页。不写 folder 列 Bot 自己的根目录，别人分享给 Bot 的文件夹不在那里，要给链接。结果带名字、类型和 token：文件夹接着用这个工具，其他类型用对应的工具读。' },
+  { name: 'feishu_wiki', input: wikiInput, description: '看飞书知识库的目录：列出 Bot 能看到的知识库，或一个知识库、一个页面下面的页面，可以翻页。结果的 token 用来往下列，hasChildren 说明下面还有；objToken 和 type 用来读页面内容，比如 docx 用 feishu_doc。' },
+  { name: 'feishu_comments', input: commentsInput, description: '读一篇文档的评论和回复，可以翻页。一条评论带它引用的原文、是否解决和回复；moreReplies 为真时，用 comment 读这条评论的全部回复。Bot 要有这篇文档的阅读权限。' },
+  { name: 'feishu_doc_media', input: docMediaInput, description: '下载飞书文档里的图片和附件，返回本机路径。先用 feishu_doc 读文档，图片是 <img src="…">，附件是 <source token="…">，把 src 或 token 传进来。Bot 要有这篇文档的阅读权限。' },
   { name: 'feishu_search', input: searchInput, description: '按关键词搜飞书消息。' },
 ] as const satisfies readonly { name: string; input: z.ZodObject; description: string }[];
 
 export const feishuToolNames: ReadonlySet<string> = new Set(definitions.map(tool => tool.name));
 /** The document column of 7.2: all a comment's session reads, there being no chat for it to read. */
-export const feishuDocToolNames: ReadonlySet<string> = new Set(['feishu_doc', 'feishu_sheet', 'feishu_base', 'feishu_slides', 'feishu_mindnote', 'feishu_board', 'feishu_minutes', 'feishu_drive_file']);
+export const feishuDocToolNames: ReadonlySet<string> = new Set(['feishu_doc', 'feishu_sheet', 'feishu_base', 'feishu_slides', 'feishu_mindnote', 'feishu_board', 'feishu_minutes', 'feishu_drive_file', 'feishu_folder', 'feishu_wiki', 'feishu_comments', 'feishu_doc_media']);
 /** Not among {@link feishuToolNames}: a session gets it by `tools.feishuEdit`, its tier's call. */
 export const FEISHU_DOC_EDIT = 'feishu_doc_edit';
 const docEditDescription = '改飞书新版文档：追加、插入、替换选中的内容，身份是 Bot 自己。表格和多维表格改不了。Bot 要有这篇文档的编辑权限。';
@@ -177,6 +190,10 @@ export function createFeishuTools(deps: { members(chatId: string, cursor?: strin
     tool<typeof boardInput>('feishu_board', args => reader.board(args)),
     tool<typeof minutesInput>('feishu_minutes', args => reader.minutes(args)),
     tool<typeof driveInput>('feishu_drive_file', (args, ctx) => reader.driveFile({ ...args, ...savedIn(ctx) })),
+    tool<typeof folderInput>('feishu_folder', args => reader.folder(args)),
+    tool<typeof wikiInput>('feishu_wiki', args => reader.wiki(args)),
+    tool<typeof commentsInput>('feishu_comments', args => reader.comments(args)),
+    tool<typeof docMediaInput>('feishu_doc_media', (args, ctx) => reader.docMedia({ ...args, ...savedIn(ctx) })),
     tool<typeof searchInput>('feishu_search', (args, ctx) => reader.search({ ...args, ...chatOf(args.chat, ctx) })),
     docEditTool(reader, deps.groupTier),
   ];

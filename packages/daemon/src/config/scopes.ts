@@ -155,6 +155,13 @@ export const MINDNOTE_READ_SCOPES = ['mindnote:node:read'] as const;
 export const BOARD_READ_SCOPES = ['board:whiteboard:node:read'] as const;
 export const MINUTES_READ_SCOPES = ['minutes:minutes:readonly', 'minutes:minutes.transcript:export'] as const;
 export const LEGACY_DOC_READ_SCOPES = ['docs:doc:readonly'] as const;
+/** What a folder holds (`drive/v1/files`). */
+export const DRIVE_LIST_SCOPES = ['space:document:retrieve'] as const;
+/** The knowledge bases and their tree. Finding a page from its link is `wiki:wiki:readonly`, in {@link DOC_READ_SCOPES}. */
+export const WIKI_READ_SCOPES = ['wiki:space:retrieve', 'wiki:node:retrieve'] as const;
+/** Also in {@link COMMENT_SCOPES}, which the first link has preselected since before these tools. */
+export const COMMENT_READ_SCOPES = ['docs:document.comment:read'] as const;
+export const DOC_MEDIA_SCOPES = ['docs:document.media:download'] as const;
 /** Changing a document as the Bot (the tool comes with F3). */
 export const DOC_EDIT_SCOPES = ['docx:document:write_only'] as const;
 export const MESSAGE_SEARCH_SCOPES = ['search:message'] as const;
@@ -173,6 +180,10 @@ export const FEISHU_TOOL_SCOPES = [
   ...BOARD_READ_SCOPES,
   ...MINUTES_READ_SCOPES,
   ...LEGACY_DOC_READ_SCOPES,
+  ...DRIVE_LIST_SCOPES,
+  ...WIKI_READ_SCOPES,
+  ...COMMENT_READ_SCOPES,
+  ...DOC_MEDIA_SCOPES,
   ...MESSAGE_SEARCH_SCOPES,
 ] as const;
 
@@ -235,6 +246,10 @@ export const SCOPE_LABELS: Record<string, string> = {
   'minutes:minutes:readonly': '读取妙记信息',
   'minutes:minutes.transcript:export': '导出妙记文字记录',
   'docs:doc:readonly': '读取旧版文档内容',
+  'space:document:retrieve': '查看云空间文件夹里的文件',
+  'wiki:space:retrieve': '查看知识库列表',
+  'wiki:node:retrieve': '查看知识库目录',
+  'docs:document.media:download': '下载文档里的图片和附件',
   'docx:document:write_only': '修改 Bot 有编辑权限的文档',
   'search:message': '搜索消息',
 };

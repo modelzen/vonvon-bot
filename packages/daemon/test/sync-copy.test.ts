@@ -21,7 +21,7 @@ afterAll(async () => {
 });
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'sync-copy-'));
-  return { botPaths: (appId: string) => ({ dir: join(appDir, 'bots', appId), configFile: join(appDir, 'bots', appId, 'config.json') }), paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments') } };
+  return { botPaths: (appId: string) => ({ dir: join(appDir, 'bots', appId), configFile: join(appDir, 'bots', appId, 'config.json') }), paths: { appDir, inboundDir: join(appDir, 'inbound'), sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments') } };
 });
 afterAll(() => rmSync(paths.appDir, { recursive: true, force: true }));
 
@@ -286,10 +286,12 @@ describe('the orchestrator answers only the topic message', () => {
     expect(records()).toEqual([]);
   });
 
-  it('in a DM topic, sends the menu once', async () => {
+  // dm-agent 5: the words in a private topic are the Agent's; here no row exists, so the one answer is the sentence.
+  it('in a DM topic, answers once, the topic message', async () => {
     await sendBoth(DM);
-    expect(fake.dm).toHaveBeenCalledTimes(1);
-    expect((fake.dm.mock.calls[0] as unknown as [unknown, unknown, NormalizedMessage])[2].messageId).toBe(IN_TOPIC);
+    await vi.waitFor(() => expect(fake.send).toHaveBeenCalledTimes(1));
+    expect(sentFor()).toEqual([IN_TOPIC]);
+    expect(fake.dm).not.toHaveBeenCalled();
   });
 
   it('notes a disabled group\'s @ once, for the topic message', async () => {
