@@ -26,6 +26,42 @@ function fixture(cfg: AppConfig = newBot(), opts: { missingScopes?: string[]; bo
 const pending = (cfg: AppConfig) => cfg.preferences?.access?.firstHelloPending;
 
 describe('the first hello (dm-agent 第一次见面)', () => {
+  // Codex 审查任务 350 必败: told during the wait, it did nothing, and the client had stopped asking
+  it('tries once more when the wait is over, told too soon', async () => {
+    vi.useFakeTimers();
+    try {
+      const scopes = { missingScopes: ['im:message'] };
+      const t = fixture(newBot(), scopes);
+      const hello = t.start();
+      await hello.attempt();
+      expect(t.create).not.toHaveBeenCalled();
+      t.advance(FIRST_HELLO_RETRY_MS / 3);
+      scopes.missingScopes = [];
+      await hello.attempt();
+      await hello.attempt();
+      expect(t.validate).toHaveBeenCalledTimes(1);
+      t.advance(FIRST_HELLO_RETRY_MS);
+      await vi.advanceTimersByTimeAsync(FIRST_HELLO_RETRY_MS);
+      expect(t.validate).toHaveBeenCalledTimes(2);
+      expect(t.create).toHaveBeenCalledTimes(1);
+      expect(pending(t.cfg)).toBeUndefined();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not come back after it stopped', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = fixture(newBot(), { missingScopes: ['im:message'] });
+      const hello = t.start();
+      await hello.attempt();
+      await hello.attempt();
+      hello.stop();
+      t.advance(FIRST_HELLO_RETRY_MS);
+      await vi.advanceTimersByTimeAsync(FIRST_HELLO_RETRY_MS);
+      expect(t.validate).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('tells a new bot\'s creator once, in the fixed words with the bot\'s name, and takes the mark off', async () => {
     const t = fixture();
     const hello = t.start();
