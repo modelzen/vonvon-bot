@@ -165,6 +165,15 @@ it('never counts or lists a group that has no binding to this Bot', () => {
   expect(html.match(/<summary>/g)).toHaveLength(1);
 });
 
+it('distinguishes unavailable data from zero bindings and a known disconnected state', () => {
+  const render = (agent: Agent, members: Membership[]) =>
+    renderToStaticMarkup(<NowBotList snapshot={snapshot(agent, members)} {...badgeActions}/>);
+  expect(render({...bot, readError:'unreadable'}, [])).toContain('群数待更新');
+  expect(render(bot, [{...member, stale:true}])).toContain('上次记录 1 个群');
+  expect(render({...bot, connection:'unknown'}, [])).toContain('待更新，已加入 0 个群');
+  expect(render({...bot, connection:'connecting'}, [])).toContain('连接中，已加入 0 个群');
+});
+
 it('labels a stopped connection on a disabled bot as disabled, and reuses communication copy', () => {
   expect(nowGroupAttention({...bot, enabled: false, connection: 'stopped'}, member, false, false, now).label).toBe('已停用');
   expect(nowGroupAttention(bot, {...member, conversation: 'threads'}, true, false, now).description).toContain('主区 @ Bot 开启新话题');
