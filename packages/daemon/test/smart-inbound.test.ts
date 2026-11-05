@@ -1,10 +1,10 @@
-import { createAgentEntries } from '../src/agent/entry/registry';
 import { FocusEverywhere } from './helpers/focus-everywhere';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
+import { createAgentEntries } from '../src/agent/entry/registry';
 import { Client, withTenantToken, type NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import { projectRevision } from '../src/admin/collaboration';
 import type { AppConfig } from '../src/config/schema';

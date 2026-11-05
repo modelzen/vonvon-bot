@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { feishuMembers, type FeishuMembers } from '../../admin/structured-commands';
-import { AdminWriteError } from '../../admin/ops';
+import { AdminWriteError } from '../../admin/write-error';
 import { inboundChatDir } from '../../bot/media';
 import type { PermissionMode } from '../types';
 import { FeishuReadRefused } from '../../feishu-read/denial';
