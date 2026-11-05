@@ -170,8 +170,9 @@ describe('who gets in, in what order', () => {
     expect(fake.voice).not.toHaveBeenCalled();
     // Not a reply to anyone's card either: a quote does not open the door.
     await o.onMessage(message('回答', { senderId: STRANGER, parentId: 'om_nothing' } as never));
-    await until(() => expect(send).toHaveBeenCalledTimes(2));
     await tick();
+    // The same person is told once in ten minutes (dm-agent 3.5).
+    expect(send).toHaveBeenCalledTimes(1);
     expect(be.startThread).not.toHaveBeenCalled(); expect(await listSessions()).toEqual([]);
     expect((await dmProject())?.dm?.people[A]).toBeUndefined();
   });

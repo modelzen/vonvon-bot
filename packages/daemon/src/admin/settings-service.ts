@@ -6,7 +6,7 @@ import { loadConfig } from '../config/store';
 import { isComplete } from '../config/schema';
 import { getProjectByChatId, listProjectsIn, mutateProject, mutateProjectByChatId } from '../project/registry';
 import { listSessionsIn } from '../bot/session-store';
-import { DEFAULT_COMMENT_INSTRUCTIONS } from '../bot/comments';
+import { currentCommentInstructions, DEFAULT_COMMENT_INSTRUCTIONS } from '../bot/comments';
 import { createSettingsOwner, offlineSettings, SettingsInputError, isLocalSettingsSection, workspaceRevision } from './settings';
 import { admitLibraryWorkspace, type HostLibrary } from './library';
 import { AdminWriteError } from './ops';
@@ -42,7 +42,7 @@ export function createSettingsService(deps: AdminServiceDeps, library?: HostLibr
         mutateProject: (name, change, options) => mutateProject(name, change, options, { file: files.projectsFile, dataRoot: paths.appDir }),
         mutateChatProject: (chatId, change, options) => mutateProjectByChatId(chatId, change, options, { file: files.projectsFile, dataRoot: paths.appDir }),
         readSession: async id => (await listSessionsIn(files.sessionsFile)).find(s => s.threadId === id),
-        instructions: { read: () => readFile(join(botDir(botId), 'comment-instructions.md'), 'utf8').catch(error => { if (error.code === 'ENOENT') return DEFAULT_COMMENT_INSTRUCTIONS; throw error; }),
+        instructions: { read: () => readFile(join(botDir(botId), 'comment-instructions.md'), 'utf8').then(currentCommentInstructions).catch(error => { if (error.code === 'ENOENT') return DEFAULT_COMMENT_INSTRUCTIONS; throw error; }),
           save: async () => { throw new Error('只读'); }, sync: async () => { throw new Error('只读'); } },
       });
   }

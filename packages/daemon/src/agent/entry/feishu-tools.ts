@@ -1,14 +1,15 @@
 import { z } from 'zod';
 import { feishuMembers, type FeishuMembers } from '../../admin/structured-commands';
 import { inboundChatDir } from '../../bot/media';
+import type { PermissionMode } from '../types';
 import { FeishuReadRefused } from '../../feishu-read/denial';
 import type { FeishuReader } from '../../feishu-read/reader';
 import { ToolRefusal, type AgentTool, type ToolContext } from './tools';
 
 /**
  * 飞书读取工具（dm-agent 7.1、7.2）：Claude 的 MCP 和 Codex 的 dynamicTools 共用这一份定义。工具不走沙箱，范围在这里
- * 守：群会话只读本群的消息、文件、公告、成员，文档、表格、云空间不按群隔离；私聊看这一轮是不是管理员的。跨 Bot 是 F2，
- * 评论会话是 F3。结果就是内容本身，不加标注。
+ * 守：群会话只读本群的消息、文件、公告、成员，文档、表格、云空间不按群隔离；私聊看这一轮是不是管理员的；评论会话只有文档
+ * 这一列（第 7.4 节）。跨 Bot 是 F2。结果就是内容本身，不加标注。改文档的 `feishu_doc_edit`（F3）也在这里，只读档不给。
  */
 
 const chat = z.string().min(1).max(200).describe('群的 chat_id；不写就是当前这个群');
@@ -28,6 +29,11 @@ const docInput = z.object({ doc: reference.describe('文档或知识库页面的
 const sheetInput = z.object({ sheet: reference.describe('表格的链接，或者它的 token'),
   range: z.string().min(1).max(200).describe('要读的区域，比如 <sheetId>!A1:D20；不写就列出有哪些工作表和它们的 id').optional(), cursor: cursor.optional() }).strict();
 const driveInput = z.object({ file: reference.describe('云空间文件的链接，或者它的 token'), name: z.string().min(1).max(200).describe('存成什么文件名，不写就用原来的').optional() }).strict();
+const docEditInput = z.object({ doc: reference.describe('文档或知识库页面的链接，或者它的 token'),
+  action: z.enum(['append', 'insert', 'replace']).describe('append 追加到文末；insert 插到 block 后面；replace 换掉 pattern 或 block'),
+  content: z.string().min(1).max(100_000).describe('新内容，Markdown'),
+  block: z.string().min(1).max(200).describe('块的 id，在 feishu_doc 的结果里，改过文档后要重新读一次。insert 时插在它后面，replace 时换掉整个块').optional(),
+  pattern: z.string().min(1).max(2000).describe('replace 时要换掉的一段行内文字，不跨段；文档里每一处都会被换').optional() }).strict();
 const searchInput = z.object({ query: z.string().min(1).max(500), chat: chat.describe('只搜这个群的 chat_id；群会话里只搜本群').optional(), limit: limit(20).describe('一页几条，默认 20').optional(), cursor: cursor.optional() }).strict();
 
 const definitions = [
@@ -43,17 +49,25 @@ const definitions = [
 ] as const satisfies readonly { name: string; input: z.ZodObject; description: string }[];
 
 export const feishuToolNames: ReadonlySet<string> = new Set(definitions.map(tool => tool.name));
+/** The document column of 7.2: all a comment's session reads, there being no chat for it to read. */
+export const feishuDocToolNames: ReadonlySet<string> = new Set(['feishu_doc', 'feishu_sheet', 'feishu_drive_file']);
+/** Not among {@link feishuToolNames}: a session gets it by `tools.feishuEdit`, its tier's call. */
+export const FEISHU_DOC_EDIT = 'feishu_doc_edit';
+const docEditDescription = '改飞书新版文档：追加、插入、替换选中的内容，身份是 Bot 自己。表格和多维表格改不了。Bot 要有这篇文档的编辑权限。';
 /** The Claude backend lists these only in sessions whose profile has `tools.feishu`; `feishu_members` is older and always listed. */
 export const feishuReadToolNames: ReadonlySet<string> = new Set([...feishuToolNames].filter(name => name !== 'feishu_members'));
 
 /** The same tools without any provider's types, for Codex dynamicTools. */
-export function feishuToolSpecs(): { name: string; description: string; inputSchema: object }[] {
-  return definitions.map(({ name, description, input }) => ({ name, description, inputSchema: z.toJSONSchema(input) }));
+export function feishuToolSpecs(tools: { feishuEdit?: boolean; documentsOnly?: boolean } = {}): { name: string; description: string; inputSchema: object }[] {
+  const reads = definitions.filter(({ name }) => !tools.documentsOnly || feishuDocToolNames.has(name));
+  return [...reads.map(({ name, description, input }) => ({ name, description, inputSchema: z.toJSONSchema(input) })),
+    ...tools.feishuEdit ? [{ name: FEISHU_DOC_EDIT, description: docEditDescription, inputSchema: z.toJSONSchema(docEditInput) }] : []];
 }
 
 const NOT_THIS_CHAT = '群里只能读本群的内容，读不了别的群。';
 const denied = () => new ToolRefusal({ ok: false, code: 'refused', message: '目标不存在或没有权限。' });
 const refusal = (message: string) => new ToolRefusal({ ok: false, code: 'refused', message });
+const READ_ONLY_TIER = '这个群是只读档，改不了文档。要改，请管理员在 Vonvon Bot 客户端里调高这个群的权限。';
 
 /** A group's session is kept to its group; a private chat reads any group this Bot is in, on an administrator's turn. */
 function chatOf(requested: string | undefined, ctx: ToolContext): { chat?: string; only?: string } {
@@ -66,9 +80,9 @@ function chatOf(requested: string | undefined, ctx: ToolContext): { chat?: strin
   return target ? { chat: target } : {};
 }
 
-/** Documents are not kept to a group (7.2): whoever is in a place these tools are listed in reads them. */
+/** Documents are not kept to a group (7.2): whoever is in a place these tools are listed in reads them. A comment's turn is the registry's (authorizeFeishu). */
 function mayRead(ctx: ToolContext): void {
-  if (ctx.place.kind !== 'group' && !(ctx.place.kind === 'p2p' && ctx.admin)) throw denied();
+  if (ctx.place.kind !== 'group' && ctx.place.kind !== 'doc' && !(ctx.place.kind === 'p2p' && ctx.admin)) throw denied();
 }
 
 /** Runs a read, with the place looked at again after the wait (a private chat's turn can end during it). */
@@ -86,11 +100,44 @@ async function read<T>(ctx: ToolContext, run: () => Promise<T>): Promise<T> {
 
 function tool<Input extends z.ZodObject>(name: typeof definitions[number]['name'], run: (args: z.infer<Input>, ctx: ToolContext) => Promise<unknown>): AgentTool {
   const definition = definitions.find(item => item.name === name)!;
-  return { name, class: 'read', places: ['group', 'p2p'], description: definition.description, input: definition.input,
+  return { name, ...feishuDocToolNames.has(name) ? { class: 'document' as const } : { class: 'read' as const, places: ['group', 'p2p'] as const }, description: definition.description, input: definition.input,
     run: (args, ctx) => read(ctx, () => run(definition.input.parse(args) as z.infer<Input>, ctx)) };
 }
 
-export function createFeishuTools(deps: { members(chatId: string, cursor?: string): Promise<FeishuMembers>; feishu?: FeishuReader }): AgentTool[] {
+/**
+ * The tool skips the sandbox, so the tier is looked at here too (7.2), now, whatever the session was started with: a resumed
+ * Codex thread keeps the tools of its rollout. A comment has no tier; a private chat is full access.
+ */
+async function mayEdit(ctx: ToolContext, tier: ((chatId: string) => Promise<PermissionMode | undefined>) | undefined): Promise<void> {
+  mayRead(ctx);
+  if (ctx.place.kind !== 'group') return;
+  const current = ctx.place.chatId ? await tier?.(ctx.place.chatId) : undefined;
+  if (!current || current === 'qa') throw refusal(READ_ONLY_TIER);
+}
+
+function docEditTool(reader: FeishuReader, tier: ((chatId: string) => Promise<PermissionMode | undefined>) | undefined): AgentTool {
+  return { name: FEISHU_DOC_EDIT, class: 'document', writes: true, description: docEditDescription, input: docEditInput,
+    async run(args, ctx) {
+      const request = docEditInput.parse(args);
+      await mayEdit(ctx, tier);
+      const commit = ctx.commit;
+      if (!commit) throw denied();
+      try {
+        return await commit(async guard => {
+          // A bare token that turns out to be a knowledge-base page's is tried twice; the guard takes one call.
+          let guarded = false;
+          return reader.docEdit(request, () => { if (!guarded) { guarded = true; guard(); } });
+        });
+      } catch (failure) {
+        if (failure instanceof FeishuReadRefused) throw refusal(failure.message);
+        throw failure;
+      }
+    } };
+}
+
+export function createFeishuTools(deps: { members(chatId: string, cursor?: string): Promise<FeishuMembers>; feishu?: FeishuReader;
+  /** A group's permission tier now, for the edit tool. */
+  groupTier?(chatId: string): Promise<PermissionMode | undefined> }): AgentTool[] {
   const members = tool<typeof membersInput>('feishu_members', ({ chat: requested, cursor }, ctx) => {
     const { chat: target } = chatOf(requested, ctx);
     if (!target) throw refusal('要写 chat：想查哪个群。');
@@ -108,6 +155,7 @@ export function createFeishuTools(deps: { members(chatId: string, cursor?: strin
     tool<typeof sheetInput>('feishu_sheet', args => reader.sheet(args)),
     tool<typeof driveInput>('feishu_drive_file', (args, ctx) => reader.driveFile({ ...args, ...savedIn(ctx) })),
     tool<typeof searchInput>('feishu_search', (args, ctx) => reader.search({ ...args, ...chatOf(args.chat, ctx) })),
+    docEditTool(reader, deps.groupTier),
   ];
 }
 
