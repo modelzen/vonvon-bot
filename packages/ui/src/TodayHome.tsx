@@ -1,20 +1,31 @@
 import {Activity, ArrowRight, ChartNoAxesColumn, ChevronRight, Cpu, Download, Link, MonitorSmartphone, Power, Wrench, type LucideIcon} from 'lucide-react';
-import type {DesktopSnapshot} from '@vonvon/protocol';
+import type {AgentId, DesktopSnapshot} from '@vonvon/protocol';
 import {NowBotList} from './NowBotList';
 import {NowActivity} from './NowActivity';
 import {NowUsage} from './NowUsage';
+import {GlowButton} from './GlowButton';
 import {uiFeatures} from './features';
 import type {Page} from './collaboration-model';
-import {useActiveDevice} from './client-context';
+import {useActiveDevice, useClient} from './client-context';
 import {whereName} from './device-copy';
 
 export function TodayHome({snapshot, onSetup, onRegister, onOpenUsage, disabled}: {snapshot: DesktopSnapshot; onSetup: () => void; onRegister: () => void; onOpenUsage: () => void; disabled: boolean}) {
+  const client = useClient();
+  async function changeNumber(agentId: AgentId, badgeNumber: string) {
+    const result = await client.run({type: 'setAgentBadgeNumber', agentId, badgeNumber});
+    if (result.kind === 'applied') return;
+    if (result.kind === 'refused' || result.kind === 'outcomeUnknown') return result.message;
+    return '工号未能保存，请重试。';
+  }
   const attention = snapshot.agents.filter(bot => bot.readError || (bot.enabled && (!bot.running || bot.connection !== 'connected')));
   const connected = snapshot.host.kind === 'connected' && !snapshot.stale;
   return <div className="today-home">
-    <header className="today-intro"><h1>此刻</h1>{snapshot.stale && <span role="status">正在更新…</span>}</header>
+    <header className="today-intro">
+      <div className="today-intro-title"><h1>此刻</h1>{snapshot.stale && <span role="status">正在更新…</span>}</div>
+      <GlowButton disabled={disabled} onClick={onRegister}>添加 Bot</GlowButton>
+    </header>
     {!snapshot.stale && attention.length > 0 && <button type="button" className="today-connection-note" onClick={onSetup}><span className="today-state-dot"/><span>{attention.length} 个 Bot 需要检查连接</span><ArrowRight size={14}/></button>}
-    <NowBotList snapshot={snapshot} connected={connected} onRegister={onRegister} disabled={disabled}/>
+    <NowBotList snapshot={snapshot} connected={connected} onChangeNumber={changeNumber} disabled={disabled}/>
     <NowActivity snapshot={snapshot}/>
     <NowUsage disabled={!connected} onOpenUsage={onOpenUsage}/>
   </div>;

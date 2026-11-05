@@ -117,9 +117,9 @@ describe('application roles', () => {
       ? { code: 0, tenant_access_token: 'fixture-token' }
       : url.includes('collaborators') ? { code: 0, data: { collaborators: [
         { type: 'developer', user_id: 'ou_dev' }, { type: 'administrator', user_id: 'ou_admin' }, { type: 'operator', user_id: 'ou_operator' }, { type: 'owner', user_id: 'ou_owner' },
-      ] } } : { code: 0, data: { app: { owner: { owner_id: 'ou_owner', type: 2 } } } }));
+      ] } } : { code: 0, data: { app: { owner: { owner_id: 'ou_owner', name: '示例姓名', type: 2 } } } }));
     vi.stubGlobal('fetch', request);
-    expect(await fetchAppRoles(app, 'fixture', new AbortController().signal)).toEqual({ ...result, admins: ['ou_dev', 'ou_admin'] });
+    expect(await fetchAppRoles(app, 'fixture', new AbortController().signal)).toEqual({ ...result, ownerName: '示例姓名', admins: ['ou_dev', 'ou_admin'] });
     expect(request.mock.calls.filter(([url]) => url.includes('user_id_type=open_id'))).toHaveLength(2);
     expect(request.mock.calls.map(([url]) => url)).toContain(`https://open.feishu.cn/open-apis/application/v6/applications/${app.id}?user_id_type=open_id&lang=zh_cn`);
     expect(request.mock.calls.map(([url]) => url)).toContain(`https://open.feishu.cn/open-apis/application/v6/applications/${app.id}/collaborators?user_id_type=open_id`);

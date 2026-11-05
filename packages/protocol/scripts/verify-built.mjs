@@ -21,6 +21,7 @@ const samples = [
   {type:"setResponse",membershipId,response:"mention"},
   {type:"setPermission",membershipId,administrator:"full",network:false},
   {type:"setAgentEnabled",agentId,enabled:true},
+  {type:"setAgentBadgeNumber",agentId,badgeNumber:"0001234"},
   {type:"deleteAgent",agentId},
   {type:"cancelJob",jobId},
 ];

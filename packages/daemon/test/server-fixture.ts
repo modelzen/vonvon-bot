@@ -35,6 +35,7 @@ export function fakeService(overrides: Partial<AdminService> = {}): AdminService
     restartDaemon: empty, startDaemon: empty, stopDaemon: empty, applyUpdate: empty,
     checkUpdate: async () => ({ current: 'test', latest: null, hasUpdate: false, dev: true }), updateStatus: () => null,
     hostDoctor: async () => ({ node: 'test', platform: 'test', arch: 'test', osRelease: 'test', appDir: testHome.current, logsDir: join(testHome.current, 'logs'), logBytes: 0, version: 'test', backends: [] }),
+    setBotBadgeNumber: async () => ({ ok: true }),
     setBotEnabled: async () => ({ ok: true, activation: 'applied', message: 'applied' }), deleteBot: async () => ({ ok: true }),
     getVoice: async () => ({ enabled: false, feishu: { state: 'unchecked', message: '' }, result: '', grantUrl: '' }), setVoice: empty,
     accountUsage: async () => ({ profile: { topInvocations: [], dailyBuckets: [] }, usage: { main: {}, extras: [], fetchedAt: 1 } }),
