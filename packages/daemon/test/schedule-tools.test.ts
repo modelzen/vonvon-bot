@@ -19,7 +19,7 @@ describe('the seven tools', () => {
     expect(JSON.stringify(specs)).not.toMatch(/chatId|botId/);
     const tools = createScheduleTools({ commands: { execute: async () => ({ kind: 'deleted', taskId: 'x' }) } });
     expect(tools.map(tool => [tool.class, tool.description])).toEqual(specs.map(spec => ['schedule', spec.description]));
-    expect(tools.find(tool => tool.name === 'schedule_create')?.description).toBe('给本群建一个定时任务，或给自己排一个稍后回来的一次性任务；时间用 when 写，不用算毫秒。');
+    expect(tools.find(tool => tool.name === 'schedule_create')?.description).toBe('在本群或这个私聊建一个定时任务，或给自己排一个稍后回来的一次性任务；时间用 when 写，不用算毫秒。');
   });
 
   it('tells an edit that a missing zone is the task\'s own, a create that it is the daemon\'s, and a list that a taskId reads one task whole', () => {
@@ -28,7 +28,7 @@ describe('the seven tools', () => {
     expect(schema('schedule_create').properties.timeZone.description).toBe('IANA 时区名，比如 Asia/Shanghai；不写就用 daemon 所在电脑的时区');
     expect(schema('schedule_edit').properties.patch.properties.timeZone.description).toBe('IANA 时区名；不写就按这个任务自己的时区（schedule_list 里的 timeZone）');
     const list = scheduleToolSpecs().find(spec => spec.name === 'schedule_list')?.inputSchema;
-    expect(list).toMatchObject({ properties: { taskId: { type: 'string', description: '只看这一个任务，内容不截短；不写就列出本群全部' } } });
+    expect(list).toMatchObject({ properties: { taskId: { type: 'string', description: '只看这一个任务，内容不截短；不写就列出这里全部' } } });
     expect(list).not.toHaveProperty('required');
     expect(schema('schedule_pause')).toMatchObject({ properties: { taskId: { description: '任务 id，来自 schedule_list' } }, required: ['taskId'] });
   });

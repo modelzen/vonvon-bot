@@ -67,7 +67,7 @@ const LEASED = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon res
  */
 export const LOCAL_ONLY: ReadonlySet<string> = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'service install', 'service uninstall', 'service status',
   'update', 'remote status', 'remote enable', 'remote disable', 'remote port', 'remote candidates', 'pair', 'clients ls', 'clients rename', 'clients revoke', 'device rename',
-  'bot repair-dir', 'open', '__standalone-setup', '__standalone-teardown']);
+  'bot remove', 'bot repair-dir', 'open', '__standalone-setup', '__standalone-teardown']);
 /** A command's full name without `vonvon`: `daemon restart`, `pair`. */
 const commandPath = (command: Command): string => {
   const names: string[] = [];

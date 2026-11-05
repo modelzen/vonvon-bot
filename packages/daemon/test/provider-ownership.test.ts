@@ -17,6 +17,8 @@ afterAll(async () => {
 });
 const transport = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock('../src/platform/spawn', async original => ({ ...await original<object>(), spawnProcess: transport.spawn }));
+// startBridge writes the launcher under the data root, which this test does not move.
+vi.mock('../src/agent/session-cli', async original => ({ ...await original<object>(), writeSessionCli: async () => undefined }));
 vi.mock('../src/agent/codex-appserver/locate', () => ({
   refreshCodexResolution: () => '/fixture/no-provider', resolveCodexBin: () => '/fixture/no-provider',
   codexVersionAsync: async () => 'codex-cli 0.163.0',

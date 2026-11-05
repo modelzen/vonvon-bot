@@ -1,16 +1,22 @@
 import type { BuiltinSkill } from './package';
-import { feishuMessageSkill } from './feishu-message';
-import { scheduleSkill } from './schedule';
+import { configSkill } from './config';
+import { dmFeishuSkill, feishuSkill } from './feishu';
+import { dmScheduleSkill, scheduleSkill } from './schedule';
 
 /**
- * product.md 3.6: a bound group's sessions get vonvon's own skills, every name starting `vonvon` (s1b): the task skill
- * and how a reply becomes a Feishu message. vonvon ships no Feishu-operations skill (Feishu's own lark-cli skills are the
- * user's). A private chat has its own package: `vonvon-config` joins it with the rest of the settings work (dm-agent 9).
- * A comment's session gets none (its reply is a document comment).
+ * product.md 3.6: vonvon's own skills, every name starting `vonvon` (s1b). A bound group's sessions get the task skill
+ * and the Feishu skill; a private chat gets the same two names in its own words, and `vonvon-config` (dm-agent 9). vonvon
+ * ships no other Feishu-operations skill (Feishu's own lark-cli skills are the user's). A comment's session gets none
+ * (its reply is a document comment).
  */
 export function builtinSkillsOfSet(set: 'group' | 'dm'): BuiltinSkill[] {
   switch (set) {
-    case 'group':
-    case 'dm': return [scheduleSkill, feishuMessageSkill];
+    case 'group': return [scheduleSkill, feishuSkill];
+    case 'dm': return [dmScheduleSkill, dmFeishuSkill, configSkill];
   }
+}
+
+/** Every builtin skill's name, once: what a session's skill whitelist adds, whichever package it was handed. */
+export function builtinSkillNames(): string[] {
+  return [...new Set([...builtinSkillsOfSet('group'), ...builtinSkillsOfSet('dm')].map(skill => skill.name))];
 }

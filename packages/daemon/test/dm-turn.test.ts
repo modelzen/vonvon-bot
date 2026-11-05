@@ -158,7 +158,7 @@ describe('who gets in, in what order', () => {
     await o.onMessage(message('帮我看看', { raw: { sender: { sender_type: 'user', sender_id: { union_id: 'on_person' } } } }));
     await until(() => expect(run.consumed).toHaveLength(1));
     const env = (be.startThread.mock.calls[0][0] as StartThreadOptions).profile?.env;
-    expect(env).toMatchObject({ VONVON_SESSION: TOKEN });
+    expect(env).toMatchObject({ VONVON_SESSION: TOKEN, VONVON_BOT: APP });
     expect(env).not.toHaveProperty('VONVON_SCOPE');
     expect(turn.mock.calls[0]?.[1]).toMatchObject({ requesterOpenId: OWNER, requesterUnionId: 'on_person' });
     expect((await dmProject())?.dm?.people[A]).toMatchObject({ openId: OWNER, unionId: 'on_person' });

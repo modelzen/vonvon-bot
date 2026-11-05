@@ -29,6 +29,7 @@ vi.mock('../src/project/registry', () => ({ listProjects: async () => [], splitT
 vi.mock('../src/bot/topic-registry', () => ({ createTopicRegistry: () => ({}) }));
 vi.mock('../src/bot/session-store', () => ({ adoptAdminSessions: async () => [] }));
 vi.mock('../src/config/paths', () => ({ paths: { topicsDir: '/fixture/topics' } }));
+vi.mock('../src/agent/session-cli', () => ({ writeSessionCli: async () => undefined }));
 vi.mock('../src/host/crash-guard', () => ({ onCrashSync: () => () => {} }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, fail: fixture.logFail } }));
 vi.mock('../src/bot/handle-message', () => ({ createOrchestrator: () => ({

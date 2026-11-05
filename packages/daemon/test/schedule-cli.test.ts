@@ -173,7 +173,7 @@ describe('parsing the time options', () => {
       // 14:00 in Tokyo (UTC+9); the daemon's Shanghai would be 06:00 UTC
       { action: 'edit', chatId: 'oc_group', taskId: 'st_0123456789abcdef', revision: 'r1', patch: { spec: { kind: 'once', at: Date.UTC(2026, 10, 5, 5, 0) } } },
     ]);
-    expect(await h.failure('edit', { taskId: 'st_gone', revision: 'r1', at: '2026-11-05 14:00' })).toMatchObject({ exitCode: 4, error: { message: '改任务没有完成：本群没有这个任务。' } });
+    expect(await h.failure('edit', { taskId: 'st_gone', revision: 'r1', at: '2026-11-05 14:00' })).toMatchObject({ exitCode: 4, error: { message: '改任务没有完成：这里没有这个任务。' } });
   });
 
   it('edits only the given fields with the given revision', async () => {
@@ -209,7 +209,7 @@ describe('requests that read first', () => {
       { action: 'delete', chatId: 'oc_group', taskId: 'st_0123456789abcdef', revision: 'r9' },
       { action: 'delete', chatId: 'oc_group', taskId: 'st_0123456789abcdef', revision: 'r1' },
     ]);
-    expect(await h.failure('delete', { taskId: 'st_gone' })).toMatchObject({ exitCode: 4, error: { kind: 'refused', message: '删任务没有完成：本群没有这个任务。' } });
+    expect(await h.failure('delete', { taskId: 'st_gone' })).toMatchObject({ exitCode: 4, error: { kind: 'refused', message: '删任务没有完成：这里没有这个任务。' } });
   });
 
   it("an unbound group's raw id works for list, runs, delete and pause, and nothing else", async () => {

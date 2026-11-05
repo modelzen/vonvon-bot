@@ -120,6 +120,7 @@ describe('in a private chat', () => {
     expect(made.kind === 'task' && f.store.get(made.task.id)?.chatId).toBe(DM);
     expect(creatorOf(f, made)).toEqual({ via: 'chat', openId: ADMIN, role: 'admin', name: '主人', messageId: 'om_trigger', text: '每天 9 点发日报' });
     expect(await f.text('schedule_list')).toContain('这个私聊 1 个任务');
+    expect(await reply(f, 'schedule_list', { taskId: 'st_gone' })).toMatchObject({ kind: 'refused', reason: 'not-found', message: '这个私聊没有这个任务。' });
   });
 
   it('lets a task\'s own run do what its creator may: make a task, touch another (6.3)', async () => {

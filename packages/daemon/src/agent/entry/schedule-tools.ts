@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ScheduledTaskView, SchedulePlacement, ScheduleRefusal, ScheduleReply, ScheduleRequest, ScheduleSpec } from '@vonvon/protocol';
-import { scheduleRefusalMessages, type ScheduleActor, type ScheduleCommands } from '../../admin/schedule-commands';
+import { DM_NOT_FOUND, scheduleRefusalMessages, type ScheduleActor, type ScheduleCommands } from '../../admin/schedule-commands';
 import { clampUnits } from '../../bot/schedule/store';
 import { ceilToMinute, formatAt, hostTimeZone, parseLocal } from '../../bot/schedule/time';
 import type { TurnWhere } from './registry';
@@ -24,7 +24,7 @@ const whenSchema = z.union([
 ]).describe('什么时候。一次：{kind:"once",at:"YYYY-MM-DD HH:mm"}（按 timeZone）或 {kind:"once",inMinutes:20}；'
   + '每 N 分钟：{kind:"every",minutes:30}；每天：{kind:"daily",time:"09:00"}；每周：{kind:"weekly",days:[1,2,3,4,5],time:"09:00"}（0 是周日）；'
   + 'cron：{kind:"cron",expr:"0 9 * * 1-5"}（5 段）');
-const whereSchema = z.enum(['here', 'thisTopic', 'newTopic']).describe('发到哪。here（默认）：话题里建的一次性任务回这个话题，其余跟群的会话方式；'
+const whereSchema = z.enum(['here', 'thisTopic', 'newTopic']).describe('发到哪，私聊里不用写。here（默认）：话题里建的一次性任务回这个话题，其余跟群的会话方式；'
   + 'thisTopic：用户说了"就在这个话题里发"；newTopic：用户说了"开个话题发"，每次开新话题');
 const zone = z.string().min(1).max(64);
 const zoneSchema = zone.describe('IANA 时区名，比如 Asia/Shanghai；不写就用 daemon 所在电脑的时区');
@@ -38,14 +38,14 @@ const instruction = z.string().min(1).max(4000).describe('到点时要做什么�
 const createInput = z.object({ name, instruction, when: whenSchema, where: whereSchema.optional(), timeZone: zoneSchema.optional() }).strict();
 const editInput = z.object({ taskId, revision, patch: z.object({ name: name.optional(), instruction: instruction.optional(),
   when: whenSchema.optional(), where: whereSchema.optional(), timeZone: editZoneSchema.optional() }).strict() }).strict();
-const listInput = z.object({ taskId: taskId.describe('只看这一个任务，内容不截短；不写就列出本群全部').optional() }).strict();
+const listInput = z.object({ taskId: taskId.describe('只看这一个任务，内容不截短；不写就列出这里全部').optional() }).strict();
 const targetInput = z.object({ taskId }).strict();
 const deleteInput = z.object({ taskId, revision }).strict();
 
-/** Section 16's descriptions, verbatim. */
+/** Section 16's descriptions, verbatim but for 本群: the tools are a private chat's too (dm-agent 8). */
 const definitions = [
-  { name: 'schedule_list', action: 'list', input: listInput, description: '列出本群这个 Bot 的定时任务，含现在的时间和时区。' },
-  { name: 'schedule_create', action: 'create', input: createInput, description: '给本群建一个定时任务，或给自己排一个稍后回来的一次性任务；时间用 when 写，不用算毫秒。' },
+  { name: 'schedule_list', action: 'list', input: listInput, description: '列出这个 Bot 在本群或这个私聊的定时任务，含现在的时间和时区。' },
+  { name: 'schedule_create', action: 'create', input: createInput, description: '在本群或这个私聊建一个定时任务，或给自己排一个稍后回来的一次性任务；时间用 when 写，不用算毫秒。' },
   { name: 'schedule_edit', action: 'edit', input: editInput, description: '改任务的名字、内容、时间或发到哪；要带 list 里的 revision。' },
   { name: 'schedule_pause', action: 'pause', input: targetInput, description: '暂停。' },
   { name: 'schedule_resume', action: 'resume', input: targetInput, description: '恢复。' },
@@ -197,7 +197,7 @@ export function createScheduleTools(deps: { commands: ScheduleCommands; now?: ()
       if (id === undefined || listed.kind !== 'tasks') return answer(listed, turn);
       // Only what the list shows: another group's task, or another task in a task's own run, reads as missing.
       const task = listed.tasks.find(candidate => candidate.id === id);
-      return answer(task ? { kind: 'task', task } : refuse('not-found', scheduleRefusalMessages['not-found']), turn, '任务');
+      return answer(task ? { kind: 'task', task } : refuse('not-found', turn.actor.kind === 'dm' ? DM_NOT_FOUND : scheduleRefusalMessages['not-found']), turn, '任务');
     },
     async create(args, ctx) {
       const input = createInput.parse(args);

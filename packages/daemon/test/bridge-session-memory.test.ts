@@ -1,6 +1,6 @@
 import { rmSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request } from '@vonvon/protocol';
 import type { AgentThread } from '../src/agent/types';
@@ -37,10 +37,14 @@ vi.mock('../src/admin/groups', () => ({ createGroupExecutor: () => async () => (
 vi.mock('../src/bot/topic-registry', () => ({ createTopicRegistry: () => ({}) }));
 vi.mock('../src/bot/session-store', () => ({ adoptAdminSessions: async () => [] }));
 vi.mock('../src/host/crash-guard', () => ({ onCrashSync: () => () => {} }));
-vi.mock('../src/bot/handle-message', () => ({ createOrchestrator: () => ({
-  initialize: async () => {}, dispatcher: { handle: async () => {} }, shutdown: async () => {},
-  replyDropped() {}, saveDroppedSync() {}, settings: {}, scheduler: { start: async () => {}, stop() {}, drain: async () => {} },
-}) }));
+const orchestrator = vi.hoisted(() => ({ options: undefined as { sessionCli?: string } | undefined }));
+vi.mock('../src/bot/handle-message', () => ({ createOrchestrator: (...args: unknown[]) => {
+  orchestrator.options = args[4] as { sessionCli?: string };
+  return {
+    initialize: async () => {}, dispatcher: { handle: async () => {} }, shutdown: async () => {},
+    replyDropped() {}, saveDroppedSync() {}, settings: {}, scheduler: { start: async () => {}, stop() {}, drain: async () => {} },
+  };
+} }));
 
 import { startBridge } from '../src/bot/bridge';
 
@@ -83,6 +87,25 @@ function privateChat(entries: Awaited<ReturnType<typeof bridge>>, who: string, t
     bot: (action: Parameters<typeof entries.authorizeSessionCall>[1]) => entries.authorizeSessionCall(entry.sessionId, action),
   };
 }
+
+// dm-agent 9. main 必败: no launcher, and a session's `vonvon` hung on the shell's startup files.
+describe('the launcher, as the bridge wires it', () => {
+  const launcher = (): string => join(paths.appDir, 'bin', process.platform === 'win32' ? 'vonvon.cmd' : 'vonvon');
+  it('is written when a Bot starts and handed to its sessions', async () => {
+    await bridge();
+    expect(orchestrator.options?.sessionCli).toBe(launcher());
+    expect(await readFile(launcher(), 'utf8')).toContain(JSON.stringify(process.execPath).slice(1, -1));
+  });
+  it('does not hold the Bot up when it cannot be written', async () => {
+    const bin = join(paths.appDir, 'bin');
+    await rm(bin, { recursive: true, force: true });
+    await writeFile(bin, 'a file where the directory goes');
+    try {
+      await bridge();
+      expect(orchestrator.options).not.toHaveProperty('sessionCli');
+    } finally { await rm(bin, { force: true }); }
+  });
+});
 
 describe('a private chat\'s session and its bot\'s projects, as the bridge wires them', () => {
   // main 必败: the bridge gave the memory writer no projects for a private chat, so each of these was refused
