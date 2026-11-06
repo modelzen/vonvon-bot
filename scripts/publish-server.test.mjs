@@ -315,7 +315,8 @@ test('server CDN config is explicit and ordinary GET refuses cached or stale mut
   await f.upload(planned);
   const ordinary = async (url, options) => {
     assert.equal(options.cache, undefined);
-    assert.equal(options.headers, undefined);
+    // Snapshots omit headers; full byte verification negotiates identity without bypassing cache.
+    if (options.headers !== undefined) assert.deepEqual(options.headers, { 'Accept-Encoding': 'identity' });
     const response = await f.cos.fetchImpl(url);
     if (url.endsWith('/install.sh') && response.status === 200) response.headers.set('X-Cache-Lookup', 'Cache Hit');
     return response;
@@ -330,4 +331,24 @@ test('server CDN config is explicit and ordinary GET refuses cached or stale mut
     return f.cos.fetchImpl(url);
   };
   await assert.rejects(f.promote(planned, { ownerConfirmation: 'ok', fetchImpl: stale }), /公网内容不一致/);
+});
+
+test('public byte verification requests identity and rejects encoded responses and bad hashes', async () => {
+  const body = Buffer.from('original bytes');
+  const object = { file: 'manifest.json', url: `${SERVER_BASE_URL}/0.9.0/manifest.json`, contentType: 'application/json', bytes: body.length, sha256: hash(body), sha512: hash(body, 'sha512') };
+  const fetchResponse = (encoding, bytes = body) => async (url, options) => {
+    assert.equal(url, object.url);
+    assert.equal(options.redirect, 'error');
+    assert.deepEqual(options.headers, { 'Accept-Encoding': 'identity' });
+    return new Response(bytes, { headers: { 'content-type': object.contentType, 'content-length': String(bytes.length), 'cache-control': 'public, max-age=31536000, immutable', ...(encoding === undefined ? {} : { 'content-encoding': encoding }) } });
+  };
+  for (const encoding of [undefined, 'identity']) {
+    assert.equal((await verifyServerPublic([object], { fetchImpl: fetchResponse(encoding) }))[0].sha256, object.sha256);
+  }
+  // Model fetch's decoded body, even with a matching length: ignored identity must still fail closed.
+  for (const encoding of ['gzip', 'br', 'identity, gzip']) {
+    await assert.rejects(verifyServerPublic([object], { fetchImpl: fetchResponse(encoding) }), /Content-Encoding/);
+  }
+  await assert.rejects(verifyServerPublic([object], { fetchImpl: fetchResponse('identity', Buffer.alloc(body.length, 'x')) }), /公网内容不一致/);
+  await assert.rejects(verifyServerPublic([{ ...object, sha512: '0'.repeat(128) }], { fetchImpl: fetchResponse('identity') }), /公网内容不一致/);
 });
