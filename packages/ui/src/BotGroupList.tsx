@@ -20,6 +20,8 @@ type Props = {
   dmNew?: number;
 };
 
+const modeOf = (member: Membership) => ({threads: '独立话题', shared: '连续交谈', smart: '智能'}[member.conversation]);
+
 const providerOf = (backend: string) => {
   const label = backendLabel(backend);
   return {
@@ -55,11 +57,12 @@ export function BotGroupList({snapshot, agent, busy, status, onJoin, onMembershi
   const members = snapshot.memberships.filter(member => member.agentId === agent.id);
   const groups = new Map(snapshot.groups.map(group => [group.id, group]));
   const dm = dmRowOf(agent, status);
+  const dmMode = agent.dm && modeOf(agent.dm);
   const dmRow = dm && agent.dm && <button
     type="button"
     className="bot-group-list__row"
     data-unavailable={dm.tone !== 'success' || undefined}
-    aria-label={`设置 ${agent.name} 的私聊，Provider：${dm.provider}${dm.exception ? `，${dm.exception}` : ''}`}
+    aria-label={`设置 ${agent.name} 的私聊，Provider：${dm.provider}，沟通方式：${dmMode}${dm.exception ? `，${dm.exception}` : ''}`}
     onClick={onDm}
   >
     <span className="bot-group-list__identity">
@@ -68,7 +71,7 @@ export function BotGroupList({snapshot, agent, busy, status, onJoin, onMembershi
       {newTag(dmNew) && <span className="bot-group-list__status" data-tone="neutral">{newTag(dmNew)}</span>}
     </span>
     <span className="bot-group-list__provider" title={dm.provider}>{dm.icon && <img src={dm.icon} alt=""/>}<span>{dm.provider}</span></span>
-    <span className="bot-group-list__mode">仅管理员</span>
+    <span className="bot-group-list__mode">{dmMode}</span>
     <ChevronRight className="bot-group-list__chevron" size={14} aria-hidden="true"/>
   </button>;
   return <SettingsGroup
@@ -83,7 +86,7 @@ export function BotGroupList({snapshot, agent, busy, status, onJoin, onMembershi
         const group = groups.get(member.groupId);
         if (!group) return null;
         const {provider, icon} = providerOf(member.backend);
-        const mode = {threads: '独立话题', shared: '连续交谈', smart: '智能'}[member.conversation];
+        const mode = modeOf(member);
         const rowStatus = rowStatusOf(member, status, '本群已停用');
         const exception = rowStatus.tone !== 'success' ? rowStatus.label : undefined;
         return <button
