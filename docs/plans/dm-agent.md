@@ -515,7 +515,7 @@ A1、F1、D1 马上同时开，互不依赖。D2 和 A2 接着开。合计约 6,
 
 ## 13. 已知限制
 
-- 私聊的判断只在 `packages/daemon/src/bot/handle-message.ts` 的智能路径上多一层：一条消息走 named 通道，先等 1.5 秒看人有没有接着说，只判断最新的一句（`spokenPast`）；被折叠的话靠回合的上文拉取带给 Agent。2026-11-06 以前建的私聊行没有 `smart`，还是每条都回，内部用户在设置页或 `vonvon settings set --dm conversation.mode=smart` 换。
+- 私聊的判断只在 `packages/daemon/src/bot/handle-message.ts` 的智能路径上多一层：一条消息走 named 通道，先等 1.5 秒看人有没有接着说（`spokenPast`），连着的几句合成一条判断一次；只让判断看最后一句时，"谢谢"会把前面的问题一起跳过（2026-11-06 实测）。被折叠的话靠回合的上文拉取带给 Agent。2026-11-06 以前建的私聊行没有 `smart`，还是每条都回，内部用户在设置页或 `vonvon settings set --dm conversation.mode=smart` 换。
 
 - 名单和"不能做"挡不住完全访问的 Agent 自己改文件、读凭据。管理员私聊等于拿到这台电脑，这是 owner 定的前提。
 - 管理员名单按 Bot，权限却到整台电脑。在 A 是管理员的人，能经私聊改 B，但在 B 的群里不算管理员。页面上写明。
