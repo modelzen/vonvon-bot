@@ -119,6 +119,7 @@ const schemas: Record<string, Record<string, Rule>> = {
     response: shape({
       noMention: bool
     }, true),
+    conversation: shape({ mode: one('smart', 'single') }),
     model: shape({
       selection
     }),

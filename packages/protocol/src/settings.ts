@@ -158,6 +158,8 @@ export const projectEditableSchemas = {
   profile: groupProfile, role: projectRole, modelAccess, workspace, smartRules, skills, presentation,
   permission: z.object({ mode: tier, custom: z.record(z.string(), z.unknown()).nullable() }),
   response: z.object({ noMention: z.boolean() }),
+  /** A private chat's only: 智能 or 单会话. A group's is changed with the group, not here. */
+  conversation: z.object({ mode: z.enum(["smart", "single"]) }),
   model: z.object({ selection }),
   speed,
   /** 运行中来了消息 for this group; stored "default" inherits the bot's `run.pendingPolicy` */
@@ -355,6 +357,7 @@ export const projectViewSchema = z.object({
   sections: sections(projectSectionSchemas).extend({
     profile: section(groupProfile).optional(), role: section(projectRole).optional(), modelAccess: section(modelAccess).optional(), workspace: section(workspace).optional(), smartRules: section(smartRules).optional(), skills: section(skills).optional(), presentation: section(presentation).optional(),
     run: section(projectSectionSchemas.run).optional(),
+    conversation: section(projectSectionSchemas.conversation).optional(),
     speed: section(speed).optional(),
     judge: section(judgeViewSection).optional(),
   }),

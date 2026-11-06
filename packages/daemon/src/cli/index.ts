@@ -444,7 +444,7 @@ Examples:
   vonvon settings set judge.selection='{"kind":"llm","model":"gpt-6-luna","effort":"low"}'
   vonvon settings set judge.selection='{"kind":"decision","provider":"typesafe","model":"jev-latest"}'   # 决策模型，各后端的群都用
   vonvon settings set --group oc_xxx judge.selection='{"kind":"default"}'   # 群里去掉覆盖，用 bot 的
-  vonvon settings set --dm model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'   # 私聊只能改 model、speed、modelAccess、skills
+  vonvon settings set --dm model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'   # 私聊只能改 model、speed、modelAccess、skills、conversation、smartRules、judge
   vonvon settings set --group oc_xxx smartRules.respond='"第一段\\n\\n第二段"'   # 文字要换行时写成带引号的 JSON，普通文字里的 \\n 不是换行
   vonvon settings set --host execution.codexBin=/usr/local/bin/codex      # 本机：Codex 可执行文件，null 回到自动找`)
   .action(async (assignments: string[], options: Target) => {

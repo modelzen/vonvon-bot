@@ -143,6 +143,8 @@ export interface ProjectSections {
   response: {
     noMention: boolean;
   };
+  /** A private chat's only: 智能 or 单会话. A group's is changed with the group, not here. */
+  conversation: { mode: 'smart' | 'single' };
   model: {
     selection: ModelSelection;
   };
@@ -239,7 +241,7 @@ export interface ProjectSettingsView {
   scope: Extract<SettingsScope, {
     kind: 'project';
   }>;
-  sections: Sections<Omit<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation' | 'speed'>> & Partial<Sections<Pick<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation' | 'speed'>>>;
+  sections: Sections<Omit<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation' | 'speed' | 'conversation'>> & Partial<Sections<Pick<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation' | 'speed' | 'conversation'>>>;
   botProfile?: BotProfile;
   skillsError?: string;
   skills?: Array<{ path: string; name: string; description: string; source: 'workspace' | 'user' | 'provider'; enabled: boolean }>;

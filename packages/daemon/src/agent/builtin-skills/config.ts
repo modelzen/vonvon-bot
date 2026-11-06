@@ -31,7 +31,7 @@ export const configSkill: BuiltinSkill = {
 - 什么都不写：这个 Bot，就是你自己。
 - \`--bot B\`：别的 Bot，写名字或 id。
 - \`--group X\`：一个群，写群名或 \`oc_\` 开头的 id；别的 Bot 的群要同时写 \`--bot\`。
-- \`--dm\`：这个 Bot 的私聊，比如 \`vonvon settings get --dm\`、\`vonvon schedule list --dm\`。
+- \`--dm\`：这个 Bot 的私聊，比如 \`vonvon settings get --dm\`、\`vonvon schedule list --dm\`。私聊的沟通方式（\`conversation.mode\`，\`smart\` 或 \`single\`）和判断规则（\`smartRules.respond\`）也用它改。
 - 人的 id 按 Bot 分：往 Bot B 的名单里写人，用 \`vonvon feishu members <群> --bot B\` 查到的 id。
 
 ## 写文字
