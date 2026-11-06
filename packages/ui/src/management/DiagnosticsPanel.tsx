@@ -2,7 +2,7 @@ import type {SetupProvider} from '../setup/provider-state';
 import {ChevronDown, RefreshCw} from 'lucide-react';
 import {useRef, useState, type ReactNode} from 'react';
 import {
-  CUSTOM_PROMPT_NOTICE, NOT_REPLIED_TEXT, OPTIONAL_SCOPE_EFFECTS, SCOPE_DENIAL_PLACE_TEXT, backendLabel, botSteps, connectionStep, crashText, formatTime, toolSteps,
+  CUSTOM_PROMPT_NOTICE, FEISHU_TOOL_SCOPE_EFFECTS, NOT_REPLIED_TEXT, OPTIONAL_SCOPE_EFFECTS, SCOPE_DENIAL_PLACE_TEXT, backendLabel, botSteps, connectionStep, crashText, formatTime, toolSteps,
   type AdminSetupStatus, type Agent, type AgentId, type Command, type CommandResult, type CrashEntry, type DesktopSnapshot, type DirectoryProblem, type Membership, type NotReplied, type SetupStep, type StepAction, type StepTone,
 } from '@vonvon/protocol';
 import {useActiveDevice, useClient, useShellCapabilities} from '../client-context';
@@ -51,6 +51,19 @@ export function scopeView(status: AdminSetupStatus | undefined, agent: Agent, no
   if (missing.size) return view(`缺 ${missing.size} 项`, required.length ? 'warning' : 'neutral');
   if (lines.length) return view('被拒过', 'warning');
   return view('没有缺的', 'success');
+}
+
+/** 飞书文档能力: what the Bot's Feishu tools can't do yet. Optional, so it never counts as 飞书设置 left to do. */
+export function toolScopeView(status: AdminSetupStatus | undefined): {badge: ReactNode; lines: ReactNode[]; url?: string} | undefined {
+  const missing = status?.scopes.missingTools;
+  if (!missing) return undefined;
+  if (!missing.length) return {badge: badge('没有缺的', 'success'), lines: []};
+  const effects = [...new Set(missing.map(scope => FEISHU_TOOL_SCOPE_EFFECTS[scope] ?? scope))];
+  return {
+    badge: badge(`缺 ${missing.length} 项`, 'neutral'),
+    lines: [...effects.map(effect => <li key={effect}>{effect}</li>), <li key="after">开通后要发布新版本才生效；打不开链接，就转给这个飞书应用的管理员。</li>],
+    url: status?.scopes.toolsGrantUrl,
+  };
 }
 
 /** 飞书设置: the checklist's Feishu steps still to do, and its warnings about optional events; the
@@ -133,6 +146,8 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
   const scopes = scopeView(read?.status, agent, now, read?.problem);
   const setup = setupView(agent, read);
   const grantUrl = read?.status?.scopes.grantUrl;
+  const toolScopes = toolScopeView(read?.status);
+  const toolsGrantUrl = toolScopes?.url;
   const counts = new Map<string, number>();
   for (const member of snapshot.memberships) if (member.agentId === agent.id) counts.set(member.backend, (counts.get(member.backend) ?? 0) + 1);
   const misplaced = snapshot.memberships.filter(member => member.agentId === agent.id && member.directoryProblem);
@@ -173,6 +188,9 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
     <SettingsRow title="缺的权限" description={scopes.lines.length ? <ul className="diagnostics-scopes">{scopes.lines}</ul> : undefined}
       trailing={<span className="setup-step-trailing">{scopes.badge}{grantUrl && scopes.lines.length > 0 && <Button size="sm"
         onClick={() => void openExternalUrl(grantUrl, 'app-console', shell).catch(error => onError(error instanceof Error ? error.message : '无法打开开发者后台。'))}>一键开权限</Button>}</span>}/>
+    {toolScopes && <SettingsRow title="飞书文档能力" description={toolScopes.lines.length ? <ul className="diagnostics-scopes">{toolScopes.lines}</ul> : undefined}
+      trailing={<span className="setup-step-trailing">{toolScopes.badge}{toolsGrantUrl && <Button size="sm"
+        onClick={() => void openExternalUrl(toolsGrantUrl, 'app-console', shell).catch(error => onError(error instanceof Error ? error.message : '无法打开开发者后台。'))}>去开通</Button>}</span>}/>}
     <SettingsRow title="Provider" description={toolText || '尚未连接群聊'}/>
     {misplaced.length > 0 && <SettingsRow title="群目录" description={<DirectoryProblems members={misplaced}/>} trailing={badge(`${misplaced.length} 个群放错了位置`, 'warning')}/>}
     <SmartDiagnostics agent={agent} snapshot={snapshot} now={now}/>

@@ -21,7 +21,7 @@ it.each(['ends', 'fails'] as const)('ends the token, and the connections made wi
   const sdk = { query, listSessions: vi.fn(), getSessionInfo: vi.fn(), getSessionMessages: vi.fn(), renameSession: vi.fn(), createSdkMcpServer, tool } satisfies ClaudeSdkFacade;
   const fixture = await startFixture(fakeService());
   try {
-    const entries = createAgentEntries({ appId: BOT, isAdmin: () => false, isOwner: () => false, sessions: { revoke: sessionId => fixture.sessionTokens.revoke(sessionId) } });
+    const entries = createAgentEntries({ appId: BOT, isAdmin: () => false, sessions: { revoke: sessionId => fixture.sessionTokens.revoke(sessionId) } });
     const entry = entries.issue({ kind: 'group', chatId: GROUP });
     const token = fixture.sessionTokens.issue({ appId: BOT, place: 'group', chatId: GROUP, sessionId: entry.sessionId });
     const thread = await new ClaudeAgentBackend(async () => sdk, () => undefined).startThread({ cwd: '/fixture', entry });

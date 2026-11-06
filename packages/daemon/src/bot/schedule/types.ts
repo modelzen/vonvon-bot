@@ -1,6 +1,6 @@
 import type { ScheduledTaskView } from '@vonvon/protocol';
 
-export type StoredTask = Omit<ScheduledTaskView, 'nextRunAt' | 'running' | 'describe' | 'botId'> & {
+export type StoredTask = Omit<ScheduledTaskView, 'nextRunAt' | 'running' | 'describe' | 'botId' | 'dm'> & {
   cursor: number;
   inflight?: { runId: string; slot: number; trigger: 'schedule' | 'catchUp' | 'manual'; startedAt: number; revision: string };
   noticePending?: true;           // 自动暂停的那条群消息还没发出去，下次 tick 再试

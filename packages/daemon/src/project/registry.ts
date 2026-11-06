@@ -119,6 +119,30 @@ export interface Project {
   supplement?: string;
   /** 记忆设计 7.1 的分步标记，每步做完的时间（epoch ms）：`library` = 步骤 A，`memory` = 步骤 B。 */
   migration?: { library?: number; memory?: number };
+  /** This row is the bot's private chat (dm-agent 4.1): one per bot, kept out of everything about groups by
+   * {@link listProjectsIn}. `people` is keyed by Feishu's p2p chat_id, one entry per admin who has written to the bot. */
+  dm?: { people: Record<string, DmPerson> };
+}
+/** `unionId`: from the Feishu event; another Bot pulls this person into a group by it (dm-agent 6.4). */
+export interface DmPerson { openId: string; unionId?: string; name?: string; at: number }
+
+/** The display name of the private-chat row. Never looked up: a group may be called this too. */
+export const DM_PROJECT_NAME = '私聊';
+/** How settings and the command line address a bot's private chat; not a Feishu id. Passes the protocol's `groupIdSchema`. */
+export const dmChatId = (appId: string): string => `oc_dm_${appId}`;
+export const isDmRow = (row: Pick<Project, 'dm'>): boolean => Boolean(row.dm);
+const notDmRow = (row: Project): boolean => !isDmRow(row);
+const namedRow = (rows: Project[], name: string): Project | undefined => rows.find(row => notDmRow(row) && row.name === name);
+const isDmChatOf = (row: Project, chatId: string): boolean => Boolean(row.dm?.people) && Object.hasOwn(row.dm!.people, chatId);
+/** The row of `chatId`, its own id first; a p2p chat_id maps to the private-chat row. Every write by chat id goes through here. */
+function rowIndexOf(rows: Project[], chatId: string): number {
+  const own = rows.findIndex(row => row.chatId === chatId);
+  return own === -1 ? rows.findIndex(row => isDmChatOf(row, chatId)) : own;
+}
+/** Readers of a p2p chat get its real chat_id in the row, so turns, sessions and tasks carry it; `oc_dm_<appId>` gets the row as stored. */
+function rowOfChat(rows: Project[], chatId: string): Project | undefined {
+  const row = rows[rowIndexOf(rows, chatId)];
+  return row?.dm && row.chatId !== chatId ? { ...row, chatId } : row;
 }
 
 /**
@@ -210,14 +234,8 @@ interface StoreFile {
 
 const FILE_VERSION = 1;
 
+/** Every row, the private chat's too: what the writers here read and write back, and the chat id lookups. */
 async function read(file = paths.projectsFile): Promise<Project[]> {
-  return listProjectsIn(file);
-}
-
-/** 读取指定 projects.json（绝对路径）。Web 控制台 / supervisor 跨 bot 聚合视图
- * 专用——daemon 进程内绝不可用 useBotDir 全局切目录，显式路径才安全。文件缺失
- * 视为空注册表（与当前 bot 路径同语义）。 */
-export async function listProjectsIn(file: string): Promise<Project[]> {
   try {
     const text = await readFile(file, 'utf8');
     return storedRows(JSON.parse(text)).map(foldGuestTier);
@@ -225,6 +243,13 @@ export async function listProjectsIn(file: string): Promise<Project[]> {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw err;
   }
+}
+
+/** 读取指定 projects.json（绝对路径）。Web 控制台 / supervisor 跨 bot 聚合视图
+ * 专用——daemon 进程内绝不可用 useBotDir 全局切目录，显式路径才安全。文件缺失
+ * 视为空注册表（与当前 bot 路径同语义）。只有群：私聊那一行不在里面（{@link isDmRow}）。 */
+export async function listProjectsIn(file: string): Promise<Project[]> {
+  return (await read(file)).filter(notDmRow);
 }
 
 /** The rows of a parsed projects.json, as stored (no fold); any malformed row fails the whole file. */
@@ -263,7 +288,7 @@ export async function splitTierChats(file = paths.projectsFile): Promise<Map<str
   const split = new Map<string, PermissionMode>();
   for (const row of Array.isArray(stored.projects) ? stored.projects : []) {
     const raw = row as Project & { guestMode?: unknown };
-    if (!raw || typeof raw.chatId !== 'string') continue;
+    if (!raw || typeof raw.chatId !== 'string' || isDmRow(raw)) continue;
     if ((raw.guestMode != null && raw.guestMode !== effectiveMode(raw)) || pending.has(raw.chatId)) split.set(raw.chatId, effectiveMode(foldGuestTier(raw)));
   }
   return split;
@@ -438,6 +463,7 @@ export async function setTierMergePending(chats: readonly string[]): Promise<voi
  * the daemon does not read yet (`projectId`, `migration`): its callers add keys and leave a row's directories alone.
  * The write is synced before and after the rename: the startup migration rewrites every bot's file once, stopped
  * bots' too, and a power cut must not leave one of them empty (an empty file stops that bot from starting).
+ * The private-chat row is not handed over, and is written back as it was: its callers migrate groups.
  */
 export function withStoredRows(target: RegistryLocation, operation: (rows: Project[]) => Promise<boolean>): Promise<void> {
   return ownProjects(async location => {
@@ -445,16 +471,16 @@ export function withStoredRows(target: RegistryLocation, operation: (rows: Proje
     if (stored.projects === undefined) return;
     const rows = storedRows(stored);
     const previous: Record<string, unknown> = JSON.parse(JSON.stringify(stored));
-    if (await operation(rows)) await writeStored(location, { ...stored, version: FILE_VERSION, projects: rows }, previous, undefined, true);
+    if (await operation(rows.filter(notDmRow))) await writeStored(location, { ...stored, version: FILE_VERSION, projects: rows }, previous, undefined, true);
   }, target);
 }
 
 export async function listProjects(): Promise<Project[]> {
-  return read();
+  return listProjectsIn(paths.projectsFile);
 }
 
-export async function getProjectByChatId(chatId: string): Promise<Project | undefined> {
-  return (await read()).find((p) => p.chatId === chatId);
+export async function getProjectByChatId(chatId: string, file?: string): Promise<Project | undefined> {
+  return rowOfChat(await read(file), chatId);
 }
 
 /** {@link getProjectByChatId} read synchronously, for the scheduled-task gate (bot/schedule/scheduler.ts), which decides in place. */
@@ -464,11 +490,62 @@ export function getProjectByChatIdSync(chatId: string): Project | undefined {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw err;
   }
-  return storedRows(JSON.parse(text)).map(foldGuestTier).find((p) => p.chatId === chatId);
+  return rowOfChat(storedRows(JSON.parse(text)).map(foldGuestTier), chatId);
 }
 
 export async function getProjectByName(name: string): Promise<Project | undefined> {
-  return (await read()).find((p) => p.name === name);
+  return namedRow(await read(), name);
+}
+
+/** The bot's private-chat row, as stored. */
+export async function dmProject(file?: string): Promise<Project | undefined> {
+  return (await read(file)).find(isDmRow);
+}
+
+/** The person whose private chat `chatId` is, as `row` remembers them. */
+export const dmPersonOf = (row: Pick<Project, 'dm'> | undefined, chatId: string): DmPerson | undefined =>
+  row?.dm && Object.hasOwn(row.dm.people, chatId) ? row.dm.people[chatId] : undefined;
+
+/** Everyone who has talked to the bot in private, each once, earliest first, with the chat they used last: a person can have an old chat too. */
+export async function dmPersonList(file?: string): Promise<(DmPerson & { chatId: string })[]> {
+  const people = new Map<string, DmPerson & { chatId: string; last: number }>();
+  for (const [chatId, person] of Object.entries((await dmProject(file))?.dm?.people ?? {})) {
+    const known = people.get(person.openId);
+    const name = person.name ?? known?.name;
+    const newest = !known || person.at >= known.last;
+    people.set(person.openId, { openId: person.openId, ...(name ? { name } : {}), at: Math.min(person.at, known?.at ?? person.at), chatId: newest ? chatId : known.chatId, last: Math.max(person.at, known?.last ?? person.at) });
+  }
+  return [...people.values()].sort((a, b) => a.at - b.at || a.openId.localeCompare(b.openId)).map(({ last: _last, ...person }) => person);
+}
+
+/** Add the private-chat row unless the bot has one; the row the file ends up with. */
+export function addDmProject(input: Project, target?: RegistryLocation): Promise<Project> {
+  const row = structuredClone(input);
+  return ownProjects(async location => {
+    const projects = await read(location.file);
+    const existing = projects.find(isDmRow);
+    if (existing) return existing;
+    projects.push(row);
+    return write(location, projects, row);
+  }, target);
+}
+
+/**
+ * Remember which private chat is whose: written before a person's first turn, so a scheduled task finds its way back
+ * from the chat id. Writes nothing when the row already says so.
+ */
+export async function rememberDmChat(chatId: string, openId: string, name?: string, unionId?: string): Promise<void> {
+  return ownProjects(async location => {
+    const projects = await read(location.file);
+    const row = projects.find(isDmRow);
+    if (!row?.dm) throw new Error('私聊项目不存在');
+    row.dm.people ??= {};
+    const known = Object.hasOwn(row.dm.people, chatId) ? row.dm.people[chatId] : undefined;
+    if (known?.openId === openId && (name === undefined || known.name === name) && (unionId === undefined || known.unionId === unionId)) return;
+    const shown = name ?? known?.name, union = unionId ?? known?.unionId;
+    row.dm.people[chatId] = { openId, ...(union === undefined ? {} : { unionId: union }), ...(shown === undefined ? {} : { name: shown }), at: known?.at ?? Date.now() };
+    await write(location, projects);
+  });
 }
 
 /** Add a project. Throws if the name — or the bound chat — is already taken.
@@ -478,7 +555,7 @@ export async function addProject(input: Project, target?: RegistryLocation): Pro
   const p = structuredClone(input);
   return ownProjects(async location => {
     const projects = await read(location.file);
-    if (projects.some((x) => x.name === p.name)) {
+    if (namedRow(projects, p.name)) {
       throw new Error(`项目名「${p.name}」已存在`);
     }
     if (p.chatId) {
@@ -561,7 +638,7 @@ export function bindProject(input: ProjectBinding, prepareNew: (previous?: Previ
       }
       throw new Error(`该群已绑定为项目「${existing.name}」，现有文件夹、后端和会话方式不可修改，免 @ 请在群设置里改`);
     }
-    if (projects.some(project => project.name === binding.name)) throw new Error(`项目名「${binding.name}」已存在`);
+    if (namedRow(projects, binding.name)) throw new Error(`项目名「${binding.name}」已存在`);
     const prepared = await prepareNew(previous);
     if (binding.cwd.kind === 'existing' && prepared.cwd !== binding.cwd.path) throw new Error('工作目录已改变，请重新选择');
     const project: Project = { ...prepared, name: binding.name, chatId: binding.chatId,
@@ -583,7 +660,7 @@ export async function updateProject(
   const capturedPatch = typeof patch === 'function' ? patch : structuredClone(patch);
   return ownProjects(async location => {
     const projects = await read(location.file);
-    const p = projects.find((x) => x.name === name);
+    const p = namedRow(projects, name);
     if (!p) return;
     const actual = typeof capturedPatch === 'function' ? capturedPatch(p) : capturedPatch;
     const target = p as unknown as Record<string, unknown>;
@@ -599,8 +676,9 @@ export async function updateProject(
 export async function removeProject(name: string, beforeRemove?: (project: Project) => void): Promise<Project | undefined> {
   return ownProjects(async location => {
     const projects = await read(location.file);
-    const idx = projects.findIndex((p) => p.name === name);
-    if (idx === -1) return undefined;
+    const named = namedRow(projects, name);
+    if (!named) return undefined;
+    const idx = projects.indexOf(named);
     beforeRemove?.(projects[idx]!);
     const [removed] = projects.splice(idx, 1);
     const previous = await readStored(location.file);
@@ -621,7 +699,18 @@ export async function removeProject(name: string, beforeRemove?: (project: Proje
 export async function mutateProject(name: string, mutate: (project: Project) => void | Promise<void>, options?: ProjectCommitOptions, location?: RegistryLocation): Promise<Project> {
   return ownProjects(async location => {
     const projects = await read(location.file);
-    const project = projects.find(item => item.name === name);
+    const project = namedRow(projects, name);
+    if (!project) throw new Error('项目不存在');
+    await mutate(project);
+    return write(location, projects, project, options);
+  }, location);
+}
+
+/** {@link mutateProject} by chat id, for the row a name cannot reach: the private chat, by `oc_dm_<appId>` or a p2p chat_id. */
+export async function mutateProjectByChatId(chatId: string, mutate: (project: Project) => void | Promise<void>, options?: ProjectCommitOptions, location?: RegistryLocation): Promise<Project> {
+  return ownProjects(async location => {
+    const projects = await read(location.file);
+    const project = projects[rowIndexOf(projects, chatId)];
     if (!project) throw new Error('项目不存在');
     await mutate(project);
     return write(location, projects, project, options);
@@ -632,7 +721,7 @@ export async function mutateProject(name: string, mutate: (project: Project) => 
 export async function resetProjectDirectoryOverride(name: string, key: keyof DirectorySettings): Promise<void> {
   return ownProjects(async location => {
     const projects = await read(location.file);
-    const project = projects.find(item => item.name === name);
+    const project = namedRow(projects, name);
     if (!project?.directories || !Object.hasOwn(project.directories, key)) return;
     // A row of a library project mirrors it: the override goes in the project (admin/library.ts `resetWorkspaceOverride`).
     if (isProjectId(project.projectId)) throw new Error('这个群的工作区归项目管，请改项目的工作区（library.workspace），不要直接改群的目录');

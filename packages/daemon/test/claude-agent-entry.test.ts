@@ -82,7 +82,7 @@ it.each([0, 255, 256])('keeps streamed/full duplicate origins in their original 
     yield { type: 'assistant', message: { content: [block] } } as SDKMessage;
   })();
   const write = vi.fn(async () => 'changed');
-  const registry = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true,
+  const registry = createAgentEntries({ appId: 'fixture', isAdmin: () => true,
     tools: [{ name: 't_set', class: 'settings', description: 'test', input: z.object({}),
       run: async (_args, ctx) => { if (!ctx.commit) throw Error('missing commit'); return ctx.commit(async guard => { guard(); return write(); }); } }] });
   const grant = registry.issue({ kind: 'p2p', chatId: 'dm' });
@@ -115,7 +115,7 @@ it.each([0, 255, 256])('keeps streamed/full duplicate origins in their original 
 
 it.each(['group', 'doc', 'p2p'] as const)('registers the shared %s discovery list with Claude without exposing forbidden writers', async kind => {
   const write = vi.fn(async () => 'changed');
-  const registry = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true,
+  const registry = createAgentEntries({ appId: 'fixture', isAdmin: () => true,
     tools: [
       { name: 't_read', class: 'read', description: 'read', input: z.object({}), run: async () => 'read' },
       { name: 't_set', class: 'settings', description: 'write', input: z.object({}), run: write },

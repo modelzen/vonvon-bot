@@ -3,7 +3,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {formatTime, type AdminSetupStatus, type Agent, type ApplicationCrashes, type DesktopSnapshot, type NotReplied, type ToolState} from '@vonvon/protocol';
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
-import {crashBars, DiagnosticsPanel, scopeView, setupView} from '../src/management/DiagnosticsPanel';
+import {crashBars, DiagnosticsPanel, scopeView, setupView, toolScopeView} from '../src/management/DiagnosticsPanel';
 import {diagnosticsSection, findEntries, searchEntries, settingAnchor} from '../src/search';
 
 const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
@@ -175,6 +175,20 @@ it('merges the console\'s missing scopes with the ones Feishu refused at runtime
   expect(renderToStaticMarkup(<>{scopeView({scopes: {grantUrl: 'x'}} as AdminSetupStatus, agent, now).badge}</>)).toContain('暂时读不到已开通的权限');
   expect(renderToStaticMarkup(<>{scopeView(undefined, agent, now, '应用凭据不对').badge}</>)).toContain('读取失败');
   expect(renderToStaticMarkup(<>{scopeView({scopes: {missingRequired: [], missingOptional: [], grantUrl: 'x'}} as AdminSetupStatus, agent, now).badge}</>)).toContain('没有缺的');
+});
+
+it('lists what the Feishu tools lack as optional, with their own link', () => {
+  const status = {scopes: {missingRequired: [], missingOptional: [], missingTools: ['docs:document.content:read', 'docx:document:readonly', 'search:message'], grantUrl: 'x', toolsGrantUrl: 'https://open.feishu.cn/app/cli_diag/auth?q=y'}} as AdminSetupStatus;
+  const view = toolScopeView(status)!;
+  const html = renderToStaticMarkup(<>{view.badge}<ul>{view.lines}</ul></>);
+  expect(html).toContain('缺 3 项');
+  expect(html.match(/读不了文档和知识库/g)).toHaveLength(1);
+  expect(html).toContain('搜不了消息');
+  expect(html).toContain('发布新版本');
+  expect(view.url).toBe('https://open.feishu.cn/app/cli_diag/auth?q=y');
+  expect(renderToStaticMarkup(<>{toolScopeView({scopes: {missingTools: [], grantUrl: 'x'}} as AdminSetupStatus)!.badge}</>)).toContain('没有缺的');
+  expect(toolScopeView({scopes: {grantUrl: 'x'}} as AdminSetupStatus)).toBeUndefined();
+  expect(renderToStaticMarkup(<>{scopeView(status, agent, now).badge}</>)).toContain('没有缺的');
 });
 
 it('says 全部完成 with the optional events the checklist warns about, and leaves the scope warning to 缺的权限', () => {

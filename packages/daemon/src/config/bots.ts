@@ -275,16 +275,7 @@ export function withBotGroupBinding<T>(expected: BotIdentity, group: { chatId: s
     const key = groupAllocationKey({ ...identity, chatId: input.chatId });
     const previous = registry.groupAllocations?.[key];
     return operation({ allocatedPath: previous?.state === 'ready' ? previous.namespaceRoot : undefined, prepareDefault: () => directoryError(entry.name, async () => {
-      let bot = registry.allocations?.[entry.appId];
-      if (!bot) {
-        if (Object.keys(registry.allocations ?? {}).length >= 4096) throw new Error('Bot allocation limit reached');
-        bot = await planAllocation({ ...entry, handle: entry.name, parent: input.projectsRootDir, dataDir: paths.appDir }, registry.allocations ?? {});
-        registry.allocations = { ...registry.allocations, [entry.appId]: bot };
-        await publish(registry);
-      }
-      validateAccountClaim(registry, bot, entry);
-      const readyBot = await materializeBot(registry, bot);
-      await publish(registry);
+      const readyBot = await readyBotDirectory(registry, entry, input.projectsRootDir);
       let container = registry.groupContainers?.[entry.appId];
       if (!container) {
         container = { version: 1, appId: entry.appId, tenant: entry.tenant,
@@ -313,6 +304,42 @@ export function withBotGroupBinding<T>(expected: BotIdentity, group: { chatId: s
       return { cwd: claim.namespaceRoot, blank: true as const, directories: { workspaces: { primary: claim.namespaceRoot, additional: [] } } };
     }) });
   });
+}
+
+/**
+ * The bot's private-chat folder, `dm` in its stable directory (dm-agent 4.1; made on first use, like `groups`, so a bot
+ * without a group gets its directory here). A fixed name under a directory only the bot allocates in, so unlike a
+ * group's it needs no record of its own. A bot with no directory yet takes it under `projectsRootDir`, as its first
+ * group would have. Making it again is a no-op.
+ */
+export function ensureBotDmDirectory(expected: BotIdentity, projectsRootDir: string): Promise<string> {
+  const identity = { ...expected };
+  return ownBots(async registry => {
+    const entry = registry.bots.find(bot => bot.appId === identity.appId);
+    if (!entry || !sameIdentity(entry, identity)) throw new Error('机器人已移除或重新注册，请重启');
+    return directoryError(entry.name, async () => {
+      const readyBot = await readyBotDirectory(registry, entry, projectsRootDir);
+      const folder = join(readyBot.namespaceRoot, 'dm');
+      await ensureDurableDirectory(folder);
+      await verifyDirectory(readyBot, paths.appDir);
+      return folder;
+    });
+  });
+}
+
+/** The bot's stable directory, allocated under `projectsRootDir` when it has none, and checked or made; published. */
+async function readyBotDirectory(registry: BotsRegistry, entry: BotEntry, projectsRootDir: string): Promise<Extract<Allocation, { state: 'ready' }>> {
+  let bot = registry.allocations?.[entry.appId];
+  if (!bot) {
+    if (Object.keys(registry.allocations ?? {}).length >= 4096) throw new Error('Bot allocation limit reached');
+    bot = await planAllocation({ ...entry, handle: entry.name, parent: projectsRootDir, dataDir: paths.appDir }, registry.allocations ?? {});
+    registry.allocations = { ...registry.allocations, [entry.appId]: bot };
+    await publish(registry);
+  }
+  validateAccountClaim(registry, bot, entry);
+  const ready = await materializeBot(registry, bot);
+  await publish(registry);
+  return ready;
 }
 
 /**

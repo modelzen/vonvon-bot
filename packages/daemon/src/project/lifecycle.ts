@@ -3,7 +3,7 @@ import {prepareNewGroupSettings} from './initial-settings';
 import { pendingGroupsFile, retireBoundPendingGroup } from './pending-groups';
 import { realpath, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import type { LarkChannel } from '@larksuiteoapi/node-sdk';
+import type { Client, LarkChannel } from '@larksuiteoapi/node-sdk';
 import { paths } from '../config/paths';
 import { botPaths } from '../config/paths';
 import { assertBotIdentity, withBotGroupBinding, type BotIdentity } from '../config/bots';
@@ -47,6 +47,14 @@ export function bindModeFor(backend?: string): PermissionMode | undefined {
   return undefined;
 }
 
+/**
+ * A person as the Bot making the group can name them. An open_id is its app's; another Bot of this computer gets the
+ * union_id, which the same developer's apps share (dm-agent 6.4).
+ */
+export interface GroupInvitee { idType: 'open_id' | 'union_id'; id: string }
+/** dm-agent 6.4: a person another Bot could not pull in, so no group. */
+export const cannotInvite = (bot: string): string => `Bot ${bot} 拉不了你。可以你自己建群、把 ${bot} 拉进去，再让我绑定。`;
+
 export interface CreateProjectInput {
   /** Feishu's dedupe key for this one creation (chat.create `uuid`, at most 50 characters): the web makes one per
    * RPC, the DM one per card click. Nothing retries chat.create; a retry would have to reuse it. */
@@ -55,8 +63,10 @@ export interface CreateProjectInput {
   /** The registered bot this process runs as. Checked before Feishu is called; the default directory is under it. */
   bot: BotIdentity;
   name: string;
-  /** DM sender open_id — invited to the new group + set as a member. */
-  ownerOpenId: string;
+  /** Who the new group is for: invited, then made its admin. */
+  invitee: GroupInvitee;
+  /** This Bot's name, for the refusal of an invitee it cannot pull in. */
+  botName?: string;
   /** when set, bind this existing folder; otherwise create a blank project. */
   existingPath?: string;
   /** Join this library project (its id) instead of making one: the group uses its workspace, `existingPath` is not used. */
@@ -203,6 +213,25 @@ async function newBindingProject(bot: BotIdentity, group: { chatId: string; name
     workspace: { primary, additional: [...additional], ...(repositories ? { repositories: [...repositories] } : {}) } });
 }
 
+const botLabel = (input: Pick<CreateProjectInput, 'bot' | 'botName'>): string => input.botName ?? input.bot.appId;
+
+/**
+ * dm-agent 6.4: a union_id of another organization can come back as a group without the person, a group nobody asked for.
+ * Asked before the row is saved: then the group goes and the creation is refused. A check that fails says nothing of
+ * that, so the group stands as Feishu answered.
+ */
+async function refuseIfLeftOut(client: Client, chatId: string, input: CreateProjectInput): Promise<void> {
+  if (input.invitee.idType !== 'union_id') return;
+  let left = false;
+  try {
+    const reply = await client.im.v1.chatMembers.get({ path: { chat_id: chatId }, params: { member_id_type: 'union_id', page_size: 100 } });
+    left = reply.code === 0 && Array.isArray(reply.data?.items) && !reply.data.has_more && !reply.data.items.some(member => member.member_id === input.invitee.id);
+  } catch (error) { log.fail('project', error, { phase: 'invitee-check', requestId: input.requestId }); }
+  if (!left) return;
+  await client.im.v1.chat.delete({ path: { chat_id: chatId } }).catch((error: unknown) => log.fail('project', error, { phase: 'invitee-disband', chatId }));
+  throw new CreationRefusedError(cannotInvite(botLabel(input)));
+}
+
 /**
  * Create a project: check everything local, create a bound Feishu group (bot
  * stays owner, creator invited + promoted to admin), save its row at once, then
@@ -246,17 +275,20 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
     let chatId: string | undefined;
     try {
       const res = await client.im.v1.chat.create({
-        params: { user_id_type: 'open_id', uuid: input.requestId },
-        data: { name, user_id_list: [input.ownerOpenId] },
+        params: { user_id_type: input.invitee.idType, uuid: input.requestId },
+        data: { name, user_id_list: [input.invitee.id] },
       });
       // The SDK resolves a 2xx with Feishu's error code in it.
       if (typeof res.code === 'number' && res.code !== 0) throw Object.assign(new Error(`chat.create code ${res.code}`), { response: { status: 200, data: res } });
       chatId = res.data?.chat_id;
     } catch (error) {
       log.fail('project', error, { phase: 'create', requestId: input.requestId });
-      throw creationFailure(error, dispatched);
+      const failure = creationFailure(error, dispatched);
+      // Feishu's words stay beside ours: not every refusal of a union_id is the other organization's.
+      throw input.invitee.idType === 'union_id' && failure instanceof CreationRefusedError && dispatched ? new CreationRefusedError(`${cannotInvite(botLabel(input))}（${failure.message}）`) : failure;
     }
     if (!chatId) throw new CreationOutcomeUnknownError(new Error('chat.create returned no chat_id'));
+    await refuseIfLeftOut(client, chatId, input);
 
     // Saved before anything else, so a stuck admin call cannot keep a created group out of projects.json.
     let saved: Project;
@@ -286,7 +318,7 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
     // announcement (top banner) and onboarding (welcome card / Pin / tab). All
     // best-effort: the group is usable even if they fail or run out of budget.
     await client.im.v1.chatManagers
-      .addManagers({ path: { chat_id: chatId }, params: { member_id_type: 'open_id' }, data: { manager_ids: [input.ownerOpenId] } })
+      .addManagers({ path: { chat_id: chatId }, params: { member_id_type: input.invitee.idType }, data: { manager_ids: [input.invitee.id] } })
       .catch((err) => log.fail('project', err, { phase: 'add-manager' }));
     await setAnnouncement({ rawClient: client }, saved, limits).catch((err) => log.fail('project', err, { phase: 'announcement' }));
     await onboardGroup({ rawClient: client }, saved).catch((err) => log.fail('project', err, { phase: 'onboard' }));

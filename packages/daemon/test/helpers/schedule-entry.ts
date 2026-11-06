@@ -50,7 +50,7 @@ export async function scheduleFixture(opts: { tasks?: StoredTask[]; place?: Agen
   const commands = createScheduleCommands({ store, scheduler, botId: 'bot-test', now: () => now, hostTimeZone: () => HOST });
   const core = commands.execute;
   const execute = vi.spyOn(commands, 'execute');
-  const entries = createAgentEntries({ appId: 'bot-test', isAdmin: id => id === OWNER || id === ADMIN, isOwner: id => id === OWNER,
+  const entries = createAgentEntries({ appId: 'bot-test', isAdmin: id => id === OWNER || id === ADMIN,
     tools: [...createScheduleTools({ commands, now: () => now, hostTimeZone: () => HOST }), ...opts.tools ?? []] });
   const entry = entries.issue(opts.place ?? { kind: 'group', chatId: G });
   const thread = agentThread();

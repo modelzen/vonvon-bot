@@ -41,7 +41,7 @@ beforeEach(async () => {
   for (const [chatId, enabled] of [['oc_a', true], ['oc_off', false]] as const) {
     await registry.addProject({ name: chatId, chatId, cwd: join(root, 'workspace'), blank: false, createdAt: 1, kind: 'single', enabled });
   }
-  const cfg: AppConfig = { accounts: { app: { id: 'cli_schedule_pause', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'cli_schedule_pause', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] } } };
   o = (await import('../src/bot/handle-message')).createOrchestrator({ send } as never, cfg, join(root, 'workspace'));
 });
 afterEach(async () => {
@@ -113,6 +113,28 @@ it('a creator without an open id is not at-ed', async () => {
   const store = await drive(task({ createdBy: { via: 'desktop' } }));
   await vi.waitFor(() => expect(store.get('st_00000000000000a1')?.state).toBe('paused'));
   await vi.waitFor(() => expect(send).toHaveBeenCalledExactlyOnceWith('oc_a', { post: { zh_cn: { content: [[{ tag: 'text', text: head + tail }]] } } }));
+});
+
+// dm-agent 6.4. main 必败: a task another Bot's private chat made said nothing of who made it
+it('a creator known by name alone is named, not at-ed', async () => {
+  const store = await drive(task({ createdBy: { via: 'cli', name: '<at user_id="all"></at>张三' } }));
+  await vi.waitFor(() => expect(store.get('st_00000000000000a1')?.state).toBe('paused'));
+  await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+  const said = JSON.stringify(send.mock.calls);
+  expect(said).toContain('张三 看一下');
+  expect(said).not.toContain('"tag":"at"');
+  expect(said).not.toContain('<at');
+});
+
+// main 必败: a private chat has only its person to tell, and its tasks are not in a group's settings
+it('a private chat\'s notice has no @, and says where it is resumed there', async () => {
+  const registry = await import('../src/project/registry');
+  await registry.addDmProject({ name: '私聊', chatId: registry.dmChatId('cli_schedule_pause'), cwd: join(root, 'workspace'), blank: true, createdAt: 1, kind: 'single', mode: 'full', dm: { people: {} } });
+  await registry.rememberDmChat('oc_p2p', 'ou_owner', '张三');
+  const store = await drive(task({ chatId: 'oc_p2p', createdBy: { via: 'chat', openId: 'ou_owner', name: '张三', role: 'admin' } }));
+  await vi.waitFor(() => expect(store.get('st_00000000000000a1')?.state).toBe('paused'));
+  await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+  expect(send).toHaveBeenCalledWith('oc_p2p', { post: { zh_cn: { content: [[{ tag: 'text', text: `${head}看一下：后端失败。跟我说一声，或者到 Bot 页的"任务"里能恢复。` }]] } } });
 });
 
 it('a notice that was not sent stays pending and goes out at the next tick', async () => {

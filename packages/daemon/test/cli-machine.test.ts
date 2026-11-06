@@ -306,6 +306,17 @@ it('context show asks for a group or the comments and prints both columns', asyn
   expect(contextPreview).toHaveBeenCalledTimes(2);
 });
 
+// dm-agent 10 (D4). main 必败: a private chat had no 模型看到什么
+it('context show --dm asks for that person and leaves out what a private chat does not have', async () => {
+  const contextPreview = vi.fn(async () => ({ ...preview, next: { ...preview.next, sections: [{ key: 'dmMemory', version: 'v3', chars: 10, items: 2, branches: 1 }], items: { bot: 0, trusted: 1, untrusted: 1 } } }));
+  const h = harness({ snapshot: async () => snapshot([agent('cli_a')]), contextPreview });
+  await runContextShow({ dm: 'ou_a' }, h.io(), h.daemon);
+  expect(contextPreview).toHaveBeenCalledWith({ type: 'get', agentId: 'cli_a', place: { kind: 'dm', openId: 'ou_a' } });
+  expect(h.out().split('\n')).toContain('  私聊记忆  可信 1 条 / 待确认 1 条（1 个分支）');
+  expect(h.out()).not.toContain('智能判断');
+  expect(await caught(runContextShow({ dm: 'ou_a', group: '研发群' }, h.io(), h.daemon))).toMatchObject({ kind: 'bad-args' });
+});
+
 // main 必败: there was no secrets test
 it('secrets test: busy is the right key (0), auth fails with its outcome, a session is refused before connecting', async () => {
   const outcome = { value: 'busy' as 'busy' | 'auth' };

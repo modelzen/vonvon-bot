@@ -1,7 +1,7 @@
 import type { AdminService } from '../admin/service';
 import { bridgeVersion } from '../core/version';
 
-export async function readAdminState(service: Pick<AdminService, 'listBots' | 'listProjects'>) {
+export async function readAdminState(service: Pick<AdminService, 'listBots' | 'listProjects' | 'dmRow'>) {
   const bots = await service.listBots();
   const out = [];
   let remainingAvatarBytes = 2_000_000;
@@ -15,7 +15,11 @@ export async function readAdminState(service: Pick<AdminService, 'listBots' | 'l
   }
   for (const bot of bots) {
     const b = withAvatarBudget(bot);
-    try { out.push({ ...b, projects: (await service.listProjects(b.appId)).map(withAvatarBudget) }); }
+    try {
+      const projects = (await service.listProjects(b.appId)).map(withAvatarBudget);
+      const dm = await service.dmRow?.(b.appId);
+      out.push({ ...b, projects, ...(dm ? { dm } : {}) });
+    }
     catch (error) { out.push({ ...b, projects: [], projectsError: error instanceof Error ? error.message : '项目读取失败' }); }
   }
   return { version: bridgeVersion(), generatedAt: Date.now(), bots: out };

@@ -39,7 +39,7 @@ function backend(id: string, ask?: { request: AskRequest; respond?: AgentRun['re
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 it('the next comment applies model changes to the same native session and backend changes to a new session', async () => {
   const codex = backend('codex-appserver'); const claude = backend('claude-agent');
-  const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, comments: { backend: 'codex-appserver', model: 'one', effort: 'low' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, comments: { backend: 'codex-appserver', model: 'one', effort: 'low' } } };
   const orchestrator = createOrchestrator({} as never, cfg, paths.appDir);
   const event = (replyId: string) => ({ fileType: 'docx', fileToken: 'fixture-doc', commentId: 'comment', replyId, mentionedBot: true, operator: { openId: 'ou_owner' } });
   try {
@@ -63,7 +63,7 @@ it('cloud comment asks resolve unavailable immediately with zero card or notific
   const respond = vi.fn<NonNullable<AgentRun['respondToAsk']>>(() => new Promise(() => {}));
   backend('codex-appserver', { request: { id: 'comment-permission', kind: 'permission', permissionMode: 'full', title: '允许吗', detail: 'need approval', acceptedConsequence: 'continue', declinedConsequence: 'deny' }, respond });
   const network = vi.fn(() => { throw new Error('unexpected network'); });
-  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, comments: { backend: 'codex-appserver' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, comments: { backend: 'codex-appserver' } } };
   const orchestrator = createOrchestrator({ send: network, rawClient: { cardkit: { v1: { card: { create: network } } } } } as never, cfg, paths.appDir);
   try {
     await orchestrator.onComment({ fileType: 'docx', fileToken: 'ask-fixture-doc', commentId: 'ask-comment', replyId: 'ask', mentionedBot: true, operator: { openId: 'ou_owner' } } as never);
@@ -85,7 +85,7 @@ it('a late comment response rejection cannot interrupt the next run on the reuse
     else { yield { type: 'turn_started', turnId: 'next' }; await next; }
     yield { type: 'done', turnId: 'done' };
   })() });
-  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, comments: { backend: 'codex-appserver' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, comments: { backend: 'codex-appserver' } } };
   const orchestrator = createOrchestrator({} as never, cfg, paths.appDir);
   const event = { fileType: 'docx', fileToken: 'late-doc', commentId: 'late-comment', mentionedBot: true, operator: { openId: 'ou_owner' } };
   try {
@@ -104,7 +104,7 @@ it('a missing comment response port recycles the origin even before a turn id ex
   const provider = backend('codex-appserver', { request, turnId: () => undefined, events: () => (async function* (): AsyncGenerator<AgentEvent> {
     yield { type: 'ask', request }; await new Promise<void>(() => {});
   })() });
-  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, comments: { backend: 'codex-appserver' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, comments: { backend: 'codex-appserver' } } };
   const orchestrator = createOrchestrator({} as never, cfg, paths.appDir);
   try {
     await orchestrator.onComment({ fileType: 'docx', fileToken: 'broken-doc', commentId: 'broken-comment', replyId: 'one', mentionedBot: true, operator: { openId: 'ou_owner' } } as never);
@@ -114,7 +114,7 @@ it('a missing comment response port recycles the origin even before a turn id ex
 
 it('s36d2: with no comment backend a comment runs on the bot default backend and its model, still with no tier', async () => {
   const codex = backend('codex-appserver'); const claude = backend('claude-agent');
-  const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, defaults: { backend: 'claude-agent', model: { kind: 'catalog', id: 'two', effort: 'high' } } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, defaults: { backend: 'claude-agent', model: { kind: 'catalog', id: 'two', effort: 'high' } } } };
   const orchestrator = createOrchestrator({} as never, cfg, paths.appDir);
   try {
     await orchestrator.onComment({ fileType: 'docx', fileToken: 'fixture-doc', commentId: 'inherit', replyId: 'one', mentionedBot: true, operator: { openId: 'ou_owner' } } as never);
@@ -129,7 +129,7 @@ it('s36d2: with no comment backend a comment runs on the bot default backend and
 
 it('s36d2: saving a comment model from the DM card leaves an inherited backend unset, and writes one chosen away from it', async () => {
   backend('codex-appserver'); backend('claude-agent');
-  const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] } } };
   await saveConfig(cfg);
   const orchestrator = createOrchestrator({ send: async () => ({}) } as never, cfg, paths.appDir);
   const submit = (b: string, model: string) => orchestrator.dispatcher.handle({ messageId: `om_${b}_${model}`, chatId: 'oc_dm', operator: { openId: 'ou_owner' },
@@ -153,7 +153,7 @@ it('redacts a split token in a cloud comment reply through the orchestrator', as
       yield { type: 'done', turnId: 'turn' };
     })(),
   });
-  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, comments: { backend: 'codex-appserver' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, comments: { backend: 'codex-appserver' } } };
   const orchestrator = createOrchestrator({} as never, cfg, paths.appDir);
   try {
     await orchestrator.onComment({ fileType: 'docx', fileToken: 'redact-doc', commentId: 'redact-comment', replyId: 'one', mentionedBot: true, operator: { openId: 'ou_owner' } } as never);
@@ -162,10 +162,24 @@ it('redacts a split token in a cloud comment reply through the orchestrator', as
   } finally { await orchestrator.shutdown(); }
 });
 
+it('holds a turn open for a comment\'s run, as its person, so the document tools answer', async () => {
+  backend('codex-appserver');
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, comments: { backend: 'codex-appserver' } } };
+  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true });
+  const openTurn = vi.spyOn(entries, 'openTurn');
+  const orchestrator = createOrchestrator({} as never, cfg, paths.appDir, undefined, { entries });
+  try {
+    await orchestrator.onComment({ fileType: 'docx', fileToken: 'fixture-doc', commentId: 'turn-comment', replyId: 'one', mentionedBot: true, operator: { openId: 'ou_owner' } } as never);
+    expect(openTurn).toHaveBeenCalledOnce();
+    expect(openTurn.mock.calls[0]![1]).toMatchObject({ requesterOpenId: 'ou_owner', requesterKind: 'user', triggerMessageId: 'one' });
+    expect(openTurn.mock.results[0]!.value.presence).toBe('human');
+  } finally { await orchestrator.shutdown(); }
+});
+
 it('binds document grants to the resolved document for start, resume and failed-resume fallback', async () => {
   const codex = backend('codex-appserver');
-  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, comments: { backend: 'codex-appserver', model: 'one' } } };
-  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true });
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, comments: { backend: 'codex-appserver', model: 'one' } } };
+  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true });
   const issue = vi.spyOn(entries, 'issue');
   const orchestrator = createOrchestrator({} as never, cfg, paths.appDir, undefined, { entries });
   const event = (replyId: string) => ({ fileType: 'docx', fileToken: 'unresolved-token', commentId: 'entry-document', replyId, mentionedBot: true, operator: { openId: 'ou_owner' } });

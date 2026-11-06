@@ -19,7 +19,7 @@ const section = (stored: object) => ({ stored, effective: stored, revision: `rev
 const voice = { enabled: true, feishu: { state: 'granted', message: '已开通' }, result: '', grantUrl: '' };
 const agentView = (over: object = {}) => ({
   scope: { kind: 'agent', botId: 'cli_a' }, sections: {}, ownerOpenId: 'ou_owner',
-  administrators: { feishu: { ownerOpenId: 'ou_owner', adminOpenIds: ['ou_fs'] }, scannerOpenId: 'ou_owner', openIds: ['ou_owner', 'ou_local'], revision: 'a1' },
+  administrators: { openIds: ['ou_owner', 'ou_local'], revision: 'a1' },
   voice, commentInstructions: { content: { kind: 'default', text: '默认的评论指令' }, revision: 'c1', maxEditLength: 30000 },
   ...over,
 });
@@ -46,6 +46,52 @@ function harness(settings: (request: SettingsRequest) => unknown) {
 }
 const pipe = (text: string): Stdin => ({ isTTY: false, read: async () => text });
 
+// dm-agent 10 (D4). main 必败: settings had no --dm
+describe('settings --dm', () => {
+  const dm = { kind: 'project', botId: 'cli_a', projectName: 'oc_dm_cli_a' };
+  const fixed = (stored: object) => ({ ...section(stored), access: { kind: 'readonly', reason: 'dm-fixed', message: '私聊只有完全访问一档' } });
+  const view = {
+    scope: dm, identity: { chatId: 'oc_dm_cli_a', backend: 'claude-agent', cwd: '/data/projects/dm', kind: 'single' }, members: { openIds: [], revision: 'm1' }, skills: [],
+    sections: {
+      model: section({ selection: { kind: 'default' } }), speed: section({ tier: 'inherit' }), modelAccess: section({ backend: 'claude-agent', models: ['m'], efforts: ['low'] }), skills: section({ disabledPaths: [] }),
+      permission: fixed({ mode: 'full', options: { tiers: [], fields: [{ key: 'sandbox', label: '沙盒', kind: 'switch' }] } }), workspace: fixed({ primary: '/data/projects/dm', directories: [], repositories: [] }),
+      response: fixed({ noMention: true }), judge: fixed({ selection: { kind: 'default' } }),
+    },
+  };
+  const reads = (request: SettingsRequest) => request.type === 'read' ? { kind: 'view', view } : { kind: 'saved', result: { kind: 'saved', section: {}, effects: [], warnings: [] } };
+
+  it('reads the private chat by oc_dm_<appId>, and shows only what it has', async () => {
+    const h = harness(reads);
+    await runSettingsGet(undefined, { dm: true }, h.io(), h.daemon);
+    expect(h.send).toHaveBeenCalledWith({ type: 'read', scope: dm });
+    expect(h.send.mock.calls.some(([request]) => request.type === 'sessions')).toBe(false);
+    const lines = h.out().split('\n');
+    expect(lines[0]).toBe('Bot Test（cli_a）的私聊 · Claude · /data/projects/dm');
+    for (const name of ['[model]', '[speed]', '[modelAccess]', '[skills]', '[permission]（只读：私聊只有完全访问一档）', '[workspace]（只读：私聊只有完全访问一档）']) expect(lines).toContain(name);
+    expect(h.out()).not.toContain('[response]');
+    expect(h.out()).not.toContain('[judge]');
+    expect(h.out()).not.toContain('高级设置');
+    expect(h.out()).not.toContain('响应成员');
+    expect(await h.failure(runSettingsGet('response', { dm: true }, h.io(), h.daemon))).toMatchObject({ exitCode: 2 });
+  });
+
+  it('saves through the same save, and takes no --group or --session', async () => {
+    const h = harness(reads);
+    await runSettingsSet(['model.selection={"kind":"default"}'], { dm: true }, h.io(), h.daemon);
+    expect(h.send).toHaveBeenLastCalledWith({ type: 'save', edit: expect.objectContaining({ scope: dm, section: 'model' }) });
+    for (const target of [{ dm: true, group: '研发' }, { dm: true, session: 'th_1' }, { dm: true, host: true }]) expect(await h.failure(runSettingsGet(undefined, target, h.io(), h.daemon))).toMatchObject({ exitCode: 2 });
+  });
+
+  it('lists the models of its own Provider, for the project picker', async () => {
+    const h = harness(() => ({ kind: 'models', catalog: { backend: 'claude-agent', state: 'ready', models: [] } }));
+    const dmAgent = { dm: true };
+    expect(await h.failure(runSettingsModels(dmAgent, h.io(), h.daemon))).toMatchObject({ exitCode: 2, error: { message: '这个 Bot 还没有私聊：启动过一次才有。也可以用 --backend 指定。' } });
+    await runSettingsModels({ ...dmAgent, backend: 'claude' }, h.io(), h.daemon);
+    expect(h.send).toHaveBeenLastCalledWith({ type: 'models', query: { botId: 'cli_a', backend: 'claude-agent', purpose: 'project' } });
+    expect(await h.failure(runSettingsModels({ ...dmAgent, purpose: 'judge' }, h.io(), h.daemon))).toMatchObject({ exitCode: 2 });
+  });
+});
+
 describe('settings act voice', () => {
   // main 必败: settings act did not exist
   it('refresh sends refreshPermission and prints the permission, the result and where to grant it', async () => {
@@ -70,7 +116,7 @@ describe('settings act voice', () => {
 
 describe('settings act admin', () => {
   // main 必败
-  it('reads the revision first unless given one, and prints who is an administrator and why', async () => {
+  it('reads the revision first unless given one, and prints who is an administrator', async () => {
     const after = agentView({ administrators: { ...agentView().administrators, openIds: ['ou_owner', 'ou_local', 'ou_x'], revision: 'a2' } });
     const h = harness(request => request.type === 'act' ? savedWith(after) : { kind: 'view', view: agentView() });
     await runSettingsAdmin('add', 'ou_x', {}, h.io(), h.daemon);
@@ -78,7 +124,7 @@ describe('settings act admin', () => {
       { type: 'read', scope: { kind: 'agent', botId: 'cli_a' } },
       { type: 'act', action: { kind: 'adminMember', botId: 'cli_a', openId: 'ou_x', membership: 'present', revision: 'a1' } },
     ]);
-    expect(h.out()).toBe('已加上管理员 ou_x。\n管理员：ou_owner（主人、扫码的人）、ou_fs（飞书管理员）、ou_local（本机加的）、ou_x（本机加的）\n');
+    expect(h.out()).toBe('已加上管理员 ou_x。\n管理员：ou_owner（创建者）、ou_local、ou_x\n');
     h.send.mockClear(); h.clear();
     await runSettingsAdmin('remove', 'ou_local', { revision: 'a0' }, h.io(true), h.daemon);
     expect(h.send.mock.calls.map(([request]) => request)).toEqual([{ type: 'act', action: { kind: 'adminMember', botId: 'cli_a', openId: 'ou_local', membership: 'absent', revision: 'a0' } }]);
@@ -302,7 +348,7 @@ describe('settings get: what the buttons change (4.4)', () => {
     expect(h.out()).toBe([
       'Bot Test（cli_a）的设置',
       '语音转文字：开（飞书语音权限：已开通）',
-      '管理员：ou_owner（主人、扫码的人）、ou_fs（飞书管理员）、ou_local（本机加的）',
+      '管理员：ou_owner（创建者）、ou_local',
       '管理员改动：vonvon settings act admin add|remove <openId> --bot cli_a',
       `评论指令：自定义「${Array.from(custom.content.text).slice(0, 40).join('')}…」`, '',
     ].join('\n'));

@@ -65,10 +65,12 @@ export const adminSetupStatusSchema = z.object({
   connection: z.object({ running: z.boolean(), connection: z.string().optional() }),
   event: eventDiagnosisSchema,
   /** missingRequired gates the checklist step; missingJoinScopes (im:chat:readonly and the leave-group scope)
-   * only warns; missingOptional is the 3.11 optional scopes the 状态与诊断 page lists. All undefined when the grants could not be read. */
+   * only warns; missingOptional is the 3.11 optional scopes the 状态与诊断 page lists; missingTools is what the Bot's Feishu
+   * tools lack, with toolsGrantUrl pre-selecting just those. All undefined when the grants could not be read. */
   scopes: z.object({
     missingRequired: z.array(z.string()).optional(), missingJoinScopes: z.array(z.string()).optional(),
-    missingOptional: z.array(z.string()).optional(), grantUrl: z.string(),
+    missingOptional: z.array(z.string()).optional(), missingTools: z.array(z.string()).optional(), grantUrl: z.string(),
+    toolsGrantUrl: z.string().optional(),
   }),
   eventConfigUrl: z.string(),
   /** The app's page on the developer console (versions and publishing are there). */

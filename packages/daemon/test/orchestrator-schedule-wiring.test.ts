@@ -61,7 +61,7 @@ afterEach(async () => {
 });
 
 function setup() {
-  const cfg: AppConfig = { accounts: { app: { id: APP, secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
+  const cfg: AppConfig = { accounts: { app: { id: APP, secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] } } };
   const channel = { send: vi.fn(async () => ({})), rawClient: { im: { v1: { message: { get: async () => ({ data: { items: [] } }), reply: vi.fn(async () => ({ data: {} })) } } } } };
   const o = createOrchestrator(channel as never, cfg, join(root, 'workspace'));
   opened.push(o);

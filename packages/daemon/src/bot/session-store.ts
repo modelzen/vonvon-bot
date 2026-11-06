@@ -73,6 +73,9 @@ export interface SessionRecord {
   /** What the session was last handed of vonvon's role, supplement and memory (bot/context-assembly.ts). A record
    * without it is an older session: its next turn gets the whole thing again. */
   context?: SessionContext;
+  /** The native sessions this key held before {@link sessionId}, oldest first, at most {@link EARLIER_MAX}: a private
+   * chat's `/resume` lists these and no other (dm-agent 4.3). `/new` leaves nothing else that says whose a session was. */
+  earlier?: string[];
   createdAt: number;
   updatedAt: number;
 }
@@ -397,10 +400,17 @@ export async function adoptAdminSessions(splitChats: { has(chatId: string): bool
 }
 
 /** Puts `rec` in place of the record at its key, or adds it. */
+export const EARLIER_MAX = 50;
+/** `earlier` of a key that moves from the native session `held` to `next`. */
+function earlierAfter(held: Pick<SessionRecord, 'sessionId' | 'earlier'>, next: string): string[] | undefined {
+  if (held.sessionId === next) return held.earlier;
+  return [...(held.earlier ?? []).filter(id => id !== next && id !== held.sessionId), held.sessionId].slice(-EARLIER_MAX);
+}
 function put(store: StoreFile, rec: SessionRecord): void {
   const idx = store.sessions.findIndex((s) => s.threadId === rec.threadId);
-  if (idx === -1) store.sessions.push(rec);
-  else store.sessions[idx] = rec;
+  if (idx === -1) { store.sessions.push(rec); return; }
+  const earlier = earlierAfter(store.sessions[idx]!, rec.sessionId);
+  store.sessions[idx] = earlier ? { ...rec, earlier } : rec;
 }
 
 /** Insert or replace a session by threadId. */
@@ -452,6 +462,8 @@ export async function patchSession(
     const rec = store.sessions.find((s) => s.threadId === threadId);
     if (!rec) return;
     const actual = typeof patch === 'function' ? patch(rec) : patch;
+    const earlier = actual.sessionId ? earlierAfter(rec, actual.sessionId) : undefined;
+    if (earlier) rec.earlier = earlier;
     const target = rec as unknown as Record<string, unknown>;
     for (const [k, v] of Object.entries(actual)) {
       if (v !== undefined) target[k] = v;

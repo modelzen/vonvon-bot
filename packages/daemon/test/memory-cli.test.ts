@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryReply, MemoryRequest } from '@vonvon/protocol';
 import {
-  runMemoryAdd, runMemoryBranch, runMemoryBranchDelete, runMemoryEdit, runMemoryEvents, runMemoryExport, runMemoryItem, runMemoryList, runMemoryMove,
+  runMemoryAdd, runMemoryBranch, runMemoryBranchDelete, runMemoryEdit, runMemoryEvents, runMemoryExport, runMemoryItem, runMemoryList, runMemoryMove, runMemoryPeople,
   runMemoryPromote, runMemoryPurge, runMemoryUndo, terminalMemoryContext, type MemoryContext, type MemoryKind, type MemoryTerminal,
 } from '../src/cli/commands/memory';
 import { connectLocalDaemon, setCliContext, withDaemon, type Io } from '../src/cli/daemon-client';
@@ -66,6 +66,23 @@ describe('which memory a command means', () => {
     twins.ctx.bots = async () => [{ id: 'cli_a', name: '小研' }, { id: 'cli_c', name: '小研' }];
     await expect(runMemoryAdd('x', { bot: '小研' }, twins.open)).rejects.toEqual(failure('bad-args', '有 2 个 Bot 都叫「小研」'));
     expect(twins.run).not.toHaveBeenCalled();
+  });
+});
+
+describe('the people of a bot\'s private chats', () => {
+  it('asks for the bot --bot names and prints what --dm takes', async () => {
+    const t = terminal({ kind: 'dmPeople', people: [{ openId: 'ou_a', name: '张三', at: 1, used: 2 }, { openId: 'ou_b', at: 2, used: 0 }] });
+    await runMemoryPeople({ bot: '小研' }, t.open);
+    expect(t.run).toHaveBeenCalledWith({ type: 'dmPeople', botId: 'cli_a' });
+    expect(t.kinds).toEqual(['read']);
+    expect(t.out.join('\n')).toContain('ou_a  张三  2 条');
+    expect(t.out.join('\n')).toContain('ou_b  （名字未知）  0 条');
+  });
+  it('says so when nobody has, and wants a bot', async () => {
+    const t = terminal({ kind: 'dmPeople', people: [] });
+    await runMemoryPeople({ bot: 'cli_a' }, t.open);
+    expect(t.out.join('\n')).toContain('还没有人私聊过');
+    await expect(runMemoryPeople({}, t.open)).rejects.toThrow('要指定 Bot');
   });
 });
 

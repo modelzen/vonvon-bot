@@ -140,20 +140,49 @@ describe('a Bot session\'s command line', () => {
     } finally { await d.close(); }
   }, 60_000);
 
-  // Codex review 239-2 / 240-1. main 必败 (in this slice): settings get left them out, the act's --json printed them again
-  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('prints a private chat\'s administrators after settings act admin add as settings get shows them', async () => {
+  // product.md section 6: the list changes in the client and the terminal, never by chat. main 必败
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('refuses a private chat\'s settings act admin add before it reaches the Bot process', async () => {
     const view = (openIds: string[], revision: string) => ({ ...agentFixture, scope: { kind: 'agent', botId: BOT },
-      administrators: { feishu: { ownerOpenId: 'ou_owner', adminOpenIds: ['ou_fs'] }, scannerOpenId: 'ou_scan', openIds, revision } });
+      administrators: { openIds, revision } });
     const act = vi.fn(async () => ({ kind: 'saved', view: view(['ou_local', 'ou_0123456789abcdef'], 'a2'), effects: [], warnings: [] }));
     const settings = { act, read: async () => view(['ou_local'], 'a1'), save: async () => { throw new Error('unused'); }, models: async () => { throw new Error('unused'); } };
-    // the owner's own private-chat turn, as its Bot process says
-    const d = await daemon({ settings } as unknown as Partial<AdminService>, async () => ({ ok: true, role: 'owner', openId: 'ou_owner' }));
+    // an admin's own private-chat turn, as its Bot process says
+    const d = await daemon({ settings } as unknown as Partial<AdminService>, async () => ({ ok: true, role: 'admin', openId: 'ou_admin' }));
     try {
       const token = d.fixture.sessionTokens.issue({ appId: BOT, place: 'dm', chatId: 'oc_dm', sessionId: 'ses_1111111111111111' });
       const added = await run(d.fixture.home, d.home, ['settings', 'act', 'admin', 'add', 'ou_0123456789abcdef', '--scope', `bot=${BOT}`], { VONVON_SESSION: token });
-      expect(added, added.stderr).toMatchObject({ code: 0, json: { ok: true, result: 'saved' } });
-      expect(added.json.administrators).toEqual({ openIds: ['ou_local', 'ou_0123456789abcdef'], revision: 'a2' });
-      expect(act).toHaveBeenCalledExactlyOnceWith({ kind: 'adminMember', botId: BOT, openId: 'ou_0123456789abcdef', membership: 'present', revision: 'a1' });
+      expect(added, added.stderr).toMatchObject({ code: 4, json: { ok: false, error: { kind: 'refused', message: '修改设置失败：管理员名单只能在 Vonvon Bot 客户端的「设置 → 管理员」或终端里改，聊天里不能改。' } } });
+      expect(act).not.toHaveBeenCalled();
+    } finally { await d.close(); }
+  }, 60_000);
+
+  // dm-agent 6.1. main 必败: a private chat's command needed --scope, and a Bot with no groups read as bindings hidden
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('needs no --scope in a private chat, and reads a Bot with no groups as having none', async () => {
+    const d = await daemon({ listProjects: async () => [] }, async () => ({ ok: true, role: 'admin', openId: 'ou_admin' }));
+    try {
+      const token = d.fixture.sessionTokens.issue({ appId: BOT, place: 'dm', chatId: 'oc_dm', sessionId: 'ses_1111111111111111' });
+      const set = await run(d.fixture.home, d.home, ['group', 'set', '研发', '--disable', '--bot', BOT], { VONVON_SESSION: token });
+      expect(set.json.error?.message, set.stderr).toContain('研发');
+      expect(set.json.error?.message).not.toContain('不能从 Bot 会话里做');
+      expect(set.json.error?.reason).not.toBe('scope_required');
+    } finally { await d.close(); }
+  }, 60_000);
+
+  // dm-agent 8. main 必败: the Bot process's `dm` actor was no answer the host took
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('makes a group\'s task from a private chat, as its person, with no --scope', async () => {
+    const actor = { kind: 'dm', via: 'cli', openId: 'ou_admin', name: '张三', chatId: 'oc_dm' } as const;
+    const task = { id: 'st_1', botId: BOT, chatId: GROUP, revision: 'r', name: 'probe', instruction: '巡检', spec: { kind: 'every', minutes: 60 }, timeZone: 'UTC', placement: { kind: 'follow' }, state: 'active',
+      createdBy: { via: 'cli' }, createdAt: 1, updatedAt: 1, running: false, counts: { runs: 0, missed: 0, skipped: 0, consecutiveFailures: 0 }, recent: [], describe: '每 60 分钟' };
+    const executeSchedule = vi.fn(async (_bot: string, _actor: unknown, request: { action: string }) => request.action === 'create' ? { kind: 'task' as const, task: task as ScheduledTaskView } : { kind: 'tasks' as const, tasks: [], now: 1, timeZone: 'UTC' });
+    const d = await daemon({ executeSchedule }, async () => ({ ok: true, role: 'admin', openId: 'ou_admin', actor }));
+    try {
+      const token = d.fixture.sessionTokens.issue({ appId: BOT, place: 'dm', chatId: 'oc_dm', sessionId: 'ses_1111111111111111' });
+      const add = await run(d.fixture.home, d.home, ['schedule', 'add', '巡检', '--bot', BOT, '--group', '运营', '--name', 'probe', '--every', '1h'], { VONVON_SESSION: token });
+      expect(add, add.stderr).toMatchObject({ code: 0 });
+      expect(executeSchedule).toHaveBeenLastCalledWith(BOT, actor, expect.objectContaining({ action: 'create', chatId: OTHER }));
+      // its own private chat by id, which no list of groups has
+      expect(await run(d.fixture.home, d.home, ['schedule', 'list', '--bot', BOT, '--group', 'oc_dm'], { VONVON_SESSION: token })).toMatchObject({ code: 0 });
+      expect(executeSchedule).toHaveBeenLastCalledWith(BOT, actor, { action: 'list', chatId: 'oc_dm' });
     } finally { await d.close(); }
   }, 60_000);
 

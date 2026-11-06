@@ -44,6 +44,20 @@ describe('filterSnapshot', () => {
   });
 });
 
+// dm-agent 10. main 必败: there was no private chat in the snapshot to leave out
+describe('the private chat in a snapshot', () => {
+  const dm = { id: 'x', agentId: 'cli_x', groupId: 'oc_dm_cli_x', name: '私聊' };
+  const withDm = { ...snapshot, agents: snapshot.agents.map(agent => agent.id === 'cli_x' ? { ...agent, dm } : agent) } as unknown as DesktopSnapshot;
+  it('stays for the whole bot and goes for a reach of one group', () => {
+    expect(filterSnapshot(withDm, principal('dm'), { bot: 'cli_x' }).agents[0]?.dm).toEqual(dm);
+    expect(filterSnapshot(withDm, principal('group'), { bot: 'cli_x', group: 'oc_a' }).agents[0]).not.toHaveProperty('dm');
+  });
+  it('reaches a private chat\'s session and no group\'s', () => {
+    expect(sessionSnapshot(withDm, principal('dm')).agents[0]?.dm).toEqual(dm);
+    expect(sessionSnapshot(withDm, principal('group')).agents[0]).not.toHaveProperty('dm');
+  });
+});
+
 // s1b: a group's session reads the least its command line resolves names with. main 必败: it read its group's folder,
 // tier, backend, jobs, recent conversations, tools and the data path.
 describe('sessionSnapshot', () => {
@@ -58,7 +72,7 @@ describe('sessionSnapshot', () => {
     application: { platform: 'linux', version: '0.9.0', loginItem: true, dataPath: '/data', service: { state: 'running', skipped: false }, crashes: { records: [] } },
   } as unknown as DesktopSnapshot;
   it('gives a group its bot\'s and its group\'s names, its project\'s id and name, and blanks for the rest', () => {
-    const shown = sessionSnapshot(full, principal('group'), { bot: 'cli_x', group: 'oc_a' });
+    const shown = sessionSnapshot(full, principal('group'));
     expect(shown).toEqual({
       revision: 3, observedAt: 1, stale: false, host: { kind: 'blocked', message: '' },
       agents: [{ id: 'cli_x', name: 'X', enabled: true, running: true, connection: '', activation: 'active' }],
@@ -68,15 +82,14 @@ describe('sessionSnapshot', () => {
     });
     expect(JSON.stringify(shown)).not.toMatch(/\/w\/|\/data|full|claude-agent|oc_b|cli_z|data:/);
   });
-  it('gives a comment its bot alone, and a private chat what filterSnapshot gives it', () => {
-    const comment = sessionSnapshot(full, principal('comment'), { bot: 'cli_x' });
+  it('gives a comment its bot alone', () => {
+    const comment = sessionSnapshot(full, principal('comment'));
     expect([comment.agents.map(agent => agent.id), comment.groups, comment.memberships, comment.projects]).toEqual([['cli_x'], [], [], []]);
-    expect(sessionSnapshot(full, principal('dm'), { bot: 'cli_x' })).toEqual(filterSnapshot(full, principal('dm'), { bot: 'cli_x' }));
   });
   it('keeps the Feishu owner display name on the owner surface', () => {
     const named = { ...full, agents: full.agents.map(agent => ({ ...agent, ownerName: '示例姓名' })) };
     for (const place of ['group', 'dm', 'comment'] as const) {
-      expect(sessionSnapshot(named, principal(place), null).agents[0]).not.toHaveProperty('ownerName');
+      expect(sessionSnapshot(named, principal(place)).agents[0]).not.toHaveProperty('ownerName');
     }
     expect(filterSnapshot(named, principal('dm'), null).agents[0]?.ownerName).toBe('示例姓名');
   });

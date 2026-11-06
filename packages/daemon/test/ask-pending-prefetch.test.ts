@@ -51,7 +51,7 @@ it.each(['ordinary', 'goal'] as const)('preserves typed messages after %s backen
   } };
   const coordinator = new AskCoordinator(channel as unknown as LarkChannel, {
     accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } },
-    preferences: { access: { ownerOpenId: 'owner' } },
+    preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] } },
   }, { peek: () => 'Owner' });
   const pause = createIdlePause();
   const turn = coordinator.openTurn({ run, sessionKey: 'session',

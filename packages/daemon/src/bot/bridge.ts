@@ -10,14 +10,19 @@ import type { AdminWriteOp } from '../admin/ops';
 import type { AdminLibraryOp } from '../admin/library';
 import type { ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
 import type { ScheduleActor } from '../admin/schedule-commands';
-import { isAdmin, resolveOwner, type AppConfig } from '../config/schema';
+import { isAdmin, type AppConfig } from '../config/schema';
 import { createCommandTools } from '../agent/entry/command-tools';
+import { createFeishuReader, type FeishuReadReply, type FeishuReadRequest } from '../feishu-read/reader';
+import { createFeishuCalls, createFeishuReads } from '../agent/entry/feishu-tools';
+import type { ApiRequest } from '../feishu-read/api';
 import { createMemoryWriter } from './memory-writer';
-import { listProjects } from '../project/registry';
+import { createFirstHello } from './first-hello';
+import { dmPersonOf, getProjectByChatId, listProjects } from '../project/registry';
 import { isProjectId } from '../project/library';
 import { createAgentEntries, type AgentEntries } from '../agent/entry/registry';
 import { log } from '../core/logger';
 import { createOrchestrator } from './handle-message';
+import { putSessionCliOnPath, writeSessionCli } from '../agent/session-cli';
 import { createTopicRegistry } from './topic-registry';
 import type { BotIdentity } from '../config/bots';
 import { adoptAdminSessions } from './session-store';
@@ -52,11 +57,16 @@ export interface BridgeHandle {
   collaboration: (request: CollaborationRequest) => Promise<unknown>;
   adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | Project>;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
+  /** A read this Bot runs as itself, the host asking (dm-agent 7.3). */
+  feishuRead: (request: FeishuReadRequest) => Promise<FeishuReadReply>;
+  feishuApi: (request: ApiRequest) => Promise<FeishuReadReply>;
   /** The host's workspace fan-out for this bot (admin/library.ts `AdminLibraryOp`). */
   libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
   /** Scheduled tasks over the wire (admin/ipc.ts `AdminScheduleOp`), run as the local owner or a Bot session's turn. */
   schedule: (actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
+  /** Tries the first private message to the creator, when the bot still owes one; the host calls it once the scopes are in. */
+  firstHello: () => Promise<void>;
   /** Teardown: drop the long connection first, cut the running turns short and close every agent session (no orphan
    *  app-servers). `reason`, read as the cards end, says why on them. Idempotent enough for a signal handler. */
   shutdown: (reason?: () => StopReason) => Promise<void>;
@@ -88,6 +98,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     botId: app.id,
     projectIdOf: async chatId => (await listProjects()).find(project => project.chatId === chatId)?.projectId,
     botProjectIds: async () => [...new Set((await listProjects()).flatMap(project => isProjectId(project.projectId) ? [project.projectId] : []))],
+    dmPersonOf: async chatId => dmPersonOf(await getProjectByChatId(chatId), chatId)?.openId,
   });
   // 咖啡一下 (the local Claude Code / Codex hook relay) left v1 in s02b: no
   // service and no socket; s02c deleted D/cli-bridge. Since s02c2 the installed
@@ -95,25 +106,28 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   const host = opts.host;
   // A revoke lost at shutdown is fine: the host drops all of this bot's tokens when its process exits.
   const sessions = host ? { revoke: (sessionId: string) => { void host.revokeSessionToken(sessionId).catch(() => undefined); } } : undefined;
-  const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), isOwner: id => resolveOwner(opts.cfg) === id, ...(sessions ? { sessions } : {}),
+  const feishu = createFeishuReader({ channel, app });
+  const members = async (chatId: string, cursor?: string): Promise<GroupMembers> => {
+    const result = await createGroupExecutor(channel, identity)({ kind: 'groupMembers', chatId, cursor });
+    if (!('members' in result)) throw new Error('Invalid members reply');
+    return result;
+  };
+  const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), ...(sessions ? { sessions } : {}),
     memoryPlace: turn => memory.placeOf(turn), tools: createCommandTools({
-    appId: app.id, memory,
+    appId: app.id, memory, feishu, groupTier: chatId => orchestrator.permissionOf(chatId),
     schedule: { execute: (actor, request) => orchestrator.scheduleAs(actor, request) },
-    settings: { read: scope => orchestrator.settings.read(scope), save: (edit, options) => orchestrator.settings.save(edit, options), models: query => orchestrator.settings.models(query), act: action => orchestrator.settings.act(action) },
-    projects: listProjects,
     groups: async cursor => {
       const result = await createGroupExecutor(channel, identity)({ kind: 'joinedGroups', cursor });
       if (!('groups' in result)) throw new Error('Invalid group reply');
       return result;
     },
-    members: async (chatId, cursor) => {
-      const result = await createGroupExecutor(channel, identity)({ kind: 'groupMembers', chatId, cursor });
-      if (!('members' in result)) throw new Error('Invalid members reply');
-      return result;
-    },
+    members, ...(host ? { route: (bot, request) => host.feishuRead(bot, request), routeApi: (bot, request) => host.feishuApi(bot, request) } : {}),
   }) });
+  const sessionCli = await writeSessionCli();
+  if (sessionCli) putSessionCliOnPath(sessionCli);
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
-    { entries, memory, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}) });
+    { entries, memory, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}), ...(sessionCli ? { sessionCli } : {}) });
+  const firstHello = createFirstHello({ cfg: opts.cfg, appSecret: opts.appSecret, channel, write: orchestrator.writePreferences });
   const roles = createAppRoleRefresher(app, opts.appSecret);
   await roles.refresh();
   let rolesStopped = false;
@@ -123,7 +137,8 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     const remaining = cached ? cached.fetchedAt + APP_ROLE_CACHE_MS - Date.now() : 0;
     // No fresh result (the last refresh failed, or none ever came): try again sooner, within the trust window (252-4).
     rolesTimer = setTimeout(() => {
-      void roles.refresh().then(() => { if (!rolesStopped) scheduleRoles(); });
+      // The same slow beat brings the bot's first hello: nothing tells a running process that the app was published.
+      void roles.refresh().then(() => { void firstHello.attempt(); if (!rolesStopped) scheduleRoles(); });
     }, remaining > 0 && remaining <= APP_ROLE_CACHE_MS ? remaining : APP_ROLE_RETRY_MS);
     rolesTimer.unref();
   };
@@ -134,6 +149,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   const shutdown = (reason?: () => StopReason): Promise<void> => {
     if (closing) return closing;
     rolesStopped = true;
+    firstHello.stop();
     clearTimeout(rolesTimer);
     const rolesClosing = roles.stop();
     // s18c: stop taking events first. One that comes after this is not acknowledged, so Feishu pushes it again to the
@@ -235,6 +251,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     orchestrator.replyDropped();
     // Scheduled runs post to Feishu: the tick starts once connected, after the crashed runs are recorded.
     await orchestrator.scheduler.start();
+    void firstHello.attempt();
 
     const executeGroup = createGroupExecutor(channel, identity, opts.cfg.preferences?.projectsRootDir);
     const adminGroups: BridgeHandle['adminGroups'] = op => {
@@ -244,7 +261,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       void task.then(() => groupTasks.delete(task), () => groupTasks.delete(task));
       return task;
     };
-    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, shutdown };
+    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, feishuRead: createFeishuReads({ feishu, members }), feishuApi: createFeishuCalls(feishu), firstHello: firstHello.attempt, shutdown };
   } catch (error) {
     try { await shutdown(); }
     catch (cleanupError) {

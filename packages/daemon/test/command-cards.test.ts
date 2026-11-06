@@ -159,6 +159,13 @@ describe('buildHelpCard 权限过滤', () => {
     expect(admin).toContain('/resume');
   });
 
+  it('私聊（dm-agent 5）：主区和话题的帮助都列 /menu，群里不列', () => {
+    const main = JSON.stringify(buildHelpCard('single', true, true, undefined, undefined, true));
+    expect(main).toContain('/menu'); expect(main).toContain('私聊');
+    expect(JSON.stringify(buildHelpCard('topic', true, true, undefined, undefined, true))).toContain('/menu');
+    expect(JSON.stringify(buildHelpCard('single', true, true))).not.toContain('/menu');
+  });
+
   it('/new（s15）：单会话群给管理员列 /new 和 /clear；/compact 写明忙时等；话题里怎么开新会话按群的类型写', () => {
     const admin = JSON.stringify(buildHelpCard('single', true, true));
     expect(admin).toContain('`/new`（或 `/clear`）→ 换一条新会话，旧的能 `/resume` 回来（飞书消息保留）');

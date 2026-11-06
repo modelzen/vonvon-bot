@@ -2,7 +2,10 @@ import { pendingGroupsFile, readPendingGroups, type PendingGroup } from '../proj
 import type { CollaborationRequest } from './collaboration';
 import {runtimeDistribution} from '../service/distribution';
 import { createSettingsService } from './settings-service';
-import { admitLibraryWorkspace, createHostLibrary, type AdminLibraryOp, type HostLibrary } from './library';
+import { admitLibraryWorkspace, botLabel, createHostLibrary, type AdminLibraryOp, type HostLibrary } from './library';
+import { routeFeishuApi, routeFeishuRead, type FeishuReach } from './feishu-route';
+import type { ApiRequest } from '../feishu-read/api';
+import type { FeishuReadReply, FeishuReadRequest } from '../feishu-read/reader';
 import { isProjectId, readLibrary } from '../project/library';
 import { projectRevision, projectView } from './collaboration';
 import { AdminWriteError } from './ops';
@@ -31,9 +34,11 @@ import {
   type ResolvedCompletionReminderConfig,
 } from '../config/schema';
 import {
+  dmProject,
   noMentionOf,
   sessionModeOf,
   listProjectsIn,
+  type Project,
   type SessionMode,
 } from '../project/registry';
 import { isRetiredKey, listSessionsIn } from '../bot/session-store';
@@ -133,6 +138,10 @@ export interface AdminService {
   pendingGroups?(botId: string): Promise<{ groups: PendingGroup[] }>;
   joinedGroups?(botId: string, cursor?: string): Promise<JoinedGroups>;
   groupMembers?(botId: string, chatId: string, cursor?: string): Promise<GroupMembers>;
+  /** dm-agent 7.3: a Feishu read, on the Bot `reach` comes to (admin/feishu-route.ts). Refusals are replies, not errors. */
+  feishuRead?(reach: FeishuReach, request: Omit<FeishuReadRequest, 'only'>): Promise<FeishuReadReply>;
+  /** dm-agent 7.6: `feishu_api` on the Bot named. A private chat's tool only, through the host: no RPC reaches it. */
+  feishuApi?(bot: string, request: ApiRequest): Promise<FeishuReadReply>;
   bindGroup?(botId: string, input: BindGroupInput): Promise<AdminProject>;
   getVoice(botId: string): Promise<VoiceView>;
   setVoice(botId: string, action: VoiceAction): Promise<void>;
@@ -140,6 +149,8 @@ export interface AdminService {
   listBots(): Promise<AdminBot[]>;
   /** 某 bot 的项目列表（含话题数等聚合字段），对齐 DM 📁 项目列表。 */
   listProjects(botId: string): Promise<AdminProject[]>;
+  /** 这个 Bot 的私聊那一行，不在 listProjects 里；Bot 还没跑过时没有。 */
+  dmRow?(botId: string): Promise<AdminProject | undefined>;
   /** 单个项目详情；不存在返回 undefined。 */
   getProject(botId: string, name: string): Promise<AdminProject | undefined>;
   /** 🧠 切换项目后端（写）。与 DM dm.proj.backend.submit 同一套校验+落盘。 */
@@ -374,8 +385,16 @@ export interface AdminSetupStatus {
    * ④ 必需 scope 中尚未授权的（undefined = 没查成；空 = 已齐全）+ 一键授权深链。
    * missingJoinScopes 是加入现有群要的 scope（同样三态）：缺了只提醒——拉进群不会提醒绑定，查找已加入的群会失败。
    * grantUrl 始终给（预选全部 scope，缺啥点一次补齐）。
+   * missingTools 是 Bot 自己的飞书工具要的 scope，不进 grantUrl，缺的时候由 toolsGrantUrl 单独预选（dm-agent 6.5）。
    */
-  scopes: { missingRequired?: string[]; missingJoinScopes?: string[]; missingOptional?: string[]; grantUrl: string };
+  scopes: {
+    missingRequired?: string[];
+    missingJoinScopes?: string[];
+    missingOptional?: string[];
+    missingTools?: string[];
+    grantUrl: string;
+    toolsGrantUrl?: string;
+  };
   /** 开发者后台「事件与回调」配置页深链。 */
   eventConfigUrl: string;
   /** 开发者后台这个应用的首页（版本管理与发布在里面）。 */
@@ -466,6 +485,11 @@ export interface AdminServiceDeps {
   executeLibrary?: (botId: string, op: AdminLibraryOp) => Promise<unknown>;
   /** Forwards a scheduled-task request to the bot process; a bot that is not running replies `refused bot-not-running`. */
   executeSchedule?: (botId: string, actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
+  /** Runs a Feishu read in the bot's process, undefined when it has none: its answer is unchecked until the route parses it. */
+  executeFeishuRead?: (botId: string, request: FeishuReadRequest) => Promise<unknown>;
+  executeFeishuApi?: (botId: string, request: ApiRequest) => Promise<unknown>;
+  /** Tells a running bot that its scopes look granted; it sends what it still owes its creator (dm-agent 第一次见面). */
+  firstHello?: (botId: string) => Promise<void>;
   /** 实时运行状态（daemon 进程内：本进程 channel / 子进程 IPC）。返回 undefined
    * 或缺省 → 回退锁文件探测（该 bot 不归本 daemon 管，如未激活的 bot）。 */
   liveStatus?: (botId: string) => Promise<BotLiveStatus | undefined>;
@@ -506,6 +530,30 @@ const MAX_PENDING_GROUPS = 1000;
  * 注册表/会话文件（复用 registry / session-store / store 模块的显式路径导出，
  * 不自己解析 JSON；不碰全局 currentBotDir）；写路径与实时状态由 deps 注入。
  */
+/** A project row with its effective values, before the counts and the avatar that depend on who is asking. */
+function adminRow(p: Project): Omit<AdminProject, 'sessionCount'> {
+  const permission = groupPermission(p);
+  return {
+    name: p.name,
+    enabled: p.enabled !== false,
+    chatId: p.chatId,
+    cwd: p.cwd,
+    ...(isProjectId(p.projectId) ? { projectId: p.projectId } : {}),
+    blank: p.blank,
+    branch: p.branch,
+    kind: sessionModeOf(p),
+    origin: p.origin ?? 'created',
+    noMention: noMentionOf(p),
+    mode: permission.effect.mode,
+    guestMode: permission.effect.mode,
+    network: permission.effect.network,
+    // What the group's sessions actually start on: its own backend, else Codex (s36d2).
+    backend: groupBackendId(p),
+    allowedUsersCount: p.allowedUsers?.length ?? 0,
+    createdAt: p.createdAt,
+  };
+}
+
 export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
   let activationQueue: Promise<unknown> = Promise.resolve();
   const codexTools = deps.codexTools ?? new CodexSetupService();
@@ -554,25 +602,9 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     const problems = await legacyDirectoryProblems(projects.map(p => p.cwd), await directoryContext(undefined, await configuredProjectsRoots(files.configFile)))
       .catch(() => projects.map(() => undefined));
     const result = projects.map((p, index) => ({
+      ...adminRow(p),
       avatarDataUrl: groupAvatars.get(botId, p.chatId),
-      name: p.name,
-      enabled: p.enabled !== false,
-      chatId: p.chatId,
-      cwd: p.cwd,
-      ...(isProjectId(p.projectId) ? { projectId: p.projectId } : {}),
-      blank: p.blank,
-      branch: p.branch,
-      kind: sessionModeOf(p),
-      origin: p.origin ?? 'created',
-      noMention: noMentionOf(p),
-      mode: groupPermission(p).effect.mode,
-      guestMode: groupPermission(p).effect.mode,
-      network: groupPermission(p).effect.network,
-      // What the group's sessions actually start on: its own backend, else Codex (s36d2).
-      backend: groupBackendId(p),
-      allowedUsersCount: p.allowedUsers?.length ?? 0,
       sessionCount: p.chatId ? (countByChat.get(p.chatId) ?? 0) : 0,
-      createdAt: p.createdAt,
       ...(problems[index] ? { directoryProblem: problems[index] } : {}),
     }));
     for (const project of projects) if (project.chatId) void groupAvatars.refresh(botId, project.chatId);
@@ -595,6 +627,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     return { running: false };
   }
 
+  const routeBots = async () => (await loadBots()).bots.map(bot => ({ id: bot.appId, label: botLabel(bot), name: bot.name }));
   async function runState(botId: string): Promise<BotLiveStatus> {
     const live = await deps.liveStatus?.(botId).catch(() => undefined);
     return live ?? lockFileRunState(botId);
@@ -703,6 +736,21 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       if (!deps.executeGroups) throw new NotWiredYetError('群成员');
       return parseGroupMembers(await deps.executeGroups(botId, { kind: 'groupMembers', chatId, cursor }));
     },
+    async feishuApi(bot, request) {
+      const execute = deps.executeFeishuApi;
+      if (!execute) throw new NotWiredYetError('飞书接口');
+      return routeFeishuApi({ bots: routeBots, execute }, bot, request);
+    },
+    async feishuRead(reach, request) {
+      const execute = deps.executeFeishuRead;
+      if (!execute) throw new NotWiredYetError('飞书读取');
+      return routeFeishuRead({
+        bots: routeBots,
+        chats: async botId => (await listProjectsIn(botPaths(botId).projectsFile)).map(project => project.chatId),
+        running: async botId => (await runState(botId)).running,
+        execute,
+      }, reach, request);
+    },
     async bindGroup(botId, input) {
       if (!deps.executeGroups) throw new NotWiredYetError('绑定群聊');
       await deps.executeGroups(botId, { kind: 'bindGroup', input });
@@ -753,6 +801,15 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
 
     listProjects(botId: string): Promise<AdminProject[]> {
       return projectsWithCounts(botId);
+    },
+
+    async dmRow(botId: string): Promise<AdminProject | undefined> {
+      const files = botPaths(botId);
+      const row = await dmProject(files.projectsFile);
+      if (!row) return undefined;
+      const chats = new Set(Object.keys(row.dm?.people ?? {}));
+      const sessions = await listSessionsIn(files.sessionsFile);
+      return { ...adminRow(row), sessionCount: sessions.filter(session => chats.has(session.chatId) && !isRetiredKey(session.threadId)).length };
     },
 
     async getProject(botId: string, name: string): Promise<AdminProject | undefined> {
@@ -903,6 +960,10 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       if (validation.ok && entry && app.id === entry.appId && !deps.readonlyPreview) {
         await syncBotName('setup-status', botIdentity(entry), entry.botName, validation.botName);
       }
+      // The client watches this while the user publishes, so the hello need not wait for the bot's own slow check.
+      if (validation.ok && validation.missingScopes?.length === 0 && cfg.preferences?.access?.firstHelloPending && !deps.readonlyPreview) {
+        void deps.firstHello?.(app.id).catch(() => undefined);
+      }
 
       return {
         ...base,
@@ -915,7 +976,11 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
           missingRequired: validation.ok ? validation.missingScopes : undefined,
           missingJoinScopes: validation.ok ? validation.missingJoinScopes : undefined,
           missingOptional: validation.ok ? validation.missingOptional : undefined,
+          missingTools: validation.ok ? validation.missingTools : undefined,
           grantUrl: buildScopeGrantUrl(app.id, app.tenant),
+          ...(validation.ok && validation.missingTools?.length
+            ? { toolsGrantUrl: buildScopeGrantUrl(app.id, app.tenant, validation.missingTools) }
+            : {}),
         },
       };
     },

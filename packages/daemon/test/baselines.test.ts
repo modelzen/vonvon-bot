@@ -21,7 +21,7 @@ afterAll(async () => {
 });
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'baselines-'));
-  return { botPaths: (appId: string) => ({ dir: join(appDir, 'bots', appId), configFile: join(appDir, 'bots', appId, 'config.json') }), paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments') } };
+  return { botPaths: (appId: string) => ({ dir: join(appDir, 'bots', appId), configFile: join(appDir, 'bots', appId, 'config.json') }), paths: { appDir, inboundDir: join(appDir, 'inbound'), sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments') } };
 });
 afterAll(() => rmSync(paths.appDir, { recursive: true, force: true }));
 
@@ -145,7 +145,7 @@ describe('audienceOf (product.md 3.4 三条底线)', () => {
 });
 
 describe('the orchestrator with several bots in the group', () => {
-  const cfg: AppConfig = { accounts: { app: { id: ME, secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
+  const cfg: AppConfig = { accounts: { app: { id: ME, secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, completionReminder: { mode: 'manual' } } };
   const channel = { send: fake.send, botIdentity: { openId: 'ou_me', name: '小码' },
     rawClient: { appId: ME, im: { v1: { messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) }, message: { get: fake.get, list: fake.list }, chat: { get: fake.chatGet } } } } };
   let orchestrator: ReturnType<typeof createOrchestrator>;
