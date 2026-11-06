@@ -401,7 +401,8 @@ describe('the private-chat row (dm-agent 4.2)', () => {
     const group = { kind: 'project', botId, projectName: '研发群' } as const;
     const view = await owner.read(group) as ProjectSettingsView;
     expect(view.sections.conversation).toBeUndefined();
-    await expect(owner.save({ scope: group, section: 'conversation', revision: 'x', patch: { mode: 'single' } } as never)).rejects.toThrow('无效设置分区');
+    // Codex 368: a group's `response` revision hashes the same value, so it passes the revision check.
+    expect(await owner.save({ scope: group, section: 'conversation', revision: view.sections.response.revision, patch: { mode: 'single' } } as never)).toMatchObject({ kind: 'rejected' });
     expect((await getProjectByChatId('oc_group'))?.smart).toBe(true);
   });
   it('does not follow the Bot\'s default model: what it took at creation is its own (4.1)', async () => {

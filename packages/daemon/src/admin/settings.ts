@@ -1005,7 +1005,11 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               break;
             }
             case 'smartRules': p.smartRules = { ...original.smartRules, ...e.patch }; break;
-            case 'conversation': p.smart = e.patch.mode === 'smart'; break;
+            case 'conversation':
+              // A group's revision of `response` is the same value, so a group's save can get this far.
+              if (!p.dm) throw new SettingsInputError('无效设置分区');
+              p.smart = e.patch.mode === 'smart';
+              break;
             case 'skills': p.skills = { ...original.skills, ...e.patch }; p.skills.disabledPaths = [...new Set(p.skills.disabledPaths)]; break;
             case 'presentation': p.presentation = { ...original.presentation, ...e.patch }; break;
             case 'workspace':

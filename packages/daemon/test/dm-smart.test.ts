@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AppConfig } from '../src/config/schema';
 import { saveConfig } from '../src/config/store';
+import { readDropped } from '../src/bot/restart-dropped';
 import { type AgentEvent, type AgentInput, type StartThreadOptions } from '../src/agent/types';
 import type { JudgeRequest, JudgeResult } from '../src/judge/types';
 import { DEFAULT_DM_SMART_RULES } from '@vonvon/protocol';
@@ -55,6 +56,7 @@ const BE = 'codex-appserver';
 const APP = 'cli_fixture';
 const bot = { appId: APP, tenant: 'feishu' as const, createdAt: 1, registrationId: 'fixture' };
 const A = 'oc_p2p_a';
+const DROPPED = join(paths.appDir, 'dropped.json');
 const OWNER = 'ou_owner', ADMIN = 'ou_admin';
 
 function deferred<T>() {
@@ -108,7 +110,7 @@ let opened: ReturnType<typeof createOrchestrator>[] = [];
 async function app(mode: 'smart' | 'single' = 'smart') {
   await saveConfig(cfg);
   const entries: AgentEntries = createAgentEntries({ appId: APP, isAdmin: id => (cfg.preferences?.access?.admins ?? []).includes(id), tools: [], sessions: { revoke() {} } });
-  const o = createOrchestrator(channel as never, cfg, paths.appDir, undefined, { entries, bot, time });
+  const o = createOrchestrator(channel as never, cfg, paths.appDir, undefined, { entries, bot, time, droppedFile: DROPPED });
   opened.push(o); await o.initialize?.();
   await until(async () => expect(await dmProject()).toBeDefined());
   if (mode === 'single') await mutateProjectByChatId(dmChatId(APP), project => { project.smart = false; });
@@ -122,6 +124,7 @@ const until = (check: () => unknown) => vi.waitFor(check, { interval: 5, timeout
 /** Long enough for a judgement that was going to start to have started, and for its landing. */
 const settled = () => new Promise<void>(resolve => setTimeout(resolve, 200));
 const result = (decision: JudgeResult['decision'], extra: Partial<JudgeResult> = {}): JudgeResult => ({ decision, reason: '', backend: BE, model: 'fixture', modelSource: 'default', promptSource: 'default', ms: 1, ...extra });
+const history = (m: NormalizedMessage) => ({ message_id: m.messageId, msg_type: 'text', create_time: String(m.createTime), sender: { id: OWNER, sender_type: 'user', sender_name: 'Owner' }, body: { content: JSON.stringify({ text: m.content }) } });
 const judged = () => fake.judge.mock.calls.map(([request]) => request as JudgeRequest);
 const emoji = (messageId: string) => reacted.mock.calls.filter(([call]) => call.path.message_id === messageId).map(([call]) => call.data.reaction_type.emoji_type);
 const said = () => JSON.stringify(send.mock.calls);
@@ -129,7 +132,7 @@ const text = (input: AgentInput | undefined) => JSON.stringify(input);
 
 beforeEach(async () => {
   await seedBots({ version: 1, bots: [{ ...bot, name: 'fixture' }] });
-  await rm(paths.projectsFile, { force: true }); await rm(paths.sessionsFile, { force: true });
+  await rm(paths.projectsFile, { force: true }); await rm(paths.sessionsFile, { force: true }); await rm(DROPPED, { force: true });
   cfg = { accounts: { app: { id: APP, secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: OWNER, admins: [OWNER, ADMIN] }, completionReminder: { mode: 'manual' }, pendingPolicy: 'queue' } } as AppConfig;
   fake.cards = []; send.mockClear(); reacted.mockClear(); listed.mockClear(); fake.judge.mockReset().mockResolvedValue(result('main'));
   backend(thread());
@@ -235,10 +238,10 @@ describe('every message is looked at', () => {
 });
 
 describe('a person still typing', () => {
-  it('judges only the newest of a burst, and the earlier ones reach the judge and the turn', async () => {
+  it('judges a burst once and answers once, every line reaching the turn', async () => {
     const run = thread(); backend(run); const o = await app();
     const first = message('帮我查一下', { createTime: Date.now() - 5000 });
-    listed.mockResolvedValue({ data: { items: [{ message_id: first.messageId, msg_type: 'text', create_time: String(first.createTime), sender: { id: OWNER, sender_type: 'user', sender_name: 'Owner' }, body: { content: JSON.stringify({ text: first.content }) } }], has_more: false } });
+    listed.mockResolvedValue({ data: { items: [history(first)], has_more: false } });
     await o.onMessage(first);
     await o.onMessage(message('昨天的那个报错'));
     await until(() => expect(run.consumed).toHaveLength(1));
@@ -246,8 +249,9 @@ describe('a person still typing', () => {
     expect(judged()).toHaveLength(1);
     const seen = JSON.stringify(judged()[0]);
     expect(seen).toContain('帮我查一下'); expect(seen).toContain('昨天的那个报错');
-    expect(text(run.consumed[0])).toContain('帮我查一下'); expect(text(run.consumed[0])).toContain('昨天的那个报错');
-    expect(run.consumed).toHaveLength(1);
+    expect(judged()[0]!.message.text).toBe('帮我查一下\n昨天的那个报错');
+    expect(text(run.consumed[0]).split('帮我查一下')).toHaveLength(2);
+    expect(text(run.consumed[0])).toContain('昨天的那个报错');
     run.turns[0]!.resolve();
   });
 
@@ -261,25 +265,82 @@ describe('a person still typing', () => {
     expect(judged()[0]!.context.some(line => line.id === asked.messageId)).toBe(false);
   });
 
-  it('a recalled newest message does not take the earlier one with it', async () => {
+  // Codex 368. A burst was one judged line plus history: a long first message lost its end at the record block's 280 characters.
+  it('hands the turn every word of a long message, once', async () => {
+    const run = thread(); backend(run); const o = await app();
+    const long = `${'需求'.repeat(400)}最后一定要写成表格`;
+    const first = message(long, { createTime: Date.now() - 5000 });
+    listed.mockResolvedValue({ data: { items: [history(first)], has_more: false } });
+    await o.onMessage(first);
+    await o.onMessage(message('按这个做，谢谢'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    expect(text(run.consumed[0])).toContain('最后一定要写成表格');
+    expect(text(run.consumed[0]).split('最后一定要写成表格')).toHaveLength(2);
+    run.turns[0]!.resolve();
+  });
+
+  it('a line recalled while the person is still typing leaves the burst', async () => {
     const run = thread(); backend(run); const o = await app();
     const first = message('帮我查一下'), last = message('打错了');
     await o.onMessage(first);
     await o.onMessage(last);
     await o.onRecall({ messageId: last.messageId, chatId: A });
     await until(() => expect(run.consumed).toHaveLength(1));
-    expect(text(run.consumed[0])).toContain('帮我查一下');
+    expect(judged()).toHaveLength(1);
+    expect(judged()[0]!.message.text).toBe('帮我查一下');
     run.turns[0]!.resolve();
   });
 
-  it('a file is never folded into the words after it', async () => {
-    const file = message('[图片]', { rawContentType: 'image', resources: [{ type: 'image', fileKey: 'img_fixture' }] as never });
+  // Codex 368. main 必败 on the first version of this: the earlier line had left its slot, so nothing brought it back.
+  it.each([['last', 1], ['first', 0]] as const)('the %s line recalled during the judgement sends the rest round again', async (_which, gone) => {
+    const gate = deferred<JudgeResult>(); fake.judge.mockReturnValueOnce(gate.promise);
+    const run = thread(); backend(run); const o = await app();
+    const lines = [message('帮我查下昨天的报错'), message('按日期排')];
+    for (const line of lines) await o.onMessage(line);
+    await until(() => expect(judged()).toHaveLength(1));
+    await o.onRecall({ messageId: lines[gone]!.messageId, chatId: A });
+    await until(() => expect(judged()).toHaveLength(2));
+    expect(judged()[1]!.message.text).toBe(lines[1 - gone]!.content);
+    await until(() => expect(run.consumed).toHaveLength(1));
+    gate.resolve(result('main'));
+    await settled();
+    expect(run.consumed).toHaveLength(1);
+    expect(text(run.consumed[0])).not.toContain(lines[gone]!.content);
+    run.turns[0]!.resolve();
+  });
+
+  it('words after a file go in with the file, which the turn hangs on', async () => {
+    const file = message('![image](img_fixture)', { rawContentType: 'image', resources: [{ type: 'image', fileKey: 'img_fixture' }] as never });
     const words = message('看下这张');
     const run = thread(); backend(run); const o = await app();
     await o.onMessage(file);
     await o.onMessage(words);
-    await until(() => expect(judged().map(request => request.message.id)).toEqual(expect.arrayContaining([file.messageId, words.messageId])));
-    run.turns[0]?.resolve();
+    await until(() => expect(judged()).toHaveLength(1));
+    expect(judged()[0]!.ref).toBe(file.messageId);
+    expect(judged()[0]!.message.text).toContain('看下这张');
+    await until(() => expect(run.consumed).toHaveLength(1));
+    await settled();
+    expect(judged()).toHaveLength(1);
+    expect(text(run.consumed[0])).toContain('看下这张');
+    run.turns[0]!.resolve();
+  });
+
+  it('a second file starts a new message: each brings only its own', async () => {
+    const one = message('![image](img_one)', { rawContentType: 'image', resources: [{ type: 'image', fileKey: 'img_one' }] as never });
+    const two = message('![image](img_two)', { rawContentType: 'image', resources: [{ type: 'image', fileKey: 'img_two' }] as never });
+    const o = await app();
+    await o.onMessage(one);
+    await o.onMessage(two);
+    await until(() => expect(judged().map(request => request.ref).sort()).toEqual([one.messageId, two.messageId].sort()));
+  });
+
+  it('keeps what is held when the Bot stops', async () => {
+    const o = await app();
+    const held = message('帮我查一下');
+    await o.onMessage(held);
+    await o.shutdown();
+    expect(readDropped(DROPPED, Date.now()).entries).toMatchObject([{ chatId: A, messageId: held.messageId }]);
+    expect(judged()).toEqual([]);
   });
 });
 
