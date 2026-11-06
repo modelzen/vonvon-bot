@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
-import { mkdir, open, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, realpath, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { z } from 'zod';
 import { paths } from '../config/paths';
+import { renameOverReaders } from '../server/atomic-file';
 import { acquireMutex, closeMutex, holdMutexRole } from '../config/data-access';
 import { syncDirectory } from '../config/bot-namespace';
 import { type PermissionMode, type ReasoningEffort } from '../agent/types';
@@ -419,8 +420,7 @@ async function writeStored(location: RegistryLocation, body: Record<string, unkn
       catch (error) { failed = true; throw error; }
       finally { try { await file.close(); } catch (error) { if (!failed) throw error; } }
     } else await writeFile(tmp, serialized, 'utf8');
-    beforeCommit?.();
-    await rename(tmp, location.file);
+    await renameOverReaders(tmp, location.file, beforeCommit);
   } catch (error) {
     await unlink(tmp).catch(() => undefined);
     throw error;

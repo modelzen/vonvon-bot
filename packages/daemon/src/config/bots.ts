@@ -1,4 +1,5 @@
 import { constants, existsSync } from 'node:fs';
+import { renameOverReaders } from '../server/atomic-file';
 import { randomInt, randomUUID } from 'node:crypto';
 import { badgeNumberSchema } from '@vonvon/protocol';
 import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
@@ -115,7 +116,7 @@ async function publish(reg: BotsRegistry): Promise<void> {
     try { await file.writeFile(content, 'utf8'); await file.sync(); }
     catch (error) { failed = true; throw error; }
     finally { try { await file.close(); } catch (error) { if (!failed) throw error; } }
-    await rename(tmp, paths.botsFile);
+    await renameOverReaders(tmp, paths.botsFile);
     await syncDirectory(dirname(paths.botsFile));
   } catch (error) { primaryError = error; throw error; }
   finally {

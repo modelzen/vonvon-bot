@@ -38,8 +38,9 @@ function configure(bot: BotEntry, preferences?: AppPreferences): void {
 function group(name: string): Project {
   return { name, chatId: `oc_${name}`, cwd: join(fixture.root, name), blank: false, createdAt: 1 };
 }
+// Native realpath expands Windows 8.3 temp-directory aliases, matching fs/promises.realpath in production.
 beforeEach(() => {
-  fixture.root = realpathSync(mkdtempSync(join(tmpdir(), 'dm-upgrade-')));
+  fixture.root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dm-upgrade-')));
   writeFileSync(join(fixture.root, 'bots.json'), JSON.stringify({ version: 1, current: bots[0]!.appId, bots }));
   for (const bot of bots) configure(bot);
   offlineProvider.mockClear();
