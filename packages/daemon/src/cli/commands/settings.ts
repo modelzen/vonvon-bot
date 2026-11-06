@@ -360,8 +360,8 @@ export async function runSettingsGet(section: string | undefined, target: Target
       // the --bot and --group this command was given, so the line runs as printed on a machine with several bots
       const scope = `${target.bot !== undefined ? `--bot ${target.bot} ` : ''}${view.scope.kind === 'project' && target.group !== undefined ? `--group ${target.group} ` : ''}`;
       human.push(...decisionLines(decisionModels, inUse, section === 'judge', scope));
-      if (prompt) human.push(`  ${promptSource(prompt, view.scope.kind === 'project')}`);
-      human.push('  只在智能模式的群里用');
+      if (prompt && !target.dm) human.push(`  ${promptSource(prompt, view.scope.kind === 'project')}`);
+      human.push(target.dm ? '  只在智能模式下用' : '  只在智能模式的群里用');
       if (prompt && section === 'judge') human.push(...promptText(prompt));
     }
   }

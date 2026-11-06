@@ -87,7 +87,7 @@ const QUESTIONS: Record<JudgeVariant, { question: string; criteria: Partial<Reco
     },
   },
   dm: {
-    question: '`new_message` 发在私聊里，是对 bot（`bot_name`）说的。按 `rules`，bot 回不回？',
+    question: '`new_message` 发在私聊里，是对 bot（`bot_name`）说的，标了 `new` 的几条是和它一起连着发来的。按 `rules`，其中有一条要回，bot 就回。bot 回不回？',
     criteria: {
       skip: SKIP,
       main: '回：按 `rules`，回应这条消息',
