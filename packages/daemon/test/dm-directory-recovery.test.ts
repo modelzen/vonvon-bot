@@ -17,6 +17,7 @@ vi.mock('../src/config/paths', async () => {
 import { botIdentity, ensureBotDmDirectory, loadBots, repairBotDirectories, withBotGroupBinding, type BotEntry, type BotsRegistry } from '../src/config/bots';
 import { directoryIdentity, verifyDirectory } from '../src/config/bot-namespace';
 
+const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
 const first: BotEntry = { name: 'first', appId: 'cli_first', tenant: 'feishu', createdAt: 1 };
 const second: BotEntry = { name: 'second', appId: 'cli_second', tenant: 'feishu', createdAt: 2 };
 let outside: string;
@@ -131,7 +132,7 @@ describe('DM initialization after restoring managed directories', () => {
     await group();
     const moved = join(outside, 'linked-projects');
     renameSync(projects(), moved);
-    symlinkSync(moved, projects(), 'dir');
+    symlinkSync(moved, projects(), directoryLinkType);
     const before = contents();
     await expect(dm()).rejects.toThrow();
     expect(contents()).toBe(before);
@@ -141,7 +142,7 @@ describe('DM initialization after restoring managed directories', () => {
     await group(); changeRecordedDevice();
     const bot = read().allocations![first.appId]!.namespaceRoot;
     const moved = join(outside, 'linked-bot');
-    renameSync(bot, moved); symlinkSync(moved, bot, 'dir');
+    renameSync(bot, moved); symlinkSync(moved, bot, directoryLinkType);
     const before = contents();
     await expect(dm()).rejects.toThrow();
     expect(contents()).toBe(before);
@@ -150,7 +151,7 @@ describe('DM initialization after restoring managed directories', () => {
   it('rejects a linked descendant after checking the parent without a partial publish', async () => {
     const existing = await group(); changeRecordedDevice();
     const moved = join(outside, 'linked-group');
-    renameSync(existing.cwd, moved); symlinkSync(moved, existing.cwd, 'dir');
+    renameSync(existing.cwd, moved); symlinkSync(moved, existing.cwd, directoryLinkType);
     const before = contents();
     await expect(dm()).rejects.toThrow();
     expect(contents()).toBe(before);
@@ -160,7 +161,7 @@ describe('DM initialization after restoring managed directories', () => {
   it('rejects an existing DM leaf link without touching its target or repairing the ledger', async () => {
     await group(); changeRecordedDevice();
     writeFileSync(join(outside, 'keep.txt'), 'outside content');
-    symlinkSync(outside, join(projects(), first.name, 'dm'), 'dir');
+    symlinkSync(outside, join(projects(), first.name, 'dm'), directoryLinkType);
     const before = contents();
     await expect(dm()).rejects.toThrow('目录被换成了文件或链接');
     expect(contents()).toBe(before);
@@ -170,7 +171,7 @@ describe('DM initialization after restoring managed directories', () => {
   it('rejects a dangling DM leaf link without creating the external target', async () => {
     await group();
     const target = join(outside, 'must-not-be-created');
-    symlinkSync(target, join(projects(), first.name, 'dm'), 'dir');
+    symlinkSync(target, join(projects(), first.name, 'dm'), directoryLinkType);
     await expect(dm()).rejects.toThrow('目录被换成了文件或链接');
     expect(existsSync(target)).toBe(false);
   });
