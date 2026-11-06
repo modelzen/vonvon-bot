@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmod, mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -47,6 +47,7 @@ vi.mock('../src/card/run-card-stream', () => ({
 }));
 import { builtinSkillsOfSet } from '../src/agent/builtin-skills/registry';
 import { codexSessionParams } from '../src/agent/codex-appserver/backend';
+import { createAgentEntries } from '../src/agent/entry/registry';
 import { createOrchestrator } from '../src/bot/handle-message';
 import type { AppConfig } from '../src/config/schema';
 
@@ -66,7 +67,7 @@ afterEach(async () => {
 });
 afterAll(async () => { await rm(dataRoot, { recursive: true, force: true }); });
 
-function orchestrator(capabilityPackages = true) {
+function orchestrator(capabilityPackages = true, options?: Parameters<typeof createOrchestrator>[4]) {
   const startThread = vi.fn(async (_opts: StartThreadOptions) => ({ sessionId: 'fresh', isAlive: () => true, close: async () => {}, abort: async () => {}, steer: async () => {},
     runStreamed: () => ({ turnId: () => 'turn', events: (async function* (): AsyncGenerator<AgentEvent> { yield { type: 'turn_started', turnId: 'turn' }; yield { type: 'done', turnId: 'turn' }; })() }) }));
   fake.backend = { id: 'codex-appserver', displayName: 'codex', profileCapabilities: { capabilityPackages }, listModels: async () => [], startThread, resumeThread: startThread, listThreads: async () => [] };
@@ -75,8 +76,8 @@ function orchestrator(capabilityPackages = true) {
     cardkit: { v1: { card: { create: async () => ({ data: { card_id: 'card' } }) } } },
     im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'omt_new' }] } }), list: ok, reply: ok, create: ok },
       chat: { get: async () => { throw new Error('no scope'); } }, messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) } } } } };
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
-  return { o: createOrchestrator(channel as never, cfg, root), startThread };
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] } } };
+  return { o: createOrchestrator(channel as never, cfg, root, undefined, options), startThread };
 }
 const message = (threadId?: string): NormalizedMessage => ({ messageId: `msg-${++seq}`, chatId: 'chat', chatType: 'group', ...(threadId ? { threadId } : {}),
   content: '每天 9 点发日报', senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false });
@@ -141,6 +142,56 @@ for (const mode of ['qa', 'write'] as const) {
 it('writes nothing for a backend that cannot take packages', async () => {
   expect((await groupProfile(false))?.capabilityPackages).toEqual([]);
   expect(fake.ensure).not.toHaveBeenCalled();
+});
+
+// dm-agent 9: every session, wherever it runs and whether it starts or resumes, finds `vonvon`; both Providers read `env`.
+describe('the launcher in a session\'s env', () => {
+  const CLI = join('/data', 'bin', 'vonvon');
+  const onPath = { VONVON_CLI: CLI };
+  const started = async (start: (o: ReturnType<typeof createOrchestrator>) => Promise<unknown>) => {
+    const { o, startThread } = orchestrator(true, { sessionCli: CLI });
+    await start(o);
+    await vi.waitFor(() => expect(startThread).toHaveBeenCalled());
+    await o.shutdown();
+    return startThread.mock.calls[0]![0];
+  };
+  const group = () => ({ name: 'g', chatId: 'chat', cwd: join(root, 'work'), kind: 'multi', mode: 'qa', createdAt: 1, blank: false });
+  it('reaches a group\'s new session', async () => {
+    fake.project = group();
+    expect((await started(o => o.onMessage(message()))).profile?.env).toMatchObject(onPath);
+  });
+  it('reaches a resumed session', async () => {
+    fake.project = group();
+    fake.record = { threadId: 'omt_old', chatId: 'chat', sessionId: 'thread', backend: 'codex-appserver', cwd: join(root, 'work'), summary: '' };
+    const options = await started(o => o.onMessage(message('omt_old')));
+    expect(options).toMatchObject({ sessionId: 'thread' });
+    expect(options.profile?.env).toMatchObject(onPath);
+  });
+  it('reaches a comment\'s session', async () => {
+    fake.project = undefined;
+    const options = await started(o => o.onComment({ fileType: 'docx', fileToken: 'fixture-doc', commentId: 'comment', replyId: 'one', mentionedBot: true, operator: { openId: 'owner' }, timestamp: Date.now() }));
+    expect(options.profile?.env).toMatchObject(onPath);
+  });
+  it('goes through to Codex\'s shell policy', async () => {
+    fake.project = group();
+    const sent = codexSessionParams(await started(o => o.onMessage(message())), 'codex-cli 0.163.0', null) as Record<string, any>;
+    expect(sent.config.shell_environment_policy.set).toMatchObject(onPath);
+    expect(sent.config.shell_environment_policy.set).not.toHaveProperty('PATH');
+  });
+  it('is left out where no launcher was written', async () => {
+    fake.project = group();
+    expect((await groupProfile())?.env).not.toHaveProperty('VONVON_CLI');
+  });
+  it('sits beside a session\'s token and scope', async () => {
+    fake.project = group();
+    const entries = createAgentEntries({ appId: 'app', isAdmin: () => true });
+    const { o, startThread } = orchestrator(true, { sessionCli: CLI, entries, host: { issueSessionToken: async () => 'vs1.token' } });
+    await o.onMessage(message());
+    await vi.waitFor(() => expect(startThread).toHaveBeenCalled());
+    await o.shutdown();
+    expect(startThread.mock.calls[0]![0].profile?.env).toMatchObject({ ...onPath, VONVON_SESSION: 'vs1.token', VONVON_SCOPE: 'bot=app,group=chat' });
+    expect(startThread.mock.calls[0]![0].profile?.env).not.toHaveProperty('VONVON_BOT');
+  });
 });
 
 it('gives a comment\'s session none', async () => {

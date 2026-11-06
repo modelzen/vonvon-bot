@@ -146,7 +146,7 @@ function message(text: string, fields: Partial<NormalizedMessage> = {}): Normali
 /** A short interrupt grace by default: the fake thread ends a turn only once it is closed. */
 function setup(options: { droppedFile?: string | false; maxConcurrentRuns?: number; reply?: unknown; shutdownTiming?: { interruptGraceMs?: number; drainMs?: number } } = {}) {
   const cfg: AppConfig = { accounts: { app: { id: APP, secret: 'test', tenant: 'feishu' } }, preferences: {
-    pendingPolicy: 'queue', access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' },
+    pendingPolicy: 'queue', access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' },
     ...(options.maxConcurrentRuns ? { maxConcurrentRuns: options.maxConcurrentRuns } : {}),
   } };
   const channel = { send: fake.send, rawClient: { cardkit: { v1: { card: { create: fake.askCreate, update: fake.askUpdate } } }, im: { v1: {

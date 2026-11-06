@@ -51,7 +51,7 @@ async function bot(): Promise<void> {
   process.on('message', hostApi.onMessage);
   let switchOn = true;
   const entries = createAgentEntries({
-    appId: APP_ID, isAdmin: id => id === OWNER || id === ADMIN, isOwner: id => id === OWNER, chatSettingsOn: () => switchOn,
+    appId: APP_ID, isAdmin: id => id === OWNER || id === ADMIN,
     sessions: { revoke: sessionId => { void hostApi.revokeSessionToken(sessionId).catch(() => {}); } },
     memoryPlace: async turn => turn.place === 'group' ? { chatProjectId: PROJECT_A } : { botProjectIds: [PROJECT_A, PROJECT_B] },
   });
@@ -104,7 +104,7 @@ async function host(cli: string | undefined): Promise<number> {
   const child: ChildProcess = fork(process.argv[1]!, ['--bot'], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
   const caller = createAdminIpcCaller(message => { if (!child.connected) throw new Error('IPC 通道已关闭'); child.send(message); });
   child.on('message', caller.onMessage);
-  child.on('message', createHostIpcResponder({ issueSessionToken: async input => tokens.issue(input), revokeSessionToken: async sessionId => { tokens.revoke(sessionId); } },
+  child.on('message', createHostIpcResponder({ issueSessionToken: async input => tokens.issue(input), revokeSessionToken: async sessionId => { tokens.revoke(sessionId); }, feishuRead: async () => ({ ok: false, kind: 'other', message: 'not in this probe' }), feishuApi: async () => ({ ok: false, kind: 'other', message: 'not in this probe' }) },
     message => { if (child.connected) child.send(message); }).onMessage);
   const waiting = new Map<number, (reply: { token?: string; sessionId?: string }) => void>();
   let ready!: () => void;

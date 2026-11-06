@@ -133,7 +133,7 @@ function message(text: string): NormalizedMessage {
 /** Starts the orchestrator; every resume returns `thread` when given. */
 function setup(thread?: unknown, allowedChats = ['chat'], entries?: AgentEntries, host?: Pick<HostApi, 'issueSessionToken'>) {
   if (thread) fake.backend.resumeThread.mockResolvedValue(thread);
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['admin'], allowedChats } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner', 'admin'], allowedChats } } };
   const channel = { send: fake.send, getChatInfo: async () => ({ name: 'Test', chatType: 'group' }), rawClient: { cardkit: { v1: { cardElement: { delete: fake.deleteElement } } }, im: { v1: { chat: { get: async () => ({ data: { chat_mode: 'group' } }) }, chatMembers: { isInChat: async () => ({ code: 0, data: { is_in_chat: true } }) }, message: { get: async () => ({ data: { items: [{ thread_id: 'topic', body: { content: JSON.stringify({ type: 'card', data: { card_id: 'orphan-entity' } }) } }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
@@ -874,7 +874,7 @@ describe('goal child questions across parent turns', () => {
     }
     await click('secret-first', 'chat'); expect(f.response).not.toHaveBeenCalled();
     next.release(); await until(() => expect(inNext).toBe(true)); expect(count).toBe(3);
-    await o.onMessage({ ...message(secret), chatType: 'p2p', chatId: 'p2p', threadId: undefined });
+    await o.onMessage({ ...message(secret), chatType: 'p2p', chatId: 'p2p', threadId: undefined, replyToMessageId: carrier('secret-first', 'owner') });
     expect(f.response).toHaveBeenCalledExactlyOnceWith('secret-first', { kind: 'answered', answer: { kind: 'text', text: secret } });
     await until(() => expect(count).toBe(6)); await click('secret-first', 'owner'); expect(f.response).toHaveBeenCalledTimes(1);
     fake.sessions = [{ threadId: 'topic', chatId: 'chat', cwd: '/test', sessionId: 'host', backend: 'codex', summary: '' }];
@@ -898,7 +898,7 @@ describe('goal child questions across parent turns', () => {
 });
 
 describe('agent entry authority during compact and retry', () => {
-  const registry = () => createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true });
+  const registry = () => createAgentEntries({ appId: 'fixture', isAdmin: () => true });
   const human = (text: string) => ({ ...message(text), raw: { sender: { sender_type: 'user' } } });
   it('closes the triggering authority before running a queued manual compaction', async () => {
     let finish: (() => void) | undefined;
@@ -950,7 +950,7 @@ describe('session token', () => {
   // main 必败: the session started with VONVON_SESSION=1
   it('starts the session with its token in the environment', async () => {
     const sessions = { revoke: vi.fn() };
-    const entries = createAgentEntries({ appId: 'app', isAdmin: () => true, isOwner: () => true, sessions });
+    const entries = createAgentEntries({ appId: 'app', isAdmin: () => true, sessions });
     const host = { issueSessionToken: vi.fn(async () => TOKEN) };
     const run = scriptedThread([]);
     const o = setup(run.t, ['chat'], entries, host);
@@ -966,7 +966,7 @@ describe('session token', () => {
   });
   it('does not start a session the host gave no token for', async () => {
     const sessions = { revoke: vi.fn() };
-    const entries = createAgentEntries({ appId: 'app', isAdmin: () => true, isOwner: () => true, sessions });
+    const entries = createAgentEntries({ appId: 'app', isAdmin: () => true, sessions });
     const host = { issueSessionToken: vi.fn(async () => { throw new Error('vonvon 主进程 5000ms 未响应'); }) };
     const run = scriptedThread([]);
     const o = setup(run.t, ['chat'], entries, host);

@@ -1,5 +1,6 @@
 import type { BotSettingsEdit, SettingsAction, SettingsSave, SettingsActionResult, HostSettings } from './settings-types';
 import { backendIds } from '../agent';
+import { AdminWriteError } from './write-error';
 import { permissionTable, tableEnv, tierInfo, TIER_NETWORK } from '../agent/permission';
 import { groupBackendId, groupPermission } from '../config/execution';
 import type { AgentBackend, BackendProbe, PermissionMode, ReasoningEffort } from '../agent/types';
@@ -58,15 +59,7 @@ export type AdminWriteOp =
       longTaskMinutes: number;
     };
 
-/** 写操作被校验拒绝（中文原因可直接上卡/上 HTTP body）。HTTP 层映射 409；
- * IPC 层凭 code 还原类型。 */
-export class AdminWriteError extends Error {
-  readonly code = 'ADMIN_WRITE_REJECTED';
-  constructor(reason: string) {
-    super(reason);
-    this.name = 'AdminWriteError';
-  }
-}
+export { AdminWriteError };
 
 /** perform* 的统一返回：ok 带写后回读的最新项目（卡片/响应直接渲染它，保证与
  * 盘上一致）；!ok 带中文拒因。不抛错——DM 与 Web 对拒因的呈现方式不同。 */

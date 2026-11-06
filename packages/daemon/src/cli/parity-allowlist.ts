@@ -24,6 +24,8 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'command.setResponse': { reason: 'superseded', note: 'settings.save.project response (settings set)' },
   'command.setPermission': { reason: 'superseded', note: 'settings.save.project permission (settings set)' },
 
+  'command.listGroupMembers': { reason: 'superseded', note: 'command.feishuRead feishu_members (feishu members), which picks the Bot; the web page sends this one' },
+
   'library.previous': { reason: 'unused', note: 'no client sends it' },
 
   'collaboration.startGoal': { reason: 'unused', note: 'goals start in the group chat; no client sends it' },

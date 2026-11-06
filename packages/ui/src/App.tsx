@@ -62,7 +62,7 @@ import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel} from "./settings/SettingsPanel";
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
 import {decisionProviderSection, diagnosticsSection, OPEN_SETTING_EVENT, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
-import {agentPanes, initialRoute, openMembership, openScheduleTab, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, joinedGroupRoute} from './collaboration-navigation';
+import {agentPanes, initialRoute, openDm, openMembership, openScheduleTab, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, joinedGroupRoute} from './collaboration-navigation';
 import {SearchDialog} from './SearchDialog';
 import {flushSync} from 'react-dom';
 import {GroupWorkspace, groupTabForSection, type GroupDesignTab} from './GroupWorkspace';
@@ -88,6 +88,7 @@ import {ServerUpdateCard} from './management/ServerUpdateCard';
 import {whereName} from './device-copy';
 import {DiagnosticsPanel} from './management/DiagnosticsPanel';
 import {SecretsPanel} from './management/SecretsPanel';
+import {AdministratorsPanel} from './management/AdministratorsPanel';
 import {appCardFor, coreUpdatable, UpdatePanel} from './management/UpdatePanel';
 import {DesktopUpdateProvider, useDesktopUpdate} from './desktop-update';
 import {DesktopUpdateButton} from './DesktopUpdateButton';
@@ -558,10 +559,11 @@ function DesktopApp() {
   const titles: Record<Page, string> = {
     home: "此刻",
     settings: "设置",
-    collaboration: member
+    collaboration: route.kind === 'dm' ? `私聊 · ${agent?.name ?? 'Bot'}` : member
       ? `${group?.name ?? '飞书群'} · ${agent?.name ?? 'Bot'}`
       : (agent?.name ?? group?.name ?? project?.name ?? (view === "agents" ? "Bot" : view === "groups" ? "群组" : "项目管理")),
     setup: "飞书连接",
+    administrators: "管理员",
     bridgeImport: "Bridge 导入",
     environment: "工具",
     providers: "Provider",
@@ -583,6 +585,7 @@ function DesktopApp() {
       : route.parent.kind === 'project'
         ? snapshot.projects?.find(item => item.id === (route.parent.kind === 'project' ? route.parent.id : undefined))?.name ?? '项目'
         : route.parent.kind === 'group' ? '群组列表' : '项目列表'
+    : route.kind === 'dm' ? agent?.name ?? 'Bot'
     : routeView(route) === 'agents' ? 'Bot 列表' : routeView(route) === 'groups' ? '群组列表' : '项目列表';
   function membershipRows(
     members: Membership[],
@@ -663,7 +666,11 @@ function DesktopApp() {
               <button type="button" onClick={() => changeRoute(routeBack)}>{route.parent.kind === 'group' ? group?.name ?? '飞书群' : parentLabel}</button>
               <ChevronRight size={12} aria-hidden="true" />
             </>}
-            <span aria-current={route.kind === 'membership' && groupTabs[route.id] === 'memory' ? undefined : 'page'}>{route.kind === 'membership' ? route.parent.kind === 'agent' ? group?.name ?? '飞书群' : agent?.name ?? 'Bot' : agent?.name ?? group?.name ?? project?.name ?? '内容已变化'}</span>
+            {route.kind === 'dm' && <>
+              <button type="button" onClick={() => changeRoute(routeBack)}>{parentLabel}</button>
+              <ChevronRight size={12} aria-hidden="true" />
+            </>}
+            <span aria-current={route.kind === 'membership' && groupTabs[route.id] === 'memory' ? undefined : 'page'}>{route.kind === 'dm' ? '私聊' : route.kind === 'membership' ? route.parent.kind === 'agent' ? group?.name ?? '飞书群' : agent?.name ?? 'Bot' : agent?.name ?? group?.name ?? project?.name ?? '内容已变化'}</span>
             {route.kind === 'membership' && groupTabs[route.id] === 'memory' && <><ChevronRight size={12} aria-hidden="true"/><span aria-current="page">记忆</span></>}
           </nav>}
           {pendingGroups.map(page => {
@@ -813,7 +820,7 @@ function DesktopApp() {
                   )}
                 </>
               )}
-              {selection.kind === "agent" && agent && (
+              {selection.kind === "agent" && route.kind !== 'dm' && agent && (
                 <>
                   <div className="bot-detail-header">
                   <header className="collaboration-profile">
@@ -829,7 +836,7 @@ function DesktopApp() {
                   <div className="bot-detail-navigation"><BotDetailTabs selected={route.kind === 'agent' ? route.pane.kind : 'groups'} onSelect={agentPane}/></div>
                   </div>
                   {route.kind === 'agent' && route.pane.kind === 'profile' ? <BotMap agentId={agent.id} snapshot={snapshot} onProject={id => select({kind: 'project', id})}/>
-                  : route.kind === 'agent' && route.pane.kind === 'schedule' ? <BotSchedules key={agent.id} agentId={agent.id} snapshot={snapshot} onOpen={openGroupSchedule}/> : detail.kind !== 'agent-settings' ? <>
+                  : route.kind === 'agent' && route.pane.kind === 'schedule' ? <BotSchedules key={agent.id} agentId={agent.id} snapshot={snapshot} onOpen={openGroupSchedule} onOpenDm={() => changeRoute(() => openDm(agent.id, 'schedule', {kind: 'schedule'}))}/> : detail.kind !== 'agent-settings' ? <>
                   <BotGroupList
                     snapshot={snapshot}
                     agent={agent}
@@ -837,6 +844,8 @@ function DesktopApp() {
                     status={agentListStatus(agent)}
                     onJoin={() => void openJoin(agent.id)}
                     onMembership={id => select({kind: 'membership', id})}
+                    onDm={() => changeRoute(() => openDm(agent.id))}
+                    dmNew={newCounts.dm[agent.id]}
                   />
                   </> : <div className="agent-settings-page">
                   <SettingsGroup className="agent-activation" id={settingAnchor('Bot 身份')}>
@@ -921,7 +930,13 @@ function DesktopApp() {
                 onProject={id => select({kind: 'project', id})}
                 onOpenTools={() => openContextSettings('environment')} onOpenProviders={() => openContextSettings('providers')} onOpenSecrets={provider => openContextSettings('secrets', decisionProviderSection(provider))}
                 onChanged={async () => {await run({type:'refresh'});}}/>}
-              {((route.kind === 'agent' && !agent) || (route.kind === 'group' && !group) || (route.kind === 'project' && !project) || (route.kind === 'membership' && (!member || !agent || !group))) && (
+              {route.kind === 'dm' && agent?.dm && <GroupWorkspace key={agent.dm.id} dmMode member={agent.dm} agent={agent} group={{id: agent.dm.groupId, name: agent.dm.name}} snapshot={snapshot}
+                initialTab={route.tab} newMemoryCount={newCounts.dm[agent.id]} onTabChange={tab => changeRoute(current => current.kind === 'dm' ? {...current, tab} : current)}
+                onBot={() => undefined}
+                onBotProfile={() => changeRoute(() => ({kind:'agent',id:agent.id,pane:{kind:'profile'}}))}
+                onOpenTools={() => openContextSettings('environment')} onOpenProviders={() => openContextSettings('providers')} onOpenSecrets={provider => openContextSettings('secrets', decisionProviderSection(provider))}
+                onChanged={async () => {await run({type:'refresh'});}}/>}
+              {((route.kind === 'agent' && !agent) || (route.kind === 'dm' && !agent?.dm) || (route.kind === 'group' && !group) || (route.kind === 'project' && !project) || (route.kind === 'membership' && (!member || !agent || !group))) && (
                 <InlineNotice title="内容暂不可用">
                   {route.kind === 'membership' ? '这条群内协作或关联的 Bot、飞书群已变化。请返回上一级并刷新。' : '这个 Bot、飞书群或项目已变化。请返回列表并刷新。'}
                 </InlineNotice>
@@ -929,6 +944,7 @@ function DesktopApp() {
             </>
           )}
           {(page === "setup" || (page === "home" && !snapshot.agents.length)) && <WelcomeSetup key={setupAgentId ?? "global"} initialAgentId={setupAgentId} initialProvider={setupProvider} onProviderPrepared={setSetupProvider} onCreateBot={provider => void register(undefined, provider)} onOpenGroups={() => snapshot.agents.length === 1 ? openJoin(snapshot.agents[0]!.id, undefined, setupProvider) : openList("agents")} snapshot={snapshot} ready={ready} busy={busy} run={run} onRegister={agentId => void register(agentId)} onOpenProviders={openProviders} onNotice={(message, error) => setNotice({message, error})}/>}
+          {page === "administrators" && <AdministratorsPanel agents={snapshot.agents}/>}
           {page === "bridgeImport" && <section className="welcome-setup" aria-label="Bridge 导入"><header className="today-page-heading"><h1>Bridge 导入</h1></header><BridgeImportPanel ready={ready} busy={busy} platform={snapshot.application.platform} showUnavailable/></section>}
           {page === "providers" && <ProviderManager snapshot={snapshot} ready={ready} busy={busy} run={run} reveal={searchTarget?.reveal === 'codex' ? 'codex' : searchTarget?.reveal === 'claude' ? 'claude' : undefined}/>}
           {page === "environment" && <><EnvironmentPanel reveal={searchTarget?.reveal} request={client.environment}/></>}

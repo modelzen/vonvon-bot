@@ -68,7 +68,7 @@ html, body { min-width: 320px; min-height: 0; }
 .today-settings-row { min-height: 64px; cursor: pointer; }
 .today-setting-icon { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 7px; color: var(--color-text-secondary); background: var(--color-surface-muted); }
 .today-setting-icon[data-page="providers"], .today-setting-icon[data-page="secrets"] { color: #8254cc; background: #efe8fa; }
-.today-setting-icon[data-page="environment"], .today-setting-icon[data-page="setup"] { color: #226bc0; background: #e8f0fc; }
+.today-setting-icon[data-page="environment"], .today-setting-icon[data-page="setup"], .today-setting-icon[data-page="administrators"] { color: #226bc0; background: #e8f0fc; }
 .today-setting-icon[data-page="usage"], .today-setting-icon[data-page="bridgeImport"] { color: #247e76; background: #e6f2f0; }
 .today-setting-icon[data-page="devices"], .today-setting-icon[data-page="application"], .today-setting-icon[data-page="diagnostics"] { color: #68686e; background: #eeeef1; }
 .today-empty { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px; border: 1px solid var(--color-border); border-radius: var(--card-radius, 12px); background: var(--color-surface); }

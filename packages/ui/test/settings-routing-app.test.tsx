@@ -28,7 +28,7 @@ vi.mock('../src/client-context', async original => {
 });
 vi.mock('../src/settings/DraftGuard', () => ({DraftGuardProvider: () => null, useDraftGuard: () => ({navigate: (action: () => void) => action()})}));
 vi.mock('../src/desktop-update', () => ({DesktopUpdateProvider: () => null, useDesktopUpdate: () => [undefined]}));
-vi.mock('../src/new-counts', async original => ({...await original<typeof import('../src/new-counts')>(), useNewCounts: () => ({projects: {}, bots: {}})}));
+vi.mock('../src/new-counts', async original => ({...await original<typeof import('../src/new-counts')>(), useNewCounts: () => ({projects: {}, bots: {}, dm: {}})}));
 vi.mock('../src/pending-groups', () => ({usePendingGroups: () => []}));
 vi.mock('../src/management/SecretsPanel', async original => ({...await original<typeof import('../src/management/SecretsPanel')>(), useSecrets: () => ({read: {kind: 'loading'}, reader: {read: vi.fn()}})}));
 vi.mock('../src/setup/useSetupStatus', () => ({useSetupStatus: () => ({reads: {}, recheck: vi.fn()})}));

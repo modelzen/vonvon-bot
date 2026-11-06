@@ -2,6 +2,7 @@ import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement, type ReactNode} from 'react';
 import type {AdminSetupStatus, Agent, DesktopSnapshot} from '@vonvon/protocol';
 import {FeishuConnections} from '../src/setup/FeishuConnections';
+import {PrivateChatButton, privateChatUrl} from '../src/setup/PrivateChatButton';
 import type {SetupRead} from '../src/setup/useSetupStatus';
 
 const h = vi.hoisted(() => ({
@@ -18,7 +19,7 @@ vi.mock('react', async original => ({...await original<typeof import('react')>()
 }));
 vi.mock('../src/client-context', () => ({useClient: () => ({admin: h.admin}), useShellCapabilities: () => ({})}));
 vi.mock('../src/setup/useSetupStatus', () => ({useSetupStatus: () => ({reads: h.reads, recheck: h.recheck})}));
-vi.mock('../src/url-actions', () => ({openExternalUrl: (...args: unknown[]) => h.openExternal(...args)}));
+vi.mock('../src/url-actions', async original => ({...await original<typeof import('../src/url-actions')>(), openExternalUrl: (...args: unknown[]) => h.openExternal(...args)}));
 
 type Element = ReactElement<Record<string, any>>;
 function nodes(node: ReactNode): Element[] {
@@ -212,4 +213,21 @@ it('does not substitute the first Bot when the requested Bot has not arrived or 
   expect(section(all)).toBeUndefined();
   all.find(node => node.type === 'button' && node.props.title === '一号 Bot')!.props.onClick();
   expect(section(render({...snapshot, agents: [first]}, second.id)).props['aria-label']).toBe('一号 Bot 的配置检查');
+});
+
+it('offers the private chat next to the groups, on the tenant of the selected Bot', async () => {
+  const peek = () => { h.index = 0; return FeishuConnections({snapshot, ready: true, busy: false, run, onRegister, onOpenGroups, onOpenProviders: () => {}, onNotice}); };
+  const chat = (tree: ReactNode) => {
+    const heading = nodes(tree).find(node => node.type === 'header')!;
+    const found = nodes(heading).find(node => node.type === PrivateChatButton)!;
+    return {found, groups: nodes(heading).some(node => text(node.props.children) === '连接群聊')};
+  };
+  expect(chat(peek()).groups).toBe(true);
+  expect(chat(peek()).found.props.status).toBeUndefined();
+  h.reads[first.id] = {status: {...done(first.id), tenant: 'lark'}, checking: false} satisfies SetupRead;
+  const {found} = chat(peek());
+  expect(found.props.agent).toBe(first);
+  expect(privateChatUrl(found.props.status)).toBe('https://applink.larksuite.com/client/bot/open?appId=cli_first');
+  expect(privateChatUrl(undefined)).toBeUndefined();
+  expect(privateChatUrl(done(second.id))).toBe('https://applink.feishu.cn/client/bot/open?appId=cli_second');
 });

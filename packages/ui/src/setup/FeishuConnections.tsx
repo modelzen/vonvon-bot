@@ -6,6 +6,7 @@ import {AgentAvatar} from '../AgentAvatar';
 import {Button, IconButton, StatusBadge} from '../reference/components/ui';
 import {useClient, useShellCapabilities} from '../client-context';
 import {openExternalUrl} from '../url-actions';
+import {PrivateChatButton} from './PrivateChatButton';
 import {stepDescription, type SetupChecklistProps} from './SetupChecklist';
 import {useSetupStatus, type SetupRead} from './useSetupStatus';
 import './feishu-connections.css';
@@ -61,6 +62,7 @@ export function FeishuConnections({snapshot, ready, busy, run, onRegister, onOpe
         <div className="welcome-setup__intro"><h1>飞书连接</h1><p>管理 Bot 的连接与权限。</p></div>
         <div className="welcome-setup__actions">
           <GlowButton disabled={!ready || busy} onClick={() => onRegister()}>添加 Bot</GlowButton>
+          {agent && <PrivateChatButton agent={agent} status={read?.status} onNotice={onNotice}/>}
           {onOpenGroups && <Button size="sm" variant="primary" disabled={!ready || busy} onClick={onOpenGroups}
             icon={<ArrowRight size={15} aria-hidden="true"/>}>连接群聊</Button>}
         </div>

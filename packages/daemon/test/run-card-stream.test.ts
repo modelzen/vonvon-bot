@@ -407,7 +407,7 @@ it('delivers an independent child question while the real running-card pump reje
   ch.rawClient.im.v1.message.reply = reply;
   const stream = new RunCardStream(); await stream.create(ch, 'failure-chat', card([md('initial')]), {});
   stream.streamCoalesced(ch, card([md('changed')]), null);
-  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] } } };
   const run: AgentRun = { turnId: () => 'turn', events: (async function* () {})(), respondToAsk: async () => {} };
   const asks = new AskCoordinator(ch, cfg, { peek: () => 'Owner' });
   const turn = asks.openTurn({ run, sessionKey: 'session', placement: { chatId: 'failure-chat', replyTo: 'trigger', replyInThread: true },

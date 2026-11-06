@@ -19,7 +19,7 @@ afterAll(async () => {
 });
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'no-mention-parity-'));
-  return { botPaths: (appId: string) => ({ dir: join(appDir, 'bots', appId), configFile: join(appDir, 'bots', appId, 'config.json') }), paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments') } };
+  return { botPaths: (appId: string) => ({ dir: join(appDir, 'bots', appId), configFile: join(appDir, 'bots', appId, 'config.json') }), paths: { appDir, inboundDir: join(appDir, 'inbound'), sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments') } };
 });
 afterAll(() => rmSync(paths.appDir, { recursive: true, force: true }));
 
@@ -69,7 +69,7 @@ vi.mock('../src/card/run-card-stream', () => ({
 
 import { createOrchestrator } from '../src/bot/handle-message';
 
-const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
+const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, completionReminder: { mode: 'manual' } } };
 // The group's only bot: the bridge's 免@ rules, unchanged by s22 (test/baselines.test.ts has several bots).
 const channel = { send: fake.send, rawClient: { im: { v1: { messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) }, chat: { get: async () => ({ code: 0, data: { bot_count: '1' } }) } } } } };
 let orchestrator: ReturnType<typeof createOrchestrator>;

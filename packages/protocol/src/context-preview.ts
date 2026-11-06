@@ -11,12 +11,14 @@ export const contextPreviewRequestSchema = z.object({
   place: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("group"), groupId: groupIdSchema }).strict(),
     z.object({ kind: z.literal("comment") }).strict(),
+    /** One person's private chat: what they have decides the memory, so the person is part of the place (dm-agent 5). */
+    z.object({ kind: z.literal("dm"), openId: z.string().min(1).max(300) }).strict(),
   ]),
   threadId: z.string().min(1).max(1000).optional(),
 }).strict();
 export type ContextPreviewRequest = z.infer<typeof contextPreviewRequestSchema>;
 
-export const contextSectionKeySchema = z.enum(["identity", "role", "supplement", "botMemory", "projectMemory"]);
+export const contextSectionKeySchema = z.enum(["identity", "role", "supplement", "botMemory", "projectMemory", "dmMemory"]);
 export type ContextSectionKey = z.infer<typeof contextSectionKeySchema>;
 
 const count = z.number().int().nonnegative();
@@ -35,7 +37,8 @@ export const contextPreviewReplySchema = z.object({
   running: z.boolean(),
   next: z.object({
     sections: z.array(contextNextSectionSchema),
-    /** Items handed over, by kind: the bot's, the project's trusted, the project's unconfirmed. */
+    /** Items handed over, by kind: the bot's, the project's trusted, the project's unconfirmed. A private chat has no
+     * project memory, so there the last two count the person's private-chat memory. */
     items: z.object({ bot: count, trusted: count, untrusted: count }).strict(),
     /** vonvon's own tools; no file, skill or MCP names of the workspace. */
     tools: z.array(z.string()),

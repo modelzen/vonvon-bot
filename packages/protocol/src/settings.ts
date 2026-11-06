@@ -205,8 +205,9 @@ const access = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("writable") }),
   z.object({
     kind: z.literal("readonly"),
-    /** `not-dm`: a Bot's group session reads its group's settings, which only a private chat changes (devices 5.2). */
-    reason: z.enum(["preview", "owner-offline", "unsupported-host", "stale", "not-dm"]),
+    /** `not-dm`: a Bot's group session reads its group's settings, which only a private chat changes (devices 5.2).
+     * `dm-fixed`: a section the private chat does not have, whoever asks (dm-agent 4.2). */
+    reason: z.enum(["preview", "owner-offline", "unsupported-host", "stale", "not-dm", "dm-fixed"]),
     message: z.string(),
   }),
 ]);
@@ -270,6 +271,15 @@ const decisionModels = z
     }),
   )
   .optional();
+/** Someone who may be made an administrator (dm-agent 3.4): the creator, whom Feishu names, or who was turned away from a private chat. */
+export const adminCandidateSchema = z.object({
+  openId: openIdSchema,
+  name: z.string(),
+  sources: z.array(z.enum(["creator", "feishu", "refused"])),
+  /** when they were last turned away; set with `refused` */
+  at: z.number().optional(),
+});
+export type AdminCandidate = z.infer<typeof adminCandidateSchema>;
 export const agentViewSchema = z.object({
   scope: z.object({ kind: z.literal("agent"), botId: agentIdSchema }),
   /** `judge`, `smartPrompt` and `judgeByBackend` came in s23d: a daemon from before sends none. */
@@ -305,9 +315,11 @@ export const agentViewSchema = z.object({
   decisionModels,
   ownerOpenId: z.string().nullable(),
   administrators: z.object({
-    feishu: z.object({ ownerOpenId: z.string().nullable(), adminOpenIds: z.array(z.string()) }).optional(),
-    scannerOpenId: z.string().nullable().optional(),
     openIds: z.array(z.string()),
+    /** The name Feishu gave each person on the list; one it would not name has no entry. Absent from an older daemon. */
+    names: z.record(z.string()).optional(),
+    /** Who may be picked to join the list, the people on it left out. Absent from an older daemon. */
+    candidates: z.array(adminCandidateSchema).optional(),
     revision: z.string(),
   }),
   voice,

@@ -4,8 +4,9 @@ import type { Principal } from './principal';
 export type BotSessionPrincipal = Extract<Principal, { kind: 'bot-session' }>;
 
 /**
- * Which of its bot's groups a Bot session reaches (devices 5.3): a group session only its own, a private chat all of
- * them narrowed by `--scope group=`, a comment none. A group session without a chat reaches none.
+ * Which of its bot's groups a reach takes in (devices 5.3): a group session only its own, a comment none, and the owner
+ * within a `--scope` (scopedOwner) all of them narrowed by `group=`. A group session without a chat reaches none.
+ * A private chat's session is not narrowed at all (dm-agent 6.1).
  */
 export function sessionGroups(principal: BotSessionPrincipal, scope: Scope | null): (groupId: string) => boolean {
   if (principal.place === 'comment') return () => false;
@@ -23,8 +24,8 @@ export function scopedOwner(scope: Scope): BotSessionPrincipal {
 }
 
 /**
- * devices-4a 4.7: what a Bot session sees of the daemon's state: its own bot and the groups it reaches, none of the
- * diagnostics; the host, platform and version as they are.
+ * devices-4a 4.7: what the owner within a `--scope` sees of the daemon's state: its bot and the groups it reaches, none
+ * of the diagnostics; the host, platform and version as they are.
  */
 export function filterSnapshot(snapshot: DesktopSnapshot, principal: BotSessionPrincipal, scope: Scope | null): DesktopSnapshot {
   const { appId } = principal;
@@ -35,7 +36,8 @@ export function filterSnapshot(snapshot: DesktopSnapshot, principal: BotSessionP
   const { projects, recentConversations, ...rest } = snapshot;
   return {
     ...rest,
-    agents: snapshot.agents.filter(agent => agent.id === appId).map(({ diagnostics: _diagnostics, ...agent }) => agent),
+    // A scope narrowed to one group does not reach the Bot's private chat.
+    agents: snapshot.agents.filter(agent => agent.id === appId).map(({ diagnostics: _diagnostics, dm, ...agent }) => ({ ...agent, ...(dm && scope?.group === undefined ? { dm } : {}) })),
     groups: snapshot.groups.filter(group => groupIds.has(group.id)),
     memberships,
     ...(projects ? { projects: projects
@@ -47,12 +49,15 @@ export function filterSnapshot(snapshot: DesktopSnapshot, principal: BotSessionP
   };
 }
 
-/** What a Bot session reads of the daemon's state: a private chat's as {@link filterSnapshot} cuts it, a group's and a comment's far less. */
-export function sessionSnapshot(snapshot: DesktopSnapshot, principal: BotSessionPrincipal, scope: Scope | null): DesktopSnapshot {
-  if (principal.place !== 'dm') return placeSnapshot(snapshot, principal);
-  const shown = filterSnapshot(snapshot, principal, scope);
-  // The desktop badge labels the Feishu app owner. Keep that person's name out of bot-session CLI reads.
-  return { ...shown, agents: shown.agents.map(({ ownerName: _ownerName, ...agent }) => agent) };
+/** What a Bot session reads of the daemon's state: a private chat's every Bot, a group's and a comment's far less. */
+export function sessionSnapshot(snapshot: DesktopSnapshot, principal: BotSessionPrincipal): DesktopSnapshot {
+  return principal.place === 'dm' ? dmSnapshot(snapshot) : placeSnapshot(snapshot, principal);
+}
+
+/** dm-agent 6.1: a private chat reaches every Bot of this computer, so all of it but the crash reports and the diagnostics. The desktop badge labels the Feishu app owner; that person's name stays out of a session's reads. */
+function dmSnapshot(snapshot: DesktopSnapshot): DesktopSnapshot {
+  const { crashes: _crashes, ...application } = snapshot.application;
+  return { ...snapshot, agents: snapshot.agents.map(({ diagnostics: _diagnostics, ownerName: _ownerName, ...agent }) => agent), application };
 }
 
 /**

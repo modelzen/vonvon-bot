@@ -2,13 +2,14 @@ import { buildAdminsCard, DM } from '../src/card/dm-cards';
 import * as appRoles from '../src/config/app-roles';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { paths } from '../src/config/paths';
+import { join } from 'node:path';
+import { botPaths, paths } from '../src/config/paths';
 import { saveConfig, loadConfig } from '../src/config/store';
 import { createAppPreferencesWriter, createAdminWriteExecutor } from '../src/admin/ops';
 import { createSettingsOwner, type SettingsOwnerDeps } from '../src/admin/settings';
 import { parseSettingsEdit, parseSettingsAction, parseModelQuery } from '../src/admin/settings-parse';
 import type { AgentSettingsView, ProjectSettingsView, SessionSettingsView } from '../src/admin/settings-types';
-import { addProject, getProjectByName, updateProject } from '../src/project/registry';
+import { addDmProject, addProject, dmChatId, dmProject, DM_PROJECT_NAME, getProjectByName, rememberDmChat, updateProject } from '../src/project/registry';
 import { getSession, RETIRED_KEY_TEXT, upsertSession } from '../src/bot/session-store';
 import { createAdminIpcCaller, createAdminIpcResponder } from '../src/admin/ipc';
 import type { AppConfig } from '../src/config/schema';
@@ -142,6 +143,17 @@ it('accepts hand-typed model ids for the project default and a topic, never for 
   const a = await owner.read(agent) as AgentSettingsView;
   expect((await owner.save({ scope: agent, section: 'comments', revision: a.sections.comments.revision, patch: { selection: custom } })).kind).toBe('rejected');
 });
+// dm-agent 5: a private chat's session has a row of its own, not on the group list; its model page must find it.
+it('reads a private chat\'s session through its row', async () => {
+  await addDmProject({ name: DM_PROJECT_NAME, chatId: dmChatId(botId), cwd: '/tmp/dm', blank: true, createdAt: 1, kind: 'single', mode: 'full', dm: { people: {} } });
+  await rememberDmChat('oc_p2p_fixture', 'ou_person');
+  await upsertSession({ threadId: 'oc_p2p_fixture', chatId: 'oc_p2p_fixture', sessionId: 'native-dm', backend: 'codex-appserver', cwd: '/tmp/dm', model: 'fixture-model', effort: 'high', createdAt: 1, updatedAt: 1, summary: '' });
+  const scope = { kind: 'session' as const, botId, threadId: 'oc_p2p_fixture' };
+  const { owner } = await fixture();
+  const view = await owner.read(scope) as SessionSettingsView;
+  expect(view.sections.model.stored.selection).toMatchObject({ model: 'fixture-model' });
+  expect((await owner.save({ scope, section: 'model', revision: view.sections.model.revision, patch: { selection: { kind: 'default' } } })).kind).toBe('saved');
+});
 it('refuses a session key retired in s15c, to read or to save, before touching the record', async () => {
   const retired = { kind: 'session' as const, botId, threadId: `${session.threadId}#admin` };
   await upsertSession({ ...(await getSession(session.threadId))!, threadId: retired.threadId });
@@ -247,9 +259,8 @@ it('session catalog and speed saves use the session cwd capability', async () =>
   const view = await owner.read(session) as SessionSettingsView;
   expect((await owner.save({ scope: session, section: 'speed', revision: view.sections.speed!.revision, patch: { tier: 'fast' } })).kind).toBe('rejected');
 });
-it('membership operations retain owner and preserve concurrent project edits', async () => {
-  const { owner } = await fixture(); const a = await owner.read(agent) as AgentSettingsView;
-  expect((await owner.act({ kind: 'adminMember', botId, openId: 'ou_owner', membership: 'absent', revision: a.administrators.revision })).kind).toBe('rejected');
+it('membership operations preserve concurrent project edits', async () => {
+  const { owner } = await fixture();
   const p = await owner.read(project) as ProjectSettingsView;
   await updateProject('demo', { noMention: false });
   expect((await owner.act({ kind: 'projectMember', botId, projectName: 'demo', openId: 'ou_member', membership: 'present', revision: p.members.revision })).kind).toBe('saved');
@@ -308,6 +319,78 @@ it('s31c: a full-only backend refuses unavailable tiers and custom, while unrela
   expect((await getProjectByName('demo'))?.mode).toBe('full');
 });
 // main 必败: choosing 完全访问 for a group said nothing about group members (devices 第 15 节, devices-ui-2 4.10)
+describe('the private-chat row (dm-agent 4.2)', () => {
+  const dm = { kind: 'project' as const, botId, projectName: dmChatId(botId) };
+  beforeEach(async () => {
+    await addDmProject({ name: '私聊', chatId: dmChatId(botId), cwd: '/tmp/dm', blank: true, origin: 'created', kind: 'single', noMention: true, mode: 'full', network: true, createdAt: 1, backend: 'codex-appserver',
+      modelAccess: { backend: 'codex-appserver', models: ['fixture-model'], efforts: ['high'] }, dm: { people: { oc_a: { openId: 'ou_a', at: 1 }, oc_b: { openId: 'ou_b', at: 2 } } } });
+  });
+  const save = async (owner: Awaited<ReturnType<typeof fixture>>['owner'], section: string, patch: unknown) => {
+    const view = await owner.read(dm) as ProjectSettingsView;
+    const current = view.sections[section as keyof ProjectSettingsView['sections']];
+    return owner.save({ scope: dm, section, revision: current?.revision ?? 'x', patch } as never);
+  };
+  it('reads by oc_dm_<appId>, with no roster to ask Feishu for', async () => {
+    const responseRoster = vi.fn(async () => { throw new Error('not a group'); });
+    const { owner } = await fixture({ responseRoster, discoverSkills: async () => [] });
+    const view = await owner.read(dm) as ProjectSettingsView;
+    expect(view.identity.chatId).toBe(dmChatId(botId));
+    expect(responseRoster).not.toHaveBeenCalled();
+  });
+  it('is not a group name: a name finds nothing', async () => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    await expect(owner.read({ ...dm, projectName: '私聊' })).rejects.toThrow('项目不存在');
+  });
+  it('saves skills and the allowset, and rebinds each person\'s chat', async () => {
+    const evictLiveSessionsForChat = vi.fn(async (_chatId: string) => {});
+    const { owner } = await fixture({ evictLiveSessionsForChat, discoverSkills: async () => [] });
+    expect((await save(owner, 'skills', { disabledPaths: ['/x'] })).kind).toBe('saved');
+    expect((await dmProject())?.skills?.disabledPaths).toEqual(['/x']);
+    expect(evictLiveSessionsForChat.mock.calls.map(([chat]) => chat).sort()).toEqual(['oc_a', 'oc_b']);
+    expect((await save(owner, 'modelAccess', { efforts: ['low', 'high'] })).kind).toBe('saved');
+    const row = await dmProject();
+    expect(row?.modelAccess?.efforts).toEqual(['low', 'high']);
+    expect(row?.mode).toBe('full');
+    expect(row?.chatId).toBe(dmChatId(botId));
+    expect(row?.dm?.people.oc_a?.openId).toBe('ou_a');
+  });
+  it('saves the model and the speed', async () => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    expect((await save(owner, 'model', { selection: { kind: 'explicit', model: 'fixture-model', effort: 'high' } })).kind).toBe('saved');
+    expect((await dmProject())?.defaultModel).toBe('fixture-model');
+    expect((await save(owner, 'speed', { tier: 'fast' })).kind).toBe('saved');
+    expect((await dmProject())?.serviceTier).toBe('fast');
+  });
+  it.each([['permission', { mode: 'qa' }], ['workspace', { primary: '/tmp/x' }], ['response', { noMention: false }], ['run', { pendingPolicy: 'queue' }], ['role', { supplement: 'x' }],
+    ['smartRules', { respond: 'x' }], ['presentation', { voiceEnabled: false }], ['judge', { selection: { kind: 'default' } }]])('refuses %s', async (section, patch) => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    const before = await dmProject();
+    expect(await save(owner, section, patch)).toMatchObject({ kind: 'rejected', fields: [{ message: '私聊只能改模型、速度、可选模型和技能' }] });
+    expect(await dmProject()).toEqual(before);
+  });
+  // dm-agent 10 (D4). main 必败: the view called them writable and only a save was refused
+  it('reads its fixed sections as read-only, and what it may change as writable', async () => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    const view = await owner.read(dm) as ProjectSettingsView;
+    const access = (key: keyof ProjectSettingsView['sections']) => view.sections[key]?.access;
+    for (const key of ['permission', 'workspace', 'response', 'run', 'role', 'smartRules', 'presentation', 'judge'] as const) expect(access(key)).toMatchObject({ kind: 'readonly', reason: 'dm-fixed' });
+    for (const key of ['model', 'speed', 'modelAccess', 'skills'] as const) expect(access(key)).toEqual({ kind: 'writable' });
+  });
+  it('does not follow the Bot\'s default model: what it took at creation is its own (4.1)', async () => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    const model = async () => (await owner.read(dm) as ProjectSettingsView).sections.model.effective.selection;
+    const before = await model();
+    cfg.preferences = { ...cfg.preferences, defaults: { ...cfg.preferences?.defaults, model: { kind: 'known', id: 'another-model', effort: 'low' } } } as never;
+    expect(await model()).toEqual(before);
+    expect((await dmProject())?.modelAccess?.models).toEqual(['fixture-model']);
+  });
+  it('member actions do not reach it', async () => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    expect(await owner.act({ kind: 'projectAudience', botId, projectName: dmChatId(botId), audience: 'all', revision: 'x' } as never)).toMatchObject({ kind: 'rejected' });
+    expect((await dmProject())?.allowedUsers).toBeUndefined();
+  });
+});
+
 describe('完全访问 group warning', () => {
   it('only a group\'s full tier carries the warning', () => {
     expect(permissionTiers({ platform: 'linux', group: true }).map(tier => tier.warning)).toEqual([undefined, undefined, FULL_ACCESS_WARNING]);
@@ -574,38 +657,87 @@ it('s28c: a partial or unavailable roster never replaces saved response members 
   expect((await getProjectByName('demo'))?.allowedUsers).toEqual(['ou_saved']);
 });
 
-it('shows Feishu administrator sources and prevents their local removal', async () => {
-  const roles = vi.spyOn(appRoles, 'getAppRoleSnapshot').mockReturnValue({
-    appId: botId, tenant: 'feishu', fetchedAt: Date.now(), ownerOpenId: 'ou_feishu_owner', admins: ['ou_feishu_admin'],
+describe('the administrators', () => {
+  const access = (admins: string[], ownerOpenId = 'ou_owner') => { cfg.preferences = { ...cfg.preferences, access: { ownerOpenId, admins } }; return saveConfig(cfg); };
+  const list = async (owner: Awaited<ReturnType<typeof fixture>>['owner']) => owner.read(agent) as Promise<AgentSettingsView>;
+  const remove = async (owner: Awaited<ReturnType<typeof fixture>>['owner'], openId: string) =>
+    owner.act({ kind: 'adminMember', botId, openId, membership: 'absent', revision: (await list(owner)).administrators.revision });
+
+  it('shows what Feishu names as candidates, none of it on the list or the card', async () => {
+    const roles = vi.spyOn(appRoles, 'getAppRoleSnapshot').mockReturnValue({
+      appId: botId, tenant: 'feishu', fetchedAt: Date.now(), ownerOpenId: 'ou_feishu_owner', admins: ['ou_feishu_admin', 'ou_feishu_unnamed'],
+    });
+    try {
+      await access(['ou_owner', 'ou_admin']);
+      const personNames = vi.fn(async () => new Map([['ou_admin', '张三'], ['ou_owner', '李四'], ['ou_feishu_owner', '王五'], ['ou_feishu_admin', '赵六']]));
+      const view = await list((await fixture({ personNames })).owner);
+      expect(view.administrators.openIds).toEqual(['ou_owner', 'ou_admin']);
+      expect(view.administrators.names).toEqual({ ou_owner: '李四', ou_admin: '张三' });
+      // the people on the list are not offered again; one Feishu will not name is not offered at all
+      expect(view.administrators.candidates).toEqual([
+        { openId: 'ou_feishu_owner', name: '王五', sources: ['feishu'] },
+        { openId: 'ou_feishu_admin', name: '赵六', sources: ['feishu'] },
+      ]);
+      expect(personNames).toHaveBeenCalledTimes(1);
+      expect(view.ownerOpenId).toBe('ou_owner');
+      const card = JSON.stringify(buildAdminsCard(cfg, new Map([['ou_admin', '张三'], ['ou_owner', '李四']])));
+      expect(card).toContain('张三');
+      expect(card).toContain('李四 · 创建者');
+      expect(card).not.toContain('feishu');
+      // product.md section 6: read-only, whoever looks
+      for (const action of ['rmAdmin', 'addAdminForm']) expect(card).not.toContain(`"a":"${DM[action as keyof typeof DM]}"`);
+      expect(card).toContain('名单在 Vonvon Bot 的「设置 → 管理员」或终端里改。');
+    } finally { roles.mockRestore(); }
   });
-  try {
-    cfg.preferences ??= {};
-    cfg.preferences.access ??= {};
-    cfg.preferences.access.admins = [...(cfg.preferences.access.admins ?? []), 'ou_feishu_admin'];
-    await saveConfig(cfg);
-    const { owner } = await fixture();
-    const view = await owner.read(agent);
-    if (view.scope.kind !== 'agent' || !('administrators' in view)) throw new Error('Expected agent settings');
-    expect(view.administrators.feishu).toEqual({ ownerOpenId: 'ou_feishu_owner', adminOpenIds: ['ou_feishu_admin'] });
-    expect(view.administrators.scannerOpenId).toBe('ou_owner');
-    const card = JSON.stringify(buildAdminsCard(cfg, new Map(), { editable: true }));
-    expect(card).toContain('飞书应用拥有者');
-    expect(card).toContain('飞书应用管理员');
-    expect(card).toContain('扫码注册者');
-    expect(card).toContain('本地管理员');
-    expect(card).not.toContain('\"u\":\"ou_feishu_admin\"');
-    expect(card).toContain('\"u\":\"ou_admin\"');
-    // audit 252-1: an admin who is not the owner sees the same list, read-only
-    const readOnly = JSON.stringify(buildAdminsCard(cfg, new Map(), { editable: false }));
-    expect(readOnly).toContain('本地管理员');
-    expect(readOnly).toContain('本机管理员名单只有飞书应用的拥有者能改。');
-    for (const action of ['rmAdmin', 'addAdminForm']) expect(readOnly).not.toContain(`"a":"${DM[action as keyof typeof DM]}"`);
-    for (const openId of ['ou_feishu_owner', 'ou_feishu_admin', 'ou_owner']) {
-      expect((await owner.act({ kind: 'adminMember', botId, openId, membership: 'absent', revision: view.administrators.revision })).kind).toBe('rejected');
-    }
-    expect((await owner.act({ kind: 'adminMember', botId, openId: 'ou_admin', membership: 'absent', revision: view.administrators.revision })).kind).toBe('saved');
-    expect(cfg.preferences?.access?.admins).toContain('ou_feishu_admin');
-  } finally { roles.mockRestore(); }
+
+  // dm-agent 3.4: the creator is always there, whatever Feishu says of them
+  it('offers the creator after they were removed, by name or as 创建者, and the people turned away', async () => {
+    await access(['ou_admin']);
+    await mkdir(botPaths(botId).dir, { recursive: true });
+    await writeFile(join(botPaths(botId).dir, 'dm-refused.json'), JSON.stringify({ v: 1, people: [{ openId: 'ou_refused', name: '孙七', at: Date.now() }, { openId: 'ou_old', name: '很久以前', at: 1 }] }));
+    const stopped = (await list((await fixture()).owner)).administrators;
+    expect(stopped.names).toEqual({});
+    expect(stopped.candidates).toEqual([
+      { openId: 'ou_owner', name: '创建者', sources: ['creator'] },
+      { openId: 'ou_refused', name: '孙七', sources: ['refused'], at: expect.any(Number) },
+    ]);
+    const running = (await list((await fixture({ personNames: async () => new Map([['ou_owner', '李四']]) })).owner)).administrators;
+    expect(running.candidates?.[0]).toEqual({ openId: 'ou_owner', name: '李四', sources: ['creator'] });
+  });
+
+  // dm-agent 3.3. main 必败: the creator and Feishu's people could not be removed here
+  it('removes anyone while another stays, the creator too, and refuses the last one', async () => {
+    const roles = vi.spyOn(appRoles, 'getAppRoleSnapshot').mockReturnValue({
+      appId: botId, tenant: 'feishu', fetchedAt: Date.now(), ownerOpenId: 'ou_feishu_owner', admins: ['ou_feishu_admin'],
+    });
+    try {
+      await access(['ou_owner', 'ou_feishu_admin', 'ou_admin']);
+      const { owner } = await fixture();
+      expect((await remove(owner, 'ou_owner')).kind).toBe('saved');
+      expect((await remove(owner, 'ou_feishu_admin')).kind).toBe('saved');
+      expect(cfg.preferences?.access).toMatchObject({ ownerOpenId: 'ou_owner', admins: ['ou_admin'] });
+      const last = await remove(owner, 'ou_admin');
+      expect(last).toMatchObject({ kind: 'rejected' });
+      expect(JSON.stringify(last)).toContain('至少要有一个管理员。');
+      expect(cfg.preferences?.access?.admins).toEqual(['ou_admin']);
+    } finally { roles.mockRestore(); }
+  });
+
+  it('tells of a removal after the write, once, and a failure there leaves the list changed', async () => {
+    await access(['ou_owner', 'ou_admin']);
+    const seen: (string[] | undefined)[] = [];
+    const adminRemoved = vi.fn((_openId: string) => { seen.push(cfg.preferences?.access?.admins); throw new Error('cleanup failed'); });
+    const { owner } = await fixture({ adminRemoved });
+    expect((await remove(owner, 'ou_nobody')).kind).toBe('saved');
+    expect(adminRemoved).not.toHaveBeenCalled();
+    expect((await remove(owner, 'ou_admin')).kind).toBe('saved');
+    expect(adminRemoved).toHaveBeenCalledExactlyOnceWith('ou_admin');
+    expect(seen).toEqual([['ou_owner']]);
+    expect((await loadConfig()).preferences?.access?.admins).toEqual(['ou_owner']);
+    const { administrators: { revision } } = await list(owner);
+    expect((await owner.act({ kind: 'adminMember', botId, openId: 'ou_new', membership: 'present', revision })).kind).toBe('saved');
+    expect(adminRemoved).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('model catalog availability', () => {

@@ -134,6 +134,59 @@ export const V1_OPTIONAL_SCOPES = [
   'application:application:self_manage',
 ] as const;
 
+/**
+ * Optional scopes of the Bot's own Feishu read tools (dm-agent 6.5, 7.1; D/feishu-read). Names from a test app and
+ * the API schemas, 2026-11-05. Like the other opt-in groups, NOT in {@link REQUIRED_SCOPES}: without them a tool answers
+ * with what is missing and a link (dm-agent 7.5), and everything else still works.
+ *   - `docs:document.content:read` = docs_ai fetch, `docx:document:readonly` = the raw_content fallback;
+ *   - `sheets:spreadsheet:read` = a spreadsheet's sheets and a range's values;
+ *   - `bitable:app:readonly` = a base's tables, fields, views and records (measured 2026-11-05: this one scope covers them all);
+ *   - `drive:file:download` = a Drive file's bytes.
+ * F6's (`lark-cli schema`, not yet measured): `slides:presentation:read` = a deck's XML, `mindnote:node:read` = a mind
+ * note's nodes, `board:whiteboard:node:read` = a board's nodes, `minutes:minutes:readonly` = a minute's details and
+ * `minutes:minutes.transcript:export` = its transcript, `docs:doc:readonly` = an old document's text.
+ */
+export const DOC_READ_SCOPES = ['docs:document.content:read', 'docx:document:readonly', 'wiki:wiki:readonly'] as const;
+export const SHEET_READ_SCOPES = ['sheets:spreadsheet:read'] as const;
+export const BITABLE_READ_SCOPES = ['bitable:app:readonly'] as const;
+export const DRIVE_READ_SCOPES = ['drive:file:download'] as const;
+export const SLIDES_READ_SCOPES = ['slides:presentation:read'] as const;
+export const MINDNOTE_READ_SCOPES = ['mindnote:node:read'] as const;
+export const BOARD_READ_SCOPES = ['board:whiteboard:node:read'] as const;
+export const MINUTES_READ_SCOPES = ['minutes:minutes:readonly', 'minutes:minutes.transcript:export'] as const;
+export const LEGACY_DOC_READ_SCOPES = ['docs:doc:readonly'] as const;
+/** What a folder holds (`drive/v1/files`). */
+export const DRIVE_LIST_SCOPES = ['space:document:retrieve'] as const;
+/** The knowledge bases and their tree. Finding a page from its link is `wiki:wiki:readonly`, in {@link DOC_READ_SCOPES}. */
+export const WIKI_READ_SCOPES = ['wiki:space:retrieve', 'wiki:node:retrieve'] as const;
+/** Also in {@link COMMENT_SCOPES}, which the first link has preselected since before these tools. */
+export const COMMENT_READ_SCOPES = ['docs:document.comment:read'] as const;
+export const DOC_MEDIA_SCOPES = ['docs:document.media:download'] as const;
+/** Changing a document as the Bot (the tool comes with F3). */
+export const DOC_EDIT_SCOPES = ['docx:document:write_only'] as const;
+export const MESSAGE_SEARCH_SCOPES = ['search:message'] as const;
+/**
+ * Every scope of those tools. Not in {@link GRANT_SCOPES}: Feishu rates them all 高级, and an enterprise's admin decides
+ * which scopes skip review, so they get their own pre-selected link instead of enlarging the first review (dm-agent 6.5).
+ */
+export const FEISHU_TOOL_SCOPES = [
+  ...DOC_READ_SCOPES,
+  ...DOC_EDIT_SCOPES,
+  ...SHEET_READ_SCOPES,
+  ...BITABLE_READ_SCOPES,
+  ...DRIVE_READ_SCOPES,
+  ...SLIDES_READ_SCOPES,
+  ...MINDNOTE_READ_SCOPES,
+  ...BOARD_READ_SCOPES,
+  ...MINUTES_READ_SCOPES,
+  ...LEGACY_DOC_READ_SCOPES,
+  ...DRIVE_LIST_SCOPES,
+  ...WIKI_READ_SCOPES,
+  ...COMMENT_READ_SCOPES,
+  ...DOC_MEDIA_SCOPES,
+  ...MESSAGE_SEARCH_SCOPES,
+] as const;
+
 /** The 3.11 optional scopes that change what the bot does in a chat, listed on the 状态与诊断 page. */
 export const CHAT_OPTIONAL_SCOPES = [...CONTACT_SCOPES, 'im:chat:readonly', ...V1_OPTIONAL_SCOPES] as const;
 
@@ -182,6 +235,23 @@ export const SCOPE_LABELS: Record<string, string> = {
   'im:message.reactions:read': '接收表情回复事件（终态卡 👍 续轮 / 运行卡 OK 终止）',
   'im:message.group_at_msg.include_bot:readonly': '接收其他机器人 @我 的群消息',
   'application:application:self_manage': '读取应用的所有者和协作者（飞书里的管理员也能管 bot）',
+  'docs:document.content:read': '读取文档内容',
+  'docx:document:readonly': '读取文档纯文本',
+  'sheets:spreadsheet:read': '读取表格内容',
+  'bitable:app:readonly': '读取多维表格内容',
+  'drive:file:download': '下载云空间文件',
+  'slides:presentation:read': '读取幻灯片内容',
+  'mindnote:node:read': '读取思维笔记内容',
+  'board:whiteboard:node:read': '读取画板内容',
+  'minutes:minutes:readonly': '读取妙记信息',
+  'minutes:minutes.transcript:export': '导出妙记文字记录',
+  'docs:doc:readonly': '读取旧版文档内容',
+  'space:document:retrieve': '查看云空间文件夹里的文件',
+  'wiki:space:retrieve': '查看知识库列表',
+  'wiki:node:retrieve': '查看知识库目录',
+  'docs:document.media:download': '下载文档里的图片和附件',
+  'docx:document:write_only': '修改 Bot 有编辑权限的文档',
+  'search:message': '搜索消息',
 };
 
 /** `<中文说明>（<token>）` for a known scope, else the raw token. */

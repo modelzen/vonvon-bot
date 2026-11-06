@@ -7,7 +7,7 @@ let current: Awaited<ReturnType<typeof setup>> | undefined;
 afterEach(async () => { await current?.orchestrator.shutdown(); current = undefined; });
 
 it('opens the scheduled turn with its task and run, presence scheduled; memory turns go on as initiative', async () => {
-  const entries = createAgentEntries({ appId: 'fixture', isAdmin: id => id === 'owner', isOwner: id => id === 'owner' });
+  const entries = createAgentEntries({ appId: 'fixture', isAdmin: id => id === 'owner' });
   const open = vi.spyOn(entries, 'openTurn');
   const memory = vi.spyOn(entries, 'memoryTurn');
   current = await setup('single', { entries });

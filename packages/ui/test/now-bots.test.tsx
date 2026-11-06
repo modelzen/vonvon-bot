@@ -1,5 +1,6 @@
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
+import {badgeUrl} from '../src/BadgeContact';
 import {agentIdSchema, desktopSnapshotSchema, membershipSchema, type Agent, type BotActivity, type GroupAttention, type Membership} from '@vonvon/protocol';
 import {NowBotList, nowBotActivities} from '../src/NowBotList';
 import {badgeTenure} from '../src/badge-content';
@@ -141,6 +142,18 @@ it('counts the joining date and turns over at local midnight without waiting 24 
   expect(badgeTenure(after,before)).toBeUndefined();
   expect(badgeTenure(undefined,after)).toBeUndefined();
 });
+it('leaves the private chat off the badge: only bound groups are listed and counted', () => {
+  const dm = membershipSchema.parse({...member, id: '["cli_now","oc_dm_cli_now"]', groupId: 'oc_dm_cli_now', name: '私聊'});
+  const html = renderToStaticMarkup(<NowBotList snapshot={snapshot({...bot, dm})} {...badgeActions}/>);
+  expect(html).toContain('设计讨论');
+  expect(html).not.toContain('私聊');
+});
+
+it('opens a Lark Bot in Lark', () => {
+  expect(badgeUrl('cli_now', 'lark')).toContain('applink.larksuite.com');
+  expect(badgeUrl('cli_now')).toContain('applink.feishu.cn');
+});
+
 it('keeps every distinct group available directly on the back, including when the list overflows',()=>{
   const groups=Array.from({length:12},(_,i)=>membershipSchema.parse({...member,groupId:'oc_design_'+i,name:'设计讨论 '+i}));
   const render=(members:Membership[])=>renderToStaticMarkup(<NowBotList snapshot={snapshot(bot,members)} {...badgeActions}/>);

@@ -30,7 +30,7 @@ async function settingsFixture() {
   const projectFile = join(home, 'project.json');
   const cfg: AppConfig = {
     accounts: { app: { id: botId, tenant: 'feishu', secret: { source: 'exec', id: 'credential-original' } } },
-    preferences: { access: { ownerOpenId: 'ou_owner', admins: [] } },
+    preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] } },
   };
   // An old row with auto-compaction turned off: since s12 nothing reads it.
   const initialProject = { name: 'demo', chatId: 'oc_demo', cwd: home, blank: false, createdAt: 1, autoCompact: false };

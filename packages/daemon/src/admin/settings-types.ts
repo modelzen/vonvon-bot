@@ -171,7 +171,7 @@ export type SettingsAccess = {
   kind: 'writable';
 } | {
   kind: 'readonly';
-  reason: 'preview' | 'owner-offline' | 'unsupported-host' | 'stale';
+  reason: 'preview' | 'owner-offline' | 'unsupported-host' | 'stale' | 'dm-fixed';
   message: string;
 };
 export interface ApplyEffect {
@@ -189,6 +189,14 @@ export interface SettingsSection<T> {
 type Sections<M> = {
   [K in keyof M]: SettingsSection<M[K]>;
 };
+/** Someone who may be made an administrator (dm-agent 3.4). */
+export interface AdminCandidate {
+  openId: string;
+  name: string;
+  sources: ('creator' | 'feishu' | 'refused')[];
+  /** when they were last turned away; set with `refused` */
+  at?: number;
+}
 export interface AgentSettingsView {
   scope: Extract<SettingsScope, {
     kind: 'agent';
@@ -197,9 +205,11 @@ export interface AgentSettingsView {
   roleInfo?: { draft?: string; headed: boolean; oversized: boolean; mergedNotice: boolean; integrity: 'ok' | 'untracked' | 'changed' };
   ownerOpenId: string | null;
   administrators: {
-    feishu?: { ownerOpenId: string | null; adminOpenIds: string[] };
-    scannerOpenId?: string | null;
     openIds: string[];
+    /** the name Feishu gave each person on the list; one it would not name has no entry */
+    names?: Record<string, string>;
+    /** who may be picked to join the list, the people on it left out */
+    candidates?: AdminCandidate[];
     revision: string;
   };
   voice: VoiceView;

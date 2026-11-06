@@ -1,5 +1,5 @@
 import { mkdir, readdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import type { CommentEvent, LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { TenantBrand } from '../config/schema';
@@ -265,7 +265,10 @@ export const DEFAULT_COMMENT_INSTRUCTIONS = `# 飞书云文档评论助手
 你被 @ 在一篇飞书云文档（{docUrl}，类型 {fileType}，file_token：{fileToken}）的评论里。系统会把你这一轮的最终回复自动贴回这条评论。每轮还会给你评论范围和（行内评论时）选中的原文。
 
 ## 怎么做
-- 需要看正文，或用户要求"帮我改 / 优化 / 重写 / 细化这段"时，用 lark-cli 读 / 改这篇文档（{fileToken}）。
+- 需要看正文，或用户要求"帮我改 / 优化 / 重写 / 细化这段"时，用 vonvon 的飞书工具读和改这篇文档（{fileToken}），身份是 Bot 自己：feishu_doc 读文档，feishu_sheet 读表格，feishu_base 读多维表格，feishu_doc_edit 改文档。
+- Bot 没有权限时，在回复里说清楚要用户做什么，不要换别的身份去读或改。
+- 表格（sheet）和多维表格（bitable）现在能读，不能改；用户要改时在回复里说明。
+- 这些工具不在时，在回复里请用户新开一条评论再 @ 你。
 - 改文档时绝不要删除或整段替换"被评论的原文"（本轮给你的选中原文）——飞书评论锚定在这段文字上，删了它评论会变成"原文已被删除"、移进历史评论，正文就看不到了。要保留这段原文，在它之后或周围增改，只动这一处。
 - 改完只回一句简短说明；用户只是提问就直接答，不改任何东西。
 
@@ -274,6 +277,15 @@ export const DEFAULT_COMMENT_INSTRUCTIONS = `# 飞书云文档评论助手
 2. 只输出最终答案本身，不要复述分析过程或"我现在去…"。
 3. 全程纯文本：不要任何 markdown 标记（** __ # - * > 反引号 之类）、不要代码块、不要表格——评论框不渲染，会原样显示这些符号。语气简洁直接。
 `;
+
+/** The defaults files were seeded with before (the lark-cli one, then F3's, which could not read a base): nobody wrote those, so they move on with the default. */
+const OLD_DEFAULTS: ReadonlySet<string> = new Set([
+  '7748a9dfec681ff8ac8f6fb7102c9854cb18e733e45a36f68955a69194906b92',
+  'd362f2260e3ec44acb39115a9167df078279d9ceb11cd3738ab1e82a18e9c5ff',
+]);
+const isOldDefault = (text: string): boolean => OLD_DEFAULTS.has(createHash('sha256').update(text).digest('hex'));
+/** The instructions a file stands for: its text as it is, unless that is an untouched copy of an old default. */
+export const currentCommentInstructions = (text: string): string => isOldDefault(text) ? DEFAULT_COMMENT_INSTRUCTIONS : text;
 
 /** A doc-comment session key — one per comment THREAD (not per doc), so distinct
  * comment threads on the same document are independent conversations that run in
@@ -295,11 +307,17 @@ export function commentCwd(projectsRoot: string, fileType: string, fileToken: st
  * then uses the default. An existing file is used as-is and never overwritten —
  * a blank/whitespace-only file falls back to the default for this run but is left
  * untouched on disk (never silently clobber a file the user may have emptied).
+ * The one exception is an untouched copy of an old default, which is what seeding
+ * left behind: it is replaced, or it would keep the old default forever.
  * A comment run never blocks on this.
  */
 export async function loadCommentInstructions(masterFile: string): Promise<string> {
   try {
     const existing = await readFile(masterFile, 'utf8');
+    if (isOldDefault(existing)) {
+      await saveCommentInstructions(masterFile, DEFAULT_COMMENT_INSTRUCTIONS).catch(() => undefined);
+      return DEFAULT_COMMENT_INSTRUCTIONS;
+    }
     return existing.trim() ? existing : DEFAULT_COMMENT_INSTRUCTIONS; // exists → use as-is (blank → default, no clobber)
   } catch {
     // missing / unreadable only — seed a copy below so the user has a file to edit
@@ -382,7 +400,7 @@ export async function syncAllCommentInstructions(
 /**
  * Build the per-turn user message for a doc-comment mention — runtime FACTS only
  * (doc link/token/type, comment scope, the selected quote, the question). The
- * behavioral instructions (read/edit via lark-cli, don't self-post, plain-text
+ * behavioral instructions (read/edit with the Feishu tools, don't self-post, plain-text
  * output) live in the synced AGENTS.md / CLAUDE.md instead of being repeated
  * every turn (see {@link DEFAULT_COMMENT_INSTRUCTIONS}).
  */

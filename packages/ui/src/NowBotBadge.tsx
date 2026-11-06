@@ -71,7 +71,7 @@ export function NowBotBadge({agent, index, groupSummary, status, tone, ownerName
   const qrTrigger = useRef<HTMLButtonElement>(null);
   const numberTrigger = useRef<HTMLButtonElement>(null);
   const restoreFocus = useRef<'qr' | 'job' | undefined>(undefined);
-  const url=badgeUrl(agent.id);
+  const url=badgeUrl(agent.id,agent.tenant);
   const slot = useHanger(showMotion && !detail);
   const frontControl = useRef<HTMLButtonElement>(null), backControl = useRef<HTMLDivElement>(null);
   const moveFocus = useRef(false);

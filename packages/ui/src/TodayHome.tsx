@@ -1,4 +1,4 @@
-import {Activity, ArrowRight, ChartNoAxesColumn, ChevronRight, Cpu, Download, Link, MonitorSmartphone, Power, Wrench, type LucideIcon} from 'lucide-react';
+import {Activity, ArrowRight, ChartNoAxesColumn, ChevronRight, Cpu, Download, Link, MonitorSmartphone, Power, UserRoundCog, Wrench, type LucideIcon} from 'lucide-react';
 import type {AgentId, DesktopSnapshot} from '@vonvon/protocol';
 import {NowBotList} from './NowBotList';
 import {NowActivity} from './NowActivity';
@@ -41,6 +41,7 @@ const settingsEntries: {page: Page; title: string; description: string; icon: Lu
   {page: 'usage', title: '用量', description: '额度、使用记录与智能判断次数', icon: ChartNoAxesColumn},
   {page: 'devices', title: '设备连接', description: '连接其他设备，管理对当前设备的访问', icon: MonitorSmartphone},
   {page: 'setup', title: '飞书连接', description: 'Bot 的应用权限、事件与连接检查', icon: Link},
+  {page: 'administrators', title: '管理员', description: '谁能私聊 Bot、操作这台电脑', icon: UserRoundCog},
   {page: 'bridgeImport', title: 'Bridge 导入', description: '迁移旧 Bridge 数据，查看进度与结果', icon: Download},
   {page: 'application', title: '应用与启动', description: '软件更新、后台运行与启动设置', icon: Power},
   {page: 'diagnostics', title: '诊断', description: '运行状态、未回复原因、日志与恢复', icon: Activity},

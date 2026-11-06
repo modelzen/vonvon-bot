@@ -19,7 +19,7 @@ export function BadgeCode({url,name}: {url:string;name:string}) {
   },[url]);
   return <svg className="badge-code" xmlns="http://www.w3.org/2000/svg" role="img" aria-label={name+' 的飞书二维码'} viewBox={'0 0 '+matrix.size+' '+matrix.size} shapeRendering="crispEdges"><rect width={matrix.size} height={matrix.size} fill="white"/><path d={matrix.path} fill="#18201c"/></svg>;
 }
-export function badgeUrl(id:string){return allowedExternalUrl(botChatUrl(id),'bot-chat');}
+export function badgeUrl(id:string,tenant:'feishu'|'lark'='feishu'){return allowedExternalUrl(botChatUrl(id,tenant),'bot-chat');}
 export function BadgeLink({url,name}:{url:string;name:string}) {
   const shell=useShellCapabilities();
   const [error,setError]=useState('');

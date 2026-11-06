@@ -1,4 +1,6 @@
+import { FEISHU_API, FEISHU_DOC_EDIT, feishuToolNames, feishuToolSpecs } from '../entry/feishu-tools';
 import { scheduleToolNames, scheduleToolSpecs } from '../entry/schedule-tools';
+import type { SessionProfile } from '../session-profile';
 import type { StartThreadOptions } from '../types';
 import type { ThreadStartParams } from './protocol';
 
@@ -19,21 +21,26 @@ export interface DynamicToolNamespace {
 }
 export type ThreadStartWithTools = ThreadStartParams & { dynamicTools?: DynamicToolNamespace[] };
 
-/** T3's schedule tools: the same definitions Claude's `vonvon_bot` MCP server lists. */
-export function scheduleNamespace(): DynamicToolNamespace {
-  return { type: 'namespace', name: 'vonvon_bot', description: 'vonvon 的工具：本群的定时任务。',
-    tools: scheduleToolSpecs().map(spec => ({ type: 'function', ...spec })) };
+/** vonvon's tools of this session: the same definitions Claude's `vonvon_bot` MCP server lists. */
+export function vonvonNamespace(tools: NonNullable<SessionProfile['tools']>): DynamicToolNamespace {
+  const specs = [...tools.schedule ? scheduleToolSpecs() : [], ...tools.feishu ? feishuToolSpecs(tools) : []];
+  return { type: 'namespace', name: 'vonvon_bot', description: 'vonvon 的工具：定时任务，读飞书的内容，改飞书文档。',
+    tools: specs.map(spec => ({ type: 'function', ...spec })) };
 }
 
 /**
  * Only thread/start carries tools (the rollout keeps them; a resume restores them from disk and ignores any it is
- * sent), and only for a profile with `tools.schedule` and a session with an entry to answer the calls.
+ * sent), and only for a profile with `tools.schedule` or `tools.feishu` and a session with an entry to answer the calls.
  */
 export function startDynamicTools(opts: Pick<StartThreadOptions, 'entry' | 'profile'>): Pick<ThreadStartWithTools, 'dynamicTools'> {
-  return opts.entry && opts.profile?.tools?.schedule ? { dynamicTools: [scheduleNamespace()] } : {};
+  const tools = opts.profile?.tools;
+  return opts.entry && (tools?.schedule || tools?.feishu) ? { dynamicTools: [vonvonNamespace(tools)] } : {};
 }
 
-/** What Codex may call back: the tools thread/start offers, nothing else the entry has (no memory tools for Codex). */
+/**
+ * What Codex may call back: the tools thread/start offers, nothing else the entry has (no memory tools for Codex). A
+ * thread older than feishu_doc_edit simply does not have it; one whose tier dropped since is refused by the tool itself.
+ */
 export function offeredTool(namespace: string | null | undefined, tool: string): boolean {
-  return (namespace ?? 'vonvon_bot') === 'vonvon_bot' && scheduleToolNames.has(tool);
+  return (namespace ?? 'vonvon_bot') === 'vonvon_bot' && (scheduleToolNames.has(tool) || feishuToolNames.has(tool) || tool === FEISHU_DOC_EDIT || tool === FEISHU_API);
 }

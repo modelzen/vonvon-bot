@@ -5,7 +5,7 @@ import type { Project } from '../src/project/registry';
 
 const cfg = (access: Record<string, unknown> = {}): AppConfig => ({
   accounts: { app: { id: 'app', secret: 'x', tenant: 'feishu' } },
-  preferences: { access: { ownerOpenId: 'ou_owner', ...access } },
+  preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'], ...access } },
 }) as AppConfig;
 const project = (fields: Partial<Project> = {}): Project => ({
   name: 'p', chatId: 'oc_chat', cwd: '/work', blank: false, createdAt: 0, mode: 'write', ...fields,
@@ -23,6 +23,14 @@ describe('fileClaimMode (product.md 3.12)', () => {
     expect(fileClaimMode(cfg(), p, record, 'ou_someone')).toBeUndefined();
     expect(fileClaimMode(cfg({ admins: ['ou_admin'] }), p, record, 'ou_admin')).toBe('write');
     expect(fileClaimMode(cfg(), p, record, 'ou_owner')).toBe('write');
+  });
+
+  // dm-agent 5: a private chat's row is an administrators' place; the group list has no say in it, and no member gets in.
+  it('in a private chat, takes the present administrator only, whatever the list of groups says', () => {
+    const dm = project({ dm: { people: {} } });
+    expect(fileClaimMode(cfg({ admins: ['ou_admin'], allowedChats: ['oc_other'] }), dm, record, 'ou_admin')).toBe('write');
+    expect(fileClaimMode(cfg({ allowedChats: ['oc_other'] }), dm, record, 'ou_someone')).toBeUndefined();
+    expect(fileClaimMode(cfg(), dm, record, 'ou_someone')).toBeUndefined();
   });
 
   it('refuses a chat outside the app allowlist, an unbound, disabled or moved project, and no clicker', () => {

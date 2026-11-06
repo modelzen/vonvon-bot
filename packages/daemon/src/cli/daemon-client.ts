@@ -3,7 +3,7 @@ import { badArgs, CommandError, rpcErrorKind } from './command-error';
 import { connectLocal, ConnectionError, RpcError, type VonvonClient } from '@vonvon/client';
 import { backendLabel, conversationCopy, PROTOCOL_VERSION, requestSchema, type Agent, type Membership, type Scope, type ServerInfo } from '@vonvon/protocol';
 import { paths } from '../config/paths';
-import { inBotSession, SESSION_ENV } from '../config/session-env';
+import { inBotSession, SESSION_BOT_ENV, SESSION_ENV } from '../config/session-env';
 import { looksLikeSessionToken, SESSION_TOKEN_INVALID } from '../host/session-tokens';
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { PidLockError, readRunningPidLock } from '../server/pid-lock';
@@ -38,8 +38,8 @@ export const printable = (text: string): string => text.replace(CONTROL, '');
 /** devices 15. */
 const SESSION_TOKEN_MISSING = '这是 Bot 会话，但没有有效的会话令牌，不能以主人身份运行。';
 
-/** What every command's connection carries (devices-4a 4.9): the global `--scope`, and the environment it runs in. */
-const context: { scope?: Scope; env: NodeJS.ProcessEnv } = { env: process.env };
+/** What every command's connection carries (devices-4a 4.9): the global `--scope`, the environment it runs in, and whether the daemon took it for a private chat's session. */
+const context: { scope?: Scope; env: NodeJS.ProcessEnv; dm?: boolean } = { env: process.env };
 /** index.ts sets the parsed `--scope` before a command runs; tests set both. */
 export function setCliContext(next: { scope?: Scope | undefined; env?: NodeJS.ProcessEnv }): void {
   if ('scope' in next) { if (next.scope) context.scope = next.scope; else delete context.scope; }
@@ -47,6 +47,8 @@ export function setCliContext(next: { scope?: Scope | undefined; env?: NodeJS.Pr
 }
 /** The global `--scope` this command was given, if any. */
 export const cliScope = (): Scope | undefined => context.scope;
+/** This command runs in a Bot's session: the daemon knows which Bot it is on. */
+export const cliInSession = (): boolean => inBotSession(context.env);
 
 /**
  * devices 5.3 and 8.3: an owner's `--scope` is the daemon's to apply. A read that falls back to the files with no daemon
@@ -168,8 +170,9 @@ export async function withDaemon<T>(fn: (call: Call, info?: ServerInfo) => Promi
   try {
     if (inBotSession(context.env) || context.scope) {
       const scope = context.scope;
+      // A private chat's session has no `--scope` (dm-agent 6.1): it negotiates without one.
       const refusal = await call('核对范围', c => c.admin({ type: 'negotiate', capabilities: ['cli'], ...(scope ? { scope } : {}) })
-        .then(() => undefined, (error: unknown) => { if (error instanceof RpcError) return error; throw error; }));
+        .then(reply => { context.dm = reply?.kind === 'negotiated' && reply.principal === 'bot-session:dm'; }, (error: unknown) => { if (error instanceof RpcError) return error; throw error; }));
       if (refusal) throw new CommandError(rpcErrorKind(refusal.code), refusal.message, { reason: refusal.code });
     }
     return await fn(call, serverInfo);
@@ -205,7 +208,7 @@ export function want<R extends { kind: string }, K extends R['kind']>(what: stri
 
 export const NO_BOT = '还没有 Bot。运行 vonvon bot add 在终端里扫码注册，或者在网页里注册（vonvon open）。';
 
-/** No "current bot": only a single bot is picked without --bot. By id first, then by name (`memory --bot` gets the files' bots too). */
+/** No "current bot": without --bot, only a single bot is picked, or a private chat's own. By id first, then by name (`memory --bot` gets the files' bots too). */
 export function pickBot<A extends { id: string; name: string }>(agents: readonly A[], wanted?: string): A {
   const [only] = agents;
   if (!only) throw badArgs(NO_BOT);
@@ -213,6 +216,8 @@ export function pickBot<A extends { id: string; name: string }>(agents: readonly
   const list = agents.map(agent => `${printable(agent.name)}（${agent.id}）`).join('、');
   if (wanted === undefined) {
     if (agents.length === 1) return only;
+    const own = inBotSession(context.env) ? agents.find(agent => agent.id === context.env[SESSION_BOT_ENV]) : undefined;
+    if (own) return own;
     throw badArgs(`有 ${agents.length} 个 Bot，用 --bot 指定：${list}`);
   }
   const byId = agents.find(agent => agent.id === wanted);
@@ -233,9 +238,10 @@ export function runningBot(agents: readonly Agent[], wanted?: string): Agent {
 /**
  * s1b: a group's (or a comment's) Bot session reads a snapshot with no bindings in it, so it cannot name a group. True
  * there; a command then lets the daemon say why not (群里不能改设置), or refuses as the daemon would, never "没有绑定".
+ * A private chat reads them all: a Bot with none has none (dm-agent 6.1).
  */
 export const bindingsHidden = (memberships: readonly Membership[], bot: Agent): boolean =>
-  inBotSession(context.env) && !memberships.some(membership => membership.agentId === bot.id);
+  inBotSession(context.env) && !context.dm && !memberships.some(membership => membership.agentId === bot.id);
 /** The daemon's words for what a Bot session may not do (server/authz.ts SESSION_DENIED). */
 const SESSION_DENIED = '这个操作不能从 Bot 会话里做。';
 

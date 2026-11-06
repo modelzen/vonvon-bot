@@ -6,7 +6,7 @@ import type {Destination, DetailPane, Selection} from './search';
 
 export type AgentPane = {kind: 'groups'} | {kind: 'profile'} | {kind: 'schedule'} | {kind: 'settings'};
 /** The Bot page's tabs in order; 任务 lists every group's tasks of the Bot and a row opens that group's 任务 tab. */
-export const agentPanes: readonly {kind: AgentPane['kind']; label: string}[] = [{kind: 'groups', label: '群聊'}, {kind: 'profile', label: '记忆'}, {kind: 'schedule', label: '任务'}, {kind: 'settings', label: '设置'}];
+export const agentPanes: readonly {kind: AgentPane['kind']; label: string}[] = [{kind: 'groups', label: '聊天'}, {kind: 'profile', label: '记忆'}, {kind: 'schedule', label: '任务'}, {kind: 'settings', label: '设置'}];
 /** Project memory and workspace remain reachable as secondary destinations. */
 export type ProjectPane = {kind: 'map'} | {kind: 'workspace'} | {kind: 'context'} | {kind: 'group'; tab: GroupSettingsTab};
 export type MembershipPane = {kind: 'activity'} | {kind: 'settings'};
@@ -17,14 +17,16 @@ export type CollaborationRoute =
   | {kind: 'agent'; id: AgentId; pane: AgentPane}
   | {kind: 'group'; id: GroupId}
   | {kind: 'project'; id: ProjectId; pane: ProjectPane}
-  | {kind: 'membership'; id: MembershipId; pane: MembershipPane; parent: MembershipParent};
+  | {kind: 'membership'; id: MembershipId; pane: MembershipPane; parent: MembershipParent}
+  /** A Bot's private chat: the same workspace as a group, with no group behind it. `from`: the Bot page's tab it was opened from. */
+  | {kind: 'dm'; agentId: AgentId; tab: GroupDesignTab; from?: AgentPane};
 
 export const initialRoute: CollaborationRoute = {kind: 'list', view: 'agents'};
 
 export function routeView(route: CollaborationRoute): CollaborationView {
   if (route.kind === 'list') return route.view;
   if (route.kind === 'membership') return routeView(route.parent);
-  return route.kind === 'agent' ? 'agents' : route.kind === 'group' ? 'groups' : 'projects';
+  return route.kind === 'agent' || route.kind === 'dm' ? 'agents' : route.kind === 'group' ? 'groups' : 'projects';
 }
 
 export function routeSelection(route: CollaborationRoute): Selection {
@@ -34,6 +36,7 @@ export function routeSelection(route: CollaborationRoute): Selection {
     case 'group': return {kind: 'group', id: route.id};
     case 'project': return {kind: 'project', id: route.id};
     case 'membership': return {kind: 'membership', id: route.id};
+    case 'dm': return {kind: 'agent', id: route.agentId};
   }
 }
 
@@ -56,7 +59,7 @@ export function openMembership(route: CollaborationRoute, id: MembershipId, snap
   const matches = (parent: MembershipParent) => parent.kind === 'agent' ? parent.id === member.agentId
     : parent.kind === 'group' ? parent.id === member.groupId
     : parent.kind === 'project' ? parent.id === projectId : false;
-  const parent: MembershipParent = route.kind !== 'membership' && route.kind !== 'list' && matches(route)
+  const parent: MembershipParent = route.kind !== 'membership' && route.kind !== 'list' && route.kind !== 'dm' && matches(route)
     ? route
     : route.kind === 'membership' && matches(route.parent)
       ? route.parent
@@ -73,8 +76,14 @@ export function openScheduleTab(tabs: Readonly<Record<string, GroupDesignTab>>, 
   return {...tabs, [id]: 'schedule'};
 }
 
+/** The private chat's page, on `tab`; back goes to the Bot page's `from`, its 群聊 tab unless given. */
+export function openDm(agentId: AgentId, tab: GroupDesignTab = 'model', from?: AgentPane): CollaborationRoute {
+  return {kind: 'dm', agentId, tab, ...(from ? {from} : {})};
+}
+
 export function routeBack(route: CollaborationRoute): CollaborationRoute {
   if (route.kind === 'membership') return route.parent;
+  if (route.kind === 'dm') return {kind: 'agent', id: route.agentId, pane: route.from ?? {kind: 'groups'}};
   if (route.kind === 'list') return route;
   return {kind: 'list', view: routeView(route)};
 }

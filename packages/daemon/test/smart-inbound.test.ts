@@ -1,4 +1,3 @@
-import { createAgentEntries } from '../src/agent/entry/registry';
 import { FocusEverywhere } from './helpers/focus-everywhere';
 import { Attention } from '../src/bot/attention';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,6 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
+import { createAgentEntries } from '../src/agent/entry/registry';
 import { Client, withTenantToken, type NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import { projectRevision } from '../src/admin/collaboration';
 import type { AppConfig } from '../src/config/schema';
@@ -35,7 +35,7 @@ afterAll(async () => {
 });
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'smart-inbound-'));
-  return { botPaths: (appId: string) => ({ dir: join(appDir, 'bots', appId), configFile: join(appDir, 'bots', appId, 'config.json') }), paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments'), botsFile: join(appDir, 'bots.json') } };
+  return { botPaths: (appId: string) => ({ dir: join(appDir, 'bots', appId), configFile: join(appDir, 'bots', appId, 'config.json') }), paths: { appDir, inboundDir: join(appDir, 'inbound'), sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments'), botsFile: join(appDir, 'bots.json') } };
 });
 afterAll(() => rmSync(paths.appDir, { recursive: true, force: true }));
 
@@ -138,7 +138,7 @@ const BOT = { openId: 'ou_bot', name: '小码' };
 const APP = 'cli_fixture';
 const CHAT = 'oc_demo';
 const base = { name: 'demo', chatId: CHAT, cwd: workspace, kind: 'single', smart: true, mode: 'full', network: false };
-const cfg: AppConfig & { preferences: NonNullable<AppConfig["preferences"]> } = { accounts: { app: { id: APP, secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
+const cfg: AppConfig & { preferences: NonNullable<AppConfig["preferences"]> } = { accounts: { app: { id: APP, secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, completionReminder: { mode: 'manual' } } };
 const channel = {
   send: fake.send, botIdentity: BOT,
   rawClient: { appId: APP, request: fake.request, cardkit: { v1: { card: { create: fake.cardCreate } } }, im: { v1: {
@@ -179,7 +179,14 @@ async function judged(m: EventMessage): Promise<{ req: JudgeRequest; answer: Def
 async function decide(m: EventMessage, value: JudgeResult): Promise<void> {
   (await judged(m)).answer.resolve(value);
 }
-const settle = async (): Promise<void> => { for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r)); };
+/** Real file reads and writes take as long as the machine likes, so ticks alone cannot say the work has landed. */
+const fileWork = (): boolean => process.getActiveResourcesInfo().some(name => name.startsWith('FSReq'));
+const settle = async (): Promise<void> => {
+  for (let round = 0; round < 500; round++) {
+    for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r));
+    if (!fileWork()) return;
+  }
+};
 
 let orchestrator: ReturnType<typeof createOrchestrator>;
 let events: DiagnosticsEvent[] = [];
@@ -611,7 +618,7 @@ describe('smart mode intake (s25)', () => {
 
   it('keeps an initiative run outside human settings authority', async () => {
     await orchestrator.shutdown();
-    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true });
+    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true });
     const issue = vi.spyOn(entries, 'issue'), open = vi.spyOn(entries, 'openTurn'), checked = vi.fn();
     orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { attention: new FocusEverywhere(), entries });
     fake.events = async function* () {
@@ -2128,15 +2135,14 @@ describe('attention (s25g)', () => {
     for (const message of messages) await send(message);
     await settle(); expect(fake.judge).not.toHaveBeenCalled();
     await advance(s(20));
-    expect(fake.judge.mock.calls.length).toBeGreaterThan(0);
+    await vi.waitFor(() => expect(fake.judge.mock.calls.length).toBeGreaterThan(0));
     expect(logged('attention-recover')).toEqual([]);
     for (const message of messages) {
       if (asked.has(idOf(message))) await decide(message, result('skip'));
     }
     await settle(); await advance(m(6));
     for (const message of messages) expect((await judged(message)).req.variant).toBe('topic');
-    const latest = events.flatMap(event => event.kind === 'attention' ? event.groups : []).at(-1);
-    expect(latest?.group?.score).toBe(10);
+    await vi.waitFor(() => expect(events.flatMap(event => event.kind === 'attention' ? event.groups : []).at(-1)?.group?.score).toBe(10));
   });
   it('55, 62. defers at 45 uses, drops stale arrivals when budget returns, and does not count an empty glance', async () => {
     const used = vi.spyOn(JudgeBudget.prototype, 'used').mockReturnValue(45);

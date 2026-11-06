@@ -33,7 +33,7 @@ export interface SnapshotStore {
 export const hostPlatform = (platform: NodeJS.Platform = process.platform): 'macos' | 'linux' | 'windows' | 'unsupported' =>
   platform === 'darwin' ? 'macos' : platform === 'linux' ? 'linux' : platform === 'win32' ? 'windows' : 'unsupported';
 export async function createSnapshotStore(options: {
-  service: Pick<AdminService, 'listBots' | 'listProjects' | 'codexSetup'>;
+  service: Pick<AdminService, 'listBots' | 'listProjects' | 'dmRow' | 'codexSetup'>;
   jobs: () => Job[];
   publish: (snapshot: DesktopSnapshot) => void;
   readTools?: (refresh?: boolean) => Promise<ToolState[]>;

@@ -1,4 +1,3 @@
-import { getAppRoleSnapshot, trustedFeishuAdmins } from './app-roles';
 import type { BotDefaults } from './defaults';
 import type { DirectorySettings } from './directories';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../agent/types';
@@ -76,16 +75,21 @@ export type ModelDisplayMode = 'off' | 'running' | 'always';
 
 /**
  * Access control (see design §5):
- *   ownerOpenId   — 扫码注册者(owner)。恒为 admin、不可删；即使 admins 为空也仍是 admin。
- *   admins        — open_ids that may DM the bot (create project / global config /
- *                   destructive ops). 空 = 仅 owner。
+ *   ownerOpenId   — 扫码注册的人（创建者）。只给界面的小标签和候选人用，不参与判断。
+ *   admins        — 管理员名单，判断只看它（product.md 第 6 节）。至少留一个；空的是老数据。
+ *   adminsVersion — 名单升级到的版本（dm-agent 3.2）。
+ *   firstHelloPending — 新注册的 Bot 还欠创建者一条私聊（dm-agent 第一次见面）。
  *   allowedUsers  — @deprecated 全局响应白名单，已由项目级 Project.allowedUsers 取代。
  *   allowedChats  — chat_ids the bot responds in. Empty = all.
  */
 export interface AppAccess {
-  /** 扫码注册者的 open_id；恒为 admin，不可删；admins 增删不影响它。 */
+  /** 扫码注册者的 open_id；被移出 admins 以后还留着，但不再是管理员。 */
   ownerOpenId?: string;
   admins?: string[];
+  /** 写了 2 就不再升级，否则被移除的创建者每次启动都会被加回来（config/admins-upgrade.ts）。 */
+  adminsVersion?: number;
+  /** 只有扫码注册时写，发出去就删。老 Bot 和刷新凭据都没有它，所以不会补发。 */
+  firstHelloPending?: boolean;
   /** @deprecated 已由项目级 Project.allowedUsers 取代；保留仅为兼容旧 config 解析，不再读取。 */
   allowedUsers?: string[];
   allowedChats?: string[];
@@ -357,33 +361,28 @@ export function isChatAllowed(cfg: AppConfig, chatId: string): boolean {
   return list.includes(chatId);
 }
 
-/** Feishu application owner when known; otherwise the scanner, or first legacy local admin. */
-export function resolveOwner(cfg: AppConfig): string | undefined {
-  const access = cfg.preferences?.access;
-  return getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant)?.ownerOpenId ?? access?.ownerOpenId ?? access?.admins?.[0];
-}
-
-/**
- * Management access is the union of Feishu owner/admins/developers, scanner and local admins. Feishu's admins and
- * developers only while a recent refresh vouches for them (audit 252-4); its owner, like the scanner, stays.
- */
+/** The only role (product.md section 6): on the list or not. Feishu's own roles and who scanned do not count. */
 export function isAdmin(cfg: AppConfig, senderId: string): boolean {
-  if (!senderId) return false;
-  const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
-  return senderId === roles?.ownerOpenId || trustedFeishuAdmins(roles).includes(senderId)
-    || senderId === cfg.preferences?.access?.ownerOpenId
-    || Boolean(cfg.preferences?.access?.admins?.includes(senderId));
+  return Boolean(senderId) && Boolean(cfg.preferences?.access?.admins?.includes(senderId));
 }
 
-/** True when `senderId` may make the bot respond in a project group. admin/owner
+/** 替 Bot 说话时要一个人：创建者还是管理员就是创建者，否则是名单第一个。不代表权限比别人大。 */
+export function primaryAdmin(cfg: AppConfig): string | undefined {
+  const { ownerOpenId, admins = [] } = cfg.preferences?.access ?? {};
+  return ownerOpenId && admins.includes(ownerOpenId) ? ownerOpenId : admins[0];
+}
+
+/** True when `senderId` may make the bot respond in a project group. admin
  * 恒豁免；项目白名单空/缺省 = 所有人。project 用结构化 Pick 类型避免 schema→registry
  * 循环依赖。 */
 export function isUserAllowedInProject(
   cfg: AppConfig,
-  project: { allowedUsers?: string[] } | undefined,
+  project: { allowedUsers?: string[]; dm?: unknown } | undefined,
   senderId: string,
 ): boolean {
   if (isAdmin(cfg, senderId)) return true;
+  // A private chat has no allow list: its only door is the admin list (dm-agent 5).
+  if (project?.dm) return false;
   const list = project?.allowedUsers;
   if (!list || list.length === 0) return true;
   return list.includes(senderId);

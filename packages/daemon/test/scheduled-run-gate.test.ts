@@ -52,7 +52,7 @@ beforeEach(async () => {
   registry = await import('../src/project/registry');
   file = (await import('../src/config/paths')).botPaths(APP).schedulesFile;
   mkdirSync(dirname(file), { recursive: true });
-  const cfg: AppConfig = { accounts: { app: { id: APP, secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } };
+  const cfg: AppConfig = { accounts: { app: { id: APP, secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] } } };
   const { createOrchestrator } = await import('../src/bot/handle-message');
   o = createOrchestrator({ send } as never, cfg, join(root, 'workspace'));
 });
@@ -72,13 +72,14 @@ const task = (id: string, chatId: string, patch: Partial<StoredTask> = {}): Stor
   cursor: 0, counts: { runs: 0, missed: 0, skipped: 0, consecutiveFailures: 0 }, recent: [], ...patch,
 });
 const stored = (): StoredTask[] => (JSON.parse(readFileSync(file, 'utf8')) as { tasks: StoredTask[] }).tasks;
+const gate = (chatId: string) => fake.deps!.gate(chatId, task('st_gate', chatId));
 
 describe('scheduleGate (T2 4.2)', () => {
   it('maps an unbound, disabled and unavailable-tier group, and lets a ready one run', async () => {
     await bind('oc_on');
     await bind('oc_off', { enabled: false });
     await bind('oc_qa', { mode: 'qa' });
-    expect(['oc_on', 'oc_off', 'oc_qa', 'oc_none'].map(chatId => fake.deps!.gate(chatId))).toEqual(['ok', 'disabled', 'tier-unavailable', 'unbound']);
+    expect(['oc_on', 'oc_off', 'oc_qa', 'oc_none'].map(chatId => gate(chatId))).toEqual(['ok', 'disabled', 'tier-unavailable', 'unbound']);
   });
 
   it('is updating while the desktop changes the group or publishes a resumed session', async () => {
@@ -87,17 +88,17 @@ describe('scheduleGate (T2 4.2)', () => {
     let release!: () => void;
     fake.hold = new Promise(resolve => { release = resolve; });
     const editing = o.collaboration({ action: 'editProject', projectName: 'oc_on', chatId: 'oc_on', expectedRevision: await revision('oc_on'), enabled: true });
-    await vi.waitFor(() => expect(fake.deps!.gate('oc_on')).toBe('updating'));
+    await vi.waitFor(() => expect(gate('oc_on')).toBe('updating'));
     release();
     await editing;
-    expect(fake.deps!.gate('oc_on')).toBe('ok');
+    expect(gate('oc_on')).toBe('ok');
     let fail!: (error: Error) => void;
     fake.backend.readHistory.mockReturnValueOnce(new Promise((_resolve, reject) => { fail = reject; }));
     const resuming = o.collaboration({ action: 'resume', projectName: 'oc_multi', chatId: 'oc_multi', sessionId: 'past', backend: 'codex' });
-    await vi.waitFor(() => expect(fake.deps!.gate('oc_multi')).toBe('updating'));
+    await vi.waitFor(() => expect(gate('oc_multi')).toBe('updating'));
     fail(new Error('history unavailable'));
     await expect(resuming).rejects.toThrow('history unavailable');
-    expect(fake.deps!.gate('oc_multi')).toBe('ok');
+    expect(gate('oc_multi')).toBe('ok');
   });
 
   it('says in the main area, at most once an hour per task, that the tier is unavailable', async () => {

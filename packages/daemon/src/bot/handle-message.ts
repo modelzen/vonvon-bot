@@ -4,7 +4,6 @@ import type { MemoryWriter } from './memory-writer';
 import { redactAgentEvents } from '../core/token-redact';
 import { buildJudgeFacts, judgeFactRead, sameNameWord } from './judge-facts';
 import { bareText, smartSalience, type Salience, type SalienceDeps } from './salience';
-import { getAppRoleSnapshot, trustedFeishuAdmins } from '../config/app-roles';
 import { createChatPeople } from './chat-people';
 import { findHandoffs, handoffSendResult, type HandoffSendResult, handoffText, handoffNote, ambiguousNote, ambiguousPersonNote, overNote, incompleteNote, otherBotNames, HANDOFF_SEND_MS, type HandoffMiss } from './bot-handoff';
 import { AskCoordinator, type AskTurn } from './ask-coordinator';
@@ -18,7 +17,7 @@ import { groupSkillProfile } from '../agent/group-skills';
 import { completeBuiltinPackage, ensureBuiltinPackage } from '../agent/builtin-skills/package';
 import { builtinSkillsOfSet } from '../agent/builtin-skills/registry';
 import type { SessionProfile } from '../agent/session-profile';
-import { SESSION_ENV, SESSION_SCOPE_ENV, sessionScope } from '../config/session-env';
+import { SESSION_BOT_ENV, SESSION_CLI_ENV, SESSION_ENV, SESSION_SCOPE_ENV, sessionScope } from '../config/session-env';
 import type { HostApi } from '../admin/ipc';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
@@ -29,7 +28,7 @@ import { isProjectId, readLibrary, type LibraryProject } from '../project/librar
 import { createSettingsOwner, materializeGroupSettings } from '../admin/settings';
 import { snapshotDefaultJudge, snapshotProviderJudge, requireDecisionKey } from '../project/initial-settings';
 import type { HostSettings } from '../admin/settings-types';
-import type { AdminWriteResult } from '../admin/ops';
+import type { AdminWriteResult, AppPreferencesWriter } from '../admin/ops';
 import { registerVoiceConsole } from './voice-console';
 import { createVoiceService } from '../voice/service';
 import { ingestVoice, createIntakeQueue, type IngestedContext } from '../voice/inbound';
@@ -111,11 +110,10 @@ import {
   isChatAllowed,
   isUserAllowedInProject,
   normalizeRunIdleTimeoutSeconds,
-  resolveOwner,
+  primaryAdmin,
   COMPLETION_REMINDER_LONG_TASK_MAX_MINUTES,
   COMPLETION_REMINDER_LONG_TASK_MIN_MINUTES,
   secretKeyForApp,
-  type AppAccess,
   type AppConfig,
   type AppPreferences,
   type CommentsConfig,
@@ -178,7 +176,6 @@ import {
 import { log, withTrace } from '../core/logger';
 import {
   AUTO_COMPACT_RETIRED,
-  buildAddAdminCard,
   buildAddAllowedCard,
   buildAdminsCard,
   buildCommentPromptCard,
@@ -240,17 +237,21 @@ import { resolveProjectsRootDir } from '../config/directories';
 import { loadBots } from '../config/bots';
 import { admitDirectorySettings } from '../config/directories';
 import { DirectoryError, directoryFailure } from '../config/directory-errors';
-import { botBackendId, groupBackendId, groupPermission, resolveCommentsExecution, resolveExecution, resolveModelPreference, executionSessionProfile, projectModelAllowed, projectModelCatalog, projectSpeedAllowed, type ModelPreference } from '../config/execution';
+import { botBackendId, groupBackendId, groupPermission, resolveCommentsExecution, resolveExecution, resolveModelPreference, resolveProjectModelAccess, executionSessionProfile, projectModelAllowed, projectModelCatalog, projectSpeedAllowed, type ModelPreference } from '../config/execution';
+import { ensureDmProject, type DmProjectDefaults } from './dm-project';
 import { fileClaimMode, messageLink, OutboundFiles } from './outbound-files';
 import { getSecret } from '../config/keystore';
 import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import {
+  dmPersonOf,
+  dmProject,
   getProjectByChatId,
   getProjectByChatIdSync,
   getProjectByName,
   listProjects,
   noMentionOf,
+  rememberDmChat,
   ruleKind,
   sessionModeOf,
   storedMode,
@@ -260,7 +261,7 @@ import {
   type Project,
   type SessionMode,
 } from '../project/registry';
-import { bindModeFor, createProject, CreatedButUnsavedError, CreationOutcomeUnknownError, joinExistingGroup } from '../project/lifecycle';
+import { bindModeFor, createProject, CreatedButUnsavedError, CreationOutcomeUnknownError, joinExistingGroup, type GroupInvitee } from '../project/lifecycle';
 export { bindModeFor } from '../project/lifecycle';
 import { refreshBranch } from '../project/announcement';
 import { leaveChat, transferOwnership } from '../project/group-ops';
@@ -308,6 +309,7 @@ import { lineOfMessage, quotedLine, RecentLines, type RecentLine } from './recen
 import { JudgeBudget, SmartLanes, JUDGE_GLANCE_CAP, JUDGE_BUDGET, JUDGE_BUDGET_WINDOW_MS, type LaneEntry, type LaneKind } from './smart-intake';
 import { Attention, outcomeOf, type PlaceRef, type PlaceView, type LookKind, type AttentionTicket, type AttentionGroupToken } from './attention';
 import { handleDmConsole } from './dm-console';
+import { upgradeAdmins } from '../config/admins-upgrade';
 import { createSyncCopyGate } from './sync-copy';
 import { fetchInteractiveCardText, isDegradedCardContent } from './card-content';
 import {
@@ -317,6 +319,8 @@ import {
   messageHasImages,
   stripFileTokens,
   weaveFileManifest,
+  inboundChatDir,
+  prepareInboundDir,
 } from './media';
 import {
   BACKFILL_MAX,
@@ -356,6 +360,7 @@ import {
   removeCommentReaction,
   renderCommentInstructions,
   resolveComment,
+  type ResolvedTarget,
   stripMarkdown,
   SUPPORTED_FILE_TYPES,
   syncCommentInstructions,
@@ -363,7 +368,8 @@ import {
 import { createEarlyInterrupt, createGracefulInterrupt, createIdlePause, Semaphore, withIdleTimeout, type IdlePause } from './watchdog';
 import { createBotRoster } from './bot-roster';
 import { readResponseRoster, responseMemberLabel } from './response-members';
-import { createNameBook, fetchChatMembers, resolveNames, withDeadline } from './names';
+import { createNameBook, createPersonNames, fetchChatMembers, resolveNames, withDeadline } from './names';
+import { createDmRefusal } from './dm-refused';
 
 /** 所有项目群成员的并集（去重）—— admins 加人的候选源（admins 通常是项目相关的人）。
  * 逐群调 fetchChatMembers，失败的群跳过；不含 bot/应用（接口保证）。 */
@@ -722,13 +728,15 @@ function runFailureMessage(err: unknown, dropped: number, sessionNotice?: string
 }
 
 /** Why a location's stored session couldn't be continued (see resolveThread). */
-export type RecreateReason = 'resume-failed' | 'cwd-changed';
+export type RecreateReason = 'resume-failed' | 'cwd-changed' | 'provider-changed';
+
+interface ResolvedThread { thread: AgentThread | undefined; recreated: boolean; reason?: RecreateReason }
 
 /** The run-card line for a forced session change: never switch sessions
  * silently (product.md 3.5). A topic re-weaves its recent messages into the new
  * session; the main area has nothing to re-weave. */
 export function sessionChangeNotice(reason: RecreateReason, topic: boolean): string {
-  const why = reason === 'cwd-changed' ? '本群的工作目录改了' : '原来的会话接不上了（恢复失败）';
+  const why = reason === 'cwd-changed' ? '本群的工作目录改了' : reason === 'provider-changed' ? 'Provider 换了' : '原来的会话接不上了（恢复失败）';
   const carried = topic ? '，话题里最近的消息已重新带上' : '';
   return `⚠️ ${why}，这一轮起换了一条新会话，之前的对话记不得${carried}。`;
 }
@@ -950,6 +958,8 @@ export interface Orchestrator {
   onRecall: (evt: RecallEvent) => Promise<void>;
   dispatcher: CardDispatcher;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
+  /** This bot's one writer of its preferences. */
+  writePreferences: AppPreferencesWriter;
   /** The host changed a library project's workspace: this bot's rows of it follow, their groups' sessions archived (admin/library.ts). */
   libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
@@ -958,6 +968,8 @@ export interface Orchestrator {
    * grant (agent/entry/schedule-tools.ts), the wire's is the local owner's or a Bot session's turn.
    */
   scheduleAs: (actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
+  /** A bound group's permission tier now; undefined for a chat not bound. */
+  permissionOf: (chatId: string) => Promise<PermissionMode | undefined>;
   /** The scheduled-task tick (bot/schedule/scheduler.ts), outside admit; bridge.ts starts it once Feishu is connected. */
   scheduler: { start(): Promise<void>; stop(): void; drain(ms: number): Promise<void> };
   /** Interrupts every turn, gives the agents a moment to end them, then closes every live session so a graceful exit
@@ -975,7 +987,7 @@ export interface Orchestrator {
  * message handler and the card-action dispatcher so they share that state.
  *
  * Flow (design §3):
- *   p2p                       → DM console (never runs codex).
+ *   p2p                       → an administrator's own Agent (dm-agent 5); `/menu` and the card answers stop before it.
  *   group @bot, no thread     → reply_in_thread creates the topic → run codex
  *                               (default model/effort; tune later with /model).
  *   group @bot /resume        → history picker → resume a codex thread in a new topic.
@@ -1134,11 +1146,14 @@ export function createOrchestrator(
   options?: { entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
     /** devices-4a 4.3: where each new session's token comes from (the host, over IPC). Without it a session gets none (tests). */
     host?: Pick<HostApi, 'issueSessionToken'>;
+    /** The launcher this Bot wrote for its sessions (agent/session-cli.ts); without one a session's PATH stays as it was. */
+    sessionCli?: string;
     /** A shutdown's two waits (owner 2026-11-02); tests shorten them. */
     shutdownTiming?: { interruptGraceMs?: number; drainMs?: number } },
 ): Orchestrator {
   const entries = options?.entries;
   const host = options?.host;
+  const sessionCli = options?.sessionCli;
   const memory = options?.memory;
   const bindingBot = options?.bot ? { ...options.bot } : undefined;
   /** Lazily-constructed backends by id — one instance per backend for the whole
@@ -1162,7 +1177,9 @@ export function createOrchestrator(
   }
   /** What vonvon hands a session of `project` (a comment session when there is none): see bot/context-assembly.ts. */
   async function contextSourcesFor(project: Project | undefined, options: { skipBotMemory?: boolean } = {}) {
-    const place: ContextPlace = project ? { kind: 'group', chatId: project.chatId, chatName: project.name } : { kind: 'comment' };
+    const dmPerson = project?.dm?.people[project.chatId];
+    const place: ContextPlace = project?.dm ? { kind: 'dm', person: dmPerson?.name ?? (dmPerson ? names.peek(dmPerson.openId) : undefined), ...(dmPerson ? { openId: dmPerson.openId } : {}) }
+      : project ? { kind: 'group', chatId: project.chatId, chatName: project.name } : { kind: 'comment' };
     return loadContextSources({
       appId: cfg.accounts.app.id, botName: channel.botIdentity?.name, place, ...(project ? { row: project } : {}),
       nameOf: openId => names.peek(openId), chatNames: async () => new Map((await listProjects()).map(row => [row.chatId, row.name] as const)), ...(options.skipBotMemory ? { skipBotMemory: true } : {}),
@@ -1188,30 +1205,39 @@ export function createOrchestrator(
     const context = contextDelivered.get(thread);
     return context ? { context } : {};
   };
-  async function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode, place?: 'comment') {
+  async function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode, place?: 'comment', commentedFile?: string) {
     const execution = execOf(project);
     const sources = project || place === 'comment' ? await contextSourcesFor(project) : undefined;
     const assembled = sources ? assemble(sources, project ? 'work' : 'comment') : undefined;
     const nonce = newNonce();
     const skills = project ? await groupSkillProfile({ backend, cwd, directories: execution.workspaces.additional, disabledPaths: project.skills?.disabledPaths }) : undefined;
-    // A bound group's sessions get the schedule tools, read-only tier too (3.13); a comment's never do.
+    // A bound group's and a private chat's sessions get the schedule tools (3.13) and the Feishu read tools (dm-agent 7.2),
+    // read-only tier too; a comment's never do.
     const schedule = Boolean(project) && place !== 'comment';
+    // A comment's session has the document column, and the edit tool when it is on a docx (7.4); a group's edits in any tier but read-only (7.2).
+    const comment = place === 'comment';
+    const feishuEdit = comment ? commentedFile === 'docx' : schedule && (permission ?? execution.permission) !== 'qa';
+    // The generic tool is a private chat's alone: a group cannot reach other groups or write to Feishu through it (7.6).
+    const feishuApi = schedule && Boolean(project?.dm);
     // The task skill goes with the tools (T4b); a package that cannot be written leaves the last whole one, or none.
-    const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId) : [];
-    const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages, mcpServers: [],
-      tools: { schedule }, ...(skills ? { skills } : {}) } : undefined;
+    const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId, project?.dm ? 'dm' : 'group') : [];
+    // What the Feishu tools download must be readable outside full access too.
+    const downloads = schedule && project ? inboundChatDir(project.chatId) : undefined;
+    if (downloads) await prepareInboundDir(downloads);
+    const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: downloads ? [{ path: downloads, access: 'read' as const }] : [], capabilityPackages, mcpServers: [],
+      tools: { schedule, feishu: schedule || comment, ...(feishuEdit ? { feishuEdit } : {}), ...(feishuApi ? { feishuApi } : {}), ...(comment ? { documentsOnly: true } : {}), ...(project?.dm ? { acrossBots: true } : {}) }, ...(skills ? { skills } : {}) } : undefined;
     const built = await executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
     if (assembled && built) openings.set(built, contextOf(assembled, nonce));
     return built;
   }
-  async function builtinPackage(chatId: string | undefined): Promise<SessionProfile['capabilityPackages']> {
+  async function builtinPackage(chatId: string | undefined, set: 'group' | 'dm'): Promise<SessionProfile['capabilityPackages']> {
     try {
-      const { path } = await ensureBuiltinPackage(cfg.accounts.app.id, 'group', builtinSkillsOfSet('group'));
+      const { path } = await ensureBuiltinPackage(cfg.accounts.app.id, set, builtinSkillsOfSet(set));
       return [{ path, kind: 'builtin' }];
     } catch (error) {
       // A resumed Codex thread still lists the skills from its rollout, so the package already there must stay
       // handed over (and readable); only without a whole one does the session start without the skill.
-      const kept = await completeBuiltinPackage(cfg.accounts.app.id, 'group');
+      const kept = await completeBuiltinPackage(cfg.accounts.app.id, set);
       log.fail('agent', error, { phase: 'builtin-package-failed', chatId, kept: Boolean(kept) });
       return kept ? [{ path: kept, kind: 'builtin' }] : [];
     }
@@ -1260,17 +1286,51 @@ export function createOrchestrator(
     // written since because the sources above are read now, at the start of the turn.
     const update = await planTurnUpdate(sources, assembled, delivered, Date.now(), { notices: takeMemoryNotices(thread.sessionId), hiddenBlocks: hiddenBlocksFor(backendId) });
     contextDelivered.set(thread, update.context);
-    turnStores.set(thread, { ...(assembled.cur.bot ? { bot: assembled.cur.bot.store } : {}), ...(assembled.cur.project ? { project: assembled.cur.project.store } : {}) });
+    turnStores.set(thread, { ...(assembled.cur.bot ? { bot: assembled.cur.bot.store } : {}), ...(assembled.cur.project ? { project: assembled.cur.project.store } : {}), ...(assembled.cur.dm ? { dm: assembled.cur.dm.store } : {}) });
     if (!update.text) return input;
     if (persisted) void trackTask(patchSession(key, { context: update.context }).catch(() => undefined));
     if (thread.injectContext) { await thread.injectContext(update.text); return input; }
     // Claude's system append is frozen on resume; a clearly scoped update accompanies the task.
     return { ...input, text: `${update.text}\n\n${input.text ?? ''}` };
   }
+  /** The private-chat row's first creation, which a message in the meantime waits for. */
+  let dmReady: Promise<unknown> = Promise.resolve();
+  /** What a new private-chat row starts from (dm-agent 4.1): a group of nothing, as the bot would run it today. No models listed leaves the model unset, not guessed. */
+  async function dmDefaults(): Promise<DmProjectDefaults> {
+    const execution = execOf(undefined);
+    const be = backendFor(execution.backend);
+    const models = await listModels(be);
+    if (!models.length) return { backend: execution.backend };
+    const { model: defaultModel, effort: defaultEffort } = await pickGroupDefault(undefined, be, execution.model);
+    // A hand-typed model is outside the catalog, which an allowset filters by: like a group's (3.11), it goes without one.
+    if (execution.model?.custom) return { backend: execution.backend, defaultModel, defaultEffort, defaultModelCustom: true };
+    const modelAccess = resolveProjectModelAccess({ group: { backend: execution.backend, cwd: '', defaultModel, defaultEffort } }, models);
+    return { backend: execution.backend, defaultModel, defaultEffort, modelAccess };
+  }
   async function pickGroupDefault(project: Project | undefined, backend: AgentBackend, prefer?: ModelPreference) {
     const models = projectModelCatalog(project, backend.id, await listModels(backend));
     if (project?.modelAccess && !models.length) throw new Error('本群没有可用的模型与 Effort 组合，请先在群设置中选择');
     return pickDefault(models, project?.modelAccess ? { ...prefer, custom: false } : prefer);
+  }
+  /**
+   * A private chat has one session and no new topic to change in, so its next turn follows the page (dm-agent 4.1): a model
+   * taken off the list moves to the row's default, another Provider starts over there. True in that last case: what the
+   * old one holds cannot be resumed.
+   */
+  async function followDmRow(threadId: string, chatId: string, project: Project): Promise<boolean> {
+    const rec = project.modelAccess ? await getSession(threadId) : undefined;
+    if (!rec) return false;
+    const be = groupBackend(project);
+    const moved = rec.backend !== be.id;
+    if (!moved && projectModelAllowed(project, be.id, rec.model, rec.effort, await listModels(be))) return false;
+    const prefer = modelPrefOf(project, be.id);
+    const { model, effort } = await pickGroupDefault(project, be, prefer);
+    await patchSession(threadId, { backend: be.id, model, effort, modelCustom: isCustomDefault(prefer, model) });
+    if (moved) {
+      await evictLiveSessionsForChat(chatId);
+      lastUsage.delete(threadId); // a new session: the meter starts over
+    }
+    return moved;
   }
   /** The group's backend: its own, else Codex; not the bot default (product.md 3.2). */
   function groupBackend(project: Pick<Project, 'backend'> | undefined): AgentBackend {
@@ -1412,6 +1472,7 @@ export function createOrchestrator(
   const sessions = new Map<string, AgentThread>();
   const threadPermissions = new WeakMap<AgentThread, string>();
   class ThreadPermissionChanged extends Error {}
+  const DM_CLOSED = '你已经不是这个 Bot 的管理员，这一轮没有开始。';
   function permissionFingerprint(opts: Pick<StartThreadOptions, 'mode' | 'network' | 'native' | 'readScope'>): string {
     const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable)
       : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, stable(item)])) : value;
@@ -1430,7 +1491,8 @@ export function createOrchestrator(
   }
   /**
    * The token a new session's `vonvon` commands carry (devices 5.3), in place of the bare marker, and beside it the
-   * `--scope` its command line copies: a group's reach is its group, a private chat's and a comment's the bot.
+   * `--scope` its command line copies: a group's reach is its group, a comment's the bot. A private chat has one reach
+   * and needs no `--scope` (dm-agent 6.1); it sees every Bot, so its command line is told which one is its own.
    */
   async function sessionEnv(api: Pick<HostApi, 'issueSessionToken'>, sessionId: string, place: AgentPlace): Promise<Record<string, string>> {
     const chatId = place.kind !== 'doc' && place.chatId ? place.chatId : undefined;
@@ -1438,15 +1500,22 @@ export function createOrchestrator(
       appId: cfg.accounts.app.id, place: place.kind === 'p2p' ? 'dm' : place.kind === 'group' ? 'group' : 'comment', sessionId,
       ...(chatId ? { chatId } : {}),
     });
-    return { [SESSION_ENV]: token, [SESSION_SCOPE_ENV]: sessionScope(cfg.accounts.app.id, place.kind === 'group' ? chatId : undefined) };
+    return place.kind === 'p2p' ? { [SESSION_ENV]: token, [SESSION_BOT_ENV]: cfg.accounts.app.id } : { [SESSION_ENV]: token, [SESSION_SCOPE_ENV]: sessionScope(cfg.accounts.app.id, place.kind === 'group' ? chatId : undefined) };
   }
+  /** Where a session of `chatId` runs: a private chat's row answers for a real p2p chat, so its token and its tools are a private chat's. */
+  const sessionPlace = (project: Project | undefined, chatId: string): AgentPlace => ({ kind: project?.dm ? 'p2p' : 'group', chatId });
+  /** Whether the person of a private chat is still on the list. Asked where a turn or a session starts: the list can change while one is on its way (dm-agent 3.3). */
+  const dmOpen = (project: Project): boolean => isAdmin(cfg, project.dm?.people[project.chatId]?.openId ?? '');
+  /** Who a private chat's task runs as (dm-agent 6.3): its creator, or when this Bot has no open_id for them (the desktop, another Bot's private chat) the chat's person. */
+  const dmRunner = (task: Pick<StoredTask, 'createdBy'>, project: Project): string => task.createdBy.openId ?? dmPersonOf(project, project.chatId)?.openId ?? '';
   /** The profile a thread was actually started with: a permission save can swap in a rebuilt one (and its opening). */
   const profileUsed = new WeakMap<AgentThread, object>();
   /** A save can finish while a provider is starting, before eviction can see its thread. */
   async function createWithPermission<T extends StartThreadOptions>(be: AgentBackend, original: T, place: AgentPlace, create: (opts: T) => Promise<AgentThread>): Promise<AgentThread> {
     for (let attempt = 0; attempt < 2; attempt++) {
       let opts = original;
-      const project = place.kind === 'group' && place.chatId ? await getProjectByChatId(place.chatId) : undefined;
+      const project = place.kind !== 'doc' && place.chatId ? await getProjectByChatId(place.chatId) : undefined;
+      if (project?.dm && !dmOpen(project)) throw new ThreadPermissionChanged(DM_CLOSED);
       if (project) {
         const perm = turnPerm(project);
         if (permissionFingerprint(opts) !== permissionFingerprint(perm))
@@ -1457,7 +1526,9 @@ export function createOrchestrator(
       try {
         // devices 5.3: the session's shell gets its token, never the bare marker; no token, no session (the host is gone).
         const session = entry && host ? await sessionEnv(host, entry.sessionId, place) : undefined;
-        thread = await create({...opts, ...(entry ? {entry} : {}), ...(session ? {profile: withSessionEnv(opts.profile, session)} : {})});
+        // Every session finds `vonvon`, whichever Provider and place (dm-agent 9): on the PATH it inherits, or by this.
+        const env = { ...(sessionCli ? { [SESSION_CLI_ENV]: sessionCli } : {}), ...session };
+        thread = await create({...opts, ...(entry ? {entry} : {}), ...(Object.keys(env).length ? {profile: withSessionEnv(opts.profile, env)} : {})});
         entry?.attach(thread);
       }
       catch (error) { entry?.revoke('start-failed'); throw error; }
@@ -1465,8 +1536,13 @@ export function createOrchestrator(
       const fingerprint = permissionFingerprint(opts);
       threadPermissions.set(thread, fingerprint);
       let current: Project | undefined;
-      try { current = place.kind === 'group' && place.chatId ? await getProjectByChatId(place.chatId) : undefined; }
+      try { current = place.kind !== 'doc' && place.chatId ? await getProjectByChatId(place.chatId) : undefined; }
       catch (error) { entry?.revoke('start-failed'); await closeForPermission(thread); throw error; }
+      if (current?.dm && !dmOpen(current)) {
+        entry?.revoke('closed');
+        await closeForPermission(thread);
+        throw new ThreadPermissionChanged(DM_CLOSED);
+      }
       if (!current || permissionFingerprint(turnPerm(current)) === fingerprint) return thread;
       entry?.revoke('closed');
       await closeForPermission(thread);
@@ -2749,13 +2825,26 @@ export function createOrchestrator(
     // before any reply, record, watermark or note; its topic message is answered (s14d).
     if (msg.chatType === 'p2p') {
       if (await syncCopy.skip(msg, true)) return;
-      if (!fromBot(msg) && msg.rawContentType === 'audio') {
+      if (fromBot(msg)) return;
+      // Whoever a group's agent asked may reply to their card; everything else stops here, before any transcription (dm-agent 3.5).
+      if (!isAdmin(cfg, msg.senderId)) {
+        if (!askAnswered(msg)) await refuseDm(msg);
+        return;
+      }
+      if (msg.rawContentType === 'audio') {
         const textMessage = await transcribeMessage(msg, intakeOwner);
         if (!textMessage) return;
         msg = textMessage;
       }
-      if (!fromBot(msg) && typedCandidate(msg) && asks.dmText({ openId: msg.senderId, text: msg.content.trim(), messageId: msg.messageId, createTime: msg.createTime })) return;
-      await handleDmConsole(channel, cfg, msg);
+      if (askAnswered(msg)) return;
+      if (isMenuCommand(msg)) { await handleDmConsole(channel, cfg, msg); return; }
+      const dm = await openDmChat(msg);
+      if (!dm) {
+        await channel.send(msg.chatId, { markdown: '私聊项目没建好，请到 Vonvon Bot 的诊断页看看。' }, { replyTo: msg.messageId }).catch(() => undefined);
+        return;
+      }
+      if (msg.threadId) noteTopicMessage(msg);
+      await routeMessage(msg, dm, false);
       return;
     }
 
@@ -2875,7 +2964,43 @@ export function createOrchestrator(
       }
       return;
     }
+    await routeMessage(msg, project, smart);
+  };
 
+  /** A person's private chat is a door of its own (dm-agent 3.5): the refusal is worded and the candidate kept by {@link createDmRefusal}. */
+  async function refuseDm(msg: NormalizedMessage): Promise<void> {
+    await dmRefusal({ openId: msg.senderId, chatId: msg.chatId, replyTo: msg.messageId });
+  }
+  /** A reply to the card a group's agent sent this person: only that answers it (dm-agent 5). The rest is for their own Agent. */
+  function askAnswered(msg: NormalizedMessage): boolean {
+    const quoted = quotedId(msg);
+    if (!quoted || !typedCandidate(msg)) return false;
+    if (!asks.dmText({ openId: msg.senderId, text: msg.content.trim(), quoted, createTime: msg.createTime })) return false;
+    markSeen(msg.threadId ?? msg.chatId, { id: msg.messageId, at: msg.createTime });
+    return true;
+  }
+  /** `/menu`; `/settings` is not listed and does the same (dm-agent 5). */
+  function isMenuCommand(msg: NormalizedMessage): boolean {
+    return /^\/(menu|settings)(?![\w/])/i.test(msg.content.trim());
+  }
+  /** Each person's private chats since this process started: taking them off the list reaches a running turn even when the files cannot be read. */
+  const dmChatsOf = new Map<string, Set<string>>();
+  /** The private chat's row as this person's chat, noted before the turn so that a task can find the chat again. Undefined when there is no row. */
+  async function openDmChat(msg: NormalizedMessage): Promise<Project | undefined> {
+    const chats = dmChatsOf.get(msg.senderId) ?? new Set<string>();
+    dmChatsOf.set(msg.senderId, chats.add(msg.chatId));
+    await orStop(dmReady, undefined);
+    try {
+      await rememberDmChat(msg.chatId, msg.senderId, await names.senderName(msg), rawSender(msg)?.sender_id?.union_id);
+      return await getProjectByChatId(msg.chatId);
+    } catch (error) {
+      log.fail('project', error, { phase: 'dm-remember' });
+      return undefined;
+    }
+  }
+
+  /** A message past the gates of its place: a command, or a turn in the session of where it was said. */
+  async function routeMessage(msg: NormalizedMessage, project: Project, smart: boolean): Promise<void> {
     // 多维表格「发送消息卡片」等 card 2.0 交互卡片：推送事件 / 旧版 content 只给降级
     // 占位（SDK 归一化成 "[interactive card]"，或「请升级至最新版本客户端…」），真正的
     // 卡片正文（含 Base 记录链接）要带 card_msg_content_type=raw_card_content 回查才拿得
@@ -2973,9 +3098,10 @@ export function createOrchestrator(
         await refuseGroupSettings(msg, true);
         return;
       }
+      const mainArea = project.dm ? '主区' : '主群区';
       if (cmd === 'resume') {
         await channel
-          .send(msg.chatId, { markdown: `\`/${cmd}\` 请到主群区使用（话题外发）。` }, { replyTo: msg.messageId, replyInThread: true })
+          .send(msg.chatId, { markdown: `\`/${cmd}\` 请到${mainArea}使用（话题外发）。` }, { replyTo: msg.messageId, replyInThread: true })
           .catch(() => undefined);
         return;
       }
@@ -2983,7 +3109,7 @@ export function createOrchestrator(
         await channel
           .send(
             msg.chatId,
-            { markdown: '话题里不换会话。要新的会话，就开一个新话题；`/resume` 请到主群区使用。' },
+            { markdown: `话题里不换会话。要新的会话，就开一个新话题；\`/resume\` 请到${mainArea}使用。` },
             { replyTo: msg.messageId, replyInThread: true },
           )
           .catch(() => undefined);
@@ -3088,7 +3214,7 @@ export function createOrchestrator(
     }
     if (await refuseUnavailableTier(msg, project, turnPerm(project))) return;
     startTopicDirectly(msg, text, project);
-  };
+  }
 
   /**
    * A message was recalled (im.message.recalled_v1, s15). Not in a session yet:
@@ -3228,12 +3354,12 @@ export function createOrchestrator(
     }
   }
 
-  /** 非管理员触发 owner-only 命令(/resume、/new、/clear)时的统一无权限提示。
-   * design §5: 管理类命令仅 bot owner(=admins[]) 可用；对话类(/model、/help)对所有人开放。 */
+  /** 非管理员触发管理命令(/resume、/new、/clear)时的统一无权限提示。
+   * 管理类命令仅管理员可用；对话类(/model、/help)对所有人开放。 */
   async function denyAdminCommand(msg: NormalizedMessage, cmd: 'resume' | 'clear' | 'new'): Promise<void> {
     const why = cmd === 'clear' || cmd === 'new' ? '主区的会话是大家共用的。' : '';
     await channel
-      .send(msg.chatId, { markdown: `⚠️ \`/${cmd}\` 只有主人和管理员能用。${why}` }, { replyTo: msg.messageId })
+      .send(msg.chatId, { markdown: `⚠️ \`/${cmd}\` 只有管理员能用。${why}` }, { replyTo: msg.messageId })
       .catch(() => undefined);
     log.info('intake', 'cmd-denied', { cmd });
   }
@@ -3252,7 +3378,7 @@ export function createOrchestrator(
   /** A turn's resolved permission: the group's one tier, whoever sends (s15c). */
   type TurnPerm = Pick<StartThreadOptions, 'mode' | 'network' | 'native' | 'readScope'>;
 
-  /** The group's tier and network for `project`; none without a group (私聊 waits for s49). */
+  /** The group's tier and network for `project`, a private chat's row too (always 完全访问); none without a row. */
   function turnPerm(project: Project | undefined): TurnPerm {
     if (!project) return {};
     const exec = execOf(project);
@@ -3280,12 +3406,13 @@ export function createOrchestrator(
     noteNotReplied(msg, 'tier-unavailable', { backendId: be.id });
     const now = Date.now();
     const last = unavailableTierNoted.get(msg.chatId);
-    if ((!msg.mentionedBot || fromBot(msg)) && now - (last ?? -Infinity) < FULL_ONLY_QUIET_MS) return true;
+    if (!project.dm && (!msg.mentionedBot || fromBot(msg)) && now - (last ?? -Infinity) < FULL_ONLY_QUIET_MS) return true;
     // Stamped before sending so 免@ messages arriving meanwhile stay quiet; put back if the send fails.
     unavailableTierNoted.set(msg.chatId, now);
     // The command needs --bot when the host has several bots (pickBot); an unreadable registry counts as one.
     const several = await loadBots().then((reg) => reg.bots.length > 1, () => false);
-    const markdown = unavailableTierReply(msg.chatId, table, env, mode, several ? cfg.accounts.app.id : undefined);
+    const markdown = project.dm ? `ℹ️ 这一轮没有开始：私聊固定用「${tierInfo(table, env, mode).name}」，${tierInfo(table, env, mode).unavailable}\n这时私聊里只有 \`/menu\` 能用。`
+      : unavailableTierReply(msg.chatId, table, env, mode, several ? cfg.accounts.app.id : undefined);
     const sent = await channel.send(msg.chatId, { markdown }, { replyTo: msg.messageId, replyInThread: Boolean(msg.threadId) }).then(() => true, () => false);
     if (!sent && unavailableTierNoted.get(msg.chatId) === now) {
       if (last === undefined) unavailableTierNoted.delete(msg.chatId);
@@ -3307,29 +3434,31 @@ export function createOrchestrator(
     const project = getProjectByChatIdSync(task.chatId);
     const reason = project && tierUnavailable(project);
     const now = Date.now();
-    if (!reason || shuttingDown || now - (gateFailureNoted.get(task.id) ?? -Infinity) < 60 * 60_000) return;
+    if (!project || !reason || shuttingDown || now - (gateFailureNoted.get(task.id) ?? -Infinity) < 60 * 60_000) return;
     gateFailureNoted.set(task.id, now);
     // A text message's `<at>` is a real mention and no at-guard reads it; the task's name is anybody's words, so no tag
     // in it survives (as in the scheduled topic's root). Only the name: an unclosed tag would run to the end of the sentence.
-    const text = `⏰ 定时任务「${plainTaskName(task.name)}」这次没跑：本群的权限档现在用不了（${reason.replace(/。$/, '')}）。连续 10 次会自动暂停。`;
+    const text = `⏰ 定时任务「${plainTaskName(task.name)}」这次没跑：${project.dm ? '私聊' : '本群'}的权限档现在用不了（${reason.replace(/。$/, '')}）。连续 10 次会自动暂停。`;
     void trackTask(sayInMain(task.chatId, { text }, text).catch(error => {
       if (gateFailureNoted.get(task.id) === now) gateFailureNoted.delete(task.id); // the next failure tries again
       log.fail('schedule', error, { phase: 'gate-notice', taskId: task.id });
     }));
   }
 
-  /** The scheduler paused a task after 10 failures in a row: one post in the main area, the creator at-ed when known.
+  /** The scheduler paused a task after 10 failures in a row: one post in the main area, the creator at-ed when known; a
+   * private chat has only them to tell, and a task made from another Bot's private chat only their name (dm-agent 6.4).
    * Throws when it is not sent, so the scheduler keeps the notice pending and tries again. */
   async function notifyAutoPause(task: StoredTask): Promise<void> {
     const project = await getProjectByChatId(task.chatId);
     if (!project || project.enabled === false) return; // the bot says nothing in a group it no longer serves
     const failure = [...task.recent].reverse().find(run => run.status === 'failed' || run.by === 'crash');
     const why = (failure?.error ?? '运行中 Bot 进程退出了').replace(/。$/, '');
-    const { openId, name } = task.createdBy;
+    const { name } = task.createdBy, openId = project.dm ? undefined : task.createdBy.openId;
     // Feishu's post format reads a text element as plain text (not tried here); the name is anybody's words, so no tag
     // stays in it either way.
     const head = `定时任务「${plainTaskName(task.name)}」连续 10 次失败，已自动暂停。`;
-    const tail = `看一下：${why}。到群设置的"任务"里能恢复。`;
+    const named = name && !openId && !project.dm ? `${plainTaskName(name)} ` : '';
+    const tail = `${named}看一下：${why}。${project.dm ? '跟我说一声，或者到 Bot 页的"任务"里' : '到群设置的"任务"里'}能恢复。`;
     const row = openId ? [{ tag: 'text', text: head }, { tag: 'at', user_id: openId }, { tag: 'text', text: ` ${tail}` }] : [{ tag: 'text', text: head + tail }];
     await sayInMain(task.chatId, { post: { zh_cn: { content: [row] } } }, openId ? `${head}@${name ?? '创建人'} ${tail}` : head + tail);
   }
@@ -3422,7 +3551,7 @@ export function createOrchestrator(
     // No project = an unbound group: never run (or resume a session) with no
     // tier, which backends read as full access. Messages stop earlier; this
     // also covers the card-originated turns (👍 继续, 🔁 重试).
-    if (refusedTurn(project, msg.chatId, extra)) return Promise.resolve();
+    if (refusedTurn(project, msg.chatId, extra) || dmShut(project, msg, extra)) return Promise.resolve();
     const owner = active.get(sessionKey);
     return orderTurns(sessionKey, async () => {
       if (staleRetry(extra)) return;
@@ -3500,6 +3629,14 @@ export function createOrchestrator(
     // The gate let a scheduled run through, so the group changed since: a race (T2 4.2).
     if (refused) dropScheduled(extra, SCHEDULE_UPDATING);
     return refused !== undefined;
+  }
+
+  /** Past the door and removed since (dm-agent 3.3): the first gate said yes to someone the list no longer has. A task's run has its creator as sender. */
+  function dmShut(project: Project | undefined, msg: NormalizedMessage, extra?: TurnExtra): boolean {
+    if (!project?.dm || isAdmin(cfg, msg.senderId)) return false;
+    log.info('intake', 'reject', { reason: 'dm-admin-removed', ref: msg.messageId.slice(-6) });
+    dropScheduled(extra, SCHEDULE_UPDATING);
+    return true;
   }
 
   // Keep preparation ordered, but do not pin the lane on an uncertain steer ACK.
@@ -3614,7 +3751,7 @@ export function createOrchestrator(
     const titleSource: SessionTitleSource = goal
       ? { text, rawContentType: 'text' }
       : sessionTitleSourceFromMessage(msg, summaryText ?? text);
-    if (refusedTurn(project, msg.chatId, extra)) return;
+    if (refusedTurn(project, msg.chatId, extra) || dmShut(project, msg, extra)) return;
     // A retry re-checks here, in the same synchronous step that reserves it: a
     // message may have reserved the session while it waited.
     if (staleRetry(extra)) return;
@@ -3712,10 +3849,11 @@ export function createOrchestrator(
         // preIngested (handleTurn already wove them into `text`).
         const ingestP = preIngested ? Promise.resolve(preIngested) : ingestContext(msg, text, extra, goal ? undefined : project);
         let tResolveDone = tIntake;
-        const resolveP = resolveThread(sessionKey, msg.chatId, {
+        const moved = project?.dm && await followDmRow(sessionKey, msg.chatId, project);
+        const resolveP = (moved ? Promise.resolve<ResolvedThread>({ thread: undefined, recreated: true, reason: 'provider-changed' }) : resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
           network: perm.network, native: perm.native, readScope: perm.readScope,
-        }).then((r) => {
+        })).then((r) => {
           tResolveDone = Date.now();
           return r;
         });
@@ -3905,7 +4043,7 @@ export function createOrchestrator(
           const be = sessionBackendOf(prior, project);
           const freshSpeed = await reconcileStoredSpeed(be, sessionKey, cwd, model, prior?.serviceTier);
           const savedSpeed = prior ? (await getSession(sessionKey))?.serviceTier : undefined;
-          thread = await startWith(be, { cwd, model, effort, serviceTier: freshSpeed, mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, profile: await profileOf(project, cwd, be, perm.mode) }, { kind: 'group', chatId: msg.chatId });
+          thread = await startWith(be, { cwd, model, effort, serviceTier: freshSpeed, mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, profile: await profileOf(project, cwd, be, perm.mode) }, sessionPlace(project, msg.chatId));
           trackSession(sessionKey, thread);
           // 自愈观测：来源=全新会话（无持久化记录），与 resume-ok/resume-recreate
           // 互斥——三者其一 + agent 层的 spawn/prewarm-hit 即可还原完整恢复路径。
@@ -4128,7 +4266,7 @@ export function createOrchestrator(
     threadId: string,
     chatId: string,
     perm: TurnPerm,
-  ): Promise<{ thread: AgentThread | undefined; recreated: boolean; reason?: RecreateReason }> {
+  ): Promise<ResolvedThread> {
     let project: Project | undefined;
     const live = sessions.get(threadId);
     if (live) {
@@ -4186,7 +4324,7 @@ export function createOrchestrator(
         serviceTier: resumedSpeed,
         mode: perm.mode,
         network: perm.network, native: perm.native, readScope: perm.readScope,
-      }, { kind: 'group', chatId });
+      }, sessionPlace(project, chatId));
       trackSession(threadId, resumed);
       // The opening handed to a resumed session carries a new mark. Claude takes its system append again on resume, so that
       // opening is what it now holds (the record's mark stays accepted); Codex keeps the instructions it was started with,
@@ -4220,7 +4358,7 @@ export function createOrchestrator(
         serviceTier: resumedSpeed,
         mode: perm.mode,
         network: perm.network, native: perm.native, readScope: perm.readScope,
-      }, { kind: 'group', chatId });
+      }, sessionPlace(project, chatId));
       trackSession(threadId, fresh);
       lastUsage.delete(threadId);
       // The resumed codex thread is gone — repoint the persisted record at the
@@ -4295,7 +4433,7 @@ export function createOrchestrator(
       let tResolveDone = tIntake;
       const threadP = (async () => {
         const { model, effort } = await pickGroupDefault(project, be, prefer);
-        const thread = await startWith(be, { cwd, model, effort, serviceTier: 'standard', mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, profile: await profileOf(project, cwd, be, perm.mode) }, { kind: 'group', chatId: msg.chatId });
+        const thread = await startWith(be, { cwd, model, effort, serviceTier: 'standard', mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, profile: await profileOf(project, cwd, be, perm.mode) }, sessionPlace(project, msg.chatId));
         tResolveDone = Date.now();
         return { thread, model, effort };
       })();
@@ -4448,6 +4586,9 @@ export function createOrchestrator(
       .send(chatId, { markdown: `这个话题没有接上会话：${why}` }, { replyTo: topicMsgId, replyInThread: true })
       .catch(() => undefined);
   }
+  /** How many sessions of the shared folder a private chat's `/resume` looks through for its own, and how many a card shows. */
+  const DM_RESUME_SCAN = 200;
+  const RESUME_LIST_MAX = 15;
   /** Why a card `/resume` left its new topic unbound when a message there started a session first. */
   const RESUME_TOPIC_BUSY = '新话题里已经开始了新的会话，没有接上这条。';
 
@@ -4469,16 +4610,19 @@ export function createOrchestrator(
         // button's callback value (`b`), so the pick → readHistory → rebind path
         // stays on the same backend that listed the sessions.
         const be = groupBackend(project);
-        const listed = await be.listThreads(cwd);
+        const listed = await (project?.dm ? be.listThreads(cwd, DM_RESUME_SCAN) : be.listThreads(cwd));
         // Sessions another place of this group holds are left off (s15f): resuming one here
         // would give it two writers. The key being resumed may pick its own again.
         const records = await listSessions();
+        // A private chat's folder is shared by its admins: this window lists what it held itself, nobody else's and no terminal's (dm-agent 4.3).
+        const own = project?.dm ? new Set(records.filter(rec => rec.chatId === msg.chatId).flatMap(rec => [rec.sessionId, ...rec.earlier ?? []])) : undefined;
         const holders: SessionRecord[] = [];
         const threads = listed.filter((t) => {
+          if (own && !own.has(t.sessionId)) return false;
           const holder = sessionHolder(records, { chatId: msg.chatId, key: singleSessionKey, backend: be.id, sessionId: t.sessionId });
           if (holder) holders.push(holder);
           return !holder;
-        });
+        }).slice(0, RESUME_LIST_MAX);
         const state: ResumeCardState = {
           chatId: msg.chatId,
           originalMsgId: msg.messageId,
@@ -4724,7 +4868,7 @@ export function createOrchestrator(
   /**
    * `/new` or `/clear` (single-session groups only, admin-gated): park the current session
    * and rebind the group to a BRAND-NEW backend thread, preserving the session's
-   * model / effort / backend. The parked thread stays on disk (resumable via
+   * model / effort / backend while the group's list allows them. The parked thread stays on disk (resumable via
    * `/resume`) — non-destructive; Feishu chat history is untouched, and the card
    * says so. Reserves the session SYNCHRONOUSLY (like {@link runCompact}) so a
    * message racing in through the SDK's per-chat queue waits (then runs on the new
@@ -4755,15 +4899,18 @@ export function createOrchestrator(
         // Route by the session's backend (fall back to the project's) — a fresh
         // codex thread for a codex session, claude for a claude one. The cwd is the
         // group's current one, not the record's (s36d2).
-        const be = sessionBackendOf(rec, project);
+        const held = sessionBackendOf(rec, project);
+        // What the group's list no longer holds would be refused at the first turn, and this command is the way out of that.
+        const stays = !project?.modelAccess || projectModelAllowed(project, held.id, rec?.model, rec?.effort, await listModels(held));
+        const be = stays ? held : groupBackend(project);
         const cwd = workCwd(project, rec);
         // Carry the session's chosen model/effort into the new thread so /clear
         // resets the CONVERSATION, not the user's model pick; a session without one
         // starts on the default, as its next turn would. Tier (mode/network) comes
         // from the caller's live perm.
-        let model = rec?.model;
-        let effort = rec?.effort;
-        let modelCustom = rec?.modelCustom;
+        let model = stays ? rec?.model : undefined;
+        let effort = stays ? rec?.effort : undefined;
+        let modelCustom = stays ? rec?.modelCustom : undefined;
         if (!model) {
           const prefer = modelPrefOf(project, be.id);
           const picked = await pickGroupDefault(project, be, prefer);
@@ -4781,7 +4928,7 @@ export function createOrchestrator(
           mode: perm.mode,
           network: perm.network, native: perm.native, readScope: perm.readScope,
           profile: await profileOf(project, cwd, be, perm.mode),
-        }, { kind: 'group', chatId: msg.chatId });
+        }, sessionPlace(project, msg.chatId));
         // Close + evict the parked live thread (a separate app-server proc); its
         // on-disk session survives for /resume. Then track the fresh one.
         const old = sessions.get(sessionKey);
@@ -4842,7 +4989,7 @@ export function createOrchestrator(
     // （能力守卫会拒），避免「列了点了才发现不支持」。codex(capabilities undefined)=全列。
     const caps = groupBackend(project).capabilities;
     await withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
-      const card = buildHelpCard(scope, noMention, isAdmin(cfg, msg.senderId), caps, project ? sessionModeOf(project) : 'multi');
+      const card = buildHelpCard(scope, noMention, isAdmin(cfg, msg.senderId), caps, project ? sessionModeOf(project) : 'multi', Boolean(project?.dm));
       await sendManagedCard(channel, msg.chatId, card, msg.messageId, inThread).catch((err) =>
         log.fail('card', err, { cmd: 'help', scope }),
       );
@@ -4934,6 +5081,11 @@ export function createOrchestrator(
     for (const [k, s] of modelPending) if (now - s.createdAt > PENDING_TTL_MS) modelPending.delete(k);
   }
 
+  /** A card's chat gate: a group's allow list, a private chat's admin list (dm-agent 5). */
+  function placeOpen(chatId: string, openId: string): boolean {
+    return getProjectByChatIdSync(chatId)?.dm ? isAdmin(cfg, openId) : isChatAllowed(cfg, chatId);
+  }
+
   /**
    * Resolve + authorize a command-card (/model, /resume) action. Only the
    * original requester may act on their card (design §5); chat/user must still
@@ -4950,7 +5102,7 @@ export function createOrchestrator(
       return undefined;
     }
     const op = evt.operator?.openId ?? '';
-    if (op !== state.requesterOpenId || !isChatAllowed(cfg, state.chatId)) {
+    if (op !== state.requesterOpenId || !placeOpen(state.chatId, op)) {
       log.info('card', 'action-denied', { reason: 'not-allowed' });
       return undefined;
     }
@@ -5158,7 +5310,7 @@ export function createOrchestrator(
     });
 
   /** Run-card actions: gated by chat/user allow lists (design §5). */
-  const runAllowed = (evt: CardActionEvent): boolean => isChatAllowed(cfg, evt.chatId);
+  const runAllowed = (evt: CardActionEvent): boolean => placeOpen(evt.chatId, evt.operator?.openId ?? '');
   /**
    * Owner-or-admin gate for run-card controls. Killing/altering someone else's
    * run is destructive (design §5: 杀别人的 run 限 admins), and `allowedUsers`
@@ -5431,10 +5583,12 @@ export function createOrchestrator(
   }
 
   /** Whether a scheduled task of the group may start now (bot/schedule/scheduler.ts): turnRefusal's states, a desktop
-   * hold, then the tier. Synchronous, as the scheduler decides in place. */
-  function scheduleGate(chatId: string): 'ok' | 'disabled' | 'updating' | 'held' | 'unbound' | 'tier-unavailable' {
+   * hold, then the tier; a private chat's also that the chat's person and the one it runs as are still admins (dm-agent 6.3).
+   * Synchronous, as the scheduler decides in place. */
+  function scheduleGate(chatId: string, task: Pick<StoredTask, 'createdBy'>): 'ok' | 'disabled' | 'updating' | 'held' | 'unbound' | 'tier-unavailable' | 'admin-removed' {
     const project = getProjectByChatIdSync(chatId);
     if (!project) return 'unbound';
+    if (project.dm && !(dmOpen(project) && isAdmin(cfg, dmRunner(task, project)))) return 'admin-removed';
     if (project.enabled === false) return 'disabled';
     if (projectMutations.has(chatId) || resumePublications.has(chatId)) return 'updating';
     if ((firingHolds.get(chatId) ?? 0) > Date.now()) return 'held';
@@ -5527,21 +5681,16 @@ export function createOrchestrator(
   // DM management console buttons (design §3.1). Admin-gated; sub-views patch
   // the same card in place, each carrying a ⬅️ 菜单 back button.
   const dmAdmin = (openId?: string): boolean => isAdmin(cfg, openId ?? '');
-  /** product.md 3.7: only the owner changes this machine's administrators, here as by chat and the command line (audit 252-1). */
-  const dmOwner = (openId?: string): boolean => Boolean(openId) && resolveOwner(cfg) === openId;
-  const administratorIds = (): (string | undefined)[] => {
-    const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
-    return [roles?.ownerOpenId, ...trustedFeishuAdmins(roles), cfg.preferences?.access?.ownerOpenId, ...(cfg.preferences?.access?.admins ?? [])];
-  };
-  /** The administrators card as the clicker may use it: the owner adds and removes, an admin only reads. */
-  const adminsCard = async (evt: CardActionEvent): Promise<CardObject> =>
-    buildAdminsCard(cfg, await namesWithOperator(evt, administratorIds()), { editable: dmOwner(evt.operator?.openId) });
   // DM cards are CardKit entities (sendManagedCard); update them via the
   // settle-then-cardkit path so the click's callback acks first. Passing the
   // whole evt lets settleUpdate self-heal an orphaned (post-restart) card by
   // re-posting to evt.chatId.
   const patch = (evt: CardActionEvent, c: object | (() => object | Promise<object>)): void => {
     void settleUpdate(evt.messageId, c, evt.chatId);
+  };
+  const showAdmins = ({ evt }: { evt: CardActionEvent }): void => {
+    if (!dmAdmin(evt.operator?.openId)) return;
+    patch(evt, async () => buildAdminsCard(cfg, await namesWithOperator(evt, cfg.preferences?.access?.admins ?? [])));
   };
   /** An old in-group settings card clicked (s1b): it becomes the not-dm sentence, nothing is written. */
   const refuseGroupSettingsCard = (evt: CardActionEvent): void => {
@@ -5972,7 +6121,7 @@ export function createOrchestrator(
               requestId,
               bot,
               name,
-              ownerOpenId: op,
+              invitee: { idType: 'open_id', id: op },
               existingPath: cwdIn || undefined,
               projectsRootDir: cfg.preferences?.projectsRootDir,
               kind,
@@ -6417,58 +6566,12 @@ export function createOrchestrator(
     .on(GS.modelDefaultSubmit, ({ evt }) => refuseGroupSettingsCard(evt))
     // ── 权限管理回调（admins 全局 / 项目响应白名单）。均 dmAdmin 门控（私聊管理台）。
     // 列表卡用 patch 原地重渲染（纯按钮不锁）；加人是 form 提交，结果发**新卡**（旧表单
-    // 留痕），规避 select 锁卡。owner 恒在 admins 名单顶、不可删。
-    .on(DM.admins, ({ evt }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      patch(evt, () => adminsCard(evt));
-    })
-    .on(DM.addAdminForm, ({ evt }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      // An admin's click on an owner's card (a forwarded or older one): the list back, read-only.
-      if (!dmOwner(evt.operator?.openId)) { patch(evt, () => adminsCard(evt)); return; }
-      patch(evt, async () => {
-        const all = await fetchAllProjectMembers(channel);
-        const members = all.filter((m) => !isAdmin(cfg, m.openId)); // 排除已是 admin/owner 的
-        return buildAddAdminCard(members);
-      });
-    })
-    .on(DM.addAdminSubmit, ({ evt, formValue }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      const owner = dmOwner(evt.operator?.openId);
-      const manual = String(formValue?.open_id ?? '').trim();
-      const id = manual.startsWith('ou_') ? manual : pickOpenId(formValue);
-      log.info('console', 'admin-add', { picked: id?.slice(-6) ?? null, ...(owner ? {} : { refused: 'not-owner' }) });
-      void trackTask((async () => {
-        if (id && owner) {
-          await writePreferences((preferences) => {
-            const access: AppAccess = { ...(preferences.access ?? {}) };
-            access.ownerOpenId ??= cfg.preferences?.access?.admins?.[0];
-            access.admins = Array.from(new Set([...(access.admins ?? []), id]));
-            preferences.access = access;
-          }).catch((e) => log.fail('console', e, { phase: 'save-config' }));
-        }
-        await sendManagedCard(channel, evt.chatId, await adminsCard(evt)).catch((e) => log.fail('console', e, { phase: 'admin-add-result' }));
-      })());
-    })
-    .on(DM.rmAdmin, ({ evt, value }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      const owner = dmOwner(evt.operator?.openId);
-      const id = typeof value.u === 'string' ? value.u : '';
-      if (!owner) log.info('console', 'admin-remove', { refused: 'not-owner' });
-      patch(evt, async () => {
-        const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
-        const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
-        if (owner && id && id !== resolveOwner(cfg) && id !== scanner && !trustedFeishuAdmins(roles).includes(id)) {
-          await writePreferences((preferences) => {
-            const access: AppAccess = { ...(preferences.access ?? {}) };
-            access.ownerOpenId ??= cfg.preferences?.access?.admins?.[0];
-            access.admins = (access.admins ?? []).filter((x) => x !== id);
-            preferences.access = access;
-          }).catch((e) => log.fail('console', e, { phase: 'save-config' }));
-        }
-        return adminsCard(evt);
-      });
-    })
+    // 留痕），规避 select 锁卡。
+    .on(DM.admins, showAdmins)
+    // The list changes in the client and the terminal only (product.md section 6): an old card's buttons just redraw it.
+    .on(DM.addAdminForm, showAdmins)
+    .on(DM.addAdminSubmit, showAdmins)
+    .on(DM.rmAdmin, showAdmins)
     .on(DM.allowlist, ({ evt, value }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
       const name = typeof value.n === 'string' ? value.n : '';
@@ -6883,8 +6986,12 @@ export function createOrchestrator(
     }
   }
   async function collaboration(request: CollaborationRequest): Promise<unknown> {
-    const owner = resolveOwner(cfg);
-    if (!owner) throw new AdminWriteError('请先给这个 Bot 配置飞书管理员');
+    // Who a new group is for and who gets a group this Bot leaves: its primary admin, unless a private chat's creation
+    // says who asked (dm-agent 6.4), when this Bot needs no admin of its own.
+    const primary = primaryAdmin(cfg);
+    const invitee: GroupInvitee | undefined = (request.action === 'createProject' ? request.invitee : undefined) ?? (primary ? { idType: 'open_id', id: primary } : undefined);
+    if (!invitee) throw new AdminWriteError('请先给这个 Bot 添加管理员');
+    const admin = invitee.id;
     if (request.action === 'usage') return { data: await fetchUsageBundle(request.force) };
     if (request.action === 'createProject') {
       const signature = JSON.stringify(request);
@@ -6903,7 +7010,7 @@ export function createOrchestrator(
       const result = serialCreate(async signal => {
         const directory = request.directory === undefined ? undefined : await realpath(request.directory);
         if (directory !== undefined && !(await stat(directory)).isDirectory()) throw new AdminWriteError('所选文件夹不是目录');
-        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, name: request.name, ownerOpenId: owner, existingPath: directory, project: request.project, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, judge: request.judge, mode: bindModeFor(request.backend), signal });
+        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, botName: channel.botIdentity?.name, name: request.name, invitee, existingPath: directory, project: request.project, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, judge: request.judge, mode: bindModeFor(request.backend), signal });
         return { ok: true, project: projectView(project) };
       }).catch((error: unknown) => {
         // Every refusal crosses IPC as the bot's own word; a result not known stays a plain error, which the RPC
@@ -6958,7 +7065,7 @@ export function createOrchestrator(
           let warning: string | undefined;
           try {
             if (project.origin === 'joined') { await leaveChat(channel, project.chatId); groupEffect = 'left'; }
-            else { await transferOwnership(channel, project.chatId, owner); groupEffect = 'transferred'; }
+            else { await transferOwnership(channel, project.chatId, admin); groupEffect = 'transferred'; }
           } catch (error) { groupEffect = 'failed'; warning = error instanceof Error ? error.message : '飞书群操作失败'; }
           return { ok: true, groupEffect, ...(warning ? { warning } : {}) };
         }
@@ -7058,7 +7165,7 @@ export function createOrchestrator(
       if (!current || projectMutations.has(project.chatId) || projectRevision(current) !== projectRevision(project)) throw new AdminWriteError('项目已改变，请刷新后重试');
       const key = ruleKind(project) === 'single' ? perm.sessionKey : `desktop-resume:${project.chatId}`;
       if (active.has(key) || intakeChats.has(project.chatId) || pendingTopics.has(project.chatId)) throw new AdminWriteError('会话正在运行');
-      const reserved: ActiveState = { queue: [], requesterOpenId: owner, requesterKind: 'user', smart: sessionModeOf(project) === 'smart' };
+      const reserved: ActiveState = { queue: [], requesterOpenId: admin, requesterKind: 'user', smart: sessionModeOf(project) === 'smart' };
       active.set(key, reserved);
       if (ruleKind(project) !== 'single') resumePublications.add(project.chatId);
       let publishedKey: string | undefined;
@@ -7123,7 +7230,7 @@ export function createOrchestrator(
     if (!record || record.detached) throw new AdminWriteError('此会话已归档或不属于当前项目，请开始新会话');
     const key = record.threadId;
     const state = active.get(key);
-    if (request.action === 'context') return { threadId: key, usage: lastUsage.get(key) ?? null, run: state ? { id: runId(state), goal: state.isGoal === true, canStop: Boolean(state.interrupt), canEndGoal: Boolean(state.endGoal), canRemind: state.requesterOpenId === owner && reminderButtonOffered(state.presentation ?? cfg, state) && !state.isGoal, reminderRequested: state.completionReminderRequested === true, subagents: (state.subagents?.() ?? []).map(({ id, name, task, status, stoppable }) => ({ id, name, task, status, stoppable })) } : null };
+    if (request.action === 'context') return { threadId: key, usage: lastUsage.get(key) ?? null, run: state ? { id: runId(state), goal: state.isGoal === true, canStop: Boolean(state.interrupt), canEndGoal: Boolean(state.endGoal), canRemind: state.requesterOpenId === admin && reminderButtonOffered(state.presentation ?? cfg, state) && !state.isGoal, reminderRequested: state.completionReminderRequested === true, subagents: (state.subagents?.() ?? []).map(({ id, name, task, status, stoppable }) => ({ id, name, task, status, stoppable })) } : null };
     if (request.action === 'stopSubagent') {
       if (!state || runId(state) !== request.runId) throw new AdminWriteError('原任务已经结束，请刷新');
       if (!state.run?.stopSubagent) throw new AdminWriteError('这个任务不支持单独停止子 agent');
@@ -7136,7 +7243,7 @@ export function createOrchestrator(
       if (request.action === 'stop') { if (!state.interrupt) throw new AdminWriteError('任务正在准备，请稍后停止'); state.interrupt(); }
       else if (request.action === 'endGoal') { if (!state.endGoal) throw new AdminWriteError('当前不是目标任务'); state.endGoal(); }
       else {
-        if (state.requesterOpenId !== owner || !reminderButtonOffered(state.presentation ?? cfg, state) || state.isGoal) throw new AdminWriteError('仅任务发起人可设置本次完成提醒，且需开启手动提醒模式');
+        if (state.requesterOpenId !== admin || !reminderButtonOffered(state.presentation ?? cfg, state) || state.isGoal) throw new AdminWriteError('仅任务发起人可设置本次完成提醒，且需开启手动提醒模式');
         state.completionReminderRequested = request.requested;
         refreshCompletionReminderCards();
       }
@@ -7147,7 +7254,7 @@ export function createOrchestrator(
     const sessionBackend = backendFor(record.backend);
     if (request.action === 'startGoal' && sessionBackend.capabilities?.goal === false) throw new AdminWriteError('当前后端不支持自主目标');
     if (request.action === 'compact' && sessionBackend.capabilities?.compact === false) throw new AdminWriteError('当前后端不支持手动压缩');
-    const reserved: ActiveState = { queue: [], requesterOpenId: owner, requesterKind: 'user', smart: sessionModeOf(project) === 'smart', isGoal: request.action === 'startGoal' };
+    const reserved: ActiveState = { queue: [], requesterOpenId: admin, requesterKind: 'user', smart: sessionModeOf(project) === 'smart', isGoal: request.action === 'startGoal' };
     active.set(key, reserved);
     let launched = false;
     let compacted: AgentThread | undefined;
@@ -7158,7 +7265,7 @@ export function createOrchestrator(
         if (ruleKind(project) !== 'single' || key !== perm.sessionKey) throw new AdminWriteError('只有单会话群可以清空当前上下文');
         const clearedSpeed = await reconcileStoredSpeed(sessionBackend, key, record.cwd, record.model, record.serviceTier);
         const savedSpeed = (await getSession(key))?.serviceTier;
-        const fresh = await startWith(sessionBackend, { cwd: project.cwd, model: record.model, effort: record.effort, serviceTier: clearedSpeed, mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, profile: await profileOf(project, project.cwd, sessionBackend, perm.mode) }, { kind: 'group', chatId: project.chatId });
+        const fresh = await startWith(sessionBackend, { cwd: project.cwd, model: record.model, effort: record.effort, serviceTier: clearedSpeed, mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, profile: await profileOf(project, project.cwd, sessionBackend, perm.mode) }, sessionPlace(project, project.chatId));
         // The local clock, not a Feishu createTime like the other watermarks: this
         // is the main-area session, which no back-fill reads until s14 (it must
         // then allow for clock skew, or use the newest createTime it has).
@@ -7195,7 +7302,7 @@ export function createOrchestrator(
       }
       const root = await channel.send(project.chatId, { markdown: `桌面端启动目标：${request.objective}` }, replyTo ? { replyTo, replyInThread: true } : undefined);
       launched = true;
-      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, model: record.model, effort: record.effort, serviceTier: record.serviceTier, flat: ruleKind(project) === 'single', backendId: sessionBackend.id, requesterOpenId: owner, requesterKind: 'user', titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
+      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, model: record.model, effort: record.effort, serviceTier: record.serviceTier, flat: ruleKind(project) === 'single', backendId: sessionBackend.id, requesterOpenId: admin, requesterKind: 'user', titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
       return { ok: true, threadId: key };
     } finally {
       if (!launched && active.get(key) === reserved) active.delete(key);
@@ -7753,6 +7860,8 @@ export function createOrchestrator(
       const said = new Set(opts.recallsShown);
       let fromQueue = false;
       let replyInThread = opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId));
+      // On the row since their first message (dm-agent 6.4). Whoever a turn runs as: a task's creator need not be this chat's person.
+      const dmPeople = Object.values((await getProjectByChatId(opts.chatId).catch(() => undefined))?.dm?.people ?? {});
       for (;;) {
         let turnInput = currentTurn.input;
         // In flight from here, through the preparation below, not only once turn/start went out (review 260).
@@ -7761,12 +7870,14 @@ export function createOrchestrator(
         state.requesterKind = currentTurn.requesterKind;
         const scheduled = currentTurn.scheduled;
         state.scheduled = scheduled ? true : undefined;
+        const dmUnionId = dmPeople.find(person => person.openId === currentTurn.requesterOpenId)?.unionId;
         turnScope = entries?.openTurn(opts.thread, {
           requesterOpenId: currentTurn.requesterOpenId, requesterKind: currentTurn.requesterKind,
           triggerMessageId: currentTurn.seen?.id ?? currentTurn.triggerMessageId, retry: currentTurn.replayText !== undefined,
           initiative: Boolean(currentTurn.initiative), wake: Boolean(currentTurn.wake),
           ...(currentTurn.memoryTrigger ? { typed: currentTurn.memoryTrigger.typed, triggerText: currentTurn.memoryTrigger.text } : {}),
           ...(currentTurn.requesterName ? { requesterName: currentTurn.requesterName } : {}),
+          ...(dmUnionId ? { requesterUnionId: dmUnionId } : {}),
           ...(scheduled ? { scheduled: { taskId: scheduled.job.task.id, runId: scheduled.job.runId } } : {}),
           // Read when a task tool runs: a topic the bot opens is a topic at once, but has its id only after adoptThreadId.
           where: () => ({ inTopic: !isMainKey(activeKey, opts.chatId),
@@ -7815,6 +7926,14 @@ export function createOrchestrator(
         }
         const turnServiceTier = await reconcileStoredSpeed(turnBackend, rec?.threadId ?? topicThreadId, rec?.cwd ?? runCwd, turnModel, rec?.serviceTier);
         turnInput = await preparePersonality(opts.thread, opts.chatId, turnInput, topicThreadId, opts.backendId);
+        // Removed while this turn was prepared (dm-agent 3.3): the door is shut, and the removal could not see this thread.
+        if (currentProject?.dm && !dmOpen(currentProject)) {
+          askAgain([currentTurn, ...state.queue.splice(0)], opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了', 'occupied');
+          state.inFlight = undefined;
+          if (topicThreadId && sessions.get(topicThreadId) === opts.thread) sessions.delete(topicThreadId);
+          void trackTask(opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
+          break;
+        }
         // The session went during the awaits above, after the last turn's end found it there: the turn does not start on
         // the closed thread. A person's first turn, evicted while it was prepared, still runs (T2 做法).
         if ((fromQueue || scheduled || shuttingDown) && settleGone(currentTurn, replyTo)) break;
@@ -8055,7 +8174,7 @@ export function createOrchestrator(
         state.idlePause = idlePause;
         const originalInterrupt = state.interrupt;
         askTurn = asks.openTurn({ run, sessionKey: activeKey,
-          placement: { chatId: opts.chatId, replyTo: scheduled ? landingOf(scheduled) : currentTurn.seen?.id ?? opts.replyTo, replyInThread: !opts.flat },
+          placement: { chatId: opts.chatId, replyTo: scheduled ? landingOf(scheduled) : currentTurn.seen?.id ?? opts.replyTo, replyInThread: !opts.flat, own: Boolean(currentProject?.dm) },
           initiator: { kind: currentTurn.requesterKind ?? 'unknown', openId: currentTurn.requesterOpenId }, idlePause,
           waiting: (label, subagentId) => { activity?.waiting(Boolean(label)); rc.askWaiting = label; rc.askWaitingSubagentId = subagentId; stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID); },
           // A late ask faults too once a ⏹ or the shutdown stopped the turn (both set intakeCancelled): the stop stays theirs.
@@ -8710,7 +8829,7 @@ export function createOrchestrator(
     let askWaiting: string | undefined;
     let activity: ReturnType<typeof createRunActivity> | undefined;
     let askWaitingSubagentId: string | undefined;
-    const askPlacement = { chatId: opts.chatId, replyTo: opts.replyTo, replyInThread: !opts.flat };
+    const askPlacement = { chatId: opts.chatId, replyTo: opts.replyTo, replyInThread: !opts.flat, own: false };
     let lastStatus = 'active';
     let goalTokens = 0;
     let goalSeconds = 0;
@@ -8744,7 +8863,7 @@ export function createOrchestrator(
           serviceTier: opts.serviceTier,
           mode: opts.mode, network: opts.network, native: opts.native, readScope: opts.readScope,
           profile: await profileOf(project, runCwd, be, opts.mode),
-        }, { kind: 'group', chatId: opts.chatId });
+        }, sessionPlace(project, opts.chatId));
         state.thread = opts.thread;
         trackSession(opts.knownThreadId, opts.thread);
       }
@@ -8753,6 +8872,8 @@ export function createOrchestrator(
       if (!projectModelAllowed(currentProject, goalBackend.id, opts.model, opts.effort, currentProject?.modelAccess ? await listModels(goalBackend) : undefined)) throw new Error('当前模型或 Effort 已不在本群可用范围，请用 /model 重新选择。');
       const goalServiceTier = opts.serviceTier;
       const goalContext = await preparePersonality(opts.thread, opts.chatId, {}, opts.knownThreadId, opts.backendId);
+      if (currentProject?.dm && !dmOpen(currentProject)) throw new ThreadPermissionChanged(DM_CLOSED);
+      askPlacement.own = Boolean(currentProject?.dm);
       const run = opts.thread.runGoal(goalContext.text ? `${goalContext.text}\n\n目标：${objective}` : objective,
         { serviceTier: goalServiceTier });
       state.run = run;
@@ -9089,11 +9210,14 @@ export function createOrchestrator(
         // global cap is still `sema`, acquired inside the lock.
         await withDocLock(sessionKey, async () => {
           const release = await sema.acquire();
+          let turn: TurnScope | undefined;
           try {
             if (shuttingDown) return;
-            const thread = await resolveDocThread(sessionKey, cwd, instructions, ctx.question, target.fileToken);
+            const thread = await resolveDocThread(sessionKey, cwd, instructions, ctx.question, target);
             if (shuttingDown) { await thread.close(); return; }
             const rec = await getSession(sessionKey);
+            // The document tools answer only while a turn is going (dm-agent 7.4). The person was checked above.
+            turn = entries?.openTurn(thread, { requesterOpenId: operatorId, requesterKind: 'user', triggerMessageId: evt.replyId ?? evt.commentId, retry: false, initiative: false, wake: false });
             const run = thread.runStreamed({ text: prompt }, { model: rec?.model, effort: rec?.effort });
 
             let state: RunState = initialState;
@@ -9159,6 +9283,7 @@ export function createOrchestrator(
             );
             log.info('comment', 'done', { terminal: state.terminal, timedOut, len: reply.length });
           } finally {
+            turn?.close();
             release();
           }
         });
@@ -9195,8 +9320,9 @@ export function createOrchestrator(
     cwd: string,
     instructions: string,
     question: string,
-    docId: string,
+    target: ResolvedTarget,
   ): Promise<AgentThread> {
+    const docId = target.fileToken;
     // The comment settings, else the bot default, else built in (s36d2); no tier, as before.
     const comments = resolveCommentsExecution(cfg.preferences);
     const be = backendFor(comments.backend);
@@ -9213,7 +9339,7 @@ export function createOrchestrator(
     }
     if (rec && rec.backend === be.id) {
       try {
-        const resumed = await resumeWith(be, { cwd: rec.cwd, sessionId: rec.sessionId, model, effort, profile: await profileOf(undefined, rec.cwd, be, 'full', 'comment') }, { kind: 'doc', docId });
+        const resumed = await resumeWith(be, { cwd: rec.cwd, sessionId: rec.sessionId, model, effort, profile: await profileOf(undefined, rec.cwd, be, 'full', 'comment', target.fileType) }, { kind: 'doc', docId });
         // 评论的模型来自评论设置（不是手填的）或 bot 默认
         await patchSession(sessionKey, { model, effort, modelCustom });
         trackSession(sessionKey, resumed);
@@ -9223,7 +9349,7 @@ export function createOrchestrator(
         log.fail('agent', err, { phase: 'comment-resume', sessionKey });
       }
     }
-    const fresh = await startWith(be, { cwd, model, effort, profile: await profileOf(undefined, cwd, be, 'full', 'comment') }, { kind: 'doc', docId });
+    const fresh = await startWith(be, { cwd, model, effort, profile: await profileOf(undefined, cwd, be, 'full', 'comment', target.fileType) }, { kind: 'doc', docId });
     trackSession(sessionKey, fresh);
     commentInstrUsed.set(sessionKey, instructions);
     await upsertSession({
@@ -9298,9 +9424,9 @@ export function createOrchestrator(
         return;
       }
       const admin = isAdmin(cfg, op);
-      const to = admin ? op : resolveOwner(cfg);
+      const to = admin ? op : primaryAdmin(cfg);
       if (!to) {
-        log.info('intake', 'bot-added-no-owner', tail);
+        log.info('intake', 'bot-added-no-admin', tail);
         return;
       }
       const [info, mode, adderName] = await Promise.all([
@@ -9345,10 +9471,10 @@ export function createOrchestrator(
         hasOtherBots: mode.ok && mode.bots !== undefined ? mode.bots > 1 : undefined,
         fullOnly, addedBy: admin ? undefined : { name: adderName } });
       const sent = await orStop(sendManagedCard(channel, to, card, undefined, false, 'open_id').then(() => 'yes', error => {
-        log.fail('intake', error, { phase: 'bot-added-bindcard', to: admin ? 'adder' : 'owner' });
+        log.fail('intake', error, { phase: 'bot-added-bindcard', to: admin ? 'adder' : 'admin' });
         return 'no';
       }), 'unknown');
-      log.info('intake', 'bot-added', { ...tail, to: admin ? 'adder' : 'owner', topic,
+      log.info('intake', 'bot-added', { ...tail, to: admin ? 'adder' : 'admin', topic,
         named: Boolean(name), adderNamed: Boolean(adderName), sent });
     }).catch(error => log.fail('intake', error, { phase: 'bot-added' }));
   }
@@ -9458,7 +9584,7 @@ export function createOrchestrator(
         log.info('intake', 'reaction-denied', { emoji: evt.emojiType, unbound: !project });
         return;
       }
-      if (!isChatAllowed(cfg, rec.chatId) || !isUserAllowedInProject(cfg, project, op)) return;
+      if (!placeOpen(rec.chatId, op) || !isUserAllowedInProject(cfg, project, op)) return;
       // Flat only for a single group's main-area session (keyed by chatId); a
       // topic in a single group is its own session and continues in the topic.
       const flat = project !== undefined && ruleKind(project) === 'single' && sessionKey === rec.chatId;
@@ -9479,9 +9605,11 @@ export function createOrchestrator(
    * dm.settings / dm.usage / dm.doctor / dm.reconnect / dm.update 各自直达对应卡
    * （与首页卡内同名按钮的渲染同源，单一事实源）；其它 key 或空 key 回退首页菜单卡，
    * 兼容「只配一个入口」与「私聊发任意消息→首页卡」（handleDmConsole）的旧语义。
-   * 非管理员回拒绝文案（同 handleDmConsole 语义）。事件不带 chat_id，发送走
+   * 非管理员回拒绝文案（同私聊消息，走 dmRefusal）。事件不带 chat_id，发送走
    * receive_id_type=open_id。
    */
+  /** What a non-administrator gets in a private chat and the list the client picks administrators from (dm-agent 3.5). */
+  const dmRefusal = createDmRefusal({ channel, appId: cfg.accounts.app.id });
   const onBotMenu = async (evt: { openId?: string; eventKey?: string; eventId?: string }): Promise<void> => {
     const op = evt.openId;
     if (!op) return;
@@ -9490,16 +9618,7 @@ export function createOrchestrator(
     if (evt.eventId && seenInbound.seen(`menu:${evt.eventId}`)) return;
     log.info('intake', 'bot-menu', { key: evt.eventKey, op: op.slice(-6) });
     if (!isAdmin(cfg, op)) {
-      await channel.rawClient.im.v1.message
-        .create({
-          params: { receive_id_type: 'open_id' },
-          data: {
-            receive_id: op,
-            msg_type: 'text',
-            content: JSON.stringify({ text: '⛔ 仅管理员可在私聊里管理项目。' }),
-          },
-        })
-        .catch(() => undefined);
+      await dmRefusal({ openId: op });
       return;
     }
     const sendDm = (c: object) => sendManagedCard(channel, op, c, undefined, false, 'open_id');
@@ -9753,7 +9872,58 @@ export function createOrchestrator(
   // 首次真实调用会自动重试，fallback 绝不被钉死（listModels 包装层也不缓存）。
   void trackTask(backend.listModels().catch((err) => log.fail('agent', err, { phase: 'models-prewarm' })));
 
-  const settings = createSettingsOwner({ responseRoster: (chatId) => orStop(readResponseRoster(channel, roster, chatId), { state: 'unavailable', entries: [], otherBots: false }), cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, refreshCompletionReminders: refreshCompletionReminderCards });
+  /** The removal's steps after the list is written (dm-agent 3.3): the door is shut already; each failure here is only logged. */
+  async function endDmOf(openId: string): Promise<void> {
+    const chats = new Set(dmChatsOf.get(openId));
+    dmChatsOf.delete(openId);
+    // The files only add what this process has not seen: one that cannot be read must not keep a running turn alive.
+    const orLogged = <T,>(read: Promise<T>, fallback: T): Promise<T> => read.catch((error: unknown) => { log.fail('project', error, { phase: 'dm-close' }); return fallback; });
+    const people = (await orLogged(dmProject(), undefined))?.dm?.people ?? {};
+    for (const [chatId, person] of Object.entries(people)) if (person.openId === openId) chats.add(chatId);
+    const pauseTasks = (): Promise<void> => pauseDmTasks(openId, chats).catch((error: unknown) => log.fail('schedule', error, { phase: 'admin-removed' }));
+    if (!chats.size) return pauseTasks();
+    const records = await orLogged(listSessions(), []);
+    for (const chatId of chats) {
+      entries?.revokeChat(chatId);
+      const keys = new Set([chatId, ...records.filter(rec => rec.chatId === chatId).map(rec => rec.threadId),
+        ...[...active].flatMap(([key, state]) => state.chatId === chatId ? [key] : [])]);
+      for (const key of keys) {
+        const state = active.get(key);
+        if (state) {
+          // The queue goes first: a stop only ends the turn. Nothing is asked again, the person has no door to send it to.
+          askAgain(state.queue.splice(0), chatId, key === chatId ? 'main' : 'topic', 'queue-dropped', '会话被停下了', 'occupied');
+          dropCompact(state);
+          cancelIntake(state);
+          state.interrupt?.();
+          state.evicted = true;
+        }
+        const live = sessions.get(key);
+        if (live) {
+          sessions.delete(key);
+          void trackTask(live.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
+        }
+      }
+      log.info('console', 'dm-closed', { chat: chatId.slice(-6), keys: keys.size });
+    }
+    await pauseTasks();
+  }
+  /** A removed admin's private-chat tasks pause (dm-agent 3.3): those in their chats and those they made in another's. A group's stay, they are the group's. */
+  async function pauseDmTasks(openId: string, chats: ReadonlySet<string>): Promise<void> {
+    await loadStore();
+    const theirs = (task: StoredTask): boolean => task.state === 'active'
+      && (chats.has(task.chatId) || (task.createdBy.openId === openId && scheduleChat(task.chatId)?.kind === 'dm'));
+    if (!scheduleStore.all().some(theirs)) return;
+    await scheduleStore.mutateConfig((tasks, touch) => {
+      for (const task of tasks) {
+        if (!theirs(task)) continue;
+        task.state = 'paused';
+        task.pausedReason = 'admin-removed';
+        touch(task);
+      }
+    });
+  }
+  const personNames = createPersonNames(channel);
+  const settings = createSettingsOwner({ personNames, adminRemoved: endDmOf, responseRoster: (chatId) => orStop(readResponseRoster(channel, roster, chatId), { state: 'unavailable', entries: [], otherBots: false }), cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, refreshCompletionReminders: refreshCompletionReminderCards });
   const executeAdminWrite = createAdminWriteExecutor({ cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, settings });
   const adminExecute = async (op: AdminWriteOp): Promise<AdminWriteResult> => {
     const result = await executeAdminWrite(op);
@@ -9897,15 +10067,18 @@ export function createOrchestrator(
         topicId = key;
       } else fallback = true;
     }
-    const newTopic = !topicId && (task.placement.kind === 'newTopic' || ruleKind(placed) === 'multi' || await orStop(topicCtx.noMainArea(chatId), false));
+    // A private chat opens no topic for a run (dm-agent 8): its main area's one session, whatever the task says.
+    const newTopic = !topicId && !placed.dm && (task.placement.kind === 'newTopic' || ruleKind(placed) === 'multi' || await orStop(topicCtx.noMainArea(chatId), false));
     // Unbound, disabled or edited while Feishu and the disk answered: the run uses none of what it read (T2 4.2).
     const project = await getProjectByChatId(chatId);
     if (refusedTurn(project, chatId, { scheduled: hook }) || !project || projectSettingsRevision(project) !== projectSettingsRevision(placed)) return void hook.settle(SCHEDULE_UPDATING);
     if (shuttingDown) return void hook.settle({ status: 'interrupted', by: 'shutdown' });
     if (newTopic) return startScheduledTopic(hook, project, fallback);
     const text = scheduledHeader(hook.job, hostTimeZone(), fallback);
+    // A group's run has no sender. A private chat's has its person's rights, read off the turn (dm-agent 6.3).
+    const sender = project.dm ? { senderId: dmRunner(task, project), ...(task.createdBy.name ? { senderName: task.createdBy.name } : {}) } : { senderId: '' };
     const msg: NormalizedMessage = {
-      messageId: `vsched_${task.id}_${hook.job.slot}`, chatId, chatType: 'group', senderId: '', content: text, rawContentType: 'text',
+      messageId: `vsched_${task.id}_${hook.job.slot}`, chatId, chatType: project.dm ? 'p2p' : 'group', ...sender, content: text, rawContentType: 'text',
       resources: [], mentions: [], mentionAll: false, mentionedBot: false, createTime: Date.now(), ...(topicId ? { threadId: topicId } : {}),
     };
     await handleTurn(msg, text, topicId ?? chatId, !topicId, project, turnPerm(project), { scheduled: hook, queueOnly: true, summary: `定时任务「${plainTaskName(task.name)}」` });
@@ -9935,7 +10108,7 @@ export function createOrchestrator(
         recent.addOwn(chatId, chatId, { id: root.messageId, at: rootAt, text: rootText });
         hook.target = { kind: 'topic', anchor: root.messageId };
         const { model, effort } = await pickGroupDefault(project, be, prefer);
-        starting = profileOf(project, cwd, be, perm.mode).then(profile => startWith(be, { cwd, model, effort, serviceTier: 'standard', ...perm, profile }, { kind: 'group', chatId }));
+        starting = profileOf(project, cwd, be, perm.mode).then(profile => startWith(be, { cwd, model, effort, serviceTier: 'standard', ...perm, profile }, sessionPlace(project, chatId)));
         const listP = topics ? topics.list(chatId) : Promise.resolve([]);
         const [thread, section] = await Promise.all([starting,
           Promise.all([pullMainBefore(chatId, rootAt, root.messageId), listP]).then(([pull, list]) => mainSection(chatId, pull, list, rootAt, undefined))]);
@@ -9993,7 +10166,17 @@ export function createOrchestrator(
     maxInflight: () => Math.max(1, Math.floor(getMaxConcurrentRuns(cfg) / 2)),
     log, diagnostics: scheduleDiagnostic,
   });
-  const scheduleCommands = createScheduleCommands({ store: scheduleStore, scheduler, botId: cfg.accounts.app.id, now: () => Date.now(), hostTimeZone });
+  /** What a chat is to this Bot, for the task commands. The private-chat row's own id (`oc_dm_…`) is nowhere to post. An unreadable project file reads as no chat: the view must not throw. */
+  function scheduleChat(chatId: string): { kind: 'dm'; name?: string } | { kind: 'group' } | undefined {
+    let project: Project | undefined;
+    try { project = getProjectByChatIdSync(chatId); }
+    catch (error) { log.fail('schedule', error, { phase: 'chat-of' }); return undefined; }
+    if (!project?.dm) return project && { kind: 'group' };
+    const person = dmPersonOf(project, chatId);
+    const name = person && (person.name ?? names.peek(person.openId));
+    return person && { kind: 'dm', ...(name ? { name } : {}) };
+  }
+  const scheduleCommands = createScheduleCommands({ store: scheduleStore, scheduler, botId: cfg.accounts.app.id, now: () => Date.now(), hostTimeZone, chatOf: scheduleChat });
   let storeLoaded: ReturnType<typeof scheduleStore.load> | undefined;
   const loadStore = (): ReturnType<typeof scheduleStore.load> => (storeLoaded ??= scheduleStore.load());
   const scheduleAs = async (actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply> => {
@@ -10017,8 +10200,12 @@ export function createOrchestrator(
   }
   return {
     initialize: async () => {
+      // A failure leaves the list as it is and the next start tries again.
+      await upgradeAdmins(cfg, writePreferences).catch(error => log.fail('setup', error, { phase: 'admins-upgrade' }));
       const result = await materializeGroupSettings({ cfg, backendFor });
       if (result.updated.length || result.deferred.length) log.info('settings', 'group-settings-materialized', { updated: result.updated.length, deferred: result.deferred.length });
+      // In the background: listing a provider's models can cold-spawn it, and a bot must start without its private chat.
+      if (options?.bot) dmReady = trackTask(ensureDmProject({ bot: options.bot, projectsRootDir: cfg.preferences?.projectsRootDir, defaults: dmDefaults }));
       // An unreadable file keeps the bot from starting; a corrupt one is moved aside and the store starts empty.
       await loadStore();
     },
@@ -10032,9 +10219,14 @@ export function createOrchestrator(
     onRecall: admitEvent(onRecall),
     dispatcher,
     adminExecute: admit(adminExecute),
+    writePreferences,
     libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
     scheduleAs: admittedScheduleAs,
+    permissionOf: async chatId => {
+      const project = await getProjectByChatId(chatId);
+      return project ? execOf(project).permission : undefined;
+    },
     scheduler: { start: async () => scheduler.start(await loadStore()), stop: () => scheduler.stop(), drain: ms => scheduler.drain(ms) },
     shutdown,
     // A crash before the shutdown also keeps the people's turns in flight: no card of theirs will say anything. One during
