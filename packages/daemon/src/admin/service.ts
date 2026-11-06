@@ -20,6 +20,7 @@ import { voiceView } from '../voice/view';
 import type { VoiceAction, VoiceView } from '../voice/types';
 import { readFile, realpath, rm, stat } from 'node:fs/promises';
 import { botIdentity, loadBots, setBotActivation, setBotBadgeNumber, removeBot } from '../config/bots';
+import { dmPreparationError, prepareDmProjectForBot } from '../bot/dm-project';
 import { botPaths, botDir } from '../config/paths';
 import { configuredProjectsRoots, directoryContext, legacyDirectoryProblems } from '../project/directory-audit';
 import type { DirectoryProblem, ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
@@ -805,8 +806,17 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
 
     async dmRow(botId: string): Promise<AdminProject | undefined> {
       const files = botPaths(botId);
-      const row = await dmProject(files.projectsFile);
-      if (!row) return undefined;
+      // Preparation records a localized failure if the file cannot be read, instead of exposing a raw OS/JSON error.
+      let row = await dmProject(files.projectsFile).catch(() => undefined);
+      // Also covers registration after host startup and recovery after a transient filesystem failure.
+      // Preparation is local and never starts a Provider or a stopped Bot.
+      if (!row || dmPreparationError(botId)) {
+        const bot = (await loadBots()).bots.find(bot => bot.appId === botId);
+        if (bot) row = await prepareDmProjectForBot(bot);
+        const failure = dmPreparationError(botId);
+        if (failure) throw new Error(failure);
+      }
+      if (!row) throw new Error('私聊尚未准备好，请重启 Bot 后重试。');
       const chats = new Set(Object.keys(row.dm?.people ?? {}));
       const sessions = await listSessionsIn(files.sessionsFile);
       return { ...adminRow(row), sessionCount: sessions.filter(session => chats.has(session.chatId) && !isRetiredKey(session.threadId)).length };

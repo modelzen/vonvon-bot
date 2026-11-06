@@ -1,13 +1,13 @@
 import { constants, existsSync } from 'node:fs';
 import { randomInt, randomUUID } from 'node:crypto';
 import { badgeNumberSchema } from '@vonvon/protocol';
-import { lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { paths, botDir, botPaths } from './paths';
 import { loadConfig } from './store';
 import { isComplete, type TenantBrand, type AppConfig, type AppPreferences } from './schema';
 import { acquireMutex, closeMutex } from './data-access';
-import { type Allocation, type ObjectIdentity, SafeAppIdSchema, parseAllocations, ensureDurableDirectory, directoryIdentity, materializeAllocation, materializeDirectory, planDirectory, planAllocation, recordCurrent as recordAt, restoreParent, sameObject, syncDirectory, verifyDirectory } from './bot-namespace';
+import { type Allocation, type DirectoryClaim, type ObjectIdentity, SafeAppIdSchema, parseAllocations, ensureDurableDirectory, directoryIdentity, materializeAllocation, materializeDirectory, planDirectory, planAllocation, recordCurrent as recordAt, restoreParent, sameObject, syncDirectory, verifyDirectory } from './bot-namespace';
 import { DirectoryError, directoryError } from './directory-errors';
 import { resolveProjectsRootDir, type DirectorySettings } from './directories';
 import { groupAllocationKey, parseGroupNamespaces, type GroupNamespaceState } from './group-namespace';
@@ -317,14 +317,41 @@ export function ensureBotDmDirectory(expected: BotIdentity, projectsRootDir: str
   return ownBots(async registry => {
     const entry = registry.bots.find(bot => bot.appId === identity.appId);
     if (!entry || !sameIdentity(entry, identity)) throw new Error('机器人已移除或重新注册，请重启');
+    await assertBridgeImportReservation(paths.appDir, identity.appId);
     return directoryError(entry.name, async () => {
-      const readyBot = await readyBotDirectory(registry, entry, projectsRootDir);
+      let readyBot: Extract<Allocation, { state: 'ready' }>;
+      try { readyBot = await readyBotDirectory(registry, entry, projectsRootDir); }
+      catch (error) {
+        // A restored data directory (or a new mount number after a restart) keeps these paths but not their
+        // filesystem identities. Only this app-owned subtree can be reconciled without operator intervention.
+        if (!(error instanceof Error && ['Namespace parent changed', 'Namespace directory changed'].includes(error.message))) throw error;
+        const recovered = await recoverManagedBotDirectory(registry, entry);
+        if (!recovered) throw error;
+        readyBot = recovered;
+      }
       const folder = join(readyBot.namespaceRoot, 'dm');
-      await ensureDurableDirectory(folder);
+      await inspectDmDirectory(folder, true);
+      await ensureDurableDirectory(folder, async () => {
+        await verifyDirectory(readyBot, paths.appDir);
+        await inspectDmDirectory(folder, true);
+      });
+      await inspectDmDirectory(folder, false);
       await verifyDirectory(readyBot, paths.appDir);
       return folder;
     });
   });
+}
+
+/** A DM leaf is app-owned too: never follow an existing link, including a dangling one. */
+async function inspectDmDirectory(folder: string, allowMissing: boolean): Promise<void> {
+  try {
+    const entry = await lstat(folder);
+    if (entry.isSymbolicLink() || !entry.isDirectory()) throw new Error('Invalid namespace directory');
+  } catch (error) {
+    if (allowMissing && error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  if (await realpath(folder) !== folder) throw new Error('Namespace path changed');
 }
 
 /** The bot's stable directory, allocated under `projectsRootDir` when it has none, and checked or made; published. */
@@ -373,6 +400,73 @@ function adoptParent(registry: BotsRegistry, appId: string, level: 'bot' | 'cont
 
 /** `others`: the registered bots under the same projects root whose records still name the root as it was. */
 export type DirectoryRepair = { handle: string; recorded: number; missing: number; others: string[] };
+
+/** Re-record a complete tree in memory. Callers publish only after every directory has passed their policy. */
+async function recordBotTree(registry: BotsRegistry, allocation: Allocation, parentIdentity: ObjectIdentity,
+  recordCurrent: typeof recordAt): Promise<Pick<DirectoryRepair, 'recorded' | 'missing'>> {
+  const appId = allocation.appId;
+  const result = { recorded: 0, missing: 0 };
+  const count = (present: boolean): void => { if (present) result.recorded++; else result.missing++; };
+  const bot = await recordCurrent(allocation, parentIdentity, paths.appDir);
+  registry.allocations = { ...registry.allocations, [appId]: bot.record };
+  count(bot.present);
+  const container = registry.groupContainers?.[appId];
+  if (bot.present && bot.record.state === 'ready' && container) {
+    const groups = await recordCurrent(container, bot.record.object, paths.appDir);
+    registry.groupContainers = { ...registry.groupContainers, [appId]: groups.record };
+    count(groups.present);
+    if (groups.present && groups.record.state === 'ready') {
+      for (const [key, claim] of Object.entries(registry.groupAllocations ?? {})) {
+        if (claim.appId !== appId) continue;
+        const group = await recordCurrent(claim, groups.record.object, paths.appDir);
+        registry.groupAllocations = { ...registry.groupAllocations, [key]: group.record };
+        count(group.present);
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * DM startup may repair restored identities only inside <data>/projects. Custom roots still require repair-dir.
+ * Every existing directory must remain at its original canonical path, on the data volume, with no links or
+ * occupied reservations. Check a clone, including the group ledger, so a rejected descendant changes no records.
+ */
+async function recoverManagedBotDirectory(registry: BotsRegistry, entry: BotEntry): Promise<Extract<Allocation, { state: 'ready' }> | undefined> {
+  const allocation = registry.allocations?.[entry.appId];
+  if (!allocation || allocation.state !== 'ready') return undefined;
+  validateAccountClaim(registry, allocation, entry);
+  const dataRoot = await realpath(paths.appDir);
+  const parent = join(dataRoot, 'projects');
+  if (allocation.parent !== parent || dirname(allocation.namespaceRoot) !== parent) return undefined;
+  if (await realpath(parent) !== parent) return undefined;
+  const parentIdentity = await directoryIdentity(parent);
+  if (parentIdentity.dev !== (await directoryIdentity(dataRoot)).dev) return undefined;
+  const checked: Extract<DirectoryClaim, { state: 'ready' }>[] = [];
+  const recordManaged: typeof recordAt = async (record, owner, dataDir) => {
+    // recordAt also rejects links and changes in ancestor paths, including dangling links.
+    const current = await recordAt(record, owner, dataDir);
+    if (current.present) {
+      if (record.state !== 'ready') throw new Error('Reserved namespace already exists; recovery requires operator review');
+      if (current.record.state !== 'ready' || current.record.object.dev !== parentIdentity.dev) throw new Error('Namespace directory changed');
+      checked.push(current.record);
+    }
+    return current;
+  };
+  const next = structuredClone(registry);
+  await recordBotTree(next, allocation, parentIdentity, recordManaged);
+  const recovered = next.allocations?.[entry.appId];
+  // A missing bot directory is handled by ordinary materialization, not by taking over another tree.
+  if (!recovered || recovered.state !== 'ready' || !checked.some(record => record.namespaceRoot === recovered.namespaceRoot)) return undefined;
+  for (const record of checked) await verifyDirectory(record, paths.appDir);
+  await inspectDmDirectory(join(recovered.namespaceRoot, 'dm'), true);
+  await publish(next);
+  registry.allocations = next.allocations;
+  registry.groupContainers = next.groupContainers;
+  registry.groupAllocations = next.groupAllocations;
+  return recovered;
+}
+
 /**
  * `vonvon bot repair-dir`: after a migration or a restore from backup, take the bot's directories at their recorded
  * paths as its own again: the bot directory, its `groups` and each group's. A directory that is gone keeps its record
@@ -389,7 +483,6 @@ export function repairBotDirectories(wanted: string): Promise<DirectoryRepair> {
     if (!appId || !allocation) throw new Error(`没有找到「${target}」的目录记录：它不是这台电脑上注册的 bot，或者注册得早，还没分配过自己的目录。`);
     return directoryError(allocation.handle, async () => {
       const result: DirectoryRepair = { handle: allocation.handle, recorded: 0, missing: 0, others: [] };
-      const count = (present: boolean): void => { if (present) result.recorded++; else result.missing++; };
       const recordCurrent: typeof recordAt = (record, parent, dataDir) => recordAt(record, parent, dataDir).catch((error: unknown) => {
         if (!(error instanceof Error && error.message === 'Namespace path changed')) throw error;
         throw new DirectoryError(`「${allocation.handle}」的目录位置变了（比如换成了链接），只能按原来的路径重新记录。把目录放回原处后再运行。`, { cause: error });
@@ -403,24 +496,7 @@ export function repairBotDirectories(wanted: string): Promise<DirectoryRepair> {
       }
       result.others = Object.values(registry.allocations ?? {}).filter(record => record.appId !== appId && record.parent === allocation.parent
         && !sameObject(record.parentIdentity, parentIdentity) && registry.bots.some(bot => bot.appId === record.appId)).map(record => record.handle);
-      const bot = await recordCurrent(allocation, parentIdentity, paths.appDir);
-      registry.allocations = { ...registry.allocations, [appId]: bot.record };
-      count(bot.present);
-      const container = registry.groupContainers?.[appId];
-      if (bot.present && bot.record.state === 'ready' && container) {
-        const groups = await recordCurrent(container, bot.record.object, paths.appDir);
-        registry.groupContainers = { ...registry.groupContainers, [appId]: groups.record };
-        count(groups.present);
-        if (groups.present && groups.record.state === 'ready') {
-          const owner = groups.record.object;
-          for (const [key, claim] of Object.entries(registry.groupAllocations ?? {})) {
-            if (claim.appId !== appId) continue;
-            const group = await recordCurrent(claim, owner, paths.appDir);
-            registry.groupAllocations = { ...registry.groupAllocations, [key]: group.record };
-            count(group.present);
-          }
-        }
-      }
+      Object.assign(result, await recordBotTree(registry, allocation, parentIdentity, recordCurrent));
       await publish(registry);
       return result;
     });

@@ -53,13 +53,41 @@ it('stays with no group bound, above 尚未绑定飞书群, and the count is 0',
   expect(html).toContain('bot-group-list__count">0<');
 });
 
-it('has no row until the Bot has run and made one', () => {
+it('keeps compatibility with an older daemon that supplies neither a private chat nor an error', () => {
   expect(list(agent({dm: undefined}), [member])).not.toContain('私聊');
+});
+
+it.each([undefined, row({stale: true})])('shows an unavailable private-chat entry and leaves healthy groups usable after preparation fails (%#)', dm => {
+  const bot = agent({dm, dmError: '私聊初始化失败：Bot 目录需要修复'});
+  const html = list(bot, [member]);
+  expect(html).toContain('私聊和飞书群');
+  expect(html).toContain('和 小支 的私聊');
+  expect(html).toContain('暂不可用');
+  expect(html).toContain('私聊初始化失败：Bot 目录需要修复');
+  expect(html).toContain('role="status"');
+  expect(html).not.toContain('aria-label="设置 小支 的私聊');
+  expect(html).toContain('aria-label="设置 小支 在 研发群 中的行为，Provider：Codex，沟通方式：独立话题"');
+  expect(html.match(/<button[^>]*bot-group-list__row/g)).toHaveLength(1);
+  expect(html).not.toContain('disabled=""');
+  expect(html).toContain('bot-group-list__count">1<');
+});
+
+it('keeps the private-chat failure visible with no groups and restores its settings entry when the error clears', () => {
+  const failed = list(agent({dm: undefined, dmError: '私聊初始化失败：目录不可写'}), []);
+  expect(failed).toContain('和 小支 的私聊');
+  expect(failed).toContain('私聊初始化失败：目录不可写');
+  expect(failed).toContain('尚未绑定飞书群');
+  expect(failed).not.toContain('群配置读取失败');
+  const recovered = list(agent(), []);
+  expect(recovered).not.toContain('私聊初始化失败');
+  expect(recovered).not.toContain('暂不可用');
+  expect(recovered).toContain('aria-label="设置 小支 的私聊');
 });
 
 it('says what is wrong with the row, and how much is new in its memory', () => {
   expect(dmRowOf(agent(), running)).toMatchObject({provider: 'Claude', exception: undefined});
   expect(dmRowOf(agent({dm: row({stale: true})}), running)).toMatchObject({exception: '状态过期', tone: 'warning'});
+  expect(dmRowOf(agent({dmError: '私聊配置读取失败'}), running)).toMatchObject({exception: '暂不可用', tone: 'warning'});
   expect(dmRowOf(agent(), {label: '已停用', tone: 'neutral'})).toMatchObject({exception: 'Bot 已停用'});
   expect(list(agent(), [], {dmNew: 3})).toContain('新 3');
 });

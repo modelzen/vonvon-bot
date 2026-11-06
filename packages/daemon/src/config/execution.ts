@@ -46,7 +46,7 @@ export interface ResolvedExecution {
 }
 
 export type GroupLayer = Pick<Project,
-  'backend' | 'mode' | 'network' | 'custom' | 'cwd' | 'directories' | 'pendingPolicy' | 'defaultModel' | 'defaultEffort' | 'defaultModelCustom' | 'modelAccess'> & Partial<Pick<Project, 'chatId'>>;
+  'backend' | 'mode' | 'network' | 'custom' | 'cwd' | 'directories' | 'pendingPolicy' | 'defaultModel' | 'defaultEffort' | 'defaultModelCustom' | 'modelAccess'> & Partial<Pick<Project, 'chatId' | 'dm'>>;
 export type ExecutionLayers = { bot?: AppPreferences; group?: GroupLayer };
 
 /** A backend id still in the catalog; a removed one counts as unset, as backendFor does. */
@@ -142,6 +142,8 @@ export function resolveModelPreference({ bot, group }: ExecutionLayers, backendI
   if (group?.defaultModel && groupBackendId(group) === backendId) {
     return { model: group.defaultModel, effort: group.defaultEffort, custom: group.defaultModelCustom === true, source: 'group' };
   }
+  // A private chat created offline with no explicit model uses the Provider default; later Bot edits do not change it.
+  if (group?.dm?.useProviderDefault === true) return undefined;
   const chosen = bot?.defaults?.model;
   if (chosen && botBackendId(bot) === backendId) {
     return { model: chosen.id, effort: chosen.effort, custom: chosen.kind === 'custom', source: 'bot' };
