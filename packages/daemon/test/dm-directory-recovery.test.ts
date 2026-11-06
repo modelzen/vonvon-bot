@@ -40,9 +40,10 @@ function changeRecordedDevice() {
   const value = read(); visit(value); save(value);
 }
 
+// Native realpath expands Windows 8.3 temp-directory aliases, matching fs/promises.realpath in production.
 beforeEach(() => {
-  fixture.root = realpathSync(mkdtempSync(join(tmpdir(), 'dm-directory-recovery-')));
-  outside = realpathSync(mkdtempSync(join(tmpdir(), 'dm-directory-external-')));
+  fixture.root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dm-directory-recovery-')));
+  outside = realpathSync.native(mkdtempSync(join(tmpdir(), 'dm-directory-external-')));
   save({ version: 1, current: first.appId, bots: [first, second] });
 });
 afterEach(() => {
