@@ -1,6 +1,5 @@
 import type { ResponseRoster } from '@vonvon/protocol';
 import { responseMemberLabel } from '../bot/response-members';
-import { getAppRoleSnapshot, trustedFeishuAdmins } from '../config/app-roles';
 import { voiceView, VOICE_TITLE, VOICE_DESCRIPTION, VOICE_NOTICE, VOICE_DOC_URL } from '../voice/view';
 import {
   COMPLETION_REMINDER_LONG_TASK_MAX_MINUTES,
@@ -181,7 +180,7 @@ export function buildDmMenuCard(opts: { version?: string } = {}): CardObject {
   const { version } = opts;
   return card(
     [
-      md('私聊用于**建项目和管理**；具体任务请到项目群里 @我。'),
+      md('直接跟我说就行。这里是常用入口。'),
       hr(),
       // 两行按钮固定宽度、左对齐；两行宽度配平后总长相等、右边缘对齐（见 MENU_BTN_W_*）。
       actionsFixed([
@@ -644,7 +643,7 @@ export function buildJoinGroupFormCard(
   if (opts.hasOtherBots) formItems.push(note('群里还有别的 bot。几个 bot 都选智能，它们才能互相 @、各自判断接不接话。'));
   const group = opts.name ? `「${opts.name}」` : '一个群（没读到群名）';
   const introduction = opts.error ? '重新选一下，点下面对应的按钮。' : opts.addedBy
-    ? `**${opts.addedBy.name || '有人'}** 把我拉进了${group}。拉我的不是主人或管理员，所以发给你。设置好才能用：选会话方式，点下面对应的按钮。`
+    ? `**${opts.addedBy.name || '有人'}** 把我拉进了${group}。拉我的不是管理员，所以发给你。设置好才能用：选会话方式，点下面对应的按钮。`
     : `你把我拉进了${group}。设置好才能用：选会话方式，点下面对应的按钮。`;
   elements.push(
     md(introduction),
@@ -1172,9 +1171,6 @@ export function buildSessionTitleSettingsCard(
   return card(elements, { header: { title: '🏷️ 会话标题', template: 'blue' } });
 }
 
-/** 飞书 CLI（lark-cli）使用文档——评论里读/改文档依赖它。 */
-const LARK_CLI_DOC_URL = 'https://bytedance.larkoffice.com/wiki/ILuTww7Xcimb6GkhH0mcK2f4nS7';
-
 export type CommentModelFormResolution =
   | { ok: false; message: string }
   | { ok: true; model: ModelInfo; effort?: ReasoningEffort; adjusted: boolean };
@@ -1321,10 +1317,7 @@ export function buildCommentSettingsCard(
     actions([button('编辑回复规则', { a: DM.commentEditPrompt }, 'primary')]),
     hr(),
     md('📎 **文档读写能力**'),
-    note(
-      '如需读取或直接修改文档，本机还要安装并登录飞书 CLI（lark-cli）；访问权限以当前登录身份为准。' +
-        ` [查看安装与用法](${LARK_CLI_DOC_URL})`,
-    ),
+    note('Bot 用自己的身份读和改文档：在文档右上角的分享里搜 Bot 名，要读给阅读权限，要改给编辑权限。表格和多维表格现在不能改。'),
     hr(),
     actions([button('⬅️ 返回设置', { a: DM.settings })]),
   );
@@ -1502,86 +1495,19 @@ function memberName(names: Map<string, string>, id: string): string {
 }
 
 /**
- * 全局管理员名单卡（DM「⚙️ 设置 → 👮 管理员」）。**纯按钮卡**——绝不放 select：select
- * 一旦交互会锁 card_id（见 {@link buildSettingsCard} 注释）。加人走独立的表单卡
- * {@link buildAddAdminCard}。owner 行无移除按钮（owner 恒为 admin、不可删）。
- * `names` 由调用方用 contact.batch 预解析 open_id→姓名。`editable`：只有飞书应用的拥有者（没有时是扫码注册者）能加、移本机管理员
- * （product.md 3.7），别的管理员看到的名单只读，没有增删按钮。
+ * 管理员名单卡（DM「⚙️ 设置 → 👮 管理员」）。只读：名单只在桌面端、网页和终端里改（product.md 第 6 节），
+ * 旧卡片上的增删按钮点了也只是重画成这张卡。`names` 由调用方用 contact.batch 预解析 open_id→姓名。
  */
-export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>, opts: { editable: boolean }): CardObject {
-  const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
-  const owner = roles?.ownerOpenId;
-  const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
-  const admins = cfg.preferences?.access?.admins ?? [];
-  const elements: CardElement[] = [md('**管理员名单** · 本 bot 全局（可私聊管理 / 建项目 / 销毁操作）'), hr()];
-  const seen = new Set<string>();
-  if (owner) {
-    seen.add(owner);
-    elements.push(actions([md(`👑 **${memberName(names, owner)}** · 飞书应用拥有者`)]));
-  }
-  for (const id of trustedFeishuAdmins(roles)) {
-    if (seen.has(id)) continue;
-    seen.add(id);
-    elements.push(actions([md(`${memberName(names, id)} · 飞书应用管理员`)]));
-  }
-  if (scanner && !seen.has(scanner)) {
-    seen.add(scanner);
-    elements.push(actions([md(`${memberName(names, scanner)} · 扫码注册者`)]));
-  }
-  let extra = 0;
-  for (const id of admins) {
-    if (seen.has(id)) continue;
-    seen.add(id);
-    extra++;
-    const label = md(`${memberName(names, id)} · 本地管理员`);
-    elements.push(actions(opts.editable ? [label, button('🗑 移除', { a: DM.rmAdmin, u: id }, 'danger')] : [label]));
-  }
-  if (extra === 0) elements.push(note('暂无额外管理员。'));
-  elements.push(
+export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>): CardObject {
+  const { ownerOpenId, admins = [] } = cfg.preferences?.access ?? {};
+  return card([
+    md('**管理员名单** · 管理员能通过私聊操作这台电脑和这台电脑上的所有 Bot'),
     hr(),
-    actions(opts.editable ? [button('➕ 添加管理员', { a: DM.addAdminForm }, 'primary'), button('⬅️ 设置', { a: DM.settings })] : [button('⬅️ 设置', { a: DM.settings })]),
-    note(opts.editable ? '飞书应用拥有者和管理员请在飞书开放平台管理；扫码注册者不可移除。' : '本机管理员名单只有飞书应用的拥有者能改。飞书应用拥有者和管理员请在飞书开放平台管理。'),
-  );
-  return card(elements, { header: { title: '👮 管理员', template: 'blue' } });
-}
-
-/** 添加管理员的表单卡：select_person 选人 + 提交。提交后旧卡留痕、结果发新名单卡
- * （form+submit 模式规避 select 锁卡，仿 {@link buildNewProjectFormCard}）。 */
-/**
- * 添加管理员的表单卡。候选 = **所有项目群成员的并集**（真人，去重、不含 bot/应用，
- * 调用方已排除现有 admin）；大群/多群只列前 N，其余走 open_id 手填兜底。 */
-export function buildAddAdminCard(members: { openId: string; name: string }[]): CardObject {
-  const MAX = 50;
-  const shown = members.slice(0, MAX);
-  const formEls: CardElement[] = [];
-  if (shown.length > 0) {
-    formEls.push(
-      selectMenu({
-        name: 'pick',
-        placeholder: '从项目群成员选择',
-        options: shown.map((m) => ({ label: m.name, value: m.openId })),
-      }),
-    );
-  }
-  formEls.push(
-    input({
-      name: 'open_id',
-      label: shown.length ? '或直接输入 open_id' : '输入 open_id（未读取到项目群成员）',
-      placeholder: 'ou_xxx',
-    }),
-    actions([submitButton('✅ 确认添加', { a: DM.addAdminSubmit }, 'primary', 'submit_admin')]),
-  );
-  const tail: CardElement[] = [];
-  if (members.length > MAX) tail.push(note(`候选较多，仅列前 ${MAX} 个；其余请直接输入 open_id。`));
-  return card(
-    [
-      md('**添加管理员** · 从项目群成员选，或输入 open_id'),
-      form('add_admin', formEls),
-      ...tail,
-      actions([button('⬅️ 取消', { a: DM.admins })]),
-    ],
-    { header: { title: '➕ 添加管理员', template: 'blue' } },
-  );
+    ...admins.map(id => actions([md(id === ownerOpenId ? `${memberName(names, id)} · 创建者` : memberName(names, id))])),
+    hr(),
+    actions([button('⬅️ 设置', { a: DM.settings })]),
+    note('名单在 Vonvon Bot 的「设置 → 管理员」或终端里改。'),
+  ], { header: { title: '👮 管理员', template: 'blue' } });
 }
 
 /** Short label for a tier (falls back to the raw value). Exported for the

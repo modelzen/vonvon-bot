@@ -72,7 +72,7 @@ const effortOptions = [
 const effectText = (section: Section<unknown>) =>
   section.apply.map((item) => item.detail).join(" ");
 export type SettingsFieldIssue = {field: string; message: string};
-const errorText = (reply: SettingsReply, labels?: Record<string, string>): string | undefined => {
+export const errorText = (reply: SettingsReply, labels?: Record<string, string>): string | undefined => {
   if (reply.kind === "refused") return reply.message;
   if (reply.kind === "saved") {
     if (reply.result.kind === "rejected")
@@ -770,7 +770,6 @@ function AgentPanel({
 }) {
   const client = useClient();
   const [actionMessage, setActionMessage] = useState<string>();
-  const [adminId, setAdminId] = useState("");
   const [chatId, setChatId] = useState("");
   async function save(
     section: keyof AgentSettingsView["sections"],
@@ -804,14 +803,6 @@ function AgentPanel({
     }
     return result.kind === 'acted' && result.result.kind === 'saved';
   }
-  async function addAdministrator() {
-    const parsed = openIdSchema.safeParse(adminId.trim());
-    if (!parsed.success) return false;
-    const saved = await act({type: 'act', action: {kind: 'adminMember', botId: view.scope.botId, openId: parsed.data, membership: 'present', revision: view.administrators.revision}});
-    if (saved) setAdminId('');
-    return saved;
-  }
-  useDraft(Boolean(adminId), {title: '添加管理员', save: addAdministrator, discard: () => setAdminId('')});
   useDraft(Boolean(chatId), {title: '添加群 ID', save: async () => {setActionMessage('请先将群 ID 添加到列表，再保存。'); return false;}, discard: () => setChatId('')});
   const cards = view.sections.cards,
     run = view.sections.run,
@@ -875,73 +866,6 @@ function AgentPanel({
       </SettingsGroup>
       <BotTitleSettings key={`titles:${view.scope.botId}`} view={view} save={save}/>
       <BotCommentSettings key={`comments:${view.scope.botId}`} view={view} save={save} refresh={refresh}/>
-      <details className="agent-settings-disclosure">
-        <summary><span>管理员</span></summary>
-      <SettingsGroup
-        label="管理员"
-        id={settingAnchor("管理员")}
-        footer={
-          cards.access.kind === "readonly"
-            ? cards.access.message
-            : "飞书应用身份请在飞书开放平台管理；注册者始终保留本地管理员权限。"
-        }
-      >
-        <SettingsRow title="飞书应用拥有者" value={view.administrators.feishu?.ownerOpenId ?? "尚未获取"} />
-        {view.administrators.feishu?.adminOpenIds.map((id) => (
-          <SettingsRow key={`feishu-${id}`} title={id} value="飞书应用管理员 · 请在飞书开放平台管理" />
-        ))}
-        <SettingsRow title="扫码注册者" value={view.administrators.scannerOpenId ?? view.ownerOpenId ?? "尚未确认"} />
-        {view.administrators.openIds.map((id) => (
-          <SettingsRow
-            key={id}
-            title={id}
-            value="本地管理员"
-            trailing={
-              id === view.ownerOpenId || id === view.administrators.scannerOpenId || view.administrators.feishu?.adminOpenIds.includes(id) ? undefined : <Button
-                size="sm"
-                disabled={cards.access.kind === "readonly"}
-                onClick={() =>
-                  void act({
-                    type: "act",
-                    action: {
-                      kind: "adminMember",
-                      botId: view.scope.botId,
-                      openId: id,
-                      membership: "absent",
-                      revision: view.administrators.revision,
-                    },
-                  })
-                }
-              >
-                移除
-              </Button>
-            }
-          />
-        ))}
-        <SettingsRow
-          title="添加管理员 Open ID"
-          trailing={
-            <div className="settings-inline-actions">
-              <Text
-                label="管理员 Open ID"
-                value={adminId}
-                disabled={cards.access.kind === "readonly"}
-                onChange={setAdminId}
-              />
-              <Button
-                size="sm"
-                disabled={!openIdSchema.safeParse(adminId.trim()).success}
-                onClick={() =>
-                  void addAdministrator()
-                }
-              >
-                添加
-              </Button>
-            </div>
-          }
-        />
-      </SettingsGroup>
-      </details>
       <details className="agent-settings-disclosure">
         <summary><span>更多设置<small>允许的飞书群</small></span></summary>
       <Editor

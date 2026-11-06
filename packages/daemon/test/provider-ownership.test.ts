@@ -17,6 +17,8 @@ afterAll(async () => {
 });
 const transport = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock('../src/platform/spawn', async original => ({ ...await original<object>(), spawnProcess: transport.spawn }));
+// startBridge writes the launcher under the data root, which this test does not move.
+vi.mock('../src/agent/session-cli', async original => ({ ...await original<object>(), writeSessionCli: async () => undefined }));
 vi.mock('../src/agent/codex-appserver/locate', () => ({
   refreshCodexResolution: () => '/fixture/no-provider', resolveCodexBin: () => '/fixture/no-provider',
   codexVersionAsync: async () => 'codex-cli 0.163.0',
@@ -38,6 +40,8 @@ vi.mock('../src/config/app-roles', async original => ({
   ...await original<object>(),
   createAppRoleRefresher: () => ({ refresh: fake.refreshRoles, stop: fake.stopRoles }),
 }));
+// F1's profileOf prepares the download folder on the real disk, which fake timers do not wait for.
+vi.mock('../src/bot/media', async original => ({ ...await original<object>(), prepareInboundDir: async () => {} }));
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 vi.mock('../src/project/registry', async (original) => ({
@@ -128,7 +132,7 @@ function message(text: string): NormalizedMessage {
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
 function setup(policy: 'steer' | 'queue' = 'steer') {
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' } } };
   const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'new-topic' }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
@@ -146,7 +150,7 @@ function channel() {
     messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) },
   } } } };
 }
-const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } } };
+const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' } } };
 type GroupState = 'present' | 'missing' | 'permission-denied';
 interface Shell {
   child: ChildProcess;

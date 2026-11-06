@@ -6,9 +6,9 @@ import { clampUnits, type ScheduleStore } from './store';
 import type { StoredTask, ScheduledJob, ScheduledOutcome } from './types';
 import { countSlotsBetween, latestSlotWithin, nextSlotAfter } from './time';
 
-type Gate = 'ok' | 'disabled' | 'updating' | 'held' | 'unbound' | 'tier-unavailable';
+type Gate = 'ok' | 'disabled' | 'updating' | 'held' | 'unbound' | 'tier-unavailable' | 'admin-removed';
 type SkipGate = 'disabled' | 'updating' | 'held';
-type FailGate = 'unbound' | 'tier-unavailable';
+type FailGate = 'unbound' | 'tier-unavailable' | 'admin-removed';
 /** Why a launch is refused: what the gate said, or 'gate-error' when the gate itself threw. */
 type Refusal = Exclude<Gate, 'ok'> | 'gate-error';
 type Timers = { setTimeout: typeof setTimeout; clearTimeout: typeof clearTimeout };
@@ -43,7 +43,7 @@ const MISSED_CAP = 10_000;            // a stored missed count of 10000 reads "1
 const MAX_ERROR_UNITS = 200;          // scheduleRunRecordSchema.error
 const MAX_EXCERPT_UNITS = 500;        // lastResult.excerpt
 const GATE_ERRORS: Record<FailGate | 'gate-error', string> = {
-  unbound: '群已解绑', 'tier-unavailable': '本群的权限档现在用不了', 'gate-error': '运行前检查出错',
+  unbound: '群已解绑', 'tier-unavailable': '权限档现在用不了', 'admin-removed': '创建人已不是管理员', 'gate-error': '运行前检查出错',
 };
 const INVALID_OUTCOME = '运行结果无效';
 const SKIP_REASONS: readonly string[] = ['disabled', 'updating', 'held'] satisfies SkipGate[];
@@ -107,7 +107,7 @@ export function nextRunAfterFailure(job: ScheduledJob): boolean {
 export function createScheduler(deps: {
   store: ScheduleStore; now: () => number; timers: Timers;
   run: (job: ScheduledJob) => Promise<ScheduledOutcome>;
-  gate: (chatId: string) => Gate;
+  gate: (chatId: string, task: Pick<StoredTask, 'createdBy'>) => Gate;
   notifyAutoPause: (task: StoredTask) => Promise<void>;
   notifyGateFailure: (task: StoredTask) => void;
   maxInflight: () => number; log: typeof log; diagnostics: (event: ScheduleDiagnosticEvent) => void;
@@ -470,13 +470,18 @@ export function createScheduler(deps: {
     });
   }
 
-  /** The gate refuses `slot` outright (unbound, tier unavailable): a counted failed run, the cursor moves on. */
+  /**
+   * The gate refuses `slot` outright (unbound, tier unavailable, creator removed): a counted failed run, the cursor moves
+   * on. The removal pauses a private chat's tasks itself and only logs a failure to (dm-agent 3.3), and a Bot that was
+   * stopped never heard of it: a task that gets here pauses now, in the same words, and nobody is told.
+   */
   async function failSlot(task: StoredTask, slot: number, gate: FailGate): Promise<void> {
     const failed = await write(draft => {
       const current = unchanged(draft, task);
       if (!current) return undefined;
       recordMissedBefore(draft, current, slot);
       current.cursor = slot;
+      if (gate === 'admin-removed') changeState(draft, current, () => { current.state = 'paused'; current.pausedReason = 'admin-removed'; });
       applyOutcome(draft, current, { runId: newId(), slot, trigger: triggerFor(slot), startedAt: now() }, gateFailure(gate));
       return structuredClone(current);
     });
@@ -511,7 +516,7 @@ export function createScheduler(deps: {
     }
     if (latest <= task.cursor) return undefined;
     // The gate comes before the running check: a refused slot is recorded as refused even while a run is on.
-    const gate = deps.gate(task.chatId);
+    const gate = deps.gate(task.chatId, task);
     if (gate !== 'ok') {
       await closeSlot(task, latest, gate);
       return undefined;
@@ -607,7 +612,7 @@ export function createScheduler(deps: {
    */
   function gateOf(task: StoredTask): Refusal | 'ok' {
     try {
-      return deps.gate(task.chatId);
+      return deps.gate(task.chatId, task);
     } catch (error) {
       deps.log.fail('schedule', error, { phase: 'gate', taskId: task.id });
       return 'gate-error';

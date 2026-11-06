@@ -1,13 +1,12 @@
 import { rmSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request } from '@vonvon/protocol';
 import type { AgentThread } from '../src/agent/types';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { listProjects } from '../src/project/registry';
-import { decisionMessages } from '../src/bot/memory-authority';
 import { authorize, type AuthzDeps } from '../src/server/authz';
 
 /**
@@ -38,10 +37,14 @@ vi.mock('../src/admin/groups', () => ({ createGroupExecutor: () => async () => (
 vi.mock('../src/bot/topic-registry', () => ({ createTopicRegistry: () => ({}) }));
 vi.mock('../src/bot/session-store', () => ({ adoptAdminSessions: async () => [] }));
 vi.mock('../src/host/crash-guard', () => ({ onCrashSync: () => () => {} }));
-vi.mock('../src/bot/handle-message', () => ({ createOrchestrator: () => ({
-  initialize: async () => {}, dispatcher: { handle: async () => {} }, shutdown: async () => {},
-  replyDropped() {}, saveDroppedSync() {}, settings: {}, scheduler: { start: async () => {}, stop() {}, drain: async () => {} },
-}) }));
+const orchestrator = vi.hoisted(() => ({ options: undefined as { sessionCli?: string } | undefined }));
+vi.mock('../src/bot/handle-message', () => ({ createOrchestrator: (...args: unknown[]) => {
+  orchestrator.options = args[4] as { sessionCli?: string };
+  return {
+    initialize: async () => {}, dispatcher: { handle: async () => {} }, shutdown: async () => {},
+    replyDropped() {}, saveDroppedSync() {}, settings: {}, scheduler: { start: async () => {}, stop() {}, drain: async () => {} },
+  };
+} }));
 
 import { startBridge } from '../src/bot/bridge';
 
@@ -50,7 +53,7 @@ const OWNER = 'ou_owner';
 const MEMBER = 'ou_member';
 const DEV = 'prj_0000000a';
 const OPS = 'prj_0000000b';
-const cfg = { accounts: { app: { id: APP, secret: 'x', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: OWNER } } } as AppConfig;
+const cfg = { accounts: { app: { id: APP, secret: 'x', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: OWNER, admins: [OWNER] } } } as AppConfig;
 const row = (name: string, chatId: string, projectId?: string) => ({ name, chatId, cwd: `/w/${name}`, blank: false, createdAt: 1, ...(projectId ? { projectId } : {}) });
 const storeProjects = (projects: object[]) => writeFile(paths.projectsFile, JSON.stringify({ version: 1, projects }));
 const thread = (): AgentThread => ({
@@ -79,17 +82,37 @@ function privateChat(entries: Awaited<ReturnType<typeof bridge>>, who: string, t
   };
   const peer = { principal: { kind: 'bot-session' as const, sessionId: entry.sessionId, appId: APP, place: 'dm' as const, chatId: 'oc_dm' }, protocolVersion: 2, negotiated: true, scope: { bot: APP } };
   return {
+    entry,
     ask: (payload: object) => authorize(peer, request(payload), deps),
     bot: (action: Parameters<typeof entries.authorizeSessionCall>[1]) => entries.authorizeSessionCall(entry.sessionId, action),
   };
 }
+
+// dm-agent 9. main 必败: no launcher, and a session's `vonvon` hung on the shell's startup files.
+describe('the launcher, as the bridge wires it', () => {
+  const launcher = (): string => join(paths.appDir, 'bin', process.platform === 'win32' ? 'vonvon.cmd' : 'vonvon');
+  it('is written when a Bot starts and handed to its sessions', async () => {
+    await bridge();
+    expect(orchestrator.options?.sessionCli).toBe(launcher());
+    expect(await readFile(launcher(), 'utf8')).toContain(JSON.stringify(process.execPath).slice(1, -1));
+  });
+  it('does not hold the Bot up when it cannot be written', async () => {
+    const bin = join(paths.appDir, 'bin');
+    await rm(bin, { recursive: true, force: true });
+    await writeFile(bin, 'a file where the directory goes');
+    try {
+      await bridge();
+      expect(orchestrator.options).not.toHaveProperty('sessionCli');
+    } finally { await rm(bin, { force: true }); }
+  });
+});
 
 describe('a private chat\'s session and its bot\'s projects, as the bridge wires them', () => {
   // main 必败: the bridge gave the memory writer no projects for a private chat, so each of these was refused
   it('adds, edits and archives the memory of a project its bot is bound to, on the owner\'s turn', async () => {
     await storeProjects([row('研发', 'oc_dev', DEV), row('运营', 'oc_ops', OPS)]);
     const chat = privateChat(await bridge(), OWNER, '记住 研发周四发版');
-    const owner = { role: 'owner', openId: OWNER };
+    const owner = { role: 'admin', openId: OWNER };
     expect(await chat.ask({ type: 'add', scope: { kind: 'project', projectId: DEV }, text: '周四发版' })).toMatchObject({ ok: true, grant: { ...owner,
       memory: { scope: { kind: 'project', projectId: DEV }, trust: 'trusted', actor: owner, source: { botId: APP, chatId: 'oc_dm', messageId: 'om_1' } } } });
     expect(await chat.ask({ type: 'edit', scope: { kind: 'project', projectId: OPS }, itemId: `p_${OPS}:000001`, revision: 1, text: '周五发版' }))
@@ -98,19 +121,29 @@ describe('a private chat\'s session and its bot\'s projects, as the bridge wires
       .toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'project', projectId: DEV } } } });
   });
 
-  it('counts each project once and reads the table every time: one no group binds stays out until one does', async () => {
+  it('keeps a private chat\'s words in its person\'s memory unless it names a project, any project', async () => {
     // two groups of one project, a row from before projects and one whose id is not a project's
     await storeProjects([row('研发', 'oc_dev', DEV), row('研发二群', 'oc_dev2', DEV), row('旧群', 'oc_old'), row('坏行', 'oc_bad', 'not-a-project')]);
     const entries = await bridge();
-    // a member's --bot lands in the bot's one project, as memory_add does in a private chat (two would leave it nowhere)
-    expect(await privateChat(entries, MEMBER, '你好').ask({ type: 'add', scope: { kind: 'bot', botId: APP }, text: '周四发版' }))
-      .toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'project', projectId: DEV }, trust: 'untrusted', source: { downgraded: 'member' } } } });
-    // OPS is no group's of this bot: the host refuses it first, and its Bot process would too
-    const owner = privateChat(entries, OWNER, '记住 运营');
-    const add = { kind: 'memory', op: 'add', target: { kind: 'project', projectId: OPS }, text: 'x' } as const;
-    expect(await owner.ask({ type: 'add', scope: { kind: 'project', projectId: OPS }, text: 'x' })).toMatchObject({ ok: false, code: 'permission_denied' });
-    expect(await owner.bot(add)).toEqual({ ok: false, reason: 'not-allowed-here', message: decisionMessages['not-allowed-here'] });
-    await storeProjects([row('研发', 'oc_dev', DEV), row('运营', 'oc_ops', OPS)]);
-    expect(await owner.ask({ type: 'add', scope: { kind: 'project', projectId: OPS }, text: 'x' })).toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'project', projectId: OPS } } } });
+    // dm-agent 5: a --bot that fails the gate stays in the person's own memory, as memory_add does in a private chat; the bot's one project is not where private words go
+    expect(await privateChat(entries, OWNER, '你好').ask({ type: 'add', scope: { kind: 'bot', botId: APP }, text: '周四发版' }))
+      .toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'dm', openId: OWNER }, source: { downgraded: 'not-in-message' } } } });
+    // dm-agent 6.3: nobody but an admin has a turn here
+    expect(await privateChat(entries, MEMBER, '你好').ask({ type: 'add', scope: { kind: 'bot', botId: APP }, text: '周四发版' })).toMatchObject({ ok: false, code: 'permission_denied' });
+    // a named project is still the way in
+    expect(await privateChat(entries, OWNER, '记住 研发').ask({ type: 'add', scope: { kind: 'project', projectId: DEV }, text: '周四发版' }))
+      .toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'project', projectId: DEV } } } });
+    // dm-agent 6.1: a private chat reaches every project, one none of this bot's groups binds as well
+    expect(await privateChat(entries, OWNER, '记住 运营').ask({ type: 'add', scope: { kind: 'project', projectId: OPS }, text: 'x' })).toMatchObject({ ok: true, grant: { memory: { scope: { kind: 'project', projectId: OPS } } } });
+  });
+
+  // dm-agent 5: whose window this is comes from the private-chat row, as the bridge reads it.
+  it('lists the memory of the person the window belongs to', async () => {
+    await storeProjects([{ ...row('私聊', 'oc_dm_cli_fixture'), dm: { people: { oc_dm: { openId: OWNER, at: 1 } } } }]);
+    const entries = await bridge();
+    const { entry } = privateChat(entries, OWNER, '记住 周报先写结论');
+    entry.noteToolUse('u1');
+    expect(await entry.call('memory_add', { text: '周报先写结论' }, { toolUseId: 'u1' })).toMatchObject({ ok: true, result: { ok: true, scopeApplied: 'dm' } });
+    expect(JSON.stringify(await entry.call('memory_list', {}, { toolUseId: 'u1' }))).toContain('周报先写结论');
   });
 });

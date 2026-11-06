@@ -71,7 +71,7 @@ export async function connectBrowser(options: BrowserConnectionOptions): Promise
       close: closeSocket,
     };
     if (!serverInfo) throw new Error("Daemon handshake ended without server info");
-    return { client: createClient(connection), serverInfo };
+    return { client: createClient(connection, serverInfo.capabilities), serverInfo };
   } catch (error) {
     try { await closeSocket(); }
     catch (failure) { throw new AggregateError([error, failure], "Daemon connection failed and physical closure was not observed"); }

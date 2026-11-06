@@ -20,15 +20,22 @@ import { createTurnMapper, resultErrorText } from './event-map';
 import { decide, type ClaudeAccess, type ClaudePermissionOptions, type PathFs, type ToolCall } from './permission';
 import { bridgeAsk, type BridgedAsk } from './ask-bridge';
 import { findTranscript, scanTranscript } from './transcript';
+import { FEISHU_API, FEISHU_DOC_EDIT, feishuReadToolNames } from '../entry/feishu-tools';
 import { scheduleToolNames } from '../entry/schedule-tools';
 import { toolReplyText } from '../entry/tools';
-import { builtinSkillsOfSet } from '../builtin-skills/registry';
+import { builtinSkillNames } from '../builtin-skills/registry';
 
 /** Config the backend hands the thread to stand up its persistent query(). */
 export interface ClaudeThreadConfig {
   entry?: AgentEntry;
   /** The session's profile has `tools.schedule`: vonvon_bot lists the schedule tools too. */
   scheduleTools?: boolean;
+  /** The session's profile has `tools.feishu`: vonvon_bot lists the Feishu read tools too. */
+  feishuTools?: boolean;
+  /** The session's profile has `tools.feishuEdit`: vonvon_bot lists feishu_doc_edit too. */
+  feishuEditTools?: boolean;
+  /** The session's profile has `tools.feishuApi`: vonvon_bot lists feishu_api too. */
+  feishuApiTools?: boolean;
   createSdkMcpServer?: ClaudeSdkFacade['createSdkMcpServer'];
   tool?: ClaudeSdkFacade['tool'];
   /** self-assigned UUID (start: options.sessionId) or the id to resume. */
@@ -112,12 +119,12 @@ export const AUTO_COMPACT_SETTINGS = {
 /**
  * vonvon's builtin capability package is the plugin `vonvon` (builtin-skills/package.ts). Loaded from a directory its
  * id is `vonvon@inline`. A workspace's `.claude/settings.json` can turn it off; enabling it in the flag settings, which
- * outrank project and local settings, beats that (both measured, product.md 9.22). A group's skill whitelist gets its
- * skills too.
+ * outrank project and local settings, beats that (both measured, product.md 9.22). A session's skill whitelist gets
+ * its skills too: all of them, a name its package does not have matching nothing.
  */
 const BUILTIN_PLUGIN = 'vonvon';
 export const BUILTIN_PLUGIN_ID = `${BUILTIN_PLUGIN}@inline`;
-export const BUILTIN_SKILL_NAMES = builtinSkillsOfSet('group').map(skill => `${BUILTIN_PLUGIN}:${skill.name}`);
+export const BUILTIN_SKILL_NAMES = builtinSkillNames().map(name => `${BUILTIN_PLUGIN}:${name}`);
 
 /** Hard ceiling on a manual /compact (a summarization turn) so a wedged process
  * can't hang the「压缩中」card forever. Mirrors codex's COMPACT_TIMEOUT_MS. */
@@ -360,7 +367,7 @@ export class ClaudeAgentThread implements AgentThread {
       if (cfg.createSdkMcpServer && cfg.tool) {
         const tool = cfg.tool;
         mcpServers.vonvon_bot = cfg.createSdkMcpServer({ name: 'vonvon_bot', version: '1',
-          tools: entry.tools().filter(spec => cfg.scheduleTools || !scheduleToolNames.has(spec.name)).map(spec => tool(spec.name, spec.description, spec.input.shape, async (args, extra) => {
+          tools: entry.tools().filter(spec => (cfg.scheduleTools || !scheduleToolNames.has(spec.name)) && (cfg.feishuTools || !feishuReadToolNames.has(spec.name)) && (cfg.feishuEditTools || spec.name !== FEISHU_DOC_EDIT) && (cfg.feishuApiTools || spec.name !== FEISHU_API)).map(spec => tool(spec.name, spec.description, spec.input.shape, async (args, extra) => {
             const origin = toolOriginSchema.safeParse(extra);
             const reply = await entry.call(spec.name, args, { toolUseId: origin.success ? origin.data._meta['claudecode/toolUseId'] : undefined });
             return { content: [{ type: 'text', text: toolReplyText(reply) }], ...(!reply.ok ? { isError: true } : {}) };

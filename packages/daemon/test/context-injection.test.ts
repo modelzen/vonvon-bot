@@ -116,7 +116,7 @@ function message(text: string): NormalizedMessage {
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
 function setup(policy: 'steer' | 'queue' = 'steer', entries?: AgentEntries) {
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' } } };
   const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'new-topic' }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
@@ -287,8 +287,8 @@ describe('one runtime for context, hidden blocks and usage', () => {
   async function runtime() {
     const mem = await memory();
     const writer = createMemoryWriter({ botId: 'app', botDirectory: join(mem.dir, 'bots', 'app'), library: libraryLocation(mem.dir), projectIdOf: async () => PROJECT });
-    const entries = createAgentEntries({ appId: 'app', isAdmin: () => false, isOwner: id => id === 'owner', tools: [] });
-    const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: 'steer', access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } } };
+    const entries = createAgentEntries({ appId: 'app', isAdmin: id => id === 'owner', tools: [] });
+    const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: 'steer', access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' } } };
     const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'new-topic' }] } }) }, messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) } } } } };
     orchestrator = createOrchestrator(channel as never, cfg, '/test', undefined, { entries, memory: writer });
     return { mem, o: orchestrator };
@@ -336,7 +336,7 @@ describe('one runtime for context, hidden blocks and usage', () => {
       await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'final', expect.anything()));
       const view = await new MemoryStore(projectMemoryLocation(PROJECT, { library: libraryLocation(mem.dir) })).read();
       const written = view.items.find(item => item.text === '每周四发版');
-      expect(written).toMatchObject({ trust: 'trusted', source: { turn: { kind: 'human' }, actorRole: 'owner' } });
+      expect(written).toMatchObject({ trust: 'trusted', source: { turn: { kind: 'human' }, actorRole: 'admin' } });
     } finally { /* nothing to restore */ }
   });
 

@@ -43,7 +43,7 @@ import { createOrchestrator } from '../src/bot/handle-message';
 const BOT = { openId: 'ou_bot', name: '小码' };
 const CHAT = 'oc_entry';
 const target = { projectName: 'entry', chatId: CHAT };
-const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
+const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] }, completionReminder: { mode: 'manual' } } };
 const channel = {
   send: fake.send, botIdentity: BOT,
   rawClient: { appId: 'cli_fixture', im: { v1: {

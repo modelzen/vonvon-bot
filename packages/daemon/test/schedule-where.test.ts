@@ -111,11 +111,11 @@ describe('where() from launchRun', () => {
       cardkit: { v1: { card: { create: async () => ({ data: { card_id: 'card' } }) } } },
       im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'omt_new' }] } }), list: ok, reply: ok, create: ok },
         chat: { get: async () => { throw new Error('no scope'); } }, messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) } } } } };
-    const entries = createAgentEntries({ appId: 'app', isAdmin: () => true, isOwner: () => true });
+    const entries = createAgentEntries({ appId: 'app', isAdmin: () => true });
     const opened: { facts: TurnFacts; where: TurnWhere | undefined }[] = [];
     const open = entries.openTurn.bind(entries);
     vi.spyOn(entries, 'openTurn').mockImplementation((thread, facts) => { opened.push({ facts, where: facts.where?.() }); return open(thread, facts); });
-    const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
+    const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] } } };
     const o = createOrchestrator(channel as never, cfg, root, undefined, { entries });
     return { o, opened };
   }

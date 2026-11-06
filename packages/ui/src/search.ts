@@ -32,7 +32,6 @@ const agentGroups: readonly AgentGroup[] = [
   {title: '云文档评论', fields: [item('评论模型', ['后端', '评论后端', '模型', '执行工具'], {field: '选择评论模型'}), item('评论思考强度', ['推理强度'], {field: '评论模型思考强度', guide: '先选择一个具体模型，再调整思考强度。'})]},
   {title: '评论回复规则', fields: [item('评论规则文本', ['提示词', 'instructions'], {field: '评论回复规则'}), item('保存规则', ['保存评论规则']), item('恢复默认', ['恢复默认评论规则'])]},
   {title: '新会话标题', aliases: ['会话标题'], fields: [item('标题模型', ['Codex 标题模型', 'Claude 标题模型', '标题后端', '执行工具'], {field: '', guide: '开启会话标题后，选择生成标题的模型。'}), item('用模型生成标题', ['自动生成会话标题'], {field: '自动生成会话标题'}), item('自定义模型 ID', ['标题模型 ID'], {field: '', guide: '开启会话标题，打开模型菜单并选择「自定义模型 ID」。'}), item('推理强度', ['标题推理强度'], {field: '', guide: '选择标题模型后，在旁边调整思考强度。'})]},
-  {title: '管理员', fields: [item('飞书应用拥有者', ['主人', '所有者', '飞书应用所有者']), item('扫码注册者', ['扫码人', '注册者']), item('添加管理员 Open ID'), item('移除管理员', [], {field: '', guide: '在管理员列表中找到要移除的成员。'})]},
   {title: '允许的飞书群', fields: [item('群范围'), item('添加群 ID'), item('移除群 ID', [], {field: '', guide: '在允许的飞书群列表中找到要移除的群。'})]},
   {title: '移除 Bot', fields: [item('删除本地 Bot 数据', ['删除机器人'])]},
 ];
@@ -100,6 +99,7 @@ export function searchEntries(snapshot: DesktopSnapshot, capabilities: {external
   const pages: readonly {id: string; title: string; aliases: readonly string[]; page: Page; view?: CollaborationView}[] = [
     {id: 'home', title: '此刻', aliases: ['首页', '概览'], page: 'home'},
     {id: 'agents', title: 'Bot', aliases: ['机器人', '注册 Bot', '添加 Bot', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
+    {id: 'administrators', title: '管理员', aliases: ['添加管理员', '移除管理员', '谁能私聊', '候选人', '创建者', '私聊权限', '被拒的人'], page: 'administrators'},
     {id: 'bridgeImport', title: 'Bridge 导入', aliases: ['导入 Bridge', 'feishu-codex-bridge', 'Feishu Codex Bridge', '迁移', '旧版导入', '恢复导入'], page: 'bridgeImport'},
     {id: 'setup', title: '飞书连接', aliases: ['连接与设置', '首次运行清单', '后端', '准备执行工具', '扫码', '开权限', '一键开权限', '事件订阅', '卡片回调', '发布版本', '长连接'], page: 'setup'},
     {id: 'groups', title: '群组', aliases: ['飞书群', '群聊', '已连接飞书群', '群设置'], page: 'collaboration', view: 'groups'},
@@ -123,7 +123,7 @@ export function searchEntries(snapshot: DesktopSnapshot, capabilities: {external
     entries.push({id: agent.id, title: agent.name, context: 'Bot', aliases: [agent.id], destination: base, kind: 'item'});
     entries.push({id: `${agent.id}-settings`, title: 'Bot 设置', context: agent.name, aliases: ['机器人设置', 'Bot 权限'], destination: {...base, detail: {kind: 'agent-settings'}}, kind: 'setting'});
     entries.push({id: `${agent.id}-diagnostics`, title: 'Bot 状态', context: `诊断 · ${agent.name}`, aliases: ['连接', '缺的权限', '没回的消息'], destination: {page: 'diagnostics', section: diagnosticsSection(agent.id)}, kind: 'setting'});
-    for (const title of ['智能群关注状态', '自定义智能提示词']) entries.push({id: `${agent.id}-${title}`, title, context: `诊断 · ${agent.name}`, aliases: [], destination: {page: 'diagnostics', section: diagnosticsSection(agent.id), field: title}, kind: 'setting'});
+    for (const title of ['智能群注意力', '自定义智能提示词']) entries.push({id: `${agent.id}-${title}`, title, context: `诊断 · ${agent.name}`, aliases: [], destination: {page: 'diagnostics', section: diagnosticsSection(agent.id), field: title}, kind: 'setting'});
     for (const group of agentGroups) {
       const destination: Destination = {...base, detail: {kind: 'agent-settings'}, section: group.title, reveal: group.reveal};
       entries.push({id: `${agent.id}-${group.title}`, title: group.title, context: `Bot 设置 · ${agent.name}`, aliases: group.aliases ?? [], destination, kind: 'setting'});

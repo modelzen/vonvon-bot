@@ -27,7 +27,7 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['memory', 'archive', 'x', '--revision', '1'], 2], [['memory', 'reseal'], 2], [['memory', 'branch-rename', 'a', 'b'], 2], [['memory', 'branch-merge', 'a', 'b'], 2],
   [['memory', 'events', 'x'], 2], [['memory', 'restore', 'x', '--revision', '1'], 2], [['memory', 'confirm', 'x', '--revision', '1'], 2],
   [['memory', 'promote', 'x', '--revision', '1'], 2], [['memory', 'move', 'x', '--revision', '1', '--to', 'p'], 2], [['memory', 'purge', 'x'], 2],
-  [['memory', 'undo', 'e'], 2], [['memory', 'branch-delete', 'a'], 2],
+  [['memory', 'undo', 'e'], 2], [['memory', 'branch-delete', 'a'], 2], [['memory', 'people'], 2],
   // C5: a write goes through the daemon only, so with none running it is 3; the old name of archive still works
   [['memory', 'add', 'x', '--project', 'p'], 3], [['memory', 'forget', 'x', '--revision', '1', '--project', 'p'], 3],
   // Codex review 251-1: given --scope, the reads that fall back to the files want the daemon instead (no project p: 2 without it)
@@ -45,7 +45,12 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['session', 'resume', 'x', '--group', 'g'], 3], [['session', 'stop', '--group', 'g'], 3], [['session', 'end-goal', '--group', 'g'], 3],
   [['session', 'stop-subagent', 'x', '--group', 'g'], 3], [['session', 'reminder', '--on', '--group', 'g'], 3],
   [['usage', 'show'], 3], [['usage', 'share', '--group', 'g'], 3], [['usage', 'judge'], 3],
+  [['memory', 'people'], 2],
   [['feishu', 'groups'], 3], [['feishu', 'members', 'oc_x'], 3],
+  [['feishu', 'messages', 'oc_x'], 3], [['feishu', 'message', 'om_x'], 3], [['feishu', 'file', 'om_x', 'file_x', '--type', 'file'], 3], [['feishu', 'chat', 'oc_x'], 3],
+  [['feishu', 'doc', 'dox'], 3], [['feishu', 'sheet', 'sht'], 3], [['feishu', 'base', 'bas'], 3], [['feishu', 'slides', 'sld'], 3], [['feishu', 'mindnote', 'bmn'], 3],
+  [['feishu', 'board', 'brd'], 3], [['feishu', 'minutes', 'min'], 3], [['feishu', 'drive', 'box'], 3], [['feishu', 'folder'], 3], [['feishu', 'wiki'], 3],
+  [['feishu', 'comments', 'dox'], 3], [['feishu', 'doc-media', 'box'], 3], [['feishu', 'search', 'x'], 3],
   [['env', 'scan'], 3], [['env', 'install', 'codex'], 3], [['env', 'update', 'codex'], 3], [['env', 'uninstall', 'codex'], 3], [['env', 'login', 'lark-cli'], 3],
   [['env', 'profile', 'list'], 3], [['env', 'profile', 'use', 'p'], 3], [['env', 'profile', 'add', 'p', '--app-id', 'cli_x'], 3], [['env', 'profile', 'init', 'p'], 3],
   [['env', 'backend', 'list'], 3], [['env', 'backend', 'version', 'x'], 3], [['env', 'backend', 'install', 'x'], 3], [['env', 'backend', 'uninstall', 'x'], 3],
@@ -110,7 +115,7 @@ it('every command prints one JSON line with --json, its exit code inside a failu
       if (code !== 0) expect(json, what).toMatchObject({ exitCode: code, error: { kind: expect.any(String), message: expect.any(String) } });
     }
   } finally { await rm(base, { recursive: true, force: true }); }
-}, 180_000);
+}, 240_000);
 
 // cli-2-bot 4.6: only the commands named in LEASED take the data lease, and with it make the data root
 it('takes the data lease for the commands that write the data root only', async () => {

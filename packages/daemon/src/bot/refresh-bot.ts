@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { botIdentity, commitBotCredentialRefresh, loadBots } from '../config/bots';
 import { botPaths } from '../config/paths';
 import { loadConfig } from '../config/store';
-import { isAdmin, isComplete, secretKeyForApp } from '../config/schema';
+import { isComplete, secretKeyForApp } from '../config/schema';
 import { setSecret } from '../config/keystore';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import { startRegistration, registrationErrorCode, type StartRegistrationOptions } from './wizard';
@@ -24,17 +24,15 @@ export async function refreshBotCredentials(
       return fail('stale_target', '这个 Bot 已移除或配置已变更，请重新加载。');
     }
     const expected = botIdentity(entry);
-    const owner = config.preferences?.access?.ownerOpenId;
     const secret = config.accounts.app.secret;
-    if (!owner || typeof secret !== 'object' || secret.source !== 'exec' || secret.provider !== 'bridge' || secret.id !== secretKeyForApp(appId)) {
-      return fail('credential_rejected', '这个 Bot 的密钥不是 daemon 保存的，或者它还没有主人，无法刷新凭据。');
+    if (typeof secret !== 'object' || secret.source !== 'exec' || secret.provider !== 'bridge' || secret.id !== secretKeyForApp(appId)) {
+      return fail('credential_rejected', '这个 Bot 的密钥不是 daemon 保存的，无法刷新凭据。');
     }
     const creds = await register({ ...options, appId });
     if (options.signal.aborted) return fail('abort', '已取消。');
+    // Who scanned is not looked at: whoever can scan this app out is its Feishu admin or developer anyway, and a creator
+    // taken off the list could not change the credentials otherwise (product.md section 6).
     if (creds.clientId !== appId || creds.tenant !== entry.tenant) return fail('credential_rejected', '扫码返回的应用或租户不匹配，未保存凭据。');
-    if (!creds.operatorOpenId || !isAdmin(config, creds.operatorOpenId)) {
-      return fail('access_denied', '请由这个 Bot 的主人或管理员扫码，未保存凭据。');
-    }
     const validation = await validate(appId, creds.clientSecret, entry.tenant);
     if (!validation.ok) return fail('credential_rejected', '新凭据校验失败，未保存。');
     const committed = await commitBotCredentialRefresh(expected, () => setSecret(secretKeyForApp(appId), creds.clientSecret, async () => {
@@ -42,7 +40,7 @@ export async function refreshBotCredentials(
       if (await readFile(file, 'utf8') !== original) throw { code: 'stale_target' };
     }));
     if (committed === 'stale') return fail('stale_target', '这个 Bot 已移除或配置已变更，请重新加载。');
-    return { ok: true, appId, name: entry.name, tenant: entry.tenant, adminOpenId: owner, botName: entry.botName, missingScopes: validation.missingScopes };
+    return { ok: true, appId, name: entry.name, tenant: entry.tenant, adminOpenId: config.preferences?.access?.ownerOpenId ?? creds.operatorOpenId ?? '', botName: entry.botName, missingScopes: validation.missingScopes };
   } catch (error) {
     const code = registrationErrorCode(error);
     if (code === 'abort') return fail('abort', '已取消。');

@@ -1,20 +1,22 @@
 import { getAppRoleSnapshot, trustedFeishuAdmins } from '../config/app-roles';
+import { readRefused } from '../bot/dm-refused';
+import { adminCandidates } from './admin-candidates';
 import { ToolRefusal } from '../agent/entry/tools';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { FULL_ACCESS_WARNING, JUDGE_SELECTION_KINDS, decisionEndpointProblem } from '@vonvon/protocol';
+import { DEFAULT_DM_SMART_RULES, FULL_ACCESS_WARNING, JUDGE_SELECTION_KINDS, decisionEndpointProblem } from '@vonvon/protocol';
 import type { AgentBackend, ModelInfo, ReasoningEffort } from '../agent/types';
 import { backendIds } from '../agent';
 import { parseModelId } from '../agent/model-id';
 import { permissionTable, PermissionInputError, tableEnv, tierInfo, TIER_NETWORK } from '../agent/permission';
-import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, getShowToolCalls, resolveOwner, type AppConfig, type AppPreferences } from '../config/schema';
+import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, getShowToolCalls, type AppConfig, type AppPreferences } from '../config/schema';
 import { paths } from '../config/paths';
 import { admitDirectorySettings, resolveProjectsRootDir } from '../config/directories';
 import { botBackendId, groupBackendId, groupPermission, resolveCommentsExecution, resolveModelPreference, resolveProjectModelAccess, projectModelAllowed, projectSpeedAllowed } from '../config/execution';
 import { isProjectId } from '../project/library';
-import { effectiveMode, getProjectByName, listProjects, mutateProject, noMentionOf, pendingPolicyOf, sessionModeOf, type Project, type ProjectWorkspace } from '../project/registry';
+import { dmChatId, effectiveMode, getProjectByChatId, getProjectByName, listProjects, mutateProject, mutateProjectByChatId, noMentionOf, pendingPolicyOf, sessionModeOf, type Project, type ProjectWorkspace } from '../project/registry';
 import { getSession, listSessions, isRetiredKey, mutateSession, RETIRED_KEY_TEXT, type SessionRecord } from '../bot/session-store';
-import { DEFAULT_COMMENT_INSTRUCTIONS, saveCommentInstructions, syncAllCommentInstructions } from '../bot/comments';
+import { currentCommentInstructions, DEFAULT_COMMENT_INSTRUCTIONS, saveCommentInstructions, syncAllCommentInstructions } from '../bot/comments';
 import { voiceView } from '../voice/view';
 import { keyStatus } from './secrets';
 import { DECISION_FORMAT_LINES, DECISION_INPUT_EXAMPLE, decisionProvider, decisionProviders, keyMissingText } from '../judge/decision';
@@ -27,6 +29,7 @@ import { probeBackends, SMART_NO_MENTION_REFUSED, type AppPreferencesWriter } fr
 import { parseSettingsAction, parseSettingsEdit, SettingsInputError } from './settings-parse';
 import type * as T from './settings-types';
 import { offlineModelCatalog, rememberModelCatalog } from './model-catalog';
+import { log } from '../core/logger';
 import { supplementOf } from '../bot/context-assembly';
 import { botFiles, readRole, readSoulText, readText, roleDraft, roleProblem, updateRole, waitForBotFiles } from '../bot/role-files';
 import { loadBots } from '../config/bots';
@@ -39,7 +42,7 @@ export function settingsRevision(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 export function isLocalSettingsSection(kind: string, section: string): boolean {
-  return kind === 'agent' ? section === 'profile' || section === 'role' : kind === 'project' && ['profile', 'role', 'modelAccess', 'workspace', 'smartRules', 'skills', 'presentation', 'judge', 'permission', 'response', 'run'].includes(section);
+  return kind === 'agent' ? section === 'profile' || section === 'role' : kind === 'project' && ['profile', 'role', 'modelAccess', 'workspace', 'smartRules', 'skills', 'presentation', 'judge', 'permission', 'response', 'run', 'conversation'].includes(section);
 }
 const writable: T.SettingsAccess = {
   kind: 'writable'
@@ -64,6 +67,14 @@ export interface SettingsOwnerDeps {
   localEditing?: boolean;
   discoverSkills?: typeof discoverGroupSkills;
   writePreferences: AppPreferencesWriter;
+  /**
+   * Told once a person's off the list (dm-agent 3.3 steps 3 to 5), in this Bot process, after the write; a failure is only
+   * logged. D2 stops the turns of their private chat, clears its queue and revokes its sessions' tokens, C2 pauses their
+   * private-chat tasks; until then nobody passes this.
+   */
+  adminRemoved?(openId: string): void | Promise<void>;
+  /** open_id → name, read from Feishu for the administrators page; absent in a stopped Bot, which cannot ask */
+  personNames?: (openIds: readonly string[]) => Promise<ReadonlyMap<string, string>>;
   backendFor: (id: string) => AgentBackend;
   evictLiveSessionsForChat: (chatId: string) => Promise<void>;
   voiceAction?: (action: VoiceAction) => Promise<void>;
@@ -71,10 +82,13 @@ export interface SettingsOwnerDeps {
   access?: T.SettingsAccess;
   runningConcurrency?: number;
   readProject?: typeof getProjectByName;
+  /** the private-chat row, which no name reaches; `readProject` and `mutateProject` only take groups */
+  readChatProject?: typeof getProjectByChatId;
   listProjects?: typeof listProjects;
   readSessions?: typeof listSessions;
   readSession?: typeof getSession;
   mutateProject?: typeof mutateProject;
+  mutateChatProject?: typeof mutateProjectByChatId;
   mutateSession?: typeof mutateSession;
   /** tests point it at a temporary bot directory */
   readSmartPrompt?: (appId: string, chatId?: string) => ReturnType<typeof readSmartPrompt>;
@@ -95,6 +109,10 @@ function effect(fields: string[], when: T.ApplyEffect['when'], detail: string): 
       detail
     }];
 }
+/** What `settings save.project` takes for the private chat (dm-agent 4.2): its tier and folder are fixed, and the group-only sections are not its. */
+const DM_SECTIONS: ReadonlySet<string> = new Set<keyof T.ProjectSections>(['model', 'speed', 'modelAccess', 'skills', 'smartRules', 'judge', 'conversation', 'run', 'presentation']);
+const DM_ONLY_THESE = '私聊只能改模型、速度、可选模型、技能、沟通方式、判断规则、决策模型、运行中来了消息和消息与提醒';
+const DM_FIXED: T.SettingsAccess = { kind: 'readonly', reason: 'dm-fixed', message: `私聊只有完全访问一档，目录也是固定的。${DM_ONLY_THESE}。` };
 const agentEffects: {
   [K in keyof T.AgentSections]: T.ApplyEffect[];
 } = {
@@ -228,6 +246,7 @@ function projectData(p: Project, backend: AgentBackend): T.ProjectSections {
     response: {
       noMention: noMentionOf(p)
     },
+    conversation: { mode: sessionModeOf(p) === 'smart' ? 'smart' : 'single' },
     model: {
       selection: selection(p.defaultModel, p.defaultEffort, p.defaultModelCustom)
     },
@@ -253,7 +272,7 @@ function projectRaw(p: Project, section: keyof T.ProjectSections): unknown {
   if (section === 'workspace') return [p.name, p.chatId, p.cwd, p.directories];
   if (section === 'modelAccess') return [p.name, p.chatId, p.modelAccess, p.defaultModel, p.defaultEffort];
   if (['profile', 'smartRules', 'skills', 'presentation'].includes(section)) return [p.name, p.chatId, p[section as 'profile']];
-  const data = section === 'permission' ? [p.mode, p.network, p.custom] : section === 'response' ? p.noMention : section === 'run' ? p.pendingPolicy : section === 'judge' ? p.judge : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
+  const data = section === 'permission' ? [p.mode, p.network, p.custom] : section === 'response' ? p.noMention : section === 'conversation' ? p.smart : section === 'run' ? p.pendingPolicy : section === 'judge' ? p.judge : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
   return [p.name, p.chatId, p.cwd, p.backend, data];
 }
 function sessionRaw(s: SessionRecord): unknown {
@@ -329,12 +348,17 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   const access = deps.access ?? writable;
   const sectionAccess = (kind: string, section: string) => deps.localEditing && isLocalSettingsSection(kind, section) ? writable : access;
   const runningConcurrency = deps.runningConcurrency ?? getMaxConcurrentRuns(cfg);
-  const readProject = deps.readProject ?? getProjectByName;
+  // A settings scope names a group by its name and the bot's private chat by `oc_dm_<appId>` (dm-agent 4.2).
+  const dmChat = dmChatId(botId);
+  const readChatProject = deps.readChatProject ?? getProjectByChatId;
+  const readGroup = deps.readProject ?? getProjectByName;
+  const readProject = (name: string) => name === dmChat ? readChatProject(name) : readGroup(name);
   const readSession = deps.readSession ?? getSession;
-  const changeProject = deps.mutateProject ?? mutateProject;
+  const changeGroup = deps.mutateProject ?? mutateProject;
+  const changeChatProject = deps.mutateChatProject ?? mutateProjectByChatId;
   const changeSession = deps.mutateSession ?? mutateSession;
   const instructions = deps.instructions ?? {
-    read: () => readFile(paths.commentInstructionsFile, 'utf8').catch(error => {
+    read: () => readFile(paths.commentInstructionsFile, 'utf8').then(currentCommentInstructions).catch(error => {
       if (error.code === 'ENOENT')
         return DEFAULT_COMMENT_INSTRUCTIONS;
       throw error;
@@ -583,14 +607,14 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     result.role = { supplement: supplementOf(p) };
     result.modelAccess = resolveProjectModelAccess({ bot: cfg.preferences, group: p }, peekModels(groupBackendId(p)));
     if (!p.directories?.repositories) result.workspace.repositories = [...cfg.preferences?.directories?.repositories ?? []];
-    if (!p.smartRules) result.smartRules = rulesFromSmartPrompt(await (deps.readSmartPrompt ?? readSmartPrompt)(botId, p.chatId));
+    if (!p.smartRules) result.smartRules = p.dm ? { ...DEFAULT_DM_SMART_RULES } : rulesFromSmartPrompt(await (deps.readSmartPrompt ?? readSmartPrompt)(botId, p.chatId));
     const completion = getCompletionReminderConfig(cfg);
     result.presentation = p.presentation ? { showModel: getModelDisplay(cfg), ...p.presentation } : { voiceEnabled: voiceView(cfg).enabled, showToolCalls: getShowToolCalls(cfg), showModel: getModelDisplay(cfg), completionMode: completion.mode, longTaskMinutes: completion.longTaskMinutes };
     return result;
   }
   async function sectionRaw(p: Project, section: keyof T.ProjectSections): Promise<unknown> {
     if (section === 'role' && p.supplement === undefined) return [botId, projectRaw(p, section), supplementOf(p)];
-    if (section === 'smartRules' && !p.smartRules) return [botId, projectRaw(p, section), (await (deps.readSmartPrompt ?? readSmartPrompt)(botId, p.chatId)).text];
+    if (section === 'smartRules' && !p.smartRules && !p.dm) return [botId, projectRaw(p, section), (await (deps.readSmartPrompt ?? readSmartPrompt)(botId, p.chatId)).text];
     return [botId, projectRaw(p, section)];
   }
   async function validateModelAccess(value: T.ProjectSections['modelAccess'], previous: T.ProjectSections['modelAccess']): Promise<ModelInfo[]> {
@@ -668,6 +692,12 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       }
       const text = await instructions.read();
       const roles = getAppRoleSnapshot(botId, cfg.accounts.app.tenant);
+      // Names only from Feishu (dm-agent 3.4), asked once for everyone the page shows; a stopped Bot has no way to ask.
+      const admins = cfg.preferences?.access?.admins ?? [];
+      const feishuIds = [...new Set([...(roles?.ownerOpenId ? [roles.ownerOpenId] : []), ...trustedFeishuAdmins(roles)])];
+      const refused = readRefused(botId);
+      const refusedNames = new Map(refused.map(person => [person.openId, person.name]));
+      const names = await deps.personNames?.([...new Set([...admins, ...(cfg.preferences?.access?.ownerOpenId ? [cfg.preferences.access.ownerOpenId] : []), ...feishuIds])]) ?? new Map<string, string>();
       const draft = data.role.identity.trim() ? '' : roleDraft(deps.botName ?? await registeredBotName(botId));
       return {
         scope,
@@ -676,12 +706,13 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           ...(draft ? { draft } : {}),
           headed: roleView.headed, oversized: roleView.oversized, mergedNotice: roleView.mergedNotice, integrity: roleView.integrity,
         },
-        ownerOpenId: resolveOwner(cfg) ?? null,
+        // The one who scanned the bot in, a label only; what Feishu names is no administrator, only who may be picked.
+        ownerOpenId: cfg.preferences?.access?.ownerOpenId ?? null,
         administrators: {
-          feishu: { ownerOpenId: roles?.ownerOpenId ?? null, adminOpenIds: [...trustedFeishuAdmins(roles)] },
-          scannerOpenId: cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0] ?? null,
-          openIds: [...(cfg.preferences?.access?.admins ?? [])],
-          revision: settingsRevision([botId, resolveOwner(cfg), cfg.preferences?.access?.admins ?? []])
+          openIds: [...admins],
+          names: Object.fromEntries(admins.flatMap(id => { const name = names.get(id) ?? refusedNames.get(id); return name ? [[id, name]] : []; })),
+          candidates: adminCandidates({ admins, creator: cfg.preferences?.access?.ownerOpenId, feishu: feishuIds, refused, names }),
+          revision: settingsRevision([botId, cfg.preferences?.access?.admins ?? []])
         },
         voice: voiceView(cfg),
         commentInstructions: {
@@ -706,7 +737,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       if (!p)
         throw new SettingsInputError('项目不存在');
       const data = await projectSettings(p);
-      const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], sectionAccess('project', key), effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' || key === 'workspace' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : key === 'workspace' ? '下一轮新开会话' : key === 'judge' ? agentEffects.judge[0]!.detail : key === 'run' && p.backend === 'claude-agent' ? 'Claude 不支持插话，运行中来的消息照样排队' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
+      const sections = Object.fromEntries(Object.entries(data).filter(([key]) => p.dm || key !== 'conversation').map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], p.dm && !DM_SECTIONS.has(key) ? DM_FIXED : sectionAccess('project', key), effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' || key === 'workspace' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : key === 'workspace' ? '下一轮新开会话' : key === 'judge' ? agentEffects.judge[0]!.detail : key === 'run' && p.backend === 'claude-agent' ? 'Claude 不支持插话，运行中来的消息照样排队' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
       for (const key of ['profile', 'role', 'smartRules'] as const) sections[key]!.revision = settingsRevision(await sectionRaw(p, key));
       const botProfile = await legacyBotProfile(botId);
       sections.profile!.effective = { ...data.profile };
@@ -749,11 +780,11 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           ...(fullOnly ? { fullOnly } : {})
         },
         members: {
-          ...(deps.responseRoster ? { roster: await deps.responseRoster(p.chatId) } : {}),
+          ...(deps.responseRoster && !p.dm ? { roster: await deps.responseRoster(p.chatId) } : {}),
           openIds: [...(p.allowedUsers ?? [])],
           revision: settingsRevision([botId, p.name, p.chatId, p.allowedUsers ?? []])
         },
-        smartPrompt: p.smartRules ? { ...await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], groupDecides), source: 'group', text: composeSmartRules(p.smartRules) } : await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], groupDecides),
+        smartPrompt: p.smartRules || p.dm ? { ...await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], groupDecides), source: 'group', text: composeSmartRules(p.smartRules ?? DEFAULT_DM_SMART_RULES) } : await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], groupDecides),
         decisionModels: await decisionModels()
       };
     }
@@ -766,7 +797,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       let effectiveSpeed: T.SessionSpeedSetting['tier'] = s.serviceTier ?? 'standard';
       if (s.serviceTier && s.serviceTier !== 'standard') {
         const { model: storedModel, serviceTier: storedTier } = s;
-        const speedGroup = (await (deps.listProjects ?? listProjects)()).find(p => p.chatId === s.chatId);
+        const speedGroup = await readChatProject(s.chatId);
         const speedPreference = speedGroup ? resolveModelPreference({ bot: cfg.preferences, group: speedGroup }, s.backend) : undefined;
         if (!projectSpeedAllowed(speedGroup, storedModel ?? speedPreference?.model, storedTier)) effectiveSpeed = 'standard';
         const catalog = s.backend === 'codex-appserver'
@@ -775,7 +806,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         const selected = catalog?.state === 'ready' ? catalog.models.find(item => item.id === storedModel && !item.hidden) : undefined;
         if (!selected?.serviceTiers?.some(item => item.id === storedTier)) effectiveSpeed = 'standard';
       }
-      const project = (await (deps.listProjects ?? listProjects)()).find(p => p.chatId === s.chatId);
+      const project = await readChatProject(s.chatId);
       return {
         scope,
         sections: {
@@ -837,6 +868,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     let additionalEffects: T.ApplyEffect[] = [];
     let turnedFull = false;
     try {
+      if (edit.scope.kind === 'project' && edit.scope.projectName === dmChat && !DM_SECTIONS.has(edit.section))
+        throw new SettingsInputError(DM_ONLY_THESE);
       if (edit.scope.kind === 'agent') {
         const e = edit as Extract<T.BotSettingsEdit, {
           section: keyof T.AgentSections;
@@ -959,7 +992,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             throw new SettingsInputError('项目不存在');
           judge = await prepareJudge(e.patch.selection, [botId, projectRaw(now, 'judge')], e.revision, groupBackendId(now), true);
         }
-        const p = await changeProject(e.scope.projectName, async (p) => {
+        const change = e.scope.projectName === dmChat ? changeChatProject : changeGroup;
+        const p = await change(e.scope.projectName, async (p) => {
           check(await sectionRaw(p, e.section), e.revision);
           switch (e.section) {
             case 'profile':
@@ -971,6 +1005,11 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               break;
             }
             case 'smartRules': p.smartRules = { ...original.smartRules, ...e.patch }; break;
+            case 'conversation':
+              // A group's revision of `response` is the same value, so a group's save can get this far.
+              if (!p.dm) throw new SettingsInputError('无效设置分区');
+              p.smart = e.patch.mode === 'smart';
+              break;
             case 'skills': p.skills = { ...original.skills, ...e.patch }; p.skills.disabledPaths = [...new Set(p.skills.disabledPaths)]; break;
             case 'presentation': p.presentation = { ...original.presentation, ...e.patch }; break;
             case 'workspace':
@@ -1091,7 +1130,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         if (!p) return { kind: 'saved', section: await sectionView(e), effects: [] };
         if (['permission', 'workspace', 'skills', 'modelAccess', 'profile', 'role'].includes(e.section)) {
           try {
-            await deps.evictLiveSessionsForChat(p.chatId);
+            // A private chat's sessions are under each person's p2p chat_id, not the row's.
+            for (const chatId of p.dm ? Object.keys(p.dm.people) : [p.chatId]) await deps.evictLiveSessionsForChat(chatId);
           }
           catch {
             additionalEffects = effect([e.section], 'restart', '设置已保存，但活跃会话重新绑定失败。请重启 daemon 使权限设置生效');
@@ -1108,7 +1148,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           check([botId, e.section === 'speed' ? sessionSpeedRaw(s) : sessionRaw(s)], e.revision);
           if (e.section === 'speed') {
             if (!e.patch.tier) throw new SettingsInputError('缺少速度档位');
-            const group = (await (deps.listProjects ?? listProjects)()).find(p => p.chatId === s.chatId);
+            const group = await readChatProject(s.chatId);
             const prefer = group ? resolveModelPreference({ bot: cfg.preferences, group }, s.backend) : undefined;
             await validateSpeed(e.patch.tier, s.backend, s.model ?? prefer?.model, s.modelCustom === true || (!s.model && prefer?.custom === true), s.cwd, group);
             if (e.patch.tier === 'standard') delete s.serviceTier;
@@ -1118,7 +1158,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           if (!e.patch.selection)
             throw new SettingsInputError('缺少模型选择');
           const chosen = await validateSelection(s.backend, e.patch.selection, true);
-          const group = (await (deps.listProjects ?? listProjects)()).find(p => p.chatId === s.chatId);
+          const group = await readChatProject(s.chatId);
           if (group?.modelAccess && (chosen.kind === 'default' || !projectModelAllowed(group, s.backend, chosen.model, chosen.effort, peekModels(s.backend)))) throw new SettingsInputError('请从本群允许的模型与 Effort 中选择');
           applySelection(s, chosen);
           if (chosen.kind === 'default')
@@ -1188,27 +1228,31 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             throw error instanceof VoiceActionRefused ? new SettingsInputError(error.message) : error;
           });
           break;
-        case 'adminMember':
+        case 'adminMember': {
+          let removed = false;
           await deps.writePreferences(p => {
-            check([botId, resolveOwner(cfg), p.access?.admins ?? []], action.revision);
-            const roles = getAppRoleSnapshot(botId, cfg.accounts.app.tenant);
-            const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
-            if (action.membership === 'absent' && (action.openId === resolveOwner(cfg) || action.openId === scanner || trustedFeishuAdmins(roles).includes(action.openId)))
-              throw new SettingsInputError('飞书应用管理员和注册者不能在本机移除');
+            check([botId, p.access?.admins ?? []], action.revision);
             const admins = new Set(p.access?.admins ?? []);
             if (action.membership === 'present')
               admins.add(action.openId);
-            else
-              admins.delete(action.openId);
+            else {
+              if (admins.size === 1 && admins.has(action.openId))
+                throw new SettingsInputError('至少要有一个管理员。');
+              removed = admins.delete(action.openId);
+            }
             p.access = {
               ...p.access,
               admins: [...admins]
             };
           });
+          // The list is written and the door shut: what follows only tidies up, so its failure changes nothing.
+          if (removed)
+            await Promise.resolve().then(() => deps.adminRemoved?.(action.openId)).catch((error: unknown) => log.fail('settings', error, { phase: 'admin-removed' }));
           break;
+        }
         case 'projectAudience':
         case 'projectMember':
-          await changeProject(action.projectName, p => {
+          await changeGroup(action.projectName, p => {
             check([botId, p.name, p.chatId, p.allowedUsers ?? []], action.revision);
             const members = new Set(p.allowedUsers ?? []);
             if (action.kind === 'projectAudience')

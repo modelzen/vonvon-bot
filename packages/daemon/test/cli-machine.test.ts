@@ -306,6 +306,17 @@ it('context show asks for a group or the comments and prints both columns', asyn
   expect(contextPreview).toHaveBeenCalledTimes(2);
 });
 
+// dm-agent 10 (D4). main 必败: a private chat had no 模型看到什么
+it('context show --dm asks for that person and leaves out what a private chat does not have', async () => {
+  const contextPreview = vi.fn(async () => ({ ...preview, next: { ...preview.next, sections: [{ key: 'dmMemory', version: 'v3', chars: 10, items: 2, branches: 1 }], items: { bot: 0, trusted: 1, untrusted: 1 } } }));
+  const h = harness({ snapshot: async () => snapshot([agent('cli_a')]), contextPreview });
+  await runContextShow({ dm: 'ou_a' }, h.io(), h.daemon);
+  expect(contextPreview).toHaveBeenCalledWith({ type: 'get', agentId: 'cli_a', place: { kind: 'dm', openId: 'ou_a' } });
+  expect(h.out().split('\n')).toContain('  私聊记忆  可信 1 条 / 待确认 1 条（1 个分支）');
+  expect(h.out()).not.toContain('智能判断');
+  expect(await caught(runContextShow({ dm: 'ou_a', group: '研发群' }, h.io(), h.daemon))).toMatchObject({ kind: 'bad-args' });
+});
+
 // main 必败: there was no secrets test
 it('secrets test: busy is the right key (0), auth fails with its outcome, a session is refused before connecting', async () => {
   const outcome = { value: 'busy' as 'busy' | 'auth' };
@@ -327,12 +338,12 @@ it('now shows each activity, a possibly stuck one, attention and the latest acti
   const busy = agent('cli_a', '小助手', { diagnostics: {
     notReplied: [], deniedScopes: [],
     activities: [{ id: '7d1f1a6e-3b8e-4d0c-9a51-2f6a0e4b9c12', groupId: groupIdSchema.parse('oc_dev'), phase: 'thinking', startedAt: T0 - 120_000, updatedAt: T0 - 61_000 }],
-    attention: [{ groupId: 'oc_dev', main: { mode: 'focus', intervalMs: 0 }, focusedTopics: 0, watchedTopics: 2 }],
+    attention: [{ groupId: 'oc_dev', group: {score: 100, intervalMs: 5000, updatedAt: T0}, main: { mode: 'focus', intervalMs: 0 }, focusedTopics: 0, watchedTopics: 2 }],
     latestAction: { id: '8d1f1a6e-3b8e-4d0c-9a51-2f6a0e4b9c12', groupId: 'oc_dev', kind: 'replied', at: T0 - 10_000 },
   } });
   const h = harness({ snapshot: async () => snapshot([busy, agent('cli_b', '闲着的')]) });
   await runNow(undefined, h.io(), h.daemon, () => T0);
-  expect(h.out()).toBe('小助手（cli_a）\n  研发群：思考中（2 分钟）（可能卡住了）\n  关注：研发群 主区专注、2 个话题留意\n  刚刚：在 研发群 回复了\n');
+  expect(h.out()).toBe('小助手（cli_a）\n  研发群：思考中（2 分钟）（可能卡住了）\n  注意力：研发群 群注意力 100/100（短批查看）\n  刚刚：在 研发群 回复了\n');
   h.clear(); await runNow(undefined, h.io(true), h.daemon, () => T0);
   expect(JSON.parse(h.out()).bots.map((bot: { id: string; activities: unknown[] }) => [bot.id, bot.activities.length])).toEqual([['cli_a', 1], ['cli_b', 0]]);
   const idle = harness({ snapshot: async () => snapshot([agent('cli_a')]) });

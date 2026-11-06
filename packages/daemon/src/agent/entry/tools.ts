@@ -11,6 +11,8 @@ export interface ToolContext {
   admin?: boolean;
   readonly writeRefusal?: Extract<AgentToolReply, { ok: false }>;
   place: AgentPlace;
+  /** The session's id, which its token in the host names: what a read through another Bot shows the host (dm-agent 7.3). */
+  sessionId?: string;
   turn?: { id: number; requesterOpenId: string; role: 'owner' | 'admin' | 'member' | 'bot'; triggerMessageId: string };
   /** memory 类工具：这一轮对记忆的事实，每次调用现取（提交点前的 commit guard 里再取一次） */
   memoryTurn?(): MemoryTurn | undefined;
@@ -27,13 +29,21 @@ export type CommitGuard = () => void;
 export const TOOL_RESULT_BYTES = 256 * 1024;
 export interface AgentTool {
   name: string;
-  class: 'read' | 'settings' | 'memory' | 'schedule';
+  /**
+   * `document`: the document column of dm-agent 7.2, the Feishu tools a comment's session gets too. `feishu-api`: the
+   * private chat's generic tool (7.6), kept to an administrator's turn or task by the registry.
+   */
+  class: 'read' | 'settings' | 'memory' | 'schedule' | 'document' | 'feishu-api';
+  /** `document` 类：这个工具改东西，所有位置都要这一轮还在（registry 的 authorizeFeishu） */
+  writes?: boolean;
   /** Where it is listed and may be called, besides what its class allows; everywhere its class allows when absent. */
   places?: readonly AgentPlace['kind'][];
   /** schedule 类：对应命令核的哪个动作，登记表按它查 3.13 的角色表 */
   action?: ScheduleRequest['action'];
   description: string;
   input: z.ZodObject;
+  /** The input in a private chat, where it may name another Bot (dm-agent 7.3); `input` everywhere else. */
+  dmInput?: z.ZodObject;
   run(args: unknown, ctx: ToolContext): Promise<unknown>;
 }
 export type AgentToolSpec = Pick<AgentTool, 'name' | 'description' | 'input'>;
@@ -49,7 +59,7 @@ export function toolReplyText(reply: AgentToolReply): string {
 export const sessionInfoTool: AgentTool = {
   name: 'session_info',
   class: 'read',
-  description: '查这条会话在 vonvon 里属于哪里（群、私聊还是文档评论），以及现在这一轮是不是有人发消息触发的。平时不用调。',
+  description: '查这条会话在 vonvon 里属于哪里（群、私聊还是文档评论），以及现在这一轮是不是有人发消息触发的；私聊里还回这一轮能不能用 vonvon 命令行改设置。平时不用调。',
   input: z.object({}).strict(),
   async run() { throw new Error('session_info is evaluated by the registry'); },
 };

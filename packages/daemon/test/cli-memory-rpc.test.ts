@@ -35,10 +35,10 @@ describe('the memory RPC', () => {
     } finally { await fixture.close(); }
   });
 
-  // devices 5.2: no memory tool deletes a branch, so no Bot session may
-  it('refuses branchDelete to every Bot session, and lets the owner', async () => {
+  // devices 5.2: no memory tool deletes a branch, so no group's session may; a private chat's may, its turn going (dm-agent 6.2)
+  it('refuses branchDelete to a group\'s and a comment\'s session, and lets the owner', async () => {
     const remove = request('d', { type: 'branchDelete', scope: { kind: 'bot', botId: 'cli_x' }, name: '发版' });
-    for (const place of ['dm', 'group', 'comment'] as const) {
+    for (const place of ['group', 'comment'] as const) {
       const principal = { kind: 'bot-session' as const, sessionId: 'ses_0123456789abcdef', appId: 'cli_x', place, ...(place === 'comment' ? {} : { chatId: 'oc_y' }) };
       expect(await authorize({ principal, protocolVersion: 2, negotiated: true, scope: { bot: 'cli_x', ...(place === 'group' ? { group: 'oc_y' } : {}) } }, remove))
         .toEqual({ ok: false, code: 'permission_denied', message: SESSION_DENIED });

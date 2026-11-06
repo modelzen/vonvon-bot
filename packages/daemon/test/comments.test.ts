@@ -7,6 +7,7 @@ import {
   buildCommentPrompt,
   commentCwd,
   commentSessionKey,
+  currentCommentInstructions,
   DEFAULT_COMMENT_INSTRUCTIONS,
   fetchCommentContext,
   fitCommentReply,
@@ -150,7 +151,9 @@ describe('DEFAULT_COMMENT_INSTRUCTIONS (the seeded AGENTS.md/CLAUDE.md content)'
   it('carries the machine contract + read/edit + anchor-preservation guidance', () => {
     expect(DEFAULT_COMMENT_INSTRUCTIONS).toContain('系统会自动'); // the bridge posts the reply, not the agent
     expect(DEFAULT_COMMENT_INSTRUCTIONS).toContain('纯文本'); // no-markdown output rule
-    expect(DEFAULT_COMMENT_INSTRUCTIONS).toContain('lark-cli'); // read/edit the doc via lark-cli
+    expect(DEFAULT_COMMENT_INSTRUCTIONS).toContain('feishu_doc_edit'); // read/edit with the Bot's own tools
+    expect(DEFAULT_COMMENT_INSTRUCTIONS).toContain('不要换别的身份'); // no other identity when the Bot lacks access
+    expect(DEFAULT_COMMENT_INSTRUCTIONS).not.toContain('lark-cli');
     expect(DEFAULT_COMMENT_INSTRUCTIONS).toContain('原文已被删除'); // anchor-preservation rule: don't delete the commented text
     expect(DEFAULT_COMMENT_INSTRUCTIONS).toContain('解决 / 删除'); // don't self-resolve/delete comments
   });
@@ -229,6 +232,31 @@ describe('comment instructions file lifecycle', () => {
     const { writeFileSync } = await import('node:fs');
     writeFileSync(master, edited, 'utf8');
     expect(await loadCommentInstructions(master)).toBe(edited);
+  });
+
+  it('moves a file still holding the lark-cli default on to the new one, and leaves any edit of it alone', async () => {
+    const root = tmp();
+    const master = join(root, 'comment-instructions.md');
+    const start = DEFAULT_COMMENT_INSTRUCTIONS.indexOf('- 需要看正文'), end = DEFAULT_COMMENT_INSTRUCTIONS.indexOf('- 改文档时绝不要');
+    const seeded = `${DEFAULT_COMMENT_INSTRUCTIONS.slice(0, start)}- 需要看正文，或用户要求"帮我改 / 优化 / 重写 / 细化这段"时，用 lark-cli 读 / 改这篇文档（{fileToken}）。\n${DEFAULT_COMMENT_INSTRUCTIONS.slice(end)}`;
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(master, seeded, 'utf8');
+    expect(currentCommentInstructions(seeded)).toBe(DEFAULT_COMMENT_INSTRUCTIONS);
+    expect(await loadCommentInstructions(master)).toBe(DEFAULT_COMMENT_INSTRUCTIONS);
+    expect(readFileSync(master, 'utf8')).toBe(DEFAULT_COMMENT_INSTRUCTIONS);
+    const edited = `${seeded}\n再加一条：回复不超过三句。`;
+    writeFileSync(master, edited, 'utf8');
+    expect(currentCommentInstructions(edited)).toBe(edited);
+    expect(await loadCommentInstructions(master)).toBe(edited);
+    expect(readFileSync(master, 'utf8')).toBe(edited);
+  });
+
+  it('moves a file still holding the default that could not read a base on to the new one', () => {
+    const seeded = DEFAULT_COMMENT_INSTRUCTIONS.replace('feishu_base 读多维表格，', '').replace('现在能读，不能改；', '现在不能改，多维表格的内容也读不到；');
+    expect(seeded).not.toBe(DEFAULT_COMMENT_INSTRUCTIONS);
+    expect(currentCommentInstructions(seeded)).toBe(DEFAULT_COMMENT_INSTRUCTIONS);
+    expect(DEFAULT_COMMENT_INSTRUCTIONS).toContain('feishu_base');
+    expect(DEFAULT_COMMENT_INSTRUCTIONS).not.toContain('读不到');
   });
 
   it('does NOT overwrite an existing blank/whitespace master file (uses default for the run, leaves file intact)', async () => {

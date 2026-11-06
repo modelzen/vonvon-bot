@@ -150,10 +150,11 @@ function answerSummary(request: AskRequest, answer: AskAnswer): string {
   }).join('\n');
 }
 
-export function buildAskCard(input: { request: AskRequest; from?: { name?: string }; state: AskCardState; respondents: readonly { openId: string; name: string }[]; scope?: 'group' | 'dm' }): CardObject {
+export function buildAskCard(input: { request: AskRequest; from?: { name?: string }; state: AskCardState; respondents: readonly { openId: string; name: string }[]; scope?: 'group' | 'dm' | 'own' }): CardObject {
   const { request, state, respondents, scope = 'group' } = input;
   const elements: CardElement[] = [];
   if (scope === 'dm') elements.push(md('这是群里 agent 问的问题。答案只交给 agent，不会出现在群里。'));
+  // 'own': the question of this private chat's own session; it is in the window of the only person who answers it.
   if (request.kind === 'choices') {
     for (const question of request.questions) {
       elements.push(md(`**${question.title}**\n${question.detail}`));
@@ -163,6 +164,7 @@ export function buildAskCard(input: { request: AskRequest; from?: { name?: strin
   elements.push(md(`回答后：${request.acceptedConsequence}\n\n未回答或拒绝后：${request.declinedConsequence}`));
   if (scope === 'group') elements.push(md(`可回答：${respondents.length ? respondents.map(person => `<at id="${person.openId}">${person.name}</at>`).join('、') : '等待指定成员回答'}`));
   if (state.kind === 'pending') {
+    if (scope === 'dm') elements.push(note('点卡片回答，或回复这张卡'));
     if (scope === 'group' && isSensitiveAsk(request)) {
       elements.push(md('🔒 这个问题要填敏感信息，不在群里显示输入框。我已经私聊了能回答的人，请在和我的私聊里回答；答完这里会更新。'));
     } else if (request.kind === 'choices') {

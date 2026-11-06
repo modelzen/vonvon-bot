@@ -62,7 +62,7 @@ export async function connectLocal(options: { home: string; cliEntry: string; cr
         });
       },
     };
-    return { client: createClient(connection), serverInfo };
+    return { client: createClient(connection, serverInfo.capabilities), serverInfo };
   } catch (error) {
     socket.terminate();
     throw error;

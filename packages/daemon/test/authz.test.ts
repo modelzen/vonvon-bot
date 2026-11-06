@@ -32,7 +32,7 @@ it('lets the owner do everything, a connection of another protocol only the main
 it('gives a group session only what its work needs, and the not-dm sentence for the settings writes', () => {
   const cells = (want: (cell: string) => boolean) => [...RULES].filter(([, rule]) => want(rule.places.group)).map(([kind]) => kind).sort();
   expect(cells(cell => cell === 'host')).toEqual(['admin.negotiate', 'command.listGroupMembers', 'snapshot.get']);
-  expect(cells(cell => cell === 'bot')).toEqual(['memory.add', 'memory.archive', 'memory.edit', 'memory.list',
+  expect(cells(cell => cell === 'bot')).toEqual(['command.feishuRead', 'memory.add', 'memory.archive', 'memory.edit', 'memory.list',
     'schedule.create', 'schedule.delete', 'schedule.edit', 'schedule.list', 'schedule.pause', 'schedule.resume', 'schedule.runNow']);
   expect(cells(cell => cell === 'not-dm')).toEqual(['collaboration.createProject', 'collaboration.editProject', 'command.setPermission', 'command.setResponse',
     'settings.act.adminMember', 'settings.act.commentInstructions', 'settings.act.projectAudience', 'settings.act.projectMember', 'settings.act.voice',
@@ -42,7 +42,11 @@ it('gives a group session only what its work needs, and the not-dm sentence for 
     'collaboration.context', 'collaboration.project', 'collaboration.providerModels', 'library.list', 'admin.daemonStatus', 'memory.export', 'memory.events']) {
     expect(RULES.get(kind)?.places.group, kind).toBe('deny');
   }
-  // a private chat's cells as they were (its sessions come later); a comment's own group-less reads none of these either
-  expect(RULES.get('library.list')?.places).toEqual({ dm: 'host', group: 'deny', comment: 'deny' });
+  // dm-agent 5: who has a private chat is the owner's page, no session's: another administrator's name is not this one's to read
+  expect(RULES.get('memory.dmPeople')?.places).toEqual({ dm: 'deny', group: 'deny', comment: 'deny' });
+  // dm-agent 3.3. main 必败: the list never changes by chat, a private chat's included
+  expect(RULES.get('settings.act.adminMember')?.places).toEqual({ dm: 'deny', group: 'not-dm', comment: 'not-dm' });
+  // dm-agent 6.2: a private chat reads what a turn may; a comment's own group-less reads none of these either
+  expect(RULES.get('library.list')?.places).toEqual({ dm: 'bot', group: 'deny', comment: 'deny' });
   expect(RULES.get('settings.models')?.places).toEqual({ dm: 'bot', group: 'deny', comment: 'deny' });
 });

@@ -29,6 +29,8 @@ const MAX_NAMES = 2000;
 const LOOKUP_DEADLINE_MS = 3000;
 const LOOKUP_HARD_DEADLINE_MS = 15_000;
 const CONTACT_RETRY_MS = 30 * 60_000;
+const CONTACT_BATCH = 50;
+const PERSON_NAMES_TTL_MS = 5 * 60_000;
 
 interface NameEntry {
   /** undefined for a remembered miss. */
@@ -179,7 +181,7 @@ async function contactNames(channel: LarkChannel, ids: string[]): Promise<Map<st
 }
 
 /** The chat's members (first page). Throws on failure. */
-async function chatMemberNames(channel: LarkChannel, chatId: string): Promise<{ openId: string; name?: string }[]> {
+export async function chatMemberNames(channel: LarkChannel, chatId: string): Promise<{ openId: string; name?: string }[]> {
   const r = await channel.rawClient.im.v1.chatMembers.get({
     path: { chat_id: chatId },
     params: { member_id_type: 'open_id', page_size: 100 },
@@ -193,13 +195,42 @@ async function chatMemberNames(channel: LarkChannel, chatId: string): Promise<{ 
  */
 export async function resolveNames(channel: LarkChannel, ids: (string | undefined)[]): Promise<Map<string, string>> {
   const uniq = [...new Set(ids.filter((x): x is string => Boolean(x)))];
-  if (uniq.length === 0) return new Map();
-  try {
-    return await contactNames(channel, uniq);
-  } catch (err) {
-    log.info('console', 'resolve-names-fail', { n: uniq.length, err: String(err) });
-    return new Map();
+  const out = new Map<string, string>();
+  // contact.batch takes 50 ids at most; a chunk that fails leaves the others their names
+  for (let i = 0; i < uniq.length; i += CONTACT_BATCH) {
+    const chunk = uniq.slice(i, i + CONTACT_BATCH);
+    try {
+      for (const [id, name] of await contactNames(channel, chunk)) out.set(id, name);
+    } catch (err) {
+      log.info('console', 'resolve-names-fail', { n: chunk.length, err: String(err) });
+    }
   }
+  return out;
+}
+
+/**
+ * {@link resolveNames} for the administrators page, which asks again at every read: answers, and misses too, are kept
+ * for a few minutes, and a read that takes longer than the deadline shows the names it has.
+ */
+export function createPersonNames(channel: LarkChannel, opts: { now?: () => number; ttlMs?: number; deadlineMs?: number } = {}): (ids: readonly string[]) => Promise<Map<string, string>> {
+  const now = opts.now ?? Date.now;
+  const ttlMs = opts.ttlMs ?? PERSON_NAMES_TTL_MS;
+  const deadlineMs = opts.deadlineMs ?? LOOKUP_DEADLINE_MS;
+  const kept = new Map<string, { name?: string; until: number }>();
+  return async ids => {
+    const wanted = [...new Set(ids)];
+    const missing = wanted.filter(id => (kept.get(id)?.until ?? 0) <= now());
+    if (missing.length) {
+      const asked = resolveNames(channel, missing).then(found => {
+        for (const id of missing) kept.set(id, { name: found.get(id) ?? kept.get(id)?.name, until: now() + ttlMs });
+        return found;
+      });
+      await withDeadline(asked, deadlineMs, 'person-names');
+    }
+    const out = new Map<string, string>();
+    for (const id of wanted) { const name = kept.get(id)?.name; if (name) out.set(id, name); }
+    return out;
+  };
 }
 
 /** 拉群成员（open_id + 姓名）。该接口**不返回机器人成员**（天然排除 bot），也能拿到

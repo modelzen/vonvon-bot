@@ -22,7 +22,7 @@ vi.mock('../src/bot/session-store', async (original) => ({ ...await original<obj
   getSession: async () => undefined, listSessions: async () => [], patchSession: async () => undefined, upsertSession: async () => undefined }));
 vi.mock('../src/bot/session-title-coordinator', () => ({ SessionTitleCoordinator: class { startRecovery() {} async register() {} async shutdown() {} } }));
 vi.mock('../src/bot/comments', async original => ({ ...await original<object>(),
-  resolveComment: async () => ({ target: { fileType: 'docx', fileToken: 'fixture-doc' }, ctx: { question: 'fixture question', isWhole: true } }),
+  resolveComment: async (_channel: unknown, evt: { fileType: string }) => ({ target: { fileType: evt.fileType, fileToken: 'fixture-doc' }, ctx: { question: 'fixture question', isWhole: true } }),
   commentCwd: () => fake.commentCwd, loadCommentInstructions: async () => 'fixture instructions', syncCommentInstructions: async () => undefined,
   postCommentReply: async () => undefined }));
 vi.mock('../src/card/run-card-stream', () => ({
@@ -57,27 +57,36 @@ function orchestrator() {
     cardkit: { v1: { card: { create: async () => ({ data: { card_id: 'card' } }) } } },
     im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'omt_new' }] } }), list: ok, reply: ok, create: ok },
       chat: { get: async () => { throw new Error('no scope'); } }, messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) } } } } };
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] } } };
   return { o: createOrchestrator(channel as never, cfg, root), startThread };
 }
 const message = (): NormalizedMessage => ({ messageId: `msg-${++seq}`, chatId: 'chat', chatType: 'group', content: '每天 9 点发日报', senderId: 'owner',
   senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false });
 
 describe('profileOf', () => {
-  it.each(['qa', 'write', 'full'] as const)('gives a bound group\'s session the schedule tools in the %s tier', async mode => {
+  it.each([['qa', {}], ['write', { feishuEdit: true }], ['full', { feishuEdit: true }]] as const)('gives a bound group\'s session the schedule tools in the %s tier, and the edit tool above read-only', async (mode, edit) => {
     fake.project = { name: 'g', chatId: 'chat', cwd: join(root, 'work'), kind: 'multi', mode, createdAt: 1, blank: false };
     const { o, startThread } = orchestrator();
     await o.onMessage(message());
     await vi.waitFor(() => expect(startThread).toHaveBeenCalled());
-    expect(startThread.mock.calls[0]![0].profile?.tools).toEqual({ schedule: true });
+    // No `feishuApi`: the generic tool is a private chat's (dm-agent 7.6), asserted in dm-turn.test.ts.
+    expect(startThread.mock.calls[0]![0].profile?.tools).toEqual({ schedule: true, feishu: true, ...edit });
     await o.shutdown();
   });
-  it('gives a comment\'s session none', async () => {
+  it('gives a comment\'s session no schedule tools, the document column, and the edit tool on a docx', async () => {
     fake.project = undefined;
     const { o, startThread } = orchestrator();
     await o.onComment({ fileType: 'docx', fileToken: 'fixture-doc', commentId: 'comment', replyId: 'one', mentionedBot: true, operator: { openId: 'owner' }, timestamp: Date.now() });
     await vi.waitFor(() => expect(startThread).toHaveBeenCalled());
-    expect(startThread.mock.calls[0]![0].profile?.tools).toEqual({ schedule: false });
+    expect(startThread.mock.calls[0]![0].profile?.tools).toEqual({ schedule: false, feishu: true, feishuEdit: true, documentsOnly: true });
+    await o.shutdown();
+  });
+  it('gives a comment on a spreadsheet the same reads and no edit tool', async () => {
+    fake.project = undefined;
+    const { o, startThread } = orchestrator();
+    await o.onComment({ fileType: 'sheet', fileToken: 'fixture-sheet', commentId: 'comment-sheet', replyId: 'one', mentionedBot: true, operator: { openId: 'owner' }, timestamp: Date.now() });
+    await vi.waitFor(() => expect(startThread).toHaveBeenCalled());
+    expect(startThread.mock.calls[0]![0].profile?.tools).toEqual({ schedule: false, feishu: true, documentsOnly: true });
     await o.shutdown();
   });
 });
@@ -89,9 +98,9 @@ describe('the profile on its way to a backend', () => {
     const execution = resolveExecution({ group: { cwd, mode: 'qa', directories: { workspaces: { primary: cwd, additional: [extra] } } } });
     const built = await executionSessionProfile({ execution, cwd, backend: 'claude-agent', scope: 'group', profile: { ...base, tools: { schedule: true } }, dataDir: join(root, 'data') });
     expect(built).toMatchObject({ additionalRoots: [{ path: extra, access: 'read' }], tools: { schedule: true } });
-    expect(resolveSessionProfile(built, { additionalRoots: true }).tools).toEqual({ schedule: true });
-    expect(resolveSessionProfile(base).tools).toEqual({ schedule: false });
-    expect(resolveSessionProfile().tools).toEqual({ schedule: false });
+    expect(resolveSessionProfile(built, { additionalRoots: true }).tools).toEqual({ schedule: true, feishu: false });
+    expect(resolveSessionProfile(base).tools).toEqual({ schedule: false, feishu: false });
+    expect(resolveSessionProfile().tools).toEqual({ schedule: false, feishu: false });
   });
   it('keeps dynamicTools out of the params Codex start and resume share (T3b adds them on thread/start only)', () => {
     for (const schedule of [true, false]) {

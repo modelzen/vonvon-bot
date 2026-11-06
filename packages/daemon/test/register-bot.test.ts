@@ -213,6 +213,7 @@ describe('registerBotFromCredentials · ownerOpenId（扫码人 = owner+admin）
     const cfg = JSON.parse(readFileSync(botPaths('cli_owner123456').configFile, 'utf8'));
     expect(cfg.preferences.access.ownerOpenId).toBe('ou_scanner');
     expect(cfg.preferences.access.admins).toContain('ou_scanner');
+    expect(cfg.preferences.access.firstHelloPending).toBe(true); // the first hello is owed to a new bot only
   });
 
   it('ownerOpenId 为空 → 拒绝保存无人可管理的配置', async () => {
@@ -278,12 +279,20 @@ describe('targeted credential refresh', () => {
     expect(JSON.stringify(result)).not.toContain('replacement');
   });
 
-  it.each(['wrong-app', 'wrong-tenant', 'wrong-scanner', 'abort', 'stale', 'rejected'] as const)('refuses %s without writing any encrypted data', async failure => {
+  it('does not make a greeted bot new again', async () => {
+    const f = await fixture();
+    const config = JSON.parse(readFileSync(f.files.configFile, 'utf8'));
+    delete config.preferences.access.firstHelloPending;
+    writeFileSync(f.files.configFile, JSON.stringify(config));
+    await refreshBotCredentials(f.appId, f.options, vi.fn(async () => f.creds), okValidate);
+    expect(JSON.parse(readFileSync(f.files.configFile, 'utf8')).preferences.access.firstHelloPending).toBeUndefined();
+  });
+
+  it.each(['wrong-app', 'wrong-tenant', 'abort', 'stale', 'rejected'] as const)('refuses %s without writing any encrypted data', async failure => {
     const f = await fixture();
     const beforeSecret = readFileSync(paths.secretsFile, 'utf8');
     const register = vi.fn(async () => {
       if (failure === 'wrong-app') f.creds.clientId = 'cli_unrelated';
-      if (failure === 'wrong-scanner') f.creds.operatorOpenId = 'ou_stranger';
       if (failure === 'abort') f.abort.abort();
       if (failure === 'stale') writeFileSync(f.files.configFile, `${f.before[0]} `);
       return failure === 'wrong-tenant' ? { ...f.creds, tenant: 'lark' as const } : f.creds;
@@ -294,6 +303,25 @@ describe('targeted credential refresh', () => {
     expect(readFileSync(paths.secretsFile, 'utf8')).toBe(beforeSecret);
     expect(JSON.stringify(result)).not.toContain('replacement');
     expect(await getSecret(secretKeyForApp(f.appId))).toBe('original');
+  });
+
+  // product.md section 6: only the app is checked, so a creator taken off the list can still change the credentials. main 必败
+  it.each([
+    ['someone off the list', { operatorOpenId: 'ou_stranger' }],
+    ['a scan that names nobody', { operatorOpenId: undefined }],
+  ])('takes the scan of %s for the same app', async (_name, scan) => {
+    const f = await fixture();
+    expect(await refreshBotCredentials(f.appId, f.options, async () => ({ ...f.creds, ...scan }), okValidate)).toMatchObject({ ok: true, appId: f.appId });
+    expect(await getSecret(secretKeyForApp(f.appId))).toBe('replacement');
+    expect(readFileSync(f.files.configFile, 'utf8')).toBe(f.before[0]);
+  });
+
+  it('takes a scan for a bot with no creator on record', async () => {
+    const f = await fixture();
+    const config = JSON.parse(f.before[0]!);
+    delete config.preferences.access.ownerOpenId;
+    writeFileSync(f.files.configFile, JSON.stringify(config));
+    expect(await refreshBotCredentials(f.appId, f.options, async () => f.creds, okValidate)).toMatchObject({ ok: true, adminOpenId: 'ou_admin' });
   });
 
   it('honors cancellation during validation before encrypted commit', async () => {

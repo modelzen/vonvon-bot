@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const scheduleRefusalSchema = z.enum([
-  'not-group',           // 私聊、评论会话；chat actor 的 listBot
+  'not-group',           // 评论会话；群里点名别的群、群里的 listBot
   'not-found',           // 没有这个任务，或者它不属于这个群（跨群一律按不存在）
   'not-task-owner',      // 成员改别人建的
   'scheduled-run-scope', // 无人回合碰别的任务
@@ -43,10 +43,11 @@ const nameSchema = z.string().trim().min(1).max(40);
 const instructionSchema = z.string().trim().min(1).max(4000);
 export const scheduledTaskViewSchema = z.object({
   id: z.string(), botId: z.string(), chatId: z.string(),
+  dm: z.object({ name: z.string().optional() }).strict().optional(), // chatId 是这个 Bot 的一个私聊时才有：私聊里的那个人，不存盘（dm-agent 第 8 节）
   revision: z.string(),                   // 只在配置变化时换（见 4.2）
   name: nameSchema, instruction: instructionSchema,
   spec: scheduleSpecSchema, timeZone: z.string(), placement: schedulePlacementSchema,
-  state: z.enum(['active', 'paused', 'finished']), pausedReason: z.enum(['manual', 'failures', 'unavailable']).optional(),
+  state: z.enum(['active', 'paused', 'finished']), pausedReason: z.enum(['manual', 'failures', 'unavailable', 'admin-removed']).optional(),
   createdBy: scheduleCreatorSchema, createdAt: z.number().int(), updatedAt: z.number().int(),
   nextRunAt: z.number().int().optional(), running: z.boolean(),
   counts: z.object({ runs: z.number().int(), missed: z.number().int(), skipped: z.number().int(), consecutiveFailures: z.number().int() }).strict(),
@@ -59,7 +60,7 @@ const target = { taskId: z.string() };
 const patchSchema = z.object({ name: nameSchema, instruction: instructionSchema, spec: scheduleSpecSchema, placement: schedulePlacementSchema, timeZone: z.string() }).partial().strict();
 export const scheduleRequestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('list'), chatId: z.string() }).strict(),
-  z.object({ action: z.literal('listBot') }).strict(),                                   // 只给桌面端和终端
+  z.object({ action: z.literal('listBot') }).strict(),                                   // 给桌面端、终端和私聊
   z.object({ action: z.literal('create'), chatId: z.string(), name: nameSchema, instruction: instructionSchema, spec: scheduleSpecSchema,
     placement: schedulePlacementSchema.optional(), timeZone: z.string().optional() }).strict(),
   z.object({ action: z.literal('edit'), chatId: z.string(), ...target, revision: z.string(), patch: patchSchema }).strict(),

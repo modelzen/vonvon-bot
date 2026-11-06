@@ -67,7 +67,7 @@ const LEASED = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon res
  */
 export const LOCAL_ONLY: ReadonlySet<string> = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'service install', 'service uninstall', 'service status',
   'update', 'remote status', 'remote enable', 'remote disable', 'remote port', 'remote candidates', 'pair', 'clients ls', 'clients rename', 'clients revoke', 'device rename',
-  'bot repair-dir', 'open', '__standalone-setup', '__standalone-teardown']);
+  'bot remove', 'bot repair-dir', 'open', '__standalone-setup', '__standalone-teardown']);
 /** A command's full name without `vonvon`: `daemon restart`, `pair`. */
 const commandPath = (command: Command): string => {
   const names: string[] = [];
@@ -88,7 +88,7 @@ export function parseScope(spec: string): Scope {
   if (!scope.bot) throw wrong();
   return { bot: scope.bot, ...(scope.group ? { group: scope.group } : {}) };
 }
-program.option('--scope <spec>', "The Bot session's scope, bot=<appId>[,group=<chatId>]; a Bot session's commands must carry it: --scope \"$VONVON_SCOPE\"");
+program.option('--scope <spec>', "The Bot session's scope, bot=<appId>[,group=<chatId>]; a group's or a comment's session must carry it: --scope \"$VONVON_SCOPE\". A private chat's needs none");
 program.hook('preAction', async (_command, action) => {
   const path = commandPath(action);
   const supervised = path === 'daemon run' && typeof process.send === 'function';
@@ -370,6 +370,7 @@ Examples:
   vonvon memory add "周四发版" --project 研发 --branch 发版
   vonvon memory archive <itemId> --project 研发 --revision <r>     # r: memory list 里的 r 数字
   vonvon memory events <itemId> --project 研发                     # 每行最后是 memory undo 要的事件 id
+  vonvon memory people --bot 小研                                  # 私聊过这个 Bot 的人，第一列是 --dm 要的 id
   vonvon memory list --bot 小研 --dm ou_xxx                        # 这个 Bot 和这个人的私聊记忆`);
 const memoryScope = (command: Command) => command.option('--project <project>', 'Project name or id (prj_…)').option('--bot <bot>', "Bot name or appId: its own memory")
   .option('--dm <openId>', "With --bot: the bot's private chat memory with this person").option(...JSON_FLAG);
@@ -379,6 +380,9 @@ type MemoryOptions = Json & { project?: string; bot?: string; dm?: string; branc
 const REVISION = ['--revision <n>', 'The revision vonvon memory list shows (r…)'] as const;
 memoryScope(covers(memory.command('list'), 'memory.list').description('List the entries by branch')).option('--all', 'Also list the archived entries; --json always has them').action(async (options: MemoryOptions) => {
   await (await memoryCommands()).runMemoryList(options, await memoryTerminal(options));
+});
+covers(memory.command('people'), 'memory.dmPeople').description("Who has talked to a bot in private, with how much memory; the id is what --dm takes").requiredOption('--bot <bot>', 'Bot name or appId').option(...JSON_FLAG).action(async (options: MemoryOptions) => {
+  await (await memoryCommands()).runMemoryPeople(options, await memoryTerminal(options));
 });
 memoryScope(covers(memory.command('export'), 'memory.export').description('One markdown document per branch')).action(async (options: MemoryOptions) => {
   await (await memoryCommands()).runMemoryExport(options, await memoryTerminal(options));
@@ -416,9 +420,9 @@ memoryScope(covers(memory.command('branch-delete <name>'), 'memory.branchDelete'
   .option('--expected <n>', 'The entry count you saw; a branch changed since is left as it is'))
   .action(async (name: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryBranchDelete(name, options, await memoryTerminal(options)); });
 const settings = program.command('settings').description('Read and change bot, group and session settings');
-type Target = Json & { bot?: string; group?: string; session?: string; host?: boolean; revision?: string; reason?: string };
+type Target = Json & { bot?: string; group?: string; session?: string; host?: boolean; dm?: boolean; revision?: string; reason?: string };
 const READ = ['settings.read.agent', 'settings.read.project', 'settings.read.session', 'settings.read.host'];
-const scoped = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--session <threadId>', 'Session thread id')
+const scoped = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--dm', "The bot's private chat (私聊), not with --group or --session").option('--session <threadId>', 'Session thread id')
   .option('--host', "This computer's own settings (the web page's 本机), for every bot; not with --bot, --group or --session").option('--json', 'Print JSON');
 scoped(covers(settings.command('get [section]'), ...READ, 'settings.sessions').description('Show settings, or one section; `get judge` also prints the whole judge prompt')).action(async (section: string | undefined, options: Target) => {
   await (await import('./commands/settings')).runSettingsGet(section, options, io(options));
@@ -440,6 +444,8 @@ Examples:
   vonvon settings set judge.selection='{"kind":"llm","model":"gpt-6-luna","effort":"low"}'
   vonvon settings set judge.selection='{"kind":"decision","provider":"typesafe","model":"jev-latest"}'   # 决策模型，各后端的群都用
   vonvon settings set --group oc_xxx judge.selection='{"kind":"default"}'   # 群里去掉覆盖，用 bot 的
+  vonvon settings set --dm model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'   # 私聊只能改 model、speed、modelAccess、skills、conversation、smartRules、judge
+  vonvon settings set --group oc_xxx smartRules.respond='"第一段\\n\\n第二段"'   # 文字要换行时写成带引号的 JSON，普通文字里的 \\n 不是换行
   vonvon settings set --host execution.codexBin=/usr/local/bin/codex      # 本机：Codex 可执行文件，null 回到自动找`)
   .action(async (assignments: string[], options: Target) => {
     await (await import('./commands/settings')).runSettingsSet(assignments, options, io(options));
@@ -470,10 +476,11 @@ covers(settingsAct.command('comment-instructions'), 'settings.act.commentInstruc
   });
 covers(settings.command('models'), 'settings.models').description("List the models a settings page's model picker offers")
   .option('--backend <backend>', 'codex, claude, or an id like codex-appserver').option('--purpose <purpose>', 'project, session, comments, titles or judge')
-  .option('--session <threadId>', 'Session thread id; needed for --purpose session').option('--refresh', 'Ask the Provider again now (刷新); without it the list it last read').option(...BOT).option(...JSON_FLAG)
+  .option('--session <threadId>', 'Session thread id; needed for --purpose session').option('--refresh', 'Ask the Provider again now (刷新); without it the list it last read')
+  .option('--dm', "The private chat's picker: its own Provider and --purpose project, unless given").option(...BOT).option(...JSON_FLAG)
   .addHelpText('after', `
 These are what a bot's model picker offers for one use; every model a Provider reports is vonvon provider models <codex|claude>.`)
-  .action(async (options: Json & { bot?: string; backend?: string; purpose?: string; session?: string; refresh?: boolean }) => {
+  .action(async (options: Json & { bot?: string; backend?: string; purpose?: string; session?: string; refresh?: boolean; dm?: boolean }) => {
     await (await import('./commands/settings')).runSettingsModels(options, io(options));
   });
 const schedule = program.command('schedule').description('List and change the scheduled tasks of a group (定时任务)')
@@ -486,9 +493,12 @@ Examples:
   vonvon schedule add --group 研发群 --name 发版提醒 --at "2026-11-01 14:00" --tz Asia/Tokyo "提醒大家 15:00 发版"
   vonvon schedule edit st_xxx --group 研发群 --revision <r> --daily 10:00   # revision 见 list --json
   vonvon schedule pause st_xxx --group 研发群
-  vonvon schedule runs st_xxx --group 研发群                # 总次数和最近 20 次`);
+  vonvon schedule runs st_xxx --group 研发群                # 总次数和最近 20 次
+  vonvon schedule list --dm                               # 这个 Bot 私聊里的任务
+  vonvon schedule add --dm --to ou_xxx --name 早报 --daily 09:00 "把今天的安排发给我"   # 只有一位管理员私聊过时可以不写 --to
+  vonvon schedule pause st_xxx --dm`);
 type ScheduleOptions = Json & Omit<ScheduleTarget, 'taskId' | 'instruction'>;
-const inGroup = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--json', 'Print JSON');
+const inGroup = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--dm', "The bot's private chat (私聊), not with --group or --all").option('--json', 'Print JSON');
 const timing = (command: Command) => command
   .option('--every <interval>', 'Every 30m or 2h').option('--daily <HH:mm>', 'Every day at this time').option('--weekly <days@HH:mm>', 'mon,wed@10:00; days mon to sun')
   .option('--at <time>', 'Once, "YYYY-MM-DD HH:mm" in --tz, else in the task\'s time zone on edit and the daemon\'s on add').option('--cron <expr>', 'Standard 5 fields, like "0 9 * * 1-5"')
@@ -499,6 +509,7 @@ const runSchedule = async (action: ScheduleAction, target: Json & ScheduleTarget
 inGroup(covers(schedule.command('list'), 'schedule.list', 'schedule.listBot').description("List a group's tasks, or with --all every group's")).option('--all', "Every group's tasks of the bot")
   .action(async (options: ScheduleOptions) => { await runSchedule('list', options); });
 timing(inGroup(covers(schedule.command('add <instruction>'), 'schedule.create').description('Add a task: --name, one time option and what to do'))).option('--new-topic', 'Post each run in a new topic')
+  .option('--to <openId>', 'With --dm: whose private chat the task posts to, an administrator who has talked to the bot')
   .action(async (instruction: string, options: ScheduleOptions) => { await runSchedule('add', { ...options, instruction }); });
 timing(inGroup(covers(schedule.command('edit <taskId> [instruction]'), 'schedule.edit').description('Change a task; give only what changes'))).requiredOption('--revision <revision>', 'The revision schedule list --json shows')
   .option('--new-topic', 'Post each run in a new topic').option('--follow', "Post each run the way the group's conversation mode does")
@@ -585,15 +596,67 @@ covers(remote.command('disable [ip]'), 'device.disable').description('Stop accep
   .action(async (ip: string | undefined, options: Json) => { await (await remotes()).runRemote('disable', ip === undefined ? {} : { host: ip }, io(options)); });
 covers(remote.command('port <port>'), 'device.setPort').description('Change the remote port (default 7767); paired clients paste a new link once, no pairing again').option(...JSON_FLAG)
   .action(async (port: string, options: Json) => { await (await remotes()).runRemote('port', { port }, io(options)); });
-const feishu = program.command('feishu').description('Read Feishu groups and members');
+const feishu = program.command('feishu').description("Read Feishu as a bot: groups, messages, documents. A bot sees what its app was granted and shared; --bot picks which one")
+  .addHelpText('after', `
+Without --bot: in a Bot session the session's bot, or for a group the bot bound to it; in a terminal the bot bound to the group, or the only bot.
+A group's session reads only its own group's messages, files and members.`);
 covers(feishu.command('groups'), 'command.listJoinedGroups').description('List joined groups, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
   .action(async (options: Json & { bot?: string; cursor?: string }) => {
-    await (await import('./commands/feishu')).runFeishu('groups', undefined, options, io(options));
+    await (await import('./commands/feishu')).runFeishuGroups(options, io(options));
   });
-covers(feishu.command('members <groupId>'), 'command.listGroupMembers').description('List group members, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
-  .action(async (groupId: string, options: Json & { bot?: string; cursor?: string }) => {
-    await (await import('./commands/feishu')).runFeishu('members', groupId, options, io(options));
-  });
+type FeishuOptions = Json & { bot?: string; cursor?: string; limit?: number; name?: string };
+const FEISHU_CURSOR = ['--cursor <cursor>', 'Next page cursor'] as const;
+const FEISHU_LIMIT = ['--limit <n>', 'How many at most', Number] as const;
+const FEISHU_NAME = ['--name <name>', 'Save as this file name'] as const;
+/** dm-agent 7.3: each read is its tool's, argument for argument (`command.feishuRead`). */
+const feishuRead = (usage: string, description: string) => covers(feishu.command(usage), 'command.feishuRead').description(description).option(...BOT).option(...JSON_FLAG);
+const readFeishu = async (tool: string, args: Record<string, unknown>, options: FeishuOptions): Promise<void> => {
+  await (await import('./commands/feishu')).runFeishuRead(tool, args, options, io(options));
+};
+feishuRead('members [groupId]', 'List group members a bot can see, with their open_ids, one page').option(...FEISHU_CURSOR)
+  .action((chat: string | undefined, options: FeishuOptions) => readFeishu('feishu_members', { chat, cursor: options.cursor }, options));
+feishuRead('messages [groupId]', "Read a group's or a topic's messages, one page").option('--thread <id>', 'Read this topic (omt_…)').option('--start <time>', 'Earliest, YYYY-MM-DD HH:mm').option('--end <time>', 'Latest, YYYY-MM-DD HH:mm')
+  .addOption(new Option('--order <order>', 'newest first, or oldest first').choices(['newest', 'oldest'])).option(...FEISHU_LIMIT).option(...FEISHU_CURSOR)
+  .action((chat: string | undefined, options: FeishuOptions & { thread?: string; start?: string; end?: string; order?: string }) => readFeishu('feishu_messages',
+    { chat, thread: options.thread, start: options.start, end: options.end, order: options.order, limit: options.limit, cursor: options.cursor }, options));
+feishuRead('message <messageId>', 'Read one message whole; a merged forward is expanded').option(...FEISHU_CURSOR)
+  .action((messageId: string, options: FeishuOptions) => readFeishu('feishu_message', { messageId, cursor: options.cursor }, options));
+feishuRead('file <messageId> <fileKey>', "Download a message's image or file, and print where it went").addOption(new Option('--type <type>', 'image or file, as the message lists it').choices(['image', 'file']).makeOptionMandatory()).option(...FEISHU_NAME)
+  .action((messageId: string, fileKey: string, options: FeishuOptions & { type: string }) => readFeishu('feishu_file', { messageId, fileKey, type: options.type, name: options.name }, options));
+feishuRead('chat [groupId]', "Read a group's name, description and announcement").option(...FEISHU_CURSOR)
+  .action((chat: string | undefined, options: FeishuOptions) => readFeishu('feishu_chat', { chat, cursor: options.cursor }, options));
+feishuRead('doc <doc>', 'Read a document or a knowledge-base page; give its link or token').option(...FEISHU_CURSOR)
+  .action((doc: string, options: FeishuOptions) => readFeishu('feishu_doc', { doc, cursor: options.cursor }, options));
+feishuRead('sheet <sheet>', 'List a sheet\'s tabs, or read a range; give its link or token').option('--range <range>', 'What to read, like <sheetId>!A1:D20').option(...FEISHU_CURSOR)
+  .action((sheet: string, options: FeishuOptions & { range?: string }) => readFeishu('feishu_sheet', { sheet, range: options.range, cursor: options.cursor }, options));
+feishuRead('base <base>', "Read a multi-dimensional table's tables, fields, views or records; give its link or token")
+  .addOption(new Option('--what <what>', 'What to read').choices(['tables', 'fields', 'views', 'records'])).option('--table <id>', 'The table (tbl…)').option('--view <id>', 'The view (vew…)')
+  .option('--fields <names>', 'Only these fields, comma separated').option('--filter <json>', 'Records to keep, as JSON: {"conjunction":"and","conditions":[{"field":"…","operator":"is","value":["…"]}]}').option(...FEISHU_LIMIT).option(...FEISHU_CURSOR)
+  .action(async (base: string, options: FeishuOptions & { what?: string; table?: string; view?: string; fields?: string; filter?: string }) => { await readFeishu('feishu_base',
+    { base, what: options.what, table: options.table, view: options.view, fields: options.fields?.split(','), filter: options.filter === undefined ? undefined : await (await import('./commands/feishu')).jsonArgument('--filter', options.filter), limit: options.limit, cursor: options.cursor }, options); });
+feishuRead('slides <slides>', 'Read a slide deck whole, as XML; give its link or token').option(...FEISHU_CURSOR)
+  .action((slides: string, options: FeishuOptions) => readFeishu('feishu_slides', { slides, cursor: options.cursor }, options));
+feishuRead('mindnote <mindnote>', 'Read a mind note, as indented text; give its link or token').option(...FEISHU_CURSOR)
+  .action((mindnote: string, options: FeishuOptions) => readFeishu('feishu_mindnote', { mindnote, cursor: options.cursor }, options));
+feishuRead('board <board>', "Read a whiteboard's text and links; give its link or token").option(...FEISHU_CURSOR)
+  .action((board: string, options: FeishuOptions) => readFeishu('feishu_board', { board, cursor: options.cursor }, options));
+feishuRead('minutes <minutes>', "Read a Minutes recording's details and transcript; give its link or token").option(...FEISHU_CURSOR)
+  .action((minutes: string, options: FeishuOptions) => readFeishu('feishu_minutes', { minutes, cursor: options.cursor }, options));
+feishuRead('drive <file>', 'Download a cloud-drive file, and print where it went; give its link or token').option(...FEISHU_NAME)
+  .action((file: string, options: FeishuOptions) => readFeishu('feishu_drive_file', { file, name: options.name }, options));
+feishuRead('folder [folder]', "List a cloud-drive folder; give its link or token, or none for the bot's own root").option(...FEISHU_LIMIT).option(...FEISHU_CURSOR)
+  .action((folder: string | undefined, options: FeishuOptions) => readFeishu('feishu_folder', { folder, limit: options.limit, cursor: options.cursor }, options));
+feishuRead('wiki [wiki]', 'List the knowledge bases a bot can see, or a base\'s or a page\'s pages; give a link or an id').option(...FEISHU_LIMIT).option(...FEISHU_CURSOR)
+  .action((wiki: string | undefined, options: FeishuOptions) => readFeishu('feishu_wiki', { wiki, limit: options.limit, cursor: options.cursor }, options));
+feishuRead('comments <doc>', "Read a document's comments and replies; give its link or token")
+  .addOption(new Option('--type <type>', "A bare token's type, docx by default").choices(['doc', 'docx', 'sheet', 'file', 'slides', 'bitable'])).option('--comment <id>', "Only this comment's replies")
+  .option('--solved', 'Only the solved ones').option('--unsolved', 'Only the unsolved ones').option(...FEISHU_LIMIT).option(...FEISHU_CURSOR)
+  .action((doc: string, options: FeishuOptions & { type?: string; comment?: string; solved?: boolean; unsolved?: boolean }) => readFeishu('feishu_comments',
+    { doc, type: options.type, comment: options.comment, solved: options.solved ? true : options.unsolved ? false : undefined, limit: options.limit, cursor: options.cursor }, options));
+feishuRead('doc-media <token>', "Download a document's picture or attachment; its token is in what `feishu doc` reads").option(...FEISHU_NAME)
+  .action((token: string, options: FeishuOptions) => readFeishu('feishu_doc_media', { token, name: options.name }, options));
+feishuRead('search <query>', 'Search messages, one page').option('--group <groupId>', 'Only this group').option(...FEISHU_LIMIT).option(...FEISHU_CURSOR)
+  .action((query: string, options: FeishuOptions & { group?: string }) => readFeishu('feishu_search', { query, chat: options.group, limit: options.limit, cursor: options.cursor }, options));
 const env = program.command('env').description("This computer's tools and Provider components: the web page's 本机环境")
   .addHelpText('after', `
 <tool> is codex, claude or lark-cli. vonvon signs in lark-cli only; Codex and Claude sign in with their own commands.
@@ -767,8 +830,8 @@ covers(bridgeImport.command('rollback'), 'machine.bridgeImport.rollback').descri
 const context = program.command('context').description("What the model is handed (the web page's 模型看到什么)");
 covers(context.command('show'), 'contextPreview.get').description("vonvon's own parts a new session would get, and what the session was last handed")
   .option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--comment', 'Document comments instead of a group')
-  .option('--session <threadId>', "Which session; defaults to the group's latest").option(...JSON_FLAG)
-  .action(async (options: Json & { bot?: string; group?: string; comment?: boolean; session?: string }) => { await (await import('./commands/context')).runContextShow(options, io(options)); });
+  .option('--dm <openId>', "One person's private chat instead of a group").option('--session <threadId>', "Which session; defaults to the group's latest").option(...JSON_FLAG)
+  .action(async (options: Json & { bot?: string; group?: string; comment?: boolean; dm?: string; session?: string }) => { await (await import('./commands/context')).runContextShow(options, io(options)); });
 covers(program.command('now'), 'snapshot.get').description("What each bot is doing now and which groups it attends to (the web page's 此刻)").option(...BOT).option(...JSON_FLAG)
   .action(async (options: Json & { bot?: string }) => { await (await import('./commands/now')).runNow(options.bot, io(options)); });
 covers(program.command('snapshot'), 'snapshot.get').description("The web page's whole state: a summary, or all of it with --json").option(...JSON_FLAG)

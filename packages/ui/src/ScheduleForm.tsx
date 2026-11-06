@@ -103,15 +103,18 @@ export function scheduleRequest(draft: ScheduleDraft, context: {chatId: string; 
 }
 
 /** The read-only copy of what the user had typed, kept when someone else changed the task first. */
-export function draftSummary(draft: ScheduleDraft): string {
+export function draftSummary(draft: ScheduleDraft, dm = false): string {
   const when = {once: `一次 ${draft.at.replace('T', ' ')}`, every: `每 ${draft.minutes} 分钟`, daily: `每天 ${draft.time}`,
     weekly: `每周${draft.days.map(day => DAY_NAMES[day]).join('、')} ${draft.time}`, cron: `cron「${draft.expr}」`}[draft.when];
-  return [`名字：${draft.name}`, `什么时候：${when}（${draft.timeZone}）`, `发到哪：${placementText[draft.placement]}`, `要做什么：${draft.instruction}`].join('\n');
+  return [`名字：${draft.name}`, `什么时候：${when}（${draft.timeZone}）`, ...(dm ? [] : [`发到哪：${placementText[draft.placement]}`]), `要做什么：${draft.instruction}`].join('\n');
 }
 
-/** 新建 and 编辑. A conflict loads the task as it is now and keeps what the user typed below it, read-only. */
-export function ScheduleForm({chatId, task: opened, hostTimeZone, send, onClose, now = Date.now}: {
-  chatId: string; task?: ScheduledTaskView; hostTimeZone: string; send: ScheduleSend; onClose: () => void; now?: () => number;
+/**
+ * 新建 and 编辑. A conflict loads the task as it is now and keeps what the user typed below it, read-only. `chats`: the
+ * private chat's page, where a new task picks whose chat it posts to (a task already has one) and no chat has topics.
+ */
+export function ScheduleForm({chatId, chats, task: opened, hostTimeZone, send, onClose, now = Date.now}: {
+  chatId?: string; chats?: readonly {value: string; label: string}[]; task?: ScheduledTaskView; hostTimeZone: string; send: ScheduleSend; onClose: () => void; now?: () => number;
 }) {
   const id = useId();
   const [task, setTask] = useState(opened);
@@ -120,9 +123,13 @@ export function ScheduleForm({chatId, task: opened, hostTimeZone, send, onClose,
   const [stale, setStale] = useState('');
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
+  const [chosen, setChosen] = useState(chats?.[0]?.value);
+  const dm = chats !== undefined || Boolean(opened?.dm);
   const set = (change: Partial<ScheduleDraft>) => setDraft(current => ({...current, ...change}));
   async function save() {
-    const request = scheduleRequest(draft, {chatId, now: now(), task, initial});
+    const target = task?.chatId ?? chosen ?? chatId;
+    if (target === undefined) {setError('先选发给谁。'); return;}
+    const request = scheduleRequest(draft, {chatId: target, now: now(), task, initial});
     if ('error' in request) {setError(request.error); return;}
     setPending(true); setError('');
     try {
@@ -130,7 +137,7 @@ export function ScheduleForm({chatId, task: opened, hostTimeZone, send, onClose,
       if (reply.kind === 'task') return onClose();
       if (reply.kind === 'conflict') {
         const fresh = scheduleDraft(reply.current, hostTimeZone);
-        setStale(draftSummary(draft)); setTask(reply.current); setInitial(fresh); setDraft(fresh); setError(scheduleConflict);
+        setStale(draftSummary(draft, dm)); setTask(reply.current); setInitial(fresh); setDraft(fresh); setError(scheduleConflict);
       } else setError(reply.kind === 'refused' ? refusalText(reply) : '没有保存，请重试。');
     } catch (failure) {setError(failure instanceof Error ? failure.message : '没有保存，请重试。');}
     finally {setPending(false);}
@@ -142,6 +149,7 @@ export function ScheduleForm({chatId, task: opened, hostTimeZone, send, onClose,
   return <Dialog open title={opened ? '编辑任务' : '新建任务'} onClose={pending ? undefined : onClose}
     footer={<><Button disabled={pending} onClick={onClose}>取消</Button><Button variant="primary" loading={pending} onClick={() => void save()}>保存</Button></>}><div className="schedule-form">
     <FormField label="名字" htmlFor={field('name')}><input id={field('name')} value={draft.name} disabled={pending} autoComplete="off" onChange={event => set({name: event.target.value})}/></FormField>
+    {chats && !opened && chosen !== undefined && <FormField label="发给谁"><SettingChoices label="发给谁" value={chosen} choices={[...chats]} disabled={pending} onChange={setChosen}/></FormField>}
     <FormField label="要做什么" htmlFor={field('instruction')}><textarea id={field('instruction')} rows={4} value={draft.instruction} disabled={pending} onChange={event => set({instruction: event.target.value})}/></FormField>
     <FormField label="什么时候"><SettingChoices label="什么时候" value={draft.when} choices={whenChoices} disabled={pending} onChange={when => set({when})}/></FormField>
     {draft.when === 'once' && <FormField label="时间" htmlFor={field('at')}><input id={field('at')} type="datetime-local" value={draft.at} disabled={pending} onChange={event => set({at: event.target.value})}/></FormField>}
@@ -152,7 +160,7 @@ export function ScheduleForm({chatId, task: opened, hostTimeZone, send, onClose,
     </fieldset>}
     {(draft.when === 'daily' || draft.when === 'weekly') && <FormField label="几点" htmlFor={field('time')}><input id={field('time')} type="time" value={draft.time} disabled={pending} onChange={event => set({time: event.target.value})}/></FormField>}
     {draft.when === 'cron' && <FormField label="cron" htmlFor={field('cron')} description="5 段，用空格隔开：分 时 日 月 星期。例如 0 9 * * 1-5 是每个工作日 09:00。"><input id={field('cron')} value={draft.expr} disabled={pending} autoComplete="off" spellCheck={false} onChange={event => set({expr: event.target.value})}/></FormField>}
-    <FormField label="发到哪"><SettingChoices label="发到哪" value={draft.placement} choices={placements} disabled={pending} onChange={placement => set({placement})}/></FormField>
+    {!dm && <FormField label="发到哪"><SettingChoices label="发到哪" value={draft.placement} choices={placements} disabled={pending} onChange={placement => set({placement})}/></FormField>}
     <FormField label="时区" htmlFor={field('zone')} description={<>Vonvon 所在电脑的时区是 {hostTimeZone}{unknown && <><br/>这个时区这里不认识，上面的时间按 {shownZone(draft.timeZone, hostTimeZone)} 显示；换成认识的时区后保存</>}</>}><input id={field('zone')} value={draft.timeZone} disabled={pending} autoComplete="off" spellCheck={false} onChange={event => set({timeZone: event.target.value})}/></FormField>
     {error && <InlineNotice title="没有保存" tone="warning">{error}</InlineNotice>}
     {stale && <FormField label="你刚才填的" htmlFor={field('stale')}><textarea id={field('stale')} rows={6} readOnly value={stale}/></FormField>}

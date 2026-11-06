@@ -1,12 +1,14 @@
 import { constants, existsSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
+import { renameOverReaders } from '../server/atomic-file';
+import { randomInt, randomUUID } from 'node:crypto';
+import { badgeNumberSchema } from '@vonvon/protocol';
+import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { paths, botDir, botPaths } from './paths';
 import { loadConfig } from './store';
 import { isComplete, type TenantBrand, type AppConfig, type AppPreferences } from './schema';
 import { acquireMutex, closeMutex } from './data-access';
-import { type Allocation, type ObjectIdentity, SafeAppIdSchema, parseAllocations, ensureDurableDirectory, directoryIdentity, materializeAllocation, materializeDirectory, planDirectory, planAllocation, recordCurrent as recordAt, restoreParent, sameObject, syncDirectory, verifyDirectory } from './bot-namespace';
+import { type Allocation, type DirectoryClaim, type ObjectIdentity, SafeAppIdSchema, parseAllocations, ensureDurableDirectory, directoryIdentity, materializeAllocation, materializeDirectory, planDirectory, planAllocation, recordCurrent as recordAt, restoreParent, sameObject, syncDirectory, verifyDirectory } from './bot-namespace';
 import { DirectoryError, directoryError } from './directory-errors';
 import { resolveProjectsRootDir, type DirectorySettings } from './directories';
 import { groupAllocationKey, parseGroupNamespaces, type GroupNamespaceState } from './group-namespace';
@@ -21,6 +23,8 @@ export interface BotEntry {
   /** bot display name from credential validation (best-effort, for `bots` list) */
   botName?: string;
   createdAt: number;
+  /** Printed on the badge. Keep as a string so a number such as 007 survives a save. */
+  badgeNumber?: string;
   /** New registrations get an incarnation; old rows remain absent until re-registration. */
   registrationId?: string;
   /**
@@ -44,7 +48,30 @@ export interface BotsRegistry extends GroupNamespaceState {
   current?: string;
   bots: BotEntry[];
   allocations?: Record<string, Allocation>;
+  /** Automatic issuance history survives a bot being renumbered or removed. */
+  badgeIssuance?: BadgeIssuance;
 }
+
+interface BadgeIssuance {
+  usedFavorites: string[];
+  /** One past the maximum means the sequential range is exhausted. */
+  nextSequential: number;
+}
+
+const BADGE_FAVORITES = [
+  // Powers of two and familiar HTTP status codes.
+  '128', '256', '512', '1024', '2048', '4096', '8192', '200', '404', '418',
+  // Mathematical constants, the first primes, Ramanujan's number and Kaprekar's constant.
+  '314', '3141', '2718', '1618', '1414', '1732', '2236', '2357', '1729', '6174',
+  // Books, films and games: Bond, the answer to everything, Star Trek, System Shock and more.
+  '007', '042', '1138', '1984', '2001', '2010', '1701', '0451', '1985', '9527',
+  // Lucky numbers and Chinese homophones.
+  '168', '518', '520', '521', '666', '777', '888', '999', '1314', '1688',
+  // Internet favorites, runs and repeating digits.
+  '2333', '4242', '1234', '4321', '1111', '2222', '3333', '6666', '8888', '9999',
+];
+const firstSequentialBadge = 10_000;
+const lastSequentialBadge = 9_999_999;
 
 const emptyRegistry = (): BotsRegistry => ({ version: 1, bots: [] });
 
@@ -89,7 +116,7 @@ async function publish(reg: BotsRegistry): Promise<void> {
     try { await file.writeFile(content, 'utf8'); await file.sync(); }
     catch (error) { failed = true; throw error; }
     finally { try { await file.close(); } catch (error) { if (!failed) throw error; } }
-    await rename(tmp, paths.botsFile);
+    await renameOverReaders(tmp, paths.botsFile);
     await syncDirectory(dirname(paths.botsFile));
   } catch (error) { primaryError = error; throw error; }
   finally {
@@ -147,7 +174,76 @@ function ownBots<T>(operation: (registry: BotsRegistry) => Promise<T>): Promise<
 }
 
 export function ensureRegistry(): Promise<BotsRegistry> {
-  return ownBots(async registry => registry);
+  return ownBots(async registry => {
+    const claimed = new Set<string>();
+    const pending: BotEntry[] = [];
+    for (const bot of registry.bots) {
+      if (bot.badgeNumber && badgeNumberSchema.safeParse(bot.badgeNumber).success && !claimed.has(bot.badgeNumber)) {
+        claimed.add(bot.badgeNumber);
+      } else {
+        pending.push(bot);
+      }
+    }
+    const issuance = badgeIssuanceFor(registry);
+    if (pending.length || issuance.usedFavorites.length !== (registry.badgeIssuance?.usedFavorites.length ?? 0)) {
+      for (const bot of pending) {
+        bot.badgeNumber = allocateBadgeNumber(issuance, claimed);
+        claimed.add(bot.badgeNumber);
+      }
+      registry.badgeIssuance = issuance;
+      await publish(registry);
+    }
+    return registry;
+  });
+}
+
+/** Work on a copy: the next number is committed in the same publish as its bot. */
+function badgeIssuanceFor(registry: BotsRegistry, newManualNumber?: string): BadgeIssuance {
+  const stored = registry.badgeIssuance;
+  if (stored !== undefined && (!stored || !Array.isArray(stored.usedFavorites)
+    || stored.usedFavorites.length > BADGE_FAVORITES.length || !stored.usedFavorites.every(number => BADGE_FAVORITES.includes(number))
+    || !Number.isInteger(stored.nextSequential) || stored.nextSequential < firstSequentialBadge || stored.nextSequential > lastSequentialBadge + 1)) {
+    throw new Error('工号发放记录损坏，请检查 Bot 注册表。');
+  }
+  const used = new Set(stored?.usedFavorites);
+  for (const bot of registry.bots) {
+    if (bot.badgeNumber && BADGE_FAVORITES.includes(bot.badgeNumber)) used.add(bot.badgeNumber);
+  }
+  if (newManualNumber && BADGE_FAVORITES.includes(newManualNumber)) used.add(newManualNumber);
+  return {usedFavorites: [...used], nextSequential: stored?.nextSequential ?? firstSequentialBadge};
+}
+
+function allocateBadgeNumber(issuance: BadgeIssuance, claimed: ReadonlySet<string>): string {
+  const available = BADGE_FAVORITES.filter(number => !issuance.usedFavorites.includes(number));
+  if (available.length) {
+    const number = available[randomInt(available.length)]!;
+    issuance.usedFavorites.push(number);
+    return number;
+  }
+  for (let number = issuance.nextSequential; number <= lastSequentialBadge; number++) {
+    if (!claimed.has(String(number))) {
+      issuance.nextSequential = number + 1;
+      return String(number);
+    }
+  }
+  throw new Error('自动工号已发完（上限 9999999），无法分配新的工号。');
+}
+
+export function setBotBadgeNumber(appId: string, badgeNumber: string): Promise<{ok: true} | {ok: false; reason: string}> {
+  return ownBots(async registry => {
+    const entry = registry.bots.find(bot => bot.appId === appId);
+    if (!entry) return {ok: false, reason: '没有找到这个 Bot，请刷新后重试。'};
+    if (!badgeNumberSchema.safeParse(badgeNumber).success) return {ok: false, reason: '请输入 1 至 7 位数字。'};
+    if (registry.bots.some(bot => bot.appId !== appId && bot.badgeNumber === badgeNumber)) {
+      return {ok: false, reason: '这个工号已有 Bot 使用。'};
+    }
+    if (entry.badgeNumber !== badgeNumber) {
+      registry.badgeIssuance = badgeIssuanceFor(registry, badgeNumber);
+      entry.badgeNumber = badgeNumber;
+      await publish(registry);
+    }
+    return {ok: true};
+  });
 }
 
 export type BotIdentity = Readonly<Pick<BotEntry, 'appId' | 'tenant' | 'createdAt' | 'registrationId'>>;
@@ -180,16 +276,7 @@ export function withBotGroupBinding<T>(expected: BotIdentity, group: { chatId: s
     const key = groupAllocationKey({ ...identity, chatId: input.chatId });
     const previous = registry.groupAllocations?.[key];
     return operation({ allocatedPath: previous?.state === 'ready' ? previous.namespaceRoot : undefined, prepareDefault: () => directoryError(entry.name, async () => {
-      let bot = registry.allocations?.[entry.appId];
-      if (!bot) {
-        if (Object.keys(registry.allocations ?? {}).length >= 4096) throw new Error('Bot allocation limit reached');
-        bot = await planAllocation({ ...entry, handle: entry.name, parent: input.projectsRootDir, dataDir: paths.appDir }, registry.allocations ?? {});
-        registry.allocations = { ...registry.allocations, [entry.appId]: bot };
-        await publish(registry);
-      }
-      validateAccountClaim(registry, bot, entry);
-      const readyBot = await materializeBot(registry, bot);
-      await publish(registry);
+      const readyBot = await readyBotDirectory(registry, entry, input.projectsRootDir);
       let container = registry.groupContainers?.[entry.appId];
       if (!container) {
         container = { version: 1, appId: entry.appId, tenant: entry.tenant,
@@ -218,6 +305,69 @@ export function withBotGroupBinding<T>(expected: BotIdentity, group: { chatId: s
       return { cwd: claim.namespaceRoot, blank: true as const, directories: { workspaces: { primary: claim.namespaceRoot, additional: [] } } };
     }) });
   });
+}
+
+/**
+ * The bot's private-chat folder, `dm` in its stable directory (dm-agent 4.1; made on first use, like `groups`, so a bot
+ * without a group gets its directory here). A fixed name under a directory only the bot allocates in, so unlike a
+ * group's it needs no record of its own. A bot with no directory yet takes it under `projectsRootDir`, as its first
+ * group would have. Making it again is a no-op.
+ */
+export function ensureBotDmDirectory(expected: BotIdentity, projectsRootDir: string): Promise<string> {
+  const identity = { ...expected };
+  return ownBots(async registry => {
+    const entry = registry.bots.find(bot => bot.appId === identity.appId);
+    if (!entry || !sameIdentity(entry, identity)) throw new Error('机器人已移除或重新注册，请重启');
+    await assertBridgeImportReservation(paths.appDir, identity.appId);
+    return directoryError(entry.name, async () => {
+      let readyBot: Extract<Allocation, { state: 'ready' }>;
+      try { readyBot = await readyBotDirectory(registry, entry, projectsRootDir); }
+      catch (error) {
+        // A restored data directory (or a new mount number after a restart) keeps these paths but not their
+        // filesystem identities. Only this app-owned subtree can be reconciled without operator intervention.
+        if (!(error instanceof Error && ['Namespace parent changed', 'Namespace directory changed'].includes(error.message))) throw error;
+        const recovered = await recoverManagedBotDirectory(registry, entry);
+        if (!recovered) throw error;
+        readyBot = recovered;
+      }
+      const folder = join(readyBot.namespaceRoot, 'dm');
+      await inspectDmDirectory(folder, true);
+      await ensureDurableDirectory(folder, async () => {
+        await verifyDirectory(readyBot, paths.appDir);
+        await inspectDmDirectory(folder, true);
+      });
+      await inspectDmDirectory(folder, false);
+      await verifyDirectory(readyBot, paths.appDir);
+      return folder;
+    });
+  });
+}
+
+/** A DM leaf is app-owned too: never follow an existing link, including a dangling one. */
+async function inspectDmDirectory(folder: string, allowMissing: boolean): Promise<void> {
+  try {
+    const entry = await lstat(folder);
+    if (entry.isSymbolicLink() || !entry.isDirectory()) throw new Error('Invalid namespace directory');
+  } catch (error) {
+    if (allowMissing && error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  if (await realpath(folder) !== folder) throw new Error('Namespace path changed');
+}
+
+/** The bot's stable directory, allocated under `projectsRootDir` when it has none, and checked or made; published. */
+async function readyBotDirectory(registry: BotsRegistry, entry: BotEntry, projectsRootDir: string): Promise<Extract<Allocation, { state: 'ready' }>> {
+  let bot = registry.allocations?.[entry.appId];
+  if (!bot) {
+    if (Object.keys(registry.allocations ?? {}).length >= 4096) throw new Error('Bot allocation limit reached');
+    bot = await planAllocation({ ...entry, handle: entry.name, parent: projectsRootDir, dataDir: paths.appDir }, registry.allocations ?? {});
+    registry.allocations = { ...registry.allocations, [entry.appId]: bot };
+    await publish(registry);
+  }
+  validateAccountClaim(registry, bot, entry);
+  const ready = await materializeBot(registry, bot);
+  await publish(registry);
+  return ready;
 }
 
 /**
@@ -251,6 +401,73 @@ function adoptParent(registry: BotsRegistry, appId: string, level: 'bot' | 'cont
 
 /** `others`: the registered bots under the same projects root whose records still name the root as it was. */
 export type DirectoryRepair = { handle: string; recorded: number; missing: number; others: string[] };
+
+/** Re-record a complete tree in memory. Callers publish only after every directory has passed their policy. */
+async function recordBotTree(registry: BotsRegistry, allocation: Allocation, parentIdentity: ObjectIdentity,
+  recordCurrent: typeof recordAt): Promise<Pick<DirectoryRepair, 'recorded' | 'missing'>> {
+  const appId = allocation.appId;
+  const result = { recorded: 0, missing: 0 };
+  const count = (present: boolean): void => { if (present) result.recorded++; else result.missing++; };
+  const bot = await recordCurrent(allocation, parentIdentity, paths.appDir);
+  registry.allocations = { ...registry.allocations, [appId]: bot.record };
+  count(bot.present);
+  const container = registry.groupContainers?.[appId];
+  if (bot.present && bot.record.state === 'ready' && container) {
+    const groups = await recordCurrent(container, bot.record.object, paths.appDir);
+    registry.groupContainers = { ...registry.groupContainers, [appId]: groups.record };
+    count(groups.present);
+    if (groups.present && groups.record.state === 'ready') {
+      for (const [key, claim] of Object.entries(registry.groupAllocations ?? {})) {
+        if (claim.appId !== appId) continue;
+        const group = await recordCurrent(claim, groups.record.object, paths.appDir);
+        registry.groupAllocations = { ...registry.groupAllocations, [key]: group.record };
+        count(group.present);
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * DM startup may repair restored identities only inside <data>/projects. Custom roots still require repair-dir.
+ * Every existing directory must remain at its original canonical path, on the data volume, with no links or
+ * occupied reservations. Check a clone, including the group ledger, so a rejected descendant changes no records.
+ */
+async function recoverManagedBotDirectory(registry: BotsRegistry, entry: BotEntry): Promise<Extract<Allocation, { state: 'ready' }> | undefined> {
+  const allocation = registry.allocations?.[entry.appId];
+  if (!allocation || allocation.state !== 'ready') return undefined;
+  validateAccountClaim(registry, allocation, entry);
+  const dataRoot = await realpath(paths.appDir);
+  const parent = join(dataRoot, 'projects');
+  if (allocation.parent !== parent || dirname(allocation.namespaceRoot) !== parent) return undefined;
+  if (await realpath(parent) !== parent) return undefined;
+  const parentIdentity = await directoryIdentity(parent);
+  if (parentIdentity.dev !== (await directoryIdentity(dataRoot)).dev) return undefined;
+  const checked: Extract<DirectoryClaim, { state: 'ready' }>[] = [];
+  const recordManaged: typeof recordAt = async (record, owner, dataDir) => {
+    // recordAt also rejects links and changes in ancestor paths, including dangling links.
+    const current = await recordAt(record, owner, dataDir);
+    if (current.present) {
+      if (record.state !== 'ready') throw new Error('Reserved namespace already exists; recovery requires operator review');
+      if (current.record.state !== 'ready' || current.record.object.dev !== parentIdentity.dev) throw new Error('Namespace directory changed');
+      checked.push(current.record);
+    }
+    return current;
+  };
+  const next = structuredClone(registry);
+  await recordBotTree(next, allocation, parentIdentity, recordManaged);
+  const recovered = next.allocations?.[entry.appId];
+  // A missing bot directory is handled by ordinary materialization, not by taking over another tree.
+  if (!recovered || recovered.state !== 'ready' || !checked.some(record => record.namespaceRoot === recovered.namespaceRoot)) return undefined;
+  for (const record of checked) await verifyDirectory(record, paths.appDir);
+  await inspectDmDirectory(join(recovered.namespaceRoot, 'dm'), true);
+  await publish(next);
+  registry.allocations = next.allocations;
+  registry.groupContainers = next.groupContainers;
+  registry.groupAllocations = next.groupAllocations;
+  return recovered;
+}
+
 /**
  * `vonvon bot repair-dir`: after a migration or a restore from backup, take the bot's directories at their recorded
  * paths as its own again: the bot directory, its `groups` and each group's. A directory that is gone keeps its record
@@ -267,7 +484,6 @@ export function repairBotDirectories(wanted: string): Promise<DirectoryRepair> {
     if (!appId || !allocation) throw new Error(`没有找到「${target}」的目录记录：它不是这台电脑上注册的 bot，或者注册得早，还没分配过自己的目录。`);
     return directoryError(allocation.handle, async () => {
       const result: DirectoryRepair = { handle: allocation.handle, recorded: 0, missing: 0, others: [] };
-      const count = (present: boolean): void => { if (present) result.recorded++; else result.missing++; };
       const recordCurrent: typeof recordAt = (record, parent, dataDir) => recordAt(record, parent, dataDir).catch((error: unknown) => {
         if (!(error instanceof Error && error.message === 'Namespace path changed')) throw error;
         throw new DirectoryError(`「${allocation.handle}」的目录位置变了（比如换成了链接），只能按原来的路径重新记录。把目录放回原处后再运行。`, { cause: error });
@@ -281,24 +497,7 @@ export function repairBotDirectories(wanted: string): Promise<DirectoryRepair> {
       }
       result.others = Object.values(registry.allocations ?? {}).filter(record => record.appId !== appId && record.parent === allocation.parent
         && !sameObject(record.parentIdentity, parentIdentity) && registry.bots.some(bot => bot.appId === record.appId)).map(record => record.handle);
-      const bot = await recordCurrent(allocation, parentIdentity, paths.appDir);
-      registry.allocations = { ...registry.allocations, [appId]: bot.record };
-      count(bot.present);
-      const container = registry.groupContainers?.[appId];
-      if (bot.present && bot.record.state === 'ready' && container) {
-        const groups = await recordCurrent(container, bot.record.object, paths.appDir);
-        registry.groupContainers = { ...registry.groupContainers, [appId]: groups.record };
-        count(groups.present);
-        if (groups.present && groups.record.state === 'ready') {
-          const owner = groups.record.object;
-          for (const [key, claim] of Object.entries(registry.groupAllocations ?? {})) {
-            if (claim.appId !== appId) continue;
-            const group = await recordCurrent(claim, owner, paths.appDir);
-            registry.groupAllocations = { ...registry.groupAllocations, [key]: group.record };
-            count(group.present);
-          }
-        }
-      }
+      Object.assign(result, await recordBotTree(registry, allocation, parentIdentity, recordCurrent));
       await publish(registry);
       return result;
     });
@@ -322,6 +521,9 @@ export function registerBotEntry(
     if (previous && imported) throw new Error('Imported bot already registered');
     if (previous) return { kind: 'already-registered', entry: previous };
     if (!SafeAppIdSchema.safeParse(identity.appId).success) throw new Error('Invalid bot app ID');
+    const issuance = badgeIssuanceFor(registry);
+    const claimed = new Set(registry.bots.flatMap(bot => bot.badgeNumber ? [bot.badgeNumber] : []));
+    const badgeNumber = allocateBadgeNumber(issuance, claimed);
     const snapshot = await loadConfig(botPaths(identity.appId).configFile);
     const preferences = structuredClone(isComplete(snapshot) ? snapshot.preferences : identity.initialPreferences);
     const allocations = registry.allocations ?? {};
@@ -340,11 +542,12 @@ export function registerBotEntry(
     const pending = allocation;
     allocation = await directoryError(pending.handle, () => materializeBot(registry, pending));
     await publish(registry);
-    const entry: BotEntry = { appId: identity.appId, tenant: identity.tenant, botName: identity.botName,
+    const entry: BotEntry = { appId: identity.appId, tenant: identity.tenant, botName: identity.botName, badgeNumber,
       name: allocation.handle, createdAt: Date.now(), registrationId: imported?.registrationId ?? randomUUID() };
     await persistAccount(Object.freeze({ entry: Object.freeze({ ...entry }), snapshot: structuredClone(snapshot),
       preferences: structuredClone(preferences), namespaceRoot: allocation.namespaceRoot }));
     registry.bots.push(entry);
+    registry.badgeIssuance = issuance;
     registry.current ??= entry.appId;
     await publish(registry);
     return { kind: 'registered', entry };
@@ -360,6 +563,7 @@ export function reserveImportedBots(appIds: readonly string[], reserve: () => Pr
 }
 export function unregisterImportedBots(entries: readonly {appId: string; registrationId: string; handle?: string}[]): Promise<void> {
   return ownBots(async registry => {
+    registry.badgeIssuance = badgeIssuanceFor(registry);
     for (const entry of entries) {
       const existing = registry.bots.find(bot => bot.appId === entry.appId);
       if (existing && existing.registrationId !== entry.registrationId) throw new Error('Imported registration ownership changed');
@@ -434,6 +638,7 @@ export function removeBot(
     if (activeBots(registry).some(bot => bot.appId === identity.appId)) return { kind: 'active' };
     const allocation = registry.allocations?.[entry.appId];
     if (allocation) validateAccountClaim(registry, allocation, entry);
+    registry.badgeIssuance = badgeIssuanceFor(registry);
     await callbacks.cleanup();
     registry.bots = registry.bots.filter(bot => bot !== entry);
     if (registry.current === entry.appId) registry.current = registry.bots[0]?.appId;
