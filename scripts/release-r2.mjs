@@ -245,8 +245,11 @@ async function consume(body, expected, { keep = false } = {}) {
 async function publicObject(object, baseURL, fetchImpl, { mutable = false } = {}) {
   const url = objectURL(baseURL, object.key);
   // Ordinary exact URL GET: request no-cache or a nonce would hide a stale edge object.
-  const response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(r2TransferTimeout(object.bytes)) });
+  const response = await fetchImpl(url, { redirect: 'error', headers: { 'Accept-Encoding': 'identity' }, signal: AbortSignal.timeout(r2TransferTimeout(object.bytes)) });
   if (response.status !== 200) { await response.body?.cancel(); throw new Error(`Public mirror verification failed (HTTP ${response.status}): ${object.file}`); }
+  // Require original object bytes even if a CDN ignores Accept-Encoding and fetch decodes its response.
+  const encoding = response.headers.get('content-encoding');
+  if (encoding !== null && encoding.trim().toLowerCase() !== 'identity') { await response.body?.cancel(); throw new Error(`Public mirror Content-Encoding differs: ${object.file}`); }
   const control = response.headers.get('cache-control') ?? '';
   let validCache;
   if (mutable) {
