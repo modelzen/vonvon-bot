@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
-import { mkdir, open, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, realpath, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { z } from 'zod';
 import { paths } from '../config/paths';
+import { renameOverReaders } from '../server/atomic-file';
 import { acquireMutex, closeMutex, holdMutexRole } from '../config/data-access';
 import { syncDirectory } from '../config/bot-namespace';
 import { type PermissionMode, type ReasoningEffort } from '../agent/types';
@@ -121,7 +122,12 @@ export interface Project {
   migration?: { library?: number; memory?: number };
   /** This row is the bot's private chat (dm-agent 4.1): one per bot, kept out of everything about groups by
    * {@link listProjectsIn}. `people` is keyed by Feishu's p2p chat_id, one entry per admin who has written to the bot. */
-  dm?: { people: Record<string, DmPerson> };
+  dm?: {
+    people: Record<string, DmPerson>;
+    /** New offline-created DMs with no saved model use the Provider default, independent of future Bot edits.
+     * Absent on historical rows: preserve their original model fallback. */
+    useProviderDefault?: true;
+  };
 }
 /** `unionId`: from the Feishu event; another Bot pulls this person into a group by it (dm-agent 6.4). */
 export interface DmPerson { openId: string; unionId?: string; name?: string; at: number }
@@ -414,8 +420,7 @@ async function writeStored(location: RegistryLocation, body: Record<string, unkn
       catch (error) { failed = true; throw error; }
       finally { try { await file.close(); } catch (error) { if (!failed) throw error; } }
     } else await writeFile(tmp, serialized, 'utf8');
-    beforeCommit?.();
-    await rename(tmp, location.file);
+    await renameOverReaders(tmp, location.file, beforeCommit);
   } catch (error) {
     await unlink(tmp).catch(() => undefined);
     throw error;

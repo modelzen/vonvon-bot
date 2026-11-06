@@ -187,8 +187,10 @@ export const agentSchema = z.object({
   /** Which client opens this Bot; absent from older daemons, read as Feishu. */
   tenant: z.enum(["feishu", "lark"]).optional(),
   /** This Bot's private chat, with the synthetic group id `oc_dm_<appId>`. Beside `memberships`, so no group list, group
-   * directory or search picks it up; absent until the Bot has run once, and from older daemons. */
+   * directory or search picks it up; absent when preparation failed, and from older daemons. */
   dm: membershipSchema.optional(),
+  /** Private-chat preparation/read failure; independent of group configuration and absent from older daemons. */
+  dmError: z.string().optional(),
 });
 export type Agent = z.infer<typeof agentSchema>;
 /** A library project and the bindings that share it, as the snapshot shows them. */

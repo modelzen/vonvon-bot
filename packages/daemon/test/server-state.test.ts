@@ -48,6 +48,43 @@ describe('lossless admin state and pinned projection', () => {
     expect(projectState(none, empty, new Set()).agents[0]).not.toHaveProperty('dm');
   });
 
+  it.each([{ projects: [project] }, { projects: [] }])('keeps a private-chat preparation failure separate from readable groups (%#)', async ({ projects }) => {
+    const dmError = '私聊初始化失败：Bot 目录需要修复';
+    const state = await readAdminState({ listBots: async () => [bot], listProjects: async () => projects, dmRow: async () => { throw new Error(dmError); } });
+    expect(state.bots[0]).toEqual({ ...bot, projects, dmError });
+    const projected = projectState(state, empty, new Set());
+    expect(projected.stale).toBe(false);
+    expect(projected.agents[0]).toMatchObject({ dmError });
+    expect(projected.agents[0]).not.toHaveProperty('readError');
+    expect(projected.agents[0]).not.toHaveProperty('dm');
+    expect(projected.memberships.map(member => [member.groupId, member.stale])).toEqual(projects.map(item => [item.chatId, false]));
+    expect(projected.groups.map(group => group.id)).toEqual(projects.map(item => item.chatId));
+    expect(desktopSnapshotSchema.parse({ ...empty, ...projected }).agents[0]?.dmError).toBe(dmError);
+  });
+
+  it('keeps a previously readable private chat stale during its failure and clears the error after recovery', async () => {
+    const row: AdminProject = { ...project, name: '私聊', chatId: 'oc_dm_cli_test', cwd: '/tmp/dm', mode: 'full', noMention: true };
+    const good = await readAdminState({ listBots: async () => [bot], listProjects: async () => [project], dmRow: async () => row });
+    const previous = { ...empty, ...projectState(good, empty, new Set()) };
+    const bad = await readAdminState({ listBots: async () => [bot], listProjects: async () => [{ ...project, name: 'updated group' }], dmRow: async () => { throw new Error('私聊配置读取失败'); } });
+    const failed = { ...empty, ...projectState(bad, previous, new Set()) };
+    expect(failed.agents[0]?.dm).toEqual({ ...previous.agents[0]?.dm, stale: true });
+    expect(failed.agents[0]?.dmError).toBe('私聊配置读取失败');
+    expect(failed.memberships[0]).toMatchObject({ name: 'updated group', stale: false });
+    expect(failed.agents[0]).not.toHaveProperty('readError');
+    const recovered = projectState(good, failed, new Set());
+    expect(recovered.agents[0]?.dm).toEqual(previous.agents[0]?.dm);
+    expect(recovered.agents[0]).not.toHaveProperty('dmError');
+    expect(recovered.stale).toBe(false);
+  });
+
+  it('still reads private-chat state when only the group configuration fails', async () => {
+    const row: AdminProject = { ...project, name: '私聊', chatId: 'oc_dm_cli_test', cwd: '/tmp/dm' };
+    const state = await readAdminState({ listBots: async () => [bot], listProjects: async () => { throw new Error('invalid projects.json'); }, dmRow: async () => row });
+    expect(state.bots[0]).toMatchObject({ projectsError: 'invalid projects.json', dm: row });
+    expect(projectState(state, empty, new Set()).agents[0]?.dm).toMatchObject({ groupId: 'oc_dm_cli_test', stale: false });
+  });
+
   it('0.9.0 Mac 验收 B-1: puts a group\'s picture on the group once, not on each of its memberships', async () => {
     const pictured = { ...project, avatarDataUrl: 'data:image/png;base64,AAAA' };
     const state = await readAdminState({ listBots: async () => [bot, { ...bot, appId: 'cli_second' }], listProjects: async () => [pictured] });

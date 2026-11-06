@@ -20,10 +20,10 @@ export function projectState(state: AdminState, previous: DesktopSnapshot, pendi
     const agentId = agentIdSchema.parse(bot.appId);
     const duplicate = new Set(bot.projects.map(project => project.chatId)).size !== bot.projects.length;
     const readError = ('projectsError' in bot ? bot.projectsError : undefined) ?? (duplicate ? '同一个 Bot 存在冲突的群绑定，请在内核中修复。' : undefined);
-    // Beside the memberships, not among them: no group list, directory or search counts the private chat. A read that
-    // failed keeps the one the client has, as the groups below do.
+    // Private-chat failures do not invalidate healthy group bindings. Keep any previous DM only as stale.
     const previousDm = previous.agents.find(agent => agent.id === agentId)?.dm;
-    const dm = readError ? (previousDm && { ...previousDm, stale: true }) : 'dm' in bot && bot.dm ? membershipOf(agentId, bot.dm) : undefined;
+    const dmError = bot.dmError;
+    const dm = dmError ? (previousDm && { ...previousDm, stale: true }) : bot.dm ? membershipOf(agentId, bot.dm) : readError ? (previousDm && { ...previousDm, stale: true }) : undefined;
     agents.push({
       id: agentId, name: bot.botName || bot.name,
       ...(bot.badgeNumber ? { badgeNumber: bot.badgeNumber } : {}),
@@ -35,6 +35,7 @@ export function projectState(state: AdminState, previous: DesktopSnapshot, pendi
       activation: pending.has(bot.appId) || bot.active !== bot.running ? 'restartRequired' : 'active',
       ...(readError ? { readError } : {}),
       ...(dm ? { dm } : {}),
+      ...(dmError ? { dmError } : {}),
     });
     if (readError) {
       for (const member of previous.memberships.filter(member => member.agentId === bot.appId)) {

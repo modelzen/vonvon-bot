@@ -40,11 +40,11 @@ function rowStatusOf(member: Membership, status: Status, disabled: string): Stat
 /** A private chat is named after who is on the other side, as Feishu shows it, and carries that Bot's face. */
 export const dmTitle = (agent: Pick<Agent, 'name'>): string => `和 ${agent.name} 的私聊`;
 
-/** The private chat's row, or nothing until the Bot has run once and made it; it counts as no group. */
+/** The private chat's settings metadata; older daemons may omit it. It counts as no group. */
 export function dmRowOf(agent: Agent, status: Status) {
   if (!agent.dm) return undefined;
   const {provider, icon} = providerOf(agent.dm.backend);
-  const rowStatus = rowStatusOf(agent.dm, status, '私聊已停用');
+  const rowStatus: Status = agent.dmError ? {label: '暂不可用', tone: 'warning'} : rowStatusOf(agent.dm, status, '私聊已停用');
   return {provider, icon, tone: rowStatus.tone, exception: rowStatus.tone !== 'success' ? rowStatus.label : undefined};
 }
 
@@ -58,7 +58,13 @@ export function BotGroupList({snapshot, agent, busy, status, onJoin, onMembershi
   const groups = new Map(snapshot.groups.map(group => [group.id, group]));
   const dm = dmRowOf(agent, status);
   const dmMode = agent.dm && modeOf(agent.dm);
-  const dmRow = dm && agent.dm && <button
+  const dmRow = agent.dmError ? <div className="bot-group-list__row bot-group-list__row--failed" data-unavailable role="status">
+    <span className="bot-group-list__identity">
+      <AgentAvatar agent={agent}/><strong title={dmTitle(agent)}>{dmTitle(agent)}</strong>
+      <span className="bot-group-list__status" data-tone="warning">暂不可用</span>
+    </span>
+    <p className="bot-group-list__error">{agent.dmError}</p>
+  </div> : dm && agent.dm && <button
     type="button"
     className="bot-group-list__row"
     data-unavailable={dm.tone !== 'success' || undefined}
@@ -76,9 +82,9 @@ export function BotGroupList({snapshot, agent, busy, status, onJoin, onMembershi
   </button>;
   return <SettingsGroup
     className="bot-group-list"
-    label={<><span>{dm ? '私聊和飞书群' : '已加入的飞书群'}</span><span className="bot-group-list__count">{members.length}</span></>}
+    label={<><span>{dmRow ? '私聊和飞书群' : '已加入的飞书群'}</span><span className="bot-group-list__count">{members.length}</span></>}
     action={<JoinGroupButton disabled={busy || !agent.enabled || Boolean(agent.readError)} onClick={onJoin}/>}
-    footer={members.length ? dm ? '点开调整这个 Bot 在私聊或群里的设置。' : '点击群聊，调整这个 Bot 在该群中的设置。' : undefined}
+    footer={members.length ? dm && !agent.dmError ? '点开调整这个 Bot 在私聊或群里的设置。' : '点击群聊，调整这个 Bot 在该群中的设置。' : undefined}
   >
     {members.length ? <div className="bot-group-list__rows">
       {dmRow}
