@@ -117,8 +117,8 @@ describe('decision model request (s23f 做法（问法）)', () => {
   });
 
   it('shows the options and a sample state in place of the format lines and the text input', () => {
-    expect(Object.keys(DECISION_FORMAT_LINES)).toEqual(['main', 'topic']);
-    for (const variant of ['main', 'topic'] as const) {
+    expect(Object.keys(DECISION_FORMAT_LINES)).toEqual(['main', 'topic', 'dm']);
+    for (const variant of ['main', 'topic', 'dm'] as const) {
       expect(DECISION_FORMAT_LINES[variant].split('\n')[0]).toBe(JUDGE_FORMAT_HEADER);
       expect(DECISION_FORMAT_LINES[variant]).toContain('决策模型不读格式行');
     }

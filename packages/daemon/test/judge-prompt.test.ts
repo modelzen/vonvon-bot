@@ -39,14 +39,14 @@ describe('judge prompt', () => {
   });
 
   it('joins SMART.md, a blank line and the variant format lines', () => {
-    expect(Object.keys(JUDGE_ALLOWED)).toEqual(['main', 'topic']);
-    for (const variant of ['main', 'topic'] as const) {
+    expect(Object.keys(JUDGE_ALLOWED)).toEqual(['main', 'topic', 'dm']);
+    for (const variant of ['main', 'topic', 'dm'] as const) {
       const system = judgeSystem('SMART', variant);
       expect(system).toBe(`SMART\n\n${JUDGE_FORMAT_LINES[variant]}`);
       expect(JUDGE_FORMAT_LINES[variant].split('\n')[0]).toBe(JUDGE_FORMAT_HEADER);
       expect(JUDGE_FORMAT_LINES[variant].split('\n')[1]).toBe('你只做判断，不调用任何工具，不回答消息本身。');
     }
-    expect(new Set(Object.values(JUDGE_FORMAT_LINES)).size).toBe(2);
+    expect(new Set(Object.values(JUDGE_FORMAT_LINES)).size).toBe(3);
     expect(DEFAULT_SMART_PROMPT).toContain('拿不准时不回应');
     expect(judgeSchema('topic')).toMatchObject({ properties: { decision: { enum: ['skip', 'reply'] }, reason: { maxLength: 80 } } });
   });
