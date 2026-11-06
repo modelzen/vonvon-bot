@@ -564,6 +564,8 @@ export interface QueuedTurn {
   woven?: string[];
   /** The topics its record block quoted, marked seen with {@link seen} so each is quoted once. */
   seenExtra?: SeenMark[];
+  /** The private chat's messages it stands for, while a recall can still change what it says. */
+  burst?: DmBurst;
   /** Its record block carried the recent topics (SessionRecord.topicsDue), cleared once it starts. */
   tableShown?: boolean;
   /** The recall notes its block said (SessionRecord.recalls), dropped once it starts (s15). */
@@ -848,20 +850,22 @@ interface TurnExtra {
   initiative?: true;
   wake?: { name: string };
   /** A private chat's burst this turn stands for: its lines are in the text, so the record block leaves them out. */
-  burst?: ReadonlySet<string>;
+  burst?: DmBurst;
   /** A scheduled task's run (T2): never steers, nothing is ingested, every drop settles it. */
   scheduled?: ScheduledHook;
 }
 
 /** A smart group's message on its lane (s25). */
 /** The messages of a private chat that go on as one (see holdDm). */
-interface DmBurst {
+export interface DmBurst {
   place: string;
   msgs: NormalizedMessage[];
   timer?: unknown;
   /** One of them was recalled before the landing: the others went round again. */
   gone?: true;
 }
+
+const burstMarks = (burst: DmBurst | undefined): SeenMark[] => (burst?.msgs ?? []).map((msg) => ({ id: msg.messageId, at: msg.createTime }));
 
 interface SmartItem extends LaneEntry {
   at: number;
@@ -2255,11 +2259,21 @@ export function createOrchestrator(
       if (!burst.msgs.length) { time.clearTimer(burst.timer); dmBursts.delete(burst.place); }
       return;
     }
+    for (const state of active.values()) {
+      const queued = state.queue.find((turn) => turn.burst?.msgs.some((msg) => msg.messageId === id));
+      if (!queued) continue;
+      state.queue.splice(state.queue.indexOf(queued), 1);
+      resendBurst(queued.burst!);
+      return;
+    }
     const burst = dmSent.get(id);
     if (!burst) return;
     burst.gone = true;
     for (const msg of burst.msgs) dmSent.delete(msg.messageId);
     smartLanes.abort(burstTrigger(burst).messageId);
+    resendBurst(burst);
+  }
+  function resendBurst(burst: DmBurst): void {
     for (const msg of burst.msgs) if (!recalled.has(msg.messageId)) holdDm(msg);
   }
 
@@ -2550,7 +2564,10 @@ export function createOrchestrator(
     let context = recent.context(item.place, { id: msg.messageId, at: msg.createTime });
     if (look && (look.fresh.size > 1 || look.glance)) context = context.map((l) => l.id && look.fresh.has(l.id) ? { ...l, fresh: true as const } : l);
     const line = lineOfMessage(msg, name, quotedLine(recent, msg), JUDGE_INPUT_LIMITS.messageChars);
-    if (item.burst) context = context.filter((l) => !item.burst!.msgs.some((m) => m.messageId === l.id));
+    if (item.burst) {
+      context = context.filter((l) => !item.burst!.msgs.some((m) => m.messageId === l.id));
+      line.text = item.burst.msgs.map((m) => lineOfMessage(m, name, undefined, JUDGE_INPUT_LIMITS.messageChars).text).filter(Boolean).join('\n');
+    }
     const botName = channel.botIdentity?.name ?? '';
     context = context.map((l) => sameNameWord(l.text, botName) ? { ...l, sameNameWord: true as const } : l);
     if (sameNameWord(bareText(msg), botName)) line.sameNameWord = true;
@@ -2784,7 +2801,7 @@ export function createOrchestrator(
     if (decision !== 'topic') takeUpTo({ chatId: msg.chatId, place }, trig.createTime);
     const accepted = acceptAttention({ chatId: msg.chatId, place }, under?.senderId ?? trig.senderId, !wake, item.attentionGroup);
     log.info('intake', 'judge-landed', { ref, decision, variant, ...(look ? { glance: true, looked: look.length } : {}), ...(trig !== msg ? { trigger: trig.messageId.slice(-6) } : {}), ...(wake ? { wake: true } : {}), ...(under ? { anchor: under.id.slice(-6) } : {}) });
-    const extra: TurnExtra = { attentionAcceptance: accepted, ...(wake ? { wake: { name: wake.sender.name ?? '' } } : initiative ? { initiative: true as const } : {}), ...(item.burst ? { burst: new Set(item.burst.msgs.map((m) => m.messageId)) } : {}) };
+    const extra: TurnExtra = { attentionAcceptance: accepted, ...(wake ? { wake: { name: wake.sender.name ?? '' } } : initiative ? { initiative: true as const } : {}), ...(item.burst ? { burst: item.burst } : {}) };
     if (decision === 'topic') startTopicDirectly(msg, text, project, false, extra, under);
     else void trackTask(handleTurn(trig, turnText, ts.sessionKey, !trig.threadId, project, ts, extra)
       .catch((err) => log.fail('intake', err)));
@@ -3730,7 +3747,7 @@ export function createOrchestrator(
         // if the ACK is lost. Marked seen for the same reason, so the next
         // back-fill does not weave it again.
         dropRetries(sessionKey);
-        markSeen(sessionKey, { id: msg.messageId, at: msg.createTime });
+        markSeen(sessionKey, { id: msg.messageId, at: msg.createTime }, 'id', undefined, burstMarks(extra?.burst));
         try {
           entries?.noteSteer(cur.thread, { openId: msg.senderId, kind: askRequesterKind(msg) });
           await steerWithDeadline(cur.thread, { text: woven.text, images }, tid);
@@ -3878,6 +3895,7 @@ export function createOrchestrator(
         requestedAt: msg.createTime || Date.now(),
         summary: stripFileTokens(summaryText ?? text).slice(0, 80) || undefined,
         seen: { id: msg.messageId, at: msg.createTime },
+        ...(extra?.burst ? { burst: extra.burst, seenExtra: burstMarks(extra.burst) } : {}),
         origin,
         ...(extra?.initiative ? { initiative: true as const } : {}),
         wake: extra?.wake,
@@ -4033,7 +4051,7 @@ export function createOrchestrator(
           let history = codexEmpty
             ? pull.messages.filter((m) => m.createTime >= floor)
             : pull.messages.filter((m) => isUnread(prior, m.messageId, m.createTime));
-          if (extra?.burst) history = history.filter((m) => !extra.burst!.has(m.messageId));
+          if (extra?.burst) history = history.filter((m) => !extra.burst!.msgs.some((line) => line.messageId === m.messageId));
           const spec = codexEmpty ? await openingP : undefined;
           if (codexEmpty && rootId && !history.some(isRoot)) {
             // The topic's first message is no longer re-quoted every turn, so a new
@@ -4087,7 +4105,7 @@ export function createOrchestrator(
           });
           // The oldest line the new session got (s15), the trigger without one.
           const times = [...kept, ...topicsPart.opening?.main ?? []].map((m) => m.createTime).filter((t) => t > 0);
-          if (codexEmpty && pull.ok) openFrom = Math.min(now, ...times);
+          if (codexEmpty && pull.ok) openFrom = Math.min(now, ...times, ...burstMarks(extra?.burst).map((mark) => mark.at));
           log.info('intake', 'record-block', { place, lines: kept.length, earlier, opening: codexEmpty, ok: pull.ok, streaming: streaming.length,
             quotes: topicsPart.quotes?.length ?? 0, moreTopics: topicsPart.moreTopics ?? 0, table: topicsPart.table?.length ?? 0,
             ownRoots: topicsPart.refs?.length ?? 0, recalls: recalls.length, ...openingLog });
@@ -4224,7 +4242,7 @@ export function createOrchestrator(
           seenHow,
           streaming,
           woven,
-          seenExtra,
+          seenExtra: [...seenExtra, ...burstMarks(extra?.burst)],
           tableShown,
           recallsShown: notes.map((r) => r.id),
           from: openFrom,
