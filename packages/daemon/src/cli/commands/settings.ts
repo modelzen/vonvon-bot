@@ -26,7 +26,7 @@ export type Kind = 'agent' | 'project' | 'session' | 'host';
 export type Target = { bot?: string; group?: string; session?: string; host?: boolean; dm?: boolean; revision?: string; reason?: string };
 
 /** What a private chat shows, besides the group sections it does not have: the last two are fixed (dm-agent 4.2). */
-const DM_VIEW = ['model', 'speed', 'modelAccess', 'skills', 'permission', 'workspace', 'conversation', 'smartRules', 'judge'];
+const DM_VIEW = ['model', 'speed', 'modelAccess', 'skills', 'permission', 'workspace', 'conversation', 'smartRules', 'judge', 'run', 'presentation'];
 const TABLES: Record<Kind, Record<string, SectionSchema>> = { agent: agentSectionSchemas, project: projectEditableSchemas, session: sessionSectionSchemas, host: hostSectionSchemas };
 const sectionNames = (kind: Kind): string[] => Object.keys(TABLES[kind]);
 const FORMAT = '写成 节.项=值，例如 permission.mode=full';

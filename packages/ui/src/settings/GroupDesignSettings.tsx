@@ -3,6 +3,7 @@ import {DEFAULT_DM_SMART_RULES_TEXT, smartRulesText} from '@vonvon/protocol';
 import {Blocks, ChevronRight, Folder, GitBranch, Plus, RefreshCw, Search, X} from 'lucide-react';
 import {backendLabel, isKnownJudgeSelection, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
 import {useActiveDevice, useClient} from '../client-context';
+import {settingAnchor} from '../search';
 import {onDevice, updateServerText, whereName} from '../device-copy';
 import {useDirectoriesPicker} from '../directory-picker';
 import {Button, IconButton, InlineNotice, SelectControl, Toggle} from '../reference/components/ui';
@@ -12,6 +13,8 @@ import {Catalog, Editor, ProjectPanel, type CatalogControls, type Section, type 
 import {PersonaEditor} from './PersonaEditor';
 import {SmartRulesEditor, SMART_RULES_MAX_LENGTH} from './SmartRulesEditor';
 import {SettingChoices} from './SettingChoices';
+import {ConversationSlider, dmConversationModes} from './ConversationSlider';
+import {useDraftGuard} from './DraftGuard';
 import {useProviderDiscovery} from './useProviderDiscovery';
 import {DecisionFields, providerDecisionProblem} from './DecisionFields';
 export {DecisionFields} from './DecisionFields';
@@ -24,10 +27,6 @@ import './group-design-settings.css';
 /** 模型与权限 shares one settings view; permission remains a compatible internal section key. */
 export type GroupSettingsTab = 'capabilities' | 'role' | 'model' | 'response' | 'permission';
 const SUPPLEMENT_MAX = 5_000;
-const DM_MODES = [
-  {value: 'smart', label: '智能', description: '每条都看，不是每条都回。收尾的话留个表情。'},
-  {value: 'single', label: '单会话', description: '每条都回。'},
-] as const;
 type Scope = ProjectSettingsView['scope'];
 type GroupSections = ProjectSettingsView['sections'];
 type ModelAccess = NonNullable<GroupSections['modelAccess']>['stored'];
@@ -44,7 +43,7 @@ type Props = {
   onOpenSecrets?: (provider?: string) => void;
   responseHeader?: ReactNode;
   refreshVersion?: number;
-  /** The private chat's row: no 语音, and its permission and folder only shown (dm-agent 4.2). */
+  /** The private chat's row: its permission and folder are only shown, and it has no topics or members (dm-agent 4.2). */
   dm?: boolean;
 };
 const failText = (error: unknown) => error instanceof Error ? error.message : '暂时无法读取，请重试。';
@@ -92,13 +91,38 @@ function GroupSettingsLoader(props: Props) {
 /** What a private chat shows and does not let anyone change: one tier, one folder. */
 export function dmFixedRows(view: ProjectSettingsView): {title: string; value: string; description: string}[] {
   const {mode, options} = view.sections.permission.stored;
+  const tier = options.tiers.find(item => item.tier === mode);
   return [
-    {title: '执行权限', value: options.tiers.find(tier => tier.tier === mode)?.name ?? '完全访问', description: '私聊固定用这一档'},
+    {title: '执行权限', value: tier?.name ?? '完全访问', description: [tier?.summary, '私聊固定用这一档。'].filter(Boolean).join(' ')},
     {title: '目录', value: view.identity.cwd, description: '私聊专用，不能改'},
   ];
 }
 function DmFixedSettings({view}: {view: ProjectSettingsView}) {
-  return <SettingsGroup label="权限与目录">{dmFixedRows(view).map(row => <SettingsRow key={row.title} title={row.title} description={row.description} value={row.value}/>)}</SettingsGroup>;
+  const [tier, folder] = dmFixedRows(view);
+  return <SettingsGroup label="执行权限" id={settingAnchor('权限')} className="permission-summary">
+    <SettingsRow title={tier!.value} description={tier!.description}/>
+    <SettingsRow title={folder!.title} description={folder!.description} value={folder!.value}/>
+  </SettingsGroup>;
+}
+
+/** The group's 聊天方式 control, on the row's own setting instead of the group's binding. */
+function DmConversation({section, save}: {section: NonNullable<GroupSections['conversation']>; save: (patch: {mode: 'smart' | 'single'}, revision: string) => Promise<SettingsReply>}) {
+  const guard = useDraftGuard();
+  const [pending, setPending] = useState<'smart' | 'single'>();
+  const [problem, setProblem] = useState(false);
+  async function change(mode: 'smart' | 'single') {
+    setPending(mode); setProblem(false);
+    try {
+      const reply = await save({mode}, section.revision);
+      if (reply.kind !== 'saved' || reply.result.kind !== 'saved') setProblem(true);
+    } catch {setProblem(true);}
+    finally {setPending(undefined);}
+  }
+  return <div className="group-conversation-layout"><section id={settingAnchor('聊天方式')} className="group-conversation-choice" aria-label="聊天方式">
+    <h3>聊天方式</h3><ConversationSlider label="聊天方式" modes={dmConversationModes} value={(pending ?? section.stored.mode) === 'smart' ? 'smart' : 'shared'}
+      disabled={section.access.kind === 'readonly'} pending={pending !== undefined} onChange={next => guard.navigate(() => {void change(next === 'smart' ? 'smart' : 'single');})}/>
+    {problem && <p className="group-control-note" role="alert">没保存上，请再试一次。</p>}
+  </section></div>;
 }
 
 export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, onOpenProviders, onOpenSecrets, responseHeader, dm}: Omit<Props, 'scope'> & {view: ProjectSettingsView; refresh: () => Promise<void>}) {
@@ -141,7 +165,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
             onToggle={(path, enabled) => void commit({disabledPaths: toggleItem(draft.disabledPaths, path, !enabled)})}
             refresh={refresh}/>}/> : view.skillsError ? <InlineNotice title="技能尚未读取" tone="warning">{view.skillsError}<IconButton size="sm" variant="ghost" label="重新读取" title="重新读取" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></InlineNotice> : <MissingSection/>}
         {view.skills && view.skillsError && <p className="gd-note" role="status">{view.skillsError}</p>}
-        {sections.presentation && !dm && <Editor title="语音" section={sections.presentation} save={(patch, revision) => save('presentation', patch, revision)}
+        {sections.presentation && <Editor title="语音" section={sections.presentation} save={(patch, revision) => save('presentation', patch, revision)}
           render={(draft, _set, disabled, commit) => <SettingsRow title="语音转文字" trailing={<Toggle className="settings-row-switch" label="语音转文字" aria-label="语音转文字" checked={draft.voiceEnabled} disabled={disabled} onChange={event => void commit({voiceEnabled: event.target.checked})}/>}/>}/>}
         {onOpenTools && <SettingsGroup><SettingsRow title="工具" description="安装与授权" trailing={<Button size="sm" onClick={onOpenTools}>管理<ChevronRight size={13}/></Button>}/></SettingsGroup>}
       </>}
@@ -161,8 +185,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
       {(tab === 'model' || tab === 'permission') && (dm ? <DmFixedSettings view={view}/> : <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>)}
       {tab === 'response' && <>
         {responseHeader}
-        {dm && sections.conversation && <Editor title="沟通方式" section={sections.conversation} autoSave save={(patch, revision) => save('conversation', patch, revision)}
-          render={(draft, _set, disabled, commit) => <SettingChoices stacked label="沟通方式" disabled={disabled} value={draft.mode} choices={DM_MODES} onChange={mode => void commit({mode})}/>}/>}
+        {dm && sections.conversation && <DmConversation section={sections.conversation} save={(patch, revision) => save('conversation', patch, revision)}/>}
         {view.identity.kind === 'smart' && <>
           {judgeSection ? <Editor title="决策模型" section={judgeSection} autoSave save={(patch, revision) => save('judge', patch, revision)}
             validate={value => providerDecisionProblem(value.selection, providers, view.decisionModels, undefined, where)}
@@ -174,8 +197,8 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
         </>}
         {!dm && view.identity.kind !== 'smart' && <ProjectPanel view={view} refresh={refresh} partition="response" independent hideJudge/>}
         {!dm && <details className="gd-disclosure"><summary>响应成员</summary><ProjectPanel view={view} refresh={refresh} partition="members" independent hideJudge/></details>}
-        {!dm && <ProjectPanel view={view} refresh={refresh} partition="run" independent hideJudge/>}
-        {!dm && sections.presentation && <Editor title="消息与提醒" section={sections.presentation} save={(patch, revision) => save('presentation', patch, revision)} render={(draft, set, disabled, commit) => <>
+        <ProjectPanel view={view} refresh={refresh} partition="run" independent hideJudge/>
+        {sections.presentation && <Editor title="消息与提醒" section={sections.presentation} save={(patch, revision) => save('presentation', patch, revision)} render={(draft, set, disabled, commit) => <>
           <SettingsRow title="显示工具调用" trailing={<Toggle className="settings-row-switch" label="显示工具调用" aria-label="显示工具调用" checked={draft.showToolCalls} disabled={disabled} onChange={event => void commit({showToolCalls: event.target.checked})}/>}/>
           <SettingsRow className="group-choice-row" title="显示模型" trailing={<SettingChoices segmented label="显示模型" disabled={disabled} value={draft.showModel ?? ''} choices={[{value: 'off', label: '不显示'}, {value: 'running', label: '运行时'}, {value: 'always', label: '始终'}]} onChange={showModel => {if (showModel === 'off' || showModel === 'running' || showModel === 'always') void commit({showModel});}}/>}/>
           <SettingsRow className="group-choice-row" title="完成提醒" trailing={<SettingChoices segmented label="完成提醒" disabled={disabled} value={draft.completionMode} choices={[{value: 'manual', label: '手动'}, {value: 'long', label: '长任务'}, {value: 'failures', label: '失败时'}, {value: 'always', label: '每次'}]} onChange={completionMode => void commit({completionMode})}/>}/>

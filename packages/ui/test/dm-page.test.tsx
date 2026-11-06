@@ -91,28 +91,27 @@ const view = (): ProjectSettingsView => ({
   sections: {
     permission: section(permissionValue(), fixed), response: section({noMention: true}, fixed), model: section({selection: {kind: 'default'}}),
     modelAccess: section({backend: 'codex-appserver', models: ['actual-a'], efforts: ['low']}), skills: section({disabledPaths: []}),
-    presentation: section({voiceEnabled: false, showToolCalls: true, showModel: 'running', completionMode: 'manual', longTaskMinutes: 5}, fixed),
+    presentation: section({voiceEnabled: false, showToolCalls: true, showModel: 'running', completionMode: 'manual', longTaskMinutes: 5}), run: section({pendingPolicy: 'default'}),
     workspace: section({primary: '/data/projects/dm', directories: [], repositories: []}, fixed),
     conversation: section({mode: 'smart'}), smartRules: section({respond: '私聊的规则', newTopic: ''}),
   }, members: {openIds: [], revision: 'm'},
 } as unknown as ProjectSettingsView);
-const settings = (tab: GroupSettingsTab) => renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider>
+const settings = (tab: GroupSettingsTab) => renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider><DraftGuardProvider>
   <GroupSettingsContent dm tab={tab} view={view()} refresh={async () => {}} botName="小支" onOpenTools={() => {}}/>
-</DirectoryPickerProvider></ClientProvider>);
+</DraftGuardProvider></DirectoryPickerProvider></ClientProvider>);
 
-it('offers 智能 and 单会话 on 沟通方式, and nothing only a group has', () => {
+it('uses the group\'s 聊天方式 slider with the two ways a private chat has, and the group\'s other settings', () => {
   const html = settings('response');
-  expect(html).toContain('沟通方式');
-  expect(html).toContain('智能');
-  expect(html).toContain('单会话');
-  for (const gone of ['多会话', '响应成员', '消息与提醒', '免 @']) expect(html).not.toContain(gone);
+  for (const shown of ['聊天方式', 'type="range"', '连续交谈', '智能', '每条都看，只回需要回的', '消息与提醒', '显示工具调用']) expect(html).toContain(shown);
+  for (const gone of ['独立话题', '响应成员', '免 @']) expect(html).not.toContain(gone);
+  expect(html).toContain('max="1"');
 });
 
-it('shows the private chat\'s own rules while it is smart, none on 单会话', () => {
+it('shows the private chat\'s own rules while it is smart, none on 连续交谈', () => {
   const smart = view(); smart.identity = {...smart.identity, kind: 'smart'} as never;
-  const render = (value: ProjectSettingsView) => renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider>
+  const render = (value: ProjectSettingsView) => renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider><DraftGuardProvider>
     <GroupSettingsContent dm tab="response" view={value} refresh={async () => {}} botName="小支" onOpenTools={() => {}}/>
-  </DirectoryPickerProvider></ClientProvider>);
+  </DraftGuardProvider></DirectoryPickerProvider></ClientProvider>);
   expect(render(smart)).toContain('判断规则');
   expect(render(view())).not.toContain('判断规则');
 });
@@ -128,11 +127,11 @@ it('shows the tier and the folder on 模型与权限, and nothing there to chang
   for (const gone of ['只读', '工作区可写', '高级设置', '添加目录', '私聊只有完全访问一档', '群内通过']) expect(html).not.toContain(gone);
 });
 
-it('keeps Skill and tools on 能力, without 语音', () => {
+it('keeps Skill, tools and 语音 on 能力', () => {
   const html = settings('capabilities');
   expect(html).toContain('实际技能');
   expect(html).toContain('安装与授权');
-  expect(html).not.toContain('语音');
+  expect(html).toContain('语音');
 });
 
 const person = (over: Partial<DmPerson>): DmPerson => ({openId: 'ou_abcdef123456', at: 1, used: 0, ...over});
