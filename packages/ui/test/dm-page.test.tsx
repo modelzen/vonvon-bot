@@ -10,7 +10,7 @@ import {injectedLine, panelRows} from '../src/context-model';
 import {DirectoryPickerProvider} from '../src/directory-picker';
 import {DmPeopleList} from '../src/DmMemory';
 import {dmChats, dmPersonLabel, dmPersonRow, type DmPerson} from '../src/dm-people';
-import {GroupWorkspace, workspaceTabs} from '../src/GroupWorkspace';
+import {GroupWorkspace} from '../src/GroupWorkspace';
 import {memoryScopeKey} from '../src/memory-model';
 import {dmScheduleSummary, dmTasksOf, listOf} from '../src/schedule-model';
 import {ScheduleTaskList} from '../src/ScheduleTab';
@@ -33,14 +33,15 @@ const snapshotOf = (bot: Agent, memberships: Membership[]) => ({agents: [bot], g
 const running = {label: '运行中', tone: 'success'} as const;
 const list = (bot: Agent, memberships: Membership[], extra: {dmNew?: number} = {}) => renderToStaticMarkup(<BotGroupList snapshot={snapshotOf(bot, memberships)} agent={bot} busy={false} status={running} onJoin={() => {}} onMembership={() => {}} onDm={() => {}} {...extra}/>);
 
-it('puts the private chat at the very top of the group list, with its Provider and no way of talking, counted as no group', () => {
+it('puts the private chat at the very top of the group list, with its Provider and way of talking, counted as no group', () => {
   const html = list(agent(), [member]);
   expect(html.indexOf('私聊')).toBeGreaterThan(-1);
   expect(html.indexOf('私聊')).toBeLessThan(html.indexOf('研发群'));
   expect(html).toContain('bot-group-list__count">1<');
-  expect(html).toContain('aria-label="设置 小支 的私聊，Provider：Claude"');
+  expect(html).toContain('aria-label="设置 小支 的私聊，Provider：Claude，沟通方式：连续交谈"');
   expect(html).toContain('和 小支 的私聊');
-  expect(html).toContain('bot-group-list__mode">仅管理员<');
+  expect(html).toContain('bot-group-list__mode">连续交谈<');
+  expect(list(agent({dm: row({conversation: 'smart'})}), [member])).toContain('bot-group-list__mode">智能<');
   expect(html).toContain('collaboration-avatar agent');
   expect(html.match(/<button[^>]*bot-group-list__row/g)).toHaveLength(2);
 });
@@ -63,19 +64,14 @@ it('says what is wrong with the row, and how much is new in its memory', () => {
   expect(list(agent(), [], {dmNew: 3})).toContain('新 3');
 });
 
-it('has the four tabs of a private chat: no 沟通方式', () => {
-  expect(workspaceTabs(true).map(([, label]) => label)).toEqual(['模型与权限', '能力', '记忆', '任务']);
-  expect(workspaceTabs().map(([, label]) => label)).toContain('沟通方式');
-});
-
 const page = (bot: Agent, tab: 'model' | 'memory' | 'schedule' = 'model') => renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider><DraftGuardProvider>
   <GroupWorkspace dmMode member={bot.dm!} agent={bot} group={{id: rowId, name: '私聊'}} snapshot={snapshotOf(bot, [])} initialTab={tab} onBot={() => {}} onBotProfile={() => {}} onOpenTools={() => {}} onOpenSecrets={() => {}} onChanged={async () => {}}/>
 </DraftGuardProvider></DirectoryPickerProvider></ClientProvider>);
 it('opens the group workspace without what only a group has', () => {
   const html = page(agent());
-  for (const label of ['模型与权限', '能力', '记忆', '任务']) expect(html).toContain(`>${label}<`);
+  for (const label of ['模型与权限', '能力', '沟通方式', '记忆', '任务']) expect(html).toContain(`>${label}<`);
   expect(html).toContain('aria-label="私聊设置"');
-  for (const gone of ['沟通方式', '在飞书打开', '对话记录', '使用说明', '解除群绑定', '在本群使用', '选择本群 Bot']) expect(html).not.toContain(gone);
+  for (const gone of ['在飞书打开', '对话记录', '使用说明', '解除群绑定', '在本群使用', '选择本群 Bot']) expect(html).not.toContain(gone);
   expect(page(agent({running: false}))).toContain('Bot 未运行');
 });
 
@@ -96,13 +92,30 @@ const view = (): ProjectSettingsView => ({
   sections: {
     permission: section(permissionValue(), fixed), response: section({noMention: true}, fixed), model: section({selection: {kind: 'default'}}),
     modelAccess: section({backend: 'codex-appserver', models: ['actual-a'], efforts: ['low']}), skills: section({disabledPaths: []}),
-    presentation: section({voiceEnabled: false, showToolCalls: true, showModel: 'running', completionMode: 'manual', longTaskMinutes: 5}, fixed),
+    presentation: section({voiceEnabled: false, showToolCalls: true, showModel: 'running', completionMode: 'manual', longTaskMinutes: 5}), run: section({pendingPolicy: 'default'}),
     workspace: section({primary: '/data/projects/dm', directories: [], repositories: []}, fixed),
+    conversation: section({mode: 'smart'}), smartRules: section({respond: '私聊的规则', newTopic: ''}),
   }, members: {openIds: [], revision: 'm'},
 } as unknown as ProjectSettingsView);
-const settings = (tab: GroupSettingsTab) => renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider>
+const settings = (tab: GroupSettingsTab) => renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider><DraftGuardProvider>
   <GroupSettingsContent dm tab={tab} view={view()} refresh={async () => {}} botName="小支" onOpenTools={() => {}}/>
-</DirectoryPickerProvider></ClientProvider>);
+</DraftGuardProvider></DirectoryPickerProvider></ClientProvider>);
+
+it('uses the group\'s 聊天方式 slider with the two ways a private chat has, and the group\'s other settings', () => {
+  const html = settings('response');
+  for (const shown of ['聊天方式', 'type="range"', '连续交谈', '智能', '每条都看，只回需要回的', '消息与提醒', '显示工具调用']) expect(html).toContain(shown);
+  for (const gone of ['独立话题', '响应成员', '免 @']) expect(html).not.toContain(gone);
+  expect(html).toContain('max="1"');
+});
+
+it('shows the private chat\'s own rules while it is smart, none on 连续交谈', () => {
+  const smart = view(); smart.identity = {...smart.identity, kind: 'smart'} as never;
+  const render = (value: ProjectSettingsView) => renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider><DraftGuardProvider>
+    <GroupSettingsContent dm tab="response" view={value} refresh={async () => {}} botName="小支" onOpenTools={() => {}}/>
+  </DraftGuardProvider></DirectoryPickerProvider></ClientProvider>);
+  expect(render(smart)).toContain('判断规则');
+  expect(render(view())).not.toContain('判断规则');
+});
 
 it('shows the tier and the folder on 模型与权限, and nothing there to change them', () => {
   const [tier, folder] = dmFixedRows(view());
@@ -115,11 +128,11 @@ it('shows the tier and the folder on 模型与权限, and nothing there to chang
   for (const gone of ['只读', '工作区可写', '高级设置', '添加目录', '私聊只有完全访问一档', '群内通过']) expect(html).not.toContain(gone);
 });
 
-it('keeps Skill and tools on 能力, without 语音', () => {
+it('keeps Skill, tools and 语音 on 能力', () => {
   const html = settings('capabilities');
   expect(html).toContain('实际技能');
   expect(html).toContain('安装与授权');
-  expect(html).not.toContain('语音');
+  expect(html).toContain('语音');
 });
 
 const person = (over: Partial<DmPerson>): DmPerson => ({openId: 'ou_abcdef123456', at: 1, used: 0, ...over});

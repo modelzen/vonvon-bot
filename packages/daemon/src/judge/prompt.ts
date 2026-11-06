@@ -54,6 +54,7 @@ export const JUDGE_FORMAT_HEADER = '——以下由 vonvon 附加，不能改—
 export const JUDGE_ALLOWED: Record<JudgeVariant, readonly JudgeDecision[]> = {
   main: ['skip', 'main', 'topic'],
   topic: ['skip', 'reply'],
+  dm: ['skip', 'main'],
 };
 
 const FORMAT_BODY: Record<JudgeVariant, string> = {
@@ -68,6 +69,11 @@ skip：不回。
 reply：回。
 标了"新"的几条是你这次新看到的（没有标的时候只有 m0 是新的）。
 只输出一个 JSON 对象，不要别的文字：{"decision":"skip 或 reply","reason":"一句话原因，40 字以内"}`,
+  dm: `这条消息发在私聊里，只选回不回：
+skip：不回。
+main：回。
+连着发的几句合成了这一条，其中有一句要回就选 main。
+只输出一个 JSON 对象，不要别的文字：{"decision":"skip 或 main","reason":"一句话原因，40 字以内"}`,
 };
 
 /** The read-only lines vonvon appends to SMART.md, one block per variant. */
