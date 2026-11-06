@@ -8,7 +8,7 @@ import { readDropped } from '../src/bot/restart-dropped';
 import { parseAskRequest, type AgentEvent, type AgentInput, type StartThreadOptions } from '../src/agent/types';
 import type { HostApi } from '../src/admin/ipc';
 import { paths } from '../src/config/paths';
-import { dmChatId, dmProject } from '../src/project/registry';
+import { dmChatId, dmProject, mutateProjectByChatId } from '../src/project/registry';
 import { getSession, listSessions, upsertSession } from '../src/bot/session-store';
 import { createAgentEntries, type AgentEntries } from '../src/agent/entry/registry';
 import { createOrchestrator } from '../src/bot/handle-message';
@@ -119,6 +119,9 @@ async function app(policy: 'steer' | 'queue' = 'queue', host?: Pick<HostApi, 'is
   const issue = vi.spyOn(entries, 'issue');
   const o = createOrchestrator(channel as never, cfg, paths.appDir, undefined, { entries, bot, droppedFile: DROPPED, ...(host ? { host } : {}) });
   opened.push(o); await o.initialize?.();
+  // These tests are about the turn, so every message runs: the judge in front of it is dm-smart.test.ts.
+  await until(async () => expect(await dmProject()).toBeDefined());
+  await mutateProjectByChatId(dmChatId(APP), project => { project.smart = false; });
   return { o, entries, issue };
 }
 function message(text: string, more: Partial<NormalizedMessage> = {}): NormalizedMessage {

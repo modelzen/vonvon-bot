@@ -86,6 +86,13 @@ const QUESTIONS: Record<JudgeVariant, { question: string; criteria: Partial<Reco
       reply: '回：按 `rules`，在当前话题回应这条消息',
     },
   },
+  dm: {
+    question: '`new_message` 发在私聊里，是对 bot（`bot_name`）说的。按 `rules`，bot 回不回？',
+    criteria: {
+      skip: SKIP,
+      main: '回：按 `rules`，回应这条消息',
+    },
+  },
 };
 /** The anchor question of the report's five (35/36 right): m0 and up to 10 earlier lines, each "who：its first 40 characters". */
 const ANCHOR_QUESTION = '群里哪一条消息是在等 bot（`bot_name`）回应的？';

@@ -55,7 +55,7 @@ describe('settings --dm', () => {
     sections: {
       model: section({ selection: { kind: 'default' } }), speed: section({ tier: 'inherit' }), modelAccess: section({ backend: 'claude-agent', models: ['m'], efforts: ['low'] }), skills: section({ disabledPaths: [] }),
       permission: fixed({ mode: 'full', options: { tiers: [], fields: [{ key: 'sandbox', label: '沙盒', kind: 'switch' }] } }), workspace: fixed({ primary: '/data/projects/dm', directories: [], repositories: [] }),
-      response: fixed({ noMention: true }), judge: fixed({ selection: { kind: 'default' } }),
+      response: fixed({ noMention: true }), conversation: section({ mode: 'smart' }), smartRules: section({ respond: '', newTopic: '' }), judge: section({ selection: { kind: 'default' } }),
     },
   };
   const reads = (request: SettingsRequest) => request.type === 'read' ? { kind: 'view', view } : { kind: 'saved', result: { kind: 'saved', section: {}, effects: [], warnings: [] } };
@@ -69,7 +69,7 @@ describe('settings --dm', () => {
     expect(lines[0]).toBe('Bot Test（cli_a）的私聊 · Claude · /data/projects/dm');
     for (const name of ['[model]', '[speed]', '[modelAccess]', '[skills]', '[permission]（只读：私聊只有完全访问一档）', '[workspace]（只读：私聊只有完全访问一档）']) expect(lines).toContain(name);
     expect(h.out()).not.toContain('[response]');
-    expect(h.out()).not.toContain('[judge]');
+    for (const name of ['[conversation]', '[smartRules]', '[judge]']) expect(lines).toContain(name);
     expect(h.out()).not.toContain('高级设置');
     expect(h.out()).not.toContain('响应成员');
     expect(await h.failure(runSettingsGet('response', { dm: true }, h.io(), h.daemon))).toMatchObject({ exitCode: 2 });
@@ -79,6 +79,8 @@ describe('settings --dm', () => {
     const h = harness(reads);
     await runSettingsSet(['model.selection={"kind":"default"}'], { dm: true }, h.io(), h.daemon);
     expect(h.send).toHaveBeenLastCalledWith({ type: 'save', edit: expect.objectContaining({ scope: dm, section: 'model' }) });
+    await runSettingsSet(['conversation.mode=single'], { dm: true }, h.io(), h.daemon);
+    expect(h.send).toHaveBeenLastCalledWith({ type: 'save', edit: expect.objectContaining({ scope: dm, section: 'conversation', patch: { mode: 'single' } }) });
     for (const target of [{ dm: true, group: '研发' }, { dm: true, session: 'th_1' }, { dm: true, host: true }]) expect(await h.failure(runSettingsGet(undefined, target, h.io(), h.daemon))).toMatchObject({ exitCode: 2 });
   });
 

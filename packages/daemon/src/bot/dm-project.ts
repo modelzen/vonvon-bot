@@ -20,7 +20,7 @@ export async function ensureDmProject(input: { bot: BotIdentity; projectsRootDir
     const existing = await dmProject();
     if (existing) { await ensureDurableDirectory(existing.cwd); return; }
     const row = await addDmProject({ ...await input.defaults(), name: DM_PROJECT_NAME, chatId: dmChatId(input.bot.appId), cwd, blank: true, origin: 'created',
-      kind: 'single', noMention: true, mode: 'full', network: TIER_NETWORK.full, createdAt: Date.now(), dm: { people: {} } });
+      kind: 'single', smart: true, noMention: true, mode: 'full', network: TIER_NETWORK.full, createdAt: Date.now(), dm: { people: {} } });
     log.info('project', 'dm-project', { cwd: row.cwd, backend: row.backend });
   } catch (error) { log.fail('project', error, { phase: 'dm-project' }); }
 }

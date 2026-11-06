@@ -137,7 +137,7 @@ describe('the config builtin skill', () => {
     expect(configSkill.body).toContain('用 `"$VONVON_CLI"`，');
     expect(configSkill.body).toContain(`smartRules.respond='"第一段\\n\\n第二段"'`);
     for (const words of ['智能提示词不起作用', '`response.noMention`', '`vonvon group set X --conversation smart`']) expect(configSkill.body).toContain(words);
-    for (const words of ['`"$VONVON_CLI"`', '`vonvon --help`', '`vonvon bot list`', '`vonvon group list`', '`vonvon settings get`', '不要背', '`--bot B`', '`--group X`', '`--dm`', '这个 Bot，就是你自己',
+    for (const words of ['`"$VONVON_CLI"`', '`vonvon --help`', '`vonvon bot list`', '`vonvon group list`', '`vonvon settings get`', '不要背', '`--bot B`', '`--group X`', '`--dm`', '`conversation.mode`', '这个 Bot，就是你自己',
       '群设置改完下一轮生效', 'Skill 和 MCP 要等新会话', 'Bot 自己进不了已有的群']) expect(configSkill.body).toContain(words);
   });
   it('lists what cannot be done here and sends the user where it can (dm-agent 6.2)', () => {

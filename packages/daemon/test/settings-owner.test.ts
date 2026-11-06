@@ -9,14 +9,14 @@ import { createAppPreferencesWriter, createAdminWriteExecutor } from '../src/adm
 import { createSettingsOwner, type SettingsOwnerDeps } from '../src/admin/settings';
 import { parseSettingsEdit, parseSettingsAction, parseModelQuery } from '../src/admin/settings-parse';
 import type { AgentSettingsView, ProjectSettingsView, SessionSettingsView } from '../src/admin/settings-types';
-import { addDmProject, addProject, dmChatId, dmProject, DM_PROJECT_NAME, getProjectByName, rememberDmChat, updateProject } from '../src/project/registry';
+import { addDmProject, addProject, dmChatId, dmProject, DM_PROJECT_NAME, getProjectByChatId, getProjectByName, rememberDmChat, updateProject } from '../src/project/registry';
 import { getSession, RETIRED_KEY_TEXT, upsertSession } from '../src/bot/session-store';
 import { createAdminIpcCaller, createAdminIpcResponder } from '../src/admin/ipc';
 import type { AppConfig } from '../src/config/schema';
 import type { AgentBackend } from '../src/agent/types';
 import { offlineModelCatalog, rememberModelCatalog } from '../src/admin/model-catalog';
 import { permissionTable, permissionTiers } from '../src/agent/permission';
-import { FULL_ACCESS_WARNING } from '@vonvon/protocol';
+import { DEFAULT_DM_SMART_RULES, FULL_ACCESS_WARNING } from '@vonvon/protocol';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
@@ -362,10 +362,10 @@ describe('the private-chat row (dm-agent 4.2)', () => {
     expect((await dmProject())?.serviceTier).toBe('fast');
   });
   it.each([['permission', { mode: 'qa' }], ['workspace', { primary: '/tmp/x' }], ['response', { noMention: false }], ['run', { pendingPolicy: 'queue' }], ['role', { supplement: 'x' }],
-    ['smartRules', { respond: 'x' }], ['presentation', { voiceEnabled: false }], ['judge', { selection: { kind: 'default' } }]])('refuses %s', async (section, patch) => {
+    ['presentation', { voiceEnabled: false }]])('refuses %s', async (section, patch) => {
     const { owner } = await fixture({ discoverSkills: async () => [] });
     const before = await dmProject();
-    expect(await save(owner, section, patch)).toMatchObject({ kind: 'rejected', fields: [{ message: '私聊只能改模型、速度、可选模型和技能' }] });
+    expect(await save(owner, section, patch)).toMatchObject({ kind: 'rejected', fields: [{ message: '私聊只能改模型、速度、可选模型、技能、沟通方式、判断规则和决策模型' }] });
     expect(await dmProject()).toEqual(before);
   });
   // dm-agent 10 (D4). main 必败: the view called them writable and only a save was refused
@@ -373,8 +373,36 @@ describe('the private-chat row (dm-agent 4.2)', () => {
     const { owner } = await fixture({ discoverSkills: async () => [] });
     const view = await owner.read(dm) as ProjectSettingsView;
     const access = (key: keyof ProjectSettingsView['sections']) => view.sections[key]?.access;
-    for (const key of ['permission', 'workspace', 'response', 'run', 'role', 'smartRules', 'presentation', 'judge'] as const) expect(access(key)).toMatchObject({ kind: 'readonly', reason: 'dm-fixed' });
-    for (const key of ['model', 'speed', 'modelAccess', 'skills'] as const) expect(access(key)).toEqual({ kind: 'writable' });
+    for (const key of ['permission', 'workspace', 'response', 'run', 'role', 'presentation'] as const) expect(access(key)).toMatchObject({ kind: 'readonly', reason: 'dm-fixed' });
+    for (const key of ['model', 'speed', 'modelAccess', 'skills', 'conversation', 'smartRules', 'judge'] as const) expect(access(key)).toEqual({ kind: 'writable' });
+  });
+  // owner 2026-11-06. main 必败: a private chat had no way of talking to choose, and every message was answered
+  it('switches between smart and 单会话 on the row itself', async () => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    expect((await owner.read(dm) as ProjectSettingsView).sections.conversation?.effective.mode).toBe('single');
+    expect((await save(owner, 'conversation', { mode: 'smart' })).kind).toBe('saved');
+    expect((await dmProject())?.smart).toBe(true);
+    expect((await owner.read(dm) as ProjectSettingsView).sections.conversation?.effective.mode).toBe('smart');
+    expect((await save(owner, 'conversation', { mode: 'single' })).kind).toBe('saved');
+    expect((await dmProject())?.smart).toBe(false);
+  });
+  it('shows the private chat\'s own default rules until they are edited, and keeps them to itself', async () => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    const view = await owner.read(dm) as ProjectSettingsView;
+    expect(view.sections.smartRules?.effective.respond).toBe(DEFAULT_DM_SMART_RULES.respond);
+    expect(view.smartPrompt?.text).toContain('这是私聊');
+    expect((await save(owner, 'smartRules', { respond: '都回' })).kind).toBe('saved');
+    expect((await dmProject())?.smartRules?.respond).toBe('都回');
+    expect((await owner.read(dm) as ProjectSettingsView).sections.smartRules?.effective.respond).toBe('都回');
+  });
+  it('a group has no such section: its way of talking stays where it was', async () => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    await addProject({ name: '研发群', chatId: 'oc_group', cwd: '/tmp/group', blank: true, origin: 'created', kind: 'single', smart: true, noMention: true, mode: 'full', network: true, createdAt: 1, backend: 'codex-appserver' } as never);
+    const group = { kind: 'project', botId, projectName: '研发群' } as const;
+    const view = await owner.read(group) as ProjectSettingsView;
+    expect(view.sections.conversation).toBeUndefined();
+    await expect(owner.save({ scope: group, section: 'conversation', revision: 'x', patch: { mode: 'single' } } as never)).rejects.toThrow('无效设置分区');
+    expect((await getProjectByChatId('oc_group'))?.smart).toBe(true);
   });
   it('does not follow the Bot\'s default model: what it took at creation is its own (4.1)', async () => {
     const { owner } = await fixture({ discoverSkills: async () => [] });

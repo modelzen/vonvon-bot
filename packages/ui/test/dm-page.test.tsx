@@ -10,7 +10,7 @@ import {injectedLine, panelRows} from '../src/context-model';
 import {DirectoryPickerProvider} from '../src/directory-picker';
 import {DmPeopleList} from '../src/DmMemory';
 import {dmChats, dmPersonLabel, dmPersonRow, type DmPerson} from '../src/dm-people';
-import {GroupWorkspace, workspaceTabs} from '../src/GroupWorkspace';
+import {GroupWorkspace} from '../src/GroupWorkspace';
 import {memoryScopeKey} from '../src/memory-model';
 import {dmScheduleSummary, dmTasksOf, listOf} from '../src/schedule-model';
 import {ScheduleTaskList} from '../src/ScheduleTab';
@@ -63,19 +63,14 @@ it('says what is wrong with the row, and how much is new in its memory', () => {
   expect(list(agent(), [], {dmNew: 3})).toContain('新 3');
 });
 
-it('has the four tabs of a private chat: no 沟通方式', () => {
-  expect(workspaceTabs(true).map(([, label]) => label)).toEqual(['模型与权限', '能力', '记忆', '任务']);
-  expect(workspaceTabs().map(([, label]) => label)).toContain('沟通方式');
-});
-
 const page = (bot: Agent, tab: 'model' | 'memory' | 'schedule' = 'model') => renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider><DraftGuardProvider>
   <GroupWorkspace dmMode member={bot.dm!} agent={bot} group={{id: rowId, name: '私聊'}} snapshot={snapshotOf(bot, [])} initialTab={tab} onBot={() => {}} onBotProfile={() => {}} onOpenTools={() => {}} onOpenSecrets={() => {}} onChanged={async () => {}}/>
 </DraftGuardProvider></DirectoryPickerProvider></ClientProvider>);
 it('opens the group workspace without what only a group has', () => {
   const html = page(agent());
-  for (const label of ['模型与权限', '能力', '记忆', '任务']) expect(html).toContain(`>${label}<`);
+  for (const label of ['模型与权限', '能力', '沟通方式', '记忆', '任务']) expect(html).toContain(`>${label}<`);
   expect(html).toContain('aria-label="私聊设置"');
-  for (const gone of ['沟通方式', '在飞书打开', '对话记录', '使用说明', '解除群绑定', '在本群使用', '选择本群 Bot']) expect(html).not.toContain(gone);
+  for (const gone of ['在飞书打开', '对话记录', '使用说明', '解除群绑定', '在本群使用', '选择本群 Bot']) expect(html).not.toContain(gone);
   expect(page(agent({running: false}))).toContain('Bot 未运行');
 });
 
@@ -98,11 +93,29 @@ const view = (): ProjectSettingsView => ({
     modelAccess: section({backend: 'codex-appserver', models: ['actual-a'], efforts: ['low']}), skills: section({disabledPaths: []}),
     presentation: section({voiceEnabled: false, showToolCalls: true, showModel: 'running', completionMode: 'manual', longTaskMinutes: 5}, fixed),
     workspace: section({primary: '/data/projects/dm', directories: [], repositories: []}, fixed),
+    conversation: section({mode: 'smart'}), smartRules: section({respond: '私聊的规则', newTopic: ''}),
   }, members: {openIds: [], revision: 'm'},
 } as unknown as ProjectSettingsView);
 const settings = (tab: GroupSettingsTab) => renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider>
   <GroupSettingsContent dm tab={tab} view={view()} refresh={async () => {}} botName="小支" onOpenTools={() => {}}/>
 </DirectoryPickerProvider></ClientProvider>);
+
+it('offers 智能 and 单会话 on 沟通方式, and nothing only a group has', () => {
+  const html = settings('response');
+  expect(html).toContain('沟通方式');
+  expect(html).toContain('智能');
+  expect(html).toContain('单会话');
+  for (const gone of ['多会话', '响应成员', '消息与提醒', '免 @']) expect(html).not.toContain(gone);
+});
+
+it('shows the private chat\'s own rules while it is smart, none on 单会话', () => {
+  const smart = view(); smart.identity = {...smart.identity, kind: 'smart'} as never;
+  const render = (value: ProjectSettingsView) => renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider>
+    <GroupSettingsContent dm tab="response" view={value} refresh={async () => {}} botName="小支" onOpenTools={() => {}}/>
+  </DirectoryPickerProvider></ClientProvider>);
+  expect(render(smart)).toContain('判断规则');
+  expect(render(view())).not.toContain('判断规则');
+});
 
 it('shows the tier and the folder on 模型与权限, and nothing there to change them', () => {
   const [tier, folder] = dmFixedRows(view());
