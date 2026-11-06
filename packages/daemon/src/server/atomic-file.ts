@@ -28,8 +28,10 @@ export async function writeFileAtomic(filePath: string, data: string | NodeJS.Ar
 
 /** Windows will not replace a file that another process has open (EPERM, EACCES or EBUSY): daemon.pid while the CLI or the
  * desktop polls it for readiness made `daemon start` die (#667 Windows CI). Readers hold it for milliseconds; retry ~2.5 s. */
-async function renameOverReaders(from: string, to: string): Promise<void> {
+export async function renameOverReaders(from: string, to: string, beforeCommit?: () => void): Promise<void> {
   for (let delay = 10; ; delay *= 2) {
+    // Revalidate immediately before every attempt; authorization failures must never be retried.
+    beforeCommit?.();
     try { return await rename(from, to); }
     catch (error) {
       const code = error instanceof Error && 'code' in error ? String(error.code) : '';

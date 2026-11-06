@@ -66,6 +66,8 @@ export type Tool = z.infer<typeof toolSchema>;
 
 const empty = <T extends string>(type: T) =>
   z.object({ type: z.literal(type) }).strict();
+export const MAX_BADGE_NUMBER_LENGTH = 7;
+export const badgeNumberSchema = z.string().min(1).max(MAX_BADGE_NUMBER_LENGTH).regex(/^\d+$/);
 export const commandSchema = z.discriminatedUnion("type", [
   z.object({type: z.literal("refresh"), tools: z.boolean().optional()}).strict(),
   z.object({type: z.literal("listPendingGroups"), agentId: agentIdSchema}).strict(),
@@ -80,6 +82,11 @@ export const commandSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("listGroupMembers"), agentId: agentIdSchema, groupId: groupIdSchema, cursor: z.string().min(1).max(2048).optional() }).strict(),
+  /**
+   * dm-agent 7.3: a read of a Bot's Feishu tools, by the tool's name and its arguments, which the daemon checks as the tool
+   * does. No `agentId`: the daemon picks the Bot, the session's or the one bound to the chat asked about.
+   */
+  z.object({ type: z.literal("feishuRead"), agentId: agentIdSchema.optional(), tool: z.string().min(1).max(100), args: z.record(z.string(), z.unknown()) }).strict(),
   z
     .object({
       type: z.literal("bindGroup"),
@@ -124,6 +131,7 @@ export const commandSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({type:z.literal("deleteAgent"),agentId:agentIdSchema}).strict(),
+  z.object({type: z.literal("setAgentBadgeNumber"), agentId: agentIdSchema, badgeNumber: badgeNumberSchema}).strict(),
   z.object({ type: z.literal("cancelJob"), jobId: jobIdSchema }).strict(),
 ]);
 export type Command = z.infer<typeof commandSchema>;
@@ -138,17 +146,6 @@ export type HostState = z.infer<typeof hostStateSchema>;
  * the picture went out earlier on the same connection. The client library puts the picture back and drops this before
  * anyone reads the snapshot; a reader that does not know it sees no picture (0.9.0 Mac 验收: avatars over a slow link). */
 const avatarRef = z.string().optional();
-export const agentSchema = z.object({
-  id: agentIdSchema, name: z.string(), avatarDataUrl: z.string().optional(), avatarRef,
-  enabled: z.boolean(), running: z.boolean(), connection: z.string(),
-  activation: z.enum(["active", "restartRequired"]), readError: z.string().optional(),
-  /** The bot's recent not-replied messages and scope denials; absent when it has none. */
-  diagnostics: botDiagnosticsSchema.optional(),
-  /** This bot alone stopped restarting after 3 crashes in 10 minutes (s18a); absent from older daemons. */
-  paused: crashPauseSchema.optional(),
-  lockHeld: lockHeldSchema.optional(),
-});
-export type Agent = z.infer<typeof agentSchema>;
 /** A group directory an older version left in the wrong place (s36c2d): a bot's own directory, the projects root
  * itself, in the data directory outside `projects/`, or a folder above the data directory. */
 export const directoryProblemSchema = z.enum(["botRoot", "projectsRoot", "dataDir", "dataDirParent"]);
@@ -174,6 +171,28 @@ export const membershipSchema = z.object({
   stale: z.boolean(),
 });
 export type Membership = z.infer<typeof membershipSchema>;
+export const agentSchema = z.object({
+  id: agentIdSchema, name: z.string(), avatarDataUrl: z.string().optional(), avatarRef,
+  enabled: z.boolean(), running: z.boolean(), connection: z.string(),
+  activation: z.enum(["active", "restartRequired"]), readError: z.string().optional(),
+  badgeNumber: badgeNumberSchema.optional(),
+  /** The bot's recent not-replied messages and scope denials; absent when it has none. */
+  diagnostics: botDiagnosticsSchema.optional(),
+  /** This bot alone stopped restarting after 3 crashes in 10 minutes (s18a); absent from older daemons. */
+  paused: crashPauseSchema.optional(),
+  lockHeld: lockHeldSchema.optional(),
+  /** Local registration date and the display name of the confirmed Feishu application owner. */
+  registeredAt: z.number().finite().nonnegative().optional(),
+  ownerName: z.string().optional(),
+  /** Which client opens this Bot; absent from older daemons, read as Feishu. */
+  tenant: z.enum(["feishu", "lark"]).optional(),
+  /** This Bot's private chat, with the synthetic group id `oc_dm_<appId>`. Beside `memberships`, so no group list, group
+   * directory or search picks it up; absent when preparation failed, and from older daemons. */
+  dm: membershipSchema.optional(),
+  /** Private-chat preparation/read failure; independent of group configuration and absent from older daemons. */
+  dmError: z.string().optional(),
+});
+export type Agent = z.infer<typeof agentSchema>;
 /** A library project and the bindings that share it, as the snapshot shows them. */
 export const snapshotProjectSchema = z.object({
   id: projectIdSchema, name: z.string(), revision: z.number().int().min(1),
@@ -256,6 +275,7 @@ export const jobSchema = z.discriminatedUnion("phase", [
 ]);
 export type Job = z.infer<typeof jobSchema>;
 export const desktopSnapshotSchema = z.object({
+  attentionModel: z.literal("group").optional(),
   revision: z.number(), observedAt: z.number(), stale: z.boolean(), host: hostStateSchema,
   agents: z.array(agentSchema), groups: z.array(groupSchema), memberships: z.array(membershipSchema),
   /** The project library (memory design §2.5); absent from daemons before it. */
@@ -279,6 +299,7 @@ export const commandResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("folderChosen"), folder: folderChoiceSchema }),
   z.object({ kind: z.literal("members"), members: z.array(z.object({ openId: z.string().min(1), name: z.string() })), nextCursor: z.string().optional() }),
   z.object({ kind: z.literal("groups"), groups: z.array(z.object({ id: groupIdSchema, name: z.string(), bound: z.boolean(), hasOtherBots: z.boolean().optional() })), nextCursor: z.string().optional() }),
+  z.object({ kind: z.literal("feishuRead"), result: z.unknown() }),
   z.object({ kind: z.literal("cancelled") }),
   z.object({ kind: z.literal("activationPending"), message: z.string() }),
   z.object({ kind: z.literal("refused"), code: z.string(), message: z.string() }),

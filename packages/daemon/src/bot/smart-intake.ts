@@ -59,6 +59,8 @@ export interface LaneDeps<E extends LaneEntry, V> {
   land(batch: E[], verdict: V, glance: boolean): Promise<void>;
   /** Undefined judges immediately; a timestamp schedules a glance of the waiting batch. */
   due(place: string, waiting: readonly Waiting<E>[], now: number): number | undefined;
+  /** Select a single continuation without promoting the rest of its ordinary batch. */
+  priority?(entry: E): boolean;
   overflow?(dropped: E[]): void;
   now(): number;
   setTimer(fn: () => void, ms: number): unknown;
@@ -100,6 +102,8 @@ export class SmartLanes<E extends LaneEntry, V> {
   private readonly lanes = new Map<string, Lane<E, V>>();
   private seq = 0;
   private closed = false;
+  private rearming = false;
+  private rearmPending = false;
 
   constructor(private readonly deps: LaneDeps<E, V>) {}
 
@@ -124,6 +128,29 @@ export class SmartLanes<E extends LaneEntry, V> {
   rearm(place: string): void {
     const lane = this.lanes.get(place);
     if (lane && !lane.judging) this.arm(lane);
+  }
+
+  /** A group's shared viewing cadence changed; retain each position's own batch. */
+  rearmWhere(matches: (entry: E) => boolean): void {
+    if (this.rearming) {
+      this.rearmPending = true;
+      return;
+    }
+    this.rearming = true;
+    try {
+      let filter = matches;
+      do {
+        this.rearmPending = false;
+        for (const [place, lane] of this.lanes) {
+          if (lane.waiting.some(item => filter(item.entry))) this.rearm(place);
+        }
+        // Nested requests can target another group. One extra sweep handles
+        // them together without growing the synchronous judgement call stack.
+        filter = () => true;
+      } while (this.rearmPending && !this.closed);
+    } finally {
+      this.rearming = false;
+    }
   }
 
   prune(place: string, taken: (entry: E) => boolean): E[] {
@@ -255,7 +282,9 @@ export class SmartLanes<E extends LaneEntry, V> {
   }
 
   private startWaiting(lane: Lane<E, V>, glance: boolean): void {
-    this.start(lane, lane.waiting.splice(0), 'chat', glance);
+    const priority = !glance && this.deps.priority ? lane.waiting.findIndex(item => this.deps.priority!(item.entry)) : -1;
+    const batch = priority < 0 ? lane.waiting.splice(0) : lane.waiting.splice(priority, 1);
+    this.start(lane, batch, 'chat', glance);
   }
 
   private settle(lane: Lane<E, V>): void {

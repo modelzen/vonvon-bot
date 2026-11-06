@@ -16,7 +16,7 @@ vi.mock('../src/server/pid-lock', () => ({
 vi.mock('../src/server/owner-verification', () => ({ stopVerifiedOwner: fixture.stop, verifyPidLockOwner: vi.fn() }));
 vi.mock('../src/config/paths', () => ({ paths: { appDir: '/virtual/vonvon-stop' } }));
 
-import { runStop } from '../src/cli/commands/daemon';
+import { RELEASED_EXIT_GRACE_MS, runStop } from '../src/cli/commands/daemon';
 
 const owner = { pid: 74321, startedAt: '2026-10-10T00:00:00.000Z', listen: '127.0.0.1:43119' } satisfies PidLockInfo;
 const replacement = { pid: 74322, startedAt: '2026-10-10T00:01:00.000Z', listen: '127.0.0.1:43119' } satisfies PidLockInfo;
@@ -73,6 +73,25 @@ it('returns true after the acknowledged owner dies and removes its lock', async 
   await expect(result).resolves.toBe(true);
   expect(fixture.stop).toHaveBeenCalledOnce();
   expect(fixture.signals).not.toHaveBeenCalled();
+});
+
+it('returns true when the owner released its lock but its PID stays, as a zombie under a parent that does not reap it', async () => {
+  let done = false;
+  const result = runStop('/virtual/vonvon-stop').then(value => { done = true; return value; });
+  await vi.advanceTimersByTimeAsync(100);
+  fixture.lock = null;
+  await vi.advanceTimersByTimeAsync(RELEASED_EXIT_GRACE_MS - 500);
+  expect(done).toBe(false);
+  await vi.advanceTimersByTimeAsync(1000);
+  await expect(result).resolves.toBe(true);
+  expect(fixture.signals).not.toHaveBeenCalled();
+});
+
+it('keeps waiting while the owner still holds its lock', async () => {
+  let done = false;
+  void runStop('/virtual/vonvon-stop').then(() => { done = true; });
+  await vi.advanceTimersByTimeAsync(RELEASED_EXIT_GRACE_MS * 4);
+  expect(done).toBe(false);
 });
 
 it('rejects a live replacement after the acknowledged owner exits', async () => {

@@ -26,7 +26,7 @@ afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 const groups = () => join(paths.projectsRootDir, 'fixture', 'groups');
 let serial = 0;
 function input(name: string, patch: Partial<CreateProjectInput> = {}): CreateProjectInput {
-  return { requestId: `request-${++serial}`, bot, name, ownerOpenId: 'ou_owner', kind: 'multi', ...patch };
+  return { requestId: `request-${++serial}`, bot, name, invitee: { idType: 'open_id', id: 'ou_owner' }, kind: 'multi', ...patch };
 }
 /** chat.create answered by `create`; every other call by Feishu's plain success. */
 function only(create: Answer): Answer {
@@ -36,6 +36,54 @@ async function allocations(): Promise<Record<string, { chatId: string; state: st
   return JSON.parse(await readFile(paths.botsFile, 'utf8')).groupAllocations ?? {};
 }
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// dm-agent 6.4: another Bot of this computer names the person by union_id
+describe('createProject for a person named by union_id', () => {
+  const union = { invitee: { idType: 'union_id', id: 'on_person' }, botName: 'B' } as const;
+  const members = (ids: string[], extra: object = {}) => ({ code: 0, data: { items: ids.map(id => ({ member_id: id, name: '某人' })), has_more: false, ...extra } });
+  const membersOf = (answer: unknown): Answer => request => request.method === 'GET' && /\/members$/.test(request.path) ? answer : undefined;
+
+  it('pulls them in and makes them the group\'s admin by that id', async () => {
+    const fake = fakeLark(membersOf(members(['on_person'])));
+    const project = await createProject({ rawClient: fake.client }, input('Union', union));
+    expect(fake.creates()[0]).toMatchObject({ params: { user_id_type: 'union_id' }, data: { user_id_list: ['on_person'] } });
+    expect(fake.requests.find(r => r.path.endsWith('/managers/add_managers'))).toMatchObject({ params: { member_id_type: 'union_id' }, data: { manager_ids: ['on_person'] } });
+    expect((await listProjects()).find(p => p.chatId === project.chatId)).toBeDefined();
+    expect(fake.open()).toBe(0);
+  });
+
+  it('refuses in the words of the design when Feishu refuses the id, its own words beside them', async () => {
+    const fake = fakeLark(only(() => { throw httpError(400, { code: 99992361, msg: 'id cross' }); }));
+    const error = await createProject({ rawClient: fake.client }, input('Foreign', union)).catch((e: unknown) => e as Error);
+    expect(error).toBeInstanceOf(CreationRefusedError);
+    expect((error as Error).message).toContain('Bot B 拉不了你。可以你自己建群、把 B 拉进去，再让我绑定。');
+    expect((error as Error).message).toContain('99992361');
+    expect((await listProjects()).some(p => p.name === 'Foreign')).toBe(false);
+  });
+
+  it('takes a group Feishu made without the person down again, and refuses', async () => {
+    const fake = fakeLark(membersOf(members([])));
+    const error = await createProject({ rawClient: fake.client }, input('Left out', union)).catch((e: unknown) => e as Error);
+    expect(error).toBeInstanceOf(CreationRefusedError);
+    expect((error as Error).message).toBe('Bot B 拉不了你。可以你自己建群、把 B 拉进去，再让我绑定。');
+    expect(fake.requests.filter(r => r.method === 'DELETE' && /\/im\/v1\/chats\//.test(r.path))).toHaveLength(1);
+    expect((await listProjects()).some(p => p.name === 'Left out')).toBe(false);
+    expect(fake.requests.some(r => r.path.endsWith('/managers/add_managers'))).toBe(false);
+  });
+
+  it.each([['the check fails', { code: 232011, msg: 'no' }], ['the list is cut off', members([], { has_more: true })]])('keeps the group when %s: nothing says the person is out', async (_case, answer) => {
+    const fake = fakeLark(membersOf(answer));
+    const project = await createProject({ rawClient: fake.client }, input(`Kept ${String(_case)}`, union));
+    expect(project.chatId).toBeTruthy();
+    expect(fake.requests.some(r => r.method === 'DELETE')).toBe(false);
+  });
+
+  it('asks nothing more of an open_id', async () => {
+    const fake = fakeLark();
+    await createProject({ rawClient: fake.client }, input('Plain'));
+    expect(fake.requests.some(r => r.method === 'GET' && /\/members$/.test(r.path))).toBe(false);
+  });
+});
 
 describe('s36d1 createProject', () => {
   it('saves a new group in a stable directory under the bot, before the admin, announcement and welcome', async () => {

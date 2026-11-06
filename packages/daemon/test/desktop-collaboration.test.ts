@@ -36,7 +36,7 @@ afterAll(async () => {
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
   const appDir = mkdtempSync(join(tmpdir(), 'desktop-collaboration-'));
-  return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), botsFile: join(appDir, 'bots.json'), commentInstructionsFile: join(appDir, 'instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') },
+  return { paths: { appDir, inboundDir: join(appDir, 'inbound'), sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), botsFile: join(appDir, 'bots.json'), commentInstructionsFile: join(appDir, 'instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') },
     botPaths: () => ({ projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json') }) };
 });
 const fixture = vi.hoisted(() => ({ failProjectsWrite: false, holdProjectsWrite: undefined as Promise<void> | undefined, reachedProjectsWrite: () => {}, failSessionsWrite: false, holdSessionsWrite: undefined as Promise<void> | undefined, reachedSessionsWrite: () => {}, backend: undefined as unknown, leave: vi.fn(), send: vi.fn(async () => ({ messageId: 'om_sent' })), usage: vi.fn<() => Promise<AccountUsageBundle>>(async () => ({ profile: { topInvocations: [], dailyBuckets: [] }, usage: { main: {}, extras: [], fetchedAt: 1 } })) }));
@@ -56,7 +56,7 @@ vi.mock('../src/project/group-ops', () => ({ leaveChat: fixture.leave, transferO
 vi.mock('../src/card/managed', () => ({ sendManagedCard: fixture.send, updateManagedCard: vi.fn(async () => true) }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} }, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
 const target = { projectName: 'demo', chatId: 'oc_demo' };
-const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } };
+const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_owner'] } } };
 function backend() {
   const thread = { sessionId: 'fresh', isAlive: () => true, close: vi.fn(async () => {}), compact: vi.fn(async (): Promise<{ usage: { usedTokens: number; contextWindow: number | null } | null }> => ({ usage: { usedTokens: 20, contextWindow: 100 } })) };
   const backend = { id: 'codex-appserver', displayName: 'Codex (app-server)', listModels: async () => [{ id: 'gpt-5.5', displayName: 'GPT', supportedEfforts: ['medium' as const], defaultEffort: 'medium' as const, isDefault: true, hidden: false }], startThread: vi.fn(async () => thread), resumeThread: vi.fn(async () => thread), listThreads: vi.fn(async () => [{ sessionId: 'past', preview: 'historic', createdAt: 1, updatedAt: 2 }]), readHistory: vi.fn(async () => ({ name: 'historic', preview: '', turns: [], totalTurns: 0 })) };
@@ -83,6 +83,10 @@ it('rejects untrusted identity, extra fields and relative paths at the HTTP boun
   expect(() => parseCollaborationRequest({ action: 'context', ...target, threadId: 'oc_demo', owner: 'ou_fake' })).toThrow();
   expect(() => parseCollaborationRequest({ action: 'editProject', ...target, expectedRevision: 'revision', directory: '../escape' })).toThrow();
   expect(parseCollaborationRequest({ action: 'usage', force: true })).toEqual({ action: 'usage', force: true });
+  // dm-agent 6.4: who a new group pulls in crosses to the Bot process, and only as one of these two ids
+  const created = { action: 'createProject', requestId: 'r'.repeat(16), name: 'n', kind: 'single', backend: 'codex-appserver' };
+  expect(parseCollaborationRequest({ ...created, invitee: { idType: 'union_id', id: 'on_person' } })).toMatchObject({ invitee: { idType: 'union_id', id: 'on_person' } });
+  expect(() => parseCollaborationRequest({ ...created, invitee: { idType: 'email', id: 'on_person' } })).toThrow();
   expect(parseCollaborationRequest({ action: 'shareUsage', ...target, sections: ['stats', 'heatmap'] })).toMatchObject({ sections: ['stats', 'heatmap'] });
   expect(() => parseCollaborationRequest({ action: 'shareUsage', ...target, sections: ['unknown'] })).toThrow('分享区块无效');
   expect(() => parseCollaborationRequest({ action: 'shareUsage', ...target, sections: 'stats' })).toThrow('分享区块无效');

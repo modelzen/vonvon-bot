@@ -91,10 +91,13 @@ export type RemoteSeams = Partial<Pick<EnableDeps, 'interfaces' | 'tailscale' | 
  * the desktop app carries is updated by that app (U4), except on Windows for 0.9.0 (owner 2026-11-02).
  */
 export const capabilities = (distribution?: string, remoteOpen = false, platform: NodeJS.Platform = process.platform): string[] => [
-  'device', 'session-scope', ...remoteOpen ? ['remote'] : [],
+  'device', 'session-scope', 'attention.group', ...remoteOpen ? ['remote'] : [],
   ...distribution === 'standalone' ? ['update.standalone'] : distribution === 'global-npm' ? ['update.npm']
     : distribution === 'bundled' && platform !== 'win32' ? ['update.bundled'] : [],
 ];
+
+/** How many pages of a group's members (100 each) `knowsMember` reads before it gives up: an id it did not find is refused. */
+const MEMBER_PAGES = 100;
 
 /**
  * devices-4a 4.7: what each connection gets of a published event. The owner all of it, its snapshot cut to its `--scope`
@@ -106,7 +109,7 @@ export const viewFor = (tokens: Pick<SessionTokens, 'active'>): PeerView => (pee
   const principal = peer.principal;
   if (principal.kind === 'owner') return peer.scope && event.event === 'snapshot' ? { ...event, payload: filterSnapshot(event.payload, scopedOwner(peer.scope), peer.scope) } : event;
   if (principal.kind !== 'bot-session' || !tokens.active(principal.sessionId)) return null;
-  if (peer.negotiated && event.event === 'snapshot') return { ...event, payload: sessionSnapshot(event.payload, principal, peer.scope) };
+  if (peer.negotiated && event.event === 'snapshot') return { ...event, payload: sessionSnapshot(event.payload, principal) };
   return null;
 };
 
@@ -131,6 +134,19 @@ export async function startApi(options: { service: AdminService; port?: number; 
     sessionActive: sessionId => sessionTokens.active(sessionId, true),
     ...(options.askBot ? { askBot: options.askBot } : {}),
     memoryItem: async (scope, itemId) => (await memoryStoreFor(scope)).get(itemId),
+    botName: async appId => (await options.service.listBots()).find(bot => bot.appId === appId)?.name ?? appId,
+    knowsMember: async (appId, projectName, openId) => {
+      const chatId = (await options.service.listProjects(appId)).find(project => project.name === projectName)?.chatId;
+      if (!chatId || !options.service.groupMembers) return false;
+      let cursor: string | undefined;
+      for (let page = 0; page < MEMBER_PAGES; page++) {
+        const members = await options.service.groupMembers(appId, chatId, cursor);
+        if (members.members.some(member => member.openId === openId)) return true;
+        if (!members.nextCursor) return false;
+        cursor = members.nextCursor;
+      }
+      return false;
+    },
   };
   /** devices 5.3: a session that ends (revoked, its bot's process gone, idle) closes the connections made with its token. */
   let stopEnding: (() => void) | undefined;
@@ -275,11 +291,11 @@ export async function startApi(options: { service: AdminService; port?: number; 
         }
         case 'device': return finish(peer, await deviceRpc({ home, identity, clients, invites, remote: { listeners: remote, enable, active, candidates } }, peer, request.payload), payload => ({ type: 'response', id, method: 'device', payload }));
         case 'settings': return finish(peer, await settingsRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'settings', payload: shown(payload) }));
-        case 'collaboration': return finish(peer, await collaborationRpc(options.service, directory, request.payload), payload => ({ type: 'response', id, method: 'collaboration', payload: shown(payload) }));
+        case 'collaboration': return finish(peer, await collaborationRpc(options.service, directory, request.payload, decision.invitee), payload => ({ type: 'response', id, method: 'collaboration', payload: shown(payload) }));
         case 'environment': return finish(peer, await environmentRpc(options.service, jobs, peer, request.payload, environment), payload => ({ type: 'response', id, method: 'environment', payload }));
         case 'machine': return finish(peer, await machineRpc(options.service, options.control, port, request.payload, { launcher: serviceActions, snapshots, root: home, bridgeImport: options.bridgeImport, environment,
           bundled: { peer, update: bundled, distribution: () => installed, clients } }), payload => ({ type: 'response', id, method: 'machine', payload }));
-        case 'command': return finish(peer, await commandRpc({ service: options.service, jobs, peer, owner: ownerOf(peer), directory, snapshots, control: options.control, port }, request.payload), payload => ({ type: 'response', id, method: 'command', payload: shown(payload) }));
+        case 'command': return finish(peer, await commandRpc({ service: options.service, jobs, peer, owner: ownerOf(peer), directory, snapshots, control: options.control, port, ...(decision.feishu ? { feishu: decision.feishu } : {}) }, request.payload), payload => ({ type: 'response', id, method: 'command', payload: shown(payload) }));
         case 'library': return finish(peer, await libraryRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'library', payload: shown(payload) }));
         // devices-4b 4.5: a Bot session's write lands where its Bot process said, as its turn's person.
         case 'memory': return finish(peer, await memoryRpc(options.service, request.payload, {

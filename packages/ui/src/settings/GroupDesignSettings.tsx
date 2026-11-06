@@ -1,8 +1,9 @@
 import {useCallback, useContext, useEffect, useRef, useState, type ReactNode} from 'react';
-import {smartRulesText} from '@vonvon/protocol';
+import {DEFAULT_DM_SMART_RULES_TEXT, smartRulesText} from '@vonvon/protocol';
 import {Blocks, ChevronRight, Folder, GitBranch, Plus, RefreshCw, Search, X} from 'lucide-react';
 import {backendLabel, isKnownJudgeSelection, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
 import {useActiveDevice, useClient} from '../client-context';
+import {settingAnchor} from '../search';
 import {onDevice, updateServerText, whereName} from '../device-copy';
 import {useDirectoriesPicker} from '../directory-picker';
 import {Button, IconButton, InlineNotice, SelectControl, Toggle} from '../reference/components/ui';
@@ -12,6 +13,8 @@ import {Catalog, Editor, ProjectPanel, type CatalogControls, type Section, type 
 import {PersonaEditor} from './PersonaEditor';
 import {SmartRulesEditor, SMART_RULES_MAX_LENGTH} from './SmartRulesEditor';
 import {SettingChoices} from './SettingChoices';
+import {ConversationSlider, dmConversationModes} from './ConversationSlider';
+import {useDraftGuard} from './DraftGuard';
 import {useProviderDiscovery} from './useProviderDiscovery';
 import {DecisionFields, providerDecisionProblem} from './DecisionFields';
 export {DecisionFields} from './DecisionFields';
@@ -40,6 +43,8 @@ type Props = {
   onOpenSecrets?: (provider?: string) => void;
   responseHeader?: ReactNode;
   refreshVersion?: number;
+  /** The private chat's row: its permission and folder are only shown, and it has no topics or members (dm-agent 4.2). */
+  dm?: boolean;
 };
 const failText = (error: unknown) => error instanceof Error ? error.message : '暂时无法读取，请重试。';
 const pathName = (path: string) => path.split(/[\\/]/).filter(Boolean).at(-1) || path;
@@ -83,7 +88,44 @@ function GroupSettingsLoader(props: Props) {
   </div>;
 }
 
-export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, onOpenProviders, onOpenSecrets, responseHeader}: Omit<Props, 'scope'> & {view: ProjectSettingsView; refresh: () => Promise<void>}) {
+/** What a private chat shows and does not let anyone change: one tier, one folder. */
+export function dmFixedRows(view: ProjectSettingsView): {title: string; value: string; description: string}[] {
+  const {mode, options} = view.sections.permission.stored;
+  const tier = options.tiers.find(item => item.tier === mode);
+  return [
+    {title: '执行权限', value: tier?.name ?? '完全访问', description: [tier?.summary, '私聊固定用这一档。'].filter(Boolean).join(' ')},
+    {title: '目录', value: view.identity.cwd, description: '私聊专用，不能改'},
+  ];
+}
+function DmFixedSettings({view}: {view: ProjectSettingsView}) {
+  const [tier, folder] = dmFixedRows(view);
+  return <SettingsGroup label="执行权限" id={settingAnchor('权限')} className="permission-summary">
+    <SettingsRow title={tier!.value} description={tier!.description}/>
+    <SettingsRow title={folder!.title} description={folder!.description} value={folder!.value}/>
+  </SettingsGroup>;
+}
+
+/** The group's 聊天方式 control, on the row's own setting instead of the group's binding. */
+function DmConversation({section, save}: {section: NonNullable<GroupSections['conversation']>; save: (patch: {mode: 'smart' | 'single'}, revision: string) => Promise<SettingsReply>}) {
+  const guard = useDraftGuard();
+  const [pending, setPending] = useState<'smart' | 'single'>();
+  const [problem, setProblem] = useState(false);
+  async function change(mode: 'smart' | 'single') {
+    setPending(mode); setProblem(false);
+    try {
+      const reply = await save({mode}, section.revision);
+      if (reply.kind !== 'saved' || reply.result.kind !== 'saved') setProblem(true);
+    } catch {setProblem(true);}
+    finally {setPending(undefined);}
+  }
+  return <div className="group-conversation-layout"><section id={settingAnchor('聊天方式')} className="group-conversation-choice" aria-label="聊天方式">
+    <h3>聊天方式</h3><ConversationSlider label="聊天方式" modes={dmConversationModes} value={(pending ?? section.stored.mode) === 'smart' ? 'smart' : 'shared'}
+      disabled={section.access.kind === 'readonly'} pending={pending !== undefined} onChange={next => guard.navigate(() => {void change(next === 'smart' ? 'smart' : 'single');})}/>
+    {problem && <p className="group-control-note" role="alert">没保存上，请再试一次。</p>}
+  </section></div>;
+}
+
+export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, onOpenProviders, onOpenSecrets, responseHeader, dm}: Omit<Props, 'scope'> & {view: ProjectSettingsView; refresh: () => Promise<void>}) {
   const client = useClient();
   const where = useActiveDevice();
   const discovery = useProviderDiscovery(tools);
@@ -103,9 +145,10 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
     if (reply.kind === 'saved' && reply.result.kind === 'saved') await refresh();
     return reply;
   }
-  const relevant: (Section<unknown> | undefined)[] = tab === 'capabilities' ? [sections.skills, sections.presentation]
-    : tab === 'role' ? [sections.role] : tab === 'model' ? [sections.modelAccess, sections.permission]
+  const relevant: (Section<unknown> | undefined)[] = tab === 'capabilities' ? [sections.skills, ...(dm ? [] : [sections.presentation])]
+    : tab === 'role' ? [sections.role] : tab === 'model' ? [sections.modelAccess, ...(dm ? [] : [sections.permission])]
     : tab === 'permission' ? [sections.permission]
+    : dm ? [sections.conversation, ...(view.identity.kind === 'smart' ? [sections.smartRules, sections.judge] : [])]
     : [...(view.identity.kind !== 'smart' ? [sections.response] : []), ...(view.identity.backend !== 'claude-agent' ? [sections.run] : []), sections.permission, sections.presentation, ...(view.identity.kind === 'smart' ? [sections.judge, sections.smartRules] : [])];
   const notices: ReadonlyMessage[] = [];
   for (const section of relevant) if (section?.access.kind === 'readonly' && !hasReadonlyMessage([...outerReadonly, ...notices], section.access)) notices.push(section.access);
@@ -137,11 +180,12 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
         fieldLabels={{models: '可用模型', defaultModel: '可用模型', modelServiceTiers: '可用模型', efforts: '可用思考强度', modelEfforts: '可用思考强度', defaultEffort: '可用思考强度', backend: 'Provider', settings: '模型设置'}}
         render={(draft, set, disabled, _commit, _resetKey, _discard, fieldIssues) => <ModelAccessFields fieldIssues={fieldIssues} botId={view.scope.botId} value={draft} onChange={set} disabled={disabled} providers={providers} onCatalog={rememberCatalog}
           onCheckProviders={discovery.retry} checkingProviders={discovery.checking}
-          onOpenProviders={onOpenProviders} permissionName={sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)?.name} savedBackend={view.identity.backend}/>}
+          onOpenProviders={onOpenProviders} dm={dm} permissionName={dm ? undefined : sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)?.name} savedBackend={view.identity.backend}/>}
         validate={value => providers.some(provider => provider.id === value.backend) ? modelAccessProblem(value, modelCatalog.current) : `这个 Provider 现在不可用，先${onDevice(where, '安装')}并配置好。`}/> : <MissingSection/>)}
-      {(tab === 'model' || tab === 'permission') && <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>}
+      {(tab === 'model' || tab === 'permission') && (dm ? <DmFixedSettings view={view}/> : <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>)}
       {tab === 'response' && <>
         {responseHeader}
+        {dm && sections.conversation && <DmConversation section={sections.conversation} save={(patch, revision) => save('conversation', patch, revision)}/>}
         {view.identity.kind === 'smart' && <>
           {judgeSection ? <Editor title="决策模型" section={judgeSection} autoSave save={(patch, revision) => save('judge', patch, revision)}
             validate={value => providerDecisionProblem(value.selection, providers, view.decisionModels, undefined, where)}
@@ -149,10 +193,10 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
               onChange={selection => set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} catalogs={decisionCatalogs} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>}
           {sections.smartRules ? <Editor title="判断规则" section={sections.smartRules} save={(patch, revision) => save('smartRules', patch, revision)}
             validate={draft => smartRulesText(draft).length > SMART_RULES_MAX_LENGTH ? `规则超过 ${SMART_RULES_MAX_LENGTH} 字，请缩短后保存。` : undefined}
-            render={(draft, set, disabled, _commit, resetKey) => <SmartRulesEditor key={resetKey} expanded={rulesExpanded} onExpandedChange={setRulesExpanded} value={smartRulesText(draft)} disabled={disabled} onChange={respond => set({respond, newTopic: ''})}/>}/> : <MissingSection/>}
+            render={(draft, set, disabled, _commit, resetKey) => <SmartRulesEditor key={resetKey} defaultText={dm ? DEFAULT_DM_SMART_RULES_TEXT : undefined} expanded={rulesExpanded} onExpandedChange={setRulesExpanded} value={smartRulesText(draft)} disabled={disabled} onChange={respond => set({respond, newTopic: ''})}/>}/> : <MissingSection/>}
         </>}
-        {view.identity.kind !== 'smart' && <ProjectPanel view={view} refresh={refresh} partition="response" independent hideJudge/>}
-        <details className="gd-disclosure"><summary>响应成员</summary><ProjectPanel view={view} refresh={refresh} partition="members" independent hideJudge/></details>
+        {!dm && view.identity.kind !== 'smart' && <ProjectPanel view={view} refresh={refresh} partition="response" independent hideJudge/>}
+        {!dm && <details className="gd-disclosure"><summary>响应成员</summary><ProjectPanel view={view} refresh={refresh} partition="members" independent hideJudge/></details>}
         <ProjectPanel view={view} refresh={refresh} partition="run" independent hideJudge/>
         {sections.presentation && <Editor title="消息与提醒" section={sections.presentation} save={(patch, revision) => save('presentation', patch, revision)} render={(draft, set, disabled, commit) => <>
           <SettingsRow title="显示工具调用" trailing={<Toggle className="settings-row-switch" label="显示工具调用" aria-label="显示工具调用" checked={draft.showToolCalls} disabled={disabled} onChange={event => void commit({showToolCalls: event.target.checked})}/>}/>
@@ -190,7 +234,7 @@ export function modelAccessProblem(value: ModelAccess, catalog?: ModelCatalog): 
   const problems = modelAccessProblems(value, catalog);
   return problems.models ?? problems.efforts ?? problems.catalog;
 }
-export function ModelAccessFields({botId, value, onChange, disabled, providers, onCatalog, permissionName, savedBackend, onOpenProviders, onCheckProviders, checkingProviders, fieldIssues}: {fieldIssues?: SettingsFieldIssue[]; botId: AgentId; value: ModelAccess; onChange: (value: ModelAccess) => void; disabled: boolean; providers: Provider[]; onCatalog?: (catalog: ModelCatalog | undefined) => void; permissionName?: string; savedBackend?: string; onOpenProviders?: () => void; onCheckProviders?: () => void; checkingProviders?: boolean}) {
+export function ModelAccessFields({botId, value, onChange, disabled, providers, onCatalog, permissionName, savedBackend, onOpenProviders, onCheckProviders, checkingProviders, fieldIssues, dm}: {dm?: boolean; fieldIssues?: SettingsFieldIssue[]; botId: AgentId; value: ModelAccess; onChange: (value: ModelAccess) => void; disabled: boolean; providers: Provider[]; onCatalog?: (catalog: ModelCatalog | undefined) => void; permissionName?: string; savedBackend?: string; onOpenProviders?: () => void; onCheckProviders?: () => void; checkingProviders?: boolean}) {
   const available = providers.some(provider => provider.id === value.backend);
   const choices = providerChoices(providers, value.backend);
   return <div className="gd-model-fields gd-model-fields--compact">
@@ -203,10 +247,10 @@ export function ModelAccessFields({botId, value, onChange, disabled, providers, 
     </div>
     {permissionName && value.backend !== savedBackend && <p className="gd-model-compact-notice" role="status">换 Provider 后，权限仍是「{permissionName}」；自定义设置会清掉。</p>}
     {!available && <div className="gd-model-compact-notice" role="status"><span>此 Provider 暂不可用，已保存的选择仍保留。</span>{onOpenProviders && <Button size="sm" onClick={onOpenProviders}>检查 Provider</Button>}</div>}
-    <Catalog key={value.backend} botId={botId} backend={value.backend} purpose="project" showStatus={false}>{(catalog, catalogControls) => <ModelAccessChoices fieldIssues={fieldIssues} value={value} onChange={onChange} catalog={catalog?.backend === value.backend ? catalog : undefined} catalogControls={catalogControls} disabled={disabled || !available} onCatalog={onCatalog}/>}</Catalog>
+    <Catalog key={value.backend} botId={botId} backend={value.backend} purpose="project" showStatus={false}>{(catalog, catalogControls) => <ModelAccessChoices dm={dm} fieldIssues={fieldIssues} value={value} onChange={onChange} catalog={catalog?.backend === value.backend ? catalog : undefined} catalogControls={catalogControls} disabled={disabled || !available} onCatalog={onCatalog}/>}</Catalog>
   </div>;
 }
-export function ModelAccessChoices({value, onChange, catalog, catalogControls, disabled, onCatalog, fieldIssues}: {fieldIssues?: SettingsFieldIssue[]; value: ModelAccess; onChange: (value: ModelAccess) => void; catalog?: ModelCatalog; catalogControls?: CatalogControls; disabled: boolean; onCatalog?: (catalog: ModelCatalog | undefined) => void}) {
+export function ModelAccessChoices({value, onChange, catalog, catalogControls, disabled, onCatalog, fieldIssues, dm}: {dm?: boolean; fieldIssues?: SettingsFieldIssue[]; value: ModelAccess; onChange: (value: ModelAccess) => void; catalog?: ModelCatalog; catalogControls?: CatalogControls; disabled: boolean; onCatalog?: (catalog: ModelCatalog | undefined) => void}) {
   useEffect(() => {onCatalog?.(catalogControls?.loading ? undefined : catalog);}, [catalog, catalogControls?.loading, onCatalog]);
   const problems = modelAccessProblems(value, catalogControls?.loading ? undefined : catalog);
   const fieldError = (fields: string[]) => fieldIssues?.filter(issue => fields.includes(issue.field)).map(issue => issue.message).join('；') || undefined;
@@ -217,7 +261,7 @@ export function ModelAccessChoices({value, onChange, catalog, catalogControls, d
   const defaults = `${model?.displayName ?? id ?? '请选择'}${model?.supportedEfforts.length && effort ? ` · ${effort}` : ''}`;
   return <>
     <CompactModelSelection errors={errors} value={value} onChange={onChange} catalog={catalog} catalogControls={catalogControls} disabled={disabled}/>
-    {status ? <p className="gd-model-compact-note" role="status">{status}</p> : !problem && <p className="gd-model-compact-note">{`群内通过 /model 切换；新话题默认：${defaults}。`}</p>}
+    {status ? <p className="gd-model-compact-note" role="status">{status}</p> : !problem && <p className="gd-model-compact-note">{dm ? `新会话默认：${defaults}。` : `群内通过 /model 切换；新话题默认：${defaults}。`}</p>}
   </>;
 }
 

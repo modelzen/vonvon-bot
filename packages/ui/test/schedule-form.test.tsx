@@ -163,3 +163,31 @@ it('shows the daemon\'s bad-schedule text as it is', async () => {
   await save(task);
   expect(render(task).notice()).toBe('cron 不合法：第 2 段超出范围');
 });
+
+// dm-agent 10 (D4). main 必败: a new task could only go to the chat the page was on
+it('asks whose private chat a new task posts to, and offers no topic there', async () => {
+  const chats = [{value: 'oc_p2p_a', label: '张三'}, {value: 'oc_p2p_b', label: '李四'}];
+  const dmForm = () => {
+    harness.index = 0;
+    const all = nodes(ScheduleForm({chats, hostTimeZone: 'UTC', send, onClose, now: () => scheduleNow}));
+    return {choices: (label: string) => all.find(node => node.props.label === label && node.props.choices), input: (key: string) => all.find(node => node.props.id === `form-${key}`)!, button: (text: string) => all.find(node => node.props.children === text && node.props.onClick)!};
+  };
+  expect(dmForm().choices('发到哪')).toBeUndefined();
+  expect(dmForm().choices('发给谁')!.props.choices).toEqual(chats);
+  dmForm().choices('发给谁')!.props.onChange('oc_p2p_b');
+  dmForm().input('name').props.onChange({target: {value: '早报'}});
+  dmForm().input('instruction').props.onChange({target: {value: '发今天的安排'}});
+  await dmForm().button('保存').props.onClick();
+  expect(send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({action: 'create', chatId: 'oc_p2p_b', name: '早报'}));
+});
+
+it('keeps a private task on its own chat when editing it, with no choice of person', async () => {
+  const task = scheduleTask({chatId: 'oc_p2p_a', dm: {name: '张三'}});
+  harness.index = 0;
+  const all = nodes(ScheduleForm({chats: [{value: 'oc_p2p_b', label: '李四'}], task, hostTimeZone: 'UTC', send, onClose, now: () => scheduleNow}));
+  expect(all.some(node => node.props.label === '发给谁' || node.props.label === '发到哪')).toBe(false);
+  all.find(node => node.props.id === 'form-name')!.props.onChange({target: {value: '改过'}});
+  harness.index = 0;
+  await nodes(ScheduleForm({chats: [{value: 'oc_p2p_b', label: '李四'}], task, hostTimeZone: 'UTC', send, onClose, now: () => scheduleNow})).find(node => node.props.children === '保存' && node.props.onClick)!.props.onClick();
+  expect(send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({action: 'edit', chatId: 'oc_p2p_a', taskId: task.id}));
+});

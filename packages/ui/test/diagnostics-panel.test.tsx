@@ -3,7 +3,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {formatTime, type AdminSetupStatus, type Agent, type ApplicationCrashes, type DesktopSnapshot, type NotReplied, type ToolState} from '@vonvon/protocol';
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
-import {crashBars, DiagnosticsPanel, scopeView, setupView} from '../src/management/DiagnosticsPanel';
+import {crashBars, DiagnosticsPanel, scopeView, setupView, toolScopeView} from '../src/management/DiagnosticsPanel';
 import {diagnosticsSection, findEntries, searchEntries, settingAnchor} from '../src/search';
 
 const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
@@ -177,6 +177,20 @@ it('merges the console\'s missing scopes with the ones Feishu refused at runtime
   expect(renderToStaticMarkup(<>{scopeView({scopes: {missingRequired: [], missingOptional: [], grantUrl: 'x'}} as AdminSetupStatus, agent, now).badge}</>)).toContain('没有缺的');
 });
 
+it('lists what the Feishu tools lack as optional, with their own link', () => {
+  const status = {scopes: {missingRequired: [], missingOptional: [], missingTools: ['docs:document.content:read', 'docx:document:readonly', 'search:message'], grantUrl: 'x', toolsGrantUrl: 'https://open.feishu.cn/app/cli_diag/auth?q=y'}} as AdminSetupStatus;
+  const view = toolScopeView(status)!;
+  const html = renderToStaticMarkup(<>{view.badge}<ul>{view.lines}</ul></>);
+  expect(html).toContain('缺 3 项');
+  expect(html.match(/读不了文档和知识库/g)).toHaveLength(1);
+  expect(html).toContain('搜不了消息');
+  expect(html).toContain('发布新版本');
+  expect(view.url).toBe('https://open.feishu.cn/app/cli_diag/auth?q=y');
+  expect(renderToStaticMarkup(<>{toolScopeView({scopes: {missingTools: [], grantUrl: 'x'}} as AdminSetupStatus)!.badge}</>)).toContain('没有缺的');
+  expect(toolScopeView({scopes: {grantUrl: 'x'}} as AdminSetupStatus)).toBeUndefined();
+  expect(renderToStaticMarkup(<>{scopeView(status, agent, now).badge}</>)).toContain('没有缺的');
+});
+
 it('says 全部完成 with the optional events the checklist warns about, and leaves the scope warning to 缺的权限', () => {
   const status = {appId: 'cli_diag', tenant: 'feishu', credentials: {ok: true}, eventConfigUrl: 'x', consoleUrl: 'x', cardCallback: {confirmed: true},
     event: {state: 'ok', missingOptional: ['im.message.recalled_v1']},
@@ -213,26 +227,29 @@ it('lists the groups an older version put in a wrong directory, only when there 
   expect(render([agent])).not.toContain('群目录');
 });
 
-it('shows every smart group once with actual main/topic state, budget and old prompt notice; rules stay absent', () => {
-  const snap = snapshot([{...agent, diagnostics: {notReplied: [], deniedScopes: [], attention: [{groupId: 'oc_bound_group', main: {mode: 'watch', intervalMs: 180000}, focusedTopics: 2, watchedTopics: 1, budget: {kind: 'no-glance', until: now + 60000}}], customPromptGroups: ['oc_bound_group']}}]);
+it('shows every smart group once with one group score, budget and old prompt notice; rules stay absent', () => {
+  const snap = snapshot([{...agent, diagnostics: {notReplied: [], deniedScopes: [], attention: [{groupId: 'oc_bound_group', group: {score: 50, intervalMs: 180000, updatedAt: now}, main: {mode: 'watch', intervalMs: 180000}, focusedTopics: 2, watchedTopics: 1, budget: {kind: 'no-glance', until: now + 60000}}], customPromptGroups: ['oc_bound_group']}}]);
   snap.memberships[0]!.conversation = 'smart';
+  snap.memberships[0]!.enabled = true;
   const html = renderToStaticMarkup(<ClientProvider client={client}><DiagnosticsPanel snapshot={snap} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenProviders={() => {}} onOpenSecrets={() => {}} onNotice={() => {}}/></ClientProvider>);
-  expect(html).toContain('主区留意（间隔 180 秒）');
-  expect(html).toContain('话题专注 2 个、留意 1 个');
-  expect(html).toContain('暂停扫一眼');
+  expect(html).toContain('50 / 100 · 普通查看暂缓');
+  expect(html).not.toContain('话题专注 2 个');
+  expect(html).toContain('批量查看暂缓');
   expect(html).toContain('你的自定义提示词保持原样');
-  expect(render([agent])).not.toContain('智能群关注状态');
-  for (const title of ['智能群关注状态', '自定义智能提示词']) expect(findEntries(searchEntries(snap), title).some(entry => entry.destination.section === diagnosticsSection(agent.id))).toBe(true);
+  expect(render([agent])).not.toContain('智能群注意力');
+  for (const title of ['智能群注意力', '自定义智能提示词']) expect(findEntries(searchEntries(snap), title).some(entry => entry.destination.section === diagnosticsSection(agent.id))).toBe(true);
 });
 
 it('distinguishes a new daemon with empty attention from an old daemon without the field', () => {
   const show = (attention?: []) => {
     const snap = snapshot([{...agent, diagnostics: {notReplied: [], deniedScopes: [], ...(attention ? {attention} : {})}}]);
+    snap.attentionModel = 'group';
     snap.memberships[0]!.conversation = 'smart';
+    snap.memberships[0]!.enabled = true;
     return renderToStaticMarkup(<ClientProvider client={client}><DiagnosticsPanel snapshot={snap} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenProviders={() => {}} onOpenSecrets={() => {}} onNotice={() => {}}/></ClientProvider>);
   };
-  expect(show([])).toContain('主区尚无关注状态');
-  expect(show()).toContain('daemon 未提供关注状态');
+  expect(show([])).toContain('10 / 100 · 低度留意');
+  expect(show()).toContain('当前版本未提供注意力状态');
 });
 
 // Codex review 244: a remote device's tools were explained as this computer's (这台电脑, 查看本机环境, 在终端运行 codex …)

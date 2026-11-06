@@ -1,13 +1,13 @@
-// The crash messages to a bot's owner (product.md 3.10, s18b). The host sends them itself with the bot's app identity over
+// The crash messages to a bot's administrators (product.md 3.10, s18b). The host sends them itself with the bot's app identity over
 // Feishu's HTTP API, not through a bot's long connection, so they go out while the bots are down or paused.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { crashText, type CrashEntry } from '@vonvon/protocol';
 import { FEISHU_API_BASES } from '../admin/avatar';
 import type { BotEntry } from '../config/bots';
 import { botPaths } from '../config/paths';
-import { isComplete, resolveOwner, type TenantBrand } from '../config/schema';
+import { isComplete, type TenantBrand } from '../config/schema';
 import { resolveAppSecret } from '../config/secret-resolver';
 import { loadConfig } from '../config/store';
 import { FEISHU_RATE_LIMIT_CODES } from '../utils/feishu-error';
@@ -19,14 +19,14 @@ import {
 
 /** What the host's start knows of the run before it (bootstrap, from `openHostRun`). */
 export type HostNotice = { previous?: CrashEntry; crashes: number; resumed: boolean; pauseEntered: boolean };
-export type Sender = { appId: string; tenant: TenantBrand; appSecret: string; openId: string };
+export type Sender = { appId: string; tenant: TenantBrand; appSecret: string; openIds: readonly string[] };
 type PauseEvent<T = UnsentNotice> = T extends UnsentNotice ? Omit<T, 'uuid' | 'chainId' | 'at'> : never;
 type BotPausedEvent = Extract<PauseEvent, { kind: 'bot-paused' }>;
 type BotEvent = BotPausedEvent | (Omit<BotPausedEvent, 'kind'> & { kind: 'bot-recovered' });
 export type NoticeEvent = PauseEvent | BotEvent
   | (Omit<Extract<PauseEvent, { kind: 'host-paused' }>, 'kind'> & { kind: 'host-recovered' });
 export type SendResult = { ok: true } | { ok: false; retry: boolean; status?: number; code?: number; msg?: string };
-/** A sender, or why this bot cannot send (no complete config, no owner, no secret). */
+/** A sender, or why this bot cannot send (no complete config, no administrator, no secret). */
 export type LoadSender = (appId: string) => Promise<Sender | string>;
 
 export interface CrashNotifier {
@@ -101,13 +101,13 @@ export function botFolders(root: string): string[] {
 }
 
 /** The bot's own config, read at each send (no secret kept in memory). */
-export async function loadOwnerSender(appId: string): Promise<Sender | string> {
+export async function loadAdminSender(appId: string): Promise<Sender | string> {
   let cfg: Awaited<ReturnType<typeof loadConfig>>;
   try { cfg = await loadConfig(botPaths(appId).configFile); } catch { return 'config-unreadable'; }
   if (!isComplete(cfg)) return 'config-incomplete';
-  const openId = resolveOwner(cfg);
-  if (!openId) return 'no-owner';
-  try { return { appId, tenant: cfg.accounts.app.tenant, appSecret: await resolveAppSecret(cfg), openId }; }
+  const openIds = [...new Set(cfg.preferences?.access?.admins ?? [])];
+  if (!openIds.length) return 'no-admin';
+  try { return { appId, tenant: cfg.accounts.app.tenant, appSecret: await resolveAppSecret(cfg), openIds }; }
   catch { return 'secret-unreadable'; }
 }
 
@@ -137,9 +137,16 @@ function refused(reply: Reply): SendResult | undefined {
   return undefined;
 }
 
-/** A tenant token for the bot's app, then a text message to its owner's open_id. `uuid` makes a resend of the same
- * message a no-op on Feishu's side (verified 2026-10-16: the same uuid returns the same message_id). */
-export async function sendOwnerText(sender: Sender, text: string, uuid: string, signal: AbortSignal, fetchImpl: typeof fetch = fetch): Promise<SendResult> {
+const failedSend = (error: unknown): SendResult => ({ ok: false, retry: true, msg: (error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 200) });
+/** Feishu keeps one message per uuid, so each person gets their own, the same one at each try whatever the list's order. */
+const personalUuid = (uuid: string, openId: string): string => `${uuid}-${createHash('sha256').update(openId).digest('hex').slice(0, 8)}`;
+
+/**
+ * A tenant token for the bot's app, then a text message to each administrator's open_id. The per-person `uuid` makes a
+ * resend of the same message a no-op on Feishu's side (verified 2026-10-16: the same uuid returns the same message_id), so
+ * a try again reaches only who it missed. Took if one got it and nobody is worth trying again; else the first failure.
+ */
+export async function sendAdminText(sender: Sender, text: string, uuid: string, signal: AbortSignal, fetchImpl: typeof fetch = fetch): Promise<SendResult> {
   const base = FEISHU_API_BASES[sender.tenant];
   const step = (): AbortSignal => AbortSignal.any([signal, AbortSignal.timeout(STEP_TIMEOUT_MS)]);
   try {
@@ -147,12 +154,18 @@ export async function sendOwnerText(sender: Sender, text: string, uuid: string, 
     const authRefused = refused(auth);
     if (authRefused) return authRefused;
     if (!auth.token) return { ok: false, retry: false, status: auth.status, msg: 'no tenant_access_token' };
-    const sent = await post(fetchImpl, `${base}/open-apis/im/v1/messages?receive_id_type=open_id`,
-      { receive_id: sender.openId, msg_type: 'text', content: JSON.stringify({ text }), uuid }, step(), auth.token);
-    return refused(sent) ?? { ok: true };
-  } catch (error) {
-    return { ok: false, retry: true, msg: (error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 200) };
-  }
+    const results = await Promise.all(sender.openIds.map(async (openId): Promise<SendResult> => {
+      try {
+        const sent = await post(fetchImpl, `${base}/open-apis/im/v1/messages?receive_id_type=open_id`,
+          { receive_id: openId, msg_type: 'text', content: JSON.stringify({ text }), uuid: personalUuid(uuid, openId) }, step(), auth.token);
+        return refused(sent) ?? { ok: true };
+      } catch (error) { return failedSend(error); }
+    }));
+    const failures = results.filter(result => !result.ok);
+    const again = failures.find(result => result.retry);
+    if (again) return again;
+    return failures.length === results.length ? failures[0] ?? { ok: true } : { ok: true };
+  } catch (error) { return failedSend(error); }
 }
 
 type Job = { event: NoticeEvent; uuid: string; attempt: number; scope: string; gen: number; exempt: boolean; candidates: readonly string[] };
@@ -165,7 +178,7 @@ export function createCrashNotifier(deps: {
   const clock = deps.clock ?? systemClock;
   // Looked up at each send, so a fetch replaced after this was made (a test preload) is the one used.
   const fetchImpl: typeof fetch = (input, init) => (deps.fetchImpl ?? globalThis.fetch)(input, init);
-  const loadSender = deps.loadSender ?? loadOwnerSender;
+  const loadSender = deps.loadSender ?? loadAdminSender;
   const stableMs = deps.stableMs ?? NOTICE_STABLE_MS;
   const retryMs = deps.retryMs ?? NOTICE_RETRY_MS;
   const last = new Map<string, NoticeStamp>(Object.entries(readNotices(root, () => log.warn('crash-notify', 'notices-corrupt', {}))));
@@ -292,10 +305,10 @@ export function createCrashNotifier(deps: {
     if (closed && next.exempt) waitAgain?.();
     if (!next.exempt && limited(sender.appId)) { log.info('crash-notify', 'limited', { ...fields, bot: sender.appId }); return 'sent'; }
     const signal = next.exempt ? finalCut.signal : AbortSignal.any([closeCut.signal, finalCut.signal]);
-    const result = await sendOwnerText(sender, noticeText(next.event), next.uuid, signal, fetchImpl);
+    const result = await sendAdminText(sender, noticeText(next.event), next.uuid, signal, fetchImpl);
     if (result.ok) {
       stampSent(sender.appId);
-      log.info('crash-notify', 'sent', { ...fields, bot: sender.appId, owner: sender.openId });
+      log.info('crash-notify', 'sent', { ...fields, bot: sender.appId, admins: sender.openIds.length });
       return 'sent';
     }
     const detail = { ...fields, bot: sender.appId, ...(result.status !== undefined ? { status: result.status } : {}), ...(result.code !== undefined ? { code: result.code } : {}), ...(result.msg ? { msg: result.msg } : {}) };

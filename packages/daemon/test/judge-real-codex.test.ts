@@ -30,6 +30,7 @@ const marker = randomUUID();
 const MESSAGES: Record<JudgeVariant, { text: string; mentions?: string[] }> = {
   main: { text: '今天食堂的红烧肉不错' },
   topic: { text: '这个报错能帮我看下吗' },
+  dm: { text: '帮我看下这个报错' },
 };
 
 const request = (variant: JudgeVariant, extra: Partial<JudgeRequest> = {}): JudgeRequest => ({

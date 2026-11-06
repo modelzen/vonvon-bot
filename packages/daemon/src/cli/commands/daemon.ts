@@ -137,12 +137,16 @@ function sameOwner(left: PidLockInfo | null, right: PidLockInfo): boolean {
   return left?.pid === right.pid && left.startedAt === right.startedAt;
 }
 
+/** How long a stop waits for a process that has released daemon.pid. A parent that never reaps it leaves a zombie, which still answers `kill 0`. */
+export const RELEASED_EXIT_GRACE_MS = 5000;
+
 export async function runStop(home = paths.appDir, reason?: 'update'): Promise<boolean> {
   const lock = await readRunningPidLock(home);
   if (!lock) return false;
   if (lock.pid === process.pid) throw new Error('Refusing to stop the current CLI process.');
   await stopVerifiedOwner(home, lock, reason);
   let progressAt = Date.now() + 5000;
+  let releasedBy: number | undefined;
   for (;;) {
     const current = await getPidLockInfo(home);
     if (current && !sameOwner(current, lock) && isPidLockOwnerRunning(current)) {
@@ -153,6 +157,7 @@ export async function runStop(home = paths.appDir, reason?: 'update'): Promise<b
       if (!sameOwner(await getPidLockInfo(home), lock)) return true;
       throw new Error(`Daemon ${lock.pid} exited without releasing daemon.pid. Cleanup was not confirmed; see vonvon daemon logs.`);
     }
+    if (!sameOwner(current, lock) && Date.now() >= (releasedBy ??= Date.now() + RELEASED_EXIT_GRACE_MS)) return true;
     if (Date.now() >= progressAt) {
       process.stderr.write(`Waiting for daemon PID ${lock.pid} at ${lock.listen} to finish stopping…\n`);
       progressAt = Date.now() + 5000;

@@ -43,7 +43,7 @@ const json = (...args: Parameters<typeof buildCommentSettingsCard>): string =>
   JSON.stringify(buildCommentSettingsCard(...args));
 
 describe('buildCommentSettingsCard', () => {
-  it('shows backend buttons (cascade) + a model/effort form + prompt-editor + lark-cli hint', () => {
+  it('shows backend buttons (cascade) + a model/effort form + prompt-editor + how to share a document with the Bot', () => {
     const j = json(cfg(), TWO_BACKENDS, codexModels);
     expect(j).toContain('dm.comment.setBackend'); // backend buttons (>1)
     expect(j).toContain('Codex');
@@ -56,8 +56,8 @@ describe('buildCommentSettingsCard', () => {
     expect(j).toContain('GPT-5.5');
     expect(j).toContain('dm.comment.editPrompt'); // prompt editor button
     expect(j).toContain('编辑回复规则');
-    expect(j).toContain('lark-cli'); // 飞书CLI 配合提示
-    expect(j).toContain('bytedance.larkoffice.com/wiki/'); // 飞书CLI 文档链接
+    expect(j).toContain('分享里搜 Bot 名'); // 文档权限靠分享给 Bot
+    expect(j).not.toContain('lark-cli');
     expect(j).toContain('dm.settings'); // back to settings
   });
 

@@ -8,323 +8,306 @@ const A = { chatId: 'oc_a', place: 'oc_a' };
 const A1 = { chatId: 'oc_a', place: 'omt_a1' };
 const A2 = { chatId: 'oc_a', place: 'omt_a2' };
 const B = { chatId: 'oc_b', place: 'oc_b' };
-const glanceSkip = (a: Attention, ref = A, at = T0) => { a.glanced(ref, at); a.verdict(ref, 'glance', 'skip', at); };
-const topic = (n: number) => ({ chatId: 'oc_a', place: `omt_${n}` });
+const reading = (a: Attention, chatId = A.chatId) => a.snapshot().find(group => group.groupId === chatId)?.group;
 
-describe('attention defaults and arrival', () => {
-  it('1. uses the agreed defaults and rejects invalid intervals', () => {
-    expect(ATTENTION_DEFAULTS).toEqual({ places: 200, intervalsMs: [60_000, 180_000, 300_000], exitIntervalMs: 180_000,
-      quietMs: 20_000, batch: 10, overdueMs: 60_000, lullMs: 300_000, mainFocusMs: 600_000,
-      mainMisses: 3, topicMisses: 5, windowMs: 600_000 });
-    expect(() => new Attention({ intervalsMs: [] })).toThrow(RangeError);
-    expect(() => new Attention({ intervalsMs: [180_000, 60_000] })).toThrow(RangeError);
-  });
-  it('2. starts an unseen main area in watch', () => {
+describe('one score per group', () => {
+  it('starts low even in a historically owned topic', () => {
     const a = new Attention();
-    expect(a.arrive(A, T0)).toBe('watch');
-    expect(a.state(A.place)).toEqual({ chatId: A.chatId, topic: false, mode: 'watch', intervalMs: m(1), arrivedAt: T0, misses: 0 });
-    expect(a.state('omt_x')).toBeUndefined();
+    expect(a.arrive(A1, T0, { mine: true })).toBe('watch');
+    expect(reading(a)).toEqual({ score: 10, intervalMs: m(5), updatedAt: T0 });
+    expect(a.followup(A1, T0, 'ou_person')).toBe(false);
+    expect(a.state(A1.place)).toMatchObject({ mode: 'watch', topic: true, intervalMs: m(5) });
   });
-  it('3. starts only a mine topic in focus, and ignores later mine values', () => {
+
+  it('raises the whole group only after a real participation lands', () => {
     const a = new Attention();
-    expect(a.arrive(A1, T0, { mine: true })).toBe('focus');
-    expect(a.state(A1.place)?.misses).toBe(0);
-    expect(a.arrive(A1, T0 + s(5), { mine: false })).toBe('focus');
-    expect(a.arrive(A2, T0, { mine: false })).toBe('watch');
-    expect(a.arrive(A, T0, { mine: true })).toBe('watch');
+    a.arrive(A, T0); a.arrive(A1, T0); a.arrive(B, T0);
+    a.verdict(A1, 'glance', 'reply', T0);
+    expect(reading(a)?.score).toBe(10);
+    a.replied(A1, T0 + 1, { senderId: 'ou_person' });
+    expect(reading(a)).toEqual({ score: 100, intervalMs: s(5), updatedAt: T0 + 1 });
+    expect(a.state(A.place)).toMatchObject({ mode: 'focus', intervalMs: s(5) });
+    expect(a.state(A1.place)).toMatchObject({ mode: 'focus', intervalMs: s(5) });
+    expect(reading(a, B.chatId)?.score).toBe(10);
   });
-  it('4. resets a slow watch interval exactly at the lull boundary', () => {
-    const at = (t: number) => { const a = new Attention(); a.arrive(A, T0); for (let i = 0; i < 3; i++) glanceSkip(a); a.arrive(A, t); return a; };
-    expect(at(T0 + m(5)).state(A.place)?.intervalMs).toBe(m(1));
-    expect(at(T0 + m(5) - 1).state(A.place)?.intervalMs).toBe(m(5));
+
+  it.each([[2, 75, 1], [10, 50, 3], [20, 25, 5], [30, 10, 5], [180, 10, 5]])(
+    'decays at %i minutes for both the main area and every topic', (minutes, score, interval) => {
+      const a = new Attention(); a.arrive(A, T0); a.replied(A1, T0);
+      a.expire(T0 + m(minutes!));
+      expect(reading(a)).toMatchObject({ score, intervalMs: m(interval!) });
+      expect(a.state(A.place)?.intervalMs).toBe(m(interval!));
+      expect(a.state(A1.place)?.intervalMs).toBe(m(interval!));
+      expect(a.snapshot()[0]?.focusedTopics).toBe(0);
+    },
+  );
+
+  it('keeps exact boundaries deterministic and publishes each transition once', () => {
+    const a = new Attention(); const reports: ReturnType<Attention['snapshot']>[] = [];
+    a.observe(groups => { reports.push(groups); });
+    a.replied(A1, T0);
+    expect(a.nextExpiryAt()).toBe(T0 + m(2));
+    expect(a.expire(T0 + m(2) - 1)).toBe(false);
+    expect(reading(a)?.score).toBe(100);
+    const count = reports.length;
+    expect(a.expire(T0 + m(2))).toBe(true);
+    expect(reading(a)?.score).toBe(75);
+    expect(reports).toHaveLength(count + 1);
+    expect(a.expire(T0 + m(2))).toBe(false);
+    expect(reports).toHaveLength(count + 1);
+    expect(a.nextExpiryAt()).toBe(T0 + m(10));
+    a.expire(T0 + m(30));
+    expect(a.nextExpiryAt()).toBeUndefined();
   });
-  it('5. exits main focus after, but not at, ten minutes', () => {
+
+  it('does not renew participation from arrivals, skips, errors or bot-only replies', () => {
     const a = new Attention(); a.replied(A, T0);
-    for (const n of [4, 8, 10]) expect(a.arrive(A, T0 + m(n))).toBe('focus');
-    expect(a.arrive(A, T0 + m(10) + 1)).toBe('watch');
-    expect(a.state(A.place)).toMatchObject({ intervalMs: m(3), misses: 0 });
+    for (let minute = 1; minute <= 30; minute++) {
+      a.arrive(A1, T0 + m(minute));
+      a.verdict(A1, 'glance', minute % 2 ? 'skip' : 'error', T0 + m(minute));
+      a.replied(A2, T0 + m(minute), { participation: false });
+    }
+    expect(reading(a)?.score).toBe(10);
+    expect(a.followup(A2, T0 + m(30), 'ou_person')).toBe(false);
   });
-  it('6. applies the main focus exit before the lull reset', () => {
-    const a = new Attention(); a.arrive(A, T0 - m(1)); a.replied(A, T0);
-    expect(a.arrive(A, T0 + m(11))).toBe('watch');
-    expect(a.state(A.place)?.intervalMs).toBe(m(1));
+
+  it('renews deadlines when the Bot actually participates again', () => {
+    const a = new Attention(); a.replied(A, T0);
+    a.replied(A1, T0 + m(9));
+    expect(a.nextExpiryAt()).toBe(T0 + m(11));
+    a.expire(T0 + m(10));
+    expect(reading(a)?.score).toBe(100);
+    a.expire(T0 + m(11));
+    expect(reading(a)?.score).toBe(75);
   });
-  it('7. never expires topic focus by elapsed time', () => {
-    const a = new Attention(); a.replied(A1, T0);
-    expect(a.arrive(A1, T0 + m(60))).toBe('focus');
-  });
-  it('8. tolerates backwards time without moving arrival backwards', () => {
-    const a = new Attention(); a.arrive(A, T0 + s(10)); a.arrive(A, T0);
-    expect(a.state(A.place)?.arrivedAt).toBe(T0 + s(10));
-    a.replied(A, T0); expect(a.arrive(A, T0 - m(1))).toBe('focus');
+
+  it('never rewinds group time for a delayed judgement', () => {
+    const a = new Attention(); a.replied(A1, T0); a.expire(T0 + m(30));
+    a.verdict(A1, 'signal', 'reply', T0);
+    expect(reading(a)?.score).toBe(10);
+    expect(a.nextExpiryAt()).toBeUndefined();
+    a.arrive(A, T0 + m(1));
+    expect(a.state(A.place)?.arrivedAt).toBe(T0 + m(30));
   });
 });
 
-describe('due time', () => {
-  it('9. waits for quiet when never looked at, and leaves empty pending undefined', () => {
+describe('batching ordinary messages', () => {
+  it('looks at the first quiet batch after twenty seconds without raising the score', () => {
     const a = new Attention(); a.arrive(A, T0);
+    expect(a.due(A.place, [], T0)).toBeUndefined();
     expect(a.due(A.place, [T0], T0)).toBe(T0 + s(20));
     a.arrive(A, T0 + s(10));
     expect(a.due(A.place, [T0, T0 + s(10)], T0 + s(10))).toBe(T0 + s(30));
-    expect(a.due(A.place, [], T0)).toBeUndefined();
-    expect(a.due('oc_z', [T0], T0)).toBe(T0 + s(20));
+    a.glanced(A, T0 + s(30));
+    a.verdict(A, 'glance', 'skip', T0 + s(31));
+    expect(reading(a)?.score).toBe(10);
   });
-  it('includes a newer hard signal in the quiet deadline without adding it to pending', () => {
-    const a = new Attention(); a.arrive(A, T0);
-    a.arrive(A, T0 + s(10));
-    expect(a.due(A.place, [T0], T0 + s(10))).toBe(T0 + s(30));
+
+  it('uses one cold start for all positions, then respects the five-minute cooldown', () => {
+    const a = new Attention(); a.arrive(A, T0); a.arrive(A1, T0 + s(1));
+    a.glanced(A, T0 + s(21));
+    expect(a.due(A1.place, [T0 + s(1)], T0 + s(21))).toBe(T0 + s(321));
+    a.arrive(A2, T0 + s(30));
+    expect(a.due(A2.place, [T0 + s(30)], T0 + s(30))).toBe(T0 + s(321));
   });
-  it('10. waits until the previous look interval has passed', () => {
+
+  it('does not let ten messages punch through a cold-group cooldown', () => {
     const a = new Attention(); a.arrive(A, T0); a.glanced(A, T0 + s(20));
-    a.verdict(A, 'glance', 'skip', T0 + s(25)); a.arrive(A, T0 + s(60));
-    expect(a.due(A.place, [T0 + s(60)], T0 + s(60))).toBe(T0 + s(200));
+    const pending = Array.from({ length: 10 }, (_, i) => T0 + s(21 + i));
+    for (const at of pending) a.arrive(A, at);
+    expect(a.due(A.place, pending, pending.at(-1)!)).toBe(T0 + s(320));
   });
-  it('11. uses overdue to bound a continuous stream', () => {
-    const a = new Attention(); const times = Array.from({ length: 8 }, (_, n) => T0 + s(15 * n));
-    for (const at of times) a.arrive(A, at);
-    expect(a.due(A.place, times, T0 + s(105))).toBe(T0 + s(120));
-  });
-  it('12. scans immediately only on the tenth pending message', () => {
-    const a = new Attention(); const times = Array.from({ length: 10 }, (_, n) => T0 + s(n));
-    times.forEach(at => a.arrive(A, at));
-    expect(a.due(A.place, times.slice(0, 9), times[8]!)).toBeGreaterThan(times[8]!);
-    expect(a.due(A.place, times, times[9]!)).toBe(times[9]);
-  });
-  it('13. scans pending messages immediately in focus', () => {
-    const a = new Attention(); a.verdict(A, 'glance', 'reply', T0);
-    expect(a.due(A.place, [T0 + s(1)], T0 + s(1))).toBe(T0 + s(1));
-  });
-  it('14. never returns a past due time', () => {
-    const a = new Attention(); a.arrive(A, T0);
-    expect(a.due(A.place, [T0], T0 + m(30))).toBe(T0 + m(30));
-  });
-  it('15. uses constructor intervals', () => {
-    const a = new Attention({ intervalsMs: [30_000, 90_000, 150_000] });
-    a.arrive(A, T0); a.glanced(A, T0 + s(20)); a.verdict(A, 'glance', 'skip', T0 + s(25));
-    expect(a.state(A.place)?.intervalMs).toBe(s(90));
-    a.arrive(A, T0 + s(30));
-    expect(a.due(A.place, [T0 + s(30)], T0 + s(30))).toBe(T0 + s(110));
-  });
-});
 
-describe('look and reply transitions', () => {
-  it('16. raises watch intervals one tier per skipped glance', () => {
-    const a = new Attention(); a.arrive(A, T0);
-    for (const interval of [m(3), m(5), m(5)]) { glanceSkip(a); expect(a.state(A.place)?.intervalMs).toBe(interval); }
+  it('reopens a fast first batch only after the whole group has been quiet for five minutes', () => {
+    const a = new Attention(); a.arrive(A, T0); a.glanced(A, T0 + s(20));
+    a.arrive(A1, T0 + m(4));
+    a.arrive(A, T0 + m(5));
+    expect(a.due(A.place, [T0 + m(5)], T0 + m(5))).toBe(T0 + s(320));
+    a.glanced(A, T0 + s(320));
+    a.arrive(A1, T0 + m(10));
+    expect(a.due(A1.place, [T0 + m(10)], T0 + m(10))).toBe(T0 + m(10) + s(20));
   });
-  it('17. records a look even when the glance fails', () => {
-    const a = new Attention(); a.glanced(A, T0); a.verdict(A, 'glance', 'error', T0 + s(4));
-    expect(a.state(A.place)).toMatchObject({ intervalMs: m(1), lookedAt: T0 });
-  });
-  it('18. a skipped signal resets watch interval without recording a look', () => {
-    const a = new Attention(); a.arrive(A, T0); glanceSkip(a, A, T0 + s(1)); glanceSkip(a, A, T0 + s(2));
-    const lookedAt = a.state(A.place)?.lookedAt;
-    a.verdict(A, 'signal', 'skip', T0 + s(3));
-    expect(a.state(A.place)).toMatchObject({ mode: 'watch', intervalMs: m(1), lookedAt });
-  });
-  it('19. three skipped signals exit main focus', () => {
-    const a = new Attention(); a.replied(A, T0);
-    for (let i = 1; i <= 2; i++) { a.verdict(A, 'signal', 'skip', T0 + i); expect(a.state(A.place)).toMatchObject({ mode: 'focus', misses: i }); }
-    a.verdict(A, 'signal', 'skip', T0 + 3);
-    expect(a.state(A.place)).toMatchObject({ mode: 'watch', intervalMs: m(3), misses: 0 });
-  });
-  it('20. errors do not count as focus misses, and a reply clears misses', () => {
-    const a = new Attention(); a.replied(A, T0);
-    a.verdict(A, 'focus', 'skip', T0 + 1); a.verdict(A, 'focus', 'error', T0 + 2); a.verdict(A, 'focus', 'skip', T0 + 3);
-    expect(a.state(A.place)).toMatchObject({ mode: 'focus', misses: 2 });
-    a.verdict(A, 'focus', 'skip', T0 + 4); expect(a.state(A.place)).toMatchObject({ mode: 'watch', intervalMs: m(3) });
-    const b = new Attention(); b.replied(A, T0);
-    b.verdict(A, 'focus', 'skip', T0 + 1); b.verdict(A, 'focus', 'skip', T0 + 2); b.verdict(A, 'focus', 'reply', T0 + 3);
-    expect(b.state(A.place)).toMatchObject({ mode: 'focus', misses: 0 });
-  });
-  it('21. exits topic focus only after five misses', () => {
+
+  it('batches at score 100 with a fixed five-second bound even under continuous arrivals', () => {
     const a = new Attention(); a.replied(A1, T0);
-    for (let i = 1; i <= 4; i++) a.verdict(A1, 'focus', 'skip', T0 + i);
-    expect(a.state(A1.place)).toMatchObject({ mode: 'focus', misses: 4 });
-    a.verdict(A1, 'focus', 'skip', T0 + 5);
-    expect(a.state(A1.place)).toMatchObject({ mode: 'watch', intervalMs: m(3), misses: 0 });
+    const pending = Array.from({ length: 5 }, (_, i) => T0 + s(i));
+    for (const at of pending) a.arrive(A, at);
+    expect(a.due(A.place, pending, T0 + s(4))).toBe(T0 + s(5));
+    a.glanced(A, T0 + s(5));
+    a.arrive(A2, T0 + s(6));
+    expect(a.due(A2.place, [T0 + s(6)], T0 + s(6))).toBe(T0 + s(11));
   });
-  it.each(['glance', 'signal', 'focus'] as const)('22. %s reply enters focus and resets interval', kind => {
-    const a = new Attention(); a.arrive(A, T0); glanceSkip(a); glanceSkip(a);
-    a.verdict(A, kind, 'reply', T0 + s(1));
-    expect(a.state(A.place)).toMatchObject({ mode: 'focus', misses: 0, intervalMs: m(1), repliedAt: T0 + s(1) });
-    expect(a.arrive(A, T0 + s(2))).toBe('focus');
+
+  it.each([[2, 1], [10, 3], [20, 5], [30, 5]])('shares the %i-minute-age cadence across positions', (age, interval) => {
+    const a = new Attention(); a.arrive(A, T0); a.replied(A1, T0);
+    const at = T0 + m(age!);
+    a.arrive(A, at); a.glanced(A, at + s(20));
+    a.arrive(A2, at + s(21));
+    expect(a.due(A2.place, [at + s(21)], at + s(21))).toBe(at + s(20) + m(interval!));
   });
-  it('23. stale skip kinds do not alter the current mode', () => {
-    const a = new Attention(); a.replied(A, T0); a.verdict(A, 'focus', 'skip', T0 + 1);
-    const focus = a.state(A.place); a.verdict(A, 'glance', 'skip', T0 + 2); expect(a.state(A.place)).toEqual(focus);
-    const b = new Attention(); b.arrive(B, T0); glanceSkip(b, B); const watch = b.state(B.place);
-    b.verdict(B, 'focus', 'skip', T0 + 2); expect(b.state(B.place)).toEqual(watch);
+
+  it('bounds a continually postponed batch so a busy sibling cannot starve it', () => {
+    const a = new Attention(); a.arrive(A, T0); a.glanced(A, T0 + s(20));
+    a.arrive(A1, T0 + s(30));
+    a.glanced(A, T0 + m(4));
+    expect(a.due(A1.place, [T0 + s(30)], T0 + m(4))).toBe(T0 + s(390));
+    expect(a.due(A1.place, [T0 + s(30)], T0 + m(8))).toBe(T0 + m(8));
   });
-  it('24. errors of every kind leave focus and watch values unchanged', () => {
-    const a = new Attention(); a.replied(A, T0); a.verdict(A, 'focus', 'skip', T0 + 1);
-    const b = new Attention(); b.arrive(B, T0); glanceSkip(b, B); glanceSkip(b, B);
-    for (const [att, ref] of [[a, A], [b, B]] as const) {
-      const before = att.state(ref.place);
-      for (const kind of ['signal', 'focus', 'glance'] as const) att.verdict(ref, kind, 'error', T0 + 2);
-      expect(att.state(ref.place)).toEqual(before);
-    }
-  });
-  it('25. skip and error do not create state, while reply, replied, and glanced do', () => {
-    const a = new Attention(); a.verdict(A2, 'signal', 'skip', T0); a.verdict(A2, 'glance', 'error', T0);
-    expect(a.state(A2.place)).toBeUndefined();
-    a.verdict(A2, 'focus', 'reply', T0); expect(a.state(A2.place)?.mode).toBe('focus');
-    const newer = { chatId: 'oc_a', place: 'omt_new' }; a.replied(newer, T0);
-    expect(a.state(newer.place)).toMatchObject({ topic: true, mode: 'focus', repliedAt: T0 });
-    a.glanced(B, T0); expect(a.state(B.place)).toMatchObject({ mode: 'watch', lookedAt: T0 });
+
+  it('bounds the cold-start wait under a continuous stream', () => {
+    const a = new Attention();
+    const pending = Array.from({ length: 8 }, (_, i) => T0 + s(i * 10));
+    for (const at of pending) a.arrive(A, at);
+    expect(a.due(A.place, pending, T0 + s(70))).toBe(T0 + s(80));
   });
 });
 
-describe('state memory and glance selection', () => {
-  it('26. forgets only one chat and reinitializes its locations normally', () => {
-    const a = new Attention(); for (const ref of [A, A1, A2, B]) a.arrive(ref, T0);
-    const preserved = a.state(B.place); a.forget(A.chatId);
-    for (const ref of [A, A1, A2]) expect(a.state(ref.place)).toBeUndefined();
-    expect(a.state(B.place)).toEqual(preserved);
-    expect(a.arrive(A, T0 + 1)).toBe('watch'); expect(a.state(A.place)?.lookedAt).toBeUndefined();
-    expect(a.arrive(A1, T0 + 1, { mine: true })).toBe('focus');
+describe('one-use recent follow-ups', () => {
+  it('gives a topic exactly one early next message without renewing its group', () => {
+    const a = new Attention(); a.replied(A1, T0);
+    expect(a.followup(A1, T0 + s(1), 'ou_anyone')).toBe(true);
+    expect(a.followup(A1, T0 + s(2), 'ou_anyone')).toBe(false);
+    expect(a.nextExpiryAt()).toBe(T0 + m(2));
+    a.replied(A1, T0 + s(3));
+    expect(a.followup(A1, T0 + s(4), 'ou_anyone')).toBe(true);
   });
-  it('27. resets only that chat when its prompt hash changes', () => {
-    const a = new Attention(); expect(a.notePrompt(A.chatId, 'h1')).toBe(false);
-    a.arrive(A, T0); a.arrive(B, T0);
-    expect(a.notePrompt(A.chatId, 'h1')).toBe(false); expect(a.state(A.place)).toBeDefined();
-    expect(a.notePrompt(A.chatId, 'h2')).toBe(true);
-    expect(a.state(A.place)).toBeUndefined(); expect(a.state(B.place)).toBeDefined();
-    expect(a.notePrompt(B.chatId, 'h1')).toBe(false);
+
+  it('restricts main-area shortcuts to the person who was just addressed', () => {
+    const a = new Attention(); a.replied(A, T0, { senderId: 'ou_requester' });
+    expect(a.followup(A, T0 + s(1), 'ou_other')).toBe(false);
+    expect(a.followup(A, T0 + s(1))).toBe(false);
+    expect(a.followup(A, T0 + s(2), 'ou_requester')).toBe(true);
+    expect(a.followup(A, T0 + s(3), 'ou_requester')).toBe(false);
+    a.replied(A, T0 + s(4));
+    expect(a.followup(A, T0 + s(5), 'ou_requester')).toBe(false);
   });
-  it('keeps a prompt hash across forget so a later change is still detected', () => {
+
+  it('expires the shortcut at two minutes and never revives an old topic', () => {
+    const a = new Attention(); a.replied(A1, T0);
+    expect(a.followup(A1, T0 + m(2), 'ou_person')).toBe(false);
+    a.arrive(A1, T0 + m(180), { mine: true });
+    expect(a.followup(A1, T0 + m(180), 'ou_person')).toBe(false);
+    expect(reading(a)?.score).toBe(10);
+  });
+
+  it('shares the originating reply shortcut with its actually opened topic', () => {
+    const a = new Attention(); const ticket = a.replied(A, T0, { senderId: 'ou_requester' });
+    a.openedTopic(A.chatId, A1.place, ticket);
+    expect(a.followup(A1, T0 + s(1), 'ou_other')).toBe(true);
+    expect(a.followup(A, T0 + s(2), 'ou_requester')).toBe(false);
+    expect(reading(a)?.updatedAt).toBe(T0);
+  });
+
+  it('binds an asynchronous opening to its own reply instead of a newer main-area reply', () => {
     const a = new Attention();
-    expect(a.notePrompt(A.chatId, 'h1')).toBe(false);
-    expect(a.notePrompt(A.chatId, 'h2')).toBe(true);
+    const first = a.replied(A, T0, { senderId: 'ou_first' });
+    const second = a.replied(A, T0 + s(10), { senderId: 'ou_second' });
+    a.openedTopic(A.chatId, A1.place, first, T0 + s(11));
+    expect(a.followup(A1, T0 + s(12), 'ou_anyone')).toBe(true);
+    expect(a.followup(A, T0 + s(13), 'ou_second')).toBe(true);
+    a.openedTopic(A.chatId, A2.place, second, T0 + s(14));
+    expect(a.followup(A2, T0 + s(14), 'ou_anyone')).toBe(false);
+  });
+
+  it('rejects expired, cross-group and forgotten capabilities', () => {
+    const a = new Attention();
+    const ticket = a.replied(A, T0);
+    a.openedTopic(B.chatId, 'omt_b', ticket, T0 + s(1));
+    expect(a.state('omt_b')).toBeUndefined();
+    a.openedTopic(A.chatId, A1.place, ticket, T0 + m(2));
+    expect(a.state(A1.place)).toBeUndefined();
+    const fresh = a.replied(A, T0 + m(3));
+    a.forget(A.chatId); a.arrive(A, T0 + m(3) + 1);
+    a.openedTopic(A.chatId, A1.place, fresh, T0 + m(3) + 2);
+    expect(a.state(A1.place)).toBeUndefined();
+  });
+
+  it('does not grant shortcuts for background topic recovery', () => {
+    const a = new Attention(); a.openedTopic(A.chatId, A1.place);
+    expect(a.snapshot()).toEqual([]);
+    a.replied(A, T0);
+    a.openedTopic(A.chatId, A1.place, undefined, T0 + 1);
+    expect(a.state(A1.place)).toBeUndefined();
+    a.expire(T0 + m(2)); a.openedTopic(A.chatId, A1.place);
+    expect(a.state(A1.place)).toBeUndefined();
+  });
+
+  it('budget freezing consumes the shortcut while preserving the group score', () => {
+    const a = new Attention();
+    expect(a.freeze(A1, T0)).toBe(false);
+    a.replied(A1, T0); expect(a.freeze(A1, T0 + s(1))).toBe(true);
+    expect(a.followup(A1, T0 + s(2), 'ou_person')).toBe(false);
+    expect(reading(a)?.score).toBe(100);
+  });
+});
+
+describe('bounded state and context', () => {
+  it('evicts least-recently-used positions and drops group state only after its last position leaves', () => {
+    const a = new Attention({ places: 2 }); a.replied(A, T0); a.arrive(A1, T0); a.arrive(B, T0);
+    expect(a.state(A.place)).toBeUndefined();
+    expect(reading(a)?.score).toBe(100);
+    a.arrive({ chatId: 'oc_c', place: 'oc_c' }, T0);
+    expect(reading(a)).toBeUndefined();
+    expect(a.nextExpiryAt()).toBeUndefined();
+  });
+
+  it('keeps reads from changing LRU order and returns state copies without routing tickets', () => {
+    const a = new Attention({ places: 2 }); a.replied(A, T0); a.arrive(A1, T0);
+    const copy = a.state(A.place)!;
+    copy.mode = 'watch';
+    expect(a.state(A.place)?.mode).toBe('focus');
+    expect(copy).not.toHaveProperty('followup');
+    a.arrive(B, T0);
+    expect(a.state(A.place)).toBeUndefined();
+  });
+
+  it('invalidates captured group identities after forgetting or LRU eviction', () => {
+    const a = new Attention({ places: 1 }); a.arrive(A, T0);
+    const first = a.captureGroup(A.chatId);
+    expect(a.isCurrentGroup(A.chatId, first)).toBe(true);
+    expect(a.isCurrentGroup(B.chatId, first)).toBe(false);
+    a.forget(A.chatId); a.arrive(A, T0 + 1);
+    expect(a.isCurrentGroup(A.chatId, first)).toBe(false);
+    const second = a.captureGroup(A.chatId);
+    a.arrive(B, T0 + 2); a.arrive(A, T0 + 3);
+    expect(a.isCurrentGroup(A.chatId, second)).toBe(false);
+  });
+
+  it('forgets only one group and retains its prompt hash across resets', () => {
+    const a = new Attention(); a.replied(A1, T0); a.replied(B, T0);
+    expect(a.notePrompt(A.chatId, 'old')).toBe(false);
+    expect(a.notePrompt(A.chatId, 'new')).toBe(true);
+    expect(reading(a)).toBeUndefined();
+    expect(reading(a, B.chatId)?.score).toBe(100);
     a.forget(A.chatId);
-    expect(a.notePrompt(A.chatId, 'h3')).toBe(true);
-    expect(a.notePrompt(A.chatId, 'h3')).toBe(false);
+    expect(a.notePrompt(A.chatId, 'newer')).toBe(true);
   });
-  it('28. evicts the least recently used place and permits mine to restore it', () => {
-    const a = new Attention(); for (let n = 0; n < 200; n++) a.arrive(topic(n), T0);
-    a.verdict(topic(0), 'focus', 'error', T0); a.arrive(topic(200), T0);
-    expect(a.state(topic(1).place)).toBeUndefined();
-    for (const n of [0, 2, 199, 200]) expect(a.state(topic(n).place)).toBeDefined();
-    expect(a.arrive(topic(1), T0, { mine: true })).toBe('focus');
+
+  it('bounds remembered prompt hashes independently of active groups', () => {
+    const a = new Attention({ places: 2 });
+    a.notePrompt('oc_a', 'a'); a.notePrompt('oc_b', 'b'); a.notePrompt('oc_a', 'a'); a.notePrompt('oc_c', 'c');
+    expect(a.notePrompt('oc_b', 'changed')).toBe(false);
   });
-  it('29. state does not touch LRU and returns a copy', () => {
-    const a = new Attention(); for (let n = 0; n < 200; n++) a.arrive(topic(n), T0);
-    expect(a.state(topic(0).place)).toBeDefined(); a.arrive(topic(200), T0);
-    expect(a.state(topic(0).place)).toBeUndefined();
-    const copy = a.state(topic(2).place)!; copy.mode = 'focus';
-    expect(a.state(topic(2).place)?.mode).toBe('watch');
-  });
-  it('30. picks only the latest ten messages within the window, retaining order', () => {
+
+  it('keeps the latest ten recent messages as candidates and older messages as context', () => {
     const a = new Attention(); const now = T0 + m(20);
     const pending = [T0, T0 + m(10), ...Array.from({ length: 12 }, (_, n) => T0 + m(15) + s(10 * n))].map((at, id) => ({ at, id }));
-    const result = a.pickGlance(pending, now);
-    expect(result.look).toEqual(pending.slice(4));
-    expect(result.old).toEqual(pending.slice(0, 4));
-    const boundary = [{ at: now - m(10) - 1, id: 'too-old' }, { at: now - m(10), id: 'exact' }];
-    expect(a.pickGlance(boundary, now)).toEqual({ look: [boundary[1]], old: [boundary[0]] });
-    expect(a.pickGlance([], now)).toEqual({ look: [], old: [] });
+    expect(a.pickGlance(pending, now)).toEqual({ look: pending.slice(4), old: pending.slice(0, 4) });
+    const edge = [{ at: now - m(10) - 1 }, { at: now - m(10) }];
+    expect(a.pickGlance(edge, now)).toEqual({ look: [edge[1]], old: [edge[0]] });
   });
-  it('31. maps skipped, replying, and failed judge results', () => {
+
+  it('rejects invalid cadence and decay boundaries', () => {
+    expect(ATTENTION_DEFAULTS.decayMs).toEqual([m(2), m(10), m(20), m(30)]);
+    expect(() => new Attention({ places: 0 })).toThrow(RangeError);
+    expect(() => new Attention({ intervalsMs: [] })).toThrow(RangeError);
+    expect(() => new Attention({ intervalsMs: [m(3), m(1), m(5)] })).toThrow(RangeError);
+    expect(() => new Attention({ decayMs: [m(2), m(10)] })).toThrow(RangeError);
+  });
+
+  it('maps model outcomes while leaving participation decisions to the caller', () => {
     expect(outcomeOf({ decision: 'skip' })).toBe('skip');
     for (const decision of ['main', 'topic', 'reply'] as const) expect(outcomeOf({ decision })).toBe('reply');
-    expect(outcomeOf({ decision: 'skip', error: { kind: 'timeout' } })).toBe('error');
     expect(outcomeOf({ decision: 'main', error: { kind: 'timeout' } })).toBe('error');
   });
-  it('bounds prompt hashes independently of state and does not touch state in due', () => {
-    const a = new Attention({ places: 2 }); a.arrive(A, T0); a.arrive(B, T0);
-    expect(a.due(A.place, [T0], T0)).toBe(T0 + s(20));
-    a.arrive(A1, T0); expect(a.state(A.place)).toBeUndefined();
-    expect(a.notePrompt('oc_a', 'old')).toBe(false);
-    expect(a.notePrompt('oc_b', 'keep')).toBe(false);
-    expect(a.notePrompt('oc_a', 'old')).toBe(false); // touch oc_a
-    expect(a.notePrompt('oc_c', 'new')).toBe(false); // evict oc_b
-    expect(a.notePrompt('oc_b', 'changed')).toBe(false); // unknown hash after eviction
-  });
-});
-
-describe('freeze (s25g)', () => {
-  it('32. turns focus into watch and preserves its reply time', () => {
-    const a = new Attention(); a.replied(A, T0); a.verdict(A, 'focus', 'skip', T0);
-    expect(a.state(A.place)?.misses).toBe(1);
-    expect(a.freeze(A, T0 + s(1))).toBe(true);
-    expect(a.state(A.place)).toMatchObject({ mode: 'watch', intervalMs: m(3), misses: 0, repliedAt: T0 });
-  });
-  it('33. leaves watch unchanged and does not create missing places', () => {
-    const a = new Attention(); a.arrive(A, T0); glanceSkip(a); glanceSkip(a);
-    const before = a.state(A.place); expect(before?.intervalMs).toBe(m(5));
-    expect(a.freeze(A, T0)).toBe(false); expect(a.state(A.place)).toEqual(before);
-    expect(a.freeze(A2, T0)).toBe(false); expect(a.state(A2.place)).toBeUndefined();
-  });
-});
-
-describe('idle main focus expiry', () => {
-  it('expires after ten minutes without arrivals and reports the transition once', () => {
-    const a = new Attention();
-    const reports: ReturnType<Attention['snapshot']>[] = [];
-    a.observe(groups => { reports.push(groups); });
-    a.arrive(A, T0); a.replied(A, T0); a.verdict(A, 'focus', 'skip', T0 + 1);
-    const count = reports.length;
-    expect(a.nextExpiryAt()).toBe(T0 + m(10) + 1);
-    expect(a.expire(T0 + m(10))).toBe(false);
-    expect(reports).toHaveLength(count);
-    expect(a.expire(T0 + m(10) + 1)).toBe(true);
-    expect(a.state(A.place)).toMatchObject({ mode: 'watch', intervalMs: m(3), misses: 0, arrivedAt: T0, repliedAt: T0 });
-    expect(reports.at(-1)?.[0]?.main).toEqual({ mode: 'watch', intervalMs: m(3) });
-    expect(reports).toHaveLength(count + 1);
-    expect(a.expire(T0 + m(20))).toBe(false);
-    expect(a.nextExpiryAt()).toBeUndefined();
-    expect(reports).toHaveLength(count + 1);
-  });
-
-  it('renews reply deadlines and expires every overdue main area after a delayed timer', () => {
-    const a = new Attention();
-    a.replied(A, T0); a.replied(B, T0 + m(2)); a.replied(A1, T0);
-    a.replied(A, T0 + m(9));
-    expect(a.nextExpiryAt()).toBe(T0 + m(12) + 1);
-    expect(a.expire(T0 + m(10) + 1)).toBe(false);
-    expect(a.expire(T0 + m(30))).toBe(true);
-    expect(a.state(A.place)?.mode).toBe('watch');
-    expect(a.state(B.place)?.mode).toBe('watch');
-    expect(a.state(A1.place)?.mode).toBe('focus');
-    expect(a.nextExpiryAt()).toBeUndefined();
-  });
-
-  it('cancels expiry when focus ends, is forgotten, or is evicted', () => {
-    const a = new Attention({ places: 2 });
-    a.replied(A, T0); a.replied(B, T0 + m(2));
-    a.freeze(A, T0);
-    expect(a.nextExpiryAt()).toBe(T0 + m(12) + 1);
-    a.forget(B.chatId);
-    expect(a.nextExpiryAt()).toBeUndefined();
-    a.replied(B, T0); a.arrive(A1, T0); a.arrive(A2, T0);
-    expect(a.state(B.place)).toBeUndefined();
-    expect(a.nextExpiryAt()).toBeUndefined();
-  });
-
-  it('honors configured expiry and keeps expiry scans from promoting LRU entries', () => {
-    const a = new Attention({ places: 2, mainFocusMs: s(30), exitIntervalMs: m(5) });
-    a.replied(A, T0); a.arrive(A1, T0 + 1, { mine: true });
-    expect(a.nextExpiryAt()).toBe(T0 + s(30) + 1);
-    a.expire(T0 + s(30) + 1);
-    expect(a.state(A.place)?.intervalMs).toBe(m(5));
-    a.arrive(B, T0 + m(1));
-    expect(a.state(A.place)).toBeUndefined();
-    expect(a.state(A1.place)?.mode).toBe('focus');
-  });
-});
-
-it('reports real per-group main and topic state, eviction and forgetting without topic ids', () => {
-  const a = new Attention({ places: 2 });
-  let latest = a.snapshot();
-  a.observe(groups => { latest = groups; });
-  a.arrive(A, T0);
-  a.arrive(A1, T0, { mine: true });
-  expect(latest).toEqual([{ groupId: 'oc_a', main: { mode: 'watch', intervalMs: 60000 }, focusedTopics: 1, watchedTopics: 0 }]);
-  a.freeze(A1, T0);
-  expect(latest[0]?.watchedTopics).toBe(1);
-  a.arrive(B, T0);
-  expect(latest.find(group => group.groupId === 'oc_a')?.main).toBeUndefined();
-  a.forget('oc_a');
-  expect(latest.map(group => group.groupId)).toEqual(['oc_b']);
-  expect(new Attention().snapshot()).toEqual([]);
 });

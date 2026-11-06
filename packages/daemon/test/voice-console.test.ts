@@ -11,7 +11,7 @@ vi.mock('../src/card/managed', () => ({ updateManagedCard: managed.update, sendM
 vi.mock('../src/voice/probe', () => ({ probePcm: async () => Buffer.alloc(32) }));
 vi.mock('../src/core/logger', () => ({ log: { info: vi.fn(), fail: vi.fn() }, withTrace: (_: unknown, run: () => unknown) => run() }));
 function setup() {
-  const cfg: AppConfig = { accounts: { app: { id: 'cli_test', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' }, voice: { enabled: false } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'cli_test', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] }, voice: { enabled: false } } };
   const persist = vi.fn(async () => undefined);
   const feishu = { checkPermission: vi.fn(async () => undefined), recognize: vi.fn(async () => '测试正文') };
   const voice = createVoiceService(cfg, createAppPreferencesWriter({ cfg, persistConfig: persist }), { feishu });

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { AgentEntry, AgentThread, AgentToolReply } from '../types';
 import { log } from '../../core/logger';
-import { decideAdd, decideEdit, decisionMessages, ownDm, type MemoryPlace, type MemoryTurn, type RequestedScope } from '../../bot/memory-authority';
+import { actorOf, decideAdd, decideEdit, decisionMessages, ownDm, type MemoryPlace, type MemoryTurn, type RequestedScope } from '../../bot/memory-authority';
 import { scheduleRefusalMessages, type ScheduleActor } from '../../admin/schedule-commands';
 import type { MemoryLanding, SessionAction, SessionAuthz } from '../../admin/ipc';
 import { sessionInfoTool, TOOL_RESULT_BYTES, ToolRefusal, type AgentTool, type ToolContext } from './tools';
@@ -22,6 +22,8 @@ export interface TurnFacts {
   scheduled?: { taskId: string; runId: string };
   /** 发起人的名字，建任务时记成创建人（总设计 7.2 的 `{creator}`） */
   requesterName?: string;
+  /** 私聊发起人的 union_id：open_id 按应用分，要让别的 Bot 拉这个人进群时用它（dm-agent 6.4） */
+  requesterUnionId?: string;
   /** 这一轮在群里的位置，任务工具调用时才读（`launchRun` 的闭包；bot 开的话题认领后才有 id） */
   where?(): TurnWhere;
 }
@@ -39,6 +41,8 @@ export interface AgentEntries {
   /** 这一轮对记忆的事实（`memoryTurn()` 一调就绑定当前这一轮）；线程不是这个 daemon 发过入口的返回 undefined */
   memoryTurn(thread: AgentThread): TurnMemory | undefined;
   noteSteer(thread: AgentThread, sender: { openId?: string; kind: 'user' | 'bot' | 'unknown' }): void;
+  /** Every session of this private chat ends now, its token with it (dm-agent 3.3): an admin was removed. A session still starting goes too. */
+  revokeChat(chatId: string): void;
   /**
    * devices-4b 4.2: a Bot session's ★ request from its command line, judged for the session's current turn by the same
    * checks as the tools' (authorizeNow, authorizeMemory, authorizeSchedule, `ctx.admin`). Changes nothing but a dead
@@ -60,8 +64,6 @@ export const NOT_DM_COMMENT_MESSAGE = '评论里不能改设置。私聊我可�
 export const notDmMessage = (place: 'group' | 'dm' | 'comment' | AgentPlace['kind']): string => place === 'comment' || place === 'doc' ? NOT_DM_COMMENT_MESSAGE : NOT_DM_MESSAGE;
 /** devices 15, 这一轮已结束: a Bot session's command line called when no turn of its session is going (or its Bot process is gone). */
 export const SESSION_TURN_ENDED = '这次调用对应的那一轮对话已经结束，不能再改设置。';
-/** devices 3.7: only the owner's turn changes this machine's administrators (devices-4b 4.2). */
-export const NOT_OWNER_MESSAGE = '本机管理员名单只有飞书应用的拥有者能改。';
 /** A session's call is not tied to a tool use: a turn not known, ended or a session gone all read as the turn having ended. */
 const ENDED = new Set(['revoked', 'unknown-origin', 'turn-ended']);
 const messages = {
@@ -69,11 +71,10 @@ const messages = {
   revoked: '这条会话的 vonvon 工具已经失效（会话结束了，或者 daemon 重启过）。不要重试，接着做别的。',
   'unknown-tool': '没有这个工具。',
   'not-dm': NOT_DM_MESSAGE,
-  'not-human-turn': '这一轮不是主人或管理员发消息直接触发的，不能改设置。',
+  'not-human-turn': '这一轮不是管理员发消息直接触发的，也不是管理员建的私聊定时任务，不能改设置。',
   'turn-ended': '发起这次改动的那一轮已经结束了，不能改设置。请对方重新说一遍。',
   'unknown-origin': 'vonvon 认不出这次改动是哪一轮发起的，不能改设置。请对方重新说一遍。',
-  'not-admin': '只有主人和管理员发消息触发的那一轮能改设置。',
-  'switch-off': '主人关了私聊里的“聊天改设置”，要改请去桌面端或网页。',
+  'not-admin': '只有管理员发消息触发的那一轮，或者管理员建的私聊定时任务，能改设置。',
   'not-group': scheduleRefusalMessages['not-group'],
   'no-human-create': scheduleRefusalMessages['no-human-create'],
   'scheduled-run-scope': scheduleRefusalMessages['scheduled-run-scope'],
@@ -98,6 +99,24 @@ function notDm(place: AgentPlace): Failure {
 }
 function scheduleRefused(reason: keyof typeof scheduleTurnMessages): Failure {
   return { ok: false, code: 'refused', reason, message: scheduleTurnMessages[reason] };
+}
+/** The document tools' own sentences for the same two. */
+const feishuTurnMessages = {
+  'unknown-origin': 'vonvon 认不出这次操作是哪一轮发起的，文档没有动。请对方重新说一遍。',
+  'turn-ended': '发起这次操作的那一轮已经结束了，文档没有动。请对方重新说一遍。',
+};
+function feishuRefused(reason: keyof typeof feishuTurnMessages): Failure {
+  return { ok: false, code: 'refused', reason, message: feishuTurnMessages[reason] };
+}
+/** feishu_api's own sentences: nothing here is about settings or a document. */
+const feishuApiMessages = {
+  'unknown-origin': 'vonvon 认不出这次调用是哪一轮发起的，没有调飞书。请对方重新说一遍。',
+  'turn-ended': '发起这次调用的那一轮已经结束了，没有调飞书。请对方重新说一遍。',
+  'not-human-turn': '这一轮不是管理员发消息或管理员的定时任务触发的，不能调飞书接口。',
+  'not-admin': '只有管理员的私聊能调飞书接口。',
+};
+function feishuApiRefused(reason: keyof typeof feishuApiMessages): Failure {
+  return { ok: false, code: 'refused', reason, message: feishuApiMessages[reason] };
 }
 interface TurnAuth {
   id: number;
@@ -139,11 +158,11 @@ interface Grant {
 const PRUNED_IDS = 1024;
 /** A tool kept to some places (the settings reads, a private chat's) is neither listed nor called elsewhere. */
 const placed = (tool: AgentTool, place: AgentPlace): boolean => !tool.places || tool.places.includes(place.kind);
+/** What a tool takes in this place: a private chat's may be wider (dm-agent 7.3). */
+const inputAt = (tool: AgentTool, place: AgentPlace): AgentTool['input'] => place.kind === 'p2p' ? tool.dmInput ?? tool.input : tool.input;
 export function createAgentEntries(opts: {
   appId: string;
   isAdmin(openId: string): boolean;
-  isOwner(openId: string): boolean;
-  chatSettingsOn?(): boolean;
   tools?: readonly AgentTool[];
   /** devices-4a 4.3: told once when a session ends, so the host drops its token (best effort: it never throws). */
   sessions?: { revoke(sessionId: string): void };
@@ -197,15 +216,22 @@ export function createAgentEntries(opts: {
     try { opts.sessions?.revoke(grant.sessionId); }
     catch (error) { log.fail('agent', error, { phase: 'session-revoke', sessionId: grant.sessionId }); }
   }
+  /**
+   * dm-agent 6.3: whether a private chat's turn, going, may do what the permission table lets it. An admin's own message,
+   * or a task of this private chat as its creator: the same rights (owner 2026-11-05). The creator is on the turn's facts;
+   * one no longer an admin has had the task paused (3.3), so this only catches a run already on its way.
+   */
+  function dmTurn(auth: TurnAuth): Failure | undefined {
+    if (!auth.human && auth.presence !== 'scheduled') return refused('not-human-turn');
+    if (!opts.isAdmin(auth.facts.requesterOpenId ?? '')) return refused('not-admin');
+  }
   function authorizeNow(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
     if (grant.thread && !grant.thread.isAlive()) revoke(grant);
     if (grant.phase === 'revoked') return failure('revoked');
     if (grant.place.kind !== 'p2p') return notDm(grant.place);
     if (!auth) return refused('unknown-origin');
     if (!auth.active || grant.turn !== auth) return refused('turn-ended');
-    if (!auth.human) return refused('not-human-turn');
-    if (!opts.isAdmin(auth.facts.requesterOpenId ?? '')) return refused('not-admin');
-    if (!(opts.chatSettingsOn?.() ?? true)) return refused('switch-off');
+    return dmTurn(auth);
   }
   /** 记忆类工具的授权：不要求人、角色，只要求入口还活着、这一轮还在进行；人不人、什么角色只影响落点（§3.2） */
   function authorizeMemory(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
@@ -222,30 +248,58 @@ export function createAgentEntries(opts: {
   function authorizeSchedule(grant: Grant, auth: TurnAuth | undefined, action: AgentTool['action'], taskId: unknown): Failure | undefined {
     if (grant.thread && !grant.thread.isAlive()) revoke(grant);
     if (grant.phase === 'revoked') return failure('revoked');
-    if (grant.place.kind !== 'group') return refused('not-group');
+    if (grant.place.kind === 'doc') return refused('not-group');
     if (!auth) return scheduleRefused('unknown-origin');
     if (!auth.active || grant.turn !== auth) return scheduleRefused('turn-ended');
+    if (grant.place.kind === 'p2p') return dmTurn(auth);
     if (action === 'list') return undefined;
     if (auth.steered || auth.presence === 'none') return { ...refused('not-human-turn'), message: scheduleRefusalMessages['not-human-turn'] };
     if (auth.presence !== 'scheduled') return undefined;
     if (action === 'create') return refused('no-human-create');
     if ((action !== 'edit' && action !== 'delete') || taskId !== auth.facts.scheduled?.taskId) return refused('scheduled-run-scope');
   }
-  /** The tools' `ctx.admin` (a private chat's read-only queries, settings_get): the owner's or an admin's own turn, going. */
+  /**
+   * 文档这一列的工具（dm-agent 7.2、7.4）：入口活着、这一轮还在。谁能做看位置：评论 @bot 进来之前已经查过管理员，群和私聊的
+   * 范围在工具里守（`mayRead`、`mayEdit`）。群和私聊的读不走这里（`turnBound`），改文档和评论会话走。
+   */
+  function authorizeFeishu(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
+    if (grant.thread && !grant.thread.isAlive()) revoke(grant);
+    if (grant.phase === 'revoked') return failure('revoked');
+    if (!auth) return feishuRefused('unknown-origin');
+    if (!auth.active || grant.turn !== auth) return feishuRefused('turn-ended');
+  }
+  /** feishu_api: the entry alive and this turn going, then {@link dmTurn} in its own words. The place is `places: ['p2p']`, looked at before this. */
+  function authorizeFeishuApi(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
+    if (grant.thread && !grant.thread.isAlive()) revoke(grant);
+    if (grant.phase === 'revoked') return failure('revoked');
+    if (!auth) return feishuApiRefused('unknown-origin');
+    if (!auth.active || grant.turn !== auth) return feishuApiRefused('turn-ended');
+    const refusal = dmTurn(auth);
+    return refusal && feishuApiRefused(refusal.reason === 'not-human-turn' ? 'not-human-turn' : 'not-admin');
+  }
+  /** The tools' `ctx.admin` (a private chat's queries of its Bot's groups) and a private chat's requests through the command line. */
   function adminTurn(grant: Grant): Failure | undefined {
     const turn = grant.turn;
-    if (!turn?.active) return refused('turn-ended');
-    if (!turn.human) return refused('not-human-turn');
-    if (!opts.isAdmin(turn.facts.requesterOpenId ?? '')) return refused('not-admin');
+    return turn?.active ? dmTurn(turn) : refused('turn-ended');
   }
-  const roleOf = (auth: TurnAuth): MemoryTurn['role'] => {
+  const roleOf = (auth: TurnAuth): Exclude<MemoryTurn['role'], 'owner'> => {
     const openId = auth.facts.requesterOpenId ?? '';
     if (auth.facts.requesterKind !== 'user' || !openId) return 'bot';
-    return opts.isOwner(openId) ? 'owner' : opts.isAdmin(openId) ? 'admin' : 'member';
+    return opts.isAdmin(openId) ? 'admin' : 'member';
   };
-  /** Who the command core sees: the task's own run, or the person of this turn with where they are now. */
+  /**
+   * Who the command core sees: the task's own run, or the person of this turn with where they are now. A private chat's
+   * turn is its person's or their task's, the same rights (dm-agent 6.3); only a person's message is a task's origin.
+   */
   function scheduleActor(grant: Grant, auth: TurnAuth): Exclude<ScheduleActor, { kind: 'local' }> {
     const chatId = grant.place.chatId ?? '';
+    if (grant.place.kind === 'p2p') {
+      const { requesterOpenId: openId, requesterName: name, triggerMessageId: messageId, typed, triggerText, scheduled } = auth.facts;
+      return {
+        kind: 'dm', via: 'chat', chatId, ...(openId ? { openId } : {}), ...(name ? { name } : {}),
+        ...(!scheduled && messageId ? { messageId } : {}), ...(!scheduled && typed && triggerText ? { text: triggerText } : {}),
+      };
+    }
     if (auth.facts.scheduled) return { kind: 'scheduled', ...auth.facts.scheduled, chatId };
     const { facts } = auth, role = roleOf(auth), topicId = facts.where?.().topicId;
     return {
@@ -298,20 +352,23 @@ export function createAgentEntries(opts: {
       const settings = tool.class === 'settings';
       const memory = tool.class === 'memory';
       const schedule = tool.class === 'schedule';
-      const gated = settings || memory || schedule;
+      const document = tool.class === 'document' && (tool.writes === true || grant.place.kind === 'doc');
+      const feishuApi = tool.class === 'feishu-api';
+      const gated = settings || memory || schedule || document || feishuApi;
       const taskId = schedule && args && typeof args === 'object' && 'taskId' in args ? args.taskId : undefined;
       // Claude's tool-use id, or the Codex turn id its turn/start answered with (定时任务 T3b): both noted by noteToolUse.
       const auth = origin?.toolUseId ? grant.origins.get(origin.toolUseId) : undefined;
       const authNow = (): Failure | undefined => memory ? authorizeMemory(grant, auth)
-        : schedule ? authorizeSchedule(grant, auth, tool.action, taskId) : authorizeNow(grant, auth);
+        : schedule ? authorizeSchedule(grant, auth, tool.action, taskId)
+          : document ? authorizeFeishu(grant, auth) : feishuApi ? authorizeFeishuApi(grant, auth) : authorizeNow(grant, auth);
       if (gated) {
         const refusal = authNow();
         const known = origin?.toolUseId && (grant.origins.has(origin.toolUseId) || grant.pruned.has(origin.toolUseId));
-        if (refusal?.reason === 'unknown-origin' && known) return finishLog(schedule ? scheduleRefused('turn-ended') : refused('turn-ended'));
+        if (refusal?.reason === 'unknown-origin' && known) return finishLog(schedule ? scheduleRefused('turn-ended') : document ? feishuRefused('turn-ended') : feishuApi ? feishuApiRefused('turn-ended') : refused('turn-ended'));
         if (refusal) return finishLog(refusal);
         if (settings && grant.settingRunning && grant.queue.length >= 8) return finishLog(failure('busy'));
       }
-      const parsed = tool.input.safeParse(args);
+      const parsed = inputAt(tool, grant.place).safeParse(args);
       if (!parsed.success) return finishLog({ ok: false, code: 'bad-args', message: `参数不对：${parsed.error.issues.map(i => `${i.path.join('.') || '<root>'}：${i.code}`).join('；')}。` });
       if ((!settings || !grant.settingRunning) && grant.active >= 4) return finishLog(failure('busy'));
       return new Promise<AgentToolReply>(resolve => {
@@ -345,7 +402,7 @@ export function createAgentEntries(opts: {
         const onTurnAbort = () => {
           if (committed) return;
           // 记忆类：插话也会触发这个信号，但那一轮没结束，只影响落点，不打断调用；任务类插话后只剩 list
-          if (memory || schedule) { const refusal = authNow(); if (refusal) stop(refusal); }
+          if (memory || schedule || document || feishuApi) { const refusal = authNow(); if (refusal) stop(refusal); }
           else stop(authNow() ?? refused('turn-ended'));
         };
         const timer = setTimeout(() => stop(failure('timeout')), Math.max(0, deadline - Date.now()));
@@ -359,7 +416,7 @@ export function createAgentEntries(opts: {
           if (Date.now() > deadline - reserveMs) throw new ToolRefusal(failure('timeout'));
         };
         async function execute() {
-          const ctx: ToolContext = { signal: controller.signal, place: grant.place, notAfter: deadline, get admin() { return !adminTurn(grant); }, get writeRefusal() { return authorizeNow(grant, auth); } };
+          const ctx: ToolContext = { signal: controller.signal, place: grant.place, sessionId: grant.sessionId, notAfter: deadline, get admin() { return !adminTurn(grant); }, get writeRefusal() { return authorizeNow(grant, auth); } };
           if (memory && auth) {
             ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: roleOf(auth) };
             ctx.memoryTurn = () => memoryTurnOf(grant, auth);
@@ -368,7 +425,7 @@ export function createAgentEntries(opts: {
           }
           if (schedule && auth) ctx.schedule = () => ({ actor: scheduleActor(grant, auth), where: auth.facts.where?.() ?? { inTopic: false }, steered: auth.steered });
           if (gated && auth) {
-            if (settings) ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: opts.isOwner(auth.facts.requesterOpenId ?? '') ? 'owner' : 'admin' };
+            if (settings) ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: 'admin' };
             ctx.commit = async write => {
               check(0);
               let guarded = false;
@@ -392,7 +449,8 @@ export function createAgentEntries(opts: {
             let result: unknown;
             if (name === 'session_info') {
               const turn = !grant.turn?.active ? 'none' : grant.turn.human ? 'person' : 'other';
-              // Only a private chat changes settings, so only there it says whether this turn may (settings-dm-only).
+              // Only a private chat changes settings, with the command line, so only there it says whether this turn's
+              // `vonvon` calls may: a person's own, or a task's (dm-agent 6.3).
               const refusal = grant.place.kind !== 'p2p' ? undefined : grant.turn ? authorizeNow(grant, grant.turn) : refused('not-human-turn');
               result = { v: 1, place: place.kind, turn, ...(grant.place.kind !== 'p2p' ? {} : { settings: refusal ? { allowed: false, reason: refusal.reason ?? refusal.code } : { allowed: true } }) };
             } else result = await runTool(parsed.data, ctx);
@@ -404,7 +462,9 @@ export function createAgentEntries(opts: {
             else {
               log.fail('agent.tool-failed', error, { tool: name });
               settle(!committed ? failure('failed') : { ok: false, code: 'failed', message: schedule
-                ? '提交时出错，任务可能已经改了。先用 schedule_list 查一下，再决定要不要重试。' : '提交时出错，设置可能已经改了。先查一下现在的设置，再决定要不要重试。' });
+                ? '提交时出错，任务可能已经改了。先用 schedule_list 查一下，再决定要不要重试。'
+                : document ? '提交时出错，文档可能已经改了。先用 feishu_doc 读一下，再决定要不要重试。'
+                  : feishuApi ? '调用时出错，这次调用可能已经生效了。先查一下，再决定要不要重试。' : '提交时出错，设置可能已经改了。先查一下现在的设置，再决定要不要重试。' });
             }
           }
         }
@@ -431,10 +491,10 @@ export function createAgentEntries(opts: {
         if (grant.thread && !grant.thread.isAlive()) revoke(grant);
         if (grant.phase === 'revoked') throw new ToolRefusal(failure('revoked'));
         if (grant.phase === 'capacity') return [];
-        // 评论会话（doc）只给读类工具；写记忆的在群和私聊里给，任务的只在群里给；只为设置服务的读工具只在私聊里给
-        return tools.filter(tool => placed(tool, grant.place) && (tool.class === 'read' || (tool.class === 'memory' ? grant.place.kind !== 'doc'
-          : grant.place.kind === (tool.class === 'schedule' ? 'group' : 'p2p'))))
-          .map(({ name, description, input }) => ({ name, description, input }));
+        // 评论会话（doc）只给读类和文档这一列的工具；写记忆的和任务的在群和私聊里给；只为设置服务的读工具只在私聊里给
+        return tools.filter(tool => placed(tool, grant.place) && (tool.class === 'read' || tool.class === 'document'
+          || (tool.class === 'memory' || tool.class === 'schedule' ? grant.place.kind !== 'doc' : grant.place.kind === 'p2p')))
+          .map(tool => ({ name: tool.name, description: tool.description, input: inputAt(tool, grant.place) }));
       },
       call,
       noteToolUse(id) {
@@ -473,16 +533,23 @@ export function createAgentEntries(opts: {
     if (!grant) return ended;
     if (grant.thread && !grant.thread.isAlive()) { revoke(grant); return ended; }
     const auth = grant.turn;
-    const who = (turn: TurnAuth): { role: MemoryTurn['role']; openId?: string } => ({ role: roleOf(turn), ...(turn.facts.requesterOpenId ? { openId: turn.facts.requesterOpenId } : {}) });
+    const who = (turn: TurnAuth): Pick<Extract<SessionAuthz, { ok: true }>, 'role' | 'openId' | 'unionId' | 'name'> => {
+      const { requesterOpenId: openId, requesterUnionId: unionId, requesterName: name } = turn.facts;
+      return { role: roleOf(turn), ...(openId ? { openId } : {}), ...(unionId ? { unionId } : {}), ...(name ? { name } : {}) };
+    };
     switch (action.kind) {
-      case 'settingsWrite': case 'adminMember': {
+      case 'settingsWrite': {
         const failure = authorizeNow(grant, auth);
         if (failure || !auth) return denial(failure ?? refused('unknown-origin'));
-        if (action.kind === 'adminMember' && !opts.isOwner(auth.facts.requesterOpenId ?? '')) return { ok: false, reason: 'not-owner', message: NOT_OWNER_MESSAGE };
         return { ok: true, ...who(auth) };
       }
       case 'adminRead': {
         const failure = grant.place.kind !== 'p2p' ? notDm(grant.place) : adminTurn(grant);
+        return failure || !grant.turn ? denial(failure ?? refused('turn-ended')) : { ok: true, ...who(grant.turn) };
+      }
+      // dm-agent 7.3: a private chat's as anything else of it; a group's on a turn of its own, whoever's, as its tools are (7.2).
+      case 'feishuRead': {
+        const failure = grant.place.kind === 'p2p' ? adminTurn(grant) : grant.place.kind === 'doc' ? notDm(grant.place) : grant.turn?.active ? undefined : refused('turn-ended');
         return failure || !grant.turn ? denial(failure ?? refused('turn-ended')) : { ok: true, ...who(grant.turn) };
       }
       case 'schedule': {
@@ -491,36 +558,52 @@ export function createAgentEntries(opts: {
         const actor = scheduleActor(grant, auth);
         // The command core checks a person's turn again by its role; a task's own run as itself (3.13).
         if (actor.kind === 'scheduled') return { ok: true, ...who(auth), actor };
+        if (actor.kind === 'dm') {
+          const { text: _text, ...person } = actor;
+          return { ok: true, ...who(auth), actor: { ...person, via: 'cli' } };
+        }
         const { openId, role, chatId, name, messageId } = actor;
         return { ok: true, ...who(auth), actor: { kind: 'session', openId, role, chatId, ...(name ? { name } : {}), ...(messageId ? { messageId } : {}) } };
       }
       case 'memory': {
-        const failure = authorizeMemory(grant, auth);
+        const dm = grant.place.kind === 'p2p';
+        const failure = authorizeMemory(grant, auth) ?? (dm && auth ? dmTurn(auth) : undefined);
         const turn = !failure && auth ? memoryTurnOf(grant, auth) : undefined;
         if (!turn || !auth) return denial(failure ?? refused('unknown-origin'));
         const target = action.op === 'edit' ? action.item.scope : action.target;
         // A private chat's memory is its own person's: the tools' decideAdd and decideEdit give no other (4.5a).
         if (target.kind === 'dm' && !ownDm(turn, target.openId)) return { ok: false, reason: 'out-of-scope', message: decisionMessages['out-of-scope'] };
         if (action.op === 'read') return { ok: true, ...who(auth) };
+        // dm-agent 6.4: what is written in another Bot's memory says who by name, its open_id being this Bot's.
+        const otherBot = action.otherBot === true, name = auth.facts.requesterName;
         const source: MemoryLanding['source'] = {
           botId: opts.appId, turn: { kind: turn.kind, steered: turn.steered }, ...(turn.chatId ? { chatId: turn.chatId } : {}),
-          ...(auth.facts.triggerMessageId ? { messageId: auth.facts.triggerMessageId } : {}),
+          ...(auth.facts.triggerMessageId ? { messageId: auth.facts.triggerMessageId } : {}), ...(otherBot && name ? { actorName: name } : {}),
         };
-        const actorOf = (decided: { actorRole: string; actorOpenId?: string }): MemoryLanding['actor'] =>
-          ({ role: decided.actorRole as MemoryLanding['actor']['role'], ...(decided.actorOpenId ? { openId: decided.actorOpenId } : {}) });
+        const writer = (decided: { actorRole: string; actorOpenId?: string }): MemoryLanding['actor'] =>
+          ({ role: decided.actorRole as MemoryLanding['actor']['role'], ...(decided.actorOpenId && !otherBot ? { openId: decided.actorOpenId } : {}) });
+        if (action.op === 'manage') {
+          if (!dm) return denial(notDm(grant.place));
+          const by = actorOf(turn);
+          return { ok: true, ...who(auth), memory: { scope: action.target, trust: by.trust, actor: writer(by), source, ...(otherBot ? { otherBot } : {}) } };
+        }
+        // A private chat reaches every project (dm-agent 6.1), not only those of its Bot's groups.
+        const reached = dm && target.kind === 'project' ? { ...place, botProjectIds: [...place.botProjectIds ?? [], target.projectId] } : place;
         if (action.op === 'edit') {
-          const decision = decideEdit({ turn, place, item: action.item, ...(action.text !== undefined ? { text: action.text } : {}) });
+          const decision = decideEdit({ turn, place: reached, item: action.item, ...(action.text !== undefined ? { text: action.text } : {}) });
           if (!decision.allow) return { ok: false, reason: decision.reason, message: decisionMessages[decision.reason] };
           // One Bot-memory write a turn, as the tools reserve it; not given back if the write then fails.
           if (action.item.scope.kind === 'bot') auth.botWrites++;
-          return { ok: true, ...who(auth), memory: { scope: action.item.scope, trust: 'untrusted', actor: actorOf(decision.actor), source } };
+          return { ok: true, ...who(auth), memory: { scope: action.item.scope, trust: 'untrusted', actor: writer(decision.actor), source } };
         }
         const requested: RequestedScope = target.kind === 'project' ? { project: target.projectId } : target.kind;
-        const decision = decideAdd({ turn, place, via: 'tool', text: action.text.trim(), scope: requested });
+        const decision = decideAdd({ turn, place: reached, via: 'tool', text: action.text.trim(), scope: requested });
         if (!decision.allow) return { ok: false, reason: decision.reason, message: decisionMessages[decision.reason] };
+        // A downgrade lands in this Bot's project: not what a write aimed at another Bot asked for.
+        if (otherBot && decision.scope.kind !== target.kind) return { ok: false, reason: 'not-allowed-here', message: decisionMessages['not-allowed-here'] };
         if (decision.scope.kind === 'bot') auth.botWrites++;
         return { ok: true, ...who(auth), memory: {
-          scope: decision.scope, trust: decision.trust, actor: actorOf(decision),
+          scope: decision.scope, trust: decision.trust, actor: writer(decision),
           source: { ...source, ...(decision.downgraded ? { downgraded: decision.downgraded } : {}) },
         } };
       }
@@ -560,6 +643,7 @@ export function createAgentEntries(opts: {
         auth.controller.abort();
       }
     },
+    revokeChat(chatId) { for (const grant of [...grants]) if (grant.place.kind === 'p2p' && grant.place.chatId === chatId) revoke(grant); },
     closeAll() { shuttingDown = true; for (const grant of grants) revoke(grant); },
   };
 }

@@ -9,8 +9,9 @@ export type { JudgeErrorKind } from '../agent/error-kind';
  * Where the message to judge was posted (product.md 3.4):
  *   main      group main area, named or unnamed: skip / main / topic
  *   topic     inside a topic (topic-group posts too): skip / reply
+ *   dm        a private chat's main area: skip / main
  */
-export type JudgeVariant = 'main' | 'topic';
+export type JudgeVariant = 'main' | 'topic' | 'dm';
 export type JudgeDecision = 'skip' | 'main' | 'topic' | 'reply';
 
 /**

@@ -143,6 +143,8 @@ export interface ProjectSections {
   response: {
     noMention: boolean;
   };
+  /** A private chat's only: 智能 or 单会话. A group's is changed with the group, not here. */
+  conversation: { mode: 'smart' | 'single' };
   model: {
     selection: ModelSelection;
   };
@@ -171,7 +173,7 @@ export type SettingsAccess = {
   kind: 'writable';
 } | {
   kind: 'readonly';
-  reason: 'preview' | 'owner-offline' | 'unsupported-host' | 'stale';
+  reason: 'preview' | 'owner-offline' | 'unsupported-host' | 'stale' | 'dm-fixed';
   message: string;
 };
 export interface ApplyEffect {
@@ -189,6 +191,14 @@ export interface SettingsSection<T> {
 type Sections<M> = {
   [K in keyof M]: SettingsSection<M[K]>;
 };
+/** Someone who may be made an administrator (dm-agent 3.4). */
+export interface AdminCandidate {
+  openId: string;
+  name: string;
+  sources: ('creator' | 'feishu' | 'refused')[];
+  /** when they were last turned away; set with `refused` */
+  at?: number;
+}
 export interface AgentSettingsView {
   scope: Extract<SettingsScope, {
     kind: 'agent';
@@ -197,9 +207,11 @@ export interface AgentSettingsView {
   roleInfo?: { draft?: string; headed: boolean; oversized: boolean; mergedNotice: boolean; integrity: 'ok' | 'untracked' | 'changed' };
   ownerOpenId: string | null;
   administrators: {
-    feishu?: { ownerOpenId: string | null; adminOpenIds: string[] };
-    scannerOpenId?: string | null;
     openIds: string[];
+    /** the name Feishu gave each person on the list; one it would not name has no entry */
+    names?: Record<string, string>;
+    /** who may be picked to join the list, the people on it left out */
+    candidates?: AdminCandidate[];
     revision: string;
   };
   voice: VoiceView;
@@ -229,7 +241,7 @@ export interface ProjectSettingsView {
   scope: Extract<SettingsScope, {
     kind: 'project';
   }>;
-  sections: Sections<Omit<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation' | 'speed'>> & Partial<Sections<Pick<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation' | 'speed'>>>;
+  sections: Sections<Omit<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation' | 'speed' | 'conversation'>> & Partial<Sections<Pick<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation' | 'speed' | 'conversation'>>>;
   botProfile?: BotProfile;
   skillsError?: string;
   skills?: Array<{ path: string; name: string; description: string; source: 'workspace' | 'user' | 'provider'; enabled: boolean }>;

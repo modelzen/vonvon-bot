@@ -7,7 +7,7 @@ import type { CollaborationRequest as ServiceRequest } from '../../admin/collabo
 import { UsageError, type UsageErrorKind } from '../../agent/types';
 import { AdminWriteError } from '../../admin/ops';
 import { NotWiredYetError } from '../../admin/service';
-import { CREATED_UNSAVED, CREATION_UNKNOWN } from '../../project/lifecycle';
+import { CREATED_UNSAVED, CREATION_UNKNOWN, type GroupInvitee } from '../../project/lifecycle';
 import type { DirectoryBrowser } from '../directory-browser';
 import type { RpcOutcome } from '../rpc';
 import { RpcError, unsupported } from '../errors';
@@ -58,15 +58,24 @@ const usageErrorMessages = (login: string): Record<UsageErrorKind, string> => ({
   transient: '暂时无法读取 Codex 用量，请稍后重试。',
 });
 
-export async function collaborationRpc(service: AdminService, directory: DirectoryBrowser, request: CollaborationRequest): Promise<RpcOutcome<CollaborationReply>> {
+/** `invitee`: who a group made from a private chat pulls in (authz.ts); the bot's primary admin from the desktop and the terminal. */
+export async function collaborationRpc(service: AdminService, directory: DirectoryBrowser, request: CollaborationRequest, invitee?: GroupInvitee): Promise<RpcOutcome<CollaborationReply>> {
   if (request.action === 'providerModels') {
     const result = await discoverProviderModels(request.backend, undefined, request.refresh);
     return { kind: 'read', value: collaborationReplySchema.parse({ kind: 'providerModels', backend: request.backend, state: result.models.length ? 'ready' : 'unavailable', models: result.models, ...(result.message ? { message: result.message } : {}) }) };
   }
   if (request.action === 'usage') {
-    try { return { kind: 'read', value: collaborationReplySchema.parse({ kind: 'usage', data: await service.accountUsage(request.force) }) }; }
+    const claude = request.backend === 'claude-agent';
+    const provider = claude ? 'Claude' : 'Codex';
+    try { return { kind: 'read', value: collaborationReplySchema.parse({ kind: 'usage', data: await service.accountUsage(request.force, request.backend ?? 'codex-appserver') }) }; }
     catch (error) {
-      throw new RpcError(error instanceof UsageError ? 'usage_unavailable' : 'operation_failed', error instanceof UsageError ? usageErrorMessages(`${toolCommand('codex')} login`)[error.kind] : '读取 Codex 用量失败');
+      const messages: Record<UsageErrorKind, string> = claude ? {
+        'no-auth': '这台设备上没有可读取的 Claude 订阅凭据，请在该设备上运行 Claude Code 检查配置。',
+        'api-key-mode': '当前 Claude 用的是 API 接入，没有订阅额度可读。',
+        'need-relogin': `Claude 的订阅凭据过期了，在终端运行 \`${toolCommand('claude')}\` 更新配置后再看。`,
+        transient: '暂时无法读取 Claude 用量，请稍后重试。',
+      } : usageErrorMessages(`${toolCommand('codex')} login`);
+      throw new RpcError(error instanceof UsageError ? 'usage_unavailable' : 'operation_failed', error instanceof UsageError ? messages[error.kind] : `读取 ${provider} 用量失败`);
     }
   }
   await requireRunningAgent(service, request.agentId);
@@ -74,7 +83,7 @@ export async function collaborationRpc(service: AdminService, directory: Directo
   let operation: ServiceRequest;
   if (request.action === 'createProject') {
     if (request.conversation === 'smart' && request.response !== undefined) throw new RpcError('invalid_request', `${SMART_NO_MENTION}。`);
-    operation = { action: 'createProject', requestId: randomUUID(), name: request.name, ...(request.project ? { project: request.project } : {}), kind: conversationToMode(request.conversation), ...(request.judge ? {judge:request.judge} : {}), ...(request.response ? { noMention: request.response === 'all' } : {}), backend: request.tool === 'codex' ? 'codex-appserver' : 'claude-agent', ...(request.folder.kind === 'existing' ? { directory: await directory.resolve(request.folder.folderToken) } : {}) };
+    operation = { action: 'createProject', requestId: randomUUID(), name: request.name, ...(invitee ? { invitee } : {}), ...(request.project ? { project: request.project } : {}), kind: conversationToMode(request.conversation), ...(request.judge ? {judge:request.judge} : {}), ...(request.response ? { noMention: request.response === 'all' } : {}), backend: request.tool === 'codex' ? 'codex-appserver' : 'claude-agent', ...(request.folder.kind === 'existing' ? { directory: await directory.resolve(request.folder.folderToken) } : {}) };
   } else if (request.action === 'editProject') {
     operation = { action: 'editProject', projectName: request.projectName, chatId: request.groupId, expectedRevision: request.expectedRevision, ...(request.folderToken ? { directory: await directory.resolve(request.folderToken) } : {}), ...(request.project ? { project: request.project } : {}), ...(request.conversation ? { kind: conversationToMode(request.conversation) } : {}), ...(request.enabled !== undefined ? { enabled: request.enabled } : {}) };
   } else {

@@ -151,7 +151,7 @@ function message(text: string, over: Partial<NormalizedMessage> = {}): Normalize
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false, raw: { sender: { sender_type: 'user' } }, ...over } as NormalizedMessage;
 }
 function setup(policy: 'steer' | 'queue' = 'steer') {
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' } } };
   const channel = { send: fake.send, rawClient: { cardkit: { v1: { card: { idConvert: fake.idConvert }, cardElement: { update: fake.elementUpdate } } }, im: { v1: { message: { reply: fake.reply, get: fake.getMessage }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
@@ -621,52 +621,57 @@ describe('s33b sensitive ask intake', () => {
     await until(() => expect(fake.sendManaged.mock.calls.some(args => args[5] === 'open_id')).toBe(true));
   }
 
-  it('accepts a transcribed private answer before the DM console', async () => {
+  /** The card this person got in private: the managed send to their open_id. */
+  async function card(): Promise<string> {
+    const index = fake.sendManaged.mock.calls.findIndex(args => args[5] === 'open_id');
+    return (await fake.sendManaged.mock.results[index]!.value as { messageId: string }).messageId;
+  }
+  const dm = (text: string, over: Partial<NormalizedMessage> = {}) => message(text, { chatType: 'p2p', chatId: 'dm', threadId: undefined, ...over });
+
+  it('accepts a transcribed reply to the card, before anything else', async () => {
     const run = thread(); const o = await started(run, { threadId: undefined });
     await secretVisible(run);
     fake.voice.mockImplementation(async (_channel, msg) => voiceResult('private answer', msg.messageId));
-    await o.onMessage(message('<audio/>', { chatType: 'p2p', chatId: 'dm', threadId: undefined, rawContentType: 'audio' }));
+    await o.onMessage(dm('<audio/>', { rawContentType: 'audio', replyToMessageId: await card() }));
     await until(() => answered(run, 'private answer'));
     expect(fake.voice).toHaveBeenCalledOnce();
     run.turns[0]!.resolve();
   });
 
-  it('answers in p2p before the console, and falls back when no card waits', async () => {
+  it('answers with a reply to the card, and leaves everything else to the Agent (main 必败)', async () => {
     const run = thread(); const o = await started(run, { threadId: undefined });
     await secretVisible(run);
-    await o.onMessage(message('private answer', { chatType: 'p2p', chatId: 'dm', threadId: undefined }));
+    await o.onMessage(dm('不是回答'));
+    await o.onMessage(dm('回错了', { replyToMessageId: 'om_other' }));
+    expect(run.respond).not.toHaveBeenCalled();
+    expect(fake.dmConsole).not.toHaveBeenCalled();
+    await o.onMessage(dm('private answer', { replyToMessageId: await card() }));
     await until(() => expect(run.respond).toHaveBeenCalledExactlyOnceWith('id',
       { kind: 'answered', answer: { kind: 'text', text: 'private answer' } }));
-    expect(fake.dmConsole).not.toHaveBeenCalled();
-    const ordinary = message('console message', { chatType: 'p2p', chatId: 'dm', threadId: undefined });
-    await o.onMessage(ordinary);
-    expect(fake.dmConsole).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.anything(), ordinary);
     run.turns[0]!.resolve();
   });
 
-  it('routes retired skill commands and follow-up text to the ordinary private console', async () => {
-    const o = setup();
-    for (const content of ['/skill-add chat write reports', 'Also support markdown reports', '/skill-done']) {
-      const incoming = message(content, { chatType: 'p2p', chatId: 'dm', threadId: undefined });
-      await o.onMessage(incoming);
-      expect(fake.dmConsole).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), incoming);
-    }
-    expect(fake.dmConsole).toHaveBeenCalledTimes(3);
-    expect(fake.backend.startThread).not.toHaveBeenCalled();
-    expect(fake.backend.resumeThread).not.toHaveBeenCalled();
-  });
-
-  it.each(['bot', 'attachment'] as const)('keeps p2p %s messages in the console without answering', async kind => {
+  it('gives the menu for /menu, a question open or not; a retired skill command is just words', async () => {
     const run = thread(); const o = await started(run, { threadId: undefined });
     await secretVisible(run);
-    const incoming = message('not an answer', { chatType: 'p2p', chatId: 'dm', threadId: undefined,
+    const menu = dm('/menu');
+    await o.onMessage(menu);
+    expect(fake.dmConsole).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.anything(), menu);
+    await o.onMessage(dm('/skill-add chat write reports'));
+    expect(fake.dmConsole).toHaveBeenCalledOnce();
+    expect(run.respond).not.toHaveBeenCalled();
+    run.turns[0]!.resolve();
+  });
+
+  it.each(['bot', 'attachment'] as const)('takes no %s message for an answer, even as a reply', async kind => {
+    const run = thread(); const o = await started(run, { threadId: undefined });
+    await secretVisible(run);
+    await o.onMessage(dm('not an answer', { replyToMessageId: await card(),
       ...(kind === 'bot' ? { raw: { sender: { sender_type: 'app' } } }
         : { rawContentType: 'post', resources: [{ type: 'image', fileKey: 'attachment' }] as NormalizedMessage['resources'] }),
-    });
-    await o.onMessage(incoming);
-    expect(fake.dmConsole).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.anything(), incoming);
+    } as Partial<NormalizedMessage>));
     expect(run.respond).not.toHaveBeenCalled();
-    await o.onMessage(message('private answer', { chatType: 'p2p', chatId: 'dm', threadId: undefined }));
+    await o.onMessage(dm('private answer', { replyToMessageId: await card() }));
     await until(() => expect(run.respond).toHaveBeenCalledExactlyOnceWith('id',
       { kind: 'answered', answer: { kind: 'text', text: 'private answer' } }));
     run.turns[0]!.resolve();

@@ -7,7 +7,7 @@ import './smart-rules-editor.css';
 export const SMART_RULES_MAX_LENGTH = 30000;
 
 /** The browser owns the live editing DOM so React updates do not move the caret or interrupt IME. */
-export function SmartRulesEditor({value, onChange, disabled = false, expanded, onExpandedChange}: {value: string; onChange: (text: string) => void; disabled?: boolean; expanded: boolean; onExpandedChange: (expanded: boolean) => void}) {
+export function SmartRulesEditor({value, onChange, disabled = false, expanded, onExpandedChange, defaultText = DEFAULT_SMART_RULES_TEXT}: {value: string; onChange: (text: string) => void; disabled?: boolean; defaultText?: string; expanded: boolean; onExpandedChange: (expanded: boolean) => void}) {
   const id = useId();
   const sizeButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -53,7 +53,7 @@ export function SmartRulesEditor({value, onChange, disabled = false, expanded, o
     range.selectNodeContents(editor.current);
     const selection = window.getSelection();
     selection?.removeAllRanges(); selection?.addRange(range);
-    document.execCommand('insertHTML', false, smartRulesMarkup(DEFAULT_SMART_RULES_TEXT));
+    document.execCommand('insertHTML', false, smartRulesMarkup(defaultText));
     publish();
   }
   function copy(event: ClipboardEvent<HTMLDivElement>, cut = false) {
@@ -96,7 +96,7 @@ export function SmartRulesEditor({value, onChange, disabled = false, expanded, o
   return <div className="smart-rules-field" data-expanded={expanded || undefined}>
     <div className="smart-rules-toolbar">
       <p id={`${id}-help`} className="gd-note">直接修改正文和小标题，× 只删除小标题。</p>
-      <button type="button" className="gd-text-action" disabled={disabled || value === DEFAULT_SMART_RULES_TEXT} onClick={restore}>恢复默认</button>
+      <button type="button" className="gd-text-action" disabled={disabled || value === defaultText} onClick={restore}>恢复默认</button>
     </div>
     <div className="smart-rules-surface">
       <div id={`${id}-editor`} ref={editor} className="smart-rules-input" role="textbox" aria-label="判断规则" aria-multiline="true"

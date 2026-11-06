@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'vitest';
 import {agentIdSchema, groupIdSchema, membershipIdSchema, projectIdSchema, type DesktopSnapshot} from '@vonvon/protocol';
-import {agentPanes, joinedGroupRoute, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type CollaborationRoute} from '../src/collaboration-navigation';
+import {agentPanes, joinedGroupRoute, openDm, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type CollaborationRoute} from '../src/collaboration-navigation';
 
 const agentId = agentIdSchema.parse('cli_navigationA');
 const anotherAgentId = agentIdSchema.parse('cli_navigationB');
@@ -114,6 +114,20 @@ test('old daemons without projects still support the group tree and group search
 });
 
 test('the Bot page has four panes, 任务 after 记忆', () => {
-  assert.deepEqual(agentPanes.map(pane => pane.label), ['群聊', '记忆', '任务', '设置']);
+  assert.deepEqual(agentPanes.map(pane => pane.label), ['聊天', '记忆', '任务', '设置']);
   assert.deepEqual(routeDetail({kind: 'agent', id: agentId, pane: {kind: 'schedule'}}), {kind: 'overview'});
+});
+
+// dm-agent 10 (D4). main 必败: there was no route to a private chat
+test('the private chat sits under its Bot: its page, its 模型与权限 tab first, and back to where it was opened from', () => {
+  const opened = openDm(agentId);
+  assert.deepEqual(opened, {kind: 'dm', agentId, tab: 'model'});
+  assert.equal(routeView(opened), 'agents');
+  assert.deepEqual(routeSelection(opened), {kind: 'agent', id: agentId});
+  assert.deepEqual(routeDetail(opened), {kind: 'overview'});
+  assert.deepEqual(routeBack(opened), {kind: 'agent', id: agentId, pane: {kind: 'groups'}});
+  assert.deepEqual(routeBack(openDm(agentId, 'schedule', {kind: 'schedule'})), {kind: 'agent', id: agentId, pane: {kind: 'schedule'}});
+  // a group opened from the private chat's page goes back to the Bot, the private chat being no group's parent
+  const member = openMembership(opened, memberId, snapshot);
+  assert.deepEqual(member, {kind: 'membership', id: memberId, pane: {kind: 'settings'}, parent: {kind: 'agent', id: agentId, pane: {kind: 'groups'}}});
 });

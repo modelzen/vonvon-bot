@@ -124,6 +124,8 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     if (!process.send && !run?.paused) {
       try { await (await import('../admin/library')).prepareLibraryAtStartup(); }
       catch (error) { log.fail('library', error, { phase: 'startup' }); }
+      try { await (await import('../bot/dm-project')).prepareDmProjectsAtStartup(); }
+      catch (error) { log.fail('project', error, { phase: 'dm-startup' }); }
     }
     // Lane 10 hook: the value is a fake-child.mjs path; the real `vonvon daemon run` has no other seam a lane can reach.
     if (process.env.VONVON_TEST_SPAWN_FAKE_CHILD) {

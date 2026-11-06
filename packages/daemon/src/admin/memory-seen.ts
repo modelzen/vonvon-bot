@@ -8,8 +8,8 @@ import type { LibraryLocation } from '../project/library';
  * 记忆设计 5.8 的"新"标记。主人上次打开某一页（`bot:<appId>`、`project:<projectId>`）的时间存在 `<数据根>/library/seen.json`，
  * 只有本机一份，桌面端和网页端看到的一样。原子写，不占 `'library'` 锁，也不碰条目、revision 和完整性校验：新不新只拿事件的 `at` 比。
  */
-export type SeenPage = { kind: 'bot'; botId: string } | { kind: 'project'; projectId: string };
-export const seenKey = (page: SeenPage): string => page.kind === 'bot' ? `bot:${page.botId}` : `project:${page.projectId}`;
+export type SeenPage = { kind: 'bot'; botId: string } | { kind: 'project'; projectId: string } | { kind: 'dm'; botId: string; openId: string };
+export const seenKey = (page: SeenPage): string => page.kind === 'bot' ? `bot:${page.botId}` : page.kind === 'project' ? `project:${page.projectId}` : `dm:${page.botId}:${page.openId}`;
 const seenFile = (library: LibraryLocation): string => join(library.dir, 'seen.json');
 
 export async function readSeen(library: LibraryLocation): Promise<Record<string, number>> {

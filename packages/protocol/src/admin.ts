@@ -1,11 +1,12 @@
 import { z } from "zod";
-import { agentIdSchema, distributionSchema, permissionSchema } from "./domain.js";
+import { agentIdSchema, badgeNumberSchema, distributionSchema, permissionSchema } from "./domain.js";
 import { API_KEY_MAX, keyIdSchema, secretServiceSchema, secretTestOutcomeSchema } from "./secrets.js";
 import { principalWireSchema } from "./handshake.js";
 import { scopeSchema } from "./device.js";
 
 export const adminProjectSchema = z.object({
   avatarDataUrl: z.string().optional(),
+  enabled: z.boolean().optional(),
   name: z.string(), chatId: z.string(), cwd: z.string(), blank: z.boolean(),
   branch: z.string().optional(), kind: z.enum(["multi", "single", "smart"]),
   origin: z.enum(["created", "joined"]), noMention: z.boolean(),
@@ -21,6 +22,7 @@ export type AdminProject = z.infer<typeof adminProjectSchema>;
 export const adminBotSchema = z.object({
   name: z.string(), appId: z.string(), tenant: z.enum(["feishu", "lark"]),
   botName: z.string().optional(), avatarDataUrl: z.string().optional(),
+  badgeNumber: badgeNumberSchema.optional(),
   active: z.boolean(), current: z.boolean(), running: z.boolean(),
   pid: z.number().optional(), startedAt: z.number().optional(),
   connection: z.string().optional(), completionReminder: z.object({
@@ -63,10 +65,12 @@ export const adminSetupStatusSchema = z.object({
   connection: z.object({ running: z.boolean(), connection: z.string().optional() }),
   event: eventDiagnosisSchema,
   /** missingRequired gates the checklist step; missingJoinScopes (im:chat:readonly and the leave-group scope)
-   * only warns; missingOptional is the 3.11 optional scopes the 状态与诊断 page lists. All undefined when the grants could not be read. */
+   * only warns; missingOptional is the 3.11 optional scopes the 状态与诊断 page lists; missingTools is what the Bot's Feishu
+   * tools lack, with toolsGrantUrl pre-selecting just those. All undefined when the grants could not be read. */
   scopes: z.object({
     missingRequired: z.array(z.string()).optional(), missingJoinScopes: z.array(z.string()).optional(),
-    missingOptional: z.array(z.string()).optional(), grantUrl: z.string(),
+    missingOptional: z.array(z.string()).optional(), missingTools: z.array(z.string()).optional(), grantUrl: z.string(),
+    toolsGrantUrl: z.string().optional(),
   }),
   eventConfigUrl: z.string(),
   /** The app's page on the developer console (versions and publishing are there). */
