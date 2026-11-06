@@ -238,7 +238,7 @@ import { loadBots } from '../config/bots';
 import { admitDirectorySettings } from '../config/directories';
 import { DirectoryError, directoryFailure } from '../config/directory-errors';
 import { botBackendId, groupBackendId, groupPermission, resolveCommentsExecution, resolveExecution, resolveModelPreference, resolveProjectModelAccess, executionSessionProfile, projectModelAllowed, projectModelCatalog, projectSpeedAllowed, type ModelPreference } from '../config/execution';
-import { ensureDmProject, type DmProjectDefaults } from './dm-project';
+import { ensureDmProject, storedDmDefaults } from './dm-project';
 import { fileClaimMode, messageLink, OutboundFiles } from './outbound-files';
 import { getSecret } from '../config/keystore';
 import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
@@ -1312,18 +1312,6 @@ export function createOrchestrator(
   }
   /** The private-chat row's first creation, which a message in the meantime waits for. */
   let dmReady: Promise<unknown> = Promise.resolve();
-  /** What a new private-chat row starts from (dm-agent 4.1): a group of nothing, as the bot would run it today. No models listed leaves the model unset, not guessed. */
-  async function dmDefaults(): Promise<DmProjectDefaults> {
-    const execution = execOf(undefined);
-    const be = backendFor(execution.backend);
-    const models = await listModels(be);
-    if (!models.length) return { backend: execution.backend };
-    const { model: defaultModel, effort: defaultEffort } = await pickGroupDefault(undefined, be, execution.model);
-    // A hand-typed model is outside the catalog, which an allowset filters by: like a group's (3.11), it goes without one.
-    if (execution.model?.custom) return { backend: execution.backend, defaultModel, defaultEffort, defaultModelCustom: true };
-    const modelAccess = resolveProjectModelAccess({ group: { backend: execution.backend, cwd: '', defaultModel, defaultEffort } }, models);
-    return { backend: execution.backend, defaultModel, defaultEffort, modelAccess };
-  }
   async function pickGroupDefault(project: Project | undefined, backend: AgentBackend, prefer?: ModelPreference) {
     const models = projectModelCatalog(project, backend.id, await listModels(backend));
     if (project?.modelAccess && !models.length) throw new Error('本群没有可用的模型与 Effort 组合，请先在群设置中选择');
@@ -10298,8 +10286,8 @@ export function createOrchestrator(
       await upgradeAdmins(cfg, writePreferences).catch(error => log.fail('setup', error, { phase: 'admins-upgrade' }));
       const result = await materializeGroupSettings({ cfg, backendFor });
       if (result.updated.length || result.deferred.length) log.info('settings', 'group-settings-materialized', { updated: result.updated.length, deferred: result.deferred.length });
-      // In the background: listing a provider's models can cold-spawn it, and a bot must start without its private chat.
-      if (options?.bot) dmReady = trackTask(ensureDmProject({ bot: options.bot, projectsRootDir: cfg.preferences?.projectsRootDir, defaults: dmDefaults }));
+      // The host prepares old/stopped Bots too. This also covers new registrations and a standalone Bot process.
+      if (options?.bot) dmReady = trackTask(ensureDmProject({ bot: options.bot, projectsRootDir: cfg.preferences?.projectsRootDir, defaults: async () => storedDmDefaults(cfg.preferences) }));
       // An unreadable file keeps the bot from starting; a corrupt one is moved aside and the store starts empty.
       await loadStore();
     },

@@ -39,9 +39,10 @@ function registered(extra: Partial<BotEntry> = {}): void {
   writeFileSync(join(fixture.root, 'bots.json'), JSON.stringify({ version: 1, current: APP, bots: [{ ...entry, ...extra }] }));
 }
 let work: string;
+// Native realpath expands Windows 8.3 temp-directory aliases, matching fs/promises.realpath in production.
 beforeEach(() => {
-  fixture.root = realpathSync(mkdtempSync(join(tmpdir(), 'dm-project-')));
-  work = realpathSync(mkdtempSync(join(tmpdir(), 'dm-project-work-')));
+  fixture.root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dm-project-')));
+  work = realpathSync.native(mkdtempSync(join(tmpdir(), 'dm-project-work-')));
   mkdirSync(join(fixture.root, 'bots', APP), { recursive: true });
 });
 afterEach(() => { vi.restoreAllMocks(); rmSync(fixture.root, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true }); });

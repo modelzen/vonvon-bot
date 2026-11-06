@@ -19,6 +19,8 @@ vi.mock('../src/provider/process/process-host', () => ({
   ProcessHost: class { async sweepOrphans() { return {}; } admission() { return undefined; } async closeAll() { if (fixture.closeAll) throw fixture.closeAll; } },
 }));
 vi.mock('../src/cli/commands/run', () => ({ runRun: vi.fn() }));
+// Startup data preparation owns its own locks; crash/cleanup tests isolate that boundary from host-owned locks.
+vi.mock('../src/bot/dm-project', () => ({ prepareDmProjectsAtStartup: vi.fn(async () => {}) }));
 import { runRun } from '../src/cli/commands/run';
 import { closeMutex } from '../src/config/data-access';
 import { formatErrorTree } from '../src/core/error-parts';
