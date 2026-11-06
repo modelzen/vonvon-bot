@@ -179,7 +179,14 @@ async function judged(m: EventMessage): Promise<{ req: JudgeRequest; answer: Def
 async function decide(m: EventMessage, value: JudgeResult): Promise<void> {
   (await judged(m)).answer.resolve(value);
 }
-const settle = async (): Promise<void> => { for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r)); };
+/** Real file reads and writes take as long as the machine likes, so ticks alone cannot say the work has landed. */
+const fileWork = (): boolean => process.getActiveResourcesInfo().some(name => name.startsWith('FSReq'));
+const settle = async (): Promise<void> => {
+  for (let round = 0; round < 500; round++) {
+    for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r));
+    if (!fileWork()) return;
+  }
+};
 
 let orchestrator: ReturnType<typeof createOrchestrator>;
 let events: DiagnosticsEvent[] = [];
@@ -2128,15 +2135,14 @@ describe('attention (s25g)', () => {
     for (const message of messages) await send(message);
     await settle(); expect(fake.judge).not.toHaveBeenCalled();
     await advance(s(20));
-    expect(fake.judge.mock.calls.length).toBeGreaterThan(0);
+    await vi.waitFor(() => expect(fake.judge.mock.calls.length).toBeGreaterThan(0));
     expect(logged('attention-recover')).toEqual([]);
     for (const message of messages) {
       if (asked.has(idOf(message))) await decide(message, result('skip'));
     }
     await settle(); await advance(m(6));
     for (const message of messages) expect((await judged(message)).req.variant).toBe('topic');
-    const latest = events.flatMap(event => event.kind === 'attention' ? event.groups : []).at(-1);
-    expect(latest?.group?.score).toBe(10);
+    await vi.waitFor(() => expect(events.flatMap(event => event.kind === 'attention' ? event.groups : []).at(-1)?.group?.score).toBe(10));
   });
   it('55, 62. defers at 45 uses, drops stale arrivals when budget returns, and does not count an empty glance', async () => {
     const used = vi.spyOn(JudgeBudget.prototype, 'used').mockReturnValue(45);
