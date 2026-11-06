@@ -8,7 +8,7 @@ import { readDropped } from '../src/bot/restart-dropped';
 import { parseAskRequest, type AgentEvent, type AgentInput, type StartThreadOptions } from '../src/agent/types';
 import type { HostApi } from '../src/admin/ipc';
 import { paths } from '../src/config/paths';
-import { dmChatId, dmProject } from '../src/project/registry';
+import { dmChatId, dmProject, mutateProjectByChatId } from '../src/project/registry';
 import { getSession, listSessions, upsertSession } from '../src/bot/session-store';
 import { createAgentEntries, type AgentEntries } from '../src/agent/entry/registry';
 import { createOrchestrator } from '../src/bot/handle-message';
@@ -119,6 +119,9 @@ async function app(policy: 'steer' | 'queue' = 'queue', host?: Pick<HostApi, 'is
   const issue = vi.spyOn(entries, 'issue');
   const o = createOrchestrator(channel as never, cfg, paths.appDir, undefined, { entries, bot, droppedFile: DROPPED, ...(host ? { host } : {}) });
   opened.push(o); await o.initialize?.();
+  // These tests are about the turn, so every message runs: the judge in front of it is dm-smart.test.ts.
+  await until(async () => expect(await dmProject()).toBeDefined());
+  await mutateProjectByChatId(dmChatId(APP), project => { project.smart = false; });
   return { o, entries, issue };
 }
 function message(text: string, more: Partial<NormalizedMessage> = {}): NormalizedMessage {
@@ -285,6 +288,17 @@ describe('a turn going on in a private chat', () => {
     expect(JSON.stringify(run.consumed[1])).toContain('第二句');
     expect(be.startThread).toHaveBeenCalledOnce();
     run.turns[1]!.resolve();
+  });
+
+  // owner 2026-11-06: what a group can set, a private chat can set. The row wins over the Bot.
+  it('takes 运行中来了消息 from its own row', async () => {
+    const run = thread(); backend(run); const { o } = await app('queue');
+    await mutateProjectByChatId(dmChatId(APP), project => { project.pendingPolicy = 'steer'; });
+    await o.onMessage(message('先看这个'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    await o.onMessage(message('顺便看那个'));
+    await until(() => expect(run.t.steer).toHaveBeenCalledOnce());
+    run.turns[0]!.resolve();
   });
 
   it('steers the turn with what is said meanwhile, under the steer policy', async () => {

@@ -26,7 +26,7 @@ export type Kind = 'agent' | 'project' | 'session' | 'host';
 export type Target = { bot?: string; group?: string; session?: string; host?: boolean; dm?: boolean; revision?: string; reason?: string };
 
 /** What a private chat shows, besides the group sections it does not have: the last two are fixed (dm-agent 4.2). */
-const DM_VIEW = ['model', 'speed', 'modelAccess', 'skills', 'permission', 'workspace'];
+const DM_VIEW = ['model', 'speed', 'modelAccess', 'skills', 'permission', 'workspace', 'conversation', 'smartRules', 'judge', 'run', 'presentation'];
 const TABLES: Record<Kind, Record<string, SectionSchema>> = { agent: agentSectionSchemas, project: projectEditableSchemas, session: sessionSectionSchemas, host: hostSectionSchemas };
 const sectionNames = (kind: Kind): string[] => Object.keys(TABLES[kind]);
 const FORMAT = '写成 节.项=值，例如 permission.mode=full';
@@ -360,8 +360,8 @@ export async function runSettingsGet(section: string | undefined, target: Target
       // the --bot and --group this command was given, so the line runs as printed on a machine with several bots
       const scope = `${target.bot !== undefined ? `--bot ${target.bot} ` : ''}${view.scope.kind === 'project' && target.group !== undefined ? `--group ${target.group} ` : ''}`;
       human.push(...decisionLines(decisionModels, inUse, section === 'judge', scope));
-      if (prompt) human.push(`  ${promptSource(prompt, view.scope.kind === 'project')}`);
-      human.push('  只在智能模式的群里用');
+      if (prompt && !target.dm) human.push(`  ${promptSource(prompt, view.scope.kind === 'project')}`);
+      human.push(target.dm ? '  只在智能模式下用' : '  只在智能模式的群里用');
       if (prompt && section === 'judge') human.push(...promptText(prompt));
     }
   }

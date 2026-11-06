@@ -196,7 +196,7 @@ describe('ensureDmProject', () => {
     const cwd = join(fixture.root, 'projects', 'jojo', 'dm');
     expect(statSync(cwd).isDirectory()).toBe(true);
     const [row] = stored();
-    expect(row).toEqual({ name: '私聊', chatId: dmChatId(APP), cwd, blank: true, origin: 'created', kind: 'single', noMention: true, mode: 'full', network: true, createdAt: expect.any(Number), dm: { people: {} },
+    expect(row).toEqual({ name: '私聊', chatId: dmChatId(APP), cwd, blank: true, origin: 'created', kind: 'single', smart: true, noMention: true, mode: 'full', network: true, createdAt: expect.any(Number), dm: { people: {} },
       backend: 'claude-agent', defaultModel: 'm', defaultEffort: 'high', modelAccess: { backend: 'claude-agent', models: ['m'], efforts: ['high'] } });
   });
   it('joins an upgraded bot\'s groups', async () => {

@@ -20,7 +20,7 @@ import { readSmartPrompt, SmartPromptError, composeSmartRules } from './smart-fi
 import { DecisionError } from './typesafe';
 import type { JudgeErrorKind, JudgeRequest, JudgeResult } from './types';
 
-export const JUDGE_TIMEOUT_MS = { main: 20_000, topic: 20_000 } as const;
+export const JUDGE_TIMEOUT_MS = { main: 20_000, topic: 20_000, dm: 20_000 } as const;
 /** Named messages wait at most twelve seconds before intake handles the failure. */
 export const JUDGE_NAMED_TIMEOUT_MS = 12_000;
 /** How long an aborted backend call may take to clean up before its slot is given back anyway. */
