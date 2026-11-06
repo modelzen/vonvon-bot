@@ -2902,7 +2902,7 @@ export function createOrchestrator(
         return;
       }
       if (msg.rawContentType === 'audio') {
-        const textMessage = await transcribeMessage(msg, intakeOwner);
+        const textMessage = await transcribeMessage(msg, intakeOwner, await dmProject().catch(() => undefined));
         if (!textMessage) return;
         msg = textMessage;
       }

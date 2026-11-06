@@ -361,11 +361,10 @@ describe('the private-chat row (dm-agent 4.2)', () => {
     expect((await save(owner, 'speed', { tier: 'fast' })).kind).toBe('saved');
     expect((await dmProject())?.serviceTier).toBe('fast');
   });
-  it.each([['permission', { mode: 'qa' }], ['workspace', { primary: '/tmp/x' }], ['response', { noMention: false }], ['run', { pendingPolicy: 'queue' }], ['role', { supplement: 'x' }],
-    ['presentation', { voiceEnabled: false }]])('refuses %s', async (section, patch) => {
+  it.each([['permission', { mode: 'qa' }], ['workspace', { primary: '/tmp/x' }], ['response', { noMention: false }], ['role', { supplement: 'x' }]])('refuses %s', async (section, patch) => {
     const { owner } = await fixture({ discoverSkills: async () => [] });
     const before = await dmProject();
-    expect(await save(owner, section, patch)).toMatchObject({ kind: 'rejected', fields: [{ message: '私聊只能改模型、速度、可选模型、技能、沟通方式、判断规则和决策模型' }] });
+    expect(await save(owner, section, patch)).toMatchObject({ kind: 'rejected', fields: [{ message: '私聊只能改模型、速度、可选模型、技能、沟通方式、判断规则、决策模型、运行中来了消息和消息与提醒' }] });
     expect(await dmProject()).toEqual(before);
   });
   // dm-agent 10 (D4). main 必败: the view called them writable and only a save was refused
@@ -373,8 +372,15 @@ describe('the private-chat row (dm-agent 4.2)', () => {
     const { owner } = await fixture({ discoverSkills: async () => [] });
     const view = await owner.read(dm) as ProjectSettingsView;
     const access = (key: keyof ProjectSettingsView['sections']) => view.sections[key]?.access;
-    for (const key of ['permission', 'workspace', 'response', 'run', 'role', 'presentation'] as const) expect(access(key)).toMatchObject({ kind: 'readonly', reason: 'dm-fixed' });
-    for (const key of ['model', 'speed', 'modelAccess', 'skills', 'conversation', 'smartRules', 'judge'] as const) expect(access(key)).toEqual({ kind: 'writable' });
+    for (const key of ['permission', 'workspace', 'response', 'role'] as const) expect(access(key)).toMatchObject({ kind: 'readonly', reason: 'dm-fixed' });
+    for (const key of ['model', 'speed', 'modelAccess', 'skills', 'conversation', 'smartRules', 'judge', 'run', 'presentation'] as const) expect(access(key)).toEqual({ kind: 'writable' });
+  });
+  it('keeps its own 运行中来了消息 and 消息与提醒 on the row', async () => {
+    const { owner } = await fixture({ discoverSkills: async () => [] });
+    expect((await save(owner, 'run', { pendingPolicy: 'queue' })).kind).toBe('saved');
+    expect((await dmProject())?.pendingPolicy).toBe('queue');
+    expect((await save(owner, 'presentation', { voiceEnabled: false })).kind).toBe('saved');
+    expect((await dmProject())?.presentation?.voiceEnabled).toBe(false);
   });
   // owner 2026-11-06. main 必败: a private chat had no way of talking to choose, and every message was answered
   it('switches between smart and 单会话 on the row itself', async () => {

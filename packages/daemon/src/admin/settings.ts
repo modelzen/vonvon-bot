@@ -110,8 +110,8 @@ function effect(fields: string[], when: T.ApplyEffect['when'], detail: string): 
     }];
 }
 /** What `settings save.project` takes for the private chat (dm-agent 4.2): its tier and folder are fixed, and the group-only sections are not its. */
-const DM_SECTIONS: ReadonlySet<string> = new Set<keyof T.ProjectSections>(['model', 'speed', 'modelAccess', 'skills', 'smartRules', 'judge', 'conversation']);
-const DM_ONLY_THESE = '私聊只能改模型、速度、可选模型、技能、沟通方式、判断规则和决策模型';
+const DM_SECTIONS: ReadonlySet<string> = new Set<keyof T.ProjectSections>(['model', 'speed', 'modelAccess', 'skills', 'smartRules', 'judge', 'conversation', 'run', 'presentation']);
+const DM_ONLY_THESE = '私聊只能改模型、速度、可选模型、技能、沟通方式、判断规则、决策模型、运行中来了消息和消息与提醒';
 const DM_FIXED: T.SettingsAccess = { kind: 'readonly', reason: 'dm-fixed', message: `私聊只有完全访问一档，目录也是固定的。${DM_ONLY_THESE}。` };
 const agentEffects: {
   [K in keyof T.AgentSections]: T.ApplyEffect[];

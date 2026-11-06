@@ -290,6 +290,17 @@ describe('a turn going on in a private chat', () => {
     run.turns[1]!.resolve();
   });
 
+  // owner 2026-11-06: what a group can set, a private chat can set. The row wins over the Bot.
+  it('takes 运行中来了消息 from its own row', async () => {
+    const run = thread(); backend(run); const { o } = await app('queue');
+    await mutateProjectByChatId(dmChatId(APP), project => { project.pendingPolicy = 'steer'; });
+    await o.onMessage(message('先看这个'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    await o.onMessage(message('顺便看那个'));
+    await until(() => expect(run.t.steer).toHaveBeenCalledOnce());
+    run.turns[0]!.resolve();
+  });
+
   it('steers the turn with what is said meanwhile, under the steer policy', async () => {
     const run = thread(); backend(run); const { o } = await app('steer');
     await o.onMessage(message('第一句')); await until(() => expect(run.consumed).toHaveLength(1));
