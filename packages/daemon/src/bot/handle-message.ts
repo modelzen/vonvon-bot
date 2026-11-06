@@ -2206,7 +2206,7 @@ export function createOrchestrator(
    */
   const DM_QUIET_MS = 1500;
   const dmNewest = new Map<string, string>();
-  /** The earlier lines of a burst, for the judgement of its newest to look at as well: a closing word must not drop the question before it. */
+  /** The earlier lines of a burst. Its newest is judged with them as one message: on its own, a closing word drops the question before it. */
   const dmFolded = new Map<string, Set<string>>();
   async function spokenPast(item: SmartItem, signal: AbortSignal): Promise<boolean> {
     await new Promise<void>((resolve) => {
@@ -2471,10 +2471,6 @@ export function createOrchestrator(
       dmFolded.set(item.place, (dmFolded.get(item.place) ?? new Set()).add(msg.messageId));
       return { kind: 'drop' };
     }
-    if (item.signal === 'dm') {
-      for (const id of dmFolded.get(item.place) ?? []) look.fresh.add(id);
-      dmFolded.delete(item.place);
-    }
     // A 同时发送到群 copy is looked up here, not on the chat's queue (s14d); a private chat's was, on arrival.
     if (item.signal !== 'dm' && !msg.threadId && !msg.mentionedBot && (await syncCopy.skip(msg, true))) return { kind: 'drop' };
     const project = await getProjectByChatId(msg.chatId);
@@ -2516,6 +2512,12 @@ export function createOrchestrator(
     let context = recent.context(item.place, { id: msg.messageId, at: msg.createTime });
     if (look && (look.fresh.size > 1 || look.glance)) context = context.map((l) => l.id && look.fresh.has(l.id) ? { ...l, fresh: true as const } : l);
     const line = lineOfMessage(msg, name, quotedLine(recent, msg), JUDGE_INPUT_LIMITS.messageChars);
+    const burst = item.signal === 'dm' ? dmFolded.get(item.place) : undefined;
+    if (burst) {
+      dmFolded.delete(item.place);
+      line.text = [...context.filter((l) => l.id && burst.has(l.id)).map((l) => l.text), line.text].join('\n');
+      context = context.filter((l) => !l.id || !burst.has(l.id));
+    }
     const botName = channel.botIdentity?.name ?? '';
     context = context.map((l) => sameNameWord(l.text, botName) ? { ...l, sameNameWord: true as const } : l);
     if (sameNameWord(bareText(msg), botName)) line.sameNameWord = true;

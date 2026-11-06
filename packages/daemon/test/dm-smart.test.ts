@@ -251,13 +251,14 @@ describe('a person still typing', () => {
     run.turns[0]!.resolve();
   });
 
-  it('shows the judge the question a closing word followed, so the word cannot drop it', async () => {
+  it('judges a burst as one message: a closing word cannot drop the question before it', async () => {
     const o = await app();
     const asked = message('帮我查下昨天的报错', { createTime: Date.now() - 5000 });
     await o.onMessage(asked);
     await o.onMessage(message('谢谢'));
     await until(() => expect(judged()).toHaveLength(1));
-    expect(judged()[0]!.context.find(line => line.id === asked.messageId)).toMatchObject({ fresh: true });
+    expect(judged()[0]!.message.text).toBe('帮我查下昨天的报错\n谢谢');
+    expect(judged()[0]!.context.some(line => line.id === asked.messageId)).toBe(false);
   });
 
   it('a recalled newest message does not take the earlier one with it', async () => {
