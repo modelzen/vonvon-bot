@@ -11,6 +11,7 @@ import { DEFAULT_DM_SMART_RULES } from '@vonvon/protocol';
 import { setDiagnosticsSink } from '../src/bot/diagnostics';
 import { paths } from '../src/config/paths';
 import { dmChatId, dmProject, mutateProjectByChatId } from '../src/project/registry';
+import { getSession, isSeen } from '../src/bot/session-store';
 import { createAgentEntries, type AgentEntries } from '../src/agent/entry/registry';
 import { createOrchestrator } from '../src/bot/handle-message';
 import { seedBots } from './helpers/bot-fixture';
@@ -118,7 +119,7 @@ async function app(mode: 'smart' | 'single' = 'smart') {
 }
 function message(text: string, more: Partial<NormalizedMessage> = {}): NormalizedMessage {
   return { messageId: `om_msg_${++fake.n}`, chatId: A, chatType: 'p2p', content: text, senderId: OWNER, senderName: 'Owner', mentionedBot: false, createTime: Date.now(),
-    rawContentType: 'text', resources: [], mentions: [], mentionAll: false, raw: { sender: { sender_type: 'user' } }, ...more } as NormalizedMessage;
+    rawContentType: 'text', resources: [], mentions: [], mentionAll: false, raw: { sender: { sender_type: 'user' }, message: { message_type: 'text', content: JSON.stringify({ text }) } }, ...more } as NormalizedMessage;
 }
 const until = (check: () => unknown) => vi.waitFor(check, { interval: 5, timeout: 4000 });
 /** Long enough for a judgement that was going to start to have started, and for its landing. */
@@ -306,6 +307,55 @@ describe('a person still typing', () => {
     await settled();
     expect(run.consumed).toHaveLength(1);
     expect(text(run.consumed[0])).not.toContain(lines[gone]!.content);
+    run.turns[0]!.resolve();
+  });
+
+  // Codex 369. The members were dropped once landed: recalling the first still ran it, recalling the last dropped the first.
+  it.each([['first', 0], ['last', 1]] as const)('the %s line recalled while the burst queues behind a turn sends the rest round again', async (_which, gone) => {
+    const run = thread(); backend(run); const o = await app();
+    await o.onMessage(message('先跑这个'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const lines = [message('然后查昨天的报错'), message('再按日期排')];
+    for (const line of lines) await o.onMessage(line);
+    await until(() => expect(judged()).toHaveLength(2));
+    await settled();
+    await o.onRecall({ messageId: lines[gone]!.messageId, chatId: A });
+    await until(() => expect(judged()).toHaveLength(3));
+    expect(judged()[2]!.message.text).toBe(lines[1 - gone]!.content);
+    await settled();
+    run.turns[0]!.resolve();
+    await until(() => expect(run.consumed).toHaveLength(2));
+    await settled();
+    expect(run.consumed).toHaveLength(2);
+    expect(text(run.consumed[1])).toContain(lines[1 - gone]!.content);
+    expect(text(run.consumed[1])).not.toContain(lines[gone]!.content);
+    run.turns[1]!.resolve();
+  });
+
+  // Codex 369. Only the message the turn hangs on was marked, so a re-push of an earlier line was answered again.
+  it('marks every line of a queued burst seen once its turn starts', async () => {
+    const run = thread(); backend(run); const o = await app();
+    await o.onMessage(message('先跑这个'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const lines = [message('然后查昨天的报错'), message('再按日期排')];
+    for (const line of lines) await o.onMessage(line);
+    await until(() => expect(judged()).toHaveLength(2));
+    await settled();
+    run.turns[0]!.resolve();
+    await until(() => expect(run.consumed).toHaveLength(2));
+    await until(async () => { for (const line of lines) expect(isSeen(await getSession(A), line.messageId, line.createTime)).toBe(true); });
+    run.turns[1]!.resolve();
+  });
+
+  // Codex 369. A recall only reaches a session that started before the message, by `from`.
+  it('starts a new session at the first line of its burst', async () => {
+    const run = thread(); backend(run); const o = await app();
+    const first = message('帮我查一下', { createTime: Date.now() - 5000 }), last = message('昨天的那个报错');
+    listed.mockResolvedValue({ data: { items: [history(first)], has_more: false } });
+    await o.onMessage(first);
+    await o.onMessage(last);
+    await until(() => expect(run.consumed).toHaveLength(1));
+    await until(async () => expect((await getSession(A))?.from).toBe(first.createTime));
     run.turns[0]!.resolve();
   });
 
