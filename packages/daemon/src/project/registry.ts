@@ -121,7 +121,12 @@ export interface Project {
   migration?: { library?: number; memory?: number };
   /** This row is the bot's private chat (dm-agent 4.1): one per bot, kept out of everything about groups by
    * {@link listProjectsIn}. `people` is keyed by Feishu's p2p chat_id, one entry per admin who has written to the bot. */
-  dm?: { people: Record<string, DmPerson> };
+  dm?: {
+    people: Record<string, DmPerson>;
+    /** New offline-created DMs with no saved model use the Provider default, independent of future Bot edits.
+     * Absent on historical rows: preserve their original model fallback. */
+    useProviderDefault?: true;
+  };
 }
 /** `unionId`: from the Feishu event; another Bot pulls this person into a group by it (dm-agent 6.4). */
 export interface DmPerson { openId: string; unionId?: string; name?: string; at: number }
