@@ -33,14 +33,15 @@ const snapshotOf = (bot: Agent, memberships: Membership[]) => ({agents: [bot], g
 const running = {label: '运行中', tone: 'success'} as const;
 const list = (bot: Agent, memberships: Membership[], extra: {dmNew?: number} = {}) => renderToStaticMarkup(<BotGroupList snapshot={snapshotOf(bot, memberships)} agent={bot} busy={false} status={running} onJoin={() => {}} onMembership={() => {}} onDm={() => {}} {...extra}/>);
 
-it('puts the private chat at the very top of the group list, with its Provider and no way of talking, counted as no group', () => {
+it('puts the private chat at the very top of the group list, with its Provider and way of talking, counted as no group', () => {
   const html = list(agent(), [member]);
   expect(html.indexOf('私聊')).toBeGreaterThan(-1);
   expect(html.indexOf('私聊')).toBeLessThan(html.indexOf('研发群'));
   expect(html).toContain('bot-group-list__count">1<');
-  expect(html).toContain('aria-label="设置 小支 的私聊，Provider：Claude"');
+  expect(html).toContain('aria-label="设置 小支 的私聊，Provider：Claude，沟通方式：连续交谈"');
   expect(html).toContain('和 小支 的私聊');
-  expect(html).toContain('bot-group-list__mode">仅管理员<');
+  expect(html).toContain('bot-group-list__mode">连续交谈<');
+  expect(list(agent({dm: row({conversation: 'smart'})}), [member])).toContain('bot-group-list__mode">智能<');
   expect(html).toContain('collaboration-avatar agent');
   expect(html.match(/<button[^>]*bot-group-list__row/g)).toHaveLength(2);
 });
