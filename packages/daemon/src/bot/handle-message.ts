@@ -2206,6 +2206,8 @@ export function createOrchestrator(
    */
   const DM_QUIET_MS = 1500;
   const dmNewest = new Map<string, string>();
+  /** The earlier lines of a burst, for the judgement of its newest to look at as well: a closing word must not drop the question before it. */
+  const dmFolded = new Map<string, Set<string>>();
   async function spokenPast(item: SmartItem, signal: AbortSignal): Promise<boolean> {
     await new Promise<void>((resolve) => {
       if (signal.aborted) { resolve(); return; }
@@ -2466,7 +2468,12 @@ export function createOrchestrator(
     const { msg } = item;
     if (item.signal === 'dm' && await spokenPast(item, signal)) {
       log.info('intake', 'dm-folded', { ref: msg.messageId.slice(-6) });
+      dmFolded.set(item.place, (dmFolded.get(item.place) ?? new Set()).add(msg.messageId));
       return { kind: 'drop' };
+    }
+    if (item.signal === 'dm') {
+      for (const id of dmFolded.get(item.place) ?? []) look.fresh.add(id);
+      dmFolded.delete(item.place);
     }
     // A 同时发送到群 copy is looked up here, not on the chat's queue (s14d); a private chat's was, on arrival.
     if (item.signal !== 'dm' && !msg.threadId && !msg.mentionedBot && (await syncCopy.skip(msg, true))) return { kind: 'drop' };
