@@ -48,9 +48,12 @@ describe('real configured Provider discovery', () => {
     expect(c.collaboration).toHaveBeenCalledExactlyOnceWith({action: 'usage', force: false, backend: 'claude-agent'});
     expect(updates).toContainEqual({kind: 'provider', provider: {id: 'claude-agent', name: 'Claude', account: {kind: 'subscription'}, data}});
     const html = renderToStaticMarkup(<NowUsageBody provider={{id: 'claude-agent', name: 'Claude', account: {kind: 'subscription'}, data}}/>);
-    expect(html).toContain('Claude 当前用量');
+    expect(html).toContain('Claude 额度');
     expect(html).toContain('32');
     expect(html).toContain('5 小时限额');
+    // A daemon from before now-share N2 sends no local stats: the quota stands alone, nothing is made up from tokens.
+    expect(html).toContain('暂无 Claude Code 的使用统计');
+    expect(html).not.toContain('usage-heatmap__grid');
   });
   it('publishes Codex without waiting for slow Claude and reuses the existing usage RPC', async () => {
     let resolve!: (value: unknown) => void;
@@ -76,9 +79,9 @@ describe('quota and daily history semantics', () => {
   it('distinguishes a real zero from absent history and excludes future days', () => {
     const cells = usageDays([{date: '2026-10-24', tokens: 0}, {date: '2026-10-25', tokens: 100}, {date: '2026-10-27', tokens: 999999}], new Date(2026, 9, 26));
     expect(cells).toHaveLength(91);
-    expect(cells.find(cell => cell.date === '2026-10-24')).toMatchObject({level: 0, tokens: 0, future: false});
+    expect(cells.find(cell => cell.date === '2026-10-24')).toMatchObject({level: 0, value: 0, future: false});
     expect(cells.find(cell => cell.date === '2026-10-25')).toMatchObject({level: 4});
-    expect(cells.find(cell => cell.date === '2026-10-26')).toMatchObject({level: -1, tokens: undefined});
+    expect(cells.find(cell => cell.date === '2026-10-26')).toMatchObject({level: -1, value: undefined});
     expect(cells.find(cell => cell.date === '2026-10-27')).toMatchObject({future: true});
   });
   it('labels free and unknown accounts honestly and uses actual rate-limit windows', () => {
@@ -88,7 +91,7 @@ describe('quota and daily history semantics', () => {
     expect(usageWindowLabel(604800, 'fallback')).toBe('7 天限额');
     expect(usageWindowLabel(18000, 'fallback')).toBe('5 小时限额');
     const html = renderToStaticMarkup(<NowUsageBody provider={codex}/>);
-    expect(html).toContain('32'); expect(html).toContain('% 已用'); expect(html).toContain('重置');
+    expect(html).toContain('32'); expect(html).toContain('aria-label="5 小时限额已用"'); expect(html).toContain('重置');
     expect(html).not.toContain('% 剩余');
   });
   it('does not render a synthetic heatmap or quota for Claude or missing Codex history', () => {
@@ -106,13 +109,11 @@ describe('quota and daily history semantics', () => {
 
 
 describe('settings usage presentation reused on home', () => {
-  it('preserves shared activity statistics while keeping expanded details in settings', () => {
+  it('shows the Codex panel on home and keeps expanded details in settings', () => {
     const profile = {...data.profile, lifetimeTokens: 56_774_727_759, currentStreakDays: 35, totalThreads: 214, totalSkillsUsed: 87};
     const html = renderToStaticMarkup(<NowUsageBody provider={{...codex, data: {...data, profile}}}/>);
-    for (const content of ['usage-account', 'usage-quota-grid', 'usage-activity', '累计 Token', '56,774,727,759', '连续活跃', '35 天']) expect(html).toContain(content);
+    for (const content of ['usage-board', 'data-provider="codex"', '累计 Token', '568<small>亿</small>', '214 个会话', '连续活跃', '35<small>天</small>', 'Codex 额度']) expect(html).toContain(content);
     for (const content of ['<details', '详细统计', '会话总数', '技能调用总数']) expect(html).not.toContain(content);
-    expect(html).not.toContain('now-quota-window');
-    expect(html).not.toContain('now-daily-calendar');
   });
   it('shares the settings request contract and preserves explicit refresh and refusal', async () => {
     const request = vi.fn(async () => ({kind: 'usage' as const, data}));

@@ -3,6 +3,4 @@
 .judge-source-counts small{font-size:11px;color:var(--color-text-secondary)}
 .judge-source-counts strong{font-size:18px;font-weight:550;color:var(--color-text);letter-spacing:-.02em}
 .judge-daily-details>summary{padding:12px 16px}
-.judge-daily-scroll{max-height:224px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;scrollbar-width:thin}
-.judge-daily-scroll:focus-visible{outline:2px solid var(--color-focus);outline-offset:3px;border-radius:3px}
 @media(max-width:520px){.judge-source-counts{gap:16px}.judge-source-counts>span{gap:4px}.judge-source-counts strong{font-size:16px}}
