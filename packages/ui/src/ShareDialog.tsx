@@ -3,7 +3,7 @@ import type {DesktopSnapshot} from '@vonvon/protocol';
 import {Button, SelectControl, Toggle} from './reference/components/ui';
 import {Dialog} from './reference/components/ui/Dialog';
 import {SettingsGroup, SettingsRow} from './reference/components/system-settings';
-import {ClientProvider, LOCAL_ACTIVE_DEVICE, useActiveDevice, useClient, useDevicesState, useShellCapabilities, type ShareShell} from './client-context';
+import {ClientProvider, LOCAL_ACTIVE_DEVICE, useActiveDevice, useClient, useDevicesState, useShellCapabilities, type ShareRecording, type ShareShell} from './client-context';
 import {desktopPlatformMark} from './devices/devices-presentation';
 import {useJudgeUsage} from './management/JudgeUsage';
 import {badgeUrl} from './BadgeContact';
@@ -13,7 +13,7 @@ import {ShareCard} from './ShareCard';
 import {buildShareModel, defaultShareOptions, SHARE_USAGE, shareable, type ShareOptions, type ShareUsageId} from './share-model';
 import {
   lastShareChoice, readShareTargets, recipientName, rememberShareChoice, SHARE_OLD_DAEMON, shareChoice, shareErrorText,
-  shareRecordings, shareSenders, sendShareGif, type ShareChoice, type ShareRecipient, type ShareTargetsRead,
+  shareRecordings, shareSenders, sendShareGif, sharesGif, type ShareChoice, type ShareRecipient, type ShareTargetsRead,
 } from './share-send';
 import './management/usage.css';
 import './settings/settings.css';
@@ -62,11 +62,13 @@ export function ShareDialog({share, snapshot, providers, onClose}: {share: Share
   const recordings = useMemo(() => shareRecordings(share), [share]);
   const live = useRef({key, closed: false});
   live.current.key = key;
+  // Read again only when the device shown starts or stops saying it can, not on each new list.
+  const capabilities = device.capabilities, sends = sharesGif(capabilities);
   useEffect(() => {
     let active = true;
-    void readShareTargets(request => client.admin(request)).then(read => {if (active) setTargets(read);});
+    void readShareTargets(request => client.admin(request), capabilities).then(read => {if (active) setTargets(read);});
     return () => {active = false;};
-  }, [client]);
+  }, [client, sends]);
   // Other options make another GIF; closing leaves none behind.
   useEffect(() => {recordings.drop(); setToast(undefined);}, [key, recordings]);
   useEffect(() => {
@@ -77,17 +79,23 @@ export function ShareDialog({share, snapshot, providers, onClose}: {share: Share
   const chosen = targets.kind === 'ready' ? shareChoice(targets.bots, last) : undefined;
   function choose(next: ShareChoice) {setLast(next); rememberShareChoice(localStorage, device.id, next);}
 
-  async function record(action: Work['action']) {
+  /** The recording of what is shown; none once the dialog closed or it was dropped, which discards it. */
+  async function record(action: Work['action']): Promise<ShareRecording | undefined> {
     const asked = key;
+    // What is shown is kept: defaults no longer follow a usage reply that comes later.
+    setChanged(options);
     if (!recordings.has(asked)) setWork({action, label: '正在生成…'});
-    return recordings.get(asked, () => model, fraction => {
+    const pending = recordings.get(asked, () => model, fraction => {
       if (live.current.key === asked) setWork({action, label: `正在生成 ${Math.round(fraction * 100)}%`});
     });
+    const recording = await pending;
+    return live.current.closed || !recordings.holds(pending) ? undefined : recording;
   }
   async function copy() {
     setToast(undefined);
     try {
       const recording = await record('copy');
+      if (!recording) return;
       setWork({action: 'copy', label: '正在复制…'});
       const {path} = await share.copy(recording.id);
       setToast({kind: 'copied', path});
@@ -101,6 +109,7 @@ export function ShareDialog({share, snapshot, providers, onClose}: {share: Share
     setToast(undefined);
     try {
       const recording = await record('send');
+      if (!recording) return;
       setWork({action: 'send', label: '正在发送…'});
       const gif = await share.bytes(recording.id);
       await sendShareGif(request => {
