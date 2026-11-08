@@ -46,9 +46,21 @@ describe('buildQueuedCard', () => {
     expect(automaticMode.map((b) => b.behaviors[0].value.a)).toEqual([RC.stop]);
   });
 
-  it('replaces the reminder button with an explicit enabled note after it is requested', () => {
+  it('keeps the requested reminder in place as a disabled button without another callback', () => {
+    const available = buttons(buildQueuedCard({ position: 2, cardKey: 'om_1', completionReminder: 'available' }));
     const card = buildQueuedCard({ position: 2, cardKey: 'om_1', completionReminder: 'requested' });
-    expect(buttons(card).map((b) => b.behaviors[0].value.a)).toEqual([RC.stop]);
+    const requested = buttons(card);
+    expect(requested).toHaveLength(2);
+    expect(requested.flatMap((b) => b.behaviors?.map((behavior: any) => behavior.value.a) ?? [])).toEqual([RC.stop]);
+    expect(requested[0]?.text?.content).toBe('取消排队');
+    expect(requested[1]).toMatchObject({
+      element_id: available[1]?.element_id,
+      text: { tag: 'plain_text', content: '✅ 已开启提醒' },
+      disabled: true,
+      size: available[1]?.size,
+      width: 'default',
+    });
+    expect(requested[1]).not.toHaveProperty('behaviors');
     const json = JSON.stringify(card);
     expect(json).toContain('本轮结束后会提醒发起人');
     expect(json).not.toContain('完成后提醒我');
