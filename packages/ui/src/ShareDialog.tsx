@@ -73,7 +73,7 @@ export function ShareDialog({share, snapshot, providers, onClose}: {share: Share
   useEffect(() => {recordings.drop(); setToast(undefined);}, [key, recordings]);
   useEffect(() => {
     live.current.closed = false;
-    return () => {live.current.closed = true; recordings.drop();};
+    return () => {live.current.closed = true; recordings.close();};
   }, [recordings]);
   const blocked = sendBlocked(targets);
   const chosen = targets.kind === 'ready' ? shareChoice(targets.bots, last) : undefined;

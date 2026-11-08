@@ -34,8 +34,6 @@ const restartDeadlineMs = 60_000;
 const stopDeadlineMs = 60_000;
 /** A manual start cancels passive reconnection without a connection-lost dialog. */
 const startTakesOver = 'start-takes-over';
-/** The window's sidebar (the UI's `--settings-sidebar-width`): the share card is as wide as the content beside it. */
-const sidebarWidth = 223;
 
 export function desktopResources(appPath: string, packaged: boolean): DesktopResources {
   return packaged ? {
@@ -638,7 +636,6 @@ export async function startDesktop(): Promise<void> {
       return share ??= createShareRecorder({
         uiUrl, preload: realpathSync(paths.sharePreload), worker: realpathSync(paths.shareWorker),
         folder: join(app.getPath('userData'), 'share'),
-        cardWidth: () => current.getContentBounds().width - sidebarWidth,
       });
     };
     bridge = installBridge(owner, current, paths, {
