@@ -120,19 +120,18 @@ const view = (): ProjectSettingsView => ({
   sections: {
     permission: section(permissionValue(), fixed), response: section({noMention: true}, fixed), model: section({selection: {kind: 'default'}}),
     modelAccess: section({backend: 'codex-appserver', models: ['actual-a'], efforts: ['low']}), skills: section({disabledPaths: []}),
-    presentation: section({voiceEnabled: false, showToolCalls: true, showModel: 'running', completionMode: 'manual', longTaskMinutes: 5}), run: section({pendingPolicy: 'default'}),
+    presentation: section({voiceEnabled: false, showToolCalls: true, showModel: 'running', completionMode: 'failures', longTaskMinutes: 3}), run: section({pendingPolicy: 'default'}),
     workspace: section({primary: '/data/projects/dm', directories: [], repositories: []}, fixed),
     conversation: section({mode: 'smart'}), smartRules: section({respond: '私聊的规则', newTopic: ''}),
   }, members: {openIds: [], revision: 'm'},
 } as unknown as ProjectSettingsView);
 const settings = (tab: GroupSettingsTab) => renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider><DraftGuardProvider>
-  <GroupSettingsContent dm tab={tab} view={view()} refresh={async () => {}} botName="小支" onOpenTools={() => {}}/>
+  <GroupSettingsContent dm agent={agent()} tab={tab} view={view()} refresh={async () => {}} botName="小支" onOpenTools={() => {}}/>
 </DraftGuardProvider></DirectoryPickerProvider></ClientProvider>);
 
 it('uses the group\'s 聊天方式 slider with the two ways a private chat has, and the group\'s other settings', () => {
   const html = settings('response');
-  for (const shown of ['聊天方式', 'type="range"', '连续交谈', '智能', '每条都看，只回需要回的', '完成提醒']) expect(html).toContain(shown);
-  expect(html).not.toContain('回复卡片样式');
+  for (const shown of ['聊天方式', 'type="range"', '连续交谈', '智能', '每条都看，只回需要回的', '回复卡片样式', '此私聊使用旧版默认展示', '完成提醒', '回应谁', '只有管理员可以私聊这个 Bot', '这台设备及设备上的所有 Bot']) expect(html).toContain(shown);
   for (const gone of ['独立话题', '响应成员', '免 @']) expect(html).not.toContain(gone);
   expect(html).toContain('max="1"');
 });

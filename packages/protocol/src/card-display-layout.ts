@@ -1,4 +1,4 @@
-import {contextRulesFor, interpolate, isShown, type CardDisplayConfig, type CardDisplayBlock, type CardDisplaySlot, type CardDisplayValues} from './card-display.js';
+import {contextRulesFor, interpolate, isShown, DEFAULT_REMINDER_TEMPLATE, DEFAULT_REMINDER_REQUESTED_TEMPLATE, type CardDisplayConfig, type CardDisplayBlock, type CardDisplaySlot, type CardDisplayValues} from './card-display.js';
 
 /** The card builder supplies these positions while creating native elements. */
 export type CardDisplayLayoutParts = {
@@ -10,7 +10,10 @@ export type CardDisplayLayoutParts = {
   statusElement?: CardDisplayElement;
   modelElement?: CardDisplayElement;
   controlsIndex?: number;
+  /** Legacy standalone confirmation; newer native cards keep a disabled button in controls. */
+  reminderIndex?: number;
   answerIndices: number[];
+  subagentIndices?: number[];
 };
 export type CardDisplayLayoutInput = {
   phase: 'running' | 'done';
@@ -23,6 +26,7 @@ export type CardDisplayElement = Record<string, unknown>;
 export type CardDisplayCard = Record<string, unknown>;
 /** Independent orphan-healing anchor when the run stop button leaves controls. */
 export const CARD_DISPLAY_STOP_EID = 'display-stop';
+export const CARD_DISPLAY_REMINDER_EID = 'display-reminder';
 
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const elements = (value: unknown): CardDisplayElement[] => Array.isArray(value) ? value as CardDisplayElement[] : [];
@@ -45,6 +49,22 @@ function findStop(node: CardDisplayElement): CardDisplayElement | undefined {
     const found = findStop(child); if (found) return found;
   }
   return undefined;
+}
+const isReminder = (node: CardDisplayElement): boolean => node.tag === 'button'
+  && (callback(node) === 'run.remind' || node.element_id === CARD_DISPLAY_REMINDER_EID && node.disabled === true);
+function findReminder(node: CardDisplayElement): CardDisplayElement | undefined {
+  if (isReminder(node)) return node;
+  for (const child of [...elements(node.elements),...elements(node.columns)]) {
+    const found = findReminder(child); if (found) return found;
+  }
+  return undefined;
+}
+function withoutReminder(node: CardDisplayElement): CardDisplayElement | undefined {
+  if (isReminder(node)) return undefined;
+  const next = {...node};
+  for (const key of ['elements','columns']) if (Array.isArray(node[key])) next[key] = elements(node[key]).map(withoutReminder).filter((child):child is CardDisplayElement => Boolean(child));
+  if (next.tag === 'column' && !elements(next.elements).length || next.tag === 'column_set' && !elements(next.columns).length) return undefined;
+  return next;
 }
 function withoutStop(node: CardDisplayElement): CardDisplayElement | undefined {
   if (node.tag === 'button' && callback(node) === 'run.stop') return undefined;
@@ -83,8 +103,16 @@ export function compileCardDisplay(base: CardDisplayCard, config: CardDisplayCon
   at(input.parts.modelIndex,'model');
   const controls = at(input.parts.controlsIndex,'controls');
   const stop = controls && findStop(controls);
+  const reminder = controls && findReminder(controls);
+  const reminderConfirmation = at(input.parts.reminderIndex,'reminder');
+  const hasReminderBlock = config.blocks.some(block => block.kind === 'reminder');
   const excluded = new Set([input.parts.contextIndex,input.parts.processIndex,input.parts.statusIndex,input.parts.modelIndex,input.parts.controlsIndex].filter((index):index is number => index !== undefined));
-  const main = original.filter((_node,index) => !excluded.has(index) && (input.phase === 'done' || config.reply?.streamText !== false || !input.parts.answerIndices.includes(index)));
+  const toolsBlock=config.blocks.find(block=>block.kind==='tools');
+  const showSubagents=config.reply?.streamText!==false && Boolean(toolsBlock && isShown(toolsBlock,input.phase) && toolsBlock.mode!=='off');
+  const main = original.filter((_node,index) => !excluded.has(index)
+    && (!(hasReminderBlock || config.reply?.streamText === false) || index !== input.parts.reminderIndex)
+    && (input.phase === 'done' || config.reply?.streamText !== false || !input.parts.answerIndices.includes(index))
+    && (showSubagents || !input.parts.subagentIndices?.includes(index)));
   const slots = Object.fromEntries(slotOrder.map(slot => [slot,[] as CardDisplayElement[]])) as Record<CardDisplaySlot,CardDisplayElement[]>;
   const percent = Number(object(input.values.context).percent);
   for (const block of config.blocks) {
@@ -107,6 +135,25 @@ export function compileCardDisplay(base: CardDisplayCard, config: CardDisplayCon
       if (block.appearance === 'text') button.text = {tag:'plain_text',content:interpolate(block.template,input.values).text || '终止'};
       else delete button.text;
       slots[block.slot]!.push(button);
+      continue;
+    }
+    if (block.kind === 'reminder') {
+      if (input.phase === 'done' || config.reply?.streamText === false || !reminder && !reminderConfirmation) continue;
+      // Only move native controls/confirmation. A config must never manufacture
+      // a callback when the policy or requester does not offer manual reminders.
+      // Older preview frames supplied a note. Upgrade only that confirmed state
+      // to an inert button, never to an actionable callback.
+      const control: CardDisplayElement = reminder ? structuredClone(reminder) : {
+        tag:'button',type:'default',disabled:true,
+        hover_tips:{tag:'plain_text',content:'本轮结束后会提醒发起人'},
+      };
+      control.element_id = CARD_DISPLAY_REMINDER_EID;
+      const before = block.template.trim() ? block.template : DEFAULT_REMINDER_TEMPLATE;
+      const after = block.requestedTemplate?.trim() ? block.requestedTemplate : DEFAULT_REMINDER_REQUESTED_TEMPLATE;
+      control.text = {tag:'plain_text',content:control.disabled === true ? after : before};
+      control.size = 'medium';
+      control.width = 'default';
+      slots[block.slot]!.push(control);
       continue;
     }
     if (block.kind === 'custom' && block.source === 'script' && !input.scriptValues?.[block.id]) continue;
@@ -161,11 +208,18 @@ export function compileCardDisplay(base: CardDisplayCard, config: CardDisplayCon
   // Older/custom-only drafts without a stop component keep native behavior.
   const hasStopBlock = config.blocks.some(block=>block.kind==='stop');
   let remainingControls = controls && (hasStopBlock || config.reply?.streamText === false ? withoutStop(controls) : controls);
+  if (remainingControls && (hasReminderBlock || config.reply?.streamText === false)) remainingControls = withoutReminder(remainingControls);
   const leftActions = slots['actions-left']!, rightActions = slots['actions-right']!;
   if (leftActions.length || rightActions.length) {
-    const actionColumns = [...leftActions.length ? [column(leftActions)] : [], ...rightActions.length ? [column(rightActions,true)] : []];
-    if (remainingControls?.tag === 'column_set') remainingControls = {...remainingControls,columns:[...actionColumns,...elements(remainingControls.columns)]};
-    else remainingControls = {tag:'column_set',element_id:'controls',flex_mode:'flow',horizontal_spacing:'small',columns:actionColumns};
+    const actionColumn=(items:CardDisplayElement[]):CardDisplayElement=>({tag:'column',width:'auto',elements:items});
+    const nativeColumns=remainingControls?.tag==='column_set' ? elements(remainingControls.columns) : [];
+    const actionColumns=[...leftActions.map(item=>actionColumn([item])),...nativeColumns];
+    if (rightActions.length) {
+      // A weighted spacer keeps the stop at the physical right edge even when
+      // it is the only action or a reminder/goal button occupies the left.
+      actionColumns.push({tag:'column',width:'weighted',weight:1,elements:[{tag:'markdown',content:'\u200B'}]},...rightActions.map(item=>actionColumn([item])));
+    }
+    remainingControls={...(remainingControls?.tag==='column_set'?remainingControls:{}),tag:'column_set',element_id:'controls',flex_mode:rightActions.length?'none':'flow',horizontal_spacing:'small',columns:actionColumns};
   }
   const top = row(slots['top-left']!,slots['top-right']!);
   const bottom = row(slots['bottom-left']!,slots['bottom-right']!);

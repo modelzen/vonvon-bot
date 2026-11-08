@@ -26,7 +26,7 @@ import { statusSymbol } from './process-status';
 import { buildProcessBodyWithKinds, currentAnswerIndex, processTitle, runElapsedMs } from './run-process';
 import { runCardMeter } from './context-gauge';
 import { toolCommand } from '../environment/tool-command';
-import { compileCardDisplay, type CardDisplayLayoutParts, type CardDisplayValues, type CardDisplayConfig } from '@vonvon/protocol';
+import { CARD_DISPLAY_REMINDER_EID, DEFAULT_REMINDER_TEMPLATE, DEFAULT_REMINDER_REQUESTED_TEMPLATE, compileCardDisplay, type CardDisplayLayoutParts, type CardDisplayValues, type CardDisplayConfig } from '@vonvon/protocol';
 
 /** Action ids for the in-topic run card. */
 export const RC = {
@@ -103,6 +103,18 @@ function stopControl(cardKey: string, presentation: StopControlPresentation): Ca
     icon: { tag: 'standard_icon', token: control.icon, color: control.iconColor },
     hover_tips: { tag: 'plain_text', content: control.tooltip },
     behaviors: [{ type: 'callback', value: { a: RC.stop, m: cardKey } }],
+  };
+}
+
+function reminderControl(cardKey: string, requested: boolean): CardElement {
+  return {
+    tag:'button',element_id:CARD_DISPLAY_REMINDER_EID,
+    text:{tag:'plain_text',content:requested ? DEFAULT_REMINDER_REQUESTED_TEMPLATE : DEFAULT_REMINDER_TEMPLATE},
+    type:'default',size:'medium',width:'default',
+    ...(requested ? {
+      disabled:true,
+      hover_tips:{tag:'plain_text',content:'本轮结束后会提醒发起人'},
+    } : {behaviors:[{type:'callback',value:{a:RC.remind,m:cardKey}}]}),
   };
 }
 
@@ -261,7 +273,7 @@ export function buildRunCardBase(rc: RunCardState): {card:CardObject;parts:CardD
   const prefix = [...rc.label ? [noteMd(rc.label)] : [], ...voiceReplyElements(rc.voiceMessages)];
   const all = [...prefix,...elements];
   const index = (kind:RunCardPart) => {const found = all.findIndex(element => runCardParts.get(element) === kind);return found < 0 ? undefined : found;};
-  const parts: CardDisplayLayoutParts = {contextIndex:index('context') ?? 0,processIndex:index('process'),statusIndex:index('footer'),modelIndex:index('footer'),controlsIndex:all.findIndex(element => element.element_id === CONTROLS_EID),answerIndices:all.flatMap((element,i) => runCardParts.get(element) === 'answer' ? [i] : [])};
+  const parts: CardDisplayLayoutParts = {contextIndex:index('context') ?? 0,processIndex:index('process'),statusIndex:index('footer'),modelIndex:index('footer'),controlsIndex:all.findIndex(element => element.element_id === CONTROLS_EID),reminderIndex:index('reminder'),answerIndices:all.flatMap((element,i) => runCardParts.get(element) === 'answer' ? [i] : []),subagentIndices:all.flatMap((element,i)=>runCardParts.get(element)==='subagent'?[i]:[])};
   const processElement = all[parts.processIndex ?? -1];
   if (processElement) parts.processChildKinds = runCardProcessKinds.get(processElement);
   const footerElement = all[parts.statusIndex ?? -1];
@@ -284,7 +296,7 @@ export function buildRunCardBase(rc: RunCardState): {card:CardObject;parts:CardD
   return {card:result,parts,values};
 }
 
-type RunCardPart = 'context'|'process'|'footer'|'answer';
+type RunCardPart = 'context'|'process'|'footer'|'answer'|'subagent'|'reminder';
 const runCardParts = new WeakMap<CardElement,RunCardPart>();
 const runCardProcessKinds = new WeakMap<CardElement,Array<'tool'|'thinking'|'other'>>();
 const runCardFooterParts = new WeakMap<CardElement,{status?:CardElement;model?:CardElement}>();
@@ -321,9 +333,14 @@ function processBlockVisible(rc:RunCardState,kind:'tool'|'reasoning',running:boo
   const block=rc.cardDisplay.blocks.find(item=>item.kind===(kind==='tool'?'tools':'thinking'));
   return Boolean(block && (block.mode==='always'||block.mode===(running?'running':'done')));
 }
+function subagentsVisible(rc:RunCardState,running:boolean):boolean {
+  if (!rc.cardDisplay) return rc.showTools!==false;
+  if (rc.cardDisplay.reply?.streamText===false) return false;
+  return processBlockVisible(rc,'tool',running);
+}
 
 function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
-  const section = subagentSection(state, rc);
+  const section = subagentsVisible(rc,true) ? subagentSection(state, rc) : {elements:[],components:0};
   // The context meter heads every run card (s12), running and terminal.
   const elements: CardElement[] = [markRunPart(runCardMeter(state.usage),'context')];
   if (rc.sessionNotice) elements.push(noteMd(rc.sessionNotice));
@@ -338,7 +355,7 @@ function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
     elements.push(panel);
   }
   else if (state.startedAt !== undefined) elements.push(markRunPart(md(title),'process'));
-  elements.push(...section.elements);
+  elements.push(...section.elements.map(element=>markRunPart(element,'subagent')));
   const answer = answerIdx >= 0 ? (state.blocks[answerIdx] as Extract<Block, { kind: 'text' }>).content : '';
   if (answer) {
     elements.push(...renderRichText(answer, rc.images, { streamTailId: ANSWER_EID, live: true }).map(element => markRunPart(element,'answer')));
@@ -376,17 +393,14 @@ function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
   } else if (rc.cardKey) {
     // Ordinary turns only: the one-shot reminder is deliberately absent from
     // goal cards (goal has its own terminal summary) and from every non-manual
-    // global strategy. Once tapped, make the state explicit instead of leaving
-    // a button that looks tappable twice.
-    if (rc.completionReminder === 'requested') {
-      elements.push(noteMd('_🔔 本轮结束后会提醒发起人_'));
-    }
+    // global strategy. Once tapped, keep the same footprint and disable the
+    // button so confirmation never shifts the card or submits twice.
     const controls: CardElement[] = [];
     if (!rc.hideStop) {
       controls.push(stopControl(rc.cardKey, 'run'));
     }
-    if (rc.completionReminder === 'available') {
-      controls.push(button('🔔 完成后提醒我', { a: RC.remind, m: rc.cardKey }, 'default'));
+    if (rc.completionReminder === 'available' || rc.completionReminder === 'requested') {
+      controls.push(reminderControl(rc.cardKey, rc.completionReminder === 'requested'));
     }
     if (controls.length > 0) elements.push(actions(controls, CONTROLS_EID));
   }
@@ -403,7 +417,7 @@ function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
  * a partial answer (if any text streamed) stays visible above the note.
  */
 function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
-  const section = subagentSection(state, rc);
+  const section = subagentsVisible(rc,false) ? subagentSection(state, rc) : {elements:[],components:0};
   const elements: CardElement[] = [markRunPart(runCardMeter(state.usage),'context')];
   if (rc.sessionNotice) elements.push(noteMd(rc.sessionNotice));
 
@@ -427,7 +441,7 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   }
   else if (state.startedAt !== undefined) elements.push(markRunPart(md(title),'process'));
 
-  elements.push(...section.elements);
+  elements.push(...section.elements.map(element=>markRunPart(element,'subagent')));
 
   // Terminal answer. A reply that TABLES its data goes through the report
   // renderer: card markdown has no tables, so `| a | b |` would otherwise show up
@@ -583,11 +597,10 @@ export function buildQueuedCard(qc: QueuedCardState): CardObject {
     md(`${statusSymbol('waiting')} 排队中（第 **${qc.position ?? 1}** 位）`),
     noteMd('全局并发池已满（所有群/话题共享），轮到后自动开始。'),
   ];
-  if (qc.completionReminder === 'requested') els.push(noteMd('_🔔 本轮结束后会提醒发起人_'));
   if (qc.cardKey) {
     const controls: CardElement[] = [stopControl(qc.cardKey, 'queue')];
-    if (qc.completionReminder === 'available') {
-      controls.push(button('🔔 完成后提醒我', { a: RC.remind, m: qc.cardKey }, 'default'));
+    if (qc.completionReminder === 'available' || qc.completionReminder === 'requested') {
+      controls.push(reminderControl(qc.cardKey, qc.completionReminder === 'requested'));
     }
     els.push(actions(controls, CONTROLS_EID));
   }

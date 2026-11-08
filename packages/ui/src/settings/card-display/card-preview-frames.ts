@@ -41,87 +41,6 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "text_size": "normal"
         },
         {
-          "tag": "markdown",
-          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
-          "text_size": "normal"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "还没有步骤",
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_7a41cef8bfa3",
-          "margin": "0px 0px 0px 0px"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "还没有步骤",
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_fa2044e5924c",
-          "margin": "0px 0px 0px 0px"
-        },
-        {
           "tag": "column_set",
           "flex_mode": "none",
           "horizontal_spacing": "medium",
@@ -202,11 +121,14 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
               "elements": [
                 {
                   "tag": "button",
+                  "element_id": "display-reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
                   },
                   "type": "default",
+                  "size": "medium",
+                  "width": "default",
                   "behaviors": [
                     {
                       "type": "callback",
@@ -323,97 +245,6 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           ]
         },
         {
-          "tag": "markdown",
-          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
-          "text_size": "normal"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "调用 查阅功能文档 工具",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "setting-inter_outlined",
-                "color": "grey"
-              },
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_7a41cef8bfa3",
-          "margin": "0px 0px 0px 0px"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "调用 核对使用场景 工具",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "setting-inter_outlined",
-                "color": "grey"
-              },
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_fa2044e5924c",
-          "margin": "0px 0px 0px 0px"
-        },
-        {
           "tag": "column_set",
           "flex_mode": "none",
           "horizontal_spacing": "medium",
@@ -494,11 +325,14 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
               "elements": [
                 {
                   "tag": "button",
+                  "element_id": "display-reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
                   },
                   "type": "default",
+                  "size": "medium",
+                  "width": "default",
                   "behaviors": [
                     {
                       "type": "callback",
@@ -562,7 +396,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -611,7 +445,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -741,11 +575,14 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
               "elements": [
                 {
                   "tag": "button",
+                  "element_id": "display-reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
                   },
                   "type": "default",
+                  "size": "medium",
+                  "width": "default",
                   "behaviors": [
                     {
                       "type": "callback",
@@ -799,7 +636,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -848,7 +685,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -938,87 +775,6 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "text_size": "normal"
         },
         {
-          "tag": "markdown",
-          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
-          "text_size": "normal"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "还没有步骤",
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_7a41cef8bfa3",
-          "margin": "0px 0px 0px 0px"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "还没有步骤",
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_fa2044e5924c",
-          "margin": "0px 0px 0px 0px"
-        },
-        {
           "tag": "column_set",
           "flex_mode": "none",
           "horizontal_spacing": "medium",
@@ -1099,11 +855,14 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
               "elements": [
                 {
                   "tag": "button",
+                  "element_id": "display-reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
                   },
                   "type": "default",
+                  "size": "medium",
+                  "width": "default",
                   "behaviors": [
                     {
                       "type": "callback",
@@ -1220,97 +979,6 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           ]
         },
         {
-          "tag": "markdown",
-          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
-          "text_size": "normal"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "调用 查阅功能文档 工具",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "setting-inter_outlined",
-                "color": "grey"
-              },
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_7a41cef8bfa3",
-          "margin": "0px 0px 0px 0px"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "调用 核对使用场景 工具",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "setting-inter_outlined",
-                "color": "grey"
-              },
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_fa2044e5924c",
-          "margin": "0px 0px 0px 0px"
-        },
-        {
           "tag": "column_set",
           "flex_mode": "none",
           "horizontal_spacing": "medium",
@@ -1391,11 +1059,14 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
               "elements": [
                 {
                   "tag": "button",
+                  "element_id": "display-reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
                   },
                   "type": "default",
+                  "size": "medium",
+                  "width": "default",
                   "behaviors": [
                     {
                       "type": "callback",
@@ -1522,7 +1193,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -1571,7 +1242,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -1701,11 +1372,14 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
               "elements": [
                 {
                   "tag": "button",
+                  "element_id": "display-reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
                   },
                   "type": "default",
+                  "size": "medium",
+                  "width": "default",
                   "behaviors": [
                     {
                       "type": "callback",
@@ -1822,7 +1496,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -1871,7 +1545,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -1916,7 +1590,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
         },
         {
           "tag": "markdown",
-          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\nVonvon Bot 想帮你把常用流程交给 AI，从反复操作里腾出时间，去做更想做的事。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\n你不必追着学习每一种 AI。让 AI 主动了解你的工作，在你需要之前，就开始帮忙。",
           "text_size": "normal"
         }
       ],
@@ -1961,7 +1635,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 9秒</font>",
+              "content": "<font color='grey'>已处理 4秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -2034,7 +1708,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -2083,7 +1757,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -2213,11 +1887,14 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
+                  "element_id": "display-reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
                   },
                   "type": "default",
+                  "size": "medium",
+                  "width": "default",
                   "behaviors": [
                     {
                       "type": "callback",
@@ -2271,7 +1948,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 11秒</font>",
+              "content": "<font color='grey'>已处理 4秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -2344,7 +2021,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -2393,7 +2070,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -2523,11 +2200,14 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
+                  "element_id": "display-reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
                   },
                   "type": "default",
+                  "size": "medium",
+                  "width": "default",
                   "behaviors": [
                     {
                       "type": "callback",
@@ -2581,7 +2261,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 14秒</font>",
+              "content": "<font color='grey'>已处理 5秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -2654,7 +2334,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -2703,7 +2383,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -2833,11 +2513,14 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
+                  "element_id": "display-reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
                   },
                   "type": "default",
+                  "size": "medium",
+                  "width": "default",
                   "behaviors": [
                     {
                       "type": "callback",
@@ -2891,7 +2574,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 16秒</font>",
+              "content": "<font color='grey'>已处理 5秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -2964,7 +2647,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -3013,7 +2696,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -3143,11 +2826,14 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
+                  "element_id": "display-reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
                   },
                   "type": "default",
+                  "size": "medium",
+                  "width": "default",
                   "behaviors": [
                     {
                       "type": "callback",
@@ -3201,7 +2887,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 19秒</font>",
+              "content": "<font color='grey'>已处理 6秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -3274,7 +2960,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -3323,7 +3009,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -3453,11 +3139,14 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
+                  "element_id": "display-reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
                   },
                   "type": "default",
+                  "size": "medium",
+                  "width": "default",
                   "behaviors": [
                     {
                       "type": "callback",
@@ -3511,7 +3200,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 21秒</font>",
+              "content": "<font color='grey'>已处理 7秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -3584,7 +3273,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -3633,7 +3322,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -3763,11 +3452,14 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
+                  "element_id": "display-reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
                   },
                   "type": "default",
+                  "size": "medium",
+                  "width": "default",
                   "behaviors": [
                     {
                       "type": "callback",
@@ -3821,7 +3513,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 24秒</font>",
+              "content": "<font color='grey'>已处理 7秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -3894,7 +3586,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -3943,7 +3635,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -3989,7 +3681,7 @@ export const streamingPreviewFrames: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\nVonvon Bot 想帮你把常用流程交给 AI，",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\n你不必追着学习每一种 AI。",
           "text_size": "normal"
         },
         {
@@ -4073,11 +3765,14 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
+                  "element_id": "display-reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
                   },
                   "type": "default",
+                  "size": "medium",
+                  "width": "default",
                   "behaviors": [
                     {
                       "type": "callback",
@@ -4131,7 +3826,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 26秒</font>",
+              "content": "<font color='grey'>已处理 8秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -4204,7 +3899,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -4253,7 +3948,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -4299,7 +3994,7 @@ export const streamingPreviewFrames: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\nVonvon Bot 想帮你把常用流程交给 AI，从反复操作里腾出时间，去做更想做的事。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\n你不必追着学习每一种 AI。让 AI 主动了解你的工作，在你需要之前，就开始帮忙。",
           "text_size": "normal"
         },
         {
@@ -4383,11 +4078,14 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "button",
+                  "element_id": "display-reminder",
                   "text": {
                     "tag": "plain_text",
                     "content": "🔔 完成后提醒我"
                   },
                   "type": "default",
+                  "size": "medium",
+                  "width": "default",
                   "behaviors": [
                     {
                       "type": "callback",
@@ -4442,87 +4140,6 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "tag": "markdown",
           "content": "<font color='grey'>已处理 1秒</font>",
           "text_size": "normal"
-        },
-        {
-          "tag": "markdown",
-          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
-          "text_size": "normal"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "还没有步骤",
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_7a41cef8bfa3",
-          "margin": "0px 0px 0px 0px"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "还没有步骤",
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_fa2044e5924c",
-          "margin": "0px 0px 0px 0px"
         },
         {
           "tag": "column_set",
@@ -4703,97 +4320,6 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           ]
         },
         {
-          "tag": "markdown",
-          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
-          "text_size": "normal"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "调用 查阅功能文档 工具",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "setting-inter_outlined",
-                "color": "grey"
-              },
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_7a41cef8bfa3",
-          "margin": "0px 0px 0px 0px"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "调用 核对使用场景 工具",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "setting-inter_outlined",
-                "color": "grey"
-              },
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_fa2044e5924c",
-          "margin": "0px 0px 0px 0px"
-        },
-        {
           "tag": "column_set",
           "flex_mode": "none",
           "horizontal_spacing": "medium",
@@ -4919,7 +4445,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -4968,7 +4494,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -5133,7 +4659,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -5182,7 +4708,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -5270,87 +4796,6 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "tag": "markdown",
           "content": "<font color='grey'>已处理 1秒</font>",
           "text_size": "normal"
-        },
-        {
-          "tag": "markdown",
-          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
-          "text_size": "normal"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "还没有步骤",
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_7a41cef8bfa3",
-          "margin": "0px 0px 0px 0px"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "还没有步骤",
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_fa2044e5924c",
-          "margin": "0px 0px 0px 0px"
         },
         {
           "tag": "column_set",
@@ -5529,97 +4974,6 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
               "margin": "0px 0px 0px 0px"
             }
           ]
-        },
-        {
-          "tag": "markdown",
-          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
-          "text_size": "normal"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "调用 查阅功能文档 工具",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "setting-inter_outlined",
-                "color": "grey"
-              },
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_7a41cef8bfa3",
-          "margin": "0px 0px 0px 0px"
-        },
-        {
-          "tag": "collapsible_panel",
-          "expanded": false,
-          "header": {
-            "title": {
-              "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
-              "text_size": "normal",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "robot_outlined",
-                "color": "grey"
-              }
-            },
-            "vertical_align": "center",
-            "padding": "0px",
-            "icon": {
-              "tag": "standard_icon",
-              "token": "down-small-ccm_outlined",
-              "color": "grey",
-              "size": "16px 16px"
-            },
-            "icon_position": "follow_text",
-            "icon_expanded_angle": -180
-          },
-          "vertical_spacing": "8px",
-          "padding": "0px",
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "调用 核对使用场景 工具",
-              "icon": {
-                "tag": "standard_icon",
-                "token": "setting-inter_outlined",
-                "color": "grey"
-              },
-              "margin": "0px 0px 0px 0px",
-              "text_size": "normal"
-            }
-          ],
-          "element_id": "sa_fa2044e5924c",
-          "margin": "0px 0px 0px 0px"
         },
         {
           "tag": "column_set",
@@ -5810,7 +5164,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -5859,7 +5213,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6087,7 +5441,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6136,7 +5490,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6181,7 +5535,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
         },
         {
           "tag": "markdown",
-          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\nVonvon Bot 想帮你把常用流程交给 AI，从反复操作里腾出时间，去做更想做的事。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\n你不必追着学习每一种 AI。让 AI 主动了解你的工作，在你需要之前，就开始帮忙。",
           "text_size": "normal"
         }
       ],
@@ -6226,7 +5580,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 9秒</font>",
+              "content": "<font color='grey'>已处理 4秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -6299,7 +5653,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6348,7 +5702,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6513,7 +5867,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 11秒</font>",
+              "content": "<font color='grey'>已处理 4秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -6586,7 +5940,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6635,7 +5989,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6800,7 +6154,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 14秒</font>",
+              "content": "<font color='grey'>已处理 5秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -6873,7 +6227,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6922,7 +6276,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -7087,7 +6441,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 16秒</font>",
+              "content": "<font color='grey'>已处理 5秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -7160,7 +6514,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -7209,7 +6563,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -7374,7 +6728,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 19秒</font>",
+              "content": "<font color='grey'>已处理 6秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -7447,7 +6801,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -7496,7 +6850,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -7661,7 +7015,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 21秒</font>",
+              "content": "<font color='grey'>已处理 7秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -7734,7 +7088,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -7783,7 +7137,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -7948,7 +7302,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 24秒</font>",
+              "content": "<font color='grey'>已处理 7秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -8021,7 +7375,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -8070,7 +7424,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -8116,7 +7470,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\nVonvon Bot 想帮你把常用流程交给 AI，",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\n你不必追着学习每一种 AI。",
           "text_size": "normal"
         },
         {
@@ -8235,7 +7589,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 26秒</font>",
+              "content": "<font color='grey'>已处理 8秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -8308,7 +7662,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -8357,7 +7711,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -8403,7 +7757,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\nVonvon Bot 想帮你把常用流程交给 AI，从反复操作里腾出时间，去做更想做的事。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\n你不必追着学习每一种 AI。让 AI 主动了解你的工作，在你需要之前，就开始帮忙。",
           "text_size": "normal"
         },
         {
@@ -8494,10 +7848,11 @@ export const previewLayoutInputs: Record<'thinking' | 'tool' | 'streaming' | 'do
     "parts": {
       "contextIndex": 0,
       "processIndex": 1,
-      "statusIndex": 5,
-      "modelIndex": 5,
-      "controlsIndex": 6,
+      "statusIndex": 2,
+      "modelIndex": 2,
+      "controlsIndex": 3,
       "answerIndices": [],
+      "subagentIndices": [],
       "statusElement": {
         "tag": "markdown",
         "content": "<font color='grey'>正在处理</font>",
@@ -8541,10 +7896,11 @@ export const previewLayoutInputs: Record<'thinking' | 'tool' | 'streaming' | 'do
     "parts": {
       "contextIndex": 0,
       "processIndex": 1,
-      "statusIndex": 5,
-      "modelIndex": 5,
-      "controlsIndex": 6,
+      "statusIndex": 2,
+      "modelIndex": 2,
+      "controlsIndex": 3,
       "answerIndices": [],
+      "subagentIndices": [],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -8598,6 +7954,11 @@ export const previewLayoutInputs: Record<'thinking' | 'tool' | 'streaming' | 'do
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "statusElement": {
         "tag": "markdown",
         "content": "<font color='grey'>正在输出</font>",
@@ -8643,6 +8004,11 @@ export const previewLayoutInputs: Record<'thinking' | 'tool' | 'streaming' | 'do
       "processIndex": 1,
       "answerIndices": [
         5
+      ],
+      "subagentIndices": [
+        2,
+        3,
+        4
       ]
     },
     "values": {
@@ -8673,10 +8039,11 @@ export const toolPreviewLayoutInputs: Record<'thinking' | 'tool' | 'streaming' |
     "parts": {
       "contextIndex": 0,
       "processIndex": 1,
-      "statusIndex": 5,
-      "modelIndex": 5,
-      "controlsIndex": 6,
+      "statusIndex": 2,
+      "modelIndex": 2,
+      "controlsIndex": 3,
       "answerIndices": [],
+      "subagentIndices": [],
       "statusElement": {
         "tag": "markdown",
         "content": "<font color='grey'>正在处理</font>",
@@ -8720,10 +8087,11 @@ export const toolPreviewLayoutInputs: Record<'thinking' | 'tool' | 'streaming' |
     "parts": {
       "contextIndex": 0,
       "processIndex": 1,
-      "statusIndex": 5,
-      "modelIndex": 5,
-      "controlsIndex": 6,
+      "statusIndex": 2,
+      "modelIndex": 2,
+      "controlsIndex": 3,
       "answerIndices": [],
+      "subagentIndices": [],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -8777,6 +8145,11 @@ export const toolPreviewLayoutInputs: Record<'thinking' | 'tool' | 'streaming' |
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -8826,6 +8199,11 @@ export const toolPreviewLayoutInputs: Record<'thinking' | 'tool' | 'streaming' |
       "processIndex": 1,
       "answerIndices": [
         5
+      ],
+      "subagentIndices": [
+        2,
+        3,
+        4
       ],
       "processChildKinds": [
         "thinking",
@@ -8860,10 +8238,11 @@ export const previewLayoutInputsNonManual: Record<'thinking' | 'tool' | 'streami
     "parts": {
       "contextIndex": 0,
       "processIndex": 1,
-      "statusIndex": 5,
-      "modelIndex": 5,
-      "controlsIndex": 6,
+      "statusIndex": 2,
+      "modelIndex": 2,
+      "controlsIndex": 3,
       "answerIndices": [],
+      "subagentIndices": [],
       "statusElement": {
         "tag": "markdown",
         "content": "<font color='grey'>正在处理</font>",
@@ -8907,10 +8286,11 @@ export const previewLayoutInputsNonManual: Record<'thinking' | 'tool' | 'streami
     "parts": {
       "contextIndex": 0,
       "processIndex": 1,
-      "statusIndex": 5,
-      "modelIndex": 5,
-      "controlsIndex": 6,
+      "statusIndex": 2,
+      "modelIndex": 2,
+      "controlsIndex": 3,
       "answerIndices": [],
+      "subagentIndices": [],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -8964,6 +8344,11 @@ export const previewLayoutInputsNonManual: Record<'thinking' | 'tool' | 'streami
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "statusElement": {
         "tag": "markdown",
         "content": "<font color='grey'>正在输出</font>",
@@ -9009,6 +8394,11 @@ export const previewLayoutInputsNonManual: Record<'thinking' | 'tool' | 'streami
       "processIndex": 1,
       "answerIndices": [
         5
+      ],
+      "subagentIndices": [
+        2,
+        3,
+        4
       ]
     },
     "values": {
@@ -9039,10 +8429,11 @@ export const toolPreviewLayoutInputsNonManual: Record<'thinking' | 'tool' | 'str
     "parts": {
       "contextIndex": 0,
       "processIndex": 1,
-      "statusIndex": 5,
-      "modelIndex": 5,
-      "controlsIndex": 6,
+      "statusIndex": 2,
+      "modelIndex": 2,
+      "controlsIndex": 3,
       "answerIndices": [],
+      "subagentIndices": [],
       "statusElement": {
         "tag": "markdown",
         "content": "<font color='grey'>正在处理</font>",
@@ -9086,10 +8477,11 @@ export const toolPreviewLayoutInputsNonManual: Record<'thinking' | 'tool' | 'str
     "parts": {
       "contextIndex": 0,
       "processIndex": 1,
-      "statusIndex": 5,
-      "modelIndex": 5,
-      "controlsIndex": 6,
+      "statusIndex": 2,
+      "modelIndex": 2,
+      "controlsIndex": 3,
       "answerIndices": [],
+      "subagentIndices": [],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -9143,6 +8535,11 @@ export const toolPreviewLayoutInputsNonManual: Record<'thinking' | 'tool' | 'str
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -9192,6 +8589,11 @@ export const toolPreviewLayoutInputsNonManual: Record<'thinking' | 'tool' | 'str
       "processIndex": 1,
       "answerIndices": [
         5
+      ],
+      "subagentIndices": [
+        2,
+        3,
+        4
       ],
       "processChildKinds": [
         "thinking",
@@ -9232,6 +8634,11 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -9268,7 +8675,7 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       },
       "elapsed": {
         "label": "已处理",
-        "value": "9秒"
+        "value": "4秒"
       },
       "status": {
         "label": "正在输出"
@@ -9285,6 +8692,11 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -9321,7 +8733,7 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       },
       "elapsed": {
         "label": "已处理",
-        "value": "11秒"
+        "value": "4秒"
       },
       "status": {
         "label": "正在输出"
@@ -9338,6 +8750,11 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -9374,7 +8791,7 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       },
       "elapsed": {
         "label": "已处理",
-        "value": "14秒"
+        "value": "5秒"
       },
       "status": {
         "label": "正在输出"
@@ -9391,6 +8808,11 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -9427,7 +8849,7 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       },
       "elapsed": {
         "label": "已处理",
-        "value": "16秒"
+        "value": "5秒"
       },
       "status": {
         "label": "正在输出"
@@ -9444,6 +8866,11 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -9480,7 +8907,7 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       },
       "elapsed": {
         "label": "已处理",
-        "value": "19秒"
+        "value": "6秒"
       },
       "status": {
         "label": "正在输出"
@@ -9497,6 +8924,11 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -9533,7 +8965,7 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       },
       "elapsed": {
         "label": "已处理",
-        "value": "21秒"
+        "value": "7秒"
       },
       "status": {
         "label": "正在输出"
@@ -9550,6 +8982,11 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -9586,7 +9023,7 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       },
       "elapsed": {
         "label": "已处理",
-        "value": "24秒"
+        "value": "7秒"
       },
       "status": {
         "label": "正在输出"
@@ -9603,6 +9040,11 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -9639,7 +9081,7 @@ export const streamingLayoutInputs: PreviewLayoutInput[] = [
       },
       "elapsed": {
         "label": "已处理",
-        "value": "26秒"
+        "value": "8秒"
       },
       "status": {
         "label": "正在输出"
@@ -9659,6 +9101,1426 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "4秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "4秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "5秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "5秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "6秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "7秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "7秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "8秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  }
+] as PreviewLayoutInput[];
+
+export const toolPreviewFramesRequested: Record<'thinking' | 'tool' | 'streaming' | 'done', CardJson> = {
+  "thinking": {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "思考中"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>已处理 1秒</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在处理</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "time_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "element_id": "display-reminder",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "✅ 已开启提醒"
+                  },
+                  "type": "default",
+                  "size": "medium",
+                  "width": "default",
+                  "disabled": true,
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "本轮结束后会提醒发起人"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  "tool": {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在调用工具"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 4秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在调用工具</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "setting-inter_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "element_id": "display-reminder",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "✅ 已开启提醒"
+                  },
+                  "type": "default",
+                  "size": "medium",
+                  "width": "default",
+                  "disabled": true,
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "本轮结束后会提醒发起人"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  "streaming": {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 9秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 查阅功能文档 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 核对使用场景 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "我请两位伙伴一起梳理，给你一份 Vonvon Bot 的简明介绍。",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "element_id": "display-reminder",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "✅ 已开启提醒"
+                  },
+                  "type": "default",
+                  "size": "medium",
+                  "width": "default",
+                  "disabled": true,
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "本轮结束后会提醒发起人"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  "done": {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "summary": {
+        "content": "已完成"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 80% · 380k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>用时 9秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 查阅功能文档 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 核对使用场景 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\n你不必追着学习每一种 AI。让 AI 主动了解你的工作，在你需要之前，就开始帮忙。",
+          "text_size": "normal"
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  }
+} as Record<'thinking' | 'tool' | 'streaming' | 'done', CardJson>;
+
+export const toolPreviewLayoutInputsRequested: Record<'thinking' | 'tool' | 'streaming' | 'done', PreviewLayoutInput> = {
+  "thinking": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 2,
+      "modelIndex": 2,
+      "controlsIndex": 3,
+      "answerIndices": [],
+      "subagentIndices": [],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在处理</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "time_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "1秒"
+      },
+      "status": {
+        "label": "正在处理"
+      }
+    }
+  },
+  "tool": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 2,
+      "modelIndex": 2,
+      "controlsIndex": 3,
+      "answerIndices": [],
+      "subagentIndices": [],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在调用工具</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "setting-inter_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "4秒"
+      },
+      "status": {
+        "label": "正在调用工具"
+      }
+    }
+  },
+  "streaming": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -9702,6 +10564,2522 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       }
     }
   },
+  "done": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "answerIndices": [
+        5
+      ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ]
+    },
+    "values": {
+      "context": {
+        "percent": 80,
+        "used": "380k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "用时",
+        "value": "9秒"
+      },
+      "status": {
+        "label": ""
+      }
+    }
+  }
+} as Record<'thinking' | 'tool' | 'streaming' | 'done', PreviewLayoutInput>;
+
+export const streamingPreviewFramesRequested: CardJson[] = [
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 4秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 查阅功能文档 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 核对使用场景 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "把 AI 同事请进飞书，",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "element_id": "display-reminder",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "✅ 已开启提醒"
+                  },
+                  "type": "default",
+                  "size": "medium",
+                  "width": "default",
+                  "disabled": true,
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "本轮结束后会提醒发起人"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 4秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 查阅功能文档 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 核对使用场景 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "把 AI 同事请进飞书，把时间留给自己。",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "element_id": "display-reminder",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "✅ 已开启提醒"
+                  },
+                  "type": "default",
+                  "size": "medium",
+                  "width": "default",
+                  "disabled": true,
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "本轮结束后会提醒发起人"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 5秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 查阅功能文档 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 核对使用场景 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "element_id": "display-reminder",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "✅ 已开启提醒"
+                  },
+                  "type": "default",
+                  "size": "medium",
+                  "width": "default",
+                  "disabled": true,
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "本轮结束后会提醒发起人"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 5秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 查阅功能文档 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 核对使用场景 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "element_id": "display-reminder",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "✅ 已开启提醒"
+                  },
+                  "type": "default",
+                  "size": "medium",
+                  "width": "default",
+                  "disabled": true,
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "本轮结束后会提醒发起人"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 6秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 查阅功能文档 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 核对使用场景 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "element_id": "display-reminder",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "✅ 已开启提醒"
+                  },
+                  "type": "default",
+                  "size": "medium",
+                  "width": "default",
+                  "disabled": true,
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "本轮结束后会提醒发起人"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 7秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 查阅功能文档 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 核对使用场景 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "element_id": "display-reminder",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "✅ 已开启提醒"
+                  },
+                  "type": "default",
+                  "size": "medium",
+                  "width": "default",
+                  "disabled": true,
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "本轮结束后会提醒发起人"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 7秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 查阅功能文档 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 核对使用场景 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\n你不必追着学习每一种 AI。",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "element_id": "display-reminder",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "✅ 已开启提醒"
+                  },
+                  "type": "default",
+                  "size": "medium",
+                  "width": "default",
+                  "disabled": true,
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "本轮结束后会提醒发起人"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 8秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 查阅功能文档 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 2秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 核对使用场景 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\n你不必追着学习每一种 AI。让 AI 主动了解你的工作，在你需要之前，就开始帮忙。",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "element_id": "display-reminder",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "✅ 已开启提醒"
+                  },
+                  "type": "default",
+                  "size": "medium",
+                  "width": "default",
+                  "disabled": true,
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "本轮结束后会提醒发起人"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  }
+] as CardJson[];
+
+export const streamingLayoutInputsRequested: PreviewLayoutInput[] = [
   {
     "parts": {
       "contextIndex": 0,
@@ -9711,6 +13089,11 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       "controlsIndex": 7,
       "answerIndices": [
         5
+      ],
+      "subagentIndices": [
+        2,
+        3,
+        4
       ],
       "processChildKinds": [
         "thinking",
@@ -9748,7 +13131,7 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       },
       "elapsed": {
         "label": "已处理",
-        "value": "11秒"
+        "value": "4秒"
       },
       "status": {
         "label": "正在输出"
@@ -9765,6 +13148,11 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -9801,7 +13189,7 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       },
       "elapsed": {
         "label": "已处理",
-        "value": "14秒"
+        "value": "4秒"
       },
       "status": {
         "label": "正在输出"
@@ -9818,6 +13206,11 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -9854,7 +13247,7 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       },
       "elapsed": {
         "label": "已处理",
-        "value": "16秒"
+        "value": "5秒"
       },
       "status": {
         "label": "正在输出"
@@ -9871,6 +13264,11 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -9907,7 +13305,7 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       },
       "elapsed": {
         "label": "已处理",
-        "value": "19秒"
+        "value": "5秒"
       },
       "status": {
         "label": "正在输出"
@@ -9924,6 +13322,11 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -9960,7 +13363,7 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       },
       "elapsed": {
         "label": "已处理",
-        "value": "21秒"
+        "value": "6秒"
       },
       "status": {
         "label": "正在输出"
@@ -9977,6 +13380,11 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -10013,7 +13421,7 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       },
       "elapsed": {
         "label": "已处理",
-        "value": "24秒"
+        "value": "7秒"
       },
       "status": {
         "label": "正在输出"
@@ -10030,6 +13438,11 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       "answerIndices": [
         5
       ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
       "processChildKinds": [
         "thinking",
         "tool"
@@ -10066,10 +13479,1970 @@ export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
       },
       "elapsed": {
         "label": "已处理",
-        "value": "26秒"
+        "value": "7秒"
       },
       "status": {
         "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "8秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  }
+] as PreviewLayoutInput[];
+
+export const subagentPreviewFrames: CardJson[] = [
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在调用工具"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 5秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>1 个运行中</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "还没有步骤",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在调用工具</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "setting-inter_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "element_id": "display-reminder",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "size": "medium",
+                  "width": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在调用工具"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 6秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 1秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 查阅功能文档 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "还没有步骤",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在调用工具</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "setting-inter_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "element_id": "display-reminder",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "size": "medium",
+                  "width": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  }
+] as CardJson[];
+
+export const subagentPreviewLayoutInputs: PreviewLayoutInput[] = [
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 4,
+      "modelIndex": 4,
+      "controlsIndex": 5,
+      "answerIndices": [],
+      "subagentIndices": [
+        2,
+        3
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在调用工具</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "setting-inter_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "5秒"
+      },
+      "status": {
+        "label": "正在调用工具"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 5,
+      "modelIndex": 5,
+      "controlsIndex": 6,
+      "answerIndices": [],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在调用工具</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "setting-inter_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "6秒"
+      },
+      "status": {
+        "label": "正在调用工具"
+      }
+    }
+  }
+] as PreviewLayoutInput[];
+
+export const subagentPreviewFramesNonManual: CardJson[] = [
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在调用工具"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 5秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>1 个运行中</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "还没有步骤",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在调用工具</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "setting-inter_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在调用工具"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 6秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 1秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 查阅功能文档 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "还没有步骤",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在调用工具</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "setting-inter_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  }
+] as CardJson[];
+
+export const subagentPreviewLayoutInputsNonManual: PreviewLayoutInput[] = [
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 4,
+      "modelIndex": 4,
+      "controlsIndex": 5,
+      "answerIndices": [],
+      "subagentIndices": [
+        2,
+        3
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在调用工具</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "setting-inter_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "5秒"
+      },
+      "status": {
+        "label": "正在调用工具"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 5,
+      "modelIndex": 5,
+      "controlsIndex": 6,
+      "answerIndices": [],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在调用工具</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "setting-inter_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "6秒"
+      },
+      "status": {
+        "label": "正在调用工具"
+      }
+    }
+  }
+] as PreviewLayoutInput[];
+
+export const subagentPreviewFramesRequested: CardJson[] = [
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在调用工具"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 5秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>1 个运行中</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "还没有步骤",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在调用工具</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "setting-inter_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "element_id": "display-reminder",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "✅ 已开启提醒"
+                  },
+                  "type": "default",
+                  "size": "medium",
+                  "width": "default",
+                  "disabled": true,
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "本轮结束后会提醒发起人"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在调用工具"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 6秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 1秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 查阅功能文档 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "还没有步骤",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在调用工具</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "setting-inter_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "element_id": "display-reminder",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "✅ 已开启提醒"
+                  },
+                  "type": "default",
+                  "size": "medium",
+                  "width": "default",
+                  "disabled": true,
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "本轮结束后会提醒发起人"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  }
+] as CardJson[];
+
+export const subagentPreviewLayoutInputsRequested: PreviewLayoutInput[] = [
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 4,
+      "modelIndex": 4,
+      "controlsIndex": 5,
+      "answerIndices": [],
+      "subagentIndices": [
+        2,
+        3
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在调用工具</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "setting-inter_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "5秒"
+      },
+      "status": {
+        "label": "正在调用工具"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 5,
+      "modelIndex": 5,
+      "controlsIndex": 6,
+      "answerIndices": [],
+      "subagentIndices": [
+        2,
+        3,
+        4
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在调用工具</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "setting-inter_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "6秒"
+      },
+      "status": {
+        "label": "正在调用工具"
       }
     }
   }

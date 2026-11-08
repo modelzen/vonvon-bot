@@ -12,7 +12,7 @@ import { chatMemberNames, resolveNames, withDeadline } from './names';
  * the client offers when an administrator is added. D2 calls {@link createDmRefusal} where the private chat checks
  * `isAdmin`, before any transcription or download.
  */
-export const DM_REFUSED_MESSAGE = '你还不是这个 Bot 的管理员，请管理员在 Vonvon Bot 的「设置 → 管理员」里添加你。';
+export const DM_REFUSED_MESSAGE = '你还不是这个 Bot 的管理员，请管理员在 Vonvon Bot 的「私聊 → 沟通方式 → 回应谁」里添加你。';
 export const DM_REFUSED_MAX = 20;
 export const DM_REFUSED_TTL_MS = 30 * 24 * 60 * 60_000;
 /** The same person gets the reply once in this long. */

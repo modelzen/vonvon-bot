@@ -25,6 +25,7 @@ export * from "./cli-path-block.js";
 export * from "./display.js";
 export * from './card-display.js';
 export * from './card-display-layout.js';
+export * from './completion-template.js';
 
 export * from "./group-decision.js";
 

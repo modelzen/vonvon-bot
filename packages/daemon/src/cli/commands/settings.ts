@@ -106,6 +106,8 @@ export function parseAssignments(kind: Kind, assignments: readonly string[]): { 
     texts.set(field, text);
   }
   if (section === undefined) throw badArgs(FORMAT);
+  if (kind === 'agent' && section === 'cards') throw badArgs('消息卡按群聊或私聊分别设置：群用 --group X presentation.cardDisplay，私聊用 --dm presentation.cardDisplay');
+  if (kind === 'project' && section === 'presentation' && (fields.has('showToolCalls') || fields.has('showModel'))) throw badArgs('旧工具和模型显示字段只供迁移；请改本群或私聊的 presentation.cardDisplay');
   if (section === 'cliBridge') throw badArgs('咖啡一下第一版已拿掉，不能改。');
   if (section === 'compact' && kind === 'project') throw badArgs('自动压缩现在一直开着，不能关了。');
   if (section === 'permission' && kind === 'project' && fields.has('network')) throw badArgs('联网已经并进权限的档位：只读不联网，工作区可写联网，完全访问不限制。只读又要联网这类组合，用高级设置 permission.custom。');
@@ -378,6 +380,11 @@ export async function runSettingsGet(section: string | undefined, target: Target
 
 export async function runSettingsSet(assignments: readonly string[], target: Target, io: Io, daemon: Daemon = withDaemon): Promise<void> {
   const { section, patch } = parseAssignments(scopeKind(target), assignments);
+  // A complete card object was edited from an earlier snapshot. Reading a new
+  // revision here would authorize overwriting changes made in the meantime.
+  if (section === 'presentation' && Object.hasOwn(patch, 'cardDisplay') && patch.cardDisplay !== null && !target.revision?.trim()) {
+    throw badArgs('保存完整 presentation.cardDisplay 必须提供 --revision <读取时的版本>。先用 vonvon settings get presentation --group <群> --json（私聊用 --dm，跨 Bot 加 --bot）读取 view.sections.presentation.revision，并在同一目标上使用这个版本保存。');
+  }
   const unknown = '可能已经保存，运行 vonvon settings get 查看。';
   const result = await daemon(async call => {
     const scope = await scopeOf(call, target);

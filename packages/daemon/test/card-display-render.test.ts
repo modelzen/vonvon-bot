@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import {CARD_DISPLAY_STOP_EID,defaultCardDisplay} from '@vonvon/protocol';
+import {CARD_DISPLAY_STOP_EID,CARD_DISPLAY_REMINDER_EID,defaultCardDisplay,allowedSlots,compileCardDisplay,DEFAULT_REMINDER_TEMPLATE,DEFAULT_REMINDER_REQUESTED_TEMPLATE} from '@vonvon/protocol';
 import {buildRunCard,buildRunCardBase,ANSWER_EID,CONTROLS_EID} from '../src/card/run-card';
 import {initialState,type RunState} from '../src/card/run-state';
 import {deadRunCardElementIds} from '../src/bot/handle-message';
@@ -9,7 +9,7 @@ const nodes = (value:unknown):Record<string,any>[] => {
   const visit=(item:unknown):void=>{if(Array.isArray(item))item.forEach(visit);else if(item&&typeof item==='object') {const node=item as Record<string,any>;if(node.tag)out.push(node);for(const child of Object.values(node))visit(child);}};
   visit(value);return out;
 };
-const actions=(value:unknown)=>nodes(value).filter(node=>node.tag==='button').map(node=>node.behaviors?.[0]?.value);
+const actions=(value:unknown)=>nodes(value).filter(node=>node.tag==='button').map(node=>node.behaviors?.[0]?.value).filter(Boolean);
 const running:RunState={...initialState,startedAt:0,usage:{used:371000,window:475000},footer:'streaming',blocks:[
   {kind:'reasoning',id:'r',content:'thinking content',streaming:false},
   {kind:'tool',tool:{id:'t',title:'rg --files',kind:'command',status:'done',output:'README.md'}},
@@ -92,9 +92,26 @@ describe('native card display compiler',()=>{
     expect(stop[0]?.behaviors?.[0]?.value).toEqual({a:'run.stop',m:'om_7'});
     expect(controls).toHaveLength(1);
     expect(actions(controls[0]).map(value=>value?.a)).toEqual(['run.remind']);
-    expect(deadRunCardElementIds('run.stop')).toEqual([CONTROLS_EID,CARD_DISPLAY_STOP_EID]);
-    expect(deadRunCardElementIds('goal.end')).toEqual([CONTROLS_EID,CARD_DISPLAY_STOP_EID]);
+    expect(deadRunCardElementIds('run.stop')).toEqual([CONTROLS_EID,CARD_DISPLAY_STOP_EID,CARD_DISPLAY_REMINDER_EID]);
+    expect(deadRunCardElementIds('goal.end')).toEqual([CONTROLS_EID,CARD_DISPLAY_STOP_EID,CARD_DISPLAY_REMINDER_EID]);
     expect(deadRunCardElementIds('run.retry')).toEqual([CONTROLS_EID]);
+  });
+
+  it('pins the stop to the far right of the native action row with and without other controls',()=>{
+    const config=defaultCardDisplay();
+    config.blocks.find(block=>block.kind==='stop')!.slot='actions-right';
+    for (const extras of [{},{completionReminder:'available' as const},{goalControls:true}]) {
+      const card=buildRunCard({rs:running,cardKey:'om_right',cardDisplay:config,strictCardDisplay:true,...extras});
+      const controls=nodes(card).find(node=>node.element_id===CONTROLS_EID)!;
+      const columns=controls.columns as Record<string,any>[];
+      expect(controls.flex_mode).toBe('none');
+      expect(columns.at(-2)).toMatchObject({tag:'column',width:'weighted',weight:1});
+      expect(columns.at(-1)).toMatchObject({tag:'column',width:'auto'});
+      expect(actions(columns.at(-1))).toEqual([{a:'run.stop',m:'om_right'}]);
+      expect(actions(card).filter(value=>value?.a==='run.stop')).toHaveLength(1);
+      if ('completionReminder' in extras) expect(actions(columns.slice(0,-2))).toContainEqual({a:'run.remind',m:'om_right'});
+      if ('goalControls' in extras) expect(actions(columns.slice(0,-2))).toContainEqual({a:'goal.end',m:'om_right'});
+    }
   });
 
   it('keeps the native stop control for a legacy draft without a stop block',()=>{
@@ -102,6 +119,95 @@ describe('native card display compiler',()=>{
     config.blocks=config.blocks.filter(block=>block.kind!=='stop');
     const card=buildRunCard({rs:running,cardKey:'om_6',cardDisplay:config,strictCardDisplay:true});
     expect(actions(card).filter(value=>value?.a==='run.stop')).toEqual([{a:'run.stop',m:'om_6'}]);
+  });
+
+  it('keeps a requested reminder in the same shape and slot with no repeated callback',()=>{
+    const config=defaultCardDisplay();
+    const reminder=config.blocks.find(block=>block.kind==='reminder')!;
+    reminder.template='  📣 做完叫我  ';
+    reminder.requestedTemplate='✅ 已订阅，完成后我会回来';
+    for(const slot of allowedSlots(reminder)){
+      reminder.slot=slot;
+      const rc={rs:{...running,startedAt:undefined},cardKey:'om_remind',cardDisplay:config,strictCardDisplay:true};
+      const available=buildRunCard({...rc,completionReminder:'available'});
+      const control=nodes(available).find(node=>node.element_id===CARD_DISPLAY_REMINDER_EID)!;
+      expect(control).toMatchObject({tag:'button',size:'medium',width:'default',text:{tag:'plain_text',content:'  📣 做完叫我  '}});
+      expect(actions(available).filter(value=>value?.a==='run.remind')).toEqual([{a:'run.remind',m:'om_remind'}]);
+      const requested=buildRunCard({...rc,completionReminder:'requested'});
+      const confirmations=nodes(requested).filter(node=>node.element_id===CARD_DISPLAY_REMINDER_EID);
+      expect(confirmations).toHaveLength(1);
+      const confirmed=confirmations[0]!;
+      expect(confirmed).toMatchObject({tag:'button',disabled:true,text:{tag:'plain_text',content:reminder.requestedTemplate},size:'medium',width:control.width,hover_tips:{tag:'plain_text',content:'本轮结束后会提醒发起人'}});
+      expect(confirmed.behaviors).toBeUndefined();
+      expect(actions(requested).some(value=>value?.a==='run.remind')).toBe(false);
+      // Only the label and interaction metadata change. Slot, width, hierarchy
+      // and surrounding controls stay identical even when the labels differ.
+      delete confirmed.disabled;delete confirmed.hover_tips;
+      confirmed.behaviors=control.behaviors;confirmed.text=control.text;
+      expect(requested).toEqual(available);
+    }
+    expect(deadRunCardElementIds('run.remind')).toContain(CARD_DISPLAY_REMINDER_EID);
+  });
+
+  it('uses equal fixed native button sizes and keeps adjacent actions in separate columns',()=>{
+    const config=defaultCardDisplay();
+    for(const completionReminder of ['available','requested'] as const){
+      const rc={rs:running,cardKey:'om_size',completionReminder};
+      for(const card of [buildRunCardBase(rc).card,buildRunCard({...rc,cardDisplay:config,strictCardDisplay:true})]){
+        const controls=nodes(card).find(node=>node.element_id===CONTROLS_EID)!;
+        expect(controls.columns).toHaveLength(2);
+        const buttons=nodes(controls).filter(node=>node.tag==='button');
+        expect(buttons[0]).toMatchObject({size:'medium',width:'default'});
+        expect(buttons[1]).toMatchObject({size:'medium',width:'default'});
+      }
+    }
+  });
+
+  it('never adds reminders without native availability and removes them during one-shot output',()=>{
+    const config=defaultCardDisplay();
+    for(const extras of [{},{goalControls:true},{rs:{...running,terminal:'done' as const,completedAt:9000}}]){
+      const card=buildRunCard({rs:running,cardKey:'om_absent',cardDisplay:config,strictCardDisplay:true,...extras});
+      expect(actions(card).some(value=>value?.a==='run.remind')).toBe(false);
+      expect(JSON.stringify(card)).not.toContain(CARD_DISPLAY_REMINDER_EID);
+    }
+    for(const reminder of ['available','requested'] as const)for(const legacy of [false,true]){
+      const draft=defaultCardDisplay();draft.reply!.streamText=false;
+      if(legacy)draft.blocks=draft.blocks.filter(block=>block.kind!=='reminder');
+      const card=buildRunCard({rs:running,cardKey:'om_oneshot',completionReminder:reminder,cardDisplay:draft,strictCardDisplay:true});
+      expect(actions(card)).toEqual([]);
+      expect(JSON.stringify(card)).not.toContain('本轮结束后会提醒发起人');
+    }
+  });
+
+  it('keeps native reminder placement for older configs with no reminder block',()=>{
+    const config=defaultCardDisplay();config.blocks=config.blocks.filter(block=>block.kind!=='reminder');
+    const available=buildRunCard({rs:running,cardKey:'om_legacy',completionReminder:'available',cardDisplay:config,strictCardDisplay:true});
+    const controls=nodes(available).find(node=>node.element_id===CONTROLS_EID)!;
+    expect(actions(controls)).toContainEqual({a:'run.remind',m:'om_legacy'});
+    const requested=buildRunCard({rs:running,cardKey:'om_legacy',completionReminder:'requested',cardDisplay:config,strictCardDisplay:true});
+    const requestedControls=nodes(requested).find(node=>node.element_id===CONTROLS_EID)!;
+    expect(nodes(requestedControls).filter(node=>node.tag==='button')).toMatchObject([
+      {behaviors:[{value:{a:'run.stop'}}]},
+      {element_id:CARD_DISPLAY_REMINDER_EID,disabled:true,text:{content:DEFAULT_REMINDER_REQUESTED_TEMPLATE}},
+    ]);
+    expect(actions(requested).some(value=>value?.a==='run.remind')).toBe(false);
+  });
+
+  it('upgrades a legacy requested-note fixture only to a disabled button',()=>{
+    const config=defaultCardDisplay();
+    const reminder=config.blocks.find(block=>block.kind==='reminder')!;
+    reminder.slot='bottom-right';reminder.template='  📣 做完叫我  ';
+    delete reminder.requestedTemplate;
+    const base=buildRunCardBase({rs:running,cardKey:'om_old'});
+    const elements=(base.card.body as any).elements;
+    base.parts.reminderIndex=elements.length;
+    elements.push({tag:'markdown',content:'_🔔 本轮结束后会提醒发起人_'});
+    const card=compileCardDisplay(base.card,config,{phase:'running',parts:base.parts,values:base.values,strict:true});
+    expect(nodes(card).filter(node=>node.element_id===CARD_DISPLAY_REMINDER_EID)).toMatchObject([
+      {tag:'button',disabled:true,size:'medium',width:'default',text:{content:DEFAULT_REMINDER_REQUESTED_TEMPLATE}},
+    ]);
+    expect(actions(card).some(value=>value?.a==='run.remind')).toBe(false);
+    expect(JSON.stringify(card)).not.toContain('_🔔 本轮结束后会提醒发起人_');
   });
 
   it('budgets enabled reasoning after filtering many disabled tool blocks',()=>{
@@ -137,5 +243,24 @@ describe('native card display compiler',()=>{
     expect(actions(card)).toContainEqual({a:'run.stop',m:'om_8'});
     expect(JSON.stringify(card)).toContain('answer content');
     expect(()=>buildRunCard({rs:running,cardKey:'om_8',cardDisplay:malformed,strictCardDisplay:true})).toThrow();
+  });
+
+  it('treats subagents as tool process in native, shared preview, and one-shot modes',()=>{
+    const withSubagents:RunState={...running,subagents:[{id:'sa-1',name:'CHILD_SENTINEL',task:'inspect',status:'running',startedAt:0,stepCount:1,steps:[{stepId:'s',title:'step',status:'done'}],stoppable:true}]};
+    const config=defaultCardDisplay();
+    const rc={rs:withSubagents,cardKey:'om_sa',cardDisplay:config,strictCardDisplay:true};
+    expect(buildRunCardBase(rc).parts.subagentIndices?.length).toBeGreaterThan(0);
+    expect(JSON.stringify(buildRunCard(rc))).toContain('CHILD_SENTINEL');
+    expect(JSON.stringify(buildRunCard({rs:withSubagents,cardKey:'om_sa',showTools:false}))).not.toContain('CHILD_SENTINEL');
+    config.blocks.find(block=>block.kind==='tools')!.mode='off';
+    expect(JSON.stringify(buildRunCard(rc))).not.toContain('CHILD_SENTINEL');
+    const terminal={...withSubagents,terminal:'done' as const,completedAt:9000};
+    expect(JSON.stringify(buildRunCard({...rc,rs:terminal}))).not.toContain('CHILD_SENTINEL');
+    config.blocks.find(block=>block.kind==='tools')!.mode='always';
+    config.reply={streamText:false,collapseAfterRun:true};
+    expect(JSON.stringify(buildRunCard(rc))).not.toContain('CHILD_SENTINEL');
+    const done=JSON.stringify(buildRunCard({...rc,rs:terminal}));
+    expect(done).not.toContain('CHILD_SENTINEL');
+    expect(done).toContain('answer content');
   });
 });

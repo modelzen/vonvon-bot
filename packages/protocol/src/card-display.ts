@@ -3,13 +3,15 @@ import {z} from 'zod';
 /** One declarative contract for settings, CLI, native cards and the editor. */
 export type CardDisplayMode = 'off' | 'running' | 'done' | 'always';
 export type CardDisplaySlot = 'top-left' | 'top-right' | 'top' | 'process' | 'bottom-left' | 'bottom-right' | 'bottom' | 'actions-left' | 'actions-right';
-export type CardDisplayKind = 'context' | 'model' | 'time' | 'status' | 'tools' | 'thinking' | 'stop' | 'custom';
+export type CardDisplayKind = 'context' | 'model' | 'time' | 'status' | 'tools' | 'thinking' | 'stop' | 'reminder' | 'custom';
 export type ContextColor = 'yellow' | 'orange' | 'red';
 export type ContextRules = {yellowAt: number; orangeAt: number; redAt: number; showFrom: number; enabledColors?: ContextColor[] | undefined};
 export type CardDisplayValues = Record<string, unknown>;
 export type CardDisplayBlock = {
   id: string; kind: CardDisplayKind; name: string; slot: CardDisplaySlot; mode: CardDisplayMode;
   appearance: 'text' | 'percent' | 'bar' | 'icon'; template: string;
+  /** Manual reminder's disabled confirmation label; omitted by older drafts. */
+  requestedTemplate?: string | undefined;
   size: 'notation' | 'normal'; color: 'auto' | 'grey' | 'blue';
   /** Retained for older editor drafts; contextRules is authoritative when set. */
   warning: boolean; warningAt: number;
@@ -32,7 +34,7 @@ export const slotNames: Record<CardDisplaySlot, string> = {'top-left':'上方左
 export const modeNames: Record<CardDisplayMode, string> = {off:'隐藏',running:'仅执行中',done:'仅完成后',always:'全程显示'};
 const infoSlots: CardDisplaySlot[] = ['top-left','top-right','top','bottom-left','bottom-right','bottom'];
 export function allowedSlots(block: Pick<CardDisplayBlock,'kind'|'appearance'>): CardDisplaySlot[] {
-  if (block.kind === 'stop') return ['top-left','top-right','bottom-left','bottom-right','actions-left','actions-right'];
+  if (block.kind === 'stop' || block.kind === 'reminder') return ['top-left','top-right','bottom-left','bottom-right','actions-left','actions-right'];
   if (block.kind === 'tools' || block.kind === 'thinking') return ['process'];
   if (block.kind === 'time') return ['process', ...infoSlots];
   if (block.kind === 'status') return ['bottom-left','bottom-right'];
@@ -40,6 +42,8 @@ export function allowedSlots(block: Pick<CardDisplayBlock,'kind'|'appearance'>):
 }
 
 const blank = {appearance:'text' as const,size:'notation' as const,color:'auto' as const,warning:false,warningAt:80,source:'builtin' as const,script:'',language:'node' as const,sample:'{"branch":"feature/card-style"}'};
+export const DEFAULT_REMINDER_TEMPLATE = '🔔 完成后提醒我';
+export const DEFAULT_REMINDER_REQUESTED_TEMPLATE = '✅ 已开启提醒';
 export function defaultCardDisplay(): CardDisplayConfig {
   return {version:1,reply:{streamText:true,collapseAfterRun:true},blocks:[
     {...blank,id:'context',kind:'context',name:'上下文用量',slot:'top',mode:'always',template:'上下文 {{context.percent}}% · {{context.used}}/{{context.window}}',contextRules:{yellowAt:70,orangeAt:85,redAt:95,showFrom:0,enabledColors:['yellow','orange','red']}},
@@ -49,6 +53,7 @@ export function defaultCardDisplay(): CardDisplayConfig {
     {...blank,id:'tools',kind:'tools',name:'工具调用',slot:'process',mode:'always',template:''},
     {...blank,id:'thinking',kind:'thinking',name:'思考内容',slot:'process',mode:'always',template:''},
     {...blank,id:'stop',kind:'stop',name:'终止按钮',slot:'actions-left',mode:'running',appearance:'icon',template:'终止'},
+    {...blank,id:'reminder',kind:'reminder',name:'完成提醒按钮',slot:'actions-left',mode:'running',template:DEFAULT_REMINDER_TEMPLATE,requestedTemplate:DEFAULT_REMINDER_REQUESTED_TEMPLATE},
   ]};
 }
 export function contextRulesFor(block: Pick<CardDisplayBlock,'contextRules'|'warning'|'warningAt'>): ContextRules {
@@ -76,7 +81,7 @@ export function interpolate(template: string, values: CardDisplayValues): {text:
 }
 export const CARD_DISPLAY_VARIABLES = ['context.percent','context.used','context.window','context.mark','model.name','model.effort','elapsed.label','elapsed.value','status.label'] as const;
 export function variablesFor(kind: CardDisplayKind): string[] {
-  if (kind === 'stop') return [];
+  if (kind === 'stop' || kind === 'reminder') return [];
   if (kind === 'context') return ['context.percent','context.used','context.window'];
   if (kind === 'model') return ['model.name','model.effort'];
   if (kind === 'time') return ['elapsed.label','elapsed.value'];
@@ -89,9 +94,9 @@ const percent = z.number().int().min(0).max(100);
 const contextRulesSchema = z.object({yellowAt:percent,orangeAt:percent,redAt:percent,showFrom:percent,enabledColors:z.array(z.enum(['yellow','orange','red'])).max(3).optional()}).strict();
 const blockSchema = z.object({
   id:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/,'组件 ID 只能使用字母、数字、下划线和短横线，最多 64 字符'),
-  kind:z.enum(['context','model','time','status','tools','thinking','stop','custom']),name:z.string().min(1).max(80),
+  kind:z.enum(['context','model','time','status','tools','thinking','stop','reminder','custom']),name:z.string().min(1).max(80),
   slot:z.enum(['top-left','top-right','top','process','bottom-left','bottom-right','bottom','actions-left','actions-right']),mode:modeSchema,
-  appearance:z.enum(['text','percent','bar','icon']),template:z.string().max(2000),size:z.enum(['notation','normal']),color:z.enum(['auto','grey','blue']),
+  appearance:z.enum(['text','percent','bar','icon']),template:z.string().max(2000),requestedTemplate:z.string().max(80).optional(),size:z.enum(['notation','normal']),color:z.enum(['auto','grey','blue']),
   warning:z.boolean(),warningAt:z.number().int().min(1).max(100),source:z.enum(['builtin','script']),script:z.string().max(8192),language:z.enum(['node','shell','powershell']),sample:z.string().max(16384),contextRules:contextRulesSchema.optional(),
 }).strict();
 
@@ -111,6 +116,13 @@ export const cardDisplayConfigSchema: z.ZodType<CardDisplayConfig> = z.object({
     kinds.add(block.kind);
     if (!allowedSlots(block).includes(block.slot)) issue([...path,'slot'],'这个组件不能放在该位置');
     if ((block.kind === 'stop' || block.kind === 'status') && !['off','running'].includes(block.mode)) issue([...path,'mode'],'该组件只在执行中存在，请选择 running 或 off');
+    if (block.kind === 'reminder' && block.mode !== 'running') issue([...path,'mode'],'手动提醒按钮仅在执行中显示，不能单独隐藏');
+    if (block.kind === 'reminder' && (!block.template.trim() || block.template.length > 80 || /[\r\n]/.test(block.template))) issue([...path,'template'],'提醒按钮文字需为 1–80 字的单行文字，可使用 emoji');
+    if (block.requestedTemplate !== undefined) {
+      if (block.kind !== 'reminder') issue([...path,'requestedTemplate'],'仅完成提醒按钮可设置点击后的文字');
+      if (!block.requestedTemplate.trim() || /[\r\n]/.test(block.requestedTemplate)) issue([...path,'requestedTemplate'],'点击后的按钮文字需为 1–80 字的单行文字，可使用 emoji');
+      if (/[{}]/.test(block.requestedTemplate)) issue([...path,'requestedTemplate'],'提醒按钮文字不支持模板变量');
+    }
     if (block.kind === 'stop' ? !['icon','text'].includes(block.appearance) : block.kind === 'context' ? !['text','percent','bar'].includes(block.appearance) : block.appearance !== 'text') issue([...path,'appearance'],'该组件不支持此显示形态');
     if (block.kind !== 'custom' && block.source !== 'builtin') issue([...path,'source'],'脚本仅用于自定义组件');
     if (block.source === 'script' && !block.script.trim()) issue([...path,'script'],'请填写脚本');
@@ -122,7 +134,7 @@ export const cardDisplayConfigSchema: z.ZodType<CardDisplayConfig> = z.object({
       const thresholds = (['yellow','orange','red'] as const).filter(color => colors.includes(color)).map(color => block.contextRules![`${color}At`]);
       if (thresholds.some((value,i) => i > 0 && value <= thresholds[i-1]!)) issue([...path,'contextRules'],'已启用的黄色、橙色、红色起点必须依次递增');
     }
-    const available = new Set<string>(CARD_DISPLAY_VARIABLES);
+    const available = new Set<string>(block.kind === 'reminder' ? [] : CARD_DISPLAY_VARIABLES);
     if (block.kind === 'custom' && block.source === 'script') {
       try {
         const sample:unknown = JSON.parse(block.sample);

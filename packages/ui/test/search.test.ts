@@ -93,11 +93,17 @@ test('application search points old startup and update labels to the compact con
   assert.equal(install?.field, '重启升级');
 });
 
-test('A2: the administrators have a page of their own, no longer a row in each Bot settings', () => {
+test('administrator search opens the matching private chat response page', () => {
+  const withDm: DesktopSnapshot = {...snapshot, agents:[{...snapshot.agents[0]!,dm:{...snapshot.memberships[0]!,name:'私聊',conversation:'shared'}}]};
+  const dmEntries = searchEntries(withDm);
   for (const query of ['管理员', '添加管理员', '谁能私聊', '候选人']) {
-    const result = findEntries(entries, query)[0];
-    assert.equal(result?.destination.page, 'administrators', query);
+    const result = findEntries(dmEntries, query)[0]!;
+    assert.equal(result.destination.page, 'collaboration', query);
+    assert.equal(result.destination.reveal, 'dm-response', query);
+    assert.equal(result.destination.section, '回应谁', query);
+    assert.deepEqual(routeFromSearch(result.destination, withDm)?.route,{kind:'dm',agentId,tab:'response'});
   }
+  assert.equal(dmEntries.some(entry => entry.destination.page === 'administrators'),false);
   assert.equal(findEntries(entries, '扫码注册者').length, 0);
   assert.equal(findEntries(entries, '添加管理员 Open ID').length, 0);
 });
@@ -157,8 +163,8 @@ test('results are complete, ranked, uniquely identified, and have valid destinat
 
 test('conditional settings lead to existing parent controls', () => {
   const threshold = findEntries(entries, '长任务阈值').find(entry => entry.destination.selection?.kind === 'membership');
-  assert.equal(threshold?.destination.section, '完成提醒');
-  assert.equal(threshold?.destination.field, '完成提醒');
+  assert.equal(threshold?.destination.section, '回复样式');
+  assert.equal(threshold?.destination.field, '回复卡片样式');
   assert.equal(threshold?.destination.detail?.kind, 'membership-settings');
   assert.match(threshold?.destination.guide ?? '', /长任务/);
   assert.equal(groupTabForSection(threshold?.destination.section), 'response');
@@ -214,7 +220,7 @@ test('adding a Bot and the legacy registration wording still find the Bot list',
 });
 
 test('words the 叫法表 retired still find the renamed fields', () => {
-  assert.equal(findEntries(entries, '待处理消息策略')[0]?.title, '运行中来了消息');
+  assert.equal(findEntries(entries, '待处理消息策略')[0]?.title, '新消息处理');
   assert.equal(findEntries(entries, 'Host 状态')[0]?.title, '后端状态 Codex');
   assert.equal(findEntries(entries, 'Host 版本')[0]?.title, '后端版本 Codex');
   assert.equal(findEntries(entries, '当前 Profile')[0]?.title, '当前账号配置 飞书 CLI');
@@ -236,7 +242,7 @@ test('smart-only settings are indexed only for smart groups, alongside the mode 
   assert.equal(groupTabForSection(judge?.destination.section), 'response');
   assert.equal(findEntries(entries, '判断模型').length, 0);
   assert.equal(findEntries(entries, '智能模式').find(entry => entry.title === '聊天方式')?.destination.section, '聊天方式');
-  assert.ok(findEntries(entries, '插话').some(entry => entry.destination.detail?.kind === 'membership-settings' && entry.destination.section === '运行中来了消息'));
+  assert.ok(findEntries(entries, '插话').some(entry => entry.destination.detail?.kind === 'membership-settings' && entry.destination.section === '新消息处理'));
   assert.equal(findEntries(smart, '免 @').length, 0);
   const custom = findEntries(smart, '判断的手填模型 id')[0];
   assert.equal(custom?.title, '自定义决策模型 ID');
@@ -247,23 +253,18 @@ test('smart-only settings are indexed only for smart groups, alongside the mode 
 test('s28c: member picker label and alias navigate to the bound group response-member row', () => {
   for (const query of ['从群成员选择', '选择响应成员']) {
     const result = findEntries(entries, query)[0];
-    assert.equal(result?.title, '从群成员选择');
+    assert.equal(result?.title, '指定成员');
     assert.deepEqual(result?.destination, {
       page: 'collaboration', view: 'groups', selection: {kind: 'membership', id: membershipId},
-      detail: {kind: 'membership-settings'}, section: '响应成员', field: '从群成员选择',
+      detail: {kind: 'membership-settings'}, section: '回应谁', field: '指定成员',
       reveal: undefined, guide: undefined,
     });
   }
 });
 
-test('s28c: the manual Open ID entry remains searchable alongside the picker', () => {
+test('does not advertise the removed manual member ID entry', () => {
   for (const query of ['添加成员 Open ID', '成员 Open ID']) {
-    const result = findEntries(entries, query)[0];
-    assert.equal(result?.title, '添加成员 Open ID');
-    assert.equal(result?.destination.section, '响应成员');
-    assert.equal(result?.destination.field, '添加成员 Open ID');
-    assert.deepEqual(result?.destination.selection, {kind: 'membership', id: membershipId});
-    assert.deepEqual(result?.destination.detail, {kind: 'membership-settings'});
+    assert.equal(findEntries(entries, query).length, 0);
   }
 });
 
@@ -275,8 +276,8 @@ test('each group setting belongs to its visible page or expandable editor, inclu
     ['项目记忆', 'memory', '记忆'],
     ['模型 Provider', 'model', '可用模型'], ['可用 Effort', 'model', '可用模型'],
     ['权限', 'model', '权限'], ['能挡到什么', 'model', '权限'], ['高级设置', 'model', '权限'],
-    ['沟通方式', 'response', '聊天方式'], ['回复规则', 'response', '聊天方式'], ['聊天方式', 'response', '聊天方式'], ['显示模型', 'response', '消息卡片'],
-    ['显示工具调用', 'response', '消息卡片'], ['完成提醒', 'response', '完成提醒'], ['从群成员选择', 'response', '响应成员'],
+    ['沟通方式', 'response', '聊天方式'], ['回复规则', 'response', '聊天方式'], ['聊天方式', 'response', '聊天方式'], ['显示模型', 'response', '回复样式'],
+    ['显示工具调用', 'response', '回复样式'], ['完成提醒', 'response', '回复样式'], ['从群成员选择', 'response', '回应谁'],
   ]) {
     const entry = findEntries(entries, query!).find(item => item.destination.selection?.kind === 'membership');
     assert.equal(entry?.destination.section, section, query);
@@ -340,11 +341,12 @@ test('Bot profile has its own route and former Bot-only group settings no longer
     assert.deepEqual(result?.destination.selection, {kind: 'agent', id: agentId});
     assert.equal(result?.destination.field, field);
   }
-  for (const label of ['回复卡片样式', '完成提醒']) {
-    const matches = entries.filter(entry => entry.title === label);
-    assert.ok(matches.some(entry => entry.destination.selection?.kind === 'membership'), label);
-    assert.ok(matches.some(entry => entry.destination.selection?.kind === 'agent'), label);
-  }
+  const cards = entries.filter(entry => entry.title === '回复卡片样式');
+  assert.ok(cards.some(entry => entry.destination.selection?.kind === 'membership'));
+  assert.ok(!cards.some(entry => entry.destination.selection?.kind === 'agent'));
+  const reminders = entries.filter(entry => entry.title === '完成提醒');
+  assert.ok(reminders.some(entry => entry.destination.selection?.kind === 'membership'));
+  assert.ok(reminders.some(entry => entry.destination.selection?.kind === 'agent'));
   for (const oldSection of ['任务卡片', '消息与提醒', '运行策略', '工作区的默认位置', '群绑定', '新会话默认模型', '话题模型', '判断模型']) {
     assert.ok(!entries.some(entry => entry.destination.section === oldSection), oldSection);
   }
@@ -446,4 +448,12 @@ test('renamed settings remain discoverable by their previous labels', () => {
     const entry = findEntries(entries, query!).find(entry => entry.id === id);
     assert.equal(entry?.title, title, query);
   }
+});
+
+
+test('restoring card defaults leads to the visible editor entry', () => {
+  const result = findEntries(entries,'恢复默认卡片').find(entry => entry.destination.selection?.kind === 'membership');
+  assert.equal(result?.destination.section,'回复样式');
+  assert.equal(result?.destination.field,'回复卡片样式');
+  assert.match(result?.destination.guide ?? '',/编辑页底部/);
 });

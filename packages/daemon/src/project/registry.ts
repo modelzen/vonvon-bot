@@ -3,7 +3,8 @@ import { mkdir, open, readFile, realpath, unlink, writeFile } from 'node:fs/prom
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { z } from 'zod';
-import { cardDisplayConfigSchema, type CardDisplayConfig } from '@vonvon/protocol';
+import { cardDisplayConfigSchema, completionTemplateSchema, defaultCardDisplay, type CardDisplayConfig } from '@vonvon/protocol';
+import { getCompletionReminderConfig, getModelDisplay, getShowToolCalls, type AppConfig } from '../config/schema';
 import { paths } from '../config/paths';
 import { renameOverReaders } from '../server/atomic-file';
 import { acquireMutex, closeMutex, holdMutexRole } from '../config/data-access';
@@ -29,7 +30,16 @@ export interface ProjectModelAccess {
 export interface ProjectWorkspace { primary: string; directories: string[]; repositories: string[] }
 export interface ProjectSmartRules { respond: string; newTopic: string }
 export interface ProjectSkills { disabledPaths: string[] }
-export interface ProjectPresentation { voiceEnabled: boolean; showToolCalls: boolean; showModel?: 'off' | 'running' | 'always'; cardDisplay?: CardDisplayConfig | null; completionMode: 'manual' | 'long' | 'failures' | 'always'; longTaskMinutes: number }
+export interface ProjectPresentation { voiceEnabled?: boolean; showToolCalls?: boolean; showModel?: 'off' | 'running' | 'always'; cardDisplay?: CardDisplayConfig | null; completionMode?: 'manual' | 'long' | 'failures' | 'always'; longTaskMinutes?: number; completionTemplate?: string | null }
+
+/** The legacy fields used only when an old row needs a complete presentation snapshot. */
+export function cardDisplayPresentationDefaults(cfg:Partial<AppConfig>):ProjectPresentation {
+  // The three legacy readers only inspect preferences; stopped Bots load a
+  // partial config without an accounts section.
+  const preferencesOnly=cfg as AppConfig;
+  const completion=getCompletionReminderConfig(preferencesOnly);
+  return {voiceEnabled:cfg.preferences?.voice?.enabled===true,showToolCalls:getShowToolCalls(preferencesOnly),showModel:getModelDisplay(preferencesOnly),cardDisplay:null,completionMode:completion.mode,longTaskMinutes:completion.longTaskMinutes};
+}
 
 /** A project = a Feishu group bound to a fixed working directory. */
 export interface Project {
@@ -266,12 +276,22 @@ function storedRows(parsed: unknown): Project[] {
   const file = parsed as Partial<StoreFile> | null;
   if (!file || !Array.isArray(file.projects) || file.projects.some(p => !p || typeof p !== 'object' || typeof p.name !== 'string' || typeof p.cwd !== 'string')) throw new Error('项目注册表格式无效');
   for (const project of file.projects) {
-    if (project.presentation?.cardDisplay !== undefined && !cardDisplayConfigSchema.safeParse(project.presentation.cardDisplay).success) {
-      delete project.presentation.cardDisplay;
+    if (project.presentation?.cardDisplay !== undefined && project.presentation.cardDisplay !== null && !cardDisplayConfigSchema.safeParse(project.presentation.cardDisplay).success) {
+      // Preserve explicit presence so the one-time migration cannot replace a
+      // future/invalid local style with the former Bot-wide style.
+      project.presentation.cardDisplay=null;
       const key = project.chatId || project.name;
       if (!warnedCardDisplay.has(key)) {
         warnedCardDisplay.add(key);
         log.warn('card', 'display-config-invalid', { scope: 'group', group: project.name, action: 'ignored-stored-card-display' });
+      }
+    }
+    if (project.presentation?.completionTemplate != null && !completionTemplateSchema.safeParse(project.presentation.completionTemplate).success) {
+      project.presentation.completionTemplate=null;
+      const key=`${project.chatId || project.name}:completion-template`;
+      if (!warnedCardDisplay.has(key)) {
+        warnedCardDisplay.add(key);
+        log.warn('card','completion-template-invalid',{scope:'group',group:project.name,action:'using-default'});
       }
     }
     parseDirectorySettings(project.directories);
@@ -382,8 +402,8 @@ const storedSectionSchemas = {
     defaultModel: z.string().min(1).max(1000).optional(), defaultEffort: z.string().min(1).max(1000).optional() }),
   smartRules: z.object({ respond: z.string().max(30000), newTopic: z.string().max(30000) }),
   skills: z.object({ disabledPaths: z.array(z.string().min(1).max(4096)).max(1000) }),
-  presentation: z.object({ voiceEnabled: z.boolean(), showToolCalls: z.boolean(), showModel: z.enum(['off', 'running', 'always']).optional(), cardDisplay: z.unknown().refine(value => cardDisplayConfigSchema.safeParse(value).success).optional(),
-    completionMode: z.enum(['manual', 'long', 'failures', 'always']), longTaskMinutes: z.number().int().min(1).max(1440) }),
+  presentation: z.object({ voiceEnabled: z.boolean().optional(), showToolCalls: z.boolean().optional(), showModel: z.enum(['off', 'running', 'always']).optional(), cardDisplay: z.unknown().refine(value => value === null || cardDisplayConfigSchema.safeParse(value).success).optional(),
+    completionMode: z.enum(['manual', 'long', 'failures', 'always']).optional(), longTaskMinutes: z.number().int().min(1).max(1440).optional(), completionTemplate: z.unknown().refine(value=>value===null || completionTemplateSchema.safeParse(value).success).optional() }),
 };
 
 /** Explicit group settings never silently fall back to broader Bot permissions when malformed. */
@@ -457,6 +477,37 @@ async function write(location: RegistryLocation, projects: Project[], selected?:
   const previous = await readStored(location.file);
   await writeStored(location, { ...previous, version: FILE_VERSION, projects: detached }, previous, options?.beforeCommit, false, options?.mirror === true);
   return result;
+}
+
+/**
+ * One-time copy of a former Bot-wide card style into every existing group/DM.
+ * A missing field becomes an explicit local value; explicit null/config is
+ * never overwritten. The legacy Bot value is read only here, never at render.
+ */
+export function materializeCardDisplaySettings(input:{legacy?:CardDisplayConfig;defaults:ProjectPresentation;target?:RegistryLocation}):Promise<number> {
+  const inherited=input.legacy && cardDisplayConfigSchema.safeParse(input.legacy).success ? structuredClone(input.legacy) : null;
+  const snapshot=(presentation:ProjectPresentation):CardDisplayConfig|null=>{
+    if (inherited) return structuredClone(inherited);
+    const tools=presentation.showToolCalls ?? input.defaults.showToolCalls ?? true;
+    const model=presentation.showModel ?? input.defaults.showModel ?? 'running';
+    if (tools && model==='running') return null;
+    const display=defaultCardDisplay();
+    display.blocks.find(block=>block.kind==='tools')!.mode=tools?'always':'off';
+    display.blocks.find(block=>block.kind==='model')!.mode=model;
+    return display;
+  };
+  return ownProjects(async location=>{
+    const rows=await read(location.file);
+    let updated=0;
+    for (const row of rows) {
+      let changed=false;
+      if (!row.presentation) {row.presentation={cardDisplay:snapshot(input.defaults)};changed=true;}
+      if (row.presentation.cardDisplay===undefined) {row.presentation.cardDisplay=snapshot(row.presentation);changed=true;}
+      if (changed) updated++;
+    }
+    if (updated) await write(location,rows);
+    return updated;
+  },input.target);
 }
 
 /**

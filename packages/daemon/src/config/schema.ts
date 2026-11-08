@@ -2,7 +2,7 @@ import type { BotDefaults } from './defaults';
 import type { DirectorySettings } from './directories';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../agent/types';
 import type { JudgeSelectionStored } from '../judge/types';
-import type { CardDisplayConfig } from '@vonvon/protocol';
+import {completionTemplateSchema, type CardDisplayConfig} from '@vonvon/protocol';
 
 export type TenantBrand = 'feishu' | 'lark';
 
@@ -56,12 +56,15 @@ export interface CompletionReminderConfig {
   mode?: CompletionReminderMode;
   /** `long` 策略的耗时阈值（分钟）。默认 3，有效范围 1–1440。 */
   longTaskMinutes?: number;
+  /** Run-local projection from a chat's presentation; never a Bot template setting. */
+  template?: string | null;
 }
 
 /** Fully-resolved completion-reminder preferences. */
 export interface ResolvedCompletionReminderConfig {
   mode: CompletionReminderMode;
   longTaskMinutes: number;
+  template?: string | null;
 }
 
 export const COMPLETION_REMINDER_LONG_TASK_MIN_MINUTES = 1;
@@ -114,7 +117,7 @@ export interface AppPreferences {
    * 默认 running（仅输出时显示，生成完即收起）——平时能扫一眼当前模型，又不在终态
    * 卡上长期留标签。兼容历史布尔值：true→always、false→off（见 {@link getModelDisplay}）。 */
   showModel?: ModelDisplayMode | boolean;
-  /** Optional validated run-card layout shared with group overrides. Missing keeps legacy output. */
+  /** Legacy Bot-wide layout: read only for one-time group/DM migration. Runtime reads each local presentation. */
   cardDisplay?: CardDisplayConfig;
   /** cap concurrent codex turns across all threads. Default 10. */
   maxConcurrentRuns?: number;
@@ -278,7 +281,8 @@ export function getCompletionReminderConfig(cfg: AppConfig): ResolvedCompletionR
           COMPLETION_REMINDER_LONG_TASK_MAX_MINUTES,
           Math.max(COMPLETION_REMINDER_LONG_TASK_MIN_MINUTES, Math.floor(minutes)),
         );
-  return { mode, longTaskMinutes };
+  const template = completionTemplateSchema.safeParse(raw?.template).success ? raw!.template! : null;
+  return { mode, longTaskMinutes, ...(template ? {template} : {}) };
 }
 
 /** The per-run “完成后提醒我” button only exists in manual mode. */

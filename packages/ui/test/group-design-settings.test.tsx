@@ -23,7 +23,7 @@ const fixture = (): ProjectSettingsView => ({
     modelAccess: section({backend: 'codex-appserver', models: ['actual-a'], efforts: ['low']}),
     workspace: section({primary: '/one', directories: ['/one', '/two'], repositories: ['/repo-a', '/repo-b']}),
     skills: section({disabledPaths: []}),
-    presentation: section({voiceEnabled: false, showToolCalls: true, showModel: 'running', completionMode: 'manual', longTaskMinutes: 5}),
+    presentation: section({voiceEnabled: false, showToolCalls: true, showModel: 'running', completionMode: 'failures', longTaskMinutes: 3}),
     smartRules: section({respond: '响应规则原文', newTopic: '新话题规则原文'}),
     judge: section({selection: {kind: 'llm', backend: 'codex-appserver', model: 'actual-a'}}),
     run: {...section({pendingPolicy: 'default'}), effective: {pendingPolicy: 'queue'}},
@@ -152,7 +152,7 @@ it('combines legacy smart prompts in one editor without losing either custom rul
   expect(html).toContain('响应规则原文'); expect(html).toContain('新话题规则原文');
   expect(html.match(/role="textbox"/g)).toHaveLength(1);
   expect(html).toContain('contentEditable="true"');
-  expect(html).toContain('响应成员'); expect(html).toContain('回复卡片样式'); expect(html).toContain('完成提醒');
+  expect(html).toContain('回应谁'); expect(html).toContain('回复卡片样式'); expect(html).toContain('完成提醒');
   expect(html).not.toContain('显示模型');
   expect(html).not.toContain('跟着 Bot 默认');
   expect(html).not.toContain('查看合成');
@@ -167,15 +167,20 @@ it('announces shared readonly reasons once but preserves independent safety reas
   expect(html.match(/独有权限限制/g)).toHaveLength(1);
 });
 
-it('shows whether card style is inherited and exposes a distinct reset for a group override', () => {
-  const inherited = render('response');
-  expect(inherited).toContain('沿用 Bot 默认样式');
-  expect(inherited).not.toContain('继承 Bot</button>');
+it('shows a fixed local default and restores a group override to that default', () => {
+  const initial = render('response');
+  expect(initial).toContain('此群聊使用旧版默认展示');
+  expect(initial).not.toContain('继承 Bot');
   const view = fixture();
   view.sections.presentation = {...view.sections.presentation!, stored: {...view.sections.presentation!.stored, cardDisplay: defaultCardDisplay()}};
   const overridden = render('response', view);
   expect(overridden).toContain('已自定义');
-  expect(overridden).toContain('继承 Bot');
+  expect(overridden).not.toContain('恢复默认展示');
+  expect(overridden).not.toContain('aria-label="完成提醒"');
+  const reminderOnly = fixture();
+  reminderOnly.sections.presentation!.effective.completionMode = 'always';
+  expect(render('response', reminderOnly)).toContain('已自定义');
+  expect(render('response', reminderOnly)).not.toContain('恢复默认展示');
 });
 
 it('shows the actual default in one writing surface with four removable headings and restore', () => {
@@ -202,4 +207,18 @@ it('shows the server-resolved group model without migration or follow-global act
     expect(html).not.toContain('跟随全局默认');
     expect(html).not.toContain('正在读取默认决策模型');
   }
+});
+
+
+it('keeps new-message handling visible within chat settings while advanced smart rules start folded', () => {
+  const smart = render('response');
+  expect(smart).toContain('<details class="gd-disclosure"><summary>智能回应设置</summary>');
+  expect(smart.indexOf('新消息处理')).toBeLessThan(smart.indexOf('回应谁'));
+  expect(smart.indexOf('回应谁')).toBeLessThan(smart.indexOf('回复样式'));
+  const claude = fixture(); claude.identity.backend = 'claude-agent';
+  const html = render('response',claude);
+  expect(html).toContain('新消息处理');
+  expect(html).toContain('排队等待');
+  expect(html).toContain('Claude 暂不支持立即插话');
+  expect(html).not.toContain('aria-label="新消息处理"');
 });

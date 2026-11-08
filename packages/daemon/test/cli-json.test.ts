@@ -35,7 +35,8 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['memory', 'list', '--project', 'p', '--scope', 'bot=cli_a'], 3], [['memory', 'export', '--project', 'p', '--scope', 'bot=cli_a'], 3],
   [['memory', 'events', 'x', '--project', 'p', '--scope', 'bot=cli_a,group=oc_x'], 3], [['memory', 'list', '--project', 'p'], 2],
   [['project', 'list', '--scope', 'bot=cli_a'], 3], [['daemon', 'status', '--scope', 'bot=cli_a'], 3],
-  [['settings', 'get'], 3], [['settings', 'access'], 3], [['settings', 'set', 'cards.showToolCalls=false'], 3],
+  [['settings', 'get'], 3], [['settings', 'access'], 3], [['settings', 'set', '--dm', 'presentation.cardDisplay=null'], 3],
+  [['settings', 'set', 'cards.showToolCalls=false'], 2],
   [['settings', 'card-template'], 0], [['settings', 'card-check', 'missing-card.json'], 2],
   [['settings', 'card-test', 'missing-card.json', '--cwd', tmpdir()], 2],
   [['settings', 'get', '--host'], 3], [['settings', 'act', 'voice', 'test'], 3], [['settings', 'act', 'admin', 'add', 'ou_x'], 3], [['settings', 'act', 'admin', 'add', '123'], 2],
@@ -143,6 +144,24 @@ it('prints a reusable card template and checks card files without writing data',
     await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally { await rm(base, { recursive: true, force: true }); }
 }, 60_000);
+
+it('documents and enforces a read-time revision for complete card objects at the CLI entry', async () => {
+  const base=await mkdtemp(join(tmpdir(),'vonvon-card-revision-cli-'));
+  try {
+    const home=join(base,'home');await mkdir(home);
+    const root=join(base,'data');
+    const assignment=`presentation.cardDisplay=${JSON.stringify(defaultCardDisplay())}`;
+    const missing=await run(home,root,['settings','set','--dm',assignment]);
+    expect(missing).toMatchObject({code:2,stderr:''});
+    expect(JSON.parse(missing.stdout)).toMatchObject({exitCode:2,error:{kind:'bad-args',message:expect.stringContaining('view.sections.presentation.revision')}});
+    const explicit=await run(home,root,['settings','set','--dm','--revision','snapshot-A',assignment]);
+    expect(explicit.code).toBe(3); // Passed local validation and tried the absent daemon.
+    const help=await run(home,root,['settings','set','--help']);
+    expect(help.code).toBe(0);
+    const helpText=help.stdout.replace(/\s+/g,' ');
+    for(const words of ['required for a complete presentation.cardDisplay','view.sections.presentation.revision','--revision <读取时的版本>','不要仅替换 revision 后重提旧对象']) expect(helpText).toContain(words);
+  } finally {await rm(base,{recursive:true,force:true});}
+});
 
 it('runs card scripts only on explicit card-test and reports missing JSON output', async () => {
   const base = await mkdtemp(join(tmpdir(), 'vonvon-card-test-json-'));

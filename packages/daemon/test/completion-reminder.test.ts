@@ -10,6 +10,7 @@ import {
 } from '../src/bot/handle-message';
 import { reminderButtonOffered, sendCompletionReminderReply } from '../src/bot/completion-reminder';
 import type { AppConfig } from '../src/config/schema';
+import { getCompletionReminderConfig } from '../src/config/schema';
 import { log } from '../src/core/logger';
 
 function dedupe() {
@@ -38,6 +39,20 @@ function config(mode?: 'manual' | 'long' | 'failures' | 'always'): AppConfig {
 }
 
 describe('completion reminder post', () => {
+  it('renders a local text template while preserving native mention and mandatory card-update failure advice',()=>{
+    const template='{{icon}} {{task}} {{status}}\n{{durationLabel}} {{elapsed}}';
+    const success=JSON.parse(buildCompletionReminderContent({requesterOpenId:'ou_requester',outcome:'done',elapsedMs:2_000,summary:'整理资料',cardUpdated:true,template}));
+    expect(success.zh_cn.content[0]).toEqual([{tag:'at',user_id:'ou_requester'},{tag:'text',text:' ✅ 整理资料 已完成'}]);
+    expect(success.zh_cn.content[1][0].text).toBe('用时 2 秒');
+    const failure=JSON.parse(buildCompletionReminderContent({requesterOpenId:'ou_requester',outcome:'error',elapsedMs:2_000,summary:'整理资料',cardUpdated:false,template}));
+    expect(failure.zh_cn.content[2][0].text).toBe('最终卡片更新失败，请查看上方流式内容或重新发起任务。');
+  });
+  it('uses fixed default for malformed stored templates',()=>{
+    const cfg=config('always');cfg.preferences!.completionReminder!.template='{{unknown}}';
+    expect(getCompletionReminderConfig(cfg).template).toBeUndefined();
+    const post=JSON.parse(buildCompletionReminderContent({requesterOpenId:'ou_1',outcome:'idle_timeout',elapsedMs:1_000,cardUpdated:true,template:getCompletionReminderConfig(cfg).template}));
+    expect(post.zh_cn.content[0][1].text).toContain('响应超时 · 等待 1 秒');
+  });
   it('uses a native structured at node and a clean success summary', () => {
     const content = JSON.parse(
       buildCompletionReminderContent({

@@ -6,6 +6,14 @@ it('checks the default configuration across native running and terminal render s
   const config=defaultCardDisplay();
   expect(await assertValidCardDisplay(config)).toEqual(config);
 });
+it('checks custom reminder labels in both clickable and confirmed states before saving',async()=>{
+  const config=defaultCardDisplay();
+  const reminder=config.blocks.find(block=>block.kind==='reminder')!;
+  reminder.template='📣 做完叫我';reminder.requestedTemplate='✅ 收到，完成后会通知你';
+  expect(await assertValidCardDisplay(config)).toEqual(config);
+  reminder.requestedTemplate='{{unknown}}';
+  await expect(assertValidCardDisplay(config)).rejects.toThrow('requestedTemplate');
+});
 it('rejects syntax errors and missing variables before persistence',async()=>{
   const config=defaultCardDisplay();
   config.blocks.push({...config.blocks[0]!,id:'branch',kind:'custom',name:'Git',source:'script',script:'const = ;',sample:'{"branch":"dev"}',template:'{{branch}}',contextRules:undefined});

@@ -164,7 +164,7 @@ import {
   type RunCardState,
 } from '../card/run-card';
 import { runCardDisplayScripts } from '../card/card-display-scripts';
-import { CARD_DISPLAY_STOP_EID } from '@vonvon/protocol';
+import { CARD_DISPLAY_STOP_EID, CARD_DISPLAY_REMINDER_EID } from '@vonvon/protocol';
 import { buildGoalDoneCard } from '../card/goal-card';
 import { RunCardStream } from '../card/run-card-stream';
 import { buildCleanCard } from '../card/markdown-render';
@@ -252,6 +252,8 @@ import {
   getProjectByChatId,
   getProjectByChatIdSync,
   getProjectByName,
+  cardDisplayPresentationDefaults,
+  materializeCardDisplaySettings,
   listProjects,
   noMentionOf,
   rememberDmChat,
@@ -846,7 +848,7 @@ async function refreshRunCardDisplayValues(rc:RunCardState,cwd:string):Promise<v
 /** Element IDs removed from an orphan CardKit entity after a stale run action. */
 export function deadRunCardElementIds(actionId:string,extraElementId?:string):string[] {
   const movedStop=actionId===RC.stop||actionId===RC.endGoal||actionId===RC.remind;
-  return [CONTROLS_EID,...(movedStop?[CARD_DISPLAY_STOP_EID]:[]),...(extraElementId?[extraElementId]:[])];
+  return [CONTROLS_EID,...(movedStop?[CARD_DISPLAY_STOP_EID,CARD_DISPLAY_REMINDER_EID]:[]),...(extraElementId?[extraElementId]:[])];
 }
 
 interface AttentionAcceptance {
@@ -6425,14 +6427,15 @@ export function createOrchestrator(
         return renderProjectList();
       });
     })
-    // Each setting is a row of option buttons; the click's `v` is the chosen value.
-    .on(DM.setTools, ({ evt, value }) => {
-      applyPref(evt, (p) => (p.showToolCalls = value.v === 'on'));
+    // Already-sent cards may still contain these Bot-wide controls. Explain the
+    // per-chat route without writing a preference that no longer drives cards.
+    .on(DM.setTools, ({ evt }) => {
+      if (!dmAdmin(evt.operator?.openId)) return;
+      void patch(evt, renderSettings('消息卡现在按群聊和私聊分别设置。请在桌面端打开对应会话的「消息卡展示」，或在私聊告诉我想怎样显示。'));
     })
-    .on(DM.setShowModel, ({ evt, value }) => {
-      applyPref(evt, (p) => {
-        p.showModel = value.v === 'running' ? 'running' : value.v === 'always' ? 'always' : 'off';
-      });
+    .on(DM.setShowModel, ({ evt }) => {
+      if (!dmAdmin(evt.operator?.openId)) return;
+      void patch(evt, renderSettings('消息卡现在按群聊和私聊分别设置。请在桌面端打开对应会话的「消息卡展示」，或在私聊告诉我想怎样显示。'));
     })
     .on(DM.setWatchdog, ({ evt, value }) => {
       const n = Number(value.v);
@@ -10313,6 +10316,9 @@ export function createOrchestrator(
       if (result.updated.length || result.deferred.length) log.info('settings', 'group-settings-materialized', { updated: result.updated.length, deferred: result.deferred.length });
       // The host prepares old/stopped Bots too. This also covers new registrations and a standalone Bot process.
       if (options?.bot) dmReady = trackTask(ensureDmProject({ bot: options.bot, projectsRootDir: cfg.preferences?.projectsRootDir, defaults: async () => storedDmDefaults(cfg.preferences) }));
+      await dmReady;
+      const cardDisplayRows=await materializeCardDisplaySettings({legacy:cfg.preferences?.cardDisplay,defaults:cardDisplayPresentationDefaults(cfg)});
+      if (cardDisplayRows) log.info('card','display-settings-materialized',{count:cardDisplayRows});
       // An unreadable file keeps the bot from starting; a corrupt one is moved aside and the store starts empty.
       await loadStore();
     },
