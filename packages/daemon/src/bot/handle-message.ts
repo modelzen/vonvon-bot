@@ -144,7 +144,6 @@ import {
   modelIdCode,
   reasoningEffortLabel,
   RES,
-  SMART_NOTICE,
   type HelpScope,
   type ModelCardState,
   type ResumeCardState,
@@ -3523,7 +3522,7 @@ export function createOrchestrator(
     return true;
   }
 
-  /** A line of the bot's own in the group's main area, kept for the main session's context like {@link SMART_NOTICE}. */
+  /** A line of the bot's own in the group's main area, kept for the main session's context. */
   async function sayInMain(chatId: string, input: { text: string } | { post: object }, text: string): Promise<void> {
     const sent = await channel.send(chatId, input);
     recent.addOwn(chatId, chatId, { id: sent.messageId, at: Date.now(), text });
@@ -7033,8 +7032,6 @@ export function createOrchestrator(
   }
 
   const projectMutations = new Set<string>();
-  /** Groups being told 智能's sentence after a switch (s25c): their settings wait for it, their messages do not. */
-  const smartNotices = new Set<string>();
   const runIds = new WeakMap<ActiveState, { run: AgentRun | undefined; id: string }>();
   let createChain: Promise<unknown> = Promise.resolve();
   /** Aborts every Feishu call of a creation still running when the bridge stops, so the drain does not wait out its budget. */
@@ -7143,13 +7140,11 @@ export function createOrchestrator(
     }
     if (request.action === 'editProject' || request.action === 'removeProject') {
       if (projectRevision(project) !== request.expectedRevision) throw new AdminWriteError('项目设置已改变，请刷新后重试');
-      if (smartNotices.has(project.chatId)) throw new AdminWriteError('正在群里说一句，请稍后再改');
       if (projectMutations.has(project.chatId) || runningIn(project.chatId) || intakeChats.has(project.chatId) || pendingTopics.has(project.chatId)) {
         holdFiring(project.chatId, FIRING_HOLD_MS); // no scheduled run starts before the retry
         throw new AdminWriteError('Agent 正在执行任务，请结束后修改项目');
       }
       let edited: { ok: true; project: ReturnType<typeof projectView> } | undefined;
-      let announce = false;
       projectMutations.add(project.chatId);
       try {
         const current = await getProjectByName(project.name);
@@ -7236,22 +7231,10 @@ export function createOrchestrator(
           const thread = sessions.get(rec.threadId); sessions.delete(rec.threadId);
           if (thread) await thread.close().catch(error => log.fail('desktop', error, { phase: 'project-session-close' }));
         }
-        announce = sessionModeOf(project) !== 'smart' && sessionModeOf(updated) === 'smart' && updated.enabled !== false;
         edited = { ok: true, project: projectView(updated) };
       } finally { projectMutations.delete(project.chatId); }
-      if (!announce) return edited;
-      // 选了智能 tells the group (3.4), once the group is unlocked so a message meanwhile is not turned away (s25c).
-      // Another edit waits until it is said, so it never lands in a group switched away meanwhile (审查低).
-      // Saved already: a failure is a warning, not retried and not made up on a later save.
-      smartNotices.add(project.chatId);
-      try {
-        const sent = await channel.send(project.chatId, { text: SMART_NOTICE });
-        recent.addOwn(project.chatId, project.chatId, { id: sent.messageId, at: Date.now(), text: SMART_NOTICE });
-        return edited;
-      } catch (error) {
-        log.fail('desktop', error, { phase: 'smart-notice' });
-        return { ...edited, warning: `已改成智能开话题，但没能在群里说一句：${error instanceof Error ? error.message : String(error)}` };
-      } finally { smartNotices.delete(project.chatId); }
+      // Switching to 智能 says nothing in the group (owner 2026-11-08): the bot just starts reading.
+      return edited;
     }
     if (projectMutations.has(project.chatId) || project.enabled === false) throw new AdminWriteError('项目已停用或正在修改');
     const perm = turnSession(project.chatId, project);
