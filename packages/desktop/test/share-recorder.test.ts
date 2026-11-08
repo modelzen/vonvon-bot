@@ -235,6 +235,21 @@ describe('share recorder', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('hands over no GIF when the dialog closes or the app quits while a pass that ran out of time is closing', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      for (const [code, stop] of [['cancelled', (recorder: ShareRecorder) => void recorder.cancel()], ['disposed', (recorder: ShareRecorder) => recorder.dispose()]] as const) {
+        const h = harness({ fits: true, readyPasses: 1 });
+        const recording = h.recorder.record({ bots: [] });
+        await vi.waitFor(() => expect(h.windows).toHaveLength(2));
+        vi.advanceTimersByTime(90_000);
+        stop(h.recorder);
+        await expect(recording).rejects.toMatchObject({ code });
+        await vi.waitFor(() => expect(h.windows.every(window => window.destroyed)).toBe(true));
+      }
+    } finally { vi.useRealTimers(); }
+  });
+
   it('starts no smaller pass it has no time for: one takes about as long as the last', async () => {
     const now = Date.now();
     let spent = 0;

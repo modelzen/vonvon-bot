@@ -205,9 +205,12 @@ export class ShareRecorder {
     if (json === undefined || json.length > MODEL_MAX) throw new ShareError('invalid_model');
     const stop = deferred<never>(), ended = deferred<void>();
     // A pass that was already ending when the recording stopped may still finish. Cancelled or quitting, its result is
-    // dropped; out of time, the GIF a pass made that fits is kept.
-    let stopped: ShareError | undefined;
-    const running = this.running = { stop: (error: ShareError) => { stopped ??= error; stop.reject(error); }, ended: ended.promise };
+    // dropped, even after running out of time (Codex review 383); only out of time, the GIF a pass made that fits is kept.
+    let stopped: ShareError | undefined, dropped: ShareError | undefined;
+    const running = this.running = {
+      stop: (error: ShareError) => { stopped ??= error; if (error.code !== 'timeout') dropped ??= error; stop.reject(error); },
+      ended: ended.promise,
+    };
     const timer = setTimeout(() => running.stop(new ShareError('timeout')), this.deps.timeoutMs ?? TIMEOUT_MS);
     const deadline = Date.now() + (this.deps.timeoutMs ?? TIMEOUT_MS);
     let reported = 0;
@@ -239,6 +242,7 @@ export class ShareRecorder {
         if (deadline - Date.now() < Math.max(20_000, Date.now() - started)) break;
         scale = scale > 1.5 ? 1.5 : scale > 1.25 ? 1.25 : scale > MIN_SCALE ? MIN_SCALE : 0;
       }
+      if (dropped) throw dropped;
       if (stopped && (stopped.code !== 'timeout' || !best)) throw stopped;
       if (!best) throw new ShareError('too_large');
       const gif = Buffer.from(best.variant.gif.buffer, best.variant.gif.byteOffset, best.variant.gif.byteLength);
