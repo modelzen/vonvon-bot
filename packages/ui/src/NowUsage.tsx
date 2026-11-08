@@ -26,12 +26,16 @@ export async function readNowProviders(client: ReaderClient, publish: (update: P
       if (login.state !== 'signedIn' && login.state !== 'notRequired' && !configuredApi) throw new Error('账户状态暂无法确认。');
       const account = login.account ?? {kind: 'unknown' as const};
       const provider: NowProvider = {id: entry.id, name: entry.displayName, account, ...(configuredApi ? {problem: '账户状态暂无法确认。'} : {})};
-      const readsUsage = (entry.id === 'codex-appserver' || entry.id === 'claude-agent') && account.kind !== 'api';
+      // Claude's stats come from this device's transcripts, so an API account reads them too; the quota column then
+      // says there is no subscription quota. An older daemon refuses that read with its own reason.
+      const claude = entry.id === 'claude-agent';
+      const readsUsage = claude || (entry.id === 'codex-appserver' && account.kind !== 'api');
       publish({kind: 'provider', provider: {...provider, loading: readsUsage}});
       if (!readsUsage) return;
       try {
-        const data = await readUsage(request => client.collaboration(request), false, entry.id === 'claude-agent' ? 'claude-agent' : undefined);
-        publish({kind: 'provider', provider: {...provider, data}});
+        const data = await readUsage(request => client.collaboration(request), false, claude ? 'claude-agent' : undefined);
+        // An unverifiable API login does not make the stats stale.
+        publish({kind: 'provider', provider: {id: entry.id, name: entry.displayName, account, data}});
       } catch (error) {
         publish({kind: 'provider', provider: {...provider, problem: error instanceof Error ? error.message : '暂无法刷新额度与用量。'}});
       }
