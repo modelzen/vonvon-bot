@@ -62,7 +62,7 @@ export type ShareShell = {
   bytes(id: string): Promise<Uint8Array>;
   discard(id: string): Promise<void>;
   /** Stops the recording in progress, if any (its `record` rejects); resolves once its window and worker are gone. */
-  cancel?(): Promise<void>;
+  cancel(): Promise<void>;
 };
 
 type ShareRect = { x: number; y: number; width: number; height: number };

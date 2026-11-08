@@ -115,6 +115,24 @@ describe('Claude Code panel', () => {
     expect(settings).toContain('已用 0%');
     expect(settings).not.toContain('暂不可用');
   });
+  it('takes more whole weeks only when asked, the app keeping 13, and builds up over all of them', () => {
+    expect(usageDays(buckets, now)).toHaveLength(91);
+    const wide = usageDays(buckets, now, 'tokens', 26);
+    expect(wide).toHaveLength(182);
+    // From a Monday, today (a Sunday) last; the weeks before the account's history are unknown, as its gaps are.
+    expect(new Date(`${wide[0]!.date}T00:00:00Z`).getUTCDay()).toBe(1);
+    expect(wide.at(-1)!.date).toBe(day(0));
+    expect(wide.filter(cell => cell.level < 0)).toHaveLength(91);
+    const html = renderToStaticMarkup(<CodexUsagePanel data={codex} sections={{quota: false}} weeks={26}/>);
+    expect(html.match(/data-future=/g)).toHaveLength(182);
+    expect(html).toContain('每日 Token · 最近 26 周');
+    expect(html).not.toContain('usage-board-quota');
+    // Half of 26 weeks shows only the older 13, which have no history: all 91 million of the recent days are hidden.
+    expect(renderToStaticMarkup(<CodexUsagePanel data={codex} sections={{quota: false}} weeks={26} progress={0.5}/>)).toContain('1.66<small>亿</small>');
+    const claudeWide = renderToStaticMarkup(<ClaudeUsagePanel data={claude} sections={{quota: false}} weeks={26}/>);
+    expect(claudeWide.match(/data-future=/g)).toHaveLength(182);
+    expect(claudeWide).toContain('每日消息 · 最近 26 周');
+  });
   it('grades days by the p25/p50/p75 of active days and counts a day without messages as zero', () => {
     const graded = usageDays([1, 2, 3, 4, 5, 6, 7, 8].map((messages, back) => ({date: day(back + 1), tokens: 0, messages})), now, 'messages');
     expect([1, 3, 5, 7].map(messages => graded.find(cell => cell.date === day(messages))?.level)).toEqual([1, 2, 3, 4]);

@@ -4,12 +4,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SHARE_CARD_WIDTH, SHARE_GIF_MAX_BYTES, SHARE_GIF_MAX_SIDE } from '@vonvon/protocol';
 
 vi.mock('electron', () => ({ BrowserWindow: class {}, ClipboardItem: class {}, clipboard: {}, ipcMain: {}, session: {}, shell: {} }));
 
 import { shareCardChannels, type ShareTick } from '../src/share-contract.js';
 import { ShareGifEncoder } from '../src/share-gif.js';
-import { ShareError, ShareRecorder, type ShareEncoder } from '../src/share-recorder.js';
+import { ShareError, ShareRecorder, shareScale, type ShareEncoder } from '../src/share-recorder.js';
 import { decodeGif } from './helpers/gif-decode.js';
 
 const UI = 'file:///app/ui/index.html';
@@ -25,6 +26,8 @@ type PageOptions = {
   build?: { delay: number; ms: number };
   /** Called as a pass closes its encoder, which takes a few milliseconds to stop, as a worker does. */
   onClose?: () => void;
+  /** Every encoding comes out over Feishu's 10 MB, so the recorder tries smaller passes. */
+  oversize?: boolean;
 };
 
 let folder = '';
@@ -43,6 +46,7 @@ function harness(page: PageOptions = {}, timeoutMs?: number) {
     readonly mainFrame = { url: '' };
     destroyed = false;
     size: [number, number] = [0, 0];
+    scale = 2;
     time = 0;
     marker = 0;
     ticks = 0;
@@ -81,11 +85,11 @@ function harness(page: PageOptions = {}, timeoutMs?: number) {
       if (page.ready === 'never') return;
       order.push(`ready ${JSON.stringify(await handlers.get(shareCardChannels.ready)!(event, page.ready === 'invalid' ? { width: -1 } : page.layout ?? LAYOUT))}`);
     }
-    /** A frame at scale 2: the card's shade follows the clock for half a second (or `build`), then holds; the marker at
-     * the corner. */
+    /** A frame at its window's scale: the card's shade follows the clock for half a second (or `build`), then holds; the
+     * marker at the corner. */
     paint(): void {
       if (this.size[0] === 0) return;
-      const width = this.size[0] * 2, height = this.size[1] * 2;
+      const width = Math.floor(this.size[0] * this.scale), height = Math.floor(this.size[1] * this.scale);
       const bitmap = Buffer.alloc(width * height * 4);
       const build = page.build, x = build && Math.min(1, Math.max(0, (this.time - build.delay) / build.ms));
       const shade = x === undefined ? Math.min(250, Math.round(this.time / 50) * 25) : Math.round(250 * (1 - (1 - x) ** 3));
@@ -98,7 +102,7 @@ function harness(page: PageOptions = {}, timeoutMs?: number) {
   class FakeWindow {
     readonly webContents = new FakeContents();
     destroyed = false;
-    constructor(readonly options: { width: number; height: number; scale: number }) {}
+    constructor(readonly options: { width: number; height: number; scale: number }) { this.webContents.scale = options.scale; }
     readonly setContentSize = vi.fn((width: number, height: number) => { order.push(`size ${width}x${height}`); this.webContents.size = [width, height]; });
     readonly isDestroyed = (): boolean => this.destroyed;
     /** As Electron does, the page goes a moment after the window. */
@@ -113,7 +117,7 @@ function harness(page: PageOptions = {}, timeoutMs?: number) {
     handle: vi.fn((channel: string, handler: Handler) => { handlers.set(channel, handler); }),
     removeHandler: vi.fn((channel: string) => { handlers.delete(channel); }),
   };
-  const encoders: { closed: boolean }[] = [];
+  const encoders: { closed: boolean; width: number; height: number }[] = [];
   const clipboard = { write: vi.fn(async (_items: unknown[]) => {}) };
   const reveal = vi.fn((_path: string) => {});
   const recorder = new ShareRecorder({
@@ -121,14 +125,15 @@ function harness(page: PageOptions = {}, timeoutMs?: number) {
     openWindow: options => { const window = new FakeWindow(options); windows.push(window); order.push(`open ${JSON.stringify(options)}`); return window; },
     encoder: (width, height): ShareEncoder => {
       const encoder = new ShareGifEncoder(width, height);
-      const state = { closed: false };
+      const state = { closed: false, width, height };
       encoders.push(state);
       return {
-        frame: async (bgra, time) => encoder.add(new Uint8Array(bgra), time), finish: async (interval, hold) => encoder.finish(interval, hold),
+        frame: async (bgra, time) => encoder.add(new Uint8Array(bgra), time),
+        finish: async (interval, hold) => encoder.finish(interval, hold).map(variant => page.oversize ? { ...variant, gif: new Uint8Array(SHARE_GIF_MAX_BYTES + 1) } : variant),
         close: () => { page.onClose?.(); return new Promise(resolve => setTimeout(() => { state.closed = true; resolve(); }, 5)); },
       };
     },
-    cardWidth: () => 700, folder,
+    folder,
     clipboard: { platform: 'darwin', clipboard, ClipboardItem: class { constructor(readonly entries: object) {} } as never, powershell: async () => {} },
     reveal, now: () => new Date(2026, 10, 8, 17, 39, 5), timeoutMs,
   });
@@ -143,10 +148,11 @@ describe('share recorder', () => {
     const recording = await h.recorder.record(model, fraction => progress.push(fraction));
     const [window] = h.windows;
     expect(h.windows).toHaveLength(1);
-    expect(window!.options).toEqual({ width: 700, height: 900, scale: 2 });
+    // At the card's own width from the start, so it is laid out once.
+    expect(window!.options).toEqual({ width: SHARE_CARD_WIDTH, height: 900, scale: 2 });
     expect(window!.webContents.model).toEqual(model);
     expect(h.order.slice(0, 9)).toEqual([
-      'open {"width":700,"height":900,"scale":2}', `load ${UI}#share-card`, 'size 40x38', 'attach',
+      `open {"width":${SHARE_CARD_WIDTH},"height":900,"scale":2}`, `load ${UI}#share-card`, 'size 40x38', 'attach',
       'Emulation.setEmulatedMedia {"features":[{"name":"prefers-reduced-motion","value":"no-preference"}]}', 'Animation.enable',
       'begin', 'Animation.setPlaybackRate {"playbackRate":0}', 'ready {"ok":true}',
     ]);
@@ -186,6 +192,41 @@ describe('share recorder', () => {
       // The build-up itself is in the GIF, from the still start.
       expect(shade(frames[1]!.rgba)).toBeLessThanOrEqual(8);
       expect(frames.length).toBeGreaterThan(10);
+    }
+  });
+
+  it('keeps both sides of the GIF within Feishu\'s 2000 px, starting over smaller for a tall card', async () => {
+    const tall = { ...LAYOUT, height: 1200 };
+    const h = harness({ layout: tall });
+    const recording = await h.recorder.record({ bots: [] });
+    // 2400 px tall at 2x: that pass stops at the layout, and the card is drawn again at 1.5x.
+    expect(h.windows.map(window => window.options.scale)).toEqual([2, 1.5]);
+    expect(h.windows.every(window => window.destroyed)).toBe(true);
+    expect(recording).toMatchObject({ width: 60, height: 1800 });
+    expect(decodeGif(await h.recorder.bytes(recording.id))).toMatchObject({ width: 60, height: 1800 });
+  });
+
+  it('keeps every smaller pass within 2000 px too, down to the last', async () => {
+    const h = harness({ layout: { ...LAYOUT, height: 1200 }, oversize: true });
+    await expect(h.recorder.record({ bots: [] })).rejects.toMatchObject({ code: 'too_large' });
+    expect(h.windows.map(window => window.options.scale)).toEqual([2, 1.5, 1.25, 1]);
+    expect(h.encoders.map(({ width, height }) => [width, height])).toEqual([[60, 1800], [50, 1500], [40, 1200]]);
+  });
+
+  it('picks the largest quarter scale with neither side over 2000 px, below 1x only when nothing else fits', () => {
+    expect(shareScale(904, 900, 2)).toBe(2);
+    expect(shareScale(904, 1050, 2)).toBe(1.75);
+    expect(shareScale(904, 1810, 2)).toBe(1);
+    expect(shareScale(904, 1810, 1.5)).toBe(1);
+    expect(shareScale(904, 2400, 2)).toBe(0.75);
+    expect(shareScale(904, 8100, 2)).toBe(0);
+    // Every pass the recorder may try, from 2x down its fallbacks, fits.
+    for (const height of [400, 999, 1000, 1001, 1333, 1600, 1999, 2000, 2001, 3000, 7999]) {
+      for (let scale = shareScale(SHARE_CARD_WIDTH, height, 2); scale > 0; scale = shareScale(SHARE_CARD_WIDTH, height, scale > 1.5 ? 1.5 : scale > 1.25 ? 1.25 : scale > 1 ? 1 : 0)) {
+        expect(Math.floor(SHARE_CARD_WIDTH * scale)).toBeLessThanOrEqual(SHARE_GIF_MAX_SIDE);
+        expect(Math.floor(height * scale)).toBeLessThanOrEqual(SHARE_GIF_MAX_SIDE);
+        expect(scale * 4 % 1).toBe(0);
+      }
     }
   });
 
@@ -250,7 +291,7 @@ describe('share recorder', () => {
     await expect(first).rejects.toMatchObject({ code: 'cancelled' });
     await cancelled;
     expect(h.windows[0]!.webContents.destroyed).toBe(true);
-    expect(h.encoders).toEqual([{ closed: true }]);
+    expect(h.encoders).toMatchObject([{ closed: true }]);
     // Reopened at once: not busy.
     const second = await h.recorder.record({ bots: [] });
     expect(h.windows).toHaveLength(2);
@@ -264,7 +305,7 @@ describe('share recorder', () => {
     const h = harness({ onClose: () => { cancelled ??= h.recorder.cancel(); } });
     await expect(h.recorder.record({ bots: [] })).rejects.toMatchObject({ code: 'cancelled' });
     await cancelled;
-    expect(h.encoders).toEqual([{ closed: true }]);
+    expect(h.encoders).toMatchObject([{ closed: true }]);
     await expect(h.recorder.record({ bots: [] })).resolves.toMatchObject({ width: 80, height: 60 });
   });
 

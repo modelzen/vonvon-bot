@@ -95,7 +95,8 @@ function shell() {
     return new Promise<ShareRecording>((resolve, reject) => pending.push({id, resolve: () => resolve(recording(id)), reject}));
   });
   const discard = vi.fn(async (_id: string) => undefined);
-  return {record, discard, pending};
+  const cancel = vi.fn(async () => undefined);
+  return {record, discard, cancel, pending};
 }
 const settle = () => new Promise(done => setTimeout(done, 0));
 
@@ -127,6 +128,27 @@ describe('one recording per set of options', () => {
     await settle();
     expect(fake.discard).toHaveBeenLastCalledWith('r2');
     expect(recordings.has('k2')).toBe(false);
+  });
+  it('stops a recording still running when the dialog closes, and only discards one that is done', async () => {
+    const fake = shell(), recordings = shareRecordings(fake);
+    const running = recordings.get('k1', () => ({}));
+    recordings.close();
+    expect(fake.cancel).toHaveBeenCalledOnce();
+    expect(recordings.holds(running)).toBe(false);
+    // Cancelled, it fails: nothing to discard.
+    fake.pending[0]!.reject(new Error('已取消生成分享图。'));
+    await expect(running).rejects.toThrow('已取消');
+    await settle();
+    expect(fake.discard).not.toHaveBeenCalled();
+    const done = recordings.get('k1', () => ({}));
+    fake.pending[1]!.resolve();
+    await done;
+    recordings.close();
+    await settle();
+    expect(fake.cancel).toHaveBeenCalledOnce();
+    expect(fake.discard).toHaveBeenCalledExactlyOnceWith('r2');
+    recordings.close();
+    expect(fake.cancel).toHaveBeenCalledOnce();
   });
   it('records again after a failed recording', async () => {
     const fake = shell(), recordings = shareRecordings(fake);

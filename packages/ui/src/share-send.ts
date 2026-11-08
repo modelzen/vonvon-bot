@@ -59,8 +59,8 @@ export function rememberShareChoice(storage: Pick<Storage, 'setItem'>, device: s
 }
 
 /** One recording for one set of options: 复制 and 发到飞书 share it, other options discard it, and so does closing. */
-export function shareRecordings(shell: Pick<ShareShell, 'record' | 'discard'>) {
-  let current: {key: string; recording: Promise<ShareRecording>} | undefined;
+export function shareRecordings(shell: Pick<ShareShell, 'record' | 'discard' | 'cancel'>) {
+  let current: {key: string; recording: Promise<ShareRecording>; running: boolean} | undefined;
   function drop() {
     const old = current;
     current = undefined;
@@ -71,15 +71,20 @@ export function shareRecordings(shell: Pick<ShareShell, 'record' | 'discard'>) {
     get(key: string, model: () => unknown, onProgress?: (fraction: number) => void): Promise<ShareRecording> {
       if (current?.key === key) return current.recording;
       drop();
-      const entry = {key, recording: shell.record(model(), onProgress)};
+      const entry = {key, recording: shell.record(model(), onProgress), running: true};
       current = entry;
-      entry.recording.catch(() => {if (current === entry) current = undefined;});
+      entry.recording.then(() => {entry.running = false;}, () => {entry.running = false; if (current === entry) current = undefined;});
       return entry.recording;
     },
     has: (key: string) => current?.key === key,
     /** Whether `recording` is still the one kept: once dropped, it is only discarded. */
     holds: (recording: Promise<ShareRecording>) => current?.recording === recording,
     drop,
+    /** The dialog closed: a recording still running stops, its offscreen window and encoder closed; one done is discarded. */
+    close() {
+      if (current?.running) void shell.cancel().catch(() => undefined);
+      drop();
+    },
   };
 }
 
