@@ -51,7 +51,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -89,7 +89,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -279,7 +279,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -333,7 +333,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -357,7 +357,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -376,7 +376,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -400,7 +400,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -562,7 +562,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -586,7 +586,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -597,7 +597,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -611,7 +611,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -635,7 +635,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -646,7 +646,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -657,7 +657,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "小队正在翻记录、核数字，我先把周报串起来。",
+          "content": "我请两位伙伴一起梳理，给你一份 Vonvon Bot 的简明介绍。",
           "text_size": "normal"
         },
         {
@@ -799,7 +799,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -823,7 +823,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -834,7 +834,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -848,7 +848,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -872,7 +872,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -883,7 +883,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -893,7 +893,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
         },
         {
           "tag": "markdown",
-          "content": "小队正在翻记录、核数字，我先把周报串起来。",
+          "content": "我请两位伙伴一起梳理，给你一份 Vonvon Bot 的简明介绍。",
           "text_size": "normal"
         }
       ],
@@ -948,7 +948,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -986,7 +986,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -1176,7 +1176,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -1230,7 +1230,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -1254,7 +1254,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -1273,7 +1273,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -1297,7 +1297,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -1468,7 +1468,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -1502,7 +1502,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -1522,7 +1522,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -1546,7 +1546,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -1557,7 +1557,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -1571,7 +1571,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -1595,7 +1595,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -1606,7 +1606,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -1617,7 +1617,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "小队正在翻记录、核数字，我先把周报串起来。",
+          "content": "我请两位伙伴一起梳理，给你一份 Vonvon Bot 的简明介绍。",
           "text_size": "normal"
         },
         {
@@ -1768,7 +1768,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -1802,7 +1802,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -1822,7 +1822,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -1846,7 +1846,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -1857,7 +1857,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -1871,7 +1871,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -1895,7 +1895,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -1906,7 +1906,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -1916,7 +1916,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
         },
         {
           "tag": "markdown",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。\n\n你负责点发送，也负责准时下班。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\nVonvon Bot 想帮你把常用流程交给 AI，从反复操作里腾出时间，去做更想做的事。",
           "text_size": "normal"
         }
       ],
@@ -1980,7 +1980,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -2014,7 +2014,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -2034,7 +2034,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -2058,7 +2058,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -2069,7 +2069,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -2083,7 +2083,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -2107,7 +2107,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -2118,7 +2118,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -2129,7 +2129,7 @@ export const streamingPreviewFrames: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。",
+          "content": "把 AI 同事请进飞书，",
           "text_size": "normal"
         },
         {
@@ -2290,7 +2290,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -2324,7 +2324,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -2344,7 +2344,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -2368,7 +2368,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -2379,7 +2379,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -2393,7 +2393,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -2417,7 +2417,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -2428,7 +2428,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -2439,7 +2439,7 @@ export const streamingPreviewFrames: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；",
+          "content": "把 AI 同事请进飞书，把时间留给自己。",
           "text_size": "normal"
         },
         {
@@ -2600,7 +2600,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -2634,7 +2634,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -2654,7 +2654,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -2678,7 +2678,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -2689,7 +2689,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -2703,7 +2703,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -2727,7 +2727,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -2738,7 +2738,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -2749,7 +2749,7 @@ export const streamingPreviewFrames: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，",
           "text_size": "normal"
         },
         {
@@ -2910,7 +2910,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -2944,7 +2944,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -2964,7 +2964,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -2988,7 +2988,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -2999,7 +2999,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -3013,7 +3013,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -3037,7 +3037,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -3048,7 +3048,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -3059,7 +3059,7 @@ export const streamingPreviewFrames: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。",
           "text_size": "normal"
         },
         {
@@ -3220,7 +3220,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -3254,7 +3254,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -3274,7 +3274,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -3298,7 +3298,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -3309,7 +3309,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -3323,7 +3323,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -3347,7 +3347,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -3358,7 +3358,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -3369,7 +3369,7 @@ export const streamingPreviewFrames: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，",
           "text_size": "normal"
         },
         {
@@ -3530,7 +3530,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -3564,7 +3564,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -3584,7 +3584,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -3608,7 +3608,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -3619,7 +3619,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -3633,7 +3633,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -3657,7 +3657,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -3668,7 +3668,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -3679,7 +3679,7 @@ export const streamingPreviewFrames: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。",
           "text_size": "normal"
         },
         {
@@ -3840,7 +3840,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -3874,7 +3874,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -3894,7 +3894,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -3918,7 +3918,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -3929,7 +3929,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -3943,7 +3943,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -3967,7 +3967,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -3978,7 +3978,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -3989,7 +3989,7 @@ export const streamingPreviewFrames: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。\n\n你负责点发送，",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\nVonvon Bot 想帮你把常用流程交给 AI，",
           "text_size": "normal"
         },
         {
@@ -4150,7 +4150,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -4184,7 +4184,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -4204,7 +4204,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -4228,7 +4228,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -4239,7 +4239,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -4253,7 +4253,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -4277,7 +4277,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -4288,7 +4288,7 @@ export const streamingPreviewFrames: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -4299,7 +4299,7 @@ export const streamingPreviewFrames: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。\n\n你负责点发送，也负责准时下班。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\nVonvon Bot 想帮你把常用流程交给 AI，从反复操作里腾出时间，去做更想做的事。",
           "text_size": "normal"
         },
         {
@@ -4454,7 +4454,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -4492,7 +4492,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -4659,7 +4659,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -4713,7 +4713,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -4737,7 +4737,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -4756,7 +4756,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -4780,7 +4780,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -4919,7 +4919,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -4943,7 +4943,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -4954,7 +4954,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -4968,7 +4968,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -4992,7 +4992,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -5003,7 +5003,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -5014,7 +5014,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "小队正在翻记录、核数字，我先把周报串起来。",
+          "content": "我请两位伙伴一起梳理，给你一份 Vonvon Bot 的简明介绍。",
           "text_size": "normal"
         },
         {
@@ -5133,7 +5133,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -5157,7 +5157,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -5168,7 +5168,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -5182,7 +5182,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -5206,7 +5206,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -5217,7 +5217,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -5227,7 +5227,7 @@ export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 
         },
         {
           "tag": "markdown",
-          "content": "小队正在翻记录、核数字，我先把周报串起来。",
+          "content": "我请两位伙伴一起梳理，给你一份 Vonvon Bot 的简明介绍。",
           "text_size": "normal"
         }
       ],
@@ -5282,7 +5282,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -5320,7 +5320,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -5487,7 +5487,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -5541,7 +5541,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -5565,7 +5565,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -5584,7 +5584,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -5608,7 +5608,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -5756,7 +5756,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -5790,7 +5790,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -5810,7 +5810,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -5834,7 +5834,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -5845,7 +5845,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -5859,7 +5859,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -5883,7 +5883,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -5894,7 +5894,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -5905,7 +5905,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "小队正在翻记录、核数字，我先把周报串起来。",
+          "content": "我请两位伙伴一起梳理，给你一份 Vonvon Bot 的简明介绍。",
           "text_size": "normal"
         },
         {
@@ -6033,7 +6033,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -6067,7 +6067,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -6087,7 +6087,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6111,7 +6111,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -6122,7 +6122,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -6136,7 +6136,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6160,7 +6160,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -6171,7 +6171,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -6181,7 +6181,7 @@ export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming
         },
         {
           "tag": "markdown",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。\n\n你负责点发送，也负责准时下班。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\nVonvon Bot 想帮你把常用流程交给 AI，从反复操作里腾出时间，去做更想做的事。",
           "text_size": "normal"
         }
       ],
@@ -6245,7 +6245,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -6279,7 +6279,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -6299,7 +6299,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6323,7 +6323,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -6334,7 +6334,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -6348,7 +6348,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6372,7 +6372,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -6383,7 +6383,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -6394,7 +6394,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。",
+          "content": "把 AI 同事请进飞书，",
           "text_size": "normal"
         },
         {
@@ -6532,7 +6532,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -6566,7 +6566,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -6586,7 +6586,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6610,7 +6610,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -6621,7 +6621,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -6635,7 +6635,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6659,7 +6659,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -6670,7 +6670,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -6681,7 +6681,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；",
+          "content": "把 AI 同事请进飞书，把时间留给自己。",
           "text_size": "normal"
         },
         {
@@ -6819,7 +6819,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -6853,7 +6853,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -6873,7 +6873,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6897,7 +6897,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -6908,7 +6908,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -6922,7 +6922,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -6946,7 +6946,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -6957,7 +6957,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -6968,7 +6968,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，",
           "text_size": "normal"
         },
         {
@@ -7106,7 +7106,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -7140,7 +7140,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -7160,7 +7160,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -7184,7 +7184,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -7195,7 +7195,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -7209,7 +7209,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -7233,7 +7233,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -7244,7 +7244,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -7255,7 +7255,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。",
           "text_size": "normal"
         },
         {
@@ -7393,7 +7393,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -7427,7 +7427,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -7447,7 +7447,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -7471,7 +7471,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -7482,7 +7482,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -7496,7 +7496,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -7520,7 +7520,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -7531,7 +7531,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -7542,7 +7542,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，",
           "text_size": "normal"
         },
         {
@@ -7680,7 +7680,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -7714,7 +7714,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -7734,7 +7734,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -7758,7 +7758,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -7769,7 +7769,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -7783,7 +7783,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -7807,7 +7807,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -7818,7 +7818,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -7829,7 +7829,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。",
           "text_size": "normal"
         },
         {
@@ -7967,7 +7967,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -8001,7 +8001,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -8021,7 +8021,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -8045,7 +8045,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -8056,7 +8056,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -8070,7 +8070,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -8094,7 +8094,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -8105,7 +8105,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -8116,7 +8116,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。\n\n你负责点发送，",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\nVonvon Bot 想帮你把常用流程交给 AI，",
           "text_size": "normal"
         },
         {
@@ -8254,7 +8254,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "content": "先梳理核心功能，再请伙伴核对实际能力和产品愿景。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -8288,7 +8288,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ndocs/product.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -8308,7 +8308,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "content": "<font color='grey'>功能侦察员：梳理核心功能</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -8332,7 +8332,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 整理本周记录 工具",
+              "content": "调用 查阅功能文档 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -8343,7 +8343,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n本周进展已整理。",
+              "content": "**结果**\n已整理飞书交互、本机执行和小队协作。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -8357,7 +8357,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "content": "<font color='grey'>体验观察员：提炼产品优势</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
               "text_size": "normal",
               "icon": {
                 "tag": "standard_icon",
@@ -8381,7 +8381,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "调用 逐项核对数字 工具",
+              "content": "调用 核对使用场景 工具",
               "icon": {
                 "tag": "standard_icon",
                 "token": "setting-inter_outlined",
@@ -8392,7 +8392,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
             },
             {
               "tag": "markdown",
-              "content": "**结果**\n需要确认的数字已标记。",
+              "content": "**结果**\n核心体验：在聊天里交代任务，随时查看进展。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             }
@@ -8403,7 +8403,7 @@ export const streamingPreviewFramesNonManual: CardJson[] = [
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。\n\n你负责点发送，也负责准时下班。",
+          "content": "把 AI 同事请进飞书，把时间留给自己。\n\n**一句话开工**：整理资料、写文案、改代码，用你电脑上的 Codex 或 Claude 来完成。\n**小队协作**：复杂任务交给子 Agent 分工，进展、工具调用都能看见。\n\nVonvon Bot 想帮你把常用流程交给 AI，从反复操作里腾出时间，去做更想做的事。",
           "text_size": "normal"
         },
         {

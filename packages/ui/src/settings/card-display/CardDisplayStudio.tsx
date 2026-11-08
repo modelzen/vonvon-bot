@@ -158,7 +158,18 @@ function ContextSettings({block, onChange}: {block: CardBlock; onChange: (rules:
 
 export function CardDisplayPage({initial, onDraftChange, onSave, onClose, saveError: error, onDiscardConflict, botName = 'Bot', groupName = '本群', showTools = true, showModel = 'running', completionMode = 'manual'}: Props & {initial?: CardDisplayDraft; onDraftChange?: (value: CardDisplayDraft) => void; onSave: (value: CardDisplayDraft) => Promise<boolean>; onClose: () => void; saveError?: string; onDiscardConflict?: () => void}) {
   const page = useRef<HTMLElement>(null);
-  useLayoutEffect(() => {page.current?.closest('#main-content')?.scrollTo({top:0,behavior:'instant'});}, []);
+  useLayoutEffect(() => {
+    const element = page.current;
+    const host = element?.closest<HTMLElement>('#main-content');
+    if (!element || !host) return;
+    host.scrollTo({top:0,behavior:'instant'});
+    const measure = () => element.style.setProperty('--cds-page-height', `${Math.max(320, host.getBoundingClientRect().bottom - element.getBoundingClientRect().top)}px`);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
   const makeInitial = () => {
     if (initial) return structuredClone(initial);
     const value = defaultCardDisplay();
@@ -179,9 +190,6 @@ export function CardDisplayPage({initial, onDraftChange, onSave, onClose, saveEr
   const suppressClick = useRef(false);
   const pointerCleanup = useRef<() => void>(() => {});
   const canvas = useRef<HTMLDivElement>(null);
-  const chat = useRef<HTMLDivElement>(null);
-  const hint = useRef<HTMLDivElement>(null);
-  const [previewFit, setPreviewFit] = useState({height: 0, scale: 1});
   const [notice, setNotice] = useState('');
   const [saving, setSaving] = useState(false);
   const templateInput = useRef<HTMLTextAreaElement>(null);
@@ -218,8 +226,6 @@ export function CardDisplayPage({initial, onDraftChange, onSave, onClose, saveEr
   const preview = useMemo(() => {
     const result = safeComposeCard(base, draft, frame, usage, layout, lastValidCard.current);
     if (!result.error) lastValidCard.current = result.card;
-    const tool = findComponent(result.card.body.elements, 'tools');
-    if (tool && frame === 'tool') tool.expanded = true;
     return result;
   }, [base, layout, draft, frame, streamIndex, usage, dragged]);
   const card = preview.card;
@@ -238,22 +244,6 @@ export function CardDisplayPage({initial, onDraftChange, onSave, onClose, saveEr
     const timer = setInterval(() => {if (!document.hidden && advanceAllowed.current) setTick(value => value + 1);}, 1400);
     return () => clearInterval(timer);
   }, [advancing]);
-  useLayoutEffect(() => {
-    const stage = canvas.current, content = chat.current, note = hint.current;
-    if (!stage || !content || !note || typeof ResizeObserver === 'undefined') return;
-    let animation = 0;
-    const measure = () => {
-      const style = getComputedStyle(stage);
-      const available = stage.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) - note.offsetHeight - 20;
-      const height = content.offsetHeight;
-      const scale = height > 0 && available > 0 ? Math.min(1, available / height) : 1;
-      setPreviewFit(current => current.height === height && Math.abs(current.scale - scale) < .001 ? current : {height, scale});
-    };
-    const observer = new ResizeObserver(() => {cancelAnimationFrame(animation); animation = requestAnimationFrame(measure);});
-    observer.observe(stage); observer.observe(content); observer.observe(note);
-    measure();
-    return () => {observer.disconnect(); cancelAnimationFrame(animation);};
-  }, []);
   useEffect(() => () => pointerCleanup.current(), []);
 
   function pauseAtPointer() {
@@ -357,11 +347,24 @@ export function CardDisplayPage({initial, onDraftChange, onSave, onClose, saveEr
     suppressClick.current = false;
     const startX = event.clientX, startY = event.clientY, pointerId = event.pointerId;
     let moved = false;
-    const cleanup = () => {window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', cancel); pointerCleanup.current = () => {};};
+    let pointerX = startX, pointerY = startY, scrollAnimation = 0;
+    const scrollAtEdge = () => {
+      const stage = canvas.current;
+      if (stage) {
+        const bounds = stage.getBoundingClientRect();
+        if (pointerX >= bounds.left && pointerX <= bounds.right && pointerY >= bounds.top - 40 && pointerY <= bounds.bottom + 40) {
+          const delta = pointerY < bounds.top + 40 ? -Math.min(14, (bounds.top + 40 - pointerY) / 3) : pointerY > bounds.bottom - 40 ? Math.min(14, (pointerY - bounds.bottom + 40) / 3) : 0;
+          if (delta) stage.scrollTop += delta;
+        }
+      }
+      scrollAnimation = requestAnimationFrame(scrollAtEdge);
+    };
+    const cleanup = () => {cancelAnimationFrame(scrollAnimation);window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', cancel); pointerCleanup.current = () => {};};
     const move = (next: PointerEvent) => {
       if (next.pointerId !== pointerId) return;
+      pointerX = next.clientX; pointerY = next.clientY;
       if (!moved && Math.hypot(next.clientX - startX, next.clientY - startY) < 6) return;
-      if (!moved) {moved = true; suppressClick.current = true; advanceAllowed.current = false; flushSync(() => {setDragged(id); setDragOrigin(origin);});}
+      if (!moved) {moved = true; suppressClick.current = true; advanceAllowed.current = false; flushSync(() => {setDragged(id); setDragOrigin(origin);});scrollAnimation = requestAnimationFrame(scrollAtEdge);}
       next.preventDefault();
     };
     const end = (next: PointerEvent) => {
@@ -387,22 +390,22 @@ export function CardDisplayPage({initial, onDraftChange, onSave, onClose, saveEr
   const component = block ? findComponent(card.body.elements, block.id) ?? exampleNode(block, block.kind === 'context' ? frame : undefined, usage) : undefined;
   const draggedBlock = draft.blocks.find(item => item.id === dragged);
   return <main className="cds-page" ref={page} aria-label="消息卡片设置">
-        <header className="cds-page-header"><Button size="sm" variant="ghost" icon={<ChevronLeft size={15}/>} disabled={saving} onClick={onClose}>返回设置</Button><div><h2>消息卡片</h2><p>{botName} · {groupName}</p></div></header>
+        <header className="cds-page-header"><Button size="sm" variant="ghost" icon={<ChevronLeft size={16}/>} aria-label="返回设置" title="返回设置" disabled={saving} onClick={onClose}/><h2>消息卡片</h2><p>{groupName} · {botName}</p></header>
         <div className="cds-page-content"><div className="card-display-studio"><div className="cds-workbench">
-          <aside className="cds-pool" aria-label="组件池" data-return-target={Boolean(dragged && dragOrigin === 'card')}><div className="cds-pool-title">组件</div><p>拖入卡片，拖回这里隐藏</p>
+          <aside className="cds-pool" aria-label="组件池" data-return-target={Boolean(dragged && dragOrigin === 'card')}><div className="cds-pool-title">卡片组件</div><p>拖到右侧，拖回这里隐藏</p>
             {dragged && dragOrigin === 'card' && <div className="cds-return-cue">放回这里即可隐藏</div>}
             <div className="cds-pool-items">{samples.map(({block: item, node}) => <button type="button" key={item.id} aria-label={item.kind === 'stop' ? '终止按钮' : undefined} onPointerDown={event => startPointerDrag(event,item.id,'pool')} className="cds-pool-item" disabled={(item.kind === 'stop' || item.kind === 'status') && draft.reply?.streamText === false} title={item.kind === 'stop' && draft.reply?.streamText === false ? '终止按钮在流式输出时使用' : undefined} data-shown={item.mode !== 'off'} data-pool-component={item.id} onClick={() => {if (!suppressClick.current) add(item.id);}}>
               {node && <FeishuContentSample node={node}/>}<span className="cds-pool-mark" aria-hidden="true">{item.mode !== 'off' ? <Check size={12}/> : <Plus size={13}/>}</span>
             </button>)}</div>
             <Button size="sm" variant="ghost" icon={<Plus size={14}/>} disabled={scriptCount >= 4} title={scriptCount >= 4 ? '最多四个脚本组件，删除一个后可继续添加' : undefined} onClick={addCustom}>自定义组件 {scriptCount}/4</Button>
-            <div className="cds-process-settings"><div className="cds-pool-title">回复行为</div><FormField label="输出方式"><SelectControl label="回复输出方式" value={draft.reply?.streamText === false ? 'final' : 'stream'} options={[{value: 'stream', label: '流式输出'}, {value: 'final', label: '完成后输出'}]} onChange={value => setReply('streamText', value === 'stream')}/></FormField>{draft.blocks.filter(item => item.kind === 'tools' || item.kind === 'thinking').map(item => <Toggle key={item.id} label={item.kind === 'tools' ? '显示工具调用' : '显示思考内容'} checked={item.mode !== 'off'} disabled={draft.reply?.streamText === false} onChange={event => patch(item.id, {mode: event.target.checked ? 'always' : 'off'})}/>)}<p className="cds-reminder-note">{manualReminder ? '完成提醒：手动。预览中的「完成后提醒我」是实际卡片按钮。' : '完成提醒由外层设置决定；当前策略下，卡片不显示手动提醒按钮。'}</p><details className="cds-reply-more"><summary>更多</summary><Toggle label="完成后收起过程" checked={draft.reply?.collapseAfterRun !== false} onChange={event => setReply('collapseAfterRun', event.target.checked)}/></details></div>
+            <div className="cds-process-settings"><div className="cds-pool-title">回复行为</div><FormField label="输出方式"><SelectControl label="回复输出方式" value={draft.reply?.streamText === false ? 'final' : 'stream'} options={[{value: 'stream', label: '流式输出'}, {value: 'final', label: '完成后输出'}]} onChange={value => setReply('streamText', value === 'stream')}/></FormField>{draft.blocks.filter(item => item.kind === 'tools' || item.kind === 'thinking').map(item => <Toggle key={item.id} label={item.kind === 'tools' ? '显示工具调用' : '显示思考内容'} checked={item.mode !== 'off'} disabled={draft.reply?.streamText === false} onChange={event => patch(item.id, {mode: event.target.checked ? 'always' : 'off'})}/>)}<details className="cds-reply-more"><summary>更多</summary><Toggle label="完成后收起过程" checked={draft.reply?.collapseAfterRun !== false} onChange={event => setReply('collapseAfterRun', event.target.checked)}/><p className="cds-reminder-note">{manualReminder ? '完成提醒：手动。预览中的「完成后提醒我」是实际卡片按钮。' : '完成提醒由外层设置决定；当前策略下，卡片不显示手动提醒按钮。'}</p></details></div>
           </aside>
           <div className="cds-stage" ref={canvas} data-advancing={advancing}>
-            <div className="cds-preview-fit" style={{height: previewFit.height ? previewFit.height * previewFit.scale : undefined}}><div className="cds-chat" ref={chat} style={{transform: `scale(${previewFit.scale})`}}><div className="cds-bot-label"><img src="./vonvon-logo.png" alt=""/><span>{botName}</span><span className="cds-feishu-bot-tag">机器人</span></div>
+            <div className="cds-chat"><div className="cds-bot-label"><img src="./vonvon-logo.png" alt=""/><span>{botName}</span><span className="cds-feishu-bot-tag">机器人</span></div>
               <div className="cds-preview-card" onPointerEnter={pauseAtPointer} onPointerLeave={() => setPointerInside(false)} onPointerDownCapture={() => {pauseAtPointer();setFocusInside(false);}} onKeyDownCapture={() => {advanceAllowed.current=false;setFocusInside(true);}} onFocusCapture={event => {const visible=(event.target as HTMLElement).matches(':focus-visible');if(visible)advanceAllowed.current=false;setFocusInside(visible);}} onBlurCapture={event => {if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusInside(false);}}>
-              <FeishuCardPreview key={`${frame}:${streamIndex ?? 0}:${draft.reply?.collapseAfterRun !== false}`} card={card} replyContext="回复 示例用户：周五了，帮我把这周做的事变成一份不想重写的周报。" editing showSlots={Boolean(dragged)} editableComponents={movable.map(item => item.id)} allowedDropSlots={draggedBlock ? allowedSlots(draggedBlock) : undefined} onPointerDragStart={(id,event) => startPointerDrag(event,id,'card')} onSelect={id => {if (!suppressClick.current) select(id);}} onRemove={id => hide(id)}/></div>
-            </div></div>
-            <div className="cds-hint" ref={hint}><p className="cds-edit-hint"><Pointer size={20} strokeWidth={1.7} aria-hidden="true"/><span>点击卡片内容进行设置，拖动组件调整位置</span></p><p className="cds-preview-status" role="status">{notice || (dragged ? dragOrigin === 'card' ? '拖动换位置，拖回左侧隐藏。' : '松开放入指定位置。' : pointerInside || focusInside ? '演示已暂停 · 移出卡片后继续' : draft.reply?.streamText === false ? '完成后输出 · 预览最终回复' : '自动演示 · 移入卡片时暂停')}{previewUsage !== undefined && <button type="button" className="cds-usage-reset" onClick={() => setPreviewUsage(undefined)}>恢复自动用量</button>}</p>{preview.error && <p className="cds-preview-error" role="alert">当前草稿暂时无法预览：{preview.error}</p>}</div>
+              <FeishuCardPreview key={`${frame}:${streamIndex ?? 0}:${draft.reply?.collapseAfterRun !== false}`} card={card} editing showSlots={Boolean(dragged)} editableComponents={movable.map(item => item.id)} allowedDropSlots={draggedBlock ? allowedSlots(draggedBlock) : undefined} onPointerDragStart={(id,event) => startPointerDrag(event,id,'card')} onSelect={id => {if (!suppressClick.current) select(id);}} onRemove={id => hide(id)}/></div>
+            </div>
+            <div className="cds-hint"><p className="cds-edit-hint"><Pointer size={18} strokeWidth={1.7} aria-hidden="true"/><span>点击卡片内容进行设置，拖动组件调整位置</span></p><p className="cds-preview-status" role="status">{notice || (dragged ? dragOrigin === 'card' ? '拖动换位置，拖回左侧隐藏。' : '松开放入指定位置。' : pointerInside || focusInside ? '演示已暂停 · 移出卡片后继续' : draft.reply?.streamText === false ? '完成后输出 · 预览最终回复' : '自动演示 · 移入卡片时暂停')}{previewUsage !== undefined && <button type="button" className="cds-usage-reset" onClick={() => setPreviewUsage(undefined)}>恢复自动用量</button>}</p>{preview.error && <p className="cds-preview-error" role="alert">当前草稿暂时无法预览：{preview.error}</p>}</div>
           </div>
         </div></div></div>
         <footer className="cds-page-footer"><div className="cds-footer-actions"><Button size="sm" variant="ghost" icon={<Undo2 size={13}/>} title={past.length ? '撤销上一步修改' : '还没有可撤销的修改'} disabled={!past.length || saving} onClick={() => {const prior = past.at(-1); if (prior) {setDraft(prior); onDraftChange?.(prior); setPast(items => items.slice(0, -1)); setNotice('已撤销上一步修改。');}}}>撤销</Button><Button size="sm" variant="ghost" icon={<RotateCcw size={13}/>} disabled={saving} onClick={() => {edit(defaultCardDisplay()); setTick(0);}}>恢复默认</Button></div>{error && <span className="cds-dialog-save-error" role="alert">{error}{onDiscardConflict && <button type="button" disabled={saving} onClick={onDiscardConflict}>使用最新设置并放弃草稿</button>}</span>}<Button size="sm" variant="primary" loading={saving} disabled={saving} onClick={() => {setSaving(true); void onSave(structuredClone(draft)).finally(() => setSaving(false));}}>保存并完成</Button></footer>
