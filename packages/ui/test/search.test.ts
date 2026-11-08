@@ -156,8 +156,8 @@ test('results are complete, ranked, uniquely identified, and have valid destinat
 });
 
 test('conditional settings lead to existing parent controls', () => {
-  const threshold = findEntries(entries, '长任务阈值')[0];
-  assert.equal(threshold?.destination.section, '消息与提醒');
+  const threshold = findEntries(entries, '长任务阈值').find(entry => entry.destination.selection?.kind === 'membership');
+  assert.equal(threshold?.destination.section, '完成提醒');
   assert.equal(threshold?.destination.field, '完成提醒');
   assert.equal(threshold?.destination.detail?.kind, 'membership-settings');
   assert.match(threshold?.destination.guide ?? '', /长任务/);
@@ -275,8 +275,8 @@ test('each group setting belongs to its visible page or expandable editor, inclu
     ['项目记忆', 'memory', '记忆'],
     ['模型 Provider', 'model', '可用模型'], ['可用 Effort', 'model', '可用模型'],
     ['权限', 'model', '权限'], ['能挡到什么', 'model', '权限'], ['高级设置', 'model', '权限'],
-    ['沟通方式', 'response', '聊天方式'], ['回复规则', 'response', '聊天方式'], ['聊天方式', 'response', '聊天方式'], ['显示模型', 'response', '消息与提醒'],
-    ['显示工具调用', 'response', '消息与提醒'], ['从群成员选择', 'response', '响应成员'],
+    ['沟通方式', 'response', '聊天方式'], ['回复规则', 'response', '聊天方式'], ['聊天方式', 'response', '聊天方式'], ['显示模型', 'response', '消息卡片'],
+    ['显示工具调用', 'response', '消息卡片'], ['完成提醒', 'response', '完成提醒'], ['从群成员选择', 'response', '响应成员'],
   ]) {
     const entry = findEntries(entries, query!).find(item => item.destination.selection?.kind === 'membership');
     assert.equal(entry?.destination.section, section, query);
@@ -340,12 +340,12 @@ test('Bot profile has its own route and former Bot-only group settings no longer
     assert.deepEqual(result?.destination.selection, {kind: 'agent', id: agentId});
     assert.equal(result?.destination.field, field);
   }
-  for (const label of ['显示工具调用', '显示模型', '完成提醒', '运行中来了消息']) {
+  for (const label of ['回复卡片样式', '完成提醒']) {
     const matches = entries.filter(entry => entry.title === label);
-    assert.ok(matches.length > 0);
-    assert.ok(matches.every(entry => entry.destination.selection?.kind === 'membership'), label);
+    assert.ok(matches.some(entry => entry.destination.selection?.kind === 'membership'), label);
+    assert.ok(matches.some(entry => entry.destination.selection?.kind === 'agent'), label);
   }
-  for (const oldSection of ['任务卡片', '完成提醒', '运行策略', '工作区的默认位置', '群绑定', '新会话默认模型', '话题模型', '判断模型']) {
+  for (const oldSection of ['任务卡片', '消息与提醒', '运行策略', '工作区的默认位置', '群绑定', '新会话默认模型', '话题模型', '判断模型']) {
     assert.ok(!entries.some(entry => entry.destination.section === oldSection), oldSection);
   }
   assert.equal(findEntries(entries, '本话题模型').length, 0);

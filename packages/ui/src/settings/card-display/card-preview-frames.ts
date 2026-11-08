@@ -2,8 +2,8 @@
 // The fixed clock and RunState inputs reproduce the approved Feishu card states.
 // All answer content is fictional sample text, not an actual conversation.
 import type {CardJson} from './FeishuCardPreview';
-
-export const sourceSha = '8192eaf682aa059cee6704ebb29185c010983fec';
+import type {CardDisplayLayoutParts, CardDisplayValues} from '@vonvon/protocol';
+export type PreviewLayoutInput = {parts: CardDisplayLayoutParts; values: CardDisplayValues};
 
 export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', CardJson> = {
   "thinking": {
@@ -30,7 +30,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 78% · 371k/475k",
+            "content": "上下文 78% · 371k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
@@ -39,6 +39,87 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "tag": "markdown",
           "content": "<font color='grey'>已处理 1秒</font>",
           "text_size": "normal"
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "还没有步骤",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "还没有步骤",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
         },
         {
           "tag": "column_set",
@@ -114,6 +195,29 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
                   ]
                 }
               ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
             }
           ]
         }
@@ -145,7 +249,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 78% · 371k/475k",
+            "content": "上下文 78% · 371k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
@@ -175,7 +279,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "elements": [
             {
               "tag": "markdown",
-              "content": "先查看相关文件，再整理结果。",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -217,6 +321,97 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
               "margin": "0px 0px 0px 0px"
             }
           ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
         },
         {
           "tag": "column_set",
@@ -292,6 +487,29 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
                   ]
                 }
               ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
             }
           ]
         }
@@ -323,7 +541,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 78% · 371k/475k",
+            "content": "上下文 78% · 371k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
@@ -335,8 +553,111 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
         },
         {
           "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
           "element_id": "answer",
-          "content": "嗨，早。今天想继续看看 Vonvon 的进展，还是做点别的？",
+          "content": "小队正在翻记录、核数字，我先把周报串起来。",
           "text_size": "normal"
         },
         {
@@ -413,6 +734,29 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
                   ]
                 }
               ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
             }
           ]
         }
@@ -434,7 +778,7 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 80% · 380k/475k",
+            "content": "上下文 80% · 380k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
@@ -446,7 +790,110 @@ export const previewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done', C
         },
         {
           "tag": "markdown",
-          "content": "嗨，早。今天想继续看看 Vonvon 的进展，还是做点别的？",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "content": "小队正在翻记录、核数字，我先把周报串起来。",
           "text_size": "normal"
         }
       ],
@@ -480,7 +927,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 78% · 371k/475k",
+            "content": "上下文 78% · 371k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
@@ -489,6 +936,3593 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "tag": "markdown",
           "content": "<font color='grey'>已处理 1秒</font>",
           "text_size": "normal"
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "还没有步骤",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "还没有步骤",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在处理</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "time_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  "tool": {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在调用工具"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 4秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在调用工具</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "setting-inter_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  "streaming": {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 9秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "小队正在翻记录、核数字，我先把周报串起来。",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  "done": {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "summary": {
+        "content": "已完成"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 80% · 380k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>用时 9秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。\n\n你负责点发送，也负责准时下班。",
+          "text_size": "normal"
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  }
+} as Record<'thinking' | 'tool' | 'streaming' | 'done', CardJson>;
+
+export const streamingPreviewFrames: CardJson[] = [
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 9秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "周报小队收工啦。",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 11秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 14秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 16秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 19秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 21秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 24秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。\n\n你负责点发送，",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 26秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。\n\n你负责点发送，也负责准时下班。",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "🔔 完成后提醒我"
+                  },
+                  "type": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.remind",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  }
+] as CardJson[];
+
+export const previewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 'done', CardJson> = {
+  "thinking": {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "思考中"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>已处理 1秒</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "还没有步骤",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "还没有步骤",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
         },
         {
           "tag": "column_set",
@@ -595,7 +4629,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 78% · 371k/475k",
+            "content": "上下文 78% · 371k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
@@ -625,7 +4659,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "elements": [
             {
               "tag": "markdown",
-              "content": "先查看相关文件，再整理结果。",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -667,6 +4701,97 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
               "margin": "0px 0px 0px 0px"
             }
           ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
         },
         {
           "tag": "column_set",
@@ -773,19 +4898,34 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 78% · 371k/475k",
+            "content": "上下文 78% · 371k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
         },
         {
+          "tag": "markdown",
+          "content": "<font color='grey'>已处理 9秒</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
           "tag": "collapsible_panel",
-          "expanded": true,
+          "expanded": false,
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>已处理 9秒</font>",
-              "text_size": "normal"
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
             },
             "vertical_align": "center",
             "padding": "0px",
@@ -798,58 +4938,83 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
             "icon_position": "follow_text",
             "icon_expanded_angle": -180
           },
-          "vertical_spacing": "16px",
+          "vertical_spacing": "8px",
           "padding": "0px",
           "elements": [
             {
               "tag": "markdown",
-              "content": "先查看相关文件，再整理结果。",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
             {
-              "tag": "collapsible_panel",
-              "expanded": false,
-              "header": {
-                "title": {
-                  "tag": "markdown",
-                  "content": "<font color='grey'>搜索文件</font>",
-                  "text_size": "normal",
-                  "icon": {
-                    "tag": "standard_icon",
-                    "token": "search_outlined",
-                    "color": "grey"
-                  }
-                },
-                "vertical_align": "center",
-                "padding": "0px",
-                "icon": {
-                  "tag": "standard_icon",
-                  "token": "down-small-ccm_outlined",
-                  "color": "grey",
-                  "size": "16px 16px"
-                },
-                "icon_position": "follow_text",
-                "icon_expanded_angle": -180
-              },
-              "vertical_spacing": "8px",
-              "padding": "0px",
-              "elements": [
-                {
-                  "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ncard-layout.example.ts\n```\n\n**退出码** `0`",
-                  "margin": "0px 0px 0px 20px",
-                  "text_size": "normal"
-                }
-              ],
-              "margin": "0px 0px 0px 0px"
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
             }
-          ]
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
         },
         {
           "tag": "markdown",
           "element_id": "answer",
-          "content": "嗨，早。今天想继续看看 Vonvon 的进展，还是做点别的？",
+          "content": "小队正在翻记录、核数字，我先把周报串起来。",
           "text_size": "normal"
         },
         {
@@ -947,10 +5112,20 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 80% · 380k/475k",
+            "content": "上下文 80% · 380k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>用时 9秒</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
         },
         {
           "tag": "collapsible_panel",
@@ -958,7 +5133,342 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "header": {
             "title": {
               "tag": "markdown",
-              "content": "<font color='grey'>用时 9秒</font>",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "content": "小队正在翻记录、核数字，我先把周报串起来。",
+          "text_size": "normal"
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  }
+} as Record<'thinking' | 'tool' | 'streaming' | 'done', CardJson>;
+
+export const toolPreviewFramesNonManual: Record<'thinking' | 'tool' | 'streaming' | 'done', CardJson> = {
+  "thinking": {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "思考中"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>已处理 1秒</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "还没有步骤",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>0 步 · 不足 1 秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "还没有步骤",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在处理</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "time_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  "tool": {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在调用工具"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 4秒</font>",
               "text_size": "normal"
             },
             "vertical_align": "center",
@@ -977,7 +5487,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
           "elements": [
             {
               "tag": "markdown",
-              "content": "先查看相关文件，再整理结果。",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -1011,7 +5521,7 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ncard-layout.example.ts\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -1022,17 +5532,177 @@ export const toolPreviewFrames: Record<'thinking' | 'tool' | 'streaming' | 'done
         },
         {
           "tag": "markdown",
-          "content": "我建议把消息卡片收紧：先给结论，再按需展开过程。运行时能看见进度，结束后让回答成为重点。\n\n- 上下文和耗时放顶部，方便扫一眼。\n- 思考与工具收进过程，详细内容点开看。\n- 模型和状态放底部，不抢正文位置。\n\n这样短答一屏读完，工具结果也能随时查到。",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个运行中</font>",
           "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 3秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在调用工具</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "setting-inter_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
         }
       ],
       "vertical_spacing": "16px"
     }
-  }
-} as Record<'thinking' | 'tool' | 'streaming' | 'done', CardJson>;
-
-export const streamingPreviewFrames: CardJson[] = [
-  {
+  },
+  "streaming": {
     "schema": "2.0",
     "config": {
       "update_multi": true,
@@ -1056,7 +5726,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 78% · 371k/475k",
+            "content": "上下文 78% · 371k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
@@ -1086,7 +5756,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先查看相关文件，再整理结果。",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -1120,7 +5790,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ncard-layout.example.ts\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -1131,8 +5801,600 @@ export const streamingPreviewFrames: CardJson[] = [
         },
         {
           "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
           "element_id": "answer",
-          "content": "我建议把消息卡片收紧：",
+          "content": "小队正在翻记录、核数字，我先把周报串起来。",
+          "text_size": "normal"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "none",
+          "horizontal_spacing": "medium",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>正在输出</font>",
+                  "text_size": "notation",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "edit_outlined",
+                    "color": "grey"
+                  }
+                }
+              ]
+            },
+            {
+              "tag": "column",
+              "width": "weighted",
+              "weight": 1,
+              "vertical_align": "center",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+                  "text_size": "notation",
+                  "text_color": "grey",
+                  "text_align": "right"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "column_set",
+          "element_id": "controls",
+          "flex_mode": "flow",
+          "horizontal_spacing": "small",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "type": "primary",
+                  "size": "medium",
+                  "width": "default",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "stop-record_filled",
+                    "color": "blue"
+                  },
+                  "hover_tips": {
+                    "tag": "plain_text",
+                    "content": "停止生成"
+                  },
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "a": "run.stop",
+                        "m": "preview-only-card"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  },
+  "done": {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "summary": {
+        "content": "已完成"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 80% · 380k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>用时 9秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。\n\n你负责点发送，也负责准时下班。",
+          "text_size": "normal"
+        }
+      ],
+      "vertical_spacing": "16px"
+    }
+  }
+} as Record<'thinking' | 'tool' | 'streaming' | 'done', CardJson>;
+
+export const streamingPreviewFramesNonManual: CardJson[] = [
+  {
+    "schema": "2.0",
+    "config": {
+      "update_multi": true,
+      "streaming_mode": true,
+      "streaming_config": {
+        "print_frequency_ms": {
+          "default": 25
+        },
+        "print_step": {
+          "default": 6
+        },
+        "print_strategy": "fast"
+      },
+      "summary": {
+        "content": "正在输出"
+      }
+    },
+    "body": {
+      "elements": [
+        {
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": "上下文 78% · 371k/475k",
+            "text_size": "notation",
+            "text_color": "yellow"
+          }
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": true,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>已处理 9秒</font>",
+              "text_size": "normal"
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "16px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "collapsible_panel",
+              "expanded": false,
+              "header": {
+                "title": {
+                  "tag": "markdown",
+                  "content": "<font color='grey'>搜索文件</font>",
+                  "text_size": "normal",
+                  "icon": {
+                    "tag": "standard_icon",
+                    "token": "search_outlined",
+                    "color": "grey"
+                  }
+                },
+                "vertical_align": "center",
+                "padding": "0px",
+                "icon": {
+                  "tag": "standard_icon",
+                  "token": "down-small-ccm_outlined",
+                  "color": "grey",
+                  "size": "16px 16px"
+                },
+                "icon_position": "follow_text",
+                "icon_expanded_angle": -180
+              },
+              "vertical_spacing": "8px",
+              "padding": "0px",
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
+                  "margin": "0px 0px 0px 20px",
+                  "text_size": "normal"
+                }
+              ],
+              "margin": "0px 0px 0px 0px"
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
+          "element_id": "answer",
+          "content": "周报小队收工啦。",
           "text_size": "normal"
         },
         {
@@ -1240,7 +6502,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 78% · 371k/475k",
+            "content": "上下文 78% · 371k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
@@ -1270,7 +6532,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先查看相关文件，再整理结果。",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -1304,7 +6566,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ncard-layout.example.ts\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -1315,8 +6577,111 @@ export const streamingPreviewFrames: CardJson[] = [
         },
         {
           "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
           "element_id": "answer",
-          "content": "我建议把消息卡片收紧：先给结论，再按需展开过程。",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；",
           "text_size": "normal"
         },
         {
@@ -1424,7 +6789,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 78% · 371k/475k",
+            "content": "上下文 78% · 371k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
@@ -1454,7 +6819,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先查看相关文件，再整理结果。",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -1488,7 +6853,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ncard-layout.example.ts\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -1499,8 +6864,111 @@ export const streamingPreviewFrames: CardJson[] = [
         },
         {
           "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
           "element_id": "answer",
-          "content": "我建议把消息卡片收紧：先给结论，再按需展开过程。运行时能看见进度，结束后让回答成为重点。",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。",
           "text_size": "normal"
         },
         {
@@ -1608,7 +7076,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 78% · 371k/475k",
+            "content": "上下文 78% · 371k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
@@ -1638,7 +7106,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先查看相关文件，再整理结果。",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -1672,7 +7140,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ncard-layout.example.ts\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -1683,8 +7151,111 @@ export const streamingPreviewFrames: CardJson[] = [
         },
         {
           "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
           "element_id": "answer",
-          "content": "我建议把消息卡片收紧：先给结论，再按需展开过程。运行时能看见进度，结束后让回答成为重点。\n\n- 上下文和耗时放顶部，方便扫一眼。",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。",
           "text_size": "normal"
         },
         {
@@ -1792,7 +7363,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 78% · 371k/475k",
+            "content": "上下文 78% · 371k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
@@ -1822,7 +7393,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先查看相关文件，再整理结果。",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -1856,7 +7427,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ncard-layout.example.ts\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -1867,8 +7438,111 @@ export const streamingPreviewFrames: CardJson[] = [
         },
         {
           "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
           "element_id": "answer",
-          "content": "我建议把消息卡片收紧：先给结论，再按需展开过程。运行时能看见进度，结束后让回答成为重点。\n\n- 上下文和耗时放顶部，方便扫一眼。\n- 思考与工具收进过程，详细内容点开看。",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。",
           "text_size": "normal"
         },
         {
@@ -1976,7 +7650,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 78% · 371k/475k",
+            "content": "上下文 78% · 371k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
@@ -2006,7 +7680,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先查看相关文件，再整理结果。",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -2040,7 +7714,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ncard-layout.example.ts\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -2051,8 +7725,111 @@ export const streamingPreviewFrames: CardJson[] = [
         },
         {
           "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
           "element_id": "answer",
-          "content": "我建议把消息卡片收紧：先给结论，再按需展开过程。运行时能看见进度，结束后让回答成为重点。\n\n- 上下文和耗时放顶部，方便扫一眼。\n- 思考与工具收进过程，详细内容点开看。\n- 模型和状态放底部，不抢正文位置。",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。",
           "text_size": "normal"
         },
         {
@@ -2160,7 +7937,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 78% · 371k/475k",
+            "content": "上下文 78% · 371k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
@@ -2190,7 +7967,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先查看相关文件，再整理结果。",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -2224,7 +8001,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ncard-layout.example.ts\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -2235,8 +8012,111 @@ export const streamingPreviewFrames: CardJson[] = [
         },
         {
           "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
           "element_id": "answer",
-          "content": "我建议把消息卡片收紧：先给结论，再按需展开过程。运行时能看见进度，结束后让回答成为重点。\n\n- 上下文和耗时放顶部，方便扫一眼。\n- 思考与工具收进过程，详细内容点开看。\n- 模型和状态放底部，不抢正文位置。\n\n这样短答一屏读完，",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。\n\n你负责点发送，",
           "text_size": "normal"
         },
         {
@@ -2344,7 +8224,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "tag": "div",
           "text": {
             "tag": "lark_md",
-            "content": "🟡 上下文 78% · 371k/475k",
+            "content": "上下文 78% · 371k/475k",
             "text_size": "notation",
             "text_color": "yellow"
           }
@@ -2374,7 +8254,7 @@ export const streamingPreviewFrames: CardJson[] = [
           "elements": [
             {
               "tag": "markdown",
-              "content": "先查看相关文件，再整理结果。",
+              "content": "先让伙伴翻记录、核数字，再把本周进展写成好读的周报。",
               "margin": "0px 0px 0px 0px",
               "text_size": "normal"
             },
@@ -2408,7 +8288,7 @@ export const streamingPreviewFrames: CardJson[] = [
               "elements": [
                 {
                   "tag": "markdown",
-                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\ncard-layout.example.ts\n```\n\n**退出码** `0`",
+                  "content": "**命令**\n```bash\nrg --files\n```\n\n**输出**\n```\nnotes/summary.md\n```\n\n**退出码** `0`",
                   "margin": "0px 0px 0px 20px",
                   "text_size": "normal"
                 }
@@ -2419,8 +8299,111 @@ export const streamingPreviewFrames: CardJson[] = [
         },
         {
           "tag": "markdown",
+          "content": "<font color='grey'>子 agent</font><font color='grey'> · </font><font color='grey'>2 个已完成</font>",
+          "text_size": "normal"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>资料侦察员：捞出本周进展</font><font color='grey'> · </font><font color='grey'>1 步 · 8秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 整理本周记录 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n本周进展已整理。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_7a41cef8bfa3",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "collapsible_panel",
+          "expanded": false,
+          "header": {
+            "title": {
+              "tag": "markdown",
+              "content": "<font color='grey'>细节挑刺员：核对数字与遗漏</font><font color='grey'> · </font><font color='grey'>1 步 · 7秒</font>",
+              "text_size": "normal",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "robot_outlined",
+                "color": "grey"
+              }
+            },
+            "vertical_align": "center",
+            "padding": "0px",
+            "icon": {
+              "tag": "standard_icon",
+              "token": "down-small-ccm_outlined",
+              "color": "grey",
+              "size": "16px 16px"
+            },
+            "icon_position": "follow_text",
+            "icon_expanded_angle": -180
+          },
+          "vertical_spacing": "8px",
+          "padding": "0px",
+          "elements": [
+            {
+              "tag": "markdown",
+              "content": "调用 逐项核对数字 工具",
+              "icon": {
+                "tag": "standard_icon",
+                "token": "setting-inter_outlined",
+                "color": "grey"
+              },
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            },
+            {
+              "tag": "markdown",
+              "content": "**结果**\n需要确认的数字已标记。",
+              "margin": "0px 0px 0px 0px",
+              "text_size": "normal"
+            }
+          ],
+          "element_id": "sa_fa2044e5924c",
+          "margin": "0px 0px 0px 0px"
+        },
+        {
+          "tag": "markdown",
           "element_id": "answer",
-          "content": "我建议把消息卡片收紧：先给结论，再按需展开过程。运行时能看见进度，结束后让回答成为重点。\n\n- 上下文和耗时放顶部，方便扫一眼。\n- 思考与工具收进过程，详细内容点开看。\n- 模型和状态放底部，不抢正文位置。\n\n这样短答一屏读完，工具结果也能随时查到。",
+          "content": "周报小队收工啦。资料侦察员翻出进展，细节挑刺员圈出数字和遗漏；我把“忙了一周”写成能直接发的三段话。\n\n**进展**：关键事项已排好顺序。\n**待确认**：两处数字有标记，点开过程可核。\n**下周**：先补细节，再请小队看新版。\n\n你负责点发送，也负责准时下班。",
           "text_size": "normal"
         },
         {
@@ -2505,3 +8488,1589 @@ export const streamingPreviewFrames: CardJson[] = [
     }
   }
 ] as CardJson[];
+
+export const previewLayoutInputs: Record<'thinking' | 'tool' | 'streaming' | 'done', PreviewLayoutInput> = {
+  "thinking": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 5,
+      "modelIndex": 5,
+      "controlsIndex": 6,
+      "answerIndices": [],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在处理</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "time_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "1秒"
+      },
+      "status": {
+        "label": "正在处理"
+      }
+    }
+  },
+  "tool": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 5,
+      "modelIndex": 5,
+      "controlsIndex": 6,
+      "answerIndices": [],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在调用工具</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "setting-inter_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "4秒"
+      },
+      "status": {
+        "label": "正在调用工具"
+      }
+    }
+  },
+  "streaming": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "9秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  "done": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "answerIndices": [
+        5
+      ]
+    },
+    "values": {
+      "context": {
+        "percent": 80,
+        "used": "380k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "用时",
+        "value": "9秒"
+      },
+      "status": {
+        "label": ""
+      }
+    }
+  }
+} as Record<'thinking' | 'tool' | 'streaming' | 'done', PreviewLayoutInput>;
+
+export const toolPreviewLayoutInputs: Record<'thinking' | 'tool' | 'streaming' | 'done', PreviewLayoutInput> = {
+  "thinking": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 5,
+      "modelIndex": 5,
+      "controlsIndex": 6,
+      "answerIndices": [],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在处理</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "time_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "1秒"
+      },
+      "status": {
+        "label": "正在处理"
+      }
+    }
+  },
+  "tool": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 5,
+      "modelIndex": 5,
+      "controlsIndex": 6,
+      "answerIndices": [],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在调用工具</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "setting-inter_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "4秒"
+      },
+      "status": {
+        "label": "正在调用工具"
+      }
+    }
+  },
+  "streaming": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "9秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  "done": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ]
+    },
+    "values": {
+      "context": {
+        "percent": 80,
+        "used": "380k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "用时",
+        "value": "9秒"
+      },
+      "status": {
+        "label": ""
+      }
+    }
+  }
+} as Record<'thinking' | 'tool' | 'streaming' | 'done', PreviewLayoutInput>;
+
+export const previewLayoutInputsNonManual: Record<'thinking' | 'tool' | 'streaming' | 'done', PreviewLayoutInput> = {
+  "thinking": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 5,
+      "modelIndex": 5,
+      "controlsIndex": 6,
+      "answerIndices": [],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在处理</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "time_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "1秒"
+      },
+      "status": {
+        "label": "正在处理"
+      }
+    }
+  },
+  "tool": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 5,
+      "modelIndex": 5,
+      "controlsIndex": 6,
+      "answerIndices": [],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在调用工具</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "setting-inter_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "4秒"
+      },
+      "status": {
+        "label": "正在调用工具"
+      }
+    }
+  },
+  "streaming": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "9秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  "done": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "answerIndices": [
+        5
+      ]
+    },
+    "values": {
+      "context": {
+        "percent": 80,
+        "used": "380k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "用时",
+        "value": "9秒"
+      },
+      "status": {
+        "label": ""
+      }
+    }
+  }
+} as Record<'thinking' | 'tool' | 'streaming' | 'done', PreviewLayoutInput>;
+
+export const toolPreviewLayoutInputsNonManual: Record<'thinking' | 'tool' | 'streaming' | 'done', PreviewLayoutInput> = {
+  "thinking": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 5,
+      "modelIndex": 5,
+      "controlsIndex": 6,
+      "answerIndices": [],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在处理</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "time_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "1秒"
+      },
+      "status": {
+        "label": "正在处理"
+      }
+    }
+  },
+  "tool": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 5,
+      "modelIndex": 5,
+      "controlsIndex": 6,
+      "answerIndices": [],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在调用工具</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "setting-inter_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "4秒"
+      },
+      "status": {
+        "label": "正在调用工具"
+      }
+    }
+  },
+  "streaming": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "9秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  "done": {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ]
+    },
+    "values": {
+      "context": {
+        "percent": 80,
+        "used": "380k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "用时",
+        "value": "9秒"
+      },
+      "status": {
+        "label": ""
+      }
+    }
+  }
+} as Record<'thinking' | 'tool' | 'streaming' | 'done', PreviewLayoutInput>;
+
+export const streamingLayoutInputs: PreviewLayoutInput[] = [
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "9秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "11秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "14秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "16秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "19秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "21秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "24秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "26秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  }
+] as PreviewLayoutInput[];
+
+export const streamingLayoutInputsNonManual: PreviewLayoutInput[] = [
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "9秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "11秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "14秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "16秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "19秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "21秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "24秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  },
+  {
+    "parts": {
+      "contextIndex": 0,
+      "processIndex": 1,
+      "statusIndex": 6,
+      "modelIndex": 6,
+      "controlsIndex": 7,
+      "answerIndices": [
+        5
+      ],
+      "processChildKinds": [
+        "thinking",
+        "tool"
+      ],
+      "statusElement": {
+        "tag": "markdown",
+        "content": "<font color='grey'>正在输出</font>",
+        "text_size": "notation",
+        "icon": {
+          "tag": "standard_icon",
+          "token": "edit_outlined",
+          "color": "grey"
+        }
+      },
+      "modelElement": {
+        "tag": "markdown",
+        "content": "gpt-6.1-sol · <font color='purple'>极高</font>",
+        "text_size": "notation",
+        "text_color": "grey",
+        "text_align": "right"
+      }
+    },
+    "values": {
+      "context": {
+        "percent": 78,
+        "used": "371k",
+        "window": "475k",
+        "mark": ""
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "effort": "极高",
+        "effortColor": "purple"
+      },
+      "elapsed": {
+        "label": "已处理",
+        "value": "26秒"
+      },
+      "status": {
+        "label": "正在输出"
+      }
+    }
+  }
+] as PreviewLayoutInput[];

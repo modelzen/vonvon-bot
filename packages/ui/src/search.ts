@@ -28,6 +28,8 @@ const agentGroups: readonly AgentGroup[] = [
   {title: '连接与权限', fields: [item('应用 ID', ['App ID']), item('连接与设置', ['首次运行清单', '开权限', '事件订阅', '发布版本']), item('飞书权限', ['一键开权限']), item('刷新飞书凭据', ['重新扫码', '重新授权']), item('状态与诊断', ['检查连接', '没回的消息'])]},
   {title: '个性与记忆', reveal: 'agent-profile', fields: [item('Bot 个性', ['通用个性']), item('Bot 记忆', ['公共记忆'])]},
   {title: '运行上限', aliases: ['运行策略'], fields: [item('同时处理的任务', ['最大并发任务']), item('当前运行上限', ['当前运行并发'], {field: '', guide: '重启前后上限不同时，会显示当前运行上限。'}), item('空闲超时', ['空闲超时（秒，0 为关闭）'])]},
+  {title: '消息卡片', aliases: ['任务卡片', '卡片显示', '消息与提醒'], fields: [item('回复卡片样式', ['显示工具调用', '显示模型'], {guide: '打开「自定义」，在卡片上点选或拖动内容。'}), item('恢复默认样式', ['恢复默认卡片'])]},
+  {title: '完成提醒', fields: [item('提醒方式', ['什么时候提醒']), item('超过几分钟提醒', ['长任务阈值'], {field: '提醒方式', guide: '先选择「长任务」，再设置分钟数。'})]},
   {title: '语音转文字', fields: [item('飞书语音权限'), item('权限与测试'), item('重新检测'), item('测试语音', [], {field: '测试'})]},
   {title: '云文档评论', fields: [item('评论模型', ['后端', '评论后端', '模型', '执行工具'], {field: '选择评论模型'}), item('评论思考强度', ['推理强度'], {field: '评论模型思考强度', guide: '先选择一个具体模型，再调整思考强度。'})]},
   {title: '评论回复规则', fields: [item('评论规则文本', ['提示词', 'instructions'], {field: '评论回复规则'}), item('保存规则', ['保存评论规则']), item('恢复默认', ['恢复默认评论规则'])]},
@@ -54,7 +56,8 @@ const membershipGroups: readonly Group[] = [
   {title: '群内响应', ordinaryOnly: true, fields: [item('不 @ 也能发起任务', ['免 @'])]},
   {title: '运行中来了消息', fields: [item('运行中来了消息', ['运行中收到新消息', '待处理消息策略', '插话', '排队', 'steer', 'queue'])]},
   {title: '响应成员', fields: [item('从群成员选择', ['选择响应成员']), item('添加成员 Open ID'), item('移除成员', [], {field: '', guide: '在响应成员列表中选择要移除的成员。'}), item('允许所有成员', ['清空白名单'], {field: '', guide: '设置了成员白名单后，可清空白名单。'})]},
-  {title: '消息与提醒', aliases: ['任务卡片', '卡片显示'], fields: [item('显示工具调用'), item('显示模型'), item('完成提醒', ['什么时候提醒', '提醒方式']), item('超过几分钟提醒', ['长任务阈值', '长任务阈值（分钟）'], {field: '完成提醒', guide: '把「完成提醒」设为「长任务」，即可调整分钟数。'})]},
+  {title: '消息卡片', aliases: ['任务卡片', '卡片显示', '消息与提醒'], fields: [item('回复卡片样式', ['显示工具调用', '显示模型'], {guide: '打开「自定义」，在卡片上点选或拖动内容。'}), item('继承 Bot', ['恢复 Bot 卡片样式'])]},
+  {title: '完成提醒', fields: [item('完成提醒', ['什么时候提醒', '提醒方式']), item('超过几分钟提醒', ['长任务阈值', '长任务阈值（分钟）'], {field: '完成提醒', guide: '把「完成提醒」设为「长任务」，即可调整分钟数。'})]},
 ];
 /** What the 本机环境 fields were called before the 叫法表 (docs/v1-plan.md section 5), so the old words still find them. */
 const formerly: Readonly<Record<string, string>> = {'后端状态': 'Host 状态', '后端版本': 'Host 版本', '当前账号配置': '当前 Profile'};

@@ -131,7 +131,8 @@ const settings = (tab: GroupSettingsTab) => renderToStaticMarkup(<ClientProvider
 
 it('uses the group\'s 聊天方式 slider with the two ways a private chat has, and the group\'s other settings', () => {
   const html = settings('response');
-  for (const shown of ['聊天方式', 'type="range"', '连续交谈', '智能', '每条都看，只回需要回的', '消息与提醒', '显示工具调用']) expect(html).toContain(shown);
+  for (const shown of ['聊天方式', 'type="range"', '连续交谈', '智能', '每条都看，只回需要回的', '完成提醒']) expect(html).toContain(shown);
+  expect(html).not.toContain('回复卡片样式');
   for (const gone of ['独立话题', '响应成员', '免 @']) expect(html).not.toContain(gone);
   expect(html).toContain('max="1"');
 });

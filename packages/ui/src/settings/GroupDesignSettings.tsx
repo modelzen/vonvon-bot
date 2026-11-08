@@ -186,7 +186,6 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
       {(tab === 'model' || tab === 'permission') && (dm ? <DmFixedSettings view={view}/> : <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>)}
       {tab === 'response' && <>
         {responseHeader}
-        {typeof window !== 'undefined' && window.vonvonCardPreviewScope && <CardDisplayEntry scopeKey={`${view.scope.botId}:${view.scope.projectName}`} botName={botName} groupName={groupName} showTools={sections.presentation?.stored.showToolCalls} showModel={sections.presentation?.stored.showModel}/>}
         {dm && sections.conversation && <DmConversation section={sections.conversation} save={(patch, revision) => save('conversation', patch, revision)}/>}
         {view.identity.kind === 'smart' && <>
           {judgeSection ? <Editor title="决策模型" section={judgeSection} autoSave save={(patch, revision) => save('judge', patch, revision)}
@@ -200,11 +199,11 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
         {!dm && view.identity.kind !== 'smart' && <ProjectPanel view={view} refresh={refresh} partition="response" independent hideJudge/>}
         {!dm && <details className="gd-disclosure"><summary>响应成员</summary><ProjectPanel view={view} refresh={refresh} partition="members" independent hideJudge/></details>}
         <ProjectPanel view={view} refresh={refresh} partition="run" independent hideJudge/>
-        {sections.presentation && <Editor title={typeof window !== 'undefined' && window.vonvonCardPreviewScope ? "完成提醒" : "消息与提醒"} section={sections.presentation} save={(patch, revision) => save('presentation', patch, revision)} render={(draft, set, disabled, commit) => <>
-          {!(typeof window !== 'undefined' && window.vonvonCardPreviewScope) && <>
-          <SettingsRow title="显示工具调用" trailing={<Toggle className="settings-row-switch" label="显示工具调用" aria-label="显示工具调用" checked={draft.showToolCalls} disabled={disabled} onChange={event => void commit({showToolCalls: event.target.checked})}/>}/>
-          <SettingsRow className="group-choice-row" title="显示模型" trailing={<SettingChoices segmented label="显示模型" disabled={disabled} value={draft.showModel ?? ''} choices={[{value: 'off', label: '不显示'}, {value: 'running', label: '运行时'}, {value: 'always', label: '始终'}]} onChange={showModel => {if (showModel === 'off' || showModel === 'running' || showModel === 'always') void commit({showModel});}}/>}/>
-          </>}
+        {!dm && sections.presentation && <CardDisplayEntry key={`${view.scope.botId}:${view.scope.projectName}`} level="group" saved={sections.presentation.stored.cardDisplay} effective={sections.presentation.effective.cardDisplay} revision={sections.presentation.revision}
+          readonly={sections.presentation.access.kind === 'readonly'} botName={botName} groupName={groupName}
+          completionMode={sections.presentation.effective.completionMode} showTools={sections.presentation.effective.showToolCalls} showModel={sections.presentation.effective.showModel}
+          onSave={(cardDisplay, revision) => save('presentation', {cardDisplay}, revision)} onRefresh={refresh}/>}
+        {sections.presentation && <Editor title="完成提醒" section={sections.presentation} save={(patch, revision) => save('presentation', patch, revision)} render={(draft, set, disabled, commit) => <>
           <SettingsRow className="group-choice-row" title="完成提醒" trailing={<SettingChoices segmented label="完成提醒" disabled={disabled} value={draft.completionMode} choices={[{value: 'manual', label: '手动'}, {value: 'long', label: '长任务'}, {value: 'failures', label: '失败时'}, {value: 'always', label: '每次'}]} onChange={completionMode => void commit({completionMode})}/>}/>
           {draft.completionMode === 'long' && <SettingsRow title="超过几分钟提醒" trailing={<input className="settings-field" type="number" aria-label="长任务分钟数" min={1} max={1440} value={draft.longTaskMinutes} disabled={disabled} onChange={event => set({...draft, longTaskMinutes: Number(event.target.value)})}/>}/>}
         </>}/>}
