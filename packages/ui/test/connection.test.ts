@@ -18,6 +18,7 @@ vi.mock("../src/App", () => ({ App: () => null }));
 vi.mock("../src/devices/DesktopRoot", () => ({ DesktopRoot: () => null }));
 vi.mock("../src/directory-picker", () => ({ DirectoryPickerProvider: () => null }));
 vi.mock("../src/client-context", () => ({ ClientProvider: () => null }));
+vi.mock("../src/ShareCard", () => ({ isShareCardRoute: () => false, ShareCardPage: () => null }));
 
 const connected = <T>(client: T) => ({ client, serverInfo: { type: "serverInfo", machineId: "00000000-0000-4000-8000-000000000000", version: "1", protocolVersion: 2 } });
 let dispose: (() => void) | void;

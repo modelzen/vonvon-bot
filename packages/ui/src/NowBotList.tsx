@@ -74,9 +74,10 @@ export function nowBotLatestAction(agent: Agent, members: readonly Membership[],
   return members.some(member => member.agentId === agent.id && member.groupId === action.groupId && member.enabled === true && !member.stale) ? action : undefined;
 }
 
-export function NowBotList({snapshot, connected, disabled, onChangeNumber}: {
+/** `share`: the share card's, with no way to reach the Bots from the image. */
+export function NowBotList({snapshot, connected, disabled, onChangeNumber, share = false}: {
   snapshot: DesktopSnapshot; connected: boolean; disabled: boolean;
-  onChangeNumber: (agentId: Agent['id'], value: string) => Promise<string | undefined>;
+  onChangeNumber: (agentId: Agent['id'], value: string) => Promise<string | undefined>; share?: boolean;
 }) {
   const [, tick] = useState(0);
   const [motionAllowed, setMotionAllowed] = useState(false);
@@ -113,7 +114,7 @@ export function NowBotList({snapshot, connected, disabled, onChangeNumber}: {
           status={connectionStatus} tone={connectionStatus === '已连接' ? 'online' : 'offline'}
           ownerName={agent.ownerName} tenure={badgeTenure(agent.registeredAt, now)}
           jobNumber={agent.badgeNumber} editable={live && !disabled && !!agent.badgeNumber}
-          onJobChange={value => onChangeNumber(agent.id, value)}
+          onJobChange={value => onChangeNumber(agent.id, value)} contact={!share}
           showMotion={motionAllowed}>
             {bindings.map(binding => {
               const group = snapshot.groups.find(item => item.id === binding.groupId) ?? {id: binding.groupId, name: binding.name};
