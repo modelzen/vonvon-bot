@@ -34,6 +34,7 @@
 .vcr-widget { position: relative; min-width: 0; width: fit-content; max-width: 100%; align-self: flex-start; }
 .vcr-column[data-card-position$="right"] > .vcr-widget { align-self: flex-end; }
 .vcr-widget:has(> .vcr-widget-body > .vcr-progress) { width: min(100%, 360px); }
+.vcr-widget:has(> .vcr-widget-body > .vcr-columns) { width: 100%; }
 .vcr-widget-edit { position: absolute; inset: -3px; z-index: 1; border: 0; border-radius: 5px; background: transparent; cursor: grab; }
 .vcr-widget:hover > .vcr-widget-edit { outline: 1px solid #94b4ff; background: #3370ff05; }
 .vcr-widget-edit:active { cursor: grabbing; }
@@ -133,15 +134,14 @@
 .vcr-image { margin: 0; }
 .vcr-image img { display: block; max-width: 100%; height: auto; }
 @media (prefers-reduced-motion: reduce) { .vcr-card * { transition: none !important; } }
-.vcr-progress { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; line-height: 20px; color: var(--vcr-muted); }
-.vcr-progress-label { flex: none; }
-.vcr-progress-track { display: block; flex: 1 1 auto; min-width: 30px; height: 6px; overflow: hidden; border-radius: 999px; background: #e8eaed; }
+.vcr-progress { display: flex; align-items: center; min-width: 0; width: 100%; height: 20px; }
+.vcr-progress-track { display: block; flex: 1 1 auto; min-width: 30px; height: 8px; overflow: hidden; border-radius: 999px; background: #e8eaed; }
 .vcr-progress-fill { display: block; height: 100%; border-radius: inherit; background: var(--vcr-link); }
-.vcr-progress-value { flex: none; font-variant-numeric: tabular-nums; }
-.vcr-progress[data-color="red"] .vcr-progress-fill { background: #d54941; }
+.vcr-progress[data-color="red"] .vcr-progress-fill { background: #f54a45; }
 .vcr-progress[data-color="grey"] .vcr-progress-fill { background: #8f959e; }
-.vcr-progress[data-color="yellow"] .vcr-progress-fill { background: #ad7c00; }
-.vcr-progress[data-color="orange"] .vcr-progress-fill { background: #c76a21; }
+.vcr-progress[data-color="yellow"] .vcr-progress-fill { background: #f2b50a; }
+.vcr-progress[data-color="orange"] .vcr-progress-fill { background: #f57c23; }
+.vcr-progress[data-color="blue"] .vcr-progress-fill { background: #3370ff; }
 .vcr-card .vcr-markdown p, .vcr-card .vcr-markdown li { color: inherit; font-size: inherit; line-height: inherit; }
 .vcr-button.vcr-button--stop[data-size] { min-height: 30px; }
 .vcr-slot-pick { display: flex; align-items: center; justify-content: center; gap: 5px; font-size: 12px; }

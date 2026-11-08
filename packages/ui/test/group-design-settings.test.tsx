@@ -1,7 +1,7 @@
 import {permissionValue} from './permission-fixture';
 import {expect, it} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
-import {DEFAULT_SMART_RULES, agentIdSchema, type ModelCatalog, type ProjectSettingsView} from '@vonvon/protocol';
+import {DEFAULT_SMART_RULES, agentIdSchema, defaultCardDisplay, type ModelCatalog, type ProjectSettingsView} from '@vonvon/protocol';
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {DirectoryPickerProvider} from '../src/directory-picker';
@@ -152,7 +152,8 @@ it('combines legacy smart prompts in one editor without losing either custom rul
   expect(html).toContain('响应规则原文'); expect(html).toContain('新话题规则原文');
   expect(html.match(/role="textbox"/g)).toHaveLength(1);
   expect(html).toContain('contentEditable="true"');
-  expect(html).toContain('响应成员'); expect(html).toContain('完成提醒'); expect(html).toContain('显示模型');
+  expect(html).toContain('响应成员'); expect(html).toContain('回复卡片样式'); expect(html).toContain('完成提醒');
+  expect(html).not.toContain('显示模型');
   expect(html).not.toContain('跟着 Bot 默认');
   expect(html).not.toContain('查看合成');
   expect(html).not.toContain('不 @ 也能发起任务');
@@ -164,6 +165,17 @@ it('announces shared readonly reasons once but preserves independent safety reas
   const html = render('response', view);
   expect(html.match(/共同不可编辑原因/g)).toHaveLength(1);
   expect(html.match(/独有权限限制/g)).toHaveLength(1);
+});
+
+it('shows whether card style is inherited and exposes a distinct reset for a group override', () => {
+  const inherited = render('response');
+  expect(inherited).toContain('沿用 Bot 默认样式');
+  expect(inherited).not.toContain('继承 Bot</button>');
+  const view = fixture();
+  view.sections.presentation = {...view.sections.presentation!, stored: {...view.sections.presentation!.stored, cardDisplay: defaultCardDisplay()}};
+  const overridden = render('response', view);
+  expect(overridden).toContain('已自定义');
+  expect(overridden).toContain('继承 Bot');
 });
 
 it('shows the actual default in one writing surface with four removable headings and restore', () => {

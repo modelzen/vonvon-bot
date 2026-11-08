@@ -1,4 +1,4 @@
-import {useState, type CSSProperties, type DragEvent, type ReactNode} from 'react';
+import {useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode} from 'react';
 import './feishu-card-preview.css';
 
 export type CardNode = {tag?: string; [key: string]: unknown};
@@ -13,10 +13,7 @@ type PreviewActions = {
   showSlots?: boolean;
   onSelect?: (id: string) => void;
   onRemove?: (id: string) => void;
-  onDragComponent?: (id: string | undefined) => void;
-  draggingId?: string;
-  onMove?: (id: string, slot: string) => void;
-  onPickSlot?: (slot: string) => void;
+  onPointerDragStart?: (id: string, event: ReactPointerEvent<HTMLElement>) => void;
   allowedDropSlots?: readonly string[];
   editableComponents?: readonly string[];
 };
@@ -26,6 +23,11 @@ const object = (value: unknown): CardNode => value && typeof value === 'object' 
 const list = (value: unknown): CardNode[] => Array.isArray(value) ? value.filter(item => item && typeof item === 'object') as CardNode[] : [];
 const string = (value: unknown): string => typeof value === 'string' ? value : value === undefined || value === null ? '' : String(value);
 const color = (value: unknown): string => palette.has(value as string) ? value as string : 'grey';
+const nativeChartColors: Record<string, string> = {'#8F959E':'grey','#3370FF':'blue','#F2B50A':'yellow','#F57C23':'orange','#F54A45':'red'};
+const chartColor = (value: unknown): string => typeof value === 'string' ? nativeChartColors[value.toUpperCase()] ?? color(value) : 'grey';
+const chartSample = (spec: CardNode): CardNode | undefined => list(Array.isArray(spec.data) ? object(spec.data[0]).values : object(spec.data).values)[0];
+const chartFraction = (sample: CardNode | undefined): number => Math.max(0, Math.min(1, Number(sample?.value) || 0));
+const nestedChart = (node: CardNode): CardNode | undefined => node.tag === 'chart' ? node : [...list(node.columns),...list(node.elements)].map(nestedChart).find(Boolean);
 const measure = (value: unknown): string | undefined => typeof value === 'string' && /^(?:\d+(?:\.\d+)?px|\d+(?:\.\d+)?%)$/.test(value) ? value : undefined;
 const box = (value: unknown): string | undefined => typeof value === 'string' && /^(?:\d+(?:\.\d+)?px)(?:\s+\d+(?:\.\d+)?px){0,3}$/.test(value.trim()) ? value : undefined;
 
@@ -133,19 +135,18 @@ function TextNode({data, kind}: {data: CardNode; kind: 'text' | 'div'}) {
 
 function componentLabel(data: CardNode): string {
   if (data.tag === 'button') return string(object(data.text).content ?? object(data.hover_tips).content) || '终止任务';
-  if (data.tag === 'chart') return `上下文 ${Math.round(Number(list(object(object(data.chart_spec).data).values)[0]?.value) * 100)}%`;
+  const chart = nestedChart(data);
+  if (chart) return `上下文 ${Math.round(chartFraction(chartSample(object(chart.chart_spec))) * 100)}%`;
   const content = data.tag === 'collapsible_panel' ? object(object(data.header).title) : data;
   return string(object(content.text).content ?? content.content).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
 }
 function EditableComponent({id, data, actions, children}: {id: string; data: CardNode; actions: PreviewActions; children: ReactNode}) {
   if (!actions.editing || !id || actions.editableComponents && !actions.editableComponents.includes(id)) return children;
   const label = componentLabel(data);
-  const beginDrag = (event: DragEvent) => {event.stopPropagation(); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('application/x-vonvon-card-block', id); actions.onDragComponent?.(id);};
-  const endDrag = () => actions.onDragComponent?.(undefined);
   const select = () => actions.onSelect?.(id);
   return <div className="vcr-widget" data-card-component={id}>
     <div className="vcr-widget-body" inert aria-hidden="true">{children}</div>
-    <button type="button" className="vcr-widget-edit" aria-label={label} draggable={Boolean(actions.onDragComponent)} onDragStart={beginDrag} onDragEnd={endDrag} onClick={event => {event.stopPropagation();select();}}/>
+    <button type="button" className="vcr-widget-edit" aria-label={label} onPointerDown={event => actions.onPointerDragStart?.(id,event)} onClick={event => {event.stopPropagation();select();}}/>
     {actions.onRemove && <button type="button" className="vcr-widget-remove" aria-label={`隐藏 ${label}`} onClick={event => {event.stopPropagation();actions.onRemove?.(id);}}>隐藏</button>}
   </div>;
 }
@@ -167,12 +168,6 @@ function CardElement({data, actions, level = 0}: {data: CardNode; actions: Previ
     'data-card-slot': canDrop && slot || undefined,
     'data-card-slot-label': canDrop && slotLabel || undefined,
     'data-tag': string(data.tag),
-    onDragOver: canDrop ? (event: DragEvent) => { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move'; } : undefined,
-    onDrop: canDrop ? (event: DragEvent) => {
-      event.preventDefault(); event.stopPropagation();
-      const id = event.dataTransfer.getData('application/x-vonvon-card-block');
-      if (id) actions.onMove?.(id, slot);
-    } : undefined,
     style: box(data.margin) ? {margin: box(data.margin)} as CSSProperties : undefined,
   };
   switch (data.tag) {
@@ -190,18 +185,18 @@ function CardElement({data, actions, level = 0}: {data: CardNode; actions: Previ
     case 'chart': {
       const chart = object(data.chart_spec);
       if (chart.type !== 'linearProgress') return null;
-      const sample = list(object(chart.data).values)[0];
-      const fraction = Math.max(0, Math.min(1, Number(sample?.value) || 0));
+      const sample = chartSample(chart);
+      const fraction = chartFraction(sample);
       const percentage = Math.round(fraction * 100);
-      return wrap(<div className="vcr-progress" {...attrs} data-color={color(chart.color)} role="img" aria-label={`${string(sample?.label)} ${percentage}%`}>
-        <span className="vcr-progress-label">{string(sample?.label)}</span>
+      const tint = Array.isArray(chart.color) ? chart.color[0] : chart.color;
+      const label = string(sample?.label ?? sample?.name);
+      return wrap(<div className="vcr-progress" {...attrs} data-color={chartColor(tint)} role="img" aria-label={`${label} ${percentage}%`}>
         <span className="vcr-progress-track"><span className="vcr-progress-fill" style={{width: `${fraction * 100}%`}}/></span>
-        <span className="vcr-progress-value">{percentage}%</span>
       </div>);
     }
-    case 'column_set': return <div className="vcr-columns" data-flex={string(data.flex_mode) || 'none'} data-spacing={string(data.horizontal_spacing) || 'small'} data-align={string(data.horizontal_align) || undefined} {...attrs} style={{...attrs.style, columnGap: measure(data.horizontal_spacing)}}>
+    case 'column_set': return wrap(<div className="vcr-columns" data-flex={string(data.flex_mode) || 'none'} data-spacing={string(data.horizontal_spacing) || 'small'} data-align={string(data.horizontal_align) || undefined} {...attrs} style={{...attrs.style, columnGap: measure(data.horizontal_spacing)}}>
       {list(data.columns).map((item, i) => <CardElement key={i} data={item} actions={actions} level={level + 1}/>)}{pickSlot}
-    </div>;
+    </div>);
     case 'column': return <div className="vcr-column" data-width={string(data.width) || 'auto'} data-valign={string(data.vertical_align) || 'top'} {...attrs} style={{...attrs.style, ...(data.width === 'weighted' ? {flexGrow: Math.max(1, Number(data.weight) || 1)} : {width: measure(data.width)})}}>
       {list(data.elements).map((item, i) => <CardElement key={i} data={item} actions={actions} level={level + 1}/>)}{pickSlot}
     </div>;
@@ -231,22 +226,22 @@ function Panel({data, attrs, actions, level, pickSlot}: {data: CardNode; attrs: 
 export function FeishuContentSample({node}: {node: CardNode}) {
   const content = node.tag === 'collapsible_panel' ? object(object(node.header).title) : node;
   const label = string(object(content.text).content);
-  return <div className="vcr-sample">{content.tag === 'button' ? <span className={`vcr-button${!label ? ' vcr-button--stop' : ''}`} data-variant={string(content.type)} role="img" aria-label={label || string(object(content.hover_tips).content) || '终止按钮'}>{Boolean(content.icon) && <CardIcon spec={content.icon}/>}{label}</span> : content.tag === 'chart' ? <CardElement data={content} actions={{}}/> : <TextNode data={content} kind={content.tag === 'div' ? 'div' : 'text'}/>}</div>;
+  return <div className="vcr-sample">{content.tag === 'button' ? <span className={`vcr-button${!label ? ' vcr-button--stop' : ''}`} data-variant={string(content.type)} role="img" aria-label={label || string(object(content.hover_tips).content) || '终止按钮'}>{Boolean(content.icon) && <CardIcon spec={content.icon}/>}{label}</span> : content.tag === 'chart' || content.tag === 'column_set' ? <CardElement data={content} actions={{}}/> : <TextNode data={content} kind={content.tag === 'div' ? 'div' : 'text'}/>}</div>;
 }
 
 function elementKey(item: CardNode, index: number) {
   return string(item.preview_slot ?? item.element_id ?? item.preview_component) || (item.tag === 'column_set' ? `row:${list(item.columns).map(column => string(column.preview_slot)).join(':')}` : `${item.tag}:${index}`);
 }
 
-export function FeishuCardPreview({card, onSelect, onRemove, onDragComponent, draggingId, editing, showSlots, onMove, onPickSlot, allowedDropSlots, editableComponents, replyContext}: {card: CardJson; replyContext?: string} & PreviewActions) {
-  const actions = {onSelect, onRemove, onDragComponent, editing, showSlots, onMove, onPickSlot, allowedDropSlots, editableComponents};
+export function FeishuCardPreview({card, onSelect, onRemove, onPointerDragStart, editing, showSlots, allowedDropSlots, editableComponents, replyContext}: {card: CardJson; replyContext?: string} & PreviewActions) {
+  const actions = {onSelect, onRemove, onPointerDragStart, editing, showSlots, allowedDropSlots, editableComponents};
   const contentActions = {...actions, showSlots: false};
   const header = object(card.header);
   const body = object(card.body);
   const hasControls = list(body.elements).some(node => node.element_id === 'controls');
   const actionTargets = allowedDropSlots?.some(slot => slot.startsWith('actions-'));
   const positions: Record<string, string> = {'top-left':'上方左侧',top:'上方整行','top-right':'上方右侧',process:'执行过程','bottom-left':'下方左侧',bottom:'下方整行','bottom-right':'下方右侧','actions-left':'按钮区左侧','actions-right':'按钮区右侧'};
-  const target = (slot: string) => !allowedDropSlots || allowedDropSlots.includes(slot) ? <div key={slot} className="vcr-drop-zone" data-card-slot={slot} onDragOver={event => {event.preventDefault();event.stopPropagation();event.dataTransfer.dropEffect='move';}} onDrop={event => {event.preventDefault();event.stopPropagation();const id=event.dataTransfer.getData('application/x-vonvon-card-block') || draggingId;if(id)onMove?.(id,slot);}}>{positions[slot]}</div> : null;
+  const target = (slot: string) => !allowedDropSlots || allowedDropSlots.includes(slot) ? <div key={slot} className="vcr-drop-zone" data-card-slot={slot}>{positions[slot]}</div> : null;
   return <article className="vcr-card" aria-label="飞书消息卡片" data-width-mode={string(object(card.config).width_mode) || undefined}>
     {Boolean(card.header) && <header className="vcr-card-header" data-template={string(header.template) || 'blue'}><div className="vcr-card-heading">{string(object(header.title).content)}</div>{Boolean(object(header.subtitle).content) && <div className="vcr-card-subtitle">{string(object(header.subtitle).content)}</div>}</header>}
     {replyContext && <div className="vcr-reply-context"><span>{replyContext}</span></div>}

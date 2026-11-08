@@ -54,7 +54,9 @@ export function groupTabForSection(section?: string): GroupDesignTab {
     case '群内响应':
     case '运行中来了消息':
     case '响应成员':
-    case '消息与提醒': return 'response';
+    case '消息与提醒':
+    case '消息卡片':
+    case '完成提醒': return 'response';
     default: return 'capabilities';
   }
 }

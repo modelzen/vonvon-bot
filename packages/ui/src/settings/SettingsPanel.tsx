@@ -35,6 +35,7 @@ import {NativePermissionFields, nativePermissionPatch} from './NativePermissionF
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
 import './permission-summary.css';
 import {BotTitleSettings, BotCommentSettings} from './BotModelSettings';
+import {CardDisplayEntry} from './card-display/CardDisplayStudio';
 
 type AgentScope = { kind: "agent"; botId: AgentId };
 type ProjectScope = { kind: "project"; botId: AgentId; projectName: string };
@@ -816,6 +817,13 @@ function AgentPanel({
           {run.effective.maxConcurrentRuns !== run.stored.maxConcurrentRuns && <SettingsRow title="当前运行上限" value={String(run.effective.maxConcurrentRuns)} description="重启后使用新上限。"/>}
           <SettingsRow title="空闲超时" description="单位秒，0 表示关闭。" trailing={<NumberField label="空闲超时" value={draft.runIdleTimeoutSeconds} min={0} max={3600} disabled={disabled} onChange={runIdleTimeoutSeconds => set({...draft,runIdleTimeoutSeconds})}/>}/>
         </>}/>
+      <CardDisplayEntry key={view.scope.botId} level="bot" saved={cards.stored.cardDisplay} effective={cards.effective.cardDisplay} revision={cards.revision}
+        readonlyMessage={cards.access.kind === 'readonly' ? cards.access.message : undefined} botName="此 Bot" groupName="Bot 默认"
+        showTools={cards.effective.showToolCalls} showModel={cards.effective.showModel} completionMode={view.sections.completion.stored.mode}
+        onSave={(cardDisplay, revision) => save('cards', {cardDisplay}, revision)} onRefresh={refresh}/>
+      <Editor title="完成提醒" section={view.sections.completion} save={(patch, revision) => save('completion', patch, revision)} render={(draft, set, disabled, commit) => <>
+        <SettingsRow title="提醒方式" description="手动时，执行中的消息卡片会显示「完成后提醒我」。" trailing={<SettingChoices segmented label="完成提醒" disabled={disabled} value={draft.mode} choices={[{value:'manual',label:'手动'},{value:'long',label:'长任务'},{value:'failures',label:'失败时'},{value:'always',label:'每次'}]} onChange={mode => void commit({mode})}/>}/>
+        {draft.mode === 'long' && <SettingsRow title="超过几分钟提醒" trailing={<NumberField label="长任务分钟数" value={draft.longTaskMinutes} min={1} max={1440} disabled={disabled} onChange={longTaskMinutes => set({...draft,longTaskMinutes})}/>}/>}</>}/>
       <SettingsGroup
         label="语音转文字"
         id={settingAnchor("语音转文字")}
