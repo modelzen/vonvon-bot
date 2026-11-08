@@ -13,22 +13,36 @@ import type { AccountProfileStats, ClaudeLocalStats } from '../types';
  * streaks and start hours. Only counting fields are read; message text is never kept or logged.
  *
  * Results are cached per transcript (size, mtime) in Vonvon's data dir and recombined on every read, so today and
- * the streak always follow the clock. A transcript Claude Code cleans up later (cleanupPeriodDays) keeps counting,
- * as Claude Code's own stats cache keeps the days it already counted.
+ * the streak always follow the clock. Like Claude Code's own stats cache (`Cm`, `yi`, `Sm`), the days through the
+ * yesterday of the last scan are settled: a changed transcript keeps its settled days and its session as first
+ * counted, and only later days come from the new read. So a transcript Claude Code cleans up later
+ * (cleanupPeriodDays) keeps counting, and one past 100 MiB keeps the days its tail no longer reaches.
  */
 
 const COUNTED_TYPES = new Set(['user', 'assistant', 'attachment', 'system']);
 /** Cheap pre-check before JSON.parse: a counted line has one of these as its top-level type. */
 const COUNTED_LINE = /"type"\s*:\s*"(?:user|assistant|attachment|system)"/;
 const SYNTHETIC_MODEL = '<synthetic>';
-/** Claude Code reads only the last 100 MiB of a larger transcript and drops the cut first line. */
-const TAIL_BYTES = 100 * 1024 * 1024;
 const CHUNK_BYTES = 1 << 18;
 const CONCURRENCY = 2;
 const REFRESH_MS = 60_000;
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+const DEFAULTS = {
+  /** Claude Code reads only the last 100 MiB of a larger transcript and drops the cut first line. */
+  tailBytes: 100 * 1024 * 1024,
+  now: (): Date => new Date(),
+};
+let opts = DEFAULTS;
+
+/** For tests: a smaller tail window and a fixed clock. */
+export function configureClaudeLocalStats(overrides: Partial<typeof DEFAULTS>): void {
+  opts = { ...DEFAULTS, ...overrides };
+}
 
 const time = z.number().min(-8.64e15).max(8.64e15);
+const day = z.string().refine(isDay);
 const fileSchema = z.object({
   size: z.number(),
   mtimeMs: time,
@@ -40,11 +54,19 @@ const fileSchema = z.object({
   first: time.optional(),
   last: time.optional(),
   lines: z.number().optional(),
+  /** first seen after the day its session started was settled: Claude Code never counts that session, only later days */
+  uncounted: z.literal(true).optional(),
   /** UTC day → main-session messages and tokens per model */
-  days: z.record(z.string(), z.object({ messages: z.number().optional(), tokens: z.record(z.string(), z.number()).optional() })),
+  days: z.record(day, z.object({ messages: z.number().optional(), tokens: z.record(z.string(), z.number()).optional() })),
 });
-const cacheSchema = z.object({ version: z.literal(CACHE_VERSION), root: z.string(), files: z.record(z.string(), fileSchema) });
+const cacheSchema = z.object({
+  version: z.literal(CACHE_VERSION), root: z.string(),
+  /** Claude Code's lastComputedDate: days through this one are settled */
+  settled: day.optional(),
+  files: z.record(z.string(), fileSchema),
+});
 type FileStats = z.infer<typeof fileSchema>;
+type Saved = { files: Map<string, FileStats>; settled?: string };
 
 export type ClaudeLocalProfile = Pick<AccountProfileStats, 'dailyBuckets' | 'lifetimeTokens' | 'peakDailyTokens' | 'currentStreakDays' | 'longestStreakDays'>
   & { localStats: ClaudeLocalStats };
@@ -54,6 +76,7 @@ type State = {
   controller: AbortController;
   /** undefined until the first scan (or the saved cache) is in */
   files?: Map<string, FileStats>;
+  settled?: string;
   /** no transcript on disk at the last look: Claude Code then shows no stats at all */
   empty?: boolean;
   running?: Promise<void>;
@@ -80,12 +103,17 @@ export function refreshClaudeLocalStats(root: string, force = false): Promise<vo
   return running;
 }
 
-/** What the last scan of `root` found, recombined for `now`. */
-export function claudeLocalStats(root: string, now = new Date()): ClaudeLocalProfile {
+/** What the last scan of `root` found, recombined for `now`. Never throws: quota is returned without stats instead. */
+export function claudeLocalStats(root: string, now = opts.now()): ClaudeLocalProfile {
   const current = state?.root === root ? state : undefined;
   if (!current?.files) return withoutStats('scanning');
   if (current.empty) return withoutStats('unavailable');
-  return summarize(current.files.values(), now);
+  try {
+    return summarize(current.files.values(), now);
+  } catch (error) {
+    log.warn('claude-stats', 'summary-failed', { code: errorCode(error) });
+    return withoutStats('unavailable');
+  }
 }
 
 /** Daemon shutdown: stops a running scan and waits until it lets go of its files. A later read starts over. */
@@ -103,15 +131,30 @@ function withoutStats(stateName: 'scanning' | 'unavailable'): ClaudeLocalProfile
 async function rescan(current: State): Promise<void> {
   const { root, controller: { signal } } = current;
   // A saved cache answers (stale) while this scan runs; without one the first scan reports "scanning".
-  current.files ??= await loadCache(root);
+  if (!current.files) Object.assign(current, await loadCache(root));
   const listed = await listTranscripts(root);
   signal.throwIfAborted();
   const previous = current.files ?? new Map<string, FileStats>();
+  const yesterday = shiftDay(utcDay(opts.now()), -1);
+  // Claude Code recounts only the days after its watermark, which is never later than yesterday.
+  const settled = current.settled !== undefined && current.settled > yesterday ? yesterday : current.settled;
+  // Moved to another project folder: the same session, so the new path takes over the entry the old one left.
+  const listedPaths = new Set(listed);
+  const left = new Map<string, string>();
+  for (const path of previous.keys()) if (!listedPaths.has(path)) left.set(sessionKey(root, path), path);
+  const movedFrom = new Set<string>();
   const next = new Map<string, FileStats>();
   let changed = false, failures = 0, failure: string | undefined;
   await eachLimit(listed, CONCURRENCY, async path => {
     signal.throwIfAborted();
-    const old = previous.get(path);
+    let old = previous.get(path);
+    const from = old ? undefined : left.get(sessionKey(root, path));
+    if (from !== undefined) {
+      left.delete(sessionKey(root, path));
+      movedFrom.add(from);
+      old = previous.get(from);
+      changed = true;
+    }
     try {
       const { size, mtimeMs } = await stat(path);
       if (old?.size === size && old.mtimeMs === mtimeMs) {
@@ -119,7 +162,7 @@ async function rescan(current: State): Promise<void> {
         next.set(path, old.gone ? { ...old, gone: undefined } : old);
         return;
       }
-      next.set(path, await scanFile(path, size, mtimeMs, signal));
+      next.set(path, settle(old, await scanFile(path, size, mtimeMs, signal), settled));
       changed = true;
     } catch (error) {
       if (signal.aborted) throw error;
@@ -128,19 +171,47 @@ async function rescan(current: State): Promise<void> {
       if (old) next.set(path, old);
     }
   });
-  const present = new Set(listed.map(path => sessionKey(root, path)));
   for (const [path, old] of previous) {
-    if (next.has(path)) continue;
-    // Moved to another project folder: the same session, counted once under its new path.
-    if (present.has(sessionKey(root, path))) { changed = true; continue; }
+    if (next.has(path) || movedFrom.has(path)) continue;
     if (!old.gone) changed = true;
     next.set(path, old.gone ? old : { ...old, gone: true });
   }
   signal.throwIfAborted();
+  // Claude Code sets its watermark once a pass through yesterday finds anything, then moves it to yesterday on every
+  // pass; with no transcript listed it computes nothing and keeps it.
+  const watermark = listed.length && (settled !== undefined || countsThrough(next.values(), yesterday)) ? yesterday : current.settled;
+  if (watermark !== current.settled) changed = true;
   current.files = next;
+  current.settled = watermark;
   current.empty = listed.length === 0;
   if (failures) log.warn('claude-stats', 'files-unreadable', { count: failures, code: failure });
-  if (changed) await saveCache(root, next);
+  if (changed) await saveCache(root, { files: next, settled: watermark });
+}
+
+/**
+ * A changed transcript, merged like Claude Code's cache (`Cm` → `yi`, then `Sm` for today): days through `settled`
+ * keep their cached counts and later days come from the new read, so days the 100 MiB tail no longer reaches stay.
+ * A session counts once, as read in the pass that settled the day it started; one first seen after that day never
+ * counts as a session, though its later days do.
+ */
+function settle(old: FileStats | undefined, fresh: FileStats, settled: string | undefined): FileStats {
+  if (settled === undefined) return fresh;
+  const days: FileStats['days'] = {};
+  for (const [date, counts] of Object.entries(old?.days ?? {})) if (date <= settled) days[date] = counts;
+  for (const [date, counts] of Object.entries(fresh.days)) if (date > settled) days[date] = counts;
+  const base = { size: fresh.size, mtimeMs: fresh.mtimeMs, ...(fresh.sub ? { sub: true as const } : {}), days };
+  const session = old?.first !== undefined && utcDay(new Date(old.first)) <= settled ? old : fresh;
+  if (session.first === undefined) return base;
+  const uncounted = session.uncounted || (session === fresh && utcDay(new Date(session.first)) <= settled);
+  return { ...base, first: session.first, last: session.last, lines: session.lines, ...(uncounted ? { uncounted: true as const } : {}) };
+}
+
+/** Whether a pass through `last` finds anything: Claude Code's `Qr` on its first full pass. */
+function countsThrough(files: Iterable<FileStats>, last: string): boolean {
+  for (const file of files) {
+    if (file.first !== undefined && utcDay(new Date(file.first)) <= last && Object.keys(file.days).some(date => date <= last)) return true;
+  }
+  return false;
 }
 
 /** The files Claude Code's Stats reads: `<project>/*.jsonl` and `<project>/<dir>/subagents/agent-*.jsonl`, nothing deeper. */
@@ -184,8 +255,9 @@ async function scanFile(path: string, size: number, mtimeMs: number, signal: Abo
     if (lines++ === 0) first = line.timestamp;
     last = line.timestamp;
     const at = new Date(line.timestamp as string);
-    if (Number.isNaN(at.getTime())) continue;
-    const key = utcDay(at);
+    // Claude Code skips the day counts of a line without a valid date; past year 9999 there is no YYYY-MM-DD key.
+    const key = Number.isNaN(at.getTime()) ? '' : utcDay(at);
+    if (!DAY.test(key)) continue;
     if (!sub) { const day = (days[key] ??= {}); day.messages = (day.messages ?? 0) + 1; }
     const usage = line.type === 'assistant' ? line.message?.usage : undefined;
     if (!usage) continue;
@@ -206,7 +278,7 @@ async function scanFile(path: string, size: number, mtimeMs: number, signal: Abo
 /** Lines split on "\n" like Claude Code, read up to the size the cache entry is keyed on. */
 async function* transcriptLines(path: string, size: number, signal: AbortSignal): AsyncGenerator<string> {
   if (size === 0) return;
-  const start = Math.max(0, size - TAIL_BYTES);
+  const start = Math.max(0, size - opts.tailBytes);
   let cut = start > 0, offset = start, carry: Buffer[] = [];
   const stream = createReadStream(path, { start, end: size - 1, highWaterMark: CHUNK_BYTES, signal });
   for await (const chunk of stream as AsyncIterable<Buffer>) {
@@ -240,7 +312,7 @@ function summarize(files: Iterable<FileStats>, now: Date): ClaudeLocalProfile {
     // Claude Code counts through yesterday in a cached pass that skips sessions starting later, and today in a pass
     // over the files modified today; nothing dated after today counts.
     if (start > today || (start === today && !touchedToday)) continue;
-    if (!file.sub) {
+    if (!file.sub && !file.uncounted) {
       sessions++;
       hourCounts[new Date(file.first).getHours()]!++;
       const ms = file.last - file.first;
@@ -288,16 +360,18 @@ function summarize(files: Iterable<FileStats>, now: Date): ClaudeLocalProfile {
   };
 }
 
-async function loadCache(root: string): Promise<Map<string, FileStats> | undefined> {
+/** An older version, another root or any invalid field (an impossible day included) discards the cache: a full rescan. */
+async function loadCache(root: string): Promise<Saved | undefined> {
   try {
     const parsed = cacheSchema.safeParse(JSON.parse(await readFile(paths.claudeLocalStatsFile, 'utf8')));
-    return parsed.success && parsed.data.root === root ? new Map(Object.entries(parsed.data.files)) : undefined;
+    if (!parsed.success || parsed.data.root !== root) return undefined;
+    return { files: new Map(Object.entries(parsed.data.files)), settled: parsed.data.settled };
   } catch { return undefined; }
 }
 
-async function saveCache(root: string, files: Map<string, FileStats>): Promise<void> {
+async function saveCache(root: string, { files, settled }: Saved): Promise<void> {
   try {
-    await writeFileAtomic(paths.claudeLocalStatsFile, JSON.stringify({ version: CACHE_VERSION, root, files: Object.fromEntries(files) }));
+    await writeFileAtomic(paths.claudeLocalStatsFile, JSON.stringify({ version: CACHE_VERSION, root, settled, files: Object.fromEntries(files) }));
   } catch (error) {
     // Costs only a longer scan after the next restart.
     log.warn('claude-stats', 'cache-write-failed', { code: errorCode(error) });
@@ -316,6 +390,13 @@ async function eachLimit<T>(items: T[], limit: number, run: (item: T) => Promise
 /** Claude Code's day key: the UTC date. */
 function utcDay(date: Date): string {
   return date.toISOString().split('T')[0]!;
+}
+
+/** A real date key, as Claude Code checks the dates in its own cache (`hi`). */
+function isDay(key: string): boolean {
+  if (!DAY.test(key)) return false;
+  const date = new Date(key);
+  return !Number.isNaN(date.getTime()) && utcDay(date) === key;
 }
 
 function shiftDay(day: string, by: number): string {

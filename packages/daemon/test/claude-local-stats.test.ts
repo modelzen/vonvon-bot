@@ -30,6 +30,13 @@ const assistant = (timestamp: string, model: string, [input, output, read, write
   message: { model, content: [{ type: 'text', text: 'private reply text' }], usage: { input_tokens: input, output_tokens: output, cache_read_input_tokens: read, cache_creation_input_tokens: write } },
   ...extra,
 });
+/** The module on a fixed clock: the settled date follows it like today does. */
+async function load(options: { now?: Date; tailBytes?: number } = {}) {
+  const stats = await import('../src/agent/claude-agent/local-stats');
+  const at = options.now ?? now;
+  stats.configureClaudeLocalStats({ now: () => at, ...(options.tailBytes ? { tailBytes: options.tailBytes } : {}) });
+  return stats;
+}
 async function transcript(path: string, lines: string[], mtime = touched): Promise<string> {
   const file = join(root, path);
   await mkdir(dirname(file), { recursive: true });
@@ -72,7 +79,7 @@ function hours(...starts: string[]): number[] {
 
 it('counts like Claude Code /usage Stats: files, sidechains, sub-agents, UTC days, sessions, streaks and models', async () => {
   await fixture();
-  const stats = await import('../src/agent/claude-agent/local-stats');
+  const stats = await load();
   await stats.refreshClaudeLocalStats(root);
   expect(stats.claudeLocalStats(root, now)).toEqual({
     dailyBuckets: [
@@ -107,7 +114,7 @@ it("keeps Claude Code's day window: nothing after today, and a session starting 
   // Its today pass reads only transcripts modified today.
   await transcript('p/untouched.jsonl', [user('2026-11-06T10:00:00Z'), user('2026-11-08T10:00:00Z')], new Date('2026-11-07T00:00:00Z'));
   await transcript('p/untouched-today.jsonl', [user('2026-11-08T07:00:00Z')], new Date('2026-11-07T00:00:00Z'));
-  const stats = await import('../src/agent/claude-agent/local-stats');
+  const stats = await load();
   await stats.refreshClaudeLocalStats(root);
   expect(stats.claudeLocalStats(root, now)).toMatchObject({
     dailyBuckets: [
@@ -125,7 +132,7 @@ it('rescans only a changed transcript, keeps deleted ones and reuses the saved c
     return { ...fs, createReadStream: vi.fn(fs.createReadStream) };
   });
   await fixture();
-  let stats = await import('../src/agent/claude-agent/local-stats');
+  let stats = await load();
   let reads = (await import('node:fs')).createReadStream as unknown as Mock;
   await stats.refreshClaudeLocalStats(root);
   expect(reads).toHaveBeenCalledTimes(4);
@@ -145,13 +152,13 @@ it('rescans only a changed transcript, keeps deleted ones and reuses the saved c
   expect(reads).not.toHaveBeenCalled();
   expect(stats.claudeLocalStats(root, now).localStats).toMatchObject({ sessions: 3, messages: 8 });
 
-  // A transcript moved to another project folder is the same session.
+  // A transcript moved to another project folder is the same session: it keeps its entry, unread.
   const moved = join(root, 'p-gamma', 's2.jsonl');
   await mkdir(dirname(moved));
   await rename(s2, moved);
   reads.mockClear();
   await stats.refreshClaudeLocalStats(root, true);
-  expect(reads.mock.calls.map(call => call[0])).toEqual([moved]);
+  expect(reads).not.toHaveBeenCalled();
   const before = stats.claudeLocalStats(root, now);
   expect(before).toMatchObject({ lifetimeTokens: 1620, localStats: { sessions: 3, messages: 8 } });
 
@@ -161,12 +168,110 @@ it('rescans only a changed transcript, keeps deleted ones and reuses the saved c
 
   await stats.stopClaudeLocalStats();
   vi.resetModules();
-  stats = await import('../src/agent/claude-agent/local-stats');
+  stats = await load();
   reads = (await import('node:fs')).createReadStream as unknown as Mock;
   reads.mockClear();
   await stats.refreshClaudeLocalStats(root);
   expect(reads).not.toHaveBeenCalled();
   expect(stats.claudeLocalStats(root, now)).toEqual(before);
+});
+
+it('keeps the settled days of a transcript growing past the tail limit and recounts only the later days', async () => {
+  // Like Claude Code: days through the yesterday of the last scan keep their counts, later days come from the new read.
+  const pad = (count: number) => Array<string>(count).fill(JSON.stringify({ type: 'progress', data: 'x'.repeat(100) }));
+  const opus = (timestamp: string, tokens: number) => assistant(timestamp, 'claude-opus', [tokens, 0, 0, 0]);
+  const nextDay = new Date('2026-11-09T12:00:00Z');
+  const file = await transcript('p/long.jsonl', [opus('2026-11-07T10:00:00Z', 1000), ...pad(20), opus('2026-11-08T09:00:00Z', 200)]);
+  const grow = async (lines: string[], at: Date) => { await appendFile(file, `${lines.join('\n')}\n`); await utimes(file, touched, new Date(at.getTime() - 3_600_000)); };
+  const session = { sessions: 1, longestSessionSec: 82_800, longestSessionMessages: 2 };
+  let stats = await load({ tailBytes: 4096 });
+  await stats.refreshClaudeLocalStats(root);
+  expect(stats.claudeLocalStats(root)).toMatchObject({ lifetimeTokens: 1200, localStats: { messages: 2, activeDays: 2, ...session } });
+
+  // The tail no longer reaches 11-07, settled at the first scan; the session stays as first counted.
+  await grow([...pad(8), opus('2026-11-08T10:00:00Z', 300)], now);
+  await stats.refreshClaudeLocalStats(root, true);
+  expect(stats.claudeLocalStats(root)).toMatchObject({
+    dailyBuckets: [{ date: '2026-11-07', tokens: 1000, messages: 1 }, { date: '2026-11-08', tokens: 500, messages: 2 }],
+    lifetimeTokens: 1500, localStats: { messages: 3, activeDays: 2, ...session },
+  });
+
+  // A day later 11-08 is not settled yet, so it is recounted from what the tail still holds, as Claude Code does.
+  stats = await load({ now: nextDay, tailBytes: 4096 });
+  await grow([...pad(20), opus('2026-11-09T08:00:00Z', 50)], nextDay);
+  await stats.refreshClaudeLocalStats(root, true);
+  expect(stats.claudeLocalStats(root).dailyBuckets).toEqual([
+    { date: '2026-11-07', tokens: 1000, messages: 1 }, { date: '2026-11-08', tokens: 300, messages: 1 }, { date: '2026-11-09', tokens: 50, messages: 1 },
+  ]);
+
+  // That scan settled 11-08: it stays when the tail moves past it.
+  await grow([...pad(8), opus('2026-11-09T09:00:00Z', 70)], nextDay);
+  await stats.refreshClaudeLocalStats(root, true);
+  expect(stats.claudeLocalStats(root)).toMatchObject({
+    dailyBuckets: [{ date: '2026-11-07', tokens: 1000, messages: 1 }, { date: '2026-11-08', tokens: 300, messages: 1 }, { date: '2026-11-09', tokens: 120, messages: 2 }],
+    lifetimeTokens: 1420, currentStreakDays: 3, localStats: { messages: 4, activeDays: 3, ...session },
+  });
+
+  // The settled date survives a restart.
+  await stats.stopClaudeLocalStats();
+  vi.resetModules();
+  stats = await load({ now: nextDay, tailBytes: 4096 });
+  await grow(pad(1), nextDay);
+  await stats.refreshClaudeLocalStats(root);
+  expect(stats.claudeLocalStats(root)).toMatchObject({ lifetimeTokens: 1420, localStats: { messages: 4, ...session } });
+});
+
+it('counts only the unsettled days of a transcript that shows up after its session started on a settled day', async () => {
+  await fixture();
+  const stats = await load();
+  await stats.refreshClaudeLocalStats(root);
+  const before = stats.claudeLocalStats(root);
+  // Claude Code never recounts a settled day, so it neither counts this session nor its 11-05 lines.
+  await transcript('p-beta/s5.jsonl', [user('2026-11-05T10:00:00Z'), assistant('2026-11-05T10:05:00Z', 'claude-opus', [5, 5, 0, 0]), user('2026-11-08T11:30:00Z')]);
+  await stats.refreshClaudeLocalStats(root, true);
+  expect(stats.claudeLocalStats(root)).toEqual({
+    ...before,
+    dailyBuckets: before.dailyBuckets.map(day => day.date === '2026-11-08' ? { ...day, messages: (day.messages ?? 0) + 1 } : day),
+    localStats: { ...before.localStats, messages: before.localStats.messages + 1 },
+  });
+});
+
+it('discards a cache with an impossible day or an older version, and a failing summary still returns quota', async () => {
+  const warn = vi.fn();
+  vi.doMock('../src/core/logger', () => ({ log: { info: vi.fn(), warn, error: vi.fn() } }));
+  vi.doMock('node:fs', async original => {
+    const fs = await original<typeof import('node:fs')>();
+    return { ...fs, createReadStream: vi.fn(fs.createReadStream) };
+  });
+  await fixture();
+  let stats = await load();
+  await stats.refreshClaudeLocalStats(root);
+  const expected = stats.claudeLocalStats(root);
+  const cache = join(base, 'vh', 'claude-local-stats.json');
+  const saved = JSON.parse(await readFile(cache, 'utf8')) as { files: Record<string, { days: Record<string, unknown> }> };
+  const s1 = saved.files[join(root, 'p-alpha', 's1.jsonl')]!;
+  const impossible = { ...saved, files: { ...saved.files, [join(root, 'p-alpha', 's1.jsonl')]: { ...s1, days: { '2026-11-00': s1.days['2026-11-06'], '2026-11-01': s1.days['2026-11-07'] } } } };
+  for (const broken of [impossible, { ...saved, version: 1 }]) {
+    await stats.stopClaudeLocalStats();
+    await writeFile(cache, JSON.stringify(broken));
+    vi.resetModules();
+    stats = await load();
+    const reads = (await import('node:fs')).createReadStream as unknown as Mock;
+    reads.mockClear();
+    await stats.refreshClaudeLocalStats(root);
+    expect(reads).toHaveBeenCalledTimes(4);
+    expect(stats.claudeLocalStats(root)).toEqual(expected);
+  }
+
+  // Whatever breaks the summary, quota comes back and one line carries only an error code.
+  await writeFile(join(base, 'home', '.claude', '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'fixture-token' } }));
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ five_hour: { utilization: 4 } })));
+  const { fetchClaudeUsageBundle } = await import('../src/agent/claude-agent/usage');
+  const broken = vi.spyOn(Date.prototype, 'toISOString').mockImplementation(() => { throw new RangeError('Invalid time value'); });
+  const result = await fetchClaudeUsageBundle().finally(() => broken.mockRestore());
+  expect(result.usage.main.primary).toMatchObject({ usedPercent: 4 });
+  expect(result.profile.localStats).toEqual({ state: 'unavailable', models: [], sessions: 0, messages: 0, activeDays: 0 });
+  expect(warn.mock.calls).toEqual([['claude-stats', 'summary-failed', { code: 'RangeError' }]]);
 });
 
 it('reports scanning during the first scan while quota still returns, and stops on shutdown', async () => {
@@ -180,7 +285,7 @@ it('reports scanning during the first scan while quota still returns, and stops 
   await writeFile(join(base, 'home', '.claude', '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'fixture-token', subscriptionType: 'max' } }));
   vi.stubGlobal('fetch', vi.fn(async () => Response.json({ five_hour: { utilization: 12, resets_at: null } })));
   const { fetchClaudeUsageBundle } = await import('../src/agent/claude-agent/usage');
-  const stats = await import('../src/agent/claude-agent/local-stats');
+  const stats = await load();
 
   const first = await fetchClaudeUsageBundle();
   expect(first.usage.main.primary).toMatchObject({ usedPercent: 12 });
@@ -223,7 +328,7 @@ it('logs one line without paths when the scan fails and still returns quota', as
 });
 
 it('reports unavailable without writing anything when Claude Code has no transcripts', async () => {
-  const stats = await import('../src/agent/claude-agent/local-stats');
+  const stats = await load();
   await stats.refreshClaudeLocalStats(root);
   expect(stats.claudeLocalStats(root, now).localStats.state).toBe('unavailable');
   await expect(stat(join(base, 'vh'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -245,7 +350,7 @@ it('reads only the last 100 MiB of a larger transcript, dropping the cut first l
     await write(last, size - Buffer.byteLength(last));
   } finally { await handle.close(); }
   await utimes(file, touched, touched);
-  const stats = await import('../src/agent/claude-agent/local-stats');
+  const stats = await load();
   await stats.refreshClaudeLocalStats(root);
   expect(stats.claudeLocalStats(root, now)).toMatchObject({ dailyBuckets: [{ date: '2026-11-03', tokens: 0, messages: 1 }], localStats: { sessions: 1 } });
 });
