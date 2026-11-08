@@ -17,8 +17,8 @@ it("names every request once, nested variants by their own field", () => {
   // devices 8.4: the eleven dead kinds left, the nine device kinds and admin.negotiate came; C5 added memory.branchDelete.
   // devices-ui-2 4.9: environment.installCodex and environment.startCodexLogin left too. devices-ui-4 added
   // machine.desktopUpdateReport. main 必败: 152 kinds, none of them device
-  // dm-agent 7.3: command.feishuRead. Badges added command.setAgentBadgeNumber.
-  expect(kinds).toHaveLength(154);
+  // dm-agent 7.3: command.feishuRead. Badges added command.setAgentBadgeNumber. now-share N5: the four admin.share* kinds.
+  expect(kinds).toHaveLength(158);
   for (const kind of ["device.pair", "device.setPort", "admin.negotiate", "memory.branchDelete", "machine.desktopUpdateReport"]) expect(kinds).toContain(kind);
   for (const kind of ["machine.repairCli", "collaboration.openGroup", "environment.installCodex", "environment.startCodexLogin"]) expect(kinds).not.toContain(kind);
 });
