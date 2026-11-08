@@ -43,6 +43,7 @@
 | N0 | 本计划和协议字段（`profile.localStats`、`dailyBuckets[].messages`、`judgeUsage` 的 `bots[].sources`） | — |
 | N1 | daemon：判断次数按 Bot 分来源 | N0 |
 | N2 | daemon：Claude Code 本机统计 | N0 |
+| N2b | daemon 和 UI：Claude 用量补上 Claude Code 清理掉的历史；没有订阅额度时照常显示统计，额度一栏写明原因 | N2、N3 |
 | N3 | UI：此刻页顺序、三个用量面板、Fable 一行、Jev 图标 | N0；数据来自 N1、N2，没有时降级 |
 | N4 | UI：挂绳几版，owner 选后定稿 | — |
 | N5a | UI：`ShareModel`、打码、`ShareCard`、离屏窗口的分享卡入口、分享框（选项、预览、复制、发到飞书、收件人） | N3；接口见 N5 |
@@ -68,10 +69,22 @@ N1 小，和 N3 一起做（同一个 PR 也可以）。N2、N3、N4 并行。N5
   - 天按 UTC 日期（`toISOString().slice(0,10)`），连续活跃从今天往回数。
   - 最长会话、活跃天数、最常用模型、峰值小时照它的定义。
 - 只取计数字段，不读、不存、不记日志消息正文。
-- 缓存：放 Vonvon 自己的数据目录（`config/paths` 里找合适的位置），按文件路径、大小、mtime 增量；到昨天为止的天数结果缓存，今天每次重算。不读写 Claude Code 自己的 `stats-cache.json`。
+- 缓存：放 Vonvon 自己的数据目录（`config/paths` 里找合适的位置），按文件路径、大小、mtime 增量；到昨天为止的天数结果缓存，今天每次重算。不写 Claude Code 自己的 `stats-cache.json`（N2b 起只读它补历史，见下）。
 - 第一次扫在后台跑（流式读行、让出事件循环、限并发），期间 `state: 'scanning'`，UI 显示"正在统计本机 Claude Code 记录"；找不到配置目录或没有记录时 `state: 'unavailable'`。出错只记一行日志（不带路径以外的内容），额度照常返回。
 - 远程设备和 Linux 服务器：统计的是 daemon 所在机器的 Claude Code，和执行任务的位置一致。
 - 测试：用测试目录里手写的几份 jsonl（含子代理、sidechain、跨 UTC 日界、多个模型），断言每天 Token、消息数、会话数、连续天数、最常用模型、24 格；改一个文件的 mtime 后只重扫这个文件；扫描进行中返回 `scanning`。如果本机 `~/.claude/stats-cache.json` 存在，可以只读地拿它的数字和自己的结果对照，结果写进 PR，测试里不依赖它。
+
+### N2b Claude 用量补历史、没有额度照常显示
+
+owner 2026-11-08 同意的方向。
+
+- 补历史：Claude Code 按 `cleanupPeriodDays`（默认 30 天）删掉旧记录，它自己的 `/usage` 靠配置目录里的 `stats-cache.json` 留着全部历史。Vonvon 第一次扫描以前删掉的记录，从这个文件补。
+  - 只读：不写、不锁、不另存，只取用到的数（不取会话 id 和费用）。用 zod 校验形状（版本 1 到 5）；文件不在、读不了、形状不对或超过 16 MiB 时只用记录，记一行带错误码的日志，原因不变就不再记。
+  - 合并：到它的 `lastComputedDate` 为止（最晚到昨天，今天总是重算），它和 Vonvon 各自只数了自己读到的记录，所以每一项取两边较大的那个，不会重复计数。逐天的消息数和每个模型的 Token 逐天取大；会话总数和 Vonvon 在那天以前开始的会话比；24 小时分布没有按天的数，整组取会话多的那边；最长会话取更长的；各模型累计 Token 取它的 `modelUsage` 和逐天加总中较大的。之后的天只用 Vonvon 自己的统计，和 `/usage` 的算法一样。
+  - `dailyModelTokensVersion` 低于 5 的逐天 Token，Claude Code 会用剩下的记录重建，这里不用，只用它的模型合计。本机一份记录都没有时照旧是 `unavailable`，Claude Code 这时也不显示统计。
+- 没有订阅额度：用 API 接入（API key、Bedrock、Vertex、自定义地址）、没读到订阅登录、凭据过期或者读取失败时，Claude 用量照常返回本机统计，`usage.unavailable` 写明原因（`reason` 是 daemon 的 `UsageErrorKind`，`message` 是额度一栏的那句话），额度一栏不显示读取时间和空的限额。读取失败、同一份凭据 10 分钟内读到过额度时，照旧给上次的额度和它的读取时间。此刻页对 API 接入的 Claude 也读用量。
+- 兼容：老 daemon 照旧报错，新界面显示它给的原因；老界面收到新 daemon 的回复，额度一栏显示成限额暂不可用，统计照常。
+- 测试：补历史没有重复计数、缓存不在、形状不对、缓存比记录新或旧、逐天 Token 版本旧；每种没有额度的情况有统计和没统计各一遍；额度一栏的文案。真实数据只读对照，并用部分记录加缓存副本模拟删掉的历史，结果写进 PR。
 
 ### N3 此刻页和用量面板
 
@@ -147,7 +160,7 @@ N1 小，和 N3 一起做（同一个 PR 也可以）。N2、N3、N4 并行。N5
 
 - 此刻页在 910×808 首屏能看到工牌和用量；用量在群动态上面。
 - 三个面板的每个数字都能在 daemon 返回的数据里找到来源；老 daemon（没有新字段）不报错，相应部分降级或隐藏。
-- Claude 本机统计和 Claude Code 自己 `/usage` → Stats 的数字一致（同一台机器、同一时刻对照，允许当天的差异）；不读写 Claude Code 的文件；不记录消息正文。
+- Claude 本机统计和 Claude Code 自己 `/usage` → Stats 的数字一致（同一台机器、同一时刻对照，允许当天的差异），Claude Code 清理过旧记录也一样（N2b）；不写 Claude Code 的文件，只读它的记录和 `stats-cache.json`；不记录消息正文。没有订阅额度时统计照常，额度一栏写明原因。
 - Fable 一行正常显示成 7 天限额。
 - 分享 GIF 里的工牌翻面、摆动和 app 里鼠标悬停时一样；打码开关各自生效；设备名、Bot 的飞书二维码、消息内容不出现。
 - 关掉分享框或录制失败后没有残留的离屏窗口和进程。

@@ -15,7 +15,10 @@ beforeEach(async () => {
   for (const name of ['CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']) vi.stubEnv(name, '');
   vi.resetModules();
 });
-afterEach(async () => { vi.doUnmock('node:fs/promises'); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers(); await rm(home, { recursive: true, force: true }); });
+afterEach(async () => {
+  await (await import('../src/agent/claude-agent/local-stats')).stopClaudeLocalStats();
+  vi.doUnmock('node:fs/promises'); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers(); await rm(home, { recursive: true, force: true });
+});
 const credentials = (accessToken = 'fixture-token', subscriptionType = 'max') => JSON.stringify({ claudeAiOauth: { accessToken, subscriptionType, refreshToken: 'do-not-use' } });
 const window = (utilization: number) => ({ utilization, resets_at: '2026-11-08T09:00:00Z' });
 
@@ -46,7 +49,7 @@ it('honors CLAUDE_CONFIG_DIR and user settings API mode without using another sa
   await writeFile(join(home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: 'api-fixture' } }));
   const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
   const { fetchClaudeUsageBundle } = await import('../src/agent/claude-agent/usage');
-  await expect(fetchClaudeUsageBundle()).rejects.toMatchObject({ kind: 'api-key-mode' });
+  expect((await fetchClaudeUsageBundle()).usage).toEqual({ main: {}, extras: [], fetchedAt: expect.any(Number), unavailable: 'api-key-mode' });
   expect(fetch).not.toHaveBeenCalled();
   const dir = join(home, 'custom'); await mkdir(dir); vi.stubEnv('CLAUDE_CONFIG_DIR', dir);
   await writeFile(join(dir, '.credentials.json'), credentials('custom-token', 'pro'));
@@ -84,22 +87,23 @@ it('shares the new token request when credentials rotate during an unauthorized 
   expect(fetch).toHaveBeenCalledTimes(2);
 });
 
-it.each([401, 403, 429, 500])('returns a safe error for HTTP %s without exposing the response body', async status => {
+it.each([401, 403, 429, 500])('says why there is no quota for HTTP %s without exposing the response body', async status => {
   await writeFile(file, credentials());
   const fetch = vi.fn(async () => new Response('Bearer secret-fixture', { status })); vi.stubGlobal('fetch', fetch);
   const { fetchClaudeUsageBundle } = await import('../src/agent/claude-agent/usage');
-  await expect(fetchClaudeUsageBundle()).rejects.toMatchObject({ kind: status === 401 ? 'need-relogin' : 'transient' });
-  await expect(fetchClaudeUsageBundle()).rejects.not.toThrow('secret-fixture');
+  const results = [await fetchClaudeUsageBundle(), await fetchClaudeUsageBundle()];
+  for (const result of results) expect(result.usage).toEqual({ main: {}, extras: [], fetchedAt: expect.any(Number), unavailable: status === 401 ? 'need-relogin' : 'transient' });
+  expect(JSON.stringify(results)).not.toMatch(/secret-fixture|fixture-token/);
   if (status === 429) expect(fetch).toHaveBeenCalledTimes(1);
   expect(await readFile(file, 'utf8')).toBe(credentials());
 });
 
-it('reports missing auth and malformed responses instead of an empty successful quota', async () => {
+it('says no-auth and transient for missing credentials and malformed responses instead of an empty successful quota', async () => {
   const fetch = vi.fn(async () => Response.json({ unexpected: true })); vi.stubGlobal('fetch', fetch);
   const { fetchClaudeUsageBundle } = await import('../src/agent/claude-agent/usage');
-  await expect(fetchClaudeUsageBundle()).rejects.toMatchObject({ kind: 'no-auth' });
+  expect((await fetchClaudeUsageBundle()).usage).toMatchObject({ main: {}, extras: [], unavailable: 'no-auth' });
   await writeFile(file, credentials());
-  await expect(fetchClaudeUsageBundle()).rejects.toMatchObject({ kind: 'transient' });
+  expect((await fetchClaudeUsageBundle()).usage).toMatchObject({ main: {}, extras: [], unavailable: 'transient' });
 });
 
 it('settles all reads when accounts switch A to B and back to A during 401 retries', async () => {
@@ -124,9 +128,73 @@ it('settles all reads when accounts switch A to B and back to A during 401 retri
   token = 'A'; releaseB(new Response('', { status: 401 }));
   await vi.advanceTimersByTimeAsync(15_001);
   expect(settled).toBe(true);
-  expect(await results).toEqual([
-    { status: 'rejected', reason: expect.objectContaining({ kind: 'need-relogin' }) },
-    { status: 'rejected', reason: expect.objectContaining({ kind: 'need-relogin' }) },
-  ]);
+  const relogin = { status: 'fulfilled', value: expect.objectContaining({ usage: expect.objectContaining({ main: {}, unavailable: 'need-relogin' }) }) };
+  expect(await results).toEqual([relogin, relogin]);
   expect(fetch).toHaveBeenCalledTimes(3);
+});
+
+// now-share N2b: without subscription quota the local stats still come back, and the quota says why.
+const stuck = (error: Error) => vi.fn(async () => { throw error; });
+const noQuota: [string, () => Promise<void>, string][] = [
+  ['an API key', async () => { vi.stubEnv('ANTHROPIC_API_KEY', 'sk-fixture'); }, 'api-key-mode'],
+  ['Bedrock', async () => { vi.stubEnv('CLAUDE_CODE_USE_BEDROCK', '1'); }, 'api-key-mode'],
+  ['Vertex', async () => { vi.stubEnv('CLAUDE_CODE_USE_VERTEX', '1'); }, 'api-key-mode'],
+  ['no OAuth login', async () => {}, 'no-auth'],
+  ['expired subscription credentials', async () => { await writeFile(file, credentials()); vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 401 }))); }, 'need-relogin'],
+  ['a network error', async () => { await writeFile(file, credentials()); vi.stubGlobal('fetch', stuck(new TypeError('fetch failed'))); }, 'transient'],
+];
+const now = new Date('2026-11-08T12:00:00Z');
+async function transcripts(): Promise<void> {
+  const dir = join(home, '.claude', 'projects', 'p');
+  await mkdir(dir, { recursive: true });
+  const line = (type: string, timestamp: string, usage?: object) => JSON.stringify({ type, timestamp, message: { model: 'claude-opus', content: 'private text', ...(usage ? { usage } : {}) } });
+  await writeFile(join(dir, 's.jsonl'), `${[line('user', '2026-11-06T10:00:00Z'), line('assistant', '2026-11-06T10:05:00Z', { input_tokens: 40, output_tokens: 2 })].join('\n')}\n`);
+}
+
+it.each(noQuota)('with %s, returns the local stats and why there is no quota', async (_case, arrange, reason) => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ five_hour: window(1) })));
+  await arrange();
+  await transcripts();
+  (await import('../src/agent/claude-agent/local-stats')).configureClaudeLocalStats({ now: () => now });
+  const { fetchClaudeUsageBundle } = await import('../src/agent/claude-agent/usage');
+  // The first read may still be scanning; it answers either way.
+  expect((await fetchClaudeUsageBundle()).usage).toMatchObject({ main: {}, extras: [], unavailable: reason });
+  await vi.waitFor(async () => expect((await fetchClaudeUsageBundle()).profile.localStats?.state).toBe('ready'));
+  const result = await fetchClaudeUsageBundle();
+  expect(result.usage).toEqual({ main: {}, extras: [], fetchedAt: expect.any(Number), unavailable: reason });
+  expect(result.profile).toMatchObject({ lifetimeTokens: 42, dailyBuckets: [{ date: '2026-11-06', tokens: 42, messages: 2 }], localStats: { sessions: 1, messages: 2 } });
+  expect(JSON.stringify(result)).not.toMatch(/sk-fixture|fixture-token|private text/);
+});
+
+it.each(noQuota)('with %s and no local stats, still answers with the reason', async (_case, arrange, reason) => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ five_hour: window(1) })));
+  await arrange();
+  const stats = await import('../src/agent/claude-agent/local-stats');
+  const { fetchClaudeUsageBundle } = await import('../src/agent/claude-agent/usage');
+  await fetchClaudeUsageBundle();
+  await stats.refreshClaudeLocalStats(join(home, '.claude', 'projects'));
+  const result = await fetchClaudeUsageBundle();
+  expect(result.usage).toEqual({ main: {}, extras: [], fetchedAt: expect.any(Number), unavailable: reason });
+  expect(result.profile.localStats).toEqual({ state: 'unavailable', models: [], sessions: 0, messages: 0, activeDays: 0 });
+});
+
+it('keeps the last quota of the same credentials through a passing failure, and only that long', async () => {
+  await writeFile(file, credentials());
+  const fetch = vi.fn(async () => Response.json({ five_hour: window(7) })); vi.stubGlobal('fetch', fetch);
+  const { fetchClaudeUsageBundle } = await import('../src/agent/claude-agent/usage');
+  vi.useFakeTimers({ toFake: ['Date'] });
+  const good = await fetchClaudeUsageBundle();
+  expect(good.usage.main.primary).toMatchObject({ usedPercent: 7 });
+  fetch.mockImplementation(async () => new Response('', { status: 503 }));
+  vi.advanceTimersByTime(5 * 60_000);
+  // Its own read time says how old it is.
+  expect((await fetchClaudeUsageBundle(true)).usage).toEqual(good.usage);
+  vi.advanceTimersByTime(6 * 60_000);
+  expect((await fetchClaudeUsageBundle(true)).usage).toMatchObject({ main: {}, unavailable: 'transient' });
+  // Other credentials never see it.
+  fetch.mockImplementation(async () => Response.json({ five_hour: window(9) }));
+  await fetchClaudeUsageBundle(true);
+  fetch.mockImplementation(async () => new Response('', { status: 503 }));
+  await writeFile(file, credentials('other-account'));
+  expect((await fetchClaudeUsageBundle(true)).usage).toMatchObject({ main: {}, unavailable: 'transient' });
 });

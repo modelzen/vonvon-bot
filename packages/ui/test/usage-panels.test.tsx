@@ -131,6 +131,28 @@ describe('Claude Code panel', () => {
     expect(html).toContain('<strong>Claude Max</strong>');
     for (const absent of ['usage-board-stats', 'usage-heatmap__grid', 'usage-board-habits']) expect(html).not.toContain(absent);
   });
+  // now-share N2b: without subscription quota the daemon says why, and the local stats stay.
+  const gap = (reason: string, message: string): Usage['usage'] => ({main: {}, extras: [], fetchedAt: now.getTime(), unavailable: {reason, message}});
+  it.each([
+    ['api-key-mode', '用的是 API 接入，没有订阅额度'],
+    ['no-auth', '没有读到 Claude 订阅登录，看不到额度'],
+    ['need-relogin', '订阅凭据过期了，在终端运行 `claude` 后再看'],
+    ['transient', '额度暂时读不到'],
+  ])('keeps the local stats and says why there is no quota: %s', (reason, message) => {
+    const html = renderToStaticMarkup(<ClaudeUsagePanel data={{...claude, usage: gap(reason, message)}}/>);
+    for (const text of ['12.6<small>亿</small>', '186<small>个</small>', 'usage-heatmap__grid', 'usage-board-habits',
+      '<strong>Claude</strong>', `<p class="usage-board-unavailable" role="status" data-reason="${reason}">${message}</p>`]) expect(html).toContain(text);
+    // Neither a read time nor empty windows: there was no quota to read.
+    for (const text of ['读取于', '暂不可用', 'progressbar', '限额']) expect(html).not.toContain(text);
+  });
+  it('says why there is no quota while the local stats are scanning or missing', () => {
+    for (const [state, text] of [['scanning', '正在统计本机的 Claude Code 记录'], ['unavailable', '本机没有 Claude Code 的使用记录']] as const) {
+      const profile = {...claude.profile, localStats: {...claude.profile.localStats!, state}};
+      const html = renderToStaticMarkup(<ClaudeUsagePanel data={{profile, usage: gap('api-key-mode', '用的是 API 接入，没有订阅额度')}}/>);
+      for (const shown of [text, '用的是 API 接入，没有订阅额度']) expect(html).toContain(shown);
+      expect(html).not.toContain('读取于');
+    }
+  });
   it('builds up day by day at progress 0.5', () => {
     const html = renderToStaticMarkup(<ClaudeUsagePanel data={claude} progress={0.5}/>);
     for (const text of ['12.2<small>亿</small>', '450 条消息', '共活跃 45 天', '93<small>个</small>', '24<small>小时</small>']) expect(html).toContain(text);
