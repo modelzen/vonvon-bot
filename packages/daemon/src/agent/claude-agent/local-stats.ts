@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { join, relative, sep } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { z } from 'zod';
 import { paths } from '../../config/paths';
 import { log } from '../../core/logger';
@@ -17,6 +17,12 @@ import type { AccountProfileStats, ClaudeLocalStats } from '../types';
  * yesterday of the last scan are settled: a changed transcript keeps its settled days and its session as first
  * counted, and only later days come from the new read. So a transcript Claude Code cleans up later
  * (cleanupPeriodDays) keeps counting, and one past 100 MiB keeps the days its tail no longer reaches.
+ *
+ * What was cleaned up before the first scan comes from Claude Code's own stats cache (`stats-cache.json` next to
+ * `projects/`), read only: never written, locked or kept beyond the numbers used (N2b). Through its lastComputedDate
+ * both it and these transcripts count only what each of them read, so every day, model, session total and hour takes
+ * the larger of the two, which never counts anything twice; later days come from the transcripts alone, as in
+ * Claude Code's /usage.
  */
 
 const COUNTED_TYPES = new Set(['user', 'assistant', 'attachment', 'system']);
@@ -68,6 +74,35 @@ const cacheSchema = z.object({
 type FileStats = z.infer<typeof fileSchema>;
 type Saved = { files: Map<string, FileStats>; settled?: string };
 
+const STATS_CACHE = 'stats-cache.json';
+/** Claude Code adds a few hundred bytes a day; a file this big is not its stats cache. */
+const STATS_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+/** Claude Code's `Qo`: per-day tokens of an older version it rebuilds from the transcripts left, keeping its totals. */
+const DAILY_TOKENS_VERSION = 5;
+const tally = z.number().finite().nonnegative();
+/** The fields of Claude Code's stats cache (`rn`, `pm`, `Hr`; versions 1 to 5) that are used here; others are dropped. */
+const statsCacheSchema = z.object({
+  version: z.number().int().min(1).max(5),
+  lastComputedDate: z.string().nullish(),
+  dailyActivity: z.array(z.object({ date: day, messageCount: tally })),
+  dailyModelTokens: z.array(z.object({ date: day, tokensByModel: z.record(z.string(), tally) })),
+  dailyModelTokensVersion: z.number().optional(),
+  modelUsage: z.record(z.string(), z.object({
+    inputTokens: tally.optional(), outputTokens: tally.optional(), cacheReadInputTokens: tally.optional(), cacheCreationInputTokens: tally.optional(),
+  })).optional(),
+  totalSessions: tally,
+  totalMessages: tally,
+  longestSession: z.object({ duration: tally, messageCount: tally }).nullish(),
+  hourCounts: z.record(z.string().regex(/^(?:1?\d|2[0-3])$/), tally).optional(),
+});
+type StatsCache = z.infer<typeof statsCacheSchema>;
+type Day = { messages: number; tokens: Map<string, number> };
+type Longest = { ms: number; lines: number };
+/** What Claude Code's stats cache counts through `asOf`, its lastComputedDate; days after it are not used. */
+type Backfill = { asOf: string; days: Map<string, Day>; sessions: number; hours: number[]; longest?: Longest; models: Map<string, number> };
+/** The last read of the stats cache, by size and mtime: unchanged, it is not read again. */
+type StatsCacheRead = { size: number; mtimeMs: number; backfill?: Backfill };
+
 export type ClaudeLocalProfile = Pick<AccountProfileStats, 'dailyBuckets' | 'lifetimeTokens' | 'peakDailyTokens' | 'currentStreakDays' | 'longestStreakDays'>
   & { localStats: ClaudeLocalStats };
 
@@ -79,6 +114,9 @@ type State = {
   settled?: string;
   /** no transcript on disk at the last look: Claude Code then shows no stats at all */
   empty?: boolean;
+  statsCache?: StatsCacheRead;
+  /** why the stats cache was last unusable, logged once until that changes */
+  statsCacheCode?: string;
   running?: Promise<void>;
   startedAt?: number;
 };
@@ -109,7 +147,7 @@ export function claudeLocalStats(root: string, now = opts.now()): ClaudeLocalPro
   if (!current?.files) return withoutStats('scanning');
   if (current.empty) return withoutStats('unavailable');
   try {
-    return summarize(current.files.values(), now);
+    return summarize(current.files.values(), now, current.statsCache?.backfill);
   } catch (error) {
     log.warn('claude-stats', 'summary-failed', { code: errorCode(error) });
     return withoutStats('unavailable');
@@ -130,6 +168,8 @@ function withoutStats(stateName: 'scanning' | 'unavailable'): ClaudeLocalProfile
 
 async function rescan(current: State): Promise<void> {
   const { root, controller: { signal } } = current;
+  await readStatsCache(current);
+  signal.throwIfAborted();
   // A saved cache answers (stale) while this scan runs; without one the first scan reports "scanning".
   if (!current.files) Object.assign(current, await loadCache(root));
   const listed = await listTranscripts(root);
@@ -300,12 +340,12 @@ async function* transcriptLines(path: string, size: number, signal: AbortSignal)
   if (text) yield text;
 }
 
-function summarize(files: Iterable<FileStats>, now: Date): ClaudeLocalProfile {
+function summarize(files: Iterable<FileStats>, now: Date, backfill?: Backfill): ClaudeLocalProfile {
   const today = utcDay(now);
-  const days = new Map<string, { messages: number; tokens: number }>();
-  const models = new Map<string, number>();
-  const hourCounts = Array<number>(24).fill(0);
-  let sessions = 0, messages = 0, longest: { ms: number; lines: number } | undefined;
+  const days = new Map<string, Day>();
+  // Sessions starting through the stats cache's day are in its totals as well; later ones only here.
+  const early = { sessions: 0, hours: Array<number>(24).fill(0), longest: undefined as Longest | undefined };
+  const late = { ...early, hours: Array<number>(24).fill(0) };
   for (const file of files) {
     if (file.first === undefined || file.last === undefined) continue;
     const start = utcDay(new Date(file.first)), touchedToday = utcDay(new Date(file.mtimeMs)) >= today;
@@ -313,25 +353,47 @@ function summarize(files: Iterable<FileStats>, now: Date): ClaudeLocalProfile {
     // over the files modified today; nothing dated after today counts.
     if (start > today || (start === today && !touchedToday)) continue;
     if (!file.sub && !file.uncounted) {
-      sessions++;
-      hourCounts[new Date(file.first).getHours()]!++;
-      const ms = file.last - file.first;
-      if (!longest || ms > longest.ms) longest = { ms, lines: file.lines ?? 0 };
+      const into = backfill && start <= backfill.asOf ? early : late;
+      into.sessions++;
+      into.hours[new Date(file.first).getHours()]!++;
+      into.longest = longer(into.longest, { ms: file.last - file.first, lines: file.lines ?? 0 });
     }
     for (const [date, counts] of Object.entries(file.days)) {
       if (date > today || (date === today ? !touchedToday : start === today)) continue;
-      const day = days.get(date) ?? { messages: 0, tokens: 0 };
+      const day = dayOf(days, date);
       day.messages += counts.messages ?? 0;
-      messages += counts.messages ?? 0;
-      for (const [model, tokens] of Object.entries(counts.tokens ?? {})) {
-        day.tokens += tokens;
-        models.set(model, (models.get(model) ?? 0) + tokens);
-      }
-      days.set(date, day);
+      for (const [model, tokens] of Object.entries(counts.tokens ?? {})) day.tokens.set(model, (day.tokens.get(model) ?? 0) + tokens);
     }
   }
-  if (!sessions || !longest) return withoutStats('unavailable');
-  const dailyBuckets = [...days].sort(([a], [b]) => a.localeCompare(b)).map(([date, day]) => ({ date, tokens: day.tokens, messages: day.messages }));
+  let sessions = early.sessions + late.sessions, hourCounts = early.hours, longest = longer(early.longest, late.longest);
+  if (backfill) {
+    // Claude Code recounts today, so its figures stop at yesterday even when its clock ran ahead.
+    const last = backfill.asOf < today ? backfill.asOf : shiftDay(today, -1);
+    for (const [date, theirs] of backfill.days) {
+      if (date > last) continue;
+      const day = dayOf(days, date);
+      day.messages = Math.max(day.messages, theirs.messages);
+      for (const [model, tokens] of theirs.tokens) day.tokens.set(model, Math.max(day.tokens.get(model) ?? 0, tokens));
+    }
+    sessions = Math.max(early.sessions, backfill.sessions) + late.sessions;
+    // Start hours have no split by day: the side with more sessions has the hours of them.
+    if (backfill.sessions > early.sessions) hourCounts = backfill.hours;
+    longest = longer(longer(early.longest, backfill.longest), late.longest);
+  }
+  hourCounts = hourCounts.map((count, hour) => count + late.hours[hour]!);
+  if (!sessions) return withoutStats('unavailable');
+  // Claude Code's per-model totals (its Total tokens and Favorite model) can hold more than its days do.
+  const settledModels = new Map<string, number>(), models = new Map<string, number>();
+  for (const [date, day] of days) {
+    for (const [model, tokens] of day.tokens) {
+      const into = backfill && date <= backfill.asOf ? settledModels : models;
+      into.set(model, (into.get(model) ?? 0) + tokens);
+    }
+  }
+  for (const [model, tokens] of backfill?.models ?? []) settledModels.set(model, Math.max(settledModels.get(model) ?? 0, tokens));
+  for (const [model, tokens] of settledModels) models.set(model, (models.get(model) ?? 0) + tokens);
+  const dailyBuckets = [...days].sort(([a], [b]) => a.localeCompare(b)).map(([date, day]) => ({ date, tokens: sum(day.tokens.values()), messages: day.messages }));
+  const messages = dailyBuckets.reduce((total, day) => total + day.messages, 0);
   const active = dailyBuckets.filter(day => day.messages > 0).map(day => day.date);
   const activeSet = new Set(active);
   let currentStreakDays = 0, longestStreakDays = 0, run = 0;
@@ -342,7 +404,7 @@ function summarize(files: Iterable<FileStats>, now: Date): ClaudeLocalProfile {
   });
   return {
     dailyBuckets,
-    lifetimeTokens: dailyBuckets.reduce((sum, day) => sum + day.tokens, 0),
+    lifetimeTokens: sum(models.values()),
     peakDailyTokens: Math.max(0, ...dailyBuckets.map(day => day.tokens)),
     currentStreakDays,
     longestStreakDays,
@@ -353,11 +415,100 @@ function summarize(files: Iterable<FileStats>, now: Date): ClaudeLocalProfile {
       sessions,
       messages,
       activeDays: active.length,
-      longestSessionSec: Math.max(0, Math.round(longest.ms / 1000)),
-      longestSessionMessages: longest.lines,
+      ...(longest ? { longestSessionSec: Math.max(0, Math.round(longest.ms / 1000)), longestSessionMessages: longest.lines } : {}),
       hourCounts,
     },
   };
+}
+
+function dayOf(days: Map<string, Day>, date: string): Day {
+  let day = days.get(date);
+  if (!day) days.set(date, day = { messages: 0, tokens: new Map() });
+  return day;
+}
+
+/** The longer session; on a tie the one counted first, as Claude Code keeps it. */
+function longer(a: Longest | undefined, b: Longest | undefined): Longest | undefined {
+  return !a || (b && b.ms > a.ms) ? b : a;
+}
+
+function sum(values: Iterable<number>): number {
+  let total = 0;
+  for (const value of values) total += value;
+  return total;
+}
+
+/**
+ * Claude Code's stats cache, for the days its cleanup took the transcripts of. Missing, unreadable or of another
+ * shape: transcripts alone, and one log line with a code until that changes. Never written, locked or copied.
+ */
+async function readStatsCache(current: State): Promise<void> {
+  const file = join(dirname(current.root), STATS_CACHE);
+  let code: string, seen: StatsCacheRead | undefined;
+  try {
+    const { size, mtimeMs } = await stat(file);
+    if (current.statsCache?.size === size && current.statsCache.mtimeMs === mtimeMs) return;
+    // An unusable file is not read again until it changes; a failing read is tried again.
+    seen = { size, mtimeMs };
+    if (size > STATS_CACHE_MAX_BYTES) throw new StatsCacheUnusable('too-large');
+    let raw: unknown;
+    try { raw = JSON.parse(await readFile(file, 'utf8')); } catch (error) { throw error instanceof SyntaxError ? new StatsCacheUnusable('bad-json') : error; }
+    const parsed = statsCacheSchema.safeParse(raw);
+    if (!parsed.success) throw new StatsCacheUnusable('bad-shape');
+    current.statsCache = { size, mtimeMs, backfill: toBackfill(parsed.data) };
+    current.statsCacheCode = undefined;
+    return;
+  } catch (error) {
+    code = error instanceof StatsCacheUnusable ? error.code : errorCode(error);
+    current.statsCache = error instanceof StatsCacheUnusable ? seen : undefined;
+  }
+  if (code === current.statsCacheCode) return;
+  current.statsCacheCode = code;
+  // Most users never open /usage, so there is no file to read.
+  if (code === 'ENOENT') log.info('claude-stats', 'stats-cache-unused', { code });
+  else log.warn('claude-stats', 'stats-cache-unused', { code });
+}
+
+class StatsCacheUnusable extends Error {
+  constructor(readonly code: string) { super(code); }
+}
+
+/** Only the numbers used: no session id, no costs. */
+function toBackfill(cache: StatsCache): Backfill | undefined {
+  // Like Claude Code (`Hr`): without a valid lastComputedDate the latest day it holds is its watermark; with no day,
+  // it starts over.
+  const dates = [...cache.dailyActivity, ...cache.dailyModelTokens].map(entry => entry.date);
+  const asOf = cache.lastComputedDate && isDay(cache.lastComputedDate) ? cache.lastComputedDate : dates.sort().at(-1);
+  if (!asOf) return undefined;
+  const days = new Map<string, Day>();
+  for (const { date, messageCount } of cache.dailyActivity) {
+    if (!messageCount) continue;
+    const day = dayOf(days, date);
+    day.messages = Math.max(day.messages, messageCount);
+  }
+  // Per-day tokens of an older version: Claude Code rebuilds them from the transcripts left, so they are not used.
+  if (cache.dailyModelTokensVersion === DAILY_TOKENS_VERSION) {
+    for (const { date, tokensByModel } of cache.dailyModelTokens) {
+      for (const [model, tokens] of usableModels(tokensByModel)) {
+        if (!tokens) continue;
+        const day = dayOf(days, date);
+        day.tokens.set(model, Math.max(day.tokens.get(model) ?? 0, tokens));
+      }
+    }
+  }
+  const models = new Map<string, number>();
+  for (const [model, usage] of usableModels(cache.modelUsage ?? {})) {
+    models.set(model, (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0));
+  }
+  const hours = Array<number>(24).fill(0);
+  for (const [hour, count] of Object.entries(cache.hourCounts ?? {})) hours[Number(hour)]! += count;
+  const longest = cache.longestSession ? { ms: cache.longestSession.duration, lines: cache.longestSession.messageCount } : undefined;
+  return { asOf, days, sessions: cache.totalSessions, hours, ...(longest ? { longest } : {}), models };
+}
+
+/** Claude Code skips these model names too (`qo`, `Mi`). */
+function usableModels<T>(byModel: Record<string, T>): [string, T][] {
+  return Object.entries(byModel).filter(([model]) => model !== SYNTHETIC_MODEL && !(model in Object.prototype));
 }
 
 /** An older version, another root or any invalid field (an impossible day included) discards the cache: a full rescan. */

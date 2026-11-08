@@ -354,3 +354,223 @@ it('reads only the last 100 MiB of a larger transcript, dropping the cut first l
   await stats.refreshClaudeLocalStats(root);
   expect(stats.claudeLocalStats(root, now)).toMatchObject({ dailyBuckets: [{ date: '2026-11-03', tokens: 0, messages: 1 }], localStats: { sessions: 1 } });
 });
+
+// now-share N2b: Claude Code's own stats cache fills in what its cleanup took before the first scan.
+type Cache = Record<string, unknown>;
+const statsCache = () => join(base, 'home', '.claude', 'stats-cache.json');
+/** The cache Claude Code 2.1.319 writes (`rn`, `yi`): only `lastComputedDate` through `hourCounts` are read here. */
+function claudeCache(over: Cache = {}): Cache {
+  return {
+    version: 5, lastComputedDate: '2026-11-07', dailyModelTokensVersion: 5,
+    dailyActivity: [
+      // Cleaned up from disk, so only here.
+      { date: '2026-10-20', messageCount: 5, sessionCount: 1, toolCallCount: 2 },
+      { date: '2026-10-21', messageCount: 3, sessionCount: 1, toolCallCount: 0 },
+      // The fixture's days, counted the same way.
+      { date: '2026-11-04', messageCount: 1, sessionCount: 1, toolCallCount: 0 },
+      { date: '2026-11-06', messageCount: 2, sessionCount: 1, toolCallCount: 0 },
+      { date: '2026-11-07', messageCount: 2, sessionCount: 0, toolCallCount: 0 },
+    ],
+    dailyModelTokens: [
+      { date: '2026-10-20', tokensByModel: { 'claude-opus': 1000 } },
+      { date: '2026-10-21', tokensByModel: { 'claude-sonnet': 200 } },
+      { date: '2026-11-06', tokensByModel: { 'claude-opus': 100 } },
+      { date: '2026-11-07', tokensByModel: { 'claude-sonnet': 10, 'claude-haiku': 500 } },
+    ],
+    modelUsage: {
+      'claude-opus': { inputTokens: 1000, outputTokens: 100, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 1.5, contextWindow: 0, maxOutputTokens: 0 },
+      'claude-sonnet': { inputTokens: 0, outputTokens: 210, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0, contextWindow: 0, maxOutputTokens: 0 },
+      'claude-haiku': { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 300, cacheCreationInputTokens: 200, webSearchRequests: 0, costUSD: 0, contextWindow: 0, maxOutputTokens: 0 },
+    },
+    totalSessions: 4, totalMessages: 13,
+    longestSession: { sessionId: 'fixture-session-id', duration: 3 * 3_600_000, messageCount: 7, timestamp: '2026-10-20T03:00:00.000Z' },
+    firstSessionDate: '2026-10-20T03:00:00.000Z',
+    hourCounts: Object.fromEntries(hours('2026-10-20T03:00:00Z', '2026-10-21T05:00:00Z', '2026-11-04T15:00:00Z', '2026-11-06T23:40:00Z').flatMap((count, hour) => count ? [[String(hour), count]] : [])),
+    ...over,
+  };
+}
+async function writeCache(cache: Cache | string): Promise<void> {
+  await mkdir(dirname(statsCache()), { recursive: true });
+  await writeFile(statsCache(), typeof cache === 'string' ? cache : JSON.stringify(cache));
+}
+/** The fixture alone, with no stats cache next to it. */
+async function plain() {
+  const stats = await load();
+  await stats.refreshClaudeLocalStats(root);
+  const result = stats.claudeLocalStats(root, now);
+  await stats.stopClaudeLocalStats();
+  await rm(join(base, 'vh'), { recursive: true, force: true });
+  vi.resetModules();
+  return result;
+}
+
+it('fills the days and totals Claude Code cleaned up, without counting a day it shares with the transcripts twice', async () => {
+  await fixture();
+  const cache = claudeCache();
+  await writeCache(cache);
+  const before = await stat(statsCache());
+  const stats = await load();
+  await stats.refreshClaudeLocalStats(root);
+  expect(stats.claudeLocalStats(root, now)).toEqual({
+    dailyBuckets: [
+      { date: '2026-10-20', tokens: 1000, messages: 5 },
+      { date: '2026-10-21', tokens: 200, messages: 3 },
+      { date: '2026-11-04', tokens: 0, messages: 1 },
+      { date: '2026-11-06', tokens: 100, messages: 2 },
+      { date: '2026-11-07', tokens: 510, messages: 2 },
+      { date: '2026-11-08', tokens: 1000, messages: 2 },
+    ],
+    lifetimeTokens: 2810,
+    peakDailyTokens: 1000,
+    currentStreakDays: 3,
+    longestStreakDays: 3,
+    localStats: {
+      state: 'ready',
+      // Through 11-07 the larger of its totals and the days; 11-08 from the transcripts.
+      models: [{ id: 'claude-opus', tokens: 2100 }, { id: 'claude-haiku', tokens: 500 }, { id: 'claude-sonnet', tokens: 210 }],
+      // Its 4 sessions through 11-07 include the fixture's 2; the one started today is added.
+      sessions: 5,
+      messages: 15,
+      activeDays: 6,
+      longestSessionSec: 10_800,
+      longestSessionMessages: 7,
+      hourCounts: hours('2026-10-20T03:00:00Z', '2026-10-21T05:00:00Z', '2026-11-04T15:00:00Z', '2026-11-06T23:40:00Z', '2026-11-08T09:00:00Z'),
+    },
+  });
+  // Read only: untouched, and nothing of it lands in Vonvon's own cache.
+  expect(await readFile(statsCache(), 'utf8')).toBe(JSON.stringify(cache));
+  expect((await stat(statsCache())).mtimeMs).toBe(before.mtimeMs);
+  const saved = await readFile(join(base, 'vh', 'claude-local-stats.json'), 'utf8');
+  for (const text of ['fixture-session-id', '2026-10-20', 'stats-cache']) expect(saved).not.toContain(text);
+
+  // Claude Code moves its cache on while the daemon runs: the next scan reads the new one.
+  await writeCache(claudeCache({ dailyActivity: [...cache.dailyActivity as object[], { date: '2026-10-22', messageCount: 4, sessionCount: 1, toolCallCount: 0 }], totalSessions: 5 }));
+  await stats.refreshClaudeLocalStats(root, true);
+  expect(stats.claudeLocalStats(root, now)).toMatchObject({ localStats: { sessions: 6, messages: 19, activeDays: 7 }, longestStreakDays: 3 });
+});
+
+it('takes the larger count of a day only partly cleaned up, and the transcripts where the cache has less', async () => {
+  await fixture();
+  // 11-06 lost a transcript before the first scan; Claude Code's cache lost 11-07's sub-agent and a session.
+  await writeCache(claudeCache({
+    dailyActivity: [{ date: '2026-11-06', messageCount: 6, sessionCount: 2, toolCallCount: 0 }, { date: '2026-11-07', messageCount: 1, sessionCount: 0, toolCallCount: 0 }],
+    dailyModelTokens: [{ date: '2026-11-06', tokensByModel: { 'claude-opus': 400, 'claude-fable': 50 } }, { date: '2026-11-07', tokensByModel: { 'claude-sonnet': 10 } }],
+    modelUsage: {}, totalSessions: 1, longestSession: { duration: 60_000, messageCount: 2 },
+    hourCounts: { 1: 1 },
+  }));
+  const stats = await load();
+  await stats.refreshClaudeLocalStats(root);
+  const result = stats.claudeLocalStats(root, now);
+  expect(result.dailyBuckets).toEqual([
+    { date: '2026-11-04', tokens: 0, messages: 1 },
+    { date: '2026-11-06', tokens: 450, messages: 6 },
+    { date: '2026-11-07', tokens: 510, messages: 2 },
+    { date: '2026-11-08', tokens: 1000, messages: 2 },
+  ]);
+  // Two of the fixture's sessions started through 11-07, more than its one: theirs, with their hours and the longer one.
+  expect(result.localStats).toMatchObject({
+    sessions: 3, messages: 11, longestSessionSec: 2400, longestSessionMessages: 4,
+    models: [{ id: 'claude-opus', tokens: 1400 }, { id: 'claude-haiku', tokens: 500 }, { id: 'claude-fable', tokens: 50 }, { id: 'claude-sonnet', tokens: 10 }],
+    hourCounts: hours('2026-11-06T23:40:00Z', '2026-11-08T09:00:00Z', '2026-11-04T15:00:00Z'),
+  });
+  expect(result.lifetimeTokens).toBe(1960);
+});
+
+it('without a stats cache counts the transcripts alone and logs that once', async () => {
+  await fixture();
+  const expected = await plain();
+  const info = vi.fn(), warn = vi.fn();
+  vi.doMock('../src/core/logger', () => ({ log: { info, warn, error: vi.fn() } }));
+  const stats = await load();
+  await stats.refreshClaudeLocalStats(root);
+  await stats.refreshClaudeLocalStats(root, true);
+  expect(stats.claudeLocalStats(root, now)).toEqual(expected);
+  expect(info.mock.calls).toEqual([['claude-stats', 'stats-cache-unused', { code: 'ENOENT' }]]);
+  expect(warn).not.toHaveBeenCalled();
+});
+
+it.each<[string, () => Promise<void>, string]>([
+  ['not JSON', () => writeCache('{"version":5,'), 'bad-json'],
+  ['a newer version', () => writeCache(claudeCache({ version: 6 })), 'bad-shape'],
+  ['an impossible day', () => writeCache(claudeCache({ dailyActivity: [{ date: '2026-11-00', messageCount: 9 }] })), 'bad-shape'],
+  ['a count that is not a number', () => writeCache(claudeCache({ totalSessions: '4' })), 'bad-shape'],
+  ['negative tokens', () => writeCache(claudeCache({ dailyModelTokens: [{ date: '2026-10-20', tokensByModel: { 'claude-opus': -5 } }] })), 'bad-shape'],
+  ['an hour past 23', () => writeCache(claudeCache({ hourCounts: { 24: 1 } })), 'bad-shape'],
+  ['an array', () => writeCache('[]'), 'bad-shape'],
+  ['a huge file', async () => { await writeCache(''); const handle = await open(statsCache(), 'r+'); try { await handle.truncate(17 * 1024 * 1024); } finally { await handle.close(); } }, 'too-large'],
+  ['a folder', async () => { await mkdir(statsCache(), { recursive: true }); }, 'EISDIR'],
+])('ignores a stats cache that is %s: transcripts alone and one line with a code', async (_case, arrange, code) => {
+  await fixture();
+  const expected = await plain();
+  await arrange();
+  const warn = vi.fn();
+  vi.doMock('../src/core/logger', () => ({ log: { info: vi.fn(), warn, error: vi.fn() } }));
+  const stats = await load();
+  await stats.refreshClaudeLocalStats(root);
+  await stats.refreshClaudeLocalStats(root, true);
+  expect(stats.claudeLocalStats(root, now)).toEqual(expected);
+  expect(warn.mock.calls).toEqual([['claude-stats', 'stats-cache-unused', { code }]]);
+  expect(JSON.stringify(warn.mock.calls)).not.toContain(base);
+});
+
+it('stops a cache ahead of the clock at yesterday and never counts a session twice', async () => {
+  await fixture();
+  const expected = await plain();
+  // The transcripts' own sessions and days, with a watermark past today and days dated today and later.
+  await writeCache(claudeCache({
+    lastComputedDate: '2026-11-09',
+    dailyActivity: [{ date: '2026-11-06', messageCount: 2, sessionCount: 1 }, { date: '2026-11-08', messageCount: 50, sessionCount: 1 }, { date: '2026-11-09', messageCount: 50, sessionCount: 1 }],
+    dailyModelTokens: [{ date: '2026-11-08', tokensByModel: { 'claude-opus': 9000 } }],
+    modelUsage: { 'claude-opus': { inputTokens: 1100 } }, totalSessions: 3, longestSession: null, hourCounts: {},
+  }));
+  const stats = await load();
+  await stats.refreshClaudeLocalStats(root);
+  expect(stats.claudeLocalStats(root, now)).toEqual(expected);
+});
+
+it('uses a cache older than the transcripts only through its own day', async () => {
+  await fixture();
+  // Settled through 11-05: one cleaned-up session on 10-20 plus the fixture's 11-04 one; its 11-06 entry is not settled.
+  await writeCache(claudeCache({
+    lastComputedDate: '2026-11-05',
+    dailyActivity: [{ date: '2026-10-20', messageCount: 5 }, { date: '2026-11-04', messageCount: 1 }, { date: '2026-11-06', messageCount: 40 }],
+    dailyModelTokens: [{ date: '2026-10-20', tokensByModel: { 'claude-opus': 1000 } }, { date: '2026-11-06', tokensByModel: { 'claude-opus': 4000 } }],
+    modelUsage: { 'claude-opus': { inputTokens: 1000 } }, totalSessions: 2,
+    longestSession: { duration: 600_000, messageCount: 5 }, hourCounts: Object.fromEntries([[String(new Date('2026-10-20T03:00:00Z').getHours()), 1], [String(new Date('2026-11-04T15:00:00Z').getHours()), 1]]),
+  }));
+  const stats = await load();
+  await stats.refreshClaudeLocalStats(root);
+  const result = stats.claudeLocalStats(root, now);
+  expect(result.dailyBuckets).toEqual([
+    { date: '2026-10-20', tokens: 1000, messages: 5 },
+    { date: '2026-11-04', tokens: 0, messages: 1 },
+    { date: '2026-11-06', tokens: 100, messages: 2 },
+    { date: '2026-11-07', tokens: 510, messages: 2 },
+    { date: '2026-11-08', tokens: 1000, messages: 2 },
+  ]);
+  expect(result).toMatchObject({ lifetimeTokens: 2610, localStats: {
+    sessions: 4, messages: 12, activeDays: 5, longestSessionSec: 2400,
+    models: [{ id: 'claude-opus', tokens: 2100 }, { id: 'claude-haiku', tokens: 500 }, { id: 'claude-sonnet', tokens: 10 }],
+    hourCounts: hours('2026-10-20T03:00:00Z', '2026-11-04T15:00:00Z', '2026-11-06T23:40:00Z', '2026-11-08T09:00:00Z'),
+  } });
+});
+
+it('leaves out per-day tokens of an older cache version but keeps its model totals, and needs transcripts on disk', async () => {
+  await fixture();
+  await writeCache(claudeCache({ dailyModelTokensVersion: 4 }));
+  let stats = await load();
+  await stats.refreshClaudeLocalStats(root);
+  const result = stats.claudeLocalStats(root, now);
+  // Claude Code rebuilds those days from the transcripts left, so 10-20 and 10-21 have messages and no tokens.
+  expect(result.dailyBuckets.slice(0, 2)).toEqual([{ date: '2026-10-20', tokens: 0, messages: 5 }, { date: '2026-10-21', tokens: 0, messages: 3 }]);
+  expect(result).toMatchObject({ lifetimeTokens: 2810, localStats: { models: [{ id: 'claude-opus', tokens: 2100 }, { id: 'claude-haiku', tokens: 500 }, { id: 'claude-sonnet', tokens: 210 }] } });
+
+  // With no transcript left Claude Code shows no stats at all, its cache notwithstanding.
+  await stats.stopClaudeLocalStats();
+  await rm(root, { recursive: true, force: true });
+  await rm(join(base, 'vh'), { recursive: true, force: true });
+  vi.resetModules();
+  stats = await load();
+  await stats.refreshClaudeLocalStats(root);
+  expect(stats.claudeLocalStats(root, now).localStats.state).toBe('unavailable');
+});
