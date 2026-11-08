@@ -12,8 +12,8 @@ it('keeps native subagent rows and the manual reminder control in the editable p
   const manual = JSON.stringify(composeCard(toolPreviewFrames.tool, draft, 'tool', false, undefined, toolPreviewLayoutInputs.tool));
   const automatic = JSON.stringify(composeCard(toolPreviewFramesNonManual.tool, draft, 'tool', false, undefined, toolPreviewLayoutInputsNonManual.tool));
   expect(manual).toContain('子 agent');
-  expect(manual).toContain('资料侦察员');
-  expect(manual).toContain('细节挑刺员');
+  expect(manual).toContain('功能侦察员');
+  expect(manual).toContain('体验观察员');
   expect(manual).toContain('完成后提醒我');
   expect(automatic).toContain('子 agent');
   expect(automatic).not.toContain('完成后提醒我');
