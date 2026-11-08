@@ -2,16 +2,18 @@
 import './tune-network';
 import { Command, CommanderError, Help, Option } from 'commander';
 import { badArgs, commandFailure, CommandError } from './command-error';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, stat } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
 import { formatErrorTree } from '../core/error-parts';
 import { bridgeVersion } from '../core/version';
 import { paths } from '../config/paths';
 import { enterDataAccess, type DataLease } from '../config/data-access';
 import { inBotSession } from '../config/session-env';
+import { interrupts } from './interrupt';
 import { observeShutdown, type ShutdownControl } from '../host/lifecycle';
 import type { LingerChoice } from './commands/service';
 import type { ScheduleAction, ScheduleTarget } from './commands/schedule';
-import { defaultCardDisplay, type Scope } from '@vonvon/protocol';
+import { defaultCardDisplay, interpolate, type Scope } from '@vonvon/protocol';
 
 /** devices 8.1: every command takes --json and fails through `commandFailure` (the runner at the bottom). */
 export const program = new Command().name('vonvon').description('Vonvon Bot daemon').version(bridgeVersion());
@@ -436,6 +438,47 @@ settings.command('card-check <file>').description('Validate a complete message-c
     catch (error) { throw badArgs(error instanceof Error ? error.message : '消息卡配置无效'); }
     await show(options, ['消息卡配置有效；尚未保存。'], { kind: 'valid' });
   });
+settings.command('card-test <file>').description('Run up to four message-card scripts in a selected directory with sample card values; does not save')
+  .requiredOption('--cwd <absolute-directory>', 'Absolute directory where the scripts will run')
+  .option(...JSON_FLAG)
+  .action(async (file: string, options: Json & { cwd: string }) => {
+    if (!isAbsolute(options.cwd)) throw badArgs('--cwd 必须是绝对目录');
+    try { if (!(await stat(options.cwd)).isDirectory()) throw new Error('不是目录'); }
+    catch { throw badArgs('--cwd 目录不存在或不可访问'); }
+    let input: unknown;
+    try { input = JSON.parse(await readFile(file, 'utf8')); }
+    catch (error) { throw badArgs(error instanceof SyntaxError ? '消息卡文件不是有效 JSON' : `无法读取消息卡文件：${error instanceof Error ? error.message : String(error)}`); }
+    const { assertValidCardDisplay } = await import('../card/card-display-validation');
+    let config: Awaited<ReturnType<typeof assertValidCardDisplay>>;
+    try { config = await assertValidCardDisplay(input); }
+    catch (error) { throw badArgs(error instanceof Error ? error.message : '消息卡配置无效'); }
+    const scripts = config.blocks.filter(block => block.kind === 'custom' && block.source === 'script' && block.mode !== 'off');
+    if (scripts.length > 4) throw badArgs('一次最多测试 4 个启用的卡片脚本');
+    const { buildRunCardBase } = await import('../card/run-card');
+    const { initialState } = await import('../card/run-state');
+    const { values } = buildRunCardBase({
+      rs: { ...initialState, footer: 'thinking', startedAt: Date.now() - 5_000, usage: { used: 25_000, window: 950_000 } },
+      model: 'gpt-6.1-sol', effort: 'high', cardKey: 'card-display-test',
+    });
+    const { runCardDisplayScripts } = await import('../card/card-display-scripts');
+    const interrupted = () => new CommandError('interrupted', '已中断卡片脚本测试，脚本进程已清理。');
+    const ctrlC = interrupts(handler => {
+      process.on('SIGINT', handler);
+      process.on('SIGTERM', handler);
+      return () => { process.off('SIGINT', handler); process.off('SIGTERM', handler); };
+    }, interrupted);
+    let result: Awaited<ReturnType<typeof runCardDisplayScripts>>;
+    try { result = await runCardDisplayScripts(config, { cwd: options.cwd, values, signal: ctrlC.signal }); }
+    catch (error) { if (ctrlC.interrupted) throw interrupted(); throw error; }
+    finally { ctrlC.stop(); }
+    if (ctrlC.interrupted) throw interrupted();
+    if (result.errors.length) throw badArgs(result.errors.map(error => `${error.id}：${error.message}`).join('\n'));
+    for (const block of scripts) {
+      const missing = interpolate(block.template, { ...values, ...result.values[block.id] }).missing;
+      if (missing.length) throw badArgs(`${block.id}：脚本输出缺少模板字段 ${missing.join('、')}`);
+    }
+    await show(options, ['消息卡脚本运行成功；尚未保存。'], { kind: 'valid', values: result.values });
+  });
 type Target = Json & { bot?: string; group?: string; session?: string; host?: boolean; dm?: boolean; revision?: string; reason?: string };
 const READ = ['settings.read.agent', 'settings.read.project', 'settings.read.session', 'settings.read.host'];
 const scoped = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--dm', "The bot's private chat (私聊), not with --group or --session").option('--session <threadId>', 'Session thread id')
@@ -459,6 +502,7 @@ Examples:
   vonvon settings set cards.cardDisplay='<完整 JSON 对象>'                # Bot 消息卡；先用 settings get cards --json 读取
   vonvon settings set --group oc_xxx presentation.cardDisplay=null     # 群消息卡重新继承 Bot
   vonvon settings card-check /path/to/card.json --json                # 只检查完整配置文件，不保存
+  vonvon settings card-test /path/to/card.json --cwd /absolute/folder --json  # 显式运行最多 4 个脚本，不保存
   vonvon settings set --group oc_xxx model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'
   vonvon settings set judge.selection='{"kind":"llm","model":"gpt-6-luna","effort":"low"}'
   vonvon settings set judge.selection='{"kind":"decision","provider":"typesafe","model":"jev-latest"}'   # 决策模型，各后端的群都用

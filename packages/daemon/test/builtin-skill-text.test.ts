@@ -143,7 +143,9 @@ describe('the config builtin skill', () => {
   it('uses the shared settings command for message cards and explains validation and inheritance', () => {
     for (const words of [
       '`vonvon settings get cards --json`', '`vonvon settings get presentation --group X --json`', '`vonvon settings card-template --json`',
-      '`vonvon settings card-check <file> --json`', '保留用户原有的可见行为', '不执行自定义脚本',
+      '`vonvon settings card-check <file> --json`', '`vonvon settings card-test <file> --cwd <绝对目录> --json`',
+      '保留用户原有的可见行为', '不执行自定义脚本', '没有全局 input 变量', 'process.cwd()', "execFileSync('git'", 'console.log(JSON.stringify(',
+      '未建分支', "stdio:['ignore','pipe','ignore']", '在实际 cwd 跑 card-test 验证降级', '不因目录还不是 Git 仓库而阻塞保存',
       '`vonvon settings set cards.cardDisplay=', '`vonvon settings set --group X presentation.cardDisplay=',
       '`vonvon settings set cards.cardDisplay=null`', '`vonvon settings set --group X presentation.cardDisplay=null`',
       '完整 `cardDisplay`', '模板语法', '各运行状态', '后续新任务',

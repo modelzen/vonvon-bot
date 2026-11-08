@@ -54,9 +54,15 @@ function withoutStop(node: CardDisplayElement): CardDisplayElement | undefined {
   return next;
 }
 
-function contextBar(percent: number, color: string): CardDisplayElement {
+function contextBar(percent: number, color: string, block:CardDisplayBlock): CardDisplayElement {
   const palette:Record<string,string> = {grey:'#8F959E',blue:'#3370FF',yellow:'#F2B50A',orange:'#F57C23',red:'#F54A45'};
-  return {tag:'chart',height:'36px',preview:false,chart_spec:{type:'linearProgress',data:[{id:'context',values:[{name:'上下文',value:percent/100}]}],direction:'horizontal',xField:'value',yField:'name',color:[palette[color] ?? palette.grey],padding:0,bandWidth:12,cornerRadius:6,tooltip:{visible:false},axes:[{orient:'left',visible:false},{orient:'bottom',visible:false}]}};
+  const fill=palette[color] ?? palette.grey;
+  const chart:CardDisplayElement={tag:'chart',height:'20px',preview:false,chart_spec:{type:'linearProgress',data:[{id:'context',values:[{name:'上下文',value:percent/100}]}],direction:'horizontal',xField:'value',yField:'name',color:[fill],padding:0,bandWidth:8,cornerRadius:4,progress:{style:{fill}},tooltip:{visible:false},axes:[{orient:'left',visible:false},{orient:'bottom',visible:false}]}};
+  return {tag:'column_set',flex_mode:'none',horizontal_spacing:'8px',columns:[
+    {tag:'column',width:'auto',vertical_align:'center',elements:[markdown('上下文',block,'grey')]},
+    {tag:'column',width:'weighted',weight:1,vertical_align:'center',elements:[chart]},
+    {tag:'column',width:'auto',vertical_align:'center',elements:[{...markdown(`${percent}%`,block,color),text_align:'right'}]},
+  ]};
 }
 
 /** Pure JSON compiler shared by the native daemon and the web preview. */
@@ -105,11 +111,16 @@ export function compileCardDisplay(base: CardDisplayCard, config: CardDisplayCon
     }
     if (block.kind === 'custom' && block.source === 'script' && !input.scriptValues?.[block.id]) continue;
     const values = block.kind === 'custom' ? {...input.values,...object(input.scriptValues?.[block.id])} : input.values;
-    let text = interpolate(block.template,values).text;
+    const rendered = interpolate(block.template,values);
+    if (block.kind === 'custom' && block.source === 'script' && rendered.missing.length) {
+      if (input.strict) throw new Error(`“${block.name}”缺少模板字段：${rendered.missing.join('、')}`);
+      continue;
+    }
+    let text = rendered.text;
     if (block.kind === 'context' && block.appearance === 'percent') text = `${percent}%`;
     const color = fontColor(block,percent);
     let node: CardDisplayElement;
-    if (block.kind === 'context' && block.appearance === 'bar') node = contextBar(percent,color);
+    if (block.kind === 'context' && block.appearance === 'bar') node = contextBar(percent,color,block);
     else if (block.kind==='status' && block.template==='{{status.label}}' && block.color==='auto' && input.parts.statusElement)
       node={...structuredClone(input.parts.statusElement),text_size:block.size};
     else if (block.kind==='model' && block.template==='{{model.name}} · {{model.effort}}' && block.color==='auto' && input.parts.modelElement)

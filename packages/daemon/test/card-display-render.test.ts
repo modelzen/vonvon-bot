@@ -118,6 +118,19 @@ describe('native card display compiler',()=>{
     expect(JSON.stringify(card)).toContain('上下文 —');
   });
 
+  it('emits a native context bar row with label, track, and percentage',()=>{
+    const config=defaultCardDisplay();
+    config.blocks.find(block=>block.kind==='context')!.appearance='bar';
+    const card=buildRunCard({rs:running,cardDisplay:config,strictCardDisplay:true});
+    const row=nodes(card).find(node=>node.tag==='column_set' && node.columns?.length===3 && nodes(node).some(child=>child.tag==='chart'));
+    expect(row).toBeDefined();
+    const raw=JSON.stringify(row);
+    expect(raw).toContain('上下文');
+    expect(raw).toContain('78%');
+    const chart=nodes(row).find(node=>node.tag==='chart');
+    expect(chart).toMatchObject({height:'20px',preview:false,chart_spec:{direction:'horizontal',xField:'value',yField:'name',progress:{style:{fill:'#F2B50A'}}}});
+  });
+
   it('falls back to the complete native card on a malformed runtime draft',()=>{
     const malformed={...defaultCardDisplay(),blocks:null} as unknown as ReturnType<typeof defaultCardDisplay>;
     const card=buildRunCard({rs:running,cardKey:'om_8',cardDisplay:malformed});
