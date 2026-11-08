@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { build } from 'esbuild';
@@ -35,6 +35,7 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['memory', 'events', 'x', '--project', 'p', '--scope', 'bot=cli_a,group=oc_x'], 3], [['memory', 'list', '--project', 'p'], 2],
   [['project', 'list', '--scope', 'bot=cli_a'], 3], [['daemon', 'status', '--scope', 'bot=cli_a'], 3],
   [['settings', 'get'], 3], [['settings', 'access'], 3], [['settings', 'set', 'cards.showToolCalls=false'], 3],
+  [['settings', 'card-template'], 0], [['settings', 'card-check', 'missing-card.json'], 2],
   [['settings', 'get', '--host'], 3], [['settings', 'act', 'voice', 'test'], 3], [['settings', 'act', 'admin', 'add', 'ou_x'], 3], [['settings', 'act', 'admin', 'add', '123'], 2],
   [['settings', 'act', 'member', 'all', '--group', 'g'], 3], [['settings', 'act', 'comment-instructions', '--default'], 3], [['settings', 'act', 'comment-instructions', '--stdin'], 2],
   [['settings', 'models', '--backend', 'codex', '--purpose', 'project'], 3],
@@ -116,6 +117,30 @@ it('every command prints one JSON line with --json, its exit code inside a failu
     }
   } finally { await rm(base, { recursive: true, force: true }); }
 }, 240_000);
+
+it('prints a reusable card template and checks card files without writing data', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'vonvon-card-cli-json-'));
+  try {
+    const home = join(base, 'home'); await mkdir(home);
+    const root = join(base, 'data');
+    const template = await run(home, root, ['settings', 'card-template']);
+    expect(template.code).toBe(0);
+    expect(template.stderr).toBe('');
+    const templateJson = JSON.parse(template.stdout) as { ok: boolean; cardDisplay: unknown };
+    expect(templateJson.ok).toBe(true);
+    expect(templateJson.cardDisplay).toMatchObject({ version: 1, blocks: expect.any(Array) });
+    const file = join(base, 'card.json');
+    await writeFile(file, JSON.stringify(templateJson.cardDisplay));
+    const valid = await run(home, root, ['settings', 'card-check', file]);
+    expect(valid).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(valid.stdout)).toMatchObject({ ok: true, kind: 'valid' });
+    await writeFile(file, '{broken');
+    const malformed = await run(home, root, ['settings', 'card-check', file]);
+    expect(malformed).toMatchObject({ code: 2, stderr: '' });
+    expect(JSON.parse(malformed.stdout)).toMatchObject({ ok: false, exitCode: 2, error: { kind: expect.any(String), message: expect.stringContaining('JSON') } });
+    await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally { await rm(base, { recursive: true, force: true }); }
+}, 60_000);
 
 // cli-2-bot 4.6: only the commands named in LEASED take the data lease, and with it make the data root
 it('takes the data lease for the commands that write the data root only', async () => {

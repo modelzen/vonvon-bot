@@ -20,6 +20,7 @@ const run = (events: AgentEvent[], from: RunState = initialState): RunState => e
 const markers = (s: RunState) => s.blocks.filter((b): b is Extract<Block, { kind: 'compaction' }> => b.kind === 'compaction').map(b => b.compaction);
 const elements = (s: RunState) => (buildRunCard({ rs: s }).body as { elements: Array<Record<string, unknown>> }).elements;
 const meterText = (s: RunState) => (elements(s)[0] as { text: { content: string } }).text.content;
+const meterColor = (s: RunState) => (elements(s)[0] as { text: { text_color: string } }).text.text_color;
 const cardJson = (s: RunState) => JSON.stringify(buildRunCard({ rs: s }));
 
 /** Codex app-server notifications, mapped exactly as the backend does. */
@@ -44,7 +45,8 @@ describe('the context meter heads every run card', () => {
     render.seedUsage({ used: 1, window: W }); // only the first seed counts
     expect(meterText(render.snapshot())).toBe('上下文 60% · 120k/200k');
     render.apply(usage(150_000));
-    expect(meterText(render.snapshot())).toBe('🟡 上下文 75% · 150k/200k');
+    expect(meterText(render.snapshot())).toBe('上下文 75% · 150k/200k');
+    expect(meterColor(render.snapshot())).toBe('yellow');
   });
 });
 
@@ -159,15 +161,20 @@ describe('Claude compaction line and meter, through the real thread and mapper',
 
     const render = new RunRender();
     const meters: string[] = [];
+    const colors: string[] = [];
     for await (const ev of thread.runStreamed({ text: 'go' }).events) {
       render.apply(ev);
-      if (ev.type === 'context_usage' || ev.type === 'compaction') meters.push(meterText(render.snapshot()));
+      if (ev.type === 'context_usage' || ev.type === 'compaction') {
+        meters.push(meterText(render.snapshot()));
+        colors.push(meterColor(render.snapshot()));
+      }
     }
     const s = render.snapshot();
     expect(markers(s)).toMatchObject([{ status: 'done' }]);
     expect(cardJson(s)).toContain('已压缩 85% → 20%');
     // mid-turn reading, the drop at the boundary, the next request, getContextUsage()
-    expect(meters).toEqual(['🟠 上下文 85% · 170k/200k', '🟠 上下文 85% · 170k/200k', '上下文 20% · 40k/200k', '上下文 22% · 44k/200k', '上下文 23% · 46k/200k']);
+    expect(meters).toEqual(['上下文 85% · 170k/200k', '上下文 85% · 170k/200k', '上下文 20% · 40k/200k', '上下文 22% · 44k/200k', '上下文 23% · 46k/200k']);
+    expect(colors).toEqual(['orange','orange','grey','grey','grey']);
   });
 
   it('on a thread\'s first turn, the line ends on the window getContextUsage() reports, like the meter', async () => {

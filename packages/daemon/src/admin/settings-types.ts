@@ -2,6 +2,7 @@ import type { BotProfile, GroupProfile, ProjectModelAccess, ProjectWorkspace, Pr
 import type { ModelInfo, PermissionMode, ReasoningEffort } from '../agent/types';
 import type { NativeField, TierInfo } from '../agent/permission';
 import type { ModelDisplayMode, PendingPolicy, ResolvedCompletionReminderConfig } from '../config/schema';
+import type { CardDisplayConfig } from '@vonvon/protocol';
 import type { VoiceAction, VoiceView } from '../voice/types';
 import type { JudgeModels, JudgeProvider } from '../judge/global-models';
 export type SettingsScope = {
@@ -91,6 +92,7 @@ export interface AgentSections {
   cards: {
     showToolCalls: boolean;
     showModel: ModelDisplayMode;
+    cardDisplay?: CardDisplayConfig | null;
   };
   run: {
     maxConcurrentRuns: number;

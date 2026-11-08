@@ -23,9 +23,10 @@ import type { RunCardStream } from './run-card-stream';
 import { buildSubagentSection } from './subagent-section';
 import { processPanel } from './process-panel';
 import { statusSymbol } from './process-status';
-import { buildProcessBody, currentAnswerIndex, processTitle, runElapsedMs } from './run-process';
+import { buildProcessBodyWithKinds, currentAnswerIndex, processTitle, runElapsedMs } from './run-process';
 import { runCardMeter } from './context-gauge';
 import { toolCommand } from '../environment/tool-command';
+import { compileCardDisplay, type CardDisplayLayoutParts, type CardDisplayValues, type CardDisplayConfig } from '@vonvon/protocol';
 
 /** Action ids for the in-topic run card. */
 export const RC = {
@@ -107,6 +108,9 @@ function stopControl(cardKey: string, presentation: StopControlPresentation): Ca
 
 /** Routing + render inputs for one run card. */
 export interface RunCardState {
+  cardDisplay?: CardDisplayConfig;
+  cardDisplayValues?: Record<string, Record<string, unknown>>;
+  strictCardDisplay?: boolean;
   askWaiting?: string;
   askWaitingSubagentId?: string;
   subagentsCarried?: true;
@@ -239,13 +243,53 @@ export function attachRunImages(opts: {
  * The current answer keeps the native typewriter and existing rich media path.
  */
 export function buildRunCard(rc: RunCardState): CardObject {
+  if (!rc.cardDisplay || rc.emptyNote) return buildRunCardBase(rc).card;
+  try {
+    const {card,parts,values} = buildRunCardBase(rc);
+    return compileCardDisplay(card,rc.cardDisplay,{phase:rc.rs.terminal === 'running' ? 'running' : 'done',values,scriptValues:rc.cardDisplayValues,parts,strict:rc.strictCardDisplay});
+  } catch (error) {
+    if (rc.strictCardDisplay) throw error;
+    return buildRunCardBase({...rc,cardDisplay:undefined}).card;
+  }
+}
+
+/** Native builder plus semantic positions; fixtures and production use the same parts. */
+export function buildRunCardBase(rc: RunCardState): {card:CardObject;parts:CardDisplayLayoutParts;values:CardDisplayValues} {
   const state = rc.rs;
   const running = state.terminal === 'running';
   const elements = rc.emptyNote ? [noteMd('_（没有要补的）_')] : running ? renderRunning(state, rc) : renderTerminal(state, rc);
-  const result = card([...rc.label ? [noteMd(rc.label)] : [], ...voiceReplyElements(rc.voiceMessages), ...elements].map(runTypography), { streaming: running, summary: rc.continued ? '已接收补充，继续处理' : summaryText(state) });
+  const prefix = [...rc.label ? [noteMd(rc.label)] : [], ...voiceReplyElements(rc.voiceMessages)];
+  const all = [...prefix,...elements];
+  const index = (kind:RunCardPart) => {const found = all.findIndex(element => runCardParts.get(element) === kind);return found < 0 ? undefined : found;};
+  const parts: CardDisplayLayoutParts = {contextIndex:index('context') ?? 0,processIndex:index('process'),statusIndex:index('footer'),modelIndex:index('footer'),controlsIndex:all.findIndex(element => element.element_id === CONTROLS_EID),answerIndices:all.flatMap((element,i) => runCardParts.get(element) === 'answer' ? [i] : [])};
+  const processElement = all[parts.processIndex ?? -1];
+  if (processElement) parts.processChildKinds = runCardProcessKinds.get(processElement);
+  const footerElement = all[parts.statusIndex ?? -1];
+  if (footerElement) {
+    const footerParts=runCardFooterParts.get(footerElement);
+    parts.statusElement=footerParts?.status;
+    parts.modelElement=footerParts?.model;
+  }
+  if (parts.controlsIndex !== undefined && parts.controlsIndex < 0) delete parts.controlsIndex;
+  const result = card(all.map(runTypography), { streaming: running, summary: rc.continued ? '已接收补充，继续处理' : summaryText(state) });
   result.body = { ...(result.body as Record<string, unknown>), vertical_spacing: '16px' };
-  return result;
+  const usage = state.usage;
+  const pct = usage?.window ? Math.max(0,Math.min(100,Math.round(100*usage.used/usage.window))) : undefined;
+  const k = (n:number) => n >= 1000 ? `${Math.round(n/1000)}k` : String(Math.round(n));
+  const elapsed = runElapsedMs(state) ?? 0;
+  const effortLabels:Record<string,string> = {none:'无',minimal:'极简',low:'低',medium:'中',high:'高',xhigh:'极高',max:'最高',ultra:'超强'};
+  const effortColors:Record<string,string> = {none:'grey',minimal:'grey',low:'yellow',medium:'green',high:'violet',xhigh:'purple',max:'purple',ultra:'purple'};
+  const status = rc.askWaiting || state.awaitingSubagents ? '' : state.footer === 'tool_running' ? '正在调用工具' : state.footer === 'streaming' ? '正在输出' : state.footer === 'retrying' ? '瞬断，自动重试中…' : state.footer === 'thinking' ? '正在处理' : '';
+  const values:CardDisplayValues = {context:{percent:pct,used:usage ? k(usage.used) : undefined,window:usage?.window ? k(usage.window) : undefined,mark:''},model:{name:rc.model ?? '',effort:rc.effort ? effortLabels[rc.effort] ?? rc.effort : '',effortColor:rc.effort ? effortColors[rc.effort] ?? 'grey' : 'grey'},elapsed:{label:running?'已处理':'用时',value:`${Math.max(0,Math.floor(elapsed/1000))}秒`},status:{label:status}};
+  return {card:result,parts,values};
 }
+
+type RunCardPart = 'context'|'process'|'footer'|'answer';
+const runCardParts = new WeakMap<CardElement,RunCardPart>();
+const runCardProcessKinds = new WeakMap<CardElement,Array<'tool'|'thinking'|'other'>>();
+const runCardFooterParts = new WeakMap<CardElement,{status?:CardElement;model?:CardElement}>();
+const markRunPart = (element:CardElement,kind:RunCardPart):CardElement => {runCardParts.set(element,kind);return element;};
+const markFooter = (element:CardElement,parts:{status?:CardElement;model?:CardElement}):CardElement => {markRunPart(element,'footer');runCardFooterParts.set(element,parts);return element;};
 
 function runTypography(element: CardElement): CardElement {
   return {
@@ -271,22 +315,33 @@ function subagentSection(state: RunState, rc: RunCardState) {
     waiting: rc.askWaiting && rc.askWaitingSubagentId ? { subagentId: rc.askWaitingSubagentId, label: rc.askWaiting } : undefined });
 }
 
+/** Filter before capacity budgeting; the pure compiler repeats this for fixtures. */
+function processBlockVisible(rc:RunCardState,kind:'tool'|'reasoning',running:boolean):boolean {
+  if (!rc.cardDisplay) return kind !== 'tool' || rc.showTools !== false;
+  const block=rc.cardDisplay.blocks.find(item=>item.kind===(kind==='tool'?'tools':'thinking'));
+  return Boolean(block && (block.mode==='always'||block.mode===(running?'running':'done')));
+}
+
 function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
   const section = subagentSection(state, rc);
   // The context meter heads every run card (s12), running and terminal.
-  const elements: CardElement[] = [runCardMeter(state.usage)];
+  const elements: CardElement[] = [markRunPart(runCardMeter(state.usage),'context')];
   if (rc.sessionNotice) elements.push(noteMd(rc.sessionNotice));
 
   const answerIdx = currentAnswerIndex(state.blocks);
-  const processBlocks = state.blocks.filter((b, i) => i !== answerIdx && (rc.showTools !== false || b.kind !== 'tool'));
-  const process = buildProcessBody(processBlocks, rc.images, PROCESS_COMPONENT_BUDGET - section.components - sectionPanelOverhead(section.elements), true);
+  const processBlocks = state.blocks.filter((b, i) => i !== answerIdx && (b.kind !== 'tool'||processBlockVisible(rc,'tool',true)) && (b.kind !== 'reasoning'||processBlockVisible(rc,'reasoning',true)));
+  const process = buildProcessBodyWithKinds(processBlocks, rc.images, PROCESS_COMPONENT_BUDGET - section.components - sectionPanelOverhead(section.elements), true);
   const title = processTitle(state.terminal, runElapsedMs(state));
-  if (process.length) elements.push(processPanel(title, process, true, { titleColor: false }));
-  else if (state.startedAt !== undefined) elements.push(md(title));
+  if (process.elements.length) {
+    const panel = markRunPart(processPanel(title, process.elements, true, { titleColor: false }),'process');
+    runCardProcessKinds.set(panel,process.kinds);
+    elements.push(panel);
+  }
+  else if (state.startedAt !== undefined) elements.push(markRunPart(md(title),'process'));
   elements.push(...section.elements);
   const answer = answerIdx >= 0 ? (state.blocks[answerIdx] as Extract<Block, { kind: 'text' }>).content : '';
   if (answer) {
-    elements.push(...renderRichText(answer, rc.images, { streamTailId: ANSWER_EID, live: true }));
+    elements.push(...renderRichText(answer, rc.images, { streamTailId: ANSWER_EID, live: true }).map(element => markRunPart(element,'answer')));
   }
 
   // Footer: status (left) + 模型·effort footnote (right) share one row when the
@@ -294,9 +349,9 @@ function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
   const mEl = modelEl(rc);
   if (rc.askWaiting) elements.push(md(`${statusSymbol('waiting')} ${rc.askWaiting.replace(/^⏸️?\s*/u, '')}`));
   else if (state.awaitingSubagents) elements.push(md(`${statusSymbol('waiting')} 主回合已答完，等 ${state.subagents.filter(row => row.status === 'running').length} 个子 agent 结束`));
-  else if (state.footer && mEl) elements.push(splitRow(footerStatus(state.footer), mEl));
-  else if (state.footer) elements.push(footerStatus(state.footer));
-  else if (mEl) elements.push(mEl);
+  else if (state.footer && mEl) {const status=footerStatus(state.footer);elements.push(markFooter(splitRow(status,mEl),{status,model:mEl}));}
+  else if (state.footer) {const status=footerStatus(state.footer);elements.push(markFooter(status,{status}));}
+  else if (mEl) elements.push(markFooter(mEl,{model:mEl}));
 
   // The controls row stays at the bottom, next to the newest output where the
   // reader is looking (tradeoff: a long stream may push it below the fold; see
@@ -349,7 +404,7 @@ function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
  */
 function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   const section = subagentSection(state, rc);
-  const elements: CardElement[] = [runCardMeter(state.usage)];
+  const elements: CardElement[] = [markRunPart(runCardMeter(state.usage),'context')];
   if (rc.sessionNotice) elements.push(noteMd(rc.sessionNotice));
 
   const answerIdx = lastTextIndex(state.blocks);
@@ -360,13 +415,17 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   // Everything except the final answer block is "process". (A block after the
   // answer can only be a trailing tool call — keep it folded with the rest.)
   const processBlocks = state.blocks.filter((_, i) => i !== answerIdx);
-  const blocks = rc.showTools === false ? processBlocks.filter((b) => b.kind !== 'tool') : processBlocks;
+  const blocks = processBlocks.filter(b=>(b.kind!=='tool'||processBlockVisible(rc,'tool',false))&&(b.kind!=='reasoning'||processBlockVisible(rc,'reasoning',false)));
   const processBudget = rc.localFiles?.links.length
     ? Math.max(10, Math.min(PROCESS_COMPONENT_BUDGET, 170 - fileComponentCount(answerElements))) : PROCESS_COMPONENT_BUDGET;
-  const processEls = buildProcessBody(blocks, rc.images, Math.max(10, processBudget - section.components - sectionPanelOverhead(section.elements)));
+  const processEls = buildProcessBodyWithKinds(blocks, rc.images, Math.max(10, processBudget - section.components - sectionPanelOverhead(section.elements)));
   const title = processTitle(state.terminal, runElapsedMs(state));
-  if (processEls.length) elements.push(processPanel(title, processEls, false, { titleColor: false }));
-  else if (state.startedAt !== undefined) elements.push(md(title));
+  if (processEls.elements.length) {
+    const panel = markRunPart(processPanel(title, processEls.elements, false, { titleColor: false }),'process');
+    runCardProcessKinds.set(panel,processEls.kinds);
+    elements.push(panel);
+  }
+  else if (state.startedAt !== undefined) elements.push(markRunPart(md(title),'process'));
 
   elements.push(...section.elements);
 
@@ -379,7 +438,7 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   // project, missing/oversized file, failed upload) renders as text — never raw
   // `![](…)`, which the client would resolve as a broken image node.
   if (answer) {
-    elements.push(...answerElements);
+    elements.push(...answerElements.map(element => markRunPart(element,'answer')));
   }
 
   if (rc.continued) {
@@ -406,7 +465,7 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   // 「模型 · 推理强度」footnote, bottom-right — only the always(始终) mode keeps it
   // on the terminal card; running(仅输出时) drops it once the turn ends.
   const mEl = rc.modelOnTerminal ? modelEl(rc) : null;
-  if (mEl) elements.push(mEl);
+  if (mEl) elements.push(markFooter(mEl,{model:mEl}));
 
   if (rc.cardKey && rc.retry === 'available') {
     elements.push(actions([button('🔁 重试', { a: RC.retry, m: rc.cardKey }, 'primary')], CONTROLS_EID));

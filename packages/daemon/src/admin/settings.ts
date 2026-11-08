@@ -36,6 +36,7 @@ import { loadBots } from '../config/bots';
 import { discoverGroupSkills, discoverLocalGroupSkills } from '../agent/group-skills';
 import { snapshotDefaultJudge, snapshotProviderJudge, requireDecisionKey } from '../project/initial-settings';
 import { readJudgeModels } from '../judge/global-models';
+import { assertValidCardDisplay } from '../card/card-display-validation';
 export type * from './settings-types';
 export { parseSettingsAction, parseSettingsEdit, parseSettingsScope, parseModelQuery, SettingsInputError } from './settings-parse';
 export function settingsRevision(value: unknown): string {
@@ -118,7 +119,7 @@ const agentEffects: {
 } = {
   profile: effect(['persona', 'memory'], 'next-turn', '下一轮对话使用新的个性与记忆'),
   role: effect(['identity', 'notes'], 'next-turn', '下一轮对话使用新的角色设定'),
-  cards: effect(['showToolCalls', 'showModel'], 'next-message', '后续任务卡片输出生效'),
+  cards: effect(['showToolCalls', 'showModel', 'cardDisplay'], 'next-message', '后续任务卡片输出生效'),
   run: [...effect(['maxConcurrentRuns'], 'restart', '已保存的并发上限在 daemon 重启后生效'), ...effect(['pendingPolicy'], 'next-message', '下一条消息生效'), ...effect(['runIdleTimeoutSeconds'], 'next-turn', '下一次超时检测生效')],
   completion: effect(['mode', 'longTaskMinutes'], 'task-completion', '任务结束时读取最新策略'),
   comments: effect(['backend', 'selection'], 'new-comment', '下一条评论使用新设置'),
@@ -180,7 +181,8 @@ function agentData(cfg: AppConfig): T.AgentSections {
     role: { identity: '', notes: '' },
     cards: {
       showToolCalls: getShowToolCalls(cfg),
-      showModel: getModelDisplay(cfg)
+      showModel: getModelDisplay(cfg),
+      cardDisplay: p.cardDisplay ?? null,
     },
     run: {
       maxConcurrentRuns: getMaxConcurrentRuns(cfg),
@@ -208,7 +210,7 @@ function agentData(cfg: AppConfig): T.AgentSections {
 }
 function agentRaw(p: AppPreferences, section: keyof T.AgentSections): unknown {
   switch (section) {
-    case 'cards': return [p.showToolCalls, p.showModel];
+    case 'cards': return [p.showToolCalls, p.showModel, p.cardDisplay];
     case 'run': return [p.maxConcurrentRuns, p.runIdleTimeoutSeconds, p.pendingPolicy];
     case 'completion': return [p.completionReminder?.mode, p.completionReminder?.longTaskMinutes];
     case 'comments': return [p.comments?.backend, p.comments?.model, p.comments?.effort];
@@ -609,7 +611,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     if (!p.directories?.repositories) result.workspace.repositories = [...cfg.preferences?.directories?.repositories ?? []];
     if (!p.smartRules) result.smartRules = p.dm ? { ...DEFAULT_DM_SMART_RULES } : rulesFromSmartPrompt(await (deps.readSmartPrompt ?? readSmartPrompt)(botId, p.chatId));
     const completion = getCompletionReminderConfig(cfg);
-    result.presentation = p.presentation ? { showModel: getModelDisplay(cfg), ...p.presentation } : { voiceEnabled: voiceView(cfg).enabled, showToolCalls: getShowToolCalls(cfg), showModel: getModelDisplay(cfg), completionMode: completion.mode, longTaskMinutes: completion.longTaskMinutes };
+    result.presentation = p.presentation ? { showModel: getModelDisplay(cfg), ...p.presentation, cardDisplay: p.presentation.cardDisplay ?? null } : { voiceEnabled: voiceView(cfg).enabled, showToolCalls: getShowToolCalls(cfg), showModel: getModelDisplay(cfg), cardDisplay: null, completionMode: completion.mode, longTaskMinutes: completion.longTaskMinutes };
     return result;
   }
   async function sectionRaw(p: Project, section: keyof T.ProjectSections): Promise<unknown> {
@@ -738,6 +740,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         throw new SettingsInputError('项目不存在');
       const data = await projectSettings(p);
       const sections = Object.fromEntries(Object.entries(data).filter(([key]) => p.dm || key !== 'conversation').map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], p.dm && !DM_SECTIONS.has(key) ? DM_FIXED : sectionAccess('project', key), effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' || key === 'workspace' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : key === 'workspace' ? '下一轮新开会话' : key === 'judge' ? agentEffects.judge[0]!.detail : key === 'run' && p.backend === 'claude-agent' ? 'Claude 不支持插话，运行中来的消息照样排队' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
+      sections.presentation!.effective = { ...data.presentation, cardDisplay: p.presentation?.cardDisplay ?? cfg.preferences?.cardDisplay ?? null };
       for (const key of ['profile', 'role', 'smartRules'] as const) sections[key]!.revision = settingsRevision(await sectionRaw(p, key));
       const botProfile = await legacyBotProfile(botId);
       sections.profile!.effective = { ...data.profile };
@@ -892,7 +895,12 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           check([botId, agentRaw(p, e.section as keyof T.AgentSections)], e.revision);
           switch (e.section) {
             case 'cards':
+              if (e.patch.cardDisplay !== undefined && e.patch.cardDisplay !== null) {
+                try { e.patch.cardDisplay = await assertValidCardDisplay(e.patch.cardDisplay); }
+                catch (error) { throw new SettingsInputError(error instanceof Error ? error.message : '消息卡配置无效'); }
+              }
               Object.assign(p, e.patch);
+              if (e.patch.cardDisplay === null) delete p.cardDisplay;
               break;
             case 'run':
               Object.assign(p, e.patch);
@@ -1011,7 +1019,15 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               p.smart = e.patch.mode === 'smart';
               break;
             case 'skills': p.skills = { ...original.skills, ...e.patch }; p.skills.disabledPaths = [...new Set(p.skills.disabledPaths)]; break;
-            case 'presentation': p.presentation = { ...original.presentation, ...e.patch }; break;
+            case 'presentation': {
+              if (e.patch.cardDisplay !== undefined && e.patch.cardDisplay !== null) {
+                try { e.patch.cardDisplay = await assertValidCardDisplay(e.patch.cardDisplay); }
+                catch (error) { throw new SettingsInputError(error instanceof Error ? error.message : '消息卡配置无效'); }
+              }
+              p.presentation = { ...original.presentation, ...e.patch };
+              if (p.presentation.cardDisplay == null) delete p.presentation.cardDisplay;
+              break;
+            }
             case 'workspace':
               p.cwd = admittedWorkspace!.primary;
               p.directories = { ...p.directories, workspaces: { primary: p.cwd, additional: admittedWorkspace!.directories.filter(path => path !== p.cwd) }, repositories: admittedWorkspace!.repositories };

@@ -154,6 +154,7 @@ import {
   ANSWER_EID,
   buildQueuedCard,
   buildRunCard,
+  buildRunCardBase,
   buildRunCardPlain,
   CONTROLS_EID,
   RC,
@@ -162,6 +163,8 @@ import {
   idleLabel,
   type RunCardState,
 } from '../card/run-card';
+import { runCardDisplayScripts } from '../card/card-display-scripts';
+import { CARD_DISPLAY_STOP_EID } from '@vonvon/protocol';
 import { buildGoalDoneCard } from '../card/goal-card';
 import { RunCardStream } from '../card/run-card-stream';
 import { buildCleanCard } from '../card/markdown-render';
@@ -825,6 +828,25 @@ interface ActiveState {
   evicted?: true;
   /** launchRun dropped the queue for that change, not for a ⏹: a scheduled turn still in intake is skipped too (intakeStopped). */
   evictedDrop?: true;
+}
+
+/** Run scripts at turn boundaries only; card repaint ticks reuse this snapshot. */
+async function refreshRunCardDisplayValues(rc:RunCardState,cwd:string):Promise<void> {
+  if (!rc.cardDisplay) return;
+  try {
+    const result = await runCardDisplayScripts(rc.cardDisplay,{cwd,values:buildRunCardBase({...rc,cardDisplay:undefined}).values});
+    rc.cardDisplayValues = result.values;
+    for (const error of result.errors) log.info('card','display-script-error',{block:error.id,message:error.message});
+  } catch (error) {
+    rc.cardDisplayValues={};
+    log.fail('card',error,{phase:'display-script-prepare'});
+  }
+}
+
+/** Element IDs removed from an orphan CardKit entity after a stale run action. */
+export function deadRunCardElementIds(actionId:string,extraElementId?:string):string[] {
+  const movedStop=actionId===RC.stop||actionId===RC.endGoal||actionId===RC.remind;
+  return [CONTROLS_EID,...(movedStop?[CARD_DISPLAY_STOP_EID]:[]),...(extraElementId?[extraElementId]:[])];
 }
 
 interface AttentionAcceptance {
@@ -5451,7 +5473,7 @@ export function createOrchestrator(
           ?.body?.content;
         const cardId = content ? cardIdFromMessageContent(content) : undefined;
         if (!cardId) return;
-        for (const elementId of [CONTROLS_EID, ...(extraElementId ? [extraElementId] : [])]) {
+        for (const elementId of deadRunCardElementIds(actionId,extraElementId)) {
           const seq = healSequence = Math.max(healSequence + 1, Math.floor(Date.now() / 1000));
           try { await channel.rawClient.cardkit.v1.cardElement.delete({
             path: { card_id: cardId, element_id: elementId },
@@ -5564,11 +5586,7 @@ export function createOrchestrator(
       if (!runAllowed(evt)) return;
       const st = runsByCard.get(key);
       if (!st) {
-        if (!runControlNotes.seen(`remind-ended:${key}:${evt.operator?.openId ?? ''}`)) {
-          void trackTask(channel
-            .send(evt.chatId, { markdown: 'ℹ️ 该任务已结束，无需再开启完成提醒。' }, { replyTo: evt.messageId })
-            .catch(() => undefined));
-        }
+        healDeadRunCard(evt,key,RC.remind,'ℹ️ 该任务已结束，无需再开启完成提醒。');
         log.info('card', 'action', { actionId: RC.remind, ended: true });
         return;
       }
@@ -8040,19 +8058,21 @@ export function createOrchestrator(
         let cardMsgId: string | undefined;
         let rc: RunCardState = {
           rs: render.snapshot(),
+          cardDisplay: state.presentation?.preferences?.cardDisplay,
           voiceMessages: currentTurn.voice ? [currentTurn.voice] : [],
           requesterOpenId: currentTurn.requesterOpenId,
           showTools: render.showTools,
           completionReminder: completionReminderView(state),
           ...(opts.backendId ? { backend: opts.backendId } : {}),
           // 模型显示档位：footnote 本轮 model·推理强度；always 档终态卡也保留。
-          ...(modelDisp !== 'off' && turnModel
+          ...((modelDisp !== 'off' || state.presentation?.preferences?.cardDisplay) && turnModel
             ? { model: turnModel, effort: turnEffort, modelOnTerminal: modelDisp === 'always' }
             : {}),
           ...(opts.sessionNotice ? { sessionNotice: opts.sessionNotice } : {}),
           ...(currentTurn.initiative ? { initiativeCard: currentTurn.initiative } : {}),
           ...(scheduled ? { label: scheduledLabel(scheduled.job), nextRun: scheduledNextRun(scheduled.job) } : {}),
         };
+        await refreshRunCardDisplayValues(rc,runCwd);
 
         const adoptThreadId = async (messageId: string): Promise<void> => {
           if (activeKey.startsWith('pending:')) {
@@ -8215,6 +8235,7 @@ export function createOrchestrator(
           } catch (err) {
             log.fail('card', err, { phase: 'steer-card-assets' });
           }
+          await refreshRunCardDisplayValues(previous,runCwd);
           await previousStream.finalizeCard(channel, buildRunCard(previous))
             .catch(err => log.fail('card', err, { phase: 'steer-card-finalize' }));
         };
@@ -8466,6 +8487,7 @@ export function createOrchestrator(
           // finalizeCard, while callbacks arriving from now on cannot overwrite it.
           const manuallyRequested = Boolean(state.completionReminderRequested);
           completionReminderRefreshers.delete(cardMsgId);
+          await refreshRunCardDisplayValues(rc,runCwd);
           const terminalCardUpdated = await stream.finalizeCard(channel, buildRunCard(rc));
           delivered = terminalCardUpdated;
           // Its card has its last word (the answer, or that the shutdown cut it short): nothing to ask again after a restart.
@@ -8845,6 +8867,7 @@ export function createOrchestrator(
         replyInThread: !opts.flat, cardId: ctx.stream.getCardId(),
       }, (elementId, element) => ctx.stream!.updateElement(channel, elementId, element));
       ctx.rc.images = await ctx.stream.settleImages(answerText);
+      await refreshRunCardDisplayValues(ctx.rc,runCwd);
       const terminalCardUpdated = await ctx.stream.updateCard(channel, buildRunCard(ctx.rc));
       lastCardUpdated = terminalCardUpdated;
       if (confirmedDone && ctx.rc.rs.terminal === 'done' && answerText.trim() && terminalCardUpdated) reportLatestAction(opts.chatId, 'replied');
@@ -8862,11 +8885,12 @@ export function createOrchestrator(
       const goalModelDisp = getModelDisplay(state.presentation ?? cfg);
       const rc: RunCardState = {
         rs: render.snapshot(),
+        cardDisplay: state.presentation?.preferences?.cardDisplay,
         requesterOpenId: opts.requesterOpenId,
         showTools: render.showTools,
         goalControls: true,
         ...(opts.backendId ? { backend: opts.backendId } : {}),
-        ...(goalModelDisp !== 'off' && opts.model
+        ...((goalModelDisp !== 'off' || state.presentation?.preferences?.cardDisplay) && opts.model
           ? { model: opts.model, effort: opts.effort, modelOnTerminal: goalModelDisp === 'always' }
           : {}),
         ...(opts.sessionNotice ? { sessionNotice: opts.sessionNotice } : {}),
@@ -8886,6 +8910,7 @@ export function createOrchestrator(
       });
       ctx.rc.askWaiting = askWaiting;
       ctx.rc.askWaitingSubagentId = askWaitingSubagentId;
+      await refreshRunCardDisplayValues(ctx.rc,runCwd);
       const cardMsgId = await stream.create(channel, opts.chatId, buildRunCard(ctx.rc), { replyTo, replyInThread });
       ctx.rc.cardKey = cardMsgId;
       state.runCard = ctx.rc;
