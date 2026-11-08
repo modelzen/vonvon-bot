@@ -14,8 +14,8 @@
 .share-card-title p {margin: 0; font-size: 13px; color: #6e6e73}
 
 /* The rail reaches the card's edges, so badges scrolled in and out are cut there; its gutters and gaps are the
-   910 px window's, not the viewport's. */
-.share-card .now-bot-list {margin: -10px 0 -14px}
+   910 px window's, not the viewport's. The faded strand tops start well under the subtitle, not against it (N5d). */
+.share-card .now-bot-list {margin: 14px 0 -14px}
 .share-card .badge-board {--rail-gutter: calc(var(--share-pad) + 30px); --gap: 18px; margin-inline: calc(-1 * var(--share-pad))}
 /* Nothing on the card opens: the recorder's pointer must not raise a tooltip. */
 .share-card .badge-group-status {pointer-events: none}
@@ -24,6 +24,12 @@
 .share-card-usage > h2, .share-card-activity > h2 {display: flex; align-items: center; gap: 7px; margin: 0; font-size: 12px; font-weight: 500; color: #6e6e73}
 .share-card-usage > h2 img {width: 14px; height: 14px; object-fit: contain}
 .share-card-usage > h2 img[data-round] {border-radius: 50%}
+/* With no quota column the 13 weeks grow into its room, as in the approved draft, and the stats spread out (N5d). */
+.share-card-usage[data-wide-heat] .usage-heatmap__grid {grid-template-rows: repeat(7, 22px); grid-auto-columns: 22px; gap: 4.5px}
+.share-card-usage[data-wide-heat] .usage-heatmap__grid .usage-cell {border-radius: 5px}
+/* Days without use, the legend's 少 and empty tracks are the draft's light grey: the app's, 3 levels off this paper, drop
+   out of the GIF, whose frames redraw only what moved more than 4. Days with no data stay outlined. */
+.share-card-usage {--color-surface-muted: #e7e6e1; --color-track: #e7e6e1}
 .share-card-activity {gap: 6px}
 .share-card-activity > h2 {margin-bottom: 4px}
 

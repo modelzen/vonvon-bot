@@ -199,7 +199,9 @@ describe('sending the GIF through the daemon', () => {
   });
   it('refuses a GIF Feishu would not take before uploading anything', async () => {
     const {admin} = daemon();
-    await expect(sendShareGif(admin, new Uint8Array(SHARE_GIF_MAX_BYTES + 1), recording('r1'), choice)).rejects.toThrow(ShareSendError);
+    const big = sendShareGif(admin, new Uint8Array(SHARE_GIF_MAX_BYTES + 1), recording('r1'), choice);
+    await expect(big).rejects.toThrow(ShareSendError);
+    await expect(big).rejects.toThrow('这张动图超过 10 MB，飞书发不了。');
     expect(admin).not.toHaveBeenCalled();
   });
   it('words an unexpected reply and an old daemon', async () => {

@@ -22,7 +22,7 @@ type ShareRefusal = 'unknown_bot' | 'bot_offline' | 'not_admin' | 'too_large' | 
 const refused = (code: ShareRefusal, message: string): Refusal => ({ kind: 'refused', code, message });
 const offline = (bot: string): Refusal => refused('bot_offline', `「${bot}」没连上飞书，连上以后再发。`);
 const notAdmin = (bot: string): Refusal => refused('not_admin', `这个人不是「${bot}」的管理员。分享图只能发给 Bot 的管理员。`);
-const tooLarge = (): Refusal => refused('too_large', `分享图超过 ${SHARE_GIF_MAX_BYTES / 1024 / 1024} MB，飞书发不了。少选几项再试。`);
+const tooLarge = (): Refusal => refused('too_large', `分享图超过 ${SHARE_GIF_MAX_BYTES / 1_000_000} MB，飞书发不了。少选几项再试。`);
 const tooWide = (width: number, height: number): Refusal =>
   refused('too_large', `分享图有 ${width}×${height} 像素，飞书只收长和宽都不超过 ${SHARE_GIF_MAX_SIDE} 像素的动图。少选几项再试。`);
 const broken = (): Refusal => refused('bad_image', '分享图没有完整传过来，请重新发送。');

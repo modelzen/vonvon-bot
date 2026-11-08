@@ -92,6 +92,10 @@ it('refuses a start for a Bot that is not here, not connected, or a person not o
   // The request schema stops it first; the store refuses it all the same.
   const outcome = await adminRpc(service, vi.fn(), { type: 'shareStart', agentId: 'cli_fixture_a', openId: ALICE, bytes: SHARE_GIF_MAX_BYTES + 1, sha256: sha(image) } as AdminRequest, connection);
   expect(outcome).toEqual({ kind: 'read', value: refusal('too_large', '分享图超过 10 MB，飞书发不了。少选几项再试。') });
+  // Feishu's "10 MB" read as decimal: 10,000,000 bytes is the most, and that much starts.
+  expect(SHARE_GIF_MAX_BYTES).toBe(10_000_000);
+  expect(await ask({ type: 'shareStart', agentId: 'cli_fixture_a', openId: ALICE, bytes: SHARE_GIF_MAX_BYTES, sha256: sha(image) } as AdminRequest, connection))
+    .toEqual({ kind: 'shareUpload', uploadId: expect.any(String), received: 0 });
   expect(shareImage).not.toHaveBeenCalled();
 });
 

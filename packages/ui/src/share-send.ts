@@ -102,7 +102,7 @@ function expect<K extends AdminReply['kind']>(reply: AdminReply, kind: K): Extra
  * sends it. A refusal at any step throws the daemon's own words. */
 export async function sendShareGif(admin: Admin, gif: Uint8Array, recording: Pick<ShareRecording, 'sha256'>, choice: ShareChoice,
   onPart?: (sent: number, total: number) => void): Promise<string> {
-  if (gif.byteLength > SHARE_GIF_MAX_BYTES) throw new ShareSendError('这张动图超过 10 MB，飞书发不了。');
+  if (gif.byteLength > SHARE_GIF_MAX_BYTES) throw new ShareSendError(`这张动图超过 ${SHARE_GIF_MAX_BYTES / 1_000_000} MB，飞书发不了。`);
   const total = Math.ceil(gif.byteLength / SHARE_PART_BYTES);
   const {uploadId} = expect(await admin({type: 'shareStart', agentId: choice.agentId, openId: choice.openId, bytes: gif.byteLength, sha256: recording.sha256}), 'shareUpload');
   for (let index = 0; index < total; index++) {

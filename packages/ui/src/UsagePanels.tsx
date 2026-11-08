@@ -11,9 +11,8 @@ import './usage-panels.css';
 /** What the share card may leave out; the page shows all of it. */
 export type UsagePanelSections = {habits?: boolean; quota?: boolean};
 /** `progress` (0..1) shows only the oldest share of the days, for the share card's day-by-day build; the page leaves it
- * at 1. Totals with daily figures add up the shown days, counts without them rise in step, peaks and records stay.
- * `weeks`: the heatmap's, 13 unless the share card has the room of a hidden quota column. */
-type PanelProps = {progress?: number; sections?: UsagePanelSections; weeks?: number};
+ * at 1. Totals with daily figures add up the shown days, counts without them rise in step, peaks and records stay. */
+type PanelProps = {progress?: number; sections?: UsagePanelSections};
 type Profile = Usage['profile'];
 type Amount = [value: string, unit: string];
 
@@ -90,9 +89,9 @@ export function QuotaColumn({usage, brand}: {usage: Usage['usage']; brand: strin
   </section>;
 }
 
-function Heat({profile, provider, metric = 'tokens', progress, weeks}: {profile: Profile; provider: string; metric?: 'tokens' | 'messages'; progress: number; weeks?: number}) {
+function Heat({profile, provider, metric = 'tokens', progress}: {profile: Profile; provider: string; metric?: 'tokens' | 'messages'; progress: number}) {
   return <div className="usage-board-heat">{profile.dailyBuckets.length || metric === 'messages'
-    ? <UsageHeatmap profile={profile} provider={provider} metric={metric} progress={progress} weeks={weeks}/>
+    ? <UsageHeatmap profile={profile} provider={provider} metric={metric} progress={progress}/>
     : <p className="usage-board-empty">{`${provider} 暂未提供每日活动记录。`}</p>}</div>;
 }
 function Board({provider, quota, habits, children}: {provider: string; quota?: ReactNode; habits?: ReactNode; children: ReactNode}) {
@@ -102,9 +101,9 @@ function Board({provider, quota, habits, children}: {provider: string; quota?: R
   </div>;
 }
 
-export function CodexUsagePanel({data, progress = 1, sections = {}, weeks}: PanelProps & {data: Usage}) {
+export function CodexUsagePanel({data, progress = 1, sections = {}}: PanelProps & {data: Usage}) {
   const {profile} = data;
-  const hiddenFrom = usageHiddenFrom(usageDays(profile.dailyBuckets, new Date(), 'tokens', weeks), progress);
+  const hiddenFrom = usageHiddenFrom(usageDays(profile.dailyBuckets), progress);
   const skills = profile.topInvocations.filter(item => item.kind === 'skill').sort((a, b) => b.count - a.count).slice(0, 3);
   const effort = profile.mostUsedEffort, fast = profile.fastModePct;
   const habits = sections.habits !== false && (skills.length > 0 || effort || fast !== undefined) && <div className="usage-board-habits">
@@ -122,12 +121,12 @@ export function CodexUsagePanel({data, progress = 1, sections = {}, weeks}: Pane
       {label: '峰值单日', value: profile.peakDailyTokens === undefined ? undefined : withToken(tokenAmount(profile.peakDailyTokens))},
       {label: '最长单任务', value: profile.longestTurnSec === undefined ? undefined : durationAmount(profile.longestTurnSec)},
     ]}/>
-    <Heat profile={profile} provider="Codex" progress={progress} weeks={weeks}/>
+    <Heat profile={profile} provider="Codex" progress={progress}/>
   </Board>;
 }
 /** Claude Code's own /usage → Stats, which the daemon counts from this device's transcripts (now-share N2). The quota
  * comes from the account and stands on its own while the count is scanning, missing, or from a daemon without it. */
-export function ClaudeUsagePanel({data, progress = 1, sections = {}, weeks}: PanelProps & {data: Usage}) {
+export function ClaudeUsagePanel({data, progress = 1, sections = {}}: PanelProps & {data: Usage}) {
   const where = useActiveDevice();
   const {profile} = data, stats = profile.localStats;
   const quota = sections.quota !== false && <QuotaColumn usage={data.usage} brand="Claude"/>;
@@ -135,7 +134,7 @@ export function ClaudeUsagePanel({data, progress = 1, sections = {}, weeks}: Pan
     <p className="usage-board-empty" role="status">{!stats ? '暂无 Claude Code 的使用统计。' : stats.state === 'scanning' ? `正在统计${placeOf(where)}的 Claude Code 记录…` : `${placeOf(where)}没有 Claude Code 的使用记录。`}</p>
   </Board>;
   const buckets = profile.dailyBuckets;
-  const hiddenFrom = usageHiddenFrom(usageDays(buckets, new Date(), 'messages', weeks), progress);
+  const hiddenFrom = usageHiddenFrom(usageDays(buckets, new Date(), 'messages'), progress);
   const tokens = (profile.lifetimeTokens ?? stats.models.reduce((sum, model) => sum + model.tokens, 0)) - hiddenSum(buckets, hiddenFrom, bucket => bucket.tokens);
   const messages = stats.messages - hiddenSum(buckets, hiddenFrom, bucket => bucket.messages ?? 0);
   const activeDays = stats.activeDays - hiddenSum(buckets, hiddenFrom, bucket => (bucket.messages ?? 0) > 0 ? 1 : 0);
@@ -149,7 +148,7 @@ export function ClaudeUsagePanel({data, progress = 1, sections = {}, weeks}: Pan
       {label: '最长会话', value: stats.longestSessionSec === undefined ? undefined : durationAmount(stats.longestSessionSec),
         note: stats.longestSessionMessages !== undefined && `${count(stats.longestSessionMessages)} 条消息`},
     ]}/>
-    <Heat profile={profile} provider="Claude Code" metric="messages" progress={progress} weeks={weeks}/>
+    <Heat profile={profile} provider="Claude Code" metric="messages" progress={progress}/>
   </Board>;
 }
 function ClaudeHabits({models, hours}: {models: {id: string; tokens: number}[]; hours?: number[]}) {
