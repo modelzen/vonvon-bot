@@ -8,7 +8,12 @@
 .usage-cell--2 { background: color-mix(in srgb, var(--color-accent) 45%, var(--color-surface)); }
 .usage-cell--3 { background: color-mix(in srgb, var(--color-accent) 72%, var(--color-surface)); }
 .usage-cell--4 { background: var(--color-accent); }
-.usage-heatmap__hint { display: block; margin-top: 8px; color: var(--color-text-secondary); font-size: 12px; }
+.usage-heatmap__hint { display: block; min-width: 0; color: var(--color-text-secondary); font-size: 12px; white-space: nowrap; }
+/* Sized by the grid, not the text: the legend steps aside while a day is read out. */
+.usage-heatmap__caption { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; width: 0; min-width: 100%; margin-top: 8px; }
+.usage-heatmap__legend { display: inline-flex; align-items: center; gap: 3px; flex: none; font-size: 10px; color: var(--color-text-tertiary); }
+.usage-heatmap__legend .usage-cell { width: 9px; height: 9px; border-radius: 2px; }
+.usage-heatmap:has(.usage-cell[data-selected=true]) .usage-heatmap__legend { display: none; }
 .usage-progress {height:6px;border-radius:6px;background:var(--color-surface-muted);overflow:hidden;}
 .usage-progress span {display:block;height:100%;border-radius:inherit;background:var(--color-accent);}
 .usage-details {min-width:0;}

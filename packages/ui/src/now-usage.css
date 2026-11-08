@@ -2,6 +2,7 @@
 .now-provider-tabs{display:flex;align-items:center;position:relative;isolation:isolate;gap:2px;background:var(--color-surface-muted);padding:3px;border-radius:7px;min-width:0}
 .now-provider-tab{display:inline-flex;align-items:center;justify-content:center;gap:5px;position:relative;z-index:1;padding:5px 11px;border:0;background:transparent;color:var(--color-text-secondary);font:inherit;font-size:11px;white-space:nowrap;cursor:pointer;border-radius:5px}
 .now-provider-tab img{width:13px;height:13px;object-fit:contain}
+.now-provider-tab img[data-round]{border-radius:50%}
 .now-provider-tab[data-active]{color:var(--color-text)}
 .now-provider-tab:focus-visible{outline:2px solid var(--color-focus);outline-offset:2px}
 .now-provider-indicator{position:absolute;z-index:0;left:0;top:0;width:var(--active-tab-width);height:var(--active-tab-height);transform:translate(var(--active-tab-left),var(--active-tab-top));border-radius:5px;background:var(--color-surface);box-shadow:0 1px 3px #0000000d;pointer-events:none}
@@ -11,42 +12,17 @@
 .now-usage-details-link{display:inline-flex;align-items:center;gap:5px;margin-left:auto;padding:7px 0;border:0;background:none;color:var(--color-text-secondary);font:inherit;font-size:11px;white-space:nowrap;cursor:pointer}
 .now-usage-details-link:hover{color:var(--color-text)}
 .now-usage-details-link:focus-visible{outline:2px solid var(--color-focus);outline-offset:3px;border-radius:3px}
-/* Share settings usage surfaces; home only adjusts placement and density. */
+/* The panels lay themselves out (usage-panels.css); the page adds the rule above them and the no-data account row. */
 .now-usage-panel{min-width:0}
-.now-usage-content{display:grid;gap:24px;min-width:0;padding:18px 0;border-block:1px solid var(--color-border)}
-.now-usage-content[data-has-usage=true]{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.now-usage-content{display:grid;gap:14px;min-width:0;padding-top:18px;border-top:1px solid var(--color-border)}
 .now-usage-content>.usage-account{background:none;border:0;border-radius:0;padding:0}
-.now-usage-content[data-has-usage=true]>.usage-account{grid-column:2;grid-row:1;border-left:1px solid var(--color-border);padding-left:24px}
-.now-usage-content>.ss-section{grid-column:1;grid-row:1;min-width:0;margin:0}
-.now-usage .now-usage-content>.ss-section>.ss-group{background:none;border:0;box-shadow:none;border-radius:0}
-.now-usage-content .ss-section__header{padding:0;margin-bottom:12px}
-.now-usage-content .ss-section__label{font-size:11px}
-.now-usage-content .usage-activity{align-items:flex-start;flex-direction:column;gap:14px;padding:0}
-.now-usage-content .usage-heatmap{padding:0;max-width:100%}
-.now-usage-content .usage-heatmap__hint{font-size:10px}
-.now-usage-content .usage-activity-stats{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:16px;margin:0;padding:0;width:100%}
-.now-usage-content .usage-activity-stats dd{font-size:14px}
 .now-usage-content .usage-account-heading{align-items:flex-start;gap:8px}
 .now-usage-content .usage-account-identity{gap:6px}
 .now-usage-content .usage-account-identity strong{font-size:12px}
-.now-usage-content .usage-read-time{font-size:10px}
-.now-usage-content .usage-account-note{margin-bottom:16px;font-size:10px}
-.now-usage-content .usage-quota-grid{flex-direction:column;gap:16px}
-.now-usage-content .usage-quota+.usage-quota{border:0;padding:0}
-.now-usage-content .usage-quota-line{font-size:11px;margin-bottom:8px}
-.now-usage-content .usage-quota-line strong{font-size:22px}
-.now-usage-content .usage-progress{height:4px}
-.now-usage-content .usage-reset{font-size:10px;margin-top:6px}
-.now-usage-content>.now-usage-notice{grid-column:1/-1}
-.now-jev-panel{border-block:1px solid var(--color-border)}
-.now-usage .now-jev-panel .judge-daily-scroll>.ss-section>.ss-group{background:none;box-shadow:none;border:0;border-radius:0}
-.now-jev-panel .ss-row{padding-inline:0}
-.now-usage-content[data-stale=true]>.usage-account,.now-usage-content[data-stale=true]>.ss-section{opacity:.6}
+.now-usage-content[data-stale=true]>.usage-board{opacity:.6}
 .now-usage-empty{margin:0;font-size:12px;line-height:1.7;color:var(--color-text-secondary)}
 .now-usage-notice{margin:0;font-size:11px;line-height:1.6;color:var(--color-text-tertiary)}
-.now-usage .usage-activity-stats{min-width:0;max-width:100%}
-.now-usage .usage-activity-stats dd{overflow-wrap:anywhere}
-@media(max-width:520px){.now-usage.today-home-section>header{gap:10px;flex-wrap:wrap}.now-provider-tab{padding-inline:9px}.now-usage-content[data-has-usage=true]{grid-template-columns:minmax(0,1fr)}.now-usage-content[data-has-usage=true]>.usage-account{grid-column:1;grid-row:2;border-left:0;border-top:1px solid var(--color-border);padding:20px 0 0}.now-usage-content .usage-quota-grid{flex-direction:row}.now-usage-content .usage-quota-line{flex-wrap:wrap}}
+@media(max-width:520px){.now-usage.today-home-section>header{gap:10px;flex-wrap:wrap}.now-provider-tab{padding-inline:9px}}
 @media(pointer:coarse){.now-provider-tab{min-height:40px}}
 @media(prefers-reduced-motion:reduce){.now-usage[data-pointer-motion=true] .now-provider-indicator,.now-usage[data-pointer-motion=true] .now-usage-panel{transition:none}}
 @media(forced-colors:active){.now-provider-tab[data-active]{outline:1px solid Highlight}.now-provider-indicator{display:none}}

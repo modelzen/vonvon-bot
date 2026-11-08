@@ -18,6 +18,14 @@ export function usageWindowLabel(seconds: number | undefined, fallback: string) 
   return `${Math.round(seconds / 60)} 分钟限额`;
 }
 
+type UsageWindow = NonNullable<Usage['usage']['main']['primary']>;
+/** An extra limit may report only one window (Claude's per-model weekly ones): each window is a "<name> 7 天限额" of its own. */
+export function extraWindows(item: Usage['usage']['extras'][number]): {label: string; window: UsageWindow}[] {
+  const name = item.name || '额外限额';
+  return ([[item.primary, '主要限额'], [item.secondary, '额外限额']] as const)
+    .flatMap(([window, fallback]) => window ? [{label: `${name} ${usageWindowLabel(window.windowSeconds, fallback)}`, window}] : []);
+}
+
 function windowValue(window: { usedPercent: number; resetAt?: number } | undefined) {
   if (!window) return "暂不可用";
   const reset = window.resetAt ? ` · ${new Date(window.resetAt * 1000).toLocaleString()} 重置` : "";
@@ -52,7 +60,11 @@ export function UsageAccount({data, provider = 'Codex', children}: {data?: Usage
           {data.usage.main.secondary && <UsageQuota label={secondaryLabel} window={data.usage.main.secondary}/>}
         </div>
         {(!data.usage.main.primary || !data.usage.main.secondary) && <p className="usage-quota-unavailable">{[!data.usage.main.primary && primaryLabel, !data.usage.main.secondary && secondaryLabel].filter(Boolean).join('、')}暂不可用</p>}
-        {data.usage.extras.map((item, index) => <SettingsRow key={`${item.name ?? '额外限额'}-${index}`} title={item.name || '额外限额'} value={`${windowValue(item.primary)}；${windowValue(item.secondary)}`}/>)}
+        {data.usage.extras.flatMap((item, index) => {
+          const windows = extraWindows(item);
+          return windows.length ? windows.map(({label, window}) => <SettingsRow key={`${index}-${label}`} title={label} value={windowValue(window)}/>)
+            : [<SettingsRow key={index} title={item.name || '额外限额'} value={windowValue(undefined)}/>];
+        })}
       </> : null}
       {children}
     </section>;
@@ -95,37 +107,65 @@ export function UsageQuota({label, window}: {label: string; window: {usedPercent
 
 
 const DAY = 86_400_000;
-export function usageDays(buckets: Usage['profile']['dailyBuckets'], today = new Date()) {
+export type UsageMetric = 'tokens' | 'messages';
+type Buckets = Usage['profile']['dailyBuckets'];
+/** Claude Code's /usage heatmap grades a day by the p25/p50/p75 of all its active days' messages. */
+function messageLevel(buckets: Buckets) {
+  const counts = buckets.map(item => item.messages ?? 0).filter(count => count > 0).sort((a, b) => a - b);
+  const [p25 = 0, p50 = 0, p75 = 0] = [.25, .5, .75].map(share => counts[Math.floor(counts.length * share)]);
+  return (count: number) => count <= 0 ? 0 : count >= p75 ? 4 : count >= p50 ? 3 : count >= p25 ? 2 : 1;
+}
+export function usageDays(buckets: Buckets, today = new Date(), metric: UsageMetric = 'tokens') {
   const day = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
   const start = day - ((new Date(day).getUTCDay() + 6) % 7 + 12 * 7) * DAY;
-  const daily = new Map(buckets.filter(item => Number.isFinite(item.tokens) && item.tokens >= 0).map(item => [item.date, item.tokens]));
+  const daily = new Map(buckets.flatMap(item => {
+    const value = metric === 'tokens' ? item.tokens : item.messages;
+    return value !== undefined && Number.isFinite(value) && value >= 0 ? [[item.date, value] as const] : [];
+  }));
+  // Local transcripts are complete, so a day without messages had none; gaps in the account's history stay unknown.
   const cells = Array.from({length: 91}, (_, index) => {
     const at = start + index * DAY, date = new Date(at).toISOString().slice(0, 10);
-    return {date, tokens: daily.get(date), future: at > day};
+    return {date, value: daily.get(date) ?? (metric === 'messages' ? 0 : undefined), future: at > day};
   });
-  const max = Math.max(0, ...cells.filter(cell => !cell.future).map(cell => cell.tokens ?? 0));
-  return cells.map(cell => ({...cell, level: cell.tokens === undefined ? -1 : cell.tokens === 0 || max === 0 ? 0 : Math.min(4, Math.ceil(cell.tokens / max * 4))}));
+  const max = Math.max(0, ...cells.filter(cell => !cell.future).map(cell => cell.value ?? 0));
+  const grade = metric === 'messages' ? messageLevel(buckets) : (value: number) => value === 0 || max === 0 ? 0 : Math.min(4, Math.ceil(value / max * 4));
+  return cells.map(cell => ({...cell, level: cell.value === undefined ? -1 : grade(cell.value)}));
 }
 
-/** The settings heatmap, with missing history and keyboard inspection preserved. */
-export function UsageHeatmap({profile, provider = 'Codex'}: {profile: Profile; provider?: string}) {
+/** The first past day a progress (0..1) still hides: the share card fills the oldest days first. None at 1. */
+export function usageHiddenFrom(cells: readonly {date: string; future: boolean}[], progress = 1): string | undefined {
+  const past = cells.filter(cell => !cell.future);
+  return past[Math.floor(Math.min(1, Math.max(0, progress)) * past.length)]?.date;
+}
+
+const metricCopy = {tokens: {unit: 'Token', daily: '每日 Token', label: '每日 Token 用量'}, messages: {unit: '条消息', daily: '每日消息', label: '每日消息数'}};
+/** The settings heatmap, with missing history and keyboard inspection preserved. Hidden days (progress) read as empty
+ * while the grading keeps the whole range, so colours do not shift as days fill in. */
+export function UsageHeatmap({profile, provider = 'Codex', metric = 'tokens', progress = 1}: {profile: Profile; provider?: string; metric?: UsageMetric; progress?: number}) {
   const [hover, setHover] = useState<number | null>(null);
   const [focus, setFocus] = useState<number | null>(null);
   const captionId = useId();
-  const cells = usageDays(profile.dailyBuckets);
+  const all = usageDays(profile.dailyBuckets, new Date(), metric);
+  const hiddenFrom = usageHiddenFrom(all, progress);
+  const cells = hiddenFrom ? all.map(cell => cell.date >= hiddenFrom && !cell.future ? {...cell, level: Math.min(cell.level, 0)} : cell) : all;
   const last = cells.reduce((index, cell, current) => cell.future ? index : current, 0);
   const active = hover ?? focus;
   const selected = active === null ? undefined : cells[active];
-  if (!profile.dailyBuckets.length) return <SettingsRow title="每日用量" description={`${provider} 暂未提供每日活动记录。`}/>;
-  return <div className="usage-heatmap" aria-label="最近十三周每日 Token 用量">
-    <div className="usage-heatmap__grid" tabIndex={0} role="group" aria-label={`${provider} 每日 Token 用量，方向键查看日期`} aria-describedby={captionId}
+  const copy = metricCopy[metric];
+  const dayText = (cell: {date: string; value?: number}) => `${cell.date} · ${cell.value === undefined ? '暂无数据' : `${amount(cell.value)} ${copy.unit}`}`;
+  if (!profile.dailyBuckets.length && metric === 'tokens') return <SettingsRow title="每日用量" description={`${provider} 暂未提供每日活动记录。`}/>;
+  return <div className="usage-heatmap" aria-label={`最近十三周${copy.label}`}>
+    <div className="usage-heatmap__grid" tabIndex={0} role="group" aria-label={`${provider} ${copy.label}，方向键查看日期`} aria-describedby={captionId}
       onMouseLeave={() => setHover(null)} onFocus={() => setFocus(last)} onBlur={() => setFocus(null)} onKeyDown={event => {
         const delta: Record<string, number> = {ArrowLeft: -7, ArrowRight: 7, ArrowUp: -1, ArrowDown: 1};
         if (delta[event.key] !== undefined) {event.preventDefault(); setHover(null); setFocus(index => Math.max(0, Math.min(last, (index ?? last) + delta[event.key]!)));}
       }}>
       {cells.map((cell, index) => <span key={cell.date} className={`usage-cell usage-cell--${cell.level < 0 ? 'unknown' : cell.level}`} data-future={cell.future} data-selected={index === active} aria-hidden="true"
-        title={cell.future ? undefined : `${cell.date} · ${cell.tokens === undefined ? '暂无数据' : `${amount(cell.tokens)} Token`}`} onMouseEnter={() => {if (!cell.future) setHover(index);}}/>)}
+        title={cell.future ? undefined : dayText(cell)} onMouseEnter={() => {if (!cell.future) setHover(index);}}/>)}
     </div>
-    <span className="usage-heatmap__hint" id={captionId} aria-live="polite">{selected ? `${selected.date} · ${selected.tokens === undefined ? '暂无数据' : `${amount(selected.tokens)} Token`}` : '最近十三周 · 悬停查看每日用量'}</span>
+    <div className="usage-heatmap__caption">
+      <span className="usage-heatmap__hint" id={captionId} aria-live="polite">{selected ? dayText(selected) : `${copy.daily} · 最近 13 周`}</span>
+      <span className="usage-heatmap__legend" aria-hidden="true">少{[0, 1, 2, 3, 4].map(level => <i key={level} className={`usage-cell usage-cell--${level}`}/>)}多</span>
+    </div>
   </div>;
 }

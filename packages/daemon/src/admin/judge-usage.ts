@@ -6,6 +6,9 @@ import { decisionProvider } from '../judge/decision';
 import { JudgeUsageUnreadable, localDayBefore, readJudgeUsage } from '../judge/usage';
 
 export const JUDGE_USAGE_SHOWN_DAYS = 14;
+const sourceLabel = (kind: 'llm' | 'decision', id: string) => kind === 'llm' ? backendLabel(id) : decisionProvider(id)?.displayName ?? id;
+const bySource = (a: { kind: 'llm' | 'decision'; id: string }, b: { kind: 'llm' | 'decision'; id: string }) =>
+  a.kind === b.kind ? sourceLabel(a.kind, a.id).localeCompare(sourceLabel(b.kind, b.id)) : a.kind === 'llm' ? -1 : 1;
 export async function judgeUsageView(opts: { now?: number; read?: typeof readJudgeUsage } = {}): Promise<Extract<AdminReply, { kind: 'judgeUsage' }>> {
   const now = opts.now ?? Date.now();
   const days: JudgeUsageDay[] = Array.from({ length: JUDGE_USAGE_SHOWN_DAYS }, (_, n) => ({ date: localDayBefore(now, n), total: 0, sources: [], bots: [] }));
@@ -26,22 +29,25 @@ export async function judgeUsageView(opts: { now?: number; read?: typeof readJud
     }
     for (const day of days) {
       let count = 0;
+      const sources: NonNullable<JudgeUsageDay['bots'][number]['sources']> = [];
       for (const [key, value] of Object.entries(usage[day.date] ?? {})) {
         if (!value) continue;
         const kind = key.startsWith('llm:') ? 'llm' : 'decision';
         const id = key.slice(key.indexOf(':') + 1);
         const source = day.sources.find(s => s.kind === kind && s.id === id);
         if (source) source.count += value;
-        else day.sources.push({ kind, id, label: kind === 'llm' ? backendLabel(id) : decisionProvider(id)?.displayName ?? id, count: value });
+        else day.sources.push({ kind, id, label: sourceLabel(kind, id), count: value });
+        sources.push({ kind, id, count: value });
         count += value;
       }
-      if (count) day.bots.push({ agentId: bot.appId, agentName: bot.botName || bot.name, count });
+      if (count) day.bots.push({ agentId: bot.appId, agentName: bot.botName || bot.name, count, sources });
       day.total += count;
     }
   }
   for (const day of days) {
-    day.sources.sort((a, b) => a.kind === b.kind ? a.label.localeCompare(b.label) : a.kind === 'llm' ? -1 : 1);
+    day.sources.sort(bySource);
     day.bots.sort((a, b) => b.count - a.count);
+    for (const bot of day.bots) bot.sources?.sort(bySource);
   }
   return { kind: 'judgeUsage', days, unreadBots };
 }
