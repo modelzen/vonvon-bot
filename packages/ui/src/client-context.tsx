@@ -45,9 +45,31 @@ export type ShellCapabilities = {
   /** U4: another device is updating this computer's Vonvon Bot (the words to show), or no longer; the last one at once.
    * About this computer, whichever device is shown. */
   onRemoteUpdate?: (listener: (text: string | undefined) => void) => () => void;
-  /** now-share N5: records the 此刻 share GIF, so only the desktop has it; N5 gives it its methods. */
-  share?: object;
+  /** now-share N5b: the 此刻 share GIF is recorded by the desktop, so only the desktop has this. */
+  share?: ShareShell;
 };
+
+/** now-share N5: a recording the desktop's main process keeps until `discard`. */
+export type ShareRecording = { id: string; bytes: number; sha256: string; width: number; height: number; durationMs: number };
+export type ShareShell = {
+  /** Records `model` (N5a's ShareModel, passed through as it is) offscreen; `onProgress` gets 0..1. */
+  record(model: unknown, onProgress?: (fraction: number) => void): Promise<ShareRecording>;
+  /** Writes the GIF under the app's share folder and puts that file on the clipboard. */
+  copy(id: string): Promise<{ path: string }>;
+  /** Shows the file in Finder or Explorer. */
+  reveal(path: string): Promise<void>;
+  /** The GIF itself, to send through the daemon. */
+  bytes(id: string): Promise<Uint8Array>;
+  discard(id: string): Promise<void>;
+};
+
+type ShareRect = { x: number; y: number; width: number; height: number };
+/** now-share N5: what the share card reports once its first frame is painted; CSS pixels from the card's top left,
+ * `badges` in the rail's order, those scrolled out of view included. */
+export type ShareLayout = { width: number; height: number; badges: ShareRect[]; rail: ShareRect & { scrollWidth: number; clientWidth: number } };
+/** now-share N5: only in the desktop's offscreen share window (N5b's preload); the page at `#share-card` (N5a) reads
+ * its model here and never talks to a daemon. `ready` resolves when recording starts, the card's clock starting then. */
+export type ShareCardBridge = { model(): Promise<unknown>; ready(layout: ShareLayout): Promise<void> };
 
 /** The device the page shows. */
 export type ActiveDevice = {

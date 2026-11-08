@@ -60,5 +60,7 @@ export async function adminRpc(service: AdminService, followLogs: (follow: boole
     // Nothing in the snapshot shows a key, so a save is a read: no rebuild, no revision (s23g)
     case 'secrets': case 'setSecret': case 'removeSecret': case 'testSecret':
       return { kind: 'read', value: await secretsAction(request) };
+    // now-share N5c answers these.
+    case 'shareTargets': case 'shareStart': case 'sharePart': case 'shareSend': return unsupported();
   }
 }
