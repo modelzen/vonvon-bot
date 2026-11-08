@@ -394,6 +394,8 @@ describe('the bot-session column (unit)', () => {
       'admin.secrets', 'admin.setSecret', 'admin.removeSecret', 'admin.testSecret',
       'device.status', 'device.enable', 'device.disable', 'device.setPort', 'device.pair', 'device.clients', 'device.renameClient', 'device.revokeClient', 'device.rename',
       'settings.act.adminMember', 'memory.dmPeople',
+      // now-share N5c: the 此刻 share dialog's alone.
+      'admin.shareTargets', 'admin.shareStart', 'admin.sharePart', 'admin.shareSend',
     ]);
     const onHost = new Set(['snapshot.get', 'admin.negotiate', 'admin.daemonStatus']);
     for (const [kind, rule] of RULES) expect(rule.places.dm, kind).toBe(refused.has(kind) ? 'deny' : onHost.has(kind) ? 'host' : 'bot');
