@@ -69,19 +69,23 @@ function QuotaWindow({label, window}: {label: string; window: Window}) {
     <small title={reset?.toLocaleString()}>{reset ? `${reset.toLocaleString('zh-CN', {month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false})} 重置` : '暂未提供重置时间'}</small>
   </div>;
 }
-/** Plan, read time and every window the account reports; at 90% a window turns to the warning colour. */
+/** Plan, read time and every window the account reports; at 90% a window turns to the warning colour. Without quota
+ * (API access, no subscription login, a failed read) the daemon's `unavailable` line says why (now-share N2b). */
 export function QuotaColumn({usage, brand}: {usage: Usage['usage']; brand: string}) {
   const where = useActiveDevice();
+  const gap = usage.unavailable;
   const main = ([[usage.main.primary, '主要限额'], [usage.main.secondary, '额外限额']] as const).map(([window, fallback]) => ({window, label: usageWindowLabel(window?.windowSeconds, fallback)}));
   const windows = [...main.flatMap(({window, label}) => window ? [{label, window}] : []), ...usage.extras.flatMap(extraWindows)];
   const missing = main.filter(item => !item.window).map(item => item.label);
   return <section className="usage-board-side usage-board-quota" aria-label={`${brand} 额度`}>
     <header title={`所有 Bot 共用${placeOf(where)} ${brand} 账号的额度`}>
       <strong>{usage.planType ? `${brand} ${planNames[usage.planType] ?? usage.planType}` : brand}</strong>
-      <span title={new Date(usage.fetchedAt).toLocaleString()}>读取于 {clock(usage.fetchedAt)}</span>
+      {!gap && <span title={new Date(usage.fetchedAt).toLocaleString()}>读取于 {clock(usage.fetchedAt)}</span>}
     </header>
-    {windows.map(({label, window}, index) => <QuotaWindow key={`${index}-${label}`} label={label} window={window}/>)}
-    {missing.length > 0 && <p className="usage-board-unavailable">{`${missing.join('、')}暂不可用`}</p>}
+    {gap ? <p className="usage-board-unavailable" role="status" data-reason={gap.reason}>{gap.message}</p> : <>
+      {windows.map(({label, window}, index) => <QuotaWindow key={`${index}-${label}`} label={label} window={window}/>)}
+      {missing.length > 0 && <p className="usage-board-unavailable">{`${missing.join('、')}暂不可用`}</p>}
+    </>}
   </section>;
 }
 

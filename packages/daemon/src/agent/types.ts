@@ -507,6 +507,8 @@ export interface AccountUsageSnapshot {
   extras: RateBucket[];
   /** 拉取时刻（ms） */
   fetchedAt: number;
+  /** Claude：额度读不到时为什么（main、extras 为空），本机统计照常返回 */
+  unavailable?: UsageErrorKind;
 }
 
 export interface DailyBucket {
@@ -517,7 +519,8 @@ export interface DailyBucket {
   messages?: number;
 }
 
-/** Claude Code /usage → Stats 的本机统计（daemon 读本机 Claude Code 记录算出，见 docs/plans/now-share.md N2）。 */
+/** Claude Code /usage → Stats 的本机统计（daemon 读本机 Claude Code 记录算出，见 docs/plans/now-share.md N2；
+ * 记录被清理掉的天由 Claude Code 自己的 stats-cache.json 补上，N2b）。 */
 export interface ClaudeLocalStats {
   state: 'ready' | 'scanning' | 'unavailable';
   /** 每个模型的累计 Token（input + output + cache_read + cache_creation），按 Token 降序 */
