@@ -263,6 +263,41 @@ describe('Claude compaction line and meter, through the real thread and mapper',
     }
   });
 
+  it('a read that answers after its timeout does not overwrite the next model\'s window', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      let model = 'opus';
+      let answerLate!: () => void;
+      const late = new Promise<{ totalTokens: number; maxTokens: number }>(resolve => { answerLate = () => resolve({ totalTokens: 1, maxTokens: 400_000 }); });
+      const read = vi.fn(async () => ({ totalTokens: 125_000, maxTokens: model === 'opus' ? 400_000 : 200_000 }));
+      read.mockReturnValueOnce(late);
+      const [init, msg1, msg2, result] = plainTurn('claude-opus-5-5');
+      const turns = [[init, msg1, msg2, result], [init, msg1, 'late', msg2, result]];
+      const thread = new ClaudeAgentThread({
+        sessionId: 's', resume: false, cwd: process.cwd(), access: claudeAccess(undefined, undefined, process.cwd(), process.cwd()), permission: {}, settingSources: [],
+        model: 'opus',
+        query: ({ prompt }) => Object.assign((async function* () {
+          let n = 0;
+          for await (const _ of prompt) {
+            for (const msg of turns[n++]!) {
+              if (msg !== 'late') { yield msg as SDKMessage; continue; }
+              answerLate();
+              await new Promise(resolve => setImmediate(resolve));
+            }
+          }
+        })(), { getContextUsage: read, setModel: async (next: string) => { model = next; }, interrupt: async () => {}, close: () => {} }) as unknown as Query,
+      });
+      threads.push(thread);
+      const first = meters(thread);
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(3_000);
+      await first;
+      expect(await meters(thread, { model: 'haiku' })).toEqual(['上下文 50% · 100k/200k', '上下文 60% · 120k/200k', '上下文 63% · 125k/200k']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a turn on another model reads its window again', async () => {
     let model = 'opus';
     const windows: Record<string, number> = { opus: 400_000, haiku: 200_000 };

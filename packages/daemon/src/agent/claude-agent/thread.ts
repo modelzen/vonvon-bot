@@ -943,11 +943,13 @@ export class ClaudeAgentThread implements AgentThread {
   }
 
   /** getContextUsage() as a reading (undefined when it lacks the numbers; throws
-   * as the SDK does). Keeps maxTokens for the next turn's mid-turn readings. */
+   * as the SDK does). Keeps maxTokens as the window of later readings, unless the
+   * model changed while it was out (a read that answered after withWindow's timeout). */
   private async readContextUsage(): Promise<{ usedTokens: number; contextWindow: number } | undefined> {
+    const model = this.model;
     const cu = await this.query.getContextUsage();
     if (!cu || typeof cu.totalTokens !== 'number' || typeof cu.maxTokens !== 'number') return undefined;
-    this.contextWindow = cu.maxTokens;
+    if (this.model === model) this.contextWindow = cu.maxTokens;
     return { usedTokens: cu.totalTokens, contextWindow: cu.maxTokens };
   }
 
