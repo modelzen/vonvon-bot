@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, expect, it } from 'vitest';
+import { defaultCardDisplay, type CardDisplayConfig } from '@vonvon/protocol';
 import { loadCommands } from './helpers/cli-commands';
 
 /**
@@ -36,6 +37,7 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['project', 'list', '--scope', 'bot=cli_a'], 3], [['daemon', 'status', '--scope', 'bot=cli_a'], 3],
   [['settings', 'get'], 3], [['settings', 'access'], 3], [['settings', 'set', 'cards.showToolCalls=false'], 3],
   [['settings', 'card-template'], 0], [['settings', 'card-check', 'missing-card.json'], 2],
+  [['settings', 'card-test', 'missing-card.json', '--cwd', tmpdir()], 2],
   [['settings', 'get', '--host'], 3], [['settings', 'act', 'voice', 'test'], 3], [['settings', 'act', 'admin', 'add', 'ou_x'], 3], [['settings', 'act', 'admin', 'add', '123'], 2],
   [['settings', 'act', 'member', 'all', '--group', 'g'], 3], [['settings', 'act', 'comment-instructions', '--default'], 3], [['settings', 'act', 'comment-instructions', '--stdin'], 2],
   [['settings', 'models', '--backend', 'codex', '--purpose', 'project'], 3],
@@ -141,6 +143,93 @@ it('prints a reusable card template and checks card files without writing data',
     await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally { await rm(base, { recursive: true, force: true }); }
 }, 60_000);
+
+it('runs card scripts only on explicit card-test and reports missing JSON output', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'vonvon-card-test-json-'));
+  try {
+    const home = join(base, 'home'); await mkdir(home);
+    const root = join(base, 'data');
+    const template = JSON.parse((await run(home, root, ['settings', 'card-template'])).stdout) as { cardDisplay: CardDisplayConfig };
+    const config = template.cardDisplay;
+    const { contextRules: _contextRules, ...seed } = config.blocks[0]!;
+    config.blocks.push({ ...seed, id: 'custom_runtime', kind: 'custom', name: '路径', slot: 'top-left',
+      source: 'script', language: 'node', template: '{{branch}}', sample: '{"branch":"sample","percent":3}',
+      script: "const input=JSON.parse(require('node:fs').readFileSync(0,'utf8'));console.log(JSON.stringify({branch:input.cwd,percent:input.context.percent}));",
+    });
+    const file = join(base, 'card.json');
+    await writeFile(file, JSON.stringify(config));
+    const checked = await run(home, root, ['settings', 'card-check', file]);
+    expect(checked.code).toBe(0);
+    const tested = await run(home, root, ['settings', 'card-test', file, '--cwd', base]);
+    expect(tested).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(tested.stdout)).toMatchObject({ ok: true, kind: 'valid', values: { custom_runtime: { branch: base, percent: 3 } } });
+    config.blocks.at(-1)!.script = '({branch:"not printed"});';
+    await writeFile(file, JSON.stringify(config));
+    expect((await run(home, root, ['settings', 'card-check', file])).code).toBe(0);
+    const failed = await run(home, root, ['settings', 'card-test', file, '--cwd', base]);
+    expect(failed).toMatchObject({ code: 2, stderr: '' });
+    expect(JSON.parse(failed.stdout)).toMatchObject({ ok: false, exitCode: 2, error: { message: expect.stringContaining('custom_runtime') } });
+    config.blocks.at(-1)!.script = 'console.log(JSON.stringify({}));';
+    await writeFile(file, JSON.stringify(config));
+    expect((await run(home, root, ['settings', 'card-check', file])).code).toBe(0);
+    const missing = await run(home, root, ['settings', 'card-test', file, '--cwd', base]);
+    expect(missing).toMatchObject({ code: 2, stderr: '' });
+    expect(JSON.parse(missing.stdout)).toMatchObject({ ok: false, exitCode: 2, error: { message: expect.stringContaining('custom_runtime：脚本输出缺少模板字段 branch') } });
+    await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally { await rm(base, { recursive: true, force: true }); }
+}, 60_000);
+
+it.skipIf(WINDOWS)('cleans up card-test helpers before reporting SIGINT or SIGTERM', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'vonvon-card-interrupt-'));
+  let helperPid: number | undefined;
+  let cli: ReturnType<typeof spawn> | undefined;
+  try {
+    const home = join(base, 'home'); await mkdir(home);
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+      const pidFile = join(base, `${signal}.pid`);
+      const config = defaultCardDisplay();
+      const { contextRules: _contextRules, ...seed } = config.blocks[0]!;
+      config.blocks.push({ ...seed, id: 'custom_wait', kind: 'custom', name: '等待', slot: 'top-left',
+        source: 'script', language: 'node', template: '{{branch}}', sample: '{"branch":"sample"}',
+        script: `require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},100);`,
+      });
+      const file = join(base, `${signal}.json`);
+      await writeFile(file, JSON.stringify(config));
+      const root = join(base, `${signal}-data`);
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'), VONVON_HOME: root, VONVON_SESSION: '', FEISHU_CODEX_BRIDGE: '' };
+      delete env.VONVON_SERVICE;
+      cli = spawn(process.execPath, [entry, 'settings', 'card-test', file, '--cwd', base, '--json'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = ''; let stderr = '';
+      cli.stdout!.on('data', data => { stdout += String(data); });
+      cli.stderr!.on('data', data => { stderr += String(data); });
+      const exit = new Promise<{code:number|null; signal:NodeJS.Signals|null}>(resolve => cli!.once('close', (code, endedSignal) => resolve({ code, signal: endedSignal })));
+      let pidText: string | undefined;
+      for (let n = 0; n < 120 && !pidText; n++) {
+        try { pidText = await readFile(pidFile, 'utf8'); }
+        catch { await new Promise(resolve => setTimeout(resolve, 10)); }
+      }
+      expect(pidText, `${signal} helper did not start`).toBeDefined();
+      helperPid = Number(pidText);
+      cli.kill(signal);
+      expect(await exit).toEqual({ code: 130, signal: null });
+      expect(stderr).toBe('');
+      expect(JSON.parse(stdout)).toMatchObject({ ok: false, exitCode: 130, error: { kind: 'interrupted' } });
+      await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+      let gone = false;
+      for (let n = 0; n < 50 && !gone; n++) {
+        try { process.kill(helperPid, 0); await new Promise(resolve => setTimeout(resolve, 10)); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') gone = true; else throw error; }
+      }
+      expect(gone, `${signal} left helper pid ${helperPid} running`).toBe(true);
+      helperPid = undefined;
+      cli = undefined;
+    }
+  } finally {
+    cli?.kill('SIGKILL');
+    if (helperPid) { try { process.kill(helperPid, 'SIGKILL'); } catch { /* already stopped */ } }
+    await rm(base, { recursive: true, force: true });
+  }
+}, 30_000);
 
 // cli-2-bot 4.6: only the commands named in LEASED take the data lease, and with it make the data root
 it('takes the data lease for the commands that write the data root only', async () => {

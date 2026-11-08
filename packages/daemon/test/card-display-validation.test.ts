@@ -12,6 +12,8 @@ it('rejects syntax errors and missing variables before persistence',async()=>{
   await expect(assertValidCardDisplay(config)).rejects.toThrow('脚本检查未通过');
   config.blocks.at(-1)!.script='console.log("{}")';config.blocks.at(-1)!.template='{{not_declared}}';
   await expect(assertValidCardDisplay(config)).rejects.toThrow('not_declared');
+  config.blocks.at(-1)!.template='{{branch}}';config.blocks.at(-1)!.sample='{"branch":null}';
+  await expect(assertValidCardDisplay(config)).rejects.toThrow('缺少模板字段');
 });
 it('rejects duplicate native IDs and oversized generated structures',()=>{
   expect(()=>assertCardDisplayRender({schema:'2.0',body:{elements:[{tag:'markdown',element_id:'answer'},{tag:'markdown',element_id:'answer'}]}})).toThrow('重复');
