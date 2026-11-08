@@ -130,6 +130,8 @@ export const BUILTIN_SKILL_NAMES = builtinSkillNames().map(name => `${BUILTIN_PL
  * can't hang the「压缩中」card forever. Mirrors codex's COMPACT_TIMEOUT_MS. */
 const COMPACT_TIMEOUT_MS = 120_000;
 const PLAN_MODE_TIMEOUT_MS = 10_000;
+/** A mid-turn getContextUsage() took about 40 ms on SDK 0.3.296; past this the reading shows tokens only. */
+const WINDOW_READ_TIMEOUT_MS = 3_000;
 const PLAN_RESET_FAILED = '这一轮没能回到先出方案的状态，先停下，请再发一次';
 
 /** ⏹: how long to wait for interrupt() to end the turn before hard-aborting the
@@ -347,8 +349,10 @@ export class ClaudeAgentThread implements AgentThread {
     turnId?: string; signal: AbortSignal; planConfirmation?: boolean;
     settle(result: PermissionResult): void; toResult: BridgedAsk['toResult'];
   }>();
-  /** maxTokens from the last getContextUsage(), for the next turn's mid-turn readings */
+  /** maxTokens from the last getContextUsage(): the window Claude Code itself counts against */
   private contextWindow: number | undefined;
+  /** The one read withWindow makes per process and model. */
+  private windowRead: Promise<void> | undefined;
   /** The session file and how far it has been read (s15b). */
   private transcript: TranscriptMark | undefined;
 
@@ -590,11 +594,13 @@ export class ClaudeAgentThread implements AgentThread {
     // takes effect on the next thread (documented limitation).
     if (turn?.model && turn.model !== this.model) {
       this.model = turn.model;
+      this.contextWindow = undefined;
+      this.windowRead = undefined;
       this.query.setModel(turn.model).catch((err) => log.fail('agent', err, { phase: 'setModel' }));
     }
     if (turn?.effort) this.effort = turn.effort;
 
-    const mapper = createTurnMapper({ cwd: this.cwd, contextWindow: this.contextWindow });
+    const mapper = createTurnMapper({ cwd: this.cwd });
     const inbox = new Inbox<TurnItem>();
     const mySink = (item: TurnItem): void => inbox.push(item);
     this.sink = mySink;
@@ -647,7 +653,7 @@ export class ClaudeAgentThread implements AgentThread {
               if (terminalError) continue;
               terminalError = true;
             }
-            yield ev;
+            yield await self.withWindow(ev);
           }
           if (msg.type === 'result') {
             // Drain through the turn boundary so the warm query stays aligned,
@@ -727,7 +733,7 @@ export class ClaudeAgentThread implements AgentThread {
     this.goalRunning = true;
     this.turnInFlight = true;
     const startedAt = Date.now();
-    const mapper = createTurnMapper({ cwd: this.cwd, contextWindow: this.contextWindow });
+    const mapper = createTurnMapper({ cwd: this.cwd });
     const inbox = new Inbox<TurnItem>();
     const mySink = (item: TurnItem): void => inbox.push(item);
     this.sink = mySink;
@@ -781,7 +787,7 @@ export class ClaudeAgentThread implements AgentThread {
               if (terminalError) continue;
               terminalError = true;
             }
-            yield ev;
+            yield await self.withWindow(ev);
           }
           if (msg.type === 'result') {
             self.goalRunning = false;
@@ -905,12 +911,45 @@ export class ClaudeAgentThread implements AgentThread {
     return { compacted, usage };
   }
 
+  /**
+   * A reading or compaction line carries the window Claude Code reports, never a guess from the model id:
+   * 0.10.0 showed claude-opus-5-5 as 200k for a first turn whose window was 400k (a settings file's
+   * autoCompactWindow) and the model's own 1M. Read once at the first reading of a process or model; when
+   * the read fails or times out the meter shows the tokens used until the turn-end reading.
+   */
+  private async withWindow(ev: AgentEvent): Promise<AgentEvent> {
+    if (!('contextWindow' in ev)) return ev;
+    if (this.contextWindow === undefined) {
+      this.windowRead ??= this.readWindow();
+      await this.windowRead;
+    }
+    return { ...ev, contextWindow: this.contextWindow ?? null };
+  }
+
+  private async readWindow(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.readContextUsage(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('getContextUsage timed out')), WINDOW_READ_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (err) {
+      log.fail('agent', err, { backend: 'claude-agent', phase: 'getContextUsage' });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   /** getContextUsage() as a reading (undefined when it lacks the numbers; throws
-   * as the SDK does). Keeps maxTokens for the next turn's mid-turn readings. */
+   * as the SDK does). Keeps maxTokens as the window of later readings, unless the
+   * model changed while it was out (a read that answered after withWindow's timeout). */
   private async readContextUsage(): Promise<{ usedTokens: number; contextWindow: number } | undefined> {
+    const model = this.model;
     const cu = await this.query.getContextUsage();
     if (!cu || typeof cu.totalTokens !== 'number' || typeof cu.maxTokens !== 'number') return undefined;
-    this.contextWindow = cu.maxTokens;
+    if (this.model === model) this.contextWindow = cu.maxTokens;
     return { usedTokens: cu.totalTokens, contextWindow: cu.maxTokens };
   }
 
