@@ -422,6 +422,22 @@ memoryScope(covers(memory.command('branch-delete <name>'), 'memory.branchDelete'
   .option('--expected <n>', 'The entry count you saw; a branch changed since is left as it is'))
   .action(async (name: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryBranchDelete(name, options, await memoryTerminal(options)); });
 const settings = program.command('settings').description('Read and change bot, group and session settings');
+async function withCardScriptInterrupts<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const interrupted = () => new CommandError('interrupted', '已中断消息卡检查，脚本进程已清理。');
+  const ctrlC = interrupts(handler => {
+    process.on('SIGINT', handler);
+    process.on('SIGTERM', handler);
+    return () => { process.off('SIGINT', handler); process.off('SIGTERM', handler); };
+  }, interrupted);
+  try {
+    const result = await work(ctrlC.signal);
+    if (ctrlC.interrupted) throw interrupted();
+    return result;
+  } catch (error) {
+    if (ctrlC.interrupted) throw interrupted();
+    throw error;
+  } finally { ctrlC.stop(); }
+}
 settings.command('card-template').description('Print the default message-card configuration as a starting template')
   .option(...JSON_FLAG)
   .action(async (options: Json) => {
@@ -434,8 +450,10 @@ settings.command('card-check <file>').description('Validate a complete message-c
     let input: unknown;
     try { input = JSON.parse(await readFile(file, 'utf8')); }
     catch (error) { throw badArgs(error instanceof SyntaxError ? '消息卡文件不是有效 JSON' : `无法读取消息卡文件：${error instanceof Error ? error.message : String(error)}`); }
-    try { await (await import('../card/card-display-validation')).assertValidCardDisplay(input); }
-    catch (error) { throw badArgs(error instanceof Error ? error.message : '消息卡配置无效'); }
+    await withCardScriptInterrupts(async signal => {
+      try { await (await import('../card/card-display-validation')).assertValidCardDisplay(input, signal); }
+      catch (error) { throw badArgs(error instanceof Error ? error.message : '消息卡配置无效'); }
+    });
     await show(options, ['消息卡配置有效；尚未保存。'], { kind: 'valid' });
   });
 settings.command('card-test <file>').description('Run up to four message-card scripts in a selected directory with sample card values; does not save')
@@ -448,35 +466,28 @@ settings.command('card-test <file>').description('Run up to four message-card sc
     let input: unknown;
     try { input = JSON.parse(await readFile(file, 'utf8')); }
     catch (error) { throw badArgs(error instanceof SyntaxError ? '消息卡文件不是有效 JSON' : `无法读取消息卡文件：${error instanceof Error ? error.message : String(error)}`); }
-    const { assertValidCardDisplay } = await import('../card/card-display-validation');
-    let config: Awaited<ReturnType<typeof assertValidCardDisplay>>;
-    try { config = await assertValidCardDisplay(input); }
-    catch (error) { throw badArgs(error instanceof Error ? error.message : '消息卡配置无效'); }
-    const scripts = config.blocks.filter(block => block.kind === 'custom' && block.source === 'script' && block.mode !== 'off');
-    if (scripts.length > 4) throw badArgs('一次最多测试 4 个启用的卡片脚本');
-    const { buildRunCardBase } = await import('../card/run-card');
-    const { initialState } = await import('../card/run-state');
-    const { values } = buildRunCardBase({
-      rs: { ...initialState, footer: 'thinking', startedAt: Date.now() - 5_000, usage: { used: 25_000, window: 950_000 } },
-      model: 'gpt-6.1-sol', effort: 'high', cardKey: 'card-display-test',
+    const result = await withCardScriptInterrupts(async signal => {
+      const { assertValidCardDisplay } = await import('../card/card-display-validation');
+      let config: Awaited<ReturnType<typeof assertValidCardDisplay>>;
+      try { config = await assertValidCardDisplay(input, signal); }
+      catch (error) { throw badArgs(error instanceof Error ? error.message : '消息卡配置无效'); }
+      const scripts = config.blocks.filter(block => block.kind === 'custom' && block.source === 'script' && block.mode !== 'off');
+      if (scripts.length > 4) throw badArgs('一次最多测试 4 个启用的卡片脚本');
+      const { buildRunCardBase } = await import('../card/run-card');
+      const { initialState } = await import('../card/run-state');
+      const { values } = buildRunCardBase({
+        rs: { ...initialState, footer: 'thinking', startedAt: Date.now() - 5_000, usage: { used: 25_000, window: 950_000 } },
+        model: 'gpt-6.1-sol', effort: 'high', cardKey: 'card-display-test',
+      });
+      const { runCardDisplayScripts } = await import('../card/card-display-scripts');
+      const result = await runCardDisplayScripts(config, { cwd: options.cwd, values, signal });
+      if (result.errors.length) throw badArgs(result.errors.map(error => `${error.id}：${error.message}`).join('\n'));
+      for (const block of scripts) {
+        const missing = interpolate(block.template, { ...values, ...result.values[block.id] }).missing;
+        if (missing.length) throw badArgs(`${block.id}：脚本输出缺少模板字段 ${missing.join('、')}`);
+      }
+      return result;
     });
-    const { runCardDisplayScripts } = await import('../card/card-display-scripts');
-    const interrupted = () => new CommandError('interrupted', '已中断卡片脚本测试，脚本进程已清理。');
-    const ctrlC = interrupts(handler => {
-      process.on('SIGINT', handler);
-      process.on('SIGTERM', handler);
-      return () => { process.off('SIGINT', handler); process.off('SIGTERM', handler); };
-    }, interrupted);
-    let result: Awaited<ReturnType<typeof runCardDisplayScripts>>;
-    try { result = await runCardDisplayScripts(config, { cwd: options.cwd, values, signal: ctrlC.signal }); }
-    catch (error) { if (ctrlC.interrupted) throw interrupted(); throw error; }
-    finally { ctrlC.stop(); }
-    if (ctrlC.interrupted) throw interrupted();
-    if (result.errors.length) throw badArgs(result.errors.map(error => `${error.id}：${error.message}`).join('\n'));
-    for (const block of scripts) {
-      const missing = interpolate(block.template, { ...values, ...result.values[block.id] }).missing;
-      if (missing.length) throw badArgs(`${block.id}：脚本输出缺少模板字段 ${missing.join('、')}`);
-    }
     await show(options, ['消息卡脚本运行成功；尚未保存。'], { kind: 'valid', values: result.values });
   });
 type Target = Json & { bot?: string; group?: string; session?: string; host?: boolean; dm?: boolean; revision?: string; reason?: string };

@@ -57,16 +57,17 @@ function shellCommand():string {return process.platform==='win32'?'bash':'/bin/s
 function powershellCommand():string {return process.platform==='win32'?'powershell.exe':'pwsh';}
 
 /** Syntax-only: configuration checks must not run user scripts as a side effect. */
-export async function checkCardDisplayScriptSyntax(block:CardDisplayBlock):Promise<void> {
+export async function checkCardDisplayScriptSyntax(block:CardDisplayBlock,signal?:AbortSignal):Promise<void> {
+  if(signal?.aborted)throw new Error('脚本已取消');
   if(block.source!=='script'||block.mode==='off')return;
   try {
     if(block.language==='node') {
       new Script(block.script,{filename:`card-display-${block.id}.cjs`});
     } else if(block.language==='shell') {
-      await boundedProcess(shellCommand(),['-n'],block.script,process.cwd());
+      await boundedProcess(shellCommand(),['-n'],block.script,process.cwd(),signal);
     } else {
       const parse='$s=[Console]::In.ReadToEnd();$t=$null;$e=$null;[void][System.Management.Automation.Language.Parser]::ParseInput($s,[ref]$t,[ref]$e);if($e.Count){exit 1}';
-      await boundedProcess(powershellCommand(),['-NoLogo','-NoProfile','-NonInteractive','-Command',parse],block.script,process.cwd());
+      await boundedProcess(powershellCommand(),['-NoLogo','-NoProfile','-NonInteractive','-Command',parse],block.script,process.cwd(),signal);
     }
   } catch(error) {
     const detail=block.language==='node'&&error instanceof SyntaxError?error.message.slice(0,160):'请检查脚本语法和所选语言是否已安装';

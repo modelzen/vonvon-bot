@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { defaultCardDisplay, type CardDisplayConfig } from '@vonvon/protocol';
@@ -221,6 +221,62 @@ it.skipIf(WINDOWS)('cleans up card-test helpers before reporting SIGINT or SIGTE
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') gone = true; else throw error; }
       }
       expect(gone, `${signal} left helper pid ${helperPid} running`).toBe(true);
+      helperPid = undefined;
+      cli = undefined;
+    }
+  } finally {
+    cli?.kill('SIGKILL');
+    if (helperPid) { try { process.kill(helperPid, 'SIGKILL'); } catch { /* already stopped */ } }
+    await rm(base, { recursive: true, force: true });
+  }
+}, 30_000);
+
+it.skipIf(WINDOWS)('cleans up syntax-check helpers before card-check or card-test exits on a signal', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'vonvon-card-syntax-interrupt-'));
+  let helperPid: number | undefined;
+  let cli: ReturnType<typeof spawn> | undefined;
+  try {
+    const home = join(base, 'home'); await mkdir(home);
+    const shimDir = join(base, 'bin'); await mkdir(shimDir);
+    const shim = join(shimDir, 'pwsh');
+    for (const command of ['card-check', 'card-test'] as const) for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+      const pidFile = join(base, `${command}-${signal}.pid`);
+      await writeFile(shim, `#!/bin/sh\nprintf '%s' "$$" > ${JSON.stringify(pidFile)}\nwhile :; do sleep 1; done\n`);
+      await chmod(shim, 0o755);
+      const config = defaultCardDisplay();
+      const { contextRules: _contextRules, ...seed } = config.blocks[0]!;
+      config.blocks.push({ ...seed, id: 'custom_syntax', kind: 'custom', name: '语法检查', slot: 'top-left',
+        source: 'script', language: 'powershell', template: '{{branch}}', sample: '{"branch":"sample"}',
+        script: "Write-Output '{\"branch\":\"sample\"}'",
+      });
+      const file = join(base, `${command}-${signal}.json`);
+      await writeFile(file, JSON.stringify(config));
+      const root = join(base, `${command}-${signal}-data`);
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'), VONVON_HOME: root, VONVON_SESSION: '', FEISHU_CODEX_BRIDGE: '', PATH: `${shimDir}${delimiter}${process.env.PATH ?? ''}` };
+      delete env.VONVON_SERVICE;
+      cli = spawn(process.execPath, [entry, 'settings', command, file, ...command === 'card-test' ? ['--cwd', base] : [], '--json'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = ''; let stderr = '';
+      cli.stdout!.on('data', data => { stdout += String(data); });
+      cli.stderr!.on('data', data => { stderr += String(data); });
+      const exit = new Promise<{code:number|null; signal:NodeJS.Signals|null}>(resolve => cli!.once('close', (code, endedSignal) => resolve({ code, signal: endedSignal })));
+      let pidText: string | undefined;
+      for (let n = 0; n < 120 && !pidText; n++) {
+        try { pidText = await readFile(pidFile, 'utf8'); }
+        catch { await new Promise(resolve => setTimeout(resolve, 10)); }
+      }
+      expect(pidText, `${command} ${signal} syntax helper did not start`).toBeDefined();
+      helperPid = Number(pidText);
+      cli.kill(signal);
+      expect(await exit).toEqual({ code: 130, signal: null });
+      expect(stderr).toBe('');
+      expect(JSON.parse(stdout)).toMatchObject({ ok: false, exitCode: 130, error: { kind: 'interrupted' } });
+      await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+      let gone = false;
+      for (let n = 0; n < 50 && !gone; n++) {
+        try { process.kill(helperPid, 0); await new Promise(resolve => setTimeout(resolve, 10)); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') gone = true; else throw error; }
+      }
+      expect(gone, `${command} ${signal} left syntax helper pid ${helperPid} running`).toBe(true);
       helperPid = undefined;
       cli = undefined;
     }
