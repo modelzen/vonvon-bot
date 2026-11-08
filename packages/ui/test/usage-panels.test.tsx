@@ -46,6 +46,8 @@ describe('numbers as people say them', () => {
     expect(tokenAmount(12_345)).toEqual(['1.2', '万']);
     expect(tokenAmount(812)).toEqual(['812', '']);
     expect(durationAmount(47 * 60)).toEqual(['47', '分钟']);
+    expect(durationAmount(0)).toEqual(['0', '分钟']);
+    expect(durationAmount(20)).toEqual(['<1', '分钟']);
     expect(durationAmount(5400)).toEqual(['1.5', '小时']);
     expect(durationAmount(24 * 3600 + 18 * 60)).toEqual(['24', '小时']);
   });
@@ -101,6 +103,8 @@ describe('Claude Code panel', () => {
     for (const text of ['12.6<small>亿</small>', '最常用 Opus 5.5', '9<small>天</small>', '最长 16 天 · 共活跃 91 天', '186<small>个</small>', '910 条消息',
       '24<small>小时</small>', '3,448 条消息', '每日消息 · 最近 13 周', '<strong>Claude Max</strong>',
       'Opus 5.5<b>86%</b>', 'Sonnet 4.5<b>9%</b>', 'Fable 5.1<b>4%</b>', 'Haiku 3.5<b>1%</b>', '最常在 <b>15 点</b>开工']) expect(html).toContain(text);
+    // Hours 0, 5, 10 and 20 had no sessions: an empty slot, not a short bar.
+    expect(html.match(/<i data-zero="true" title="\d+ 点 · 0 个会话"/g)).toHaveLength(4);
   });
   it('shows a Fable limit with only a weekly window as a normal 7-day row', () => {
     const html = renderToStaticMarkup(<ClaudeUsagePanel data={claude}/>);

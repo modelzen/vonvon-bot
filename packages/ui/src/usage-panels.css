@@ -59,6 +59,7 @@
 .usage-board-hourbars{display:flex;align-items:flex-end;gap:2px;height:26px;margin-bottom:6px}
 .usage-board-hourbars i{flex:1;min-height:2px;border-radius:1.5px;background:#eab49b}
 .usage-board-hourbars i[data-peak]{background:#c96442}
+.usage-board-hourbars i[data-zero]{background:var(--color-track)}
 
 .usage-board-jev-chart{margin:0}
 .usage-board-jev-chart>div{display:grid;grid-auto-flow:column;grid-auto-columns:15px;gap:5px;align-items:end;height:104px;padding-top:16px}

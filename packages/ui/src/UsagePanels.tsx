@@ -30,7 +30,7 @@ export function tokenAmount(tokens: number): Amount {
 const withToken = ([value, unit]: Amount): Amount => [value, `${unit} Token`.trim()];
 export function durationAmount(seconds: number): Amount {
   const minutes = seconds / 60;
-  if (minutes < 60) return [count(Math.max(1, Math.round(minutes))), '分钟'];
+  if (minutes < 60) return [seconds > 0 && minutes < 0.5 ? '<1' : count(Math.round(minutes)), '分钟'];
   const hours = minutes / 60;
   return [count(hours, hours < 10 ? 1 : 0), '小时'];
 }
@@ -164,7 +164,7 @@ function ClaudeHabits({models, hours}: {models: {id: string; tokens: number}[]; 
     </div>}
     {busiest > 0 && <div className="usage-board-hours">
       <div className="usage-board-hourbars" role="img" aria-label={`按会话开始时间的 24 小时分布，最常在 ${peak} 点开工`}>
-        {hours!.map((sessions, hour) => <i key={hour} data-peak={hour === peak || undefined} style={{height: `${Math.max(8, sessions / busiest * 100)}%`}} title={`${hour} 点 · ${count(sessions)} 个会话`}/>)}
+        {hours!.map((sessions, hour) => <i key={hour} data-peak={hour === peak || undefined} data-zero={!sessions || undefined} style={sessions ? {height: `${Math.max(8, sessions / busiest * 100)}%`} : undefined} title={`${hour} 点 · ${count(sessions)} 个会话`}/>)}
       </div>
       <span>最常在 <b>{`${peak} 点`}</b>开工</span>
     </div>}
