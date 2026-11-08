@@ -26,6 +26,7 @@ import { secureConnector } from './remote-transport.js';
 import { createDeviceLog } from './device-log.js';
 import { REMOTE_UPDATE_TEXT, startRemoteSelfUpdate, type RemoteSelfUpdate } from './remote-self-update.js';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
+import { createShareRecorder, ShareError, type ShareRecorder } from './share-recorder.js';
 
 /** 应用内更新没生效时给用户的手动下载地址，和设置页里的链接一致。 */
 const downloadPage = 'https://vonvon.cc/get/';
@@ -33,16 +34,22 @@ const restartDeadlineMs = 60_000;
 const stopDeadlineMs = 60_000;
 /** A manual start cancels passive reconnection without a connection-lost dialog. */
 const startTakesOver = 'start-takes-over';
+/** The window's sidebar (the UI's `--settings-sidebar-width`): the share card is as wide as the content beside it. */
+const sidebarWidth = 223;
 
 export function desktopResources(appPath: string, packaged: boolean): DesktopResources {
   return packaged ? {
     uiIndex: join(appPath, 'ui', 'index.html'),
     preload: join(appPath, 'desktop', 'preload.cjs'),
     trayPng: join(appPath, 'assets', 'tray.png'),
+    sharePreload: join(appPath, 'desktop', 'share-preload.cjs'),
+    shareWorker: join(appPath, 'desktop', 'share-gif-worker.cjs'),
   } : {
     uiIndex: join(appPath, '..', 'ui', 'dist', 'index.html'),
     preload: join(appPath, 'dist', 'preload.cjs'),
     trayPng: join(appPath, 'assets', 'tray.png'),
+    sharePreload: join(appPath, 'dist', 'share-preload.cjs'),
+    shareWorker: join(appPath, 'dist', 'share-gif-worker.cjs'),
   };
 }
 
@@ -101,6 +108,7 @@ export async function startDesktop(): Promise<void> {
   let restoringDock: Promise<void> | undefined;
   /** U4: another device updating this computer's Vonvon Bot (macOS only for 0.9.0). */
   let remoteUpdate: RemoteSelfUpdate | undefined;
+  let share: ShareRecorder | undefined;
 
   const show = (): void => {
     if (quitting || terminating || cleanupPromise) return;
@@ -157,6 +165,8 @@ export async function startDesktop(): Promise<void> {
     restartCancel?.abort();
     powerMonitor.off('resume', onResume);
     remoteUpdate?.dispose();
+    share?.dispose();
+    share = undefined;
     try {
       if (starting) await starting.catch(() => {});
       // Remote connections first, so no reconnect fires while the rest closes; the remote daemons are left alone.
@@ -622,6 +632,15 @@ export async function startDesktop(): Promise<void> {
     });
     devices.setLocal({ status: 'online', serverInfo: owner.serverInfo });
     powerMonitor.on('resume', onResume);
+    // now-share N5b: made on first use, so the share window's session and handlers exist only once someone shares.
+    const recorder = (): ShareRecorder => {
+      if (cleanupPromise || terminating) throw new ShareError('disposed');
+      return share ??= createShareRecorder({
+        uiUrl, preload: realpathSync(paths.sharePreload), worker: realpathSync(paths.shareWorker),
+        folder: join(app.getPath('userData'), 'share'),
+        cardWidth: () => current.getContentBounds().width - sidebarWidth,
+      });
+    };
     bridge = installBridge(owner, current, paths, {
       observeCli: () => observeCli(cliOptions),
       repairCli: async () => {
@@ -694,6 +713,13 @@ export async function startDesktop(): Promise<void> {
         return verified ? keepOnQuit(verified) : false;
       },
       connectionLost: showConnectionLost,
+      share: {
+        record: (model, onProgress) => recorder().record(model, onProgress),
+        copy: id => recorder().copy(id),
+        reveal: path => recorder().reveal(path),
+        bytes: id => recorder().bytes(id),
+        discard: async id => { await share?.discard(id); },
+      },
     }, devices);
     tray = createDesktopTray(icon, show, requestQuit);
     // U4: the daemon this app carries asks it to update when another device says so. Windows' app is updated on that
