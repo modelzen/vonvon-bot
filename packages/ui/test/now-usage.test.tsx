@@ -23,7 +23,37 @@ describe('real configured Provider discovery', () => {
     const updates: any[] = [];
     await readNowProviders(c, update => updates.push(update));
     expect(updates.filter(item => item.kind === 'provider')).toEqual([]);
-    expect(c.collaboration).not.toHaveBeenCalled();
+    // Claude's local stats are asked for, but a device with none shows no Claude.
+    expect(c.collaboration).toHaveBeenCalledExactlyOnceWith({action: 'usage', force: false, backend: 'claude-agent'});
+  });
+  it.each([
+    ['signed out', login('claude-agent', 'signedOut')],
+    ['unknown under a background daemon', {...login('claude-agent', 'unknown'), account: undefined}],
+    ['a login read that fails', new Error('offline')],
+  ])('shows Claude local stats without a verified login: %s', async (_, reply) => {
+    const c = client({'claude-agent': reply});
+    if (reply instanceof Error) vi.mocked(c.environment).mockImplementation(async request => {
+      if (request.type === 'backendCatalog') return {kind: 'backends', entries: [entry('claude-agent')]} as never;
+      throw reply;
+    });
+    const stats = {...noQuota, usage: {...noQuota.usage, unavailable: {reason: 'no-auth', message: '没有读到 Claude 订阅登录'}}};
+    vi.mocked(c.collaboration).mockResolvedValue({kind: 'usage', data: stats});
+    const updates: any[] = [];
+    await readNowProviders(c, update => updates.push(update));
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({kind: 'provider', provider: {id: 'claude-agent', data: stats}});
+    expect(updates[0].provider.loading).toBeUndefined();
+    const html = renderToStaticMarkup(<NowUsageBody provider={updates[0].provider}/>);
+    for (const text of ['usage-heatmap__grid', '没有读到 Claude 订阅登录']) expect(html).toContain(text);
+  });
+  it('drops a signed-out Claude when its stats read fails or has no active day', async () => {
+    for (const read of [() => Promise.reject(new Error('refused')), async () => ({kind: 'usage', data})]) {
+      const c = client({'claude-agent': login('claude-agent', 'signedOut')});
+      vi.mocked(c.collaboration).mockImplementation(read as never);
+      const updates: any[] = [];
+      await readNowProviders(c, update => updates.push(update));
+      expect(updates).toEqual([{kind: 'remove', id: 'claude-agent'}]);
+    }
   });
   it('keeps an explicitly configured external API even when its credentials cannot be verified', async () => {
     const c = client({'claude-agent': {...login('claude-agent', 'unknown', 'api'), account: {kind: 'api', apiProvider: 'bedrock'}}});
@@ -83,7 +113,8 @@ describe('real configured Provider discovery', () => {
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(updates.some(item => item.provider?.data === data)).toBe(true);
     resolve(login('claude-agent', 'signedOut')); await read;
-    expect(c.collaboration).toHaveBeenCalledExactlyOnceWith({action: 'usage', force: false});
+    expect(c.collaboration).toHaveBeenNthCalledWith(1, {action: 'usage', force: false});
+    expect(c.collaboration).toHaveBeenNthCalledWith(2, {action: 'usage', force: false, backend: 'claude-agent'});
   });
   it('removes logged-out accounts, retains failed reads as stale, and drops old quota on auth changes', () => {
     expect(mergeNowProvider([codex], {kind: 'remove', id: codex.id})).toEqual([]);

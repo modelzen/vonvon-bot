@@ -12,23 +12,39 @@ type ReaderClient = Pick<VonvonClient, 'environment' | 'collaboration'>;
 export type NowProvider = {id: string; name: string; account: BackendAccount; data?: Usage; loading?: boolean; problem?: string};
 type ProviderUpdate = {kind: 'provider'; provider: NowProvider} | {kind: 'remove'; id: string} | {kind: 'failed'; id: string; problem: string};
 
-/** Catalog is discovery only. Login evidence, not installation, admits an account. */
+/** now-share N2b: Claude's stats are this device's own Claude Code records, so they show without a verified login (signed
+ * out, or a background daemon that cannot read the macOS Keychain), but only on a device that has used Claude Code. */
+async function claudeStatsOnly(client: ReaderClient, entry: {id: string; displayName: string}, account: BackendAccount, publish: (update: ProviderUpdate) => void): Promise<boolean> {
+  try {
+    const data = await readUsage(request => client.collaboration(request), false, 'claude-agent');
+    if (!data.profile.localStats?.activeDays) return false;
+    publish({kind: 'provider', provider: {id: entry.id, name: entry.displayName, account, data}});
+    return true;
+  } catch { return false; }
+}
+
+/** Catalog is discovery only. Login evidence, not installation, admits an account; Claude's local stats admit Claude. */
 export async function readNowProviders(client: ReaderClient, publish: (update: ProviderUpdate) => void): Promise<string[]> {
   const catalog = await client.environment({type: 'backendCatalog'});
   if (catalog.kind !== 'backends') throw new Error('暂时无法读取 Provider。');
   await Promise.all(catalog.entries.map(async entry => {
     if (entry.depState !== 'installed') {publish({kind: 'remove', id: entry.id}); return;}
+    const claude = entry.id === 'claude-agent';
+    let unverified: BackendAccount = {kind: 'unknown'};
     try {
       const login = await client.environment({type: 'backendLogin', id: entry.id, refresh: false});
       if (login.kind !== 'backendLogin' || login.id !== entry.id) throw new Error('账户状态暂无法确认。');
-      if (login.state === 'signedOut') {publish({kind: 'remove', id: entry.id}); return;}
+      unverified = login.account ?? unverified;
+      if (login.state === 'signedOut') {
+        if (!(claude && await claudeStatsOnly(client, entry, unverified, publish))) publish({kind: 'remove', id: entry.id});
+        return;
+      }
       const configuredApi = login.state === 'unknown' && login.account?.kind === 'api' && !!login.account.apiProvider;
       if (login.state !== 'signedIn' && login.state !== 'notRequired' && !configuredApi) throw new Error('账户状态暂无法确认。');
       const account = login.account ?? {kind: 'unknown' as const};
       const provider: NowProvider = {id: entry.id, name: entry.displayName, account, ...(configuredApi ? {problem: '账户状态暂无法确认。'} : {})};
       // Claude's stats come from this device's transcripts, so an API account reads them too; the quota column then
       // says there is no subscription quota. An older daemon refuses that read with its own reason.
-      const claude = entry.id === 'claude-agent';
       const readsUsage = claude || (entry.id === 'codex-appserver' && account.kind !== 'api');
       publish({kind: 'provider', provider: {...provider, loading: readsUsage}});
       if (!readsUsage) return;
@@ -40,6 +56,7 @@ export async function readNowProviders(client: ReaderClient, publish: (update: P
         publish({kind: 'provider', provider: {...provider, problem: error instanceof Error ? error.message : '暂无法刷新额度与用量。'}});
       }
     } catch {
+      if (claude && await claudeStatsOnly(client, entry, unverified, publish)) return;
       publish({kind: 'failed', id: entry.id, problem: `${entry.displayName} 账户状态暂无法确认。`});
     }
   }));
