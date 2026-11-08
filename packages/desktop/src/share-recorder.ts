@@ -202,7 +202,8 @@ export class ShareRecorder {
     catch {}
     if (json === undefined || json.length > MODEL_MAX) throw new ShareError('invalid_model');
     const stop = deferred<never>(), ended = deferred<void>();
-    // A pass that was already ending when the recording stopped may still finish; its result is dropped.
+    // A pass that was already ending when the recording stopped may still finish. Cancelled or quitting, its result is
+    // dropped; out of time, the GIF a pass made that fits is kept.
     let stopped: ShareError | undefined;
     const running = this.running = { stop: (error: ShareError) => { stopped ??= error; stop.reject(error); }, ended: ended.promise };
     const timer = setTimeout(() => running.stop(new ShareError('timeout')), this.deps.timeoutMs ?? TIMEOUT_MS);
@@ -217,10 +218,12 @@ export class ShareRecorder {
       let best: { variant: ShareGifVariant; width: number; height: number } | undefined;
       let scale = 2;
       for (let passes = 0; passes < 4 && scale > 0; passes++) {
-        if (stopped) throw stopped;
+        if (stopped) break;
+        const started = Date.now();
         let result: Awaited<ReturnType<ShareRecorder['render']>>;
         try { result = await this.render(json, scale, stop.promise, report); }
         catch (error) {
+          if (error === stopped) break;
           if (!(error instanceof Rescale)) throw error;
           scale = error.scale;
           continue;
@@ -229,11 +232,12 @@ export class ShareRecorder {
         if (target) { best = { ...result, variant: target }; break; }
         const fits = result.variants.find(variant => variant.gif.length <= SHARE_GIF_MAX_BYTES);
         if (fits && !best) best = { ...result, variant: fits };
-        // Another pass, smaller, only while there is time for one; render() keeps it within shareScale.
-        if (deadline - Date.now() < 20_000) break;
+        // Another pass, smaller, only while there is time for one: it takes less than this one did. render() keeps it
+        // within shareScale.
+        if (deadline - Date.now() < Math.max(20_000, Date.now() - started)) break;
         scale = scale > 1.5 ? 1.5 : scale > 1.25 ? 1.25 : scale > MIN_SCALE ? MIN_SCALE : 0;
       }
-      if (stopped) throw stopped;
+      if (stopped && (stopped.code !== 'timeout' || !best)) throw stopped;
       if (!best) throw new ShareError('too_large');
       const gif = Buffer.from(best.variant.gif.buffer, best.variant.gif.byteOffset, best.variant.gif.byteLength);
       const recording: ShareRecording = {
