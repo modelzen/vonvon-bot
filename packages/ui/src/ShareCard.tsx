@@ -1,5 +1,5 @@
 import {useEffect, useMemo, useRef, useState, type Ref} from 'react';
-import type {DesktopSnapshot} from '@vonvon/protocol';
+import {SHARE_CARD_WIDTH, type DesktopSnapshot} from '@vonvon/protocol';
 import type {ShareCardBridge, ShareLayout} from './client-context';
 import {QrCode} from './BadgeContact';
 import {NowBotList} from './NowBotList';
@@ -18,6 +18,11 @@ export const isShareCardRoute = (hash: string) => hash === SHARE_CARD_HASH;
 
 /** The usage builds day by day after a short pause, easing out; before the clock starts it shows its end. */
 const BUILD_DELAY = 150, BUILD_MS = 1600;
+/** All the card plays on its own clock from `ready()`: the build-up. Its badges move only under the recorder's pointer. */
+export const SHARE_CARD_ANIMATION_MS = BUILD_DELAY + BUILD_MS;
+/** With no quota column the heatmap takes its room, in the app's 13 px cells and 3.5 px gaps: 26 weeks are 425.5 px of
+ * the card's 840, leaving the stats 386 px (the app gives them 363 beside its quota column). */
+const WIDE_WEEKS = 26;
 export function shareProgress(elapsed: number): number {
   const x = Math.min(1, Math.max(0, (elapsed - BUILD_DELAY) / BUILD_MS));
   return 1 - (1 - x) ** 3;
@@ -49,7 +54,8 @@ const usageKey = (usage: ShareUsage) => usage.kind === 'jev' ? 'jev' : usage.id;
 /** The 此刻 page as it would be shared: the real badges and usage panels, the title and footer of plan section 2. */
 export function ShareCard({model, progress = 1, cardRef}: {model: ShareModel; progress?: number; cardRef?: Ref<HTMLElement>}) {
   const snapshot = useMemo(() => shareSnapshot(model), [model]);
-  return <article className="share-card" ref={cardRef} aria-label="我的 AI 团队">
+  const weeks = model.sections.quota ? undefined : WIDE_WEEKS;
+  return <article className="share-card" style={{width: SHARE_CARD_WIDTH}} ref={cardRef} aria-label="我的 AI 团队">
     <header className="share-card-head">
       <span className="share-card-brand"><img src="./vonvon-logo.png" alt=""/>Vonvon Bot</span>
       <time>{model.date}</time>
@@ -65,8 +71,8 @@ export function ShareCard({model, progress = 1, cardRef}: {model: ShareModel; pr
         <h2><img src={kind.icon} alt="" data-round={kind.round}/>{usage.kind === 'jev' ? 'Jev 判断次数' : `${kind.name} 用量`}</h2>
         {usage.kind === 'jev'
           ? <JevUsagePanel view={usage.view} agents={model.bots} asOf={usage.asOf} progress={progress} sections={model.sections}/>
-          : usage.id === 'claude-agent' ? <ClaudeUsagePanel data={usage.data} progress={progress} sections={model.sections}/>
-          : <CodexUsagePanel data={usage.data} progress={progress} sections={model.sections}/>}
+          : usage.id === 'claude-agent' ? <ClaudeUsagePanel data={usage.data} progress={progress} sections={model.sections} weeks={weeks}/>
+          : <CodexUsagePanel data={usage.data} progress={progress} sections={model.sections} weeks={weeks}/>}
       </section>;
     })}
     {model.activity && <section className="share-card-activity" aria-label="群动态">
@@ -88,7 +94,8 @@ export function ShareCard({model, progress = 1, cardRef}: {model: ShareModel; pr
 
 type Box = {getBoundingClientRect(): {left: number; top: number; width: number; height: number}};
 type CardElement = Box & {querySelector(selector: string): (Box & {scrollWidth: number; clientWidth: number}) | null; querySelectorAll(selector: string): ArrayLike<Box>};
-/** CSS pixels from the card's top left. Each badge is its turning face, in rail order, those scrolled out included. */
+/** CSS pixels from the card's top left. Each badge is its turning face, in rail order, those scrolled out included. The
+ * recorder plays the card for at least `animationMs`. */
 export function shareLayout(card: CardElement): ShareLayout {
   const origin = card.getBoundingClientRect();
   const rect = (box: Box) => {
@@ -100,6 +107,7 @@ export function shareLayout(card: CardElement): ShareLayout {
     width: origin.width, height: origin.height,
     badges: Array.from(card.querySelectorAll('.badge-slot .badge-flipper'), rect),
     rail: rail ? {...rect(rail), scrollWidth: rail.scrollWidth, clientWidth: rail.clientWidth} : {x: 0, y: 0, width: 0, height: 0, scrollWidth: 0, clientWidth: 0},
+    animationMs: SHARE_CARD_ANIMATION_MS,
   };
 }
 /** Fonts loaded, every picture in, and a frame on screen. */

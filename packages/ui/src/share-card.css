@@ -1,8 +1,8 @@
-/* now-share N5a: the share card is laid out at the 此刻 page's width in the default 910 px window, whatever window it
-   is drawn in, so the badges and usage panels come out as they do in the app. */
+/* now-share N5a: the share card is laid out at the 此刻 page's width in the default 910 px window (SHARE_CARD_WIDTH, set
+   on the element), whatever window it is drawn in, so the badges and usage panels come out as they do in the app. */
 .share-card {
   --share-pad: 32px;
-  display: grid; gap: 22px; width: 904px; box-sizing: border-box; padding: 30px var(--share-pad) 22px;
+  display: grid; gap: 22px; box-sizing: border-box; padding: 30px var(--share-pad) 22px;
   background: linear-gradient(180deg, #fbfaf7, #f3f2ee); color: var(--color-text); font-family: var(--font-family-system);
 }
 .share-card-page {display: inline-block}

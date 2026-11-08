@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { agentIdSchema, openIdSchema, SHARE_GIF_MAX_BYTES, SHARE_PART_BYTES, type AdminReply, type AdminRequest, type ShareTarget } from '@vonvon/protocol';
+import { agentIdSchema, openIdSchema, SHARE_GIF_MAX_BYTES, SHARE_GIF_MAX_SIDE, SHARE_PART_BYTES, type AdminReply, type AdminRequest, type ShareTarget } from '@vonvon/protocol';
 import { withDeadline } from '../bot/names';
 import type { ShareImageFailure, ShareImageReply } from '../bot/share-image';
 import { log } from '../core/logger';
@@ -23,6 +23,8 @@ const refused = (code: ShareRefusal, message: string): Refusal => ({ kind: 'refu
 const offline = (bot: string): Refusal => refused('bot_offline', `「${bot}」没连上飞书，连上以后再发。`);
 const notAdmin = (bot: string): Refusal => refused('not_admin', `这个人不是「${bot}」的管理员。分享图只能发给 Bot 的管理员。`);
 const tooLarge = (): Refusal => refused('too_large', `分享图超过 ${SHARE_GIF_MAX_BYTES / 1024 / 1024} MB，飞书发不了。少选几项再试。`);
+const tooWide = (width: number, height: number): Refusal =>
+  refused('too_large', `分享图有 ${width}×${height} 像素，飞书只收长和宽都不超过 ${SHARE_GIF_MAX_SIDE} 像素的动图。少选几项再试。`);
 const broken = (): Refusal => refused('bad_image', '分享图没有完整传过来，请重新发送。');
 const missing = (): Refusal => refused('upload_missing', '分享图已经失效（2 分钟没有传完，或者连接断开了），请重新发送。');
 const unanswered = (bot: string): Refusal => refused('feishu_failed', `「${bot}」没有及时回话，不知道图发出去没有。先去私聊里看一眼，没有再重发。`);
@@ -89,7 +91,11 @@ export interface ShareUploads {
 }
 
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
-const isGif = (image: Buffer): boolean => ['GIF87a', 'GIF89a'].includes(image.subarray(0, 6).toString('latin1'));
+/** A GIF's logical screen, from its header (bytes 6 to 9, little-endian); none for what is not a GIF. */
+function gifSize(image: Buffer): { width: number; height: number } | undefined {
+  if (image.length < 13 || !['GIF87a', 'GIF89a'].includes(image.subarray(0, 6).toString('latin1'))) return undefined;
+  return { width: image.readUInt16LE(6), height: image.readUInt16LE(8) };
+}
 
 export function createShareUploads(service: AdminService, options: { idleMs?: number } = {}): ShareUploads {
   const idleMs = options.idleMs ?? SHARE_IDLE_MS;
@@ -170,7 +176,9 @@ export function createShareUploads(service: AdminService, options: { idleMs?: nu
     const image = Buffer.concat(upload.parts);
     upload.parts = [];
     if (image.length !== upload.bytes || createHash('sha256').update(image).digest('hex') !== upload.sha256) return broken();
-    if (!isGif(image)) return refused('bad_image', '分享图不是 GIF，请重新生成后再发。');
+    const size = gifSize(image);
+    if (!size) return refused('bad_image', '分享图不是 GIF，请重新生成后再发。');
+    if (size.width > SHARE_GIF_MAX_SIDE || size.height > SHARE_GIF_MAX_SIDE) return tooWide(size.width, size.height);
     // One send per Bot at a time: a second one waits for the first, and goes out even if its window left meanwhile, since
     // the person clicked 发送.
     const run = (sending.get(upload.agentId) ?? Promise.resolve()).then(() => deliver(upload, image));

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { adminReplySchema, SHARE_GIF_MAX_BYTES, SHARE_PART_BYTES, type AdminReply, type AdminRequest } from '@vonvon/protocol';
+import { adminReplySchema, SHARE_GIF_MAX_BYTES, SHARE_GIF_MAX_SIDE, SHARE_PART_BYTES, type AdminReply, type AdminRequest } from '@vonvon/protocol';
 import type { ShareImageReply, ShareImageRequest } from '../src/bot/share-image';
 import { createAdminService, type AdminBot, type AdminService } from '../src/admin/service';
 import { createShareUploads, SHARE_IDLE_MS } from '../src/admin/share';
@@ -35,7 +35,14 @@ beforeEach(() => {
 });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
-const gif = (size: number, fill = 7): Buffer => { const image = Buffer.alloc(size, fill); image.write('GIF89a', 0, 'latin1'); return image; };
+/** A GIF header of `width` × `height` (the share card's at 2x unless said), then `fill`. */
+const gif = (size: number, fill = 7, width = 1808, height = 1600): Buffer => {
+  const image = Buffer.alloc(size, fill);
+  image.write('GIF89a', 0, 'latin1');
+  image.writeUInt16LE(width, 6);
+  image.writeUInt16LE(height, 8);
+  return image;
+};
 const sha = (image: Buffer): string => createHash('sha256').update(image).digest('hex');
 const connect = (shares = createShareUploads(service)): AdminConnection => ({ startedAt: 0, peer: {} as AdminConnection['peer'], shares });
 async function ask(request: AdminRequest, connection?: AdminConnection): Promise<AdminReply> {
@@ -135,7 +142,20 @@ it('sends only the bytes that were declared: all of them, the same sha256, a GIF
   const png = Buffer.concat([Buffer.from('\x89PNG\r\n\x1a\n', 'latin1'), Buffer.alloc(100)]);
   uploadId = await upload(connection, png);
   expect(await send(connection, uploadId)).toEqual(refusal('bad_image', '分享图不是 GIF，请重新生成后再发。'));
+  // A header cut short is no GIF either.
+  uploadId = await upload(connection, Buffer.from('GIF89a\x10\x07', 'latin1'));
+  expect(await send(connection, uploadId)).toEqual(refusal('bad_image', '分享图不是 GIF，请重新生成后再发。'));
   expect(shareImage).not.toHaveBeenCalled();
+});
+
+it('refuses a GIF wider or taller than Feishu takes, by its header, and sends one right at the limit', async () => {
+  const connection = connect();
+  for (const [width, height] of [[SHARE_GIF_MAX_SIDE + 1, 1600], [1808, SHARE_GIF_MAX_SIDE + 1], [0xffff, 0xffff]]) {
+    const uploadId = await upload(connection, gif(100, 7, width, height));
+    expect(await send(connection, uploadId)).toEqual(refusal('too_large', `分享图有 ${width}×${height} 像素，飞书只收长和宽都不超过 2000 像素的动图。少选几项再试。`));
+  }
+  expect(shareImage).not.toHaveBeenCalled();
+  expect(await send(connection, await upload(connection, gif(100, 7, SHARE_GIF_MAX_SIDE, SHARE_GIF_MAX_SIDE)))).toEqual({ kind: 'shareSent', messageId: 'om_fixture' });
 });
 
 it('drops an upload idle for two minutes, each part starting the two minutes again', async () => {

@@ -4,7 +4,7 @@ import { stat } from 'node:fs/promises';
 import { Worker } from 'node:worker_threads';
 import { BrowserWindow, clipboard, ClipboardItem, ipcMain, session, shell, type IpcMain, type IpcMainInvokeEvent, type MouseWheelInputEvent } from 'electron';
 import { z } from 'zod';
-import { SHARE_GIF_MAX_BYTES } from '@vonvon/protocol';
+import { SHARE_CARD_WIDTH, SHARE_GIF_MAX_BYTES, SHARE_GIF_MAX_SIDE } from '@vonvon/protocol';
 import type { ShareLayout, ShareRecording } from '../../ui/src/client-context.js';
 import { SHARE_FRAME_MS, SHARE_FRAME_STEPS, SHARE_MARKER_STRIP, SHARE_STEP_MS, shareCardChannels, type ShareTick, type ShareTickResult } from './share-contract.js';
 import { putShareOnClipboard, ownShareFile, runWindowsPowerShell, writeShareFile, type ShareClipboard } from './share-files.js';
@@ -21,6 +21,17 @@ const HOLD_MS = 400;
 const MAX_PIXELS = 8_000_000;
 /** Below one device pixel per CSS pixel the card's small type stops being readable. */
 const MIN_SCALE = 1;
+/** Scales go in quarters, so the card's 904 CSS pixels are whole device pixels at each. */
+const quarter = (scale: number): number => Math.floor(scale * 4) / 4;
+/**
+ * The scale for a card of `width` × `height` CSS pixels, `scale` at most: frames over {@link MAX_PIXELS} only at
+ * {@link MIN_SCALE}, and neither side over {@link SHARE_GIF_MAX_SIDE}, as Feishu refuses that GIF; that one goes below
+ * MIN_SCALE if it must. 0 for a card no scale fits.
+ */
+export function shareScale(width: number, height: number, scale: number): number {
+  const pixels = width * height * scale * scale > MAX_PIXELS ? Math.max(MIN_SCALE, quarter(Math.sqrt(MAX_PIXELS / (width * height)))) : scale;
+  return Math.min(scale, pixels, quarter(SHARE_GIF_MAX_SIDE / Math.max(width, height)));
+}
 const MODEL_MAX = 8 * 1024 * 1024;
 const KEPT = 4;
 /** The card's own animation when its layout does not say: N5a's usage build-up, 150 ms in and 1600 ms long. */
@@ -84,10 +95,9 @@ export type ShareRecorderDeps = {
   ipc: Pick<IpcMain, 'handle' | 'removeHandler'>;
   /** The UI's index.html as a file URL; the share window loads it with `#share-card`. */
   uiUrl: string;
+  /** Opened {@link SHARE_CARD_WIDTH} wide, the card's own width, so it is never laid out at another. */
   openWindow(options: { width: number; height: number; scale: number }): ShareWindow;
   encoder(width: number, height: number): ShareEncoder;
-  /** CSS pixels: the width of the app's content area, which the card is laid out at. */
-  cardWidth(): number;
   /** The app's own share folder, under its userData. */
   folder: string;
   clipboard: ShareClipboard;
@@ -105,7 +115,7 @@ function deferred<T>(): Deferred<T> {
 }
 type Card = { contents: ShareContents; json: string; layout: Deferred<ShareLayout>; begun: Deferred<void>; failed: Deferred<never> };
 type Kept = { recording: ShareRecording; gif: Buffer; path?: string };
-/** This scale makes frames bigger than {@link MAX_PIXELS}; the pass starts over at `scale`. */
+/** This scale makes frames too big ({@link shareScale}); the pass starts over at `scale`. */
 class Rescale extends Error { constructor(readonly scale: number) { super('rescale'); } }
 
 /** The marker frame `index` painted, read from the bottom right of the bitmap, or -1. */
@@ -204,13 +214,12 @@ export class ShareRecorder {
       try { onProgress(fraction); } catch {}
     };
     try {
-      const width = Math.round(Math.min(1200, Math.max(560, this.deps.cardWidth())));
       let best: { variant: ShareGifVariant; width: number; height: number } | undefined;
       let scale = 2;
-      for (let passes = 0; passes < 4 && scale >= MIN_SCALE; passes++) {
+      for (let passes = 0; passes < 4 && scale > 0; passes++) {
         if (stopped) throw stopped;
         let result: Awaited<ReturnType<ShareRecorder['render']>>;
-        try { result = await this.render(json, width, scale, stop.promise, report); }
+        try { result = await this.render(json, scale, stop.promise, report); }
         catch (error) {
           if (!(error instanceof Rescale)) throw error;
           scale = error.scale;
@@ -220,7 +229,7 @@ export class ShareRecorder {
         if (target) { best = { ...result, variant: target }; break; }
         const fits = result.variants.find(variant => variant.gif.length <= SHARE_GIF_MAX_BYTES);
         if (fits && !best) best = { ...result, variant: fits };
-        // Another pass, smaller, only while there is time for one.
+        // Another pass, smaller, only while there is time for one; render() keeps it within shareScale.
         if (deadline - Date.now() < 20_000) break;
         scale = scale > 1.5 ? 1.5 : scale > 1.25 ? 1.25 : scale > MIN_SCALE ? MIN_SCALE : 0;
       }
@@ -245,8 +254,8 @@ export class ShareRecorder {
   }
 
   /** One pass at one scale: the window, the pointer script on the stepped clock, the frames, both encodings. */
-  private async render(json: string, layoutWidth: number, scale: number, stopped: Promise<never>, report: (fraction: number) => void) {
-    const window = this.deps.openWindow({ width: layoutWidth, height: 900, scale });
+  private async render(json: string, scale: number, stopped: Promise<never>, report: (fraction: number) => void) {
+    const window = this.deps.openWindow({ width: SHARE_CARD_WIDTH, height: 900, scale });
     const contents = window.webContents;
     const card: Card = { contents, json, layout: deferred(), begun: deferred(), failed: deferred() };
     this.cards.set(contents.id, card);
@@ -263,11 +272,11 @@ export class ShareRecorder {
       await guard(contents.loadURL(`${this.deps.uiUrl}#share-card`));
       const layout = await guard(card.layout.promise);
       const width = Math.ceil(layout.width), height = Math.ceil(layout.height);
-      if (width * height * scale * scale > MAX_PIXELS && scale > MIN_SCALE) {
-        throw new Rescale(Math.max(MIN_SCALE, Math.floor(Math.sqrt(MAX_PIXELS / (width * height)) * 4) / 4));
-      }
+      const fits = shareScale(width, height, scale);
+      if (fits < scale) throw new Rescale(fits);
       window.setContentSize(width, height + SHARE_MARKER_STRIP);
-      const cropWidth = Math.round(layout.width * scale), cropHeight = Math.round(layout.height * scale);
+      // The card sits at the page's top left. Whole device pixels of it only: a part-covered last row would mix in the page.
+      const cropWidth = Math.floor(layout.width * scale), cropHeight = Math.floor(layout.height * scale);
       frames = frameSource(contents, scale, cropWidth, cropHeight);
       encoder = this.deps.encoder(cropWidth, cropHeight);
       contents.debugger.attach('1.3');
@@ -438,7 +447,7 @@ export function workerEncoder(source: () => string): (width: number, height: num
 }
 
 /** The recorder as the app runs it. The share window has its own in-memory session, which grants no permission. */
-export function createShareRecorder(options: { uiUrl: string; preload: string; worker: string; folder: string; cardWidth(): number }): ShareRecorder {
+export function createShareRecorder(options: { uiUrl: string; preload: string; worker: string; folder: string }): ShareRecorder {
   const partition = session.fromPartition('vonvon-share');
   partition.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   partition.setPermissionCheckHandler(() => false);
@@ -466,7 +475,6 @@ export function createShareRecorder(options: { uiUrl: string; preload: string; w
       return window;
     },
     encoder: workerEncoder(() => source ??= readFileSync(options.worker, 'utf8')),
-    cardWidth: options.cardWidth,
     folder: options.folder,
     clipboard: { platform: process.platform, clipboard, ClipboardItem, powershell: runWindowsPowerShell },
     reveal: path => shell.showItemInFolder(path),
