@@ -1,7 +1,7 @@
 import {useCallback, useContext, useEffect, useRef, useState, type ReactNode} from 'react';
 import {DEFAULT_DM_SMART_RULES_TEXT, smartRulesText} from '@vonvon/protocol';
 import {Blocks, ChevronRight, Folder, GitBranch, Plus, RefreshCw, Search, X} from 'lucide-react';
-import {backendLabel, isKnownJudgeSelection, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
+import {backendLabel, isKnownJudgeSelection, type Agent, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
 import {useActiveDevice, useClient} from '../client-context';
 import {settingAnchor} from '../search';
 import {onDevice, updateServerText, whereName} from '../device-copy';
@@ -23,6 +23,7 @@ import {CompactModelSelection} from './CompactModelSelection';
 import {modelAccessDefault} from './model-access-draft';
 import {useDecisionCatalogs} from './useDecisionCatalogs';
 import './group-design-settings.css';
+import {BotAdministrators} from '../management/AdministratorsPanel';
 import {CardDisplayEntry} from './card-display/CardDisplayStudio';
 
 /** 模型与权限 shares one settings view; permission remains a compatible internal section key. */
@@ -37,12 +38,13 @@ type Props = {
   scope: Scope;
   tab: GroupSettingsTab;
   tools?: readonly ToolState[];
+  agent?: Agent;
   botName?: string;
   groupName?: string;
   onOpenTools?: () => void;
   onOpenProviders?: () => void;
   onOpenSecrets?: (provider?: string) => void;
-  responseHeader?: ReactNode;
+  responseHeader?: ReactNode | ((ordinaryResponse: ReactNode) => ReactNode);
   refreshVersion?: number;
   /** The private chat's row: its permission and folder are only shown, and it has no topics or members (dm-agent 4.2). */
   dm?: boolean;
@@ -126,7 +128,7 @@ function DmConversation({section, save}: {section: NonNullable<GroupSections['co
   </section></div>;
 }
 
-export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, onOpenProviders, onOpenSecrets, responseHeader, dm, botName, groupName}: Omit<Props, 'scope'> & {view: ProjectSettingsView; refresh: () => Promise<void>}) {
+export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, onOpenProviders, onOpenSecrets, responseHeader, dm, agent, botName, groupName}: Omit<Props, 'scope'> & {view: ProjectSettingsView; refresh: () => Promise<void>}) {
   const client = useClient();
   const where = useActiveDevice();
   const discovery = useProviderDiscovery(tools);
@@ -156,7 +158,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
   return <AnnouncedReadonlyMessages.Provider value={[...outerReadonly, ...notices]}>
     {notices.map(notice => <p className="settings-readonly-notice" role="status" key={`${notice.reason}:${notice.message}`}>{notice.message}</p>)}
     <div className="gd-page">
-      {(tab === 'response' || (tab === 'model' && (discovery.checking || discovery.message))) && <div className="gd-provider-discovery" role="status">
+      {(tab === 'response' || tab === 'model') && (discovery.checking || discovery.message) && <div className="gd-provider-discovery" role="status">
         {discovery.checking ? '正在检查 Provider 是否可用…' : discovery.message}
         {!discovery.checking && <IconButton size="sm" variant="ghost" label="重新检查 Provider" title="重新检查 Provider" onClick={discovery.retry}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}
       </div>}
@@ -185,9 +187,10 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
         validate={value => providers.some(provider => provider.id === value.backend) ? modelAccessProblem(value, modelCatalog.current) : `这个 Provider 现在不可用，先${onDevice(where, '安装')}并配置好。`}/> : <MissingSection/>)}
       {(tab === 'model' || tab === 'permission') && (dm ? <DmFixedSettings view={view}/> : <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>)}
       {tab === 'response' && <>
-        {responseHeader}
+        <section className="gd-conversation-section" aria-label="聊天方式">
+        {typeof responseHeader === 'function' ? responseHeader(!dm && view.identity.kind !== 'smart' ? <div className="group-no-mention"><ProjectPanel view={view} refresh={refresh} partition="response" independent hideJudge/></div> : null) : responseHeader}
         {dm && sections.conversation && <DmConversation section={sections.conversation} save={(patch, revision) => save('conversation', patch, revision)}/>}
-        {view.identity.kind === 'smart' && <>
+        {view.identity.kind === 'smart' && <details className="gd-disclosure"><summary>智能回应设置</summary>
           {judgeSection ? <Editor title="决策模型" section={judgeSection} autoSave save={(patch, revision) => save('judge', patch, revision)}
             validate={value => providerDecisionProblem(value.selection, providers, view.decisionModels, undefined, where)}
             render={(draft, set, disabled, _commit, resetKey) => <DecisionFields key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection}
@@ -195,18 +198,16 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
           {sections.smartRules ? <Editor title="判断规则" section={sections.smartRules} save={(patch, revision) => save('smartRules', patch, revision)}
             validate={draft => smartRulesText(draft).length > SMART_RULES_MAX_LENGTH ? `规则超过 ${SMART_RULES_MAX_LENGTH} 字，请缩短后保存。` : undefined}
             render={(draft, set, disabled, _commit, resetKey) => <SmartRulesEditor key={resetKey} defaultText={dm ? DEFAULT_DM_SMART_RULES_TEXT : undefined} expanded={rulesExpanded} onExpandedChange={setRulesExpanded} value={smartRulesText(draft)} disabled={disabled} onChange={respond => set({respond, newTopic: ''})}/>}/> : <MissingSection/>}
-        </>}
-        {!dm && view.identity.kind !== 'smart' && <ProjectPanel view={view} refresh={refresh} partition="response" independent hideJudge/>}
-        {!dm && <details className="gd-disclosure"><summary>响应成员</summary><ProjectPanel view={view} refresh={refresh} partition="members" independent hideJudge/></details>}
-        <ProjectPanel view={view} refresh={refresh} partition="run" independent hideJudge/>
-        {!dm && sections.presentation && <CardDisplayEntry key={`${view.scope.botId}:${view.scope.projectName}`} level="group" saved={sections.presentation.stored.cardDisplay} effective={sections.presentation.effective.cardDisplay} revision={sections.presentation.revision}
-          readonly={sections.presentation.access.kind === 'readonly'} botName={botName} groupName={groupName}
-          completionMode={sections.presentation.effective.completionMode} showTools={sections.presentation.effective.showToolCalls} showModel={sections.presentation.effective.showModel}
-          onSave={(cardDisplay, revision) => save('presentation', {cardDisplay}, revision)} onRefresh={refresh}/>}
-        {sections.presentation && <Editor title="完成提醒" section={sections.presentation} save={(patch, revision) => save('presentation', patch, revision)} render={(draft, set, disabled, commit) => <>
-          <SettingsRow className="group-choice-row" title="完成提醒" trailing={<SettingChoices segmented label="完成提醒" disabled={disabled} value={draft.completionMode} choices={[{value: 'manual', label: '手动'}, {value: 'long', label: '长任务'}, {value: 'failures', label: '失败时'}, {value: 'always', label: '每次'}]} onChange={completionMode => void commit({completionMode})}/>}/>
-          {draft.completionMode === 'long' && <SettingsRow title="超过几分钟提醒" trailing={<input className="settings-field" type="number" aria-label="长任务分钟数" min={1} max={1440} value={draft.longTaskMinutes} disabled={disabled} onChange={event => set({...draft, longTaskMinutes: Number(event.target.value)})}/>}/>}
-        </>}/>}
+        </details>}
+        {!dm && view.identity.kind !== 'smart' && typeof responseHeader !== 'function' && <ProjectPanel view={view} refresh={refresh} partition="response" independent hideJudge/>}
+        <div className="gd-conversation-run"><ProjectPanel view={view} refresh={refresh} partition="run" independent hideJudge/></div>
+        </section>
+        {dm ? agent && <BotAdministrators key={agent.id} agent={agent} embedded/> : <ProjectPanel view={view} refresh={refresh} partition="members" independent hideJudge/>}
+        {sections.presentation && <CardDisplayEntry key={`${view.scope.botId}:${view.scope.projectName}`} scopeLabel={dm ? '此私聊' : '此群聊'} saved={sections.presentation.stored.cardDisplay} revision={sections.presentation.revision} agent={agent}
+          readonly={sections.presentation.access.kind === 'readonly'} botName={botName} groupName={dm ? '私聊' : groupName}
+          completionMode={sections.presentation.effective.completionMode} longTaskMinutes={sections.presentation.effective.longTaskMinutes} completionTemplate={sections.presentation.effective.completionTemplate}
+          onSave={(patch, revision) => save('presentation', patch, revision)} onRefresh={refresh}/>}
+
       </>}
     </div>
   </AnnouncedReadonlyMessages.Provider>;

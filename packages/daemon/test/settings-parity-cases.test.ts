@@ -14,6 +14,7 @@ import { getSession, upsertSession } from '../src/bot/session-store';
 import type { AppConfig } from '../src/config/schema';
 import { VoiceActionRefused } from '../src/voice/types';
 import type { AgentBackend } from '../src/agent/types';
+import { defaultCardDisplay } from '@vonvon/protocol';
 
 vi.mock('../src/config/paths', () => {
   const root = mkdtempSync(join(tmpdir(), 'settings-parity-'));
@@ -44,8 +45,6 @@ afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 
 const agentCases = [
   { id: 'CARD-019', section: 'access', patch: { allowedChats: ['oc_demo'] }, field: 'access.allowedChats', expected: ['oc_demo'] },
-  { id: 'CARD-020', section: 'cards', patch: { showToolCalls: false }, field: 'showToolCalls', expected: false },
-  { id: 'CARD-021', section: 'cards', patch: { showModel: 'running' }, field: 'showModel', expected: 'running' },
   { id: 'CARD-022', section: 'run', patch: { maxConcurrentRuns: 50 }, field: 'maxConcurrentRuns', expected: 50 },
   { id: 'CARD-023', section: 'run', patch: { runIdleTimeoutSeconds: 3600 }, field: 'runIdleTimeoutSeconds', expected: 3600 },
   { id: 'CARD-024', section: 'run', patch: { pendingPolicy: 'queue' }, field: 'pendingPolicy', expected: 'queue' },
@@ -78,8 +77,6 @@ describe('agent settings persist in config.json and preserve unrelated data', ()
 });
 
 const edgeCases = [
-  { id: 'CARD-021', section: 'cards', patch: { showModel: 'off' }, field: 'showModel', expected: 'off' },
-  { id: 'CARD-021', section: 'cards', patch: { showModel: 'always' }, field: 'showModel', expected: 'always' },
   { id: 'CARD-022', section: 'run', patch: { maxConcurrentRuns: 1 }, field: 'maxConcurrentRuns', expected: 1 },
   { id: 'CARD-023', section: 'run', patch: { runIdleTimeoutSeconds: 0 }, field: 'runIdleTimeoutSeconds', expected: 0 },
   { id: 'CARD-023', section: 'run', patch: { runIdleTimeoutSeconds: 10 }, field: 'runIdleTimeoutSeconds', expected: 10 },
@@ -229,14 +226,15 @@ it('CARD-037 persists comment instructions, syncs directory and resets the defau
   expect((await settings.read(agent) as AgentSettingsView).commentInstructions.content.kind).toBe('default');
 });
 
-it('CARD-057 detects stale card edits; CARD-058 rejects stopped-agent edits', async () => {
+it('CARD-057 detects stale per-chat card edits; CARD-058 rejects stopped edits', async () => {
   const settings = await owner();
-  const a = await settings.read(agent) as AgentSettingsView;
-  expect((await settings.save({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
-  expect((await settings.save({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { showModel: 'off' } })).kind).toBe('conflict');
+  const p = await settings.read(project) as ProjectSettingsView;
+  const display = defaultCardDisplay();
+  expect((await settings.save({ scope: project, section: 'presentation', revision: p.sections.presentation!.revision, patch: { cardDisplay: display } })).kind).toBe('saved');
+  expect((await settings.save({ scope: project, section: 'presentation', revision: p.sections.presentation!.revision, patch: { cardDisplay: null } })).kind).toBe('conflict');
   const stopped = await owner({ access: { kind: 'readonly', reason: 'owner-offline', message: 'stopped' } });
-  const snapshot = await stopped.read(agent) as AgentSettingsView;
-  expect(snapshot.sections.cards.access.kind).toBe('readonly');
-  expect((await stopped.save({ scope: agent, section: 'cards', revision: snapshot.sections.cards.revision, patch: { showToolCalls: true } })).kind).toBe('unavailable');
-  expect((await loadConfig()).preferences?.showToolCalls).toBe(false);
+  const snapshot = await stopped.read(project) as ProjectSettingsView;
+  expect(snapshot.sections.presentation!.access.kind).toBe('readonly');
+  expect((await stopped.save({ scope: project, section: 'presentation', revision: snapshot.sections.presentation!.revision, patch: { cardDisplay: null } })).kind).toBe('unavailable');
+  expect((await getProjectByName('demo'))?.presentation?.cardDisplay).toEqual(display);
 });

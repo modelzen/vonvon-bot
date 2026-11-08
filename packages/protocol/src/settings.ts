@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {cardDisplayConfigSchema} from './card-display.js';
+import {completionTemplateSchema} from './completion-template.js';
 import { JUDGE_PROVIDER_IDS } from './decision-providers.js';
 import { agentIdSchema, groupIdSchema } from "./domain.js";
 
@@ -110,15 +111,10 @@ const modelAccess = z.object({
 const workspace = z.object({ primary: z.string().min(1).max(4096), directories: z.array(z.string().min(1).max(4096)).min(1).max(1000), repositories: z.array(z.string().min(1).max(4096)).max(1000) });
 const smartRules = z.object({ respond: z.string().max(30000), newTopic: z.string().max(30000) });
 const skills = z.object({ disabledPaths: z.array(z.string().min(1).max(4096)).max(1000) });
-const presentation = z.object({ voiceEnabled: z.boolean(), showToolCalls: z.boolean(), showModel: z.enum(["off", "running", "always"]).optional(), completionMode: z.enum(["manual", "long", "failures", "always"]), longTaskMinutes: z.number().int().min(1).max(1440), cardDisplay: cardDisplayConfigSchema.nullable().optional() });
+const presentation = z.object({ voiceEnabled: z.boolean(), showToolCalls: z.boolean(), showModel: z.enum(["off", "running", "always"]).optional(), completionMode: z.enum(["manual", "long", "failures", "always"]), longTaskMinutes: z.number().int().min(1).max(1440), completionTemplate: completionTemplateSchema.nullable().optional(), cardDisplay: cardDisplayConfigSchema.nullable().optional() });
 export const agentSectionSchemas = {
   profile,
   role: roleSettings,
-  cards: z.object({
-    showToolCalls: z.boolean(),
-    showModel: z.enum(["off", "running", "always"]),
-    cardDisplay: cardDisplayConfigSchema.nullable().optional(),
-  }),
   run: z.object({
     maxConcurrentRuns: z.number(),
     runIdleTimeoutSeconds: z.number(),

@@ -501,7 +501,7 @@ scoped(covers(settings.command('access'), ...READ).description('Show access to t
   await (await import('./commands/settings')).runSettingsAccess(options, io(options));
 });
 scoped(covers(settings.command('set <section.key=value...>'), 'settings.save.agent', 'settings.save.project', 'settings.save.session', 'settings.save.host').description('Change fields of one section; values are JSON or plain text'))
-  .option('--revision <revision>', 'Revision held by the caller; stale revisions are rejected')
+  .option('--revision <revision>', 'Revision from settings get; required for a complete presentation.cardDisplay object. Stale revisions are rejected; other fields default to the current revision')
   .option('--reason <text>', 'Explanation retained with the committed result')
   .addHelpText('after', `
 Examples:
@@ -509,18 +509,25 @@ Examples:
   vonvon settings set --group oc_xxx permission.mode=write
   vonvon settings set --group oc_xxx permission.custom='{"sandbox":"read-only","network":true}'
   vonvon settings set --group oc_xxx permission.custom='{"permissionMode":"plan","sandbox":true,"network":"domains","domains":["github.com"]}'
-  vonvon settings set cards.showToolCalls=false
-  vonvon settings set cards.cardDisplay='<完整 JSON 对象>'                # Bot 消息卡；先用 settings get cards --json 读取
-  vonvon settings set --group oc_xxx presentation.cardDisplay=null     # 群消息卡重新继承 Bot
+  vonvon settings get presentation --group oc_xxx --json                      # 记录 view.sections.presentation.revision 与目标 Bot/群
+  vonvon settings set --group oc_xxx --revision <读取时的版本> presentation.cardDisplay='<完整 JSON 对象>'  # 群消息卡
+  vonvon settings set --dm --revision <读取时的版本> presentation.cardDisplay='<完整 JSON 对象>'            # 先 get presentation --dm --json
+  vonvon settings set --group oc_xxx presentation.cardDisplay=null             # 群消息卡恢复固定默认
+  vonvon settings set --dm presentation.cardDisplay=null                       # 私聊消息卡恢复固定默认
+  vonvon settings set --group oc_xxx presentation.completionMode=long presentation.longTaskMinutes=10
+  vonvon settings set --dm presentation.completionTemplate='{{task}}：{{status}}，用时 {{elapsed}}'
   vonvon settings card-check /path/to/card.json --json                # 只检查完整配置文件，不保存
   vonvon settings card-test /path/to/card.json --cwd /absolute/folder --json  # 显式运行最多 4 个脚本，不保存
   vonvon settings set --group oc_xxx model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'
   vonvon settings set judge.selection='{"kind":"llm","model":"gpt-6-luna","effort":"low"}'
   vonvon settings set judge.selection='{"kind":"decision","provider":"typesafe","model":"jev-latest"}'   # 决策模型，各后端的群都用
   vonvon settings set --group oc_xxx judge.selection='{"kind":"default"}'   # 群里去掉覆盖，用 bot 的
-  vonvon settings set --dm model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'   # 私聊只能改 model、speed、modelAccess、skills、conversation、smartRules、judge
+  vonvon settings set --dm model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'   # 私聊模型
   vonvon settings set --group oc_xxx smartRules.respond='"第一段\\n\\n第二段"'   # 文字要换行时写成带引号的 JSON，普通文字里的 \\n 不是换行
-  vonvon settings set --host execution.codexBin=/usr/local/bin/codex      # 本机：Codex 可执行文件，null 回到自动找`)
+  vonvon settings set --host execution.codexBin=/usr/local/bin/codex      # 本机：Codex 可执行文件，null 回到自动找
+
+完整消息卡对象必须带读取时的 --revision；发生冲突时，重新读取当前配置，只重做用户指定的修改。
+不要仅替换 revision 后重提旧对象。保存后再次读取同一目标，核对用户要求的每一项。`)
   .action(async (assignments: string[], options: Target) => {
     await (await import('./commands/settings')).runSettingsSet(assignments, options, io(options));
   });

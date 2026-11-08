@@ -1,4 +1,5 @@
 import {useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode} from 'react';
+import {CARD_DISPLAY_REMINDER_EID} from '@vonvon/protocol';
 import './feishu-card-preview.css';
 
 export type CardNode = {tag?: string; [key: string]: unknown};
@@ -13,15 +14,21 @@ type PreviewActions = {
   showSlots?: boolean;
   onSelect?: (id: string) => void;
   onRemove?: (id: string) => void;
+  onRequestReminder?: () => void;
+  nonRemovableComponents?: readonly string[];
   onPointerDragStart?: (id: string, event: ReactPointerEvent<HTMLElement>) => void;
   allowedDropSlots?: readonly string[];
   editableComponents?: readonly string[];
+  draggedComponent?: string;
+  landedComponent?: string;
+  activeDropSlot?: string;
 };
 
 const palette = new Set(['grey', 'green', 'yellow', 'orange', 'red', 'blue', 'violet', 'purple']);
 const object = (value: unknown): CardNode => value && typeof value === 'object' && !Array.isArray(value) ? value as CardNode : {};
 const list = (value: unknown): CardNode[] => Array.isArray(value) ? value.filter(item => item && typeof item === 'object') as CardNode[] : [];
 const string = (value: unknown): string => typeof value === 'string' ? value : value === undefined || value === null ? '' : String(value);
+const callback = (node: CardNode): string | undefined => list(node.behaviors).map(behavior => object(behavior.value).a).find((value): value is string => typeof value === 'string');
 const color = (value: unknown): string => palette.has(value as string) ? value as string : 'grey';
 const nativeChartColors: Record<string, string> = {'#8F959E':'grey','#3370FF':'blue','#F2B50A':'yellow','#F57C23':'orange','#F54A45':'red'};
 const chartColor = (value: unknown): string => typeof value === 'string' ? nativeChartColors[value.toUpperCase()] ?? color(value) : 'grey';
@@ -29,6 +36,7 @@ const chartSample = (spec: CardNode): CardNode | undefined => list(Array.isArray
 const chartFraction = (sample: CardNode | undefined): number => Math.max(0, Math.min(1, Number(sample?.value) || 0));
 const nestedChart = (node: CardNode): CardNode | undefined => node.tag === 'chart' ? node : [...list(node.columns),...list(node.elements)].map(nestedChart).find(Boolean);
 const measure = (value: unknown): string | undefined => typeof value === 'string' && /^(?:\d+(?:\.\d+)?px|\d+(?:\.\d+)?%)$/.test(value) ? value : undefined;
+const buttonWidth = (value: unknown): string | undefined => value === 'fill' ? '100%' : typeof value === 'string' && /^\d+(?:\.\d+)?px$/.test(value) ? value : undefined;
 const box = (value: unknown): string | undefined => typeof value === 'string' && /^(?:\d+(?:\.\d+)?px)(?:\s+\d+(?:\.\d+)?px){0,3}$/.test(value.trim()) ? value : undefined;
 
 const icons: Record<string, ReactNode> = {
@@ -62,7 +70,7 @@ function CardIcon({spec, className = ''}: {spec: unknown; className?: string}) {
 // React escapes all content; user templates never become HTML.
 function inline(value: string, depth = 0): ReactNode[] {
   if (depth > 8 || !value) return [value];
-  const token = /<font\s+color=['"]?([a-z]+)['"]?\s*>([\s\S]*?)<\/font>|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(\*\*([^*]+)\*\*)|(`([^`]+)`)|(\*([^*]+)\*)/gi;
+  const token = /<font\s+color=['"]?([a-z]+)['"]?\s*>([\s\S]*?)<\/font>|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(\*\*([^*]+)\*\*)|(`([^`]+)`)|(\*([^*]+)\*)|(?<![\w_])_([^_\n]+)_(?![\w_])/gi;
   const parts: ReactNode[] = [];
   let previous = 0;
   for (const match of value.matchAll(token)) {
@@ -73,6 +81,7 @@ function inline(value: string, depth = 0): ReactNode[] {
     else if (match[5] !== undefined) parts.push(<strong key={index}>{inline(match[6] ?? '', depth + 1)}</strong>);
     else if (match[7] !== undefined) parts.push(<code key={index}>{match[8]}</code>);
     else if (match[9] !== undefined) parts.push(<em key={index}>{inline(match[10] ?? '', depth + 1)}</em>);
+    else if (match[11] !== undefined) parts.push(<em key={index}>{inline(match[11], depth + 1)}</em>);
     previous = index + match[0].length;
   }
   if (previous < value.length) parts.push(value.slice(previous));
@@ -138,16 +147,19 @@ function componentLabel(data: CardNode): string {
   const chart = nestedChart(data);
   if (chart) return `上下文 ${Math.round(chartFraction(chartSample(object(chart.chart_spec))) * 100)}%`;
   const content = data.tag === 'collapsible_panel' ? object(object(data.header).title) : data;
-  return string(object(content.text).content ?? content.content).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+  return string(object(content.text).content ?? content.content).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().replace(/^_([^_]+)_$/, '$1');
 }
 function EditableComponent({id, data, actions, children}: {id: string; data: CardNode; actions: PreviewActions; children: ReactNode}) {
   if (!actions.editing || !id || actions.editableComponents && !actions.editableComponents.includes(id)) return children;
   const label = componentLabel(data);
   const select = () => actions.onSelect?.(id);
-  return <div className="vcr-widget" data-card-component={id}>
-    <div className="vcr-widget-body" inert aria-hidden="true">{children}</div>
-    <button type="button" className="vcr-widget-edit" aria-label={label} onPointerDown={event => actions.onPointerDragStart?.(id,event)} onClick={event => {event.stopPropagation();select();}}/>
-    {actions.onRemove && <button type="button" className="vcr-widget-remove" aria-label={`隐藏 ${label}`} onClick={event => {event.stopPropagation();actions.onRemove?.(id);}}>隐藏</button>}
+  const reminder = callback(data) === 'run.remind' && data.disabled !== true;
+  const protectedComponent = callback(data) === 'run.remind' || data.element_id === CARD_DISPLAY_REMINDER_EID || actions.nonRemovableComponents?.includes(id);
+  return <div className="vcr-widget" data-card-component={id} data-card-position={string(data.preview_slot) || undefined} data-interactive={reminder || undefined} data-dragging={actions.draggedComponent === id} data-landed={actions.landedComponent === id}>
+    <div className="vcr-widget-body" inert={!reminder || undefined} aria-hidden={reminder ? undefined : true}>{children}</div>
+    {reminder ? <button type="button" className="vcr-widget-settings" aria-label={`设置 ${label}`} onClick={event => {event.stopPropagation();select();}}>设置</button>
+      : <button type="button" className="vcr-widget-edit" aria-label={label} title={data.disabled === true ? string(object(data.hover_tips).content) || undefined : undefined} onPointerDown={event => actions.onPointerDragStart?.(id,event)} onClick={event => {event.stopPropagation();select();}}/>}
+    {actions.onRemove && !protectedComponent && <button type="button" className="vcr-widget-remove" aria-label={`隐藏 ${label}`} onClick={event => {event.stopPropagation();actions.onRemove?.(id);}}>隐藏</button>}
   </div>;
 }
 
@@ -178,8 +190,10 @@ function CardElement({data, actions, level = 0}: {data: CardNode; actions: Previ
       const icon = object(data.icon);
       const label = string(object(data.text).content);
       const tip = string(object(data.hover_tips).content);
-      return wrap(<button type="button" className={`vcr-button${icon.token === 'stop-record_filled' && !label ? ' vcr-button--stop' : ''}`} data-variant={string(data.type) || 'default'} data-size={string(data.size) || undefined} title={tip || undefined} aria-label={tip || label || string(icon.token)} {...attrs}>
-        {Boolean(data.icon) && <CardIcon spec={data.icon}/>}{label}
+      const action = callback(data);
+      const reminder = action === 'run.remind' && data.disabled !== true;
+      return wrap(<button type="button" className={`vcr-button${icon.token === 'stop-record_filled' && !label ? ' vcr-button--stop' : ''}`} data-action={action} data-variant={string(data.type) || 'default'} data-size={string(data.size) || undefined} data-width={string(data.width) || undefined} title={tip || undefined} aria-label={tip || label || string(icon.token)} disabled={data.disabled === true} onPointerDown={reminder && actions.editing && marker ? event => actions.onPointerDragStart?.(marker,event) : undefined} onClick={reminder ? event => {event.stopPropagation(); if (data.disabled !== true) actions.onRequestReminder?.();} : undefined} {...attrs} style={{...attrs.style,width:buttonWidth(data.width)}}>
+        {Boolean(data.icon) && <CardIcon spec={data.icon}/>}{label && <span className="vcr-button-label">{label}</span>}
       </button>);
     }
     case 'chart': {
@@ -226,22 +240,22 @@ function Panel({data, attrs, actions, level, pickSlot}: {data: CardNode; attrs: 
 export function FeishuContentSample({node}: {node: CardNode}) {
   const content = node.tag === 'collapsible_panel' ? object(object(node.header).title) : node;
   const label = string(object(content.text).content);
-  return <div className="vcr-sample">{content.tag === 'button' ? <span className={`vcr-button${!label ? ' vcr-button--stop' : ''}`} data-variant={string(content.type)} role="img" aria-label={label || string(object(content.hover_tips).content) || '终止按钮'}>{Boolean(content.icon) && <CardIcon spec={content.icon}/>}{label}</span> : content.tag === 'chart' || content.tag === 'column_set' ? <CardElement data={content} actions={{}}/> : <TextNode data={content} kind={content.tag === 'div' ? 'div' : 'text'}/>}</div>;
+  return <div className="vcr-sample">{content.tag === 'button' ? <span className={`vcr-button${!label ? ' vcr-button--stop' : ''}`} data-action={callback(content)} data-element-id={string(content.element_id) || undefined} data-variant={string(content.type)} data-size={string(content.size) || undefined} data-width={string(content.width) || undefined} style={{width:buttonWidth(content.width)}} role="img" aria-label={label || string(object(content.hover_tips).content) || '终止按钮'}>{Boolean(content.icon) && <CardIcon spec={content.icon}/>}{label && <span className="vcr-button-label">{label}</span>}</span> : content.tag === 'chart' || content.tag === 'column_set' ? <CardElement data={content} actions={{}}/> : <TextNode data={content} kind={content.tag === 'div' ? 'div' : 'text'}/>}</div>;
 }
 
 function elementKey(item: CardNode, index: number) {
   return string(item.preview_slot ?? item.element_id ?? item.preview_component) || (item.tag === 'column_set' ? `row:${list(item.columns).map(column => string(column.preview_slot)).join(':')}` : `${item.tag}:${index}`);
 }
 
-export function FeishuCardPreview({card, onSelect, onRemove, onPointerDragStart, editing, showSlots, allowedDropSlots, editableComponents, replyContext}: {card: CardJson; replyContext?: string} & PreviewActions) {
-  const actions = {onSelect, onRemove, onPointerDragStart, editing, showSlots, allowedDropSlots, editableComponents};
+export function FeishuCardPreview({card, onSelect, onRemove, onRequestReminder, nonRemovableComponents, onPointerDragStart, editing, showSlots, allowedDropSlots, editableComponents, draggedComponent, landedComponent, activeDropSlot, replyContext}: {card: CardJson; replyContext?: string} & PreviewActions) {
+  const actions = {onSelect, onRemove, onRequestReminder, nonRemovableComponents, onPointerDragStart, editing, showSlots, allowedDropSlots, editableComponents, draggedComponent, landedComponent, activeDropSlot};
   const contentActions = {...actions, showSlots: false};
   const header = object(card.header);
   const body = object(card.body);
   const hasControls = list(body.elements).some(node => node.element_id === 'controls');
   const actionTargets = allowedDropSlots?.some(slot => slot.startsWith('actions-'));
   const positions: Record<string, string> = {'top-left':'上方左侧',top:'上方整行','top-right':'上方右侧',process:'执行过程','bottom-left':'下方左侧',bottom:'下方整行','bottom-right':'下方右侧','actions-left':'按钮区左侧','actions-right':'按钮区右侧'};
-  const target = (slot: string) => !allowedDropSlots || allowedDropSlots.includes(slot) ? <div key={slot} className="vcr-drop-zone" data-card-slot={slot}>{positions[slot]}</div> : null;
+  const target = (slot: string) => !allowedDropSlots || allowedDropSlots.includes(slot) ? <div key={slot} className="vcr-drop-zone" data-card-slot={slot} data-active={activeDropSlot === slot}>{positions[slot]}</div> : null;
   return <article className="vcr-card" aria-label="飞书消息卡片" data-width-mode={string(object(card.config).width_mode) || undefined}>
     {Boolean(card.header) && <header className="vcr-card-header" data-template={string(header.template) || 'blue'}><div className="vcr-card-heading">{string(object(header.title).content)}</div>{Boolean(object(header.subtitle).content) && <div className="vcr-card-subtitle">{string(object(header.subtitle).content)}</div>}</header>}
     {replyContext && <div className="vcr-reply-context"><span>{replyContext}</span></div>}

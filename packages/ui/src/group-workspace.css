@@ -33,6 +33,8 @@
 .group-conversation-layout { display: flex; align-items: center; flex-wrap: wrap; gap: 20px 28px; min-width: 0; }
 .group-conversation-layout > .group-conversation-choice { flex: 0 1 352px; min-width: 0; max-width: 100%; }
 .group-conversation-layout > .group-attention { flex: 1.4 1 300px; }
+.group-conversation-layout > .group-no-mention { flex: 1.4 1 300px; min-width: 0; }
+.group-no-mention .ss-section__header { display: none; }
 .group-conversation-choice { display: grid; gap: 10px; }
 .group-conversation-choice h3 { margin: 0; font-size: 13px; font-weight: 600; }
 .group-bot-profile-link { display: flex; align-items: center; justify-self: start; gap: 6px; padding: 0; border: 0; background: transparent; color: var(--color-text-secondary); font-size: 12px; cursor: pointer; }

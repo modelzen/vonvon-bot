@@ -1,6 +1,7 @@
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { buildCompletionReminderContent } from '../card/completion-reminder';
 import {
+  getCompletionReminderConfig,
   shouldSendCompletionReminder,
   shouldShowCompletionReminderButton,
   type AppConfig,
@@ -82,6 +83,7 @@ export async function sendCompletionReminderReply(
     elapsedMs,
     summary: input.summary,
     cardUpdated: input.cardUpdated,
+    template:getCompletionReminderConfig(deps.cfg).template,
   });
   try {
     await deps.channel.rawClient.im.v1.message.reply({

@@ -4,7 +4,7 @@ import { createBackend } from '../agent';
 import { botDir, botPaths, paths } from '../config/paths';
 import { loadConfig } from '../config/store';
 import { isComplete } from '../config/schema';
-import { getProjectByChatId, listProjectsIn, mutateProject, mutateProjectByChatId } from '../project/registry';
+import { cardDisplayPresentationDefaults, getProjectByChatId, listProjectsIn, materializeCardDisplaySettings, mutateProject, mutateProjectByChatId } from '../project/registry';
 import { listSessionsIn } from '../bot/session-store';
 import { currentCommentInstructions, DEFAULT_COMMENT_INSTRUCTIONS } from '../bot/comments';
 import { createSettingsOwner, offlineSettings, SettingsInputError, isLocalSettingsSection, workspaceRevision } from './settings';
@@ -33,6 +33,11 @@ export function createSettingsService(deps: AdminServiceDeps, library?: HostLibr
       const cfg = await loadConfig(botPaths(botId).configFile);
       if (!isComplete(cfg)) throw new SettingsInputError('这个 Bot 不存在，或者配置不完整');
       const files = botPaths(botId);
+      if (localEditing) await materializeCardDisplaySettings({
+        legacy: cfg.preferences?.cardDisplay,
+        defaults: cardDisplayPresentationDefaults(cfg),
+        target: { file: files.projectsFile, dataRoot: paths.appDir },
+      });
       return createSettingsOwner({ cfg, offline: true, localEditing, access: unavailable(), backendFor: createBackend,
         writePreferences: async () => { throw new Error('只读'); },
         evictLiveSessionsForChat: async () => {},

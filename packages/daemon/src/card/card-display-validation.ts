@@ -56,6 +56,9 @@ export async function assertValidCardDisplay(input:unknown,signal?:AbortSignal):
       completionReminder:'available',cardDisplay:config,cardDisplayValues:samples,strictCardDisplay:true,
     };
     assertCardDisplayRender(buildRunCard(rc));
+    if (config.blocks.some(block=>block.kind==='reminder') && phase.terminal==='running') {
+      assertCardDisplayRender(buildRunCard({...rc,completionReminder:'requested'}));
+    }
   }
   return config;
 }

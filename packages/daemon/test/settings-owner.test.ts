@@ -55,7 +55,7 @@ it('serializes card and HTTP preference edits, preserves unknown nested keys and
   expect(save.kind).toBe('saved');
   const fresh = await owner.read(agent) as AgentSettingsView;
   expect(fresh.sections.run.stored.maxConcurrentRuns).toBe(7); expect(fresh.sections.run.effective.maxConcurrentRuns).toBe(10);
-  expect(fresh.sections.cards.effective.showToolCalls).toBe(false);
+  expect(cfg.preferences?.showToolCalls).toBe(false);
   await owner.save({ scope: agent, section: 'completion', revision: fresh.sections.completion.revision, patch: { mode: 'always' } });
   await owner.save({ scope: agent, section: 'titles', revision: fresh.sections.titles.revision, patch: { policy: { enabled: false } } });
   const disk = await loadConfig() as AppConfig & { futureRoot: number };
@@ -99,55 +99,58 @@ it('failed persistence cannot mutate nested live preferences', async () => {
   await expect(write(p => { p.sessionTitles!.byBackend!['codex-appserver'] = { enabled: false }; })).rejects.toThrow();
   expect(cfg.preferences?.sessionTitles?.byBackend?.['codex-appserver']).toMatchObject({ enabled: true, model: 'custom-title' });
 });
-it('saves cardDisplay atomically for Bot and group, resolves inheritance, resets with null, and rejects stale revisions', async () => {
+it('saves independent group and private-chat cardDisplay, resets to explicit null, and rejects stale revisions', async () => {
+  await addDmProject({ name: DM_PROJECT_NAME, chatId: dmChatId(botId), cwd: '/tmp/dm', blank: true, createdAt: 1, kind: 'single', mode: 'full', dm: { people: {} } });
+  const dm = { kind: 'project' as const, botId, projectName: dmChatId(botId) };
   const { owner } = await fixture();
-  const display = defaultCardDisplay();
-  const a = await owner.read(agent) as AgentSettingsView;
-  expect(a.sections.cards.stored.cardDisplay).toBeNull();
-  expect((await owner.save({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { cardDisplay: display } })).kind).toBe('saved');
-  expect((await loadConfig()).preferences?.cardDisplay).toEqual(display);
-  expect(cfg.preferences?.cardDisplay).toEqual(display);
-  expect((await owner.save({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { cardDisplay: display } })).kind).toBe('conflict');
+  const agentView = await owner.read(agent) as AgentSettingsView;
+  expect(agentView.sections).not.toHaveProperty('cards');
+  const groupView = await owner.read(project) as ProjectSettingsView;
+  const dmView = await owner.read(dm) as ProjectSettingsView;
+  expect(groupView.sections.presentation!.effective.cardDisplay).toBeNull();
+  expect(dmView.sections.presentation!.effective.cardDisplay).toBeNull();
+  const configBefore = await readFile(paths.configFile, 'utf8');
 
-  const inherited = await owner.read(project) as ProjectSettingsView;
-  expect(inherited.sections.presentation!.stored.cardDisplay).toBeNull();
-  expect(inherited.sections.presentation!.effective.cardDisplay).toEqual(display);
-  const groupDisplay = structuredClone(display);
-  groupDisplay.blocks.find(block => block.kind === 'context')!.slot = 'bottom';
-  expect((await owner.save({ scope: project, section: 'presentation', revision: inherited.sections.presentation!.revision, patch: { cardDisplay: groupDisplay } })).kind).toBe('saved');
-  expect((await getProjectByName('demo'))?.presentation?.cardDisplay).toEqual(groupDisplay);
-  const overridden = await owner.read(project) as ProjectSettingsView;
-  expect(overridden.sections.presentation!.stored.cardDisplay).toEqual(groupDisplay);
-  expect(overridden.sections.presentation!.effective.cardDisplay).toEqual(groupDisplay);
-  expect((await owner.save({ scope: project, section: 'presentation', revision: inherited.sections.presentation!.revision, patch: { cardDisplay: null } })).kind).toBe('conflict');
-  expect((await owner.save({ scope: project, section: 'presentation', revision: overridden.sections.presentation!.revision, patch: { cardDisplay: null } })).kind).toBe('saved');
-  expect((await getProjectByName('demo'))?.presentation).not.toHaveProperty('cardDisplay');
-  expect(JSON.parse(await readFile(paths.projectsFile, 'utf8')).projects[0].presentation).not.toHaveProperty('cardDisplay');
-  expect((await owner.read(project) as ProjectSettingsView).sections.presentation!.effective.cardDisplay).toEqual(display);
-  const fresh = await owner.read(agent) as AgentSettingsView;
-  expect((await owner.save({ scope: agent, section: 'cards', revision: fresh.sections.cards.revision, patch: { cardDisplay: null } })).kind).toBe('saved');
-  expect((await loadConfig()).preferences).not.toHaveProperty('cardDisplay');
-  expect(JSON.parse(await readFile(paths.configFile, 'utf8')).preferences).not.toHaveProperty('cardDisplay');
+  const groupDisplay = defaultCardDisplay();
+  expect((await owner.save({ scope: project, section: 'presentation', revision: groupView.sections.presentation!.revision, patch: { cardDisplay: groupDisplay } })).kind).toBe('saved');
+  expect((await owner.read(dm) as ProjectSettingsView).sections.presentation!.effective.cardDisplay).toBeNull();
+  const ownDmDisplay = defaultCardDisplay();
+  ownDmDisplay.blocks.find(block => block.kind === 'context')!.slot = 'bottom';
+  expect((await owner.save({ scope: dm, section: 'presentation', revision: dmView.sections.presentation!.revision, patch: { cardDisplay: ownDmDisplay } })).kind).toBe('saved');
+  expect((await getProjectByChatId(dmChatId(botId)))?.presentation?.cardDisplay).toEqual(ownDmDisplay);
+  expect((await owner.save({ scope: project, section: 'presentation', revision: groupView.sections.presentation!.revision, patch: { cardDisplay: null } })).kind).toBe('conflict');
+
+  const currentGroup = await owner.read(project) as ProjectSettingsView;
+  expect(currentGroup.sections.presentation!.stored.cardDisplay).toEqual(groupDisplay);
+  expect((await owner.save({ scope: project, section: 'presentation', revision: currentGroup.sections.presentation!.revision, patch: { cardDisplay: null } })).kind).toBe('saved');
   expect((await owner.read(project) as ProjectSettingsView).sections.presentation!.effective.cardDisplay).toBeNull();
+  expect((await owner.read(dm) as ProjectSettingsView).sections.presentation!.effective.cardDisplay).toEqual(ownDmDisplay);
+  const rows = JSON.parse(await readFile(paths.projectsFile, 'utf8')) as { projects: Array<{ name: string; presentation?: { cardDisplay?: unknown } }> };
+  expect(rows.projects.find(row => row.name === 'demo')?.presentation?.cardDisplay).toBeNull();
+  expect(await readFile(paths.configFile, 'utf8')).toBe(configBefore);
 });
-it('refuses malformed cardDisplay without changing disk or live settings', async () => {
+it('does not inherit legacy Bot card fields into an unconfigured chat view', async () => {
+  cfg.preferences = { ...cfg.preferences, showToolCalls: false, showModel: 'off', cardDisplay: defaultCardDisplay() };
   const { owner } = await fixture();
-  const a = await owner.read(agent) as AgentSettingsView;
+  const view = await owner.read(project) as ProjectSettingsView;
+  expect(view.sections.presentation!.effective).toMatchObject({ showToolCalls: true, showModel: 'running', cardDisplay: null });
+});
+it('refuses Bot card edits and malformed group cardDisplay without changing disk or live settings', async () => {
+  const { owner } = await fixture();
   const p = await owner.read(project) as ProjectSettingsView;
   const configBefore = await readFile(paths.configFile, 'utf8');
   const projectBefore = await readFile(paths.projectsFile, 'utf8');
   const malformed = defaultCardDisplay();
   malformed.blocks[1]!.id = malformed.blocks[0]!.id;
-  expect(() => parseSettingsEdit({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { cardDisplay: malformed } })).toThrow();
-  await expect(owner.save({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { cardDisplay: malformed } })).rejects.toThrow('设置字段、类型或范围无效');
+  expect(() => parseSettingsEdit({ scope: agent, section: 'cards', revision: 'x', patch: { cardDisplay: defaultCardDisplay() } })).toThrow('消息卡按群聊或私聊分别设置');
+  await expect(owner.save({ scope: agent, section: 'cards', revision: 'x', patch: { cardDisplay: defaultCardDisplay() } } as never)).rejects.toThrow('消息卡按群聊或私聊分别设置');
   await expect(owner.save({ scope: project, section: 'presentation', revision: p.sections.presentation!.revision, patch: { cardDisplay: malformed } })).rejects.toThrow('设置字段、类型或范围无效');
   expect(await readFile(paths.configFile, 'utf8')).toBe(configBefore);
   expect(await readFile(paths.projectsFile, 'utf8')).toBe(projectBefore);
   expect(cfg.preferences).not.toHaveProperty('cardDisplay');
 });
-it('refuses a card script that passes schema validation but cannot compile', async () => {
+it('refuses a group card script that passes schema validation but cannot compile', async () => {
   const { owner } = await fixture();
-  const a = await owner.read(agent) as AgentSettingsView;
   const p = await owner.read(project) as ProjectSettingsView;
   const configBefore = await readFile(paths.configFile, 'utf8');
   const projectBefore = await readFile(paths.projectsFile, 'utf8');
@@ -157,12 +160,10 @@ it('refuses a card script that passes schema validation but cannot compile', asy
     appearance: 'text', template: '{{branch}}', size: 'notation', color: 'auto',
     warning: false, warningAt: 80, source: 'script', script: 'function ( {', language: 'node', sample: '{"branch":"feature"}',
   });
-  expect(parseSettingsEdit({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { cardDisplay: display } })).toBeDefined();
-  expect((await owner.save({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { cardDisplay: display } })).kind).toBe('rejected');
+  expect(parseSettingsEdit({ scope: project, section: 'presentation', revision: p.sections.presentation!.revision, patch: { cardDisplay: display } })).toBeDefined();
   expect((await owner.save({ scope: project, section: 'presentation', revision: p.sections.presentation!.revision, patch: { cardDisplay: display } })).kind).toBe('rejected');
   expect(await readFile(paths.configFile, 'utf8')).toBe(configBefore);
   expect(await readFile(paths.projectsFile, 'utf8')).toBe(projectBefore);
-  expect(cfg.preferences).not.toHaveProperty('cardDisplay');
 });
 it('ignores only hand-edited invalid cardDisplay on load', async () => {
   const original = JSON.parse(await readFile(paths.configFile, 'utf8')) as AppConfig;
@@ -175,7 +176,7 @@ it('ignores only hand-edited invalid cardDisplay on load', async () => {
   row.presentation = { voiceEnabled: true, showToolCalls: false, showModel: 'running', completionMode: 'manual', longTaskMinutes: 5, cardDisplay: { version: 999 } };
   await writeFile(paths.projectsFile, `${JSON.stringify(rows)}\n`);
   expect((await getProjectByName('demo'))?.presentation).toMatchObject({ voiceEnabled: true, showToolCalls: false });
-  expect((await getProjectByName('demo'))?.presentation).not.toHaveProperty('cardDisplay');
+  expect((await getProjectByName('demo'))?.presentation?.cardDisplay).toBeNull();
 });
 it('validates models, allows custom title ids, resets actual project and session overrides', async () => {
   const { owner } = await fixture(); let p = await owner.read(project) as ProjectSettingsView;
@@ -358,17 +359,17 @@ it('returns the exact settings result through executor and real IPC responder', 
   const caller = createAdminIpcCaller(request => responder(request));
   const responder = createAdminIpcResponder(op => op.kind === 'settingsRead' ? owner.read(op.scope) : executor(op as Parameters<typeof executor>[0]), response => caller.onMessage(response));
   const view = await caller.call({ kind: 'settingsRead', scope: agent }) as AgentSettingsView;
-  const result = await caller.call({ kind: 'settingsPatch', edit: { scope: agent, section: 'cards', revision: view.sections.cards.revision, patch: { showToolCalls: false } } });
-  expect(result).toMatchObject({ kind: 'saved', section: { section: 'cards', value: { stored: { showToolCalls: false } } } });
+  const result = await caller.call({ kind: 'settingsPatch', edit: { scope: agent, section: 'run', revision: view.sections.run.revision, patch: { pendingPolicy: 'queue' } } });
+  expect(result).toMatchObject({ kind: 'saved', section: { section: 'run', value: { stored: { pendingPolicy: 'queue' } } } });
 });
 it('readonly owner never permits writes; failed catalogs do not disable unrelated settings', async () => {
   const { owner: readonly } = await fixture({ access: { kind: 'readonly', reason: 'owner-offline', message: 'Stopped' } });
   const view = await readonly.read(agent) as AgentSettingsView;
-  expect((await readonly.save({ scope: agent, section: 'cards', revision: view.sections.cards.revision, patch: { showToolCalls: false } })).kind).toBe('unavailable');
+  expect((await readonly.save({ scope: agent, section: 'run', revision: view.sections.run.revision, patch: { pendingPolicy: 'queue' } })).kind).toBe('unavailable');
   const { owner } = await fixture({ backendFor: () => ({ ...backend, listModels: async () => { throw new Error('private diagnostics'); } }) });
   const p = await owner.read(project) as ProjectSettingsView;
   expect((await owner.save({ scope: project, section: 'model', revision: p.sections.model.revision, patch: { selection: { kind: 'explicit', model: 'fixture-model', effort: 'high' } } })).kind).toBe('rejected');
-  expect((await owner.save({ scope: agent, section: 'cards', revision: view.sections.cards.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
+  expect((await owner.save({ scope: agent, section: 'run', revision: view.sections.run.revision, patch: { pendingPolicy: 'queue' } })).kind).toBe('saved');
   expect(JSON.stringify(await owner.models({ botId, backend: 'codex-appserver', purpose: 'project' }))).not.toContain('private diagnostics');
 });
 it('project persistence survives failed runtime eviction with an explicit restart effect', async () => {
@@ -390,7 +391,7 @@ it('s31c: a full-only backend refuses unavailable tiers and custom, while unrela
   }
   expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { custom: { sandbox: 'read-only', network: false } } }))).toEqual({ kind: 'rejected', fields: [{ field: 'settings', message: 'only full here' }] });
   expect(view.sections.permission.stored.options.tiers[0]?.unavailable).toBe('only full here');
-  expect((await owner.save({ scope: project, section: 'presentation', revision: view.sections.presentation!.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
+  expect((await owner.save({ scope: project, section: 'presentation', revision: view.sections.presentation!.revision, patch: { voiceEnabled: false } })).kind).toBe('saved');
   expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa' });
   view = await owner.read(project) as ProjectSettingsView;
   expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { mode: 'full' } })).kind).toBe('saved');
@@ -697,13 +698,13 @@ it('s02c1, s02c5: an old config.json with 咖啡一下 settings loads, reads wit
   cfg = await loadConfig() as AppConfig;
   const { owner } = await fixture();
   const view = await owner.read(agent) as AgentSettingsView;
-  expect(Object.keys(view.sections)).toEqual(['profile', 'role', 'cards', 'run', 'completion', 'comments', 'titles', 'paths', 'access', 'judge']);
+  expect(Object.keys(view.sections)).toEqual(['profile', 'role', 'run', 'completion', 'comments', 'titles', 'paths', 'access', 'judge']);
   expect(view).not.toHaveProperty('cliRuntime');
   expect(JSON.stringify(view)).not.toMatch(/cliBridge|notifyScope|keepAwake/);
-  expect((await owner.save({ scope: agent, section: 'cards', revision: view.sections.cards.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
+  expect((await owner.save({ scope: agent, section: 'run', revision: view.sections.run.revision, patch: { pendingPolicy: 'queue' } })).kind).toBe('saved');
   // The file is what was written plus the one saved field: the old section, its
   // key order and the other unknown keys are untouched.
-  expect(await readFile(paths.configFile, 'utf8')).toBe(`${JSON.stringify({ ...stored, preferences: { ...stored.preferences, showToolCalls: false } }, null, 2)}\n`);
+  expect(await readFile(paths.configFile, 'utf8')).toBe(`${JSON.stringify({ ...stored, preferences: { ...stored.preferences, pendingPolicy: 'queue' } }, null, 2)}\n`);
   expect(() => parseSettingsEdit({ scope: agent, section: 'cliBridge', revision: 'x', patch: { notifyScope: 'all' } })).toThrow('设置字段、类型或范围无效');
   for (const action of [{ kind: 'setCliBridgeEnabled', botId, enabled: false, revision: 'x' }, { kind: 'repairCliHooks', botId }, { kind: 'setHostCliRoute', botId: null, revision: 'x' }, { kind: 'repairHostCliHooks', agents: ['codex'] }])
     expect(() => parseSettingsAction(action)).toThrow('设置操作参数无效');
@@ -799,7 +800,7 @@ describe('the administrators', () => {
       expect(card).not.toContain('feishu');
       // product.md section 6: read-only, whoever looks
       for (const action of ['rmAdmin', 'addAdminForm']) expect(card).not.toContain(`"a":"${DM[action as keyof typeof DM]}"`);
-      expect(card).toContain('名单在 Vonvon Bot 的「设置 → 管理员」或终端里改。');
+      expect(card).toContain('名单在 Vonvon Bot 的「私聊 → 沟通方式 → 回应谁」或终端里改。');
     } finally { roles.mockRestore(); }
   });
 

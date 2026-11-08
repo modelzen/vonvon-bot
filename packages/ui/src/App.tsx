@@ -947,7 +947,7 @@ function DesktopApp() {
             </>
           )}
           {(page === "setup" || (page === "home" && !snapshot.agents.length)) && <WelcomeSetup key={setupAgentId ?? "global"} initialAgentId={setupAgentId} initialProvider={setupProvider} onProviderPrepared={setSetupProvider} onCreateBot={provider => void register(undefined, provider)} onOpenGroups={() => snapshot.agents.length === 1 ? openJoin(snapshot.agents[0]!.id, undefined, setupProvider) : openList("agents")} snapshot={snapshot} ready={ready} busy={busy} run={run} onRegister={agentId => void register(agentId)} onOpenProviders={openProviders} onNotice={(message, error) => setNotice({message, error})}/>}
-          {page === "administrators" && <AdministratorsPanel agents={snapshot.agents}/>}
+          {page === "administrators" && <AdministratorsPanel agents={snapshot.agents} onOpenDm={agent => changeRoute(() => openDm(agent.id, 'response'))}/>}
           {page === "bridgeImport" && <section className="welcome-setup" aria-label="Bridge 导入"><header className="today-page-heading"><h1>Bridge 导入</h1></header><BridgeImportPanel ready={ready} busy={busy} platform={snapshot.application.platform} showUnavailable/></section>}
           {page === "providers" && <ProviderManager snapshot={snapshot} ready={ready} busy={busy} run={run} reveal={searchTarget?.reveal === 'codex' ? 'codex' : searchTarget?.reveal === 'claude' ? 'claude' : undefined}/>}
           {page === "environment" && <><EnvironmentPanel reveal={searchTarget?.reveal} request={client.environment}/></>}

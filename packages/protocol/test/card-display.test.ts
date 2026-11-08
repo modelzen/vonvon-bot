@@ -1,12 +1,13 @@
 import {describe,expect,it} from 'vitest';
-import {cardDisplayConfigSchema,defaultCardDisplayConfig,interpolate,allowedSlots} from '../src/card-display.js';
+import {cardDisplayConfigSchema,defaultCardDisplayConfig,interpolate,allowedSlots,DEFAULT_REMINDER_REQUESTED_TEMPLATE} from '../src/card-display.js';
 import {agentSectionSchemas,projectEditableSchemas} from '../src/settings.js';
 
 describe('card display contract',()=>{
-  it('uses a valid default and supports clearing overrides through either settings route',()=>{
+  it('uses a valid default and supports independent chat settings without a Bot card section',()=>{
     const config=defaultCardDisplayConfig();
     expect(cardDisplayConfigSchema.parse(config)).toEqual(config);
-    expect(agentSectionSchemas.cards.partial().strict().parse({cardDisplay:null})).toEqual({cardDisplay:null});
+    expect(agentSectionSchemas).not.toHaveProperty('cards');
+    expect(projectEditableSchemas.presentation.partial().strict().parse({cardDisplay:null})).toEqual({cardDisplay:null});
     expect(projectEditableSchemas.presentation.partial().strict().parse({cardDisplay:config}).cardDisplay).toEqual(config);
   });
   it('rejects unknown fields, duplicate components and incompatible slots before saving',()=>{
@@ -23,6 +24,38 @@ describe('card display contract',()=>{
     expect(cardDisplayConfigSchema.safeParse(config).success).toBe(true);
     config.blocks.find(b=>b.kind==='stop')!.mode='done';
     expect(cardDisplayConfigSchema.safeParse(config).success).toBe(false);
+  });
+  it('lets manual reminders change text and native slots without hiding or fabricating states',()=>{
+    const config=defaultCardDisplayConfig();
+    const reminder=config.blocks.find(block=>block.kind==='reminder')!;
+    expect(reminder).toMatchObject({id:'reminder',mode:'running',appearance:'text',source:'builtin',template:'🔔 完成后提醒我',requestedTemplate:DEFAULT_REMINDER_REQUESTED_TEMPLATE});
+    expect(allowedSlots(reminder)).toEqual(allowedSlots(config.blocks.find(block=>block.kind==='stop')!));
+    reminder.slot='actions-right';reminder.template='📣 做完叫我';
+    expect(cardDisplayConfigSchema.safeParse(config).success).toBe(true);
+    for(const mode of ['off','done','always'] as const){reminder.mode=mode;expect(cardDisplayConfigSchema.safeParse(config).success).toBe(false);}
+    reminder.mode='running';
+    for(const template of ['','   ','a'.repeat(81),'{{status.label}}','第一行\n第二行']){reminder.template=template;expect(cardDisplayConfigSchema.safeParse(config).success).toBe(false);}
+  });
+  it('validates each manual reminder label while accepting older drafts without the confirmation label',()=>{
+    const config=defaultCardDisplayConfig();
+    const reminder=config.blocks.find(block=>block.kind==='reminder')!;
+    reminder.requestedTemplate='✅ 已订阅，放心去忙';
+    expect(cardDisplayConfigSchema.parse(config).blocks.find(block=>block.kind==='reminder')!.requestedTemplate).toBe(reminder.requestedTemplate);
+    for(const label of ['','   ','a'.repeat(81),'{{status.label}}','{broken','第一行\n第二行']){
+      reminder.requestedTemplate=label;
+      expect(cardDisplayConfigSchema.safeParse(config).success).toBe(false);
+    }
+    delete reminder.requestedTemplate;
+    expect(cardDisplayConfigSchema.safeParse(config).success).toBe(true);
+    config.blocks[0]!.requestedTemplate='仅提醒组件允许';
+    expect(cardDisplayConfigSchema.safeParse(config).success).toBe(false);
+  });
+  it('preserves intentional spaces in both reminder labels',()=>{
+    const config=defaultCardDisplayConfig();
+    const reminder=config.blocks.find(block=>block.kind==='reminder')!;
+    reminder.template='  🔔 提醒我  ';reminder.requestedTemplate=' ✅ 已开启 ';
+    const saved=cardDisplayConfigSchema.parse(config).blocks.find(block=>block.kind==='reminder')!;
+    expect(saved.template).toBe('  🔔 提醒我  ');expect(saved.requestedTemplate).toBe(' ✅ 已开启 ');
   });
   it('requires real state labels and well-formed known template variables',()=>{
     for(const template of ['{{context.noSuchValue}}','{{context.percent','{{#if context.percent}}']){
