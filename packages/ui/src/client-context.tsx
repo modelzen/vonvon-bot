@@ -45,6 +45,8 @@ export type ShellCapabilities = {
   /** U4: another device is updating this computer's Vonvon Bot (the words to show), or no longer; the last one at once.
    * About this computer, whichever device is shown. */
   onRemoteUpdate?: (listener: (text: string | undefined) => void) => () => void;
+  /** now-share N5: records the 此刻 share GIF, so only the desktop has it; N5 gives it its methods. */
+  share?: object;
 };
 
 /** The device the page shows. */

@@ -1,11 +1,11 @@
 import {useEffect, useRef, useState} from 'react';
 import {Tabs} from '@base-ui/react/tabs';
 import type {VonvonClient} from '@vonvon/client/browser';
-import type {BackendAccount} from '@vonvon/protocol';
+import type {Agent, BackendAccount} from '@vonvon/protocol';
 import {useClient} from './client-context';
-import {UsageAccount, UsageProfile} from './management/UsageContent';
 import {readUsage, type Usage} from './management/usage-data';
-import {JudgeUsageGroup} from './management/JudgeUsage';
+import {useJudgeUsage} from './management/JudgeUsage';
+import {ClaudeUsagePanel, CodexUsagePanel, JevUsagePanel} from './UsagePanels';
 import './now-usage.css';
 
 type ReaderClient = Pick<VonvonClient, 'environment' | 'collaboration'>;
@@ -63,7 +63,7 @@ export function nowAccountLabel(account: BackendAccount): string {
 }
 
 /** Poll only while this page is connected and visible; login probes retain daemon TTLs. */
-export function NowUsage({disabled = false, onOpenUsage}: {disabled?: boolean; onOpenUsage: () => void}) {
+export function NowUsage({disabled = false, agents = [], onOpenUsage}: {disabled?: boolean; agents?: readonly Agent[]; onOpenUsage: () => void}) {
   const client = useClient();
   const clientRef = useRef(client);
   const [providers, setProviders] = useState<NowProvider[]>([]);
@@ -107,15 +107,15 @@ export function NowUsage({disabled = false, onOpenUsage}: {disabled?: boolean; o
       {providers.map(item => <Tabs.Tab key={item.id} value={item.id} className="now-provider-tab">
         {(item.id === 'codex-appserver' || item.id === 'claude-agent') && <img src={item.id === 'codex-appserver' ? './agent-icons/codex-light.png' : './agent-icons/claude-code.svg'} alt=""/>}{item.name}
       </Tabs.Tab>)}
-      <Tabs.Tab value="jev" className="now-provider-tab">Jev</Tabs.Tab>
+      <Tabs.Tab value="jev" className="now-provider-tab"><img src="./agent-icons/typesafe.png" alt="" data-round/>Jev</Tabs.Tab>
       <Tabs.Indicator className="now-provider-indicator"/>
     </Tabs.List><button type="button" className="now-usage-details-link" onClick={onOpenUsage}>查看详情<span aria-hidden="true">›</span></button></header>
     {!active && <p className="now-usage-empty">{disabled ? '连接恢复后更新用量。' : '正在读取 Provider…'}</p>}
     {provider && providers.map(item => <Tabs.Panel className="now-usage-panel" value={item.id} key={item.id}>
       {item.id === active && <NowUsageBody provider={item} stale={disabled || catalogUnavailable}/>}
     </Tabs.Panel>)}
-    <Tabs.Panel className="now-usage-panel now-jev-panel" value="jev">
-      {active === 'jev' && <JudgeUsageGroup dailySource={{kind: 'decision'}} disabled={disabled} refreshInterval={60_000}/>}
+    <Tabs.Panel className="now-usage-panel" value="jev">
+      {active === 'jev' && <NowJevUsage disabled={disabled} agents={agents}/>}
     </Tabs.Panel>
     {active !== 'jev' && problem && !provider?.problem && <p className="now-usage-notice" role="status">{problem}</p>}
   </Tabs.Root>;
@@ -123,11 +123,23 @@ export function NowUsage({disabled = false, onOpenUsage}: {disabled?: boolean; o
 
 export function NowUsageBody({provider, stale = false}: {provider: NowProvider; stale?: boolean}) {
   const data = provider.data;
-  return <div className="now-usage-content" data-has-usage={!!data} data-stale={stale || !!provider.problem}>
-    {data ? <>
-      <UsageAccount data={data} provider={provider.name}/>
-      <UsageProfile profile={data.profile} provider={provider.name} showDetails={false}/>
-    </> : <div className="usage-account"><header className="usage-account-heading"><div className="usage-account-identity"><strong>{provider.name}</strong><span>{nowAccountLabel(provider.account)}</span></div></header><p className="now-usage-empty">{provider.loading ? '正在读取用量…' : provider.problem || (provider.account.kind === 'api' ? 'API 接入暂无法读取额度与每日用量。' : provider.account.kind === 'unknown' ? '暂无账户类型与用量信息。' : '暂无法读取额度与每日用量。')}</p></div>}
-    {data && (provider.problem || stale) && <p className="now-usage-notice" role="status">{provider.problem ? '暂无法更新，显示上次读取的数据。' : '连接恢复后更新，当前为上次读取的数据。'}</p>}
+  if (!data) return <div className="now-usage-content">
+    <div className="usage-account"><header className="usage-account-heading"><div className="usage-account-identity"><strong>{provider.name}</strong><span>{nowAccountLabel(provider.account)}</span></div></header><p className="now-usage-empty">{provider.loading ? '正在读取用量…' : provider.problem || (provider.account.kind === 'api' ? 'API 接入暂无法读取额度与每日用量。' : provider.account.kind === 'unknown' ? '暂无账户类型与用量信息。' : '暂无法读取额度与每日用量。')}</p></div>
+  </div>;
+  const Panel = provider.id === 'claude-agent' ? ClaudeUsagePanel : CodexUsagePanel;
+  return <div className="now-usage-content" data-stale={stale || !!provider.problem}>
+    <Panel data={data}/>
+    {(provider.problem || stale) && <p className="now-usage-notice" role="status">{provider.problem ? '暂无法更新，显示上次读取的数据。' : '连接恢复后更新，当前为上次读取的数据。'}</p>}
+  </div>;
+}
+
+/** Jev counts come from the daemon's judge records, read every minute while the page is shown. */
+function NowJevUsage({disabled, agents}: {disabled: boolean; agents: readonly Agent[]}) {
+  const {read, readAt} = useJudgeUsage({disabled, refreshInterval: 60_000});
+  const problem = read.kind === 'loading' ? undefined : read.problem;
+  if (read.kind !== 'ready') return <div className="now-usage-content"><p className="now-usage-empty" role="status">{disabled ? '连接恢复后更新判断次数。' : problem ? `暂时无法读取判断次数：${problem}` : '正在读取判断次数…'}</p></div>;
+  return <div className="now-usage-content" data-stale={disabled || !!problem}>
+    <JevUsagePanel view={read.view} agents={agents} asOf={readAt}/>
+    {(disabled || problem) && <p className="now-usage-notice" role="status">{problem ? '暂无法更新，显示上次读取的数据。' : '连接恢复后更新，当前为上次读取的数据。'}</p>}
   </div>;
 }
