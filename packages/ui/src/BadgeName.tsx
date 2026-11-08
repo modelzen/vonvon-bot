@@ -1,4 +1,5 @@
 import {useLayoutEffect, useRef} from 'react';
+import {maskedMark} from './masked-text';
 
 /** Only the ink moves. Measuring the printed line also works for mixed scripts
  * and when a long employee number leaves less room beside the owner's name. */
@@ -49,6 +50,6 @@ export function BadgeName({text, active, motion, tooltip = true}: {text: string;
   }, [text, active, motion]);
 
   return <span className="badge-name-viewport" ref={viewport} title={tooltip ? text : undefined}>
-    <span className="badge-name-ink" ref={ink}>{text}</span>
+    <span className="badge-name-ink" ref={ink} data-masked={maskedMark(text)}>{text}</span>
   </span>;
 }
