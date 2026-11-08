@@ -105,20 +105,20 @@ describe('s47 real settings writers behind agent authorization', () => {
   it.each(interruptions)('preferences wait followed by %s leaves disk and live state unchanged', async kind => {
     if (kind === 'deadline') vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     const f = fixture(), view = await f.settings.read(agentScope);
-    if (!('cards' in view.sections)) throw Error('wrong view');
-    const revision = view.sections.cards.revision;
+    if (!('run' in view.sections)) throw Error('wrong view');
+    const revision = view.sections.run.revision;
     const held = deferred(), release = deferred();
     const holding = f.writer(async () => { held.resolve(); await release.promise; });
     await held.promise;
     const before = await readFile(join(state.root, 'config.json'));
-    const pending = f.call({ scope: agentScope, section: 'cards', revision, patch: { showToolCalls: false } });
+    const pending = f.call({ scope: agentScope, section: 'run', revision, patch: { pendingPolicy: 'queue' } });
     await new Promise<void>(resolve => setImmediate(resolve));
     await interrupt(f, kind); release.resolve(); await holding;
     expect(await pending).toMatchObject({ ok: false });
     await f.settled();
     await f.writer(() => {});
     expect(await readFile(join(state.root, 'config.json'))).toEqual(before);
-    expect(cfg.preferences?.showToolCalls).toBeUndefined();
+    expect(cfg.preferences?.pendingPolicy).toBeUndefined();
     expect((await readdir(state.root)).filter(name => name.includes('.tmp-'))).toEqual([]);
   });
   it('requires the caller revision and returns conflict instead of silently replacing a newer value', async () => {

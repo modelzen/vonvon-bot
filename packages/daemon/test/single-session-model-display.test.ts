@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentEvent, AgentInput, TurnOptions } from '../src/agent/types';
+import {defaultCardDisplay} from '@vonvon/protocol';
 
 // Keep the execution workspace physically separate from daemon data.
 const workspace = await vi.hoisted(async () => {
@@ -20,12 +21,13 @@ const fake = vi.hoisted(() => ({
   createCard: vi.fn(async () => 'card'),
   send: vi.fn(async () => ({})),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
+  cardDisplay: undefined as ReturnType<typeof defaultCardDisplay> | undefined,
 }));
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
-  getProjectByChatId: async () => ({ name: 'test', chatId: 'chat', cwd: workspace, kind: 'single', defaultModel: 'chosen-model', defaultEffort: 'xhigh' }),
+  getProjectByChatId: async () => ({ name: 'test', chatId: 'chat', cwd: workspace, kind: 'single', defaultModel: 'chosen-model', defaultEffort: 'xhigh', presentation:{cardDisplay:fake.cardDisplay} }),
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
@@ -92,7 +94,9 @@ function message(text: string): NormalizedMessage {
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
 function setup(showModel: 'off' | 'running' | 'always' = 'always') {
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { showModel, access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' } } };
+  fake.cardDisplay=defaultCardDisplay();
+  fake.cardDisplay.blocks.find(block=>block.kind==='model')!.mode=showModel;
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' } } };
   const channel = { send: fake.send, rawClient: { im: { v1: { messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };

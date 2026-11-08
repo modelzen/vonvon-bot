@@ -30,7 +30,7 @@ function fixture(text = 'Original rule', revision = 'rules-1'): AgentSettingsVie
   const titles = {policy};
   const comments = {backend: codex, selection: {kind: 'default' as const}};
   const section = <T,>(stored: T) => ({stored, effective: stored, revision: 'settings-1', access: {kind: 'writable'}, apply: []});
-  return {scope: {kind: 'agent', botId: 'cli_test'}, sections: {titles: section(titles), comments: section(comments), cards: section({})}, commentInstructions: {revision, maxEditLength: 30000, content: {kind: 'custom', text}}} as unknown as AgentSettingsView;
+  return {scope: {kind: 'agent', botId: 'cli_test'}, sections: {titles: section(titles), comments: section(comments), completion: section({mode:'failures',longTaskMinutes:3})}, commentInstructions: {revision, maxEditLength: 30000, content: {kind: 'custom', text}}} as unknown as AgentSettingsView;
 }
 const catalog: ModelCatalog = {backend: codex, state: 'ready', source: 'backend-provided', observedAt: 1, titleEfforts: ['low', 'high'], models: [{id: 'default-model', displayName: 'Default model', description: '', isDefault: true, hidden: false, defaultEffort: 'low', supportedEfforts: ['low', 'high']}]};
 beforeEach(() => {h.banks = {}; h.pending = []; h.drafts.clear(); vi.clearAllMocks();});
@@ -192,7 +192,7 @@ it('retains drafts across external revisions and explicitly reloads the latest r
 
 it('updates a clean rule from an external revision and prevents readonly saves', async () => {
   const ui = ruleHarness(); ui.render(); ui.update(fixture('Remote edit', 'rules-2')); ui.render(); expect(ui.text()).toBe('Remote edit');
-  const readonly = fixture(); readonly.sections.cards.access = {kind: 'readonly', message: 'Read only'};
+  const readonly = fixture(); readonly.sections.completion.access = {kind: 'readonly', message: 'Read only'};
   ui.update(readonly); expect(ui.render().find(node => node.type === 'textarea')!.props.disabled).toBe(true);
   ui.button('恢复默认').props.onClick(); await flush(); expect(h.client.settings).not.toHaveBeenCalled();
 });

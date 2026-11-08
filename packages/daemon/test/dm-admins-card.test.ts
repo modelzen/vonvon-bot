@@ -78,7 +78,7 @@ describe('the private chat\'s administrators card', () => {
     try {
       await orchestrator.dispatcher.handle(event());
       const card = await patched();
-      expect(card).toContain('名单在 Vonvon Bot 的「设置 → 管理员」或终端里改。');
+      expect(card).toContain('名单在 Vonvon Bot 的「私聊 → 沟通方式 → 回应谁」或终端里改。');
       expect(card).not.toContain(DM.addAdminSubmit);
       expect(await saved()).toEqual([CREATOR, ADMIN, OTHER_ADMIN]);
       expect(fixture.send).not.toHaveBeenCalled();
@@ -92,6 +92,25 @@ describe('the private chat\'s administrators card', () => {
       await new Promise(resolve => setTimeout(resolve, 20));
       expect(fixture.update).not.toHaveBeenCalled();
       expect(await saved()).toEqual([CREATOR, ADMIN, OTHER_ADMIN]);
+    } finally { await orchestrator.shutdown(); }
+  });
+});
+
+describe('legacy Bot-wide message-card buttons', () => {
+  it.each([DM.setTools, DM.setShowModel])('explains the per-chat setting for %s without changing Bot preferences', async action => {
+    cfg.preferences!.showToolCalls = false;
+    cfg.preferences!.showModel = 'off';
+    await saveConfig(cfg);
+    const before = await loadConfig();
+    const orchestrator = app();
+    try {
+      await orchestrator.dispatcher.handle(click(CREATOR, { a: action, v: 'on' }));
+      const card = await patched();
+      expect(card).toContain('消息卡现在按群聊和私聊分别设置');
+      expect(card).not.toContain(DM.setTools);
+      expect(card).not.toContain(DM.setShowModel);
+      expect((await loadConfig()).preferences).toEqual(before.preferences);
+      expect(cfg.preferences).toEqual(before.preferences);
     } finally { await orchestrator.shutdown(); }
   });
 });
