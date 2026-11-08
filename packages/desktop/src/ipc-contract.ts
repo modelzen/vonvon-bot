@@ -51,6 +51,7 @@ export const desktopChannels = {
   shareReveal: 'desktop:share:reveal',
   shareBytes: 'desktop:share:bytes',
   shareDiscard: 'desktop:share:discard',
+  shareCancel: 'desktop:share:cancel',
   event: 'desktop:event',
 } as const;
 
@@ -134,6 +135,7 @@ export interface ShareActions {
   reveal(path: string): Promise<void>;
   bytes(id: string): Promise<Uint8Array>;
   discard(id: string): Promise<void>;
+  cancel(): Promise<void>;
 }
 
 export interface AttachedDaemon {

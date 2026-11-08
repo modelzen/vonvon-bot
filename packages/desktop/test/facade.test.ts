@@ -490,6 +490,10 @@ describe('now-share facade', () => {
     await expect(shell.share!.bytes(recording.id)).resolves.toEqual(Uint8Array.from([1, 2, 3]));
     await expect(shell.share!.reveal('/share/a.gif')).resolves.toBeUndefined();
     await expect(shell.share!.discard(recording.id)).resolves.toBeUndefined();
-    expect(h.calls.slice(-5)).toEqual([desktopChannels.shareCopy, desktopChannels.shareBytes, desktopChannels.shareBytes, desktopChannels.shareReveal, desktopChannels.shareDiscard]);
+    await expect(shell.share!.cancel!()).resolves.toBeUndefined();
+    expect(h.calls.slice(-6)).toEqual([
+      desktopChannels.shareCopy, desktopChannels.shareBytes, desktopChannels.shareBytes, desktopChannels.shareReveal, desktopChannels.shareDiscard,
+      desktopChannels.shareCancel,
+    ]);
   });
 });

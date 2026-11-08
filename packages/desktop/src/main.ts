@@ -719,6 +719,7 @@ export async function startDesktop(): Promise<void> {
         reveal: path => recorder().reveal(path),
         bytes: id => recorder().bytes(id),
         discard: async id => { await share?.discard(id); },
+        cancel: async () => { await share?.cancel(); },
       },
     }, devices);
     tray = createDesktopTray(icon, show, requestQuit);

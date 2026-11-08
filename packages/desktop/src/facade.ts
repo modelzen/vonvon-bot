@@ -353,6 +353,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       return value;
     }, id),
     discard: id => callShell(desktopChannels.shareDiscard, id),
+    cancel: () => callShell(desktopChannels.shareCancel),
   };
 
   const shell: DesktopShell = {

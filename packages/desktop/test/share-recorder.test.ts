@@ -19,7 +19,13 @@ const LAYOUT = {
   rail: { x: 0, y: 4, width: 40, height: 24, scrollWidth: 40, clientWidth: 40 },
 };
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
-type PageOptions = { ready?: 'never' | 'invalid'; crashAfterTicks?: number };
+type PageOptions = {
+  ready?: 'never' | 'invalid'; crashAfterTicks?: number; layout?: typeof LAYOUT & { animationMs?: number };
+  /** The card's usage build-up as N5a draws it: still for `delay`, then `ms` long on 1-(1-x)^3; the shade is its progress. */
+  build?: { delay: number; ms: number };
+  /** Called as a pass closes its encoder, which takes a few milliseconds to stop, as a worker does. */
+  onClose?: () => void;
+};
 
 let folder = '';
 beforeEach(async () => { folder = await mkdtemp(join(tmpdir(), 'vonvon-share-recorder-')); });
@@ -35,6 +41,7 @@ function harness(page: PageOptions = {}, timeoutMs?: number) {
   class FakeContents extends EventEmitter {
     readonly id = nextId++;
     readonly mainFrame = { url: '' };
+    destroyed = false;
     size: [number, number] = [0, 0];
     time = 0;
     marker = 0;
@@ -45,6 +52,7 @@ function harness(page: PageOptions = {}, timeoutMs?: number) {
       sendCommand: vi.fn(async (method: string, params?: object) => { order.push(params ? `${method} ${JSON.stringify(params)}` : method); }),
     };
     readonly sendInputEvent = vi.fn();
+    readonly isDestroyed = (): boolean => this.destroyed;
     readonly invalidate = vi.fn(() => this.paint());
     readonly loadURL = vi.fn(async (url: string) => {
       order.push(`load ${url}`);
@@ -71,14 +79,16 @@ function harness(page: PageOptions = {}, timeoutMs?: number) {
       const event = { sender: this, senderFrame: this.mainFrame };
       this.model = (await handlers.get(shareCardChannels.model)!(event) as { value: unknown }).value;
       if (page.ready === 'never') return;
-      order.push(`ready ${JSON.stringify(await handlers.get(shareCardChannels.ready)!(event, page.ready === 'invalid' ? { width: -1 } : LAYOUT))}`);
+      order.push(`ready ${JSON.stringify(await handlers.get(shareCardChannels.ready)!(event, page.ready === 'invalid' ? { width: -1 } : page.layout ?? LAYOUT))}`);
     }
-    /** A frame at scale 2: the card's shade follows the clock for half a second, then holds; the marker at the corner. */
+    /** A frame at scale 2: the card's shade follows the clock for half a second (or `build`), then holds; the marker at
+     * the corner. */
     paint(): void {
       if (this.size[0] === 0) return;
       const width = this.size[0] * 2, height = this.size[1] * 2;
       const bitmap = Buffer.alloc(width * height * 4);
-      const shade = Math.min(250, Math.round(this.time / 50) * 25);
+      const build = page.build, x = build && Math.min(1, Math.max(0, (this.time - build.delay) / build.ms));
+      const shade = x === undefined ? Math.min(250, Math.round(this.time / 50) * 25) : Math.round(250 * (1 - (1 - x) ** 3));
       for (let i = 0; i < width * height; i++) bitmap.set([shade, 100, 200, 255], i * 4);
       const a = this.marker & 1 ? 255 : 0, b = this.marker & 2 ? 255 : 0;
       for (let y = height - 8; y < height; y++) for (let x = width - 8; x < width; x++) bitmap.set([a, b, a, 255], (y * width + x) * 4);
@@ -91,13 +101,19 @@ function harness(page: PageOptions = {}, timeoutMs?: number) {
     constructor(readonly options: { width: number; height: number; scale: number }) {}
     readonly setContentSize = vi.fn((width: number, height: number) => { order.push(`size ${width}x${height}`); this.webContents.size = [width, height]; });
     readonly isDestroyed = (): boolean => this.destroyed;
-    readonly destroy = vi.fn(() => { this.destroyed = true; order.push('destroy'); });
+    /** As Electron does, the page goes a moment after the window. */
+    readonly destroy = vi.fn(() => {
+      this.destroyed = true;
+      order.push('destroy');
+      setTimeout(() => { this.webContents.destroyed = true; this.webContents.emit('destroyed'); }, 5);
+    });
   }
 
   const ipc = {
     handle: vi.fn((channel: string, handler: Handler) => { handlers.set(channel, handler); }),
     removeHandler: vi.fn((channel: string) => { handlers.delete(channel); }),
   };
+  const encoders: { closed: boolean }[] = [];
   const clipboard = { write: vi.fn(async (_items: unknown[]) => {}) };
   const reveal = vi.fn((_path: string) => {});
   const recorder = new ShareRecorder({
@@ -105,13 +121,18 @@ function harness(page: PageOptions = {}, timeoutMs?: number) {
     openWindow: options => { const window = new FakeWindow(options); windows.push(window); order.push(`open ${JSON.stringify(options)}`); return window; },
     encoder: (width, height): ShareEncoder => {
       const encoder = new ShareGifEncoder(width, height);
-      return { frame: async (bgra, time) => encoder.add(new Uint8Array(bgra), time), finish: async (interval, hold) => encoder.finish(interval, hold), close: () => {} };
+      const state = { closed: false };
+      encoders.push(state);
+      return {
+        frame: async (bgra, time) => encoder.add(new Uint8Array(bgra), time), finish: async (interval, hold) => encoder.finish(interval, hold),
+        close: () => { page.onClose?.(); return new Promise(resolve => setTimeout(() => { state.closed = true; resolve(); }, 5)); },
+      };
     },
     cardWidth: () => 700, folder,
     clipboard: { platform: 'darwin', clipboard, ClipboardItem: class { constructor(readonly entries: object) {} } as never, powershell: async () => {} },
     reveal, now: () => new Date(2026, 10, 8, 17, 39, 5), timeoutMs,
   });
-  return { recorder, handlers, order, windows, ipc, clipboard, reveal };
+  return { recorder, handlers, order, windows, encoders, ipc, clipboard, reveal };
 }
 
 describe('share recorder', () => {
@@ -148,6 +169,24 @@ describe('share recorder', () => {
     expect(decoded.frames.slice(1, 11).map(frame => frame.delay)).toEqual(Array(10).fill(50));
     for (const [i, value] of [200, 100, 250].entries()) expect(Math.abs(decoded.frames[0]!.rgba[i]! - value)).toBeLessThanOrEqual(8);
     expect(recording.durationMs).toBe(decoded.frames.reduce((sum, frame) => sum + frame.delay, 0));
+  });
+
+  it('plays the card\'s own animation to its end before stopping, so with no badges the GIF still opens on the finished card', async () => {
+    const shade = (rgba: Uint8Array): number => rgba[2]!;
+    // N5a's build-up, 150 ms in and 1600 ms long, with no animationMs; then one that says it runs longer.
+    for (const [build, animationMs] of [[{ delay: 150, ms: 1600 }, undefined], [{ delay: 300, ms: 2200 }, 2500]] as const) {
+      const h = harness({ layout: { ...LAYOUT, badges: [], ...animationMs ? { animationMs } : {} }, build });
+      const recording = await h.recorder.record({ bots: [] });
+      expect(h.windows[0]!.webContents.sendInputEvent).not.toHaveBeenCalled();
+      expect(h.windows[0]!.webContents.time).toBeGreaterThanOrEqual((animationMs ?? 1800) - 1);
+      const frames = decodeGif(await h.recorder.bytes(recording.id)).frames;
+      expect(frames[0]!.delay).toBe(400);
+      expect(Math.abs(shade(frames[0]!.rgba) - 250)).toBeLessThanOrEqual(8);
+      expect(Math.abs(shade(frames.at(-1)!.rgba) - 250)).toBeLessThanOrEqual(8);
+      // The build-up itself is in the GIF, from the still start.
+      expect(shade(frames[1]!.rgba)).toBeLessThanOrEqual(8);
+      expect(frames.length).toBeGreaterThan(10);
+    }
   });
 
   it('closes the window when the card never says it is ready', async () => {
@@ -200,6 +239,33 @@ describe('share recorder', () => {
     await expect(recording).rejects.toMatchObject({ code: 'disposed' });
     expect(h.windows[0]!.destroyed).toBe(true);
     expect(h.ipc.removeHandler.mock.calls.map(([channel]) => channel)).toEqual([shareCardChannels.model, shareCardChannels.ready]);
+  });
+
+  it('stops a recording when the share dialog closes, and answers only once its window and encoder are gone', async () => {
+    const h = harness();
+    await expect(h.recorder.cancel()).resolves.toBeUndefined();
+    expect(h.windows).toHaveLength(0);
+    let cancelled: Promise<void> | undefined;
+    const first = h.recorder.record({ bots: [] }, fraction => { if (fraction > 0.2) cancelled ??= h.recorder.cancel(); });
+    await expect(first).rejects.toMatchObject({ code: 'cancelled' });
+    await cancelled;
+    expect(h.windows[0]!.webContents.destroyed).toBe(true);
+    expect(h.encoders).toEqual([{ closed: true }]);
+    // Reopened at once: not busy.
+    const second = await h.recorder.record({ bots: [] });
+    expect(h.windows).toHaveLength(2);
+    expect(h.windows[1]!.destroyed).toBe(true);
+    await h.recorder.cancel();
+    expect(await h.recorder.bytes(second.id)).toHaveLength(second.bytes);
+  });
+
+  it('drops a recording that was cancelled while its pass was closing', async () => {
+    let cancelled: Promise<void> | undefined;
+    const h = harness({ onClose: () => { cancelled ??= h.recorder.cancel(); } });
+    await expect(h.recorder.record({ bots: [] })).rejects.toMatchObject({ code: 'cancelled' });
+    await cancelled;
+    expect(h.encoders).toEqual([{ closed: true }]);
+    await expect(h.recorder.record({ bots: [] })).resolves.toMatchObject({ width: 80, height: 60 });
   });
 
   it('copies a recording into the share folder and onto the clipboard, reveals only its files, and forgets on discard', async () => {

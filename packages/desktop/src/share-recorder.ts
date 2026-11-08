@@ -23,6 +23,8 @@ const MAX_PIXELS = 8_000_000;
 const MIN_SCALE = 1;
 const MODEL_MAX = 8 * 1024 * 1024;
 const KEPT = 4;
+/** The card's own animation when its layout does not say: N5a's usage build-up, 150 ms in and 1600 ms long. */
+const ANIMATION_MS = 1800;
 
 const shareText = {
   busy: '正在生成另一张分享图，请稍候再试。',
@@ -34,6 +36,7 @@ const shareText = {
   file_failed: '分享图没能保存，请检查磁盘空间后重试。',
   clipboard_failed: '分享图已保存，但没能放进剪贴板，请重试。',
   not_found: '找不到这张分享图了，请重新复制。',
+  cancelled: '已取消生成分享图。',
   disposed: 'Vonvon Bot 正在退出。',
 } as const;
 export type ShareErrorCode = keyof typeof shareText;
@@ -47,6 +50,7 @@ const layoutSchema = z.object({
   width: z.number().finite().min(16).max(4096), height: z.number().finite().min(16).max(8192),
   badges: z.array(rect).max(500),
   rail: rect.extend({ scrollWidth: z.number().finite().nonnegative(), clientWidth: z.number().finite().nonnegative() }),
+  animationMs: z.number().finite().nonnegative().optional(),
 });
 
 /** What the recorder drives of an offscreen BrowserWindow, so tests can stand in for one. */
@@ -59,6 +63,7 @@ export interface ShareWindow {
 export interface ShareContents {
   readonly id: number;
   readonly mainFrame: { url: string } | null | undefined;
+  isDestroyed(): boolean;
   readonly debugger: { attach(version?: string): void; isAttached(): boolean; detach(): void; sendCommand(method: string, params?: object): Promise<unknown> };
   loadURL(url: string): Promise<void>;
   executeJavaScript(code: string): Promise<unknown>;
@@ -72,7 +77,8 @@ export interface ShareEncoder {
   /** Takes over `bgra`'s buffer; resolves once the encoder can take another frame. */
   frame(bgra: Buffer, time: number): Promise<void>;
   finish(interval: number, hold: number): Promise<ShareGifVariant[]>;
-  close(): void;
+  /** Resolves, if it returns a promise, once the encoder has stopped. */
+  close(): void | Promise<void>;
 }
 export type ShareRecorderDeps = {
   ipc: Pick<IpcMain, 'handle' | 'removeHandler'>;
@@ -151,7 +157,8 @@ function frameSource(contents: ShareContents, scale: number, cropWidth: number, 
 export class ShareRecorder {
   private readonly cards = new Map<number, Card>();
   private readonly kept = new Map<string, Kept>();
-  private running: Deferred<never> | undefined;
+  /** The recording in progress: `stop` ends it with that error; `ended` resolves once its window and worker are gone. */
+  private running: { stop(error: ShareError): void; ended: Promise<void> } | undefined;
   private disposed = false;
 
   constructor(private readonly deps: ShareRecorderDeps) {
@@ -184,8 +191,11 @@ export class ShareRecorder {
     try { json = model && typeof model === 'object' ? JSON.stringify(model) : undefined; }
     catch {}
     if (json === undefined || json.length > MODEL_MAX) throw new ShareError('invalid_model');
-    const stop = this.running = deferred<never>();
-    const timer = setTimeout(() => stop.reject(new ShareError('timeout')), this.deps.timeoutMs ?? TIMEOUT_MS);
+    const stop = deferred<never>(), ended = deferred<void>();
+    // A pass that was already ending when the recording stopped may still finish; its result is dropped.
+    let stopped: ShareError | undefined;
+    const running = this.running = { stop: (error: ShareError) => { stopped ??= error; stop.reject(error); }, ended: ended.promise };
+    const timer = setTimeout(() => running.stop(new ShareError('timeout')), this.deps.timeoutMs ?? TIMEOUT_MS);
     const deadline = Date.now() + (this.deps.timeoutMs ?? TIMEOUT_MS);
     let reported = 0;
     const report = (fraction: number): void => {
@@ -198,6 +208,7 @@ export class ShareRecorder {
       let best: { variant: ShareGifVariant; width: number; height: number } | undefined;
       let scale = 2;
       for (let passes = 0; passes < 4 && scale >= MIN_SCALE; passes++) {
+        if (stopped) throw stopped;
         let result: Awaited<ReturnType<ShareRecorder['render']>>;
         try { result = await this.render(json, width, scale, stop.promise, report); }
         catch (error) {
@@ -213,6 +224,7 @@ export class ShareRecorder {
         if (deadline - Date.now() < 20_000) break;
         scale = scale > 1.5 ? 1.5 : scale > 1.25 ? 1.25 : scale > MIN_SCALE ? MIN_SCALE : 0;
       }
+      if (stopped) throw stopped;
       if (!best) throw new ShareError('too_large');
       const gif = Buffer.from(best.variant.gif.buffer, best.variant.gif.byteOffset, best.variant.gif.byteLength);
       const recording: ShareRecording = {
@@ -227,7 +239,8 @@ export class ShareRecorder {
       throw error instanceof ShareError ? error : new ShareError('card_failed', { cause: error });
     } finally {
       clearTimeout(timer);
-      if (this.running === stop) this.running = undefined;
+      if (this.running === running) this.running = undefined;
+      ended.resolve();
     }
   }
 
@@ -268,20 +281,22 @@ export class ShareRecorder {
       let scrollLeft: number | undefined;
       const script = pointerScript(layout, () => scrollLeft);
       const settleSteps = Math.round(SHARE_SETTLE_MS / SHARE_STEP_MS);
-      const planned = [...pointerScript(layout)].length + settleSteps;
+      // The card's own animation plays to its end however soon the pointer is done; before it starts the card holds still.
+      const animated = Math.ceil((layout.animationMs ?? ANIMATION_MS) / SHARE_STEP_MS);
+      const planned = Math.max([...pointerScript(layout)].length, animated) + settleSteps;
       const maxSteps = Math.round(SHARE_MAX_MS / SHARE_STEP_MS);
       const maxScroll = Math.max(0, layout.rail.scrollWidth - layout.rail.clientWidth);
       let previous: Buffer | undefined, frame = 0, unchanged = 0, scripted = true, settled = 0, wheels = 0, scroll = 0;
       for (let step = 0; ; step++) {
         if (step % SHARE_FRAME_STEPS === 0) {
           const image = await guard(frames.next(frame));
-          unchanged = previous?.equals(image) ? unchanged + 1 : 0;
+          unchanged = step >= animated && previous?.equals(image) ? unchanged + 1 : 0;
           if (previous) await guard(encoder.frame(previous, (frame - 1) * SHARE_FRAME_MS));
           previous = image;
           frame++;
           report(Math.min(0.95, step / planned));
-          // Done once the pointer has gone and three frames in a row are alike, or the time is up.
-          if (!scripted && (unchanged >= 2 || settled >= settleSteps) || step >= maxSteps) break;
+          // Done once the pointer has gone, the card's animation is over and three frames in a row are alike, or the time is up.
+          if (!scripted && step >= animated && (unchanged >= 2 || settled >= settleSteps) || step >= maxSteps) break;
         }
         const next = scripted ? script.next() : undefined;
         if (next?.done) scripted = false;
@@ -309,13 +324,21 @@ export class ShareRecorder {
       card.begun.reject(new ShareError('card_failed'));
       this.cards.delete(contents.id);
       frames?.close();
-      encoder?.close();
+      const closing = encoder?.close();
       contents.removeListener('render-process-gone', gone);
       contents.removeListener('did-fail-load', failedLoad);
+      // The page goes a moment after its window; a second at most is waited for.
+      const closed = contents.isDestroyed() ? undefined : new Promise<void>(resolve => {
+        const done = (): void => { clearTimeout(timer); contents.removeListener('destroyed', done); resolve(); };
+        const timer = setTimeout(done, 1000);
+        contents.on('destroyed', done);
+      });
       if (!window.isDestroyed()) {
         try { if (contents.debugger.isAttached()) contents.debugger.detach(); } catch {}
         window.destroy();
       }
+      // The pass ends with its page and worker gone, so a cancelled recording leaves nothing running.
+      await Promise.all([closing, closed]);
     }
   }
 
@@ -350,10 +373,19 @@ export class ShareRecorder {
     this.kept.delete(id);
   }
 
+  /** Closing the share dialog: the recording in progress, if any, stops; resolves once its window and worker are gone,
+   * so the next `record` is not refused as busy. Nothing of it was written to disk: frames stay in memory. */
+  async cancel(): Promise<void> {
+    const running = this.running;
+    if (!running) return;
+    running.stop(new ShareError('cancelled'));
+    await running.ended;
+  }
+
   /** Quitting: a recording in progress stops and closes its window. */
   dispose(): void {
     this.disposed = true;
-    this.running?.reject(new ShareError('disposed'));
+    this.running?.stop(new ShareError('disposed'));
     this.deps.ipc.removeHandler(shareCardChannels.model);
     this.deps.ipc.removeHandler(shareCardChannels.ready);
     this.kept.clear();
@@ -399,7 +431,7 @@ export function workerEncoder(source: () => string): (width: number, height: num
       },
       close() {
         closed = true;
-        void worker.terminate();
+        return worker.terminate().then(() => {}, () => {});
       },
     };
   };
