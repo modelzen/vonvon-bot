@@ -15,6 +15,7 @@ import { CodexSetupService, type CodexSetup } from '../agent/codex-appserver/set
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { compareCodexVersions, parseCodexVersion } from '../agent/codex-appserver/version';
 import { fetchUsageBundle } from '../agent/usage';
+import { stopClaudeLocalStats } from '../agent/claude-agent/local-stats';
 import { parseJoinedGroups, parseGroupMembers, type GroupMembers, type AdminGroupOp, type BindGroupInput, type JoinedGroups } from './groups';
 import { voiceView } from '../voice/view';
 import type { VoiceAction, VoiceView } from '../voice/types';
@@ -697,7 +698,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       closing ??= (async () => {
         owners.retain(new Set());
         await Promise.allSettled([...inFlightUsage]);
-        const results = await Promise.allSettled([codexTools.close(), shutdownResidentClients()]);
+        const results = await Promise.allSettled([codexTools.close(), shutdownResidentClients(), stopClaudeLocalStats()]);
         for (const result of results) if (result.status === 'rejected') throw result.reason;
       })();
       return closing;

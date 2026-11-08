@@ -69,6 +69,8 @@ export const paths = {
   /** bot 注册表：保存的全部 bot + 当前选中的 appId */
   botsFile: join(appDir, 'bots.json'),
   judgeModelsFile: join(appDir, 'judge-models.json'),
+  /** Claude Code /usage stats per transcript file (agent/claude-agent/local-stats.ts): a restart rescans only changed files. */
+  claudeLocalStatsFile: join(appDir, 'claude-local-stats.json'),
   /** app id / 租户 / 偏好（当前 bot；不含明文密钥） */
   get configFile(): string {
     return join(currentBotDir, 'config.json');

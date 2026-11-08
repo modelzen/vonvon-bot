@@ -11,6 +11,7 @@ beforeEach(async () => {
   file = join(home, '.claude', '.credentials.json');
   vi.stubEnv('HOME', home);
   vi.stubEnv('USERPROFILE', home);
+  vi.stubEnv('VONVON_HOME', join(home, 'vh'));
   for (const name of ['CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']) vi.stubEnv(name, '');
   vi.resetModules();
 });
@@ -33,7 +34,8 @@ it('reads Linux credentials and returns real session, weekly and scoped limits w
     primary: { usedPercent: 3, windowSeconds: 18000, resetAt: 1794128400 },
     secondary: { usedPercent: 92, windowSeconds: 604800 },
   }, extras: [{ name: 'Fable', secondary: { usedPercent: 23, windowSeconds: 604800 } }, { name: 'Claude Code', secondary: { usedPercent: 30, windowSeconds: 604800 } }] });
-  expect(result.profile).toEqual({ topInvocations: [], dailyBuckets: [] });
+  expect(result.profile).toMatchObject({ topInvocations: [], dailyBuckets: [] });
+  expect(result.profile.localStats?.state).not.toBe('ready');
   expect(fetch).toHaveBeenCalledWith('https://api.anthropic.com/api/oauth/usage', expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer fixture-token', 'anthropic-beta': 'oauth-2025-04-20' }) }));
   expect(await readFile(file, 'utf8')).toBe(credentials());
   expect(JSON.stringify(result)).not.toMatch(/fixture-token|do-not-use/);
