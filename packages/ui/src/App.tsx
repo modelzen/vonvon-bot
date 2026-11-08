@@ -162,10 +162,13 @@ function DesktopApp() {
   const [searchTarget, setSearchTarget] = useState<Destination>();
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>();
   const latestSnapshot = useRef<DesktopSnapshot | undefined>(undefined);
-  const [route, setRoute] = useState<CollaborationRoute>(initialRoute);
+  const [route, setRoute] = useState<CollaborationRoute>(() => {
+    const preview = typeof window !== 'undefined' && window.vonvonCardPreviewScope;
+    return preview ? {kind:'membership', id:preview.membershipId, pane:{kind:'settings'}, parent:{kind:'group',id:preview.groupId}} : initialRoute;
+  });
   const [setupProvider, setSetupProvider] = useState<SetupProvider>();
   const [setupAgentId, setSetupAgentId] = useState<AgentId>();
-  const [page, setPage] = useState<Page>("home");
+  const [page, setPage] = useState<Page>(() => typeof window !== 'undefined' && window.vonvonCardPreviewScope ? 'collaboration' : 'home');
   const [externalCoreAvailable, setExternalCoreAvailable] = useState(false);
   const connectedVersion = snapshot?.host.kind === 'connected' ? snapshot.host.version : undefined;
   useEffect(() => {
@@ -204,7 +207,7 @@ function DesktopApp() {
   const newCounts = useNewCounts(snapshot?.revision, MEMORY_SEEN_EVENT);
   const [groupDirectoryState, setGroupDirectoryState] = useState<GroupDirectoryState>({query: '', expanded: {}});
   const [projectDirectoryState, setProjectDirectoryState] = useState<ProjectDirectoryState>({query: '', expanded: {}});
-  const [groupTabs, setGroupTabs] = useState<Record<string, GroupDesignTab>>({});
+  const [groupTabs, setGroupTabs] = useState<Record<string, GroupDesignTab>>(() => typeof window !== 'undefined' && window.vonvonCardPreviewScope ? {[window.vonvonCardPreviewScope.membershipId]:'response'} : {});
   const [newMemoryFocus, setNewMemoryFocus] = useState<{memberId: string; token: number}>();
   const [featureId, setFeatureId] = useState<string>();
   const feature = uiFeatures.find(item => item.id === featureId && item.slot === "page");

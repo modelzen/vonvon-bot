@@ -5,13 +5,14 @@ import { App } from "./App";
 import { DirectoryPickerProvider } from "./directory-picker";
 import { ClientProvider, type ShellCapabilities } from "./client-context";
 import { DesktopRoot } from "./devices/DesktopRoot";
+import type {GroupId, MembershipId} from '@vonvon/protocol';
 import "./reference/App.css";
 import "./collaboration.css";
 import "./desktop.css";
 import "./today.css";
 
 declare global {
-  interface Window { vonvonClient?: VonvonClient; vonvonShell?: ShellCapabilities }
+  interface Window { vonvonClient?: VonvonClient; vonvonShell?: ShellCapabilities; vonvonCardPreviewScope?: {membershipId: MembershipId; groupId: GroupId} }
 }
 
 type Connection = { kind: "connecting" } | { kind: "connected"; client: VonvonClient } | { kind: "disconnected"; message: string; retrying: boolean };
@@ -104,4 +105,13 @@ export function Root() {
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Application root missing");
-createRoot(root).render(<Root />);
+async function mount() {
+  // Explicit dev-only acceptance lane. It never connects to the owner's daemon.
+  if (import.meta.env.DEV && new URLSearchParams(location.search).get('preview') === 'card-display') {
+    const preview = await import('./preview/card-display-client');
+    window.vonvonClient = preview.createCardDisplayPreviewClient();
+    window.vonvonCardPreviewScope = {membershipId: preview.CARD_PREVIEW_MEMBERSHIP_ID, groupId: preview.CARD_PREVIEW_GROUP_ID};
+  }
+  createRoot(root!).render(<Root />);
+}
+void mount();
