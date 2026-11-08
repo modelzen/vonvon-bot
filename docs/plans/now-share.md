@@ -74,13 +74,16 @@ N1 小，和 N3 一起做（同一个 PR 也可以）。N2、N3、N4 并行，N5
 
 ### N4 挂绳
 
-- `now-badges.css` 和 `NowBotBadge.tsx`：去掉 `.badge-cable`；`.badge-wire` 换成两股挂绳（SVG 或 CSS），从夹子往上渐渐淡出，随 `--swing` 一起摆。夹子保留。
+**owner 2026-11-08 给了参考图，颜色、正反面和字以这里为准，任务说明里的"浅蓝 / Vonvon / more than a bot"作废：**参考图是 `/home/ops/vonvon/claude-work/now-share-1108/ref/lanyard-ref.png`（只在本机看，不进仓库，图里有人像）。挂绳是缎面织带，一面青绿色（浅蓝绿，照片里亮处约 `#4fb3b3`，正常处约 `#2f9a9c`，背光处约 `#1f6e70`，带缎面的光泽），另一面黑色（约 `#16191b`），黑色那面印青绿色的斜体手写风格字。owner 原话："颜色你就参考这个颜色。也是这样双面的，上面有字的……一面有什么字、另一面有什么字，你可以自行考虑。把字放在什么地方能够展示出来，或者感觉太小、没必要展示，你也可以把字去掉。工牌绳的宽度和工牌宽度的比例，不一定要完全按照这个示意图来。你在产品中展示时，调到一个合适的宽度就好了。"
+
+- 默认做法：青绿面不印字；黑面印青绿色斜体字，内容从 `Vonvon`、`more than a bot`、`Vonvon · more than a bot` 里挑在实际大小下最好看、最能看清的；1 倍屏上看不清就不印。字体不引入新的网络字体，用系统里有的斜体或者把字做成 SVG 路径。
+- `now-badges.css` 和 `NowBotBadge.tsx`：去掉 `.badge-cable`；`.badge-wire` 换成两股挂绳（SVG 或 CSS），从夹子往上渐渐淡出，随 `--swing` 一起摆。夹子保留。缎面光泽用顺着挂绳方向的细微明暗渐变，不要塑料感。
 - 两面：挂绳在一个 `preserve-3d` 的容器里放正反两层，`backface-visibility: hidden`。做几版给 owner 选，至少：
-  - A：工牌翻面时挂绳跟着同一条曲线（530ms `cubic-bezier(.24,.74,.2,1)`）转过去，正面浅蓝印 `Vonvon`，背面黑色印 `more than a bot`；
-  - B：两股各露一面，左边浅蓝、右边黑色，各印各的字；
-  - C：同 A，但不印字。
-- 宽度比效果图宽（每股 9 到 12px），字沿挂绳方向，小号，字距放开；字看不清就不印。
-- 用真实代码渲染：构建 UI 后用 `/home/ops/vonvon/claude-work/now-share-1108/capture.mjs` 的办法（假 client、910×808、DPR 2）截每一版的首屏，A 版再录一段悬停翻面的短 GIF。图放 `claude-work/now-share-1108/out/lanyard/`，由 Claude 放进飞书文档给 owner 选；选定后删掉没选的几版。
+  - A：工牌翻面时挂绳跟着同一条曲线（530ms `cubic-bezier(.24,.74,.2,1)`）转过去：正面青绿，背面黑色带字；
+  - B：像参考图那样两股各露一面：左边青绿，右边黑色带字；
+  - C：同 B，但挂绳中段有一处翻折，露出另一面（参考图里织带扭转的样子），做不好看就不交这一版。
+- 宽度在产品里调到合适即可（大约每股 9 到 14px），不必照参考图的比例。
+- 用真实代码渲染：构建 UI 后用 `/home/ops/vonvon/claude-work/now-share-1108/capture.mjs` 的办法（假 client、910×808、DPR 2）截每一版的首屏和两张工牌的特写（DPR 3），A 版再录一段悬停翻面的短 GIF。图放 `claude-work/now-share-1108/out/lanyard/`，由 Claude 放进飞书文档给 owner 选；选定后删掉没选的几版。
 - `prefers-reduced-motion` 下不转、不摆。
 
 ### N5 分享
