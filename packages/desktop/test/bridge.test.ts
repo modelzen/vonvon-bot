@@ -166,6 +166,7 @@ function harness() {
       reveal: vi.fn(async (_path: string) => {}),
       bytes: vi.fn(async (_id: string) => Uint8Array.from([0x47, 0x49, 0x46])),
       discard: vi.fn(async (_id: string) => {}),
+      cancel: vi.fn(async () => {}),
     },
   };
   const devs = fakeDevices();
@@ -1216,6 +1217,11 @@ describe('devices-ui-1a views', () => {
     expect(await h.invoke(desktopChannels.shareReveal, 42)).toMatchObject({ ok: false });
     expect(await h.invoke(desktopChannels.shareReveal, '/share/vonvon-share-20261108-173905.gif')).toEqual({ ok: true, value: undefined });
     expect(await h.invoke(desktopChannels.shareDiscard, shareRecording.id)).toEqual({ ok: true, value: undefined });
+    expect(await h.invoke(desktopChannels.shareCancel, 'extra')).toMatchObject({ ok: false });
+    expect(await handlers.get(desktopChannels.shareCancel)?.(wrong)).toMatchObject({ ok: false });
+    expect(h.actions.share.cancel).not.toHaveBeenCalled();
+    expect(await h.invoke(desktopChannels.shareCancel)).toEqual({ ok: true, value: undefined });
+    expect(h.actions.share.cancel).toHaveBeenCalledOnce();
     expect(h.actions.share.bytes).toHaveBeenCalledOnce();
     expect(h.actions.share.reveal).toHaveBeenCalledExactlyOnceWith('/share/vonvon-share-20261108-173905.gif');
     expect(h.actions.share.discard).toHaveBeenCalledExactlyOnceWith(shareRecording.id);

@@ -565,6 +565,7 @@ export function installBridge(
       }, path => share.reveal(path));
       register(desktopChannels.shareBytes, 1, recordingId, id => share.bytes(id));
       register(desktopChannels.shareDiscard, 1, recordingId, id => share.discard(id));
+      register(desktopChannels.shareCancel, 0, noArg, () => share.cancel());
     }
     ipcMain.handle(desktopChannels.subscribe, async (event, ...args): Promise<IpcResult<void>> => {
       if (!authorized(event)) return { ok: false, error: { kind: 'validation', message: 'Unauthorized desktop request' } };

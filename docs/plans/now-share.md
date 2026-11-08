@@ -108,8 +108,8 @@ N1 小，和 N3 一起做（同一个 PR 也可以）。N2、N3、N4 并行。N5
   - `shareTargets` → `{kind:'shareTargets', bots:[{agentId, name, connected, recipients:[{openId, name?, creator}]}]}`。`recipients` 是这个 Bot 的管理员名单，名字和管理员页同一来源。
   - `shareStart {agentId, openId, bytes, sha256}` → `{kind:'shareUpload', uploadId, received:0}`；`sharePart {uploadId, index, data}`（base64，每块原始数据不超过 `SHARE_PART_BYTES` 即 1 MiB，从 0 按序）→ `{kind:'shareUpload', uploadId, received}`；`shareSend {uploadId}` → `{kind:'shareSent', messageId}`。失败一律 `refused`，`code` 见 N5c。
   - 分块是因为 WebSocket 每帧上限 4 MB（`server/ws.ts`、`secure-socket.ts`），GIF 最大 10 MB；而且当前设备可能是远程设备，不能传本机路径。
-- 桌面外壳：`ShellCapabilities.share`（类型 `ShareShell`、`ShareRecording`，在 `packages/ui/src/client-context.tsx`），N5b 在 preload 里实现：`record(model, onProgress)`、`copy(id)`、`reveal(path)`、`bytes(id)`、`discard(id)`。
-- 离屏窗口的分享卡入口：离屏窗口加载同一份 UI，地址带 `#share-card`，页面（N5a）只渲染 `ShareCard`，数据只从 `window.vonvonShareCard`（类型 `ShareCardBridge`，N5b 的 preload 提供）拿，不连 daemon：`model()` 原样拿到 `record()` 收到的 `ShareModel`；首帧画完、图片和字体都好了以后调 `ready(layout)`（`ShareLayout`：卡片尺寸、各工牌和工牌栏的位置、栏的 `scrollWidth`/`clientWidth`），它 resolve 时录制开始，卡片从这时起跑用量累加的时钟。
+- 桌面外壳：`ShellCapabilities.share`（类型 `ShareShell`、`ShareRecording`，在 `packages/ui/src/client-context.tsx`），N5b 在 preload 里实现：`record(model, onProgress)`、`copy(id)`、`reveal(path)`、`bytes(id)`、`discard(id)`，以及 `cancel()`：停掉正在进行的录制（它的 `record` 以 `cancelled` 失败），离屏窗口和 worker 都关掉后才 resolve，关分享框时调。
+- 离屏窗口的分享卡入口：离屏窗口加载同一份 UI，地址带 `#share-card`，页面（N5a）只渲染 `ShareCard`，数据只从 `window.vonvonShareCard`（类型 `ShareCardBridge`，N5b 的 preload 提供）拿，不连 daemon：`model()` 原样拿到 `record()` 收到的 `ShareModel`；首帧画完、图片和字体都好了以后调 `ready(layout)`（`ShareLayout`：卡片尺寸、各工牌和工牌栏的位置、栏的 `scrollWidth`/`clientWidth`，可选的 `animationMs`：卡片自己的动画从 `ready()` 起要跑多久，含开头的延迟；不给按 1800 ms），它 resolve 时录制开始，卡片从这时起跑用量累加的时钟。录制至少录到 `animationMs`，最后一帧（GIF 的首帧）是累加完的样子。
 
 **N5a（UI）**
 

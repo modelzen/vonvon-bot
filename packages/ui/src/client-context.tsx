@@ -61,12 +61,18 @@ export type ShareShell = {
   /** The GIF itself, to send through the daemon. */
   bytes(id: string): Promise<Uint8Array>;
   discard(id: string): Promise<void>;
+  /** Stops the recording in progress, if any (its `record` rejects); resolves once its window and worker are gone. */
+  cancel?(): Promise<void>;
 };
 
 type ShareRect = { x: number; y: number; width: number; height: number };
 /** now-share N5: what the share card reports once its first frame is painted; CSS pixels from the card's top left,
  * `badges` in the rail's order, those scrolled out of view included. */
-export type ShareLayout = { width: number; height: number; badges: ShareRect[]; rail: ShareRect & { scrollWidth: number; clientWidth: number } };
+export type ShareLayout = {
+  width: number; height: number; badges: ShareRect[]; rail: ShareRect & { scrollWidth: number; clientWidth: number };
+  /** How long the card's own animation (the usage build-up) runs from `ready()`, its delay included, in ms. */
+  animationMs?: number;
+};
 /** now-share N5: only in the desktop's offscreen share window (N5b's preload); the page at `#share-card` (N5a) reads
  * its model here and never talks to a daemon. `ready` resolves when recording starts, the card's clock starting then. */
 export type ShareCardBridge = { model(): Promise<unknown>; ready(layout: ShareLayout): Promise<void> };

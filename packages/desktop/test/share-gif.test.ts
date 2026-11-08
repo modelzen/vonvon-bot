@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import { GifStream, ShareGifEncoder } from '../src/share-gif.js';
 import { decodeGif } from './helpers/gif-decode.js';
@@ -94,5 +96,12 @@ describe('share GIF stream', () => {
     near(pixel(halfFrames.at(-1)!.rgba, 27, 10), [30, 40, 200]);
     near(pixel(fullFrames[0]!.rgba, 27, 10), [30, 40, 200]);
     expect(half!.gif.length).toBeLessThan(full!.gif.length);
+  });
+
+  it('ships gifenc\'s license with the app, in the notices the UI carries', () => {
+    const license = readFileSync(createRequire(import.meta.url).resolve('gifenc/LICENSE.md'), 'utf8').trim();
+    const notices = readFileSync(new URL('../../ui/public/THIRD-PARTY-NOTICES.txt', import.meta.url), 'utf8');
+    expect(license).toContain('Copyright (c) 2017 Matt DesLauriers');
+    expect(notices).toContain(license);
   });
 });
