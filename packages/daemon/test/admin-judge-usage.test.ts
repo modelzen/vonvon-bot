@@ -26,9 +26,18 @@ afterEach(async () => { vi.restoreAllMocks(); await rm(paths.appDir, { force: tr
 it('aggregates fourteen local days with backend and bot names', async () => {
   const view = await judgeUsageView({ now });
   expect(view.days).toHaveLength(14);
-  expect(view.days[0]).toEqual({ date: '2026-10-19', total: 5, sources: [{ kind: 'llm', id: 'codex-appserver', label: 'Codex', count: 3 }, { kind: 'decision', id: 'typesafe', label: 'TypeSafe', count: 2 }], bots: [{ agentId: 'cli_fixture_a', agentName: 'Bot A', count: 5 }] });
-  expect(view.days[1]).toMatchObject({ total: 1, sources: [{ label: 'Claude' }] });
+  expect(view.days[0]).toEqual({ date: '2026-10-19', total: 5, sources: [{ kind: 'llm', id: 'codex-appserver', label: 'Codex', count: 3 }, { kind: 'decision', id: 'typesafe', label: 'TypeSafe', count: 2 }], bots: [{ agentId: 'cli_fixture_a', agentName: 'Bot A', count: 5, sources: [{ kind: 'llm', id: 'codex-appserver', count: 3 }, { kind: 'decision', id: 'typesafe', count: 2 }] }] });
+  expect(view.days[1]).toMatchObject({ total: 1, sources: [{ label: 'Claude' }], bots: [{ agentName: 'Bot B', count: 1, sources: [{ kind: 'llm', id: 'claude-agent', count: 1 }] }] });
   expect(view.days[13]).toEqual({ date: '2026-10-06', total: 0, sources: [], bots: [] });
+});
+it('splits each bot by source in the day order, count stays the sum', async () => {
+  await writeFile(botPaths('cli_fixture_b').judgeUsageFile, JSON.stringify({ version: 1, days: { '2026-10-19': { 'decision:typesafe': 4, 'llm:claude-agent': 1, 'llm:codex-appserver': 0 } } }));
+  const [today] = (await judgeUsageView({ now })).days;
+  expect(today?.bots).toEqual([
+    { agentId: 'cli_fixture_a', agentName: 'Bot A', count: 5, sources: [{ kind: 'llm', id: 'codex-appserver', count: 3 }, { kind: 'decision', id: 'typesafe', count: 2 }] },
+    { agentId: 'cli_fixture_b', agentName: 'Bot B', count: 5, sources: [{ kind: 'llm', id: 'claude-agent', count: 1 }, { kind: 'decision', id: 'typesafe', count: 4 }] },
+  ]);
+  expect(today?.sources.map(s => [s.id, s.count])).toEqual([['claude-agent', 1], ['codex-appserver', 3], ['typesafe', 6]]);
 });
 it.each(['not json', JSON.stringify({ version: 2, days: {} })])('skips unreadable bot files: %s', async text => {
   await writeFile(botPaths('cli_fixture_b').judgeUsageFile, text);
