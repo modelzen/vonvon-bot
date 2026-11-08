@@ -12,9 +12,11 @@ import type { ShareGifVariant } from './share-gif.js';
 import type { ShareWorkerReply, ShareWorkerRequest } from './share-gif-worker.js';
 import { pointerScript, SHARE_MAX_MS, SHARE_SETTLE_MS, type ShareInput } from './share-script.js';
 
-const TIMEOUT_MS = 60_000;
-/** The size to aim for; {@link SHARE_GIF_MAX_BYTES} (Feishu's image limit) is the most there may be. */
-const TARGET_BYTES = 5 * 1024 * 1024;
+/** Ten Bots take 56 s on a 4-core Linux box. */
+const TIMEOUT_MS = 90_000;
+/** The size to aim for: four Bots at 20 fps, where 10 makes a flip a blink. {@link SHARE_GIF_MAX_BYTES} (Feishu's image
+ * limit) is the most there may be. */
+const TARGET_BYTES = 8_000_000;
 /** How long the GIF's first frame, the finished card, shows before the motion starts again. */
 const HOLD_MS = 400;
 /** Device pixels per captured frame at most: a card that big is captured at a lower scale. */
@@ -42,7 +44,7 @@ const shareText = {
   invalid_model: '分享的内容不对，没能生成分享图。',
   timeout: '生成分享图超时了，请重试。',
   card_failed: '分享图没能画出来，请重试。',
-  too_large: '分享图超过 10 MB 了。少选几项内容再试一次。',
+  too_large: `分享图超过 ${SHARE_GIF_MAX_BYTES / 1_000_000} MB 了。少选几项内容再试一次。`,
   unknown_recording: '这张分享图已经失效，请重新生成。',
   file_failed: '分享图没能保存，请检查磁盘空间后重试。',
   clipboard_failed: '分享图已保存，但没能放进剪贴板，请重试。',

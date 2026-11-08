@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import {expect, it, vi} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
 import type {DesktopSnapshot} from '@vonvon/protocol';
@@ -77,20 +78,28 @@ it('draws nothing from a model it cannot read and never says ready', async () =>
   expect(ready).not.toHaveBeenCalled();
 });
 
-it('fills the room of a hidden quota column with a wider heatmap, and lays out as the app does when it shows', () => {
+it('grows the 13 weeks into a hidden quota column\'s room on the card only, and lays out as the app does when it shows', () => {
   const data = {profile: {topInvocations: [], dailyBuckets: [{date: '2026-11-01', tokens: 100}]}, usage: {main: {}, extras: [], fetchedAt: 1}} as unknown as Usage;
   const provider = {id: 'codex-appserver', name: 'Codex', account: {kind: 'subscription'}, data} as NowProvider;
-  const options = {...defaultShareOptions([provider], 1), usage: ['codex-appserver' as const]};
-  const html = (quota: boolean) => renderToStaticMarkup(<ShareCard model={buildShareModel({snapshot, providers: [provider], now: 1}, {...options, quota})}/>);
+  const jev = {view: {kind: 'judgeUsage', days: [{date: '2026-11-08', total: 3, sources: [], bots: []}], unreadBots: 0} as const};
+  const options = {...defaultShareOptions([provider], 1), usage: ['codex-appserver' as const, 'jev' as const]};
+  const html = (quota: boolean) => renderToStaticMarkup(<ShareCard model={buildShareModel({snapshot, providers: [provider], jev, now: 1}, {...options, quota})}/>);
   const cells = (markup: string) => markup.match(/data-future=/g)?.length ?? 0;
   const wide = html(false), app = html(true);
   expect(wide).toContain('style="width:904px"');
   expect(wide).not.toContain('usage-board-quota');
-  expect(cells(wide)).toBe(26 * 7);
-  expect(wide).toContain('每日 Token · 最近 26 周');
+  // Codex's section only: Jev's right column is its Bots, there either way.
+  expect(wide.match(/data-wide-heat="true"/g)).toHaveLength(1);
+  expect(wide).toMatch(/aria-label="Codex 用量" data-wide-heat="true"/);
   expect(app).toContain('usage-board-quota');
-  expect(cells(app)).toBe(13 * 7);
-  expect(app).toContain('每日 Token · 最近 13 周');
+  expect(app).not.toContain('data-wide-heat');
+  // The app's 13 weeks either way; only the card's CSS makes them bigger.
+  for (const markup of [wide, app]) {
+    expect(cells(markup)).toBe(13 * 7);
+    expect(markup).toContain('每日 Token · 最近 13 周');
+  }
+  const css = readFileSync(new URL('../src/share-card.css', import.meta.url), 'utf8');
+  expect(css).toContain('.share-card-usage[data-wide-heat] .usage-heatmap__grid {grid-template-rows: repeat(7, 22px); grid-auto-columns: 22px; gap: 4.5px}');
 });
 
 it('says where the card opens when there is no bridge', () => {

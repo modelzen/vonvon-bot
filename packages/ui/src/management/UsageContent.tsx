@@ -115,16 +115,15 @@ function messageLevel(buckets: Buckets) {
   const [p25 = 0, p50 = 0, p75 = 0] = [.25, .5, .75].map(share => counts[Math.floor(counts.length * share)]);
   return (count: number) => count <= 0 ? 0 : count >= p75 ? 4 : count >= p50 ? 3 : count >= p25 ? 2 : 1;
 }
-/** `weeks` whole weeks from a Monday, this week last; the share card asks for more where it has the room. */
-export function usageDays(buckets: Buckets, today = new Date(), metric: UsageMetric = 'tokens', weeks = 13) {
+export function usageDays(buckets: Buckets, today = new Date(), metric: UsageMetric = 'tokens') {
   const day = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
-  const start = day - ((new Date(day).getUTCDay() + 6) % 7 + (weeks - 1) * 7) * DAY;
+  const start = day - ((new Date(day).getUTCDay() + 6) % 7 + 12 * 7) * DAY;
   const daily = new Map(buckets.flatMap(item => {
     const value = metric === 'tokens' ? item.tokens : item.messages;
     return value !== undefined && Number.isFinite(value) && value >= 0 ? [[item.date, value] as const] : [];
   }));
   // Local transcripts are complete, so a day without messages had none; gaps in the account's history stay unknown.
-  const cells = Array.from({length: weeks * 7}, (_, index) => {
+  const cells = Array.from({length: 91}, (_, index) => {
     const at = start + index * DAY, date = new Date(at).toISOString().slice(0, 10);
     return {date, value: daily.get(date) ?? (metric === 'messages' ? 0 : undefined), future: at > day};
   });
@@ -142,11 +141,11 @@ export function usageHiddenFrom(cells: readonly {date: string; future: boolean}[
 const metricCopy = {tokens: {unit: 'Token', daily: '每日 Token', label: '每日 Token 用量'}, messages: {unit: '条消息', daily: '每日消息', label: '每日消息数'}};
 /** The settings heatmap, with missing history and keyboard inspection preserved. Hidden days (progress) read as empty
  * while the grading keeps the whole range, so colours do not shift as days fill in. */
-export function UsageHeatmap({profile, provider = 'Codex', metric = 'tokens', progress = 1, weeks = 13}: {profile: Profile; provider?: string; metric?: UsageMetric; progress?: number; weeks?: number}) {
+export function UsageHeatmap({profile, provider = 'Codex', metric = 'tokens', progress = 1}: {profile: Profile; provider?: string; metric?: UsageMetric; progress?: number}) {
   const [hover, setHover] = useState<number | null>(null);
   const [focus, setFocus] = useState<number | null>(null);
   const captionId = useId();
-  const all = usageDays(profile.dailyBuckets, new Date(), metric, weeks);
+  const all = usageDays(profile.dailyBuckets, new Date(), metric);
   const hiddenFrom = usageHiddenFrom(all, progress);
   const cells = hiddenFrom ? all.map(cell => cell.date >= hiddenFrom && !cell.future ? {...cell, level: Math.min(cell.level, 0)} : cell) : all;
   const last = cells.reduce((index, cell, current) => cell.future ? index : current, 0);
@@ -155,7 +154,7 @@ export function UsageHeatmap({profile, provider = 'Codex', metric = 'tokens', pr
   const copy = metricCopy[metric];
   const dayText = (cell: {date: string; value?: number}) => `${cell.date} · ${cell.value === undefined ? '暂无数据' : `${amount(cell.value)} ${copy.unit}`}`;
   if (!profile.dailyBuckets.length && metric === 'tokens') return <SettingsRow title="每日用量" description={`${provider} 暂未提供每日活动记录。`}/>;
-  return <div className="usage-heatmap" aria-label={`最近 ${weeks} 周${copy.label}`}>
+  return <div className="usage-heatmap" aria-label={`最近十三周${copy.label}`}>
     <div className="usage-heatmap__grid" tabIndex={0} role="group" aria-label={`${provider} ${copy.label}，方向键查看日期`} aria-describedby={captionId}
       onMouseLeave={() => setHover(null)} onFocus={() => setFocus(last)} onBlur={() => setFocus(null)} onKeyDown={event => {
         const delta: Record<string, number> = {ArrowLeft: -7, ArrowRight: 7, ArrowUp: -1, ArrowDown: 1};
@@ -165,7 +164,7 @@ export function UsageHeatmap({profile, provider = 'Codex', metric = 'tokens', pr
         title={cell.future ? undefined : dayText(cell)} onMouseEnter={() => {if (!cell.future) setHover(index);}}/>)}
     </div>
     <div className="usage-heatmap__caption">
-      <span className="usage-heatmap__hint" id={captionId} aria-live="polite">{selected ? dayText(selected) : `${copy.daily} · 最近 ${weeks} 周`}</span>
+      <span className="usage-heatmap__hint" id={captionId} aria-live="polite">{selected ? dayText(selected) : `${copy.daily} · 最近 13 周`}</span>
       <span className="usage-heatmap__legend" aria-hidden="true">少{[0, 1, 2, 3, 4].map(level => <i key={level} className={`usage-cell usage-cell--${level}`}/>)}多</span>
     </div>
   </div>;

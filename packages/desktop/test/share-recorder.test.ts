@@ -28,8 +28,10 @@ type PageOptions = {
   onClose?: () => void;
   /** Every encoding comes out over Feishu's 10 MB, so the recorder tries smaller passes. */
   oversize?: boolean;
-  /** Every encoding fits Feishu's 10 MB but not the 5 MB aimed at, so the recorder tries smaller passes while it has time. */
+  /** Every encoding fits Feishu's 10 MB but not the 8 MB aimed at, so the recorder tries smaller passes while it has time. */
   fits?: boolean;
+  /** Bytes of each pass's encoding at each frame rate. */
+  sizes?: Record<number, number>;
   /** Only the first this many windows' cards say they are ready, as a pass too slow to end in time. */
   readyPasses?: number;
 };
@@ -134,7 +136,8 @@ function harness(page: PageOptions = {}, timeoutMs?: number) {
       return {
         frame: async (bgra, time) => encoder.add(new Uint8Array(bgra), time),
         finish: async (interval, hold) => encoder.finish(interval, hold).map(variant => page.oversize || page.fits
-          ? { ...variant, gif: new Uint8Array(SHARE_GIF_MAX_BYTES + (page.oversize ? 1 : 0)) } : variant),
+          ? { ...variant, gif: new Uint8Array(SHARE_GIF_MAX_BYTES + (page.oversize ? 1 : 0)) }
+          : page.sizes ? { ...variant, gif: new Uint8Array(page.sizes[variant.fps]!) } : variant),
         close: () => { page.onClose?.(); return new Promise(resolve => setTimeout(() => { state.closed = true; resolve(); }, 5)); },
       };
     },
@@ -223,9 +226,9 @@ describe('share recorder', () => {
     try {
       const h = harness({ fits: true, readyPasses: 1 });
       const recording = h.recorder.record({ bots: [] });
-      // The first pass ends with most of the minute left, so a smaller one starts; it never gets ready.
+      // The first pass ends with most of the 90 s left, so a smaller one starts; it never gets ready.
       await vi.waitFor(() => expect(h.windows).toHaveLength(2));
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(90_000);
       await expect(recording).resolves.toMatchObject({ width: 80, height: 60, bytes: SHARE_GIF_MAX_BYTES });
       expect(h.windows.every(window => window.destroyed)).toBe(true);
       expect(h.encoders.every(encoder => encoder.closed)).toBe(true);
@@ -237,11 +240,46 @@ describe('share recorder', () => {
     let spent = 0;
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now + spent);
     try {
-      // The first pass takes 35 s of the minute: 25 s are left, too few for another.
-      const h = harness({ fits: true, onClose: () => { spent += 35_000; } });
-      await expect(h.recorder.record({ bots: [] })).resolves.toMatchObject({ width: 80, height: 60, bytes: SHARE_GIF_MAX_BYTES });
-      expect(h.windows).toHaveLength(1);
+      // Passes of 35 s: 55 s of the 90 are left after the first, enough for one more but not a third. Of 50 s: 40 are
+      // left, too few for another.
+      for (const [pass, passes] of [[35_000, 2], [50_000, 1]] as const) {
+        spent = 0;
+        const h = harness({ fits: true, onClose: () => { spent += pass; } });
+        await expect(h.recorder.record({ bots: [] })).resolves.toMatchObject({ width: 80, height: 60, bytes: SHARE_GIF_MAX_BYTES });
+        expect(h.windows).toHaveLength(passes);
+      }
     } finally { clock.mockRestore(); }
+  });
+
+  it('aims at 8,000,000 bytes: 20 fps up to that, else 10 fps of the same pass, up to Feishu\'s 10,000,000', async () => {
+    expect(SHARE_GIF_MAX_BYTES).toBe(10_000_000);
+    for (const [sizes, bytes, passes] of [
+      [{ 20: 8_000_000, 10: 4_000_000 }, 8_000_000, 1],
+      [{ 20: 8_000_001, 10: 4_000_000 }, 4_000_000, 1],
+      // Over the aim at both rates: smaller passes while there is time, and the first that fits is kept.
+      [{ 20: 10_000_001, 10: 10_000_000 }, 10_000_000, 4],
+    ] as const) {
+      const h = harness({ sizes });
+      await expect(h.recorder.record({ bots: [] })).resolves.toMatchObject({ width: 80, height: 60, bytes });
+      expect(h.windows).toHaveLength(passes);
+    }
+    const h = harness({ sizes: { 20: 10_000_001, 10: 10_000_001 } });
+    await expect(h.recorder.record({ bots: [] })).rejects.toMatchObject({ code: 'too_large', message: '分享图超过 10 MB 了。少选几项内容再试一次。' });
+  });
+
+  it('gives a recording 90 s before it times out', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ ready: 'never' });
+      let settled = false;
+      const recording = h.recorder.record({ bots: [] });
+      recording.then(() => { settled = true; }, () => { settled = true; });
+      await vi.advanceTimersByTimeAsync(89_900);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      await expect(recording).rejects.toMatchObject({ code: 'timeout' });
+      expect(h.windows[0]!.destroyed).toBe(true);
+    } finally { vi.useRealTimers(); }
   });
 
   it('picks the largest quarter scale with neither side over 2000 px, below 1x only when nothing else fits', () => {
