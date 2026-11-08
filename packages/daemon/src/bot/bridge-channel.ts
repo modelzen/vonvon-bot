@@ -2,15 +2,29 @@ import { inspect } from 'node:util';
 import { createLarkChannel, Domain } from '@larksuiteoapi/node-sdk';
 import type { AppConfig } from '../config/schema';
 
-/** An entry as text: an Error is its name and message alone, because the SDK's request errors hold the headers they sent. */
+/** What a request carried: the SDK logs a refused call's `config.data`, `params` and `request` (its `formatErrors`), with
+ * the recipient, the body and an image's bytes in them (now-share N5c). Feishu's answer stays: it logs that again apart. */
+const SENT = new Set(['data', 'params', 'headers', 'body', 'request']);
+/** `value` without what was sent, bytes or streams: the status, Feishu's code, msg and log_id stay. */
+function scrubbed(value: unknown, depth = 0): unknown {
+  if (value instanceof Error) return `${value.name}: ${value.message}`;
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return `[${value.byteLength} 字节]`;
+  if (!value || typeof value !== 'object') return value;
+  if (typeof (value as { pipe?: unknown }).pipe === 'function') return '[数据流]';
+  if (depth > 3) return '[…]';
+  if (Array.isArray(value)) return value.map(item => scrubbed(item, depth + 1));
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !SENT.has(key)).map(([key, item]) => [key, scrubbed(item, depth + 1)]));
+}
+/** An entry as text: an Error is its name and message alone, because the SDK's request errors hold the headers they sent;
+ * no one's open id or union id. */
 function logText(entry: unknown): string {
-  const text = entry instanceof Error ? `${entry.name}: ${entry.message}` : typeof entry === 'string' ? entry : inspect(entry, { depth: 3, breakLength: Infinity });
-  return text.replace(/(Bearer\s+)[^\s'"\\]+/gi, '$1[已隐藏]');
+  const text = entry instanceof Error ? `${entry.name}: ${entry.message}` : typeof entry === 'string' ? entry : inspect(scrubbed(entry), { depth: 3, breakLength: Infinity });
+  return text.replace(/(Bearer\s+)[^\s'"\\]+/gi, '$1[已隐藏]').replace(/\b(o[un])_[\w-]+/g, '$1_…');
 }
 const logTexts = (entries: unknown[]): string[] => entries.flatMap(entry => Array.isArray(entry) ? logTexts(entry) : [logText(entry)]);
 /**
  * The SDK's default logger, same outputs, minus its secrets: a failed `rawClient.request` logs the whole AxiosError, whose
- * `request._header` and `config.headers` hold `Authorization: Bearer` (dm-agent F7).
+ * `request._header` and `config.headers` hold `Authorization: Bearer` (dm-agent F7); every other call, what it sent.
  */
 export const sdkLogger = {
   error: (...entries: unknown[]) => console.log('[error]:', ...logTexts(entries)),

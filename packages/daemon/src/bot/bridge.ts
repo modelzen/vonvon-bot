@@ -17,6 +17,7 @@ import { createFeishuCalls, createFeishuReads } from '../agent/entry/feishu-tool
 import type { ApiRequest } from '../feishu-read/api';
 import { createMemoryWriter } from './memory-writer';
 import { createFirstHello } from './first-hello';
+import { sendShareImage, type ShareImageReply, type ShareImageRequest } from './share-image';
 import { dmPersonOf, getProjectByChatId, listProjects } from '../project/registry';
 import { isProjectId } from '../project/library';
 import { createAgentEntries, type AgentEntries } from '../agent/entry/registry';
@@ -60,6 +61,8 @@ export interface BridgeHandle {
   /** A read this Bot runs as itself, the host asking (dm-agent 7.3). */
   feishuRead: (request: FeishuReadRequest) => Promise<FeishuReadReply>;
   feishuApi: (request: ApiRequest) => Promise<FeishuReadReply>;
+  /** now-share N5c: the 此刻 share GIF to one of this Bot's administrators, in their private chat. */
+  shareImage: (request: ShareImageRequest) => Promise<ShareImageReply>;
   /** The host's workspace fan-out for this bot (admin/library.ts `AdminLibraryOp`). */
   libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
@@ -261,7 +264,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       void task.then(() => groupTasks.delete(task), () => groupTasks.delete(task));
       return task;
     };
-    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, feishuRead: createFeishuReads({ feishu, members }), feishuApi: createFeishuCalls(feishu), firstHello: firstHello.attempt, shutdown };
+    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, feishuRead: createFeishuReads({ feishu, members }), feishuApi: createFeishuCalls(feishu), shareImage: request => sendShareImage({ channel, cfg: opts.cfg }, request), firstHello: firstHello.attempt, shutdown };
   } catch (error) {
     try { await shutdown(); }
     catch (cleanupError) {
