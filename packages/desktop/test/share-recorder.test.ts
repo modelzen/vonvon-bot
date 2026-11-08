@@ -28,6 +28,10 @@ type PageOptions = {
   onClose?: () => void;
   /** Every encoding comes out over Feishu's 10 MB, so the recorder tries smaller passes. */
   oversize?: boolean;
+  /** Every encoding fits Feishu's 10 MB but not the 5 MB aimed at, so the recorder tries smaller passes while it has time. */
+  fits?: boolean;
+  /** Only the first this many windows' cards say they are ready, as a pass too slow to end in time. */
+  readyPasses?: number;
 };
 
 let folder = '';
@@ -82,7 +86,7 @@ function harness(page: PageOptions = {}, timeoutMs?: number) {
     private async run(): Promise<void> {
       const event = { sender: this, senderFrame: this.mainFrame };
       this.model = (await handlers.get(shareCardChannels.model)!(event) as { value: unknown }).value;
-      if (page.ready === 'never') return;
+      if (page.ready === 'never' || page.readyPasses !== undefined && this.id > page.readyPasses) return;
       order.push(`ready ${JSON.stringify(await handlers.get(shareCardChannels.ready)!(event, page.ready === 'invalid' ? { width: -1 } : page.layout ?? LAYOUT))}`);
     }
     /** A frame at its window's scale: the card's shade follows the clock for half a second (or `build`), then holds; the
@@ -129,7 +133,8 @@ function harness(page: PageOptions = {}, timeoutMs?: number) {
       encoders.push(state);
       return {
         frame: async (bgra, time) => encoder.add(new Uint8Array(bgra), time),
-        finish: async (interval, hold) => encoder.finish(interval, hold).map(variant => page.oversize ? { ...variant, gif: new Uint8Array(SHARE_GIF_MAX_BYTES + 1) } : variant),
+        finish: async (interval, hold) => encoder.finish(interval, hold).map(variant => page.oversize || page.fits
+          ? { ...variant, gif: new Uint8Array(SHARE_GIF_MAX_BYTES + (page.oversize ? 1 : 0)) } : variant),
         close: () => { page.onClose?.(); return new Promise(resolve => setTimeout(() => { state.closed = true; resolve(); }, 5)); },
       };
     },
@@ -211,6 +216,32 @@ describe('share recorder', () => {
     await expect(h.recorder.record({ bots: [] })).rejects.toMatchObject({ code: 'too_large' });
     expect(h.windows.map(window => window.options.scale)).toEqual([2, 1.5, 1.25, 1]);
     expect(h.encoders.map(({ width, height }) => [width, height])).toEqual([[60, 1800], [50, 1500], [40, 1200]]);
+  });
+
+  it('keeps the GIF that fits when a smaller pass runs out of time', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const h = harness({ fits: true, readyPasses: 1 });
+      const recording = h.recorder.record({ bots: [] });
+      // The first pass ends with most of the minute left, so a smaller one starts; it never gets ready.
+      await vi.waitFor(() => expect(h.windows).toHaveLength(2));
+      vi.advanceTimersByTime(60_000);
+      await expect(recording).resolves.toMatchObject({ width: 80, height: 60, bytes: SHARE_GIF_MAX_BYTES });
+      expect(h.windows.every(window => window.destroyed)).toBe(true);
+      expect(h.encoders.every(encoder => encoder.closed)).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('starts no smaller pass it has no time for: one takes about as long as the last', async () => {
+    const now = Date.now();
+    let spent = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now + spent);
+    try {
+      // The first pass takes 35 s of the minute: 25 s are left, too few for another.
+      const h = harness({ fits: true, onClose: () => { spent += 35_000; } });
+      await expect(h.recorder.record({ bots: [] })).resolves.toMatchObject({ width: 80, height: 60, bytes: SHARE_GIF_MAX_BYTES });
+      expect(h.windows).toHaveLength(1);
+    } finally { clock.mockRestore(); }
   });
 
   it('picks the largest quarter scale with neither side over 2000 px, below 1x only when nothing else fits', () => {
