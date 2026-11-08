@@ -149,6 +149,15 @@ it('leaves the private chat off the badge: only bound groups are listed and coun
   expect(html).not.toContain('私聊');
 });
 
+it('hangs each badge from its own lanyard, with no shared rail', () => {
+  const html = renderToStaticMarkup(<NowBotList snapshot={snapshot(bot)} {...badgeActions}/>);
+  expect(html).toMatch(/class="badge-board" data-lanyard="[a-d]"/);
+  expect(html).not.toContain('badge-cable');
+  // The printed ribbon is decoration: kept out of the accessibility tree.
+  expect(html).toContain('<span class="badge-lanyard" aria-hidden="true">');
+  expect(html.match(/class="badge-strand"/g)).toHaveLength(2);
+});
+
 it('opens a Lark Bot in Lark', () => {
   expect(badgeUrl('cli_now', 'lark')).toContain('applink.larksuite.com');
   expect(badgeUrl('cli_now')).toContain('applink.feishu.cn');
