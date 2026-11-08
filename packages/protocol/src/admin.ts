@@ -119,8 +119,13 @@ export const judgeUsageDaySchema = z.object({
 });
 export type JudgeUsageDay = z.infer<typeof judgeUsageDaySchema>;
 
-/** Feishu's limit for one image message. */
-export const SHARE_GIF_MAX_BYTES = 10 * 1024 * 1024;
+/** Feishu's limit for one image message: "不能超过 10 MB". Decimal, as it does not say which MB it means. */
+export const SHARE_GIF_MAX_BYTES = 10_000_000;
+/** Feishu refuses a GIF wider or taller than this many pixels (im/v1/images: "GIF 图片分辨率不能超过 2000 x 2000"). */
+export const SHARE_GIF_MAX_SIDE = 2000;
+/** CSS pixels: the share card's width, the 此刻 page's in the default 910 px window. The desktop opens its offscreen
+ * share window this wide, so the card is never laid out at another width. */
+export const SHARE_CARD_WIDTH = 904;
 export const SHARE_PART_BYTES = 1024 * 1024;
 export const shareTargetSchema = z.object({
   agentId: agentIdSchema, name: z.string(), connected: z.boolean(),

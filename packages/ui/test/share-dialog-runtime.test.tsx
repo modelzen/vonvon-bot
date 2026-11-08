@@ -70,6 +70,7 @@ function shell() {
     reveal: vi.fn(async (_path: string) => undefined),
     bytes: vi.fn(async (_id: string) => new Uint8Array(10)),
     discard: vi.fn(async (_id: string) => undefined),
+    cancel: vi.fn(async () => undefined),
   } satisfies ShareShell;
   return {share, finish: () => finishing.shift()!()};
 }
@@ -94,14 +95,27 @@ beforeEach(() => {
 });
 afterEach(() => {close(); vi.unstubAllGlobals();});
 
-it('copies nothing once the dialog is closed while recording; the recording is only discarded', async () => {
+it('stops the recording and copies nothing once the dialog is closed while recording; one that still ends is discarded', async () => {
   const {share, finish} = shell();
   button(render(share, [codex]), '复制').props.onClick();
   expect(button(render(share, [codex]), '正在生成…')).toBeDefined();
   close();
+  expect(share.cancel).toHaveBeenCalledOnce();
   finish();
   await settle();
   expect(share.copy).not.toHaveBeenCalled();
+  expect(share.discard).toHaveBeenCalledExactlyOnceWith('r1');
+});
+
+it('stops nothing when the dialog closes after its recording is done', async () => {
+  const {share, finish} = shell();
+  button(render(share, [codex]), '复制').props.onClick();
+  finish();
+  await settle();
+  expect(share.copy).toHaveBeenCalledExactlyOnceWith('r1');
+  close();
+  await settle();
+  expect(share.cancel).not.toHaveBeenCalled();
   expect(share.discard).toHaveBeenCalledExactlyOnceWith('r1');
 });
 
@@ -114,6 +128,7 @@ it('sends nothing once the dialog is closed while recording', async () => {
   send.props.onClick();
   expect(share.record).toHaveBeenCalledOnce();
   close();
+  expect(share.cancel).toHaveBeenCalledOnce();
   finish();
   await settle();
   expect(share.bytes).not.toHaveBeenCalled();
