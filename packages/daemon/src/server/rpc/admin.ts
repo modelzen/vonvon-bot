@@ -9,6 +9,7 @@ import { checkSessionScope } from '../authz';
 import type { Peer } from '../ws';
 import { judgeUsageView } from '../../admin/judge-usage';
 import { secretsAction } from '../../admin/secrets';
+import { shareTargets, type ShareUploads } from '../../admin/share';
 
 export async function diagnosis(service: AdminService, agentId?: string): Promise<Extract<AdminReply, { kind: 'diagnosis' }>> {
   const bots = await service.listBots();
@@ -18,8 +19,8 @@ export async function diagnosis(service: AdminService, agentId?: string): Promis
   const eventConfigUrl = bot ? buildEventConfigUrl(bot.appId, bot.tenant) : undefined;
   return { kind: 'diagnosis', bot: botId, backends, event, eventConfigUrl };
 }
-/** What the connection adds: when this daemon started, and the peer admin.negotiate records on. */
-export interface AdminConnection { startedAt: number; peer: Pick<Peer, 'principal' | 'scope' | 'negotiated' | 'negotiate'> }
+/** What the connection adds: when this daemon started, the peer admin.negotiate records on, and where its share GIF goes up. */
+export interface AdminConnection { startedAt: number; peer: Pick<Peer, 'principal' | 'scope' | 'negotiated' | 'negotiate'>; shares?: ShareUploads }
 export async function adminRpc(service: AdminService, followLogs: (follow: boolean) => void, request: AdminRequest, connection?: AdminConnection): Promise<RpcOutcome<AdminReply>> {
   switch (request.type) {
     case 'judgeUsage': return { kind: 'read', value: await judgeUsageView() };
@@ -60,7 +61,11 @@ export async function adminRpc(service: AdminService, followLogs: (follow: boole
     // Nothing in the snapshot shows a key, so a save is a read: no rebuild, no revision (s23g)
     case 'secrets': case 'setSecret': case 'removeSecret': case 'testSecret':
       return { kind: 'read', value: await secretsAction(request) };
-    // now-share N5c answers these.
-    case 'shareTargets': case 'shareStart': case 'sharePart': case 'shareSend': return unsupported();
+    // now-share N5c: refusals are replies; an upload lives as long as the connection that sends it.
+    case 'shareTargets': return { kind: 'read', value: await shareTargets(service) };
+    case 'shareStart': case 'sharePart': case 'shareSend': {
+      if (!connection?.shares) return unsupported();
+      return { kind: 'read', value: await connection.shares.handle(connection.peer, request) };
+    }
   }
 }

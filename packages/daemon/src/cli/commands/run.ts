@@ -174,6 +174,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
           if (op.kind === 'authorizeSessionCall') return handle.entries.authorizeSessionCall(op.sessionId, op.action);
           if (op.kind === 'feishuRead') return handle.feishuRead(op.request);
           if (op.kind === 'feishuApi') return handle.feishuApi(op.request);
+          if (op.kind === 'shareImage') return handle.shareImage(op.request);
           return handle.adminExecute(op);
         },
         (msg) => void process.send?.(msg),
@@ -219,6 +220,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
           executeSchedule: async (botId, actor, request) => (botId === ownAppId ? handle.schedule(actor, request) : botNotRunning()),
           executeFeishuRead: async (botId, request) => (botId === ownAppId ? handle.feishuRead(request) : undefined),
           executeFeishuApi: async (botId, request) => (botId === ownAppId ? handle.feishuApi(request) : undefined),
+          executeShareImage: async (botId, request) => (botId === ownAppId ? handle.shareImage(request) : undefined),
           liveStatus: async (botId) =>
             botId === ownAppId
               ? {
