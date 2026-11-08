@@ -163,11 +163,13 @@ async function loadLocal(
   return { buffer, cacheKey: `local:${canonical}:${mtimeMs}:${size}` };
 }
 
-async function uploadBuffer(channel: LarkChannel, buffer: Buffer): Promise<string | undefined> {
+/** An `image_key` for `buffer`, undefined when Feishu answered without one; Feishu's refusal is thrown as the SDK threw it.
+ * `timeoutMs`: the share GIF (bot/share-image.ts) may be 10 MB. */
+export async function uploadBuffer(channel: Pick<LarkChannel, 'rawClient'>, buffer: Buffer, timeoutMs = UPLOAD_TIMEOUT_MS): Promise<string | undefined> {
   const res = await withTimeout(
     channel.rawClient.im.v1.image.create({ data: { image_type: 'message', image: buffer } }),
-    UPLOAD_TIMEOUT_MS,
-    `image.create timed out after ${UPLOAD_TIMEOUT_MS}ms`,
+    timeoutMs,
+    `image.create timed out after ${timeoutMs}ms`,
   );
   // The SDK helper returns the data object directly; tolerate a `.data` wrap too.
   const key =
