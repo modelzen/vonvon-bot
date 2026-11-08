@@ -448,51 +448,20 @@ it('s21, s25c: a stored 智能 is kept by a save that sends it back and dropped 
     expect(fixture.send).not.toHaveBeenCalled();
   } finally { await app.shutdown(); }
 });
-it('s25c: switching to 智能 stores it with 免@ off, keeps the 单会话 session and says so once the group is unlocked', async () => {
+it('s25c: switching to 智能 stores it with 免@ off, keeps the 单会话 session and says nothing in the group', async () => {
   backend(); const app = orchestrator();
   try {
     await updateProject('demo', { noMention: true });
-    // Said after the edit lets go of the group: anything else the page does meanwhile is not turned away.
-    let during: unknown;
-    let edit: unknown;
-    fixture.send.mockImplementationOnce(async () => {
-      during = await app.collaboration({ action: 'context', ...target, threadId: 'oc_demo' }).then(() => 'free', (error: Error) => error.message);
-      // Another edit waits until it is said: the sentence never lands in a group switched away meanwhile (审查低).
-      const fresh = projectRevision((await getProjectByName('demo'))!);
-      edit = await app.collaboration({ action: 'editProject', ...target, expectedRevision: fresh, kind: 'multi' }).then(() => 'edited', (error: Error) => error.message);
-      return { messageId: 'om_notice' };
-    });
-    const revision = projectRevision((await getProjectByName('demo'))!);
+    let revision = projectRevision((await getProjectByName('demo'))!);
     const reply = await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' });
     expect(reply).toMatchObject({ ok: true, project: { kind: 'smart' } });
     expect(reply).not.toHaveProperty('warning');
     expect(await getProjectByName('demo')).toMatchObject({ kind: 'single', smart: true, noMention: false });
-    expect(fixture.send).toHaveBeenCalledTimes(1);
-    expect(fixture.send).toHaveBeenCalledWith('oc_demo', { text: '我会读群消息，合适时接话。' });
-    expect(during).toBe('free');
-    expect(edit).toBe('正在群里说一句，请稍后再改');
     expect((await listSessions())[0]?.detached).not.toBe(true);
-  } finally { await app.shutdown(); }
-});
-it('s25c: a failed notice is a warning on a saved switch, and a disabled group is told nothing', async () => {
-  backend(); const app = orchestrator();
-  try {
-    fixture.send.mockRejectedValueOnce(new Error('send refused'));
-    let revision = projectRevision((await getProjectByName('demo'))!);
-    expect(await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' }))
-      .toMatchObject({ ok: true, project: { kind: 'smart' }, warning: '已改成智能开话题，但没能在群里说一句：send refused' });
-    expect(await getProjectByName('demo')).toMatchObject({ kind: 'single', smart: true });
+    // The next edit is not held up by anything said in the group (owner 2026-11-08: the switch sends no message).
     revision = projectRevision((await getProjectByName('demo'))!);
     await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'multi' });
     expect(await getProjectByName('demo')).toMatchObject({ kind: 'multi', noMention: false });
-    fixture.send.mockClear();
-    revision = projectRevision((await getProjectByName('demo'))!);
-    await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart', enabled: false });
-    expect(await getProjectByName('demo')).toMatchObject({ kind: 'single', smart: true, enabled: false });
-    revision = projectRevision((await getProjectByName('demo'))!);
-    await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'single', enabled: false });
-    revision = projectRevision((await getProjectByName('demo'))!);
-    await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' });
     expect(fixture.send).not.toHaveBeenCalled();
   } finally { await app.shutdown(); }
 });
