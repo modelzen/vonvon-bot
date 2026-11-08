@@ -1,18 +1,23 @@
+import {useState} from 'react';
 import {Activity, ArrowRight, ChartNoAxesColumn, ChevronRight, Cpu, Download, Link, MonitorSmartphone, Power, Share, UserRoundCog, Wrench, type LucideIcon} from 'lucide-react';
 import type {AgentId, DesktopSnapshot} from '@vonvon/protocol';
 import {NowBotList} from './NowBotList';
 import {NowActivity} from './NowActivity';
-import {NowUsage} from './NowUsage';
+import {NowUsage, type NowProvider} from './NowUsage';
+import {ShareDialog} from './ShareDialog';
 import {GlowButton} from './GlowButton';
 import {uiFeatures} from './features';
 import type {Page} from './collaboration-model';
 import {useActiveDevice, useClient, useShellCapabilities} from './client-context';
 import {whereName} from './device-copy';
 
-/** 分享 records a GIF, which only the desktop shell can do (now-share N5); the web UI never shows it. */
-export function TodayHome({snapshot, onSetup, onRegister, onOpenUsage, onShare, disabled}: {snapshot: DesktopSnapshot; onSetup: () => void; onRegister: () => void; onOpenUsage: () => void; onShare?: () => void; disabled: boolean}) {
+/** 分享 records a GIF, which only the desktop shell can do (now-share N5); the web UI never shows it. The share dialog
+ * draws from this page's snapshot and the usage NowUsage has read. */
+export function TodayHome({snapshot, onSetup, onRegister, onOpenUsage, disabled}: {snapshot: DesktopSnapshot; onSetup: () => void; onRegister: () => void; onOpenUsage: () => void; disabled: boolean}) {
   const client = useClient();
-  const canShare = !!useShellCapabilities()?.share;
+  const share = useShellCapabilities()?.share;
+  const [sharing, setSharing] = useState(false);
+  const [providers, setProviders] = useState<NowProvider[]>([]);
   async function changeNumber(agentId: AgentId, badgeNumber: string) {
     const result = await client.run({type: 'setAgentBadgeNumber', agentId, badgeNumber});
     if (result.kind === 'applied') return;
@@ -25,14 +30,15 @@ export function TodayHome({snapshot, onSetup, onRegister, onOpenUsage, onShare, 
     <header className="today-intro">
       <div className="today-intro-title"><h1>此刻</h1>{snapshot.stale && <span role="status">正在更新…</span>}</div>
       <div className="today-intro-actions">
-        {canShare && <button type="button" className="today-share-button" onClick={onShare}><Share size={14} strokeWidth={1.8} aria-hidden="true"/>分享</button>}
+        {share && <button type="button" className="today-share-button" onClick={() => setSharing(true)}><Share size={14} strokeWidth={1.8} aria-hidden="true"/>分享</button>}
         <GlowButton disabled={disabled} onClick={onRegister}>添加 Bot</GlowButton>
       </div>
     </header>
     {!snapshot.stale && attention.length > 0 && <button type="button" className="today-connection-note" onClick={onSetup}><span className="today-state-dot"/><span>{attention.length} 个 Bot 需要检查连接</span><ArrowRight size={14}/></button>}
     <NowBotList snapshot={snapshot} connected={connected} onChangeNumber={changeNumber} disabled={disabled}/>
-    <NowUsage disabled={!connected} agents={snapshot.agents} onOpenUsage={onOpenUsage}/>
+    <NowUsage disabled={!connected} agents={snapshot.agents} onOpenUsage={onOpenUsage} onProviders={setProviders}/>
     <NowActivity snapshot={snapshot}/>
+    {share && sharing && <ShareDialog share={share} snapshot={snapshot} providers={providers} onClose={() => setSharing(false)}/>}
   </div>;
 }
 

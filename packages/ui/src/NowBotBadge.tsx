@@ -10,6 +10,8 @@ type BadgeProps = {
   agent: Agent; index: number; groupSummary: string; status: string; tone: 'online' | 'offline';
   ownerName?:string; tenure?:number; showMotion:boolean; children:ReactNode;
   jobNumber?: string; editable: boolean; onJobChange: (value: string) => Promise<string | undefined>;
+  /** false on the share card: its back has no Feishu code and no 去飞书找我 */
+  contact?: boolean;
 };
 
 type PointerSample = {x:number; t:number; speed:number};
@@ -61,7 +63,7 @@ function useHanger(enabled: boolean) {
   return slot;
 }
 
-export function NowBotBadge({agent, index, groupSummary, status, tone, ownerName, tenure, showMotion, jobNumber, editable, onJobChange, children}: BadgeProps) {
+export function NowBotBadge({agent, index, groupSummary, status, tone, ownerName, tenure, showMotion, jobNumber, editable, onJobChange, contact = true, children}: BadgeProps) {
   const [back, setBack] = useState(false);
   const [detail,setDetail]=useState<'qr'|'job'>();
   const [draft,setDraft]=useState(''),[issue,setIssue]=useState('');
@@ -71,7 +73,7 @@ export function NowBotBadge({agent, index, groupSummary, status, tone, ownerName
   const qrTrigger = useRef<HTMLButtonElement>(null);
   const numberTrigger = useRef<HTMLButtonElement>(null);
   const restoreFocus = useRef<'qr' | 'job' | undefined>(undefined);
-  const url=badgeUrl(agent.id,agent.tenant);
+  const url=contact ? badgeUrl(agent.id,agent.tenant) : undefined;
   const slot = useHanger(showMotion && !detail);
   const frontControl = useRef<HTMLButtonElement>(null), backControl = useRef<HTMLDivElement>(null);
   const moveFocus = useRef(false);

@@ -62,8 +62,9 @@ export function nowAccountLabel(account: BackendAccount): string {
   return '账户类型未知';
 }
 
-/** Poll only while this page is connected and visible; login probes retain daemon TTLs. */
-export function NowUsage({disabled = false, agents = [], onOpenUsage}: {disabled?: boolean; agents?: readonly Agent[]; onOpenUsage: () => void}) {
+/** Poll only while this page is connected and visible; login probes retain daemon TTLs. `onProviders` hears what was
+ * read, for the share dialog. */
+export function NowUsage({disabled = false, agents = [], onOpenUsage, onProviders}: {disabled?: boolean; agents?: readonly Agent[]; onOpenUsage: () => void; onProviders?: (providers: NowProvider[]) => void}) {
   const client = useClient();
   const clientRef = useRef(client);
   const [providers, setProviders] = useState<NowProvider[]>([]);
@@ -99,6 +100,7 @@ export function NowUsage({disabled = false, agents = [], onOpenUsage}: {disabled
     void refresh();
     return () => {active = false; clearTimeout(timer); document.removeEventListener('visibilitychange', visible);};
   }, [client, disabled]);
+  useEffect(() => {onProviders?.(providers);}, [providers, onProviders]);
   const provider = providers.find(item => item.id === selected) ?? providers[0];
   const active = selected === 'jev' ? 'jev' : provider?.id ?? (loading ? '' : 'jev');
   return <Tabs.Root render={<section/>} className="today-home-section now-usage" aria-label="用量" value={active} onValueChange={value => setSelected(String(value))}
