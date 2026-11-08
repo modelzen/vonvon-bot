@@ -86,7 +86,13 @@ const usageBundle = z.object({
       hourCounts: z.array(z.number()).length(24).optional(),
     }).optional(),
   }),
-  usage: z.object({ planType: z.string().optional(), main: usageBucket, extras: z.array(usageBucket), fetchedAt: z.number() }),
+  usage: z.object({
+    planType: z.string().optional(), main: usageBucket, extras: z.array(usageBucket), fetchedAt: z.number(),
+    // Why Claude's quota is empty while its local stats still come back: `reason` is a daemon UsageErrorKind
+    // (no-auth, api-key-mode, need-relogin, transient), left open for later ones; `message` is what the quota column
+    // says. Older daemons fail the read instead, and older clients see empty windows.
+    unavailable: z.object({ reason: z.string().min(1).max(40), message: z.string().min(1).max(200) }).optional(),
+  }),
 });
 
 export const collaborationReplySchema = z.discriminatedUnion("kind", [
