@@ -379,10 +379,10 @@ function endCompaction(state: RunState, evt: Extract<AgentEvent, { type: 'compac
   return { ...state, ...(reported ? { usage: reported } : {}), blocks };
 }
 
-/** A reading's window becomes the window of the run's compaction lines. On a
- * Claude thread's first turn the mid-turn window is a guess from the model id
- * until the turn-end getContextUsage(); this way the lines end on the same window
- * as the meter. A reading with no window leaves them. */
+/** A reading's window becomes the window of the run's compaction lines, so they
+ * end on the same window as the meter (a Claude turn whose first window read
+ * failed gets one from the turn-end getContextUsage()). A reading with no window
+ * leaves them. */
 function onWindow(blocks: Block[], window: number | null): Block[] {
   if (window === null) return blocks;
   const moved = (u: Usage | null | undefined): boolean => !!u && u.window !== window;

@@ -26,27 +26,26 @@ describe('createTurnMapper —— SDKMessage → AgentEvent', () => {
     expect(mp.map(sysInit('sess-1'))).toEqual([]); // 第二次 init 抑制
   });
 
-  it('压缩：status compacting → start；compact_boundary → end，带前后 token 和窗口', () => {
-    const mp = createTurnMapper({ contextWindow: 200_000 });
+  it('压缩：status compacting → start；compact_boundary → end，带前后 token，窗口留给 thread 填', () => {
+    const mp = createTurnMapper();
+    mp.map(sysInit('s', 'claude-opus-5-5'));
     expect(mp.map(m({ type: 'system', subtype: 'status', status: 'compacting' }))).toEqual([{ type: 'compaction', phase: 'start' }]);
     expect(mp.map(m({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 170_000, post_tokens: 40_000 } }))).toEqual([
-      { type: 'compaction', phase: 'end', preTokens: 170_000, postTokens: 40_000, contextWindow: 200_000 },
+      { type: 'compaction', phase: 'end', preTokens: 170_000, postTokens: 40_000, contextWindow: null },
     ]);
-    // post_tokens is optional; without a known window the init model's heuristic stands in.
-    const bare = createTurnMapper();
-    bare.map(sysInit('s', 'claude-sonnet-4-5'));
-    expect(bare.map(m({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 9000 } }))).toEqual([
-      { type: 'compaction', phase: 'end', preTokens: 9000, contextWindow: 200_000 },
+    // post_tokens is optional.
+    expect(mp.map(m({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 9000 } }))).toEqual([
+      { type: 'compaction', phase: 'end', preTokens: 9000, contextWindow: null },
     ]);
     expect(mp.map(m({ type: 'system', subtype: 'status', status: null, compact_result: 'failed', compact_error: 'x' }))).toEqual([{ type: 'compaction', phase: 'end', failed: true }]);
     expect(mp.map(m({ type: 'system', subtype: 'status', status: null, compact_result: 'success' }))).toEqual([]);
   });
 
   it('主 agent 每个请求的 usage → 一次 context_usage（每块一条 assistant 也只算一次；子 agent 不算）', () => {
-    const mp = createTurnMapper({ contextWindow: 400_000 });
+    const mp = createTurnMapper();
     const usage = { input_tokens: 10, cache_read_input_tokens: 80_000, cache_creation_input_tokens: 6_000, output_tokens: 5 };
     const block = (id: string, parent: string | null) => m({ type: 'assistant', parent_tool_use_id: parent, message: { id, usage, content: [{ type: 'text', text: 'x' }] } });
-    expect(mp.map(block('msg-1', null))).toEqual([{ type: 'context_usage', usedTokens: 86_010, contextWindow: 400_000 }]);
+    expect(mp.map(block('msg-1', null))).toEqual([{ type: 'context_usage', usedTokens: 86_010, contextWindow: null }]);
     expect(mp.map(block('msg-1', null))).toEqual([]);
     expect(mp.map(block('msg-2', 'toolu_task'))).toEqual([]);
     expect(mp.map(block('msg-3', null))).toHaveLength(1);
@@ -103,23 +102,16 @@ describe('createTurnMapper —— SDKMessage → AgentEvent', () => {
     expect(evs).toEqual([{ type: 'tool_result', itemId: 'tu_1', output: 'AB', exitCode: 0 }]);
   });
 
-  it('result(success) → usage + 回退 context_usage（窗口取自 init 的 model，非 result.model）', () => {
+  it('result(success) → usage + 回退 context_usage（不按模型名猜窗口，thread 用 getContextUsage 填）', () => {
     const mp = createTurnMapper();
-    mp.map(sysInit('s', 'claude-opus-4-8[1m]')); // init 提供 model → 1M 窗口
+    mp.map(sysInit('s', 'claude-opus-4-8[1m]'));
     const evs = mp.map(
       m({ type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 3, cache_creation_input_tokens: 2 } }),
     );
     expect(evs).toContainEqual({ type: 'usage', inputTokens: 10, outputTokens: 5 });
-    // used = 10+3+2 = 15；窗口来自 init model（[1m] → 1,000,000），不再是 result.model（缺失）
-    expect(evs).toContainEqual({ type: 'context_usage', usedTokens: 15, contextWindow: 1_000_000 });
+    // used = 10+3+2 = 15
+    expect(evs).toContainEqual({ type: 'context_usage', usedTokens: 15, contextWindow: null });
     expect(evs.some((e) => e.type === 'done')).toBe(false);
-  });
-
-  it('无 init model 时回退窗口为 null（而非崩溃）——thread 会用 getContextUsage 覆盖', () => {
-    const evs = createTurnMapper().map(
-      m({ type: 'result', subtype: 'success', usage: { input_tokens: 10, output_tokens: 0 } }),
-    );
-    expect(evs).toContainEqual({ type: 'context_usage', usedTokens: 10, contextWindow: null });
   });
 
   it('多块顺序：思考→文本→工具，itemId 各自独立递增', () => {
