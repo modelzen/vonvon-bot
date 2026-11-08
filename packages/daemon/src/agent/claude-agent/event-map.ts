@@ -42,9 +42,6 @@ import type { AgentEvent, ToolKind } from '../types';
 export interface ClaudeMapContext {
   /** thread cwd, to relativize file paths in tool titles */
   cwd?: string;
-  /** the window from the thread's last getContextUsage (maxTokens); mid-turn
-   * readings use it, else the model-id heuristic */
-  contextWindow?: number;
 }
 
 type Kind = 'text' | 'thinking' | 'tool_use' | 'other';
@@ -79,13 +76,9 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
   let blockSeq = 0;
   const open = new Map<number, OpenBlock>();
   let systemEmitted = false;
-  // Captured from system/init — the result message has NO `model`, so the context
-  // window fallback must read it here (else the window shows as 未知/unknown).
-  let initModel: string | undefined;
   // Every content block arrives as its own assistant message with the same
   // usage; emit context_usage once per API message.
   let usageMessageId: string | undefined;
-  const window = (): number | null => ctx.contextWindow ?? contextWindowFor(initModel);
 
   function map(msg: SDKMessage): AgentEvent[] {
     const m = msg as unknown as Record<string, any>;
@@ -93,7 +86,6 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
       case 'system':
         if (msg.type === 'system' && (msg.subtype === 'task_started' || msg.subtype === 'task_progress' || msg.subtype === 'task_updated' || msg.subtype === 'task_notification')) return mapTask(msg);
         if (m.subtype === 'init') {
-          if (typeof m.model === 'string') initModel = m.model;
           if (!systemEmitted) {
             systemEmitted = true;
             return [{ type: 'system', threadId: String(m.session_id ?? '') }];
@@ -111,7 +103,7 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
             phase: 'end',
             ...(typeof meta.pre_tokens === 'number' ? { preTokens: meta.pre_tokens } : {}),
             ...(typeof meta.post_tokens === 'number' ? { postTokens: meta.post_tokens } : {}),
-            contextWindow: window(),
+            contextWindow: null,
           }];
         }
         // The SDK is retrying a failed API call itself (SDKAPIRetryMessage):
@@ -145,12 +137,13 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
         }
         const out: AgentEvent[] = [];
         // A nested agent's requests have their own context; only the main one counts.
+        // The window is left null here: the thread stamps Claude Code's own (withWindow).
         const usage = m.message?.usage as Record<string, number> | undefined;
         const messageId = typeof m.message?.id === 'string' ? m.message.id : undefined;
         if (m.parent_tool_use_id == null && usage && messageId && messageId !== usageMessageId) {
           usageMessageId = messageId;
           const used = contextTokens(usage);
-          if (used > 0) out.push({ type: 'context_usage', usedTokens: used, contextWindow: window() });
+          if (used > 0) out.push({ type: 'context_usage', usedTokens: used, contextWindow: null });
         }
         for (const b of content) {
           if (b.type === 'tool_use' || b.type === 'server_tool_use') {
@@ -200,10 +193,10 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
           // Fallback context gauge (the thread overrides this with the authoritative
           // getContextUsage() reading). used = input + cache_read + cache_creation
           // (≈ the request's full input context — verified to equal getContextUsage
-          // totalTokens). Window comes from the init model, NOT result.model (absent).
+          // totalTokens).
           const used = contextTokens(usage);
           if (used > 0) {
-            out.push({ type: 'context_usage', usedTokens: used, contextWindow: window() });
+            out.push({ type: 'context_usage', usedTokens: used, contextWindow: null });
           }
         }
         return out;
@@ -439,16 +432,6 @@ function displayPath(p: string, cwd?: string): string {
 /** A request's full input context: input + cache_read + cache_creation. */
 function contextTokens(usage: Record<string, number>): number {
   return (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
-}
-
-/** Model context window heuristic — the SDK's result message doesn't report it.
- * `[1m]`-suffixed / 1m-context models get 1,000,000; otherwise the 200k default.
- * Approximate (drives only the gauge percentage); refine if the SDK exposes it. */
-function contextWindowFor(model: unknown): number | null {
-  const id = typeof model === 'string' ? model.toLowerCase() : '';
-  if (!id) return null;
-  if (id.includes('1m') || id.includes('[1m]')) return 1_000_000;
-  return 200_000;
 }
 
 /** Human-readable error text for a non-success `result` message. Used by the
