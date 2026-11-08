@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, expect, it, vi } from 'vitest';
 import { ConnectionError, RpcError, type VonvonClient } from '@vonvon/client';
 import {
-  agentIdSchema, FULL_ACCESS_WARNING, groupIdSchema, jobIdSchema, membershipIdSchema, settingsReplySchema,
+  agentIdSchema, defaultCardDisplay, FULL_ACCESS_WARNING, groupIdSchema, jobIdSchema, membershipIdSchema, settingsReplySchema,
   type AdminSetupStatus, type Agent, type DesktopSnapshot, type Job, type Membership, type SettingsReply, type ToolState,
 } from '@vonvon/protocol';
 import { pickBot, setCliContext, withDaemon, type Daemon } from '../src/cli/daemon-client';
@@ -371,6 +371,12 @@ it('s25c: settings on a 智能 group leave 免@ out of get and print the daemon\
 });
 
 it('settings set parses values as JSON or text and names the bad field', () => {
+  const cardDisplay = defaultCardDisplay();
+  expect(parseAssignments('agent', [`cards.cardDisplay=${JSON.stringify(cardDisplay)}`])).toEqual({ section: 'cards', patch: { cardDisplay } });
+  expect(parseAssignments('project', [`presentation.cardDisplay=${JSON.stringify(cardDisplay)}`])).toEqual({ section: 'presentation', patch: { cardDisplay } });
+  expect(parseAssignments('agent', ['cards.cardDisplay=null']).patch).toEqual({ cardDisplay: null });
+  expect(parseAssignments('project', ['presentation.cardDisplay=null']).patch).toEqual({ cardDisplay: null });
+  expect(() => parseAssignments('agent', ['cards.cardDisplay={"version":999}'])).toThrow('cards.cardDisplay');
   expect(parseAssignments('project', ['permission.mode=full'])).toEqual({ section: 'permission', patch: { mode: 'full' } });
   expect(parseAssignments('project', ['permission.custom={"sandbox":"read-only","network":true}']).patch).toEqual({ custom: { sandbox: 'read-only', network: true } });
   expect(parseAssignments('agent', ['run.maxConcurrentRuns=3']).patch).toEqual({ maxConcurrentRuns: 3 });

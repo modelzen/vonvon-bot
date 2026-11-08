@@ -2,6 +2,7 @@ import type { BotDefaults } from './defaults';
 import type { DirectorySettings } from './directories';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../agent/types';
 import type { JudgeSelectionStored } from '../judge/types';
+import type { CardDisplayConfig } from '@vonvon/protocol';
 
 export type TenantBrand = 'feishu' | 'lark';
 
@@ -113,6 +114,8 @@ export interface AppPreferences {
    * 默认 running（仅输出时显示，生成完即收起）——平时能扫一眼当前模型，又不在终态
    * 卡上长期留标签。兼容历史布尔值：true→always、false→off（见 {@link getModelDisplay}）。 */
   showModel?: ModelDisplayMode | boolean;
+  /** Optional validated run-card layout shared with group overrides. Missing keeps legacy output. */
+  cardDisplay?: CardDisplayConfig;
   /** cap concurrent codex turns across all threads. Default 10. */
   maxConcurrentRuns?: number;
   /** per-turn idle watchdog (seconds). 0 = off. Default 600 (on). */

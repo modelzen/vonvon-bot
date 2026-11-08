@@ -3,6 +3,7 @@ import { mkdir, open, readFile, realpath, unlink, writeFile } from 'node:fs/prom
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { z } from 'zod';
+import { cardDisplayConfigSchema, type CardDisplayConfig } from '@vonvon/protocol';
 import { paths } from '../config/paths';
 import { renameOverReaders } from '../server/atomic-file';
 import { acquireMutex, closeMutex, holdMutexRole } from '../config/data-access';
@@ -11,6 +12,7 @@ import { type PermissionMode, type ReasoningEffort } from '../agent/types';
 import { admitDirectoryChanges, parseDirectorySettings, type DirectorySettings } from '../config/directories';
 import type { JudgeSelectionStored } from '../judge/types';
 import { isProjectId } from './library';
+import { log } from '../core/logger';
 
 export interface BotProfile { persona: string; memory: string }
 export interface GroupProfile extends BotProfile { inheritPersona: boolean; inheritMemory: boolean }
@@ -27,7 +29,7 @@ export interface ProjectModelAccess {
 export interface ProjectWorkspace { primary: string; directories: string[]; repositories: string[] }
 export interface ProjectSmartRules { respond: string; newTopic: string }
 export interface ProjectSkills { disabledPaths: string[] }
-export interface ProjectPresentation { voiceEnabled: boolean; showToolCalls: boolean; showModel?: 'off' | 'running' | 'always'; completionMode: 'manual' | 'long' | 'failures' | 'always'; longTaskMinutes: number }
+export interface ProjectPresentation { voiceEnabled: boolean; showToolCalls: boolean; showModel?: 'off' | 'running' | 'always'; cardDisplay?: CardDisplayConfig | null; completionMode: 'manual' | 'long' | 'failures' | 'always'; longTaskMinutes: number }
 
 /** A project = a Feishu group bound to a fixed working directory. */
 export interface Project {
@@ -259,10 +261,22 @@ export async function listProjectsIn(file: string): Promise<Project[]> {
 }
 
 /** The rows of a parsed projects.json, as stored (no fold); any malformed row fails the whole file. */
+const warnedCardDisplay = new Set<string>();
 function storedRows(parsed: unknown): Project[] {
   const file = parsed as Partial<StoreFile> | null;
   if (!file || !Array.isArray(file.projects) || file.projects.some(p => !p || typeof p !== 'object' || typeof p.name !== 'string' || typeof p.cwd !== 'string')) throw new Error('项目注册表格式无效');
-  for (const project of file.projects) { parseDirectorySettings(project.directories); validateGroupSettings(project as unknown as Record<string, unknown>); }
+  for (const project of file.projects) {
+    if (project.presentation?.cardDisplay !== undefined && !cardDisplayConfigSchema.safeParse(project.presentation.cardDisplay).success) {
+      delete project.presentation.cardDisplay;
+      const key = project.chatId || project.name;
+      if (!warnedCardDisplay.has(key)) {
+        warnedCardDisplay.add(key);
+        log.warn('card', 'display-config-invalid', { scope: 'group', group: project.name, action: 'ignored-stored-card-display' });
+      }
+    }
+    parseDirectorySettings(project.directories);
+    validateGroupSettings(project as unknown as Record<string, unknown>);
+  }
   return file.projects;
 }
 
@@ -368,7 +382,7 @@ const storedSectionSchemas = {
     defaultModel: z.string().min(1).max(1000).optional(), defaultEffort: z.string().min(1).max(1000).optional() }),
   smartRules: z.object({ respond: z.string().max(30000), newTopic: z.string().max(30000) }),
   skills: z.object({ disabledPaths: z.array(z.string().min(1).max(4096)).max(1000) }),
-  presentation: z.object({ voiceEnabled: z.boolean(), showToolCalls: z.boolean(), showModel: z.enum(['off', 'running', 'always']).optional(),
+  presentation: z.object({ voiceEnabled: z.boolean(), showToolCalls: z.boolean(), showModel: z.enum(['off', 'running', 'always']).optional(), cardDisplay: z.unknown().refine(value => cardDisplayConfigSchema.safeParse(value).success).optional(),
     completionMode: z.enum(['manual', 'long', 'failures', 'always']), longTaskMinutes: z.number().int().min(1).max(1440) }),
 };
 

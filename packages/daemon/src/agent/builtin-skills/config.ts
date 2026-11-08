@@ -9,7 +9,7 @@ import type { BuiltinSkill } from './package';
 export const configSkill: BuiltinSkill = {
   name: 'vonvon-config',
   title: '配置',
-  description: "看和改这台电脑上的 Bot、群和它们的设置：沟通方式、智能提示词、角色设定、权限、模型、Skill、MCP、记忆，建群绑群。用户说帮我调调、老抢话、太吵、不回话、以后在某个群怎样说话、照这篇帖子配一下、建个群、这台电脑有哪些 Bot 和群时，先读本 skill。",
+  description: "看和改这台电脑上的 Bot、群和它们的设置：消息卡展示、沟通方式、智能提示词、角色设定、权限、模型、Skill、MCP、记忆，建群绑群。用户说帮我调调、卡片怎么显示、老抢话、太吵、不回话、以后在某个群怎样说话、照这篇帖子配一下、建个群、这台电脑有哪些 Bot 和群时，先读本 skill。",
   body: `这是管理员的私聊。你能用 \`vonvon\` 命令行读和改这台电脑上所有 Bot 和它们的群的配置，用户不用知道有哪些设置。
 
 ## 私聊是什么
@@ -36,6 +36,11 @@ export const configSkill: BuiltinSkill = {
 
 ## 写文字
 \`settings set\` 的值是 JSON 或普通文字。普通文字里的 \`\\n\` 不是换行，会原样存进去。要换行就写成带双引号的 JSON 字符串：\`vonvon settings set --group X smartRules.respond='"第一段\\n\\n第二段"'\`。
+
+## 配置消息卡
+\`vonvon settings card-template --json\` 的完整配置在响应的 \`cardDisplay\` 字段里。
+先用 \`vonvon settings get cards --json\` 看这个 Bot 的卡片设置；群用 \`vonvon settings get presentation --group X --json\`。完整卡片配置在 \`cardDisplay\` 字段；\`stored\` 是本级覆盖，\`effective\` 是实际生效值，群可以继承 Bot；旧的 \`showToolCalls\` 和 \`showModel\` 仍能读到。先复制 \`effective.cardDisplay\`；若它是 null，用 \`vonvon settings card-template --json\` 取得完整默认对象作为起点，并保留用户原有的可见行为：\`showToolCalls=false\` 对应工具块 \`mode=off\`，\`showModel\` 的 \`off/running/always\` 对应模型块的同名 \`mode\`。要按用户给的样式修改，只改目标字段。把候选完整 JSON 对象写到文件后，运行 \`vonvon settings card-check <file> --json\` 预检；这个命令只检查，不保存，也不执行自定义脚本。通过后用 \`vonvon settings set cards.cardDisplay='<完整 JSON 对象>'\` 保存；群用 \`vonvon settings set --group X presentation.cardDisplay='<完整 JSON 对象>'\`。跨 Bot 时加 \`--bot B\`。只改一个对象时也要提交完整 \`cardDisplay\`，不要把 JSON 的嵌套路径当成 \`settings set\` 的字段。
+保存会再次检查配置、模板语法和各运行状态下的实际卡片；未通过不会写入。要恢复 Bot 默认卡，用 \`vonvon settings set cards.cardDisplay=null\`；要让群重新继承 Bot，用 \`vonvon settings set --group X presentation.cardDisplay=null\`。保存后再读 \`settings get ... --json\` 核对当前值。已经发出的消息卡不会追改，后续新任务使用新设置。
 
 ## 改完什么时候生效
 群设置改完下一轮生效。Skill 和 MCP 要等新会话。

@@ -16,7 +16,7 @@ import type { AppConfig } from '../src/config/schema';
 import type { AgentBackend } from '../src/agent/types';
 import { offlineModelCatalog, rememberModelCatalog } from '../src/admin/model-catalog';
 import { permissionTable, permissionTiers } from '../src/agent/permission';
-import { DEFAULT_DM_SMART_RULES, FULL_ACCESS_WARNING } from '@vonvon/protocol';
+import { DEFAULT_DM_SMART_RULES, FULL_ACCESS_WARNING, defaultCardDisplay } from '@vonvon/protocol';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
@@ -98,6 +98,84 @@ it('failed persistence cannot mutate nested live preferences', async () => {
   const write = createAppPreferencesWriter({ cfg, persistConfig: async () => { throw new Error('disk'); } });
   await expect(write(p => { p.sessionTitles!.byBackend!['codex-appserver'] = { enabled: false }; })).rejects.toThrow();
   expect(cfg.preferences?.sessionTitles?.byBackend?.['codex-appserver']).toMatchObject({ enabled: true, model: 'custom-title' });
+});
+it('saves cardDisplay atomically for Bot and group, resolves inheritance, resets with null, and rejects stale revisions', async () => {
+  const { owner } = await fixture();
+  const display = defaultCardDisplay();
+  const a = await owner.read(agent) as AgentSettingsView;
+  expect(a.sections.cards.stored.cardDisplay).toBeNull();
+  expect((await owner.save({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { cardDisplay: display } })).kind).toBe('saved');
+  expect((await loadConfig()).preferences?.cardDisplay).toEqual(display);
+  expect(cfg.preferences?.cardDisplay).toEqual(display);
+  expect((await owner.save({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { cardDisplay: display } })).kind).toBe('conflict');
+
+  const inherited = await owner.read(project) as ProjectSettingsView;
+  expect(inherited.sections.presentation!.stored.cardDisplay).toBeNull();
+  expect(inherited.sections.presentation!.effective.cardDisplay).toEqual(display);
+  const groupDisplay = structuredClone(display);
+  groupDisplay.blocks.find(block => block.kind === 'context')!.slot = 'bottom';
+  expect((await owner.save({ scope: project, section: 'presentation', revision: inherited.sections.presentation!.revision, patch: { cardDisplay: groupDisplay } })).kind).toBe('saved');
+  expect((await getProjectByName('demo'))?.presentation?.cardDisplay).toEqual(groupDisplay);
+  const overridden = await owner.read(project) as ProjectSettingsView;
+  expect(overridden.sections.presentation!.stored.cardDisplay).toEqual(groupDisplay);
+  expect(overridden.sections.presentation!.effective.cardDisplay).toEqual(groupDisplay);
+  expect((await owner.save({ scope: project, section: 'presentation', revision: inherited.sections.presentation!.revision, patch: { cardDisplay: null } })).kind).toBe('conflict');
+  expect((await owner.save({ scope: project, section: 'presentation', revision: overridden.sections.presentation!.revision, patch: { cardDisplay: null } })).kind).toBe('saved');
+  expect((await getProjectByName('demo'))?.presentation).not.toHaveProperty('cardDisplay');
+  expect(JSON.parse(await readFile(paths.projectsFile, 'utf8')).projects[0].presentation).not.toHaveProperty('cardDisplay');
+  expect((await owner.read(project) as ProjectSettingsView).sections.presentation!.effective.cardDisplay).toEqual(display);
+  const fresh = await owner.read(agent) as AgentSettingsView;
+  expect((await owner.save({ scope: agent, section: 'cards', revision: fresh.sections.cards.revision, patch: { cardDisplay: null } })).kind).toBe('saved');
+  expect((await loadConfig()).preferences).not.toHaveProperty('cardDisplay');
+  expect(JSON.parse(await readFile(paths.configFile, 'utf8')).preferences).not.toHaveProperty('cardDisplay');
+  expect((await owner.read(project) as ProjectSettingsView).sections.presentation!.effective.cardDisplay).toBeNull();
+});
+it('refuses malformed cardDisplay without changing disk or live settings', async () => {
+  const { owner } = await fixture();
+  const a = await owner.read(agent) as AgentSettingsView;
+  const p = await owner.read(project) as ProjectSettingsView;
+  const configBefore = await readFile(paths.configFile, 'utf8');
+  const projectBefore = await readFile(paths.projectsFile, 'utf8');
+  const malformed = defaultCardDisplay();
+  malformed.blocks[1]!.id = malformed.blocks[0]!.id;
+  expect(() => parseSettingsEdit({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { cardDisplay: malformed } })).toThrow();
+  await expect(owner.save({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { cardDisplay: malformed } })).rejects.toThrow('设置字段、类型或范围无效');
+  await expect(owner.save({ scope: project, section: 'presentation', revision: p.sections.presentation!.revision, patch: { cardDisplay: malformed } })).rejects.toThrow('设置字段、类型或范围无效');
+  expect(await readFile(paths.configFile, 'utf8')).toBe(configBefore);
+  expect(await readFile(paths.projectsFile, 'utf8')).toBe(projectBefore);
+  expect(cfg.preferences).not.toHaveProperty('cardDisplay');
+});
+it('refuses a card script that passes schema validation but cannot compile', async () => {
+  const { owner } = await fixture();
+  const a = await owner.read(agent) as AgentSettingsView;
+  const p = await owner.read(project) as ProjectSettingsView;
+  const configBefore = await readFile(paths.configFile, 'utf8');
+  const projectBefore = await readFile(paths.projectsFile, 'utf8');
+  const display = defaultCardDisplay();
+  display.blocks.push({
+    id: 'custom_bad', kind: 'custom', name: '自定义', slot: 'top-left', mode: 'always',
+    appearance: 'text', template: '{{branch}}', size: 'notation', color: 'auto',
+    warning: false, warningAt: 80, source: 'script', script: 'function ( {', language: 'node', sample: '{"branch":"feature"}',
+  });
+  expect(parseSettingsEdit({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { cardDisplay: display } })).toBeDefined();
+  expect((await owner.save({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { cardDisplay: display } })).kind).toBe('rejected');
+  expect((await owner.save({ scope: project, section: 'presentation', revision: p.sections.presentation!.revision, patch: { cardDisplay: display } })).kind).toBe('rejected');
+  expect(await readFile(paths.configFile, 'utf8')).toBe(configBefore);
+  expect(await readFile(paths.projectsFile, 'utf8')).toBe(projectBefore);
+  expect(cfg.preferences).not.toHaveProperty('cardDisplay');
+});
+it('ignores only hand-edited invalid cardDisplay on load', async () => {
+  const original = JSON.parse(await readFile(paths.configFile, 'utf8')) as AppConfig;
+  await writeFile(paths.configFile, `${JSON.stringify({ ...original, preferences: { ...original.preferences, cardDisplay: { version: 999 } } })}\n`);
+  const loaded = await loadConfig();
+  expect(loaded.preferences).not.toHaveProperty('cardDisplay');
+  expect(loaded.preferences?.access?.admins).toEqual(['ou_admin']);
+  const rows = JSON.parse(await readFile(paths.projectsFile, 'utf8')) as { projects: Array<Record<string, unknown>> };
+  const row = rows.projects.find(entry => entry.name === 'demo')!;
+  row.presentation = { voiceEnabled: true, showToolCalls: false, showModel: 'running', completionMode: 'manual', longTaskMinutes: 5, cardDisplay: { version: 999 } };
+  await writeFile(paths.projectsFile, `${JSON.stringify(rows)}\n`);
+  expect((await getProjectByName('demo'))?.presentation).toMatchObject({ voiceEnabled: true, showToolCalls: false });
+  expect((await getProjectByName('demo'))?.presentation).not.toHaveProperty('cardDisplay');
 });
 it('validates models, allows custom title ids, resets actual project and session overrides', async () => {
   const { owner } = await fixture(); let p = await owner.read(project) as ProjectSettingsView;

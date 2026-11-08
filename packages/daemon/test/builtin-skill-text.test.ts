@@ -140,6 +140,15 @@ describe('the config builtin skill', () => {
     for (const words of ['`"$VONVON_CLI"`', '`vonvon --help`', '`vonvon bot list`', '`vonvon group list`', '`vonvon settings get`', '不要背', '`--bot B`', '`--group X`', '`--dm`', '`conversation.mode`', '这个 Bot，就是你自己',
       '群设置改完下一轮生效', 'Skill 和 MCP 要等新会话', 'Bot 自己进不了已有的群']) expect(configSkill.body).toContain(words);
   });
+  it('uses the shared settings command for message cards and explains validation and inheritance', () => {
+    for (const words of [
+      '`vonvon settings get cards --json`', '`vonvon settings get presentation --group X --json`', '`vonvon settings card-template --json`',
+      '`vonvon settings card-check <file> --json`', '保留用户原有的可见行为', '不执行自定义脚本',
+      '`vonvon settings set cards.cardDisplay=', '`vonvon settings set --group X presentation.cardDisplay=',
+      '`vonvon settings set cards.cardDisplay=null`', '`vonvon settings set --group X presentation.cardDisplay=null`',
+      '完整 `cardDisplay`', '模板语法', '各运行状态', '后续新任务',
+    ]) expect(configSkill.body).toContain(words);
+  });
   it('lists what cannot be done here and sends the user where it can (dm-agent 6.2)', () => {
     for (const words of ['Vonvon Bot 客户端或终端', '注册 Bot', '换凭据', '删除 Bot', '停用这个 Bot', '重启', '升级', '后台服务', 'API key', '管理员名单', '配对和远程连接', 'Provider', 'lark-cli', 'Bridge']) expect(configSkill.body).toContain(words);
   });

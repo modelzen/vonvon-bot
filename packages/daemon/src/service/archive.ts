@@ -65,9 +65,11 @@ export async function extractTarGz(file: string, into: string, limits: ArchiveLi
   let pending = Buffer.alloc(0);
   let entry: { handle: FileHandle; remaining: number; pad: number } | undefined;
   let ended = false;
+  let refusal: ArchiveError | undefined;
   try {
     // pipeline, not pipe: a read error on the archive (ENOENT, EACCES, EIO) rejects here instead of killing the daemon
     await pipeline(createReadStream(file), createGunzip(), async (chunks: AsyncIterable<Buffer>) => {
+      try {
       for await (const chunk of chunks) {
         if (ended) continue;
         pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
@@ -104,7 +106,15 @@ export async function extractTarGz(file: string, into: string, limits: ArchiveLi
           entry = { handle: await writer.file(name, octal(header.subarray(100, 108))), remaining: size, pad: (512 - (size % 512)) % 512 };
         }
       }
+      } catch (error) {
+        // Some Node versions report the pipeline's cleanup AbortError instead
+        // of the consumer's refusal. Keep the original validation reason.
+        if (error instanceof ArchiveError) refusal = error;
+        throw error;
+      }
     });
+  } catch (error) {
+    throw refusal ?? error;
   } finally { await entry?.handle.close(); }
   if (!ended || entry) throw new ArchiveError('corrupt', 'the tar archive ends early');
 }

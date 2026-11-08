@@ -10,6 +10,7 @@ export function presentationConfig(cfg: AppConfig, project?: Pick<Project, 'pres
     voice: { ...cfg.preferences?.voice, enabled: value.voiceEnabled },
     showToolCalls: value.showToolCalls,
     showModel: value.showModel ?? getModelDisplay(cfg),
+    cardDisplay: value.cardDisplay ?? cfg.preferences?.cardDisplay,
     completionReminder: { mode: value.completionMode, longTaskMinutes: value.longTaskMinutes },
   } };
 }

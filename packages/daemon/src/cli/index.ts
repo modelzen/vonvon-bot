@@ -2,7 +2,7 @@
 import './tune-network';
 import { Command, CommanderError, Help, Option } from 'commander';
 import { badArgs, commandFailure, CommandError } from './command-error';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { formatErrorTree } from '../core/error-parts';
 import { bridgeVersion } from '../core/version';
 import { paths } from '../config/paths';
@@ -11,7 +11,7 @@ import { inBotSession } from '../config/session-env';
 import { observeShutdown, type ShutdownControl } from '../host/lifecycle';
 import type { LingerChoice } from './commands/service';
 import type { ScheduleAction, ScheduleTarget } from './commands/schedule';
-import type { Scope } from '@vonvon/protocol';
+import { defaultCardDisplay, type Scope } from '@vonvon/protocol';
 
 /** devices 8.1: every command takes --json and fails through `commandFailure` (the runner at the bottom). */
 export const program = new Command().name('vonvon').description('Vonvon Bot daemon').version(bridgeVersion());
@@ -420,6 +420,22 @@ memoryScope(covers(memory.command('branch-delete <name>'), 'memory.branchDelete'
   .option('--expected <n>', 'The entry count you saw; a branch changed since is left as it is'))
   .action(async (name: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryBranchDelete(name, options, await memoryTerminal(options)); });
 const settings = program.command('settings').description('Read and change bot, group and session settings');
+settings.command('card-template').description('Print the default message-card configuration as a starting template')
+  .option(...JSON_FLAG)
+  .action(async (options: Json) => {
+    const cardDisplay = defaultCardDisplay();
+    await show(options, [JSON.stringify(cardDisplay, null, 2)], { cardDisplay });
+  });
+settings.command('card-check <file>').description('Validate a complete message-card JSON file without saving it or running custom scripts')
+  .option(...JSON_FLAG)
+  .action(async (file: string, options: Json) => {
+    let input: unknown;
+    try { input = JSON.parse(await readFile(file, 'utf8')); }
+    catch (error) { throw badArgs(error instanceof SyntaxError ? '消息卡文件不是有效 JSON' : `无法读取消息卡文件：${error instanceof Error ? error.message : String(error)}`); }
+    try { await (await import('../card/card-display-validation')).assertValidCardDisplay(input); }
+    catch (error) { throw badArgs(error instanceof Error ? error.message : '消息卡配置无效'); }
+    await show(options, ['消息卡配置有效；尚未保存。'], { kind: 'valid' });
+  });
 type Target = Json & { bot?: string; group?: string; session?: string; host?: boolean; dm?: boolean; revision?: string; reason?: string };
 const READ = ['settings.read.agent', 'settings.read.project', 'settings.read.session', 'settings.read.host'];
 const scoped = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--dm', "The bot's private chat (私聊), not with --group or --session").option('--session <threadId>', 'Session thread id')
@@ -440,6 +456,9 @@ Examples:
   vonvon settings set --group oc_xxx permission.custom='{"sandbox":"read-only","network":true}'
   vonvon settings set --group oc_xxx permission.custom='{"permissionMode":"plan","sandbox":true,"network":"domains","domains":["github.com"]}'
   vonvon settings set cards.showToolCalls=false
+  vonvon settings set cards.cardDisplay='<完整 JSON 对象>'                # Bot 消息卡；先用 settings get cards --json 读取
+  vonvon settings set --group oc_xxx presentation.cardDisplay=null     # 群消息卡重新继承 Bot
+  vonvon settings card-check /path/to/card.json --json                # 只检查完整配置文件，不保存
   vonvon settings set --group oc_xxx model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'
   vonvon settings set judge.selection='{"kind":"llm","model":"gpt-6-luna","effort":"low"}'
   vonvon settings set judge.selection='{"kind":"decision","provider":"typesafe","model":"jev-latest"}'   # 决策模型，各后端的群都用
