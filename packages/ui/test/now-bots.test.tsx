@@ -151,11 +151,16 @@ it('leaves the private chat off the badge: only bound groups are listed and coun
 
 it('hangs each badge from its own lanyard, with no shared rail', () => {
   const html = renderToStaticMarkup(<NowBotList snapshot={snapshot(bot)} {...badgeActions}/>);
-  expect(html).toMatch(/class="badge-board" data-lanyard="[a-d]"/);
+  expect(html).toContain('<div class="badge-board">');
+  expect(html).not.toContain('data-lanyard');
   expect(html).not.toContain('badge-cable');
   // The printed ribbon is decoration: kept out of the accessibility tree.
   expect(html).toContain('<span class="badge-lanyard" aria-hidden="true">');
   expect(html.match(/class="badge-strand"/g)).toHaveLength(2);
+  // Left strand teal in front, printed black behind; the right one the other way
+  // round. Together the two prints read "Vonvon More than a bot".
+  expect(html).toContain('<span class="badge-strand"><i></i><i class="badge-print"><b>More than a bot</b></i></span>');
+  expect(html).toContain('<span class="badge-strand"><i class="badge-print"><b>Vonvon\u2002<span>More than a bot</span></b></i><i></i></span>');
 });
 
 it('opens a Lark Bot in Lark', () => {

@@ -12,15 +12,15 @@ type BadgeProps = {
   jobNumber?: string; editable: boolean; onJobChange: (value: string) => Promise<string | undefined>;
 };
 
-/** Lanyard drafts for the owner to pick from (see now-badges.css); the others go once one is chosen. */
-const LANYARD: 'a' | 'b' | 'c' | 'd' = 'a';
-
 type PointerSample = {x:number; t:number; speed:number};
 const RackPointer = createContext<{current:PointerSample | undefined} | null>(null);
 const clamp = (x:number, max:number) => Math.max(-max,Math.min(max,x));
 
 /** A short pass gives the card angular velocity. The lanyard keeps swinging even
- * when the cursor has crossed the whole card between two animation frames. */
+ * when the cursor has crossed the whole card between two animation frames.
+ * The pivot is the top of the lanyard, well above the card: a pendulum about
+ * 1.4 times as long as the old wire's, so the spring is softer and the kicks
+ * smaller (were 145, 56 and 3°) and it swings slowly, like a badge on fabric. */
 function useHanger(enabled: boolean) {
   const slot = useRef<HTMLDivElement>(null);
   const sample = useContext(RackPointer);
@@ -30,8 +30,8 @@ function useHanger(enabled: boolean) {
     let frame = 0, last = 0, pos = 0, velocity = 0, target = 0, lastKick = -Infinity, lastDirection = 0;
     function draw(t: number) {
       const dt = Math.min((t-last)/1000,.032); last=t;
-      velocity += ((target-pos)*145 - 8.4*velocity)*dt;
-      pos = clamp(pos+velocity*dt,18);
+      velocity += ((target-pos)*100 - 8.4*velocity)*dt;
+      pos = clamp(pos+velocity*dt,12);
       const settled = Math.abs(target - pos) < .012 && Math.abs(velocity) < .05;
       node!.style.setProperty('--swing',(settled ? target : pos).toFixed(3)+'deg');
       frame = settled ? 0 : requestAnimationFrame(draw);
@@ -44,7 +44,7 @@ function useHanger(enabled: boolean) {
       const speed=prev && elapsed<110 ? elapsed>0 ? (e.clientX-prev.x)/Math.max(4,elapsed) : prev.speed : 0;
       const dir=Math.sign(speed);
       if (Math.abs(speed)>.32 && (e.timeStamp-lastKick>100 || dir!==lastDirection)) {
-        velocity=clamp(velocity-clamp(speed,3.2)*56,200);lastKick=e.timeStamp;lastDirection=dir;start();
+        velocity=clamp(velocity-clamp(speed,3.2)*38,140);lastKick=e.timeStamp;lastDirection=dir;start();
       }
     }
     function move(e:PointerEvent) {
@@ -52,7 +52,7 @@ function useHanger(enabled: boolean) {
       kick(e);
       const r=node!.getBoundingClientRect();
       const x=clamp((e.clientX-r.left)/r.width*2-1,1),y=clamp((e.clientY-r.top)/r.height*2-1,1);
-      target=-x*3;node!.style.setProperty('--yaw',(x*5).toFixed(2)+'deg');
+      target=-x*2.2;node!.style.setProperty('--yaw',(x*5).toFixed(2)+'deg');
       node!.style.setProperty('--pitch',(-y*3).toFixed(2)+'deg');
       node!.style.setProperty('--shine-x',(50+x*42).toFixed(2)+'%');start();
     }
@@ -160,8 +160,10 @@ export function NowBotBadge({agent, index, groupSummary, status, tone, ownerName
     onPointerLeave={e=>{if(e.pointerType==='mouse') hoverTurn(false);}}>
     <div className="badge-hanger">
       <span className="badge-lanyard" aria-hidden="true"><span className="badge-strands">
-        <span className="badge-strand"><i/><i><b>more than a bot · Vonvon</b></i></span>
-        <span className="badge-strand"><i/><i><b>Vonvon · more than a bot</b></i></span>
+        {/* Each strand turns over in place with the card: teal and black swap
+            sides, and the two prints together read "Vonvon More than a bot". */}
+        <span className="badge-strand"><i/><i className="badge-print"><b>More than a bot</b></i></span>
+        <span className="badge-strand"><i className="badge-print"><b>Vonvon&ensp;<span>More than a bot</span></b></i><i/></span>
       </span></span>
       <span className="badge-clasp" aria-hidden="true"/>
       <div className="badge-perspective"><div className="badge-tilt"><div className="badge-flipper">
@@ -233,7 +235,7 @@ export function BadgeRack({children}: {children: ReactNode}) {
     const cards=n.querySelectorAll<HTMLElement>('.badge-slot');
     const spacing=cards.length>1?cards[1]!.offsetLeft-cards[0]!.offsetLeft:n.clientWidth;
     n.scrollBy({left:direction*spacing,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});}
-  return <div className="badge-board" data-lanyard={LANYARD}>
+  return <div className="badge-board">
     <div className="badge-rail" ref={rail} role="region" tabIndex={0} aria-label="Bot 工牌，可横向滚动"
       onKeyDown={event => {
         if (event.target !== event.currentTarget) return;
