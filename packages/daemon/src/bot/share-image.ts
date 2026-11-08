@@ -62,6 +62,8 @@ export async function sendShareImage(deps: { channel: Pick<LarkChannel, 'rawClie
     return { ok: false, reason: reasonOf(error) };
   }
   if (!imageKey) return { ok: false, reason: 'failed' };
+  // Again: the upload may have taken a minute.
+  if (!isAdmin(cfg, request.openId)) return { ok: false, reason: 'not-admin' };
   // Feishu keeps one message per uuid for an hour: sent again after an answer that never came, the same GIF to the same
   // person is not sent twice.
   const uuid = `share-${createHash('sha256').update(`${request.sha256}:${request.openId}`).digest('hex').slice(0, 32)}`;

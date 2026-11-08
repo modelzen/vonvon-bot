@@ -171,7 +171,8 @@ export function createShareUploads(service: AdminService, options: { idleMs?: nu
     upload.parts = [];
     if (image.length !== upload.bytes || createHash('sha256').update(image).digest('hex') !== upload.sha256) return broken();
     if (!isGif(image)) return refused('bad_image', '分享图不是 GIF，请重新生成后再发。');
-    // One send per Bot at a time: a second one waits for the first.
+    // One send per Bot at a time: a second one waits for the first, and goes out even if its window left meanwhile, since
+    // the person clicked 发送.
     const run = (sending.get(upload.agentId) ?? Promise.resolve()).then(() => deliver(upload, image));
     const tail = run.then(() => undefined, () => undefined);
     sending.set(upload.agentId, tail);
