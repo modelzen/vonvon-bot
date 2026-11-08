@@ -49,16 +49,27 @@ describe('who the GIF goes to', () => {
 
 describe('whether 发到飞书 can be used', () => {
   const admin = (reply: () => Promise<AdminReply>) => vi.fn(async (_request: AdminRequest) => reply());
-  it('reads the Bots that can send', async () => {
+  const sends = ['device', 'share.gif'];
+  it('reads the Bots that can send from a daemon that says it can', async () => {
     const read = admin(async () => ({kind: 'shareTargets', bots}));
-    await expect(readShareTargets(read)).resolves.toEqual({kind: 'ready', bots});
+    await expect(readShareTargets(read, sends)).resolves.toEqual({kind: 'ready', bots});
     expect(read).toHaveBeenCalledWith({type: 'shareTargets'});
     expect(sendBlocked({kind: 'ready', bots})).toBeUndefined();
   });
+  it('does not ask a daemon without share.gif: through the desktop its error says nothing', async () => {
+    const read = admin(async () => {throw new Error('当前 daemon 不支持此操作。');});
+    await expect(readShareTargets(read, ['device', 'attention.group'])).resolves.toEqual({kind: 'old'});
+    await expect(readShareTargets(read, [])).resolves.toEqual({kind: 'old'});
+    expect(read).not.toHaveBeenCalled();
+  });
   it('tells an old daemon from a failure', async () => {
-    for (const code of ['unsupported', 'invalid_request']) await expect(readShareTargets(admin(async () => {throw new RpcError(code, 'x');}))).resolves.toEqual({kind: 'old'});
-    await expect(readShareTargets(admin(async () => {throw new RpcError('outcome_unknown', '网络断开');}))).resolves.toEqual({kind: 'failed', message: '网络断开'});
-    await expect(readShareTargets(admin(async () => ({kind: 'refused', message: '只有管理员能做'})))).resolves.toEqual({kind: 'failed', message: '只有管理员能做'});
+    for (const code of ['unsupported', 'invalid_request']) {
+      await expect(readShareTargets(admin(async () => {throw new RpcError(code, 'x');}), sends)).resolves.toEqual({kind: 'old'});
+      // As the desktop's facade throws it, when the code gets through.
+      await expect(readShareTargets(admin(async () => {throw Object.assign(new Error('x'), {code});}), sends)).resolves.toEqual({kind: 'old'});
+    }
+    await expect(readShareTargets(admin(async () => {throw new RpcError('outcome_unknown', '网络断开');}), sends)).resolves.toEqual({kind: 'failed', message: '网络断开'});
+    await expect(readShareTargets(admin(async () => ({kind: 'refused', message: '只有管理员能做'})), sends)).resolves.toEqual({kind: 'failed', message: '只有管理员能做'});
     expect(sendBlocked({kind: 'old'})).toBe(SHARE_OLD_DAEMON);
     expect(sendBlocked({kind: 'failed', message: '网络断开'})).toBe('读不到能发图的 Bot：网络断开');
     expect(sendBlocked({kind: 'loading'})).toContain('正在读取');
@@ -99,11 +110,13 @@ describe('one recording per set of options', () => {
     expect(model).toHaveBeenCalledOnce();
     expect(recordings.has('k1')).toBe(true);
     expect(recordings.has('k2')).toBe(false);
+    expect(recordings.holds(first)).toBe(true);
   });
   it('discards the old recording when the options change, even one still recording', async () => {
     const fake = shell(), recordings = shareRecordings(fake);
-    void recordings.get('k1', () => ({}));
+    const first = recordings.get('k1', () => ({}));
     void recordings.get('k2', () => ({}));
+    expect(recordings.holds(first)).toBe(false);
     expect(fake.discard).not.toHaveBeenCalled();
     fake.pending[0]!.resolve();
     await settle();
@@ -171,6 +184,7 @@ describe('sending the GIF through the daemon', () => {
     const admin = vi.fn(async (): Promise<AdminReply> => ({kind: 'shareSent', messageId: 'x'}));
     await expect(sendShareGif(admin, new Uint8Array(10), recording('r1'), choice)).rejects.toThrow('发送没有完成，请重试。');
     expect(shareErrorText(new RpcError('unsupported', 'x'), '发送失败')).toBe(SHARE_OLD_DAEMON + '。');
+    expect(shareErrorText(Object.assign(new Error('x'), {code: 'invalid_request'}), '发送失败')).toBe(SHARE_OLD_DAEMON + '。');
     expect(shareErrorText(new Error('网络断开'), '发送失败')).toBe('网络断开');
     expect(shareErrorText('?', '发送失败')).toBe('发送失败');
   });

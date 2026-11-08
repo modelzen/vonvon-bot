@@ -1,4 +1,3 @@
-import {RpcError} from '@vonvon/client/browser';
 import {agentIdSchema, openIdSchema, SHARE_GIF_MAX_BYTES, SHARE_PART_BYTES, type AdminReply, type AdminRequest, type AgentId, type ShareTarget} from '@vonvon/protocol';
 import type {ShareRecording, ShareShell} from './client-context';
 
@@ -8,9 +7,17 @@ export type ShareRecipient = ShareTarget['recipients'][number];
 export type ShareTargetsRead = {kind: 'loading'} | {kind: 'ready'; bots: ShareTarget[]} | {kind: 'old'} | {kind: 'failed'; message: string};
 export const SHARE_OLD_DAEMON = '这台设备上的 Vonvon Bot 升级后可用';
 
-/** A daemon from before now-share N5c does not know the request, or answers it unsupported. */
-const unknownRequest = (error: unknown) => error instanceof RpcError && (error.code === 'unsupported' || error.code === 'invalid_request');
-export async function readShareTargets(admin: Admin): Promise<ShareTargetsRead> {
+/** now-share N5c: a daemon that can send the GIF says so in its serverInfo. */
+export const sharesGif = (capabilities: readonly string[]) => capabilities.includes('share.gif');
+/** A daemon from before now-share N5c does not know the request, or answers it unsupported. Through the desktop the
+ * error is a plain Error whose code may not cross into the page, so the capability is what tells. */
+const unknownRequest = (error: unknown) => {
+  const code = error instanceof Error ? (error as {code?: unknown}).code : undefined;
+  return code === 'unsupported' || code === 'invalid_request';
+};
+/** `capabilities`: the shown device's; without `share.gif` it is not asked. */
+export async function readShareTargets(admin: Admin, capabilities: readonly string[]): Promise<ShareTargetsRead> {
+  if (!sharesGif(capabilities)) return {kind: 'old'};
   try {
     const reply = await admin({type: 'shareTargets'});
     if (reply.kind === 'shareTargets') return {kind: 'ready', bots: reply.bots};
@@ -70,6 +77,8 @@ export function shareRecordings(shell: Pick<ShareShell, 'record' | 'discard'>) {
       return entry.recording;
     },
     has: (key: string) => current?.key === key,
+    /** Whether `recording` is still the one kept: once dropped, it is only discarded. */
+    holds: (recording: Promise<ShareRecording>) => current?.recording === recording,
     drop,
   };
 }
