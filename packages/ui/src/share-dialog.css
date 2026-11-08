@@ -1,0 +1,29 @@
+/* now-share N5a: the live card on the left, the options on the right. */
+.ui-dialog:has(.share-dialog) {width: min(880px, calc(100vw - 32px))}
+.ui-dialog:has(.share-dialog) > .ui-dialog__content.ui-dialog__content {padding: 0; overflow: hidden; display: flex; min-height: 0}
+.share-dialog {display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(300px, 1fr); flex: 1; min-height: 0}
+.share-preview {position: relative; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 44px 22px 22px; background: #ecebe7}
+.share-preview-note {position: absolute; top: 13px; left: 16px; padding: 3px 9px; border-radius: 999px; background: var(--color-surface); box-shadow: 0 1px 3px #0000001a; font-size: 11px; color: var(--color-text-secondary)}
+.share-preview-frame {margin: 0 auto; border-radius: 9px; box-shadow: 0 8px 28px #00000021; overflow: hidden}
+.share-preview-card {width: max-content; transform-origin: 0 0}
+.share-options {display: grid; align-content: start; gap: 14px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 16px 20px 20px}
+.share-options .ss-section + .ss-section {margin-top: 0}
+.share-options .ss-row {min-height: 40px; padding-block: 7px}
+.share-usage-choices {padding: 0 16px 10px; gap: 4px 18px; margin-top: -6px}
+.share-usage-choice img {width: 14px; height: 14px; object-fit: contain}
+.share-usage-choice img[data-round] {border-radius: 50%}
+.share-usage-choice[data-disabled] {color: var(--color-text-tertiary); cursor: default}
+.share-recipient {display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px}
+.share-recipient > strong {font-weight: 600}
+.share-recipient .ui-select-control.share-recipient-choice {width: auto; min-width: 0; max-width: 150px; height: 28px}
+.share-dialog-status {flex: 1; min-width: 0; align-self: center}
+.share-toast {display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin: 0; font-size: 12px; line-height: 1.5; color: var(--color-text)}
+.share-toast[data-tone=danger] {color: var(--color-status-danger)}
+.share-toast-action {padding: 0; border: 0; background: none; color: var(--color-accent); font: inherit; font-size: 11px; cursor: pointer}
+.share-toast-action:hover {text-decoration: underline; text-underline-offset: 3px}
+.share-toast-action:focus-visible {outline: 2px solid var(--color-focus); outline-offset: 2px; border-radius: 3px}
+@media (max-width: 720px) {
+  .ui-dialog:has(.share-dialog) > .ui-dialog__content.ui-dialog__content {overflow-y: auto; display: block}
+  .share-dialog {grid-template-columns: minmax(0, 1fr)}
+  .share-preview, .share-options {overflow: visible}
+}
