@@ -446,3 +446,50 @@ describe('devices-ui-1a facade', () => {
     expect(h.calls.slice(-3)).toEqual([desktopChannels.devicesState, desktopChannels.devicesRemove, desktopChannels.devicesSwitch]);
   });
 });
+
+describe('now-share facade', () => {
+  const recording = { id: '1b4e28ba-2fa1-4d3b-a3f5-ef19b5a7633b', bytes: 3, sha256: 'a'.repeat(64), width: 1360, height: 900, durationMs: 3200 };
+
+  it('gives each recording its own progress, then forgets the listener', async () => {
+    const h = harness();
+    const args: unknown[][] = [];
+    const invoke = h.transport.invoke;
+    h.transport.invoke = (channel, ...values) => { args.push([channel, ...values]); return invoke(channel, ...values); };
+    let answer: (value: unknown) => void = () => {};
+    h.replies.set(desktopChannels.shareRecord, () => new Promise(resolve => { answer = resolve; }));
+    const { shell, client } = createDesktopFacades(h.transport);
+    const seen: number[] = [];
+    const pending = shell.share!.record({ bots: [] }, fraction => seen.push(fraction));
+    const [, model, token] = args.at(-1)!;
+    expect(model).toEqual({ bots: [] });
+    h.event({ type: 'shareProgress', token, fraction: 0.25 });
+    h.event({ type: 'shareProgress', token: (token as number) + 1, fraction: 0.5 });
+    const errors: string[] = [];
+    client.onError(error => errors.push(error.message));
+    h.event({ type: 'shareProgress', token, fraction: 2 });
+    expect(errors).toEqual(['Invalid desktop event']);
+    answer({ ok: true, value: recording });
+    await expect(pending).resolves.toEqual(recording);
+    h.event({ type: 'shareProgress', token, fraction: 0.75 });
+    expect(seen).toEqual([0.25]);
+    // A second recording asks with a new token.
+    void shell.share!.record({ bots: [] });
+    expect(args.at(-1)![2]).not.toBe(token);
+  });
+
+  it('checks every share reply and passes the recorder\'s errors with their codes', async () => {
+    const h = harness();
+    const { shell } = createDesktopFacades(h.transport);
+    h.replies.set(desktopChannels.shareRecord, async () => ({ ok: true, value: { ...recording, sha256: 'nope' } }));
+    await expect(shell.share!.record({})).rejects.toThrow();
+    h.replies.set(desktopChannels.shareCopy, async () => ({ ok: false, error: { kind: 'validation', code: 'clipboard_failed', message: '分享图已保存，但没能放进剪贴板，请重试。' } }));
+    await expect(shell.share!.copy(recording.id)).rejects.toMatchObject({ code: 'clipboard_failed', message: '分享图已保存，但没能放进剪贴板，请重试。' });
+    h.replies.set(desktopChannels.shareBytes, async () => ({ ok: true, value: [1, 2, 3] }));
+    await expect(shell.share!.bytes(recording.id)).rejects.toThrow();
+    h.replies.set(desktopChannels.shareBytes, async () => ({ ok: true, value: Uint8Array.from([1, 2, 3]) }));
+    await expect(shell.share!.bytes(recording.id)).resolves.toEqual(Uint8Array.from([1, 2, 3]));
+    await expect(shell.share!.reveal('/share/a.gif')).resolves.toBeUndefined();
+    await expect(shell.share!.discard(recording.id)).resolves.toBeUndefined();
+    expect(h.calls.slice(-5)).toEqual([desktopChannels.shareCopy, desktopChannels.shareBytes, desktopChannels.shareBytes, desktopChannels.shareReveal, desktopChannels.shareDiscard]);
+  });
+});

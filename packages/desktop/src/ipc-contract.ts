@@ -4,7 +4,7 @@ import {
   agentIdSchema, viewIdSchema, type BackendInstallEventPayload, type CommandResult, type DesktopSnapshot, type DesktopUpdate, type DeviceEventPayload,
   type DevicesState, type LogEventPayload, type MachineReply, type ViewId,
 } from '@vonvon/protocol';
-import type { ShellCapabilities } from '../../ui/src/client-context.js';
+import type { ShareRecording, ShellCapabilities } from '../../ui/src/client-context.js';
 
 /** Main-to-preload notification only; it exposes no renderer action or daemon access. */
 export const desktopFullScreenChannel = 'desktop:window:fullscreen';
@@ -46,6 +46,11 @@ export const desktopChannels = {
   devicesRemove: 'desktop:devices:remove',
   devicesSwitch: 'desktop:devices:switch',
   devicesRetry: 'desktop:devices:retry',
+  shareRecord: 'desktop:share:record',
+  shareCopy: 'desktop:share:copy',
+  shareReveal: 'desktop:share:reveal',
+  shareBytes: 'desktop:share:bytes',
+  shareDiscard: 'desktop:share:discard',
   event: 'desktop:event',
 } as const;
 
@@ -68,6 +73,12 @@ export const desktopShellRequestSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('installDesktopUpdate') }),
 ]);
 export type DesktopShellRequest = z.infer<typeof desktopShellRequestSchema>;
+
+/** now-share N5b: a recording as the page is told about it. */
+export const shareRecordingSchema = z.object({
+  id: z.string().uuid(), bytes: z.number().int().positive(), sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  width: z.number().int().positive(), height: z.number().int().positive(), durationMs: z.number().int().positive(),
+}).strict();
 
 export type SafeFailure = {
   kind: 'rpc' | 'connection' | 'validation';
@@ -98,16 +109,31 @@ export type DesktopEvent =
    * gets the last one. */
   | { type: 'remoteUpdate'; text?: string }
   | { type: 'error'; value: SafeFailure }
+  /** now-share N5b: how far the recording the page's `record` call `token` asked for has got, 0 to 1. */
+  | { type: 'shareProgress'; token: number; fraction: number }
   | { type: 'quitRequested' };
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
   'openExternal' | 'chooseExecutablePath' | 'chooseDirectoryPaths' | 'checkDesktopUpdate' | 'retryDesktopUpdate' | 'installDesktopUpdate' | 'onDesktopUpdate' |
-  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent' | 'quitKeepsDaemon' | 'onRemoteUpdate'>>;
+  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent' | 'quitKeepsDaemon' | 'onRemoteUpdate' |
+  'share'>>;
 
 export interface DesktopResources {
   uiIndex: string;
   preload: string;
   trayPng: string;
+  /** now-share N5b: the offscreen share window's preload, and the GIF encoder's worker. */
+  sharePreload: string;
+  shareWorker: string;
+}
+
+/** now-share N5b: what the page's `share` reaches in the main process (share-recorder.ts). */
+export interface ShareActions {
+  record(model: unknown, onProgress: (fraction: number) => void): Promise<ShareRecording>;
+  copy(id: string): Promise<{ path: string }>;
+  reveal(path: string): Promise<void>;
+  bytes(id: string): Promise<Uint8Array>;
+  discard(id: string): Promise<void>;
 }
 
 export interface AttachedDaemon {
@@ -162,4 +188,6 @@ export interface ShellActions {
   /** devices 7.4: whether quitting leaves this computer's verified daemon running. No daemon or unsure is false. */
   quitKeepsDaemon(): Promise<boolean>;
   connectionLost(): void;
+  /** now-share N5b: the share GIF; without it the page's share calls are not answered. */
+  share?: ShareActions;
 }
