@@ -85,9 +85,9 @@ beforeEach(async () => {
 afterEach(async () => { setDiagnosticsSink(undefined); await orchestrator.shutdown(); });
 
 describe('s25c: the web entry writes 智能 the way the inbound path reads it', () => {
-  it('judges an unnamed main-area message once switched to 智能, stops after 多会话, and says so again on the way back', async () => {
+  it('judges an unnamed main-area message once switched to 智能, stops after 多会话, and judges again on the way back, saying nothing in the group', async () => {
     await switchTo('smart');
-    expect(fake.send).toHaveBeenCalledWith(CHAT, { text: '我会读群消息，合适时接话。' });
+    expect(fake.send).not.toHaveBeenCalled();
     await send(chatter('下周发布要不要先砍掉导出功能？'));
     await vi.waitFor(() => expect(fake.judge).toHaveBeenCalledTimes(1));
     expect(fake.judge.mock.calls[0]![0]).toMatchObject({ variant: 'main' });
@@ -99,10 +99,7 @@ describe('s25c: the web entry writes 智能 the way the inbound path reads it', 
     expect(fake.judge).toHaveBeenCalledTimes(1);
     expect(judgeRecords()).toHaveLength(1);
 
-    fake.send.mockClear();
     await switchTo('smart');
-    expect(fake.send).toHaveBeenCalledTimes(1);
-    expect(fake.send).toHaveBeenCalledWith(CHAT, { text: '我会读群消息，合适时接话。' });
     await send(chatter('导出功能谁在用？'));
     await vi.waitFor(() => expect(fake.judge).toHaveBeenCalledTimes(2));
   });
