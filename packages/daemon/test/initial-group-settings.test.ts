@@ -18,6 +18,7 @@ describe('new group configuration admission',()=>{
     expect(settings.judge).toEqual({kind:'llm',backend:'codex-appserver',model:'work-model',effort:'low'});
     expect(settings.skills).toEqual({disabledPaths:[]});
     expect(settings.smartRules).toEqual(DEFAULT_SMART_RULES);
+    expect(settings.presentation).toMatchObject({showToolCalls:true,showModel:'running',cardDisplay:null});
   });
   it('non-smart groups copy the host choice without requiring its key or login',async()=>{
     const deps=helper();

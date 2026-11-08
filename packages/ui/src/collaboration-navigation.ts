@@ -93,7 +93,9 @@ export function routeFromSearch(destination: Destination, snapshot: DesktopSnaps
   const selection = destination.selection;
   if (!selection || selection.kind === 'overview') return {route: {kind: 'list', view: destination.view ?? 'agents'}};
   if (selection.kind === 'agent') {
-    if (!snapshot.agents.some(item => item.id === selection.id)) return {route: {kind: 'list', view: 'agents'}, missing: '这个 Bot 已不存在，已返回 Bot 列表。'};
+    const agent = snapshot.agents.find(item => item.id === selection.id);
+    if (!agent) return {route: {kind: 'list', view: 'agents'}, missing: '这个 Bot 已不存在，已返回 Bot 列表。'};
+    if (destination.reveal === 'dm-response') return agent.dm ? {route:openDm(agent.id,'response')} : {route:{kind:'agent',id:agent.id,pane:{kind:'groups'}},missing:'这个 Bot 的私聊设置暂不可用，已返回聊天列表。'};
     return {route: {kind: 'agent', id: selection.id, pane: destination.reveal === 'agent-profile' ? {kind:'profile'} : destination.detail?.kind === 'agent-settings' ? {kind: 'settings'} : {kind: 'groups'}}};
   }
   if (selection.kind === 'group') {

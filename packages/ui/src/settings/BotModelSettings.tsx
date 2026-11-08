@@ -85,7 +85,7 @@ export function CommentRulesEditor({view, refresh}: {view: AgentSettingsView; re
   const [notice, setNotice] = useState<string>();
   const dirty = text !== base.content.text;
   const conflict = incoming.revision !== base.revision && incoming.revision !== priorRevision.current;
-  const readonly = view.sections.cards.access.kind === 'readonly';
+  const readonly = view.sections.completion.access.kind === 'readonly';
   const disabled = readonly || pending;
   const limit = Math.min(incoming.maxEditLength, 30000);
   useEffect(() => {
@@ -113,7 +113,7 @@ export function CommentRulesEditor({view, refresh}: {view: AgentSettingsView; re
   useDraft(dirty || pending, {title: '评论回复规则', save: () => saveRules('custom'), discard});
   return <SettingsGroup label="回复规则" id={settingAnchor('评论回复规则')}
     action={<Button size="sm" variant="ghost" disabled={disabled || conflict || base.content.kind === 'default' && !dirty} onClick={() => void saveRules('default')}>恢复默认</Button>}
-    footer={readonly && view.sections.cards.access.kind === 'readonly' ? view.sections.cards.access.message : undefined}>
+    footer={readonly && view.sections.completion.access.kind === 'readonly' ? view.sections.completion.access.message : undefined}>
     <div className="comment-rules-input"><textarea aria-label="评论回复规则" className="settings-instructions" value={text} maxLength={limit} disabled={disabled || conflict}
       onChange={event => {setText(event.target.value); setError(undefined); setNotice(undefined);}}/>
       {dirty && <span className="comment-rules-count" aria-live="polite">{[...text].length.toLocaleString()} / {limit.toLocaleString()}</span>}</div>

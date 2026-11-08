@@ -9,7 +9,7 @@ import type { BuiltinSkill } from './package';
 export const configSkill: BuiltinSkill = {
   name: 'vonvon-config',
   title: '配置',
-  description: "看和改这台电脑上的 Bot、群和它们的设置：沟通方式、智能提示词、角色设定、权限、模型、Skill、MCP、记忆，建群绑群。用户说帮我调调、老抢话、太吵、不回话、以后在某个群怎样说话、照这篇帖子配一下、建个群、这台电脑有哪些 Bot 和群时，先读本 skill。",
+  description: "看和改这台电脑上的 Bot、群和它们的设置：消息卡展示、沟通方式、智能提示词、角色设定、权限、模型、Skill、MCP、记忆，建群绑群。用户说帮我调调、卡片怎么显示、老抢话、太吵、不回话、以后在某个群怎样说话、照这篇帖子配一下、建个群、这台电脑有哪些 Bot 和群时，先读本 skill。",
   body: `这是管理员的私聊。你能用 \`vonvon\` 命令行读和改这台电脑上所有 Bot 和它们的群的配置，用户不用知道有哪些设置。
 
 ## 私聊是什么
@@ -37,6 +37,16 @@ export const configSkill: BuiltinSkill = {
 ## 写文字
 \`settings set\` 的值是 JSON 或普通文字。普通文字里的 \`\\n\` 不是换行，会原样存进去。要换行就写成带双引号的 JSON 字符串：\`vonvon settings set --group X smartRules.respond='"第一段\\n\\n第二段"'\`。
 
+## 配置消息卡
+消息卡按每个群聊、每个私聊独立保存，没有 Bot 级消息卡设置。先用 \`vonvon settings get presentation --group X --json\` 看群，或用 \`vonvon settings get presentation --dm --json\` 看这个 Bot 的私聊；跨 Bot 加 \`--bot B\`。\`stored.cardDisplay\` 是本会话保存的对象，\`effective.cardDisplay\` 是实际生效值。null 表示固定旧版默认展示，不继承 Bot。旧的 \`showToolCalls\` 和 \`showModel\` 只用于兼容已有值，不再用 Bot 的 \`cards.*\` 开关配置消息卡。
+读取时同时记录 \`view.sections.presentation.revision\` 和目标 Bot、群或私聊，后续保存必须使用同一目标和这个原版本。所有基于快照的修改保存都必须带 \`--revision <原版本>\`，不能在临保存时另读一个新版本替代它。
+要自定义时，先复制当前 \`effective.cardDisplay\`；若是 null，用 \`vonvon settings card-template --json\` 响应中的 \`cardDisplay\` 作为起点，仍使用刚才读取的 presentation revision。新对象第一次保存前，参考当前会话已有的工具和模型显示值：\`showToolCalls=false\` 对应工具块 \`mode=off\`，\`showModel\` 的 \`off/running/always\` 对应模型块同名 \`mode\`。只改用户指定字段，并把完整 JSON 对象写到文件。
+若改了脚本，先运行 \`vonvon settings card-test <file> --cwd <绝对目录> --json\`，在这个群或私聊的实际目录显式运行脚本；返回的是样例卡片值，不是当前真实会话。脚本从 stdin 读取 JSON，里面有 context、model、elapsed、status 和 cwd；没有全局 input 变量，Node 可用 process.cwd()。Node 要输出一行 JSON 对象，例如 \`const {execFileSync}=require('node:child_process');let branch='未建分支';try{branch=execFileSync('git',['branch','--show-current'],{cwd:process.cwd(),encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim()||'未建分支'}catch{}console.log(JSON.stringify({branch}));\`；只返回表达式、没有打印结果会失败。用户指定了无数据、无仓库时的降级文案，这也是有效结果；在实际 cwd 跑 card-test 验证降级，不因目录还不是 Git 仓库而阻塞保存。
+脚本测试通过后运行 \`vonvon settings card-check <file> --json\`；card-check 只做静态与卡片检查，不执行自定义脚本。这两步都不保存。然后用 \`vonvon settings set --group X --revision <原版本> presentation.cardDisplay='<完整 JSON 对象>'\` 保存群，或 \`vonvon settings set --dm --revision <原版本> presentation.cardDisplay='<完整 JSON 对象>'\` 保存私聊；跨 Bot 保留原来的 \`--bot B\`。一次提交完整对象，不用嵌套路径；完整对象漏传 revision 会在连接 daemon 前被拒绝。保存会再次检查配置、模板语法和各运行状态下的实际卡片；未通过不会写入。若返回 conflict，必须重新读取同一目标的当前配置和 revision，在新对象上只重做用户指定的修改，再检查、保存；禁止仅换 revision 重提旧对象。保存后再读同一目标的 \`settings get ... --json\`，逐项核对用户要求的位置、显隐、展示时机、文案和提醒行为，核对所有具体要求后再报告完成。已发出的卡片不会追改，后续新任务使用新设置。
+恢复固定旧版默认：群用 \`vonvon settings set --group X presentation.cardDisplay=null\`，私聊用 \`vonvon settings set --dm presentation.cardDisplay=null\`。
+完成提醒也在同一份 \`presentation\` 中：\`completionMode\` 可选 \`manual\`（本轮手动）、\`long\`（长任务）、\`failures\`（失败或超时）、\`always\`（每次）；\`longTaskMinutes\` 是长任务阈值，1–1440 分钟。\`completionTemplate\` 是提醒的纯文本格式，可换行，最多 500 字。常用变量为 \`{{task}}\`（任务名称）、\`{{elapsed}}\`（耗时数值）、\`{{status}}\`（结果）、\`{{statusIcon}}\`（成功 ✅、失败 ⚠️、超时 ⏱）。「用时」「结果在上方卡片。」等文字直接写在模板中，可按用户要求改写。旧变量 \`{{icon}}\`、\`{{durationLabel}}\`、\`{{detail}}\` 仍兼容。真实 @ 提醒由系统添加，不在模板里手写飞书标签。null 恢复旧版提醒格式，不继承 Bot 的模板。
+例如 \`vonvon settings set --group X presentation.completionMode=long presentation.longTaskMinutes=10 presentation.completionTemplate='"{{statusIcon}} {{task}}：{{status}}\\n用时 {{elapsed}}，结果在上方卡片。"'\`；私聊把 \`--group X\` 换成 \`--dm\`。模式、时长、格式和卡片可以在一次 settings set 里一起提交；只改用户指定的字段。CLI 先做静态模板校验，daemon 保存前再次检查；未知变量、未闭合变量、空内容或超长模板会拒绝整次提交，原配置不变。读回核对后再告诉用户；最终卡片更新失败时，系统会保留必要的失败说明。
+手动提醒按钮是卡片中的 \`kind=reminder\` 内置组件，只在流式执行的手动提醒模式出现。可改 \`template\` 点击前文字、\`requestedTemplate\` 点击后文字（均为单行 1–80 字，支持 emoji）和 \`slot\`（top-left/top-right/bottom-left/bottom-right/actions-left/actions-right）；点击后保持原位并禁用，不再发送回调。旧配置省略 \`requestedTemplate\` 时使用“🔔 本轮结束后会提醒发起人”。固定 \`mode=running\`、\`appearance=text\`、\`source=builtin\`，不能隐藏、改高度或注入变量。非手动模式不会凭空生成按钮。
 ## 改完什么时候生效
 群设置改完下一轮生效。Skill 和 MCP 要等新会话。
 

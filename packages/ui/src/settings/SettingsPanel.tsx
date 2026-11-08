@@ -2,7 +2,7 @@ import {RefreshCw, Zap} from 'lucide-react';
 import {useClient, useShellCapabilities} from '../client-context';
 import type {VonvonClient} from '@vonvon/client/browser';
 import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { Button, IconButton, FormField, InlineNotice, Toggle } from "../reference/components/ui";
+import { Button, IconButton, FormField, InlineNotice, SelectControl, Toggle } from "../reference/components/ui";
 import { Dialog } from "../reference/components/ui/Dialog";
 import {
   SettingsGroup,
@@ -15,7 +15,6 @@ import {
   type Membership,
 } from "@vonvon/protocol";
 import {
-  openIdSchema,
   type AgentSettingsView,
   type HostSettingsView,
   type ModelCatalog,
@@ -34,6 +33,8 @@ import {SettingChoices} from './SettingChoices';
 import {NativePermissionFields, nativePermissionPatch} from './NativePermissionFields';
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
 import './permission-summary.css';
+import {ResponseMemberPicker} from './ResponseMemberPicker';
+import {Person} from '../management/Person';
 import {BotTitleSettings, BotCommentSettings} from './BotModelSettings';
 
 type AgentScope = { kind: "agent"; botId: AgentId };
@@ -804,10 +805,10 @@ function AgentPanel({
     return result.kind === 'acted' && result.result.kind === 'saved';
   }
   useDraft(Boolean(chatId), {title: '添加群 ID', save: async () => {setActionMessage('请先将群 ID 添加到列表，再保存。'); return false;}, discard: () => setChatId('')});
-  const cards = view.sections.cards,
-    run = view.sections.run,
+  const run = view.sections.run,
     voice = view.voice,
-    access = view.sections.access;
+    access = view.sections.access,
+    voiceAccess = view.sections.completion.access;
   return (
     <>
       <Editor title="运行上限" headerAction={<IconButton size="sm" variant="ghost" className="bot-settings-refresh" label="重新读取设置" title="重新读取此 Bot 的所有设置" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>} section={run} save={(draft, revision) => save("run", draft, revision)}
@@ -816,12 +817,15 @@ function AgentPanel({
           {run.effective.maxConcurrentRuns !== run.stored.maxConcurrentRuns && <SettingsRow title="当前运行上限" value={String(run.effective.maxConcurrentRuns)} description="重启后使用新上限。"/>}
           <SettingsRow title="空闲超时" description="单位秒，0 表示关闭。" trailing={<NumberField label="空闲超时" value={draft.runIdleTimeoutSeconds} min={0} max={3600} disabled={disabled} onChange={runIdleTimeoutSeconds => set({...draft,runIdleTimeoutSeconds})}/>}/>
         </>}/>
+      <Editor title="完成提醒" section={view.sections.completion} save={(patch, revision) => save('completion', patch, revision)} render={(draft, set, disabled, commit) => <>
+        <SettingsRow title="提醒方式" description="手动时，执行中的消息卡片会显示「完成后提醒我」。" trailing={<SettingChoices segmented label="完成提醒" disabled={disabled} value={draft.mode} choices={[{value:'manual',label:'手动'},{value:'long',label:'长任务'},{value:'failures',label:'失败时'},{value:'always',label:'每次'}]} onChange={mode => void commit({mode})}/>}/>
+        {draft.mode === 'long' && <SettingsRow title="超过几分钟提醒" trailing={<NumberField label="长任务分钟数" value={draft.longTaskMinutes} min={1} max={1440} disabled={disabled} onChange={longTaskMinutes => set({...draft,longTaskMinutes})}/>}/>}</>}/>
       <SettingsGroup
         label="语音转文字"
         id={settingAnchor("语音转文字")}
         footer={
-          cards.access.kind === "readonly"
-            ? cards.access.message
+          voiceAccess.kind === "readonly"
+            ? voiceAccess.message
             : undefined
         }
       >
@@ -832,7 +836,7 @@ function AgentPanel({
             <div className="settings-inline-actions">
               <IconButton label="重新检测" title="重新检测飞书语音权限" variant="ghost"
                 size="sm"
-                disabled={cards.access.kind === "readonly"}
+                disabled={voiceAccess.kind === "readonly"}
                 onClick={() =>
                   void act({
                     type: "act",
@@ -846,7 +850,7 @@ function AgentPanel({
               ><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
               <Button
                 size="sm"
-                disabled={cards.access.kind === "readonly"}
+                disabled={voiceAccess.kind === "readonly"}
                 onClick={() =>
                   void act({
                     type: "act",
@@ -1061,7 +1065,8 @@ export function ProjectPanel({
   hideJudge?: boolean;
 }) {
   const client = useClient();
-  const [memberId, setMemberId] = useState("");
+  const [pickingMembers, setPickingMembers] = useState(false);
+  const [memberBusy, setMemberBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
   async function save(
     section: keyof ProjectSettingsView["sections"],
@@ -1076,37 +1081,24 @@ export function ProjectPanel({
       await refresh();
     return result;
   }
-  async function memberAction(
-    openId: string,
-    membership: "present" | "absent",
-  ) {
-    const result = await client.settings({
-      type: "act",
-      action: {
-        kind: "projectMember",
-        botId: view.scope.botId,
-        projectName: view.scope.projectName,
-        openId,
-        membership,
-        revision: view.members.revision,
-      },
-    });
-    setNotice(errorText(result) ?? "成员范围已保存。");
-    if (result.kind === "acted" && result.result.kind === "saved") {
-      if (membership === 'present' && memberId.trim() === openId) setMemberId('');
-      await refresh();
-      return true;
-    }
-    return false;
+  async function memberAction(openId: string, membership: "present" | "absent") {
+    if (memberBusy || view.sections.permission.access.kind === 'readonly') return false;
+    setMemberBusy(true);
+    try {
+      const result = await client.settings({type:'act', action:{kind:'projectMember', botId:view.scope.botId, projectName:view.scope.projectName, openId, membership, revision:view.members.revision}});
+      setNotice(errorText(result) ?? '成员范围已保存。');
+      if (result.kind === 'acted' && result.result.kind === 'saved') {
+        await refresh(); return true;
+      }
+      if (result.kind === 'acted' && result.result.kind === 'conflict') await refresh();
+      return false;
+    } catch (failure) {setNotice(failure instanceof Error ? failure.message : '成员范围未能保存。'); return false;}
+    finally {setMemberBusy(false);}
   }
-  useDraft(Boolean(memberId), {title: '添加项目成员', save: async () => {
-    const parsed = openIdSchema.safeParse(memberId.trim());
-    return parsed.success ? memberAction(parsed.data, 'present') : false;
-  }, discard: () => setMemberId('')});
   const roster = view.members.roster;
   const memberLabel = (id: string) => {
     const member = roster?.entries.find(entry => entry.openId === id);
-    return member ? `${member.name}${member.kind === "bot" ? " · Bot" : ""} · …${id.slice(-6)}` : `未读取到名称 · …${id.slice(-6)}`;
+    return member ? `${member.name}${member.kind === "bot" ? " · Bot" : ""}` : `…${id.slice(-6)}`;
   };
   const announcedReadonly = useContext(AnnouncedReadonlyMessages);
   const permission = view.sections.permission,
@@ -1164,90 +1156,23 @@ export function ProjectPanel({
       </>}
       {(!partition || partition === 'members') && <>
       {!partition && <h2 className="membership-settings-heading">回复规则</h2>}
-      <SettingsGroup
-        label="响应成员"
-        id={settingAnchor("响应成员")}
-        footer={
-          <>{permission.access.kind === "readonly" && !hasReadonlyMessage(groupReadonly, permission.access) && <span>{permission.access.message} </span>}不选成员时向全群开放；Bot 管理员与所有者始终可用。</>
-        }
-      >
-        {view.members.openIds.map((id) => (
-          <SettingsRow
-            key={id}
-            title={memberLabel(id)}
-            trailing={
-              <Button
-                size="sm"
-                disabled={permission.access.kind === "readonly"}
-                onClick={() => void memberAction(id, "absent")}
-              >
-                移除
-              </Button>
-            }
-          />
-        ))}
-        <SettingsRow
-          title="从群成员选择"
-          description={roster?.state === "complete" ? undefined : "成员列表不完整，已选成员保留。可检查飞书权限后重试，或输入 Open ID。"}
-          trailing={<div className="settings-inline-actions">
-            <select aria-label="选择响应成员" value={memberId} disabled={permission.access.kind === "readonly"}
-              onChange={event => setMemberId(event.target.value)}>
-              <option value="">选择群成员或 Bot</option>
-              {roster?.entries.filter(entry => !view.members.openIds.includes(entry.openId)).map(entry =>
-                <option key={entry.openId} value={entry.openId}>{memberLabel(entry.openId)}</option>)}
-            </select>
-            <IconButton size="sm" variant="ghost" label="重新读取成员" title="重新读取成员" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
-          </div>}
-        />
-        <SettingsRow
-          title="添加成员 Open ID"
-          trailing={
-            <div className="settings-inline-actions">
-              <Text
-                label="成员 Open ID"
-                value={memberId}
-                disabled={permission.access.kind === "readonly"}
-                onChange={setMemberId}
-              />
-              <Button
-                size="sm"
-                disabled={permission.access.kind === "readonly" || !openIdSchema.safeParse(memberId.trim()).success}
-                onClick={() => void memberAction(memberId.trim(), "present")}
-              >
-                添加
-              </Button>
-            </div>
-          }
-        />
-        {view.members.openIds.length > 0 && (
-          <SettingsRow
-            title="允许所有成员"
-            trailing={
-              <Button
-                size="sm"
-                disabled={permission.access.kind === "readonly"}
-                onClick={async () => {
-                  const reply = await client.settings({
-                    type: "act",
-                    action: {
-                      kind: "projectAudience",
-                      botId: view.scope.botId,
-                      projectName: view.scope.projectName,
-                      audience: "all",
-                      revision: view.members.revision,
-                    },
-                  });
-                  setNotice(errorText(reply) ?? "已允许所有成员。");
-                  if (reply.kind === "acted" && reply.result.kind === "saved")
-                    await refresh();
-                }}
-              >
-                清空白名单
-              </Button>
-            }
-          />
-        )}
+      <SettingsGroup label="回应谁" id={settingAnchor("回应谁")}
+        action={<Button size="sm" aria-label="指定成员" disabled={permission.access.kind === 'readonly' || memberBusy} onClick={() => {setNotice(undefined); setPickingMembers(true);}}>指定成员</Button>}
+        footer={<>{permission.access.kind === 'readonly' && !hasReadonlyMessage(groupReadonly, permission.access) && <span>{permission.access.message} </span>}不选成员时向全群开放；Bot 管理员与所有者始终可用。</>}>
+        {!view.members.openIds.length && <SettingsRow title="所有成员" description="本群所有成员都可以发起任务。"/>}
+        {view.members.openIds.map(id => <SettingsRow key={id} title={<Person name={memberLabel(id)}/>} description={`…${id.slice(-6)}`} trailing={<Button size="sm" variant="ghost" aria-label={`移除 ${memberLabel(id)}`} disabled={permission.access.kind === 'readonly' || memberBusy} onClick={() => void memberAction(id,'absent')}>移除</Button>}/>)}
+        {view.members.openIds.length > 0 && <SettingsRow title="所有成员" trailing={<Button size="sm" variant="ghost" disabled={permission.access.kind === 'readonly' || memberBusy} onClick={async () => {
+          if (permission.access.kind === 'readonly' || memberBusy) return;
+          setMemberBusy(true);
+          try {
+            const reply = await client.settings({type:'act',action:{kind:'projectAudience',botId:view.scope.botId,projectName:view.scope.projectName,audience:'all',revision:view.members.revision}});
+            setNotice(errorText(reply) ?? '已允许所有成员。');
+            if (reply.kind === 'acted' && (reply.result.kind === 'saved' || reply.result.kind === 'conflict')) await refresh();
+          } catch (failure) {setNotice(failure instanceof Error ? failure.message : '成员范围未能保存。');}
+          finally {setMemberBusy(false);}
+        }}>恢复所有成员</Button>}/>}
       </SettingsGroup>
+      {pickingMembers && <ResponseMemberPicker roster={roster} selected={view.members.openIds} busy={memberBusy} readonly={permission.access.kind === 'readonly'} message={notice} onPick={id => void memberAction(id,'present')} onRefresh={() => void refresh()} onClose={() => setPickingMembers(false)}/>}
       </>}
       {(!partition || partition === 'response') && <>
       {/* 智能 has no 免@: a judgement decides (s25c). The group keeps its anchor, so search still lands here. */}
@@ -1286,15 +1211,15 @@ export function ProjectPanel({
       </>}
       {(!partition || partition === 'run') && <>
       {run && (view.identity.backend === "claude-agent"
-        ? <SettingsGroup id={settingAnchor("运行中来了消息")} label="运行中来了消息">
-          <SettingsRow title="运行中来了消息" value="排队" description="Claude 不支持插话。" />
+        ? <SettingsGroup id={settingAnchor("新消息处理")} label="新消息处理">
+          <SettingsRow title="新消息处理" value="排队等待" description="Bot 正在执行任务时，新消息会排队等待。Claude 暂不支持立即插话。" />
         </SettingsGroup>
-        : <Editor title="运行中来了消息" section={run}
+        : <Editor title="新消息处理" section={run}
           save={(draft, revision) => save("run", draft, revision)}
-          render={(draft, _set, disabled, commit) => <SettingsRow className="group-choice-row" title="运行中来了消息"
-            description={`插话加入当前任务，排队等待任务结束。当前：${run.effective.pendingPolicy === "steer" ? "插话" : "排队"}。`}
-            trailing={<SettingChoices segmented label="运行中来了消息" value={independent && draft.pendingPolicy === 'default' ? run.effective.pendingPolicy : draft.pendingPolicy} disabled={disabled}
-              choices={[...(!independent ? [{value: "default" as const, label: "跟着 Bot 默认"}] : []), {value: "steer" as const, label: "插话"}, {value: "queue" as const, label: "排队"}]}
+          render={(draft, _set, disabled, commit) => <SettingsRow title="新消息处理"
+            description="Bot 正在执行任务时，如何处理收到的新消息"
+            trailing={<SelectControl label="新消息处理" value={independent && draft.pendingPolicy === 'default' ? run.effective.pendingPolicy : draft.pendingPolicy} disabled={disabled}
+              options={[...(!independent ? [{value: "default" as const, label: "跟着 Bot 默认"}] : []), {value: "queue" as const, label: "排队等待"}, {value: "steer" as const, label: "立即插话"}]}
               onChange={(pendingPolicy) => void commit({pendingPolicy})} />}
           />} />)}
       </>}

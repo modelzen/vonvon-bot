@@ -5,7 +5,7 @@ import type {CollaborationView, Page} from './collaboration-model';
 
 export type Selection = {kind: 'overview'} | {kind: 'agent'; id: AgentId} | {kind: 'group'; id: GroupId} | {kind: 'project'; id: ProjectId} | {kind: 'membership'; id: MembershipId};
 export type DetailPane = {kind: 'overview'} | {kind: 'agent-settings'} | {kind: 'membership-settings'};
-export type SearchReveal = 'machine-advanced' | 'codex' | 'claude' | 'codex-tool' | 'claude-tool' | 'lark-tool' | 'profile-manager' | 'profile-add' | 'profile-create' | 'agent-profile' | 'group-history';
+export type SearchReveal = 'machine-advanced' | 'codex' | 'claude' | 'codex-tool' | 'claude-tool' | 'lark-tool' | 'profile-manager' | 'profile-add' | 'profile-create' | 'agent-profile' | 'group-history' | 'dm-response';
 export type Destination = {page: Page; view?: CollaborationView; selection?: Selection; detail?: DetailPane; section?: string; field?: string; reveal?: SearchReveal; guide?: string};
 export type SearchEntry = {id: string; title: string; context: string; aliases: readonly string[]; destination: Destination; kind: 'page' | 'setting' | 'action' | 'item'};
 export const settingAnchor = (title: string) => `setting-${encodeURIComponent(title)}`;
@@ -28,6 +28,7 @@ const agentGroups: readonly AgentGroup[] = [
   {title: '连接与权限', fields: [item('应用 ID', ['App ID']), item('连接与设置', ['首次运行清单', '开权限', '事件订阅', '发布版本']), item('飞书权限', ['一键开权限']), item('刷新飞书凭据', ['重新扫码', '重新授权']), item('状态与诊断', ['检查连接', '没回的消息'])]},
   {title: '个性与记忆', reveal: 'agent-profile', fields: [item('Bot 个性', ['通用个性']), item('Bot 记忆', ['公共记忆'])]},
   {title: '运行上限', aliases: ['运行策略'], fields: [item('同时处理的任务', ['最大并发任务']), item('当前运行上限', ['当前运行并发'], {field: '', guide: '重启前后上限不同时，会显示当前运行上限。'}), item('空闲超时', ['空闲超时（秒，0 为关闭）'])]},
+  {title: '完成提醒', fields: [item('提醒方式', ['什么时候提醒']), item('超过几分钟提醒', ['长任务阈值'], {field: '提醒方式', guide: '先选择「长任务」，再设置分钟数。'})]},
   {title: '语音转文字', fields: [item('飞书语音权限'), item('权限与测试'), item('重新检测'), item('测试语音', [], {field: '测试'})]},
   {title: '云文档评论', fields: [item('评论模型', ['后端', '评论后端', '模型', '执行工具'], {field: '选择评论模型'}), item('评论思考强度', ['推理强度'], {field: '评论模型思考强度', guide: '先选择一个具体模型，再调整思考强度。'})]},
   {title: '评论回复规则', fields: [item('评论规则文本', ['提示词', 'instructions'], {field: '评论回复规则'}), item('保存规则', ['保存评论规则']), item('恢复默认', ['恢复默认评论规则'])]},
@@ -52,9 +53,9 @@ const membershipGroups: readonly Group[] = [
   {title: '决策模型', smartOnly: true, aliases: ['判断模型'], fields: [item('决策 Provider', ['判断模型', 'Jev', 'System One', 'TypeSafe', 'OpenRouter', 'Vercel', '自定义接口'], {field: ''}), item('决策 Effort', ['判断的推理强度'], {field: '', guide: '先选择语言模型，再设置 Effort。'}), item('自定义决策模型 ID', ['判断的手填模型 id'], {field: '', guide: '选择语言模型 Provider，再点「自定义模型 ID」。'})]},
   {title: '判断规则', smartOnly: true, fields: [item('判断规则', ['什么时候回应', '什么时候不回应', '消息在群主区时', '消息已经在话题里时', '什么时候回复', '什么时候创建新话题', '响应提示词', '新话题提示词'])]},
   {title: '群内响应', ordinaryOnly: true, fields: [item('不 @ 也能发起任务', ['免 @'])]},
-  {title: '运行中来了消息', fields: [item('运行中来了消息', ['运行中收到新消息', '待处理消息策略', '插话', '排队', 'steer', 'queue'])]},
-  {title: '响应成员', fields: [item('从群成员选择', ['选择响应成员']), item('添加成员 Open ID'), item('移除成员', [], {field: '', guide: '在响应成员列表中选择要移除的成员。'}), item('允许所有成员', ['清空白名单'], {field: '', guide: '设置了成员白名单后，可清空白名单。'})]},
-  {title: '消息与提醒', aliases: ['任务卡片', '卡片显示'], fields: [item('显示工具调用'), item('显示模型'), item('完成提醒', ['什么时候提醒', '提醒方式']), item('超过几分钟提醒', ['长任务阈值', '长任务阈值（分钟）'], {field: '完成提醒', guide: '把「完成提醒」设为「长任务」，即可调整分钟数。'})]},
+  {title: '新消息处理', aliases:['运行中来了消息'], fields: [item('新消息处理', ['运行中来了消息', '运行中收到新消息', '待处理消息策略', '插话', '排队', '立即插话', '排队等待', 'steer', 'queue'])]},
+  {title: '回应谁', aliases:['响应范围','响应成员'], fields: [item('指定成员', ['添加成员', '从群成员选择', '选择响应成员'], {field:'指定成员'}), item('移除成员', [], {field: '', guide: '在响应成员列表中选择要移除的成员。'}), item('恢复所有成员', ['所有成员', '允许所有成员', '清空白名单'], {field:'所有成员',guide:'指定了成员后，可恢复为回应所有群成员。'})]},
+  {title: '回复样式', aliases: ['消息卡片', '任务卡片', '卡片显示', '消息与提醒'], fields: [item('回复卡片样式', ['显示工具调用', '显示模型'], {guide: '打开「自定义」，在卡片上点选或拖动内容。每个群聊、私聊单独保存。'}), item('恢复默认展示', ['恢复默认卡片', '恢复默认样式'], {field:'回复卡片样式',guide:'打开「自定义」，在回复样式编辑页底部选择「恢复默认」。'}), item('完成提醒', ['什么时候提醒', '提醒方式'], {field:'回复卡片样式', guide:'打开「自定义」，在左侧「回复行为」中设置完成提醒。'}), item('提醒内容', ['提醒格式', '提醒模板', '自定义提醒文字'], {field:'回复卡片样式', guide:'打开「自定义」，在左侧「完成提醒」下编辑「提醒内容」。'}), item('超过几分钟提醒', ['长任务阈值', '长任务阈值（分钟）'], {field:'回复卡片样式', guide:'打开「自定义」，将「完成提醒」设为「长任务」，再调整分钟数。'})]},
 ];
 /** What the 本机环境 fields were called before the 叫法表 (docs/v1-plan.md section 5), so the old words still find them. */
 const formerly: Readonly<Record<string, string>> = {'后端状态': 'Host 状态', '后端版本': 'Host 版本', '当前账号配置': '当前 Profile'};
@@ -99,7 +100,6 @@ export function searchEntries(snapshot: DesktopSnapshot, capabilities: {external
   const pages: readonly {id: string; title: string; aliases: readonly string[]; page: Page; view?: CollaborationView}[] = [
     {id: 'home', title: '此刻', aliases: ['首页', '概览'], page: 'home'},
     {id: 'agents', title: 'Bot', aliases: ['机器人', '注册 Bot', '添加 Bot', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
-    {id: 'administrators', title: '管理员', aliases: ['添加管理员', '移除管理员', '谁能私聊', '候选人', '创建者', '私聊权限', '被拒的人'], page: 'administrators'},
     {id: 'bridgeImport', title: 'Bridge 导入', aliases: ['导入 Bridge', 'feishu-codex-bridge', 'Feishu Codex Bridge', '迁移', '旧版导入', '恢复导入'], page: 'bridgeImport'},
     {id: 'setup', title: '飞书连接', aliases: ['连接与设置', '首次运行清单', '后端', '准备执行工具', '扫码', '开权限', '一键开权限', '事件订阅', '卡片回调', '发布版本', '长连接'], page: 'setup'},
     {id: 'groups', title: '群组', aliases: ['飞书群', '群聊', '已连接飞书群', '群设置'], page: 'collaboration', view: 'groups'},
@@ -121,6 +121,11 @@ export function searchEntries(snapshot: DesktopSnapshot, capabilities: {external
   for (const agent of snapshot.agents) {
     const base: Destination = {page: 'collaboration', view: 'agents', selection: {kind: 'agent', id: agent.id}};
     entries.push({id: agent.id, title: agent.name, context: 'Bot', aliases: [agent.id], destination: base, kind: 'item'});
+    if (agent.dm) {
+      const destination: Destination = {...base, reveal:'dm-response', section:'回应谁'};
+      entries.push({id:`${agent.id}-dm-administrators`,title:'管理员',context:`和 ${agent.name} 的私聊 · 回应谁`,aliases:['谁能私聊','候选人','创建者','私聊权限','被拒的人','响应范围','响应成员','回应谁'],destination,kind:'setting'});
+      for (const title of ['添加管理员','移除管理员']) entries.push({id:`${agent.id}-dm-${title}`,title,context:`和 ${agent.name} 的私聊`,aliases:[],destination:{...destination,field:title === '添加管理员' ? title : '',guide:title === '移除管理员' ? '在「回应谁」的管理员名单中选择要移除的人。' : undefined},kind:'setting'});
+    }
     entries.push({id: `${agent.id}-settings`, title: 'Bot 设置', context: agent.name, aliases: ['机器人设置', 'Bot 权限'], destination: {...base, detail: {kind: 'agent-settings'}}, kind: 'setting'});
     entries.push({id: `${agent.id}-diagnostics`, title: 'Bot 状态', context: `诊断 · ${agent.name}`, aliases: ['连接', '缺的权限', '没回的消息'], destination: {page: 'diagnostics', section: diagnosticsSection(agent.id)}, kind: 'setting'});
     for (const title of ['智能群注意力', '自定义智能提示词']) entries.push({id: `${agent.id}-${title}`, title, context: `诊断 · ${agent.name}`, aliases: [], destination: {page: 'diagnostics', section: diagnosticsSection(agent.id), field: title}, kind: 'setting'});

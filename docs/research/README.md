@@ -1,5 +1,7 @@
 # 调研记录
 
+- [2026-11-08 消息卡片的直接编辑与拖动引导](2026-11-08-card-editor-affordance/report.md)：Shopify、Notion、Apple Watch/iPhone 官方资料；预览内操作控件、有限槽位、上下文颜色分档及出现条件。仅本地 UI 草稿。
+
 - [2026-11-05 CI 耗时与 worker 实测](2026-11-05-ci-performance/report.md)：100 条历史运行抽样，15 条成功记录按 scope 分组；固定源码对照确认 Windows daemon 双 worker 提速约 48%，Linux 四 worker 有失败，保留原配置。
 
 - [2026-11-04 下载分发接入与验收](2026-11-04-download-distribution/report.md)：境内 COS/CDN 小流量包、海外 Linux R2、并行选源与真实下载记录；上线边界见报告。

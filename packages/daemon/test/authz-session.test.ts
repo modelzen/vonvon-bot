@@ -253,7 +253,7 @@ describe('the bot-session column (unit)', () => {
   it('keeps an owner\'s reach of one group from the whole bot and from new groups', async () => {
     const owner = (scope: Scope) => ({ principal: { kind: 'owner' as const, via: 'local' as const }, protocolVersion: 2, negotiated: true, scope });
     const wide = [
-      request('settings', { type: 'save', edit: { scope: { kind: 'agent', botId: BOT }, section: 'cards', revision: 'r1', patch: { showToolCalls: true } } }),
+      request('settings', { type: 'save', edit: { scope: { kind: 'agent', botId: BOT }, section: 'run', revision: 'r1', patch: { pendingPolicy: 'queue' } } }),
       request('settings', { type: 'act', action: { kind: 'voice', botId: BOT, action: { action: 'enable' } } }),
       request('settings', { type: 'act', action: { kind: 'commentInstructions', botId: BOT, revision: 'r', content: { kind: 'default' } } }),
       request('collaboration', { action: 'createProject', agentId: BOT, name: 'New', folder: { kind: 'default' }, tool: 'codex', conversation: 'shared' }),
@@ -399,7 +399,7 @@ describe('the bot-session column (unit)', () => {
     for (const [kind, rule] of RULES) expect(rule.places.dm, kind).toBe(refused.has(kind) ? 'deny' : onHost.has(kind) ? 'host' : 'bot');
     expect(await authorize(peer('dm'), request('admin', { type: 'secrets' }), deps)).toEqual({ ok: false, code: 'permission_denied', message: expect.stringContaining('密钥页') });
     expect(await authorize(peer('dm'), request('settings', { type: 'act', action: { kind: 'adminMember', botId: BOT, openId: 'ou_a', membership: 'present', revision: 'r' } }), deps))
-      .toEqual({ ok: false, code: 'permission_denied', message: expect.stringContaining('设置 → 管理员') });
+      .toEqual({ ok: false, code: 'permission_denied', message: expect.stringContaining('私聊 → 沟通方式 → 回应谁') });
     expect(await authorize(peer('dm'), request('machine', { type: 'stopHost' }), deps)).toEqual({ ok: false, code: 'permission_denied', message: expect.stringContaining('/menu') });
     for (const call of [request('device', { type: 'pair', ttlMinutes: 10 }), request('command', { type: 'deleteAgent', agentId: BOT }), request('environment', { type: 'startLogin' })]) {
       expect(await authorize(peer('dm'), call, deps)).toEqual({ ok: false, code: 'permission_denied', message: DM_ELSEWHERE });
