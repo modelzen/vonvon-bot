@@ -1,5 +1,5 @@
 import { claudeAccess } from '../src/agent/claude-agent/permission';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { mapNotification } from '../src/agent/codex-appserver/event-map';
 import type { ServerNotification } from '../src/agent/codex-appserver/protocol';
@@ -177,9 +177,9 @@ describe('Claude compaction line and meter, through the real thread and mapper',
     expect(colors).toEqual(['orange','orange','grey','grey','grey']);
   });
 
-  it('on a thread\'s first turn, the line ends on the window getContextUsage() reports, like the meter', async () => {
-    // The model id reads as 200k, the real window is 1M: mid-turn readings carry
-    // the guess until the turn-end getContextUsage().
+  it('on a thread\'s first turn, the compaction line uses the window getContextUsage() reports, not a guess', async () => {
+    // A model id once read as 200k here while the real window was 1M; the first
+    // reading now asks Claude Code instead.
     const firstTurn = [
       m({ type: 'system', subtype: 'init', session_id: 's', model: 'claude-opus-4-7' }),
       assistant('msg-1', 600_000),
@@ -202,10 +202,117 @@ describe('Claude compaction line and meter, through the real thread and mapper',
       render.apply(ev);
       if (ev.type === 'compaction' && ev.phase === 'end') midTurn = cardJson(render.snapshot());
     }
-    expect(midTurn).toContain('已压缩 100% → 75%'); // the guess, until the turn ends
+    expect(midTurn).toContain('已压缩 60% → 15%');
     const s = render.snapshot();
     expect(meterText(s)).toBe('上下文 16% · 160k/1000k');
     expect(cardJson(s)).toContain('已压缩 60% → 15%');
+  });
+
+  // One turn of two requests, no compaction; the fake answers getContextUsage() with `read`.
+  const plainTurn = (model: string) => [
+    m({ type: 'system', subtype: 'init', session_id: 's', model }),
+    assistant('msg-1', 100_000),
+    assistant('msg-2', 120_000),
+    m({ type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: 's', usage: { input_tokens: 0, output_tokens: 0 } }),
+  ];
+  const meteredThread = (turn: SDKMessage[], read: () => Promise<unknown>, extra: Record<string, unknown> = {}) => {
+    const thread = new ClaudeAgentThread({
+      sessionId: 's', resume: false, cwd: process.cwd(), access: claudeAccess(undefined, undefined, process.cwd(), process.cwd()), permission: {}, settingSources: [],
+      model: 'opus',
+      query: ({ prompt }) => Object.assign((async function* () { for await (const _ of prompt) yield* turn; })(), {
+        getContextUsage: read, interrupt: async () => {}, close: () => {}, ...extra,
+      }) as unknown as Query,
+    });
+    threads.push(thread);
+    return thread;
+  };
+  const meters = async (thread: ClaudeAgentThread, turn?: { model: string }) => {
+    const render = new RunRender();
+    const out: string[] = [];
+    for await (const ev of thread.runStreamed({ text: 'go' }, turn).events) {
+      render.apply(ev);
+      if (ev.type === 'context_usage') out.push(meterText(render.snapshot()));
+    }
+    return out;
+  };
+
+  it('the first reading of a thread already shows the window Claude Code reports, read once', async () => {
+    // 0.10.0: claude-opus-5-5 showed 200k until the turn ended, on a host whose
+    // settings set autoCompactWindow 400k (the model's own window is 1M).
+    const read = vi.fn(async () => ({ totalTokens: 125_000, maxTokens: 400_000 }));
+    const thread = meteredThread(plainTurn('claude-opus-5-5'), read);
+    expect(await meters(thread)).toEqual(['上下文 25% · 100k/400k', '上下文 30% · 120k/400k', '上下文 31% · 125k/400k']);
+    expect(read).toHaveBeenCalledTimes(2); // the first reading's, and the turn end's
+  });
+
+  it('when the read fails the readings show tokens only, without retrying each one', async () => {
+    const read = vi.fn()
+      .mockRejectedValueOnce(new Error('control request failed'))
+      .mockResolvedValue({ totalTokens: 125_000, maxTokens: 400_000 });
+    const thread = meteredThread(plainTurn('claude-opus-5-5'), read);
+    expect(await meters(thread)).toEqual(['上下文 已用 100k', '上下文 已用 120k', '上下文 31% · 125k/400k']);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('a read that never answers lets the turn go on after the timeout', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const read = vi.fn()
+        .mockReturnValueOnce(new Promise(() => {}))
+        .mockResolvedValue({ totalTokens: 125_000, maxTokens: 400_000 });
+      const thread = meteredThread(plainTurn('claude-opus-5-5'), read);
+      const done = meters(thread);
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(await done).toEqual(['上下文 已用 100k', '上下文 已用 120k', '上下文 31% · 125k/400k']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a read that answers after its timeout does not overwrite the next model\'s window', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      let model = 'opus';
+      let answerLate!: () => void;
+      const late = new Promise<{ totalTokens: number; maxTokens: number }>(resolve => { answerLate = () => resolve({ totalTokens: 1, maxTokens: 400_000 }); });
+      const read = vi.fn(async () => ({ totalTokens: 125_000, maxTokens: model === 'opus' ? 400_000 : 200_000 }));
+      read.mockReturnValueOnce(late);
+      const [init, msg1, msg2, result] = plainTurn('claude-opus-5-5');
+      const turns = [[init, msg1, msg2, result], [init, msg1, 'late', msg2, result]];
+      const thread = new ClaudeAgentThread({
+        sessionId: 's', resume: false, cwd: process.cwd(), access: claudeAccess(undefined, undefined, process.cwd(), process.cwd()), permission: {}, settingSources: [],
+        model: 'opus',
+        query: ({ prompt }) => Object.assign((async function* () {
+          let n = 0;
+          for await (const _ of prompt) {
+            for (const msg of turns[n++]!) {
+              if (msg !== 'late') { yield msg as SDKMessage; continue; }
+              answerLate();
+              await new Promise(resolve => setImmediate(resolve));
+            }
+          }
+        })(), { getContextUsage: read, setModel: async (next: string) => { model = next; }, interrupt: async () => {}, close: () => {} }) as unknown as Query,
+      });
+      threads.push(thread);
+      const first = meters(thread);
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(3_000);
+      await first;
+      expect(await meters(thread, { model: 'haiku' })).toEqual(['上下文 50% · 100k/200k', '上下文 60% · 120k/200k', '上下文 63% · 125k/200k']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a turn on another model reads its window again', async () => {
+    let model = 'opus';
+    const windows: Record<string, number> = { opus: 400_000, haiku: 200_000 };
+    const read = vi.fn(async () => ({ totalTokens: 125_000, maxTokens: windows[model]! }));
+    const thread = meteredThread(plainTurn('claude-opus-5-5'), read, { setModel: async (next: string) => { model = next; } });
+    expect((await meters(thread))[0]).toBe('上下文 25% · 100k/400k');
+    expect((await meters(thread, { model: 'haiku' }))[0]).toBe('上下文 50% · 100k/200k');
+    expect(read).toHaveBeenCalledTimes(4);
   });
 
   it('a later reading moves the run\'s compaction lines onto its window; one with no window leaves them', () => {
