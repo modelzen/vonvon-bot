@@ -12,11 +12,14 @@ type BadgeProps = {
   jobNumber?: string; editable: boolean; onJobChange: (value: string) => Promise<string | undefined>;
 };
 
+/** Lanyard drafts for the owner to pick from (see now-badges.css); the others go once one is chosen. */
+const LANYARD: 'a' | 'b' | 'c' | 'd' = 'a';
+
 type PointerSample = {x:number; t:number; speed:number};
 const RackPointer = createContext<{current:PointerSample | undefined} | null>(null);
 const clamp = (x:number, max:number) => Math.max(-max,Math.min(max,x));
 
-/** A short pass gives the card angular velocity. The wire keeps swinging even
+/** A short pass gives the card angular velocity. The lanyard keeps swinging even
  * when the cursor has crossed the whole card between two animation frames. */
 function useHanger(enabled: boolean) {
   const slot = useRef<HTMLDivElement>(null);
@@ -156,7 +159,10 @@ export function NowBotBadge({agent, index, groupSummary, status, tone, ownerName
     onPointerEnter={e=>{if(e.pointerType==='mouse' && matchMedia('(any-hover: hover)').matches) hoverTurn(true);}}
     onPointerLeave={e=>{if(e.pointerType==='mouse') hoverTurn(false);}}>
     <div className="badge-hanger">
-      <span className="badge-wire" aria-hidden="true"/>
+      <span className="badge-lanyard" aria-hidden="true"><span className="badge-strands">
+        <span className="badge-strand"><i/><i><b>more than a bot · Vonvon</b></i></span>
+        <span className="badge-strand"><i/><i><b>Vonvon · more than a bot</b></i></span>
+      </span></span>
       <span className="badge-clasp" aria-hidden="true"/>
       <div className="badge-perspective"><div className="badge-tilt"><div className="badge-flipper">
         <button ref={frontControl} type="button" className="badge-face badge-front" inert={back} aria-expanded={back} aria-controls={listId}
@@ -227,7 +233,7 @@ export function BadgeRack({children}: {children: ReactNode}) {
     const cards=n.querySelectorAll<HTMLElement>('.badge-slot');
     const spacing=cards.length>1?cards[1]!.offsetLeft-cards[0]!.offsetLeft:n.clientWidth;
     n.scrollBy({left:direction*spacing,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});}
-  return <div className="badge-board">
+  return <div className="badge-board" data-lanyard={LANYARD}>
     <div className="badge-rail" ref={rail} role="region" tabIndex={0} aria-label="Bot 工牌，可横向滚动"
       onKeyDown={event => {
         if (event.target !== event.currentTarget) return;
@@ -237,7 +243,6 @@ export function BadgeRack({children}: {children: ReactNode}) {
         }
       }}>
       <div className="badge-track">
-        <span className="badge-cable" aria-hidden="true"/>
         <RackPointer.Provider value={sample}>{children}</RackPointer.Provider>
       </div>
     </div>
