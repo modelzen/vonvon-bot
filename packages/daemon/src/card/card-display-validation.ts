@@ -27,11 +27,15 @@ export function assertCardDisplayRender(card:Record<string,unknown>):void {
 }
 
 /** Lint before persistence. Scripts are parsed only; samples supply render data. */
-export async function assertValidCardDisplay(input:unknown):Promise<CardDisplayConfig> {
+export async function assertValidCardDisplay(input:unknown,signal?:AbortSignal):Promise<CardDisplayConfig> {
+  if(signal?.aborted)throw new Error('脚本已取消');
   const parsed=cardDisplayConfigSchema.safeParse(input);
   if(!parsed.success)throw new Error(parsed.error.issues.map(issue=>`${issue.path.join('.')}：${issue.message}`).join('\n'));
   const config=parsed.data;
-  await Promise.all(config.blocks.map(checkCardDisplayScriptSyntax));
+  const syntaxChecks=await Promise.allSettled(config.blocks.map(block=>checkCardDisplayScriptSyntax(block,signal)));
+  const syntaxFailure=syntaxChecks.find((result):result is PromiseRejectedResult=>result.status==='rejected');
+  if(syntaxFailure)throw syntaxFailure.reason;
+  if(signal?.aborted)throw new Error('脚本已取消');
   const samples=Object.fromEntries(config.blocks.filter(block=>block.kind==='custom'&&block.source==='script').map(block=>[block.id,JSON.parse(block.sample) as Record<string,unknown>]));
   const phases:Array<{terminal:RunState['terminal'];footer:RunState['footer']}>= [
     {terminal:'running',footer:'thinking'},{terminal:'running',footer:'tool_running'},
@@ -40,6 +44,7 @@ export async function assertValidCardDisplay(input:unknown):Promise<CardDisplayC
     {terminal:'interrupted',footer:null},{terminal:'idle_timeout',footer:null},
   ];
   for(const phase of phases)for(const percent of [0,69,80,90,100]){
+    if(signal?.aborted)throw new Error('脚本已取消');
     const rs:RunState={...initialState,...phase,startedAt:1_000,completedAt:10_000,
       usage:{used:percent*1_000,window:100_000},
       blocks:[{kind:'reasoning',id:'thought',content:'检查当前设置。',streaming:false},
