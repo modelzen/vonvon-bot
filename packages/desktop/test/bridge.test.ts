@@ -13,6 +13,7 @@ import { DeviceConnectionsError, type DeviceConnections, type ViewChange } from 
 import { ServiceActionError } from '../src/service-error.js';
 import { StartHostRefusal } from '../src/daemon-manager.js';
 import { DesktopUpdateError } from '../src/updates.js';
+import { ShareError } from '../src/share-recorder.js';
 
 const { handlers, openExternal, failRegistration } = vi.hoisted(() => ({
   handlers: new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>>(),
@@ -109,6 +110,8 @@ const remoteView = (id: string, remote: ReturnType<typeof remoteClient>, mode: '
   session: { id, client: remote.client, mode, serverInfo: { type: 'serverInfo', machineId: id, version: '1', protocolVersion: 2 } },
 });
 
+const shareRecording = { id: '1b4e28ba-2fa1-4d3b-a3f5-ef19b5a7633b', bytes: 3, sha256: 'a'.repeat(64), width: 1360, height: 900, durationMs: 3200 };
+
 function harness() {
   const expectedUrl = pathToFileURL(realpathSync(uiIndex)).href;
   const frame = { url: expectedUrl };
@@ -140,7 +143,7 @@ function harness() {
     client, identity: { pid: 1, startedAt: 'now', listen: '127.0.0.1:4000' }, dispose,
     serverInfo: { type: 'serverInfo', machineId: '00000000-0000-4000-8000-000000000000', version: '1', protocolVersion: 2 },
   };
-  const paths: DesktopResources = { uiIndex, preload: '/unused', trayPng: '/unused' };
+  const paths: DesktopResources = { uiIndex, preload: '/unused', trayPng: '/unused', sharePreload: '/unused', shareWorker: '/unused' };
   const actions = {
     startHost: vi.fn(async (_bot?: string) => ({ type: 'done' as const, message: 'started' })),
     restartHost: vi.fn(async (_previous: AttachedDaemon['identity'], send: () => ReturnType<VonvonClient['run']>) => send()),
@@ -157,6 +160,14 @@ function harness() {
     retryDesktopUpdate: vi.fn(async () => ({ state: 'available' as const, current: '1.0.0', latest: '1.1.0', message: 'retried' })),
     installDesktopUpdate: vi.fn(async () => ({ state: 'downloaded' as const, current: '1.0.0', latest: '1.1.0', message: 'ready' })),
     hide: vi.fn(), confirmQuit: vi.fn(async () => {}), connectionLost: vi.fn(), quitKeepsDaemon: vi.fn(async () => true),
+    share: {
+      record: vi.fn(async (_model: unknown, _progress: (fraction: number) => void) => shareRecording),
+      copy: vi.fn(async (_id: string) => ({ path: '/share/vonvon-share-20261108-173905.gif' })),
+      reveal: vi.fn(async (_path: string) => {}),
+      bytes: vi.fn(async (_id: string) => Uint8Array.from([0x47, 0x49, 0x46])),
+      discard: vi.fn(async (_id: string) => {}),
+      cancel: vi.fn(async () => {}),
+    },
   };
   const devs = fakeDevices();
   const bridge = installBridge(owner, window, paths, actions, devs.devices);
@@ -1180,6 +1191,40 @@ describe('devices-ui-1a views', () => {
     h.devs.devices.rename.mockRejectedValueOnce(new DeviceConnectionsError('invalid_name'));
     expect(await h.invoke(desktopChannels.devicesRename, REMOTE_A, '')).toEqual({ ok: false, error: { kind: 'validation', code: 'invalid_name', message: '名字要 1 到 40 个字。' } });
     expect(await h.invoke(desktopChannels.devicesRemove, REMOTE_A)).toEqual({ ok: true, value: { revokedRemotely: false } });
+    await h.bridge.dispose();
+  });
+  it('hands the share calls to the recorder, sends progress for the call that asked, and passes share errors as they are', async () => {
+    const h = harness();
+    expect(await h.invoke(desktopChannels.subscribe)).toMatchObject({ ok: true });
+    h.actions.share.record.mockImplementationOnce(async (_model, progress) => { progress(0.5); return shareRecording; });
+    expect(await h.invoke(desktopChannels.shareRecord, { bots: [] }, 3)).toEqual({ ok: true, value: shareRecording });
+    expect(h.actions.share.record).toHaveBeenCalledExactlyOnceWith({ bots: [] }, expect.any(Function));
+    expect(h.events()).toContainEqual({ type: 'shareProgress', token: 3, fraction: 0.5 });
+    for (const token of [0, 1.5, '3']) expect(await h.invoke(desktopChannels.shareRecord, { bots: [] }, token)).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.shareRecord, { bots: [] })).toMatchObject({ ok: false });
+    const wrong = { ...h.event, senderFrame: { url: h.frame.url } } as IpcMainInvokeEvent;
+    expect(await handlers.get(desktopChannels.shareRecord)?.(wrong, { bots: [] }, 4)).toMatchObject({ ok: false });
+    expect(await handlers.get(desktopChannels.shareBytes)?.(wrong, shareRecording.id)).toMatchObject({ ok: false });
+    expect(h.actions.share.record).toHaveBeenCalledOnce();
+
+    h.actions.share.copy.mockRejectedValueOnce(new ShareError('clipboard_failed'));
+    expect(await h.invoke(desktopChannels.shareCopy, shareRecording.id)).toEqual({
+      ok: false, error: { kind: 'validation', code: 'clipboard_failed', message: '分享图已保存，但没能放进剪贴板，请重试。' },
+    });
+    expect(await h.invoke(desktopChannels.shareCopy, shareRecording.id)).toEqual({ ok: true, value: { path: '/share/vonvon-share-20261108-173905.gif' } });
+    expect(await h.invoke(desktopChannels.shareBytes, shareRecording.id)).toEqual({ ok: true, value: Uint8Array.from([0x47, 0x49, 0x46]) });
+    expect(await h.invoke(desktopChannels.shareBytes, 'x'.repeat(65))).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.shareReveal, 42)).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.shareReveal, '/share/vonvon-share-20261108-173905.gif')).toEqual({ ok: true, value: undefined });
+    expect(await h.invoke(desktopChannels.shareDiscard, shareRecording.id)).toEqual({ ok: true, value: undefined });
+    expect(await h.invoke(desktopChannels.shareCancel, 'extra')).toMatchObject({ ok: false });
+    expect(await handlers.get(desktopChannels.shareCancel)?.(wrong)).toMatchObject({ ok: false });
+    expect(h.actions.share.cancel).not.toHaveBeenCalled();
+    expect(await h.invoke(desktopChannels.shareCancel)).toEqual({ ok: true, value: undefined });
+    expect(h.actions.share.cancel).toHaveBeenCalledOnce();
+    expect(h.actions.share.bytes).toHaveBeenCalledOnce();
+    expect(h.actions.share.reveal).toHaveBeenCalledExactlyOnceWith('/share/vonvon-share-20261108-173905.gif');
+    expect(h.actions.share.discard).toHaveBeenCalledExactlyOnceWith(shareRecording.id);
     await h.bridge.dispose();
   });
 });
