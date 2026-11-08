@@ -88,11 +88,12 @@ export type RemoteSeams = Partial<Pick<EnableDeps, 'interfaces' | 'tailscale' | 
 
 /**
  * devices 4.5: what this daemon reports in a v2 server info: `remote` while an address is opened (D3); `session-scope`:
- * Bot sessions' tokens and `--scope` (D4a). A daemon that updates itself says so (devices 6.5, devices-ui-2 4.11); one
- * the desktop app carries is updated by that app (U4), except on Windows for 0.9.0 (owner 2026-11-02).
+ * Bot sessions' tokens and `--scope` (D4a); `share.gif`: it sends the 此刻 share GIF to Feishu (now-share N5c). A daemon
+ * that updates itself says so (devices 6.5, devices-ui-2 4.11); one the desktop app carries is updated by that app (U4),
+ * except on Windows for 0.9.0 (owner 2026-11-02).
  */
 export const capabilities = (distribution?: string, remoteOpen = false, platform: NodeJS.Platform = process.platform): string[] => [
-  'device', 'session-scope', 'attention.group', ...remoteOpen ? ['remote'] : [],
+  'device', 'session-scope', 'attention.group', 'share.gif', ...remoteOpen ? ['remote'] : [],
   ...distribution === 'standalone' ? ['update.standalone'] : distribution === 'global-npm' ? ['update.npm']
     : distribution === 'bundled' && platform !== 'win32' ? ['update.bundled'] : [],
 ];
