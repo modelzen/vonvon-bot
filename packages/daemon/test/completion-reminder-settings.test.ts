@@ -115,6 +115,15 @@ describe('ordinary task completion reminder config', () => {
 });
 
 describe('ordinary task completion reminder DM cards', () => {
+  it('does not offer obsolete Bot-wide tool and model card controls', () => {
+    const card = buildSettingsCard(cfg());
+    const json = JSON.stringify(card);
+    expect(buttonsFor(card, DM.setTools)).toHaveLength(0);
+    expect(buttonsFor(card, DM.setShowModel)).toHaveLength(0);
+    expect(json).not.toContain('🔧 工具调用');
+    expect(json).not.toContain('🧠 模型显示');
+  });
+
   it('shows the four modes in 运行控制 and highlights failures by default', () => {
     const card = buildSettingsCard(cfg());
     const json = JSON.stringify(card);

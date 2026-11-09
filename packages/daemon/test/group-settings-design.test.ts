@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import { mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { agentViewSchema, projectViewSchema, DEFAULT_SMART_RULES } from '@vonvon/protocol';
+import { agentViewSchema, projectViewSchema, DEFAULT_SMART_RULES, defaultCardDisplay } from '@vonvon/protocol';
 import { DEFAULT_SMART_PROMPT, LEGACY_DEFAULT_SMART_PROMPT } from '../src/judge/prompt';
 import { composeSmartRules } from '../src/judge/smart-file';
 import { botPaths, paths } from '../src/config/paths';
@@ -9,7 +9,7 @@ import { saveConfig } from '../src/config/store';
 import { createSettingsOwner, materializeGroupSettings, type SettingsOwnerDeps } from '../src/admin/settings';
 import { createSettingsService } from '../src/admin/settings-service';
 import { createAppPreferencesWriter } from '../src/admin/ops';
-import { addProject, getProjectByName, mutateProject, type Project } from '../src/project/registry';
+import { addProject, cardDisplayPresentationDefaults, getProjectByName, materializeCardDisplaySettings, mutateProject, type Project } from '../src/project/registry';
 import { upsertSession } from '../src/bot/session-store';
 import { projectModelAllowed, projectModelCatalog, projectSpeedAllowed, resolveModelPreference } from '../src/config/execution';
 import type { AppConfig } from '../src/config/schema';
@@ -156,7 +156,8 @@ it('freezes inherited legacy choices without dropping old session model IDs or u
   expect(migration.updated).toEqual(['demo']);
   const p = (await getProjectByName('demo'))!;
   expect(p.modelAccess!.models).toEqual(expect.arrayContaining(['a', 'old-gateway', 'old-topic']));
-  expect(p).toMatchObject({ future: 'preserve', defaultModel: 'old-gateway', pendingPolicy: 'queue', presentation: { showToolCalls: false }, smartRules: { respond: oldSmart } });
+  expect(p).toMatchObject({ future: 'preserve', defaultModel: 'old-gateway', pendingPolicy: 'queue', smartRules: { respond: oldSmart } });
+  expect(p.presentation).toBeUndefined();
   // the materialization no longer writes `profile`: the role is the bot's file, the supplement and memory are the migration's
   expect(p.profile).toBeUndefined();
 });
@@ -174,14 +175,87 @@ it('edits only local sections while stopped, keeps live actions gated, and never
   const service = createSettingsService({ executeWrite, liveStatus: async () => undefined });
   const p = await service.read(scope) as ProjectSettingsView;
   expect(p.sections.presentation!.access.kind).toBe('writable');
-  expect((await service.save({ scope, section: 'presentation', revision: p.sections.presentation!.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
+  expect((await service.save({ scope, section: 'presentation', revision: p.sections.presentation!.revision, patch: { voiceEnabled: false } })).kind).toBe('saved');
   expect(executeWrite).not.toHaveBeenCalled();
   await expect(readFile(botPaths(botId).processesFile)).rejects.toMatchObject({ code: 'ENOENT' });
   expect((await service.act({ kind: 'voice', botId, action: { action: 'enable' } })).kind).toBe('unavailable');
   const lock = JSON.stringify({ pid: process.pid, appId: botId, startedAt: Date.now() });
   await writeFile(botPaths(botId).processesFile, lock);
-  expect((await service.save({ scope, section: 'presentation', revision: p.sections.presentation!.revision, patch: { showToolCalls: true } })).kind).toBe('unavailable');
+  expect((await service.save({ scope, section: 'presentation', revision: p.sections.presentation!.revision, patch: { voiceEnabled: true } })).kind).toBe('unavailable');
   expect(await readFile(botPaths(botId).processesFile, 'utf8')).toBe(lock);
+});
+
+it('materializes a stopped Bot legacy card into its existing group before reading settings', async () => {
+  const display = defaultCardDisplay();
+  cfg.preferences = { ...cfg.preferences, showToolCalls: false, showModel: 'off', cardDisplay: display };
+  await saveConfig(cfg);
+  const service = createSettingsService({ executeWrite: vi.fn(), liveStatus: async () => undefined });
+  const first = await service.read(scope) as ProjectSettingsView;
+  expect(first.sections.presentation!.stored.cardDisplay).toEqual(display);
+  expect((await getProjectByName('demo'))?.presentation?.cardDisplay).toEqual(display);
+  const revised = defaultCardDisplay();
+  revised.blocks.find(block => block.kind === 'context')!.slot = 'bottom';
+  cfg.preferences.cardDisplay = revised;
+  await saveConfig(cfg);
+  const second = await service.read(scope) as ProjectSettingsView;
+  expect(second.sections.presentation!.effective.cardDisplay).toEqual(display);
+});
+
+it('keeps card-only presentation sparse and resolves current voice and completion defaults', async () => {
+  cfg.preferences = { ...cfg.preferences, voice: { enabled: false }, completionReminder: { mode: 'manual', longTaskMinutes: 5 } };
+  const owner = createSettingsOwner(deps());
+  const first = await view(owner);
+  const cardDisplay = defaultCardDisplay();
+  expect((await owner.save({ scope, section: 'presentation', revision: first.sections.presentation!.revision, patch: { cardDisplay } })).kind).toBe('saved');
+  expect((await getProjectByName('demo'))!.presentation).toEqual({ cardDisplay });
+  cfg.preferences.voice = { enabled: true };
+  cfg.preferences.completionReminder = { mode: 'long', longTaskMinutes: 12 };
+  const current = await view(owner);
+  expect(current.sections.presentation!.effective).toMatchObject({ voiceEnabled: true, completionMode: 'long', longTaskMinutes: 12 });
+  expect((await owner.save({ scope, section: 'presentation', revision: current.sections.presentation!.revision, patch: { cardDisplay: null, completionMode: 'always', longTaskMinutes: 20 } })).kind).toBe('saved');
+  expect((await owner.save({ scope, section: 'presentation', revision: current.sections.presentation!.revision, patch: { cardDisplay } })).kind).toBe('conflict');
+  expect((await getProjectByName('demo'))!.presentation).toEqual({ cardDisplay: null, completionMode: 'always', longTaskMinutes: 20 });
+  expect((await view(owner)).sections.presentation!.effective).toMatchObject({ voiceEnabled: true, cardDisplay: null, completionMode: 'always', longTaskMinutes: 20 });
+});
+
+it('saves a chat reminder template without freezing inherited policy and keeps Bot templates out of settings', async () => {
+  cfg.preferences = {...cfg.preferences, completionReminder:{mode:'long',longTaskMinutes:7,template:'Bot template'}};
+  const owner = createSettingsOwner(deps());
+  const first = await view(owner);
+  expect(first.sections.presentation!.effective.completionTemplate).toBeNull();
+  expect((await owner.read(agent) as AgentSettingsView).sections.completion.stored).toEqual({mode:'long',longTaskMinutes:7});
+  const completionTemplate = '{{icon}} {{task}}：{{status}}\n耗时 {{elapsed}}';
+  expect((await owner.save({scope,section:'presentation',revision:first.sections.presentation!.revision,patch:{completionTemplate}})).kind).toBe('saved');
+  expect((await getProjectByName('demo'))!.presentation).toEqual({completionTemplate});
+  cfg.preferences.completionReminder = {mode:'always',longTaskMinutes:9};
+  const current = await view(owner);
+  expect(current.sections.presentation!.effective).toMatchObject({completionTemplate,completionMode:'always',longTaskMinutes:9});
+  expect((await owner.save({scope,section:'presentation',revision:current.sections.presentation!.revision,patch:{completionTemplate:null}})).kind).toBe('saved');
+  expect((await getProjectByName('demo'))!.presentation).toEqual({completionTemplate:null});
+});
+
+it('validates the complete reminder and card patch before atomically saving any field', async () => {
+  const owner = createSettingsOwner(deps());
+  const first = await view(owner);
+  const before = await readFile(paths.projectsFile,'utf8');
+  for (const completionTemplate of ['{{unknown}}','{{task}','   ','x'.repeat(501)]) {
+    await expect(owner.save({scope,section:'presentation',revision:first.sections.presentation!.revision,patch:{cardDisplay:defaultCardDisplay(),completionMode:'long',longTaskMinutes:11,completionTemplate}})).rejects.toThrow();
+    expect(await readFile(paths.projectsFile,'utf8')).toBe(before);
+  }
+  for (const requestedTemplate of ['{{status.label}}','  ','x'.repeat(81),'一行\n两行']) {
+    const cardDisplay=defaultCardDisplay();
+    cardDisplay.blocks.find(block=>block.kind==='reminder')!.requestedTemplate=requestedTemplate;
+    await expect(owner.save({scope,section:'presentation',revision:first.sections.presentation!.revision,patch:{cardDisplay,completionMode:'manual',completionTemplate:'已完成'}})).rejects.toThrow();
+    expect(await readFile(paths.projectsFile,'utf8')).toBe(before);
+  }
+  const patch = {cardDisplay:defaultCardDisplay(),completionMode:'long' as const,longTaskMinutes:11,completionTemplate:'{{task}} {{status}} · {{elapsed}}'};
+  patch.cardDisplay.blocks.find(block=>block.kind==='reminder')!.requestedTemplate='✅ 完成会喊你回来';
+  expect((await owner.save({scope,section:'presentation',revision:first.sections.presentation!.revision,patch})).kind).toBe('saved');
+  expect((await getProjectByName('demo'))!.presentation).toEqual(patch);
+  const current = await view(owner);
+  expect(current.sections.presentation!.effective).toMatchObject(patch);
+  expect((await owner.save({scope,section:'presentation',revision:first.sections.presentation!.revision,patch:{completionTemplate:null}})).kind).toBe('conflict');
+  expect((await getProjectByName('demo'))!.presentation).toEqual(patch);
 });
 
 it('reads stopped-Bot local skills and model metadata without probing or starting a Provider', async () => {
@@ -215,10 +289,14 @@ it('prefers persisted observed metadata, falls back honestly, and preserves grou
   await expect(rememberModelCatalog('codex-appserver', [{ ...future[0]!, defaultEffort: '' }], '2026-10-22T03:00:00Z')).rejects.toThrow();
   cfg.preferences = { showModel: 'always' };
   await materializeGroupSettings({ ...deps(), readSessions: async () => [] });
-  expect((await getProjectByName('demo'))!.presentation?.showModel).toBe('always');
+  await materializeCardDisplaySettings({ defaults: cardDisplayPresentationDefaults(cfg) });
+  expect((await getProjectByName('demo'))!.presentation?.cardDisplay?.blocks.find(block => block.kind === 'model')?.mode).toBe('always');
   const owner = createSettingsOwner(deps()); const p = await view(owner);
-  expect((await owner.save({ scope, section: 'presentation', revision: p.sections.presentation!.revision, patch: { showModel: 'off' } })).kind).toBe('saved');
-  expect((await view(owner)).sections.presentation!.effective.showModel).toBe('off');
+  await expect(owner.save({ scope, section: 'presentation', revision: p.sections.presentation!.revision, patch: { showModel: 'off' } })).rejects.toThrow('旧工具和模型显示字段只供迁移');
+  const display = defaultCardDisplay();
+  display.blocks.find(block => block.kind === 'model')!.mode = 'off';
+  expect((await owner.save({ scope, section: 'presentation', revision: p.sections.presentation!.revision, patch: { cardDisplay: display } })).kind).toBe('saved');
+  expect((await view(owner)).sections.presentation!.effective.cardDisplay?.blocks.find(block => block.kind === 'model')?.mode).toBe('off');
   expect(cfg.preferences.showModel).toBe('always');
 });
 

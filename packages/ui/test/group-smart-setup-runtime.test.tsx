@@ -28,7 +28,7 @@ vi.mock('react', async original => {
 vi.mock('../src/client-context', async original => ({...await original<typeof import('../src/client-context')>(), useActiveDevice: () => ({id: 'local', isRemote: false, name: '这台电脑', mode: 'full', capabilities: []}), useClient: () => harness.client, useShellCapabilities: () => undefined}));
 vi.mock('../src/settings/DraftGuard', () => ({useDraftGuard: () => ({navigate: (action: () => void) => action()}), useDraft: () => {}}));
 type Element = ReactElement<Record<string, any>>;
-function nodes(node: ReactNode): Element[] {if (Array.isArray(node)) return node.flatMap(nodes); if (!isValidElement<Record<string, any>>(node)) return []; return [node, ...nodes(node.props.children), ...nodes(node.props.responseHeader)];}
+function nodes(node: ReactNode): Element[] {if (Array.isArray(node)) return node.flatMap(nodes); if (!isValidElement<Record<string, any>>(node)) return []; return [node, ...nodes(node.props.children), ...nodes(typeof node.props.responseHeader === 'function' ? node.props.responseHeader(null) : node.props.responseHeader)];}
 function renderAt(name: string, make: () => ReactNode) {
   const slot = harness.slots[name] ??= {states: [], refs: [], effects: [], memos: [], state: 0, ref: 0, effect: 0, memo: 0};
   slot.state = slot.ref = slot.effect = slot.memo = 0; harness.active = name;
@@ -225,7 +225,7 @@ it('shows attention beside the smart conversation control on 沟通方式 and hi
     const loaded = nodes(renderAt('attention-loader', () => (loader.type as (props: any) => ReactNode)(loader.props)))
       .find(node => node.type === GroupSettingsContent);
     const content = loaded ? nodes(renderAt('attention-content', () => GroupSettingsContent(loaded.props as any))) : [];
-    return {workspace, content, header: nodes(settings.props.responseHeader)};
+    return {workspace, content, header: nodes(typeof settings.props.responseHeader === 'function' ? settings.props.responseHeader(null) : settings.props.responseHeader)};
   }
   async function settled() {inspect(); await flush(); inspect(); await flush(); return inspect();}
   let ui = await settled();

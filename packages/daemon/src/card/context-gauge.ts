@@ -53,7 +53,7 @@ export function runCardMeter(usage: Usage | undefined): CardElement {
   if (pct === null || !usage.window) return colorNote(`上下文 已用 ${k(usage.used)}`, 'grey');
   const t = ctxTier(usage.used / usage.window);
   const text = `上下文 ${pct}% · ${k(usage.used)}/${k(usage.window)}`;
-  return t.level === 0 ? colorNote(text, 'grey') : colorNote(`${t.dot} ${text}`, t.color);
+  return colorNote(text, t.level === 0 ? 'grey' : t.color);
 }
 
 /** The process-area line for one compaction, e.g. `已压缩 85% → 20%`. Both ends

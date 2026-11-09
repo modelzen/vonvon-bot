@@ -32,7 +32,7 @@ describe('turning a person away (dm-agent 3.5)', () => {
     const t = fixture({ names: { ou_a: '张三' } });
     await t.refuse({ openId: 'ou_a', chatId: 'oc_p2p', replyTo: 'om_1' });
     expect(t.send).toHaveBeenCalledExactlyOnceWith('oc_p2p', { markdown: DM_REFUSED_MESSAGE }, { replyTo: 'om_1' });
-    expect(DM_REFUSED_MESSAGE).toContain('「设置 → 管理员」');
+    expect(DM_REFUSED_MESSAGE).toContain('「私聊 → 沟通方式 → 回应谁」');
     expect(t.lookupName).toHaveBeenCalledWith('ou_a', 'oc_p2p');
     expect(readRefused(appId, t.now())).toEqual([{ openId: 'ou_a', name: '张三', at: t.now() }]);
   });

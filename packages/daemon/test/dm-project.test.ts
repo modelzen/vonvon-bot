@@ -198,7 +198,8 @@ describe('ensureDmProject', () => {
     expect(statSync(cwd).isDirectory()).toBe(true);
     const [row] = stored();
     expect(row).toEqual({ name: '私聊', chatId: dmChatId(APP), cwd, blank: true, origin: 'created', kind: 'single', smart: true, noMention: true, mode: 'full', network: true, createdAt: expect.any(Number), dm: { people: {} },
-      backend: 'claude-agent', defaultModel: 'm', defaultEffort: 'high', modelAccess: { backend: 'claude-agent', models: ['m'], efforts: ['high'] } });
+      backend: 'claude-agent', defaultModel: 'm', defaultEffort: 'high', modelAccess: { backend: 'claude-agent', models: ['m'], efforts: ['high'] },
+      presentation:{cardDisplay:null} });
   });
   it('joins an upgraded bot\'s groups', async () => {
     registered();

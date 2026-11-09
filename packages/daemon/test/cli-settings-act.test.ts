@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { VonvonClient } from '@vonvon/client';
-import type { SettingsRequest } from '@vonvon/protocol';
+import { defaultCardDisplay, type SettingsRequest } from '@vonvon/protocol';
 import { commandFailure } from '../src/cli/command-error';
 import { CLI_PARITY_ALLOWLIST } from '../src/cli/parity-allowlist';
 import { loadCommands } from './helpers/cli-commands';
@@ -45,6 +45,59 @@ function harness(settings: (request: SettingsRequest) => unknown) {
   return { send, acts, connect, daemon, failure, io: (json = false) => ({ json, write: (text: string) => { out += text; } }), out: () => out, json: () => JSON.parse(out), clear: () => { out = ''; } };
 }
 const pipe = (text: string): Stdin => ({ isTTY: false, read: async () => text });
+
+it('validates reminder format before connecting and saves format and timing in one project revision', async () => {
+  const presentation = section({cardDisplay:null,completionMode:'failures',longTaskMinutes:3,completionTemplate:null});
+  const h = harness(request => request.type === 'read' ? {kind:'view',view:projectView([],{sections:{presentation}})}
+    : {kind:'saved',result:{kind:'saved',section:{},effects:[]}});
+  expect(await h.failure(runSettingsSet(['presentation.completionTemplate={{unknown}}','presentation.longTaskMinutes=10'],{group:'研发'},h.io(),h.daemon))).toMatchObject({exitCode:2,error:{message:expect.stringContaining('未知提醒变量')}});
+  expect(h.connect).not.toHaveBeenCalled();
+  await runSettingsSet(['presentation.completionMode=long','presentation.longTaskMinutes=10','presentation.completionTemplate="{{task}} {{status}}\\n用时 {{elapsed}}"'],{group:'研发'},h.io(),h.daemon);
+  expect(h.send).toHaveBeenLastCalledWith({type:'save',edit:{scope:{kind:'project',botId:'cli_a',projectName:'研发'},section:'presentation',revision:presentation.revision,patch:{completionMode:'long',longTaskMinutes:10,completionTemplate:'{{task}} {{status}}\n用时 {{elapsed}}'}}});
+  expect(h.send.mock.calls.filter(([request]) => request.type === 'save')).toHaveLength(1);
+});
+
+it('requires the read-time revision for full card snapshots before connecting, for groups and private chats', async () => {
+  const h=harness(()=>{throw new Error('must not connect');});
+  const assignment=`presentation.cardDisplay=${JSON.stringify(defaultCardDisplay())}`;
+  for(const target of [{group:'研发'},{dm:true}])for(const revision of [undefined,'','   ']){
+    expect(await h.failure(runSettingsSet([assignment],{...target,revision},h.io(),h.daemon))).toMatchObject({
+      exitCode:2,error:{message:expect.stringContaining('view.sections.presentation.revision')},
+    });
+  }
+  expect(h.connect).not.toHaveBeenCalled();
+  expect(h.send).not.toHaveBeenCalled();
+});
+
+it('preserves an explicit snapshot revision despite a newer read and returns conflict without retrying', async () => {
+  const cardA=defaultCardDisplay();
+  cardA.blocks.find(block=>block.kind==='context')!.slot='bottom-left';
+  const cardB=defaultCardDisplay();
+  cardB.blocks.find(block=>block.kind==='tools')!.mode='off';
+  const presentationB={...section({cardDisplay:cardB}),revision:'revision-B'};
+  const scope={kind:'project',botId:'cli_a',projectName:'研发'};
+  const current={scope,section:'presentation',value:presentationB};
+  const h=harness(request=>request.type==='read'
+    ? {kind:'view',view:projectView([],{sections:{presentation:presentationB}})}
+    : {kind:'saved',result:{kind:'conflict',current}});
+  expect(await h.failure(runSettingsSet([`presentation.cardDisplay=${JSON.stringify(cardA)}`],{group:'研发',revision:'revision-A'},h.io(true),h.daemon))).toMatchObject({
+    exitCode:5,error:{kind:'conflict',current},
+  });
+  expect(h.send.mock.calls.map(([request])=>request)).toEqual([
+    {type:'read',scope},
+    {type:'save',edit:{scope,section:'presentation',revision:'revision-A',patch:{cardDisplay:cardA}}},
+  ]);
+  expect(presentationB.effective).toEqual({cardDisplay:cardB});
+});
+
+it('still permits an explicit reset to default without a held revision', async () => {
+  const presentation={...section({cardDisplay:defaultCardDisplay()}),revision:'revision-current'};
+  const h=harness(request=>request.type==='read'
+    ? {kind:'view',view:projectView([],{sections:{presentation}})}
+    : {kind:'saved',result:{kind:'saved',section:{},effects:[]}});
+  await runSettingsSet(['presentation.cardDisplay=null'],{group:'研发'},h.io(),h.daemon);
+  expect(h.send).toHaveBeenLastCalledWith({type:'save',edit:{scope:{kind:'project',botId:'cli_a',projectName:'研发'},section:'presentation',revision:'revision-current',patch:{cardDisplay:null}}});
+});
 
 // dm-agent 10 (D4). main 必败: settings had no --dm
 describe('settings --dm', () => {
@@ -359,7 +412,8 @@ describe('settings get: what the buttons change (4.4)', () => {
     h.clear(); await runSettingsGet(undefined, { group: '研发' }, h.io(true), h.daemon);
     expect(Object.keys(JSON.parse(h.out()))).toEqual(['ok', 'view', 'sessions']);
     // one section asked for: only that section
-    h.clear(); await runSettingsGet('cards', {}, h.io(), h.daemon);
+    h.clear(); await runSettingsGet('skills', { group: '研发' }, h.io(), h.daemon);
+    expect(h.out()).toContain('[skills]');
     expect(h.out()).not.toContain('语音转文字');
   });
 

@@ -109,21 +109,21 @@ it("s28a: following the Bot's decision model still explains a missing key", () =
   expect(html).toContain("请在决策模型页添加密钥");
 });
 
-it("s28a: Codex groups offer run policy choices and show the effective policy", () => {
+it("s28a: Codex groups offer clear new-message policy choices with stable backend values", () => {
   const html = settings("multi", { run });
-  const policy = html.match(/role="radiogroup" aria-label="运行中来了消息">(.*?)<\/span><\/label><\/span>/s)?.[1];
+  const policy = html.match(/<div aria-label="新消息处理"[^>]*role="radiogroup">(.*?)<\/div>/s)?.[1];
   expect(policy).toBeDefined();
-  expect(radioOptions(policy ?? '')).toEqual([["default", true], ["steer", false], ["queue", false]]);
-  for (const label of ['跟着 Bot 默认', '插话', '排队']) expect(policy).toContain(label);
-  expect(html).toContain("当前：插话");
+  expect(radioOptions(policy ?? '')).toEqual([["default", true], ["queue", false], ["steer", false]]);
+  for (const label of ['跟着 Bot 默认', '排队等待', '立即插话']) expect(policy).toContain(label);
+  expect(html).toContain("Bot 正在执行任务时，如何处理收到的新消息");
 });
 
 it("s28a: Claude groups explain queueing without a selector; old daemons omit the row", () => {
   const html = settings("multi", { run: { ...run, effective: { pendingPolicy: "queue" } }, backend: "claude-agent" });
-  expect(html).not.toContain('aria-label="运行中来了消息"');
-  expect(html).toContain("Claude 不支持插话");
+  expect(html).not.toContain('aria-label="新消息处理"');
+  expect(html).toContain("Claude 暂不支持立即插话");
   expect(html).toContain("排队");
-  expect(settings("multi")).not.toContain("运行中来了消息");
+  expect(settings("multi")).not.toContain("新消息处理");
 });
 
 

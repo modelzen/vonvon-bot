@@ -190,7 +190,7 @@ describe('judge settings: checks (design 2.4)', () => {
     const groupJudge = o.save({ scope: project, section: 'judge', revision: p.sections.judge.revision, patch: { selection: { kind: 'llm', model: 'gpt-6-luna' } } });
     await vi.waitFor(() => expect(slow.held).toBe(2));
     slow.hold = false;
-    expect((await o.save({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
+    expect((await o.save({ scope: agent, section: 'run', revision: a.sections.run.revision, patch: { pendingPolicy: 'queue' } })).kind).toBe('saved');
     expect((await o.save({ scope: project, section: 'response', revision: p.sections.response.revision, patch: { noMention: true } })).kind).toBe('saved');
     slow.release();
     expect((await botJudge).kind).toBe('saved');
@@ -235,8 +235,8 @@ describe('judge settings: checks (design 2.4)', () => {
       const result = await o.save({ scope, section, revision: (view.sections as Record<string, { revision: string }>)[section]!.revision, patch } as Parameters<typeof o.save>[0]);
       return { kind: result.kind, probes: doctor.mock.calls.length - before };
     };
-    const cards = await probes(agent, 'cards', { showToolCalls: false });
-    expect(await probes(agent, 'judge', { selection: { kind: 'llm', model: 'gpt-6-luna', effort: 'high' } })).toEqual({ kind: 'saved', probes: cards.probes });
+    const run = await probes(agent, 'run', { pendingPolicy: 'queue' });
+    expect(await probes(agent, 'judge', { selection: { kind: 'llm', model: 'gpt-6-luna', effort: 'high' } })).toEqual({ kind: 'saved', probes: run.probes });
     expect(await probes(project, 'judge', { selection: { kind: 'llm', model: 'missing' } })).toEqual({ kind: 'rejected', probes: 0 });
   });
 
@@ -354,7 +354,7 @@ describe('judge settings: the view', () => {
     expect(p.sections.judge.stored.selection).toEqual({ kind: 'default' });
     expect(projectViewSchema.safeParse(p).error?.issues).toBeUndefined();
     // another section's save keeps it
-    expect((await o.save({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
+    expect((await o.save({ scope: agent, section: 'run', revision: a.sections.run.revision, patch: { pendingPolicy: 'queue' } })).kind).toBe('saved');
     expect((await loadConfig()).preferences?.judge).toEqual(future);
   });
 

@@ -159,8 +159,9 @@ it('puts 设备 first in 连接与应用, on the web page with only 允许别的
   const home = (devices?: boolean) => renderToStaticMarkup(<SettingsHome devices={devices} onNavigate={() => {}} onFeature={() => {}}/>);
   const sections = (devices?: boolean) => home(devices)
     .split('<section class="today-settings-section"').slice(1).map(section => [...section.matchAll(/<strong>([^<]+)<\/strong>/g)].map(match => match[1]));
-  const both = [['Provider', '工具', '决策模型', '用量'], ['设备连接', '飞书连接', '管理员', 'Bridge 导入', '应用与启动', '诊断']];
+  const both = [['Provider', '工具', '决策模型', '用量'], ['设备连接', '飞书连接', 'Bridge 导入', '应用与启动', '诊断']];
   expect(sections()).toEqual(both);
+  expect(home()).not.toContain('<strong>管理员</strong>');
   expect(sections(true)).toEqual(both);
   const desktop = home(true).split('<strong>设备连接</strong>')[1]!;
   expect(desktop.slice(0, desktop.indexOf('</small>'))).toContain('连接其他设备，管理对当前设备的访问');

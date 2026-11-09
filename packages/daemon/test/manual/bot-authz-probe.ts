@@ -141,17 +141,17 @@ async function host(cli: string | undefined): Promise<number> {
   const dmScope = ['--scope', `bot=${APP_ID}`];
 
   const member = await turn('dm', MEMBER);
-  check('私聊，成员这一轮：settings set cards.showToolCalls=false', await run(cli, member.token, ['settings', 'set', 'cards.showToolCalls=false', ...dmScope]),
+  check('私聊，成员这一轮：settings set run.pendingPolicy=queue', await run(cli, member.token, ['settings', 'set', 'run.pendingPolicy=queue', ...dmScope]),
     { code: 4, reason: 'permission_denied', text: '只有主人和管理员发消息触发的那一轮能改设置。' });
 
   const admin = await turn('dm', ADMIN);
   await control({ probe: 'switch', on: false });
-  check('私聊，管理员这一轮，"聊天改设置"关着：settings set cards.showToolCalls=false', await run(cli, admin.token, ['settings', 'set', 'cards.showToolCalls=false', ...dmScope]),
+  check('私聊，管理员这一轮，"聊天改设置"关着：settings set run.pendingPolicy=queue', await run(cli, admin.token, ['settings', 'set', 'run.pendingPolicy=queue', ...dmScope]),
     { code: 4, reason: 'permission_denied', text: '主人关了私聊里的“聊天改设置”' });
   await control({ probe: 'switch', on: true });
   check('私聊，管理员这一轮：settings act admin add ou_probe_new', await run(cli, admin.token, ['settings', 'act', 'admin', 'add', 'ou_probe_new', ...dmScope]),
     { code: 4, reason: 'permission_denied', text: '本机管理员名单只有飞书应用的拥有者能改。' });
-  check('私聊，管理员这一轮：settings set cards.showToolCalls=false', await run(cli, admin.token, ['settings', 'set', 'cards.showToolCalls=false', ...dmScope]), { code: 0, text: '"kind":"saved"' });
+  check('私聊，管理员这一轮：settings set run.pendingPolicy=queue', await run(cli, admin.token, ['settings', 'set', 'run.pendingPolicy=queue', ...dmScope]), { code: 0, text: '"kind":"saved"' });
 
   const owner = await turn('dm', OWNER);
   check('私聊，主人这一轮：settings act admin add ou_probe_new', await run(cli, owner.token, ['settings', 'act', 'admin', 'add', 'ou_probe_new', ...dmScope]), { code: 0, text: '"result":"saved"' });
@@ -161,7 +161,7 @@ async function host(cli: string | undefined): Promise<number> {
   check('私聊，主人这一轮，--scope 只到 oc_probe_a：settings set --group oc_probe_b（D4a 的范围先拦）',
     await run(cli, owner.token, ['settings', 'set', '--group', GROUP_B, 'permission.mode=full', '--scope', `bot=${APP_ID},group=${GROUP_A}`]), { code: 2, text: '没有绑定「oc_probe_b」' });
   await owner.close();
-  check('同一枚令牌，那一轮结束后：settings set cards.showToolCalls=false', await run(cli, owner.token, ['settings', 'set', 'cards.showToolCalls=false', ...dmScope]),
+  check('同一枚令牌，那一轮结束后：settings set run.pendingPolicy=queue', await run(cli, owner.token, ['settings', 'set', 'run.pendingPolicy=queue', ...dmScope]),
     { code: 4, reason: 'permission_denied', text: '这次调用对应的那一轮对话已经结束，不能再改设置。' });
 
   const groupScope = ['--scope', `bot=${APP_ID},group=${GROUP_A}`];
@@ -200,7 +200,7 @@ async function host(cli: string | undefined): Promise<number> {
   const exited = new Promise(resolve => child.once('exit', resolve));
   child.kill('SIGTERM');
   await exited;
-  check('Bot 进程没了（令牌还没作废）：settings set', await run(cli, admin.token, ['settings', 'set', 'cards.showToolCalls=false', ...dmScope]), { code: 4, reason: 'permission_denied', text: '这次调用对应的那一轮对话已经结束' });
+  check('Bot 进程没了（令牌还没作废）：settings set', await run(cli, admin.token, ['settings', 'set', 'run.pendingPolicy=queue', ...dmScope]), { code: 4, reason: 'permission_denied', text: '这次调用对应的那一轮对话已经结束' });
 
   await api.close();
   process.stdout.write(failed ? `${failed} 步不对。\n` : '全部符合。\n');
