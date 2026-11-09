@@ -15,4 +15,4 @@
   source artwork was only resized; its geometry and colors were not changed.
 
 These marks identify the corresponding products in the local-environment,
-project-grouping and usage interfaces, and on the 此刻 share card.
+project-grouping and usage interfaces.

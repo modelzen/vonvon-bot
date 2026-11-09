@@ -46,7 +46,7 @@ const windowsCli = join(dist, 'cli');
 const windowsCliSha256 = process.platform === 'win32' ? await buildWindowsCli(windowsCli) : undefined;
 await build({
   absWorkingDir: root,
-  entryPoints: { main: 'src/main.ts', preload: 'src/preload.ts', 'share-preload': 'src/share-preload.ts', 'share-gif-worker': 'src/share-gif-worker.ts' },
+  entryPoints: { main: 'src/main.ts', preload: 'src/preload.ts' },
   outdir: dist,
   outExtension: { '.js': '.cjs' },
   bundle: true,
@@ -65,8 +65,6 @@ await mkdir(join(stage, 'assets'), { recursive: true });
 if (windowsCliSha256) await cp(windowsCli, join(stage, 'cli'), { recursive: true });
 await cp(join(dist, 'main.cjs'), join(stage, 'desktop/main.cjs'));
 await cp(join(dist, 'preload.cjs'), join(stage, 'desktop/preload.cjs'));
-await cp(join(dist, 'share-preload.cjs'), join(stage, 'desktop/share-preload.cjs'));
-await cp(join(dist, 'share-gif-worker.cjs'), join(stage, 'desktop/share-gif-worker.cjs'));
 await cp(join(dist, 'update-config.json'), join(stage, 'dist/update-config.json'));
 await cp(join(dist, 'windows-update-config.json'), join(stage, 'dist/windows-update-config.json'));
 await cp(ui, join(stage, 'ui'), { recursive: true });

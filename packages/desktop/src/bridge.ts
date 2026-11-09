@@ -14,7 +14,6 @@ import { allowedExternalUrl, type ExternalUrlKind } from '../../ui/src/url-actio
 import { ServiceActionError } from './service-error.js';
 import { StartHostRefusal } from './daemon-manager.js';
 import { DesktopUpdateError } from './updates.js';
-import { ShareError } from './share-recorder.js';
 import {
   desktopChannels, desktopShellRequestSchema, safeErrorCode, viewArgumentSchema, type AttachedDaemon, type DesktopBridge, type DesktopEvent,
   type DesktopResources, type IpcResult, type SafeFailure, type ShellActions,
@@ -129,7 +128,6 @@ function safeFailure(error: unknown): SafeFailure {
   }
   if (error instanceof ServiceActionError) return { kind: 'validation', message: sanitizeDaemonMessage(error.safeMessage) };
   if (error instanceof StartHostRefusal || error instanceof DesktopUpdateError) return { kind: 'validation', message: error.message };
-  if (error instanceof ShareError) return { kind: 'validation', code: error.code, message: error.message };
   return { kind: 'validation', message: '桌面端操作没有成功，请重试。' };
 }
 
@@ -547,26 +545,6 @@ export function installBridge(
     register(desktopChannels.devicesRemove, 1, value => viewIdSchema.parse(value), value => devices.remove(value));
     register(desktopChannels.devicesSwitch, 1, value => viewIdSchema.parse(value), value => devices.switchTo(value));
     register(desktopChannels.devicesRetry, 0, noArg, async () => { devices.retry(); });
-    // now-share N5b: whichever device is shown, its share GIF is recorded on this computer.
-    const share = actions.share;
-    if (share) {
-      const recordingId = (value: unknown): string => {
-        if (typeof value !== 'string' || value.length > 64) throw new Error('Invalid share request');
-        return value;
-      };
-      register(desktopChannels.shareRecord, 2, (model, token) => {
-        if (typeof token !== 'number' || !Number.isSafeInteger(token) || token < 1) throw new Error('Invalid share request');
-        return { model, token };
-      }, ({ model, token }) => share.record(model, fraction => send({ type: 'shareProgress', token, fraction })));
-      register(desktopChannels.shareCopy, 1, recordingId, id => share.copy(id));
-      register(desktopChannels.shareReveal, 1, value => {
-        if (typeof value !== 'string') throw new Error('Invalid share request');
-        return value;
-      }, path => share.reveal(path));
-      register(desktopChannels.shareBytes, 1, recordingId, id => share.bytes(id));
-      register(desktopChannels.shareDiscard, 1, recordingId, id => share.discard(id));
-      register(desktopChannels.shareCancel, 0, noArg, () => share.cancel());
-    }
     ipcMain.handle(desktopChannels.subscribe, async (event, ...args): Promise<IpcResult<void>> => {
       if (!authorized(event)) return { ok: false, error: { kind: 'validation', message: 'Unauthorized desktop request' } };
       if (args.length !== 0) return { ok: false, error: { kind: 'validation', message: 'Invalid desktop request' } };

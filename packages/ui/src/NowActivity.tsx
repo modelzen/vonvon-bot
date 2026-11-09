@@ -2,24 +2,10 @@ import {useEffect, useMemo, useRef, useState} from 'react';
 import {CornerDownRight, GitBranch, MessageCircle, Minus} from 'lucide-react';
 import type {DesktopSnapshot} from '@vonvon/protocol';
 import {conversationTime} from './conversation-time';
-import {decisionLabels, decisionTrigger, nowDecisions, type NowDecision} from './now-activity';
-import {maskedMark} from './masked-text';
+import {decisionLabels, decisionTrigger, nowDecisions} from './now-activity';
 import './now-activity.css';
 
 const icons = {skip: Minus, main: MessageCircle, reply: CornerDownRight, topic: GitBranch};
-
-/** Also the share card's 群动态, where a masked group name is marked to be painted over. */
-export function NowDecisionRow({entry}: {entry: NowDecision}) {
-  const Icon = icons[entry.decision];
-  const time = conversationTime(entry.decidedAt);
-  return <article className="now-decision" data-decision={entry.decision}>
-    <span className="now-decision-icon" aria-hidden="true"><Icon size={15}/></span>
-    <div className="now-decision-copy">
-      <div className="now-decision-heading"><span className="now-decision-label">{decisionLabels[entry.decision]}</span><span className="now-decision-group" title={entry.group} data-masked={maskedMark(entry.group)}>{entry.group}</span><time dateTime={time?.dateTime} title={time?.title}>{time?.label}</time></div>
-      <div className="now-decision-context"><span title={entry.bot}>{entry.bot}</span><i aria-hidden="true"/><span>{decisionTrigger(entry)}</span></div>
-    </div>
-  </article>;
-}
 
 export function NowActivity({snapshot}: {snapshot: DesktopSnapshot}) {
   const incoming = useMemo(() => nowDecisions(snapshot), [snapshot]);
@@ -44,7 +30,17 @@ export function NowActivity({snapshot}: {snapshot: DesktopSnapshot}) {
       onFocus={() => setFocused(true)} onBlur={event => {if (!event.currentTarget.contains(event.relatedTarget as Node)) setFocused(false);}}
       onScroll={event => setScrolled(event.currentTarget.scrollTop > 2)}>
       <div className="now-activity-items" key={shown[0]?.key} data-arriving={connected && animate.current || undefined}>
-        {shown.map(entry => <NowDecisionRow key={entry.key} entry={entry}/>)}
+        {shown.map(entry => {
+          const Icon = icons[entry.decision];
+          const time = conversationTime(entry.decidedAt);
+          return <article key={entry.key} className="now-decision" data-decision={entry.decision}>
+            <span className="now-decision-icon" aria-hidden="true"><Icon size={15}/></span>
+            <div className="now-decision-copy">
+              <div className="now-decision-heading"><span className="now-decision-label">{decisionLabels[entry.decision]}</span><span className="now-decision-group" title={entry.group}>{entry.group}</span><time dateTime={time?.dateTime} title={time?.title}>{time?.label}</time></div>
+              <div className="now-decision-context"><span title={entry.bot}>{entry.bot}</span><i aria-hidden="true"/><span>{decisionTrigger(entry)}</span></div>
+            </div>
+          </article>;
+        })}
       </div>
     </div> : <p className="now-activity-empty">{!connected ? '连接恢复后显示群动态' : supported ? '暂时没有新动态' : '新动态将在智能模式判断后显示'}</p>}
   </section>;
