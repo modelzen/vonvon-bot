@@ -140,6 +140,27 @@ describe('the config builtin skill', () => {
     for (const words of ['`"$VONVON_CLI"`', '`vonvon --help`', '`vonvon bot list`', '`vonvon group list`', '`vonvon settings get`', '不要背', '`--bot B`', '`--group X`', '`--dm`', '`conversation.mode`', '这个 Bot，就是你自己',
       '群设置改完下一轮生效', 'Skill 和 MCP 要等新会话', 'Bot 自己进不了已有的群']) expect(configSkill.body).toContain(words);
   });
+  it('uses per-chat settings for message cards and explains validation and fixed defaults', () => {
+    for (const words of [
+      '`vonvon settings get presentation --group X --json`', '`vonvon settings get presentation --dm --json`', '`vonvon settings card-template --json`',
+      '`vonvon settings card-check <file> --json`', '`vonvon settings card-test <file> --cwd <绝对目录> --json`',
+      '不执行自定义脚本', '没有全局 input 变量', 'process.cwd()', "execFileSync('git'", 'console.log(JSON.stringify(',
+      '未建分支', "stdio:['ignore','pipe','ignore']", '在实际 cwd 跑 card-test 验证降级', '不因目录还不是 Git 仓库而阻塞保存',
+      '`vonvon settings set --group X --revision <原版本> presentation.cardDisplay=', '`vonvon settings set --dm --revision <原版本> presentation.cardDisplay=',
+      '`vonvon settings set --group X presentation.cardDisplay=null`', '`vonvon settings set --dm presentation.cardDisplay=null`',
+      '没有 Bot 级消息卡设置', 'null 表示固定旧版默认展示，不继承 Bot', '模板语法', '各运行状态', '后续新任务',
+      'presentation.completionMode=long', 'presentation.longTaskMinutes=10', 'presentation.completionTemplate=',
+      '{{task}}', '{{elapsed}}', '{{status}}', '{{icon}}', '{{durationLabel}}', '{{detail}}', '静态模板校验', '原配置不变',
+    ]) expect(configSkill.body).toContain(words);
+    expect(configSkill.body).not.toContain('`vonvon settings set cards.');
+  });
+  it('preserves snapshot revisions and redoes only the requested change after a conflict', () => {
+    for(const words of ['`view.sections.presentation.revision`','目标 Bot、群或私聊','同一目标和这个原版本',
+      '所有基于快照的修改保存都必须带 `--revision <原版本>`','不能在临保存时另读一个新版本替代它',
+      '跨 Bot 保留原来的 `--bot B`','完整对象漏传 revision 会在连接 daemon 前被拒绝',
+      '若返回 conflict，必须重新读取同一目标的当前配置和 revision','在新对象上只重做用户指定的修改',
+      '禁止仅换 revision 重提旧对象','保存后再读同一目标','核对所有具体要求后再报告完成']) expect(configSkill.body).toContain(words);
+  });
   it('lists what cannot be done here and sends the user where it can (dm-agent 6.2)', () => {
     for (const words of ['Vonvon Bot 客户端或终端', '注册 Bot', '换凭据', '删除 Bot', '停用这个 Bot', '重启', '升级', '后台服务', 'API key', '管理员名单', '配对和远程连接', 'Provider', 'lark-cli', 'Bridge']) expect(configSkill.body).toContain(words);
   });

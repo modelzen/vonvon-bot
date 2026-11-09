@@ -11,7 +11,7 @@ import { runSettingsSet, runSettingsAccess } from '../src/cli/commands/settings'
 import { runFeishuGroups, runFeishuRead } from '../src/cli/commands/feishu';
 
 const scope = { kind: 'agent', botId: agentIdSchema.parse('cli_test') } as const;
-const value = { stored: { showToolCalls: true }, effective: { showToolCalls: true }, revision: 'latest', access: { kind: 'writable' }, apply: [] };
+const value = { stored: { pendingPolicy: 'steer' }, effective: { pendingPolicy: 'steer' }, revision: 'latest', access: { kind: 'writable' }, apply: [] };
 function harness(settings: (request: SettingsRequest) => Promise<unknown>, run: (request: unknown) => Promise<unknown> = vi.fn(async () => ({ kind: 'groups', groups: [], nextCursor: 'next' }))) {
   let out = '';
   const close = vi.fn(async () => {});
@@ -22,24 +22,24 @@ function harness(settings: (request: SettingsRequest) => Promise<unknown>, run: 
 }
 it('sends the caller revision unchanged and reports authorized current on conflict without retry', async () => {
   const settings = vi.fn(async (request: SettingsRequest) => request.type === 'read'
-    ? { kind: 'view', view: { scope, sections: { cards: value } } }
-    : { kind: 'saved', result: { kind: 'conflict', current: { scope, section: 'cards', value } } });
+    ? { kind: 'view', view: { scope, sections: { run: value } } }
+    : { kind: 'saved', result: { kind: 'conflict', current: { scope, section: 'run', value } } });
   const h = harness(settings);
-  const error = await runSettingsSet(['cards.showToolCalls=false'], { revision: 'old', reason: 'test' }, h.io, h.daemon).catch(error => error);
+  const error = await runSettingsSet(['run.pendingPolicy=queue'], { revision: 'old', reason: 'test' }, h.io, h.daemon).catch(error => error);
   expect(commandFailure(error)).toMatchObject({ exitCode: 5, error: { kind: 'conflict', current: { value: { revision: 'latest' } } } });
-  expect(settings.mock.calls.filter(([r]) => r.type === 'save')).toEqual([[{ type: 'save', edit: { scope, section: 'cards', revision: 'old', patch: { showToolCalls: false } } }]]);
+  expect(settings.mock.calls.filter(([r]) => r.type === 'save')).toEqual([[{ type: 'save', edit: { scope, section: 'run', revision: 'old', patch: { pendingPolicy: 'queue' } } }]]);
   expect(h.close).toHaveBeenCalledOnce();
 });
 it('keeps terminal field patches compatible and retains reason only after a saved result', async () => {
-  const h = harness(async request => request.type === 'read' ? { kind: 'view', view: { scope, sections: { cards: value } } }
-    : { kind: 'saved', result: { kind: 'saved', section: { scope, section: 'cards', value }, effects: [] } });
-  await runSettingsSet(['cards.showToolCalls=false'], { reason: 'requested' }, h.io, h.daemon);
+  const h = harness(async request => request.type === 'read' ? { kind: 'view', view: { scope, sections: { run: value } } }
+    : { kind: 'saved', result: { kind: 'saved', section: { scope, section: 'run', value }, effects: [] } });
+  await runSettingsSet(['run.pendingPolicy=queue'], { reason: 'requested' }, h.io, h.daemon);
   expect(h.out()).toMatchObject({ section: { value: { revision: 'latest' } }, reason: 'requested' });
 });
 it('returns the shared access structure and Feishu pagination without converting a failure to empty success', async () => {
-  const h = harness(async () => ({ kind: 'view', view: { scope, sections: { cards: value } } }));
+  const h = harness(async () => ({ kind: 'view', view: { scope, sections: { run: value } } }));
   await runSettingsAccess({}, h.io, h.daemon);
-  expect(h.out()).toEqual({ ok: true, access: { cards: { kind: 'writable' } } });
+  expect(h.out()).toEqual({ ok: true, access: { run: { kind: 'writable' } } });
   const groups = harness(async () => undefined);
   await runFeishuGroups({ cursor: 'before' }, groups.io, groups.daemon);
   expect(groups.out()).toEqual({ ok: true, groups: [], nextCursor: 'next' });
@@ -52,11 +52,11 @@ it.each([['bad-args', 2], ['connection', 3], ['refused', 4], ['conflict', 5], ['
 it('does not classify an unreadable save response as a retryable connection error', async () => {
   let saves = 0;
   const h = harness(async request => {
-    if (request.type === 'read') return { kind: 'view', view: { scope, sections: { cards: value } } };
+    if (request.type === 'read') return { kind: 'view', view: { scope, sections: { run: value } } };
     saves++;
     throw Object.assign(new Error('reply schema'), { name: 'ZodError' });
   });
-  const error = await runSettingsSet(['cards.showToolCalls=false'], {}, h.io, h.daemon).catch(error => error);
+  const error = await runSettingsSet(['run.pendingPolicy=queue'], {}, h.io, h.daemon).catch(error => error);
   expect(commandFailure(error)).toMatchObject({ exitCode: 6, error: { kind: 'outcome-unknown' } });
   expect(saves).toBe(1);
 });

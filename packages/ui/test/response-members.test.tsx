@@ -14,15 +14,17 @@ function view(): ProjectSettingsView {
     members: {openIds:['ou_saved_missing'], revision:'r', roster:{state:'partial',otherBots:true,entries:[{openId:'ou_bot_peer',name:'同名',kind:'bot'},{openId:'ou_person',name:'同名',kind:'person'}]}} };
 }
 const render = (v: ProjectSettingsView) => renderToStaticMarkup(<ClientProvider client={client}><ProjectPanel view={v} refresh={async()=>{}} /></ClientProvider>);
-it('offers people and bots, distinguishes names and preserves absent saved members', () => {
+it('shows saved members and a picker action instead of an inline Open ID form', () => {
   const html = render(view());
-  expect(html).toContain('value="ou_bot_peer"'); expect(html).toContain('同名 · Bot · …t_peer');
-  expect(html).toContain('value="ou_person"'); expect(html).toContain('同名 · …person');
-  expect(html).toContain('未读取到名称 · …issing'); expect(html).toContain('已选成员保留');
+  expect(html).toContain('回应谁');
+  expect(html).toContain('aria-label="指定成员"');
+  expect(html).toContain('…issing');
+  expect(html).not.toContain('成员 Open ID');
+  expect(html).toContain('恢复所有成员');
 });
-it('keeps manual input for old daemons and disables the picker for readonly settings', () => {
+it('keeps saved members for old daemons and disables the picker for readonly settings', () => {
   const v = view(); delete v.members.roster;
-  expect(render(v)).toContain('成员 Open ID');
+  expect(render(v)).toContain('…issing');
   v.sections.permission.access = {kind:'readonly',reason:'owner-offline',message:'offline'};
-  expect(render(v)).toContain('aria-label="选择响应成员" disabled=""');
+  expect(render(v)).toMatch(/aria-label="指定成员"[^>]*disabled=""/);
 });

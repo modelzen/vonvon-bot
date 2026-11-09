@@ -2,16 +2,18 @@
 import './tune-network';
 import { Command, CommanderError, Help, Option } from 'commander';
 import { badArgs, commandFailure, CommandError } from './command-error';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile, stat } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
 import { formatErrorTree } from '../core/error-parts';
 import { bridgeVersion } from '../core/version';
 import { paths } from '../config/paths';
 import { enterDataAccess, type DataLease } from '../config/data-access';
 import { inBotSession } from '../config/session-env';
+import { interrupts } from './interrupt';
 import { observeShutdown, type ShutdownControl } from '../host/lifecycle';
 import type { LingerChoice } from './commands/service';
 import type { ScheduleAction, ScheduleTarget } from './commands/schedule';
-import type { Scope } from '@vonvon/protocol';
+import { defaultCardDisplay, interpolate, type Scope } from '@vonvon/protocol';
 
 /** devices 8.1: every command takes --json and fails through `commandFailure` (the runner at the bottom). */
 export const program = new Command().name('vonvon').description('Vonvon Bot daemon').version(bridgeVersion());
@@ -420,6 +422,74 @@ memoryScope(covers(memory.command('branch-delete <name>'), 'memory.branchDelete'
   .option('--expected <n>', 'The entry count you saw; a branch changed since is left as it is'))
   .action(async (name: string, options: MemoryOptions) => { await (await memoryCommands()).runMemoryBranchDelete(name, options, await memoryTerminal(options)); });
 const settings = program.command('settings').description('Read and change bot, group and session settings');
+async function withCardScriptInterrupts<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const interrupted = () => new CommandError('interrupted', '已中断消息卡检查，脚本进程已清理。');
+  const ctrlC = interrupts(handler => {
+    process.on('SIGINT', handler);
+    process.on('SIGTERM', handler);
+    return () => { process.off('SIGINT', handler); process.off('SIGTERM', handler); };
+  }, interrupted);
+  try {
+    const result = await work(ctrlC.signal);
+    if (ctrlC.interrupted) throw interrupted();
+    return result;
+  } catch (error) {
+    if (ctrlC.interrupted) throw interrupted();
+    throw error;
+  } finally { ctrlC.stop(); }
+}
+settings.command('card-template').description('Print the default message-card configuration as a starting template')
+  .option(...JSON_FLAG)
+  .action(async (options: Json) => {
+    const cardDisplay = defaultCardDisplay();
+    await show(options, [JSON.stringify(cardDisplay, null, 2)], { cardDisplay });
+  });
+settings.command('card-check <file>').description('Validate a complete message-card JSON file without saving it or running custom scripts')
+  .option(...JSON_FLAG)
+  .action(async (file: string, options: Json) => {
+    let input: unknown;
+    try { input = JSON.parse(await readFile(file, 'utf8')); }
+    catch (error) { throw badArgs(error instanceof SyntaxError ? '消息卡文件不是有效 JSON' : `无法读取消息卡文件：${error instanceof Error ? error.message : String(error)}`); }
+    await withCardScriptInterrupts(async signal => {
+      try { await (await import('../card/card-display-validation')).assertValidCardDisplay(input, signal); }
+      catch (error) { throw badArgs(error instanceof Error ? error.message : '消息卡配置无效'); }
+    });
+    await show(options, ['消息卡配置有效；尚未保存。'], { kind: 'valid' });
+  });
+settings.command('card-test <file>').description('Run up to four message-card scripts in a selected directory with sample card values; does not save')
+  .requiredOption('--cwd <absolute-directory>', 'Absolute directory where the scripts will run')
+  .option(...JSON_FLAG)
+  .action(async (file: string, options: Json & { cwd: string }) => {
+    if (!isAbsolute(options.cwd)) throw badArgs('--cwd 必须是绝对目录');
+    try { if (!(await stat(options.cwd)).isDirectory()) throw new Error('不是目录'); }
+    catch { throw badArgs('--cwd 目录不存在或不可访问'); }
+    let input: unknown;
+    try { input = JSON.parse(await readFile(file, 'utf8')); }
+    catch (error) { throw badArgs(error instanceof SyntaxError ? '消息卡文件不是有效 JSON' : `无法读取消息卡文件：${error instanceof Error ? error.message : String(error)}`); }
+    const result = await withCardScriptInterrupts(async signal => {
+      const { assertValidCardDisplay } = await import('../card/card-display-validation');
+      let config: Awaited<ReturnType<typeof assertValidCardDisplay>>;
+      try { config = await assertValidCardDisplay(input, signal); }
+      catch (error) { throw badArgs(error instanceof Error ? error.message : '消息卡配置无效'); }
+      const scripts = config.blocks.filter(block => block.kind === 'custom' && block.source === 'script' && block.mode !== 'off');
+      if (scripts.length > 4) throw badArgs('一次最多测试 4 个启用的卡片脚本');
+      const { buildRunCardBase } = await import('../card/run-card');
+      const { initialState } = await import('../card/run-state');
+      const { values } = buildRunCardBase({
+        rs: { ...initialState, footer: 'thinking', startedAt: Date.now() - 5_000, usage: { used: 25_000, window: 950_000 } },
+        model: 'gpt-6.1-sol', effort: 'high', cardKey: 'card-display-test',
+      });
+      const { runCardDisplayScripts } = await import('../card/card-display-scripts');
+      const result = await runCardDisplayScripts(config, { cwd: options.cwd, values, signal });
+      if (result.errors.length) throw badArgs(result.errors.map(error => `${error.id}：${error.message}`).join('\n'));
+      for (const block of scripts) {
+        const missing = interpolate(block.template, { ...values, ...result.values[block.id] }).missing;
+        if (missing.length) throw badArgs(`${block.id}：脚本输出缺少模板字段 ${missing.join('、')}`);
+      }
+      return result;
+    });
+    await show(options, ['消息卡脚本运行成功；尚未保存。'], { kind: 'valid', values: result.values });
+  });
 type Target = Json & { bot?: string; group?: string; session?: string; host?: boolean; dm?: boolean; revision?: string; reason?: string };
 const READ = ['settings.read.agent', 'settings.read.project', 'settings.read.session', 'settings.read.host'];
 const scoped = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--dm', "The bot's private chat (私聊), not with --group or --session").option('--session <threadId>', 'Session thread id')
@@ -431,7 +501,7 @@ scoped(covers(settings.command('access'), ...READ).description('Show access to t
   await (await import('./commands/settings')).runSettingsAccess(options, io(options));
 });
 scoped(covers(settings.command('set <section.key=value...>'), 'settings.save.agent', 'settings.save.project', 'settings.save.session', 'settings.save.host').description('Change fields of one section; values are JSON or plain text'))
-  .option('--revision <revision>', 'Revision held by the caller; stale revisions are rejected')
+  .option('--revision <revision>', 'Revision from settings get; required for a complete presentation.cardDisplay object. Stale revisions are rejected; other fields default to the current revision')
   .option('--reason <text>', 'Explanation retained with the committed result')
   .addHelpText('after', `
 Examples:
@@ -439,14 +509,25 @@ Examples:
   vonvon settings set --group oc_xxx permission.mode=write
   vonvon settings set --group oc_xxx permission.custom='{"sandbox":"read-only","network":true}'
   vonvon settings set --group oc_xxx permission.custom='{"permissionMode":"plan","sandbox":true,"network":"domains","domains":["github.com"]}'
-  vonvon settings set cards.showToolCalls=false
+  vonvon settings get presentation --group oc_xxx --json                      # 记录 view.sections.presentation.revision 与目标 Bot/群
+  vonvon settings set --group oc_xxx --revision <读取时的版本> presentation.cardDisplay='<完整 JSON 对象>'  # 群消息卡
+  vonvon settings set --dm --revision <读取时的版本> presentation.cardDisplay='<完整 JSON 对象>'            # 先 get presentation --dm --json
+  vonvon settings set --group oc_xxx presentation.cardDisplay=null             # 群消息卡恢复固定默认
+  vonvon settings set --dm presentation.cardDisplay=null                       # 私聊消息卡恢复固定默认
+  vonvon settings set --group oc_xxx presentation.completionMode=long presentation.longTaskMinutes=10
+  vonvon settings set --dm presentation.completionTemplate='{{task}}：{{status}}，用时 {{elapsed}}'
+  vonvon settings card-check /path/to/card.json --json                # 只检查完整配置文件，不保存
+  vonvon settings card-test /path/to/card.json --cwd /absolute/folder --json  # 显式运行最多 4 个脚本，不保存
   vonvon settings set --group oc_xxx model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'
   vonvon settings set judge.selection='{"kind":"llm","model":"gpt-6-luna","effort":"low"}'
   vonvon settings set judge.selection='{"kind":"decision","provider":"typesafe","model":"jev-latest"}'   # 决策模型，各后端的群都用
   vonvon settings set --group oc_xxx judge.selection='{"kind":"default"}'   # 群里去掉覆盖，用 bot 的
-  vonvon settings set --dm model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'   # 私聊只能改 model、speed、modelAccess、skills、conversation、smartRules、judge
+  vonvon settings set --dm model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'   # 私聊模型
   vonvon settings set --group oc_xxx smartRules.respond='"第一段\\n\\n第二段"'   # 文字要换行时写成带引号的 JSON，普通文字里的 \\n 不是换行
-  vonvon settings set --host execution.codexBin=/usr/local/bin/codex      # 本机：Codex 可执行文件，null 回到自动找`)
+  vonvon settings set --host execution.codexBin=/usr/local/bin/codex      # 本机：Codex 可执行文件，null 回到自动找
+
+完整消息卡对象必须带读取时的 --revision；发生冲突时，重新读取当前配置，只重做用户指定的修改。
+不要仅替换 revision 后重提旧对象。保存后再次读取同一目标，核对用户要求的每一项。`)
   .action(async (assignments: string[], options: Target) => {
     await (await import('./commands/settings')).runSettingsSet(assignments, options, io(options));
   });

@@ -1,3 +1,4 @@
+import {renderCompletionTemplate, type CompletionTemplateValues} from '@vonvon/protocol';
 import type { CompletionReminderOutcome } from '../config/schema';
 
 /** Payload inputs for the extra Feishu reply emitted after a run card settles. */
@@ -9,6 +10,8 @@ export interface CompletionReminderPost {
   summary?: string;
   /** False when the terminal CardKit update exhausted its retries. */
   cardUpdated: boolean;
+  /** Validated local plain-text layout; null/missing uses the original format. */
+  template?: string | null;
 }
 
 /** Human-readable wall-clock duration, rounded down to whole seconds. */
@@ -35,29 +38,32 @@ export function formatCompletionElapsed(elapsedMs: number): string {
 export function buildCompletionReminderContent(input: CompletionReminderPost): string {
   const task = compactSummary(input.summary);
   const elapsed = formatCompletionElapsed(input.elapsedMs);
-  const headline =
-    input.outcome === 'done'
-      ? ` ✅「${task}」已完成 · 用时 ${elapsed}`
-      : input.outcome === 'idle_timeout'
-        ? ` ⏱「${task}」响应超时 · 等待 ${elapsed}`
-        : ` ⚠️「${task}」执行失败 · 用时 ${elapsed}`;
   const detail = input.cardUpdated
     ? input.outcome === 'done'
       ? '结果在上方卡片。'
       : '详情在上方卡片。'
     : '最终卡片更新失败，请查看上方流式内容或重新发起任务。';
 
+  const values:CompletionTemplateValues={task,elapsed,detail,
+    icon:input.outcome==='done'?'✅':input.outcome==='idle_timeout'?'⏱':'⚠️',
+    status:input.outcome==='done'?'已完成':input.outcome==='idle_timeout'?'响应超时':'执行失败',
+    durationLabel:input.outcome==='idle_timeout'?'等待':'用时'};
+  let rendered:string;
+  try {rendered=renderCompletionTemplate(input.template,values);}
+  catch {rendered=renderCompletionTemplate(null,values);}
+  // A terminal CardKit failure must always explain where the partial answer is,
+  // even if a valid custom layout intentionally omitted {{detail}}.
+  if (!input.cardUpdated && !rendered.includes(detail)) rendered+=`\n${detail}`;
+  const lines=rendered.replaceAll('\r\n','\n').split('\n');
+
   const at = input.requesterOpenId.startsWith('ou_');
   return JSON.stringify({
     zh_cn: {
       title: '',
-      content: [
-        [
-          ...(at ? [{ tag: 'at', user_id: input.requesterOpenId }] : []),
-          { tag: 'text', text: at ? headline : headline.trimStart() },
-        ],
-        [{ tag: 'text', text: detail }],
-      ],
+      content: lines.map((line,index)=>index===0 ? [
+        ...(at ? [{ tag: 'at', user_id: input.requesterOpenId }] : []),
+        {tag:'text',text:at ? ` ${line}` : line},
+      ] : [{tag:'text',text:line}]),
     },
   });
 }

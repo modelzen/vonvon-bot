@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, expect, it, vi } from 'vitest';
 import { ConnectionError, RpcError, type VonvonClient } from '@vonvon/client';
 import {
-  agentIdSchema, FULL_ACCESS_WARNING, groupIdSchema, jobIdSchema, membershipIdSchema, settingsReplySchema,
+  agentIdSchema, defaultCardDisplay, FULL_ACCESS_WARNING, groupIdSchema, jobIdSchema, membershipIdSchema, settingsReplySchema,
   type AdminSetupStatus, type Agent, type DesktopSnapshot, type Job, type Membership, type SettingsReply, type ToolState,
 } from '@vonvon/protocol';
 import { pickBot, setCliContext, withDaemon, type Daemon } from '../src/cli/daemon-client';
@@ -371,6 +371,12 @@ it('s25c: settings on a 智能 group leave 免@ out of get and print the daemon\
 });
 
 it('settings set parses values as JSON or text and names the bad field', () => {
+  const cardDisplay = defaultCardDisplay();
+  expect(() => parseAssignments('agent', [`cards.cardDisplay=${JSON.stringify(cardDisplay)}`])).toThrow('消息卡按群聊或私聊分别设置');
+  expect(parseAssignments('project', [`presentation.cardDisplay=${JSON.stringify(cardDisplay)}`])).toEqual({ section: 'presentation', patch: { cardDisplay } });
+  expect(() => parseAssignments('agent', ['cards.cardDisplay=null'])).toThrow('--dm presentation.cardDisplay');
+  expect(parseAssignments('project', ['presentation.cardDisplay=null']).patch).toEqual({ cardDisplay: null });
+  expect(() => parseAssignments('project', ['presentation.cardDisplay={"version":999}'])).toThrow('presentation.cardDisplay');
   expect(parseAssignments('project', ['permission.mode=full'])).toEqual({ section: 'permission', patch: { mode: 'full' } });
   expect(parseAssignments('project', ['permission.custom={"sandbox":"read-only","network":true}']).patch).toEqual({ custom: { sandbox: 'read-only', network: true } });
   expect(parseAssignments('agent', ['run.maxConcurrentRuns=3']).patch).toEqual({ maxConcurrentRuns: 3 });
@@ -391,7 +397,8 @@ it('settings set parses values as JSON or text and names the bad field', () => {
     ['agent', ['run.maxConcurrentRuns=many'], 'run.maxConcurrentRuns 要填数字'],
     ['agent', ['run.maxConcurrentRuns=true'], 'run.maxConcurrentRuns 要填数字'],
     ['project', ['model.selection={"kind":"explicit","model":5,"effort":"medium"}'], 'model.selection.model 要填文字，JSON 里的文字要加双引号'],
-    ['agent', ['cards.showModel=3'], 'cards.showModel 只能是 off、running、always'],
+    ['project', ['presentation.showModel=3'], '旧工具和模型显示字段只供迁移'],
+    ['project', ['presentation.showToolCalls=false'], '旧工具和模型显示字段只供迁移'],
     ['project', ['model.selection={"kind":"x"}'], 'model.selection 的 kind 只能是 default 或 explicit'],
     ['project', ['mode=full'], '写成 节.项=值，例如 permission.mode=full'],
   ] as const) expect(() => parseAssignments(kind, args), message).toThrow(message);
@@ -460,7 +467,7 @@ it('settings set saves with the section revision and explains each refusal', asy
 
 it('a blank --session is an input error, a bad request is never sent, and only an unreadable reply blames the version', async () => {
   const settings = vi.fn(async (request: { type: string }): Promise<unknown> => {
-    if (request.type === 'read') return { kind: 'view', view: { scope: { kind: 'agent', botId: 'cli_a' }, sections: { cards: section({ showModel: 'off' }) } } };
+    if (request.type === 'read') return { kind: 'view', view: { scope: { kind: 'agent', botId: 'cli_a' }, sections: { run: section({ pendingPolicy: 'steer' }) } } };
     // What the client throws when replySchemas.settings.parse fails.
     const parsed = settingsReplySchema.safeParse({ kind: 'saved', result: { kind: 'nope' } });
     throw parsed.success ? new Error('parsed') : parsed.error;
@@ -471,14 +478,14 @@ it('a blank --session is an input error, a bad request is never sent, and only a
   const scope = { kind: 'session' as const, botId: agentIdSchema.parse('cli_a'), threadId: ' ' };
   await expect(h.daemon(call => call('读取设置', c => c.settings({ type: 'read', scope })))).rejects.toThrow(/^读取设置没有发出：命令行给的参数不对（scope\.threadId：.+）。$/);
   expect(settings).not.toHaveBeenCalled();
-  await expect(runSettingsSet(['cards.showModel=always'], {}, h.io(), h.daemon))
+  await expect(runSettingsSet(['run.pendingPolicy=queue'], {}, h.io(), h.daemon))
     .rejects.toThrow(/^daemon 和命令行的版本不一致。先 vonvon daemon stop，再 vonvon daemon start。\n可能已经保存，运行 vonvon settings get 查看。$/);
   expect(settings).toHaveBeenCalledTimes(2);
 });
 
 it('settings get prints each section, gives the view as JSON, and lists a group\'s newest sessions', async () => {
   const agentView = { scope: { kind: 'agent', botId: 'cli_a' }, sections: {
-    cards: section({ showToolCalls: true, showModel: 'running' }),
+    run: section({ pendingPolicy: 'steer' }),
     comments: section({ backend: 'codex-appserver', selection: { kind: 'default' } }, 'r', { backend: 'codex-appserver', selection: { kind: 'explicit', model: 'gpt-5.5', effort: 'medium' } }),
   } };
   // guestMode: the view's deprecated mirror of the one tier (s15c), not printed.
@@ -490,17 +497,17 @@ it('settings get prints each section, gives the view as JSON, and lists a group\
     ? { kind: 'sessions', sessions } : { kind: 'view', view: request.scope?.kind === 'project' ? projectView : agentView }) as SettingsReply);
   const h = harness({ snapshot: one(undefined, [member('cli_a', 'oc_pay', 'pay')]), settings });
   await runSettingsGet(undefined, {}, h.io(), h.daemon);
-  expect(h.out()).toContain('Bot Vonvon Bot（cli_a）的设置\n[cards]\n  showToolCalls = true\n  showModel = running\n[comments]\n  backend = codex-appserver\n');
+  expect(h.out()).toContain('Bot Vonvon Bot（cli_a）的设置\n[run]\n  pendingPolicy = steer\n[comments]\n  backend = codex-appserver\n');
   expect(h.out()).toContain('  selection = {"kind":"default"}（生效：{"kind":"explicit","model":"gpt-5.5","effort":"medium"}）\n');
   h.clear(); await runSettingsGet(undefined, {}, h.io(true), h.daemon);
-  expect(Object.keys(JSON.parse(h.out()).view.sections)).toEqual(['cards', 'comments']);
+  expect(Object.keys(JSON.parse(h.out()).view.sections)).toEqual(['run', 'comments']);
   h.clear(); await runSettingsGet(undefined, { group: 'pay' }, h.io(), h.daemon);
   const out = h.out();
   expect(out).toContain('群 pay（oc_pay）· Codex · 多会话（@ 我开新会话） · /home/u/pay\n[permission]（只读：这个 Bot 没在运行，运行起来后才能改设置）\n  mode = qa\n  权限：只读\n  Linux 上只能选完全访问。\n');
   expect(out).toContain('会话（最近 2 个，共 2 个；看单个会话：vonvon settings get --session <id>）');
   expect(out.indexOf('omt_new')).toBeLessThan(out.indexOf('omt_old'));
   expect(out).toContain(`gpt-5.5  ${'修'.repeat(40)}…\n`);
-  await expect(runSettingsGet('nope', {}, h.io(), h.daemon)).rejects.toThrow('没有 nope 这一节。可以看的有：profile、role、cards、run、completion、comments、titles、paths、access、judge');
+  await expect(runSettingsGet('nope', {}, h.io(), h.daemon)).rejects.toThrow('没有 nope 这一节。可以看的有：profile、role、run、completion、comments、titles、paths、access、judge');
 });
 
 it('judge: set takes the selection JSON, get prints a row per backend and the prompt source, get judge the whole prompt', async () => {

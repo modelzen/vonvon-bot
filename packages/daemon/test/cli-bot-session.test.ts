@@ -99,7 +99,7 @@ describe('a Bot session\'s command line', () => {
       // a settings write from a group: the tools' sentence
       // D4a review R1: also those that read the bot's settings before they write
       // settings-dm-only: and reading the group's own settings, as no group session has settings_get
-      for (const args of [['settings', 'act', 'voice', 'test'], ['settings', 'set', 'cards.showToolCalls=true'], ['settings', 'act', 'admin', 'add', 'ou_0123456789abcdef'], ['settings', 'act', 'comment-instructions', '--default'],
+      for (const args of [['settings', 'act', 'voice', 'test'], ['settings', 'set', 'run.pendingPolicy=queue'], ['settings', 'act', 'admin', 'add', 'ou_0123456789abcdef'], ['settings', 'act', 'comment-instructions', '--default'],
         ['settings', 'set', '--group', GROUP, 'permission.mode=full'], ['settings', 'get', '--group', GROUP]]) {
         const write = await run(d.fixture.home, d.home, [...args, '--scope', `bot=${BOT},group=${GROUP}`], { VONVON_SESSION: d.token });
         expect(write, args.join(' ')).toMatchObject({ code: 4, json: { error: { kind: 'refused', reason: 'not-dm' } } });
@@ -151,7 +151,7 @@ describe('a Bot session\'s command line', () => {
     try {
       const token = d.fixture.sessionTokens.issue({ appId: BOT, place: 'dm', chatId: 'oc_dm', sessionId: 'ses_1111111111111111' });
       const added = await run(d.fixture.home, d.home, ['settings', 'act', 'admin', 'add', 'ou_0123456789abcdef', '--scope', `bot=${BOT}`], { VONVON_SESSION: token });
-      expect(added, added.stderr).toMatchObject({ code: 4, json: { ok: false, error: { kind: 'refused', message: '修改设置失败：管理员名单只能在 Vonvon Bot 客户端的「设置 → 管理员」或终端里改，聊天里不能改。' } } });
+      expect(added, added.stderr).toMatchObject({ code: 4, json: { ok: false, error: { kind: 'refused', message: '修改设置失败：管理员名单只能在 Vonvon Bot 客户端的「私聊 → 沟通方式 → 回应谁」或终端里改，聊天里不能改。' } } });
       expect(act).not.toHaveBeenCalled();
     } finally { await d.close(); }
   }, 60_000);
