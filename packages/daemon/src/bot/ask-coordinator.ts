@@ -17,6 +17,8 @@ export interface AskTurnInput {
   idlePause: IdlePause;
   waiting: (label: string | undefined, subagentId?: string) => void;
   fault: (error: unknown) => void;
+  /** Adopt a newly created topic from the question carrier before accepting text. */
+  placed?: (messageId: string) => Promise<string | undefined>;
 }
 export interface AskTurn {
   enqueue(request: AskRequest, from?: AskOrigin): void;
@@ -148,6 +150,14 @@ export class AskCoordinator {
       const sent = await sendManagedCard(this.channel, chatId,
         buildAskCard({ request: entry.request, from: entry.from, state: { kind: 'pending' }, respondents: this.respondents(turn, entry.request), scope: this.scopeOf(turn) }), replyTo, replyInThread);
       if (entry.state.kind === 'settled') { this.terminal(turn, entry, sent.messageId, entry.state.presentation); return; }
+      const adoptedKey = await turn.placed?.(sent.messageId);
+      if (adoptedKey && adoptedKey !== turn.sessionKey && turn.open) {
+        if (this.turns.get(turn.sessionKey) === turn) this.turns.delete(turn.sessionKey);
+        turn.sessionKey = adoptedKey;
+        this.turns.set(adoptedKey, turn);
+      }
+      const afterPlacement = entry.state as EntryState;
+      if (afterPlacement.kind === 'settled') { this.terminal(turn, entry, sent.messageId, afterPlacement.presentation); return; }
       clearTimeout(entry.timer);
       entry.state = { kind: 'visible', messageId: sent.messageId, shownAt: Date.now() };
       this.carriers.set(sent.messageId, { turn, entry });
