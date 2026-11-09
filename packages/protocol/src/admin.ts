@@ -112,7 +112,9 @@ export type CodexSetup = z.infer<typeof codexSetupSchema>;
 export const judgeUsageDaySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), total: z.number().int().nonnegative(),
   sources: z.array(z.object({ kind: z.enum(["llm", "decision"]), id: z.string(), label: z.string(), count: z.number().int().nonnegative() })),
-  bots: z.array(z.object({ agentId: z.string(), agentName: z.string(), count: z.number().int().nonnegative() })),
+  // `sources` splits a Bot's count by judge (older daemons omit it, so only `count`, the sum, is known).
+  bots: z.array(z.object({ agentId: z.string(), agentName: z.string(), count: z.number().int().nonnegative(),
+    sources: z.array(z.object({ kind: z.enum(["llm", "decision"]), id: z.string(), count: z.number().int().nonnegative() })).optional() })),
 });
 export type JudgeUsageDay = z.infer<typeof judgeUsageDaySchema>;
 

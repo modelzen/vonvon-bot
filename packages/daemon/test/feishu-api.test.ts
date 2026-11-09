@@ -2,6 +2,7 @@ import { readFileSync, rmSync } from 'node:fs';
 import { createServer, type IncomingMessage, type RequestListener, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { basename, dirname } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { inspect } from 'node:util';
 import { Client, type LarkChannel } from '@larksuiteoapi/node-sdk';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
@@ -359,6 +360,14 @@ describe('through the real SDK', () => {
     sdkLogger.error([{ config: { headers: { Authorization: `Bearer ${TOKEN}` } } }, `Authorization: Bearer ${TOKEN}\r\n`]);
     expect(inspect(log.mock.calls)).not.toContain(TOKEN);
     expect(inspect(log.mock.calls)).toContain('Bearer [已隐藏]');
+  });
+  // Codex 审查任务 376-1: what the SDK logs of a refused call holds the request it sent
+  it('logs no bytes, stream, request body or person, whatever it is handed', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    sdkLogger.error([{ code: 1, image: Buffer.from('GIF89a'), view: new Uint8Array([71, 73]), form: new PassThrough(), config: { url: '/open-apis/x', data: '{"to":1}', params: { id: 2 } }, who: 'ou_0123abcd' }, 'union on_0123abcd']);
+    const text = inspect(log.mock.calls);
+    for (const kept of ['code: 1', '[6 字节]', '[2 字节]', '[数据流]', "url: '/open-apis/x'", 'ou_…', 'on_…']) expect(text).toContain(kept);
+    for (const leak of ['GIF89a', '47 49', '71, 73', '"to":1', 'id: 2', '0123abcd']) expect(text).not.toContain(leak);
   });
   it('is the logger the Bot\'s channel gives the SDK', () => {
     const channel = createBridgeChannel({ id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' }, 'fixture');

@@ -74,10 +74,25 @@ const usageBundle = z.object({
     totalThreads: z.number().optional(), fastModePct: z.number().optional(), totalSkillsUsed: z.number().optional(),
     uniqueSkillsUsed: z.number().optional(), mostUsedEffort: z.string().optional(), mostUsedEffortPct: z.number().optional(),
     topInvocations: z.array(z.object({ name: z.string(), count: z.number(), kind: z.enum(["plugin", "skill"]) })),
-    dailyBuckets: z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), tokens: z.number() })),
+    dailyBuckets: z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), tokens: z.number(), messages: z.number().optional() })),
     statsAsOf: z.string().optional(),
+    // Claude Code's own /usage → Stats, computed by the daemon from the host's local Claude Code transcripts.
+    // Older daemons omit these; Codex never sends them.
+    localStats: z.object({
+      state: z.enum(["ready", "scanning", "unavailable"]),
+      models: z.array(z.object({ id: z.string(), tokens: z.number() })),
+      sessions: z.number(), messages: z.number(), activeDays: z.number(),
+      longestSessionSec: z.number().optional(), longestSessionMessages: z.number().optional(),
+      hourCounts: z.array(z.number()).length(24).optional(),
+    }).optional(),
   }),
-  usage: z.object({ planType: z.string().optional(), main: usageBucket, extras: z.array(usageBucket), fetchedAt: z.number() }),
+  usage: z.object({
+    planType: z.string().optional(), main: usageBucket, extras: z.array(usageBucket), fetchedAt: z.number(),
+    // Why Claude's quota is empty while its local stats still come back: `reason` is a daemon UsageErrorKind
+    // (no-auth, api-key-mode, need-relogin, transient), left open for later ones; `message` is what the quota column
+    // says. Older daemons fail the read instead, and older clients see empty windows.
+    unavailable: z.object({ reason: z.string().min(1).max(40), message: z.string().min(1).max(200) }).optional(),
+  }),
 });
 
 export const collaborationReplySchema = z.discriminatedUnion("kind", [
