@@ -8,9 +8,9 @@ import {
   type BackendInstallEventPayload, type DesktopSnapshot, type DesktopUpdate, type DeviceEventPayload, type DevicesState, type LogEventPayload,
   type ViewId,
 } from '@vonvon/protocol';
-import type { DevicesShell, ShareShell } from '../../ui/src/client-context.js';
+import type { DevicesShell } from '../../ui/src/client-context.js';
 import {
-  desktopChannels, safeErrorCode, shareRecordingSchema, type DesktopShell, type DesktopShellRequest, type ViewArgument,
+  desktopChannels, safeErrorCode, type DesktopShell, type DesktopShellRequest, type ViewArgument,
 } from './ipc-contract.js';
 
 export interface FacadeTransport {
@@ -70,9 +70,6 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
   const stateListeners = new Set<(value: DevicesState) => void>();
   const localDeviceListeners = new Set<(value: DeviceEventPayload) => void>();
   const remoteUpdateListeners = new Set<(text: string | undefined) => void>();
-  /** now-share N5b: each `record` call's progress listener, by the token its events carry. */
-  const shareProgress = new Map<number, (fraction: number) => void>();
-  let shareToken = 0;
   /** U4: the last remote-update line, once one came (a cleared one too, so a late subscriber hears it is gone). */
   let latestRemoteUpdate: { text: string | undefined } | undefined;
   let latestUpdate: DesktopUpdate | undefined;
@@ -134,14 +131,6 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
           if (text !== undefined && (typeof text !== 'string' || text.length > 512)) throw new Error('Invalid desktop event');
           latestRemoteUpdate = { text };
           deliverShell(remoteUpdateListeners, text);
-          return;
-        }
-        case 'shareProgress': {
-          const token = 'token' in raw ? raw.token : undefined, fraction = 'fraction' in raw ? raw.fraction : undefined;
-          if (typeof token !== 'number' || typeof fraction !== 'number' || !(fraction >= 0 && fraction <= 1)) throw new Error('Invalid desktop event');
-          const listener = shareProgress.get(token);
-          try { listener?.(fraction); }
-          catch (failure) { shellFailure(failure); }
           return;
         }
         case 'error': {
@@ -336,26 +325,6 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
     retry: () => callShell(desktopChannels.devicesRetry),
   };
 
-  const share: ShareShell = {
-    record(model, onProgress) {
-      const token = ++shareToken;
-      if (onProgress) shareProgress.set(token, onProgress);
-      return callShellFor(desktopChannels.shareRecord, value => shareRecordingSchema.parse(value), model, token)
-        .finally(() => { shareProgress.delete(token); });
-    },
-    copy: id => callShellFor(desktopChannels.shareCopy, value => {
-      if (!value || typeof value !== 'object' || !('path' in value) || typeof value.path !== 'string') throw new Error('Invalid desktop response');
-      return { path: value.path };
-    }, id),
-    reveal: path => callShell(desktopChannels.shareReveal, path),
-    bytes: id => callShellFor(desktopChannels.shareBytes, value => {
-      if (!(value instanceof Uint8Array)) throw new Error('Invalid desktop response');
-      return value;
-    }, id),
-    discard: id => callShell(desktopChannels.shareDiscard, id),
-    cancel: () => callShell(desktopChannels.shareCancel),
-  };
-
   const shell: DesktopShell = {
     openExternal: url => callShell(desktopChannels.external, url),
     chooseExecutablePath: () => transport.invoke(desktopChannels.chooseExecutablePath)
@@ -403,7 +372,6 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       return () => { quitListeners.delete(listener); };
     },
     devices,
-    share,
     onRemoteUpdate(listener) {
       remoteUpdateListeners.add(listener);
       if (latestRemoteUpdate) {

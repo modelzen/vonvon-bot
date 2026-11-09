@@ -11,7 +11,6 @@ import { SESSION_TURN_ENDED } from '../agent/entry/registry';
 import type { FeishuReadReply, FeishuReadRequest } from '../feishu-read/reader';
 import type { ApiRequest } from '../feishu-read/api';
 import { apiRequestSchema, feishuReadReplySchema, type RoutedApi, type RoutedRead } from './feishu-route';
-import type { ShareImageRequest } from '../bot/share-image';
 
 /**
  * supervisor ↔ bot 子进程的管理面 IPC（node 'ipc' stdio / process.send）。
@@ -79,11 +78,7 @@ export type AdminSessionOp = { kind: 'authorizeSessionCall'; sessionId: string; 
  * `feishuApi`: the same for `feishu_api`, which only a private chat's tool ever asks the host for (7.6).
  */
 export type AdminFeishuOp = { kind: 'feishuRead'; request: FeishuReadRequest } | { kind: 'feishuApi'; request: ApiRequest };
-/** now-share N5c: the 此刻 share GIF, which the Bot sends to one of its administrators (bot/share-image.ts). */
-export type AdminShareOp = { kind: 'shareImage'; request: ShareImageRequest };
-/** Past the Bot process's own limits, 60 s for the upload and 15 s for the message, so its answer gets here first. */
-export const SHARE_IMAGE_IPC_MS = 90_000;
-export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | AdminFeishuOp | AdminShareOp | { kind: 'status' } | { kind: 'firstHello' };
+export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | AdminFeishuOp | { kind: 'status' } | { kind: 'firstHello' };
 
 export interface AdminIpcRequest {
   fcb: typeof ADMIN_IPC_REQ;

@@ -6,7 +6,6 @@ import { admitLibraryWorkspace, botLabel, createHostLibrary, type AdminLibraryOp
 import { routeFeishuApi, routeFeishuRead, type FeishuReach } from './feishu-route';
 import type { ApiRequest } from '../feishu-read/api';
 import type { FeishuReadReply, FeishuReadRequest } from '../feishu-read/reader';
-import { shareImageReplySchema, type ShareImageReply, type ShareImageRequest } from '../bot/share-image';
 import { isProjectId, readLibrary } from '../project/library';
 import { projectRevision, projectView } from './collaboration';
 import { AdminWriteError } from './ops';
@@ -145,8 +144,6 @@ export interface AdminService {
   feishuRead?(reach: FeishuReach, request: Omit<FeishuReadRequest, 'only'>): Promise<FeishuReadReply>;
   /** dm-agent 7.6: `feishu_api` on the Bot named. A private chat's tool only, through the host: no RPC reaches it. */
   feishuApi?(bot: string, request: ApiRequest): Promise<FeishuReadReply>;
-  /** now-share N5c: the Bot sends the share GIF to one of its administrators. A Bot not running here answers `offline`; refusals are replies. */
-  shareImage?(botId: string, request: ShareImageRequest): Promise<ShareImageReply>;
   bindGroup?(botId: string, input: BindGroupInput): Promise<AdminProject>;
   getVoice(botId: string): Promise<VoiceView>;
   setVoice(botId: string, action: VoiceAction): Promise<void>;
@@ -493,8 +490,6 @@ export interface AdminServiceDeps {
   /** Runs a Feishu read in the bot's process, undefined when it has none: its answer is unchecked until the route parses it. */
   executeFeishuRead?: (botId: string, request: FeishuReadRequest) => Promise<unknown>;
   executeFeishuApi?: (botId: string, request: ApiRequest) => Promise<unknown>;
-  /** Sends the share GIF from the bot's process, undefined when it has none (bot/share-image.ts). */
-  executeShareImage?: (botId: string, request: ShareImageRequest) => Promise<unknown>;
   /** Tells a running bot that its scopes look granted; it sends what it still owes its creator (dm-agent 第一次见面). */
   firstHello?: (botId: string) => Promise<void>;
   /** 实时运行状态（daemon 进程内：本进程 channel / 子进程 IPC）。返回 undefined
@@ -757,12 +752,6 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         running: async botId => (await runState(botId)).running,
         execute,
       }, reach, request);
-    },
-    async shareImage(botId, request) {
-      const execute = deps.executeShareImage;
-      if (!execute) throw new NotWiredYetError('发分享图');
-      const reply = await execute(botId, request);
-      return reply === undefined ? { ok: false, reason: 'offline' } : shareImageReplySchema.parse(reply);
     },
     async bindGroup(botId, input) {
       if (!deps.executeGroups) throw new NotWiredYetError('绑定群聊');

@@ -12,7 +12,7 @@ import {
   applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema, notRepliedSchema, KEY_FAILURE, keyFailureOf, keyProblem,
   isKnownJudgeSelection, type JudgeSelectionView,
   adminProjectSchema, collaborationRequestSchema, collaborationReplySchema, topicConversationCopy, conversationCopy, conversationSchema, conversationToMode, modeToConversation, projectRecordSchema,
-  toolSteps, environmentToolStateSchema, SHARE_GIF_MAX_BYTES,
+  toolSteps, environmentToolStateSchema,
 } from "../src/index.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -77,12 +77,6 @@ describe("pinned contract extraction", () => {
     // the key's length only: its shape is the daemon's to refuse in words (s23g)
     for (const value of ["", "x".repeat(4097)]) expect(adminRequestSchema.safeParse({type:"setSecret",keyId:"typesafe-api-key",value}).success).toBe(false);
     expect(adminRequestSchema.safeParse({type:"setSecret",keyId:"typesafe-api-key",value:"ts_TEST KEY"}).success).toBe(true);
-  });
-  it("now-share N5d: takes a share GIF of up to Feishu's 10 MB read as decimal", () => {
-    expect(SHARE_GIF_MAX_BYTES).toBe(10_000_000);
-    const start = (bytes: number) => adminRequestSchema.safeParse({type:"shareStart",agentId:"cli_fixture",openId:"ou_fixture",bytes,sha256:"a".repeat(64)}).success;
-    expect(start(10_000_000)).toBe(true);
-    expect(start(10_000_001)).toBe(false);
   });
   it("keeps optional V3 job, install, and event fields", () => {
     const base = {id:"job",type:"registerAgent"};

@@ -46,12 +46,11 @@
 | N2b | daemon 和 UI：Claude 用量补上 Claude Code 清理掉的历史；没有订阅额度时照常显示统计，额度一栏写明原因 | N2、N3 |
 | N3 | UI：此刻页顺序、三个用量面板、Fable 一行、Jev 图标 | N0；数据来自 N1、N2，没有时降级 |
 | N4 | UI：挂绳几版，owner 选后定稿 | — |
-| N5a | UI：`ShareModel`、打码、`ShareCard`、离屏窗口的分享卡入口、分享框（选项、预览、复制、发到飞书、收件人）（#750，已合入集成分支） | N3；接口见 N5 |
-| N5b | 桌面端：离屏录制、GIF 编码、复制成文件、在访达中显示（#752，已合入集成分支） | 接口见 N5 |
-| N5c | daemon：可发的 Bot 和收件人、分块上传、由 Bot 私聊发图（#751，已合入集成分支） | 接口见 N5 |
-| N5d | 三片接齐：卡片报动画时长、关分享框时停录制、离屏窗口按卡片宽度打开、GIF 长宽不超过 2000 px、不显示额度时热力图放大补满、挂绳和副标题拉开、零用量格子在 GIF 里看得见、20 帧每秒、超时 90 秒（本 PR） | N5a、N5b、N5c |
+| N5a | UI：`ShareModel`、打码、`ShareCard`、离屏窗口的分享卡入口、分享框（选项、预览、复制、发到飞书、收件人） | N3；接口见 N5 |
+| N5b | 桌面端：离屏录制、GIF 编码、复制成文件、在访达中显示 | 接口见 N5 |
+| N5c | daemon：可发的 Bot 和收件人、分块上传、由 Bot 私聊发图 | 接口见 N5 |
 
-N1 小，和 N3 一起做（同一个 PR 也可以）。N2、N3、N4 并行。N5 拆成三片并行，接口（协议、`vonvonShell.share`、离屏窗口的 `vonvonShareCard`）先由 Claude 提交到集成分支，三片照着接；N5a 用 N4 定稿后的工牌，不需要等 N4 合入也能开始。三片合入后，N5d 把它们之间还没接上的地方接齐（N5 各处标了 N5d 的几条）。
+N1 小，和 N3 一起做（同一个 PR 也可以）。N2、N3、N4 并行。N5 拆成三片并行，接口（协议、`vonvonShell.share`、离屏窗口的 `vonvonShareCard`）先由 Claude 提交到集成分支，三片照着接；N5a 用 N4 定稿后的工牌，不需要等 N4 合入也能开始。
 
 ## 4. 各片做法
 
@@ -122,8 +121,8 @@ owner 2026-11-08 同意的方向。
   - `shareTargets` → `{kind:'shareTargets', bots:[{agentId, name, connected, recipients:[{openId, name?, creator}]}]}`。`recipients` 是这个 Bot 的管理员名单，名字和管理员页同一来源。
   - `shareStart {agentId, openId, bytes, sha256}` → `{kind:'shareUpload', uploadId, received:0}`；`sharePart {uploadId, index, data}`（base64，每块原始数据不超过 `SHARE_PART_BYTES` 即 1 MiB，从 0 按序）→ `{kind:'shareUpload', uploadId, received}`；`shareSend {uploadId}` → `{kind:'shareSent', messageId}`。失败一律 `refused`，`code` 见 N5c。
   - 分块是因为 WebSocket 每帧上限 4 MB（`server/ws.ts`、`secure-socket.ts`），GIF 最大 10 MB；而且当前设备可能是远程设备，不能传本机路径。
-- 桌面外壳：`ShellCapabilities.share`（类型 `ShareShell`、`ShareRecording`，在 `packages/ui/src/client-context.tsx`），N5b 在 preload 里实现：`record(model, onProgress)`、`copy(id)`、`reveal(path)`、`bytes(id)`、`discard(id)`，以及 `cancel()`：停掉正在进行的录制（它的 `record` 以 `cancelled` 失败），离屏窗口和 worker 都关掉后才 resolve，关分享框时调（N5d 起必有）。
-- 离屏窗口的分享卡入口：离屏窗口加载同一份 UI，地址带 `#share-card`，页面（N5a）只渲染 `ShareCard`，数据只从 `window.vonvonShareCard`（类型 `ShareCardBridge`，N5b 的 preload 提供）拿，不连 daemon：`model()` 原样拿到 `record()` 收到的 `ShareModel`；首帧画完、图片和字体都好了以后调 `ready(layout)`（`ShareLayout`：卡片尺寸、各工牌和工牌栏的位置、栏的 `scrollWidth`/`clientWidth`，可选的 `animationMs`：卡片自己的动画从 `ready()` 起要跑多久，含开头的延迟；不给按 1800 ms。N5d 起分享卡总是给，由用量累加的常量算出：延迟 150 ms 加 1600 ms，共 1750 ms；工牌只在录制的指针下翻面、摆动，不算在内），它 resolve 时录制开始，卡片从这时起跑用量累加的时钟。录制至少录到 `animationMs`，最后一帧（GIF 的首帧）是累加完的样子。
+- 桌面外壳：`ShellCapabilities.share`（类型 `ShareShell`、`ShareRecording`，在 `packages/ui/src/client-context.tsx`），N5b 在 preload 里实现：`record(model, onProgress)`、`copy(id)`、`reveal(path)`、`bytes(id)`、`discard(id)`。
+- 离屏窗口的分享卡入口：离屏窗口加载同一份 UI，地址带 `#share-card`，页面（N5a）只渲染 `ShareCard`，数据只从 `window.vonvonShareCard`（类型 `ShareCardBridge`，N5b 的 preload 提供）拿，不连 daemon：`model()` 原样拿到 `record()` 收到的 `ShareModel`；首帧画完、图片和字体都好了以后调 `ready(layout)`（`ShareLayout`：卡片尺寸、各工牌和工牌栏的位置、栏的 `scrollWidth`/`clientWidth`），它 resolve 时录制开始，卡片从这时起跑用量累加的时钟。
 
 **N5a（UI）**
 
@@ -132,31 +131,27 @@ owner 2026-11-08 同意的方向。
 - 分享框：`reference/components/ui/Dialog`。左边是活的 `ShareCard` 预览（缩放放进去，能悬停翻面）；右边 `SettingsGroup`/`SettingsRow`/`Toggle` 和现有勾选样式（默认值见 §2）。下面一行「由 <Bot> 私聊发给 <名字>」，Bot 和人可以换（§2），数据来自 `shareTargets`。按钮「复制」「发到飞书」（主按钮）。
 - 点任一按钮：当前选项还没录过就先 `record`（按钮上显示进度），同一组选项复用同一份录制；改了选项就作废旧的；关掉分享框时 `discard`。
 - 复制成功：提示「已复制，可以粘贴到飞书或微信」和「在访达中显示」（Windows 上是「在资源管理器中显示」）。发到飞书：`bytes` → `shareStart` → 逐块 `sharePart` → `shareSend`；成功提示「已发到 <名字> 和 <Bot> 的私聊」和「打开飞书」（`badgeUrl` 那条链接，经 `openExternalUrl`）；`refused` 显示 daemon 给的说明。
-- 老 daemon：界面看当前设备的 serverInfo 有没有 `share.gif` 能力，没有就是老 daemon，不问 `shareTargets`；问了答 `unsupported` 或 `invalid_request` 也当老 daemon。「发到飞书」不可用，写「这台设备上的 Vonvon Bot 升级后可用」；复制照常。
-- 关分享框时，录制还在进行就 `cancel()`（N5d），录完的照旧 `discard`。
-- 分享卡里不显示额度一栏时，Codex、Claude Code 面板的热力图照 owner 认可的效果图补满空出来的宽度（N5d）：还是 13 周，格子放大到 22 px、间距 4.5 px，统计数字的两列随之拉开。只在分享卡的 CSS 里做（这两个面板的 section 带 `data-wide-heat`），app 不变；显示额度时卡片和 app 一样。Jev 面板的右栏是按 Bot 一栏，不归额度开关管，不变。
-- 挂绳顶端离副标题约 25 px，不再贴着它（N5d，只改分享卡 CSS）。
-- 零用量的格子、图例的「少」和空的进度条在分享卡里用效果图的浅灰 `#e7e6e1`：app 的颜色离卡片底色只差约 3 级，GIF 每帧只重画差 4 级以上的像素，录出来就看不见了（N5d）。没有数据的日子照旧只画边框，和零用量分得开。
+- 老 daemon（`shareTargets` 答 unsupported）：「发到飞书」不可用，写「这台设备上的 Vonvon Bot 升级后可用」；复制照常。
 - 测试：组装和打码（每个开关开、关时群名、人名、二维码出不出现，真名不进 `ShareModel`）；默认值和记住上次的选择；录制复用和 `discard`；发送按块、失败提示；`#share-card` 入口只用 `vonvonShareCard` 的数据。
 
 **N5b（桌面端，`packages/desktop`）**
 
 - preload 实现 `share`，主进程一个 `ShareRecorder`。
-- 离屏窗口：`show:false`、`webPreferences.offscreen`，自己的 preload 提供 `vonvonShareCard`；不连 daemon。窗口一开始就是卡片自己的宽度（协议里的 `SHARE_CARD_WIDTH`，904 CSS px，N5d），卡片只按这个宽度排一次版；卡片在页面左上角，没有边距和滚动条，取帧只截卡片那一块的整像素。输出尺寸在 10 MB 内、长和宽都不超过 2000 px（`SHARE_GIF_MAX_SIDE`：飞书不收更大的 GIF，N5d）的前提下取看得清的最大值。
+- 离屏窗口：`show:false`、`webPreferences.offscreen`，自己的 preload 提供 `vonvonShareCard`；不连 daemon。卡片按 app 内容区的宽度排版，输出尺寸在 10 MB 内取看得清的最大值。
 - 放慢时钟取帧：用 `webContents.debugger`（CDP）把 CSS 过渡和动画放慢（`Animation.setPlaybackRate`），同一倍数缩放页面的 `requestAnimationFrame` 时间戳、`performance.now` 和指针事件的时间戳；按动画时间等间隔取帧（约 20 帧每秒），每帧延时按动画时间算。要求：电脑再忙，帧与帧之间的动画时间也相等；翻面、摆动、挂绳翻面、名字滚动、用量累加都走同一个时钟。可以参考 N4 录悬停动图的办法（`claude-work/now-share-1108/n4/`），选在 Electron 里最稳的实现。
 - 录制脚本：
   1. 卡片画好后，指针从左到右依次经过每张工牌，停留到翻面完成再离开，触发 app 自己的悬停翻面、摆动、倾斜和高光；用量逐日累加同时开始。
   2. Bot 多于 4 个（owner："GIF 是动图，可以横向滚动展示的呀，自动横向滚动"）：先经过开头 4 张，再用 `sendInputEvent` 的横向 `mouseWheel` 滚动工牌栏，指针继续经过新露出的每一张；全部经过后滚回开头，最后一帧和第一帧一样。用 app 自己的工牌栏和吸附，不另做动画；滚动停下后再挪一下指针，让悬停状态更新。
   3. 每张停留随数量缩短（约 0.35 到 0.5 秒）：4 个以内约 3 秒，8 个约 6 秒，最多约 10 秒。GIF 里没有光标。
-- 编码：`gifenc`（MIT）在 worker 里；最终画面放第一帧；不超过 10 MB（按 10,000,000 字节算，飞书写的是"不能超过 10 MB"，看不出是不是 MiB，N5d），超了先降帧率再降尺寸，不降到看不清；目标 8,000,000 字节（N5d：4 个 Bot 的默认卡片 20 帧每秒约 5–6.5 MB，10 帧每秒时翻面看着像闪一下）。缩放按 0.25 一档，每一档都不超过 2000 px；卡片高到 1 倍也超的，降到 1 倍以下。再录一遍更小的，只在剩下的时间够录上一遍那么久时才录；录着录着超时了，前面已经有一份不超过 10 MB 的就用那一份，不报超时（N5d：JP-VPS 上 6 个 Bot 第一遍 1.75 倍要 36 秒，第二遍录不完，原来整个报超时）。
+- 编码：`gifenc`（MIT）在 worker 里；最终画面放第一帧；不超过 10 MB，超了先降帧率再降尺寸，不降到看不清；目标 5 MB 左右。
 - `copy`：写到 `userData/share/` 下（文件名带日期时间），只留最近 10 个；Mac 把文件放进剪贴板（文件 URL，同时放 GIF 数据），Windows 放文件列表；`reveal` 用 `shell.showItemInFolder`。
-- 清理：出错、超时（90 秒，N5d：JP-VPS 4 核上 10 个 Bot 要 55.6 秒）或 `discard` 时离屏窗口一定关掉；帧和录制只在内存里，复制写出的文件除外。
+- 清理：出错、超时（60 秒）或 `discard` 时离屏窗口一定关掉；帧和录制只在内存里，复制写出的文件除外。
 - 测试：假 BrowserWindow 测调用顺序、超时和出错时窗口关闭；GIF 可解码、帧数和延时对；剪贴板按平台写对；JP-VPS 有 `xvfb-run`，能真录一次就看帧间隔。真机交给 Mac 上的 Codex 验收。
 
 **N5c（daemon）**
 
 - `shareTargets`：本机每个 Bot 的 `agentId`、名字、是否已连接、管理员名单（顺序照存盘）和名字（管理员页的来源）、谁是创建者。
-- `shareStart`：Bot 存在且已连接；`openId` 在这个 Bot 的管理员名单里；`bytes` 不超过 `SHARE_GIF_MAX_BYTES`（10,000,000 字节，N5d）。每个连接同时只有一个上传，2 分钟没动静作废，连接断开就丢掉。`sharePart` 按序号收，总量不超过声明的。`shareSend` 核对字节数、`sha256` 和 GIF 文件头（文件头里的宽或高超过 2000 px 答 `too_large`，N5d），用现有的图片上传（`im.v1.image.create`）和发消息（`receive_id_type=open_id`、`msg_type=image`）发出，返回 `messageId`，释放内存。同一个 Bot 同时只发一张。
+- `shareStart`：Bot 存在且已连接；`openId` 在这个 Bot 的管理员名单里；`bytes` 不超过 10 MiB。每个连接同时只有一个上传，2 分钟没动静作废，连接断开就丢掉。`sharePart` 按序号收，总量不超过声明的。`shareSend` 核对字节数、`sha256` 和 GIF 文件头，用现有的图片上传（`im.v1.image.create`）和发消息（`receive_id_type=open_id`、`msg_type=image`）发出，返回 `messageId`，释放内存。同一个 Bot 同时只发一张。
 - `refused` 的 `code`：`unknown_bot`、`bot_offline`、`not_admin`、`too_large`、`bad_image`、`upload_missing`（作废或不存在）、`feishu_failed`。`message` 是给用户看的中文，例如「这个人不在 <Bot> 的可用范围里，收不到私聊。」飞书的原始错误只进日志；日志不带 open_id 和图片内容。
 - 权限：只给桌面端、网页这类主机客户端，私聊、群和评论里的 Agent 都不能调（`server/authz.ts` 已写成 deny）。
 - 测试：各种拒绝、分块拼装、作废和断开清理、假飞书客户端的上传和发送。不做真实飞书发送，真发由 Claude 验收时做。
