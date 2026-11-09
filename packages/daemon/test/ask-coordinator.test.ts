@@ -607,3 +607,20 @@ describe('a private chat\'s own question (dm-agent 5)', () => {
     turn.close('turn-ended');
   });
 });
+
+
+it('adopts the question carrier topic before accepting a typed answer without a run placeholder', async () => {
+  const f = fixture();
+  const placed = vi.fn(async () => 'question-topic');
+  const turn = f.coordinator.openTurn({ run: f.run, sessionKey: 'pending:trigger',
+    placement: { chatId: 'chat', replyTo: 'trigger', replyInThread: true },
+    initiator: { kind: 'user', openId: 'starter' }, idlePause: f.pause,
+    waiting: f.waiting, fault: f.fault, placed });
+  turn.enqueue(choices());
+  await flush();
+  expect(placed).toHaveBeenCalledWith('msg-1');
+  expect(f.create).toHaveBeenCalledTimes(1);
+  expect(f.typed('question-topic', 'starter', '一')).toBe('answered');
+  expect(f.response).toHaveBeenCalled();
+  turn.close('turn-ended');
+});

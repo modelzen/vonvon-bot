@@ -131,3 +131,11 @@ test('the private chat sits under its Bot: its page, its 模型与权限 tab fir
   const member = openMembership(opened, memberId, snapshot);
   assert.deepEqual(member, {kind: 'membership', id: memberId, pane: {kind: 'settings'}, parent: {kind: 'agent', id: agentId, pane: {kind: 'groups'}}});
 });
+
+
+test('private-chat settings search handles an unavailable private chat without opening the old administrator page', () => {
+  const destination = {page:'collaboration' as const,selection:{kind:'agent' as const,id:agentId},reveal:'dm-response' as const};
+  const found = routeFromSearch(destination,snapshot);
+  assert.deepEqual(found?.route,{kind:'agent',id:agentId,pane:{kind:'groups'}});
+  assert.match(found?.missing ?? '',/私聊设置暂不可用/);
+});

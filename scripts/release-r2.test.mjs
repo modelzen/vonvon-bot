@@ -64,7 +64,7 @@ async function fixture(t) {
   const fetchImpl = async (url, options) => {
     assert.equal(options.redirect, 'error');
     assert.equal(options.cache, undefined);
-    assert.equal(options.headers, undefined);
+    assert.deepEqual(options.headers, { 'Accept-Encoding': 'identity' });
     const parsed = new URL(url);
     assert.equal(parsed.search, '');
     const source = parsed.origin === new URL(SERVER_BASE_URL).origin ? canonical : store;
@@ -455,4 +455,23 @@ test('CANCEL arriving during the final mutable guards prevents its conditional P
   };
   await assert.rejects(f.sync({ mode: 'stable', cancelFile: path }), /stopped by CANCEL/);
   assert.equal(f.calls.some(call => call[0] === 'put' && call[1] === object.key), false);
+});
+
+test('public mirror requests identity and rejects encoded responses and bad hashes', async t => {
+  const f = await fixture(t);
+  await f.sync();
+  const fetchResponse = (encoding, corrupt = false) => async (url, options) => {
+    const response = await f.fetchImpl(url, options);
+    if (encoding !== undefined) response.headers.set('content-encoding', encoding);
+    if (!corrupt) return response;
+    const body = Buffer.from(await response.arrayBuffer());
+    body[0] ^= 1;
+    return new Response(body, { headers: response.headers });
+  };
+  await verifyR2Mirror({ plan: f.plan, config, fetchImpl: fetchResponse('identity') });
+  // An already-decoded body cannot excuse a CDN ignoring the identity request.
+  for (const encoding of ['gzip', 'br', 'identity, gzip']) {
+    await assert.rejects(verifyR2Mirror({ plan: f.plan, config, fetchImpl: fetchResponse(encoding) }), /Content-Encoding/);
+  }
+  await assert.rejects(verifyR2Mirror({ plan: f.plan, config, fetchImpl: fetchResponse('identity', true) }), /remote bytes differ/);
 });

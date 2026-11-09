@@ -1,20 +1,18 @@
-/* A punched paper badge in a clear sleeve. The hanger rotates at the rail; the
-   face rotates separately so its clasp stays put when reading the reverse. */
+/* A punched paper badge in a clear sleeve on a satin lanyard. The hanger
+   rotates where the lanyard fades out; the face rotates separately so its
+   clasp stays put when reading the reverse. */
 .badge-board {
-  --rail-gutter: clamp(22px, 3.3vw, 32px); --gap: clamp(13px, 2vw, 21px);
+  --rail-gutter: clamp(22px, 3.3vw, 32px); --gap: clamp(13px, 2vw, 21px); --lanyard-rise: 58px;
   --ink: #242823; --muted: #62675f; --hair: #c7c9c0;
   color:var(--ink); position:relative; container-type:inline-size; min-width:0;
   overflow:hidden;
+  /* The faded top of each lanyard may rise into the gap above the section. */
+  margin-top:-16px;
 }
 .badge-rail {position:relative; overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; scrollbar-width:none; scroll-snap-type:x proximity; scroll-padding-inline:var(--rail-gutter)}
 .badge-rail:focus-visible{outline:1px solid var(--color-focus,#506985);outline-offset:-2px;border-radius:6px}
 .badge-rail::-webkit-scrollbar {display:none}
-.badge-track {display:flex; align-items:flex-start; position:relative; gap:var(--gap); width:max-content; min-width:100%; padding:17px var(--rail-gutter) 19px; box-sizing:border-box}
-.badge-cable {
-  position:absolute; top:16px; inset-inline:0; height:2px; pointer-events:none;
-  background:linear-gradient(90deg,transparent,#a3a7aa 6%,#9da2a7 94%,transparent);
-  box-shadow:0 1px #ffffff85;
-}
+.badge-track {display:flex; align-items:flex-start; position:relative; gap:var(--gap); width:max-content; min-width:100%; padding:var(--lanyard-rise) var(--rail-gutter) 19px; box-sizing:border-box}
 .badge-slot {
   --drop:28px;--rest:-2deg;--portrait-tint:#d8ddea;
   --badge-width: clamp(165px,calc((100cqw - 2 * var(--rail-gutter) - 3 * var(--gap))/4),195px);
@@ -22,21 +20,66 @@
   padding-top:0; padding-bottom:5px;
 }
 .badge-slot[data-hanger="1"] {--drop:43px;--rest:1.8deg;--portrait-tint:#ebe2cf}
-.badge-slot[data-hanger="2"] {--drop:23px;--rest:-1.4deg;--portrait-tint:#cfdcdf}
+.badge-slot[data-hanger="2"] {--drop:26px;--rest:-1.4deg;--portrait-tint:#cfdcdf}
 .badge-slot[data-hanger="3"] {--drop:36px;--rest:2.2deg;--portrait-tint:#e3d7d1}
-.badge-hanger {position:relative; padding-top:var(--drop); transform-origin:50% 0;transform:rotate(calc(var(--rest) + var(--swing,0deg)))}
-.badge-wire {
-  position:absolute; top:-1px; left:calc(50% - 1px); width:2px; height:calc(var(--drop) + 8px);
-  z-index:2; pointer-events:none; background:linear-gradient(90deg,#767c71,#c4c8bf); box-shadow:1px 0 #ffffff9c;
+.badge-hanger {position:relative; padding-top:var(--drop); transform-origin:50% calc(-1 * var(--lanyard-rise));transform:rotate(calc(var(--rest) + var(--swing,0deg)))}
+.badge-lanyard {
+  position:absolute; z-index:2; pointer-events:none; user-select:none; top:calc(-1 * var(--lanyard-rise)); left:calc(50% - 20px);
+  width:40px; height:calc(var(--lanyard-rise) + var(--drop) - 8px); perspective:500px;
 }
-.badge-wire::before {
-  content:''; position:absolute; top:-2px; left:-2px; width:6px; height:5px; border-radius:2px;
-  background:linear-gradient(#e6e8e0,#74796e,#c6c8bd); border:1px solid #878c80;
+/* The strands follow the card's small tilt, pivoting on the crimp so they never
+   leave the clasp. They do not follow its half turn: each strand turns over
+   in place instead (below). */
+.badge-strands {
+  position:absolute; inset:0; transform-style:preserve-3d; transform-origin:50% 100%;
+  transform:rotateY(var(--yaw,0deg)) rotateX(var(--pitch,0deg)); transition:transform 140ms ease-out;
 }
+/* Each strand is a two-sided satin ribbon, teal on one face and black with a
+   teal print on the other: the left strand shows teal, the right one black.
+   Turning the card turns each strand over in place on the card's curve, so the
+   colours swap sides and the other print comes up. Woven edges are darker, a
+   soft sheen runs along the length, and the ends gather into the crimp. */
+.badge-strand {
+  --lean:-11deg; --lift:.4px; --hi:24%; position:absolute; bottom:0; left:calc(50% - 9.5px); width:11px; height:104%; transform-style:preserve-3d;
+  transform-origin:50% 100%; transform:rotate(var(--lean)) translateZ(var(--lift)) rotateY(var(--face,0deg));
+  transition:transform 530ms cubic-bezier(.24,.74,.2,1);
+  --teal:linear-gradient(90deg,#0b3a3b40,transparent 22% 78%,#0b3a3b52),
+    linear-gradient(to top,#1f6e70 2%,#3aa4a6 calc(var(--hi) - 12%),#58bdbc var(--hi),#33a0a2 calc(var(--hi) + 18%),#2f9a9c 64%,#247f81);
+  --black:linear-gradient(90deg,#00000080,transparent 22% 78%,#0000008c),
+    linear-gradient(to top,#0f1213 2%,#22282b calc(var(--hi) - 10%),#363e42 var(--hi),#1d2224 calc(var(--hi) + 20%),#16191b);
+  --gather:100% calc(100% - 9px),76% 100%,24% 100%,0 calc(100% - 9px);
+}
+.badge-strand + .badge-strand {--lean:11deg; --lift:0px; --hi:33%; left:calc(50% - 1.5px)}
+.badge-slot[data-back] .badge-strand {--face:180deg}
+.badge-strand > i {
+  position:absolute; inset:0; overflow:hidden; backface-visibility:hidden; background:var(--teal);
+  clip-path:polygon(0 0,100% 0,var(--gather));
+  /* The top 20px fade out, so the strands seem to run on up out of view; the
+     rest stays solid, keeping the black face black under its print. */
+  mask-image:linear-gradient(to top,#000 calc(100% - 20px),#000000d9 calc(100% - 16px),#0000008c calc(100% - 11px),#00000040 calc(100% - 6px),transparent calc(100% - 1px));
+}
+.badge-strand > i + i {transform:rotateY(180deg)}
+.badge-strand > .badge-print {background:var(--black)}
+/* Read upwards from the clasp. */
+.badge-print b {
+  position:absolute; left:50%; bottom:8px; transform-origin:0 100%; transform:rotate(-90deg) translateY(50%);
+  white-space:nowrap; color:#5cc2c1; font:italic 600 6.5px/1 var(--sans); letter-spacing:.04em;
+}
+/* The front print trails off after "Vonvon": only a hint of the rest shows
+   until the card turns and the other strand prints it in full. */
+.badge-print b > span {color:transparent; -webkit-background-clip:text; background-clip:text; background-image:linear-gradient(90deg,#5cc2c1e6,#5cc2c180 2em,#5cc2c126 3.4em,transparent 4.6em)}
+/* Too small to read on a 1x screen: leave the ribbon plain there. */
+@media (max-resolution:1.5dppx) {.badge-print b {display:none}}
 .badge-clasp {
   position:absolute; z-index:3; pointer-events:none; top:calc(var(--drop) + 3px); left:calc(50% - 3px);
   width:6px; height:11px; border:1px solid #92978a; border-radius:4px;
   box-shadow:inset 1px 0 1px #fff,1px 1px 1px #0002; background:linear-gradient(90deg,#c3c8bc,#e6e9e2 50%,#b4b9ac);
+}
+/* The split ring and the crimp that holds both strand ends. */
+.badge-clasp::before {content:'';position:absolute;top:-8px;left:-.5px;width:4px;height:6px;border:1.25px solid #8b9086;border-radius:50%}
+.badge-clasp::after {
+  content:''; position:absolute; top:-15px; left:-5px; width:14px; height:7px; box-sizing:border-box; border:1px solid #80857a; border-radius:2px;
+  background:linear-gradient(90deg,#a9aea3,#f0f2ec 42%,#c9cdc2 62%,#979c91); box-shadow:0 1px 1px #0003;
 }
 .badge-perspective {perspective:900px}
 .badge-tilt {transform-style:preserve-3d;transform:rotateY(var(--yaw,0deg)) rotateX(var(--pitch,0deg));transition:transform 140ms ease-out}
@@ -73,6 +116,7 @@
 }
 @media(prefers-reduced-motion:reduce) {
   .badge-flipper,.badge-slot[data-back] .badge-flipper {transform:none;transition:none}
+  .badge-strands,.badge-strand {transition:none}
   .badge-back {transform:none}
   .badge-slot:not([data-back]) .badge-back,.badge-slot[data-back] .badge-front{visibility:hidden}
 }

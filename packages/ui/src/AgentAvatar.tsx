@@ -1,7 +1,7 @@
 import { Bot } from 'lucide-react';
 import type { Agent } from '@vonvon/protocol';
 
-export function AgentAvatar({ agent, large = false }: { agent: Agent; large?: boolean }) {
+export function AgentAvatar({ agent, large = false }: { agent: Pick<Agent, 'avatarDataUrl'>; large?: boolean }) {
   return <span className={`collaboration-avatar agent${large ? ' large' : ''}`}>
     <Bot size={large ? 24 : 16} />
     {agent.avatarDataUrl && <img key={agent.avatarDataUrl} alt="" aria-hidden="true"

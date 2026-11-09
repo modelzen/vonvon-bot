@@ -162,10 +162,13 @@ function DesktopApp() {
   const [searchTarget, setSearchTarget] = useState<Destination>();
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>();
   const latestSnapshot = useRef<DesktopSnapshot | undefined>(undefined);
-  const [route, setRoute] = useState<CollaborationRoute>(initialRoute);
+  const [route, setRoute] = useState<CollaborationRoute>(() => {
+    const preview = typeof window !== 'undefined' && window.vonvonCardPreviewScope;
+    return preview ? {kind:'membership', id:preview.membershipId, pane:{kind:'settings'}, parent:{kind:'group',id:preview.groupId}} : initialRoute;
+  });
   const [setupProvider, setSetupProvider] = useState<SetupProvider>();
   const [setupAgentId, setSetupAgentId] = useState<AgentId>();
-  const [page, setPage] = useState<Page>("home");
+  const [page, setPage] = useState<Page>(() => typeof window !== 'undefined' && window.vonvonCardPreviewScope ? 'collaboration' : 'home');
   const [externalCoreAvailable, setExternalCoreAvailable] = useState(false);
   const connectedVersion = snapshot?.host.kind === 'connected' ? snapshot.host.version : undefined;
   useEffect(() => {
@@ -204,7 +207,7 @@ function DesktopApp() {
   const newCounts = useNewCounts(snapshot?.revision, MEMORY_SEEN_EVENT);
   const [groupDirectoryState, setGroupDirectoryState] = useState<GroupDirectoryState>({query: '', expanded: {}});
   const [projectDirectoryState, setProjectDirectoryState] = useState<ProjectDirectoryState>({query: '', expanded: {}});
-  const [groupTabs, setGroupTabs] = useState<Record<string, GroupDesignTab>>({});
+  const [groupTabs, setGroupTabs] = useState<Record<string, GroupDesignTab>>(() => typeof window !== 'undefined' && window.vonvonCardPreviewScope ? {[window.vonvonCardPreviewScope.membershipId]:'response'} : {});
   const [newMemoryFocus, setNewMemoryFocus] = useState<{memberId: string; token: number}>();
   const [featureId, setFeatureId] = useState<string>();
   const feature = uiFeatures.find(item => item.id === featureId && item.slot === "page");
@@ -944,7 +947,7 @@ function DesktopApp() {
             </>
           )}
           {(page === "setup" || (page === "home" && !snapshot.agents.length)) && <WelcomeSetup key={setupAgentId ?? "global"} initialAgentId={setupAgentId} initialProvider={setupProvider} onProviderPrepared={setSetupProvider} onCreateBot={provider => void register(undefined, provider)} onOpenGroups={() => snapshot.agents.length === 1 ? openJoin(snapshot.agents[0]!.id, undefined, setupProvider) : openList("agents")} snapshot={snapshot} ready={ready} busy={busy} run={run} onRegister={agentId => void register(agentId)} onOpenProviders={openProviders} onNotice={(message, error) => setNotice({message, error})}/>}
-          {page === "administrators" && <AdministratorsPanel agents={snapshot.agents}/>}
+          {page === "administrators" && <AdministratorsPanel agents={snapshot.agents} onOpenDm={agent => changeRoute(() => openDm(agent.id, 'response'))}/>}
           {page === "bridgeImport" && <section className="welcome-setup" aria-label="Bridge 导入"><header className="today-page-heading"><h1>Bridge 导入</h1></header><BridgeImportPanel ready={ready} busy={busy} platform={snapshot.application.platform} showUnavailable/></section>}
           {page === "providers" && <ProviderManager snapshot={snapshot} ready={ready} busy={busy} run={run} reveal={searchTarget?.reveal === 'codex' ? 'codex' : searchTarget?.reveal === 'claude' ? 'claude' : undefined}/>}
           {page === "environment" && <><EnvironmentPanel reveal={searchTarget?.reveal} request={client.environment}/></>}

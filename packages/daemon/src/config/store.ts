@@ -10,6 +10,22 @@ import { secretKeyForApp } from './schema';
 import { parseBotDefaults, resolveBotDefaults, validateConfigDefaults } from './defaults';
 import { admitDirectoryChanges, configDirectories } from './directories';
 import { getterContents } from './data-compatibility';
+import { cardDisplayConfigSchema } from '@vonvon/protocol';
+import { log } from '../core/logger';
+
+const warnedCardDisplay = new Set<string>();
+function sanitizeCardDisplay(config: unknown, location: string): void {
+  if (!config || typeof config !== 'object' || !('preferences' in config)) return;
+  const preferences = (config as { preferences?: unknown }).preferences;
+  if (!preferences || typeof preferences !== 'object' || !('cardDisplay' in preferences)) return;
+  const stored = preferences as { cardDisplay?: unknown };
+  if (stored.cardDisplay === undefined || cardDisplayConfigSchema.safeParse(stored.cardDisplay).success) return;
+  delete stored.cardDisplay;
+  if (!warnedCardDisplay.has(location)) {
+    warnedCardDisplay.add(location);
+    log.warn('card', 'display-config-invalid', { scope: 'bot', action: 'ignored-stored-card-display' });
+  }
+}
 
 export async function loadConfig(path: string = paths.configFile): Promise<Partial<AppConfig>> {
   try {
@@ -22,6 +38,7 @@ export async function loadConfig(path: string = paths.configFile): Promise<Parti
     }
     validateConfigDefaults(config);
     configDirectories(config);
+    sanitizeCardDisplay(config, path);
     return config as Partial<AppConfig>;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
@@ -109,6 +126,7 @@ export function saveConfig(cfg: AppConfig, path: string = paths.configFile, expe
   try {
     validateConfigDefaults(cfg);
     configDirectories(cfg);
+    if (cfg.preferences?.cardDisplay !== undefined && !cardDisplayConfigSchema.safeParse(cfg.preferences.cardDisplay).success) throw new Error('消息卡配置无效');
     serialized = `${JSON.stringify(cfg, null, 2)}\n`;
     validateConfigDefaults(JSON.parse(serialized));
     configDirectories(JSON.parse(serialized));

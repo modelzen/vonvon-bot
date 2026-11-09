@@ -1,7 +1,7 @@
 import type { BotProfile, GroupProfile, ProjectModelAccess, ProjectWorkspace, ProjectSmartRules, ProjectSkills, ProjectPresentation } from '../project/registry';
 import type { ModelInfo, PermissionMode, ReasoningEffort } from '../agent/types';
 import type { NativeField, TierInfo } from '../agent/permission';
-import type { ModelDisplayMode, PendingPolicy, ResolvedCompletionReminderConfig } from '../config/schema';
+import type { PendingPolicy, ResolvedCompletionReminderConfig } from '../config/schema';
 import type { VoiceAction, VoiceView } from '../voice/types';
 import type { JudgeModels, JudgeProvider } from '../judge/global-models';
 export type SettingsScope = {
@@ -88,16 +88,12 @@ export interface AgentSections {
   profile: BotProfile;
   /** 角色设定：SOUL.md 的身份与职责、其他说明（记忆设计 2.3） */
   role: { identity: string; notes: string };
-  cards: {
-    showToolCalls: boolean;
-    showModel: ModelDisplayMode;
-  };
   run: {
     maxConcurrentRuns: number;
     runIdleTimeoutSeconds: number;
     pendingPolicy: PendingPolicy;
   };
-  completion: ResolvedCompletionReminderConfig;
+  completion: Pick<ResolvedCompletionReminderConfig, 'mode' | 'longTaskMinutes'>;
   comments: {
     backend: string;
     selection: ModelSelection;

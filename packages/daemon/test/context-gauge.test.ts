@@ -58,7 +58,7 @@ describe('runCardMeter', () => {
     expect(meter({ used: 70, window: 100 }).text.text_color).toBe('yellow');
     const crit = meter({ used: 96, window: 100 });
     expect(crit.text.text_color).toBe('red');
-    expect(crit.text.content).toBe('🔴 上下文 96% · 96/100');
+    expect(crit.text.content).toBe('上下文 96% · 96/100');
   });
 });
 
