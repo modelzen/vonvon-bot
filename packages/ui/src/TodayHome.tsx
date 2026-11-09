@@ -1,4 +1,4 @@
-import {Activity, ArrowRight, ChartNoAxesColumn, ChevronRight, Cpu, Download, Link, MonitorSmartphone, Power, Share, UserRoundCog, Wrench, type LucideIcon} from 'lucide-react';
+import {Activity, ArrowRight, ChartNoAxesColumn, ChevronRight, Cpu, Download, Link, MonitorSmartphone, Power, UserRoundCog, Wrench, type LucideIcon} from 'lucide-react';
 import type {AgentId, DesktopSnapshot} from '@vonvon/protocol';
 import {NowBotList} from './NowBotList';
 import {NowActivity} from './NowActivity';
@@ -6,13 +6,11 @@ import {NowUsage} from './NowUsage';
 import {GlowButton} from './GlowButton';
 import {uiFeatures} from './features';
 import type {Page} from './collaboration-model';
-import {useActiveDevice, useClient, useShellCapabilities} from './client-context';
+import {useActiveDevice, useClient} from './client-context';
 import {whereName} from './device-copy';
 
-/** 分享 records a GIF, which only the desktop shell can do (now-share N5); the web UI never shows it. */
-export function TodayHome({snapshot, onSetup, onRegister, onOpenUsage, onShare, disabled}: {snapshot: DesktopSnapshot; onSetup: () => void; onRegister: () => void; onOpenUsage: () => void; onShare?: () => void; disabled: boolean}) {
+export function TodayHome({snapshot, onSetup, onRegister, onOpenUsage, disabled}: {snapshot: DesktopSnapshot; onSetup: () => void; onRegister: () => void; onOpenUsage: () => void; disabled: boolean}) {
   const client = useClient();
-  const canShare = !!useShellCapabilities()?.share;
   async function changeNumber(agentId: AgentId, badgeNumber: string) {
     const result = await client.run({type: 'setAgentBadgeNumber', agentId, badgeNumber});
     if (result.kind === 'applied') return;
@@ -25,7 +23,6 @@ export function TodayHome({snapshot, onSetup, onRegister, onOpenUsage, onShare, 
     <header className="today-intro">
       <div className="today-intro-title"><h1>此刻</h1>{snapshot.stale && <span role="status">正在更新…</span>}</div>
       <div className="today-intro-actions">
-        {canShare && <button type="button" className="today-share-button" onClick={onShare}><Share size={14} strokeWidth={1.8} aria-hidden="true"/>分享</button>}
         <GlowButton disabled={disabled} onClick={onRegister}>添加 Bot</GlowButton>
       </div>
     </header>

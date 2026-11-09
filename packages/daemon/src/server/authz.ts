@@ -149,8 +149,6 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
   // A group's command line never asks daemonStatus (`vonvon daemon status` reads the lock there); its paths are the owner's.
   ...rows('admin', 'daemonStatus', { dm: 'host', group: 'deny', comment: 'deny' }),
   ...rows('admin', 'negotiate', 'host'),
-  // now-share N5c: the 此刻 share dialog's; no Bot session sends a share GIF.
-  ...rows('admin', 'shareTargets shareStart sharePart shareSend', { dm: 'deny', group: 'deny', comment: 'deny' }),
   ...rows('directory', 'list suggest choose', DM_ONLY),
   ...rows('library', 'list workspace rename previous delete', DM_ONLY),
   // What memory_list, memory_add, memory_update and memory_forget do: the Bot process says where a write lands and

@@ -206,12 +206,9 @@ describe('此刻 page', () => {
   const home = (shell?: ShellCapabilities) => renderToStaticMarkup(<ClientProvider client={client} shell={shell}>
     <TodayHome snapshot={snapshot} onSetup={() => {}} onRegister={() => {}} onOpenUsage={() => {}} disabled={false}/>
   </ClientProvider>);
-  it('puts usage above 群动态 and shows 分享 only where the shell can record', () => {
+  it('puts usage above 群动态', () => {
     const web = home();
     expect(web.indexOf('aria-label="用量"')).toBeLessThan(web.indexOf('aria-label="群动态"'));
-    expect(web).not.toContain('today-share-button');
-    const desktop = home({share: {}});
-    expect(desktop.indexOf('today-share-button')).toBeLessThan(desktop.indexOf('添加 Bot'));
-    expect(desktop).toContain('./agent-icons/typesafe.png');
+    expect(web).toContain('./agent-icons/typesafe.png');
   });
 });
