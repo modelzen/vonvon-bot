@@ -5,7 +5,6 @@ import { App } from "./App";
 import { DirectoryPickerProvider } from "./directory-picker";
 import { ClientProvider, type ShellCapabilities } from "./client-context";
 import { DesktopRoot } from "./devices/DesktopRoot";
-import { isShareCardRoute, ShareCardPage } from "./ShareCard";
 import "./reference/App.css";
 import "./collaboration.css";
 import "./desktop.css";
@@ -105,5 +104,4 @@ export function Root() {
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Application root missing");
-// now-share N5: the desktop's offscreen share window loads this same bundle at #share-card and draws only the card.
-createRoot(root).render(isShareCardRoute(location.hash) ? <ShareCardPage bridge={window.vonvonShareCard}/> : <Root />);
+createRoot(root).render(<Root />);
