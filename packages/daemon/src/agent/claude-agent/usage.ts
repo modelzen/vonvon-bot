@@ -3,8 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { UsageError, type AccountUsageBundle, type RateWindow } from '../types';
+import { UsageError, type AccountUsageBundle, type AccountUsageSnapshot, type RateWindow } from '../types';
 import { claudeConfigDir, readClaudeUserSettings } from './configured-model';
+import { claudeLocalStats, refreshClaudeLocalStats } from './local-stats';
 
 const credentialsSchema = z.object({ claudeAiOauth: z.object({
   accessToken: z.string().min(1), subscriptionType: z.string().max(80).nullish(),
@@ -23,10 +24,14 @@ const usageSchema = z.object({
 });
 type Auth = { accessToken: string; planType?: string };
 
+function claudeEnv(home: string): NodeJS.ProcessEnv {
+  return { ...process.env, ...readClaudeUserSettings(process.env, home).env };
+}
+
 /** Read only: token rotation belongs to Claude Code. Never refresh or rewrite its credentials. */
 async function readAuth(): Promise<Auth> {
   const home = homedir();
-  const env = { ...process.env, ...readClaudeUserSettings(process.env, home).env };
+  const env = claudeEnv(home);
   if (env.ANTHROPIC_API_KEY?.trim() || env.ANTHROPIC_AUTH_TOKEN?.trim()
     || ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'].some(key => env[key] === '1')
     || (env.ANTHROPIC_BASE_URL?.trim() && env.ANTHROPIC_BASE_URL.replace(/\/+$/, '') !== 'https://api.anthropic.com')) {
@@ -68,14 +73,35 @@ function mapUsage(raw: unknown, auth: Auth): AccountUsageBundle {
 }
 
 const CACHE_MS = 60_000;
+/** How long a passing failure keeps showing the last quota the same credentials read. */
+const STALE_MS = 10 * 60_000;
 let cache: { key: string; data: AccountUsageBundle } | undefined;
 let cooldown: { key: string; until: number } | undefined;
 const pending = new Map<string, Promise<AccountUsageBundle>>();
 const authKey = (auth: Auth): string => createHash('sha256').update(auth.accessToken).digest('hex');
 
-/** Uses the connected host's credentials; a token change invalidates cached quota. */
+/** Uses the connected host's credentials; a token change invalidates cached quota. Local stats come from the same
+ * config dir; quota never waits for their scan, the reply carries whatever the scan has so far. No quota (API access,
+ * no subscription login, a failed read) does not fail the read: the stats still come back and `unavailable` says why. */
 export async function fetchClaudeUsageBundle(force = false): Promise<AccountUsageBundle> {
-  return fetchForAuth(await readAuth(), force, true);
+  const home = homedir();
+  const projects = join(claudeConfigDir(claudeEnv(home), home), 'projects');
+  void refreshClaudeLocalStats(projects, force);
+  const usage = await readQuota(force);
+  return { profile: { topInvocations: [], ...claudeLocalStats(projects) }, usage };
+}
+
+async function readQuota(force: boolean): Promise<AccountUsageSnapshot> {
+  let auth: Auth | undefined;
+  try {
+    auth = await readAuth();
+    return (await fetchForAuth(auth, force, true)).usage;
+  } catch (error) {
+    const kind = error instanceof UsageError ? error.kind : 'transient';
+    // A passing failure keeps the last quota these credentials read; its read time says how old it is.
+    if (kind === 'transient' && auth && cache?.key === authKey(auth) && Date.now() - cache.data.usage.fetchedAt < STALE_MS) return cache.data.usage;
+    return { main: {}, extras: [], fetchedAt: Date.now(), unavailable: kind };
+  }
 }
 
 async function fetchForAuth(auth: Auth, force: boolean, retryRotation: boolean): Promise<AccountUsageBundle> {

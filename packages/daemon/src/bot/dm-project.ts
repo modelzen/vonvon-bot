@@ -60,7 +60,7 @@ export async function ensureDmProject(input: { bot: BotIdentity; projectsRootDir
     }
     const cwd = await ensureBotDmDirectory(input.bot, resolveProjectsRootDir(input.projectsRootDir));
     const defaults = await input.defaults();
-    const row = await addDmProject({ ...defaults, name: DM_PROJECT_NAME, chatId: dmChatId(input.bot.appId), cwd, blank: true, origin: 'created',
+    const row = await addDmProject({ ...defaults, name: DM_PROJECT_NAME, chatId: dmChatId(input.bot.appId), cwd, blank: true, origin: 'created',presentation:{cardDisplay:null},
       kind: 'single', smart: true, noMention: true, mode: 'full', network: TIER_NETWORK.full, createdAt: Date.now(),
       dm: { people: {}, ...(!defaults.defaultModel && !defaults.modelAccess ? { useProviderDefault: true as const } : {}) } }, input.target);
     failures.delete(failureKey(input.bot.appId));

@@ -5,6 +5,7 @@
 .gd-toolbar .ui-button { min-height: 26px; }
 .gd-page { display: grid; gap: 22px; min-width: 0; }
 .gd-page > .ss-section { margin: 0; }
+.gd-conversation-run .ss-section__header { display: none; }
 .gd-note { margin: 0; font-size: 12px; line-height: 1.55; color: var(--color-text-secondary); }
 .gd-note[role="alert"], .gd-warning { color: var(--color-status-warning); }
 .gd-field-heading, .gd-section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 30px; }
@@ -145,3 +146,5 @@
 .gd-decision-config-link > span { display: inline-flex; align-items: center; gap: 2px; }
 
 .gd-provider-discovery { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.6; }
+
+.gd-conversation-section{display:grid;gap:16px;min-width:0}

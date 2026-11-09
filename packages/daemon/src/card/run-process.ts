@@ -18,6 +18,7 @@ const COMPACT_GROUP_BUDGET = 18_000;
 interface ProcessUnit {
   readonly element: CardElement;
   readonly itemCount: number;
+  readonly kind: 'tool' | 'thinking' | 'other';
   /** a compaction line: one short line, never dropped for the budget */
   readonly marker?: boolean;
 }
@@ -29,23 +30,29 @@ export function buildProcessBody(
   componentBudget = PROCESS_COMPONENT_BUDGET,
   live = false,
 ): CardElement[] {
+  return buildProcessBodyWithKinds(blocks,images,componentBudget,live).elements;
+}
+
+export function buildProcessBodyWithKinds(
+  blocks: readonly Block[], images?: ReadonlyMap<string,string>, componentBudget = PROCESS_COMPONENT_BUDGET, live = false,
+): {elements:CardElement[];kinds:Array<'tool'|'thinking'|'other'>} {
   const rich = processUnits(blocks, false, live, images);
   const richElements = rich.map(unit => unit.element);
-  if (fitsProcessBudget(richElements, 0, componentBudget)) return richElements;
+  if (fitsProcessBudget(richElements, 0, componentBudget)) return {elements:richElements,kinds:rich.map(unit=>unit.kind)};
 
   const compact = processUnits(blocks, true, live, images);
   const compactElements = compact.map(unit => unit.element);
-  if (fitsProcessBudget(compactElements, 0, componentBudget)) return compactElements;
+  if (fitsProcessBudget(compactElements, 0, componentBudget)) return {elements:compactElements,kinds:compact.map(unit=>unit.kind)};
 
-  const kept: CardElement[] = [];
+  const kept: ProcessUnit[] = [];
   let omitted = 0;
   for (const unit of compact) {
     // Compaction lines always stay; from the first unit that doesn't fit, the rest are omitted.
-    if (unit.marker || (omitted === 0 && fitsProcessBudget([...kept, unit.element], 512, componentBudget))) kept.push(unit.element);
+    if (unit.marker || (omitted === 0 && fitsProcessBudget([...kept.map(item=>item.element), unit.element], 512, componentBudget))) kept.push(unit);
     else omitted += unit.itemCount;
   }
-  if (omitted > 0) kept.push(markdown(`_…后续 ${String(omitted)} 项过程已省略（卡片容量限制）_`));
-  return kept;
+  if (omitted > 0) kept.push({element:markdown(`_…后续 ${String(omitted)} 项过程已省略（卡片容量限制）_`),itemCount:0,kind:'other'});
+  return {elements:kept.map(unit=>unit.element),kinds:kept.map(unit=>unit.kind)};
 }
 
 function fitsProcessBudget(
@@ -67,7 +74,7 @@ function processUnits(
   let tools: ToolEntry[] = [];
   const flushTools = (): void => {
     if (compactTools) units.push(...compactToolUnits(tools));
-    else if (tools.length === 1) units.push({ element: toolPanel(tools[0]!), itemCount: 1 });
+    else if (tools.length === 1) units.push({ element: toolPanel(tools[0]!), itemCount: 1,kind:'tool' });
     else if (tools.length > 1) units.push({
       element: processPanel(
         toolGroupTitle(tools),
@@ -75,7 +82,7 @@ function processUnits(
         false,
         { icon: toolPresentation(tools[0]!).icon, spacing: 8, titleColor: false },
       ),
-      itemCount: tools.length,
+      itemCount: tools.length,kind:'tool',
     });
     tools = [];
   };
@@ -87,14 +94,14 @@ function processUnits(
     }
     if (block.kind === 'compaction') {
       flushTools();
-      units.push({ element: compactionLine(block.compaction, live), itemCount: 1, marker: true });
+      units.push({ element: compactionLine(block.compaction, live), itemCount: 1, marker: true,kind:'other' });
       continue;
     }
     if (block.content.trim() === '') continue;
     flushTools();
     const content = truncate(block.content, block.kind === 'reasoning' ? REASONING_MAX : TEXT_MAX);
     const elements = renderRichText(content, images);
-    elements.forEach(element => units.push({ element, itemCount: 1 }));
+    elements.forEach(element => units.push({ element, itemCount: 1,kind:block.kind==='reasoning'?'thinking':'other' }));
   }
   flushTools();
   return units;
@@ -113,7 +120,7 @@ function compactToolUnits(tools: readonly ToolEntry[]): ProcessUnit[] {
         false,
         { icon: toolPresentation(batch[0]!).icon, spacing: 8, titleColor: false },
       ),
-      itemCount: batch.length,
+      itemCount: batch.length,kind:'tool',
     });
     batch = [];
     entries = [];

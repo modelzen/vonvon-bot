@@ -482,7 +482,8 @@ describe('context meter (s12: always at the top)', () => {
 
   it('is tier-colored above the threshold, without a /compact nudge', () => {
     const json = meter(run([{ type: 'context_usage', usedTokens: 8000, contextWindow: 8192 }]));
-    expect(json).toContain('🔴 上下文 98%');
+    expect(json).toContain('上下文 98%');
+    expect(json).not.toContain('🔴');
     expect(json).not.toContain('/compact');
   });
 

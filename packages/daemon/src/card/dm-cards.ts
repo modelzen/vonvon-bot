@@ -6,11 +6,9 @@ import {
   COMPLETION_REMINDER_LONG_TASK_MIN_MINUTES,
   getCompletionReminderConfig,
   getMaxConcurrentRuns,
-  getModelDisplay,
   getPendingPolicy,
   getSessionTitleConfig,
   getSessionTitleEfforts,
-  getShowToolCalls,
   normalizeRunIdleTimeoutSeconds,
   RUN_IDLE_TIMEOUT_DEFAULT_SEC,
   RUN_IDLE_TIMEOUT_MAX_SEC,
@@ -860,7 +858,7 @@ export function buildVoiceSettingsCard(cfg: AppConfig, notice?: string): CardObj
 }
 
 /**
- * Global preferences card. Grouped into sections (📤 输出展示 / ⏱ 运行控制), each
+ * Global preferences card. Grouped into sections, each
  * setting a self-explaining {@link settingItem} (name + grey caption + option
  * buttons, current value highlighted). Buttons, not select_static, on purpose:
  * Feishu locks a card_id once a select has been interacted with, after which
@@ -873,29 +871,6 @@ export function buildSettingsCard(cfg: AppConfig, notice?: string): CardObject {
   return card(
     [
       ...(notice ? [md(notice)] : []),
-      settingSection('📤 输出展示'),
-      ...settingItem(
-        '🔧 工具调用',
-        '输出时显示执行的命令 / 工具调用；关掉只看最终回答。',
-        DM.setTools,
-        getShowToolCalls(cfg) ? 'on' : 'off',
-        [
-          { label: '显示', value: 'on' },
-          { label: '隐藏', value: 'off' },
-        ],
-      ),
-      ...settingItem(
-        '🧠 模型显示',
-        '每条回复右下角显示「模型 · 推理强度」。仅输出时＝只在生成中显示；始终＝生成完后卡片也保留。',
-        DM.setShowModel,
-        getModelDisplay(cfg),
-        [
-          { label: '关闭', value: 'off' },
-          { label: '仅输出时', value: 'running' },
-          { label: '始终', value: 'always' },
-        ],
-      ),
-      hr(),
       settingSection('⏱ 运行控制'),
       md(`**⏱ 假死超时** · 当前 **${watchdogSec === 0 ? '关闭' : watchdogSec % 60 === 0 ? `${watchdogSec / 60} 分钟` : `${watchdogSec} 秒`}**`),
       note('多久没有任何输出就自动终止本轮（防卡死）。'),
@@ -1506,7 +1481,7 @@ export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>): Car
     ...admins.map(id => actions([md(id === ownerOpenId ? `${memberName(names, id)} · 创建者` : memberName(names, id))])),
     hr(),
     actions([button('⬅️ 设置', { a: DM.settings })]),
-    note('名单在 Vonvon Bot 的「设置 → 管理员」或终端里改。'),
+    note('名单在 Vonvon Bot 的「私聊 → 沟通方式 → 回应谁」或终端里改。'),
   ], { header: { title: '👮 管理员', template: 'blue' } });
 }
 

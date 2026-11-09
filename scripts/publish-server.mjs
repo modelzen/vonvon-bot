@@ -207,8 +207,11 @@ export async function serverCosClient(config, env) {
 export async function verifyServerPublic(objects, { fetchImpl = fetch, kind = 'versioned' } = {}) {
   const results = [];
   for (const object of objects) {
-    const response = await fetchImpl(object.url, { redirect: 'error', signal: AbortSignal.timeout(300_000) });
+    const response = await fetchImpl(object.url, { redirect: 'error', headers: { 'Accept-Encoding': 'identity' }, signal: AbortSignal.timeout(300_000) });
     if (response.status !== 200 || response.redirected || !response.body) throw new Error(`公网下载失败：${object.url}（HTTP ${response.status}）`);
+    // Fetch decodes compressed bodies but leaves their wire Content-Length: verify only identity bytes.
+    const encoding = response.headers.get('content-encoding');
+    if (encoding !== null && encoding.trim().toLowerCase() !== 'identity') { await response.body.cancel(); throw new Error(`公网的 Content-Encoding 不对：${object.url}`); }
     if (response.headers.get('content-type')?.split(';')[0].trim() !== object.contentType.split(';')[0]) throw new Error(`公网的 Content-Type 不对：${object.url}`);
     if (Number(response.headers.get('content-length')) !== object.bytes) throw new Error(`公网内容不一致（大小）：${object.url}`);
     cachePolicy(response.headers, kind === 'stable' ? 'manifest' : 'versioned');

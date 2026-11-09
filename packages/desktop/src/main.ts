@@ -327,8 +327,8 @@ export async function startDesktop(): Promise<void> {
     }
 
     window = new BrowserWindow({
-      width: 1000,
-      height: 800,
+      width: 910,
+      height: 808,
       minWidth: 760,
       minHeight: 640,
       show: false,

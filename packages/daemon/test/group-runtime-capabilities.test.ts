@@ -46,7 +46,7 @@ describe('native group capabilities', () => {
 it('keeps group presentation and voice enablement independent from Bot preferences', async () => {
   const cfg: AppConfig = { accounts: { app: { id: 'bot', secret: 'fake', tenant: 'feishu' } }, preferences: { voice: { enabled: false }, showToolCalls: true } };
   const group = { presentation: { voiceEnabled: true, showToolCalls: false, completionMode: 'manual' as const, longTaskMinutes: 9, showModel: 'off' as const } };
-  expect(presentationConfig(cfg, group).preferences).toMatchObject({ showToolCalls: false, showModel: 'off', voice: { enabled: true }, completionReminder: { mode: 'manual', longTaskMinutes: 9 } });
+  expect(presentationConfig(cfg, group).preferences).toMatchObject({ showToolCalls: true, showModel: 'running', voice: { enabled: true }, completionReminder: { mode: 'manual', longTaskMinutes: 9 } });
   expect(cfg.preferences).toMatchObject({ showToolCalls: true, voice: { enabled: false } });
   const feishu = { checkPermission: vi.fn(async () => {}), recognize: vi.fn(async () => 'voice text') };
   const voice = createVoiceService(cfg, async update => { cfg.preferences ??= {}; await update(cfg.preferences); return cfg.preferences; }, { feishu, decode: async () => Buffer.alloc(4) });

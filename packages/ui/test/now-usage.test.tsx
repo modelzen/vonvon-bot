@@ -7,6 +7,10 @@ import {readUsage} from '../src/management/usage-data';
 
 const data = {profile: {topInvocations: [], dailyBuckets: [{date: '2026-10-25', tokens: 100}], statsAsOf: '2026-10-25'}, usage: {main: {primary: {usedPercent: 32, windowSeconds: 18000, resetAt: 1793059200}}, extras: [], fetchedAt: 1}};
 const codex: NowProvider = {id: 'codex-appserver', name: 'Codex', account: {kind: 'subscription', planType: 'plus'}, data};
+// A daemon from now-share N2b on with no Claude subscription quota: local stats and why there is no quota.
+const noQuota = {profile: {topInvocations: [], lifetimeTokens: 42, dailyBuckets: [{date: '2026-10-25', tokens: 42, messages: 2}],
+  localStats: {state: 'ready' as const, models: [{id: 'claude-opus', tokens: 42}], sessions: 1, messages: 2, activeDays: 1, longestSessionSec: 60, longestSessionMessages: 2}},
+  usage: {main: {}, extras: [], fetchedAt: 1, unavailable: {reason: 'api-key-mode', message: '用的是 API 接入，没有订阅额度'}}};
 const entry = (id: string) => ({id, displayName: id === 'codex-appserver' ? 'Codex' : 'Claude', depState: 'installed'});
 function client(logins: Record<string, unknown>) {
   return {environment: vi.fn(async request => request.type === 'backendCatalog' ? {kind: 'backends', entries: Object.keys(logins).map(entry)} : logins[request.id]), collaboration: vi.fn(async () => ({kind: 'usage', data}))} as unknown as Pick<VonvonClient, 'environment' | 'collaboration'>;
@@ -19,27 +23,72 @@ describe('real configured Provider discovery', () => {
     const updates: any[] = [];
     await readNowProviders(c, update => updates.push(update));
     expect(updates.filter(item => item.kind === 'provider')).toEqual([]);
-    expect(c.collaboration).not.toHaveBeenCalled();
+    // Claude's local stats are asked for, but a device with none shows no Claude.
+    expect(c.collaboration).toHaveBeenCalledExactlyOnceWith({action: 'usage', force: false, backend: 'claude-agent'});
   });
-  it('keeps an explicitly configured external API even when its credentials cannot be verified', async () => {
-    const c = client({'claude-agent': {...login('claude-agent', 'unknown', 'api'), account: {kind: 'api', apiProvider: 'bedrock'}}});
+  it.each([
+    ['signed out', login('claude-agent', 'signedOut')],
+    ['unknown under a background daemon', {...login('claude-agent', 'unknown'), account: undefined}],
+    ['a login read that fails', new Error('offline')],
+  ])('shows Claude local stats without a verified login: %s', async (_, reply) => {
+    const c = client({'claude-agent': reply});
+    if (reply instanceof Error) vi.mocked(c.environment).mockImplementation(async request => {
+      if (request.type === 'backendCatalog') return {kind: 'backends', entries: [entry('claude-agent')]} as never;
+      throw reply;
+    });
+    const stats = {...noQuota, usage: {...noQuota.usage, unavailable: {reason: 'no-auth', message: '没有读到 Claude 订阅登录'}}};
+    vi.mocked(c.collaboration).mockResolvedValue({kind: 'usage', data: stats});
     const updates: any[] = [];
     await readNowProviders(c, update => updates.push(update));
     expect(updates).toHaveLength(1);
-    expect(updates[0]).toMatchObject({kind: 'provider', provider: {id: 'claude-agent', account: {kind: 'api', apiProvider: 'bedrock'}, problem: '账户状态暂无法确认。'}});
-    expect(nowAccountLabel(updates[0].provider.account)).toBe('API 接入');
+    expect(updates[0]).toMatchObject({kind: 'provider', provider: {id: 'claude-agent', data: stats}});
+    expect(updates[0].provider.loading).toBeUndefined();
     const html = renderToStaticMarkup(<NowUsageBody provider={updates[0].provider}/>);
-    expect(html).toContain('账户状态暂无法确认');
-    expect(html).not.toContain('usage-heatmap__grid');
-    expect(c.collaboration).not.toHaveBeenCalled();
+    for (const text of ['usage-heatmap__grid', '没有读到 Claude 订阅登录']) expect(html).toContain(text);
   });
-  it('shows API accounts without requesting subscription quota', async () => {
-    const c = client({'codex-appserver': login('codex-appserver', 'notRequired', 'api'), 'claude-agent': login('claude-agent', 'signedIn', 'api')});
+  it('drops a signed-out Claude when its stats read fails or has no active day', async () => {
+    for (const read of [() => Promise.reject(new Error('refused')), async () => ({kind: 'usage', data})]) {
+      const c = client({'claude-agent': login('claude-agent', 'signedOut')});
+      vi.mocked(c.collaboration).mockImplementation(read as never);
+      const updates: any[] = [];
+      await readNowProviders(c, update => updates.push(update));
+      expect(updates).toEqual([{kind: 'remove', id: 'claude-agent'}]);
+    }
+  });
+  it('keeps an explicitly configured external API even when its credentials cannot be verified', async () => {
+    const c = client({'claude-agent': {...login('claude-agent', 'unknown', 'api'), account: {kind: 'api', apiProvider: 'bedrock'}}});
+    vi.mocked(c.collaboration).mockResolvedValue({kind: 'usage', data: noQuota});
     const updates: any[] = [];
     await readNowProviders(c, update => updates.push(update));
-    expect(updates.filter(item => item.kind === 'provider')).toHaveLength(2);
-    expect(c.collaboration).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(2);
+    expect(updates[0]).toMatchObject({kind: 'provider', provider: {id: 'claude-agent', account: {kind: 'api', apiProvider: 'bedrock'}, problem: '账户状态暂无法确认。', loading: true}});
+    expect(nowAccountLabel(updates[0].provider.account)).toBe('API 接入');
+    expect(renderToStaticMarkup(<NowUsageBody provider={updates[0].provider}/>)).toContain('正在读取用量');
+    // Its local stats come back; an unverifiable login does not make them stale.
+    expect(updates[1]).toEqual({kind: 'provider', provider: {id: 'claude-agent', name: 'Claude', account: {kind: 'api', apiProvider: 'bedrock'}, data: noQuota}});
+    const html = renderToStaticMarkup(<NowUsageBody provider={updates[1].provider}/>);
+    for (const text of ['usage-heatmap__grid', '用的是 API 接入，没有订阅额度']) expect(html).toContain(text);
+    for (const text of ['暂无法更新', 'data-stale="true"']) expect(html).not.toContain(text);
+  });
+  it('reads Claude stats for an API account but no Codex quota', async () => {
+    const c = client({'codex-appserver': login('codex-appserver', 'notRequired', 'api'), 'claude-agent': login('claude-agent', 'signedIn', 'api')});
+    vi.mocked(c.collaboration).mockResolvedValue({kind: 'usage', data: noQuota});
+    const updates: any[] = [];
+    await readNowProviders(c, update => updates.push(update));
+    expect(c.collaboration).toHaveBeenCalledExactlyOnceWith({action: 'usage', force: false, backend: 'claude-agent'});
+    expect(updates.filter(item => item.kind === 'provider' && item.provider.id === 'codex-appserver')).toEqual([{kind: 'provider', provider: {id: 'codex-appserver', name: 'Codex', account: {kind: 'api'}, loading: false}}]);
+    expect(renderToStaticMarkup(<NowUsageBody provider={updates.find(item => item.provider.id === 'codex-appserver').provider}/>)).toContain('API 接入暂无法读取额度与每日用量');
     expect(vi.mocked(c.environment).mock.calls.filter(([request]) => request.type === 'backendLogin').every(([request]) => request.type === 'backendLogin' && !request.refresh)).toBe(true);
+  });
+  it("shows an older daemon's reason when it refuses a Claude API account's read", async () => {
+    const c = client({'claude-agent': login('claude-agent', 'signedIn', 'api')});
+    vi.mocked(c.collaboration).mockRejectedValue(new Error('当前 Claude 用的是 API 接入，没有订阅额度可读。'));
+    const updates: any[] = [];
+    await readNowProviders(c, update => updates.push(update));
+    const provider = updates.at(-1).provider;
+    expect(provider).toMatchObject({problem: '当前 Claude 用的是 API 接入，没有订阅额度可读。'});
+    expect(provider.data).toBeUndefined();
+    expect(renderToStaticMarkup(<NowUsageBody provider={provider}/>)).toContain('没有订阅额度可读');
   });
   it('reads Claude subscription quota from the connected daemon', async () => {
     const c = client({'claude-agent': login('claude-agent')});
@@ -48,9 +97,12 @@ describe('real configured Provider discovery', () => {
     expect(c.collaboration).toHaveBeenCalledExactlyOnceWith({action: 'usage', force: false, backend: 'claude-agent'});
     expect(updates).toContainEqual({kind: 'provider', provider: {id: 'claude-agent', name: 'Claude', account: {kind: 'subscription'}, data}});
     const html = renderToStaticMarkup(<NowUsageBody provider={{id: 'claude-agent', name: 'Claude', account: {kind: 'subscription'}, data}}/>);
-    expect(html).toContain('Claude 当前用量');
+    expect(html).toContain('Claude 额度');
     expect(html).toContain('32');
     expect(html).toContain('5 小时限额');
+    // A daemon from before now-share N2 sends no local stats: the quota stands alone, nothing is made up from tokens.
+    expect(html).toContain('暂无 Claude Code 的使用统计');
+    expect(html).not.toContain('usage-heatmap__grid');
   });
   it('publishes Codex without waiting for slow Claude and reuses the existing usage RPC', async () => {
     let resolve!: (value: unknown) => void;
@@ -61,7 +113,8 @@ describe('real configured Provider discovery', () => {
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(updates.some(item => item.provider?.data === data)).toBe(true);
     resolve(login('claude-agent', 'signedOut')); await read;
-    expect(c.collaboration).toHaveBeenCalledExactlyOnceWith({action: 'usage', force: false});
+    expect(c.collaboration).toHaveBeenNthCalledWith(1, {action: 'usage', force: false});
+    expect(c.collaboration).toHaveBeenNthCalledWith(2, {action: 'usage', force: false, backend: 'claude-agent'});
   });
   it('removes logged-out accounts, retains failed reads as stale, and drops old quota on auth changes', () => {
     expect(mergeNowProvider([codex], {kind: 'remove', id: codex.id})).toEqual([]);
@@ -76,9 +129,9 @@ describe('quota and daily history semantics', () => {
   it('distinguishes a real zero from absent history and excludes future days', () => {
     const cells = usageDays([{date: '2026-10-24', tokens: 0}, {date: '2026-10-25', tokens: 100}, {date: '2026-10-27', tokens: 999999}], new Date(2026, 9, 26));
     expect(cells).toHaveLength(91);
-    expect(cells.find(cell => cell.date === '2026-10-24')).toMatchObject({level: 0, tokens: 0, future: false});
+    expect(cells.find(cell => cell.date === '2026-10-24')).toMatchObject({level: 0, value: 0, future: false});
     expect(cells.find(cell => cell.date === '2026-10-25')).toMatchObject({level: 4});
-    expect(cells.find(cell => cell.date === '2026-10-26')).toMatchObject({level: -1, tokens: undefined});
+    expect(cells.find(cell => cell.date === '2026-10-26')).toMatchObject({level: -1, value: undefined});
     expect(cells.find(cell => cell.date === '2026-10-27')).toMatchObject({future: true});
   });
   it('labels free and unknown accounts honestly and uses actual rate-limit windows', () => {
@@ -88,7 +141,7 @@ describe('quota and daily history semantics', () => {
     expect(usageWindowLabel(604800, 'fallback')).toBe('7 天限额');
     expect(usageWindowLabel(18000, 'fallback')).toBe('5 小时限额');
     const html = renderToStaticMarkup(<NowUsageBody provider={codex}/>);
-    expect(html).toContain('32'); expect(html).toContain('% 已用'); expect(html).toContain('重置');
+    expect(html).toContain('32'); expect(html).toContain('aria-label="5 小时限额已用"'); expect(html).toContain('重置');
     expect(html).not.toContain('% 剩余');
   });
   it('does not render a synthetic heatmap or quota for Claude or missing Codex history', () => {
@@ -106,13 +159,11 @@ describe('quota and daily history semantics', () => {
 
 
 describe('settings usage presentation reused on home', () => {
-  it('preserves shared activity statistics while keeping expanded details in settings', () => {
+  it('shows the Codex panel on home and keeps expanded details in settings', () => {
     const profile = {...data.profile, lifetimeTokens: 56_774_727_759, currentStreakDays: 35, totalThreads: 214, totalSkillsUsed: 87};
     const html = renderToStaticMarkup(<NowUsageBody provider={{...codex, data: {...data, profile}}}/>);
-    for (const content of ['usage-account', 'usage-quota-grid', 'usage-activity', '累计 Token', '56,774,727,759', '连续活跃', '35 天']) expect(html).toContain(content);
+    for (const content of ['usage-board', 'data-provider="codex"', '累计 Token', '568<small>亿</small>', '214 个会话', '连续活跃', '35<small>天</small>', 'Codex 额度']) expect(html).toContain(content);
     for (const content of ['<details', '详细统计', '会话总数', '技能调用总数']) expect(html).not.toContain(content);
-    expect(html).not.toContain('now-quota-window');
-    expect(html).not.toContain('now-daily-calendar');
   });
   it('shares the settings request contract and preserves explicit refresh and refusal', async () => {
     const request = vi.fn(async () => ({kind: 'usage' as const, data}));

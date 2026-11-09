@@ -68,7 +68,7 @@ export const SESSION_DENIED = '这个操作不能从 Bot 会话里做。';
 export const DM_ELSEWHERE = '这件事要在 Vonvon Bot 客户端或终端里做，私聊里做不了。';
 const DM_SERVICE = '这件事要在 Vonvon Bot 客户端或终端里做，私聊里做不了。要重启或更新，也可以发 /menu，人点卡片上的按钮。';
 const DM_KEYS = 'API key 要在 Vonvon Bot 客户端的密钥页或终端里填，聊天里不收、不显示 key。';
-const DM_ADMINS = '管理员名单只能在 Vonvon Bot 客户端的「设置 → 管理员」或终端里改，聊天里不能改。';
+const DM_ADMINS = '管理员名单只能在 Vonvon Bot 客户端的「私聊 → 沟通方式 → 回应谁」或终端里改，聊天里不能改。';
 export const DM_OWN_BOT = '这个私聊就跑在这个 Bot 上，不能在这里停用它。要在 Vonvon Bot 客户端或终端里做。';
 /** dm-agent 6.4. */
 export const foreignOpenId = (bot: string): string => `这个 ID 不是 Bot ${bot} 查到的。用 \`vonvon feishu members --bot ${bot}\` 查。`;

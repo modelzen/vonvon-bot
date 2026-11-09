@@ -19,7 +19,7 @@ function inventory(folderToken: string) {
     ['GET /api/state', 'admin', { type: 'state' }],
     ['GET /api/project/:name/sessions', 'settings', { type: 'sessions', botId: bot.appId, projectName: project.name }],
     ...[agentScope, projectScope, sessionScope, { kind: 'host' }].map(scope => [`GET settings ${scope.kind}`, 'settings', { type: 'read', scope }]),
-    ['PATCH agent settings / section', 'settings', { type: 'save', edit: { scope: agentScope, section: 'cards', revision: 'old', patch: { showToolCalls: true } } }],
+    ['PATCH agent settings / section', 'settings', { type: 'save', edit: { scope: agentScope, section: 'run', revision: 'old', patch: { pendingPolicy: 'queue' } } }],
     ['PATCH project settings', 'settings', { type: 'save', edit: { scope: projectScope, section: 'response', revision: 'old', patch: { noMention: true } } }],
     ['PATCH session settings', 'settings', { type: 'save', edit: { scope: sessionScope, section: 'model', revision: 'old', patch: { selection: { kind: 'default' } } } }],
     ['PATCH host settings', 'settings', { type: 'save', edit: { scope: { kind: 'host' }, section: 'execution', revision: 'old', patch: { codexBin: null } } }],

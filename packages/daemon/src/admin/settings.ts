@@ -9,7 +9,7 @@ import type { AgentBackend, ModelInfo, ReasoningEffort } from '../agent/types';
 import { backendIds } from '../agent';
 import { parseModelId } from '../agent/model-id';
 import { permissionTable, PermissionInputError, tableEnv, tierInfo, TIER_NETWORK } from '../agent/permission';
-import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, getShowToolCalls, type AppConfig, type AppPreferences } from '../config/schema';
+import { getCompletionReminderConfig, getMaxConcurrentRuns, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, type AppConfig, type AppPreferences } from '../config/schema';
 import { paths } from '../config/paths';
 import { admitDirectorySettings, resolveProjectsRootDir } from '../config/directories';
 import { botBackendId, groupBackendId, groupPermission, resolveCommentsExecution, resolveModelPreference, resolveProjectModelAccess, projectModelAllowed, projectSpeedAllowed } from '../config/execution';
@@ -36,6 +36,7 @@ import { loadBots } from '../config/bots';
 import { discoverGroupSkills, discoverLocalGroupSkills } from '../agent/group-skills';
 import { snapshotDefaultJudge, snapshotProviderJudge, requireDecisionKey } from '../project/initial-settings';
 import { readJudgeModels } from '../judge/global-models';
+import { assertValidCardDisplay } from '../card/card-display-validation';
 export type * from './settings-types';
 export { parseSettingsAction, parseSettingsEdit, parseSettingsScope, parseModelQuery, SettingsInputError } from './settings-parse';
 export function settingsRevision(value: unknown): string {
@@ -118,7 +119,6 @@ const agentEffects: {
 } = {
   profile: effect(['persona', 'memory'], 'next-turn', '下一轮对话使用新的个性与记忆'),
   role: effect(['identity', 'notes'], 'next-turn', '下一轮对话使用新的角色设定'),
-  cards: effect(['showToolCalls', 'showModel'], 'next-message', '后续任务卡片输出生效'),
   run: [...effect(['maxConcurrentRuns'], 'restart', '已保存的并发上限在 daemon 重启后生效'), ...effect(['pendingPolicy'], 'next-message', '下一条消息生效'), ...effect(['runIdleTimeoutSeconds'], 'next-turn', '下一次超时检测生效')],
   completion: effect(['mode', 'longTaskMinutes'], 'task-completion', '任务结束时读取最新策略'),
   comments: effect(['backend', 'selection'], 'new-comment', '下一条评论使用新设置'),
@@ -175,19 +175,16 @@ function applySelection(target: {
 }
 function agentData(cfg: AppConfig): T.AgentSections {
   const p = cfg.preferences ?? {};
+  const {mode, longTaskMinutes} = getCompletionReminderConfig(cfg);
   return {
     profile: { persona: '', memory: '' },
     role: { identity: '', notes: '' },
-    cards: {
-      showToolCalls: getShowToolCalls(cfg),
-      showModel: getModelDisplay(cfg)
-    },
     run: {
       maxConcurrentRuns: getMaxConcurrentRuns(cfg),
       pendingPolicy: getPendingPolicy(cfg),
       runIdleTimeoutSeconds: (getRunIdleTimeoutMs(cfg) ?? 0) / 1000
     },
-    completion: getCompletionReminderConfig(cfg),
+    completion: {mode, longTaskMinutes},
     comments: {
       backend: resolveCommentsExecution(p).backend,
       selection: selection(p.comments?.model, p.comments?.effort)
@@ -208,7 +205,6 @@ function agentData(cfg: AppConfig): T.AgentSections {
 }
 function agentRaw(p: AppPreferences, section: keyof T.AgentSections): unknown {
   switch (section) {
-    case 'cards': return [p.showToolCalls, p.showModel];
     case 'run': return [p.maxConcurrentRuns, p.runIdleTimeoutSeconds, p.pendingPolicy];
     case 'completion': return [p.completionReminder?.mode, p.completionReminder?.longTaskMinutes];
     case 'comments': return [p.comments?.backend, p.comments?.model, p.comments?.effort];
@@ -609,7 +605,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     if (!p.directories?.repositories) result.workspace.repositories = [...cfg.preferences?.directories?.repositories ?? []];
     if (!p.smartRules) result.smartRules = p.dm ? { ...DEFAULT_DM_SMART_RULES } : rulesFromSmartPrompt(await (deps.readSmartPrompt ?? readSmartPrompt)(botId, p.chatId));
     const completion = getCompletionReminderConfig(cfg);
-    result.presentation = p.presentation ? { showModel: getModelDisplay(cfg), ...p.presentation } : { voiceEnabled: voiceView(cfg).enabled, showToolCalls: getShowToolCalls(cfg), showModel: getModelDisplay(cfg), completionMode: completion.mode, longTaskMinutes: completion.longTaskMinutes };
+    result.presentation = { voiceEnabled: voiceView(cfg).enabled, showToolCalls: true, showModel: 'running', cardDisplay: null, completionMode: completion.mode, longTaskMinutes: completion.longTaskMinutes, completionTemplate: null, ...p.presentation };
     return result;
   }
   async function sectionRaw(p: Project, section: keyof T.ProjectSections): Promise<unknown> {
@@ -738,6 +734,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         throw new SettingsInputError('项目不存在');
       const data = await projectSettings(p);
       const sections = Object.fromEntries(Object.entries(data).filter(([key]) => p.dm || key !== 'conversation').map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], p.dm && !DM_SECTIONS.has(key) ? DM_FIXED : sectionAccess('project', key), effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' || key === 'workspace' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : key === 'workspace' ? '下一轮新开会话' : key === 'judge' ? agentEffects.judge[0]!.detail : key === 'run' && p.backend === 'claude-agent' ? 'Claude 不支持插话，运行中来的消息照样排队' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
+      sections.presentation!.effective = { ...data.presentation, cardDisplay: p.presentation?.cardDisplay ?? null,
+        ...(p.presentation?.cardDisplay == null ? { showToolCalls: true, showModel: 'running' as const } : {}) };
       for (const key of ['profile', 'role', 'smartRules'] as const) sections[key]!.revision = settingsRevision(await sectionRaw(p, key));
       const botProfile = await legacyBotProfile(botId);
       sections.profile!.effective = { ...data.profile };
@@ -891,9 +889,6 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         } else await deps.writePreferences(async (p) => {
           check([botId, agentRaw(p, e.section as keyof T.AgentSections)], e.revision);
           switch (e.section) {
-            case 'cards':
-              Object.assign(p, e.patch);
-              break;
             case 'run':
               Object.assign(p, e.patch);
               break;
@@ -1011,7 +1006,20 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               p.smart = e.patch.mode === 'smart';
               break;
             case 'skills': p.skills = { ...original.skills, ...e.patch }; p.skills.disabledPaths = [...new Set(p.skills.disabledPaths)]; break;
-            case 'presentation': p.presentation = { ...original.presentation, ...e.patch }; break;
+            case 'presentation': {
+              if (e.patch.cardDisplay !== undefined && e.patch.cardDisplay !== null) {
+                try { e.patch.cardDisplay = await assertValidCardDisplay(e.patch.cardDisplay); }
+                catch (error) { throw new SettingsInputError(error instanceof Error ? error.message : '消息卡配置无效'); }
+              }
+              // Keep the stored row partial: card-only saves must not freeze
+              // voice or completion defaults inherited from the Bot.
+              p.presentation = { ...p.presentation, ...e.patch };
+              if (e.patch.completionMode !== undefined || e.patch.longTaskMinutes !== undefined) {
+                p.presentation.completionMode ??= original.presentation.completionMode;
+                p.presentation.longTaskMinutes ??= original.presentation.longTaskMinutes;
+              }
+              break;
+            }
             case 'workspace':
               p.cwd = admittedWorkspace!.primary;
               p.directories = { ...p.directories, workspaces: { primary: p.cwd, additional: admittedWorkspace!.directories.filter(path => path !== p.cwd) }, repositories: admittedWorkspace!.repositories };
@@ -1324,7 +1332,6 @@ export async function materializeGroupSettings(deps: Pick<SettingsOwnerDeps, 'cf
     const models = [...new Set([...native.filter(m => !m.hidden).map(m => m.id), ...selected.models, ...existing.filter(s => s.backend === backend && s.model).map(s => s.model!)])];
     const efforts = [...new Set([...native.flatMap(m => m.supportedEfforts), ...selected.efforts, ...existing.flatMap(s => s.effort ? [s.effort] : [])])];
     const preference = resolveModelPreference({ bot: deps.cfg.preferences, group: row }, backend);
-    const completion = getCompletionReminderConfig(deps.cfg);
     const oldJudge = storedJudge(deps.cfg.preferences?.judge);
     const oldEffectiveJudge = resolveJudgeModel(backend, { bot: oldJudge }, native);
     const judge: JudgeSelectionStored = oldEffectiveJudge.provider ? { kind: 'decision', provider: oldEffectiveJudge.provider, model: oldEffectiveJudge.model } : { kind: 'llm', backend, model: oldEffectiveJudge.model, ...(oldEffectiveJudge.effort ? { effort: oldEffectiveJudge.effort } : {}) };
@@ -1341,7 +1348,6 @@ export async function materializeGroupSettings(deps: Pick<SettingsOwnerDeps, 'cf
       // default repositories, as before, and the folder guard in the registry stays quiet.
       ...(row.directories?.repositories === undefined && !isProjectId(row.projectId) ? { directories: { ...row.directories, repositories: [...deps.cfg.preferences?.directories?.repositories ?? []] } } : {}),
       ...(!row.pendingPolicy ? { pendingPolicy: getPendingPolicy(deps.cfg) } : {}),
-      ...(!row.presentation || row.presentation.showModel === undefined ? { presentation: { voiceEnabled: voiceView(deps.cfg).enabled, showToolCalls: getShowToolCalls(deps.cfg), showModel: getModelDisplay(deps.cfg), completionMode: completion.mode, longTaskMinutes: completion.longTaskMinutes, ...row.presentation } } : {}),
       ...(!row.judge && judge ? { judge } : {}),
     };
     if (!Object.keys(changes).length) continue;

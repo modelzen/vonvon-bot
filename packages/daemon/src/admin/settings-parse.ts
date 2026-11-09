@@ -1,5 +1,5 @@
 import { isAbsolute } from 'node:path';
-import { JUDGE_PROVIDER_IDS } from '@vonvon/protocol';
+import { JUDGE_PROVIDER_IDS, cardDisplayConfigSchema, completionTemplateSchema } from '@vonvon/protocol';
 import { isHomeRelative } from '../platform/home-path';
 import type { SettingsAction, SettingsEdit, SettingsScope, ModelQuery } from './settings-types';
 export class SettingsInputError extends Error {
@@ -71,10 +71,6 @@ const schemas: Record<string, Record<string, Rule>> = {
   agent: {
     profile: shape({ persona: body, memory: body }, true),
     role: shape({ identity: roleBody, notes: roleBody }, true),
-    cards: shape({
-      showToolCalls: bool,
-      showModel: one('off', 'running', 'always')
-    }, true),
     run: shape({
       maxConcurrentRuns: integer(1, 50),
       runIdleTimeoutSeconds: value => value === 0 || integer(10, 3600)(value),
@@ -111,7 +107,7 @@ const schemas: Record<string, Record<string, Rule>> = {
     workspace: shape({ primary: value => value !== null && path(value), directories: array(value => value !== null && path(value)), repositories: array(value => value !== null && path(value)) }, true),
     smartRules: shape({ respond: body, newTopic: body }, true),
     skills: shape({ disabledPaths: array(selector) }, true),
-    presentation: shape({ voiceEnabled: bool, showToolCalls: bool, showModel: one('off', 'running', 'always'), completionMode: one('manual', 'long', 'failures', 'always'), longTaskMinutes: integer(1, 1440) }, true),
+    presentation: shape({ voiceEnabled: bool, showToolCalls: bool, showModel: one('off', 'running', 'always'), cardDisplay: value => value === null || cardDisplayConfigSchema.safeParse(value).success, completionMode: one('manual', 'long', 'failures', 'always'), longTaskMinutes: integer(1, 1440), completionTemplate: value => value === null || completionTemplateSchema.safeParse(value).success }, true),
     permission: shape({
       mode: one('qa', 'write', 'full'),
       custom: value => value === null || isPlainObject(value)
@@ -185,6 +181,15 @@ export function parseSettingsEdit(input: unknown): SettingsEdit {
     throw new SettingsInputError('设置保存参数无效');
   const scope = parseSettingsScope(object.scope);
   const section = String(object.section);
+  if (scope.kind === 'agent' && section === 'cards')
+    throw new SettingsInputError('消息卡按群聊或私聊分别设置：群用 --group X presentation.cardDisplay，私聊用 --dm presentation.cardDisplay');
+  if (scope.kind === 'project' && section === 'presentation' && object.patch && typeof object.patch === 'object' && (Object.hasOwn(object.patch, 'showToolCalls') || Object.hasOwn(object.patch, 'showModel')))
+    throw new SettingsInputError('旧工具和模型显示字段只供迁移；请改本群或私聊的 presentation.cardDisplay');
+  if (scope.kind === 'project' && section === 'presentation' && object.patch && typeof object.patch === 'object' && Object.hasOwn(object.patch, 'completionTemplate')) {
+    const template = (object.patch as Record<string, unknown>).completionTemplate;
+    const checked = completionTemplateSchema.nullable().safeParse(template);
+    if (!checked.success) throw new SettingsInputError(checked.error.issues.map(issue => issue.message).join('；'));
+  }
   if (scope.kind === 'project' && section === 'permission' && object.patch && typeof object.patch === 'object' && Object.hasOwn(object.patch, 'network'))
     throw new SettingsInputError('联网已经并进权限的档位：只读不联网，工作区可写联网，完全访问不限制。只读又要联网这类组合，用高级设置 permission.custom。');
   const rule = schemas[scope.kind]?.[section];

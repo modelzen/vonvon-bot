@@ -144,7 +144,6 @@ import {
   modelIdCode,
   reasoningEffortLabel,
   RES,
-  SMART_NOTICE,
   type HelpScope,
   type ModelCardState,
   type ResumeCardState,
@@ -154,6 +153,7 @@ import {
   ANSWER_EID,
   buildQueuedCard,
   buildRunCard,
+  buildRunCardBase,
   buildRunCardPlain,
   CONTROLS_EID,
   RC,
@@ -162,6 +162,8 @@ import {
   idleLabel,
   type RunCardState,
 } from '../card/run-card';
+import { runCardDisplayScripts } from '../card/card-display-scripts';
+import { CARD_DISPLAY_STOP_EID, CARD_DISPLAY_REMINDER_EID } from '@vonvon/protocol';
 import { buildGoalDoneCard } from '../card/goal-card';
 import { RunCardStream } from '../card/run-card-stream';
 import { buildCleanCard } from '../card/markdown-render';
@@ -249,6 +251,8 @@ import {
   getProjectByChatId,
   getProjectByChatIdSync,
   getProjectByName,
+  cardDisplayPresentationDefaults,
+  materializeCardDisplaySettings,
   listProjects,
   noMentionOf,
   rememberDmChat,
@@ -825,6 +829,25 @@ interface ActiveState {
   evicted?: true;
   /** launchRun dropped the queue for that change, not for a ⏹: a scheduled turn still in intake is skipped too (intakeStopped). */
   evictedDrop?: true;
+}
+
+/** Run scripts at turn boundaries only; card repaint ticks reuse this snapshot. */
+async function refreshRunCardDisplayValues(rc:RunCardState,cwd:string):Promise<void> {
+  if (!rc.cardDisplay) return;
+  try {
+    const result = await runCardDisplayScripts(rc.cardDisplay,{cwd,values:buildRunCardBase({...rc,cardDisplay:undefined}).values});
+    rc.cardDisplayValues = result.values;
+    for (const error of result.errors) log.info('card','display-script-error',{block:error.id,message:error.message});
+  } catch (error) {
+    rc.cardDisplayValues={};
+    log.fail('card',error,{phase:'display-script-prepare'});
+  }
+}
+
+/** Element IDs removed from an orphan CardKit entity after a stale run action. */
+export function deadRunCardElementIds(actionId:string,extraElementId?:string):string[] {
+  const movedStop=actionId===RC.stop||actionId===RC.endGoal||actionId===RC.remind;
+  return [CONTROLS_EID,...(movedStop?[CARD_DISPLAY_STOP_EID,CARD_DISPLAY_REMINDER_EID]:[]),...(extraElementId?[extraElementId]:[])];
 }
 
 interface AttentionAcceptance {
@@ -3499,7 +3522,7 @@ export function createOrchestrator(
     return true;
   }
 
-  /** A line of the bot's own in the group's main area, kept for the main session's context like {@link SMART_NOTICE}. */
+  /** A line of the bot's own in the group's main area, kept for the main session's context. */
   async function sayInMain(chatId: string, input: { text: string } | { post: object }, text: string): Promise<void> {
     const sent = await channel.send(chatId, input);
     recent.addOwn(chatId, chatId, { id: sent.messageId, at: Date.now(), text });
@@ -5451,7 +5474,7 @@ export function createOrchestrator(
           ?.body?.content;
         const cardId = content ? cardIdFromMessageContent(content) : undefined;
         if (!cardId) return;
-        for (const elementId of [CONTROLS_EID, ...(extraElementId ? [extraElementId] : [])]) {
+        for (const elementId of deadRunCardElementIds(actionId,extraElementId)) {
           const seq = healSequence = Math.max(healSequence + 1, Math.floor(Date.now() / 1000));
           try { await channel.rawClient.cardkit.v1.cardElement.delete({
             path: { card_id: cardId, element_id: elementId },
@@ -5564,11 +5587,7 @@ export function createOrchestrator(
       if (!runAllowed(evt)) return;
       const st = runsByCard.get(key);
       if (!st) {
-        if (!runControlNotes.seen(`remind-ended:${key}:${evt.operator?.openId ?? ''}`)) {
-          void trackTask(channel
-            .send(evt.chatId, { markdown: 'ℹ️ 该任务已结束，无需再开启完成提醒。' }, { replyTo: evt.messageId })
-            .catch(() => undefined));
-        }
+        healDeadRunCard(evt,key,RC.remind,'ℹ️ 该任务已结束，无需再开启完成提醒。');
         log.info('card', 'action', { actionId: RC.remind, ended: true });
         return;
       }
@@ -6407,14 +6426,15 @@ export function createOrchestrator(
         return renderProjectList();
       });
     })
-    // Each setting is a row of option buttons; the click's `v` is the chosen value.
-    .on(DM.setTools, ({ evt, value }) => {
-      applyPref(evt, (p) => (p.showToolCalls = value.v === 'on'));
+    // Already-sent cards may still contain these Bot-wide controls. Explain the
+    // per-chat route without writing a preference that no longer drives cards.
+    .on(DM.setTools, ({ evt }) => {
+      if (!dmAdmin(evt.operator?.openId)) return;
+      void patch(evt, renderSettings('消息卡现在按群聊和私聊分别设置。请在桌面端打开对应会话的「消息卡展示」，或在私聊告诉我想怎样显示。'));
     })
-    .on(DM.setShowModel, ({ evt, value }) => {
-      applyPref(evt, (p) => {
-        p.showModel = value.v === 'running' ? 'running' : value.v === 'always' ? 'always' : 'off';
-      });
+    .on(DM.setShowModel, ({ evt }) => {
+      if (!dmAdmin(evt.operator?.openId)) return;
+      void patch(evt, renderSettings('消息卡现在按群聊和私聊分别设置。请在桌面端打开对应会话的「消息卡展示」，或在私聊告诉我想怎样显示。'));
     })
     .on(DM.setWatchdog, ({ evt, value }) => {
       const n = Number(value.v);
@@ -7012,8 +7032,6 @@ export function createOrchestrator(
   }
 
   const projectMutations = new Set<string>();
-  /** Groups being told 智能's sentence after a switch (s25c): their settings wait for it, their messages do not. */
-  const smartNotices = new Set<string>();
   const runIds = new WeakMap<ActiveState, { run: AgentRun | undefined; id: string }>();
   let createChain: Promise<unknown> = Promise.resolve();
   /** Aborts every Feishu call of a creation still running when the bridge stops, so the drain does not wait out its budget. */
@@ -7122,13 +7140,11 @@ export function createOrchestrator(
     }
     if (request.action === 'editProject' || request.action === 'removeProject') {
       if (projectRevision(project) !== request.expectedRevision) throw new AdminWriteError('项目设置已改变，请刷新后重试');
-      if (smartNotices.has(project.chatId)) throw new AdminWriteError('正在群里说一句，请稍后再改');
       if (projectMutations.has(project.chatId) || runningIn(project.chatId) || intakeChats.has(project.chatId) || pendingTopics.has(project.chatId)) {
         holdFiring(project.chatId, FIRING_HOLD_MS); // no scheduled run starts before the retry
         throw new AdminWriteError('Agent 正在执行任务，请结束后修改项目');
       }
       let edited: { ok: true; project: ReturnType<typeof projectView> } | undefined;
-      let announce = false;
       projectMutations.add(project.chatId);
       try {
         const current = await getProjectByName(project.name);
@@ -7215,22 +7231,10 @@ export function createOrchestrator(
           const thread = sessions.get(rec.threadId); sessions.delete(rec.threadId);
           if (thread) await thread.close().catch(error => log.fail('desktop', error, { phase: 'project-session-close' }));
         }
-        announce = sessionModeOf(project) !== 'smart' && sessionModeOf(updated) === 'smart' && updated.enabled !== false;
         edited = { ok: true, project: projectView(updated) };
       } finally { projectMutations.delete(project.chatId); }
-      if (!announce) return edited;
-      // 选了智能 tells the group (3.4), once the group is unlocked so a message meanwhile is not turned away (s25c).
-      // Another edit waits until it is said, so it never lands in a group switched away meanwhile (审查低).
-      // Saved already: a failure is a warning, not retried and not made up on a later save.
-      smartNotices.add(project.chatId);
-      try {
-        const sent = await channel.send(project.chatId, { text: SMART_NOTICE });
-        recent.addOwn(project.chatId, project.chatId, { id: sent.messageId, at: Date.now(), text: SMART_NOTICE });
-        return edited;
-      } catch (error) {
-        log.fail('desktop', error, { phase: 'smart-notice' });
-        return { ...edited, warning: `已改成智能开话题，但没能在群里说一句：${error instanceof Error ? error.message : String(error)}` };
-      } finally { smartNotices.delete(project.chatId); }
+      // Switching to 智能 says nothing in the group (owner 2026-11-08): the bot just starts reading.
+      return edited;
     }
     if (projectMutations.has(project.chatId) || project.enabled === false) throw new AdminWriteError('项目已停用或正在修改');
     const perm = turnSession(project.chatId, project);
@@ -7612,22 +7616,24 @@ export function createOrchestrator(
       replyInThread: opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId)), place: opts.flat ? 'main' : 'topic',
     };
     try {
-      msgId = await stream.create(channel, opts.chatId, queueCard({ position: q.position() }), {
-        replyTo: opts.replyTo,
-        replyInThread: opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId)),
-      });
-      // 自指按钮（m = 自己的 messageId）只能在拿到 messageId 后补上。建卡 RTT 里
-      // 槽可能已到手（position()=0）——那就不补按钮，run 卡马上原地接管。
-      const pos = q.position();
-      if (pos > 0) await stream.updateCard(channel, queueCard({ position: pos, cardKey: msgId }));
-      runsByCard.set(msgId, state);
-      runStreams.set(msgId, stream);
-      if (!state.isGoal) {
-        const key = msgId;
-        completionReminderRefreshers.set(key, () => {
-          const currentPos = q.position();
-          if (currentPos > 0) void trackTask(stream.updateLiveCard(channel, queueCard({ position: currentPos, cardKey: key })));
+      if (state.presentation?.preferences?.cardDisplay?.reply?.streamText !== false) {
+        msgId = await stream.create(channel, opts.chatId, queueCard({ position: q.position() }), {
+          replyTo: opts.replyTo,
+          replyInThread: opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId)),
         });
+        // 自指按钮（m = 自己的 messageId）只能在拿到 messageId 后补上。建卡 RTT 里
+        // 槽可能已到手（position()=0）——那就不补按钮，run 卡马上原地接管。
+        const pos = q.position();
+        if (pos > 0) await stream.updateCard(channel, queueCard({ position: pos, cardKey: msgId }));
+        runsByCard.set(msgId, state);
+        runStreams.set(msgId, stream);
+        if (!state.isGoal) {
+          const key = msgId;
+          completionReminderRefreshers.set(key, () => {
+            const currentPos = q.position();
+            if (currentPos > 0) void trackTask(stream.updateLiveCard(channel, queueCard({ position: currentPos, cardKey: key })));
+          });
+        }
       }
     } catch (err) {
       // 占位卡失败不阻断排队：没有卡只是不可见/不可取消，run 照常等槽。
@@ -7704,7 +7710,7 @@ export function createOrchestrator(
     const place = opts.flat ? 'main' : 'topic';
     runsByCard.delete(cardId);
     completionReminderRefreshers.delete(cardId);
-    const detail = await deleteOwnCard(cardId);
+    const detail = cardId ? await deleteOwnCard(cardId) : undefined;
     noteNotReplied(trigger, 'judge-empty', { place, backendId: opts.backendId, detail });
     // The main area's next judgement sees it looked and said nothing; an id no recall event removes.
     recent.addOwn(opts.chatId, opts.chatId, { id: `empty:${trigger.messageId}`, at: Date.now(), text: '（看了，没有要补的，没有回）' });
@@ -8040,19 +8046,21 @@ export function createOrchestrator(
         let cardMsgId: string | undefined;
         let rc: RunCardState = {
           rs: render.snapshot(),
+          cardDisplay: state.presentation?.preferences?.cardDisplay,
           voiceMessages: currentTurn.voice ? [currentTurn.voice] : [],
           requesterOpenId: currentTurn.requesterOpenId,
           showTools: render.showTools,
           completionReminder: completionReminderView(state),
           ...(opts.backendId ? { backend: opts.backendId } : {}),
           // 模型显示档位：footnote 本轮 model·推理强度；always 档终态卡也保留。
-          ...(modelDisp !== 'off' && turnModel
+          ...((modelDisp !== 'off' || state.presentation?.preferences?.cardDisplay) && turnModel
             ? { model: turnModel, effort: turnEffort, modelOnTerminal: modelDisp === 'always' }
             : {}),
           ...(opts.sessionNotice ? { sessionNotice: opts.sessionNotice } : {}),
           ...(currentTurn.initiative ? { initiativeCard: currentTurn.initiative } : {}),
           ...(scheduled ? { label: scheduledLabel(scheduled.job), nextRun: scheduledNextRun(scheduled.job) } : {}),
         };
+        await refreshRunCardDisplayValues(rc,runCwd);
 
         const adoptThreadId = async (messageId: string): Promise<void> => {
           if (activeKey.startsWith('pending:')) {
@@ -8077,6 +8085,9 @@ export function createOrchestrator(
         // CardKit streaming entity: body streams with the native typewriter,
         // ⏹/⚙️ ride whole-card updates — both on one card_id (see RunCardStream).
         let stream = queuedCard?.stream ?? new RunCardStream();
+        const pushLiveCard = (): void => {
+          if (cardMsgId) stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID);
+        };
         state.voiceReply = {
           run,
           add: (voice) => {
@@ -8084,7 +8095,7 @@ export function createOrchestrator(
             if (messages.some((v) => v.messageId === voice.messageId)) return;
             messages.push(voice);
             if (!cardMsgId) return; // The post-create frame picks it up below.
-            if (rc.rs.terminal === 'running') stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID);
+            if (rc.rs.terminal === 'running') pushLiveCard();
             else void trackTask(stream.updateCard(channel, buildRunCard(rc))
               .catch((err) => log.fail('card', err, { phase: 'voice-steer-reply' })));
           },
@@ -8095,8 +8106,12 @@ export function createOrchestrator(
           channel,
           upload: (sources) => uploadOutboundImages(channel, sources, runCwd, opts.mode ?? DEFAULT_PERMISSION_MODE, opts.network ?? false),
         });
+        const completionOnly = rc.cardDisplay?.reply?.streamText === false;
         const tCreate = Date.now();
         try {
+          if (completionOnly) {
+            cardMsgId = ''; // No carrier exists until the terminal frame.
+          } else
           if (queuedCard) {
             // 占位卡→run 卡：同一 CardKit 实体 whole-card update 原地翻面（不闪
             // 烁、不留垃圾卡）。update 的 card JSON 带 streaming_mode=true；若该
@@ -8126,26 +8141,28 @@ export function createOrchestrator(
         curCardKey = cardMsgId;
         rc.cardKey = cardMsgId;
         state.runCard = rc;
-        runsByCard.set(cardMsgId, state);
-        runStreams.set(cardMsgId, stream);
+        if (cardMsgId) {
+          runsByCard.set(cardMsgId, state);
+          runStreams.set(cardMsgId, stream);
+        }
         const registerReminder = (messageId: string, target: RunCardState, targetStream: RunCardStream): void => {
           completionReminderRefreshers.set(messageId, () => {
             target.completionReminder = completionReminderView(state);
             void trackTask(targetStream.updateLiveCard(channel, buildRunCard(target)));
           });
         };
-        registerReminder(cardMsgId, rc, stream);
+        if (cardMsgId) registerReminder(cardMsgId, rc, stream);
         // The entity is created before its carrier messageId exists, so the
         // initial JSON cannot self-route controls. Establish the first
         // self-addressed ⏹/🔔 row immediately instead of waiting for an agent
         // event (a long silent tool startup still needs both controls).
-        stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID);
-        await adoptThreadId(cardMsgId);
-        scheduled?.started({ messageId: cardMsgId, ...(topicThreadId && !isMainKey(topicThreadId, opts.chatId) ? { topicId: topicThreadId } : {}) });
+        pushLiveCard();
+        if (cardMsgId) await adoptThreadId(cardMsgId);
+        if (cardMsgId) scheduled?.started({ messageId: cardMsgId, ...(topicThreadId && !isMainKey(topicThreadId, opts.chatId) ? { topicId: topicThreadId } : {}) });
         // first card is live = topic created. The 群@bot 建话题 path flips its
         // reaction to DONE here (creating the topic is the acked action), unlike
         // an in-topic turn which holds Typing until the reply itself ends.
-        if (!firstCardSent) {
+        if (cardMsgId && !firstCardSent) {
           firstCardSent = true;
           try {
             onTopicCreated?.();
@@ -8155,6 +8172,17 @@ export function createOrchestrator(
         }
 
         const splitCard = async (event: SteerCardEvent): Promise<void> => {
+          if (completionOnly) {
+            // Preserve steer segmentation and quote the latest accepted input,
+            // without publishing either segment while the run is still active.
+            boundary = render.snapshot();
+            segmentStartedAt = Date.now();
+            rc.rs = segmentSnapshot();
+            replyTo = event.messageId;
+            rc.initiativeCard = undefined;
+            rc.voiceMessages = event.voice ? [event.voice] : [];
+            return;
+          }
           const nextStream = new RunCardStream();
           const nextBoundary = render.snapshot();
           const nextStartedAt = Date.now();
@@ -8202,7 +8230,7 @@ export function createOrchestrator(
           registerReminder(nextId, rc, stream);
           attachRunImages({ stream, rc, channel,
             upload: sources => uploadOutboundImages(channel, sources, runCwd, opts.mode ?? DEFAULT_PERMISSION_MODE, opts.network ?? false) });
-          stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID);
+          pushLiveCard();
           try {
             await previousStream.drain();
             const text = finalMessageText(previous.rs);
@@ -8215,11 +8243,12 @@ export function createOrchestrator(
           } catch (err) {
             log.fail('card', err, { phase: 'steer-card-assets' });
           }
+          await refreshRunCardDisplayValues(previous,runCwd);
           await previousStream.finalizeCard(channel, buildRunCard(previous))
             .catch(err => log.fail('card', err, { phase: 'steer-card-finalize' }));
         };
         cardClock = setInterval(() => {
-          if (rc.rs.terminal === 'running') stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID);
+          if (rc.rs.terminal === 'running') pushLiveCard();
         }, 1000);
         cardClock.unref();
 
@@ -8254,9 +8283,10 @@ export function createOrchestrator(
         state.idlePause = idlePause;
         const originalInterrupt = state.interrupt;
         askTurn = asks.openTurn({ run, sessionKey: activeKey,
+          placed: async messageId => { await adoptThreadId(messageId); return activeKey; },
           placement: { chatId: opts.chatId, replyTo: scheduled ? landingOf(scheduled) : currentTurn.seen?.id ?? opts.replyTo, replyInThread: !opts.flat, own: Boolean(currentProject?.dm) },
           initiator: { kind: currentTurn.requesterKind ?? 'unknown', openId: currentTurn.requesterOpenId }, idlePause,
-          waiting: (label, subagentId) => { activity?.waiting(Boolean(label)); rc.askWaiting = label; rc.askWaitingSubagentId = subagentId; stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID); },
+          waiting: (label, subagentId) => { activity?.waiting(Boolean(label)); rc.askWaiting = label; rc.askWaitingSubagentId = subagentId; pushLiveCard(); },
           // A late ask faults too once a ⏹ or the shutdown stopped the turn (both set intakeCancelled): the stop stays theirs.
           fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) { askFaulted ||= !state.intakeCancelled && !shuttingDown; originalInterrupt(); } },
         });
@@ -8342,7 +8372,7 @@ export function createOrchestrator(
           // Non-blocking: never stall event consumption on a round-trip. The pump
           // coalesces and routes the latest snapshot — answer text → element
           // typewriter (cardElement.content), structure → whole-card update.
-          if (ev.type !== 'subagent_step') stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID);
+          if (ev.type !== 'subagent_step') pushLiveCard();
         }
         // Whether its session had gone as the turn's events ended, before any terminal I/O: a turn that failed on its own
         // stays its own failure, whatever stops the bot or changes the group while it is delivered (ranScheduled).
@@ -8412,12 +8442,28 @@ export function createOrchestrator(
           });
         }
 
-        const finalMsgId = cardMsgId;
+        let finalMsgId = cardMsgId;
         // Joined in on its own with nothing to say: the card goes, and nothing below is sent (s25b).
         const gone = await dropSilentCard(rc, finalMsgId, notedOf(currentTurn), opts, Boolean(state.completionReminderRequested));
         let delivered = false;
         if (!gone) try {
+          if (!finalMsgId) {
+            // Only settled content may create the carrier in completion-only mode.
+            rc.images = await stream.settleImages(finalMessageText(rc.rs));
+            await refreshRunCardDisplayValues(rc,runCwd);
+            finalMsgId = await stream.create(channel, opts.chatId, buildRunCard(rc), {
+              replyTo: scheduled ? landingOf(scheduled) : replyTo, replyInThread,
+            });
+            cardMsgId = finalMsgId;
+            curCardKey = finalMsgId;
+            runStreams.set(finalMsgId, stream);
+            if (!firstCardSent) {
+              firstCardSent = true;
+              try { onTopicCreated?.(); } catch { /* reaction is best-effort */ }
+            }
+          }
           await adoptThreadId(finalMsgId);
+          if (completionOnly) scheduled?.started({ messageId: finalMsgId, ...(topicThreadId && !isMainKey(topicThreadId, opts.chatId) ? { topicId: topicThreadId } : {}) });
           rc.cardKey = finalMsgId;
 
           // [重试] for a turn that went quiet or lost the model (product.md 3.12),
@@ -8466,6 +8512,7 @@ export function createOrchestrator(
           // finalizeCard, while callbacks arriving from now on cannot overwrite it.
           const manuallyRequested = Boolean(state.completionReminderRequested);
           completionReminderRefreshers.delete(cardMsgId);
+          await refreshRunCardDisplayValues(rc,runCwd);
           const terminalCardUpdated = await stream.finalizeCard(channel, buildRunCard(rc));
           delivered = terminalCardUpdated;
           // Its card has its last word (the answer, or that the shutdown cut it short): nothing to ask again after a restart.
@@ -8776,7 +8823,7 @@ export function createOrchestrator(
     // context (null between turns); assigned directly in the loop so TS narrows it.
     // `stream`/`cardMsgId` are null until the turn produces real output — a card is
     // sent LAZILY on first content, so a planning-only turn leaves no empty box.
-    type GoalTurnCtx = { render: RunRender; rc: RunCardState; stream: RunCardStream | null; cardMsgId: string | null; clock?: ReturnType<typeof setInterval> };
+    type GoalTurnCtx = { cardRequested?: boolean; render: RunRender; rc: RunCardState; stream: RunCardStream | null; cardMsgId: string | null; clock?: ReturnType<typeof setInterval> };
     let cur: GoalTurnCtx | null = null;
     const finalized: { last?: GoalTurnCtx } = {};
     let carried: SubagentRow[] = [];
@@ -8829,6 +8876,11 @@ export function createOrchestrator(
       if (!ctx) return;
       carried = ctx.render.snapshot().subagents.filter(row => row.status === 'running');
       ctx.rc.subagentsCarried = continues && carried.length ? true : undefined;
+      if (!ctx.stream && ctx.cardRequested && ctx.rc.cardDisplay?.reply?.streamText === false) {
+        ctx.render.finalize();
+        ctx.rc.rs = ctx.render.snapshot();
+        await ensureCard(ctx);
+      }
       if (!ctx.stream || !ctx.cardMsgId) return;
       clearInterval(ctx.clock);
       ctx.clock = undefined;
@@ -8845,6 +8897,7 @@ export function createOrchestrator(
         replyInThread: !opts.flat, cardId: ctx.stream.getCardId(),
       }, (elementId, element) => ctx.stream!.updateElement(channel, elementId, element));
       ctx.rc.images = await ctx.stream.settleImages(answerText);
+      await refreshRunCardDisplayValues(ctx.rc,runCwd);
       const terminalCardUpdated = await ctx.stream.updateCard(channel, buildRunCard(ctx.rc));
       lastCardUpdated = terminalCardUpdated;
       if (confirmedDone && ctx.rc.rs.terminal === 'done' && answerText.trim() && terminalCardUpdated) reportLatestAction(opts.chatId, 'replied');
@@ -8862,11 +8915,12 @@ export function createOrchestrator(
       const goalModelDisp = getModelDisplay(state.presentation ?? cfg);
       const rc: RunCardState = {
         rs: render.snapshot(),
+        cardDisplay: state.presentation?.preferences?.cardDisplay,
         requesterOpenId: opts.requesterOpenId,
         showTools: render.showTools,
         goalControls: true,
         ...(opts.backendId ? { backend: opts.backendId } : {}),
-        ...(goalModelDisp !== 'off' && opts.model
+        ...((goalModelDisp !== 'off' || state.presentation?.preferences?.cardDisplay) && opts.model
           ? { model: opts.model, effort: opts.effort, modelOnTerminal: goalModelDisp === 'always' }
           : {}),
         ...(opts.sessionNotice ? { sessionNotice: opts.sessionNotice } : {}),
@@ -8876,7 +8930,8 @@ export function createOrchestrator(
 
     /** Send this turn's streaming card on first real content (idempotent). */
     const ensureCard = async (ctx: GoalTurnCtx): Promise<void> => {
-      if (ctx.stream) return;
+      ctx.cardRequested = true;
+      if (ctx.stream || (ctx.rc.cardDisplay?.reply?.streamText === false && ctx.rc.rs.terminal === 'running')) return;
       const stream = new RunCardStream();
       attachRunImages({
         stream,
@@ -8886,6 +8941,7 @@ export function createOrchestrator(
       });
       ctx.rc.askWaiting = askWaiting;
       ctx.rc.askWaitingSubagentId = askWaitingSubagentId;
+      await refreshRunCardDisplayValues(ctx.rc,runCwd);
       const cardMsgId = await stream.create(channel, opts.chatId, buildRunCard(ctx.rc), { replyTo, replyInThread });
       ctx.rc.cardKey = cardMsgId;
       state.runCard = ctx.rc;
@@ -9042,7 +9098,7 @@ export function createOrchestrator(
           if (topicThreadId) requestGoalSessionTitleApply();
           await finalizeCard(cur, true); // close the previous turn's card (if it produced one)
           cur = startTurn(); // existing topics still send the card lazily on first content
-          if (activeKey.startsWith('pending:')) {
+          if (activeKey.startsWith('pending:') && cur.rc.cardDisplay?.reply?.streamText !== false) {
             // A new goal needs a real topic before its first ask can accept text.
             // Anchor both the active run and the question to the same run card.
             await ensureCard(cur);
@@ -9050,6 +9106,7 @@ export function createOrchestrator(
             askPlacement.replyTo = cur.cardMsgId!;
           }
           askTurn ??= asks.openTurn({ run, sessionKey: activeKey, placement: askPlacement,
+            placed: async messageId => { if (cur) await adoptThreadId(messageId, cur.rc); return activeKey; },
             initiator: { kind: opts.requesterKind ?? 'unknown', openId: opts.requesterOpenId }, idlePause,
             waiting: (label, subagentId) => { activity?.waiting(Boolean(label)); askWaiting = label; askWaitingSubagentId = subagentId; if (cur) { cur.rc.askWaiting = label; cur.rc.askWaitingSubagentId = subagentId; if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID); } },
             fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) originalInterrupt(); },
@@ -9110,7 +9167,7 @@ export function createOrchestrator(
         }
         await ensureCard(cur);
         cur.rc.rs = cur.render.snapshot();
-        cur.stream!.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID);
+        cur.stream?.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID);
       }
       activity.end();
       askTurn?.close('turn-ended');
@@ -10288,6 +10345,9 @@ export function createOrchestrator(
       if (result.updated.length || result.deferred.length) log.info('settings', 'group-settings-materialized', { updated: result.updated.length, deferred: result.deferred.length });
       // The host prepares old/stopped Bots too. This also covers new registrations and a standalone Bot process.
       if (options?.bot) dmReady = trackTask(ensureDmProject({ bot: options.bot, projectsRootDir: cfg.preferences?.projectsRootDir, defaults: async () => storedDmDefaults(cfg.preferences) }));
+      await dmReady;
+      const cardDisplayRows=await materializeCardDisplaySettings({legacy:cfg.preferences?.cardDisplay,defaults:cardDisplayPresentationDefaults(cfg)});
+      if (cardDisplayRows) log.info('card','display-settings-materialized',{count:cardDisplayRows});
       // An unreadable file keeps the bot from starting; a corrupt one is moved aside and the store starts empty.
       await loadStore();
     },

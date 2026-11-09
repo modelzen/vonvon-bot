@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, expect, it } from 'vitest';
+import { defaultCardDisplay, type CardDisplayConfig } from '@vonvon/protocol';
 import { loadCommands } from './helpers/cli-commands';
 
 /**
@@ -34,7 +35,10 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['memory', 'list', '--project', 'p', '--scope', 'bot=cli_a'], 3], [['memory', 'export', '--project', 'p', '--scope', 'bot=cli_a'], 3],
   [['memory', 'events', 'x', '--project', 'p', '--scope', 'bot=cli_a,group=oc_x'], 3], [['memory', 'list', '--project', 'p'], 2],
   [['project', 'list', '--scope', 'bot=cli_a'], 3], [['daemon', 'status', '--scope', 'bot=cli_a'], 3],
-  [['settings', 'get'], 3], [['settings', 'access'], 3], [['settings', 'set', 'cards.showToolCalls=false'], 3],
+  [['settings', 'get'], 3], [['settings', 'access'], 3], [['settings', 'set', '--dm', 'presentation.cardDisplay=null'], 3],
+  [['settings', 'set', 'cards.showToolCalls=false'], 2],
+  [['settings', 'card-template'], 0], [['settings', 'card-check', 'missing-card.json'], 2],
+  [['settings', 'card-test', 'missing-card.json', '--cwd', tmpdir()], 2],
   [['settings', 'get', '--host'], 3], [['settings', 'act', 'voice', 'test'], 3], [['settings', 'act', 'admin', 'add', 'ou_x'], 3], [['settings', 'act', 'admin', 'add', '123'], 2],
   [['settings', 'act', 'member', 'all', '--group', 'g'], 3], [['settings', 'act', 'comment-instructions', '--default'], 3], [['settings', 'act', 'comment-instructions', '--stdin'], 2],
   [['settings', 'models', '--backend', 'codex', '--purpose', 'project'], 3],
@@ -116,6 +120,191 @@ it('every command prints one JSON line with --json, its exit code inside a failu
     }
   } finally { await rm(base, { recursive: true, force: true }); }
 }, 240_000);
+
+it('prints a reusable card template and checks card files without writing data', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'vonvon-card-cli-json-'));
+  try {
+    const home = join(base, 'home'); await mkdir(home);
+    const root = join(base, 'data');
+    const template = await run(home, root, ['settings', 'card-template']);
+    expect(template.code).toBe(0);
+    expect(template.stderr).toBe('');
+    const templateJson = JSON.parse(template.stdout) as { ok: boolean; cardDisplay: unknown };
+    expect(templateJson.ok).toBe(true);
+    expect(templateJson.cardDisplay).toMatchObject({ version: 1, blocks: expect.any(Array) });
+    const file = join(base, 'card.json');
+    await writeFile(file, JSON.stringify(templateJson.cardDisplay));
+    const valid = await run(home, root, ['settings', 'card-check', file]);
+    expect(valid).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(valid.stdout)).toMatchObject({ ok: true, kind: 'valid' });
+    await writeFile(file, '{broken');
+    const malformed = await run(home, root, ['settings', 'card-check', file]);
+    expect(malformed).toMatchObject({ code: 2, stderr: '' });
+    expect(JSON.parse(malformed.stdout)).toMatchObject({ ok: false, exitCode: 2, error: { kind: expect.any(String), message: expect.stringContaining('JSON') } });
+    await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally { await rm(base, { recursive: true, force: true }); }
+}, 60_000);
+
+it('documents and enforces a read-time revision for complete card objects at the CLI entry', async () => {
+  const base=await mkdtemp(join(tmpdir(),'vonvon-card-revision-cli-'));
+  try {
+    const home=join(base,'home');await mkdir(home);
+    const root=join(base,'data');
+    const assignment=`presentation.cardDisplay=${JSON.stringify(defaultCardDisplay())}`;
+    const missing=await run(home,root,['settings','set','--dm',assignment]);
+    expect(missing).toMatchObject({code:2,stderr:''});
+    expect(JSON.parse(missing.stdout)).toMatchObject({exitCode:2,error:{kind:'bad-args',message:expect.stringContaining('view.sections.presentation.revision')}});
+    const explicit=await run(home,root,['settings','set','--dm','--revision','snapshot-A',assignment]);
+    expect(explicit.code).toBe(3); // Passed local validation and tried the absent daemon.
+    const help=await run(home,root,['settings','set','--help']);
+    expect(help.code).toBe(0);
+    const helpText=help.stdout.replace(/\s+/g,' ');
+    for(const words of ['required for a complete presentation.cardDisplay','view.sections.presentation.revision','--revision <读取时的版本>','不要仅替换 revision 后重提旧对象']) expect(helpText).toContain(words);
+  } finally {await rm(base,{recursive:true,force:true});}
+});
+
+it('runs card scripts only on explicit card-test and reports missing JSON output', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'vonvon-card-test-json-'));
+  try {
+    const home = join(base, 'home'); await mkdir(home);
+    const root = join(base, 'data');
+    const template = JSON.parse((await run(home, root, ['settings', 'card-template'])).stdout) as { cardDisplay: CardDisplayConfig };
+    const config = template.cardDisplay;
+    const { contextRules: _contextRules, ...seed } = config.blocks[0]!;
+    config.blocks.push({ ...seed, id: 'custom_runtime', kind: 'custom', name: '路径', slot: 'top-left',
+      source: 'script', language: 'node', template: '{{branch}}', sample: '{"branch":"sample","percent":3}',
+      script: "const input=JSON.parse(require('node:fs').readFileSync(0,'utf8'));console.log(JSON.stringify({branch:input.cwd,percent:input.context.percent}));",
+    });
+    const file = join(base, 'card.json');
+    await writeFile(file, JSON.stringify(config));
+    const checked = await run(home, root, ['settings', 'card-check', file]);
+    expect(checked.code).toBe(0);
+    const tested = await run(home, root, ['settings', 'card-test', file, '--cwd', base]);
+    expect(tested).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(tested.stdout)).toMatchObject({ ok: true, kind: 'valid', values: { custom_runtime: { branch: base, percent: 3 } } });
+    config.blocks.at(-1)!.script = '({branch:"not printed"});';
+    await writeFile(file, JSON.stringify(config));
+    expect((await run(home, root, ['settings', 'card-check', file])).code).toBe(0);
+    const failed = await run(home, root, ['settings', 'card-test', file, '--cwd', base]);
+    expect(failed).toMatchObject({ code: 2, stderr: '' });
+    expect(JSON.parse(failed.stdout)).toMatchObject({ ok: false, exitCode: 2, error: { message: expect.stringContaining('custom_runtime') } });
+    config.blocks.at(-1)!.script = 'console.log(JSON.stringify({}));';
+    await writeFile(file, JSON.stringify(config));
+    expect((await run(home, root, ['settings', 'card-check', file])).code).toBe(0);
+    const missing = await run(home, root, ['settings', 'card-test', file, '--cwd', base]);
+    expect(missing).toMatchObject({ code: 2, stderr: '' });
+    expect(JSON.parse(missing.stdout)).toMatchObject({ ok: false, exitCode: 2, error: { message: expect.stringContaining('custom_runtime：脚本输出缺少模板字段 branch') } });
+    await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally { await rm(base, { recursive: true, force: true }); }
+}, 60_000);
+
+it.skipIf(WINDOWS)('cleans up card-test helpers before reporting SIGINT or SIGTERM', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'vonvon-card-interrupt-'));
+  let helperPid: number | undefined;
+  let cli: ReturnType<typeof spawn> | undefined;
+  try {
+    const home = join(base, 'home'); await mkdir(home);
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+      const pidFile = join(base, `${signal}.pid`);
+      const config = defaultCardDisplay();
+      const { contextRules: _contextRules, ...seed } = config.blocks[0]!;
+      config.blocks.push({ ...seed, id: 'custom_wait', kind: 'custom', name: '等待', slot: 'top-left',
+        source: 'script', language: 'node', template: '{{branch}}', sample: '{"branch":"sample"}',
+        script: `require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},100);`,
+      });
+      const file = join(base, `${signal}.json`);
+      await writeFile(file, JSON.stringify(config));
+      const root = join(base, `${signal}-data`);
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'), VONVON_HOME: root, VONVON_SESSION: '', FEISHU_CODEX_BRIDGE: '' };
+      delete env.VONVON_SERVICE;
+      cli = spawn(process.execPath, [entry, 'settings', 'card-test', file, '--cwd', base, '--json'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = ''; let stderr = '';
+      cli.stdout!.on('data', data => { stdout += String(data); });
+      cli.stderr!.on('data', data => { stderr += String(data); });
+      const exit = new Promise<{code:number|null; signal:NodeJS.Signals|null}>(resolve => cli!.once('close', (code, endedSignal) => resolve({ code, signal: endedSignal })));
+      let pidText: string | undefined;
+      for (let n = 0; n < 120 && !pidText; n++) {
+        try { pidText = await readFile(pidFile, 'utf8'); }
+        catch { await new Promise(resolve => setTimeout(resolve, 10)); }
+      }
+      expect(pidText, `${signal} helper did not start`).toBeDefined();
+      helperPid = Number(pidText);
+      cli.kill(signal);
+      expect(await exit).toEqual({ code: 130, signal: null });
+      expect(stderr).toBe('');
+      expect(JSON.parse(stdout)).toMatchObject({ ok: false, exitCode: 130, error: { kind: 'interrupted' } });
+      await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+      let gone = false;
+      for (let n = 0; n < 50 && !gone; n++) {
+        try { process.kill(helperPid, 0); await new Promise(resolve => setTimeout(resolve, 10)); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') gone = true; else throw error; }
+      }
+      expect(gone, `${signal} left helper pid ${helperPid} running`).toBe(true);
+      helperPid = undefined;
+      cli = undefined;
+    }
+  } finally {
+    cli?.kill('SIGKILL');
+    if (helperPid) { try { process.kill(helperPid, 'SIGKILL'); } catch { /* already stopped */ } }
+    await rm(base, { recursive: true, force: true });
+  }
+}, 30_000);
+
+it.skipIf(WINDOWS)('cleans up syntax-check helpers before card-check or card-test exits on a signal', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'vonvon-card-syntax-interrupt-'));
+  let helperPid: number | undefined;
+  let cli: ReturnType<typeof spawn> | undefined;
+  try {
+    const home = join(base, 'home'); await mkdir(home);
+    const shimDir = join(base, 'bin'); await mkdir(shimDir);
+    const shim = join(shimDir, 'pwsh');
+    for (const command of ['card-check', 'card-test'] as const) for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+      const pidFile = join(base, `${command}-${signal}.pid`);
+      await writeFile(shim, `#!/bin/sh\nprintf '%s' "$$" > ${JSON.stringify(pidFile)}\nwhile :; do sleep 1; done\n`);
+      await chmod(shim, 0o755);
+      const config = defaultCardDisplay();
+      const { contextRules: _contextRules, ...seed } = config.blocks[0]!;
+      config.blocks.push({ ...seed, id: 'custom_syntax', kind: 'custom', name: '语法检查', slot: 'top-left',
+        source: 'script', language: 'powershell', template: '{{branch}}', sample: '{"branch":"sample"}',
+        script: "Write-Output '{\"branch\":\"sample\"}'",
+      });
+      const file = join(base, `${command}-${signal}.json`);
+      await writeFile(file, JSON.stringify(config));
+      const root = join(base, `${command}-${signal}-data`);
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'), VONVON_HOME: root, VONVON_SESSION: '', FEISHU_CODEX_BRIDGE: '', PATH: `${shimDir}${delimiter}${process.env.PATH ?? ''}` };
+      delete env.VONVON_SERVICE;
+      cli = spawn(process.execPath, [entry, 'settings', command, file, ...command === 'card-test' ? ['--cwd', base] : [], '--json'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = ''; let stderr = '';
+      cli.stdout!.on('data', data => { stdout += String(data); });
+      cli.stderr!.on('data', data => { stderr += String(data); });
+      const exit = new Promise<{code:number|null; signal:NodeJS.Signals|null}>(resolve => cli!.once('close', (code, endedSignal) => resolve({ code, signal: endedSignal })));
+      let pidText: string | undefined;
+      for (let n = 0; n < 120 && !pidText; n++) {
+        try { pidText = await readFile(pidFile, 'utf8'); }
+        catch { await new Promise(resolve => setTimeout(resolve, 10)); }
+      }
+      expect(pidText, `${command} ${signal} syntax helper did not start`).toBeDefined();
+      helperPid = Number(pidText);
+      cli.kill(signal);
+      expect(await exit).toEqual({ code: 130, signal: null });
+      expect(stderr).toBe('');
+      expect(JSON.parse(stdout)).toMatchObject({ ok: false, exitCode: 130, error: { kind: 'interrupted' } });
+      await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+      let gone = false;
+      for (let n = 0; n < 50 && !gone; n++) {
+        try { process.kill(helperPid, 0); await new Promise(resolve => setTimeout(resolve, 10)); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') gone = true; else throw error; }
+      }
+      expect(gone, `${command} ${signal} left syntax helper pid ${helperPid} running`).toBe(true);
+      helperPid = undefined;
+      cli = undefined;
+    }
+  } finally {
+    cli?.kill('SIGKILL');
+    if (helperPid) { try { process.kill(helperPid, 'SIGKILL'); } catch { /* already stopped */ } }
+    await rm(base, { recursive: true, force: true });
+  }
+}, 30_000);
 
 // cli-2-bot 4.6: only the commands named in LEASED take the data lease, and with it make the data root
 it('takes the data lease for the commands that write the data root only', async () => {

@@ -507,12 +507,31 @@ export interface AccountUsageSnapshot {
   extras: RateBucket[];
   /** 拉取时刻（ms） */
   fetchedAt: number;
+  /** Claude：额度读不到时为什么（main、extras 为空），本机统计照常返回 */
+  unavailable?: UsageErrorKind;
 }
 
 export interface DailyBucket {
   /** YYYY-MM-DD（服务端口径，疑似 UTC 日界；只含有用量的日期，热力图自己补 0） */
   date: string;
   tokens: number;
+  /** Claude 本机统计：当天消息数（Claude Code /usage 的热力图口径） */
+  messages?: number;
+}
+
+/** Claude Code /usage → Stats 的本机统计（daemon 读本机 Claude Code 记录算出，见 docs/plans/now-share.md N2；
+ * 记录被清理掉的天由 Claude Code 自己的 stats-cache.json 补上，N2b）。 */
+export interface ClaudeLocalStats {
+  state: 'ready' | 'scanning' | 'unavailable';
+  /** 每个模型的累计 Token（input + output + cache_read + cache_creation），按 Token 降序 */
+  models: { id: string; tokens: number }[];
+  sessions: number;
+  messages: number;
+  activeDays: number;
+  longestSessionSec?: number;
+  longestSessionMessages?: number;
+  /** 按会话开始的本地小时计数，长度 24 */
+  hourCounts?: number[];
 }
 
 export interface AccountProfileStats {
@@ -535,6 +554,7 @@ export interface AccountProfileStats {
   topInvocations: { name: string; count: number; kind: 'plugin' | 'skill' }[];
   dailyBuckets: DailyBucket[];
   statsAsOf?: string;
+  localStats?: ClaudeLocalStats;
 }
 
 export interface AccountUsageBundle {

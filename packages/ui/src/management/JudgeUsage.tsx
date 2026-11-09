@@ -11,7 +11,6 @@ import './judge-usage.css';
 
 export type JudgeUsageView = Extract<AdminReply, {kind: 'judgeUsage'}>;
 export type JudgeUsageRead = {kind: 'loading'} | {kind: 'ready'; view: JudgeUsageView; problem?: string} | {kind: 'failed'; problem: string};
-type DailySource = Pick<JudgeUsageDay['sources'][number], 'kind'> & {id?: string};
 export function dayLabel(date: string, today: string): string {
   const [year, month, day] = date.split('-');
   return `${year === today.slice(0, 4) ? '' : `${year}年`}${Number(month)}月${Number(day)}日${date === today ? '（今天）' : ''}`;
@@ -41,19 +40,9 @@ export function botTotals(days: readonly JudgeUsageDay[]) {
   }));
   return [...totals.values()].filter(bot => bot.total > 0).sort((a, b) => b.total - a.total || a.agentName.localeCompare(b.agentName));
 }
-export function JudgeUsageRows({read, onRead, compact = false, disabled = false, dailySource}: {read: JudgeUsageRead; onRead: () => void; compact?: boolean; disabled?: boolean; dailySource?: DailySource}) {
+export function JudgeUsageRows({read, onRead, compact = false, disabled = false}: {read: JudgeUsageRead; onRead: () => void; compact?: boolean; disabled?: boolean}) {
   const where = useActiveDevice();
   const view = read.kind === 'ready' ? read.view : undefined;
-  if (dailySource) {
-    const days = view?.days.map(day => ({date: day.date, count: day.sources.reduce((sum, source) => sum + (source.kind === dailySource.kind && (dailySource.id === undefined || source.id === dailySource.id) ? source.count : 0), 0)}));
-    return <div className="judge-daily-scroll" role="region" aria-label="每日使用次数" tabIndex={0}><SettingsGroup>
-      {disabled && <SettingsRow title="连接恢复后更新"/>}
-      {!disabled && read.kind === 'loading' && <SettingsRow title="正在读取…"/>}
-      {(read.kind === 'failed' || (read.kind === 'ready' && read.problem)) && <SettingsRow title="暂时无法读取" description={read.problem}/>}
-      {days?.filter((day, index) => index === 0 || day.count > 0).map(day => <SettingsRow key={day.date} title={dayLabel(day.date, days[0]?.date ?? day.date)} value={`${day.count.toLocaleString('zh-CN')} 次`}/>)}
-      {view && (view.unreadBots > 0 || view.botsUnreadable) && <SettingsRow title="部分记录暂时无法读取"/>}
-    </SettingsGroup></div>;
-  }
   const bots = botTotals(view?.days ?? []);
   const sources = judgeSourceTotals(view?.days ?? []);
   const empty = view && !view.unreadBots && !view.botsUnreadable && view.days.every(day => day.total === 0);
@@ -102,10 +91,15 @@ export function judgeUsageReader(admin: (request: AdminRequest) => Promise<Admin
     stop() { stopped = true; ++latest; },
   };
 }
-export function JudgeUsageGroup({compact = false, disabled = false, refreshInterval = 0, dailySource}: {compact?: boolean; disabled?: boolean; refreshInterval?: number; dailySource?: DailySource}) {
+/** Reads now and every `refreshInterval` ms while the page is visible; `readAt` is when the last good read landed. */
+export function useJudgeUsage({disabled = false, refreshInterval = 0}: {disabled?: boolean; refreshInterval?: number} = {}) {
   const client = useClient();
   const [read, setRead] = useState<JudgeUsageRead>({kind: 'loading'});
-  const reader = useMemo(() => judgeUsageReader(request => client.admin(request), setRead), [client]);
+  const [readAt, setReadAt] = useState<number>();
+  const reader = useMemo(() => judgeUsageReader(request => client.admin(request), next => {
+    setRead(next);
+    if (next.kind === 'ready' && !next.problem) setReadAt(Date.now());
+  }), [client]);
   useEffect(() => {
     if (disabled) return;
     let active = true, running = false;
@@ -122,5 +116,9 @@ export function JudgeUsageGroup({compact = false, disabled = false, refreshInter
     void refresh();
     return () => {active = false; clearTimeout(timer); reader.stop(); document.removeEventListener('visibilitychange', visible);};
   }, [reader, disabled, refreshInterval]);
-  return <JudgeUsageRows read={read} onRead={() => void reader.read()} compact={compact} disabled={disabled} dailySource={dailySource}/>;
+  return {read, readAt, reread: () => void reader.read()};
+}
+export function JudgeUsageGroup({compact = false, disabled = false, refreshInterval = 0}: {compact?: boolean; disabled?: boolean; refreshInterval?: number}) {
+  const {read, reread} = useJudgeUsage({disabled, refreshInterval});
+  return <JudgeUsageRows read={read} onRead={reread} compact={compact} disabled={disabled}/>;
 }

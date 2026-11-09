@@ -16,3 +16,8 @@
 .admin-pick .admin-person {flex:1;}
 .admin-source {color:var(--color-text-secondary);font-size:12px;}
 .admin-empty {margin:0;color:var(--color-text-secondary);font-size:12px;}
+
+.response-member-picker-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.response-member-manual{margin-top:8px;color:var(--color-text-secondary);font-size:12px}
+.response-member-manual>summary{cursor:pointer}
+.response-member-manual>.settings-inline-actions{margin-top:10px}

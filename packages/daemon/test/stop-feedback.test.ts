@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ANSWER_EID, buildQueuedCard, buildRunCard, buildRunCardPlain, CONTROLS_EID } from '../src/card/run-card';
 import { initialState, type RunState } from '../src/card/run-state';
 import { cardIdFromMessageContent } from '../src/bot/handle-message';
+import { DEFAULT_REMINDER_REQUESTED_TEMPLATE } from '@vonvon/protocol';
 
 /** All nodes carrying the given element_id (depth-first). */
 function byEid(node: unknown, eid: string, acc: Record<string, any>[] = []): Record<string, any>[] {
@@ -42,7 +43,7 @@ describe('run card controls row — CONTROLS_EID（M-4 orphan 自愈锚点）', 
     });
   });
 
-  it('manual mode adds one-shot remind; requested state becomes a note; automatic modes expose neither', () => {
+  it('manual mode confirms in the same disabled button; automatic modes expose neither', () => {
     const available = buildRunCard({ rs: initialState, cardKey: 'om_1', completionReminder: 'available' });
     const availableButtons = buttons(available);
     expect(availableButtons.map((b) => b.behaviors[0].value.a)).toEqual(['run.stop', 'run.remind']);
@@ -52,7 +53,16 @@ describe('run card controls row — CONTROLS_EID（M-4 orphan 自愈锚点）', 
     expect(availableButtons[0]?.icon?.color).toBe('blue');
 
     const requested = buildRunCard({ rs: initialState, cardKey: 'om_1', completionReminder: 'requested' });
-    expect(buttons(requested).map((b) => b.behaviors[0].value.a)).toEqual(['run.stop']);
+    const requestedButtons = buttons(requested);
+    expect(requestedButtons).toHaveLength(2);
+    expect(requestedButtons[0]).toEqual(availableButtons[0]);
+    expect(requestedButtons[1]).toEqual({
+      ...availableButtons[1], behaviors: undefined, disabled: true,
+      text: { tag: 'plain_text', content: DEFAULT_REMINDER_REQUESTED_TEMPLATE },
+      hover_tips: { tag: 'plain_text', content: '本轮结束后会提醒发起人' },
+    });
+    expect(requestedButtons[1]?.behaviors).toBeUndefined();
+    expect(byEid(requested, CONTROLS_EID)[0]?.columns).toHaveLength(2);
     expect(JSON.stringify(requested)).toContain('本轮结束后会提醒发起人');
 
     const automatic = buildRunCard({ rs: initialState, cardKey: 'om_1' });
@@ -90,6 +100,21 @@ describe('run card controls row — CONTROLS_EID（M-4 orphan 自愈锚点）', 
       icon: { token: 'close_outlined', color: 'grey' },
       behaviors: [{ value: { a: 'run.stop', m: 'om_1' } }],
     });
+  });
+
+  it('keeps queue reminder confirmation beside cancel with the same size and no callback', () => {
+    const available = buildQueuedCard({ position: 2, cardKey: 'om_q', completionReminder: 'available' });
+    const requested = buildQueuedCard({ position: 2, cardKey: 'om_q', completionReminder: 'requested' });
+    const availableButtons = buttons(available), requestedButtons = buttons(requested);
+    expect(requestedButtons).toHaveLength(2);
+    expect(requestedButtons[0]).toEqual(availableButtons[0]);
+    expect(requestedButtons[1]).toEqual({
+      ...availableButtons[1], behaviors: undefined, disabled: true,
+      text: { tag: 'plain_text', content: DEFAULT_REMINDER_REQUESTED_TEMPLATE },
+      hover_tips: { tag: 'plain_text', content: '本轮结束后会提醒发起人' },
+    });
+    expect(requestedButtons[1]?.behaviors).toBeUndefined();
+    expect(byEid(requested, CONTROLS_EID)[0]?.columns).toHaveLength(2);
   });
 
   it('button-less layouts have no controls row to delete', () => {
