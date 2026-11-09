@@ -22,12 +22,14 @@ export function TodayHome({snapshot, onSetup, onRegister, onOpenUsage, disabled}
   return <div className="today-home">
     <header className="today-intro">
       <div className="today-intro-title"><h1>此刻</h1>{snapshot.stale && <span role="status">正在更新…</span>}</div>
-      <GlowButton disabled={disabled} onClick={onRegister}>添加 Bot</GlowButton>
+      <div className="today-intro-actions">
+        <GlowButton disabled={disabled} onClick={onRegister}>添加 Bot</GlowButton>
+      </div>
     </header>
     {!snapshot.stale && attention.length > 0 && <button type="button" className="today-connection-note" onClick={onSetup}><span className="today-state-dot"/><span>{attention.length} 个 Bot 需要检查连接</span><ArrowRight size={14}/></button>}
     <NowBotList snapshot={snapshot} connected={connected} onChangeNumber={changeNumber} disabled={disabled}/>
+    <NowUsage disabled={!connected} agents={snapshot.agents} onOpenUsage={onOpenUsage}/>
     <NowActivity snapshot={snapshot}/>
-    <NowUsage disabled={!connected} onOpenUsage={onOpenUsage}/>
   </div>;
 }
 

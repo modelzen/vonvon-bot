@@ -58,6 +58,14 @@ const usageErrorMessages = (login: string): Record<UsageErrorKind, string> => ({
   transient: '暂时无法读取 Codex 用量，请稍后重试。',
 });
 
+/** What Claude's quota column says when the account has no quota to show; the local stats still come back. */
+const claudeQuotaGaps = (login: string): Record<UsageErrorKind, string> => ({
+  'no-auth': '没有读到 Claude 订阅登录，看不到额度',
+  'api-key-mode': '用的是 API 接入，没有订阅额度',
+  'need-relogin': `订阅凭据过期了，在终端运行 \`${login}\` 后再看`,
+  transient: '额度暂时读不到',
+});
+
 /** `invitee`: who a group made from a private chat pulls in (authz.ts); the bot's primary admin from the desktop and the terminal. */
 export async function collaborationRpc(service: AdminService, directory: DirectoryBrowser, request: CollaborationRequest, invitee?: GroupInvitee): Promise<RpcOutcome<CollaborationReply>> {
   if (request.action === 'providerModels') {
@@ -67,8 +75,12 @@ export async function collaborationRpc(service: AdminService, directory: Directo
   if (request.action === 'usage') {
     const claude = request.backend === 'claude-agent';
     const provider = claude ? 'Claude' : 'Codex';
-    try { return { kind: 'read', value: collaborationReplySchema.parse({ kind: 'usage', data: await service.accountUsage(request.force, request.backend ?? 'codex-appserver') }) }; }
-    catch (error) {
+    try {
+      const data = await service.accountUsage(request.force, request.backend ?? 'codex-appserver');
+      const { unavailable: gap, ...usage } = data.usage;
+      const unavailable = claude && gap ? { reason: gap, message: claudeQuotaGaps(toolCommand('claude'))[gap] } : undefined;
+      return { kind: 'read', value: collaborationReplySchema.parse({ kind: 'usage', data: { ...data, usage: { ...usage, ...(unavailable ? { unavailable } : {}) } } }) };
+    } catch (error) {
       const messages: Record<UsageErrorKind, string> = claude ? {
         'no-auth': '这台设备上没有可读取的 Claude 订阅凭据，请在该设备上运行 Claude Code 检查配置。',
         'api-key-mode': '当前 Claude 用的是 API 接入，没有订阅额度可读。',

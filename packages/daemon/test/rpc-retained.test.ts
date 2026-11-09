@@ -198,6 +198,27 @@ describe('retained Codex usage behavior over real WebSocket', () => {
     } finally { await client.close(); await fixture.close(); }
   });
 
+  it.each<[UsageErrorKind, string]>([
+    ['api-key-mode', '用的是 API 接入，没有订阅额度'],
+    ['no-auth', '没有读到 Claude 订阅登录，看不到额度'],
+    ['need-relogin', '订阅凭据过期了，在终端运行 `claude` 后再看'],
+    ['transient', '额度暂时读不到'],
+  ])('answers Claude %s with the local stats and the quota column line', async (reason, message) => {
+    const localStats = { state: 'ready' as const, models: [{ id: 'claude-opus', tokens: 42 }], sessions: 1, messages: 2, activeDays: 1 };
+    const bundle = { profile: { topInvocations: [], dailyBuckets: [{ date: '2026-11-06', tokens: 42, messages: 2 }], lifetimeTokens: 42, localStats }, usage: { main: {}, extras: [], fetchedAt: 1, unavailable: reason } };
+    const fixture = await startFixture(fakeService({ accountUsage: async () => bundle }));
+    const client = await socketClient(fixture.api.port, fixture.credential);
+    try {
+      await client.ready();
+      const frame = await client.call({ type: 'request', id: `claude-gap-${reason}`, method: 'collaboration', payload: { action: 'usage', force: false, backend: 'claude-agent' } });
+      expect(frame).toMatchObject({ type: 'response', method: 'collaboration', payload: { kind: 'usage', data: { profile: bundle.profile, usage: { main: {}, extras: [], fetchedAt: 1, unavailable: { reason, message } } } } });
+      // Codex never sends one; a stray reason does not borrow Claude's wording.
+      const codex = await client.call({ type: 'request', id: `codex-gap-${reason}`, method: 'collaboration', payload: { action: 'usage', force: false } });
+      expect(codex).toMatchObject({ type: 'response', payload: { kind: 'usage' } });
+      expect(JSON.stringify(codex)).not.toContain('unavailable');
+    } finally { await client.close(); await fixture.close(); }
+  });
+
   it('works with zero bots, forwards both force values, and retains the full bundle', async () => {
     const forces: boolean[] = [];
     const bundle = { profile: { displayName: 'Local account', topInvocations: [{ name: 'plugin-a', count: 2, kind: 'plugin' as const }], dailyBuckets: [{ date: '2026-10-10', tokens: 42 }] }, usage: { planType: 'plus', main: { name: 'main', primary: { usedPercent: 25, windowSeconds: 18000, resetAt: 12345 } }, extras: [{ name: 'secondary', secondary: { usedPercent: 50 } }], fetchedAt: 67890 } };
