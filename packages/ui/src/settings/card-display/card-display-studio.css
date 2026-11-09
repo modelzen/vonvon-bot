@@ -2,17 +2,14 @@
 .cds-widget-viewport{box-sizing:border-box;position:fixed;inset:0;display:grid;place-items:center;padding:16px;overflow:auto}
 .agent-settings-page:has(> .cds-page)>:not(.cds-page),.gd-page:has(> .cds-page)>:not(.cds-page){display:none!important}
 .group-design-workspace:has(.cds-page)>.config-header,.settings-content-scroll:has(.cds-page) .bot-detail-header{display:none!important}
-.today-window:has(.cds-page) .today-back,.settings-content-scroll:has(.cds-page) .collaboration-breadcrumb{display:none!important}
+.today-window:has(.cds-page) .settings-main-pane>.today-back,.settings-content-scroll:has(.cds-page) .collaboration-breadcrumb{display:none!important}
 .group-design-workspace:has(.cds-page){gap:0}
 .collaboration-window .settings-content-scroll:has(.cds-page) .settings-content-page>.page-stack,.collaboration-window .settings-content-scroll:has(.cds-page) .ss-page__content{width:min(100%,calc(var(--settings-content-width) + 2 * var(--settings-page-padding)));max-width:none;padding:0;margin-inline:auto}
 .settings-content-scroll:has(.cds-page){scroll-padding-block-start:0;scrollbar-gutter:auto}
 .settings-content-page:has(.cds-page){padding-bottom:0;min-height:0}
 .settings-content-page>.page-stack:has(.cds-page){display:block}
-.cds-page{box-sizing:border-box;display:grid;grid-template-rows:48px minmax(0,1fr) 44px;gap:12px;padding:16px var(--settings-page-padding,24px);height:var(--cds-page-height,calc(100dvh - 88px));min-width:0;width:100%;background:var(--color-canvas);color:var(--color-text)}
-.cds-page-header{display:flex;align-items:center;gap:10px;padding:0}
-.cds-page-header>.ui-button.ui-button{width:28px;min-width:28px;padding:0;justify-content:center;margin-left:-8px}
-.cds-page-header h2{margin:0;font-size:16px;font-weight:600;line-height:1.4}
-.cds-page-header p{margin:0 0 0 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-text-secondary);font-size:12px}
+.cds-page{box-sizing:border-box;display:grid;grid-template-rows:28px minmax(0,1fr) 44px;gap:12px;padding:8px var(--settings-page-padding,24px) 16px;height:var(--cds-page-height,calc(100dvh - 88px));min-width:0;width:100%;background:var(--color-canvas);color:var(--color-text)}
+.cds-page-header.today-back{display:flex;align-items:center;width:100%;margin:0;padding:0;min-width:0}
 .cds-entry-button.ui-button>span{display:inline-flex;align-items:center;justify-content:center;gap:4px;line-height:1}
 .cds-entry-button.ui-button>span>svg{display:block;flex:none}
 .cds-page-content{min-width:0;min-height:0}
