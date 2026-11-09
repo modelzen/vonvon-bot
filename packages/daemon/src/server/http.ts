@@ -22,7 +22,6 @@ import { createPeerHub } from './peer-hub';
 import type { SecureDeps } from './secure-socket';
 import type { RpcOutcome } from './rpc';
 import { adminRpc } from './rpc/admin';
-import { createShareUploads, type ShareUploads } from '../admin/share';
 import { commandRpc } from './rpc/command';
 import { collaborationRpc } from './rpc/collaboration';
 import { environmentRpc } from './rpc/environment';
@@ -88,12 +87,11 @@ export type RemoteSeams = Partial<Pick<EnableDeps, 'interfaces' | 'tailscale' | 
 
 /**
  * devices 4.5: what this daemon reports in a v2 server info: `remote` while an address is opened (D3); `session-scope`:
- * Bot sessions' tokens and `--scope` (D4a); `share.gif`: it sends the 此刻 share GIF to Feishu (now-share N5c). A daemon
- * that updates itself says so (devices 6.5, devices-ui-2 4.11); one the desktop app carries is updated by that app (U4),
- * except on Windows for 0.9.0 (owner 2026-11-02).
+ * Bot sessions' tokens and `--scope` (D4a). A daemon that updates itself says so (devices 6.5, devices-ui-2 4.11); one
+ * the desktop app carries is updated by that app (U4), except on Windows for 0.9.0 (owner 2026-11-02).
  */
 export const capabilities = (distribution?: string, remoteOpen = false, platform: NodeJS.Platform = process.platform): string[] => [
-  'device', 'session-scope', 'attention.group', 'share.gif', ...remoteOpen ? ['remote'] : [],
+  'device', 'session-scope', 'attention.group', ...remoteOpen ? ['remote'] : [],
   ...distribution === 'standalone' ? ['update.standalone'] : distribution === 'global-npm' ? ['update.npm']
     : distribution === 'bundled' && platform !== 'win32' ? ['update.bundled'] : [],
 ];
@@ -157,7 +155,6 @@ export async function startApi(options: { service: AdminService; port?: number; 
   let acquiredServer: ReturnType<typeof createServer> | undefined;
   let acquiredJobs: Jobs | undefined;
   let acquiredLogs: LogFollowers | undefined;
-  let acquiredShares: ShareUploads | undefined;
   let acquiredEnvironment: EnvironmentService | undefined;
   let acquiredDirectory: Awaited<ReturnType<typeof createDirectoryBrowser>> | undefined;
   let acquiredSockets: ReturnType<typeof createSocketServer> | undefined;
@@ -191,7 +188,6 @@ export async function startApi(options: { service: AdminService; port?: number; 
       () => acquiredJobs?.close(),
       () => acquiredEnvironment?.close(),
       () => acquiredLogs?.close(),
-      () => acquiredShares?.close(),
     ]) {
       const drain = new Promise<void>(resolve => resolve(cleanup()));
       void drain.catch(() => undefined);
@@ -259,7 +255,6 @@ export async function startApi(options: { service: AdminService; port?: number; 
     });
     const jobs = acquiredJobs = new Jobs({ service: options.service, changed: invalidate, toolsSettled: () => { void snapshots?.refreshTools().catch(() => undefined); } });
     const logs = acquiredLogs = new LogFollowers(join(paths.appDir, 'logs'));
-    const shares = acquiredShares = createShareUploads(options.service);
     const { readService, ...launcher } = options.serviceActions ?? {};
     const serviceActions = createServiceActionLauncher({ root: home, ...launcher, onSettled: () => { void snapshots?.refreshService().catch(() => undefined); } });
     async function finish<T>(peer: Peer, outcome: RpcOutcome<T>, envelope: (value: T) => Response): Promise<void> {
@@ -288,7 +283,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
       switch (request.method) {
         case 'snapshot': peer.send({ type: 'response', id, method: 'snapshot', payload: shown(snapshots.current()) }); return;
         case 'admin': {
-          const outcome = await adminRpc(options.service, follow => logs.follow(peer, follow), request.payload, { startedAt, peer, shares });
+          const outcome = await adminRpc(options.service, follow => logs.follow(peer, follow), request.payload, { startedAt, peer });
           // U4: the desktop shell is known once it declared it can update; after an update's restart, one that comes back
           // means the app did not change.
           if (request.payload.type === 'negotiate' && isDesktopShell(peer)) bundled.shellAttached(peer);
@@ -387,7 +382,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
     // devices-ui-3 4.2: whose a scan is, so the same client coming back on a new connection keeps it (`attached`).
     const ownerOf = (peer: Peer) => peerOwner(peer, clients, identity.current.name);
     const hub = createPeerHub({
-      detached: peer => { jobs.detach(peer); logs.detach(peer); shares.detach(peer); if (hub.state === 'open') bundled.shellDetached(peer); },
+      detached: peer => { jobs.detach(peer); logs.detach(peer); if (hub.state === 'open') bundled.shellDetached(peer); },
       attached: peer => { jobs.attach(peer, ownerOf(peer)); },
       view: viewFor(sessionTokens),
     });

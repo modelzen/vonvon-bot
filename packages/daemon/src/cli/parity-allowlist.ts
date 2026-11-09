@@ -46,8 +46,4 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'machine.desktopUpdateReport': { reason: 'desktop-only', note: "the shell's report on the update it runs for the server it carries (devices 7.5)" },
 
   'admin.negotiate': { reason: 'internal', note: 'each client sends it after the handshake' },
-  'admin.shareTargets': { reason: 'client-only', note: "the 此刻 share dialog's Bots and recipients (now-share N5)" },
-  'admin.shareStart': { reason: 'client-only', note: 'the 此刻 share dialog sends its GIF (now-share N5)' },
-  'admin.sharePart': { reason: 'client-only', note: 'the 此刻 share dialog sends its GIF (now-share N5)' },
-  'admin.shareSend': { reason: 'client-only', note: 'the 此刻 share dialog sends its GIF (now-share N5)' },
 };

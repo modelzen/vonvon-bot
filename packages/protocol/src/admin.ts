@@ -3,7 +3,6 @@ import { agentIdSchema, badgeNumberSchema, distributionSchema, permissionSchema 
 import { API_KEY_MAX, keyIdSchema, secretServiceSchema, secretTestOutcomeSchema } from "./secrets.js";
 import { principalWireSchema } from "./handshake.js";
 import { scopeSchema } from "./device.js";
-import { openIdSchema } from "./settings.js";
 
 export const adminProjectSchema = z.object({
   avatarDataUrl: z.string().optional(),
@@ -119,21 +118,6 @@ export const judgeUsageDaySchema = z.object({
 });
 export type JudgeUsageDay = z.infer<typeof judgeUsageDaySchema>;
 
-/** Feishu's limit for one image message: "不能超过 10 MB". Decimal, as it does not say which MB it means. */
-export const SHARE_GIF_MAX_BYTES = 10_000_000;
-/** Feishu refuses a GIF wider or taller than this many pixels (im/v1/images: "GIF 图片分辨率不能超过 2000 x 2000"). */
-export const SHARE_GIF_MAX_SIDE = 2000;
-/** CSS pixels: the share card's width, the 此刻 page's in the default 910 px window. The desktop opens its offscreen
- * share window this wide, so the card is never laid out at another width. */
-export const SHARE_CARD_WIDTH = 904;
-export const SHARE_PART_BYTES = 1024 * 1024;
-export const shareTargetSchema = z.object({
-  agentId: agentIdSchema, name: z.string(), connected: z.boolean(),
-  /** the Bot's admin list in order; `name` as Feishu gives it (the 管理员 page's), absent when Feishu would not name them */
-  recipients: z.array(z.object({ openId: openIdSchema, name: z.string().optional(), creator: z.boolean() })),
-});
-export type ShareTarget = z.infer<typeof shareTargetSchema>;
-
 export const adminRequestSchema = z.discriminatedUnion("type", [
   z.object({type:z.literal("judgeUsage")}).strict(),
   z.object({type:z.literal("state")}).strict(),
@@ -156,14 +140,6 @@ export const adminRequestSchema = z.discriminatedUnion("type", [
   z.object({type:z.literal("testSecret"),keyId:keyIdSchema}).strict(),
   /** devices 4.5: the first request after the handshake; the daemon takes only the first one a connection sends. */
   z.object({type:z.literal("negotiate"),capabilities:z.array(z.string().regex(/^[a-z][a-z0-9.-]{0,63}$/)).max(32),scope:scopeSchema.optional()}).strict(),
-  /** now-share N5c: the Bots that can send the 此刻 share GIF, each with the admins it can send it to. */
-  z.object({type:z.literal("shareTargets")}).strict(),
-  /** now-share N5c: the share GIF goes up in parts (a frame holds 4 MB, the GIF up to 10 MB, and the device shown may be
-   * remote), then `agentId` sends it to `openId`, one of its admins, in their private chat. */
-  z.object({type:z.literal("shareStart"),agentId:agentIdSchema,openId:openIdSchema,bytes:z.number().int().positive().max(SHARE_GIF_MAX_BYTES),sha256:z.string().regex(/^[0-9a-f]{64}$/)}).strict(),
-  /** `data`: base64 of at most SHARE_PART_BYTES, parts numbered from 0 in order */
-  z.object({type:z.literal("sharePart"),uploadId:z.string().min(1).max(64),index:z.number().int().nonnegative(),data:z.string().min(1).max(Math.ceil(SHARE_PART_BYTES / 3) * 4)}).strict(),
-  z.object({type:z.literal("shareSend"),uploadId:z.string().min(1).max(64)}).strict(),
 ]);
 export type AdminRequest = z.infer<typeof adminRequestSchema>;
 
@@ -185,9 +161,5 @@ export const adminReplySchema = z.discriminatedUnion("kind", [
   z.object({kind:z.literal("secretTested"),keyId:z.string(),outcome:secretTestOutcomeSchema,message:z.string(),status:z.number().int().optional()}),
   z.object({kind:z.literal("refused"),code:z.string(),message:z.string()}),
   z.object({kind:z.literal("negotiated"),principal:principalWireSchema,scope:scopeSchema.nullable()}),
-  z.object({kind:z.literal("shareTargets"),bots:z.array(shareTargetSchema)}),
-  /** `received`: bytes so far */
-  z.object({kind:z.literal("shareUpload"),uploadId:z.string(),received:z.number().int().nonnegative()}),
-  z.object({kind:z.literal("shareSent"),messageId:z.string()}),
 ]);
 export type AdminReply = z.infer<typeof adminReplySchema>;

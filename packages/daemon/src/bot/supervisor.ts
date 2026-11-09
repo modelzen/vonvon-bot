@@ -7,7 +7,7 @@ import { spawnProcess } from '../platform/spawn';
 import { log } from '../core/logger';
 import { withoutSessionMarkers } from '../config/session-env';
 import { loadBots, type BotEntry } from '../config/bots';
-import { askBotOver, createAdminIpcCaller, createHostIpcResponder, FEISHU_READ_IPC_MS, SHARE_IMAGE_IPC_MS, type AdminIpcCaller } from '../admin/ipc';
+import { askBotOver, createAdminIpcCaller, createHostIpcResponder, FEISHU_READ_IPC_MS, type AdminIpcCaller } from '../admin/ipc';
 import { hostFeishuApi, hostFeishuRead } from '../admin/feishu-route';
 import { createSessionTokens } from '../host/session-tokens';
 import { AdminWriteError } from '../admin/ops';
@@ -618,7 +618,6 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
         },
         executeFeishuRead: async (botId, request) => reachable(botId)?.call({ kind: 'feishuRead', request }, FEISHU_READ_IPC_MS),
         executeFeishuApi: async (botId, request) => reachable(botId)?.call({ kind: 'feishuApi', request }, FEISHU_READ_IPC_MS),
-        executeShareImage: async (botId, request) => reachable(botId)?.call({ kind: 'shareImage', request }, SHARE_IMAGE_IPC_MS),
         firstHello: async (botId) => {
           const child = byAppId(botId);
           if (child?.enabled && !child.pause && !child.stopping && child.proc && child.ipc) await child.ipc.call({ kind: 'firstHello' });

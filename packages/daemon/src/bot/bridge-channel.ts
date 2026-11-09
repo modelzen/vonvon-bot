@@ -3,7 +3,7 @@ import { createLarkChannel, Domain } from '@larksuiteoapi/node-sdk';
 import type { AppConfig } from '../config/schema';
 
 /** What a request carried: the SDK logs a refused call's `config.data`, `params` and `request` (its `formatErrors`), with
- * the recipient, the body and an image's bytes in them (now-share N5c). Feishu's answer stays: it logs that again apart. */
+ * the recipient, the body and an image's bytes in them (Codex review 376). Feishu's answer stays: it logs that again apart. */
 const SENT = new Set(['data', 'params', 'headers', 'body', 'request']);
 /** `value` without what was sent, bytes or streams: the status, Feishu's code, msg and log_id stay. */
 function scrubbed(value: unknown, depth = 0): unknown {
