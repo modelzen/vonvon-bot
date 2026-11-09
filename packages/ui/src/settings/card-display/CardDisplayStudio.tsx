@@ -1,6 +1,6 @@
 import {useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent} from 'react';
 import {createPortal, flushSync} from 'react-dom';
-import {Bot, Check, ChevronLeft, ChevronRight, Code2, Minus, Plus, Pointer, RotateCcw, Undo2, X} from 'lucide-react';
+import {ArrowLeft, Bot, Check, ChevronRight, Code2, Minus, Plus, Pointer, RotateCcw, Undo2, X} from 'lucide-react';
 import {Dialog as NativeDialog} from '@base-ui/react/dialog';
 import {Button, FormField, SelectControl, Toggle} from '../../reference/components/ui';
 import {SettingsGroup, SettingsRow} from '../../reference/components/system-settings';
@@ -14,7 +14,7 @@ import {allowedSlots, streamPreviewCard, streamPreviewLength, withReminderBlock,
 import './card-display-studio.css';
 import {completionPreviewText} from './completion-preview';
 
-type Props = {agent?: Agent; botName?: string; groupName?: string} & Partial<CompletionReminderDraft>;
+type Props = {agent?: Agent; botName?: string; groupName?: string; scopeLabel?: '此群聊' | '此私聊'} & Partial<CompletionReminderDraft>;
 type EntryProps = Props & {scopeLabel: '此群聊' | '此私聊'; saved: CardDisplayDraft | null | undefined;
   revision: string; readonly?: boolean; readonlyMessage?: string; onSave: (value: CardDisplayEditorPatch, revision: string) => Promise<SettingsReply>; onRefresh?: () => Promise<void>};
 function saveError(reply: SettingsReply): string | undefined {
@@ -145,7 +145,7 @@ function ContextSettings({block, onChange}: {block: CardBlock; onChange: (rules:
   </div>;
 }
 
-export function CardDisplayPage({initial, initialReminder, onDraftChange, onSave, onClose, saveError: error, onDiscardConflict, agent, botName = 'Bot', groupName = '本群', completionMode, longTaskMinutes, completionTemplate}: Props & {initial?: CardDisplayDraft; initialReminder?: CompletionReminderDraft & {resetReminder?: true}; onDraftChange?: (value: CardDisplayEditorDraft) => void; onSave: (value: CardDisplayEditorDraft) => Promise<boolean>; onClose: () => void; saveError?: string; onDiscardConflict?: () => void}) {
+export function CardDisplayPage({initial, initialReminder, onDraftChange, onSave, onClose, saveError: error, onDiscardConflict, agent, botName = 'Bot', groupName = '本群', scopeLabel, completionMode, longTaskMinutes, completionTemplate}: Props & {initial?: CardDisplayDraft; initialReminder?: CompletionReminderDraft & {resetReminder?: true}; onDraftChange?: (value: CardDisplayEditorDraft) => void; onSave: (value: CardDisplayEditorDraft) => Promise<boolean>; onClose: () => void; saveError?: string; onDiscardConflict?: () => void}) {
   const page = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     const element = page.current;
@@ -422,7 +422,7 @@ export function CardDisplayPage({initial, initialReminder, onDraftChange, onSave
   const draggedBlock = draft.blocks.find(item => item.id === dragged);
   const draggedNode = draggedBlock ? findComponent(card.body.elements, draggedBlock.id) ?? exampleNode(draggedBlock, undefined, usage) : undefined;
   return <main className="cds-page" ref={page} aria-label="消息卡片设置">
-        <header className="cds-page-header"><Button size="sm" variant="ghost" icon={<ChevronLeft size={16}/>} aria-label="返回设置" title="返回设置" disabled={saving} onClick={onClose}/><h2>消息卡片</h2><p>{groupName} · {botName}</p></header>
+        <header className="cds-page-header today-back"><button type="button" aria-label="返回设置" title="返回设置" disabled={saving} onClick={onClose}><ArrowLeft size={14} aria-hidden="true"/><span>{scopeLabel === '此私聊' ? botName : groupName}</span></button></header>
         <div className="cds-page-content"><div className="card-display-studio"><div className="cds-workbench">
           <aside className="cds-pool" aria-label="组件池" data-return-target={Boolean(dragged && dragOrigin === 'card' && draggedBlock?.kind !== 'reminder')}><div className="cds-pool-title">卡片组件</div><p>拖到右侧，拖回这里隐藏</p>
             {dragged && dragOrigin === 'card' && draggedBlock?.kind !== 'reminder' && <div className="cds-return-cue">放回这里即可隐藏</div>}
