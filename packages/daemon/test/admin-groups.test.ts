@@ -60,6 +60,22 @@ function axiosError(status: number, data: unknown): Error {
 const input = (directory: string): BindGroupInput => ({ chatId: 'oc_a', projectName: 'First', directory, backend: 'codex-appserver', kind: 'multi' });
 
 describe('desktop group commands in the owning bot', () => {
+  it('checks only the Bot membership when the members list is unavailable', async () => {
+    const fixture = channelFixture();
+    fixture.members.mockRejectedValue(new Error('member list scope unavailable'));
+    const execute = createGroupExecutor(fixture.channel);
+    expect(await execute({kind: 'groupMembership', chatId: 'oc_membership_only', identity: bot})).toEqual({inChat: true});
+    expect(fixture.membership).toHaveBeenCalledWith({path: {chat_id: 'oc_membership_only'}});
+    expect(fixture.members).not.toHaveBeenCalled(); expect(fixture.list).not.toHaveBeenCalled();
+  });
+  it('refuses a stale runtime identity or a non-member without reading the member list', async () => {
+    const fixture = channelFixture(), execute = createGroupExecutor(fixture.channel);
+    await expect(execute({kind: 'groupMembership', chatId: 'oc_minimum', identity: {...bot, registrationId: 'changed'}})).rejects.toThrow('身份已改变');
+    expect(fixture.membership).not.toHaveBeenCalled();
+    fixture.membership.mockResolvedValueOnce({code: 0, data: {is_in_chat: false}});
+    await expect(execute({kind: 'groupMembership', chatId: 'oc_minimum', identity: bot})).rejects.toThrow('不在此群');
+    expect(fixture.members).not.toHaveBeenCalled();
+  });
   it('binds a default empty workspace and keeps pending state for stale or non-member requests', async () => {
     const fixture = channelFixture();
     const execute = createGroupExecutor(fixture.channel);
