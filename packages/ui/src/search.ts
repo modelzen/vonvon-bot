@@ -113,6 +113,7 @@ export function searchEntries(snapshot: DesktopSnapshot, capabilities: {external
     // Only the desktop adds and switches devices; every page has 允许别的设备连接 there (found by its own entry, above). 服务器 is a
     // search word only, never on the page.
     {id: 'devices', title: '设备连接', aliases: ['设备', '多设备', ...capabilities.devices ? ['添加设备', '切换设备'] : [], '远程', '连接链接', '配对', 'Tailscale', '服务器'], page: 'devices'},
+    {id: 'account', title: '账号', aliases: ['账户', '登录', '退出登录', 'GitHub', 'Google', 'Apple'], page: 'account'},
   ];
   const entries: SearchEntry[] = pages.map(page => ({id: page.id, title: page.title, context: '页面', aliases: page.aliases, destination: {page: page.page, view: page.view, selection: page.view ? {kind: 'overview'} : undefined}, kind: 'page'}));
   for (const group of globalGroups.filter(group => group.section !== '外部 Core / CLI' || capabilities.externalCoreAvailable)) group.fields.forEach((field, index) => entries.push({

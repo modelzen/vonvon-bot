@@ -9,6 +9,7 @@ import {OutsideWindow} from './device-bits';
 import {DeviceConnectionView} from './DeviceConnectionView';
 import {MaintenanceView} from './MaintenanceView';
 import {PairedToasts} from './PairedToasts';
+import {AccountProvider} from '../account-context';
 import './devices.css';
 
 export {desktopPlatformMark, shouldMarkPlatform} from './devices-presentation';
@@ -26,6 +27,10 @@ export function DesktopRoot({fallback, shell, renderApp = () => <App/>}: {fallba
 
 /** No effects: tests give it the state. */
 export function DesktopRootView({state, fallback, shell, renderApp}: {state?: DevicesState; fallback: VonvonClient; shell?: ShellCapabilities; renderApp: () => ReactNode}) {
+  return <AccountProvider account={shell?.account}><DesktopDeviceView state={state} fallback={fallback} shell={shell} renderApp={renderApp}/></AccountProvider>;
+}
+
+function DesktopDeviceView({state, fallback, shell, renderApp}: {state?: DevicesState; fallback: VonvonClient; shell?: ShellCapabilities; renderApp: () => ReactNode}) {
   const devicesShell = shell?.devices;
   const device = state ? activeDeviceFrom(state) : LOCAL_ACTIVE_DEVICE;
   const client = useMemo(() => devicesShell ? devicesShell.clientFor(device.id) : fallback, [devicesShell, device.id, fallback]);
