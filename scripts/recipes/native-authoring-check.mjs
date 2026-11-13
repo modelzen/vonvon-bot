@@ -125,6 +125,7 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
   const im = imTransport();
   let loseRegister = true,
     loseAccept = true,
+    unavailableCancel,
     afterAuthorize;
   let generation = new AbortController(),
     actor = accountId,
@@ -143,6 +144,7 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     request: async (id, path, init, beforeSend) => {
       assert.equal(id, actor);
       beforeSend();
+      if (unavailableCancel && path === '/v1/authoring/' + unavailableCancel + '/cancel') throw Error('offline cancellation');
       const headers = new Headers(init.headers);
       headers.set('Authorization', 'Bearer ' + (actor === accountId ? author : reader));
       const res = await fetch(origin + path, { ...init, headers });
@@ -394,6 +396,14 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     const nextEvidence = await act('inspectLink', { challengeId: nextLink.challengeId });
     await act('confirmLink', { challengeId: nextLink.challengeId, evidence: nextEvidence.evidence });
     const sentBefore = im.messages.size;
+    unavailableCancel = orphan;
+    const offline = await rebase();
+    const pendingCancel = offline.operations.find(o => o.operationId === orphan);
+    assert.equal(pendingCancel?.state, 'cancelPending');
+    assert.equal(pendingCancel.receipt, undefined);
+    assert.ok(pendingCancel.syncMessage);
+    assert.equal(sql("select state from recipe_private.authoring_operations where id='" + orphan + "'"), 'dispatched');
+    unavailableCancel = undefined;
     const afterRelink = await rebase();
     const cancelled = afterRelink.operations.find(o => o.operationId === orphan);
     assert.equal(cancelled?.receipt?.status, 'cancelled', 'relink must release the old proposal without its recipient');

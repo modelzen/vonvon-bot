@@ -239,7 +239,7 @@ describe('desktop IPC boundary', () => {
       recipeAuthoring:async (r:RecipeAuthoringRequest):Promise<RecipeAuthoringReply> => {
         calls.push(r);
         if (r.type === 'open') return {kind:'session', session, leaseMs:45000,linked:false};
-        if (r.type === 'status') return {kind:'status',linked:false,operations:[]};
+        if (r.type === 'status') return {kind:'status',linked:false,operations:[],reconciliation:[]};
         if (r.type === 'beginLink') return {kind:'challenge',challengeId,code:'123456',expiresAt:Date.now()+30000};
         if (r.type === 'inspectLink') return {kind:'link',linked:false,evidence,recipient:{openId:'ou_admin',chatId:groupId,tenantKey:'test'}};
         if (r.type === 'confirmLink') return {kind:'link',linked:true};
