@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { recipeInstallRequestSchema, type RecipeAuthorization, type RecipeInstallReply, type RecipeManifest } from '@vonvon/protocol';
+import { recipeInstallRequestSchema, type RecipeAuthorization, type RecipeInstallReply, type RecipeInstallRequest, type RecipeManifest } from '@vonvon/protocol';
 import type { DeviceIdentity } from '../src/remote/device';
 
 const durability = vi.hoisted(() => ({fail: false}));
@@ -82,6 +82,25 @@ beforeEach(async () => {
 afterAll(async () => { vi.unstubAllEnvs(); await rm(root, {recursive: true, force: true}); });
 
 describe('durable role installation', () => {
+  it('reads and ignores one exact future version on this Bot binding without changing another Bot in the same chat',async()=>{
+    const current=manifest(), prepared=await ready(current);
+    await store().apply(botId,prepared.operationId,async()=>{});
+    await bind('cli_other_fixture');
+    const get=(id:string)=>recipeInstallRequestSchema.parse({type:'source',botId:id,groupId}) as Extract<RecipeInstallRequest,{type:'source'}>;
+    expect((await store().source(get('cli_other_fixture')))).toMatchObject({kind:'source',source:null});
+    const versionId=randomUUID();
+    const ignore=recipeInstallRequestSchema.parse({type:'ignoreVersion',botId,groupId,recipeId:current.recipeId,installedVersionId:current.versionId,versionId});
+    if(ignore.type!=='ignoreVersion')throw Error();
+    expect(await store().source(ignore)).toMatchObject({kind:'source',source:{versionId:current.versionId,ignoredVersionId:versionId}});
+    expect((await store().source(get('cli_other_fixture')))).toMatchObject({kind:'source',source:null});
+    await expect(store().source({...ignore,installedVersionId:randomUUID()})).rejects.toThrow('来源已改变');
+    const newer={...current,versionId:randomUUID(),revision:2};
+    const p2=await ready(newer);
+    await store().apply(botId,p2.operationId,async()=>{});
+    const after=await store().source(get(botId));
+    expect(after).toMatchObject({kind:'source',source:{versionId:newer.versionId}});
+    expect(after.kind==='source' && after.source?.ignoredVersionId).toBeUndefined();
+  });
   it('rejects a lower published revision before creating another operation', async () => {
     const current = manifest({revision: 2, role: '第二版职责'}), installed = await ready(current);
     await store().apply(botId, installed.operationId, async () => {});
