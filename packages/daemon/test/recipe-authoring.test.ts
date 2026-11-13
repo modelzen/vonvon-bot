@@ -411,7 +411,6 @@ it('blocks normal deletion of this Bot registration until its revoked operations
   expect(await admin.deleteBot(appId)).toMatchObject({ok:false,reason:expect.stringContaining('草稿')});
   const registry = JSON.parse(await readFile(join(root,'bots.json'),'utf8'));
   expect(registry.bots[0].registrationId).toBe(bot.registrationId);
-  // A different registration remains removable even with this account's unresolved operations.
   const otherBot = 'cli_unrelated_fixture';
   registry.bots.push({...registry.bots[0], name:'unrelated', appId:otherBot, registrationId:randomUUID(), active:false});
   await writeFile(join(root,'bots.json'),JSON.stringify(registry));
