@@ -133,6 +133,52 @@ describe('native desktop account', () => {
     expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: business, avatarDataUrl });
   });
 
+  it('keeps an avatar completed during a temporary outage for the next verified sign-in', async () => {
+    const f = fixture();
+    const held = deferred<Response>();
+    f.avatar.mockReturnValueOnce(held.promise);
+    const a = f.create();
+    const statuses: unknown[] = [];
+    a.onStatus(value => statuses.push(value));
+    await a.login();
+    await waitFor(() => expect(f.avatar).toHaveBeenCalledOnce());
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3_590_000);
+    f.me.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    await expect(a.request(business, '/v1/me/recipes')).rejects.toThrow();
+    expect(a.status()).toEqual({ kind: 'unavailable', reason: 'offline' });
+    const published = statuses.length;
+    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEElEQVR4nGP4w8AARAwQCgAfjgPxzzTeXgAAAABJRU5ErkJggg==', 'base64');
+    held.resolve(new Response(bytes, { headers: { 'Content-Type': 'image/png' } }));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(a.status()).toEqual({ kind: 'unavailable', reason: 'offline' });
+    expect(statuses).toHaveLength(published);
+    expect(await a.login()).toMatchObject({ kind: 'signedIn', accountId: business,
+      avatarDataUrl: 'data:image/png;base64,' + bytes.toString('base64') });
+    expect(f.avatar).toHaveBeenCalledOnce();
+  });
+
+  it('discards a late avatar after verified metadata no longer names it', async () => {
+    const f = fixture();
+    const held = deferred<Response>();
+    f.avatar.mockReturnValueOnce(held.promise);
+    const a = f.create();
+    const statuses: unknown[] = [];
+    a.onStatus(value => statuses.push(value));
+    await a.login();
+    await waitFor(() => expect(f.avatar).toHaveBeenCalledOnce());
+    f.verifyUser.mockResolvedValueOnce(Response.json({ ...user, user_metadata: { full_name: 'Example User' } }));
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3_590_000);
+    await a.request(business, '/v1/me/recipes');
+    expect(a.status()).not.toHaveProperty('avatarUrl');
+    const published = statuses.length;
+    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEElEQVR4nGP4w8AARAwQCgAfjgPxzzTeXgAAAABJRU5ErkJggg==', 'base64');
+    held.resolve(new Response(bytes, { headers: { 'Content-Type': 'image/png' } }));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: business });
+    expect(a.status()).not.toHaveProperty('avatarDataUrl');
+    expect(statuses).toHaveLength(published);
+  });
+
   it('aborts avatar work at logout and never gives its late image to a subsequent account', async () => {
     const f = fixture();
     const held = deferred<Response>();
@@ -161,21 +207,40 @@ describe('native desktop account', () => {
     expect(statuses).toHaveLength(published);
   });
 
-  it('keeps a failed avatar optional, avoids refetching it on refresh, and clears the cache on logout', async () => {
+  it('retries failed avatars on verified refresh after a cooldown and clears the cache on logout', async () => {
     const f = fixture();
+    f.exchange.mockResolvedValueOnce(Response.json({ ...sessionReply(), expires_in: 1 }));
+    f.rotate.mockImplementation(async () => Response.json({ ...sessionReply(true), expires_in: 1 }));
     const a = f.create();
     await a.login();
     await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    await new Promise(resolve => setImmediate(resolve));
     expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: business });
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3_590_000);
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
     await a.request(business, '/v1/me/recipes');
-    clock.mockRestore();
     expect(f.avatar).toHaveBeenCalledOnce();
     expect(a.status()).not.toHaveProperty('avatarDataUrl');
+    clock.mockReturnValue(now + 60_001);
+    await a.request(business, '/v1/me/recipes');
+    await new Promise(resolve => setImmediate(resolve));
+    expect(f.avatar).toHaveBeenCalledTimes(2);
+    expect(a.status()).not.toHaveProperty('avatarDataUrl');
+    await a.request(business, '/v1/me/recipes');
+    expect(f.avatar).toHaveBeenCalledTimes(2);
+    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEElEQVR4nGP4w8AARAwQCgAfjgPxzzTeXgAAAABJRU5ErkJggg==', 'base64');
+    f.avatar.mockResolvedValueOnce(new Response(bytes, { headers: { 'Content-Type': 'image/png' } }));
+    clock.mockReturnValue(now + 120_002);
+    await a.request(business, '/v1/me/recipes');
+    await waitFor(() => expect(a.status()).toMatchObject({ avatarDataUrl: 'data:image/png;base64,' + bytes.toString('base64') }));
+    expect(f.avatar).toHaveBeenCalledTimes(3);
+    await a.request(business, '/v1/me/recipes');
+    expect(f.avatar).toHaveBeenCalledTimes(3);
     await a.logout();
     await a.login();
-    await waitFor(() => expect(f.avatar).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(f.avatar).toHaveBeenCalledTimes(4));
     expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: business });
+    expect(a.status()).not.toHaveProperty('avatarDataUrl');
   });
 
   it('drops unsafe profile avatar metadata without failing verified sign-in', async () => {
