@@ -103,6 +103,8 @@ export class RecipeInstaller {
     return applied;
   }
   async request(request: RecipeInstallRequest): Promise<RecipeInstallReply> {
+    if (request.type==='source' || request.type==='ignoreVersion') return this.store.source(request);
+    if (request.type === 'createdGroup') return this.store.createdGroup(request.botId, request.requestId);
     if (request.type === 'prepare') return this.store.prepare(request);
     if (request.type === 'status') return this.store.status(request.botId, request.operationId);
     if (request.type === 'issuing') return this.store.issuing(request.botId, request.operationId);

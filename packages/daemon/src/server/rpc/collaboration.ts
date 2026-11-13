@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { collaborationReplySchema, conversationToMode, projectRecordSchema, type CollaborationRequest, type CollaborationReply } from '@vonvon/protocol';
+import { collaborationReplySchema, conversationToMode, groupIdSchema, projectRecordSchema, type CollaborationRequest, type CollaborationReply } from '@vonvon/protocol';
 import { SMART_NO_MENTION } from '../../admin/groups';
 import type { AdminService } from '../../admin/service';
 import type { CollaborationRequest as ServiceRequest } from '../../admin/collaboration';
@@ -10,7 +10,7 @@ import { NotWiredYetError } from '../../admin/service';
 import { CREATED_UNSAVED, CREATION_UNKNOWN, type GroupInvitee } from '../../project/lifecycle';
 import type { DirectoryBrowser } from '../directory-browser';
 import type { RpcOutcome } from '../rpc';
-import { RpcError, unsupported } from '../errors';
+import { getRpcErrorCode, RpcError, unsupported } from '../errors';
 import { requireRunningAgent } from './ownership';
 import { discoverProviderModels } from '../../admin/model-catalog';
 import { toolCommand } from '../../environment/tool-command';
@@ -90,17 +90,22 @@ export async function collaborationRpc(service: AdminService, directory: Directo
       throw new RpcError(error instanceof UsageError ? 'usage_unavailable' : 'operation_failed', error instanceof UsageError ? messages[error.kind] : `读取 ${provider} 用量失败`);
     }
   }
-  await requireRunningAgent(service, request.agentId);
-  if (!service.collaboration) return unsupported();
   let operation: ServiceRequest;
-  if (request.action === 'createProject') {
-    if (request.conversation === 'smart' && request.response !== undefined) throw new RpcError('invalid_request', `${SMART_NO_MENTION}。`);
-    operation = { action: 'createProject', requestId: randomUUID(), name: request.name, ...(invitee ? { invitee } : {}), ...(request.project ? { project: request.project } : {}), kind: conversationToMode(request.conversation), ...(request.judge ? {judge:request.judge} : {}), ...(request.response ? { noMention: request.response === 'all' } : {}), backend: request.tool === 'codex' ? 'codex-appserver' : 'claude-agent', ...(request.folder.kind === 'existing' ? { directory: await directory.resolve(request.folder.folderToken) } : {}) };
-  } else if (request.action === 'editProject') {
-    operation = { action: 'editProject', projectName: request.projectName, chatId: request.groupId, expectedRevision: request.expectedRevision, ...(request.folderToken ? { directory: await directory.resolve(request.folderToken) } : {}), ...(request.project ? { project: request.project } : {}), ...(request.conversation ? { kind: conversationToMode(request.conversation) } : {}), ...(request.enabled !== undefined ? { enabled: request.enabled } : {}) };
-  } else {
-    const { agentId: _agentId, groupId, ...rest } = request;
-    operation = { ...rest, chatId: groupId };
+  try {
+    await requireRunningAgent(service, request.agentId);
+    if (!service.collaboration) return unsupported();
+    if (request.action === 'createProject') {
+      if (request.conversation === 'smart' && request.response !== undefined) throw new RpcError('invalid_request', `${SMART_NO_MENTION}。`);
+      operation = { action: 'createProject', requestId: request.requestId ?? randomUUID(), name: request.name, ...(invitee ? { invitee } : {}), ...(request.project ? { project: request.project } : {}), kind: conversationToMode(request.conversation), ...(request.judge ? {judge:request.judge} : {}), ...(request.response ? { noMention: request.response === 'all' } : {}), backend: request.tool === 'codex' ? 'codex-appserver' : 'claude-agent', ...(request.folder.kind === 'existing' ? { directory: await directory.resolve(request.folder.folderToken) } : {}) };
+    } else if (request.action === 'editProject') {
+      operation = { action: 'editProject', projectName: request.projectName, chatId: request.groupId, expectedRevision: request.expectedRevision, ...(request.folderToken ? { directory: await directory.resolve(request.folderToken) } : {}), ...(request.project ? { project: request.project } : {}), ...(request.conversation ? { kind: conversationToMode(request.conversation) } : {}), ...(request.enabled !== undefined ? { enabled: request.enabled } : {}) };
+    } else {
+      const { agentId: _agentId, groupId, ...rest } = request;
+      operation = { ...rest, chatId: groupId };
+    }
+  } catch (error) {
+    if (request.action !== 'createProject') throw error;
+    throw new RpcError(getRpcErrorCode(error), error instanceof Error ? error.message : '建群前检查失败', {creationRefused:true});
   }
   let raw: unknown;
   try { raw = await service.collaboration(request.agentId, operation); }
@@ -108,8 +113,14 @@ export async function collaborationRpc(service: AdminService, directory: Directo
     // s36d1: only the bot's own refusal says no group was made. A lost IPC answer, a bot that exited or timed out, or
     // a creation the bot itself could not settle, may have made one; the desktop then says so instead of a raw error.
     // A group made and not saved is named as such, with the bot's word on where to bind it.
-    if (request.action === 'createProject' && (error as { code?: unknown } | null)?.code === CREATED_UNSAVED) throw new RpcError('created_unsaved', (error as Error).message);
-    if (request.action === 'createProject' && !(error instanceof AdminWriteError || error instanceof NotWiredYetError)) throw new RpcError('outcome_unknown', CREATION_UNKNOWN);
+    const failure = error as {code?: string; chatId?: unknown; message: string} | null;
+    if (request.action === 'createProject' && failure?.code === CREATED_UNSAVED) {
+      const id = groupIdSchema.safeParse(failure.chatId);
+      throw new RpcError('created_unsaved', failure.message, id.success ? {groupId:id.data} : undefined);
+    }
+    if (request.action === 'createProject' && error instanceof AdminWriteError)
+      throw new RpcError('conflict', error.message, {creationRefused:true});
+    if (request.action === 'createProject' && !(error instanceof NotWiredYetError)) throw new RpcError('outcome_unknown', CREATION_UNKNOWN);
     throw error;
   }
   let reply: unknown;

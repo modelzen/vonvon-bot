@@ -21,6 +21,8 @@ const calls = Object.freeze({
   listCodes: 'recipe_api.list_codes($1::uuid,$2::uuid)',
   disableCode: 'recipe_api.disable_code($1::uuid)',
   revealCode: 'recipe_api.reveal_code($1::uuid)',
+  unredeemableOperation: 'recipe_api.unredeemable_operation($1::uuid,$2::uuid)',
+  latestInstallVersion: 'recipe_api.latest_install_version($1::uuid)',
   installPreview: 'recipe_api.install_preview($1::uuid)',
   authorizeOperation: 'recipe_api.authorize_operation($1::uuid,$2::jsonb,$3::bytea,$4::bytea,$5::bytea,$6::bigint)',
   cancelOperation: 'recipe_api.cancel_operation($1::uuid)',
