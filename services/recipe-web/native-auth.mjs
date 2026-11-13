@@ -54,7 +54,6 @@ export function createNativeLogin({ publicOrigin, supabaseOrigin, publishableKey
     delete flow.ticket;
     delete flow.authorizeUrl;
     delete flow.code;
-    delete flow.receiptCount;
     for (const [id, receipt] of receipts) if (receipt.flowId === flow.id) receipts.delete(id);
   }
 
@@ -179,20 +178,26 @@ export function createNativeLogin({ publicOrigin, supabaseOrigin, publishableKey
           json(res, view(flow)); return true;
         }
         if (req.method === 'DELETE' && !action) {
-          if (flow.status !== 'expired') { flow.status = 'cancelled'; clearSecrets(flow); }
+          if (!terminal.has(flow.status)) { flow.status = 'cancelled'; clearSecrets(flow); }
           json(res, view(flow)); return true;
         }
         throw new WebError(404, 'not_found');
       }
       if (req.method === 'GET' && url.pathname === '/auth/native/callback') {
+        prune();
         const flow = flows.get(browsers.get(browserKey(req)));
         const code = url.searchParams.get('code');
         let location = '/auth/native/complete';
         if (flow && expire(flow).status === 'authorized' && url.searchParams.size === 1 &&
-            url.searchParams.getAll('code').length === 1 && code && code.length <= 2048 &&
-            (flow.receiptCount || 0) < 4 && receipts.size < 2048) {
+            url.searchParams.getAll('code').length === 1 && code && code.length <= 2048) {
+          const pending = [...receipts].filter(([, value]) => value.flowId === flow.id);
+          if (pending.length >= 4) receipts.delete(pending[0][0]);
+          if (receipts.size >= 2048) {
+            for (const [id, value] of receipts) {
+              if (!value.confirmed) { receipts.delete(id); break; }
+            }
+          }
           const receipt = random();
-          flow.receiptCount = (flow.receiptCount || 0) + 1;
           receipts.set(digest(receipt).toString('hex'), { flowId: flow.id, code: seal(code, flow.id), expiresAt: flow.expiresAt });
           location += '#receipt=' + receipt;
         }
@@ -230,6 +235,7 @@ export function createNativeLogin({ publicOrigin, supabaseOrigin, publishableKey
         if (!receipt || receipt.flowId !== flow.id || receipt.expiresAt <= now()) throw new WebError(401, 'invalid_receipt');
         if (flow.status === 'authorized') {
           flow.code = receipt.code; delete receipt.code; receipt.confirmed = true; flow.status = 'ready';
+          for (const [id, pending] of receipts) if (pending.flowId === flow.id && pending !== receipt) receipts.delete(id);
         } else if (!receipt.confirmed || flow.status !== 'ready') throw new WebError(409, 'flow_conflict');
         json(res, browserView(flow)); return true;
       }
