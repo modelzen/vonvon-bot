@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 
-export async function checkNativeInstall({ root, tmp, origin, author, accountId, version, sql }) {
+export async function checkNativeInstall({ root, tmp, origin, author, accountId, version, nextVersion, sql }) {
   const home = join(tmp, 'native-install-state');
   mkdirSync(home, { mode: 0o700 });
   process.env.VONVON_HOME = home;
@@ -28,8 +28,8 @@ export async function checkNativeInstall({ root, tmp, origin, author, accountId,
       ['RecipeJournal', 'packages/desktop/src/recipe-use-journal.ts'],
       ['RecipeInstaller', 'packages/daemon/src/recipe/installer.ts'],
       ['loadOrCreateDevice', 'packages/daemon/src/remote/device.ts'],
-      ['botPaths', 'packages/daemon/src/config/paths.ts'],
-      ['addProject,getProjectByChatId', 'packages/daemon/src/project/registry.ts'],
+      ['botPaths,useBotDir', 'packages/daemon/src/config/paths.ts'],
+      ['addProject,getProjectByChatId,removeProject', 'packages/daemon/src/project/registry.ts'],
       ['recipeInstallRequestSchema,recipeInstallReplySchema', 'packages/protocol/src/index.ts'],
     ]
       .map(([symbols, path]) => 'export {' + symbols + '} from ' + JSON.stringify(join(root, path)) + ';')
@@ -51,6 +51,8 @@ export async function checkNativeInstall({ root, tmp, origin, author, accountId,
     RecipeInstaller,
     loadOrCreateDevice,
     botPaths,
+    useBotDir,
+    removeProject,
     addProject,
     getProjectByChatId,
     recipeInstallRequestSchema,
@@ -63,6 +65,7 @@ export async function checkNativeInstall({ root, tmp, origin, author, accountId,
   const lease = new AbortController();
   const ids = [];
   let loseReceipt = true;
+  let afterLatest;
   const account = {
     lease: (id) => (id === accountId ? lease.signal : undefined),
     request: async (id, path, init, guard) => {
@@ -70,7 +73,13 @@ export async function checkNativeInstall({ root, tmp, origin, author, accountId,
       guard();
       const headers = new Headers(init.headers);
       headers.set('Authorization', 'Bearer ' + author);
-      return fetch(origin + path, { ...init, headers });
+      const response = await fetch(origin + path, { ...init, headers });
+      if (afterLatest && path.endsWith('/latest-install-version')) {
+        const change = afterLatest;
+        afterLatest = undefined;
+        await change();
+      }
+      return response;
     },
   };
   function boot() {
@@ -141,6 +150,32 @@ export async function checkNativeInstall({ root, tmp, origin, author, accountId,
   assert.equal(row.supplement, '角色');
   assert.equal(row.recipeInstall.setup.steps[0].instructions, '准备');
   assert.equal((await controller.request({ type: 'finish', handle: pending.handle })).kind, 'closed');
+  const place = { viewId: 'local', accountId, botId, groupId };
+  const shown = await controller.source({ type: 'check', ...place });
+  assert.equal(shown.latest.versionId, nextVersion.versionId);
+  afterLatest = async () => {
+    useBotDir(botId);
+    await removeProject('fixture');
+    await addProject({ chatId: groupId, name: 'fixture', cwd: home, blank: false, createdAt: 1 }, location);
+    const fresh = await controller.request(begin);
+    assert.equal(fresh.kind, 'prepared');
+    assert.equal((await controller.request({ type: 'confirm', handle: fresh.handle })).kind, 'applied');
+    assert.equal((await controller.request({ type: 'finish', handle: fresh.handle })).kind, 'closed');
+  };
+  await assert.rejects(controller.source({ type: 'check', ...place }), /来源已改变/);
+  const ignore = { type: 'ignore', ...place, installedVersionId: version.versionId, versionId: nextVersion.versionId };
+  await assert.rejects(controller.source({ ...ignore, sourceToken: shown.source.sourceToken }), /来源已改变/);
+  const current = await controller.source({ type: 'check', ...place });
+  assert.notEqual(current.source.sourceToken, shown.source.sourceToken);
+  assert.equal(current.source.ignoredVersionId, undefined);
+  assert.equal(
+    (await controller.source({ ...ignore, sourceToken: current.source.sourceToken })).source.ignoredVersionId,
+    nextVersion.versionId,
+  );
+  assert.equal((await controller.source({ type: 'check', ...place })).latest, undefined);
+  console.log(
+    'PASS: latest check and ignore follow the exact displayed binding through real HTTP, unbind and reinstall.',
+  );
   console.log(
     'PASS: original desktop operation, real daemon/PG/HTTP authorization and applied receipt recover after a lost reply and restart.',
   );

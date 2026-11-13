@@ -3,12 +3,13 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { VonvonClient } from '@vonvon/client/browser';
+import { RpcError, type VonvonClient } from '@vonvon/client/browser';
 import {
   agentIdSchema,
   groupIdSchema,
   recipeInstallRequestSchema,
   recipeUseReplySchema,
+  type DesktopRecipeSourceRequest,
   type RecipeUseRequest,
   type RecipeUseReply,
   type RecipeInstallRequest,
@@ -68,6 +69,15 @@ function fixture() {
     negative: true,
     dropCommit: false,
     dropCreation: false,
+    unsaved: false,
+    unsent: false,
+    binding: false,
+    callsToBind: 0,
+    loseBind: false,
+    otherBinding: false,
+    sourceEpoch: 1,
+    ignores: 0,
+
     found: false,
     extra: false,
     wrongPreview: false,
@@ -88,6 +98,14 @@ function fixture() {
       before?.();
       const action = path.split('/').pop()!;
       step('cloud:' + action);
+      if (action === 'latest-install-version')
+        return Response.json({
+          recipeId,
+          versionId: 'bbbbbbbb-0000-4000-8000-000000000001',
+          version: '新',
+          revision: 2,
+          entitled: true,
+        });
       if (action === 'install-preview')
         return state.versionRight
           ? Response.json({
@@ -159,6 +177,21 @@ function fixture() {
         if (state.negative) state.local = 'rejected';
         return status();
       }
+      if (r.type === 'source' || r.type === 'ignoreVersion') {
+        if (r.type === 'ignoreVersion') ++state.ignores;
+        return {
+          kind: 'source',
+          groupId,
+          source: {
+            recipeId,
+            versionId,
+            authorId: accountId,
+            revision: 1,
+            installedAt: 42,
+            sourceToken: String(state.sourceEpoch).repeat(64),
+          },
+        };
+      }
       if (r.type === 'createdGroup') return { kind: r.type, groupId: state.found ? groupId : null };
       if (r.type === 'status' || r.type === 'cancel') {
         if (r.type === 'cancel' && !state.issued && !state.saved) state.local = 'rejected';
@@ -199,8 +232,22 @@ function fixture() {
       }
       throw Error('unexpected ' + kind);
     },
+    snapshot: async () => ({
+      memberships: [
+        ...(state.binding ? [{ agentId: botId, groupId }] : []),
+        ...(state.otherBinding ? [{ agentId: 'cli_other', groupId }] : []),
+      ],
+    }),
+    run: async () => {
+      ++state.callsToBind;
+      state.binding = true;
+      if (state.loseBind) throw Error('lost bind result');
+      return { kind: 'applied', revision: 7 };
+    },
     collaboration: async (r: { requestId: string }) => {
       state.createIds.push(r.requestId);
+      if (state.unsaved) throw new RpcError('created_unsaved', '已建好但未连接', { groupId });
+      if (state.unsent) throw new RpcError('conflict', 'HTTP 未发出', { creationRefused: true });
       state.found = true;
       if (state.dropCreation) throw Error('lost creation receipt');
       return { kind: 'applied', project: { chatId: groupId } };
@@ -228,6 +275,8 @@ function fixture() {
   const { shell } = createDesktopFacades({
     invoke: async (channel, raw) => {
       if (channel === desktopChannels.subscribe) return { ok: true, value: undefined };
+      if (channel === desktopChannels.recipeSource)
+        return { ok: true, value: await ctrl.source(raw as DesktopRecipeSourceRequest) };
       expect(channel).toBe(desktopChannels.recipeUse);
       const value = recipeUseReplySchema.parse(await ctrl.request(raw as RecipeUseRequest));
       state.userValues.push(value);
@@ -244,6 +293,7 @@ function fixture() {
   };
   return {
     accountId,
+    source: (r: DesktopRecipeSourceRequest) => shell.recipeSource.request(r),
     deviceId,
     groupId,
     operationId,
@@ -382,6 +432,147 @@ describe('native recipe installation', () => {
       expect(JSON.stringify(f.state.userValues)).not.toContain(key);
       expect(readFileSync(f.path, 'utf8')).not.toContain(key);
     }
+  });
+  it('keeps the confirmed physical group from created_unsaved across restart and repairs only the existing binding', async () => {
+    const f = fixture();
+    f.state.unsaved = true;
+    const create = {
+      action: 'createProject' as const,
+      agentId: f.botId,
+      name: '已建群',
+      folder: { kind: 'default' as const },
+      tool: 'codex' as const,
+      conversation: 'threads' as const,
+    };
+    const first = await f.main({ type: 'join', handle: f.handle(await f.begin(false)), input: create });
+    expect(first).toMatchObject({
+      kind: 'pending',
+      phase: 'joining',
+      recovery: { state: 'createdUnsaved', groupId: f.groupId, name: '已建群' },
+    });
+    expect(JSON.parse(readFileSync(f.path, 'utf8')).rows[0].intent).toEqual(create);
+    f.restart();
+    const pending = await f.begin(false);
+    expect(pending).toMatchObject({ kind: 'pending', recovery: { groupId: f.groupId } });
+    const bind = {
+      type: 'bindGroup' as const,
+      agentId: f.botId,
+      groupId: f.groupId,
+      projectName: '连接回来',
+      folder: { kind: 'default' as const },
+      tool: 'codex' as const,
+      conversation: 'threads' as const,
+    };
+    await expect(
+      f.main({
+        type: 'repairJoin',
+        handle: f.handle(pending),
+        input: { ...bind, groupId: groupIdSchema.parse('oc_other') },
+      }),
+    ).rejects.toThrow();
+    expect(await f.main({ type: 'repairJoin', handle: f.handle(pending), input: bind })).toMatchObject({
+      kind: 'prepared',
+      groupId: f.groupId,
+    });
+    expect(f.state.createIds).toHaveLength(1);
+    expect(f.state.callsToBind).toBe(1);
+  });
+  it('allows a fresh user choice after a definitive refusal and ending tracking on a genuinely unknown group', async () => {
+    const f = fixture();
+    f.state.unsent = true;
+    const pick = await f.begin(false);
+    const create = {
+      action: 'createProject' as const,
+      agentId: f.botId,
+      name: '测试群',
+      folder: { kind: 'default' as const },
+      tool: 'codex' as const,
+      conversation: 'threads' as const,
+    };
+    await expect(f.main({ type: 'join', handle: f.handle(pick), input: create })).rejects.toThrow();
+    expect(JSON.parse(readFileSync(f.path, 'utf8')).rows).toHaveLength(0);
+    f.state.unsent = false;
+    f.state.dropCreation = true;
+    await f.main({ type: 'join', handle: f.handle(pick), input: create });
+    f.state.found = false;
+    f.restart();
+    const paused = await f.begin(false);
+    expect(await f.main({ type: 'resume', handle: f.handle(paused) })).toMatchObject({
+      kind: 'pending',
+      recovery: { state: 'unknown' },
+    });
+    expect(await f.main({ type: 'dismissJoin', handle: f.handle(paused) })).toEqual({ kind: 'closed' });
+    expect(f.state.createIds).toHaveLength(2);
+    expect(f.state.callsToBind).toBe(0);
+  });
+  it('refuses a latest-version response after the installed binding changes during the cloud read', async () => {
+    const f = fixture();
+    f.state.at = (step) => {
+      if (step === 'cloud:latest-install-version') ++f.state.sourceEpoch;
+    };
+    await expect(
+      f.source({ type: 'check', botId: f.botId, viewId: f.deviceId, groupId: f.groupId, accountId: f.accountId }),
+    ).rejects.toThrow(/改变|变化/);
+    expect(f.state.steps.filter((s) => s === 'daemon:source')).toHaveLength(2);
+  });
+  it('repairs an unknown join by verified physical ID and recovers a lost binding receipt without a second bind', async () => {
+    const f = fixture();
+    f.state.dropCreation = true;
+    f.state.otherBinding = true;
+    const create = {
+      action: 'createProject' as const,
+      agentId: f.botId,
+      name: '同名群',
+      folder: { kind: 'default' as const },
+      tool: 'codex' as const,
+      conversation: 'threads' as const,
+    };
+    const pick = await f.begin(false);
+    const pending = await f.main({ type: 'join', handle: f.handle(pick), input: create });
+    f.state.found = false;
+    const existing = { type: 'existingBinding' as const, agentId: f.botId, groupId: f.groupId };
+    await expect(f.main({ type: 'repairJoin', handle: f.handle(pending), input: existing })).rejects.toThrow(
+      '绑定已改变',
+    );
+    const bind = {
+      type: 'bindGroup' as const,
+      agentId: f.botId,
+      groupId: f.groupId,
+      projectName: '手动绑定',
+      folder: { kind: 'default' as const },
+      tool: 'codex' as const,
+      conversation: 'threads' as const,
+    };
+    f.state.loseBind = true;
+    expect(await f.main({ type: 'repairJoin', handle: f.handle(pending), input: bind })).toMatchObject({
+      kind: 'pending',
+      recovery: { groupId: f.groupId },
+    });
+    f.restart();
+    const restored = await f.begin(false);
+    expect(await f.main({ type: 'repairJoin', handle: f.handle(restored), input: existing })).toMatchObject({
+      kind: 'prepared',
+      groupId: f.groupId,
+    });
+    expect(f.state.callsToBind).toBe(1);
+    expect(f.state.createIds).toHaveLength(1);
+  });
+  it('rejects a stale source token from a displayed update before sending ignore to the daemon', async () => {
+    const f = fixture(),
+      target = { botId: f.botId, viewId: f.deviceId, groupId: f.groupId, accountId: f.accountId };
+    const shown = await f.source({ type: 'check', ...target });
+    if (!shown.source || !shown.latest) throw Error('missing shown update');
+    ++f.state.sourceEpoch;
+    await expect(
+      f.source({
+        type: 'ignore',
+        ...target,
+        sourceToken: shown.source.sourceToken,
+        installedVersionId: shown.source.versionId,
+        versionId: shown.latest.versionId,
+      }),
+    ).rejects.toThrow('来源已改变');
+    expect(f.state.ignores).toBe(0);
   });
   it('retains an uncertain created group, looks up the original creation UUID and prepares that group once', async () => {
     const f = fixture();
