@@ -24,7 +24,6 @@ create trigger accept_source_preparation after update of state on recipe_private
   for each row when (new.state='accepted' and old.state<>'accepted' and new.purpose='prepareDraft')
   execute function recipe_private.record_source_preparation();
 
--- Both draft retirement commands insert this tombstone before removing the live row.
 create function recipe_private.retire_source_preparation() returns trigger
 language plpgsql set search_path=pg_catalog,pg_temp as $$
 begin
