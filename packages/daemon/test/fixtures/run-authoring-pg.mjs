@@ -1,4 +1,3 @@
-// Run the same SDK/intake test against a disposable PostgreSQL 15 database and the production recipe API.
 import {execFile,execFileSync} from 'node:child_process';
 import {promisify} from 'node:util';
 import {generateKeyPairSync,randomBytes,randomUUID,sign} from 'node:crypto';
