@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
+import { once } from 'node:events';
 import { createRecipeWeb } from '../server.mjs';
 import { createNativeLogin } from '../native-auth.mjs';
 import { WebError } from '../auth.mjs';
@@ -64,7 +65,7 @@ async function fixture(t, overrides = {}) {
     assert.equal(response.status, 303);
     return { response, receipt: new URL(response.headers.get('location'), origin).hash.slice('#receipt='.length) };
   };
-  return { host, native, create, browser, launch, authorizeUrl, authorize, callback };
+  return { server, host, native, create, browser, launch, authorizeUrl, authorize, callback };
 }
 
 test('native login transfers only a repeatable authorization code until acknowledged', async t => {
@@ -123,9 +124,31 @@ test('late native cancellation preserves completion and acknowledgement retries'
   now += 300_001;
   const completed = await f.native('/' + flow.flowId, { token: flow.pollToken }).then(data);
   assert.equal(completed.status, 'completed'); assert.equal(completed.code, undefined);
+  assert.equal((await f.browser('cancel', flow).then(data)).status, 'acknowledged');
   assert.equal((await ack()).status, 200);
   assert.equal((await f.browser('complete', flow, { body: { receipt } })).status, 401);
   assert.equal((await f.callback(flow)).receipt, '');
+});
+
+test('browser cancel body crossing expiry preserves expired state', async t => {
+  let now = Date.now();
+  const f = await fixture(t, { now: () => now }), flow = await f.launch(await f.create());
+  const received = once(f.server, 'request');
+  let body;
+  const pending = fetch(f.host + '/auth/native/cancel', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin,
+      Cookie: flow.cookie, 'X-Vonvon-Native-Tab': flow.binding },
+    body: new ReadableStream({ start(controller) { body = controller; controller.enqueue(Buffer.from('{')); } }),
+    duplex: 'half',
+  });
+  await received;
+  now = flow.expiresAt;
+  body.enqueue(Buffer.from('}')); body.close();
+  const response = await pending;
+  assert.equal(response.status, 200);
+  assert.equal((await data(response)).status, 'expired');
+  const polled = await f.native('/' + flow.flowId, { token: flow.pollToken }).then(data);
+  assert.equal(polled.status, 'expired'); assert.equal(polled.code, undefined);
 });
 
 test('native credentials reject browser ambient authority and malformed JSON', async t => {
