@@ -381,7 +381,6 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     console.log(
       'PASS: typed desktop authoring, real device proofs, original account, two-way link, App/chat creation and chat edit, close/reopen, A→B→A and retained cancel/accept receipts.',
     );
-    // Two concurrent old-recipient edits: cloud acceptance wins one, revocation cancels the other.
     const orphan = (await act('edit', { draftId, baseRevision: 2 })).operation.operationId;
     const accepted = (await act('edit', { draftId: fromChatSaved.receipt.draftId, baseRevision: 1 })).operation.operationId;
     await running.daemon.onMessage(message('/recipe name 仲裁前确认', operator, [...im.messages.values()].at(-1).message_id));

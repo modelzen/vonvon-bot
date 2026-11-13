@@ -247,7 +247,6 @@ export class AuthoringService {
         }
         case 'reconcile': {
           await this.ledger.run(db => {
-            // This transaction cannot inspect a candidate, reactivate a link, or send/update a card.
             this.present(p);
             const op = this.locate(db,p,req.operationId);
             if (!op.revoked) refusal();

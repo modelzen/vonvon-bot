@@ -346,7 +346,7 @@ it.each(['relink', 'remove'] as const)('recovers only terminal arbitration after
   const receipt = {operationId:op.operationId, status:'accepted', stateRevision:3, draftId:randomUUID(), revision:1};
   await expect(rpc('settle', {operationId:op.operationId, receipt})).rejects.toThrow();
   await expect(rpc('reconcile', {operationId:op.operationId, receipt})).resolves.toEqual({kind:'reconciled',receipt});
-  expect(bodies.length).toBe(before); // No IM render or device submission to either recipient.
+  expect(bodies.length).toBe(before);
   restart(); await open();
   expect(kind(await rpc('status'), 'status').reconciliation[0]?.receipt).toEqual(receipt);
   for (const [identity, accountId] of [[otherPeer, account], [peer, randomUUID()]] as const) {
