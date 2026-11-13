@@ -101,6 +101,23 @@ it('keeps the actual editor DOM, caret, unsaved text and uncertain request key a
   expect(saves).toHaveLength(2); expect(saves[1]).toEqual(saves[0]);
 });
 
+it('recovers an uncertain new-draft save before applying later edits without creating a second draft', async () => {
+  let attempts=0;
+  handle=async request=>{
+    if(request.type==='catalog')return {hero:null,items:[],nextCursor:null};
+    if(request.type!=='saveDraft')throw new Error('Unexpected draft request');
+    if(++attempts===1)throw new Error('回执丢失');
+    return {draftId,recipeId:null,revision:attempts-1,public:request.public,config:request.config};
+  };
+  await draw();await click('打开私人草稿');await fill('配方名称','原名称');await click('保存私人草稿');
+  await fill('配方名称','新名称');await click('保存私人草稿');
+  const saves=calls.filter(request=>request.type==='saveDraft');
+  expect(saves).toHaveLength(3);expect(saves[0]).toEqual(saves[1]);expect(saves[0]!.target.kind).toBe('new');
+  expect(saves[2]).toMatchObject({target:{kind:'existing',draftId,revision:1},public:{name:'新名称'}});
+  expect(document.querySelector<HTMLInputElement>('[aria-label="配方名称"]')?.value).toBe('新名称');
+  expect(document.querySelector('main')?.textContent).toContain('私人草稿已保存');
+});
+
 it('recovers a lost code-batch receipt using the same key while retaining only still-available plaintext codes', async () => {
   const available = {codeId: draftId, status: 'available' as const, code: 'A'.repeat(32)};
   const redeemed = {codeId: A, status: 'redeemed' as const};
