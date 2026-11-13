@@ -2,7 +2,7 @@ import {createContext, useContext, useEffect, useRef, useState, type ReactNode} 
 import type {VonvonClient} from '@vonvon/client/browser';
 import {groupIdSchema, type AgentId, type GroupId, type DesktopSnapshot, type RecipeDetail, type RecipeUseReply, type RecipeUseRequest} from '@vonvon/protocol';
 import {useAccount} from '../account-context';
-import {ClientProvider, useActiveDevice, useClient, useShellCapabilities, type ActiveDevice} from '../client-context';
+import {ClientProvider, useActiveDevice, useClient, useDevicesState, useShellCapabilities, type ActiveDevice} from '../client-context';
 import {DraftGuardProvider} from '../settings/DraftGuard';
 import {RecipeUseDialog} from './RecipeUseDialog';
 import './recipe-use.css';
@@ -26,6 +26,7 @@ export function RecipeUseProvider({children}: {children: ReactNode}) {
   const account = useAccount();
   const client = useClient();
   const device = useActiveDevice();
+  const devices = useDevicesState();
   const shell = useShellCapabilities();
   const [session, setSession] = useState<RecipeUseSession>();
   const [visible, setVisible] = useState(false);
@@ -50,14 +51,15 @@ export function RecipeUseProvider({children}: {children: ReactNode}) {
     {children}
     {session && shell?.recipeUse && <RecipeUseSessionView session={session} visible={visible}
       currentAccountId={accountId} currentDeviceId={device.id} currentClient={client}
+      currentReady={!devices || devices.active.phase === 'ready' && device.mode === 'full'}
       request={request => shell.recipeUse!.request(request)} onSelectBot={botId => setSession({...session, botId})}
       onSelectGroup={groupId => {if (session.botId) setSession({...session, target: {botId: session.botId, groupId: groupIdSchema.parse(groupId)}});}}
-      onClose={() => setVisible(false)} onFinished={() => {setSession(undefined); setVisible(false); setRefreshVersion(value => value + 1);}}/>}
+      onClose={() => {setVisible(false); if (!session.botId) setSession(undefined);}} onFinished={() => {setSession(undefined); setVisible(false); setRefreshVersion(value => value + 1);}}/>}
   </Context.Provider>;
 }
 
-function RecipeUseSessionView({session, visible, currentAccountId, currentDeviceId, currentClient, request, onSelectBot, onSelectGroup, onClose, onFinished}: {
-  session: RecipeUseSession; visible: boolean; currentAccountId?: string; currentDeviceId: string; currentClient: VonvonClient;
+function RecipeUseSessionView({session, visible, currentAccountId, currentDeviceId, currentClient, currentReady, request, onSelectBot, onSelectGroup, onClose, onFinished}: {
+  session: RecipeUseSession; visible: boolean; currentAccountId?: string; currentDeviceId: string; currentClient: VonvonClient; currentReady: boolean;
   request: (request: RecipeUseRequest) => Promise<RecipeUseReply>; onSelectBot: (id: AgentId) => void; onClose: () => void; onFinished: () => void;
   onSelectGroup: (groupId: string) => void;
 }) {
@@ -73,10 +75,11 @@ function RecipeUseSessionView({session, visible, currentAccountId, currentDevice
   const begunTarget = useRef<string | undefined>(undefined);
   const accountChanged = currentAccountId !== session.accountId;
   const deviceChanged = currentDeviceId !== session.device.id || currentClient !== session.client;
+  const unavailable = !currentReady || Boolean(snapshot && (snapshot.host.kind !== 'connected' || snapshot.stale));
   // Returning to the same account ID or device still requires a fresh main-process lease.
   const invalidated = useRef(false);
-  if (accountChanged || deviceChanged) invalidated.current = true;
-  const paused = accountChanged || deviceChanged;
+  if (accountChanged || deviceChanged || unavailable) invalidated.current = true;
+  const paused = accountChanged || deviceChanged || unavailable;
   useEffect(() => {mounted.current = true; return () => {mounted.current = false;};}, []);
   useEffect(() => session.client.watchSnapshots(setSnapshot), [session.client]);
 
@@ -110,7 +113,7 @@ function RecipeUseSessionView({session, visible, currentAccountId, currentDevice
   const groupId = reply && 'groupId' in reply ? reply.groupId : session.target?.groupId;
   return <ClientProvider client={session.client} device={session.device}>
     <DraftGuardProvider><RecipeUseDialog session={session} snapshot={snapshot} visible={visible} reply={reply} error={error} busy={busy}
-      paused={paused} accountChanged={accountChanged} needsRecovery={needsRecovery} reviewEpoch={reviewEpoch} acceptedResolution={acceptedResolution}
+      paused={paused} accountChanged={accountChanged} unavailable={unavailable && !deviceChanged} needsRecovery={needsRecovery} reviewEpoch={reviewEpoch} acceptedResolution={acceptedResolution}
       onSelectBot={onSelectBot} onSelectGroup={onSelectGroup} onClose={onClose} onRecover={() => void begin()}
       onRequest={input => send(input)} groupId={groupId}/></DraftGuardProvider>
   </ClientProvider>;
