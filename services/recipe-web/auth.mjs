@@ -20,9 +20,21 @@ export class WebError extends Error {
   constructor(status, code) { super(code); this.status = status; }
 }
 
+export function createLoginAdmission({ now = Date.now } = {}) {
+  let tokens = 32, updated = now();
+  return () => {
+    const current = now();
+    tokens = Math.min(32, tokens + Math.max(0, current - updated) / 1000);
+    updated = current;
+    if (tokens < 1) throw new WebError(429, 'busy');
+    tokens--;
+  };
+}
+
 export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, providerNames }) {
   const available = supabaseOrigin && publishableKey ? providerNames.filter(p => providers.has(p)) : [];
   const flows = new Map(), sessions = new Map();
+  const admit = createLoginAdmission();
   const secure = new URL(publicOrigin).protocol === 'https:';
   const flowName = secure ? '__Host-vv-flow' : 'vv-local-flow';
   const sessionName = secure ? '__Host-vv-session' : 'vv-local-session';
@@ -67,6 +79,7 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
     start(req, res, form) {
       const provider = form.get('provider');
       if (!available.includes(provider)) throw new WebError(400, 'provider_unavailable');
+      admit();
       if (flows.size >= 1024) throw new WebError(429, 'busy');
       const key = random(), verifier = random();
       flows.delete(cookieValue(req, flowName));
@@ -106,13 +119,18 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
       if (session.accessUntil > Date.now() + 15_000) return session.access;
       if (!session.refreshing) {
         session.refreshing = tokenRequest('refresh_token', { refresh_token: session.refresh })
-          .then(values => { Object.assign(session, values); return session.access; })
+          .then(values => {
+            if (getSession(req) !== session) throw new WebError(409, 'session_changed');
+            Object.assign(session, values); return session.access;
+          })
           .catch(error => {
-            if (error.status === 401) sessions.delete(cookieValue(req, sessionName));
+            if (error.status === 401 && getSession(req) === session) sessions.delete(cookieValue(req, sessionName));
             throw error;
           }).finally(() => { delete session.refreshing; });
       }
-      return session.refreshing;
+      const access = await session.refreshing;
+      if (getSession(req) !== session) throw new WebError(409, 'session_changed');
+      return access;
     },
     logout(req, res) {
       sessions.delete(cookieValue(req, sessionName));
