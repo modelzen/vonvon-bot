@@ -116,11 +116,11 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
     if (!active()) return;
     if (!outcome.ok) {
       const failure = outcome.error;
-      if (failure.code === 'operation_expired' || failure.code === 'request_upgrade_required') {
+      if (failure.code === 'operation_expired' || failure.code === 'request_upgrade_required' || failure.code === 'operation_clock_skew') {
         const next = await reconcile();
         if (!next || next.owned || next.acquired) return;
         acquisition.current.delete(selected.versionId);
-        throw new Error('已确认尚未获取。请再次点击获取，重新提交。');
+        throw new Error(failure.code === 'operation_clock_skew' ? '已确认尚未获取。请校准设备时间后，再次点击获取，重新提交。' : '已确认尚未获取。请再次点击获取，重新提交。');
       }
       if (failure.code === 'invalid_code') acquisition.current.delete(selected.versionId);
       throw new Error(communityFailureMessages[failure.code] + (failure.retryAfter ? ` 请在 ${failure.retryAfter} 秒后重试。` : ''));
