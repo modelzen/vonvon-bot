@@ -1,13 +1,14 @@
 import {useEffect, useRef, useState, type KeyboardEvent, type RefObject} from 'react';
-import {ChevronDown, ChevronRight, CircleUserRound, Plus, Settings2} from 'lucide-react';
-import type {AccountStatus, DevicesState} from '@vonvon/protocol';
+import {ChevronDown, Plus, Settings2} from 'lucide-react';
+import type {DevicesState} from '@vonvon/protocol';
 import {useActiveDevice, useDevicesState, useShellCapabilities} from '../client-context';
 import {useDraftGuard} from '../settings/DraftGuard';
 import {addBlockedReason, rowView} from './devices-presentation';
 import {DeviceTile, platformIcon, StatusDot, useDismiss, useNow} from './device-bits';
 import {AddDeviceDialog} from './AddDeviceDialog';
-import {accountStatusText, useAccount} from '../account-context';
+import {useAccount} from '../account-context';
 import {AccountAvatar} from '../accounts/AccountAvatar';
+import {AccountMenuItem, type AccountMenuActions} from '../accounts/AccountMenuItem';
 
 const reportSwitchFailure = (error: unknown) => console.error('Device switch failed', error);
 
@@ -26,7 +27,7 @@ function focusItem(menu: HTMLElement | null, which: Focus) {
 export function DeviceSwitcherMenu({state, now, onPick, onAdd, onManage, onLeave, menuRef, autoFocus, account}: {
   state: DevicesState; now: number; onPick: (id: string) => void; onAdd: () => void; onManage: () => void;
   onLeave?: () => void; menuRef?: RefObject<HTMLDivElement | null>; autoFocus?: Focus;
-  account?: {status?: AccountStatus; supported: boolean; onLogin: () => void; onManage: () => void; error?: string};
+  account?: AccountMenuActions;
 }) {
   const own = useRef<HTMLDivElement>(null);
   const menu = menuRef ?? own;
@@ -68,15 +69,7 @@ export function DeviceSwitcherMenu({state, now, onPick, onAdd, onManage, onLeave
     <div role="separator" className="device-menu__separator"/>
     <button type="button" role="menuitem" tabIndex={-1} className="device-switcher__action" disabled={Boolean(blocked)} title={blocked} onClick={onAdd}><Plus size={14} aria-hidden="true"/><span>添加设备…</span></button>
     <button type="button" role="menuitem" tabIndex={-1} className="device-switcher__action" onClick={onManage}><Settings2 size={14} aria-hidden="true"/><span>管理设备…</span></button>
-    {account && <div className="device-switcher__account">
-      <button type="button" role="menuitem" tabIndex={-1} className="device-switcher__account-button"
-        onClick={account.status?.kind === 'signedOut' ? account.onLogin : account.onManage}>
-        {account.status?.kind === 'signedIn' ? <AccountAvatar identity={account.status}/> : <CircleUserRound size={22} strokeWidth={1.5} aria-hidden="true"/>}
-        <span className="device-switcher__account-copy"><strong>{account.status?.kind === 'signedIn' ? account.status.displayName : account.status?.kind === 'signedOut' ? '登录 Vonvon' : '账号'}</strong>
-          <small>{account.error ?? (account.status?.kind === 'signedIn' ? '账号管理' : accountStatusText(account.status, account.supported))}</small></span>
-        <ChevronRight size={13} aria-hidden="true"/>
-      </button>
-    </div>}
+    {account && <div className="device-switcher__account"><AccountMenuItem account={account} menu/></div>}
   </div>;
 }
 
