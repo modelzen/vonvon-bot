@@ -90,6 +90,7 @@ export function createRecipeWeb(env = process.env) {
         if (req.headers['if-match']) headers['If-Match'] = req.headers['if-match'];
         payload = await body(req, creatorWrite ? 448 * 1024 : 4096);
       }
+      login.assertAccess(req, access, { write: claim || creatorWrite });
       const response = await fetch(apiOrigin + path + url.search, {
         method: req.method, headers, body: payload, redirect: 'error', signal: AbortSignal.timeout(12_000),
       });
