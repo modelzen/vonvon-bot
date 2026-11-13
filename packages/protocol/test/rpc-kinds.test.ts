@@ -18,7 +18,9 @@ it("names every request once, nested variants by their own field", () => {
   // devices-ui-2 4.9: environment.installCodex and environment.startCodexLogin left too. devices-ui-4 added
   // machine.desktopUpdateReport. main 必败: 152 kinds, none of them device
   // dm-agent 7.3: command.feishuRead. Badges added command.setAgentBadgeNumber.
-  expect(kinds).toHaveLength(154);
+  const installs=kinds.filter(kind=>kind.startsWith('recipeInstall.')).sort();
+  expect(installs).toEqual(['cancel','commit','createdGroup','ignoreVersion','issuing','prepare','reconcile','source','status'].map(kind=>'recipeInstall.'+kind));
+  expect(kinds.length - installs.length).toBe(154);
   for (const kind of ["device.pair", "device.setPort", "admin.negotiate", "memory.branchDelete", "machine.desktopUpdateReport"]) expect(kinds).toContain(kind);
   for (const kind of ["machine.repairCli", "collaboration.openGroup", "environment.installCodex", "environment.startCodexLogin"]) expect(kinds).not.toContain(kind);
 });
