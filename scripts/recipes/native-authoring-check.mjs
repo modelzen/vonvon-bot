@@ -125,6 +125,7 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
   const im = imTransport();
   let loseRegister = true,
     loseAccept = true,
+    unavailableCancel,
     afterAuthorize;
   let generation = new AbortController(),
     actor = accountId,
@@ -143,6 +144,7 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     request: async (id, path, init, beforeSend) => {
       assert.equal(id, actor);
       beforeSend();
+      if (unavailableCancel && path === '/v1/authoring/' + unavailableCancel + '/cancel') throw Error('offline cancellation');
       const headers = new Headers(init.headers);
       headers.set('Authorization', 'Bearer ' + (actor === accountId ? author : reader));
       const res = await fetch(origin + path, { ...init, headers });
@@ -170,10 +172,11 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     }
     return response;
   };
+  const access = { admins: [operator] };
   function boot() {
     const daemon = new code.AuthoringService({
       bot,
-      cfg: { preferences: { access: { admins: [operator] } } },
+      cfg: { preferences: { access } },
       channel: im.channel,
       root: home,
       origin,
@@ -226,17 +229,18 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     const main = shell.recipeAuthoring.request;
     return { daemon, ctrl, main };
   }
-  function message(content, senderId = operator, replyToMessageId) {
+  function message(content, senderId = operator, replyToMessageId, chatId = dm) {
     const messageId = randomUUID();
     return {
       chatType: 'p2p',
-      chatId: dm,
+      chatId,
       messageId,
       senderId,
       content,
+      rawContentType: 'text',
       replyToMessageId,
       raw: {
-        message: { chat_type: 'p2p', chat_id: dm, message_id: messageId },
+        message: { chat_type: 'p2p', chat_id: chatId, message_id: messageId },
         sender: { sender_type: 'user', tenant_key: tenantKey, sender_id: { open_id: senderId } },
       },
     };
@@ -377,6 +381,49 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     console.log(
       'PASS: typed desktop authoring, real device proofs, original account, two-way link, App/chat creation and chat edit, close/reopen, A→B→A and retained cancel/accept receipts.',
     );
+    // Two concurrent old-recipient edits: cloud acceptance wins one, revocation cancels the other.
+    const orphan = (await act('edit', { draftId, baseRevision: 2 })).operation.operationId;
+    const accepted = (await act('edit', { draftId: fromChatSaved.receipt.draftId, baseRevision: 1 })).operation.operationId;
+    await running.daemon.onMessage(message('/recipe name 仲裁前确认', operator, [...im.messages.values()].at(-1).message_id));
+    await running.daemon.onAction(im.click('confirm', operator, dm, tenantKey));
+    loseAccept = true;
+    assert.equal((await act('status')).operations.find(o => o.operationId === accepted).state, 'pendingCloud');
+    assert.equal(sql("select state from recipe_private.authoring_operations where id='" + accepted + "'"), 'accepted');
+    const otherAdmin = 'ou_relinked', otherDm = 'oc_relinked';
+    access.admins.push(otherAdmin);
+    const nextLink = await act('beginLink');
+    await running.daemon.onMessage(message('/recipe link ' + nextLink.code, otherAdmin, undefined, otherDm));
+    const nextEvidence = await act('inspectLink', { challengeId: nextLink.challengeId });
+    await act('confirmLink', { challengeId: nextLink.challengeId, evidence: nextEvidence.evidence });
+    const sentBefore = im.messages.size;
+    unavailableCancel = orphan;
+    const offline = await rebase();
+    const pendingCancel = offline.operations.find(o => o.operationId === orphan);
+    assert.equal(pendingCancel?.state, 'cancelPending');
+    assert.equal(pendingCancel.receipt, undefined);
+    assert.ok(pendingCancel.syncMessage);
+    assert.equal(sql("select state from recipe_private.authoring_operations where id='" + orphan + "'"), 'dispatched');
+    unavailableCancel = undefined;
+    const afterRelink = await rebase();
+    const cancelled = afterRelink.operations.find(o => o.operationId === orphan);
+    assert.equal(cancelled?.receipt?.status, 'cancelled', 'relink must release the old proposal without its recipient');
+    const acceptedReceipt = afterRelink.operations.find(o => o.operationId === accepted)?.receipt;
+    assert.deepEqual(acceptedReceipt, {operationId:accepted, status:'accepted', stateRevision:3, draftId:fromChatSaved.receipt.draftId, revision:2});
+    assert.equal(sql("select state from recipe_private.authoring_operations where id='" + orphan + "'"), 'cancelled');
+    for (const type of ['inspectCandidate', 'resume', 'resend'])
+      await assert.rejects(act(type, { operationId: orphan }));
+    assert.equal(im.messages.size, sentBefore);
+    const reopened = (await act('edit', { draftId, baseRevision: 2 })).operation.operationId;
+    assert.notEqual(reopened, orphan);
+    assert.equal([...im.messages.values()].at(-1).chat_id, otherDm);
+    access.admins = [operator];
+    await running.daemon.adminRemoved(otherAdmin);
+    const unlinked = await rebase();
+    assert.equal(unlinked.linked, false);
+    assert.equal(unlinked.operations.find(o => o.operationId === reopened)?.receipt?.status, 'cancelled');
+    assert.deepEqual(unlinked.operations.find(o => o.operationId === accepted)?.receipt, acceptedReceipt);
+    assert.equal(sql("select state from recipe_private.authoring_operations where id='" + reopened + "'"), 'cancelled');
+    console.log('PASS: relink and removed admin recover on restart, cancel releases the same-draft lock, lost acceptance keeps its actual revision, and the old recipient never receives another dispatch.');
     deviceGeneration += 2;
     await assert.rejects(act('status'), /stale device view/);
   } finally {

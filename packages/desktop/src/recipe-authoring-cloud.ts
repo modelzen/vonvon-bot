@@ -6,6 +6,7 @@ import {
   recipeDraftSchema,
   type AuthoringOperation,
   type AuthoringReceipt,
+  type AuthoringReconciliation,
 } from '@vonvon/protocol';
 import type { NativeAccount } from './account-session.js';
 
@@ -49,7 +50,8 @@ function registration(op: AuthoringOperation) {
     ...(op.purpose === 'editDraft' && { draftId: op.draftId, baseRevision: op.baseRevision }),
   };
 }
-function match(actual: z.infer<typeof cloudState>, accountId: string, op: AuthoringOperation) {
+type Registration = Omit<AuthoringReconciliation, 'receipt' | 'createdAt'>;
+function match(actual: z.infer<typeof cloudState>, accountId: string, op: Registration) {
   if (
     actual.operationId !== op.operationId ||
     actual.accountId !== accountId ||
@@ -61,7 +63,7 @@ function match(actual: z.infer<typeof cloudState>, accountId: string, op: Author
   )
     throw invalidAuthoring();
 }
-function state(raw: unknown, accountId: string, op: AuthoringOperation): AuthoringReceipt | Pending {
+function state(raw: unknown, accountId: string, op: Registration): AuthoringReceipt | Pending {
   const accepted = authoringReceiptSchema.options[0].safeParse(raw);
   if (accepted.success) {
     const r = accepted.data;
@@ -126,7 +128,7 @@ export function authoringCloud(account: NativeAccount, accountId: string, signal
     if (response.status === 404 || response.status === 403) throw new AuthoringError('当前账号找不到这份草稿或操作。');
     throw new AuthoringError('账号服务未确认本次操作，请稍后恢复。');
   }
-  const path = (op: AuthoringOperation) => '/v1/authoring/' + op.operationId;
+  const path = (op: Registration) => '/v1/authoring/' + op.operationId;
   return {
     async presence() {
       const actor = z
@@ -140,14 +142,14 @@ export function authoringCloud(account: NativeAccount, accountId: string, signal
       if (draft.draftId !== draftId || draft.revision !== revision)
         throw new AuthoringError('草稿修订已改变，请重新打开草稿。');
     },
-    async get(op: AuthoringOperation) {
+    async get(op: Registration) {
       const raw = await read(path(op), undefined, true);
       return raw === undefined ? undefined : state(raw, accountId, op);
     },
     async register(op: AuthoringOperation) {
       return state(await read(path(op) + '/register', registration(op)), accountId, op);
     },
-    async cancel(op: AuthoringOperation) {
+    async cancel(op: Registration) {
       const result = state(await read(path(op) + '/cancel', {}), accountId, op);
       if (!('operationId' in result)) throw invalidAuthoring();
       return result;

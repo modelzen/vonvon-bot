@@ -27,7 +27,7 @@ export interface LocalOperation {
   accountId: string; scope: string; bot: string; binding: string; recipient: Recipient; carrier: Carrier;
   secret?: string; nonce?: string; source?: Source; payload?: string; proposalDigest?: string;
   dispatchAuthorization?: AuthoringAuthorization;
-  dispatched: boolean; contextOpen?: boolean; instructionId?: string; seenInstructions?: string[]; terminalAt?: number; contextUntil?: number;
+  dispatched: boolean; revoked?: true; contextOpen?: boolean; instructionId?: string; seenInstructions?: string[]; terminalAt?: number; contextUntil?: number;
 }
 export interface AuthoringLedger {
   version: 1; links: Record<string, Link>; operations: Record<string, LocalOperation>;

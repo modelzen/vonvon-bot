@@ -150,12 +150,13 @@ function message(text: string, over: Partial<NormalizedMessage> = {}): Normalize
   return { messageId: `msg-${++seq}`, chatId: 'chat', chatType: 'group', threadId: 'topic',
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false, raw: { sender: { sender_type: 'user' } }, ...over } as NormalizedMessage;
 }
-function setup(policy: 'steer' | 'queue' = 'steer') {
+type IntakeOptions = Parameters<typeof createOrchestrator>[4];
+function setup(policy: 'steer' | 'queue' = 'steer', options?: IntakeOptions) {
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner', admins: ['owner'] }, completionReminder: { mode: 'manual' } } };
   const channel = { send: fake.send, rawClient: { cardkit: { v1: { card: { idConvert: fake.idConvert }, cardElement: { update: fake.elementUpdate } } }, im: { v1: { message: { reply: fake.reply, get: fake.getMessage }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
-  orchestrator = createOrchestrator(channel as never, cfg, workspace);
+  orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, options);
   return orchestrator;
 }
 beforeEach(() => {
@@ -202,10 +203,10 @@ async function visible(run: ReturnType<typeof thread>, request: AskRequest = cho
   run.emit({ type: 'ask', request });
   await until(() => expect(fake.reply).toHaveBeenCalled());
 }
-async function started(run: ReturnType<typeof thread>, overrides: Partial<NormalizedMessage> = {}) {
+async function started(run: ReturnType<typeof thread>, overrides: Partial<NormalizedMessage> = {}, options?: IntakeOptions) {
   fake.backend.resumeThread.mockResolvedValue(run.t);
   fake.backend.startThread.mockResolvedValue(run.t);
-  const o = setup(fake.groupPolicy ?? 'steer');
+  const o = setup(fake.groupPolicy ?? 'steer', options);
   await o.onMessage(message('first', overrides));
   await until(() => expect(run.consumed).toHaveLength(1));
   return o;
@@ -635,6 +636,48 @@ describe('s33b sensitive ask intake', () => {
     await o.onMessage(dm('<audio/>', { rawContentType: 'audio', replyToMessageId: await card() }));
     await until(() => answered(run, 'private answer'));
     expect(fake.voice).toHaveBeenCalledOnce();
+    run.turns[0]!.resolve();
+  });
+
+  it('only transcribes the reply to the live ask card when a private draft is also open', async () => {
+    const onMessage = vi.fn(async (_msg: NormalizedMessage) => true);
+    const run = thread();
+    const o = await started(run, { threadId: undefined }, { authoring: { onMessage, onAction: async () => {}, adminRemoved: async () => {} } });
+    await secretVisible(run);
+    const askCard = await card();
+    for (const reply of [{}, { replyToMessageId: 'om_draft' }, { replyToMessageId: askCard, createTime: 1 }]) {
+      const audio = dm('<audio/>', { rawContentType: 'audio', ...reply });
+      await o.onMessage(audio);
+      await until(() => expect(onMessage).toHaveBeenCalledWith(audio));
+    }
+    expect(fake.voice).not.toHaveBeenCalled();
+    expect(run.respond).not.toHaveBeenCalled();
+    fake.voice.mockImplementation(async (_channel, msg) => voiceResult('private answer', msg.messageId));
+    await o.onMessage(dm('<audio/>', { rawContentType: 'audio', replyToMessageId: askCard }));
+    await until(() => answered(run, 'private answer'));
+    expect(fake.voice).toHaveBeenCalledOnce();
+    expect(onMessage).toHaveBeenCalledTimes(3);
+    run.turns[0]!.resolve();
+  });
+
+  it('keeps an ask reply out of draft intake when the original question closes during transcription', async () => {
+    const onMessage = vi.fn(async (_msg: NormalizedMessage) => true);
+    const run = thread();
+    const o = await started(run, { threadId: undefined }, { authoring: { onMessage, onAction: async () => {}, adminRemoved: async () => {} } });
+    await secretVisible(run);
+    const audio = dm('<audio/>', { rawContentType: 'audio', replyToMessageId: await card() });
+    const transcript = deferred<ReturnType<typeof voiceResult>>();
+    fake.voice.mockReturnValueOnce(transcript.promise);
+    await o.onMessage(audio);
+    await until(() => expect(fake.voice).toHaveBeenCalledOnce());
+    run.askPending.mockReturnValue(false);
+    transcript.resolve(voiceResult('private answer', audio.messageId));
+    await until(() => expect(fake.send).toHaveBeenCalledWith(audio.chatId,
+      { markdown: expect.stringContaining('请查看原问题卡片') }, { replyTo: audio.messageId }));
+    expect(run.respond).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(run.t.steer).not.toHaveBeenCalled();
+    expect(run.consumed).toHaveLength(1);
     run.turns[0]!.resolve();
   });
 

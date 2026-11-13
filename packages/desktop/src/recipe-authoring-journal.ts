@@ -8,6 +8,7 @@ import {
   recipeBinary32Schema,
   viewIdSchema,
   type AuthoringOperation,
+  type AuthoringReconciliation,
 } from '@vonvon/protocol';
 import { AuthoringError, invalidAuthoring } from './recipe-authoring-cloud.js';
 
@@ -46,6 +47,15 @@ export class AuthoringJournal {
       this.rows = [];
     }
     return this.rows;
+  }
+  checkReconciliation(binding: Binding, recovery: AuthoringReconciliation) {
+    if (recovery.purpose === 'prepareDraft' ? recovery.draftId || recovery.baseRevision : !recovery.draftId || !recovery.baseRevision)
+      throw invalidAuthoring();
+    const prior = this.all().find(row => row.operationId === recovery.operationId);
+    if (!prior) return; // Revoked before first Main observation: verify against the authenticated daemon and cloud registration.
+    const { operationId, purpose, targetPublicKey, nonceCommitment, draftId, baseRevision, createdAt } = recovery;
+    const identity = { ...binding, operationId, purpose, targetPublicKey, nonceCommitment, draftId, baseRevision, createdAt };
+    if (Object.entries(identity).some(([key,value]) => prior[key as keyof Row] !== value)) throw invalidAuthoring();
   }
   observe(binding: Binding, op: AuthoringOperation, cancel = false) {
     if (
