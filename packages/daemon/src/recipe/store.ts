@@ -1,9 +1,10 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { groupIdSchema, recipeAuthorizationSchema, recipeBinary32Schema, recipeManifestSchema, recipeSetupSchema,
   type RecipeAuthorization, type RecipeInstallReply, type RecipeInstallRequest, type RecipeManifest, type RecipeSetup } from '@vonvon/protocol';
 import { supplementOf } from '../bot/context-assembly';
-import { withRegisteredBot } from '../config/bots';
+import { loadBots, withRegisteredBot, type BotIdentity } from '../config/bots';
 import { botPaths, paths } from '../config/paths';
 import { mutateProjectStore, readDurableProjectStore, type Project, type RegistryLocation } from '../project/registry';
 import { operationUuid, parseManifest, sha256 } from './manifest';
@@ -21,6 +22,7 @@ const operationSchema = z.object({
   nonce: binary32, nonceCommitment: binary32, targetPublicKey: binary32,
   createdAt: z.number(), status: z.enum(['prepared', 'in_progress', 'applied', 'rejected']),
   cloudCompletion: z.enum(['none', 'required', 'confirmed']).optional(),
+  preparationSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   authorization: z.custom<RecipeAuthorization>(value => recipeAuthorizationSchema.safeParse(value).success).optional(), reason: z.string().optional(), completedAt: z.number().optional(),
 }).strict();
 const operations = (stored: Record<string, unknown>): Record<string, RecipeOperation> => {
@@ -40,13 +42,30 @@ const operations = (stored: Record<string, unknown>): Record<string, RecipeOpera
 const copy = <T>(value: T): T => structuredClone(value);
 const same = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
 const settingsHash = (row: Project): string => sha256(JSON.stringify(row));
+const PREPARATION_MS = 300000, RETENTION_MS = 8 * 86400000, MAX_OPERATIONS = 512, MAX_LEDGER_BYTES = 8 * 1024 * 1024;
+const budgetSchema = z.record(uuid, z.object({day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), count: z.number().int().min(1).max(60)}).strict());
+const budgetsOf = (stored: Record<string, unknown>) => budgetSchema.parse(stored.recipeInstallDaily ?? {});
+const unissuedExpired = (operation: RecipeOperation, now: number): boolean => operation.status === 'prepared' && !operation.authorization && now - operation.createdAt >= PREPARATION_MS;
+const expire = (operation: RecipeOperation): RecipeOperation => ({...operation, status: 'rejected', reason: '本机准备已过期', completedAt: operation.createdAt + PREPARATION_MS});
+const active = (operation: RecipeOperation, now: number): boolean => operation.cloudCompletion === 'required'
+  || ((operation.status === 'prepared' || operation.status === 'in_progress') && !unissuedExpired(operation, now));
+function maintain(history: Record<string, RecipeOperation>, now: number): boolean {
+  let changed = false;
+  for (const [id, original] of Object.entries(history)) {
+    const operation = unissuedExpired(original, now) ? expire(original) : original;
+    if (operation !== original) {history[id] = operation; changed = true;}
+    if ((operation.status === 'applied' || operation.status === 'rejected') && operation.cloudCompletion !== 'required'
+      && now - operation.completedAt > RETENTION_MS) {delete history[id]; changed = true;}
+  }
+  return changed;
+}
 const terminal = (operation: RecipeOperation): RecipeInstallReply => ({kind: 'status', operationId: operation.operationId,
   groupId: groupIdSchema.parse(operation.groupId), status: operation.status === 'prepared' && operation.authorization ? 'in_progress' : operation.status,
   ...('reason' in operation && operation.reason ? {reason: operation.reason} : {})});
 
 export interface RecipeStoreOptions {
   targetPublicKey: string;
-  isInChat: (botId: string, groupId: string) => Promise<void>;
+  isInChat: (botId: string, groupId: string, identity: BotIdentity) => Promise<void>;
   membershipTimeoutMs?: number;
   location?: (botId: string) => RegistryLocation;
   now?: () => number;
@@ -59,12 +78,25 @@ export class RecipeStore {
     return this.options.location?.(botId) ?? {file: botPaths(botId).projectsFile, dataRoot: paths.appDir};
   }
   private now(): number { return (this.options.now ?? Date.now)(); }
-  private async requireMembership(botId: string, groupId: string, check = this.options.isInChat): Promise<void> {
+  private async foreignUsage(botId: string, accountId: string, day: string, now: number): Promise<{active: number; created: number}> {
+    const usage = {active: 0, created: 0};
+    for (const bot of (await loadBots()).bots) {
+      if (bot.appId === botId) continue;
+      let stored: Record<string, unknown>;
+      try {stored = JSON.parse(await readFile(this.location(bot.appId).file, 'utf8'));}
+      catch (error) {if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue; throw error;}
+      usage.active += Object.values(operations(stored)).filter(operation => operation.accountId === accountId && active(operation, now)).length;
+      const budget = budgetsOf(stored)[accountId];
+      if (budget?.day === day) usage.created += budget.count;
+    }
+    return usage;
+  }
+  private async requireMembership(botId: string, groupId: string, identity: BotIdentity, check = this.options.isInChat): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => reject(new Error('Bot 群成员核验超时')), this.options.membershipTimeoutMs ?? 10000);
     });
-    try { await Promise.race([Promise.resolve().then(() => check(botId, groupId)), expired]); }
+    try { await Promise.race([Promise.resolve().then(() => check(botId, groupId, identity)), expired]); }
     finally { clearTimeout(timer); }
   }
   async prepare(input: Prepare): Promise<RecipeInstallReply> {
@@ -74,9 +106,10 @@ export class RecipeStore {
       const result = await mutateProjectStore(this.location(request.botId), async (stored, rows) => {
         const row = rows.find(row => row.chatId === request.groupId && !row.dm);
         if (!row) throw new Error('请选择这个 Bot 已绑定的现有群');
-        await this.requireMembership(request.botId, row.chatId);
+        await this.requireMembership(request.botId, row.chatId, bot);
         const existing = row.recipeInstall;
         if (existing && existing.recipeId !== incoming.recipeId) throw new Error('这个群已使用另一份配方');
+        if (existing && incoming.revision < existing.revision) throw new Error('不能安装旧版本配方');
         if (existing?.versionId === incoming.versionId) return {changed: false, durableRead: true, value: {
           kind: 'alreadyInstalled', groupId: row.chatId, recipeId: incoming.recipeId, versionId: incoming.versionId,
         } as RecipeInstallReply};
@@ -100,16 +133,39 @@ export class RecipeStore {
         if ([...role].length > 5000) throw new Error('补充职责最多 5000 字');
         const setup = request.resolution?.setup === 'keep' ? localSetup
           : request.resolution?.setup === 'replace' || !existing || same(localSetup, existing.base.setup) ? incoming.setup : localSetup;
-        const nonce = randomBytes(32), operationId = operationUuid(this.now());
+        const now = this.now(), history = operations(stored), maintained = maintain(history, now);
+        const resolution = [request.resolution?.role?.kind ?? null, request.resolution?.role?.kind === 'custom' ? request.resolution.role.text : null,
+          request.resolution?.setup ?? null];
+        const preparationSha256 = sha256(JSON.stringify([request.accountId, bot, row.chatId, row.bindingIncarnation,
+          row.projectSettingsRevision, settingsHash(row), request.manifestSha256, request.manifest, resolution,
+          role, setup ?? null, this.options.targetPublicKey]));
+        const reused = Object.values(history).find(operation => operation.status === 'prepared' && !operation.authorization
+          && operation.createdAt <= now && !unissuedExpired(operation, now) && operation.preparationSha256 === preparationSha256);
+        if (reused) {
+          if (maintained) stored.recipeInstallOperations = history;
+          return {changed: backfilled || maintained, durableRead: true, value: {kind: 'prepared', operationId: reused.operationId,
+            targetPublicKey: reused.targetPublicKey, nonceCommitment: reused.nonceCommitment, versionId: incoming.versionId,
+            manifestSha256: reused.manifestSha256, ...review} as RecipeInstallReply};
+        }
+        const day = new Date(now).toISOString().slice(0, 10), foreign = await this.foreignUsage(request.botId, request.accountId, day, now);
+        if (foreign.active + Object.values(history).filter(operation => operation.accountId === request.accountId && active(operation, now)).length >= 3) throw new Error('这个账号已有 3 个待完成安装，请先完成或取消');
+        const daily = Object.fromEntries(Object.entries(budgetsOf(stored)).filter(([, budget]) => budget.day === day));
+        if (foreign.created + (daily[request.accountId]?.count ?? 0) >= 60) throw new Error('这个账号今天的本机准备次数已达上限');
+        if (Object.keys(history).length >= MAX_OPERATIONS) throw new Error('本机安装记录已达上限，请先恢复待完成操作');
+        const nonce = randomBytes(32), operationId = operationUuid(now);
         const operation: RecipeOperation = {
           operationId, accountId: request.accountId, bot, groupId: row.chatId,
           bindingIncarnation: row.bindingIncarnation, projectSettingsRevision: row.projectSettingsRevision,
           settingsSha256: settingsHash(row), manifest: request.manifest, manifestSha256: request.manifestSha256,
           incoming, role, ...(setup ? {setup: copy(setup)} : {}), nonce: nonce.toString('base64url'),
           nonceCommitment: Buffer.from(sha256(nonce), 'hex').toString('base64url'), targetPublicKey: this.options.targetPublicKey,
-          createdAt: this.now(), status: 'prepared', cloudCompletion: 'none',
+          createdAt: now, status: 'prepared', cloudCompletion: 'none', preparationSha256,
         };
-        const history = operations(stored); history[operationId] = operation; stored.recipeInstallOperations = history;
+        history[operationId] = operation;
+        daily[request.accountId] = {day, count: (daily[request.accountId]?.count ?? 0) + 1};
+        const ledgerBytes = Buffer.byteLength(JSON.stringify({recipeInstallOperations: history, recipeInstallDaily: daily}, null, 2));
+        if (ledgerBytes + 2048 * Object.keys(history).length > MAX_LEDGER_BYTES) throw new Error('本机安装记录已达容量上限，请先恢复待完成操作');
+        stored.recipeInstallOperations = history; stored.recipeInstallDaily = daily;
         return {changed: true, value: {kind: 'prepared', operationId, targetPublicKey: operation.targetPublicKey,
           nonceCommitment: operation.nonceCommitment, versionId: incoming.versionId, manifestSha256: operation.manifestSha256, ...review} as RecipeInstallReply};
       }, this.options.beforeCommit);
@@ -118,17 +174,26 @@ export class RecipeStore {
     });
   }
   async get(botId: string, operationId: string): Promise<RecipeOperation> {
-    return readDurableProjectStore(this.location(botId), stored => {
-      const operation = operations(stored)[operationId];
+    return mutateProjectStore(this.location(botId), async stored => {
+      const history = operations(stored), operation = history[operationId];
       if (!operation || operation.bot.appId !== botId) throw new Error('配方安装记录不存在');
-      return copy(operation);
-    });
+      if (unissuedExpired(operation, this.now())) {
+        history[operationId] = expire(operation); stored.recipeInstallOperations = history;
+        return {changed: true, value: copy(history[operationId]!)};
+      }
+      return {changed: false, durableRead: true, value: copy(operation)};
+    }, this.options.beforeCommit);
   }
   async status(botId: string, operationId: string): Promise<RecipeInstallReply> { return terminal(await this.get(botId, operationId)); }
   async authorize(botId: string, operationId: string, supplied?: RecipeAuthorization): Promise<RecipeOperation> {
-    const result = await mutateProjectStore(this.location(botId), async stored => {
+    const captured = await this.get(botId, operationId);
+    const perform = () => mutateProjectStore(this.location(botId), async stored => {
       const history = operations(stored), operation = history[operationId];
       if (!operation || operation.bot.appId !== botId) throw new Error('配方安装记录不存在');
+      if (unissuedExpired(operation, this.now())) {
+        history[operationId] = expire(operation); stored.recipeInstallOperations = history;
+        return {changed: true, value: copy(history[operationId]!)};
+      }
       if (supplied) {
         const authorization = recipeAuthorizationSchema.parse(supplied);
         if (authorization.operationId !== operationId || authorization.accountId !== operation.accountId
@@ -143,6 +208,7 @@ export class RecipeStore {
       if (!operation.authorization && !['applied', 'rejected'].includes(operation.status)) throw new Error('缺少配方安装授权');
       return {changed: false, value: copy(operation)};
     }, this.options.beforeCommit);
+    const result = captured.status === 'applied' || captured.status === 'rejected' ? await perform() : await withRegisteredBot(botId, perform);
     return result.status === 'applied' || result.status === 'rejected' ? this.get(botId, operationId) : result;
   }
   async redeemed(botId: string, operationId: string): Promise<void> {
@@ -154,19 +220,22 @@ export class RecipeStore {
       return {changed: true, value: undefined};
     }, this.options.beforeCommit);
   }
-  async apply(botId: string, operationId: string, isInChat: (botId: string, groupId: string) => Promise<void>): Promise<RecipeInstallReply> {
+  async apply(botId: string, operationId: string, isInChat: RecipeStoreOptions['isInChat']): Promise<RecipeInstallReply> {
     const captured = await this.get(botId, operationId);
     if (captured.status === 'applied' || captured.status === 'rejected') return terminal(captured);
     try {
       return await withRegisteredBot(botId, async () => mutateProjectStore(this.location(botId), async (stored, rows) => {
         const history = operations(stored), operation = history[operationId];
-        if (!operation || operation.status !== 'in_progress') throw new Error('配方尚未完成在线核验');
+        if (!operation) throw new Error('配方安装记录不存在');
+        if (operation.status === 'applied' || operation.status === 'rejected') return {changed: false, durableRead: true, value: terminal(operation)};
+        if (operation.status !== 'in_progress') throw new Error('配方尚未完成在线核验');
         const row = rows.find(row => row.chatId === operation.groupId && !row.dm);
         let reason: string | undefined;
         if (!row || row.bindingIncarnation !== operation.bindingIncarnation) reason = '群绑定已改变';
+        else if (row.recipeInstall?.recipeId === operation.incoming.recipeId && row.recipeInstall.revision > operation.incoming.revision) reason = '已经安装更新的配方版本';
         else if (row.projectSettingsRevision !== operation.projectSettingsRevision || settingsHash(row) !== operation.settingsSha256) reason = '群设置已改变';
         if (!reason) {
-          try { await this.requireMembership(botId, operation.groupId, isInChat); }
+          try { await this.requireMembership(botId, operation.groupId, operation.bot, isInChat); }
           catch { reason = '无法确认 Bot 仍在此群中'; }
         }
         if (reason) {

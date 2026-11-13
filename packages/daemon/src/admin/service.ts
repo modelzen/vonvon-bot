@@ -16,11 +16,11 @@ import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { compareCodexVersions, parseCodexVersion } from '../agent/codex-appserver/version';
 import { fetchUsageBundle } from '../agent/usage';
 import { stopClaudeLocalStats } from '../agent/claude-agent/local-stats';
-import { parseJoinedGroups, parseGroupMembers, type GroupMembers, type AdminGroupOp, type BindGroupInput, type JoinedGroups } from './groups';
+import { parseJoinedGroups, parseGroupMembers, parseGroupMembership, type GroupMembers, type AdminGroupOp, type BindGroupInput, type JoinedGroups } from './groups';
 import { voiceView } from '../voice/view';
 import type { VoiceAction, VoiceView } from '../voice/types';
 import { readFile, realpath, rm, stat } from 'node:fs/promises';
-import { botIdentity, loadBots, setBotActivation, setBotBadgeNumber, removeBot } from '../config/bots';
+import { botIdentity, loadBots, setBotActivation, setBotBadgeNumber, removeBot, type BotIdentity } from '../config/bots';
 import { dmPreparationError, prepareDmProjectForBot } from '../bot/dm-project';
 import { botPaths, botDir } from '../config/paths';
 import { configuredProjectsRoots, directoryContext, legacyDirectoryProblems } from '../project/directory-audit';
@@ -140,6 +140,7 @@ export interface AdminService {
   pendingGroups?(botId: string): Promise<{ groups: PendingGroup[] }>;
   joinedGroups?(botId: string, cursor?: string): Promise<JoinedGroups>;
   groupMembers?(botId: string, chatId: string, cursor?: string): Promise<GroupMembers>;
+  assertGroupMembership?(botId: string, chatId: string, identity: BotIdentity): Promise<void>;
   /** dm-agent 7.3: a Feishu read, on the Bot `reach` comes to (admin/feishu-route.ts). Refusals are replies, not errors. */
   feishuRead?(reach: FeishuReach, request: Omit<FeishuReadRequest, 'only'>): Promise<FeishuReadReply>;
   /** dm-agent 7.6: `feishu_api` on the Bot named. A private chat's tool only, through the host: no RPC reaches it. */
@@ -737,6 +738,10 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async groupMembers(botId, chatId, cursor) {
       if (!deps.executeGroups) throw new NotWiredYetError('群成员');
       return parseGroupMembers(await deps.executeGroups(botId, { kind: 'groupMembers', chatId, cursor }));
+    },
+    async assertGroupMembership(botId, chatId, identity) {
+      if (!deps.executeGroups) throw new NotWiredYetError('群成员身份');
+      parseGroupMembership(await deps.executeGroups(botId, {kind: 'groupMembership', chatId, identity}));
     },
     async feishuApi(bot, request) {
       const execute = deps.executeFeishuApi;
