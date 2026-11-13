@@ -28,7 +28,11 @@ setup 只保存现有 `config.setup.steps` 的 `kind/title/instructions/check/re
 
 同配方的 incoming 发布 revision 不得小于当前安装 revision。准备阶段在创建 nonce 或操作前拒绝降级；提交阶段再次检查，不能用先前准备的旧版本覆盖之后安装的新版本。
 
-同账号、可信 Bot/绑定、完整设置、精确清单及相同选择的五分钟内未授权准备，复用原 UUID 和 nonce。过期未授权准备转为 rejected；旧 UUID 不重新登记。全设备所有 Bot 合计每账号最多三个活动操作，包含不确定授权和仍待提交云完成回执的终态；每 UTC 日最多创建六十个新本机准备，重试不计数。准备及授权的活动增加均受 bots 锁保护，跨 Bot 配额读取只会与减少活动的操作并发。
+同账号、可信 Bot/绑定、完整设置、精确清单及相同选择的五分钟内 unissued 准备，复用原 UUID 和 nonce。确知尚未发起授权的 unissued 过期后转为 rejected；旧 UUID 不重新登记。Main 发起云 authorize 前，必须先调用 issuing RPC 并等待持久化成功。issuing 只能在原五分钟窗口内开始，此后即使尚未取得票据，也不能据本机时间猜测是否签发，不能自动过期或回收。迟到的合法授权继续原操作；历史缺少 issuerState 的无票据记录按 issuing 不确定状态处理。
+
+status 返回 issuerState（unissued、issuing、authorized）及 stillNeedsTicket。无票据 issuing 保持 prepared 且需要票据；已有授权返回 in_progress。已显示 applied 的本地事实仍可能需要补齐云回执，Main 清理 journal 前重发原 commit，不能只凭一次 status 读取宣称云回执已确认。
+
+当前注册的所有 Bot 合计每账号最多三个活动操作，包含 issuing、不确定授权和仍待提交云完成回执的终态；每 UTC 日最多创建六十个新本机准备，重试不计数。准备、issuing 及授权的活动增加均受 bots 锁保护，跨 Bot 配额读取只会与减少活动的操作并发。删除安全 Bot 会同时删除其本机每日计数，本机计数不是永久防绕过凭据；云 API 独立强制真实账号每日六十次上限。
 
 每个 Bot 的账本新建准入受 512 条和 8 MiB 双重上限约束，体积包含格式化存储及每条未来授权/终态的预留。只有超过八天、无需云完成回执的安全终态才回收。授权状态不明、已兑换或 cloudCompletion required 的记录不会被清理；无法安全腾出空间时拒绝新准备，原操作仍可恢复。每日预算只保留当日计数。
 
@@ -36,7 +40,9 @@ prepare、apply 固定取得 bots 后取得 projects，两次均在锁内向真�
 
 daemon 只使用配置的 HTTPS origin。测试可显式允许 loopback HTTP。请求拒绝重定向，不发送 JWT。Scoped ticket、nonce 和 X25519/HKDF/HMAC 证明用于 redeem/complete。兑换成功只表示进行中。本地 CAS 拒绝会持久记录 rejected。响应丢失后复用同一操作和凭据；本地已应用时只重发完成回执，不重复写职责。
 
-取消只在本机尚未保存授权时直接终结。已有授权、兑换已发出或已兑换时，daemon 返回进行中，主人由主进程凭当前账号请求云取消，再恢复原操作。精确的云端 operation_cancelled 或 operation_expired 可以终结尚未兑换的本地操作。独立的 cloudCompletion 保存 none、required、confirmed，只有已兑换的终态才需要提交 complete，云端预兑换取消和本机提前取消均不提交 complete。
+取消只在确知未发起授权的 unissued 状态直接终结。issuing 无票据保持不确定 prepared；已有授权、兑换已发出或已兑换时保持进行中，主人由主进程凭当前账号请求云取消，再恢复原操作。daemon 的 reconcile RPC 自己向固定服务的 `/v1/operations/:id/unredeemable` 发出原 accountId 查询。只有匹配 operationId 且永久无法首次兑换的明确 true 才能关闭未兑换操作；unknown/false 或任何异常都不能作为取消成功。请求不接受界面自报云结果。精确的云端 operation_cancelled 或 operation_expired 也可以终结尚未兑换的本地操作。独立的 cloudCompletion 保存 none、required、confirmed，只有已兑换的终态才需要提交 complete，云端预兑换取消和本机提前取消均不提交 complete。
+
+正常删除 Bot 在既有 bots 锁内先取得 projects 锁检查账本。issuing、授权不确定或 cloudCompletion required 会阻止删除，并提示恢复或取消原操作；检查发生在删除 keystore 凭据和 Bot 目录之前。issuing/授权增加同样取得 bots 锁，检查之后不能抢先新增不安全能力。安全终态确认后可沿用正常删除路径，不引入两文件提交协议。
 
 ## 5. 测试
 
