@@ -133,3 +133,16 @@ it('greys out 添加设备… for the same reasons as the page', () => {
   const manage = items(menuOf(devicesState({id: A}, {}, {secureStorage: false})))[4]!;
   expect(manage).not.toContain('disabled');
 });
+
+it('keeps account actions below device actions with the user profile', () => {
+  const profile = {kind: 'signedIn', accountId: '11111111-1111-4111-8111-111111111111', displayName: 'Clay', provider: 'github', persistence: 'secure'} as const;
+  const renderMenu = (status: typeof profile | {kind: 'signedOut'}) => renderToStaticMarkup(<DeviceSwitcherMenu state={remote} now={Date.now()} onPick={() => {}} onAdd={() => {}} onManage={() => {}}
+    account={{status, supported: true, onLogin: () => {}, onManage: () => {}}}/>);
+  const signedIn = renderMenu(profile);
+  expect(signedIn.indexOf('Clay')).toBeGreaterThan(signedIn.indexOf('管理设备…'));
+  expect(signedIn).toContain('账号管理');
+  expect(signedIn).toContain('account-avatar');
+  const signedOut = renderMenu({kind: 'signedOut'});
+  expect(signedOut.indexOf('登录 Vonvon')).toBeGreaterThan(signedOut.indexOf('管理设备…'));
+  expect(signedOut).not.toContain('网页登录');
+});
