@@ -10,7 +10,7 @@ import { AuthoringIm, physicalChat } from './authoring-im';
 import { authoringBotKey, discardAuthoringMaterial, AuthoringJournal, active, cardUpdate, linkKey, newCarrier, operationView, reserve, retire, sameRecipient, setCard, type AuthoringLedger, type Link, type LocalOperation, type Recipient, type Source } from './authoring-journal';
 import { blankPublic, digest, freezePayload, newAuthoringKey, parseChanges, type DraftInstructionParser } from './authoring-wire';
 import { checkAuthorization, postAuthoring } from './authoring-cloud';
-import { reviewSource } from './authoring-source';
+import { groupSourceIdentity, reviewSource, type ReviewedSource } from './authoring-source';
 import { operationUuid } from './manifest';
 
 export interface AuthoringPeer {id: string; device: string}
@@ -21,11 +21,10 @@ interface Challenge {
   id: string; session: string; hash: Buffer; expiresAt: number; attempts: number;
   recipient?: Recipient; messageId?: string; evidence?: string;
 }
-type View = Extract<RecipeAuthoringReply, {kind:'source'}>;
 interface Options {
   bot: BotIdentity; cfg: AppConfig; channel: LarkChannel; root?: string; now?: () => number;
   origin?: string; fetch?: typeof fetch; loopback?: boolean; parser?: DraftInstructionParser;
-  currentBot?: () => Promise<void>; source?: (scope: string, account: string, group: string) => Promise<View>;
+  currentBot?: () => Promise<void>; source?: (scope: string, account: string, group: string) => Promise<ReviewedSource>;
 }
 const LEASE = 45_000;
 const SEND_WINDOW = 55 * 60_000;
@@ -213,15 +212,37 @@ export class AuthoringService {
             return {kind:'status' as const, linked:Boolean(link), operations, reconciliation};
           });
         }
+        case 'groupSourceIdentity': {
+          const identity = await groupSourceIdentity(this.opts.channel, this.opts.bot, p.scope, req.groupId);
+          this.present(p);
+          return {kind:'groupSourceIdentity', groupId:req.groupId, identity};
+        }
+        case 'operationSourceIdentity': {
+          const op = await this.operation(p,req.operationId);
+          if (op.view.purpose !== 'prepareDraft' || !op.view.groupId) refusal();
+          let identity = op.sourceIdentity;
+          if (!identity && op.source) {
+            const review = await this.source(p,op.source.groupId).catch(() => undefined);
+            if (review && review.reviewToken === op.source.reviewToken) {
+              identity = review.identity;
+              await this.change(p,req.operationId,row => { row.sourceIdentity = review.identity; });
+            }
+          }
+          this.present(p);
+          return {kind:'operationSourceIdentity', operationId:req.operationId, groupId:op.view.groupId, identity:identity ?? null};
+        }
         case 'reviewSource': {
-          await this.allowed(p); const source = await this.source(p,req.groupId); await this.allowed(p); return source;
+          await this.allowed(p);
+          const {identity: _localBinding, ...source} = await this.source(p,req.groupId);
+          await this.allowed(p);
+          return source;
         }
         case 'prepare': {
           const linked = await this.allowed(p), review = await this.source(p,req.groupId);
           if (review.reviewToken !== req.reviewToken) refusal();
           freezePayload({public:blankPublic(),config:{role:review.role, ...(req.setup ? {setup:req.setup} : {})}});
           const source = {groupId:req.groupId, reviewToken:req.reviewToken, setup:req.setup};
-          return this.start(p, linked.recipient, {source});
+          return this.start(p, linked.recipient, {source,sourceIdentity:review.identity});
         }
         case 'edit': {
           const link = await this.allowed(p);
@@ -256,7 +277,8 @@ export class AuthoringService {
       return {kind:'operation',operation:await this.change(p,req.operationId,op => operationView(op,this.now()))};
     });
   }
-  private async start(p: Presence, recipient: Recipient, target: {source?: Source; draftId?: string; baseRevision?: number; instructionId?: string; payload?: string; proposalDigest?: string}): Promise<RecipeAuthoringReply> {
+  private async start(p: Presence, recipient: Recipient, target: {source?: Source; sourceIdentity?: string; draftId?: string; baseRevision?: number; instructionId?: string; payload?: string; proposalDigest?: string}): Promise<RecipeAuthoringReply> {
+    if (target.source && !target.sourceIdentity) refusal();
     const op = await withRegisteredBot(this.opts.bot.appId, () => this.ledger.run(db => {
       this.present(p);
       const link = db.links[linkKey(p.scope,p.account)];
@@ -266,6 +288,7 @@ export class AuthoringService {
         current.find(o => active(o) && (target.draftId ? o.view.draftId === target.draftId :
           o.source?.groupId === target.source?.groupId && o.source?.reviewToken === target.source?.reviewToken));
       if (prior) {
+        if (target.sourceIdentity && !prior.sourceIdentity && prior.source?.reviewToken === target.source?.reviewToken) prior.sourceIdentity = target.sourceIdentity;
         if (active(prior) && (target.draftId ? prior.view.baseRevision !== target.baseRevision : JSON.stringify(prior.source) !== JSON.stringify(target.source))) refusal();
         if (active(prior) && !target.instructionId && (!prior.contextOpen || (prior.contextUntil ?? 0) <= this.now())) {
           prior.contextOpen = true; prior.contextUntil = this.now()+CONTEXT; setCard(prior,prior.carrier.mode);
@@ -277,7 +300,7 @@ export class AuthoringService {
       const material = newAuthoringKey();
       const operationId = operationUuid(this.now());
       const row: LocalOperation = {accountId:p.account, scope:p.scope, bot:this.botKey, binding:link!.binding, recipient, secret:material.secret, nonce:material.nonce,
-        source:target.source, instructionId: target.instructionId, payload: target.payload, proposalDigest: target.proposalDigest,
+        source:target.source, sourceIdentity:target.sourceIdentity, instructionId: target.instructionId, payload: target.payload, proposalDigest: target.proposalDigest,
         contextUntil:this.now()+CONTEXT, carrier:newCarrier(target.source ? 'prepare' : target.payload ? 'confirm' : 'edit'), dispatched:false, contextOpen:true,
         view:{operationId, targetPublicKey:material.targetPublicKey, nonceCommitment:material.nonceCommitment,
           purpose:target.source ? 'prepareDraft' : 'editDraft', draftId:target.draftId, baseRevision:target.baseRevision,
@@ -469,7 +492,7 @@ export class AuthoringService {
         const source = link.sources[0]!;
         const reviewed = await this.source(p,source.groupId);
         if (reviewed.reviewToken !== source.reviewToken) { await reply(appChoose); return true; }
-        await this.start(p,recipient,{source,instructionId:msg.messageId});
+        await this.start(p,recipient,{source,sourceIdentity:reviewed.identity,instructionId:msg.messageId});
         await reply('已请求准备私人草稿。云端登记后，Bot 会在这里发确认卡。'); return true;
       }
       if (!selected || !selected.contextOpen || (selected.contextUntil ?? 0) <= this.now()) { await reply(appChoose); return true; }

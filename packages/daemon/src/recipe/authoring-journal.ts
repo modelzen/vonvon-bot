@@ -46,7 +46,7 @@ export function operationView(op: LocalOperation, now: number): AuthoringOperati
 export interface LocalOperation {
   view: AuthoringOperation;
   accountId: string; scope: string; bot: string; binding: string; recipient: Recipient; carrier: Carrier;
-  secret?: string; nonce?: string; source?: Source; payload?: string; proposalDigest?: string;
+  secret?: string; nonce?: string; source?: Source; sourceIdentity?: string; payload?: string; proposalDigest?: string;
   dispatchAuthorization?: AuthoringAuthorization;
   dispatched: boolean; revoked?: true; contextOpen?: boolean; instructionId?: string; seenInstructions?: string[]; terminalAt?: number; contextUntil?: number;
 }

@@ -95,7 +95,7 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     ['createDesktopFacades', 'packages/desktop/src/facade.ts'],
     ['desktopChannels', 'packages/desktop/src/ipc-contract.ts'],
     ['botPaths,useBotDir', 'packages/daemon/src/config/paths.ts'],
-    ['addProject,getProjectByChatId', 'packages/daemon/src/project/registry.ts'],
+    ['addProject,removeProject,getProjectByChatId', 'packages/daemon/src/project/registry.ts'],
     ['loadOrCreateDevice', 'packages/daemon/src/remote/device.ts'],
     [
       'recipeAuthoringRequestSchema,recipeAuthoringReplySchema,desktopAuthoringReplySchema,desktopAuthoringRequestSchema',
@@ -152,6 +152,15 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
       if (offlineAuthoring && path.startsWith('/v1/authoring/')) throw Error('before first cloud registration');
       if (substituteRecovery && path.endsWith('/recovery')) return substituteRecovery(path.split('/')[3]);
       if (unavailableCancel && path === '/v1/authoring/' + unavailableCancel + '/cancel') throw Error('offline cancellation');
+      if (path.endsWith('/register')) {
+        const id = path.split('/').at(-2);
+        const record = new code.AuthoringJournal(journalPath);
+        if (JSON.parse(init.body).purpose === 'prepareDraft') {
+          assert.ok(record.history.source({accountId:actor,deviceId,deviceKey:pk,botId},id));
+          record.history.close();
+        }
+      }
+      if (path.endsWith('/source-history')) assert.deepEqual(Object.keys(JSON.parse(init.body)), ['operationIds']);
       const headers = new Headers(init.headers);
       headers.set('Authorization', 'Bearer ' + (actor === accountId ? author : reader));
       const res = await fetch(origin + path, { ...init, headers });
@@ -510,6 +519,31 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     assert.equal(newOp.state,'waiting');
     await act('cancel',{operationId:newOp.operationId});
     console.log('PASS: three unregistered revoked IDs retain quota on 410 and mismatched proofs, then release it only on authenticated original-ID recovery; old accepts stay saved.');
+    await act('close');
+    running.ctrl.closeAll();
+    running.daemon.close();
+    const old = await request('/drafts/'+draftId,{token:author});
+    const ready = await request('/drafts/'+draftId,{method:'PATCH',revision:old.revision,token:author,
+      body:{public:{name:'来源群版本',summary:'摘要',overview:'说明',version:'1',access:'direct'},config:old.config}});
+    const version = await request('/drafts/'+draftId+'/publish',{method:'POST',revision:ready.revision,token:author,body:{}});
+    sql(`update recipe_private.authoring_operations set terminal_at=clock_timestamp()-interval '10 days'
+      where account_id='${accountId}' and state='accepted'; select recipe_private.maintain_authoring('${accountId}')`);
+    assert.equal(sql(`select count(*) from recipe_private.authoring_operations where id='${registered}'`),'0');
+    daemonOffset = 10 * 86400000;
+    running = boot();
+    const groupSession = await running.main({type:'open',accountId,viewId:'local',botId,groupId});
+    handle = groupSession.handle;
+    const history = await act('sourceHistory',{groupId});
+    assert.ok(history.entries.some(row=>row.operationId===registered && row.state==='published' && row.versionId===version.versionId));
+    assert.ok(history.entries.some(row=>row.operationId===chatOp.operationId && row.state==='draft' && row.draftId===fromChatSaved.receipt.draftId));
+    assert.ok(!history.entries.some(row=>row.operationId===editId));
+    await code.removeProject('fixture');
+    await code.addProject({chatId:groupId,name:'rebound',cwd:home,blank:false,createdAt:2,supplement:'群角色'},location);
+    await assert.rejects(act('sourceHistory',{groupId}));
+    const rebound = await running.main({type:'open',accountId,viewId:'local',botId,groupId});
+    handle = rebound.handle;
+    assert.deepEqual((await act('sourceHistory',{groupId})).entries,[]);
+    console.log('PASS: private source intents persisted before registration, exact draft and remote publication recovered after ten days, same physical group rebound without prior history.');
     deviceGeneration += 2;
     await assert.rejects(act('status'), /stale device view/);
   } finally {

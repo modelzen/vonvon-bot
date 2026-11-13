@@ -3,6 +3,7 @@ import type {DesktopAuthoringOperation, DesktopAuthoringReply, DesktopAuthoringR
 import {useAccount} from '../../account-context';
 import {useActiveDevice, useClient, useShellCapabilities} from '../../client-context';
 import {Button, InlineNotice} from '../../reference/components/ui';
+import {GroupSourceHistory} from './GroupSourceHistory';
 import {CopyButton, RecipeConfiguration, RecipeMarkdown, RecipeMetadata} from '../RecipeContent';
 import {botChatUrl, groupUrl, openExternalUrl} from '../../url-actions';
 import './authoring.css';
@@ -46,6 +47,7 @@ function AuthoringSelection({source, draft, onSaved, onBack, accountId, snapshot
   const groups = snapshot?.memberships.filter(member => !member.stale && bots.some(bot => bot.id === member.agentId) && snapshot.groups.some(group => group.id === member.groupId)) ?? [];
   const valid = selected && bots.some(bot => bot.id === selected.botId) && (draft || 'groupId' in selected && groups.some(member => member.agentId === selected.botId && member.groupId === selected.groupId));
   const bot = bots.find(bot => bot.id === selected?.botId);
+  const binding = groups.find(member => selected && 'groupId' in selected && member.agentId === selected.botId && member.groupId === selected.groupId);
   const group = selected && 'groupId' in selected ? snapshot?.groups.find(group => group.id === selected.groupId) : undefined;
   if (!shell) return <InlineNotice title="此设备暂不支持聊天草稿" tone="warning">请更新桌面应用和来源设备的 Vonvon Bot 后重试。</InlineNotice>;
   return <section className="recipe-authoring" aria-label={draft ? '在飞书继续编辑草稿' : '准备分享本群配方'}>
@@ -55,14 +57,14 @@ function AuthoringSelection({source, draft, onSaved, onBack, accountId, snapshot
       {!confirmed && <><div className="authoring-source-list" role="group" aria-label={draft ? '选择草稿编辑 Bot' : '选择分享来源'}>
         {draft ? bots.map(bot => <button type="button" key={bot.id} aria-pressed={selected?.botId === bot.id} onClick={() => setSelected({botId: bot.id})}><strong>{bot.name}</strong><small>{device.name}</small></button>) : groups.map(member => <button type="button" key={member.id} aria-pressed={selected?.botId === member.agentId && 'groupId' in selected && selected.groupId === member.groupId} onClick={() => setSelected({botId: member.agentId, groupId: member.groupId})}><strong>{snapshot.groups.find(group => group.id === member.groupId)!.name}</strong><small>{bots.find(bot => bot.id === member.agentId)!.name} · {device.name}</small></button>)}
       </div>{!(draft ? bots.length : groups.length) && <InlineNotice title={draft ? '没有可用的 Bot' : '没有可分享的已绑定群聊'}>请先在当前设备启动 Bot，并完成群聊绑定。这里不会新建群聊。</InlineNotice>}<div><Button variant="primary" disabled={!valid} onClick={() => setConfirmed(true)}>{draft ? '确认编辑 Bot' : '核对所选群聊'}</Button></div></>}
-      {confirmed && valid && bot && <AuthoringFlow key={`${device.id}:${accountId}:${bot.id}:${group?.id ?? draft?.draftId ?? ''}`} shell={shell} accountId={accountId} botId={bot.id} botName={bot.name} tenant={bot.tenant} groupId={group?.id} groupName={group?.name} draft={draft} onSaved={onSaved} onChangeSource={source ? undefined : () => setConfirmed(false)}/>}
+      {confirmed && valid && bot && <AuthoringFlow key={`${device.id}:${accountId}:${bot.id}:${group?.id ?? draft?.draftId ?? ''}:${bot.tenant ?? ''}:${bot.registeredAt ?? ''}:${bot.registrationId ?? ''}:${binding?.bindingIncarnation ?? ''}`} shell={shell} accountId={accountId} botId={bot.id} botName={bot.name} tenant={bot.tenant} groupId={group?.id} groupHistory={Boolean(source)} groupName={group?.name} draft={draft} onSaved={onSaved} onChangeSource={source ? undefined : () => setConfirmed(false)}/>}
       {confirmed && !valid && <InlineNotice title="当前来源已不可用" tone="warning">Bot 已停止或群绑定已变化。请恢复来源后重新进入分享。</InlineNotice>}
     </>}
   </section>;
 }
 
-function AuthoringFlow({shell, accountId, botId, botName, tenant, groupId, groupName, draft, onSaved, onChangeSource}: {
-  shell: RecipeAuthoringShell; accountId: string; botId: AgentId; botName: string; tenant?: 'feishu' | 'lark'; groupId?: GroupId; groupName?: string; draft?: DraftTarget;
+function AuthoringFlow({shell, accountId, botId, botName, tenant, groupId, groupHistory, groupName, draft, onSaved, onChangeSource}: {
+  shell: RecipeAuthoringShell; accountId: string; botId: AgentId; botName: string; tenant?: 'feishu' | 'lark'; groupId?: GroupId; groupHistory: boolean; groupName?: string; draft?: DraftTarget;
   onSaved: Props['onSaved']; onChangeSource?: () => void;
 }) {
   const device = useActiveDevice();
@@ -95,7 +97,7 @@ function AuthoringFlow({shell, accountId, botId, botName, tenant, groupId, group
     let active = true;
     let handle: string | undefined;
     setError(undefined);
-    void shell.request({type: 'open', accountId, viewId: device.id, botId}).then(reply => {
+    void shell.request({type: 'open', accountId, viewId: device.id, botId, ...(groupId && {groupId})}).then(reply => {
       if (reply.kind !== 'session') throw new Error('无法打开草稿操作。');
       handle = reply.handle;
       if (!active) {void shell.request({type: 'close', handle}).catch(() => {}); return;}
@@ -103,7 +105,7 @@ function AuthoringFlow({shell, accountId, botId, botName, tenant, groupId, group
       remember(reply);
     }).catch(error => {if (active) setError(message(error));});
     return () => {active = false; live.current = false; sessionRef.current = undefined; if (handle) void shell.request({type: 'close', handle}).catch(() => {});};
-  }, [shell, accountId, device.id, botId, retry]);
+  }, [shell, accountId, device.id, botId, groupId, retry]);
   async function request(input: DesktopAuthoringRequest) {
     const owner = sessionRef.current;
     const epoch = lifetime.current;
@@ -158,6 +160,7 @@ function AuthoringFlow({shell, accountId, botId, botName, tenant, groupId, group
   async function inspectLink() {if (!handle || !challenge) return; const reply = await request({type: 'inspectLink', handle, challengeId: challenge.challengeId}); if (reply?.kind === 'link') {setLink(reply); if (!reply.recipient) setNotice('尚未收到有效的本人私聊请求。请检查 Bot、短码和当前管理员身份。');}}
   async function reviewSource() {if (!handle || !groupId) return; setSource(undefined); setAttested(false); const reply = await request({type: 'reviewSource', handle, groupId}); if (reply?.kind === 'source') setSource(reply);}
   return <div className="authoring-flow">
+    {groupHistory && handle && groupId && <GroupSourceHistory key={handle} shell={shell} handle={handle} groupId={groupId}/>}
     <dl className="authoring-target"><div><dt>设备</dt><dd>{device.name}</dd></div><div><dt>Bot</dt><dd>{botName}</dd></div>{groupName && <div><dt>来源群聊</dt><dd>{groupName}</dd></div>}{session && <div><dt>账号</dt><dd>{session.target.accountName}</dd></div>}</dl>
     {tenant && <div><Button onClick={() => void openExternalUrl(botChatUrl(botId,tenant),'bot-chat',capabilities).catch(error => setError(message(error)))}>打开 Bot 私聊</Button></div>}
     {onChangeSource && <div><Button size="sm" variant="ghost" onClick={onChangeSource}>重新选择{draft ? ' Bot' : '群聊'}</Button></div>}
