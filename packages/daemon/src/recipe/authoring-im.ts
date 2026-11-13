@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { button, card, md } from '../card/cards';
 
@@ -47,10 +48,25 @@ export class AuthoringIm {
     return converted.code === 0 && converted.data?.card_id === cardId;
   }
   async update(cardId: string, seq: number, ref: string, mode: CardMode) {
-    const result = await this.channel.rawClient.cardkit.v1.card.update({path: {card_id: cardId}, data: {
-      sequence: seq, uuid: 'a_' + seq + '_' + ref, card: {type: 'card_json', data: JSON.stringify(authoringCard(ref, mode))},
-    }});
-    if (result.code !== 0) throw new Error('卡片更新待重试。');
+    let code: number | undefined;
+    try {
+      const result = await this.channel.rawClient.cardkit.v1.card.update({path: {card_id: cardId}, data: {
+        sequence: seq, uuid: 'a_' + seq + '_' + ref, card: {type: 'card_json', data: JSON.stringify(authoringCard(ref, mode))},
+      }});
+      code = result.code;
+    } catch (error) {
+      code = (error as {response?: {data?: {code?: number}}} | null)?.response?.data?.code;
+    }
+    if (code === 0) return 'updated';
+    if (code === 200740 || code === 200750) return 'unavailable';
+    if (code === 200770 || code === 300317) return 'conflict';
+    return 'pending';
+  }
+  async shows(messageId: string, chatId: string, ref: string, mode: CardMode) {
+    const result = await this.channel.rawClient.im.v1.message.get({path:{message_id:messageId}, params:{card_msg_content_type:'user_card_content'}});
+    const item = result.data?.items?.find(m => m.message_id === messageId && m.chat_id === chatId && m.msg_type === 'interactive' && !m.deleted);
+    const content = item?.body?.content;
+    return result.code === 0 && !!content && isDeepStrictEqual(JSON.parse(content),authoringCard(ref,mode));
   }
   async reply(chatId: string, messageId: string, text: string) {
     await this.channel.send(chatId, {text}, {replyTo: messageId}).catch(() => undefined);
