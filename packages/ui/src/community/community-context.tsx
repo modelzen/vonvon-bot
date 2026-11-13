@@ -5,7 +5,7 @@ import type {CommunityShell, RecipeDetail, CommunityResponses} from '@vonvon/pro
 import {useActiveDevice, useClient} from '../client-context';
 import type {RecipeGroupTarget} from '../recipes/recipe-use-context';
 
-export type CommunityRoute = {kind: 'catalog'} | {kind: 'library'} | {kind: 'workspace'} | {kind: 'detail'; recipe: {recipeId: string; versionId: string}; privateView?: boolean; useTarget?: RecipeGroupTarget} | {kind: 'draft'; draftId?: string; source?: RecipeDetail};
+export type CommunityRoute = {kind: 'catalog'} | {kind: 'library'} | {kind: 'workspace'} | {kind: 'authoring'} | {kind: 'detail'; recipe: {recipeId: string; versionId: string}; privateView?: boolean; useTarget?: RecipeGroupTarget} | {kind: 'draft'; draftId?: string; source?: RecipeDetail};
 export type CommunityDeparture = {deviceId: string; destination: Destination};
 type CommunityContextValue = {
   shell?: CommunityShell; isOpen: boolean; route: CommunityRoute;
@@ -25,7 +25,7 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
   const client = useClient();
   const device = useActiveDevice();
   const [stored, setRoute] = useState<{route: CommunityRoute; owner?: string; deviceId?: string; client?: typeof client}>({route: {kind: 'catalog'}});
-  const privateRoute = stored.route.kind === 'draft' || stored.route.kind === 'workspace' || stored.route.kind === 'library' || stored.route.kind === 'detail' && stored.route.privateView;
+  const privateRoute = stored.route.kind === 'authoring' || stored.route.kind === 'draft' || stored.route.kind === 'workspace' || stored.route.kind === 'library' || stored.route.kind === 'detail' && stored.route.privateView;
   const foreignRoute = privateRoute && stored.owner !== undefined && stored.owner !== accountId;
   const route = foreignRoute ? {kind: 'catalog'} as const : stored.route;
   useEffect(() => {if (foreignRoute) setRoute({route: {kind: 'catalog'}});}, [foreignRoute]);

@@ -100,7 +100,7 @@ it('moves production App subscriptions, search and actions to the selected devic
   expect(first.client.run.mock.calls.filter(([command]) => command.type === 'registerAgent')).toHaveLength(0);
 });
 it('keeps the production account editor and pending save through A to B to A while returning to a fresh A page', async () => {
-  await draw(A); await click('社区'); await click('创作中心'); await click('创作配方');
+  await draw(A); await click('社区'); await click('创作中心'); await click('手动创作');
   const input = await fill('配方名称', '不会因切设备丢失'); await click('保存私人草稿'); input.focus(); input.setSelectionRange(2, 4);
   for (const [id, phase] of [[B, 'connecting'], [B, 'ready'], [B, 'failed'], [A, 'ready']] as const) {
     await draw(id, phase);
@@ -167,7 +167,7 @@ it('keeps dirty production group settings behind the original guard before unmou
   expect(settings.mock.calls.every(([request]) => request.type === 'read')).toBe(true);
 });
 it('keeps the account editor behind its own guard before opening account management and logout', async () => {
-  await draw(A); await click('社区'); await click('创作中心'); await click('创作配方');
+  await draw(A); await click('社区'); await click('创作中心'); await click('手动创作');
   const editor = await fill('配方名称', '退出前保留输入');
   const menu = document.querySelector<HTMLButtonElement>('[aria-label^="当前设备："]')!;
   await act(async () => menu.click());
@@ -199,7 +199,7 @@ it('does not reuse the first A search generation when B never returned a snapsho
 
 it('switches the community target through the actual menu without discarding its dirty editor', async () => {
   shell.devices.switchTo.mockImplementation(async (id: string) => {root.render(<DesktopRootView state={devicesState({id})} fallback={first.client} shell={shell} renderApp={() => <App/>}/>);});
-  await draw(A); await click('社区'); await click('创作中心'); await click('创作配方');
+  await draw(A); await click('社区'); await click('创作中心'); await click('手动创作');
   const editor = await fill('配方名称', '切目标不会放弃草稿'); await click('保存私人草稿'); editor.focus(); editor.setSelectionRange(2, 4);
   await act(async () => document.querySelector<HTMLButtonElement>('[aria-label^="当前设备："]')!.click());
   const target = [...document.querySelectorAll<HTMLButtonElement>('.device-switcher__device')].find(button => button.querySelector('[title="家里"]'))!;
