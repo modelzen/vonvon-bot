@@ -28,7 +28,6 @@ function CommunityWindowContent() {
   const {navigate} = useDraftGuard();
   const [searchOpen, setSearchOpen] = useState(false);
   const [quitError, setQuitError] = useState<string>();
-  // Returning to the same client creates a fresh lease, so prior search data cannot revive.
   const scope = useMemo(() => ({client, deviceId: device.id}), [client, device.id]);
   const [read, setRead] = useState<{scope: typeof scope; snapshot: DesktopSnapshot}>();
   const [coreRead, setCoreRead] = useState<{scope: typeof scope; available: boolean}>();
