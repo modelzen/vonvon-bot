@@ -123,7 +123,6 @@ function AuthoringFlow({shell, accountId, botId, botName, tenant, groupId, group
   }
   const operations = session?.operations.filter(item => draft ? item.draftId === draft.draftId || item.receipt?.status === 'accepted' && item.receipt.draftId === draft.draftId : item.groupId === groupId) ?? [];
   const pending = operations.some(authoringPending);
-  // A recursive timeout keeps slow requests from overlapping; errors increase the next delay.
   useEffect(() => {
     if (!session || !pending) return;
     let active = true;
