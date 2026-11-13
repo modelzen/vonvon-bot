@@ -87,3 +87,15 @@ test('actual Web runtime ignores late route A-B-A results and leaves a newly ope
   assert.equal(h.document.querySelector('dialog').open,true);assert.equal(newer.querySelector('input').value,'NEW-INPUT');
   assert.equal(h.calls.filter(c=>c.options.method==='POST').length,1);
 });
+
+test('actual Web runtime ignores an old account response after a new account opens the same version',async t=>{
+  let finish;
+  const h=await runtime(t,async(_path,options)=>options.method==='POST'?new Promise(resolve=>{finish=resolve;}):Response.json(recipe));
+  const old=await h.open();await h.submit(old);
+  h.api.setSession({signedIn:true,displaySession:'session-b',providers:[]});await h.api.detail();
+  const newer=await h.open();newer.querySelector('input').value='ACCOUNT-B-CODE';
+  finish(Response.json({}));await h.settle();
+  assert.equal(h.document.querySelector('dialog').open,true);assert.equal(newer.querySelector('input').value,'ACCOUNT-B-CODE');
+  const lastRead=h.calls.filter(c=>c.path.startsWith('/api/v1/recipes/')).at(-1);
+  assert.equal(lastRead.options.headers['X-Vonvon-Session'],'session-b');
+});

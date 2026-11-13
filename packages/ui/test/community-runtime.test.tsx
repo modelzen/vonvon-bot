@@ -189,3 +189,20 @@ it('ignores a native late successful attempt after route A-B-A and leaves the ne
   expect([...document.querySelectorAll('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(false);
   expect(calls.filter(request=>request.type==='acquire')).toHaveLength(1);
 });
+
+it('ignores a native old-account receipt after another account opens the same version', async () => {
+  const listeners = new Set<Parameters<AccountShell['onStatus']>[0]>();
+  let current = status;
+  shell.account = {...account, status: async () => current, onStatus: listener => {listeners.add(listener); listener(current); return () => {listeners.delete(listener);};}};
+  const normal=handle;
+  let finish!: (value: unknown) => void;
+  handle=async request=>request.type==='acquire'?new Promise(resolve=>{finish=resolve;}):normal(request);
+  await draw();await click('打开已发布版本');await click('获取配方');
+  await act(async()=>{current={...status,accountId:draftId};listeners.forEach(listener=>listener(current));});
+  await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  const before=calls.filter(request=>request.type==='detail').length;
+  await act(async()=>{finish({recipeId:A,versionId:B,owned:false,acquired:true});});
+  expect(document.body.textContent).not.toContain('已获取，已保存在你的账号中');
+  expect(calls.filter(request=>request.type==='detail')).toHaveLength(before);
+  expect([...document.querySelectorAll('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(false);
+});

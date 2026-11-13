@@ -11,13 +11,14 @@ export function acquisitionKey(now = Date.now()) {
 }
 const literal = value => "'" + String(value).replaceAll("'", "''") + "'";
 export function seedAcquisitionHistory(sql, legacy) {
-  const f = {actor:randomUUID(),bulk:randomUUID(),rawVersion:randomUUID(),rawRequest:'12345678-1234-0123-0123-123456789abc',future:acquisitionKey(Date.UTC(2040,0,1)).slice(3),other:randomUUID()};
+  const f = {actor:randomUUID(),bulk:randomUUID(),onlyActor:randomUUID(),onlyRequest:randomUUID(),rawVersion:randomUUID(),rawRequest:'12345678-1234-0123-0123-123456789abc',future:acquisitionKey(Date.UTC(2040,0,1)).slice(3),other:randomUUID()};
   f.raw = 'Ab-cD';
-  sql(`insert into recipe_private.accounts(id) values('${f.actor}'),('${f.bulk}');
+  sql(`insert into recipe_private.accounts(id) values('${f.actor}'),('${f.bulk}'),('${f.onlyActor}');
     insert into recipe_private.versions(id,recipe_id,owner_id,revision,public_info,config,bytes)
     select '${f.rawVersion}',recipe_id,owner_id,2,public_info||'{"version":"fixture-2"}',config,bytes from recipe_private.versions where id='${legacy.version}';
     insert into recipe_private.grants(actor,version_id,original_request,original_digest)
-    values('${f.actor}','${f.rawVersion}','${f.rawRequest}',sha256(convert_to(jsonb_build_array('${f.rawVersion}'::uuid,'ABCD')::text,'UTF8')));
+    values('${f.actor}','${f.rawVersion}','${f.rawRequest}',sha256(convert_to(jsonb_build_array('${f.rawVersion}'::uuid,'ABCD')::text,'UTF8'))),
+      ('${f.onlyActor}','${f.rawVersion}','${f.onlyRequest}',sha256(convert_to(jsonb_build_array('${f.rawVersion}'::uuid,'ABCD')::text,'UTF8')));
     insert into recipe_private.receipts(actor,action,request_id,digest,result,created_at)
     values('${f.actor}','acquire','${f.rawRequest}',sha256(convert_to(jsonb_build_array('${f.rawVersion}'::uuid,'${f.raw}')::text,'UTF8')),
       jsonb_build_object('recipeId','${legacy.recipe}'::uuid,'versionId','${f.rawVersion}'::uuid,'owned',false,'acquired',true),'2020-01-01Z');
@@ -44,6 +45,11 @@ export async function checkAcquisitionBudget({sql,request,jwt,origin,v,v2,legacy
   const rawToken = jwt(f.actor);
   await request(rawRoute,{method:'POST',token:rawToken,body:{code:f.raw},key:f.rawRequest});
   assert.equal((await request(rawRoute,{method:'POST',token:rawToken,body:{code:'ABCD'},key:f.rawRequest,status:409})).error.code,'conflict');
+  assert.equal(sql(`select acquisition_proof from recipe_private.grants where actor='${f.onlyActor}'`),'legacy-grant-only');
+  await request(rawRoute,{method:'POST',token:jwt(f.onlyActor),body:{code:'aB-cD'},key:f.onlyRequest});
+  assert.equal(sql(`select acquisition_proof from recipe_private.grants where actor='${f.onlyActor}'`),'legacy-with-raw');
+  assert.equal(sql(`select count(*) from recipe_private.acquisition_state where actor='${f.onlyActor}'`),'0');
+  assert.equal((await request(rawRoute,{method:'POST',token:jwt(f.onlyActor),body:{code:'ABCD'},key:f.onlyRequest,status:409})).error.code,'conflict');
   await request('/versions/'+v2.versionId+'/acquire',{method:'POST',token:jwt(f.bulk),body:{},key:randomUUID(),status:409});
   if(f.accepted===256) {
     const limited=await fetch(origin+'/v1/versions/'+v2.versionId+'/acquire',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+jwt(f.bulk),'Idempotency-Key':acquisitionKey()},body:'{}'});
@@ -103,6 +109,11 @@ export async function checkAcquisitionBudget({sql,request,jwt,origin,v,v2,legacy
     const future = Date.UTC(2035,5,1,23,59,59);
     try {
       at(future);
+      sql(`insert into recipe_private.receipts(actor,action,request_id,digest,result,created_at)
+        values('${f.actor}','acquire_v2','${collision.slice(3)}',sha256('fixture'::bytea),'{}','2020-01-01Z')`);
+      await acquire(f.actor,v2.versionId,acquisitionKey(future));
+      assert.equal(sql(`select count(*) from recipe_private.receipts where actor='${f.actor}' and action='acquire_v2' and request_id='${collision.slice(3)}'`),'0');
+      assert.equal(sql(`select count(*) from recipe_private.receipts where actor='${f.actor}' and action='acquire' and request_id='${collision.slice(3)}'`),'1');
       const timeActor=randomUUID(); sql(`insert into recipe_private.accounts(id) values('${timeActor}')`);
       await expect(acquire(timeActor,v.versionId,acquisitionKey(future),'bad'),'invalid_code');
       assert.equal(sql(`select count(*) from recipe_private.acquisition_state where actor='${timeActor}'`),'0');
