@@ -85,7 +85,10 @@ export function createRecipeWeb(env = process.env) {
       const creatorRead = req.method === 'GET' && (['/v1/me/drafts', '/v1/me/publications'].includes(path) || draftPath.test(path) || codesPath.test(path));
       const creatorWrite = (req.method === 'POST' && (path === '/v1/drafts' || publishPath.test(path) || codesPath.test(path) || disableCode.test(path))) || (['PATCH', 'DELETE'].includes(req.method) && draftPath.test(path));
       if (!read && !claim && !creatorRead && !creatorWrite) throw new WebError(404, 'not_found');
-      const access = await login.access(req, { write: claim || creatorWrite });
+      const guardedRead = req.method === 'GET' && versionRead.test(path) && req.headers['x-vonvon-session'] !== undefined;
+      const guarded = claim || creatorWrite || guardedRead;
+      const access = await login.access(req, { write: guarded });
+      if (guardedRead && !access) throw new WebError(409, 'session_changed');
       if ((claim || creatorRead || creatorWrite || path === '/v1/me/recipes') && !access) throw new WebError(401, 'login_required');
       const headers = { Accept: 'application/json' };
       if (access) headers.Authorization = 'Bearer ' + access;
@@ -97,11 +100,12 @@ export function createRecipeWeb(env = process.env) {
         if (req.headers['if-match']) headers['If-Match'] = req.headers['if-match'];
         payload = await body(req, creatorWrite ? 448 * 1024 : 4096);
       }
-      login.assertAccess(req, access, { write: claim || creatorWrite });
+      login.assertAccess(req, access, { write: guarded });
       const response = await fetch(apiOrigin + path + url.search, {
         method: req.method, headers, body: payload, redirect: 'error', signal: AbortSignal.timeout(12_000),
       });
       const data = await response.json();
+      login.assertAccess(req, access, { write: guarded });
       if (response.headers.has('retry-after')) res.setHeader('Retry-After', response.headers.get('retry-after'));
       return json(res, response.status, data);
     }

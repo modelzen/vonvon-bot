@@ -120,7 +120,7 @@ function safeFailure(error: unknown): SafeFailure {
     const code = safeErrorCode(error.code);
     return { kind: 'rpc', message: sanitizeDaemonMessage(error.message), ...(code ? { code } : {}) };
   }
-  if (error instanceof CommunityError) return {kind: 'validation', message: error.message};
+  if (error instanceof CommunityError) return {kind: 'validation', message: error.message, code: error.code, ...(error.retryAfter ? {retryAfter: error.retryAfter} : {})};
   if (error instanceof ConnectionError) return { kind: 'connection', message: '和后台的连接断开了。' };
   if (error instanceof DeviceUnavailable) return { kind: 'connection', code: 'device_unavailable', message: error.message };
   if (error instanceof DeviceSwitched) return { kind: 'connection', code: 'device_switched', message: error.message };
