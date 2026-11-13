@@ -36,3 +36,4 @@ export * from './decision-providers.js';
 export * from './schedule.js';
 export * from "./desktop-account.js";
 export * from './recipe-install.js';
+export * from './desktop-community.js';
