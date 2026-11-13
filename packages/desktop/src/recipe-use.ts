@@ -343,7 +343,6 @@ export class RecipeUseController {
       }
       return this.pending(h, 'joining');
     }
-    // A returned creation belongs to its original journal even when its window or account has gone.
     this.save(h, { ...this.base(h), stage: 'group', groupId });
     this.check(h);
     return this.prepare(h, groupId);
