@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { type VonvonClient, RpcError } from '@vonvon/client/browser';
 import {
@@ -145,6 +146,11 @@ export class RecipeUseController {
     )
       return this.done(h, groupId, 'applied');
     if ((reply.kind !== 'prepared' && reply.kind !== 'review') || reply.groupId !== groupId) throw invalid();
+    if (
+      reply.incomingRole !== h.preview.content.role ||
+      !isDeepStrictEqual(reply.incomingSetup, h.preview.content.setup)
+    )
+      throw invalid();
     const {
       reviewToken,
       currentRole,
@@ -167,13 +173,31 @@ export class RecipeUseController {
       roleChoiceRequired,
       setupChoiceRequired,
     });
-    if (reply.kind === 'prepared') {
-      if (
-        reply.targetPublicKey !== h.pk ||
+    if (
+      reply.kind === 'prepared' &&
+      (reply.targetPublicKey !== h.pk ||
         reply.versionId !== h.input.versionId ||
-        reply.manifestSha256 !== h.preview.manifestSha256
-      )
-        throw invalid();
+        reply.manifestSha256 !== h.preview.manifestSha256)
+    )
+      throw invalid();
+    if (
+      h.row?.stage === 'operation' &&
+      h.row.action === 'reviewed' &&
+      (reply.kind === 'review' || h.row.operation.id !== reply.operationId)
+    ) {
+      const previous = h.row;
+      const released = this.status(
+        h,
+        previous,
+        await this.daemon(h, { type: 'cancel', botId: h.input.botId, operationId: previous.operation.id }),
+      );
+      this.check(h);
+      if (released.status !== 'rejected') {
+        this.save(h, { ...previous, action: 'confirm' });
+        return this.pending(h, 'installing');
+      }
+    }
+    if (reply.kind === 'prepared') {
       this.save(h, {
         ...this.base(h),
         stage: 'operation',
@@ -353,7 +377,8 @@ export class RecipeUseController {
         if (status.stillNeedsTicket && status.issuerState === 'issuing') return reconcile();
         status = this.status(h, row, await this.daemon(h, { type: 'cancel', ...target }));
         this.check(h);
-        if (status.status === 'rejected') return this.done(h, row.groupId, 'rejected', '已取消或过期');
+        if (status.status === 'rejected' && status.issuerState !== 'authorized')
+          return this.done(h, row.groupId, 'rejected', '已取消或过期');
         if (status.stillNeedsTicket) return reconcile();
       }
     }
@@ -408,6 +433,7 @@ export class RecipeUseController {
     const read = recipeInstallReplySchema.parse(await lease.client.recipeInstall({ type: 'source', botId, groupId }));
     check();
     if (read.kind !== 'source' || read.groupId !== groupId) throw invalid();
+    if (request.type === 'ignore' && !read.source) throw changed();
     if (request.type === 'read' || !read.source || !accountId || !signal) return { source: read.source };
     const latest = await recipeCloud(this.account, { accountId, signal, check }).latest(read.source.recipeId);
     check();

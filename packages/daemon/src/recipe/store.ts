@@ -23,6 +23,7 @@ const operationSchema = z.object({
   createdAt: z.number(), status: z.enum(['prepared', 'in_progress', 'applied', 'rejected']),
   cloudCompletion: z.enum(['none', 'required', 'confirmed']).optional(),
   preparationSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  issuerState: z.enum(['unissued', 'issuing', 'authorized']).optional(),
   authorization: z.custom<RecipeAuthorization>(value => recipeAuthorizationSchema.safeParse(value).success).optional(), reason: z.string().optional(), completedAt: z.number().optional(),
 }).strict();
 const operations = (stored: Record<string, unknown>): Record<string, RecipeOperation> => {
@@ -32,6 +33,8 @@ const operations = (stored: Record<string, unknown>): Record<string, RecipeOpera
       || (['applied', 'rejected'].includes(operation.status) && operation.completedAt === undefined)) throw new Error('配方安装记录损坏');
     operation.cloudCompletion ??= operation.status === 'in_progress' || operation.status === 'applied'
       || (operation.status === 'rejected' && operation.authorization) ? 'required' : 'none';
+    operation.issuerState ??= operation.authorization ? 'authorized' : 'issuing';
+    if (Boolean(operation.authorization) !== (operation.issuerState === 'authorized')) throw new Error('配方安装记录损坏');
     if ((operation.status === 'prepared' && operation.cloudCompletion !== 'none')
       || (operation.status === 'in_progress' && operation.cloudCompletion !== 'required')
       || (operation.status === 'applied' && operation.cloudCompletion === 'none')
@@ -45,7 +48,8 @@ const settingsHash = (row: Project): string => sha256(JSON.stringify(row));
 const PREPARATION_MS = 300000, RETENTION_MS = 8 * 86400000, MAX_OPERATIONS = 512, MAX_LEDGER_BYTES = 8 * 1024 * 1024;
 const budgetSchema = z.record(uuid, z.object({day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), count: z.number().int().min(1).max(60)}).strict());
 const budgetsOf = (stored: Record<string, unknown>) => budgetSchema.parse(stored.recipeInstallDaily ?? {});
-const unissuedExpired = (operation: RecipeOperation, now: number): boolean => operation.status === 'prepared' && !operation.authorization && now - operation.createdAt >= PREPARATION_MS;
+const unissuedExpired = (operation: RecipeOperation, now: number): boolean => operation.status === 'prepared' && operation.issuerState === 'unissued'
+  && !operation.authorization && now - operation.createdAt >= PREPARATION_MS;
 const expire = (operation: RecipeOperation): RecipeOperation => ({...operation, status: 'rejected', reason: '本机准备已过期', completedAt: operation.createdAt + PREPARATION_MS});
 const active = (operation: RecipeOperation, now: number): boolean => operation.cloudCompletion === 'required'
   || ((operation.status === 'prepared' || operation.status === 'in_progress') && !unissuedExpired(operation, now));
@@ -61,7 +65,18 @@ function maintain(history: Record<string, RecipeOperation>, now: number): boolea
 }
 const terminal = (operation: RecipeOperation): RecipeInstallReply => ({kind: 'status', operationId: operation.operationId,
   groupId: groupIdSchema.parse(operation.groupId), status: operation.status === 'prepared' && operation.authorization ? 'in_progress' : operation.status,
+  issuerState: operation.issuerState, stillNeedsTicket: operation.status === 'prepared' && !operation.authorization,
   ...('reason' in operation && operation.reason ? {reason: operation.reason} : {})});
+
+export class RecipeRecoveryRequired extends Error {}
+export function assertRecipeRemovalSafe(target: RegistryLocation): Promise<void> {
+  return mutateProjectStore(target, async stored => {
+    const unsafe = Object.values(operations(stored)).some(operation => operation.cloudCompletion === 'required'
+      || ((operation.status === 'prepared' || operation.status === 'in_progress') && (operation.issuerState !== 'unissued' || operation.authorization)));
+    if (unsafe) throw new RecipeRecoveryRequired('这个 Bot 还有待恢复的配方安装，请先恢复或取消原操作后再移除。');
+    return {changed: false, value: undefined};
+  });
+}
 
 export interface RecipeStoreOptions {
   targetPublicKey: string;
@@ -139,7 +154,7 @@ export class RecipeStore {
         const preparationSha256 = sha256(JSON.stringify([request.accountId, bot, row.chatId, row.bindingIncarnation,
           row.projectSettingsRevision, settingsHash(row), request.manifestSha256, request.manifest, resolution,
           role, setup ?? null, this.options.targetPublicKey]));
-        const reused = Object.values(history).find(operation => operation.status === 'prepared' && !operation.authorization
+        const reused = Object.values(history).find(operation => operation.status === 'prepared' && operation.issuerState === 'unissued' && !operation.authorization
           && operation.createdAt <= now && !unissuedExpired(operation, now) && operation.preparationSha256 === preparationSha256);
         if (reused) {
           if (maintained) stored.recipeInstallOperations = history;
@@ -159,7 +174,7 @@ export class RecipeStore {
           settingsSha256: settingsHash(row), manifest: request.manifest, manifestSha256: request.manifestSha256,
           incoming, role, ...(setup ? {setup: copy(setup)} : {}), nonce: nonce.toString('base64url'),
           nonceCommitment: Buffer.from(sha256(nonce), 'hex').toString('base64url'), targetPublicKey: this.options.targetPublicKey,
-          createdAt: now, status: 'prepared', cloudCompletion: 'none', preparationSha256,
+          createdAt: now, status: 'prepared', cloudCompletion: 'none', preparationSha256, issuerState: 'unissued',
         };
         history[operationId] = operation;
         daily[request.accountId] = {day, count: (daily[request.accountId]?.count ?? 0) + 1};
@@ -205,6 +220,22 @@ export class RecipeStore {
     }, this.options.beforeCommit);
   }
   async status(botId: string, operationId: string): Promise<RecipeInstallReply> { return terminal(await this.get(botId, operationId)); }
+  async issuing(botId: string, operationId: string): Promise<RecipeInstallReply> {
+    const captured = await this.get(botId, operationId);
+    if (captured.status === 'applied' || captured.status === 'rejected') return terminal(captured);
+    await withRegisteredBot(botId, () => mutateProjectStore(this.location(botId), async stored => {
+      const history = operations(stored), operation = history[operationId];
+      if (!operation || operation.bot.appId !== botId) throw new Error('配方安装记录不存在');
+      if (unissuedExpired(operation, this.now())) {
+        history[operationId] = expire(operation); stored.recipeInstallOperations = history;
+        return {changed: true, value: undefined};
+      }
+      if (operation.status !== 'prepared' || operation.issuerState !== 'unissued') return {changed: false, value: undefined};
+      operation.issuerState = 'issuing'; stored.recipeInstallOperations = history;
+      return {changed: true, value: undefined};
+    }, this.options.beforeCommit), captured.bot);
+    return this.status(botId, operationId);
+  }
   async authorize(botId: string, operationId: string, supplied?: RecipeAuthorization): Promise<RecipeOperation> {
     const captured = await this.get(botId, operationId);
     const perform = () => mutateProjectStore(this.location(botId), async stored => {
@@ -221,7 +252,7 @@ export class RecipeStore {
           || authorization.targetPublicKey !== operation.targetPublicKey || authorization.nonceCommitment !== operation.nonceCommitment
           || (operation.authorization && !same({...operation.authorization, status: 'authorized'}, {...authorization, status: 'authorized'}))) throw new Error('配方安装授权与本机准备不一致');
         if (!operation.authorization && operation.status === 'prepared') {
-          operation.authorization = authorization; stored.recipeInstallOperations = history;
+          operation.authorization = authorization; operation.issuerState = 'authorized'; stored.recipeInstallOperations = history;
           return {changed: true, value: copy(operation)};
         }
       }
@@ -279,7 +310,7 @@ export class RecipeStore {
     }
   }
   async cancel(botId: string, operationId: string): Promise<RecipeInstallReply> {
-    return this.rejectWhen(botId, operationId, '主人已取消', operation => !operation.authorization && operation.status === 'prepared');
+    return this.rejectWhen(botId, operationId, '主人已取消', operation => !operation.authorization && operation.issuerState === 'unissued' && operation.status === 'prepared');
   }
   async rejectUnredeemed(botId: string, operationId: string, reason: string): Promise<RecipeInstallReply> {
     return this.rejectWhen(botId, operationId, reason, operation => operation.cloudCompletion === 'none' && operation.status === 'prepared');

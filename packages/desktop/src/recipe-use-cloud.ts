@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { recipeAuthorizationSchema, recipeManifestSchema, recipeLatestSchema } from '@vonvon/protocol';
+import {
+  recipeAuthorizationSchema,
+  recipeManifestSchema,
+  recipeLatestSchema,
+  type RecipeManifest,
+} from '@vonvon/protocol';
 import type { NativeAccount } from './account-session.js';
 import type { RecipeJournalRow } from './recipe-use-journal.js';
 
@@ -18,7 +23,7 @@ const previewSchema = z
     manifestSha256: z.string().regex(/^[a-f0-9]{64}$/),
   })
   .strict();
-export type InstallPreview = z.infer<typeof previewSchema>;
+export type InstallPreview = z.infer<typeof previewSchema> & { content: RecipeManifest };
 type Operation = Extract<RecipeJournalRow, { stage: 'operation' }>;
 export interface RecipeAccountLease {
   accountId: string;
@@ -88,7 +93,7 @@ export function recipeCloud(account: NativeAccount, lease: RecipeAccountLease) {
         throw invalid();
       const manifest = recipeManifestSchema.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
       if (manifest.recipeId !== recipeId || manifest.versionId !== versionId) throw invalid();
-      return parsed;
+      return { ...parsed, content: manifest };
     },
     async authorize(row: Operation) {
       const body = {

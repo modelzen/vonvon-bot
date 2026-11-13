@@ -37,7 +37,6 @@ const rowSchema = z.discriminatedUnion('stage', [
     .strict(),
 ]);
 export type RecipeJournalRow = z.infer<typeof rowSchema>;
-export type RecipeOperationRef = z.infer<typeof operation>;
 const fileSchema = z.object({ v: z.literal(1), rows: z.array(rowSchema).max(64) }).strict();
 export class RecipeJournal {
   private rows: RecipeJournalRow[] | undefined;

@@ -64,10 +64,13 @@ function fixture() {
     issued: false,
     saved: false,
     versionRight: true,
+    expired: false,
+    negative: true,
     dropCommit: false,
     dropCreation: false,
     found: false,
     extra: false,
+    wrongPreview: false,
     steps: [] as string[],
     commitIds: [] as string[],
     createIds: [] as string[],
@@ -107,6 +110,7 @@ function fixture() {
           nonceCommitment: commitment,
         });
         state.rawAuths.push(path);
+        if (state.expired) return Response.json({ error: { code: 'operation_expired' } }, { status: 410 });
         return Response.json({
           ...body,
           accountId,
@@ -152,7 +156,7 @@ function fixture() {
         return status();
       }
       if (kind === 'reconcile') {
-        state.local = 'rejected';
+        if (state.negative) state.local = 'rejected';
         return status();
       }
       if (r.type === 'createdGroup') return { kind: r.type, groupId: state.found ? groupId : null };
@@ -166,7 +170,7 @@ function fixture() {
           groupId,
           reviewToken: (state.changedReview ? 'c' : 'b').repeat(64),
           currentRole: state.changedReview ? '已变更' : '本地职责',
-          incomingRole: '角色🦉',
+          incomingRole: state.wrongPreview ? '别的职责' : '角色🦉',
           roleChoiceRequired: state.conflict,
           setupChoiceRequired: false,
         };
@@ -264,6 +268,13 @@ describe('native recipe installation', () => {
     await expect(f.begin()).rejects.toThrow();
     expect(f.state.steps).not.toContain('daemon:prepare');
   });
+  it('never displays a daemon preview whose incoming text differs from the exact cloud bytes', async () => {
+    const f = fixture();
+    f.state.wrongPreview = true;
+    await expect(f.begin()).rejects.toThrow('回执无效');
+    expect(f.state.userValues).toEqual([]);
+    expect(f.state.rawAuths).toEqual([]);
+  });
   it('replaces an outdated resolution with a fresh review and requests no authorization until confirmation', async () => {
     const f = fixture();
     f.state.conflict = true;
@@ -320,6 +331,28 @@ describe('native recipe installation', () => {
       expect(seen).toBe(true);
       expect(f.state.commitIds).toEqual([]);
     }
+  });
+  it('never treats an unavailable ticket as a definitive cancellation', async () => {
+    const f = fixture();
+    const p = await f.begin();
+    f.state.expired = true;
+    f.state.negative = false;
+    expect(await f.main({ type: 'confirm', handle: f.handle(p) })).toMatchObject({ kind: 'pending' });
+    expect(f.state.steps).toContain('daemon:reconcile');
+    expect(f.state.commitIds).toEqual([]);
+    f.state.negative = true;
+    const rejected = await f.main({ type: 'resume', handle: f.handle(p) });
+    expect(rejected).toMatchObject({ kind: 'rejected' });
+    const retry = await f.main({ type: 'retry', handle: f.handle(p) });
+    expect(retry).toMatchObject({ kind: 'prepared', groupId: f.groupId });
+    expect(f.state.createIds).toHaveLength(0);
+  });
+  it('cancels an unissued operation in the original account before recording the local result', async () => {
+    const f = fixture();
+    const p = await f.begin();
+    expect(await f.main({ type: 'cancel', handle: f.handle(p) })).toMatchObject({ kind: 'rejected' });
+    expect(f.state.steps.indexOf('cloud:cancel')).toBeLessThan(f.state.steps.indexOf('daemon:cancel'));
+    expect(f.state.steps).not.toContain('cloud:authorize');
   });
   it('refuses a changed key after cloud authorization', async () => {
     const f = fixture();
