@@ -154,7 +154,6 @@ export class RecipeStore {
       return {changed: true, value: undefined};
     }, this.options.beforeCommit);
   }
-  /** Membership is checked by the live Bot process while the registration and project locks remain held. */
   async apply(botId: string, operationId: string, isInChat: (botId: string, groupId: string) => Promise<void>): Promise<RecipeInstallReply> {
     const captured = await this.get(botId, operationId);
     if (captured.status === 'applied' || captured.status === 'rejected') return terminal(captured);

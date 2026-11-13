@@ -23,7 +23,6 @@ export function recipeApiOrigin(value: string, allowLoopbackForTests = false): s
 class RecipeServiceError extends Error {
   constructor(readonly status: number, readonly code?: string) {super(`配方服务暂未确认安装 (${status})`);}
 }
-/** Only scoped operation credentials cross this boundary. Account bearer tokens never enter the daemon. */
 export class RecipeInstaller {
   readonly store: RecipeStore;
   private readonly origin: string;

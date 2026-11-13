@@ -256,7 +256,6 @@ function sameIdentity(entry: BotEntry, expected: BotIdentity): boolean {
     && entry.createdAt === expected.createdAt && entry.registrationId === expected.registrationId;
 }
 
-/** Hold the registration stable while a child project transaction commits. */
 export function withRegisteredBot<T>(appId: string, operation: (identity: BotIdentity) => Promise<T>, expected?: BotIdentity): Promise<T> {
   return holdMutexRole('bots', () => ownBots(async registry => {
     const entry = registry.bots.find(bot => bot.appId === appId);
