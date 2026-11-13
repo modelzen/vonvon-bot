@@ -206,3 +206,71 @@ it('ignores a native old-account receipt after another account opens the same ve
   expect(calls.filter(request=>request.type==='detail')).toHaveLength(before);
   expect([...document.querySelectorAll('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(false);
 });
+
+it('recovers a clock-rejected native attempt only after a checked explicit retry with a corrected key', async () => {
+  const now=Date.now();let clock=now+86400000,acquired=false;
+  vi.spyOn(Date,'now').mockImplementation(()=>clock);
+  const normal=handle;
+  handle=async request=>{
+    if(request.type==='acquire') {
+      const born=parseInt(request.requestId.slice(3).replaceAll('-','').slice(0,12),16);
+      if(born>now+120000)throw {code:'operation_clock_skew'};
+      acquired=true;return {recipeId:A,versionId:B,owned:false,acquired:true};
+    }
+    if(request.type==='detail'){const {config:_config,...publicRecipe}=recipe;return {...publicRecipe,public:{...recipe.public,access:'coded'},acquired,...(acquired?{config:recipe.config}:{})};}
+    return normal(request);
+  };
+  try {
+    await draw();await click('打开已发布版本');await fill('分享码','Ab-CD');await click('获取配方');
+    expect(document.body.textContent).toContain('校准设备时间');expect(document.body.textContent).toContain('再次点击');
+    expect(calls.filter(request=>request.type==='detail')).toHaveLength(2);
+    expect(calls.filter(request=>request.type==='acquire')).toHaveLength(1);
+    clock=now;await click('获取配方');
+    const attempts=calls.filter(request=>request.type==='acquire');expect(attempts).toHaveLength(2);
+    expect(attempts[1]!.requestId).not.toBe(attempts[0]!.requestId);expect(attempts[1]).toMatchObject({code:'Ab-CD'});
+    expect(document.body.textContent).toContain('已获取，已保存在你的账号中');
+  } finally {vi.restoreAllMocks();}
+});
+
+it('keeps a native clock-rejected raw/key until an online exact-version read confirms the existing entitlement', async () => {
+  let offline=false,acquired=false;const normal=handle;
+  handle=async request=>{
+    if(request.type==='acquire')throw {code:'operation_clock_skew'};
+    if(request.type==='detail'){
+      if(offline)throw new Error('offline');
+      const {config:_config,...publicRecipe}=recipe;return {...publicRecipe,public:{...recipe.public,access:'coded'},acquired,...(acquired?{config:recipe.config}:{})};
+    }
+    return normal(request);
+  };
+  await draw();await click('打开已发布版本');await fill('分享码','Ab-CD');offline=true;await click('获取配方');
+  expect(document.querySelector<HTMLInputElement>('[aria-label="分享码"]')?.value).toBe('Ab-CD');
+  offline=false;acquired=true;await click('获取配方');
+  const attempts=calls.filter(request=>request.type==='acquire');expect(attempts).toHaveLength(2);expect(attempts[1]).toEqual(attempts[0]);
+  expect(document.body.textContent).toContain('已获取，已保存在你的账号中');
+});
+
+it('keeps a clock-rejected native key when reconciliation returns another version',async()=>{
+  let mismatched=false;const normal=handle;
+  handle=async request=>{
+    if(request.type==='acquire')throw {code:'operation_clock_skew'};
+    if(request.type==='detail'&&mismatched)return {...recipe,versionId:draftId};
+    return normal(request);
+  };
+  await draw();await click('打开已发布版本');mismatched=true;await click('获取配方');await click('获取配方');
+  const attempts=calls.filter(request=>request.type==='acquire');expect(attempts).toHaveLength(2);expect(attempts[1]).toEqual(attempts[0]);
+  expect(document.body.textContent).toContain('获取结果暂未确认');
+});
+
+it('ignores a native clock reconciliation after route A-B-A and preserves the current attempt',async()=>{
+  let finish!:(value:unknown)=>void,reads=0;const normal=handle;
+  handle=async request=>{
+    if(request.type==='acquire')throw {code:'operation_clock_skew'};
+    if(request.type==='detail'&&++reads===2)return new Promise(resolve=>{finish=resolve;});
+    return normal(request);
+  };
+  await draw();await click('打开已发布版本');await click('获取配方');expect(finish).toBeTypeOf('function');
+  await click('返回 Bot 配方');await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  await act(async()=>{finish({...recipe,acquired:true});});
+  expect(document.body.textContent).not.toContain('已获取，已保存在你的账号中');
+  await click('获取配方');const attempts=calls.filter(request=>request.type==='acquire');expect(attempts).toHaveLength(2);expect(attempts[1]).toEqual(attempts[0]);
+});

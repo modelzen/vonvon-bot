@@ -99,3 +99,81 @@ test('actual Web runtime ignores an old account response after a new account ope
   const lastRead=h.calls.filter(c=>c.path.startsWith('/api/v1/recipes/')).at(-1);
   assert.equal(lastRead.options.headers['X-Vonvon-Session'],'session-b');
 });
+
+for (const dismiss of ['cancel','escape']) for (const late of ['success','error']) {
+  test(`actual Web runtime releases a ${dismiss} claim button and ignores late ${late} after reopening`,async t=>{
+    const pending=[];
+    const h=await runtime(t,async(_path,options)=>options.method==='POST'?new Promise(resolve=>pending.push(resolve)):Response.json(recipe));
+    const old=await h.open(), trigger=h.document.querySelector('main .actions button:last-child');
+    await h.submit(old,'Original-Code');
+    assert.equal(trigger.disabled,true);
+    if(dismiss==='cancel') [...old.querySelectorAll('button')].find(b=>b.textContent==='取消').click();
+    else h.document.querySelector('dialog').dispatchEvent(new h.dom.window.Event('cancel',{cancelable:true}));
+    await h.settle();
+    assert.equal(trigger.disabled,false,'dismissing a pending claim releases the route button immediately');
+    assert.equal(h.document.querySelector('dialog').open,false);
+    const newer=await h.open();
+    assert.equal(newer.querySelector('input').value,'Original-Code');
+    await h.submit(newer,'Original-Code');
+    assert.equal(trigger.disabled,true);
+    pending[0](late==='success'?Response.json({}):Response.json({error:{code:'invalid_code'}},{status:422}));
+    await h.settle();
+    assert.equal(trigger.disabled,true,'an old finalizer cannot release a new pending claim');
+    assert.equal(newer.querySelector('button.button').disabled,true);
+    assert.equal(newer.querySelector('input').value,'Original-Code');
+    assert.equal(newer.querySelector('.error').textContent,'');
+    assert.equal(h.document.querySelector('dialog').open,true);
+    const posts=h.calls.filter(c=>c.options.method==='POST');
+    assert.equal(posts.length,2);assert.equal(posts[0].options.headers['Idempotency-Key'],posts[1].options.headers['Idempotency-Key']);
+    pending[1](Response.json({error:{code:'rate_limited'}},{status:429}));await h.settle();
+    assert.equal(trigger.disabled,false);
+  });
+}
+
+test('actual Web runtime recovers after correcting the clock with a checked explicit retry',async t=>{
+  const now=Date.now();const original=Date.now;let clock=now+86400000,acquired=false;
+  Date.now=()=>clock;t.after(()=>{Date.now=original;});
+  const h=await runtime(t,async(_path,options)=>{
+    if(options.method!=='POST')return Response.json({...recipe,acquired});
+    const born=parseInt(options.headers['Idempotency-Key'].slice(3).replaceAll('-','').slice(0,12),16);
+    if(born>now+120000)return Response.json({error:{code:'operation_clock_skew'}},{status:422});
+    acquired=true;return Response.json({});
+  });
+  const form=await h.open();await h.submit(form,'Ab-CD');
+  assert.match(form.textContent,/校准设备时间/);assert.match(form.textContent,/再次点击/);
+  assert.equal(h.calls.filter(c=>c.path.startsWith('/api/v1/recipes/')).length,2);
+  assert.equal(h.calls.filter(c=>c.options.method==='POST').length,1);
+  clock=now;await h.submit(form,'Ab-CD');
+  const posts=h.calls.filter(c=>c.options.method==='POST');assert.equal(posts.length,2);
+  assert.notEqual(posts[0].options.headers['Idempotency-Key'],posts[1].options.headers['Idempotency-Key']);
+  assert.equal(posts[1].options.body,'{"code":"Ab-CD"}');assert.equal(h.document.querySelector('dialog').open,false);
+});
+
+test('actual Web runtime retains a clock-rejected raw/key while reconciliation is offline and accepts an existing entitlement',async t=>{
+  let offline=true,acquired=false,reads=0;
+  const h=await runtime(t,async(_path,options)=>{
+    if(options.method==='POST')return Response.json({error:{code:'operation_clock_skew'}},{status:422});
+    if(++reads>1&&offline)throw new Error('offline');return Response.json({...recipe,acquired});
+  });
+  const form=await h.open();await h.submit(form,'Ab-CD');
+  assert.match(form.textContent,/暂未确认/);assert.equal(form.querySelector('input').value,'Ab-CD');
+  offline=false;acquired=true;await h.submit(form,'Ab-CD');
+  const posts=h.calls.filter(c=>c.options.method==='POST');assert.equal(posts.length,2);
+  assert.equal(posts[0].options.headers['Idempotency-Key'],posts[1].options.headers['Idempotency-Key']);
+  assert.equal(h.document.querySelector('dialog').open,false);assert.match(h.document.querySelector('main').textContent,/已获取/);
+});
+
+for(const transition of ['route','account']) test(`actual Web runtime ignores a late clock reconciliation after ${transition} changes`,async t=>{
+  let finish,reads=0;
+  const h=await runtime(t,async(_path,options)=>{
+    if(options.method==='POST')return Response.json({error:{code:'operation_clock_skew'}},{status:422});
+    if(++reads===2)return new Promise(resolve=>{finish=resolve;});return Response.json(recipe);
+  });
+  const old=await h.open();await h.submit(old,'OLD-CODE');assert.equal(typeof finish,'function');
+  if(transition==='account')h.api.setSession({signedIn:true,displaySession:'session-b',providers:[]});
+  else {h.dom.reconfigure({url:'https://recipes.example'+route.replace(recipe.versionId,'33333333-3333-4333-8333-333333333333')});await h.api.detail();h.dom.reconfigure({url:'https://recipes.example'+route});}
+  await h.api.detail();const newer=await h.open();newer.querySelector('input').value='NEW-CODE';
+  finish(Response.json({...recipe,acquired:true}));await h.settle();
+  assert.equal(h.document.querySelector('dialog').open,true);assert.equal(newer.querySelector('input').value,'NEW-CODE');
+  assert.doesNotMatch(h.document.querySelector('main').textContent,/已获取/);
+});
