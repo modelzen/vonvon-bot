@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { paths, botDir, botPaths } from './paths';
 import { loadConfig } from './store';
 import { isComplete, type TenantBrand, type AppConfig, type AppPreferences } from './schema';
-import { acquireMutex, closeMutex } from './data-access';
+import { acquireMutex, closeMutex, holdMutexRole } from './data-access';
 import { type Allocation, type DirectoryClaim, type ObjectIdentity, SafeAppIdSchema, parseAllocations, ensureDurableDirectory, directoryIdentity, materializeAllocation, materializeDirectory, planDirectory, planAllocation, recordCurrent as recordAt, restoreParent, sameObject, syncDirectory, verifyDirectory } from './bot-namespace';
 import { DirectoryError, directoryError } from './directory-errors';
 import { resolveProjectsRootDir, type DirectorySettings } from './directories';
@@ -254,6 +254,14 @@ export function botIdentity(entry: BotEntry): BotIdentity {
 function sameIdentity(entry: BotEntry, expected: BotIdentity): boolean {
   return entry.appId === expected.appId && entry.tenant === expected.tenant
     && entry.createdAt === expected.createdAt && entry.registrationId === expected.registrationId;
+}
+
+export function withRegisteredBot<T>(appId: string, operation: (identity: BotIdentity) => Promise<T>, expected?: BotIdentity): Promise<T> {
+  return holdMutexRole('bots', () => ownBots(async registry => {
+    const entry = registry.bots.find(bot => bot.appId === appId);
+    if (!entry || (expected && !sameIdentity(entry, expected))) throw new Error('机器人已移除或重新注册');
+    return operation(botIdentity(entry));
+  }));
 }
 
 /** Refuse a group creation before it reaches Feishu when this process's bot was removed or registered again (s36d1). */
