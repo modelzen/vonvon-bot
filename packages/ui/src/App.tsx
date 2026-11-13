@@ -92,6 +92,8 @@ import {AdministratorsPanel} from './management/AdministratorsPanel';
 import {appCardFor, coreUpdatable, UpdatePanel} from './management/UpdatePanel';
 import {DesktopUpdateProvider, useDesktopUpdate} from './desktop-update';
 import {DesktopUpdateButton} from './DesktopUpdateButton';
+import {CommunityPage} from './community/CommunityPage';
+import {useCommunity} from './community/community-context';
 import {AccountPanel} from './accounts/AccountPanel';
 import {useAccountPage} from './accounts/account-page';
 
@@ -171,11 +173,12 @@ function DesktopApp() {
   const [setupProvider, setSetupProvider] = useState<SetupProvider>();
   const [setupAgentId, setSetupAgentId] = useState<AgentId>();
   const accountPage = useAccountPage();
+  const community = useCommunity();
   const [currentPage, setCurrentPage] = useState<Page>(() => typeof window !== 'undefined' && window.vonvonCardPreviewScope ? 'collaboration' : 'home');
-  const page = accountPage?.isOpen ? 'account' : currentPage;
+  const page = accountPage?.isOpen ? 'account' : community?.isOpen ? 'community' : currentPage;
   function setPage(next: Page) {
-    if (next === 'account' && accountPage) accountPage.open();
-    else {accountPage?.close(); setCurrentPage(next);}
+    if (next === 'community' && community) {accountPage?.close(); community.open();}
+    else {community?.close(); if (next === 'account' && accountPage) accountPage.open(); else {accountPage?.close(); setCurrentPage(next);}}
   }
   const [externalCoreAvailable, setExternalCoreAvailable] = useState(false);
   const connectedVersion = snapshot?.host.kind === 'connected' ? snapshot.host.version : undefined;
@@ -553,6 +556,11 @@ function DesktopApp() {
     if (cancel) await run({ type: "cancelJob", jobId: cancel }, () => generation === modalGeneration.current);
     if (generation === modalGeneration.current) setModal(null);
   }
+  if (page === 'community') return <AppShell page="community" view={view} title="社区" onNavigate={openPage} onOpenList={openList}
+    onSearch={() => setSearchOpen(true)} updateAction={<DesktopUpdateButton/>}
+    deviceSwitcher={shell?.devices ? <DeviceSwitcher onManage={() => openPage('devices')} onAccount={() => openPage('account')}/> : undefined}>
+    <div className="page-stack"><CommunityPage/></div>
+  </AppShell>;
   if (!snapshot) return <SnapshotPendingView/>;
   const member =
     selection.kind === "membership"
@@ -569,6 +577,7 @@ function DesktopApp() {
   const project = selection.kind === "project" ? snapshot.projects?.find((item) => item.id === selection.id) : undefined;
   const titles: Record<Page, string> = {
     home: "此刻",
+    community: "社区",
     settings: "设置",
     collaboration: route.kind === 'dm' ? `私聊 · ${agent?.name ?? 'Bot'}` : member
       ? `${group?.name ?? '飞书群'} · ${agent?.name ?? 'Bot'}`
