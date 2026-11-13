@@ -397,6 +397,8 @@ describe('the bot-session column (unit)', () => {
       'recipeInstall.source', 'recipeInstall.createdGroup', 'recipeInstall.ignoreVersion',
       'recipeInstall.prepare', 'recipeInstall.commit', 'recipeInstall.status', 'recipeInstall.cancel',
       'recipeInstall.issuing', 'recipeInstall.reconcile',
+      ...'advance beginLink cancel close confirmLink deliver edit inspectCandidate inspectLink open prepare reconcile resend reviewSource settle status updateCard'
+        .split(' ').map(type => 'recipeAuthoring.' + type),
     ]);
     const onHost = new Set(['snapshot.get', 'admin.negotiate', 'admin.daemonStatus']);
     for (const [kind, rule] of RULES) expect(rule.places.dm, kind).toBe(refused.has(kind) ? 'deny' : onHost.has(kind) ? 'host' : 'bot');
