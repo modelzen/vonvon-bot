@@ -40,7 +40,7 @@ export async function checkSourceHistory({request, ready, accept, operationId, a
 
   const body = {...completeBody, public:{...completeBody.public, name:'跨设备草稿'}};
   const {op, cap} = await ready(body);
-  await accept(cap, body); // Source device loses the reply. Only its pre-accept operation ID survives.
+  await accept(cap, body);
   const items = (await request('/me/drafts',{token:secondDevice})).items;
   const remoteDraft = items.find(item=>item.public.name===body.public.name);
   assert.ok(remoteDraft);
