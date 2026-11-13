@@ -41,6 +41,7 @@ type Handle = {
   target: DesktopAuthoringOperation['target'];
   groups: Map<GroupId, string>;
   operations: Map<string, AuthoringOperation>;
+  groupIdentity?: string;
   source?: { groupId: GroupId; reviewToken: string };
   challenge?: { id: string; evidence?: string };
   reviewed: Map<string, string>;
@@ -158,6 +159,7 @@ export class RecipeAuthoringController {
   }
   closeAll() {
     for (const h of this.handles.values()) this.revoke(h);
+    this.journal.history.close();
   }
   private async present(h: Handle, force = true) {
     this.check(h);
@@ -243,6 +245,7 @@ export class RecipeAuthoringController {
         throw changed();
       }
       this.check(h);
+      if (input.groupId) h.groupIdentity = await this.groupIdentity(h, input.groupId);
       const result = await this.refresh(h);
       this.check(h);
       h.timer = setInterval(
@@ -280,6 +283,23 @@ export class RecipeAuthoringController {
     this.check(h);
     return { accountId: h.open.accountId, viewId: h.open.viewId, deviceId: h.deviceId, deviceKey: h.deviceKey, botId: h.open.botId };
   }
+  private async groupIdentity(h: Handle, groupId: GroupId) {
+    if (!h.groups.has(groupId)) throw recheck();
+    const reply = expectKind(await this.daemon(h, {type:'groupSourceIdentity', groupId}), 'groupSourceIdentity');
+    if (reply.groupId !== groupId) throw invalidAuthoring();
+    return reply.identity;
+  }
+  private async rememberSource(h: Handle, op: AuthoringOperation) {
+    if (op.purpose !== 'prepareDraft' || this.journal.history.source(this.binding(h),op.operationId)) return;
+    const reply = expectKind(await this.daemon(h, {type:'operationSourceIdentity', operationId:op.operationId}), 'operationSourceIdentity');
+    if (reply.operationId !== op.operationId || reply.groupId !== op.groupId) throw invalidAuthoring();
+    if (reply.identity) this.journal.history.remember(this.binding(h), op.operationId, reply.identity);
+    else if (!terminal(op)) throw recheck();
+  }
+  private visible(h: Handle, op: DesktopAuthoringOperation) {
+    return !h.open.groupId || op.groupId === h.open.groupId &&
+      this.journal.history.source(this.binding(h), op.operationId) === h.groupIdentity;
+  }
   private remember(h: Handle, op: AuthoringOperation, cancel = false) {
     const row = this.journal.observe(this.binding(h), op, cancel);
     h.operations.set(op.operationId, op);
@@ -302,6 +322,7 @@ export class RecipeAuthoringController {
     h.operations.clear();
     for (const [index,op] of status.operations.entries()) {
       this.remember(h, op);
+      if (terminal(op) && op.receipt?.status === 'accepted') await this.rememberSource(h, op);
       if (status.linked && op.cardUpdate === 'pending')
         status.operations[index] = await this.operation(h, { type: 'updateCard', operationId: op.operationId });
     }
@@ -359,6 +380,10 @@ export class RecipeAuthoringController {
         h.retry.set(op.operationId, { state: stamp, until: Date.now() + delay, delay, message });
       }
     }
+    if (h.open.groupId && h.groupIdentity !== await this.groupIdentity(h,h.open.groupId)) {
+      this.revoke(h);
+      throw recheck();
+    }
     this.check(h);
     return {
       kind: 'session',
@@ -367,7 +392,7 @@ export class RecipeAuthoringController {
       linked: status.linked,
       operations: [...h.operations.values()].map(op =>
         this.display(h, op, terminal(op) ? undefined : h.retry.get(op.operationId)?.message),
-      ).concat(revoked),
+      ).concat(revoked).filter(op => this.visible(h,op)),
     };
   }
   private async operation(h: Handle, request: ScopedRequest & { operationId: string }) {
@@ -443,6 +468,7 @@ export class RecipeAuthoringController {
     }
     let state = await cloud.get(op);
     this.check(h);
+    if (!state || !('operationId' in state)) await this.rememberSource(h,op);
     if (!state && op.state === 'pendingMain') state = await cloud.register(op);
     this.check(h);
     if (!state) throw invalidAuthoring();
@@ -469,9 +495,21 @@ export class RecipeAuthoringController {
   }
   private async action(h: Handle, r: Exclude<Action, { type: 'close' }>): Promise<DesktopAuthoringReply> {
     await this.present(h, r.type !== 'status');
+    if (h.open.groupId && r.type !== 'status' && r.type !== 'sourceHistory') {
+      if (h.groupIdentity !== await this.groupIdentity(h,h.open.groupId) || ('groupId' in r && r.groupId !== h.open.groupId)) throw recheck();
+    }
     switch (r.type) {
       case 'status':
         return this.refresh(h);
+      case 'sourceHistory': {
+        if (r.groupId !== h.open.groupId || !h.groupIdentity) throw recheck();
+        const current = await this.groupIdentity(h,r.groupId);
+        if (current !== h.groupIdentity) throw recheck();
+        const {ids,nextCursor} = this.journal.history.page(this.binding(h), current, r.cursor);
+        const entries = await this.cloud(h).sourceHistory(ids);
+        if (current !== await this.groupIdentity(h,r.groupId)) throw recheck();
+        return {kind:'sourceHistory', entries, nextCursor};
+      }
       case 'beginLink': {
         const challenge = expectKind(await this.daemon(h, { type: r.type }), 'challenge');
         h.challenge = { id: challenge.challengeId };
@@ -505,6 +543,7 @@ export class RecipeAuthoringController {
       }
       case 'prepare':
       case 'edit': {
+        if (r.type === 'edit' && h.open.groupId) throw recheck();
         if (r.type === 'prepare' && (h.source?.groupId !== r.groupId || h.source.reviewToken !== r.reviewToken))
           throw recheck();
         if (r.type === 'edit') await this.cloud(h).draft(r.draftId, r.baseRevision);
@@ -526,12 +565,14 @@ export class RecipeAuthoringController {
         )
           throw recheck();
         this.remember(h, op);
-        return { kind: 'operation', operation: this.display(h, await this.sync(h, op)) };
+        const updated = this.display(h, await this.sync(h, op));
+        if (!this.visible(h,updated)) throw recheck();
+        return { kind:'operation', operation:updated };
       }
       default: {
         await this.status(h);
         const op = h.operations.get(r.operationId);
-        if (!op) throw recheck();
+        if (!op || !this.visible(h,this.display(h,op))) throw recheck();
         if (r.type === 'inspectCandidate') {
           const candidate = await this.inspect(h, op);
           h.reviewed.set(op.operationId, candidate.payloadDigest);

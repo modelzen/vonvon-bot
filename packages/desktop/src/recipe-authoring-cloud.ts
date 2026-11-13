@@ -4,6 +4,7 @@ import {
   authoringReceiptSchema,
   recipeBinary32Schema,
   recipeDraftSchema,
+  sourceHistoryEntrySchema,
   type AuthoringOperation,
   type AuthoringReceipt,
   type AuthoringReconciliation,
@@ -155,6 +156,14 @@ export function authoringCloud(account: NativeAccount, accountId: string, signal
         .strict()
         .parse(await read('/v1/me'));
       if (actor.accountId !== accountId) throw invalidAuthoring();
+    },
+    async sourceHistory(ids: string[]) {
+      if (!ids.length) return [];
+      const {entries} = z.object({entries:z.array(sourceHistoryEntrySchema).max(32)}).strict().parse(
+        await read('/v1/authoring/source-history', {operationIds:ids}),
+      );
+      if (entries.length !== ids.length || entries.some((entry,i) => entry.operationId !== ids[i])) throw invalidAuthoring();
+      return entries;
     },
     async draft(draftId: string, revision: number) {
       const draft = recipeDraftSchema.parse(await read('/v1/drafts/' + draftId));

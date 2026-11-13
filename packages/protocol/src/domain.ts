@@ -156,6 +156,7 @@ export type DirectoryProblem = z.infer<typeof directoryProblemSchema>;
 export const membershipSchema = z.object({
   avatarDataUrl: z.string().optional(), avatarRef, id: membershipIdSchema, agentId: agentIdSchema,
   groupId: groupIdSchema, name: z.string(), directory: z.string(), backend: z.string(),
+  bindingIncarnation: z.string().uuid().optional(),
   /** The library project this binding belongs to; absent until the daemon has linked the row (daemon start), and from older daemons. */
   projectId: projectIdSchema.optional(),
   /** Absent when the directory is fine, and from daemons before s36c2d. */
@@ -186,6 +187,7 @@ export const agentSchema = z.object({
   lockHeld: lockHeldSchema.optional(),
   /** Local registration date and the display name of the confirmed Feishu application owner. */
   registeredAt: z.number().finite().nonnegative().optional(),
+  registrationId: z.string().max(128).optional(),
   ownerName: z.string().optional(),
   /** Which client opens this Bot; absent from older daemons, read as Feishu. */
   tenant: z.enum(["feishu", "lark"]).optional(),

@@ -116,6 +116,7 @@ async function defaultAuthoring(request: DesktopAuthoringRequest):Promise<Deskto
   const session = sessionFor(request);
   switch(request.type) {
     case 'close': sessions.delete(request.handle);return {kind:'closed'};
+    case 'sourceHistory': return {kind:'sourceHistory',entries:[],nextCursor:null};
     case 'status': return {...session,linked,operations:operations.filter(item=>item.target.accountId===session.target.accountId&&item.target.viewId===session.target.viewId&&item.target.botId===session.target.botId)};
     case 'beginLink': return {kind:'challenge',challengeId,code:'0123456789abcdefabcd',expiresAt:Date.now()+300000};
     case 'inspectLink': return recipient ? {kind:'link',linked:false,recipient:{openId:'ou_verified',chatId:snapshot(A).groups[0]!.id,tenantKey:'tenant_verified'},evidence} : {kind:'link',linked:false};
@@ -173,7 +174,7 @@ async function draw(view=A) {
 
 it('selects an existing group before linking, confirms the actual recipient, attests the reviewed role and opens the original accepted draft',async()=>{
   await draw();await chooseSource();
-  expect(calls).toHaveLength(1);expect(calls[0]).toEqual({type:'open',accountId:accountA,viewId:A,botId:botA});
+  expect(calls).toHaveLength(1);expect(calls[0]).toEqual({type:'open',accountId:accountA,viewId:A,botId:botA,groupId:groupA});
   await linkMyself();await prepare();
   expect(calls.find(request=>request.type==='prepare')).toMatchObject({groupId:groupA,reviewToken:evidence,sourceAttested:true});
   expect(text()).toContain('等待本人在飞书操作');expect(text()).not.toContain('私人草稿已保存');
@@ -471,4 +472,39 @@ it.each(['route','account'] as const)('ignores an abandoned %s refresh and its o
   await act(async()=>{oldCallback(draftId,2);reject!(new Error('离开前的私有刷新错误'));});
   expect(cloudCalls.filter(request=>request.type==='draft')).toHaveLength(reads);
   expect(document.querySelector('.community-detail h1')?.textContent).toBe('现在打开的另一份草稿');expect(text()).not.toContain('离开前的私有刷新错误');
+});
+
+it('opens the exact published version from private group history and keeps uncertain records passive', async () => {
+  linked = false;
+  const secondOp = '019a8000-0000-7000-8000-000000000002';
+  const thirdOp = '019a8000-0000-7000-8000-000000000003';
+  authoring = async r => {
+    if (r.type !== 'sourceHistory') return defaultAuthoring(r);
+    return r.cursor ? {kind:'sourceHistory', entries:[{
+      state:'published',operationId:thirdOp,draftId,recipeId:A,versionId:B,name:'本群最早的版本',version:'1.2',revision:2,
+    }],nextCursor:null} : {kind:'sourceHistory',entries:[
+      {state:'draft',operationId,draftId,recipeId:A,versionId:null,name:'私有历史草稿',version:'',revision:3},
+      {state:'unknown',operationId:secondOp,draftId:null,recipeId:null,versionId:null},
+    ],nextCursor:secondOp};
+  };
+  cloud = async r => {
+    if (r.type === 'detail') return {recipeId:A,versionId:B,revision:2,owned:true,acquired:false,public:{...draft.public,name:'本群最早的版本'},config:{role:'历史版本角色'}};
+    if (r.type === 'shareLink') return {url:'https://community.example/recipes/'+A+'/versions/'+B};
+    if (r.type === 'catalog') return {hero:null,items:[],nextCursor:null};
+    throw new Error('Unexpected request '+r.type);
+  };
+  await draw(); await click('群组');
+  await act(async()=>document.querySelector<HTMLButtonElement>('.group-directory-identity')!.click());
+  await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="设置 群聊 A 中的 Bot A"]')!.click());
+  await click('分享');
+  expect(text()).toContain('私有历史草稿');
+  expect(text()).toContain('保存结果待核实');
+  expect(cloudCalls.some(r=>r.type==='detail'||r.type==='draft'||r.type==='publishDraft')).toBe(false);
+  await click('更多记录');
+  expect(text()).toContain('私有历史草稿');
+  expect(text()).toContain('本群最早的版本');
+  await click('查看发布版本'); await click('能力');
+  expect(text()).toContain('历史版本角色');
+  expect(cloudCalls.find(r=>r.type==='detail')).toMatchObject({recipeId:A,versionId:B,accountId:accountA});
+  expect(cloudCalls.some(r=>r.type==='publishDraft')).toBe(false);
 });
