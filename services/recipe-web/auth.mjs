@@ -132,6 +132,13 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
       if (getSession(req) !== session) throw new WebError(409, 'session_changed');
       return access;
     },
+    assertAccess(req, access, { write = false } = {}) {
+      if (!access) return;
+      const session = getSession(req);
+      if (!session || session.access !== access || (write && req.headers['x-vonvon-session'] !== session.displaySession)) {
+        throw new WebError(409, 'session_changed');
+      }
+    },
     logout(req, res) {
       sessions.delete(cookieValue(req, sessionName));
       flows.delete(cookieValue(req, flowName));

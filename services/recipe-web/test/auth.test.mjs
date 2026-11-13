@@ -33,6 +33,26 @@ test('logout invalidates a write that is waiting for token refresh', async t => 
   assert.equal(login.status(req).signedIn, false);
 });
 
+test('a token obtained before logout cannot be forwarded after an await boundary', async t => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ access_token: 'valid-access', refresh_token: 'refresh', expires_in: 3600 });
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const login = createLogin({ publicOrigin: 'http://localhost:1234', supabaseOrigin: 'http://localhost:1235',
+    publishableKey: 'test', providerNames: ['github'] });
+  t.after(() => login.stop());
+  const start = response();
+  login.start({ headers: {} }, start, new URLSearchParams({ provider: 'github' }));
+  const finish = response();
+  await login.callback({ headers: { cookie: cookie(start.headers['Set-Cookie']) } }, finish,
+    new URL('http://localhost:1234/auth/callback?code=synthetic'));
+  const req = { headers: { cookie: cookie(finish.headers['Set-Cookie'][1]) } };
+  req.headers['x-vonvon-session'] = login.status(req).displaySession;
+  const access = await login.access(req, { write: true });
+  login.assertAccess(req, access, { write: true });
+  login.logout(req, response());
+  assert.throws(() => login.assertAccess(req, access, { write: true }), { status: 409, message: 'session_changed' });
+});
+
 test('anonymous login admission has a bounded burst and recovers over time', () => {
   let now = 1000;
   const admit = createLoginAdmission({ now: () => now });
