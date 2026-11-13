@@ -93,6 +93,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
     const next = await shell.request({type: 'detail', accountId, recipeId: selected.recipeId, versionId: selected.versionId});
     if (!live.current || current !== generation.current) return;
     setDetail(next); setNotice('已获取，已保存在你的账号中。可以稍后从「已获取」添加到群聊。');
+    if (next.acquired || next.owned) community.onUse?.(next);
   }
   const login = <div className="community-empty"><h2>登录后继续</h2><p>{accountStatusText(account.status, account.supported)}</p><Button variant="primary" disabled={!account.supported || account.status?.kind === 'signingIn'} onClick={() => void account.login()}>登录</Button></div>;
   const privatePage = route.kind === 'library' || route.kind === 'workspace' || route.kind === 'draft' || route.kind === 'detail' && route.privateView;
@@ -125,7 +126,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
         <RecipeDetails recipe={detail} share={shareUrl && <CopyButton key={shareUrl} value={shareUrl}/>} action={detail.owned || detail.acquired ? <Button variant="primary" disabled={!community.onUse} onClick={() => community.onUse?.(detail)}>添加到群聊</Button> : <Button variant="primary" disabled={busy || detail.public.access === 'coded' && Boolean(accountId) && !code.trim()} onClick={() => void run(acquire)}>获取配方</Button>}
           management={route.privateView && detail.owned ? <div className="community-actions"><Button onClick={() => open({kind: 'draft', source: detail})}>准备新版</Button></div> : undefined}/>
         {!detail.owned && !detail.acquired && detail.public.access === 'coded' && accountId && <label className="community-editor">分享码<input aria-label="分享码" autoComplete="off" value={code} maxLength={128} onChange={event => setCode(event.target.value)}/></label>}
-        {(detail.owned || detail.acquired) && !community.onUse && <p className="community-muted">已保存在账号中。群聊安装将在目标设备的配方安装功能就绪后开放。</p>}
+        {(detail.owned || detail.acquired) && !community.onUse && <p className="community-muted">已保存在账号中。请使用最新版 Vonvon Bot 桌面应用，把配方添加到群聊。</p>}
         {route.privateView && detail.owned && detail.public.access === 'coded' && <RecipeCodes key={detail.versionId} shell={shell} accountId={accountId!} versionId={detail.versionId}/>}
       </>}
       {busy && <p role="status" className="community-muted">正在读取社区…</p>}

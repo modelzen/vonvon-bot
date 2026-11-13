@@ -35,7 +35,9 @@ export class ConnectionError extends Error {
 
 export interface VonvonClient {
   snapshot(): Promise<DesktopSnapshot>;
-  watchSnapshots(listener: (value: DesktopSnapshot) => void): () => void;
+  /** A desktop view can replace its underlying connection. Notify before its first snapshot;
+   * a client bound to a single transport never reattaches. */
+  watchSnapshots(listener: (value: DesktopSnapshot) => void, onReattached?: () => void): () => void;
   run(command: Command): Promise<CommandResult>;
   settings(request: SettingsRequest): Promise<SettingsReply>;
   collaboration(request: CollaborationRequest): Promise<CollaborationReply>;
