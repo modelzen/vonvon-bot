@@ -45,6 +45,7 @@ async function prepared(value = manifest(), extra = {}) {
   const review = await store().prepare(initial);
   if (review.kind === 'prepared' && Object.keys(extra).length === 0) return review;
   if (review.kind !== 'review' && review.kind !== 'prepared') throw new Error('fixture');
+  if (review.kind === 'prepared') await store().cancel(botId, review.operationId);
   const request = prepare(value, {resolution: {role: {kind: 'replace'}}, reviewToken: review.reviewToken, ...extra});
   if (request.type !== 'prepare') throw new Error('fixture');
   const result = await store().prepare(request);
@@ -81,6 +82,23 @@ beforeEach(async () => {
 afterAll(async () => { vi.unstubAllEnvs(); await rm(root, {recursive: true, force: true}); });
 
 describe('durable role installation', () => {
+  it('rejects a lower published revision before creating another operation', async () => {
+    const current = manifest({revision: 2, role: '第二版职责'}), installed = await ready(current);
+    await store().apply(botId, installed.operationId, async () => {});
+    const file = botPaths(botId).projectsFile, before = await readFile(file, 'utf8');
+    const request = prepare({...current, versionId: randomUUID(), revision: 1, role: '第一版职责'});
+    if (request.type !== 'prepare') throw new Error('fixture');
+    await expect(store().prepare(request)).rejects.toThrow('旧版本');
+    expect(await readFile(file, 'utf8')).toBe(before);
+    expect((await row())?.supplement).toBe('第二版职责');
+  });
+  it('refuses an older prepared revision if a newer version wins before commit', async () => {
+    const first = manifest({revision: 1}), second = {...first, versionId: randomUUID(), revision: 2, role: '第二版职责'};
+    const old = await ready(first), fresh = await ready(second);
+    await store().apply(botId, fresh.operationId, async () => {});
+    expect(await store().apply(botId, old.operationId, async () => {})).toMatchObject({status: 'rejected'});
+    expect((await row())?.recipeInstall?.revision).toBe(2);
+  });
   it('adopts the incoming role when empty and requires a choice for a different legacy persona', async () => {
     const first = prepare();
     if (first.type !== 'prepare') throw new Error('fixture');
@@ -195,6 +213,125 @@ describe('durable role installation', () => {
     expect(Math.abs(bytes.readUIntBE(0, 6) - Date.now())).toBeLessThan(10000);
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain((await store().get(botId, result.operationId)).nonce);
+  });
+});
+
+describe('bounded local preparations', () => {
+  function clockStore(now: () => number) {return new RecipeStore({targetPublicKey: device.keypair.publicKey, location, now, isInChat: async () => {}});}
+  it('reuses an exact unissued preparation with the same UUID and private nonce across retries', async () => {
+    const local = clockStore(() => Date.now()), input = prepare();
+    if (input.type !== 'prepare') throw new Error('fixture');
+    const initial = await local.prepare(input); if (initial.kind !== 'prepared') throw new Error('fixture');
+    const originalNonce = (await local.get(botId, initial.operationId)).nonce;
+    const replies = [initial, ...await Promise.all(Array.from({length: 3}, () => local.prepare(input)))];
+    expect(replies.every(reply => reply.kind === 'prepared')).toBe(true);
+    expect(new Set(replies.map(reply => reply.kind === 'prepared' ? reply.operationId : 'wrong')).size).toBe(1);
+    expect(new Set(replies.map(reply => reply.kind === 'prepared' ? reply.nonceCommitment : 'wrong')).size).toBe(1);
+    expect((await local.get(botId, initial.operationId)).nonce).toBe(originalNonce);
+    const raw = JSON.parse(await readFile(botPaths(botId).projectsFile, 'utf8'));
+    expect(Object.keys(raw.recipeInstallOperations)).toHaveLength(1);
+  });
+  it('keeps distinct accounts and binding lifetimes out of the reuse fingerprint', async () => {
+    const local = clockStore(() => Date.now()), input = prepare();
+    if (input.type !== 'prepare') throw new Error('fixture');
+    const first = await local.prepare(input), second = await local.prepare({...input, accountId: randomUUID()});
+    await removeProject('Fixture group'); await bind();
+    const rebound = await local.prepare(input);
+    expect(new Set([first, second, rebound].map(reply => reply.kind === 'prepared' ? reply.operationId : 'wrong')).size).toBe(3);
+  });
+  it('limits distinct active preparations to three for one account', async () => {
+    const local = clockStore(() => Date.now());
+    for (let index = 0; index < 3; index++) {
+      const input = prepare(); if (input.type !== 'prepare') throw new Error('fixture');
+      expect(await local.prepare(input)).toMatchObject({kind: 'prepared'});
+    }
+    const fourth = prepare(); if (fourth.type !== 'prepare') throw new Error('fixture');
+    await expect(local.prepare(fourth)).rejects.toThrow('待完成');
+  });
+  it('shares the three-active budget across Bots and frees a slot after a safe local cancellation', async () => {
+    await bind('cli_other_fixture');
+    const local = clockStore(() => Date.now()), ids: string[] = [];
+    for (let index = 0; index < 3; index++) {
+      const input = prepare(); if (input.type !== 'prepare') throw new Error('fixture');
+      const value = await local.prepare(input); if (value.kind !== 'prepared') throw new Error('fixture'); ids.push(value.operationId);
+    }
+    const other = prepare(manifest(), {botId: 'cli_other_fixture'}); if (other.type !== 'prepare') throw new Error('fixture');
+    await expect(local.prepare(other)).rejects.toThrow('待完成');
+    await local.cancel(botId, ids[0]!);
+    expect(await local.prepare(other)).toMatchObject({kind: 'prepared'});
+  });
+  it('expires an unissued preparation after five minutes and prunes its safe receipt after eight days', async () => {
+    let now = Date.now(); const local = clockStore(() => now), input = prepare();
+    if (input.type !== 'prepare') throw new Error('fixture');
+    const old = await local.prepare(input); if (old.kind !== 'prepared') throw new Error('fixture');
+    now += 300001;
+    const fresh = await local.prepare(input); if (fresh.kind !== 'prepared') throw new Error('fixture');
+    expect(fresh.operationId).not.toBe(old.operationId);
+    expect(await local.status(botId, old.operationId)).toMatchObject({status: 'rejected'});
+    now += 8 * 86400000 + 600000;
+    await local.prepare(input);
+    const raw = JSON.parse(await readFile(botPaths(botId).projectsFile, 'utf8'));
+    expect(raw.recipeInstallOperations[old.operationId]).toBeUndefined();
+    expect(raw.recipeInstallOperations[fresh.operationId]).toBeUndefined();
+  });
+  it('does not attach a late authorization after the unissued preparation expires', async () => {
+    let now = Date.now(); const local = clockStore(() => now), input = prepare(); if (input.type !== 'prepare') throw new Error('fixture');
+    const value = await local.prepare(input); if (value.kind !== 'prepared') throw new Error('fixture');
+    now += 300001;
+    expect(await local.authorize(botId, value.operationId, authorization(value))).toMatchObject({status: 'rejected', cloudCompletion: 'none'});
+    expect((await local.get(botId, value.operationId)).authorization).toBeUndefined();
+  });
+  it('caps newly created entries per account and UTC day while exact retries do not consume that budget', async () => {
+    const now = Date.now(), local = clockStore(() => now);
+    for (let index = 0; index < 60; index++) {
+      const input = prepare(); if (input.type !== 'prepare') throw new Error('fixture');
+      const value = await local.prepare(input); if (value.kind !== 'prepared') throw new Error('fixture');
+      expect(await local.prepare(input)).toMatchObject({operationId: value.operationId});
+      await local.cancel(botId, value.operationId);
+    }
+    const next = prepare(); if (next.type !== 'prepare') throw new Error('fixture');
+    await expect(local.prepare(next)).rejects.toThrow('今天');
+  }, 15000);
+  it.each(['entries', 'bytes'] as const)('blocks new work at the hard %s bound without discarding uncertain authorizations', async limit => {
+    let now = Date.now(); const local = clockStore(() => now);
+    const large = manifest({role: 'r'.repeat(5000), setup: {steps: Array.from({length: 8}, () => ({kind: 'context' as const, title: 'Text', instructions: 'i'.repeat(2048), required: true}))}});
+    const input = prepare(limit === 'bytes' ? large : manifest()); if (input.type !== 'prepare') throw new Error('fixture');
+    const value = await local.prepare(input); if (value.kind !== 'prepared') throw new Error('fixture');
+    await local.authorize(botId, value.operationId, authorization(value));
+    const prototype = await local.get(botId, value.operationId), records: Record<string, typeof prototype> = {};
+    for (let index = 0; index < (limit === 'entries' ? 512 : 128); index++) {
+      const id = randomUUID(), actor = randomUUID();
+      records[id] = {...prototype, operationId: id, accountId: actor,
+        authorization: {...prototype.authorization!, operationId: id, accountId: actor}};
+    }
+    const file = botPaths(botId).projectsFile, raw = JSON.parse(await readFile(file, 'utf8'));
+    raw.recipeInstallOperations = records; await writeFile(file, JSON.stringify(raw));
+    now += 9 * 86400000;
+    const next = prepare(); if (next.type !== 'prepare') throw new Error('fixture');
+    await expect(local.prepare(next)).rejects.toThrow(limit === 'entries' ? '记录已达上限' : '容量上限');
+    const saved = JSON.parse(await readFile(file, 'utf8'));
+    expect(Object.keys(saved.recipeInstallOperations)).toHaveLength(Object.keys(records).length);
+  });
+  it('preserves old uncertain authorizations and required cloud completions while reclaiming safe receipts', async () => {
+    let now = Date.now(); const local = clockStore(() => now);
+    const one = prepare(); if (one.type !== 'prepare') throw new Error('fixture');
+    const uncertain = await local.prepare(one); if (uncertain.kind !== 'prepared') throw new Error('fixture');
+    await local.authorize(botId, uncertain.operationId, authorization(uncertain));
+    const two = prepare(); if (two.type !== 'prepare') throw new Error('fixture');
+    const required = await local.prepare(two); if (required.kind !== 'prepared') throw new Error('fixture');
+    await local.authorize(botId, required.operationId, authorization(required)); await local.redeemed(botId, required.operationId);
+    await local.apply(botId, required.operationId, async () => {});
+    const third = prepare(manifest({revision: 2})); if (third.type !== 'prepare') throw new Error('fixture');
+    const safe = await local.prepare(third); if (safe.kind !== 'prepared') throw new Error('fixture');
+    await local.authorize(botId, safe.operationId, authorization(safe)); await local.redeemed(botId, safe.operationId);
+    await local.apply(botId, safe.operationId, async () => {}); await local.confirmCompletion(botId, safe.operationId);
+    now += 8 * 86400000 + 600000;
+    const next = prepare(manifest({revision: 3})); if (next.type !== 'prepare') throw new Error('fixture');
+    await local.prepare(next);
+    const raw = JSON.parse(await readFile(botPaths(botId).projectsFile, 'utf8'));
+    expect(raw.recipeInstallOperations[uncertain.operationId]?.authorization).toBeDefined();
+    expect(raw.recipeInstallOperations[required.operationId]?.cloudCompletion).toBe('required');
+    expect(raw.recipeInstallOperations[safe.operationId]).toBeUndefined();
   });
 });
 
