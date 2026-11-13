@@ -1,6 +1,6 @@
 import type { VonvonClient } from '@vonvon/client/browser';
 import {
-  desktopAuthoringRequestSchema, desktopAuthoringReplySchema, desktopRecipeSourceRequestSchema,desktopRecipeSourceReplySchema,recipeUseReplySchema, recipeUseRequestSchema, communityRequestSchema, communityResponseSchemas, type CommunityShell, accountStatusSchema, type AccountStatus, adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
+  acquisitionFailureSchema, desktopAuthoringRequestSchema, desktopAuthoringReplySchema, desktopRecipeSourceRequestSchema,desktopRecipeSourceReplySchema,recipeUseReplySchema, recipeUseRequestSchema, communityRequestSchema, communityResponseSchemas, type CommunityShell, accountStatusSchema, type AccountStatus, adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
   commandResultSchema, desktopSnapshotSchema, directoryReplySchema, memoryReplySchema, contextPreviewReplySchema,
   environmentReplySchema, libraryReplySchema, logEventPayloadSchema, machineReplySchema, desktopUpdateSchema, deviceReplySchema,
   scheduleReplySchema, settingsReplySchema, viewIdSchema, devicesStateSchema, deviceEventPayloadSchema, linkPreviewSchema,
@@ -389,7 +389,18 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
     community: {
       request: ((raw: Parameters<CommunityShell['request']>[0]) => {
         const request = communityRequestSchema.parse(raw);
-        return callShellFor(desktopChannels.community, value => communityResponseSchemas[request.type].parse(value), request);
+        if (request.type !== 'acquire') return callShellFor(desktopChannels.community, value => communityResponseSchemas[request.type].parse(value), request);
+        return (async () => {
+          try {
+            const result = await transport.invoke(desktopChannels.community, request);
+            if (result && typeof result === 'object' && 'ok' in result && result.ok === false && 'error' in result && result.error && typeof result.error === 'object') {
+              const error = result.error;
+              const parsed = acquisitionFailureSchema.safeParse({code: 'code' in error ? error.code : 'unavailable', ...('retryAfter' in error ? {retryAfter: error.retryAfter} : {})});
+              return {ok: false as const, error: parsed.success ? parsed.data : {code: 'unavailable' as const}};
+            }
+            return {ok: true as const, value: readResult(result, value => communityResponseSchemas.acquire.parse(value))};
+          } catch {return {ok: false as const, error: {code: 'unavailable' as const}};}
+        })();
       }) as CommunityShell['request'],
     },
     account: {

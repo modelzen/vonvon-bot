@@ -1,4 +1,5 @@
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
+import type { Server } from 'node:http';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1266,4 +1267,50 @@ describe('devices-ui-1a views', () => {
     expect(await h.invoke(desktopChannels.devicesRemove, REMOTE_A)).toEqual({ ok: true, value: { revokedRemotely: false } });
     await h.bridge.dispose();
   });
+});
+
+it('carries only typed acquisition outcomes through the actual community IPC and facade', async () => {
+  const h = harness();
+  const accountId = '11111111-1111-4111-8111-111111111111';
+  const versionId = '22222222-2222-4222-8222-222222222222';
+  Object.assign(h.account, {status: () => ({kind: 'signedIn', accountId})});
+  const {shell} = createDesktopFacades({
+    invoke: async (channel, ...args) => structuredClone(await handlers.get(channel)!(h.event, ...args)),
+    receive: () => () => {},
+  });
+  const request = {type: 'acquire' as const, accountId, versionId, requestId: 'a2.01932a00-0000-7abc-8def-0123456789ab', code: 'TEST-CODE'};
+  for (const [code, status] of [['operation_expired',410],['operation_clock_skew',422],['request_upgrade_required',409],['acquire_rate_limited',429]] as const) {
+    h.account.request.mockResolvedValueOnce(Response.json({error:{code, message:'DO-NOT-FORWARD-CODE'}}, {status, headers:{'Retry-After':'123'}}));
+    expect(await shell.community.request(request)).toEqual({ok:false,error:{code,retryAfter:123}});
+  }
+  h.account.request.mockResolvedValueOnce(Response.json({error:{code:'DO-NOT-FORWARD-CODE'}}, {status:503}));
+  expect(await shell.community.request(request)).toEqual({ok:false,error:{code:'unavailable'}});
+  h.account.request.mockRejectedValueOnce(new Error('DO-NOT-FORWARD-CODE'));
+  expect(await shell.community.request(request)).toEqual({ok:false,error:{code:'unavailable'}});
+  h.account.request.mockResolvedValueOnce(Response.json({recipeId:versionId,versionId,owned:false,acquired:true}));
+  expect(await shell.community.request(request)).toEqual({ok:true,value:{recipeId:versionId,versionId,owned:false,acquired:true}});
+  expect(Object.keys(shell.community)).toEqual(['request']);
+  await h.bridge.dispose();
+});
+
+it('preserves the real redeem HTTP limiter outcome through serialized main IPC and the facade',async()=>{
+  const apiSource=new URL('../../../services/recipe-api/src/http.mjs',import.meta.url).href;
+  const errorSource=new URL('../../../services/recipe-api/src/errors.mjs',import.meta.url).href;
+  const limiterSource=new URL('../../../services/recipe-api/src/limiter.mjs',import.meta.url).href;
+  const {createRecipeServer}=await import(apiSource);
+  const {ApiError}=await import(errorSource);
+  const {codeAttempts}=await import(limiterSource);
+  const execute=vi.fn(async()=>{throw new ApiError(422,'invalid_code');});
+  const server:Server=createRecipeServer({verify:async()=>({issuer:'https://project.example/auth/v1',subject:REMOTE_A}),execute,attempts:codeAttempts({now:()=>1000})});
+  const h=harness();
+  try {
+    server.listen(0,'127.0.0.1');await once(server,'listening');
+    const address=server.address();if(!address||typeof address==='string')throw new Error('Missing HTTP port');
+    Object.assign(h.account,{status:()=>({kind:'signedIn',accountId:REMOTE_A}),request:vi.fn(async(_accountId:string,path:string,init:RequestInit)=>fetch(`http://127.0.0.1:${address.port}`+path,{...init,headers:{...init.headers,Authorization:'Bearer synthetic'}}))});
+    const {shell}=createDesktopFacades({invoke:async(channel,...args)=>structuredClone(await handlers.get(channel)!(h.event,...args)),receive:()=>()=>{}});
+    const request={type:'acquire' as const,accountId:REMOTE_A,versionId:REMOTE_B,requestId:'a2.01932a00-0000-7abc-8def-0123456789ab',code:'TEST-CODE'};
+    for(let n=0;n<10;n++)expect(await shell.community.request(request)).toEqual({ok:false,error:{code:'invalid_code'}});
+    expect(await shell.community.request(request)).toEqual({ok:false,error:{code:'rate_limited',retryAfter:600}});
+    expect(execute).toHaveBeenCalledTimes(10);expect(Object.keys(shell.community)).toEqual(['request']);
+  } finally {await h.bridge.dispose();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
 });

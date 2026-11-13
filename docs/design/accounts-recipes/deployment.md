@@ -34,3 +34,40 @@
 - 已在 owner 提供的 Supabase 组织项目列表只读核对：Free，一个旧项目名为 `vonvon-prod`，新加坡，处于暂停状态；官网旧 bridge 账号页配置引用同一项目。不会从暂停推断它没有历史数据，亦不将其改名或用作配方 staging。[免费活动名额](https://supabase.com/docs/guides/platform/billing-on-supabase)跨管理的组织计算，暂停项目不计入。在有可用名额且没有收费的前提下，独立创建测试项目；生产再独立决策。
 - 官网用系统 Nginx 托管，现有独立子域／本机服务有先例。使用单独的 vhost、证书、Unix 用户和部署目录，目录放在官网 `current/` 之外，免受原站同步清理。不要共享统计数据库、业务密钥或 bridge 回调。API 与 Web 都只监听回环；不给外部请求选代理目的地。网页、OAuth 回程、私有 API 禁止共享缓存，并关闭回调查询参数日志。[官网部署](https://github.com/modelzen/vonvon-site/blob/ebd56eb015ee9e936085d3cfdc45412aa1ba8f86/site/DEPLOY.md#L27-L36)。
 - **采购决定：现在不买新机。** 尚未取得生产主机当前空闲内存、磁盘及到 Supabase 的时延实测。部署前检查资源余量和从真实用户网络访问三种登录的表现；对现有官网响应和资源设置隔离及预算。备选是托管函数或独立主机，只有实测共享资源会影响官网、地域可达性达不到要求或有隔离需求时再评估。每次作者发布只是数据写入，不会触发部署。
+
+## 切换领取回执预算
+
+SQL005 需要单事务执行。先在数据库副本运行 `scripts/recipes/check.mjs` 并检查当前数据量。以下 SQL 只读，可统计迁移的三类数据和本日接纳量。
+
+```sql
+select g.actor,
+  count(*) filter (where r.request_id is null) as legacy_grant_only,
+  count(*) filter (where r.request_id is not null) as legacy_with_raw
+from recipe_private.grants g
+left join recipe_private.receipts r on r.actor=g.actor and r.action='acquire' and r.request_id=g.original_request
+group by g.actor;
+select r.actor,count(*) as noop_rows,
+  count(*) filter (where r.created_at>clock_timestamp()-interval '168 hours') as retained_candidates
+from recipe_private.receipts r
+where r.action='acquire' and not exists (
+  select from recipe_private.grants g where g.actor=r.actor and g.original_request=r.request_id)
+group by r.actor;
+select actor,count(*) as accepted_today
+from recipe_private.receipts
+where action='acquire'
+  and created_at>=date_trunc('day',clock_timestamp() at time zone 'UTC') at time zone 'UTC'
+  and created_at<=clock_timestamp()
+group by actor;
+```
+
+按下面顺序切换。不要把全库升级放入业务 HTTP 的五秒事务中。
+
+1. 在流量入口暂停 acquire 和 redeem 写入，返回维护响应。停止旧 API 实例接纳新请求，排空既有请求。核对 `pg_stat_activity` 已无旧领取事务，并持有运维侧停写门。仅取得 grants 和 receipts 表锁不能替代排空旧函数调用。
+2. 保存一致备份以及上述计数、首授 grants 和原始 receipts 的校验结果。以数据量评估锁等待、磁盘和 WAL，安排维护窗口。
+3. 使用迁移账号执行 `psql -X -1 -v ON_ERROR_STOP=1 -f supabase/migrations/20261114000500_recipe_acquisition_budget.sql`。现有迁移工具若已保证每文件一个事务，可以使用相同事务边界。任一失败回滚整份 migration，保持停写并修正原因。
+4. 检查 acquire 的 text 和旧 uuid 两签名均为 recipe_owner，固定 search_path，无 PUBLIC execute。以实际 API LOGIN 的 `SET LOCAL ROLE recipe_api` 检查 text 入口可用、私表和水位不可访问。核对首授原 digest、result、created_at 和 grant 原字段未改；确认 legacy no-op 每账号不超过2048，当前日 seed 等于迁移前成功数的 min(256,n)。
+5. 部署发送 a2.UUIDv7 的 Web 和 native 调用者与显式 text SQL 的 API。先用合成账号验证 exact replay、raw mismatch409、未知裸键升级拒绝及 GET 对账会话保护，再恢复写入。
+
+迁移提交后，只允许前滚修复。降级应用时也保留新 text 入口及旧签名恢复限制。不得恢复旧无限写函数、删除 acquisition_state 或重置 effective_at。裁剪的历史无操作回执只能从一致备份恢复，不能通过旧应用重新构造。第一份真实 raw 证明和永久权益不裁剪。
+
+新成功领取键按业务账号 UTC 日最多256，作者和已取得者的重复操作也计数。已保存精确回执和历史 grant-only 恢复不计数。新无操作回执至少保留168小时，冷账号可能保留更久，实际淘汰后旧键不能重新作为新操作。v2 无操作回执最多2048/账号，迁移过渡期连同 legacy 最多4096/账号。此上界不包含真实权益及首次证明，也不代表数据库文件、WAL 或备份的字节上界。

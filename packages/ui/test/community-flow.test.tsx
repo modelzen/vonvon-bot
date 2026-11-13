@@ -41,7 +41,7 @@ it('retries an uncertain code acquisition with one request key and reports accou
   h.request.mockImplementation(async request => {
     if (request.type === 'detail') return {...recipe, acquired, ...(acquired ? {config: {role: 'role'}} : {})};
     if (request.type === 'shareLink') return {url: 'https://community.example/version'};
-    if (request.type === 'acquire') {if (++attempts === 1) throw new Error('暂时离线'); acquired = true; return {...recipe, acquired: true};}
+    if (request.type === 'acquire') {if (++attempts === 1) throw new Error('暂时离线'); acquired = true; return {ok: true, value: {recipeId: recipe.recipeId, versionId: recipe.versionId, owned: false, acquired: true}};}
     return {};
   });
   render(); await flush();

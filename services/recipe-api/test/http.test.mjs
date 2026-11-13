@@ -201,3 +201,15 @@ test('a stalled rejected upload closes within a bounded wait and does not block 
   await upload.closed;
   assert.equal(calls.length, 1);
 });
+
+test('only acquisition accepts generation-prefixed UUIDv7 keys and retains exact raw payload', async t => {
+  const {write,calls} = await fixture(t);
+  const key = 'a2.01932a00-0000-7abc-8def-0123456789ab';
+  assert.equal((await write('/v1/versions/'+id+'/redeem','POST',{code:'Ab-cD'},{'Idempotency-Key':key})).status,200);
+  assert.deepEqual(calls.at(-1),[identity,'acquire',[id,'Ab-cD',key]]);
+  assert.equal((await write('/v1/versions/'+id+'/acquire','POST',{}, {'Idempotency-Key':id})).status,200);
+  assert.equal((await write('/v1/drafts','POST',draft,{'Idempotency-Key':key})).status,400);
+  for (const invalid of [key.replace('-7abc-', '-4abc-'),key.replace('-8def-', '-0def-'),'a2.'+id,key+', '+id]) {
+    assert.equal((await write('/v1/versions/'+id+'/acquire','POST',{}, {'Idempotency-Key':invalid})).status,400);
+  }
+});

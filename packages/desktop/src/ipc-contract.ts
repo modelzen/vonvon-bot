@@ -81,6 +81,7 @@ export type SafeFailure = {
   kind: 'rpc' | 'connection' | 'validation';
   message: string;
   code?: string;
+  retryAfter?: number;
 };
 
 /** A daemon error code the renderer may see: short and plain, so it cannot carry text of its own. */
