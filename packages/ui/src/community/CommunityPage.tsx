@@ -36,14 +36,16 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   const [publications, setPublications] = useState<RecipeSummary[]>();
   const [detail, setDetail] = useState<RecipeDetail>();
   const [shareUrl, setShareUrl] = useState<string>();
-  const [code, setCode] = useState('');
+  const [inputs, setInputs] = useState<Record<string, string>>({});
+  const code = route.kind === 'detail' ? inputs[route.recipe.versionId] ?? '' : '';
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [refresh, setRefresh] = useState(0);
   const live = useRef(true);
   const generation = useRef(0);
-  const acquisition = useRef(new Map<string, {raw: string; key: string}>());
+  const submitted = useRef(new Map<string, {raw: string; key: string}>());
+  const editCode = (versionId: string, input: string) => setInputs(old => ({...old, [versionId]: input}));
   const navigation = useRef({route, isOpen: community.isOpen});
   if (navigation.current.route !== route || navigation.current.isOpen !== community.isOpen) {navigation.current = {route, isOpen: community.isOpen}; ++generation.current;}
   const requestKeys = useRef(new Map<string, string>());
@@ -53,7 +55,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   useEffect(() => {
     let active = true;
     const current = ++generation.current;
-    setError(undefined); setCode(route.kind === 'detail' ? acquisition.current.get(route.recipe.versionId)?.raw ?? '' : ''); setDetail(undefined); setShareUrl(undefined);
+    setError(undefined); setDetail(undefined); setShareUrl(undefined);
     const request = async () => {
       if (route.kind === 'catalog') {
         if (catalog) {requestAnimationFrame(() => {const element = document.getElementById('main-content'); if (element) element.scrollTop = community.catalog.scrollTop;}); return;}
@@ -63,7 +65,9 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
       } else if (route.kind === 'detail') {
         setBusy(true);
         const result = await shell.request({type: 'detail', ...(accountId ? {accountId} : {}), recipeId: route.recipe.recipeId, versionId: route.recipe.versionId});
-        if (active) setDetail(result);
+        if (!active) return;
+        if (result.recipeId !== route.recipe.recipeId || result.versionId !== route.recipe.versionId) throw new Error('未能确认此配方版本，请重试读取。');
+        setDetail(result);
         const link = await shell.request({type: 'shareLink', recipeId: route.recipe.recipeId, versionId: route.recipe.versionId});
         if (active) setShareUrl(link.url);
       } else if (accountId && route.kind === 'library') {
@@ -92,25 +96,26 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
     const selected = detail, current = generation.current;
     const active = () => live.current && current === generation.current;
     const raw = selected.public.access === 'coded' ? code.trim() : '';
-    let attempt = acquisition.current.get(selected.versionId);
+    let attempt = submitted.current.get(selected.versionId);
     const reconcile = async () => {
       const next = await shell.request({type: 'detail', accountId, recipeId: selected.recipeId, versionId: selected.versionId});
       if (!active()) return undefined;
       if (next.versionId !== selected.versionId || next.recipeId !== selected.recipeId) throw new Error('获取结果暂未确认，请重试同一操作。');
       setDetail(next);
       if (next.owned || next.acquired) {
-        acquisition.current.delete(selected.versionId);
+        submitted.current.delete(selected.versionId);
+        editCode(selected.versionId, '');
         setNotice('已获取，已保存在你的账号中。可以稍后从「已获取」添加到群聊。');
       }
       return next;
     };
     if (attempt && attempt.raw !== raw) {
       const next = await reconcile();
-      if (!next || next.owned || next.acquired) return;
-      acquisition.current.delete(selected.versionId);
+      if (!active() || !next || next.owned || next.acquired) return;
+      submitted.current.delete(selected.versionId);
       throw new Error('已确认尚未获取。请再次点击获取，提交当前输入。');
     }
-    if (!attempt) {attempt = {raw, key: newAcquisitionKey()}; acquisition.current.set(selected.versionId, attempt);}
+    if (!attempt) {attempt = {raw, key: newAcquisitionKey()}; submitted.current.set(selected.versionId, attempt);}
     const request = {type: 'acquire' as const, accountId, versionId: selected.versionId, requestId: attempt.key, ...(selected.public.access === 'coded' ? {code: attempt.raw} : {})};
     const outcome = await shell.request(request);
     if (!active()) return;
@@ -118,11 +123,11 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
       const failure = outcome.error;
       if (failure.code === 'operation_expired' || failure.code === 'request_upgrade_required' || failure.code === 'operation_clock_skew') {
         const next = await reconcile();
-        if (!next || next.owned || next.acquired) return;
-        acquisition.current.delete(selected.versionId);
+        if (!active() || !next || next.owned || next.acquired) return;
+        submitted.current.delete(selected.versionId);
         throw new Error(failure.code === 'operation_clock_skew' ? '已确认尚未获取。请校准设备时间后，再次点击获取，重新提交。' : '已确认尚未获取。请再次点击获取，重新提交。');
       }
-      if (failure.code === 'invalid_code') acquisition.current.delete(selected.versionId);
+      if (failure.code === 'invalid_code') submitted.current.delete(selected.versionId);
       throw new Error(communityFailureMessages[failure.code] + (failure.retryAfter ? ` 请在 ${failure.retryAfter} 秒后重试。` : ''));
     }
     await reconcile();
@@ -157,7 +162,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
       {route.kind === 'detail' && detail && <>
         <RecipeDetails recipe={detail} share={shareUrl && <CopyButton key={shareUrl} value={shareUrl}/>} action={detail.owned || detail.acquired ? <Button variant="primary" disabled={!community.onUse} onClick={() => community.onUse?.(detail)}>添加到群聊</Button> : <Button variant="primary" disabled={busy || detail.public.access === 'coded' && Boolean(accountId) && !code.trim()} onClick={() => void run(acquire)}>获取配方</Button>}
           management={route.privateView && detail.owned ? <div className="community-actions"><Button onClick={() => open({kind: 'draft', source: detail})}>准备新版</Button></div> : undefined}/>
-        {!detail.owned && !detail.acquired && detail.public.access === 'coded' && accountId && <label className="community-editor">分享码<input aria-label="分享码" autoComplete="off" value={code} maxLength={128} onChange={event => setCode(event.target.value)}/></label>}
+        {!detail.owned && !detail.acquired && detail.public.access === 'coded' && accountId && <label className="community-editor">分享码<input aria-label="分享码" autoComplete="off" value={code} maxLength={128} onChange={event => editCode(detail.versionId, event.target.value)}/></label>}
         {(detail.owned || detail.acquired) && !community.onUse && <p className="community-muted">已保存在账号中。群聊安装将在目标设备的配方安装功能就绪后开放。</p>}
         {route.privateView && detail.owned && detail.public.access === 'coded' && <RecipeCodes key={detail.versionId} shell={shell} accountId={accountId!} versionId={detail.versionId}/>}
       </>}

@@ -53,3 +53,9 @@ Mac 隔离临时 PostgreSQL 和 synthetic HTTP identity。运行 `PG_BINDIR=... 
 修复复用既有代次与权益对账，不改 SQL、HTTP 错误行为或全局时钟状态。两端对账失败、离线、版本不符及迟到结果均保留原 raw/key；确认已有权益后结束，确认尚未获取后只允许下一次明确点击创建新键。原生允许的受控码补充 `rate_limited`，继续与每日额度的 `acquire_rate_limited` 区分。验收覆盖取消、Escape、迟到成功和错误、账号切换、路由 A-B-A、校准时间、已有权益、离线对账、版本不符、过期和升级恢复。父任务负责最终独立增量审查；本轮不推送或部署。
 
 本地验证通过 Web/BFF 39项、API HTTP 9项、UI 社区37项、desktop bridge/community-api 96项和 protocol limits 10项。命令为 `node --test services/recipe-web/test/*.test.mjs`、`node --test services/recipe-api/test/http.test.mjs`，以及对应 workspace 内 `npx vitest run` 指定上述测试文件。protocol、UI 和 desktop 的 typecheck/build 通过，构建保留既有依赖及 CommonJS 的警告。没有修改 SQL，沿用父任务已完成的 PostgreSQL 验证，本轮未重复全套数据库测试或浏览器验收。
+
+独立复查另发现两个客户端问题。时钟拒绝后的无权益对账删掉了分享码，导致 Web 取消后重开或桌面点击「重试读取」时丢失输入；Web 确认已获取时又在第二次详情读取期间释放了旧领取按钮。RED 提交 `b6aca5edbbb21998ca422cd81be7ffbb83a49d89` 在两个实际客户端的 DOM 测试中复现，Web 3 项失败，桌面 1 项失败。
+
+账号和版本现在分别保留当前输入、可选的已提交请求（原始载荷和键）。只用一个「可提交／可重放」标记配一份分享码，无法表达用户输入新码时旧请求结果仍未知。编辑、取消、重读均不创建键。未知结果保留旧请求；确认尚未获取后只清除已提交请求，下一次提交使用当时的输入。Web 直接用已通过会话和版本核对的详情显示权益，无需额外读取。取消弹窗才释放当前详情按钮；成功会替换详情，旧按钮不再能打开弹窗。直接获取只属于详情，它的回包不会关闭后来打开的账号弹窗。
+
+本轮隔离验证通过 Web/BFF 43 项、原生社区 38 项、桌面 IPC 96 项、HTTP 9 项、协议 10 项。覆盖换码时离线对账、校时后的重开或重读、旧按钮回调以及直接获取期间打开账号弹窗。UI、desktop、protocol 类型检查及 UI、desktop 构建通过。本轮未修改服务端或 SQL；独立审查和浏览器验收由父任务负责。

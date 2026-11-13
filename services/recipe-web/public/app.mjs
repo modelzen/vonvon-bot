@@ -3,7 +3,7 @@ const main = document.querySelector('#main');
 const dialog = document.querySelector('#modal');
 const accountButton = document.querySelector('#account');
 const params = new URLSearchParams(location.search);
-const claimRequests = new Map();
+const claimIntents = new Map();
 let detailGeneration = 0, modalGeneration = 0;
 let releaseModal;
 let session, catalogSeq = 0;
@@ -37,13 +37,14 @@ async function request(path, options = {}) {
   return data;
 }
 function modal(title, ...nodes) {
-  closeDialog();
+  dismissDialog();
   const h = el('h2', title); h.id = 'dialog-title';
   dialog.setAttribute('aria-labelledby', h.id); dialog.replaceChildren(h, ...nodes);
   dialog.showModal();
 }
-const closeDialog = () => {++modalGeneration; releaseModal?.(); releaseModal = undefined; dialog.close();};
-const closeButton = () => button('关闭', closeDialog, 'secondary');
+const closeDialog = () => {++modalGeneration; releaseModal = undefined; dialog.close();};
+const dismissDialog = () => {releaseModal?.(); closeDialog();};
+const closeButton = () => button('关闭', dismissDialog, 'secondary');
 const labels = { github: 'GitHub', google: 'Google', apple: 'Apple' };
 function openLogin(next = location.pathname) {
   const forms = (session?.providers || []).filter(p => Object.hasOwn(labels, p)).map(p => {
@@ -191,16 +192,18 @@ async function copy(button) {
   }
 }
 function metric(label, value) { return group('metric', el('span', label), el('strong', value)); }
-async function detail() {
+async function detail(confirmed) {
   const generation = ++detailGeneration, path = location.pathname;
   const detailSession = session?.displaySession;
-  const data = await request('/api/v1' + path, detailSession ? {headers: {'X-Vonvon-Session': detailSession}} : {});
-  if (generation !== detailGeneration || path !== location.pathname || detailSession !== session?.displaySession) return;
+  const currentDetail = () => generation === detailGeneration && path === location.pathname && detailSession === session?.displaySession;
+  const data = confirmed ?? await request('/api/v1' + path, detailSession ? {headers: {'X-Vonvon-Session': detailSession}} : {});
+  if (!currentDetail()) return;
+  if (path.toLowerCase() !== detailUrl(data).toLowerCase()) throw new Error('unconfirmed');
   const p = data.public; document.title = p.name + ' · Vonvon Bot';
   const sharing = button('分享链接', ev => copy(ev.currentTarget), 'secondary');
   const actions = group('actions', sharing);
   if (data.acquired || data.owned) actions.append(el('span', data.owned ? '我的作品' : '已获取', 'pill'));
-  else actions.append(button('获取配方', ev => claim(data, ev.currentTarget, detailSession, generation)));
+  else actions.append(button('获取配方', ev => claim(data, ev.currentTarget, detailSession, currentDetail)));
   const top = group('page-top detail-title', group('intro', el('p', 'Bot 配方', 'eyebrow'), el('h1', p.name), el('p', p.summary, 'muted')), actions);
   const meta = group('metrics panel', metric('版本', p.version), metric('获取方式', p.access === 'coded' ? '需要分享码' : '直接获取'));
   const content = el('section');
@@ -232,48 +235,55 @@ function newAcquisitionKey() {
   const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
   return `a2.${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 }
-async function claim(recipe, trigger, sessionId, generation) {
+async function claim(recipe, trigger, sessionId, currentDetail) {
+  if (!currentDetail()) return;
   if (!session?.signedIn) return openLogin();
-  const coded = recipe.public.access === 'coded', path = location.pathname;
+  const coded = recipe.public.access === 'coded';
   const logical = sessionId + ':' + recipe.versionId;
+  const intent = claimIntents.get(logical) ?? {input: ''};
+  claimIntents.set(logical, intent);
   const form = el('form'), field = el('input'), error = el('p', null, 'error');
   const confirm = el('button', '获取配方', 'button');
-  field.value = claimRequests.get(logical)?.raw || '';
+  field.value = intent.input;
   if (coded) {
     field.required = true; field.maxLength = 128; field.autocomplete = 'off'; field.placeholder = '输入分享码'; field.setAttribute('aria-label', '分享码');
-    form.append(field, error, group('actions', button('取消', closeDialog, 'secondary'), confirm));
+    form.append(field, error, group('actions', button('取消', () => {if (current()) dismissDialog();}, 'secondary'), confirm));
     modal('输入分享码', form);
   }
   const modalId = modalGeneration;
-  if (coded) releaseModal = () => {trigger.disabled = false;};
-  const current = () => generation === detailGeneration && path === location.pathname && sessionId === session?.displaySession && modalId === modalGeneration;
+  const current = () => currentDetail() && (!coded || modalId === modalGeneration);
+  if (coded) {
+    releaseModal = () => {if (currentDetail()) trigger.disabled = false;};
+    field.addEventListener('input', () => {if (current()) intent.input = field.value;});
+  }
   async function reconcile() {
     const next = await request('/api/v1/recipes/' + recipe.recipeId + '/versions/' + recipe.versionId, {headers: {'X-Vonvon-Session': sessionId}});
     if (!current()) return;
     if (next.versionId !== recipe.versionId || next.recipeId !== recipe.recipeId) throw new Error('unconfirmed');
     if (next.owned || next.acquired) {
-      claimRequests.delete(logical);
-      if (coded && dialog.open) closeDialog();
-      message('已获取配方'); await detail();
+      claimIntents.delete(logical);
+      if (coded) closeDialog();
+      message('已获取配方'); await detail(next);
     }
     return next;
   }
   async function submit() {
     if (!current()) return;
     confirm.disabled = trigger.disabled = true; error.textContent = '';
-    const raw = coded ? field.value.trim() : '';
-    let attempt = claimRequests.get(logical);
+    intent.input = field.value;
+    const raw = intent.input.trim();
+    const attempt = intent.submitted;
     try {
       if (attempt && attempt.raw !== raw) {
         const next = await reconcile();
-        if (!next || next.owned || next.acquired) return;
-        claimRequests.delete(logical);
+        if (!current() || !next || next.owned || next.acquired) return;
+        delete intent.submitted;
         error.textContent = '已确认尚未获取。请再次点击获取，提交当前输入。'; return;
       }
-      if (!attempt) {attempt = {raw, key: newAcquisitionKey()}; claimRequests.set(logical, attempt);}
+      const submitted = intent.submitted ??= {raw, key: newAcquisitionKey()};
       await request('/api/v1/versions/' + recipe.versionId + (coded ? '/redeem' : '/acquire'), {
-        method: 'POST', headers: {'Content-Type':'application/json', 'Idempotency-Key':attempt.key, 'X-Vonvon-Session':sessionId},
-        body: JSON.stringify(coded ? {code: attempt.raw} : {}),
+        method: 'POST', headers: {'Content-Type':'application/json', 'Idempotency-Key':submitted.key, 'X-Vonvon-Session':sessionId},
+        body: JSON.stringify(coded ? {code: submitted.raw} : {}),
       });
       if (!current()) return;
       await reconcile();
@@ -282,8 +292,8 @@ async function claim(recipe, trigger, sessionId, generation) {
       if (['operation_expired', 'request_upgrade_required', 'operation_clock_skew'].includes(e.code)) {
         try {
           const next = await reconcile();
-          if (!next || next.owned || next.acquired) return;
-          claimRequests.delete(logical);
+          if (!current() || !next || next.owned || next.acquired) return;
+          delete intent.submitted;
           const msg = e.code === 'operation_clock_skew' ? '已确认尚未获取。请校准设备时间后，再次点击获取，重新提交。' : '已确认尚未获取。请再次点击获取，重新提交。';
           if (coded) error.textContent = msg; else message(msg);
         } catch {if (current()) {if (coded) error.textContent = '获取结果暂未确认，请保留输入并重试。'; else message('获取结果暂未确认，请重试。');}}
@@ -291,7 +301,7 @@ async function claim(recipe, trigger, sessionId, generation) {
       }
       if (e.code === 'session_changed') {location.reload(); return;}
       if (e.status === 401) {session.signedIn = false; accountButton.textContent = '登录'; openLogin(); return;}
-      if (e.code === 'invalid_code') claimRequests.delete(logical);
+      if (e.code === 'invalid_code') delete intent.submitted;
       const msg = e.status === 429 ? '操作过于频繁，请保留输入。' + (e.retryAfter ? ` 请在 ${e.retryAfter} 秒后重试。` : '') :
         e.code === 'invalid_code' ? '这个分享码无法兑换此版本，请核对后重试。' : '获取结果暂未确认，请重试同一操作。';
       if (coded) error.textContent = msg; else message(msg);
@@ -302,7 +312,7 @@ async function claim(recipe, trigger, sessionId, generation) {
 }
 
 accountButton.addEventListener('click', account);
-dialog.addEventListener('cancel', ev => {ev.preventDefault(); closeDialog();});
+dialog.addEventListener('cancel', ev => {ev.preventDefault(); dismissDialog();});
 try {
   session = await request('/auth/session');
   accountButton.hidden = false; accountButton.textContent = session.signedIn ? '账号' : '登录';
