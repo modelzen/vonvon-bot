@@ -1,41 +1,81 @@
-import {z} from 'zod';
-import {agentIdSchema, groupIdSchema, bindGroupCommandSchema} from './domain.js';
-import {createProjectRequestSchema} from './collaboration.js';
-import {viewIdSchema} from './desktop-devices.js';
-import {recipeResolutionSchema, recipeSetupSchema} from './recipe-install.js';
+import { z } from 'zod';
+import { agentIdSchema, groupIdSchema, bindGroupCommandSchema } from './domain.js';
+import { createProjectRequestSchema } from './collaboration.js';
+import { viewIdSchema } from './desktop-devices.js';
+import { recipeResolutionSchema, recipeSetupSchema } from './recipe-install.js';
 
 const uuid = z.string().uuid();
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 export const recipeJoinInputSchema = z.union([
-  createProjectRequestSchema.omit({requestId:true}), bindGroupCommandSchema,
+  createProjectRequestSchema.omit({ requestId: true }),
+  bindGroupCommandSchema,
 ]);
 export type RecipeJoinInput = z.infer<typeof recipeJoinInputSchema>;
 export const recipeUseRequestSchema = z.discriminatedUnion('type', [
-  z.object({type:z.literal('begin'), accountId:uuid, viewId:viewIdSchema, recipeId:uuid, versionId:uuid,
-    botId:agentIdSchema, groupId:groupIdSchema.optional()}).strict(),
-  z.object({type:z.literal('join'), handle:uuid, input:recipeJoinInputSchema}).strict(),
-  z.object({type:z.literal('resolve'), handle:uuid, reviewToken:digest, resolution:recipeResolutionSchema}).strict(),
-  z.object({type:z.literal('confirm'), handle:uuid}).strict(),
-  z.object({type:z.literal('cancel'), handle:uuid}).strict(),
-  z.object({type:z.literal('resume'), handle:uuid}).strict(),
-  z.object({type:z.literal('finish'), handle:uuid}).strict(),
+  z
+    .object({
+      type: z.literal('begin'),
+      accountId: uuid,
+      viewId: viewIdSchema,
+      recipeId: uuid,
+      versionId: uuid,
+      botId: agentIdSchema,
+      groupId: groupIdSchema.optional(),
+    })
+    .strict(),
+  z.object({ type: z.literal('join'), handle: uuid, input: recipeJoinInputSchema }).strict(),
+  z
+    .object({ type: z.literal('resolve'), handle: uuid, reviewToken: digest, resolution: recipeResolutionSchema })
+    .strict(),
+  z.object({ type: z.literal('confirm'), handle: uuid }).strict(),
+  z.object({ type: z.literal('cancel'), handle: uuid }).strict(),
+  z.object({ type: z.literal('resume'), handle: uuid }).strict(),
+  z.object({ type: z.literal('finish'), handle: uuid }).strict(),
 ]);
-const handle = {handle:uuid};
-export const desktopRecipeReviewSchema = z.object({
-  reviewToken:digest, currentRole:z.string(), incomingRole:z.string(), baseRole:z.string().optional(),
-  currentSetup:recipeSetupSchema.optional(), incomingSetup:recipeSetupSchema.optional(), baseSetup:recipeSetupSchema.optional(),
-  roleChoiceRequired:z.boolean(), setupChoiceRequired:z.boolean(),
-}).strict();
+const handle = { handle: uuid };
+export const desktopRecipeReviewSchema = z
+  .object({
+    reviewToken: digest,
+    currentRole: z.string(),
+    incomingRole: z.string(),
+    baseRole: z.string().optional(),
+    currentSetup: recipeSetupSchema.optional(),
+    incomingSetup: recipeSetupSchema.optional(),
+    baseSetup: recipeSetupSchema.optional(),
+    roleChoiceRequired: z.boolean(),
+    setupChoiceRequired: z.boolean(),
+  })
+  .strict();
 export const recipeUseReplySchema = z.discriminatedUnion('kind', [
-  z.object({kind:z.literal('choose'), ...handle}).strict(),
-  z.object({kind:z.literal('review'), ...handle, groupId:groupIdSchema, review:desktopRecipeReviewSchema}).strict(),
-  z.object({kind:z.literal('prepared'), ...handle, groupId:groupIdSchema, review:desktopRecipeReviewSchema}).strict(),
-  z.object({kind:z.literal('pending'), ...handle, groupId:groupIdSchema.optional(), phase:z.enum(['joining','installing','cancelling'])}).strict(),
-  z.object({kind:z.literal('applied'), ...handle, groupId:groupIdSchema}).strict(),
-  z.object({kind:z.literal('rejected'), ...handle, groupId:groupIdSchema.optional(), reason:z.string().optional()}).strict(),
-  z.object({kind:z.literal('closed')}).strict(),
+  z.object({ kind: z.literal('choose'), ...handle }).strict(),
+  z
+    .object({ kind: z.literal('review'), ...handle, groupId: groupIdSchema, review: desktopRecipeReviewSchema })
+    .strict(),
+  z
+    .object({ kind: z.literal('prepared'), ...handle, groupId: groupIdSchema, review: desktopRecipeReviewSchema })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('pending'),
+      ...handle,
+      groupId: groupIdSchema.optional(),
+      phase: z.enum(['joining', 'installing', 'cancelling']),
+    })
+    .strict(),
+  z.object({ kind: z.literal('applied'), ...handle, groupId: groupIdSchema }).strict(),
+  z
+    .object({
+      kind: z.literal('rejected'),
+      ...handle,
+      groupId: groupIdSchema.optional(),
+      reason: z.string().optional(),
+    })
+    .strict(),
+  z.object({ kind: z.literal('closed') }).strict(),
 ]);
 export type RecipeUseRequest = z.infer<typeof recipeUseRequestSchema>;
 export type RecipeUseReply = z.infer<typeof recipeUseReplySchema>;
 export type DesktopRecipeReview = z.infer<typeof desktopRecipeReviewSchema>;
-export interface RecipeUseShell { request(request:RecipeUseRequest):Promise<RecipeUseReply>; }
+export interface RecipeUseShell {
+  request(request: RecipeUseRequest): Promise<RecipeUseReply>;
+}

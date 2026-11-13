@@ -19,7 +19,7 @@ export interface NativeAccount {
   logout(): Promise<AccountStatus>;
   recipeLink?(recipeId: string, versionId: string): string;
   publicRequest?(path: string): Promise<Response>;
-  request(accountId: string, path: string, init?: RequestInit): Promise<Response>;
+  request(accountId: string, path: string, init?: RequestInit, beforeSend?: () => void): Promise<Response>;
   dispose(): Promise<void>;
 }
 
@@ -218,7 +218,7 @@ export function createAccountSession(options: {
       if (url.origin !== deployment.apiOrigin || url.hash) throw new AccountFault('invalid');
       return transport(url, {credentials: 'omit', redirect: 'error', cache: 'no-store', signal: requestSignal(owner.signal)});
     },
-    async request(accountId, path, init = {}) {
+    async request(accountId, path, init = {}, beforeSend) {
       const signal = owner.signal;
       if (!deployment || disposed || !credential || credential.accountId !== accountId || !path.startsWith('/v1/')) throw new AccountFault('invalid');
       const url = new URL(path, deployment.apiOrigin);
@@ -229,6 +229,7 @@ export function createAccountSession(options: {
       const headers = new Headers(init.headers);
       headers.set('Authorization', 'Bearer ' + access.token);
       const signals = init.signal ? AbortSignal.any([signal, init.signal]) : signal;
+      beforeSend?.();
       const response = await transport(url, { ...init, headers, credentials: 'omit', redirect: 'error', cache: 'no-store', signal: requestSignal(signals) });
       signal.throwIfAborted();
       return response;
