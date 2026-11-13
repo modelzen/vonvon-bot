@@ -189,18 +189,29 @@ export class RecipeStore {
     });
   }
   async source(request:Extract<RecipeInstallRequest,{type:'source'|'ignoreVersion'}>):Promise<RecipeInstallReply> {
-    return withRegisteredBot(request.botId,()=>mutateProjectStore(this.location(request.botId),async (_stored,rows)=>{
-      const row=rows.find(r=>r.chatId===request.groupId && !r.dm);
-      if(!row) throw new Error('群绑定已改变');
-      const source=row.recipeInstall;
-      if(request.type==='ignoreVersion' && (!source || source.recipeId!==request.recipeId ||
-        source.versionId!==request.installedVersionId || source.versionId===request.versionId)) throw new Error('安装来源已改变，请重新检查。');
-      const changed=!!source && request.type==='ignoreVersion' && source.ignoredVersionId!==request.versionId;
-      if(source && request.type==='ignoreVersion') source.ignoredVersionId=request.versionId;
-      return {changed,value:{kind:'source' as const,groupId:request.groupId,source:source ? {
-        recipeId:source.recipeId,versionId:source.versionId,revision:source.revision,authorId:source.authorId,installedAt:source.installedAt,
-        ...(source.setup && {setup:source.setup}),...(source.ignoredVersionId && {ignoredVersionId:source.ignoredVersionId}),
-      }:null}};
+    return withRegisteredBot(request.botId, bot => mutateProjectStore(this.location(request.botId), async (_stored, rows) => {
+      const row = rows.find(r => r.chatId === request.groupId && !r.dm);
+      if (!row) throw new Error('群绑定已改变');
+      const source = row.recipeInstall;
+      if (!source) {
+        if (request.type === 'ignoreVersion') throw new Error('安装来源已改变，请重新检查。');
+        return {changed:false, value:{kind:'source', groupId:request.groupId, source:null} as RecipeInstallReply};
+      }
+      const backfill = !row.bindingIncarnation;
+      row.bindingIncarnation ??= randomUUID();
+      const token = () => sha256(JSON.stringify([this.options.targetPublicKey, bot.appId, bot.tenant, bot.createdAt,
+        bot.registrationId, row.chatId, row.bindingIncarnation, source]));
+      if (request.type === 'ignoreVersion') {
+        if (request.sourceToken !== token() || source.recipeId !== request.recipeId ||
+          source.versionId !== request.installedVersionId || source.versionId === request.versionId)
+          throw new Error('安装来源已改变，请重新检查。');
+        source.ignoredVersionId = request.versionId;
+      }
+      return {changed:backfill || request.type === 'ignoreVersion', value:{kind:'source', groupId:request.groupId, source:{
+        sourceToken:token(), recipeId:source.recipeId, versionId:source.versionId, revision:source.revision,
+        authorId:source.authorId, installedAt:source.installedAt, ...(source.setup && {setup:source.setup}),
+        ...(source.ignoredVersionId && {ignoredVersionId:source.ignoredVersionId}),
+      }} as RecipeInstallReply};
     }));
   }
   async createdGroup(botId: string, requestId: string): Promise<RecipeInstallReply> {

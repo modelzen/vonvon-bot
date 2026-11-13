@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { closeSync, fsyncSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
-import { agentIdSchema, groupIdSchema, recipeBinary32Schema, viewIdSchema } from '@vonvon/protocol';
+import {
+  agentIdSchema,
+  groupIdSchema,
+  recipeJoinInputSchema,
+  recipeBinary32Schema,
+  viewIdSchema,
+} from '@vonvon/protocol';
 
 const uuid = z.string().uuid();
 const operation = z
@@ -21,7 +27,15 @@ const base = {
   fromJoin: z.boolean(),
 };
 const rowSchema = z.discriminatedUnion('stage', [
-  z.object({ ...base, stage: z.literal('joining'), bindId: groupIdSchema.optional() }).strict(),
+  z
+    .object({
+      ...base,
+      stage: z.literal('joining'),
+      intent: recipeJoinInputSchema.optional(),
+      bindId: groupIdSchema.optional(),
+      createdUnsaved: z.literal(true).optional(),
+    })
+    .strict(),
   z.object({ ...base, stage: z.literal('group'), groupId: groupIdSchema }).strict(),
   z
     .object({
@@ -37,6 +51,7 @@ const rowSchema = z.discriminatedUnion('stage', [
     .strict(),
 ]);
 export type RecipeJournalRow = z.infer<typeof rowSchema>;
+const fileLimit = 1024 * 1024;
 const fileSchema = z.object({ v: z.literal(1), rows: z.array(rowSchema).max(64) }).strict();
 export class RecipeJournal {
   private rows: RecipeJournalRow[] | undefined;
@@ -44,7 +59,7 @@ export class RecipeJournal {
   all(): readonly RecipeJournalRow[] {
     if (!this.rows) {
       try {
-        if (this.path && statSync(this.path).size > 128 * 1024) throw new Error();
+        if (this.path && statSync(this.path).size > fileLimit) throw new Error();
         this.rows = this.path ? fileSchema.parse(JSON.parse(readFileSync(this.path, 'utf8'))).rows : [];
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('无法读取安装记录');
@@ -61,12 +76,14 @@ export class RecipeJournal {
   }
   private write(rows: RecipeJournalRow[]) {
     const file = fileSchema.parse({ v: 1, rows });
+    const serialized = JSON.stringify(file);
+    if (Buffer.byteLength(serialized) > fileLimit) throw new Error('安装记录已满，请先恢复待完成操作。');
     if (this.path) {
       const temp = this.path + '.' + randomUUID() + '.tmp';
       const fd = openSync(temp, 'wx', 0o600);
       try {
         try {
-          writeFileSync(fd, JSON.stringify(file));
+          writeFileSync(fd, serialized);
           fsyncSync(fd);
         } finally {
           closeSync(fd);

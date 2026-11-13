@@ -15,6 +15,7 @@ import { readDropped } from '../src/bot/restart-dropped';
 import { existsSync } from 'node:fs';
 import { AdminWriteError } from '../src/admin/ops';
 import { CreationOutcomeUnknownError } from '../src/project/lifecycle';
+import { createGroupExecutor } from '../src/admin/groups';
 import { createAdminIpcCaller, createAdminIpcResponder, type AdminIpcOp } from '../src/admin/ipc';
 import { collaborationRpc } from '../src/server/rpc/collaboration';
 import { collaborationRequestSchema } from '@vonvon/protocol';
@@ -623,8 +624,8 @@ it('s36d1: shutdown waits for a web creation whose group exists and whose row is
 });
 it('s36d1: a web creation whose group was made and not saved reaches the page as created_unsaved, over IPC or in process', async () => {
   backend();
-  const fake = fakeLark();
-  const app = creator(fake.client);
+  const fake = fakeLark(request => request.path.endsWith('/members/is_in_chat') ? {code:0,data:{is_in_chat:true}} : undefined);
+  let app = creator(fake.client);
   // The bot's answer crosses IPC the way run.ts and the supervisor wire it.
   let receive: (message: unknown) => void = () => {};
   const respond = createAdminIpcResponder(async op => app.collaboration((op as Extract<AdminIpcOp, { kind: 'collaboration' }>).request), message => receive(message));
@@ -633,16 +634,45 @@ it('s36d1: a web creation whose group was made and not saved reaches the page as
   const overIpc = async (_botId: string, request: unknown) => caller.call({ kind: 'collaboration', request } as AdminIpcOp);
   const inProcess = async (_botId: string, request: unknown) => app.collaboration(request as never);
   const create = collaborationRequestSchema.parse({ action: 'createProject', agentId: bot.appId, name: 'Unsaved', folder: { kind: 'default' }, tool: 'codex', conversation: 'threads' });
+  let confirmedId = '';
   try {
     fixture.failProjectsWrite = true;
     for (const collaboration of [overIpc, inProcess]) {
       const service = { listBots: async () => [{ appId: bot.appId, active: true, running: true }], collaboration };
       const failure = await collaborationRpc(service as never, {} as never, create).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(RpcError);
-      expect(failure).toMatchObject({ code: 'created_unsaved', message: expect.stringMatching(/^群「Unsaved」已建好，但没存上：.*加入现有飞书群.*不要再建。绑回来是只读，要完全访问就到群设置里改$/) });
+      confirmedId = String((failure as RpcError).details?.groupId);
+      expect(failure).toMatchObject({ code: 'created_unsaved', details:{groupId:'oc_'+fake.creates().at(-1)?.params?.uuid}, message: expect.stringMatching(/^群「Unsaved」已建好，但没存上：.*加入现有飞书群.*不要再建。绑回来是只读，要完全访问就到群设置里改$/) });
     }
     expect(await getProjectByName('Unsaved')).toBeUndefined();
+    fixture.failProjectsWrite = false;
+    await app.shutdown();
+    app = creator(fake.client);
+    const bind = createGroupExecutor({rawClient:fake.client,send:fixture.send} as never,bot);
+    await bind({kind:'bindGroup',input:{chatId:confirmedId,projectName:'Unsaved',backend:'codex-appserver',kind:'multi'}});
+    expect(await getProjectByName('Unsaved')).toMatchObject({chatId:confirmedId,origin:'joined'});
+    expect(fake.creates()).toHaveLength(2);
+    expect(fake.requests.filter(r=>r.path.endsWith('/members/is_in_chat'))).toHaveLength(1);
   } finally { fixture.failProjectsWrite = false; await app.shutdown(); }
+});
+it('carries a confirmed pre-dispatch refusal across admin IPC and owner RPC', async () => {
+  backend();
+  const fake = fakeLark(request => request.path.includes('/auth/') ? {code:10014, msg:'invalid synthetic token'} : undefined);
+  const app = creator(fake.client);
+  let receive: (message:unknown) => void = () => {};
+  const respond = createAdminIpcResponder(async op => app.collaboration((op as Extract<AdminIpcOp,{kind:'collaboration'}>).request), message => receive(message));
+  const caller = createAdminIpcCaller(respond);
+  receive = caller.onMessage;
+  const service = {listBots:async () => [{appId:bot.appId, active:true, running:true}],
+    collaboration:async (_id:string, request:unknown) => caller.call({kind:'collaboration',request} as AdminIpcOp)};
+  const create = collaborationRequestSchema.parse({action:'createProject', agentId:bot.appId, name:'No HTTP', folder:{kind:'default'}, tool:'codex', conversation:'threads'});
+  try {
+    await expect(collaborationRpc(service as never,{} as never,create)).rejects.toMatchObject({code:'conflict',details:{creationRefused:true}});
+    expect(fake.creates()).toHaveLength(0);
+    const offline = {...service,listBots:async () => [{appId:bot.appId,active:true,running:false}]};
+    await expect(collaborationRpc(offline as never,{} as never,create)).rejects.toMatchObject({code:'conflict',details:{creationRefused:true}});
+    expect(fake.creates()).toHaveLength(0);
+  } finally { await app.shutdown(); }
 });
 it('leaves a key from before s15c unused and refuses unsupported goal before posting to Feishu', async () => {
   const be = backend(); fixture.backend = { ...be, capabilities: { goal: false, compact: true, resume: true } };

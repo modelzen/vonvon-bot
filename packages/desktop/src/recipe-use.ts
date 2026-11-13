@@ -109,7 +109,21 @@ export class RecipeUseController {
     h.row = row;
   }
   private pending(h: Handle, phase: 'joining' | 'installing' | 'cancelling'): RecipeUseReply {
-    return { kind: 'pending', handle: h.id, phase, ...(h.row && 'groupId' in h.row && { groupId: h.row.groupId }) };
+    const row = h.row;
+    if (phase === 'joining' && row?.stage === 'joining') {
+      const name = row.intent && ('name' in row.intent ? row.intent.name : row.intent.projectName);
+      return {
+        kind: 'pending',
+        handle: h.id,
+        phase,
+        recovery: {
+          state: row.createdUnsaved ? 'createdUnsaved' : 'unknown',
+          groupId: row.bindId,
+          name,
+        },
+      };
+    }
+    return { kind: 'pending', handle: h.id, phase, ...(row && 'groupId' in row && { groupId: row.groupId }) };
   }
   private done(h: Handle, groupId: GroupId, outcome: 'applied' | 'rejected', reason?: string): RecipeUseReply {
     this.save(h, { ...this.base(h), groupId, stage: 'done', outcome });
@@ -291,29 +305,87 @@ export class RecipeUseController {
       this.starting = false;
     }
   }
+  private async createdGroup(h: Handle, row: Extract<RecipeJournalRow, { stage: 'joining' }>) {
+    const reply = await this.daemon(h, { type: 'createdGroup', botId: row.botId, requestId: row.id });
+    this.check(h);
+    if (reply.kind !== 'createdGroup') throw invalid();
+    return reply.groupId;
+  }
+  private async bound(h: Handle, groupId: GroupId) {
+    this.check(h);
+    const snapshot = await h.lease.client.snapshot();
+    this.check(h);
+    return snapshot.memberships.some((m) => m.agentId === h.input.botId && m.groupId === groupId);
+  }
   private async reconcileJoin(h: Handle): Promise<RecipeUseReply> {
     const row = h.row;
     if (row?.stage !== 'joining') throw invalid();
-    let groupId: GroupId | undefined;
-    if (row.bindId) {
-      const snapshot = await h.lease.client.snapshot();
-      this.check(h);
-      if (snapshot.memberships.some((m) => m.agentId === row.botId && m.groupId === row.bindId)) groupId = row.bindId;
-    } else {
-      const reply = await this.daemon(h, { type: 'createdGroup', botId: row.botId, requestId: row.id });
-      this.check(h);
-      if (reply.kind !== 'createdGroup') throw invalid();
-      groupId = reply.groupId ?? undefined;
-    }
+    await this.identity(h);
+    this.check(h);
+    let groupId = row.bindId ?? null;
+    if (!groupId) groupId = await this.createdGroup(h, row);
+    else if (!(await this.bound(h, groupId))) groupId = null;
+    this.check(h);
     if (!groupId) return this.pending(h, 'joining');
     this.save(h, { ...this.base(h), stage: 'group', groupId });
     return this.prepare(h, groupId);
+  }
+  private async repairJoin(
+    h: Handle,
+    input: Extract<RecipeUseRequest, { type: 'repairJoin' }>['input'],
+  ): Promise<RecipeUseReply> {
+    const row = h.row;
+    if (row?.stage !== 'joining' || input.agentId !== row.botId || (row.bindId && row.bindId !== input.groupId))
+      throw changed();
+    await this.identity(h);
+    this.check(h);
+    h.preview = await this.cloud(h).preview(h.input.recipeId, h.input.versionId);
+    this.check(h);
+    if (!row.bindId) {
+      const found = await this.createdGroup(h, row);
+      this.check(h);
+      if (found && found !== input.groupId) {
+        this.save(h, { ...row, bindId: found });
+        return this.pending(h, 'joining');
+      }
+    }
+    const bound = await this.bound(h, input.groupId);
+    this.check(h);
+    if (!bound && input.type === 'existingBinding') throw new RecipeUseError('此群的绑定已改变，请重新选择。');
+    if (!bound && input.type === 'bindGroup') {
+      await this.identity(h);
+      this.check(h);
+      this.save(h, { ...row, bindId: input.groupId });
+      let reply;
+      try {
+        reply = await h.lease.client.run(input);
+      } catch {
+        this.check(h);
+        return this.pending(h, 'joining');
+      }
+      if (reply.kind === 'refused') {
+        this.check(h);
+        throw new JoinRefused();
+      }
+      if (reply.kind !== 'applied') {
+        this.check(h);
+        return this.pending(h, 'joining');
+      }
+    }
+    this.save(h, { ...this.base(h), stage: 'group', groupId: input.groupId });
+    this.check(h);
+    return this.prepare(h, input.groupId);
   }
   private async join(h: Handle, input: Extract<RecipeUseRequest, { type: 'join' }>['input']): Promise<RecipeUseReply> {
     if (h.row || h.input.groupId || input.agentId !== h.input.botId || !h.preview) throw invalid();
     await this.identity(h);
     this.check(h);
-    const row = { ...this.base(h), stage: 'joining' as const, ...('type' in input && { bindId: input.groupId }) };
+    const row = {
+      ...this.base(h),
+      stage: 'joining' as const,
+      intent: input,
+      ...('type' in input && { bindId: input.groupId }),
+    };
     this.save(h, row);
     let groupId: GroupId;
     try {
@@ -329,13 +401,24 @@ export class RecipeUseController {
         groupId = input.groupId;
       }
     } catch (error) {
+      if ('action' in input && error instanceof RpcError && error.code === 'created_unsaved') {
+        const id = groupIdSchema.safeParse(error.details?.groupId);
+        this.save(h, { ...row, createdUnsaved: true, ...(id.success && { bindId: id.data }) });
+      }
       this.check(h);
       if (
         error instanceof JoinRefused ||
+        ('action' in input && error instanceof RpcError && error.details?.creationRefused === true) ||
         (error instanceof RpcError &&
-          ['invalid_params', 'permission_denied', 'invalid_input', 'unsupported', 'invalid_argument'].includes(
-            error.code,
-          ))
+          [
+            'invalid_params',
+            'permission_denied',
+            'invalid_input',
+            'invalid_request',
+            'unsupported',
+            'invalid_argument',
+            'draining',
+          ].includes(error.code))
       ) {
         this.journal.remove(row.id);
         h.row = undefined;
@@ -429,29 +512,38 @@ export class RecipeUseController {
     };
     const device = await identity();
     check();
-    const read = recipeInstallReplySchema.parse(await lease.client.recipeInstall({ type: 'source', botId, groupId }));
+    const install = lease.client.recipeInstall.bind(lease.client);
+    const localSource = async () => {
+      check();
+      const read = recipeInstallReplySchema.parse(await install({ type: 'source', botId, groupId }));
+      check();
+      if (read.kind !== 'source' || read.groupId !== groupId) throw invalid();
+      return read.source;
+    };
+    const staleSource = () => new RecipeUseError('安装来源已改变，请重新检查更新。');
+    const shown = await localSource();
     check();
-    if (read.kind !== 'source' || read.groupId !== groupId) throw invalid();
-    if (request.type === 'ignore' && !read.source) throw changed();
-    if (request.type === 'read' || !read.source || !accountId || !signal) return { source: read.source };
-    const latest = await recipeCloud(this.account, { accountId, signal, check }).latest(read.source.recipeId);
+    if (request.type === 'ignore' && shown?.sourceToken !== request.sourceToken) throw staleSource();
+    if (request.type === 'read' || !shown || !accountId || !signal) return { source: shown };
+    const latest = await recipeCloud(this.account, { accountId, signal, check }).latest(shown.recipeId);
     check();
+    const now = await identity();
+    check();
+    if (now.pk !== device.pk || now.id !== device.id) throw changed();
     if (request.type === 'ignore') {
       if (
         latest.versionId !== request.versionId ||
-        latest.revision <= read.source.revision ||
-        request.installedVersionId !== read.source.versionId
+        latest.revision <= shown.revision ||
+        request.installedVersionId !== shown.versionId
       )
-        throw changed();
-      const now = await identity();
-      check();
-      if (now.pk !== device.pk || now.id !== device.id) throw changed();
+        throw staleSource();
       const applied = recipeInstallReplySchema.parse(
         await lease.client.recipeInstall({
           type: 'ignoreVersion',
           botId,
           groupId,
-          recipeId: read.source.recipeId,
+          recipeId: shown.recipeId,
+          sourceToken: request.sourceToken,
           installedVersionId: request.installedVersionId,
           versionId: latest.versionId,
         }),
@@ -465,9 +557,12 @@ export class RecipeUseController {
         throw invalid();
       return { source: applied.source };
     }
+    const current = await localSource();
+    check();
+    if (current?.sourceToken !== shown.sourceToken) throw staleSource();
     return {
-      source: read.source,
-      ...(latest.revision > read.source.revision && latest.versionId !== read.source.ignoredVersionId && { latest }),
+      source: current,
+      ...(latest.revision > current.revision && latest.versionId !== current.ignoredVersionId && { latest }),
     };
   }
   async request(raw: RecipeUseRequest): Promise<RecipeUseReply> {
@@ -496,6 +591,15 @@ export class RecipeUseController {
           break;
         case 'join':
           reply = await this.join(h, r.input);
+          break;
+        case 'repairJoin':
+          reply = await this.repairJoin(h, r.input);
+          break;
+        case 'dismissJoin':
+          if (row?.stage !== 'joining') throw changed();
+          this.journal.remove(row.id);
+          this.handles.delete(h.id);
+          reply = { kind: 'closed' };
           break;
         case 'resolve':
           if (row?.stage !== 'group' || !h.review || r.reviewToken !== h.review.reviewToken) throw changed();

@@ -92,7 +92,9 @@ describe('durable role installation', () => {
     const get=(id:string)=>recipeInstallRequestSchema.parse({type:'source',botId:id,groupId}) as Extract<RecipeInstallRequest,{type:'source'}>;
     expect((await store().source(get('cli_other_fixture')))).toMatchObject({kind:'source',source:null});
     const versionId=randomUUID();
-    const ignore=recipeInstallRequestSchema.parse({type:'ignoreVersion',botId,groupId,recipeId:current.recipeId,installedVersionId:current.versionId,versionId});
+    const shown=await store().source(get(botId));
+    if(shown.kind!=='source' || !shown.source)throw Error();
+    const ignore=recipeInstallRequestSchema.parse({type:'ignoreVersion',botId,groupId,sourceToken:shown.source.sourceToken,recipeId:current.recipeId,installedVersionId:current.versionId,versionId});
     if(ignore.type!=='ignoreVersion')throw Error();
     expect(await store().source(ignore)).toMatchObject({kind:'source',source:{versionId:current.versionId,ignoredVersionId:versionId}});
     expect((await store().source(get('cli_other_fixture')))).toMatchObject({kind:'source',source:null});
@@ -103,6 +105,21 @@ describe('durable role installation', () => {
     const after=await store().source(get(botId));
     expect(after).toMatchObject({kind:'source',source:{versionId:newer.versionId}});
     expect(after.kind==='source' && after.source?.ignoredVersionId).toBeUndefined();
+  });
+  it('rejects ignoring an update shown before unbinding and reinstalling the exact same version on the same Bot',async()=>{
+    const current=manifest();
+    const original=await ready(current);await store().apply(botId,original.operationId,async()=>{});
+    const read=recipeInstallRequestSchema.parse({type:'source',botId,groupId});
+    if(read.type!=='source')throw Error();
+    const shown=await store().source(read);
+    if(shown.kind!=='source' || !shown.source)throw Error();
+    await removeProject('Fixture group');await bind();
+    const replacement=await ready(current);await store().apply(botId,replacement.operationId,async()=>{});
+    const ignore=recipeInstallRequestSchema.parse({type:'ignoreVersion',botId,groupId,recipeId:current.recipeId,installedVersionId:current.versionId,
+      versionId:randomUUID(),sourceToken:shown.source.sourceToken});
+    if(ignore.type!=='ignoreVersion')throw Error();
+    await expect(store().source(ignore)).rejects.toThrow();
+    expect((await row())?.recipeInstall?.ignoredVersionId).toBeUndefined();
   });
   it('rejects a lower published revision before creating another operation', async () => {
     const current = manifest({revision: 2, role: '第二版职责'}), installed = await ready(current);
