@@ -3,12 +3,13 @@ import { pathToFileURL } from 'node:url';
 import { shell, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import { ConnectionError, RpcError, type VonvonClient } from '@vonvon/client/browser';
 import {
-  adminRequestSchema, agentIdSchema, collaborationRequestSchema, commandSchema, scheduleRequestSchema,
+  accountStatusSchema, adminRequestSchema, agentIdSchema, collaborationRequestSchema, commandSchema, scheduleRequestSchema,
   directoryRequestSchema, environmentRequestSchema, libraryRequestSchema, machineRequestSchema, memoryRequestSchema, contextPreviewRequestSchema, deviceRequestSchema,
   settingsRequestSchema, machineReplySchema, addDeviceRequestSchema, viewIdSchema, LOCAL_VIEW,
   type DesktopSnapshot, type DesktopUpdate, type MachineReply, type ViewId,
 } from '@vonvon/protocol';
 import { DeviceConnectionsError, type DeviceConnections, type ViewChange, type ViewSession } from './connections.js';
+import type { NativeAccount } from './account-session.js';
 import { RegistryError } from './device-registry.js';
 import { allowedExternalUrl, type ExternalUrlKind } from '../../ui/src/url-actions.js';
 import { ServiceActionError } from './service-error.js';
@@ -157,7 +158,7 @@ const remoteServiceToggle = (value: unknown): boolean => {
 };
 
 export function installBridge(
-  owner: AttachedDaemon, window: BrowserWindow, paths: DesktopResources, actions: ShellActions, devices: DeviceConnections,
+  owner: AttachedDaemon, window: BrowserWindow, paths: DesktopResources, actions: ShellActions, devices: DeviceConnections, account: NativeAccount,
 ): DesktopBridge {
   const expectedUrl = pathToFileURL(realpathSync(paths.uiIndex)).href;
   let disposed = false;
@@ -531,6 +532,10 @@ export function installBridge(
     register(desktopChannels.hide, 0, noArg, async () => { actions.hide(); });
     register(desktopChannels.quit, 0, noArg, () => actions.confirmQuit());
     register(desktopChannels.quitKeepsDaemon, 0, () => { localOnly(); }, () => actions.quitKeepsDaemon());
+    register(desktopChannels.accountStatus, 0, noArg, async () => accountStatusSchema.parse(account.status()));
+    register(desktopChannels.accountLogin, 0, noArg, async () => accountStatusSchema.parse(await account.login()));
+    register(desktopChannels.accountCancel, 0, noArg, async () => accountStatusSchema.parse(await account.cancelLogin()));
+    register(desktopChannels.accountLogout, 0, noArg, async () => accountStatusSchema.parse(await account.logout()));
     register(desktopChannels.devicesState, 0, noArg, async () => devices.state());
     register(desktopChannels.devicesInspect, 1, value => {
       if (typeof value !== 'string' || value.length > 65_536) throw new Error('Invalid link');
@@ -553,10 +558,12 @@ export function installBridge(
       if (retainedUpdate) send({ type: 'update', value: retainedUpdate });
       if (retainedRemoteUpdate !== undefined) send({ type: 'remoteUpdate', text: retainedRemoteUpdate });
       if (pendingQuit) { pendingQuit = false; send({ type: 'quitRequested' }); }
+      send({ type: 'account', value: accountStatusSchema.parse(account.status()) });
       send({ type: 'devices', value: devices.state() });
       return { ok: true, value: undefined };
     });
     registeredChannels.push(desktopChannels.subscribe);
+    unsubscribers.push(account.onStatus(value => send({ type: 'account', value: accountStatusSchema.parse(value) })));
     unsubscribers.push(devices.onState(value => send({ type: 'devices', value })));
     unsubscribers.push(devices.onView(change => { void onView(change); }));
     window.webContents.on('did-start-navigation', onNavigation);
