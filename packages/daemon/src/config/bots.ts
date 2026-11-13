@@ -261,7 +261,6 @@ export function withRegisteredBot<T>(appId: string, operation: (identity: BotIde
   return holdMutexRole('bots', () => ownBots(async registry => {
     const entry = registry.bots.find(bot => bot.appId === appId);
     if (!entry || (expected && !sameIdentity(entry, expected))) throw new Error('机器人已移除或重新注册');
-    if (!entry.registrationId) { entry.registrationId = randomUUID(); await publish(registry); }
     return operation(botIdentity(entry));
   }));
 }
