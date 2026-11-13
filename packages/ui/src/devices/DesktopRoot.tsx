@@ -47,7 +47,6 @@ function DesktopDeviceView({state, fallback, shell, renderApp}: {state?: Devices
   </ClientProvider>;
 }
 
-/** Device pages reset together on each device switch. Community has a separate account-owned window lifetime. */
 export function DeviceGate({state, renderApp}: {state?: DevicesState; renderApp: () => ReactNode}) {
   if (!state) return <DeviceOutsideFrame title="正在打开 Vonvon Bot…">{() => null}</DeviceOutsideFrame>;
   const active = state.active;

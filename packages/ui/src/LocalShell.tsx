@@ -4,9 +4,6 @@ import type {CollaborationView, Page} from './collaboration-model';
 import {uiFeatures} from './features';
 import {NavigationIndicator} from './NavigationIndicator';
 
-// One compact toolbar at every window size; first use only exposes useful destinations. `deviceSwitcher` (the desktop,
-// which can show several devices) takes the brand's place at the top-left; 此刻 stays the first tab. First use hides the
-// the community stays available before the first Bot has been configured.
 export function AppShell(props: {page: Page; view: CollaborationView; title: string; children: ReactNode; firstUse?: boolean; newCounts?: {bots: number; projects: number}; updateNotice?: string; updateAction?: ReactNode; onNavigate: (page: Page) => void; onOpenList: (view: CollaborationView) => void; onBack?: () => void; backLabel?: string; onSearch?: () => void; deviceSwitcher?: ReactNode; selectedFeature?: string; onFeatureNavigate?: (id: string) => void}) {
   const isSettings = !['home', 'community', 'collaboration'].includes(props.page) || Boolean(props.selectedFeature);
   const homeBack = Boolean(props.firstUse && props.deviceSwitcher) && props.page !== 'home';
