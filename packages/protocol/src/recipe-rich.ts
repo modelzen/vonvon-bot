@@ -3,6 +3,8 @@ import {cardDisplayConfigSchema} from './card-display.js';
 import {completionTemplateSchema} from './completion-template.js';
 import {JUDGE_PROVIDER_IDS} from './decision-providers.js';
 import {hhmmSchema} from './schedule.js';
+import {parseScheduleCron, resolveScheduleTimeZone} from './schedule-grammar.js';
+import {judgeSectionSchema} from './settings.js';
 
 export const RECIPE_RICH_LIMITS = Object.freeze({
   logicalBytes: 1048576, fileBytes: 131072, memoryBytes: 4096, logoBytes: 131072,
@@ -76,12 +78,14 @@ const modelAccess = z.object({backend: name, models: names, efforts: names,
   if (Object.entries(value.modelServiceTiers ?? {}).some(([model, tiers]) => !value.models.includes(model) || new Set(tiers).size !== tiers.length)) issue('modelServiceTiers');
   const defaultModel = value.defaultModel ?? value.models[0];
   if (defaultModel && !value.models.includes(defaultModel)) issue('defaultModel');
-  if (defaultModel && value.defaultEffort && !(value.modelEfforts?.[defaultModel] ?? value.efforts).includes(value.defaultEffort)) issue('defaultEffort');
+  const efforts = defaultModel && value.modelEfforts && Object.hasOwn(value.modelEfforts, defaultModel)
+    ? value.modelEfforts[defaultModel]! : value.efforts;
+  if (value.defaultEffort && !efforts.includes(value.defaultEffort)) issue('defaultEffort');
 });
 const judgeSelection = z.discriminatedUnion('kind', [
   z.object({kind: z.literal('default')}).strict(),
-  z.object({kind: z.literal('llm'), backend: name.optional(), model: name, effort: name.optional(), custom: z.boolean().optional()}).strict(),
-  z.object({kind: z.literal('decision'), provider: name, model: name}).strict(),
+  z.object({kind: z.literal('llm'), backend: name.pipe(judgeSectionSchema.shape.selection.options[1].shape.backend.unwrap()).optional(), model: name, effort: name.optional(), custom: z.boolean().optional()}).strict(),
+  z.object({kind: z.literal('decision'), provider: name.pipe(judgeSectionSchema.shape.selection.options[2].shape.provider), model: name}).strict(),
   z.object({kind: z.literal('provider'), provider: z.enum(JUDGE_PROVIDER_IDS)}).strict(),
 ]);
 const mode = z.enum(['off', 'running', 'done', 'always']);
@@ -132,7 +136,7 @@ const relativeName = text(240, 240, 1).refine(value => {
   const segments = value.split('/');
   return /\.(?:md|txt|rst)$/i.test(value) && !/[\\:\u0000-\u001f<>"|?*]/u.test(value) && !value.startsWith('/') && segments.every(segment =>
     segment !== '' && !segment.startsWith('.') && !/[. ]$/.test(segment) &&
-    !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(segment));
+    !/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(segment));
 }, 'Unsafe portable filename');
 const file = z.object({...identity, name: relativeName, use: z.enum(['skillDescription','reference','declaration']), text: recipeRichTextSchema}).strict();
 const skill = z.object({...identity, name: text(320, 80, 1), entryFileId: uuid, fileIds: z.array(uuid).min(1).max(64)}).strict();
@@ -141,13 +145,17 @@ const cadence = z.discriminatedUnion('kind', [
   z.object({kind: z.literal('every'), minutes: z.number().int().min(1).max(10080)}).strict(),
   z.object({kind: z.literal('daily'), time: hhmmSchema}).strict(),
   z.object({kind: z.literal('weekly'), days: z.array(z.number().int().min(0).max(6)).min(1).max(7), time: hhmmSchema}).strict(),
-  z.object({kind: z.literal('cron'), expr: text(100, 100, 9).refine(value => /^[\d*/,-]+(?: +[\d*/,-]+){4}$/.test(value), 'Invalid cron syntax')}).strict(),
+  z.object({kind: z.literal('cron'), expr: text(100, 100, 9).refine(value => {
+    try {parseScheduleCron(value); return true;} catch {return false;}
+  }, 'Invalid native cron')}).strict(),
 ]);
 const timezone = z.discriminatedUnion('kind', [
   z.object({kind: z.literal('targetChoice')}).strict(),
-  z.object({kind: z.literal('recommended'), iana: z.string().max(100).regex(/^[A-Za-z_+-]+(?:\/[A-Za-z0-9_+-]+)*$/)}).strict(),
+  z.object({kind: z.literal('recommended'), iana: z.string().max(100).regex(/^[A-Za-z_+-]+(?:\/[A-Za-z0-9_+-]+)*$/).refine(value => {
+    try {resolveScheduleTimeZone(value); return true;} catch {return false;}
+  }, 'Unknown timezone recommendation')}).strict(),
 ]);
-const task = z.object({...identity, name: text(160, 40, 1).refine(value => value.length <= 40, 'Native task name limit exceeded'), instruction: recipeRichTextSchema, spec: cadence,
+const task = z.object({...identity, name: text(160, 40).refine(value => value.length <= 40, 'Native task name limit exceeded'), instruction: recipeRichTextSchema, spec: cadence,
   timeZone: timezone, placement: z.enum(['follow','newTopic'])}).strict();
 const setup = z.object({...identity, kind: z.enum(['config','tool','context']), title: text(320, 80),
   instructions: text(2048), check: text(512).optional(), required: z.boolean(),
@@ -177,8 +185,47 @@ export const recipeRichReleaseSchema = z.object({
   contentSha256: sha256, logicalBytes: z.number().int().positive().max(RECIPE_RICH_LIMITS.logicalBytes),
 }).strict();
 export type RecipeRichRelease = z.infer<typeof recipeRichReleaseSchema>;
+const itemKind = z.enum(['role', 'setting', 'cardBlock', 'rule', 'skill', 'file', 'task', 'memory', 'setup', 'finalLogo']);
+const publicTextChange = z.object({op: z.literal('setPublicText'), itemId: uuid,
+  field: z.enum(['name', 'summary', 'overview', 'version']), value: text(32768),
+}).strict().superRefine((change, context) => {
+  const parsed = recipeRichContentSchema.shape.public.shape[change.field].shape.value.safeParse(change.value);
+  if (!parsed.success) context.addIssue({code: 'custom', path: ['value'], message: 'Invalid public field value'});
+});
+type SettingSchema = typeof recipeRichSettingSchema.options[number];
+type CardDisplaySettingSchema = Extract<SettingSchema, {shape: {field: z.ZodLiteral<'presentation.cardDisplay'>}}>;
+const editableSettings = recipeRichSettingSchema.options.filter((option): option is Exclude<SettingSchema, CardDisplaySettingSchema> =>
+  option.shape.field.value !== 'presentation.cardDisplay').map(option => option.omit({itemId: true, originId: true}));
+const settingChangeValue = z.union([editableSettings[0]!, editableSettings[1]!, ...editableSettings.slice(2)]);
+const candidate = z.object({sourceIntentId: uuid, candidateId: uuid, expectedRevision: revision}).strict();
+const candidateInclusion = z.discriminatedUnion('kind', [
+  z.object({kind: z.enum(['role', 'setting', 'rule', 'skill', 'task', 'memory', 'setup', 'finalLogo']), source: candidate}).strict(),
+  z.object({kind: z.literal('file'), parentItemId: uuid, source: candidate}).strict(),
+  z.object({kind: z.literal('cardBlock'), parentItemId: uuid, source: candidate}).strict(),
+]);
+const copyReference = z.discriminatedUnion('kind', [
+  z.object({kind: z.enum(['rule', 'skill', 'task', 'memory', 'setup']), itemId: uuid}).strict(),
+  z.object({kind: z.enum(['file', 'cardBlock']), itemId: uuid, parentItemId: uuid}).strict(),
+]);
+export const recipeRichDraftChangeSchema = z.union([
+  publicTextChange,
+  z.object({op: z.literal('setRoleText'), itemId: uuid, value: recipeRichTextSchema}).strict(),
+  z.object({op: z.literal('setSetting'), itemId: uuid, value: settingChangeValue}).strict(),
+  z.object({op: z.literal('setCardReply'), itemId: uuid, value: cardDisplay.innerType().shape.reply.unwrap()}).strict(),
+  z.object({op: z.literal('setCardBlock'), itemId: uuid, value: recipeRichCardBlockSchema.omit({itemId: true, originId: true, id: true})}).strict(),
+  z.object({op: z.literal('setRule'), itemId: uuid, value: rule.omit({itemId: true, originId: true})}).strict(),
+  z.object({op: z.literal('setSkill'), itemId: uuid, value: skill.pick({name: true})}).strict(),
+  z.object({op: z.literal('setFile'), itemId: uuid, value: file.pick({name: true, text: true})}).strict(),
+  z.object({op: z.literal('setTask'), itemId: uuid, value: task.omit({itemId: true, originId: true})}).strict(),
+  z.object({op: z.literal('setSetup'), itemId: uuid, value: setup.omit({itemId: true, originId: true})}).strict(),
+  z.object({op: z.literal('removeItem'), kind: itemKind, itemId: uuid}).strict(),
+  z.object({op: z.literal('copyItem'), source: copyReference}).strict(),
+  z.object({op: z.literal('includeCandidate'), value: candidateInclusion}).strict(),
+]);
+export type RecipeRichDraftChange = z.infer<typeof recipeRichDraftChangeSchema>;
 export const recipeRichAuthoringPayloadSchema = z.discriminatedUnion('purpose', [
   z.object({format: z.literal('rich-v2'), purpose: z.literal('prepareDraft'), sourceIntentId: uuid, content: recipeRichContentSchema}).strict(),
-  z.object({format: z.literal('rich-v2'), purpose: z.literal('editDraft'), draftId: uuid, baseRevision: revision, content: recipeRichContentSchema}).strict(),
+  z.object({format: z.literal('rich-v2'), purpose: z.literal('editDraft'), draftId: uuid, baseRevision: revision,
+    requestId: uuid, schemaVersion: z.literal(2), changes: z.array(recipeRichDraftChangeSchema).min(1).max(16)}).strict(),
 ]);
 export type RecipeRichAuthoringPayload = z.infer<typeof recipeRichAuthoringPayloadSchema>;

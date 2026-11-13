@@ -4,6 +4,7 @@ import {
   canonicalizeRichRecipeContent, decodeRichRecipeContent, digestRichRecipeContent, verifyRichRecipeRelease,
   validatePublishableRichRecipeContent, recipeRichAuthoringPayloadSchema, RecipeRichValidationError,
   projectEditableSchemas, type RecipeRichContent,
+  defaultCardDisplay,
 } from '../src/index.js';
 
 const id = (n: number) => `20000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -34,6 +35,42 @@ describe('rich-v2 independent review regressions', () => {
     for (const patch of [{requestId: undefined}, {schemaVersion: 1}, {changes: []}, {changes: Array(17).fill(changes[0])}]) {
       expect(recipeRichAuthoringPayloadSchema.safeParse({...edit, changes, ...patch}).success).toBe(false);
     }
+  });
+  it('covers all typed rich edits, copies, removals and scoped inclusions without caller-owned origins', () => {
+    const {id: _id, source: _source, script: _script, language: _language, sample: _sample, ...block} = defaultCardDisplay().blocks[0]!;
+    const source = {sourceIntentId: id(5), candidateId: id(6), expectedRevision: 4};
+    const changes = [
+      {op: 'setRoleText', itemId: id(10), value: inline('Role')},
+      {op: 'setSetting', itemId: id(10), value: {field: 'sessionMode', value: 'smart'}},
+      {op: 'setCardReply', itemId: id(10), value: {streamText: true, collapseAfterRun: false}},
+      {op: 'setCardBlock', itemId: id(10), value: block},
+      {op: 'setRule', itemId: id(10), value: {purpose: 'work', text: inline('Rule')}},
+      {op: 'setSkill', itemId: id(10), value: {name: 'Skill'}},
+      {op: 'setFile', itemId: id(10), value: {name: '参考.md', text: inline('Reference')}},
+      {op: 'setTask', itemId: id(10), value: {name: 'Task', instruction: inline('Summary'), spec: {kind: 'daily', time: '09:00'},
+        timeZone: {kind: 'targetChoice'}, placement: 'follow'}},
+      {op: 'setSetup', itemId: id(10), value: {kind: 'context', title: '', instructions: '', required: true, action: {kind: 'manual'}}},
+      {op: 'removeItem', kind: 'memory', itemId: id(10)},
+      {op: 'copyItem', source: {kind: 'task', itemId: id(10)}},
+      {op: 'copyItem', source: {kind: 'file', itemId: id(10), parentItemId: id(11)}},
+      {op: 'includeCandidate', value: {kind: 'memory', source}},
+      {op: 'includeCandidate', value: {kind: 'file', parentItemId: id(10), source}},
+      {op: 'includeCandidate', value: {kind: 'cardBlock', parentItemId: id(10), source}},
+    ];
+    for (const change of changes) {
+      expect(recipeRichAuthoringPayloadSchema.parse({...edit, changes: [change]})).toEqual({...edit, changes: [change]});
+      expect(recipeRichAuthoringPayloadSchema.safeParse({...edit, changes: [{...change, originId: id(8)}]}).success).toBe(false);
+    }
+    for (const change of [
+      {op: 'setCardBlock', itemId: id(10), value: {...block, originId: id(8)}},
+      {op: 'setCardBlock', itemId: id(10), value: {...block, itemId: id(8)}},
+      {op: 'setSetting', itemId: id(10), value: {field: 'presentation.cardDisplay', value: {version: 1, blocks: []}}},
+      {op: 'includeCandidate', value: {kind: 'file', source}},
+      {op: 'includeCandidate', value: {kind: 'memory', source: {...source, originId: id(8)}}},
+      {op: 'includeCandidate', value: {kind: 'memory', source: {...source, expectedRevision: 0}}},
+      {op: 'copyItem', source: {kind: 'file', itemId: id(10)}},
+      {op: 'copyItem', source: {kind: 'role', itemId: id(10)}},
+    ]) expect(recipeRichAuthoringPayloadSchema.safeParse({...edit, changes: [change]}).success).toBe(false);
   });
   it.each(['toString', 'valueOf'])('uses global efforts for an absent own model-map key %s', model => {
     const value = setting('modelAccess.recommendation', {backend: 'codex-appserver', models: [model], efforts: ['high'],
