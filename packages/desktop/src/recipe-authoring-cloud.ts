@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import {
-  authoringAuthorizationSchema, authoringReceiptSchema, recipeBinary32Schema, recipeDraftSchema,
-  type AuthoringOperation, type AuthoringReceipt,
+  authoringAuthorizationSchema,
+  authoringReceiptSchema,
+  recipeBinary32Schema,
+  recipeDraftSchema,
+  type AuthoringOperation,
+  type AuthoringReceipt,
 } from '@vonvon/protocol';
 import type { NativeAccount } from './account-session.js';
 
@@ -11,53 +15,89 @@ export const dispatchDigest = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca
 const uuid = z.string().uuid();
 const positive = z.number().int().positive().max(2147483647);
 const binding = {
-  operationId: uuid, accountId: uuid, purpose: z.enum(['prepareDraft', 'editDraft']),
-  targetPublicKey: recipeBinary32Schema, nonceCommitment: recipeBinary32Schema,
-  draftId: uuid.optional(), baseRevision: positive.optional(),
+  operationId: uuid,
+  accountId: uuid,
+  purpose: z.enum(['prepareDraft', 'editDraft']),
+  targetPublicKey: recipeBinary32Schema,
+  nonceCommitment: recipeBinary32Schema,
+  draftId: uuid.optional(),
+  baseRevision: positive.optional(),
 };
-const cloudState = z.object({
-  ...binding, status: z.enum(['registered', 'dispatched', 'cancelled', 'expired']),
-  stateRevision: positive, operationDeadline: z.number().int().nonnegative().safe(),
-}).strict();
-const tombstone = z.object({
-  operationId: uuid, accountId: uuid, status: z.literal('cancelled'), stateRevision: z.literal(1),
-  operationDeadline: z.number().int().nonnegative().safe(),
-}).strict();
+const cloudState = z
+  .object({
+    ...binding,
+    status: z.enum(['registered', 'dispatched', 'cancelled', 'expired']),
+    stateRevision: positive,
+    operationDeadline: z.number().int().nonnegative().safe(),
+  })
+  .strict();
+const tombstone = z
+  .object({
+    operationId: uuid,
+    accountId: uuid,
+    status: z.literal('cancelled'),
+    stateRevision: z.literal(1),
+    operationDeadline: z.number().int().nonnegative().safe(),
+  })
+  .strict();
 type Pending = { status: 'registered' | 'dispatched'; stateRevision: number };
 function registration(op: AuthoringOperation) {
-  return { purpose: op.purpose, targetPublicKey: op.targetPublicKey, nonceCommitment: op.nonceCommitment,
-    ...(op.purpose === 'editDraft' && { draftId: op.draftId, baseRevision: op.baseRevision }) };
+  return {
+    purpose: op.purpose,
+    targetPublicKey: op.targetPublicKey,
+    nonceCommitment: op.nonceCommitment,
+    ...(op.purpose === 'editDraft' && { draftId: op.draftId, baseRevision: op.baseRevision }),
+  };
 }
 function match(actual: z.infer<typeof cloudState>, accountId: string, op: AuthoringOperation) {
-  if (actual.operationId !== op.operationId || actual.accountId !== accountId ||
-    actual.purpose !== op.purpose || actual.targetPublicKey !== op.targetPublicKey || actual.nonceCommitment !== op.nonceCommitment ||
-    actual.draftId !== op.draftId || actual.baseRevision !== op.baseRevision) throw invalidAuthoring();
+  if (
+    actual.operationId !== op.operationId ||
+    actual.accountId !== accountId ||
+    actual.purpose !== op.purpose ||
+    actual.targetPublicKey !== op.targetPublicKey ||
+    actual.nonceCommitment !== op.nonceCommitment ||
+    actual.draftId !== op.draftId ||
+    actual.baseRevision !== op.baseRevision
+  )
+    throw invalidAuthoring();
 }
 function state(raw: unknown, accountId: string, op: AuthoringOperation): AuthoringReceipt | Pending {
   const accepted = authoringReceiptSchema.options[0].safeParse(raw);
   if (accepted.success) {
     const r = accepted.data;
-    if (r.operationId !== op.operationId || (op.purpose === 'editDraft' && (r.draftId !== op.draftId || r.revision !== op.baseRevision! + 1)) ||
-      (op.purpose === 'prepareDraft' && r.revision !== 1)) throw invalidAuthoring();
+    if (
+      r.operationId !== op.operationId ||
+      (op.purpose === 'editDraft' && (r.draftId !== op.draftId || r.revision !== op.baseRevision! + 1)) ||
+      (op.purpose === 'prepareDraft' && r.revision !== 1)
+    )
+      throw invalidAuthoring();
     return r;
   }
   const cancelled = tombstone.safeParse(raw);
   if (cancelled.success) {
-    if (cancelled.data.accountId !== accountId || cancelled.data.operationId !== op.operationId) throw invalidAuthoring();
+    if (cancelled.data.accountId !== accountId || cancelled.data.operationId !== op.operationId)
+      throw invalidAuthoring();
     return { operationId: op.operationId, status: 'cancelled', stateRevision: 1 };
   }
   const v = cloudState.parse(raw);
   match(v, accountId, op);
-  if (v.status === 'cancelled' || v.status === 'expired') return { operationId: v.operationId, status: v.status, stateRevision: v.stateRevision };
+  if (v.status === 'cancelled' || v.status === 'expired')
+    return { operationId: v.operationId, status: v.status, stateRevision: v.stateRevision };
   if (v.stateRevision !== (v.status === 'registered' ? 1 : 2)) throw invalidAuthoring();
   return { status: v.status, stateRevision: v.stateRevision };
 }
 export function authoringCloud(account: NativeAccount, accountId: string, signal: AbortSignal, check: () => void) {
   async function read(path: string, body?: object, missingAllowed = false) {
     check();
-    const response = await account.request(accountId, path, {
-      signal, ...(body && { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify(body) }),
-    }, check);
+    const response = await account.request(
+      accountId,
+      path,
+      {
+        signal,
+        ...(body && { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+      },
+      check,
+    );
     check();
     const reader = response.body?.getReader();
     if (!reader) throw invalidAuthoring();
@@ -72,11 +112,14 @@ export function authoringCloud(account: NativeAccount, accountId: string, signal
         if (size > 448 * 1024) throw invalidAuthoring();
         chunks.push(next.value);
       }
-    } finally { void reader.cancel().catch(() => {}); }
-    const raw: unknown = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(Buffer.concat(chunks)));
+    } finally {
+      void reader.cancel().catch(() => {});
+    }
+    const raw: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
     if (response.ok) return raw;
-    const code = z.object({error:z.object({code:z.string()})}).safeParse(raw);
-    if (missingAllowed && response.status === 404 && code.success && code.data.error.code === 'not_found') return undefined;
+    const code = z.object({ error: z.object({ code: z.string() }) }).safeParse(raw);
+    if (missingAllowed && response.status === 404 && code.success && code.data.error.code === 'not_found')
+      return undefined;
     if (response.status === 409) throw new AuthoringError('草稿修订或操作状态已改变，请核对原操作。');
     if (response.status === 410) throw new AuthoringError('这次操作已到期，请查看原操作。');
     if (response.status === 429) throw new AuthoringError('配方操作已达限额，请稍后重试。');
@@ -86,12 +129,16 @@ export function authoringCloud(account: NativeAccount, accountId: string, signal
   const path = (op: AuthoringOperation) => '/v1/authoring/' + op.operationId;
   return {
     async presence() {
-      const actor = z.object({accountId:uuid}).strict().parse(await read('/v1/me'));
+      const actor = z
+        .object({ accountId: uuid })
+        .strict()
+        .parse(await read('/v1/me'));
       if (actor.accountId !== accountId) throw invalidAuthoring();
     },
     async draft(draftId: string, revision: number) {
       const draft = recipeDraftSchema.parse(await read('/v1/drafts/' + draftId));
-      if (draft.draftId !== draftId || draft.revision !== revision) throw new AuthoringError('草稿修订已改变，请重新打开草稿。');
+      if (draft.draftId !== draftId || draft.revision !== revision)
+        throw new AuthoringError('草稿修订已改变，请重新打开草稿。');
     },
     async get(op: AuthoringOperation) {
       const raw = await read(path(op), undefined, true);
@@ -107,12 +154,18 @@ export function authoringCloud(account: NativeAccount, accountId: string, signal
     },
     async authorize(op: AuthoringOperation, stage: 'dispatch' | 'accept', payloadDigest: string) {
       const stateRevision = stage === 'dispatch' ? 1 : 2;
-      const body = {stage, stateRevision, payloadDigest};
+      const body = { stage, stateRevision, payloadDigest };
       const auth = authoringAuthorizationSchema.parse(await read(path(op) + '/authorize', body));
       match(auth, accountId, op);
-      if (auth.status !== (stage === 'dispatch' ? 'registered' : 'dispatched') || auth.stage !== stage ||
-        auth.stateRevision !== stateRevision || auth.payloadDigest !== payloadDigest || auth.deadline > auth.operationDeadline ||
-        auth.deadline <= Date.now()) throw invalidAuthoring();
+      if (
+        auth.status !== (stage === 'dispatch' ? 'registered' : 'dispatched') ||
+        auth.stage !== stage ||
+        auth.stateRevision !== stateRevision ||
+        auth.payloadDigest !== payloadDigest ||
+        auth.deadline > auth.operationDeadline ||
+        auth.deadline <= Date.now()
+      )
+        throw invalidAuthoring();
       return auth;
     },
   };
