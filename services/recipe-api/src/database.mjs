@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { loopback } from './auth.mjs';
 import { ApiError } from './errors.mjs';
+import { authorizationMaterial, binary32 } from './install-proof.mjs';
 
 // Static parameterized calls. No request field becomes an SQL identifier.
 const calls = Object.freeze({
@@ -19,11 +20,18 @@ const calls = Object.freeze({
   listCodes: 'recipe_api.list_codes($1::uuid,$2::uuid)',
   disableCode: 'recipe_api.disable_code($1::uuid)',
   revealCode: 'recipe_api.reveal_code($1::uuid)',
+  installPreview: 'recipe_api.install_preview($1::uuid)',
+  authorizeOperation: 'recipe_api.authorize_operation($1::uuid,$2::jsonb,$3::bytea,$4::bytea,$5::bytea,$6::bigint)',
+  cancelOperation: 'recipe_api.cancel_operation($1::uuid)',
+  redeemOperation: 'recipe_api.possess_operation($1::uuid,$2::bytea,$3::bytea,$4::bytea)',
+  completeOperation: 'recipe_api.possess_operation($1::uuid,$2::bytea,$3::bytea,$4::bytea,$5::text)',
 });
 
 const businessErrors = new Map(Object.entries({
   auth_required: 401, account_disabled: 403, not_found: 404, forbidden: 403, invalid_input: 422, incomplete_setup: 422,
   conflict: 409, quota_exceeded: 422, rate_limited: 429, invalid_code: 422,
+  operation_pending_limit: 429, operation_expired: 410, operation_clock_skew: 422,
+  operation_cancelled: 409, invalid_operation_proof: 403,
 }));
 
 function makePool(connectionString) {
@@ -102,6 +110,13 @@ export async function openDatabase(url, codeKey, issuer) {
           [identity.issuer, identity.subject]);
         await client.query("SELECT set_config('app.recipe_account',$1,true)", [mapped.account_id]);
       }
+      if (operation === 'authorizeOperation') {
+        const { rows:[context] } = await client.query('SELECT recipe_api.operation_context() AS result');
+        const [operationId, request] = args;
+        const { accountId, deadline } = context.result;
+        const material = authorizationMaterial({ ...request, operationId, accountId, deadline });
+        args = [operationId, request, binary32(material.serverPublicKey), material.ticket, material.proofHash, deadline];
+      }
       const { rows } = await client.query('SELECT ' + calls[operation] + ' AS result', args);
       await client.query('COMMIT');
       return rows[0].result;
@@ -110,11 +125,12 @@ export async function openDatabase(url, codeKey, issuer) {
         try { await client.query('ROLLBACK'); }
         catch { discard = true; }
       }
+      if (err instanceof ApiError) throw err;
       if (err.code === 'P0001' && businessErrors.has(err.message)) {
         // SQL publishing/issuing quotas use UTC calendar days.
         const dayMs = 86_400_000;
         const retryAfter = err.message === 'rate_limited'
-          ? Math.ceil((dayMs - Date.now() % dayMs) / 1000) : undefined;
+          ? Math.ceil((dayMs - Date.now() % dayMs) / 1000) : err.message === 'operation_pending_limit' ? 300 : undefined;
         throw new ApiError(businessErrors.get(err.message), err.message, retryAfter);
       }
       // Database internals and rejected query parameters can contain private text or codes.
