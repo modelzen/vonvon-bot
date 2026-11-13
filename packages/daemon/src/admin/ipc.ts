@@ -79,7 +79,7 @@ export type AdminSessionOp = { kind: 'authorizeSessionCall'; sessionId: string; 
  * `feishuApi`: the same for `feishu_api`, which only a private chat's tool ever asks the host for (7.6).
  */
 export type AdminFeishuOp = { kind: 'feishuRead'; request: FeishuReadRequest } | { kind: 'feishuApi'; request: ApiRequest };
-export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | AdminFeishuOp | { kind: 'status' } | { kind: 'firstHello' };
+export type AdminIpcOp = import('../recipe/authoring-service').AuthoringIpc | AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | AdminFeishuOp | { kind: 'status' } | { kind: 'firstHello' };
 
 export interface AdminIpcRequest {
   fcb: typeof ADMIN_IPC_REQ;
@@ -228,7 +228,6 @@ export function createAdminIpcCaller(send: (msg: AdminIpcRequest) => void): Admi
     revive: (msg) => {
       const reason = msg.error ?? '子进程执行失败';
       // 校验拒绝跨进程还原成 AdminWriteError —— HTTP 层与进程内路径同样映射 409。
-      // 建群失败保留可确定的结果，以及飞书已返回的群 ID。
       return msg.code === 'ADMIN_WRITE_REJECTED' ? new AdminWriteError(reason) : msg.code === 'GROUP_UPSTREAM' ? new GroupUpstreamError(reason) : msg.code === 'INVALID_GROUP_INPUT' ? new InvalidGroupInput(reason)
         : msg.code === 'CREATED_UNSAVED' ? Object.assign(new Error(reason), { code: msg.code, chatId: msg.groupId }) : new Error(reason);
     },
