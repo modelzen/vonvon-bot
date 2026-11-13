@@ -8,13 +8,14 @@ import { ApiError } from '../src/errors.mjs';
 
 const id = 'd8706efa-ea64-4d82-bd7f-60f83ff13d23';
 const author = '17201760-02e9-4ef0-932f-1ccad2bed95e';
+const identity = {issuer:'https://project.supabase.co/auth/v1',subject:author};
 const draft = {public:{name:'开发晨报',summary:'工作日报',version:'1',overview:'',access:'coded'},config:{role:'团队助手'}};
 
 async function fixture(t, execute) {
   const calls = [];
   const server = createRecipeServer({ verify: async token => {
     if (token !== 'valid') throw new ApiError(401,'auth_required');
-    return author;
+    return identity;
   }, execute: async (...params) => { calls.push(params); return execute ? execute(...params) : {}; } });
   server.listen(0,'127.0.0.1');
   await once(server,'listening');
@@ -40,7 +41,7 @@ test('public routes distinguish a visitor from an expired supplied credential', 
 test('draft writes validate and preserve operation identity and revision',async t => {
   const {write,calls} = await fixture(t);
   assert.equal((await write('/v1/drafts','POST',draft)).status,200);
-  assert.deepEqual(calls[0],[author,'saveDraft',[id,0,draft.public,draft.config,id,null,null]]);
+  assert.deepEqual(calls[0],[identity,'saveDraft',[id,0,draft.public,draft.config,id,null,null]]);
   const editUrl = '/v1/drafts/' + id;
   assert.equal((await write(editUrl,'PATCH',draft)).status,428);
   assert.equal((await write(editUrl,'PATCH',draft,{'If-Match':'"2"'})).status,200);
