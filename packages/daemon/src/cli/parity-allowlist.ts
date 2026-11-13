@@ -20,6 +20,7 @@ const pending = (slice: ParitySlice, note: string): ParityEntry => ({ reason: 'p
 const dead = (slice: ParitySlice, note = 'the daemon answers unsupported'): ParityEntry => ({ reason: 'dead', slice, note });
 
 export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
+  ...Object.fromEntries('open close status beginLink inspectLink confirmLink reviewSource prepare edit inspectCandidate advance deliver resend cancel settle'.split(' ').map(type => ['recipeAuthoring.' + type, {reason: 'desktop-only' as const, note: 'the signed-in desktop owns the private authoring session'}])),
   'recipeInstall.prepare': {reason: 'desktop-only', note: 'the signed-in desktop prepares an existing Bot/group role installation'},
   'recipeInstall.commit': {reason: 'desktop-only', note: 'the desktop hands over a scoped cloud operation ticket'},
   'recipeInstall.status': {reason: 'desktop-only', note: 'the desktop recovers the durable installation receipt'},

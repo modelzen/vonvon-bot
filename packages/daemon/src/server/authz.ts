@@ -157,6 +157,7 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
   ...rows('memory', 'list add edit archive', { dm: 'bot', group: 'bot', comment: 'deny' }),
   ...rows('memory', 'export events restore promote move branchRename branchMerge branchDelete confirm purge undo reseal seen newCounts', DM_ONLY),
   ...rows('contextPreview', 'get', DM_ONLY),
+  ...rows('recipeAuthoring', 'open close status beginLink inspectLink confirmLink reviewSource prepare edit inspectCandidate advance deliver resend cancel settle'),
   ...rows('recipeInstall', 'prepare commit status cancel issuing reconcile'),
   ...rows('schedule', 'list create edit pause resume delete runNow', { dm: 'bot', group: 'bot', comment: 'not-group' }),
   ...rows('schedule', 'listBot', { dm: 'bot', group: 'deny', comment: 'not-group' }),
@@ -394,6 +395,7 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
       return admin.type === 'confirmCardCallback' ? botWide() : ok;
     }
     case 'command': return commandInReach(request.payload, session, own, reaches, botWide, narrow, feishuReach(principal));
+    case 'recipeAuthoring':
     case 'recipeInstall': return own(request.payload.botId) && wholeBot ? ok : outOfReach();
     case 'settings': {
       const payload = request.payload;
