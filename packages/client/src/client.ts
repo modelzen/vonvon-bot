@@ -47,7 +47,7 @@ export interface VonvonClient {
   contextPreview(request: ContextPreviewRequest): Promise<ContextPreviewReply>;
   schedule(botId: string, request: ScheduleRequest): Promise<ScheduleReply>;
   device(request: DeviceRequest): Promise<DeviceReply>;
-  recipeInstall(request: RecipeInstallRequest): Promise<RecipeInstallReply>;
+  recipeInstall?(request: RecipeInstallRequest): Promise<RecipeInstallReply>;
   onLog(listener: (payload: LogEventPayload) => void): () => void;
   onBackendInstall(listener: (payload: BackendInstallEventPayload) => void): () => void;
   /** A client paired with or revoked from this device (devices 4.3); only the owner's connections hear it. */

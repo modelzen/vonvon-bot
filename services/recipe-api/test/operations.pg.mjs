@@ -22,7 +22,10 @@ export async function checkInstallOperations({request,sql,jwt,author,reader,othe
   assert.equal((await request('/versions/'+v.versionId+'/install-preview',{token:reader})).manifest,preview.manifest);
   await request('/versions/'+v.versionId+'/install-preview',{status:401});
   await request('/versions/'+v.versionId+'/install-preview',{token:other,status:403});
+  const latest=await request('/recipes/'+v.recipeId+'/latest-install-version',{token:author});
+  assert.deepEqual(latest,{recipeId:v.recipeId,versionId:v2.versionId,revision:2,version:v2.public.version,entitled:true});
   const stranger=jwt(randomUUID());
+  assert.deepEqual(await request('/recipes/'+v.recipeId+'/latest-install-version',{token:stranger}),{...latest,entitled:false});
   await request('/versions/'+v2.versionId+'/install-preview',{token:stranger,status:403});
   for (const subject of [legacy.owner,legacy.reader]) {
     const p=await request('/versions/'+legacy.version+'/install-preview',{token:jwt(subject)});
@@ -42,10 +45,16 @@ export async function checkInstallOperations({request,sql,jwt,author,reader,othe
   const complete=(auth,outcome='applied',status=200)=>request('/operations/'+auth.operationId+'/complete',{
     method:'POST',body:{...possession(auth),outcome},status});
 
+  const negative=(id,accountId=preview.accountId)=>request('/operations/'+id+'/unredeemable',{method:'POST',body:{accountId}});
+  const never=operationId(), expiredId=operationId(Date.now()-310000);
+  assert.deepEqual(await negative(never),{operationId:never,unredeemable:false});
+  assert.deepEqual(await negative(expiredId),{operationId:expiredId,unredeemable:true});
+  await request('/operations/'+never+'/unredeemable',{method:'POST',token:author,body:{accountId:preview.accountId},status:422});
   const id=operationId(),started=Date.now();
   const same=await Promise.all(Array.from({length:8},()=>authorize(id)));
   same.forEach(auth=>assert.deepEqual(auth,same[0]));
   const auth=same[0];
+  assert.equal((await negative(id)).unredeemable,false);
   assert.equal(auth.status,'authorized');
   assert.ok(auth.deadline>=started && auth.deadline<=Date.now()+300000);
   assert.equal(auth.accountId,preview.accountId);
@@ -121,6 +130,7 @@ export async function checkInstallOperations({request,sql,jwt,author,reader,othe
     end $$;`);
   }
   const received=await redeem(auth);
+  assert.equal((await negative(id)).unredeemable,false);
   assert.equal(received.status,'redeemed');
   assert.equal(received.manifest,preview.manifest);
   assert.ok(!('ticket' in received));
@@ -130,6 +140,7 @@ export async function checkInstallOperations({request,sql,jwt,author,reader,othe
   assert.equal((await redeem(auth)).status,'redeemed');
   assert.equal((await complete(auth)).status,'applied');
   assert.deepEqual(await complete(auth),{operationId:id,status:'applied'});
+  assert.equal((await negative(id)).unredeemable,false);
   await complete(auth,'rejected',409);
   assert.equal((await redeem(auth)).status,'applied');
   assert.equal((await authorize(id)).status,'applied');
@@ -139,6 +150,8 @@ export async function checkInstallOperations({request,sql,jwt,author,reader,othe
   assert.equal((await cancel(preCancel)).status,'cancelled');
   assert.deepEqual(await cancel(preCancel),{operationId:preCancel,status:'cancelled'});
   await authorize(preCancel,author,{},409);
+  assert.equal((await negative(preCancel)).unredeemable,true);
+  assert.equal((await negative(preCancel,randomUUID())).unredeemable,false);
   const cancelled=await authorize(operationId());
   assert.equal((await cancel(cancelled.operationId)).status,'cancelled');
   await redeem(cancelled,409);
@@ -192,6 +205,17 @@ export async function checkInstallOperations({request,sql,jwt,author,reader,othe
     assert.fail('expected database row lock waiter for '+fragment);
   }
   try {
+    const heldId=operationId(Date.now()-310000);
+    await blocker.query('begin');
+    await blocker.query('select pg_advisory_xact_lock(hashtextextended($1,187511))',[preview.accountId]);
+    await blocker.query(`insert into recipe_private.install_operations(id,account_id,state,request_digest,version_id,binding,ticket,expected_proof_hash,deadline)
+      select $1,account_id,'authorized',request_digest,version_id,binding,ticket,expected_proof_hash,floor(extract(epoch from clock_timestamp())*1000)::bigint+300000
+      from recipe_private.install_operations where id=$2`,[heldId,id]);
+    const evidence=negative(heldId);
+    await waiting('unredeemable_operation');
+    await blocker.query('commit');
+    assert.equal((await evidence).unredeemable,false,'an in-flight authorization must become visible before ruling out redemption');
+    sql(`delete from recipe_private.install_operations where id='${heldId}'`);
     const deadlineRace=await authorize(operationId());
     await blocker.query('BEGIN');
     const deadlineUpdate=await blocker.query(`update recipe_private.install_operations
