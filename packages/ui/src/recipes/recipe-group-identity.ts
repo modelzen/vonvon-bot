@@ -1,24 +1,27 @@
-import {useEffect, useMemo, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
 import type {VonvonClient} from '@vonvon/client/browser';
 import {groupIdentitySchema, groupIdSchema, type AgentId, type DesktopSnapshot} from '@vonvon/protocol';
 
 export function useRecipeTargetSnapshot(client: VonvonClient, scope: object, enabled: boolean) {
-  const [read, setRead] = useState<{scope: object; connection: object; snapshot: DesktopSnapshot}>();
+  const live = useRef<object>(undefined);
+  const [read, setRead] = useState<{scope: object; connection: object; snapshot?: DesktopSnapshot}>();
   useEffect(() => {
     if (!enabled) return;
     let active = true;
-    let connection = {};
-    let revision = -1;
+    let connection = scope;
+    live.current = connection;
     const unsubscribe = client.watchSnapshots(snapshot => {
-      // The desktop facade only delivers a repeated or lower revision after reattachment.
-      if (snapshot.revision <= revision) connection = {};
-      revision = snapshot.revision;
       if (active) setRead({scope, connection, snapshot});
+    }, () => {
+      if (!active) return;
+      connection = {};
+      live.current = connection;
+      setRead({scope, connection});
     });
-    return () => {active = false; unsubscribe();};
+    return () => {active = false; live.current = undefined; unsubscribe();};
   }, [client, scope, enabled]);
   const current = enabled && read?.scope === scope ? read : undefined;
-  return {snapshot: current?.snapshot, scope: current?.connection ?? scope};
+  return {snapshot: current?.snapshot, scope: current?.connection ?? scope, isCurrent: () => Boolean(current?.snapshot && current.connection === live.current)};
 }
 
 export function useRecipeGroupIdentity({client, scope, snapshot, botId, groupId, enabled}: {

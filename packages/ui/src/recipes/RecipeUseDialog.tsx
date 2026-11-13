@@ -1,6 +1,6 @@
 import {useState} from 'react';
 import {backendLabel, groupIdSchema, type AgentId, type DesktopRecipeReview, type DesktopSnapshot, type RecipeSetup, type RecipeUseReply, type RecipeUseRequest} from '@vonvon/protocol';
-import {JoinGroupDialog} from '../JoinGroupDialog';
+import {JoinGroupDialog, type JoinGroupDraft} from '../JoinGroupDialog';
 import {SelectJoinBotDialog} from '../SelectJoinBotDialog';
 import {Button, FormField, InlineNotice} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
@@ -10,7 +10,7 @@ import type {RecipeUseSession} from './recipe-use-context';
 
 type Props = {
   session: RecipeUseSession; snapshot?: DesktopSnapshot; visible: boolean; reply?: RecipeUseReply; error?: string;
-  busy: boolean; paused: boolean; accountChanged: boolean; unavailable: boolean; needsRecovery: boolean; reviewEpoch: number; groupId?: string;
+  busy: boolean; paused: boolean; accountChanged: boolean; unavailable: boolean; needsRecovery: boolean; groupId?: string;
   groupName?: string; groupNameError?: string; onRefreshGroupName: () => void;
   acceptedResolution?: Resolution;
   onSelectBot: (id: AgentId) => void; onSelectGroup: (groupId: string) => void; onClose: () => void; onRecover: () => void;
@@ -18,6 +18,8 @@ type Props = {
 };
 export function RecipeUseDialog(props: Props) {
   const {session, snapshot, visible, reply, busy, paused, needsRecovery, onClose, onRequest} = props;
+  const joinDraft = useState<JoinGroupDraft>();
+  const [reviewDraft, setReviewDraft] = useState<ReviewDraft>({});
   const [repairing, setRepairing] = useState(false);
   const [dismiss, setDismiss] = useState(false);
   const pending = usePendingGroups(visible && !paused ? snapshot : undefined);
@@ -30,9 +32,9 @@ export function RecipeUseDialog(props: Props) {
   const repairForm = repairing && recovery && !bound;
   const joining = reply?.kind === 'choose' || repairForm;
   const choosing = visible && !paused && !needsRecovery && !busy && joining && agent;
-  const join = !props.accountChanged && joining && reply && 'handle' in reply && agent ? <JoinGroupDialog key={repairForm ? 'repair' : 'join'} open={Boolean(choosing)}
+  const join = !paused && !needsRecovery && joining && reply && 'handle' in reply && agent ? <JoinGroupDialog key={repairForm ? 'repair' : 'join'} open={Boolean(choosing)}
     agent={agent} snapshot={snapshot} tools={snapshot?.tools} pending={pending.find(item => item.agentId === agent.id)}
-    recipe={session.recipe} onClose={repairForm ? () => setRepairing(false) : onClose} onChanged={async () => {}}
+    recipeDraft={joinDraft} recipe={session.recipe} onClose={repairForm ? () => setRepairing(false) : onClose} onChanged={async () => {}}
     existingOnly={Boolean(repairForm)} initialGroup={repairForm && recovery.groupId ? {chatId: recovery.groupId, name: groupName ?? recovery.name ?? '', addedAt: 0} : undefined}
     onRecipeCancel={repairForm ? () => setRepairing(false) : () => void onRequest({type: 'cancel', handle: reply.handle})}
     onRecipeJoin={async input => {
@@ -69,7 +71,7 @@ export function RecipeUseDialog(props: Props) {
         </ol>
         {session.target && (reply?.kind === 'review' || reply?.kind === 'prepared') && <p className="recipe-use-note">沿用现有群聊的 Provider、工作目录和沟通方式。</p>}
         {(reply?.kind === 'review' || reply?.kind === 'prepared') && <p role="status">{props.groupNameError ?? (!groupName ? '正在读取目标群名，核对后才能确认应用。' : '已核对飞书群名。')} <Button disabled={busy} onClick={props.onRefreshGroupName}>刷新群名</Button></p>}
-        {(reply?.kind === 'review' || reply?.kind === 'prepared') && <RecipeReview key={`${reply.review.reviewToken}:${props.reviewEpoch}`} review={reply.review} prepared={reply.kind === 'prepared'} busy={busy || !groupName}
+        {(reply?.kind === 'review' || reply?.kind === 'prepared') && <RecipeReview draft={reviewDraft} onChange={setReviewDraft} review={reply.review} prepared={reply.kind === 'prepared'} busy={busy || !groupName}
           acceptedResolution={props.acceptedResolution}
           onResolve={resolution => onRequest({type: 'resolve', handle: reply.handle, reviewToken: reply.review.reviewToken, resolution})}
           onConfirm={() => onRequest({type: 'confirm', handle: reply.handle})}/>}
@@ -101,10 +103,9 @@ function pendingDetail(phase: 'joining' | 'installing' | 'cancelling') {
   return {joining: '群聊可能已经创建或连接，请先核对进度。', installing: '目标设备与云端尚未确认全部完成，请先核对进度。', cancelling: '取消尚未确认；如果应用已经开始，会继续核对实际结果。'}[phase];
 }
 type Resolution = Extract<RecipeUseRequest, {type: 'resolve'}>['resolution'];
-function RecipeReview({review, prepared, busy, acceptedResolution, onResolve, onConfirm}: {review: DesktopRecipeReview; prepared: boolean; busy: boolean; acceptedResolution?: Resolution; onResolve: (resolution: Resolution) => Promise<void>; onConfirm: () => Promise<void>}) {
-  const [role, setRole] = useState<'keep' | 'replace' | 'custom'>();
-  const [text, setText] = useState(review.currentRole);
-  const [setup, setSetup] = useState<'keep' | 'replace'>();
+type ReviewDraft = {role?: 'keep' | 'replace' | 'custom'; text?: string; setup?: 'keep' | 'replace'};
+function RecipeReview({review, draft, onChange, prepared, busy, acceptedResolution, onResolve, onConfirm}: {draft: ReviewDraft; onChange: (draft: ReviewDraft) => void; review: DesktopRecipeReview; prepared: boolean; busy: boolean; acceptedResolution?: Resolution; onResolve: (resolution: Resolution) => Promise<void>; onConfirm: () => Promise<void>}) {
+  const {role, setup, text = review.currentRole} = draft;
   const tooLong = [...text].length > 5000;
   const ready = (!review.roleChoiceRequired || role !== undefined) && (!review.setupChoiceRequired || setup !== undefined) && !(role === 'custom' && tooLong);
   function resolve() {
@@ -123,15 +124,15 @@ function RecipeReview({review, prepared, busy, acceptedResolution, onResolve, on
       <CompareText title="群内当前" text={review.currentRole}/><CompareText title="本次配方" text={review.incomingRole}/>
     </div>
       {!prepared && review.roleChoiceRequired && <fieldset className="recipe-use-choices"><legend>选择角色内容</legend>
-        {([['keep', '保留群内当前'], ['replace', '使用本次配方'], ['custom', '手动合并']] as const).map(([value, label]) => <label key={value}><input type="radio" name="recipe-role" value={value} checked={role === value} disabled={busy} onChange={() => setRole(value)}/>{label}</label>)}
+        {([['keep', '保留群内当前'], ['replace', '使用本次配方'], ['custom', '手动合并']] as const).map(([value, label]) => <label key={value}><input type="radio" name="recipe-role" value={value} checked={role === value} disabled={busy} onChange={() => onChange({...draft, role: value})}/>{label}</label>)}
       </fieldset>}
-      {!prepared && role === 'custom' && <FormField label="合并后的本群角色" error={tooLong ? '本群角色最多 5000 字。' : undefined}><textarea aria-label="合并后的本群角色" value={text} disabled={busy} onChange={event => setText(event.target.value)}/><small>{[...text].length} / 5000 字</small></FormField>}
+      {!prepared && role === 'custom' && <FormField label="合并后的本群角色" error={tooLong ? '本群角色最多 5000 字。' : undefined}><textarea aria-label="合并后的本群角色" value={text} disabled={busy} onChange={event => onChange({...draft, text: event.target.value})}/><small>{[...text].length} / 5000 字</small></FormField>}
     </section>
     {(review.currentSetup || review.incomingSetup || review.baseSetup) && <section aria-label="使用准备对比"><h3>使用准备</h3><div className="recipe-use-comparison">
       {review.baseSetup && <CompareSetup title="上次配方" setup={review.baseSetup}/>}
       <CompareSetup title="群内当前" setup={review.currentSetup}/><CompareSetup title="本次配方" setup={review.incomingSetup}/>
     </div><p className="recipe-use-note">这些是使用说明。获取或应用配方不会自动执行其中的步骤。</p>
-      {!prepared && review.setupChoiceRequired && <fieldset className="recipe-use-choices"><legend>选择使用准备</legend>{([['keep', '保留群内当前'], ['replace', '使用本次配方']] as const).map(([value, label]) => <label key={value}><input type="radio" name="recipe-setup" checked={setup === value} disabled={busy} onChange={() => setSetup(value)}/>{label}</label>)}</fieldset>}
+      {!prepared && review.setupChoiceRequired && <fieldset className="recipe-use-choices"><legend>选择使用准备</legend>{([['keep', '保留群内当前'], ['replace', '使用本次配方']] as const).map(([value, label]) => <label key={value}><input type="radio" name="recipe-setup" checked={setup === value} disabled={busy} onChange={() => onChange({...draft, setup: value})}/>{label}</label>)}</fieldset>}
     </section>}
     <div className="recipe-use-review__action"><Button variant="primary" loading={busy} disabled={busy || !prepared && !ready} onClick={() => prepared ? void onConfirm() : resolve()}>{prepared ? '确认应用到这个群' : '预览所选内容'}</Button></div>
   </div>;
