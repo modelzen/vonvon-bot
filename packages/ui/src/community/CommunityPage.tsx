@@ -7,6 +7,7 @@ import {useDraftGuard} from '../settings/DraftGuard';
 import {useCommunity, type CommunityRoute} from './community-context';
 import {CopyButton, RecipeCard, RecipeDetails} from './RecipeContent';
 import {RecipeEditor} from './RecipeEditor';
+import {RecipeAuthoringPage} from './authoring/RecipeAuthoring';
 import {Dialog} from '../reference/components/ui/Dialog';
 import './community.css';
 
@@ -96,7 +97,8 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
     if (next.acquired || next.owned) community.onUse?.(next);
   }
   const login = <div className="community-empty"><h2>登录后继续</h2><p>{accountStatusText(account.status, account.supported)}</p><Button variant="primary" disabled={!account.supported || account.status?.kind === 'signingIn'} onClick={() => void account.login()}>登录</Button></div>;
-  const privatePage = route.kind === 'library' || route.kind === 'workspace' || route.kind === 'draft' || route.kind === 'detail' && route.privateView;
+  const privatePage = route.kind === 'library' || route.kind === 'workspace' || route.kind === 'authoring' || route.kind === 'draft' || route.kind === 'detail' && route.privateView;
+  if (route.kind === 'authoring' && accountId) return <RecipeAuthoringPage onBack={() => open({kind: 'workspace'})} onSaved={draftId => open({kind: 'draft', draftId})}/>;
   if (route.kind === 'draft' && accountId) return <RecipeEditor key={route.draftId ?? route.source?.versionId ?? 'new'} shell={shell} accountId={accountId} draftId={route.draftId} source={route.source}
     onBack={() => open({kind: 'workspace'})} onPublished={recipe => {setNotice(recipe.firstCode ? '本版本已发布。首枚分享码：' + recipe.firstCode : '本版本已发布。'); community.open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}, privateView: true});}}/>;
   return <div className="community-page">
@@ -118,7 +120,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
       {route.kind === 'library' && <section className="community-workspace-section"><h2>已获取</h2>{library?.items.length === 0 && <div className="community-empty"><h2>还没有获取配方</h2><p>从社区获取后，任何设备登录这个账号都可以继续使用。</p></div>}<div className="community-grid">{library?.items.map(recipe => <RecipeCard key={recipe.versionId} recipe={recipe} onOpen={() => open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}})}/>)}</div>
         {library?.nextCursor && <div><Button disabled={busy} onClick={() => void run(async () => {const current = generation.current; const next = await shell.request({type: 'library', accountId: accountId!, cursor: library.nextCursor!}); if (live.current && current === generation.current) setLibrary(old => old ? {...old, items: uniqueRecipes(old.items, next.items), nextCursor: next.nextCursor} : next);})}>加载更多</Button></div>}</section>}
       {route.kind === 'workspace' && <>
-        <div className="community-heading"><div><h2>创作中心</h2><p>私人草稿只有你能看到，发布后才进入社区。</p></div><Button variant="primary" onClick={() => open({kind: 'draft'})}>创作配方</Button></div>
+        <div className="community-heading"><div><h2>创作中心</h2><p>私人草稿只有你能看到，发布后才进入社区。</p></div><div className="community-actions"><Button variant="primary" onClick={() => open({kind: 'authoring'})}>分享群聊配方</Button><Button onClick={() => open({kind: 'draft'})}>手动创作</Button></div></div>
         <section className="community-workspace-section"><h2>私人草稿</h2>{drafts?.length === 0 && <p className="community-muted">还没有私人草稿。可以先手动准备角色与使用说明。</p>}{Boolean(drafts?.length) && <div className="community-list">{drafts?.map(draft => <div className="community-list-row" key={draft.draftId}><div><strong>{draft.public.name || '未命名草稿'}</strong><small>{draft.public.version || '未指定版本'} · 私人草稿</small></div><Button onClick={() => open({kind: 'draft', draftId: draft.draftId})}>查看草稿</Button></div>)}</div>}</section>
         <section className="community-workspace-section"><h2>已发布</h2>{publications?.length === 0 && <p className="community-muted">发布后，你可以在这里维护版本和分享码。</p>}{Boolean(publications?.length) && <div className="community-list">{publications?.map(recipe => <div className="community-list-row" key={recipe.versionId}><div><strong>{recipe.public.name}</strong><small>{recipe.public.version} · {recipe.public.access === 'coded' ? '凭分享码获取' : '直接获取'}</small></div><Button onClick={() => open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}, privateView: true})}>管理此版本</Button></div>)}</div>}</section>
       </>}
