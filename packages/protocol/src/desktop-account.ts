@@ -4,6 +4,7 @@ export const accountProviderSchema = z.enum(["github", "google", "apple"]);
 export type AccountProvider = z.infer<typeof accountProviderSchema>;
 
 export const accountAvatarUrlSchema = z.string().max(2048).url().refine(value => {
+  if (!URL.canParse(value)) return false;
   const url = new URL(value);
   return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash;
 });
