@@ -28,6 +28,9 @@ const { addProject, getProjectByChatId, mutateProjectByChatId, removeProject, mu
 const { botPaths, useBotDir } = await import('../src/config/paths');
 const { recipeInstallRpc } = await import('../src/server/rpc/recipe-install');
 const { authorize } = await import('../src/server/authz');
+const { createAdminService } = await import('../src/admin/service');
+const { setSecret, getSecret } = await import('../src/config/keystore');
+const { secretKeyForApp } = await import('../src/config/schema');
 const botId = 'cli_recipe_fixture', groupId = 'oc_recipe_fixture', accountId = randomUUID();
 const {publicKey, privateKey} = generateKeyPairSync('x25519');
 const device: DeviceIdentity = {v: 1, deviceId: randomUUID(), name: 'Fixture', keypair: {
@@ -218,6 +221,52 @@ describe('durable role installation', () => {
 
 describe('bounded local preparations', () => {
   function clockStore(now: () => number) {return new RecipeStore({targetPublicKey: device.keypair.publicKey, location, now, isInChat: async () => {}});}
+  it('preserves issuing across the five-minute boundary and restart so a delayed valid ticket can resume', async () => {
+    const start = Date.now(); let now = start; const local = clockStore(() => now), input = prepare();
+    if (input.type !== 'prepare') throw new Error('fixture');
+    const value = await local.prepare(input); if (value.kind !== 'prepared') throw new Error('fixture');
+    now += 299000;
+    expect(await local.issuing(botId, value.operationId)).toMatchObject({status: 'prepared', issuerState: 'issuing', stillNeedsTicket: true});
+    now += 2000;
+    const restarted = clockStore(() => now);
+    expect(await restarted.status(botId, value.operationId)).toMatchObject({status: 'prepared', issuerState: 'issuing', stillNeedsTicket: true});
+    const auth = {...authorization(value), deadline: start + 599000};
+    await restarted.authorize(botId, value.operationId, auth);
+    expect(await restarted.status(botId, value.operationId)).toMatchObject({status: 'in_progress', issuerState: 'authorized', stillNeedsTicket: false});
+    const {ticket: _ticket, ...binding} = auth;
+    const installer = new RecipeInstaller({apiOrigin: 'https://recipes.example', device, location, now: () => now, isInChat: async () => {},
+      fetch: (async (url: string | URL | Request) => String(url).endsWith('/redeem')
+        ? Response.json({...binding, status: 'redeemed', manifest: input.manifest})
+        : Response.json({operationId: value.operationId, status: 'applied'})) as typeof fetch});
+    expect(await installer.request(recipeInstallRequestSchema.parse({type: 'commit', botId, operationId: value.operationId}))).toMatchObject({status: 'applied', issuerState: 'authorized', stillNeedsTicket: false});
+    expect((await restarted.get(botId, value.operationId)).cloudCompletion).toBe('confirmed');
+  });
+  it('does not start issuing after an unissued preparation has expired', async () => {
+    let now = Date.now(); const local = clockStore(() => now), input = prepare(); if (input.type !== 'prepare') throw new Error('fixture');
+    const value = await local.prepare(input); if (value.kind !== 'prepared') throw new Error('fixture');
+    now += 300001;
+    expect(await local.issuing(botId, value.operationId)).toMatchObject({status: 'rejected', issuerState: 'unissued', stillNeedsTicket: false});
+  });
+  it('keeps issuing operations in the active budget beyond retention until trusted cloud reconciliation', async () => {
+    let now = Date.now(); const local = clockStore(() => now), ids: string[] = [];
+    for (let index = 0; index < 3; index++) {
+      const input = prepare(); if (input.type !== 'prepare') throw new Error('fixture');
+      const value = await local.prepare(input); if (value.kind !== 'prepared') throw new Error('fixture');
+      await local.issuing(botId, value.operationId); ids.push(value.operationId);
+    }
+    now += 9 * 86400000;
+    const next = prepare(); if (next.type !== 'prepare') throw new Error('fixture');
+    await expect(local.prepare(next)).rejects.toThrow('待完成');
+    for (const id of ids) expect(await local.status(botId, id)).toMatchObject({status: 'prepared', issuerState: 'issuing', stillNeedsTicket: true});
+  });
+  it('treats a legacy missing issuer marker as unknown instead of assuming no authorization was dispatched', async () => {
+    let now = Date.now(); const local = clockStore(() => now), input = prepare(); if (input.type !== 'prepare') throw new Error('fixture');
+    const value = await local.prepare(input); if (value.kind !== 'prepared') throw new Error('fixture');
+    const file = botPaths(botId).projectsFile, raw = JSON.parse(await readFile(file, 'utf8'));
+    delete raw.recipeInstallOperations[value.operationId].issuerState; await writeFile(file, JSON.stringify(raw));
+    now += 9 * 86400000;
+    expect(await local.status(botId, value.operationId)).toMatchObject({status: 'prepared', issuerState: 'issuing', stillNeedsTicket: true});
+  });
   it('reuses an exact unissued preparation with the same UUID and private nonce across retries', async () => {
     const local = clockStore(() => Date.now()), input = prepare();
     if (input.type !== 'prepare') throw new Error('fixture');
@@ -335,7 +384,63 @@ describe('bounded local preparations', () => {
   });
 });
 
+describe('normal Bot deletion preserves installation recovery', () => {
+  async function stoppedService() {
+    const bots = JSON.parse(await readFile(join(root, 'bots.json'), 'utf8'));
+    bots.bots[0].active = false;
+    await writeFile(join(root, 'bots.json'), JSON.stringify(bots));
+    return createAdminService({liveStatus: async () => ({running: false})});
+  }
+  it.each(['issuing', 'authorized', 'completion'] as const)('blocks the actual deleteBot path for %s state without deleting credentials or receipts', async phase => {
+    const value = await prepared();
+    await setSecret(secretKeyForApp(botId), 'recipe-fixture-secret');
+    if (phase === 'issuing') await store().issuing(botId, value.operationId);
+    else await store().authorize(botId, value.operationId, authorization(value));
+    if (phase === 'completion') {await store().redeemed(botId, value.operationId); await store().apply(botId, value.operationId, async () => {});}
+    const service = await stoppedService(), registry = await readFile(join(root, 'bots.json'), 'utf8'), receipt = await readFile(botPaths(botId).projectsFile, 'utf8');
+    expect(await service.deleteBot(botId)).toMatchObject({ok: false, reason: expect.stringContaining('恢复')});
+    expect(await readFile(join(root, 'bots.json'), 'utf8')).toBe(registry);
+    expect(await readFile(botPaths(botId).projectsFile, 'utf8')).toBe(receipt);
+    expect(await getSecret(secretKeyForApp(botId))).toBe('recipe-fixture-secret');
+  });
+  it('still permits normal deletion after the cloud completion obligation is confirmed', async () => {
+    const value = await ready(); await store().apply(botId, value.operationId, async () => {}); await store().confirmCompletion(botId, value.operationId);
+    await setSecret(secretKeyForApp(botId), 'recipe-fixture-secret');
+    expect(await (await stoppedService()).deleteBot(botId)).toMatchObject({ok: true});
+    await expect(readFile(botPaths(botId).projectsFile, 'utf8')).rejects.toMatchObject({code: 'ENOENT'});
+    expect(await getSecret(secretKeyForApp(botId))).toBeUndefined();
+  });
+});
+
 describe('wire and security boundaries', () => {
+  it('keeps an uncertain issuing operation until the daemon verifies a matching negative cloud response', async () => {
+    const value = await prepared(); let unredeemable = false;
+    const transport = vi.fn(async (url: string | URL | Request, options?: RequestInit) => {
+      expect(String(url)).toBe(`https://recipes.example/v1/operations/${value.operationId}/unredeemable`);
+      expect(JSON.parse(options!.body as string)).toEqual({accountId});
+      expect(options?.headers).toEqual({'Content-Type': 'application/json'});
+      expect(options?.redirect).toBe('error');
+      return Response.json({operationId: value.operationId, unredeemable});
+    });
+    const installer = () => new RecipeInstaller({apiOrigin: 'https://recipes.example', device, location, isInChat: async () => {}, fetch: transport as typeof fetch});
+    await installer().request(recipeInstallRequestSchema.parse({type: 'issuing', botId, operationId: value.operationId}));
+    expect(await installer().request(recipeInstallRequestSchema.parse({type: 'cancel', botId, operationId: value.operationId}))).toMatchObject({status: 'prepared', issuerState: 'issuing'});
+    const request = recipeInstallRequestSchema.parse({type: 'reconcile', botId, operationId: value.operationId});
+    expect(await installer().request(request)).toMatchObject({status: 'prepared', issuerState: 'issuing', stillNeedsTicket: true});
+    unredeemable = true;
+    expect(await installer().request(request)).toMatchObject({status: 'rejected', stillNeedsTicket: false});
+    expect((await store().get(botId, value.operationId)).cloudCompletion).toBe('none');
+    expect(await installer().request(request)).toMatchObject({status: 'rejected'});
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(recipeInstallRequestSchema.safeParse({type: 'reconcile', botId, operationId: value.operationId, unredeemable: true}).success).toBe(false);
+  });
+  it('does not close issuing from a mismatched cloud-negative response', async () => {
+    const value = await prepared(); await store().issuing(botId, value.operationId);
+    const installer = new RecipeInstaller({apiOrigin: 'https://recipes.example', device, location, isInChat: async () => {},
+      fetch: (async () => Response.json({operationId: randomUUID(), unredeemable: true})) as typeof fetch});
+    await expect(installer.request(recipeInstallRequestSchema.parse({type: 'reconcile', botId, operationId: value.operationId}))).rejects.toThrow('不一致');
+    expect(await store().status(botId, value.operationId)).toMatchObject({status: 'prepared', issuerState: 'issuing'});
+  });
   it('does not report or complete a visible terminal receipt while its post-rename durability fence fails', async () => {
     const value = manifest(), preparation = await prepared(value), auth = authorization(preparation);
     const {ticket: _ticket, ...binding} = auth;

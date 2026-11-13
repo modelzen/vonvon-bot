@@ -30,7 +30,7 @@ export class RecipeInstaller {
     this.origin = recipeApiOrigin(options.apiOrigin, options.allowLoopbackForTests);
     this.store = new RecipeStore({...options, targetPublicKey: options.device.keypair.publicKey});
   }
-  private async post(operationId: string, action: 'redeem' | 'complete', body: object): Promise<unknown> {
+  private async post(operationId: string, action: 'redeem' | 'complete' | 'unredeemable', body: object): Promise<unknown> {
     const response = await (this.options.fetch ?? fetch)(`${this.origin}/v1/operations/${operationId}/${action}`, {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
       redirect: 'error', credentials: 'omit', cache: 'no-store', signal: AbortSignal.timeout(12000),
@@ -54,6 +54,14 @@ export class RecipeInstaller {
       throw new RecipeServiceError(response.status, error.success ? error.data.error.code : undefined);
     }
     return payload;
+  }
+  private async reconcile(botId: string, operationId: string): Promise<RecipeInstallReply> {
+    const operation = await this.store.get(botId, operationId);
+    if (operation.status !== 'prepared' || operation.authorization || operation.issuerState !== 'issuing') return this.store.status(botId, operationId);
+    const result = z.object({operationId: z.string().uuid(), unredeemable: z.boolean()}).strict()
+      .parse(await this.post(operationId, 'unredeemable', {accountId: operation.accountId}));
+    if (result.operationId !== operationId) throw new Error('配方服务回执不一致');
+    return result.unredeemable ? this.store.rejectUnredeemed(botId, operationId, '云端确认无法首次兑换') : this.store.status(botId, operationId);
   }
   private credential(operation: RecipeOperation): {ticket: string; nonce: string; proof: string} {
     if (!operation.authorization || operation.targetPublicKey !== this.options.device.keypair.publicKey) throw new Error('配方授权不属于本机');
@@ -97,6 +105,8 @@ export class RecipeInstaller {
   async request(request: RecipeInstallRequest): Promise<RecipeInstallReply> {
     if (request.type === 'prepare') return this.store.prepare(request);
     if (request.type === 'status') return this.store.status(request.botId, request.operationId);
+    if (request.type === 'issuing') return this.store.issuing(request.botId, request.operationId);
+    if (request.type === 'reconcile') return this.reconcile(request.botId, request.operationId);
     if (request.type === 'cancel') return this.store.cancel(request.botId, request.operationId);
     const key = `${request.botId}:${request.operationId}`;
     const prior = this.turns.get(key);
