@@ -60,6 +60,22 @@ function axiosError(status: number, data: unknown): Error {
 const input = (directory: string): BindGroupInput => ({ chatId: 'oc_a', projectName: 'First', directory, backend: 'codex-appserver', kind: 'multi' });
 
 describe('desktop group commands in the owning bot', () => {
+  it('checks only the Bot membership when the members list is unavailable', async () => {
+    const fixture = channelFixture();
+    fixture.members.mockRejectedValue(new Error('member list scope unavailable'));
+    const execute = createGroupExecutor(fixture.channel);
+    expect(await execute({kind: 'groupMembership', chatId: 'oc_membership_only', identity: bot})).toEqual({inChat: true});
+    expect(fixture.membership).toHaveBeenCalledWith({path: {chat_id: 'oc_membership_only'}});
+    expect(fixture.members).not.toHaveBeenCalled(); expect(fixture.list).not.toHaveBeenCalled();
+  });
+  it('refuses a stale runtime identity or a non-member without reading the member list', async () => {
+    const fixture = channelFixture(), execute = createGroupExecutor(fixture.channel);
+    await expect(execute({kind: 'groupMembership', chatId: 'oc_minimum', identity: {...bot, registrationId: 'changed'}})).rejects.toThrow('身份已改变');
+    expect(fixture.membership).not.toHaveBeenCalled();
+    fixture.membership.mockResolvedValueOnce({code: 0, data: {is_in_chat: false}});
+    await expect(execute({kind: 'groupMembership', chatId: 'oc_minimum', identity: bot})).rejects.toThrow('不在此群');
+    expect(fixture.members).not.toHaveBeenCalled();
+  });
   it('binds a default empty workspace and keeps pending state for stale or non-member requests', async () => {
     const fixture = channelFixture();
     const execute = createGroupExecutor(fixture.channel);
@@ -282,11 +298,12 @@ describe('desktop group commands in the owning bot', () => {
       mode: 'full' as const, network: true, enabled: false, future: { keep: true } };
     await addProject(legacy);
     const bytes = await readFile(paths.projectsFile, 'utf8');
+    const savedLegacy = (await listProjects()).find(row => row.chatId === legacy.chatId);
     const value = { name: legacy.name, chatId: legacy.chatId, existingPath: paths.appDir, kind: legacy.kind, backend: legacy.backend, noMention: false };
-    expect(await joinExistingGroup(fixture.channel, value)).toEqual(legacy);
+    expect(await joinExistingGroup(fixture.channel, value)).toEqual(savedLegacy);
     const execute = createGroupExecutor(fixture.channel);
     const web = { ...input(paths.appDir), projectName: legacy.name, chatId: legacy.chatId, backend: legacy.backend, kind: legacy.kind };
-    expect(await execute({ kind: 'bindGroup', input: web })).toEqual(legacy);
+    expect(await execute({ kind: 'bindGroup', input: web })).toEqual(savedLegacy);
     fixture.membership.mockResolvedValueOnce({ code: 0, data: { is_in_chat: false } });
     await expect(execute({ kind: 'bindGroup', input: web })).rejects.toThrow('不在此群');
     fixture.membership.mockRejectedValueOnce(new Error('offline'));
@@ -296,7 +313,7 @@ describe('desktop group commands in the owning bot', () => {
     const smartLegacy = { ...legacy, name: 'Smart legacy', chatId: 'oc_smart_legacy', smart: true };
     await addProject(smartLegacy);
     // A hand-written 智能 row binds again as 智能 (s25c); 单会话 is another 会话方式.
-    expect(await joinExistingGroup(fixture.channel, { ...value, name: 'Smart legacy', chatId: 'oc_smart_legacy', kind: 'smart' })).toEqual(smartLegacy);
+    expect(await joinExistingGroup(fixture.channel, { ...value, name: 'Smart legacy', chatId: 'oc_smart_legacy', kind: 'smart' })).toEqual((await listProjects()).find(row => row.chatId === smartLegacy.chatId));
     await expect(joinExistingGroup(fixture.channel, { ...value, name: 'Smart legacy', chatId: 'oc_smart_legacy' })).rejects.toThrow('不可修改');
     expect(fixture.message).not.toHaveBeenCalled();
   });
