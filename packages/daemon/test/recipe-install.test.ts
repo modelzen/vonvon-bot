@@ -212,7 +212,11 @@ describe('wire and security boundaries', () => {
     expect(transport.mock.calls.filter(([url]) => String(url).endsWith('/complete'))).toHaveLength(0);
     expect((await row())?.supplement).toBe(value.role);
     await expect(store().status(botId, preparation.operationId)).rejects.toMatchObject({code: 'EIO'});
+    const sameVersion = prepare(value);
+    if (sameVersion.type !== 'prepare') throw new Error('fixture');
+    await expect(store().prepare(sameVersion)).rejects.toMatchObject({code: 'EIO'});
     durability.fail = false;
+    expect(await store().prepare(sameVersion)).toMatchObject({kind: 'alreadyInstalled', versionId: value.versionId});
     expect(await installer().request(recipeInstallRequestSchema.parse({type: 'commit', botId, operationId: preparation.operationId}))).toMatchObject({status: 'applied'});
     expect(member).toHaveBeenCalledTimes(1);
     expect(transport.mock.calls.filter(([url]) => String(url).endsWith('/complete'))).toHaveLength(1);

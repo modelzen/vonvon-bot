@@ -77,7 +77,7 @@ export class RecipeStore {
         await this.requireMembership(request.botId, row.chatId);
         const existing = row.recipeInstall;
         if (existing && existing.recipeId !== incoming.recipeId) throw new Error('这个群已使用另一份配方');
-        if (existing?.versionId === incoming.versionId) return {changed: false, value: {
+        if (existing?.versionId === incoming.versionId) return {changed: false, durableRead: true, value: {
           kind: 'alreadyInstalled', groupId: row.chatId, recipeId: incoming.recipeId, versionId: incoming.versionId,
         } as RecipeInstallReply};
         const backfilled = row.bindingIncarnation === undefined || row.projectSettingsRevision === undefined;

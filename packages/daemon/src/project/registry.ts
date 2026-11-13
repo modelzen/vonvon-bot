@@ -484,24 +484,29 @@ export interface ProjectCommitOptions {
 }
 
 /** The role, its provenance and its durable operation receipt share this one commit point. */
-export function mutateProjectStore<T>(target: RegistryLocation, operation: (store: Record<string, unknown>, rows: Project[]) => Promise<{changed: boolean; value: T}>, beforeCommit?: () => void): Promise<T> {
+export function mutateProjectStore<T>(target: RegistryLocation, operation: (store: Record<string, unknown>, rows: Project[]) => Promise<{changed: boolean; value: T; durableRead?: true}>, beforeCommit?: () => void): Promise<T> {
   return ownProjects(async location => {
     const stored = await readStored(location.file);
     const rows = stored.projects === undefined ? [] : storedRows(stored);
     const previous = structuredClone(stored);
     const result = await operation(stored, rows);
     if (result.changed) await writeStored(location, {...stored, version: FILE_VERSION, projects: rows}, previous, beforeCommit, true);
+    else if (result.durableRead) await syncProjectStore(location);
     return result.value;
   }, target);
+}
+
+async function syncProjectStore(location: RegistryLocation): Promise<void> {
+  const file = await open(location.file, 'r+');
+  try { await file.sync(); }
+  finally { await file.close(); }
+  await syncDirectory(dirname(location.file));
 }
 
 export function readDurableProjectStore<T>(target: RegistryLocation, operation: (store: Record<string, unknown>) => T): Promise<T> {
   return ownProjects(async location => {
     const value = operation(await readStored(location.file));
-    const file = await open(location.file, 'r+');
-    try { await file.sync(); }
-    finally { await file.close(); }
-    await syncDirectory(dirname(location.file));
+    await syncProjectStore(location);
     return value;
   }, target);
 }
