@@ -165,6 +165,7 @@ describe('at bot start', () => {
     // Startup materializes group settings after the tier migration, folding guestMode.
     // A second start neither rewrites the files nor repeats the completed migration.
     expect((await rawProjects()).filter(p => Object.hasOwn(p, 'guestMode'))).toEqual([]);
+    expect((await rawProjects()).map(p => [p.name, p.pendingPolicy])).toEqual([['a', 'steer'], ['b', 'steer']]);
     logged.info.length = 0;
     const files = async () => [(await stat(paths.projectsFile)).ino, (await stat(paths.sessionsFile)).ino];
     const before = await files();
