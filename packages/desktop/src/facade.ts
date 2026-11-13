@@ -1,6 +1,6 @@
 import type { VonvonClient } from '@vonvon/client/browser';
 import {
-  acquisitionFailureSchema, desktopRecipeSourceRequestSchema,desktopRecipeSourceReplySchema,recipeUseReplySchema, recipeUseRequestSchema, communityRequestSchema, communityResponseSchemas, type CommunityShell, accountStatusSchema, type AccountStatus, adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
+  acquisitionFailureSchema, desktopAuthoringRequestSchema, desktopAuthoringReplySchema, desktopRecipeSourceRequestSchema,desktopRecipeSourceReplySchema,recipeUseReplySchema, recipeUseRequestSchema, communityRequestSchema, communityResponseSchemas, type CommunityShell, accountStatusSchema, type AccountStatus, adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
   commandResultSchema, desktopSnapshotSchema, directoryReplySchema, memoryReplySchema, contextPreviewReplySchema,
   environmentReplySchema, libraryReplySchema, logEventPayloadSchema, machineReplySchema, desktopUpdateSchema, deviceReplySchema,
   scheduleReplySchema, settingsReplySchema, viewIdSchema, devicesStateSchema, deviceEventPayloadSchema, linkPreviewSchema,
@@ -158,6 +158,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
   /** One page's client: each request names `view` last, and only `view`'s events reach it (devices-ui-1a 4.6). */
   function makeClient(view: ViewArgument): BoundClient {
     const snapshots = new Set<(value: DesktopSnapshot) => void>();
+    const reattachments = new Set<() => void>();
     const logs = new Set<(value: LogEventPayload) => void>();
     const installs = new Set<(value: BackendInstallEventPayload) => void>();
     const devices = new Set<(value: DeviceEventPayload) => void>();
@@ -190,7 +191,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       if (clientClosed || (view !== 'current' && event.view !== view)) return;
       switch (event.type) {
         // Another connection: its revisions start over.
-        case 'reattached': connectionEpoch++; return;
+        case 'reattached': connectionEpoch++; deliver(reattachments, undefined); return;
         case 'snapshot': deliver(snapshots, event.value); return;
         case 'log': deliver(logs, event.value); return;
         case 'backendInstall': deliver(installs, event.value); return;
@@ -215,16 +216,15 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
 
     const client: VonvonClient = {
       snapshot: () => callClient(desktopChannels.snapshot, value => desktopSnapshotSchema.parse(value)),
-      watchSnapshots(listener) {
+      watchSnapshots(listener, onReattached) {
         if (clientClosed) return () => {};
         let active = true;
         let revision = -1;
-        let observedEpoch = connectionEpoch;
+        const reattach = () => {
+          revision = -1;
+          onReattached?.();
+        };
         const receiveSnapshot = (value: DesktopSnapshot): void => {
-          if (observedEpoch !== connectionEpoch) {
-            revision = -1;
-            observedEpoch = connectionEpoch;
-          }
           if (active && !clientClosed && value.revision > revision) {
             revision = value.revision;
             try { listener(value); }
@@ -232,11 +232,12 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
           }
         };
         snapshots.add(receiveSnapshot);
+        reattachments.add(reattach);
         const seedEpoch = connectionEpoch;
         void client.snapshot().then(value => { if (seedEpoch === connectionEpoch) receiveSnapshot(value); }).catch(error => {
           if (active && !clientClosed && seedEpoch === connectionEpoch) emitError(error instanceof Error ? error : new Error('Snapshot failed'));
         });
-        return () => { active = false; snapshots.delete(receiveSnapshot); };
+        return () => { active = false; snapshots.delete(receiveSnapshot); reattachments.delete(reattach); };
       },
       run: command => callClient(desktopChannels.run, value => commandResultSchema.parse(value), command),
       settings: request => callClient(desktopChannels.settings, value => settingsReplySchema.parse(value), request),
@@ -279,7 +280,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
           clientClosed = true;
           for (const reject of pending) reject(new Error('Daemon connection closed'));
           pending.clear();
-          snapshots.clear(); logs.clear(); installs.clear(); devices.clear(); errors.clear();
+          snapshots.clear(); reattachments.clear(); logs.clear(); installs.clear(); devices.clear(); errors.clear();
           retainedErrors.length = 0;
           readResult(await transport.invoke(desktopChannels.close, view), parseVoid);
         })();
@@ -379,6 +380,9 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
     },
     devices,
     recipeSource: {request:raw=>callShellFor(desktopChannels.recipeSource,value=>desktopRecipeSourceReplySchema.parse(value),desktopRecipeSourceRequestSchema.parse(raw))},
+    recipeAuthoring: {
+      request: raw => callShellFor(desktopChannels.recipeAuthoring, value => desktopAuthoringReplySchema.parse(value), desktopAuthoringRequestSchema.parse(raw)),
+    },
     recipeUse: {
       request: raw => callShellFor(desktopChannels.recipeUse, value=>recipeUseReplySchema.parse(value),recipeUseRequestSchema.parse(raw)),
     },
