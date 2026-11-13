@@ -85,6 +85,17 @@ try {
     await new Promise(resolve => { process.once('SIGINT', resolve); process.once('SIGTERM', resolve); });
   } else {
     const pub={name:'开发晨报',summary:'只看本周变化',overview:'## 介绍',version:'1.0',access:'coded'};
+    const trimSpace='\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff';
+    let blankDraft;
+    for (const field of ['name','summary','version']) {
+      const body={public:{...pub,[field]:trimSpace},config:{role:''}};
+      blankDraft=await request(blankDraft?'/drafts/'+blankDraft.draftId:'/drafts',{
+        method:blankDraft?'PATCH':'POST',token:author,revision:blankDraft?.revision,body});
+      await request('/drafts/'+blankDraft.draftId+'/publish',{
+        method:'POST',token:author,body:{},revision:blankDraft.revision,status:422});
+      assert.equal((await request('/drafts/'+blankDraft.draftId,{token:author})).public[field],trimSpace);
+    }
+    await request('/drafts/'+blankDraft.draftId,{method:'DELETE',token:author,body:{},revision:blankDraft.revision});
     const setupStep={kind:'context',title:'准备代码',instructions:'PRIVATE-SETUP-SENTINEL',check:'能看到 README',required:true};
     const config={role:'PRIVATE-CONFIG-SENTINEL',setup:{steps:[setupStep]}};
     const unfinished={...config,setup:{steps:[{...setupStep,title:'\t\u3000'}]}};
@@ -110,6 +121,7 @@ try {
     const key=randomUUID();
     await request(claim,{method:'POST',token:reader,body:{code:v.firstCode},key});
     await request(claim,{method:'POST',token:reader,body:{code:v.firstCode},key});
+    await request(claim,{method:'POST',token:reader,body:{code:'changed'},key,status:409});
     assert.deepEqual((await request(detail,{token:reader})).config,config);
     assert.equal((await request('/me/recipes',{token:reader})).items.length,1);
     assert.equal((await request('/me/recipes',{token:other})).items.length,0);
@@ -132,6 +144,21 @@ try {
     await request('/drafts',{method:'POST',token:author,body:{public:{...pub,version:'3'},config,recipeId:v.recipeId,sourceVersionId:v.versionId},status:409});
     await request('/versions/'+v2.versionId+'/acquire',{method:'POST',token:other,body:{}});
     assert.equal((await request('/me/recipes',{token:other})).items[0].versionId,v2.versionId);
+    const spare=await request('/versions/'+v.versionId+'/codes',{method:'POST',token:author,body:{count:2}});
+    for (const token of [author,other]) {
+      const noOpKey=randomUUID();
+      const noOp={method:'POST',token,body:{},key:noOpKey};
+      const acquired=await request('/versions/'+v2.versionId+'/acquire',noOp);
+      assert.deepEqual(await request('/versions/'+v2.versionId+'/acquire',noOp),acquired);
+      await request(claim,{method:'POST',token,body:{code:spare.items[0].code},key:noOpKey,status:409});
+    }
+    const alreadyGrantedKey=randomUUID();
+    const alreadyGranted={method:'POST',token:reader,body:{code:spare.items[0].code},key:alreadyGrantedKey};
+    await request(claim,alreadyGranted);
+    await request(claim,alreadyGranted);
+    await request(claim,{...alreadyGranted,body:{code:spare.items[1].code},status:409});
+    const unchanged=await request('/versions/'+v.versionId+'/codes',{token:author});
+    for (const code of spare.items) assert.equal(unchanged.items.find(c=>c.codeId===code.codeId).status,'available');
     // Two different accounts submit the same still-valid code at the same time.
     const issued=await request('/versions/'+v.versionId+'/codes',{method:'POST',token:author,body:{count:1}});
     const competitors=[jwt(randomUUID()),jwt(randomUUID())];
