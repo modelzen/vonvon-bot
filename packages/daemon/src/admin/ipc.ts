@@ -78,7 +78,7 @@ export type AdminSessionOp = { kind: 'authorizeSessionCall'; sessionId: string; 
  * `feishuApi`: the same for `feishu_api`, which only a private chat's tool ever asks the host for (7.6).
  */
 export type AdminFeishuOp = { kind: 'feishuRead'; request: FeishuReadRequest } | { kind: 'feishuApi'; request: ApiRequest };
-export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | AdminFeishuOp | { kind: 'status' } | { kind: 'firstHello' };
+export type AdminIpcOp = import('../recipe/authoring-service').AuthoringIpc | AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | AdminFeishuOp | { kind: 'status' } | { kind: 'firstHello' };
 
 export interface AdminIpcRequest {
   fcb: typeof ADMIN_IPC_REQ;

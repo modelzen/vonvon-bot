@@ -604,6 +604,11 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           if (!child?.enabled || !child.proc || !child.ipc) throw new AdminWriteError('这个 Bot 没在运行');
           return child.ipc.call({ kind: 'collaboration', request }, 180_000);
         },
+        recipeAuthoring: async (botId, op) => {
+          const ipc = reachable(botId);
+          if (!ipc) throw new AdminWriteError('这个 Bot 没在运行');
+          return ipc.call(op, 60000);
+        },
         executeGroups: async (botId, op) => {
           const child = byAppId(botId);
           if (child?.enabled && child.pause) throw new AdminWriteError(pausedWrite(child));
