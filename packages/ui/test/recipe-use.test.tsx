@@ -54,8 +54,8 @@ function Launcher() {
     <button onClick={() => recipeUse.start(detail, {botId, groupId})}>预览已知群</button>
     <RecipeSourcePanel view={{scope: {botId}, identity: {chatId: groupId}} as ProjectSettingsView}/></>;
 }
-async function draw(deviceId = A) {
-  await act(async () => root.render(<DesktopRootView state={devicesState({id: deviceId, phase: 'ready'})} fallback={client} shell={shell} renderApp={() => <DraftGuardProvider><Launcher/></DraftGuardProvider>}/>));
+async function draw(deviceId = A, phase: 'ready' | 'failed' = 'ready') {
+  await act(async () => root.render(<DesktopRootView state={devicesState({id: deviceId, phase})} fallback={client} shell={shell} renderApp={() => <DraftGuardProvider><Launcher/></DraftGuardProvider>}/>));
 }
 function button(text: string) {return [...document.querySelectorAll<HTMLButtonElement>('button')].find(element => element.textContent === text)!;}
 async function click(text: string) {expect(button(text), text).toBeDefined(); await act(async () => button(text).click());}
@@ -219,14 +219,14 @@ it('recovers expired or lost responses without another join and rejects malforme
 
 it('checks and ignores the exact next version, still notices later versions, and previews an update in the same group', async () => {
   let ignored = false;
-  const source = {recipeId, versionId, revision: 1, authorId: accountId, installedAt: 1, setup};
+  const source = {recipeId, versionId, revision: 1, authorId: accountId, installedAt: 1, sourceToken: token, setup};
   sourceReply = request => request.type === 'read' ? {source}
     : request.type === 'ignore' ? (ignored = true, {source: {...source, ignoredVersionId: nextVersion}})
     : {source, latest: {recipeId, versionId: ignored ? futureVersion : nextVersion, revision: ignored ? 3 : 2, version: ignored ? '3.0' : '2.0', entitled: true}};
   useReply = () => ({kind: 'prepared', handle, groupId, review: baseReview});
   await draw(); expect(document.body.textContent).toContain('当前配方 · 第 1 版');
   await click('检查新版'); await click('忽略此版本');
-  expect(sourceRequests.at(-1)).toEqual({type: 'ignore', viewId: A, botId, groupId, accountId, installedVersionId: versionId, versionId: nextVersion});
+  expect(sourceRequests.at(-1)).toEqual({type: 'ignore', viewId: A, botId, groupId, accountId, sourceToken: token, installedVersionId: versionId, versionId: nextVersion});
   expect(document.body.textContent).not.toContain('有新版本');
   await click('检查新版'); expect(document.body.textContent).toContain('有新版本 · 3.0'); await click('预览更新');
   expect(requests.at(-1)).toEqual({type: 'begin', accountId, viewId: A, botId, groupId, recipeId, versionId: futureVersion});
@@ -264,7 +264,7 @@ it('retries a rejected operation in its known group without another join', async
 
 it('acquires a newer version before starting the native update on its original bound group', async () => {
   acquired = false;
-  const source = {recipeId, versionId, revision: 1, authorId: accountId, installedAt: 1};
+  const source = {recipeId, versionId, revision: 1, authorId: accountId, installedAt: 1, sourceToken: token};
   sourceReply = request => request.type === 'read' ? {source} : {source, latest: {recipeId, versionId: nextVersion, revision: 2, version: '2.0', entitled: false}};
   useReply = () => ({kind: 'prepared', handle, groupId, review: baseReview});
   await draw(); await click('检查新版'); await click('获取新版');
@@ -276,7 +276,7 @@ it('acquires a newer version before starting the native update on its original b
 
 it('does not revive an old account update result while allowing the new account source read', async () => {
   let release: ((reply: DesktopRecipeSourceReply) => void) | undefined;
-  const source = {recipeId, versionId, revision: 1, authorId: accountId, installedAt: 1};
+  const source = {recipeId, versionId, revision: 1, authorId: accountId, installedAt: 1, sourceToken: token};
   sourceReply = request => request.type === 'check' ? new Promise<DesktopRecipeSourceReply>(resolve => {release = resolve;}) : {source};
   await draw(); await click('检查新版');
   await act(async () => accountListener!({...status as Extract<AccountStatus, {kind: 'signedIn'}>, accountId: otherAccount}));
@@ -289,7 +289,7 @@ it('does not revive an old account update result while allowing the new account 
 it('invalidates an in-flight source read when a confirmed operation is acknowledged', async () => {
   let release: ((reply: DesktopRecipeSourceReply) => void) | undefined;
   let reads = 0;
-  const source = {recipeId, versionId, revision: 1, authorId: accountId, installedAt: 1};
+  const source = {recipeId, versionId, revision: 1, authorId: accountId, installedAt: 1, sourceToken: token};
   sourceReply = () => reads++ < 2 ? new Promise<DesktopRecipeSourceReply>(resolve => {release = resolve;}) : {source: {...source, versionId: nextVersion, revision: 2}};
   useReply = request => request.type === 'finish' ? {kind: 'closed'} : {kind: 'applied', handle, groupId};
   await draw(); const before = reads; await click('预览已知群'); await click('完成');
@@ -298,4 +298,58 @@ it('invalidates an in-flight source read when a confirmed operation is acknowled
   await act(async () => release!({source}));
   expect(document.body.textContent).toContain('当前配方 · 第 2 版');
   expect(document.body.textContent).not.toContain('当前配方 · 第 1 版');
+});
+
+it('distinguishes closing the original form from explicitly cancelling an unstarted application', async () => {
+  await draw(); await openUse();
+  const close = document.querySelector<HTMLButtonElement>('.ui-dialog__header [aria-label="关闭"]')!;
+  await act(async () => close.click());
+  expect(requests.some(request => request.type === 'cancel')).toBe(false);
+  await click('添加到群聊'); await click('取消');
+  expect(requests.at(-1)).toEqual({type: 'cancel', handle});
+});
+
+it('pauses an offline original target and requires fresh recovery after reconnect', async () => {
+  useReply = () => ({kind: 'prepared', handle, groupId, review: baseReview});
+  await draw(); await openUse(); await draw(A, 'failed');
+  expect(document.body.textContent).toContain('目标设备暂不可用');
+  expect(button('确认应用到这个群')).toBeUndefined();
+  await draw(); expect(button('恢复原操作')).toBeDefined(); await click('恢复原操作');
+  expect(requests.filter(request => request.type === 'begin')).toHaveLength(2);
+});
+
+it('repairs a known created-unsaved group with the original bind form and never offers another creation', async () => {
+  useReply = request => request.type === 'begin' ? {kind: 'choose', handle}
+    : request.type === 'join' ? {kind: 'pending', handle, phase: 'joining', recovery: {state: 'createdUnsaved', groupId, name: '原群名称'}}
+    : {kind: 'prepared', handle, groupId, review: baseReview};
+  await draw(); await openUse(); await createGroup(); await click('连接已创建的群');
+  expect(button('创建群聊')).toBeUndefined(); expect(button('创建并连接')).toBeUndefined();
+  expect(document.querySelector<HTMLInputElement>('[aria-label="本地绑定名称"]')?.value).toBe('已连接的群');
+  const option = [...document.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find(element => element.textContent?.startsWith('独立话题'))!;
+  await act(async () => option.click()); await click('连接并发送欢迎卡片');
+  expect(requests.at(-1)).toEqual({type: 'repairJoin', handle, input: {type: 'bindGroup', agentId: botId, groupId, projectName: '已连接的群', folder: {kind: 'default'}, tool: 'codex', conversation: 'threads'}});
+  expect(requests.filter(request => request.type === 'join')).toHaveLength(1);
+});
+
+it('requires an explicit existing physical group for unknown creation recovery, including already bound rows', async () => {
+  useReply = request => request.type === 'begin' ? {kind: 'choose', handle}
+    : request.type === 'join' ? {kind: 'pending', handle, phase: 'joining', recovery: {state: 'unknown'}}
+    : {kind: 'prepared', handle, groupId, review: baseReview};
+  await draw(); await openUse(); await createGroup(); await click('从已加入群中选择');
+  expect(button('创建群聊')).toBeUndefined(); await click('查找已经加入的群');
+  const bound = [...document.querySelectorAll<HTMLButtonElement>('.join-group-list button')].find(element => element.textContent?.startsWith('已连接的群'))!;
+  await act(async () => bound.click());
+  expect(requests.at(-1)).toEqual({type: 'repairJoin', handle, input: {type: 'existingBinding', agentId: botId, groupId}});
+  expect(requests.filter(request => request.type === 'join')).toHaveLength(1);
+});
+
+it('only dismisses uncertain join tracking after the user confirms that no group is deleted or cancelled', async () => {
+  useReply = request => request.type === 'begin' ? {kind: 'choose', handle}
+    : request.type === 'dismissJoin' ? {kind: 'closed'} : {kind: 'pending', handle, phase: 'joining', recovery: {state: 'unknown'}};
+  await draw(); await openUse(); await createGroup(); await click('结束本次跟踪');
+  expect(requests.some(request => request.type === 'dismissJoin')).toBe(false);
+  expect(document.body.textContent).toContain('结束跟踪不会删除群聊或改变现有连接');
+  expect(document.body.textContent).toContain('不表示建群已取消');
+  await click('确认结束跟踪'); expect(requests.at(-1)).toEqual({type: 'dismissJoin', handle});
+  expect(document.body.textContent).not.toContain('配方已应用');
 });

@@ -10,6 +10,10 @@ import {useDraftGuard} from '../settings/DraftGuard';
 
 export function RecipeSourcePanel({view}: {view: ProjectSettingsView}) {
   const shell = useShellCapabilities();
+  return shell?.recipeSource ? <RecipeSourceContent view={view}/> : null;
+}
+function RecipeSourceContent({view}: {view: ProjectSettingsView}) {
+  const shell = useShellCapabilities();
   const useRecipe = useRecipeUse();
   const community = useCommunity();
   const {navigate} = useDraftGuard();
@@ -37,7 +41,7 @@ export function RecipeSourcePanel({view}: {view: ProjectSettingsView}) {
       const location = {...target, groupId: groupIdSchema.parse(target.groupId)};
       const input: DesktopRecipeSourceRequest = type === 'read' ? {type, ...location}
         : type === 'check' ? {type, ...location, accountId: accountId!}
-        : {type, ...location, accountId: accountId!, installedVersionId: source!.versionId, versionId: latest!.versionId};
+        : {type, ...location, accountId: accountId!, sourceToken: source!.sourceToken, installedVersionId: source!.versionId, versionId: latest!.versionId};
       const next = await shell.recipeSource.request(input);
       if (active.current === scope) setRead({scope, result: next});
     } catch (failure) {if (active.current === scope) setFailure({scope, message: failure instanceof Error ? failure.message : '配方来源暂时无法读取。'});}
@@ -59,7 +63,7 @@ export function RecipeSourcePanel({view}: {view: ProjectSettingsView}) {
             else navigate(() => {useRecipe?.acquireForGroup(recipe, target); community?.open({kind: 'detail', recipe});});
           }}>{latest.entitled ? '预览更新' : '获取新版'}</Button></div>}/>}
       {!accountId && <p className="recipe-source-note">登录后可检查新版本。当前配方继续保留。</p>}
-    </> : result ? <SettingsRow title="尚未应用社区配方" description="本群当前使用手动设置的角色。"/> : <p className="recipe-source-note" role="status">正在读取配方来源…</p>}
+    </> : result ? <SettingsRow title="尚未应用社区配方" description="本群还没有社区配方来源。"/> : <p className="recipe-source-note" role="status">正在读取配方来源…</p>}
     {busy && result && <p className="recipe-source-note" role="status">正在核对配方版本…</p>}
     {error && <InlineNotice title="读取未完成" tone="warning" actions={<Button size="sm" disabled={busy} onClick={() => void request('read')}>重试读取</Button>}>{error}</InlineNotice>}
   </SettingsGroup>;

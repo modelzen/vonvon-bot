@@ -78,8 +78,8 @@ export function initialGroupProvider(initialProvider?: ProviderTool, tools?: Too
   return (['codex', 'claude'] as const).find(ready);
 }
 type Props = {snapshot?: DesktopSnapshot; open?: boolean; agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; initialProvider?: ProviderTool; tools?: ToolState[]; onClose: () => void; onChanged: (target: {agentId: Agent['id']; chatId: string}) => Promise<void>; onOpenProviders?: () => void; onOpenDecisionModel?: (provider?: string) => void;
-  recipe?: {name: string; version: string}; onRecipeJoin?: (input: RecipeJoinInput) => Promise<void>; onRecipeGroup?: (groupId: string) => void};
-export function JoinGroupDialog({open = true, agent, pending, initialGroup, initialProvider, tools, onClose, onChanged, onOpenProviders, onOpenDecisionModel, recipe, onRecipeJoin, onRecipeGroup}: Props) {
+  recipe?: {name: string; version: string}; onRecipeJoin?: (input: RecipeJoinInput) => Promise<void>; onRecipeGroup?: (groupId: string) => void; onRecipeCancel?: () => void; existingOnly?: boolean};
+export function JoinGroupDialog({open = true, agent, pending, initialGroup, initialProvider, tools, onClose, onChanged, onOpenProviders, onOpenDecisionModel, recipe, onRecipeJoin, onRecipeGroup, onRecipeCancel, existingOnly}: Props) {
   const {navigate} = useDraftGuard();
   const client = useClient();
   const device = useActiveDevice();
@@ -110,7 +110,7 @@ export function JoinGroupDialog({open = true, agent, pending, initialGroup, init
     } catch (failure) {if (serial === decisionSerial.current) setDecisionReadError(failure instanceof Error ? failure.message : '无法读取决策模型设置。');}
   }
   useEffect(() => {if (open) void readDecision(); return () => {decisionSerial.current++;};}, [client, agent.id, open]);
-  const [mode, setMode] = useState<Mode>(initialGroup ? {kind: 'bind', group: initialGroup} : {kind: 'create'});
+  const [mode, setMode] = useState<Mode>(initialGroup ? {kind: 'bind', group: initialGroup} : {kind: existingOnly ? 'existing' : 'create'});
   const [name, setName] = useState(initialGroup?.name ?? '');
   const [folder, setFolder] = useState<FolderChoice>();
   const [existingDirectory, setExistingDirectory] = useState(false);
@@ -198,11 +198,11 @@ export function JoinGroupDialog({open = true, agent, pending, initialGroup, init
     finally {setBusy(false);}
   }
   return <Dialog open={open} size="lg" title={<span className="join-group-title"><span className="join-group-heading">{choosingDirectory && <IconButton label="返回添加群聊" variant="ghost" size="sm" disabled={busy} onClick={() => setChoosingDirectory(false)}><ArrowLeft size={16}/></IconButton>}{choosingDirectory ? '选择工作目录' : mode.kind === 'bind' ? '连接飞书群' : '添加飞书群'}</span><span className="join-group-agent"><AgentAvatar agent={agent}/><span title={agent.name}>{agent.name}</span></span></span>} onClose={busy ? undefined : choosingDirectory ? () => setChoosingDirectory(false) : close}
-    footer={choosingDirectory ? <><span className="directory-key-hints">↑ ↓ 选择 <span>↵ 使用目录</span></span><Button disabled={busy} onClick={() => setChoosingDirectory(false)}>返回</Button></> : mode.kind !== 'existing' ? <><Button disabled={busy} onClick={close}>取消</Button><Button variant="primary" loading={busy} disabled={locked || !tool || !ready(tool) || !name.trim() || Boolean(nameProblem) || (existingDirectory && !folder) || !conversation || Boolean(judgeProblem)} onClick={() => void save()}>{mode.kind === 'create' ? '创建并连接' : '连接并发送欢迎卡片'}</Button></> : undefined}>
+    footer={choosingDirectory ? <><span className="directory-key-hints">↑ ↓ 选择 <span>↵ 使用目录</span></span><Button disabled={busy} onClick={() => setChoosingDirectory(false)}>返回</Button></> : mode.kind !== 'existing' ? <><Button disabled={busy} onClick={onRecipeCancel ? () => navigate(onRecipeCancel) : close}>取消</Button><Button variant="primary" loading={busy} disabled={locked || !tool || !ready(tool) || !name.trim() || Boolean(nameProblem) || (existingDirectory && !folder) || !conversation || Boolean(judgeProblem)} onClick={() => void save()}>{mode.kind === 'create' ? '创建并连接' : '连接并发送欢迎卡片'}</Button></> : onRecipeCancel ? <Button disabled={busy} onClick={() => navigate(onRecipeCancel)}>取消</Button> : undefined}>
     {choosingDirectory ? <DirectorySearchStep onBusyChange={setBusy} onChoose={choice => {setFolder(choice); setChoosingDirectory(false);}}/> : <div className="page-stack join-group-flow">
       {recipe && <SettingsGroup><SettingsRow title="配方" value={<span className="recipe-use-name">{recipe.name} · {recipe.version}</span>} description="已获取，连接群聊后预览并确认应用。"/></SettingsGroup>}
       {mode.kind !== 'bind' && <div className="join-group-flow__modes" role="group" aria-label="加入方式">
-        <Button aria-pressed={mode.kind === 'create'} disabled={busy} onClick={() => switchMode({kind: 'create'})}>创建群聊</Button>
+        {!existingOnly && <Button aria-pressed={mode.kind === 'create'} disabled={busy} onClick={() => switchMode({kind: 'create'})}>创建群聊</Button>}
         <Button aria-pressed={mode.kind === 'existing'} disabled={busy} onClick={() => switchMode({kind: 'existing'})}>连接已有群聊</Button>
       </div>}
       {mode.kind === 'existing' ? <>
