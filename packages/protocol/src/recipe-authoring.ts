@@ -28,10 +28,12 @@ export const authoringAuthorizationSchema = z.object({
   payloadDigest: digest, serverPublicKey: recipeBinary32Schema, ticket: recipeBinary32Schema, deadline: millis,
 }).strict();
 export type AuthoringAuthorization = z.infer<typeof authoringAuthorizationSchema>;
-export const authoringReceiptSchema = z.discriminatedUnion('status', [
+export const authoringReceiptSchema = z.union([
   z.object({operationId: uuid, status: z.literal('accepted'), stateRevision: z.literal(3), draftId: uuid, revision: positive}).strict(),
   z.object({operationId: uuid, status: z.literal('cancelled'), stateRevision: positive}).strict(),
   z.object({operationId: uuid, status: z.literal('expired'), stateRevision: positive}).strict(),
+  // The registration window is closed and no receipt remains; a past save is still possible.
+  z.object({operationId: uuid, status: z.literal('expired'), outcome: z.literal('unknown')}).strict(),
 ]);
 export type AuthoringReceipt = z.infer<typeof authoringReceiptSchema>;
 export const authoringOperationSchema = z.object({

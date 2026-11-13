@@ -126,7 +126,7 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
   let loseRegister = true,
     loseAccept = true,
     unavailableCancel,
-    afterAuthorize;
+    afterAuthorize, offlineAuthoring = false, substituteRecovery, daemonOffset = 0;
   let generation = new AbortController(),
     actor = accountId,
     deviceGeneration = 0;
@@ -144,6 +144,8 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     request: async (id, path, init, beforeSend) => {
       assert.equal(id, actor);
       beforeSend();
+      if (offlineAuthoring && path.startsWith('/v1/authoring/')) throw Error('before first cloud registration');
+      if (substituteRecovery && path.endsWith('/recovery')) return substituteRecovery(path.split('/')[3]);
       if (unavailableCancel && path === '/v1/authoring/' + unavailableCancel + '/cancel') throw Error('offline cancellation');
       const headers = new Headers(init.headers);
       headers.set('Authorization', 'Bearer ' + (actor === accountId ? author : reader));
@@ -179,6 +181,7 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
       cfg: { preferences: { access } },
       channel: im.channel,
       root: home,
+      now: () => Date.now() + daemonOffset,
       origin,
       fetch: deviceHttp,
       loopback: true,
@@ -423,6 +426,64 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     assert.deepEqual(unlinked.operations.find(o => o.operationId === accepted)?.receipt, acceptedReceipt);
     assert.equal(sql("select state from recipe_private.authoring_operations where id='" + reopened + "'"), 'cancelled');
     console.log('PASS: relink and removed admin recover on restart, cancel releases the same-draft lock, lost acceptance keeps its actual revision, and the old recipient never receives another dispatch.');
+    // A stopped/relinked Bot can own three IDs the cloud never saw. Simulate birth six minutes ago
+    // without advancing PostgreSQL time, and keep the reservation until the real recovery route answers.
+    daemonOffset = -6*60_000;
+    await rebase();
+    const relink = await act('beginLink');
+    await running.daemon.onMessage(message('/recipe link ' + relink.code));
+    const evidence = await act('inspectLink', {challengeId:relink.challengeId});
+    await act('confirmLink',{challengeId:relink.challengeId,evidence:evidence.evidence});
+    const emptyDraft = () => request('/drafts',{method:'POST',token:author,body:{
+      public:{name:'测试',summary:'',overview:'',version:'1',access:'direct'},config:{role:'测试'},
+    }});
+    const draftIds = [draftId,fromChatSaved.receipt.draftId,(await emptyDraft()).draftId];
+    offlineAuthoring = true;
+    for (const id of draftIds) {
+      const draft = await request('/drafts/'+id,{token:author});
+      await assert.rejects(act('edit',{draftId:id,baseRevision:draft.revision}),/before first cloud registration/);
+    }
+    const tracked = (await act('status')).operations.filter(o=>draftIds.includes(o.draftId) && o.state==='pendingMain');
+    assert.equal(tracked.length,3);
+    const extra = await emptyDraft();
+    await assert.rejects(act('edit',{draftId:extra.draftId,baseRevision:1}),/上限/);
+    access.admins = [];
+    await running.daemon.adminRemoved(operator);
+    for (const op of tracked) {
+      assert.equal(sql("select count(*) from recipe_private.authoring_operations where id='"+op.operationId+"'"),'0');
+    }
+    offlineAuthoring = false;
+    const assertStillPending = async () => {
+      const result = await rebase();
+      for (const old of tracked) assert.equal(result.operations.find(o=>o.operationId===old.operationId)?.state,'cancelPending');
+    };
+    substituteRecovery = () => Response.json({error:{code:'operation_expired'}},{status:410});
+    await assertStillPending();
+    substituteRecovery = operationId => Response.json({operationId,accountId:alternate,unredeemable:true});
+    await assertStillPending();
+    substituteRecovery = () => Response.json({operationId:randomUUID(),accountId,unredeemable:true});
+    await assertStillPending();
+    substituteRecovery = undefined;
+    const settled = await rebase();
+    for (const {operationId} of tracked) {
+      const result = settled.operations.find(o=>o.operationId===operationId);
+      assert.equal(result.state,'expired');
+      assert.deepEqual(result.receipt,{operationId,status:'expired',outcome:'unknown'});
+      assert.match(result.syncMessage,/创作中心/);
+      await assert.rejects(act('resend',{operationId}));
+    }
+    assert.deepEqual(settled.operations.find(o=>o.operationId===accepted)?.receipt,acceptedReceipt);
+    daemonOffset = 0;
+    access.admins = [operator];
+    await rebase();
+    const linkAgain = await act('beginLink');
+    await running.daemon.onMessage(message('/recipe link ' + linkAgain.code));
+    const proofAgain = await act('inspectLink',{challengeId:linkAgain.challengeId});
+    await act('confirmLink',{challengeId:linkAgain.challengeId,evidence:proofAgain.evidence});
+    const newOp = (await act('edit',{draftId:extra.draftId,baseRevision:1})).operation;
+    assert.equal(newOp.state,'waiting');
+    await act('cancel',{operationId:newOp.operationId});
+    console.log('PASS: three unregistered revoked IDs retain quota on 410 and mismatched proofs, then release it only on authenticated original-ID recovery; old accepts stay saved.');
     deviceGeneration += 2;
     await assert.rejects(act('status'), /stale device view/);
   } finally {

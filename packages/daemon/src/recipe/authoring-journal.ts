@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { AuthoringAuthorization, AuthoringOperation, RecipeSetup } from '@vonvon/protocol';
+import type { BotIdentity } from '../config/bots';
 import { acquireMutex, closeMutex } from '../config/data-access';
 import { ensureDurableDirectory, syncDirectory } from '../config/bot-namespace';
 import { readLocalText } from '../import/bridge/bounded-local-files';
@@ -8,6 +9,9 @@ import { writeFileAtomic } from '../server/atomic-file';
 import { digest } from './authoring-wire';
 import type { CardMode } from './authoring-im';
 
+export function authoringBotKey(bot: BotIdentity) {
+  return digest(JSON.stringify([bot.appId,bot.tenant,bot.createdAt,bot.registrationId ?? null]));
+}
 export const DAY = 86_400_000;
 export interface Recipient { openId: string; chatId: string; tenantKey: string }
 export function sameRecipient(a: Recipient | undefined, b: Recipient | undefined) {
@@ -34,20 +38,24 @@ export interface AuthoringLedger {
   daily: Record<string, {day: string; count: number}>;
 }
 export const active = (op: LocalOperation) => op.terminalAt === undefined;
+export function discardAuthoringMaterial(op: LocalOperation) {
+  delete op.secret; delete op.nonce; delete op.dispatchAuthorization; delete op.payload; delete op.source;
+  delete op.view.payloadDigest; delete op.proposalDigest;
+}
 export function retire(op: LocalOperation, state: 'completed' | 'cancelled' | 'expired', now: number) {
   op.view.state = state;
   op.view.deliveryUnknown = false;
   op.terminalAt = now;
-  delete op.secret; delete op.nonce; delete op.dispatchAuthorization; delete op.payload; delete op.source;
-  delete op.view.payloadDigest; delete op.proposalDigest;
+  discardAuthoringMaterial(op);
 }
 export function maintain(ledger: AuthoringLedger, now: number) {
   for (const [id, op] of Object.entries(ledger.operations)) {
     if (active(op) && op.view.createdAt + DAY <= now) {
-      // An accept response may have been lost. Only an authoritative cloud receipt settles it.
+      // An accept response may have been lost. Keep tracking until the original account settles it, even after cloud retention.
       if (op.view.state === 'pendingCloud' || op.view.state === 'cancelPending') {
         op.view.state = 'cancelPending';
-        if (op.view.createdAt + 8 * DAY <= now) delete ledger.operations[id];
+        // Recovery needs only the registration commitment and a receipt; do not retain candidate text or keys indefinitely.
+        discardAuthoringMaterial(op);
       } else retire(op, 'expired', op.view.createdAt + DAY);
     } else if (op.terminalAt !== undefined && op.terminalAt + 7 * DAY <= now) delete ledger.operations[id];
   }
