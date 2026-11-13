@@ -70,6 +70,7 @@ function fixture() {
     dropCreation: false,
     found: false,
     extra: false,
+    wrongPreview: false,
     steps: [] as string[],
     commitIds: [] as string[],
     createIds: [] as string[],
@@ -169,7 +170,7 @@ function fixture() {
           groupId,
           reviewToken: (state.changedReview ? 'c' : 'b').repeat(64),
           currentRole: state.changedReview ? '已变更' : '本地职责',
-          incomingRole: '角色🦉',
+          incomingRole: state.wrongPreview ? '别的职责' : '角色🦉',
           roleChoiceRequired: state.conflict,
           setupChoiceRequired: false,
         };
@@ -266,6 +267,13 @@ describe('native recipe installation', () => {
     f.state.extra = true;
     await expect(f.begin()).rejects.toThrow();
     expect(f.state.steps).not.toContain('daemon:prepare');
+  });
+  it('never displays a daemon preview whose incoming text differs from the exact cloud bytes', async () => {
+    const f = fixture();
+    f.state.wrongPreview = true;
+    await expect(f.begin()).rejects.toThrow('回执无效');
+    expect(f.state.userValues).toEqual([]);
+    expect(f.state.rawAuths).toEqual([]);
   });
   it('replaces an outdated resolution with a fresh review and requests no authorization until confirmation', async () => {
     const f = fixture();
