@@ -227,6 +227,10 @@ try {
     const unicodeCatalog = await nativeRequest(native, {type: 'catalog', accountId, query: unicode.public.name});
     assert.equal(unicodeCatalog.items[0].versionId, unicodeVersion.versionId);
     assert.deepEqual((await nativeRequest(native, {type: 'detail', accountId, recipeId: unicodeVersion.recipeId, versionId: unicodeVersion.versionId})).public, unicode.public);
+    const {checkNativeInstall}=await import('./native-install-check.mjs');
+    const nextDraft=await request('/drafts',{method:'POST',token:author,body:{...unicode,public:{...unicode.public,version:'2'},recipeId:unicodeVersion.recipeId,sourceVersionId:unicodeVersion.versionId}});
+    const nextVersion=await request('/drafts/'+nextDraft.draftId+'/publish',{method:'POST',token:author,revision:nextDraft.revision,body:{}});
+    await checkNativeInstall({root,tmp,origin,author,accountId,version:unicodeVersion,nextVersion,sql});
     console.log('PASS: native boundary reads Unicode versions and recovers a lost code batch after cross-client redemption and disable.');
     const spare=await request('/versions/'+v.versionId+'/codes',{method:'POST',token:author,body:{count:2}});
     for (const token of [author,other]) {
