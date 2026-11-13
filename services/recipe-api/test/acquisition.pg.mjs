@@ -90,7 +90,6 @@ export async function checkAcquisitionBudget({sql,request,jwt,origin,v,v2,legacy
     await assert.rejects(pool.query('delete from recipe_private.acquisition_state'));
     assert.equal(sql(`select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='recipe_api' and p.proname='acquire' and (p.proowner<>'recipe_owner'::regrole or p.proconfig<>array['search_path=pg_catalog, pg_temp'])`),'0');
 
-    // Integrity failures must not invent raw history or consume another code.
     for (const [owner,req,version] of [[f.actor,f.rawRequest,f.rawVersion],[actor,replayKey.slice(3),v2.versionId]]) {
       const saved = sql(`select to_jsonb(r)::text from recipe_private.receipts r where actor='${owner}' and subject_id='${version}'`);
       sql(`delete from recipe_private.receipts where actor='${owner}' and subject_id='${version}'`);
@@ -134,7 +133,6 @@ export async function checkAcquisitionBudget({sql,request,jwt,origin,v,v2,legacy
       sql(`update recipe_private.acquisition_state set accepted=256 where actor='${timeActor}'`);
       await assert.rejects(acquire(timeActor,v2.versionId,acquisitionKey(future+168*3600000)),error=>
         error.message==='acquire_rate_limited' && Number(error.detail)===168*3600+1);
-      // Explicit UTC day, even when the calling connection/session uses a DST timezone.
       at(future+1000);
       const utcActor=randomUUID();sql(`insert into recipe_private.accounts(id) values('${utcActor}')`);
       await acquire(utcActor,v2.versionId,acquisitionKey(future+1000));
@@ -167,7 +165,6 @@ export async function checkAcquisitionBudget({sql,request,jwt,origin,v,v2,legacy
       assert.ok(Date.parse(sql(`select effective_at from recipe_private.acquisition_state where actor='${lockActor}'`))>=started+1000);
     } finally {await locker.query('rollback');locker.release();}
 
-    // HTTP overload is temporary 503, and is separate from the SQL daily budget.
     const token=jwt(randomUUID()), route='/versions/'+v2.versionId+'/acquire';
     const responses=await Promise.all(Array.from({length:300},async()=>{
       const response=await fetch(origin+'/v1'+route,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token,'Idempotency-Key':acquisitionKey()},body:'{}'});
