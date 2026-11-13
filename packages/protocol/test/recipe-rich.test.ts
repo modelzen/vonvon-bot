@@ -324,7 +324,8 @@ describe('rich-v2 exact capacity boundaries', () => {
 describe('explicit v2 dispatch and unchanged legacy contracts', () => {
   it('dispatches rich prepare and edit by an explicit purpose', () => {
     const prepare = {format: 'rich-v2', purpose: 'prepareDraft', sourceIntentId: id(70), content: content()};
-    const edit = {format: 'rich-v2', purpose: 'editDraft', draftId: id(71), baseRevision: 2, content: content()};
+    const edit = {format: 'rich-v2', purpose: 'editDraft', draftId: id(71), baseRevision: 2, requestId: id(72), schemaVersion: 2,
+      changes: [{op: 'setPublicText', itemId: content().public.name.itemId, field: 'name', value: 'New name'}]};
     expect(recipeRichAuthoringPayloadSchema.safeParse(prepare).success).toBe(true);
     expect(recipeRichAuthoringPayloadSchema.safeParse(edit).success).toBe(true);
     for (const payload of [{...prepare, purpose: undefined}, {...prepare, schemaVersion: 2}, {...prepare, draftId: id(71)}, {...edit, purpose: 'prepareDraft'}]) {
