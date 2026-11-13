@@ -228,7 +228,6 @@ export function createAdminIpcCaller(send: (msg: AdminIpcRequest) => void): Admi
     revive: (msg) => {
       const reason = msg.error ?? '子进程执行失败';
       // 校验拒绝跨进程还原成 AdminWriteError —— HTTP 层与进程内路径同样映射 409。
-      // 建群失败保留可确定的结果，以及飞书已返回的群 ID。
       return msg.code === 'ADMIN_WRITE_REJECTED' ? new AdminWriteError(reason) : msg.code === 'GROUP_UPSTREAM' ? new GroupUpstreamError(reason) : msg.code === 'INVALID_GROUP_INPUT' ? new InvalidGroupInput(reason)
         : msg.code === 'CREATED_UNSAVED' ? Object.assign(new Error(reason), { code: msg.code, chatId: msg.groupId }) : new Error(reason);
     },
