@@ -11,6 +11,8 @@ import {
 import type { NativeAccount } from './account-session.js';
 
 export class AuthoringError extends Error {}
+class OperationExpired extends AuthoringError {}
+const unredeemable = z.object({operationId:z.string().uuid(), accountId:z.string().uuid(), unredeemable:z.literal(true)}).strict();
 export const invalidAuthoring = () => new AuthoringError('配方操作与原记录不一致，请重新核对。');
 export const dispatchDigest = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 const uuid = z.string().uuid();
@@ -123,12 +125,29 @@ export function authoringCloud(account: NativeAccount, accountId: string, signal
     if (missingAllowed && response.status === 404 && code.success && code.data.error.code === 'not_found')
       return undefined;
     if (response.status === 409) throw new AuthoringError('草稿修订或操作状态已改变，请核对原操作。');
+    if (response.status === 410 && code.success && code.data.error.code === 'operation_expired')
+      throw new OperationExpired('这次操作已到期，请查看原操作。');
     if (response.status === 410) throw new AuthoringError('这次操作已到期，请查看原操作。');
     if (response.status === 429) throw new AuthoringError('配方操作已达限额，请稍后重试。');
     if (response.status === 404 || response.status === 403) throw new AuthoringError('当前账号找不到这份草稿或操作。');
     throw new AuthoringError('账号服务未确认本次操作，请稍后恢复。');
   }
   const path = (op: Registration) => '/v1/authoring/' + op.operationId;
+  async function getState(op: Registration, cancel = false) {
+    let raw: unknown;
+    try {
+      raw = await read(path(op) + (cancel ? '/cancel' : ''), cancel ? {} : undefined, !cancel);
+    } catch (error) {
+      if (!(error instanceof OperationExpired)) throw error;
+      raw = await read(path(op) + '/recovery');
+      const proof = unredeemable.safeParse(raw);
+      if (proof.success) {
+        if (proof.data.accountId !== accountId || proof.data.operationId !== op.operationId) throw invalidAuthoring();
+        return {operationId:op.operationId, status:'expired', outcome:'unknown'} as const;
+      }
+    }
+    return raw === undefined ? undefined : state(raw, accountId, op);
+  }
   return {
     async presence() {
       const actor = z
@@ -142,16 +161,13 @@ export function authoringCloud(account: NativeAccount, accountId: string, signal
       if (draft.draftId !== draftId || draft.revision !== revision)
         throw new AuthoringError('草稿修订已改变，请重新打开草稿。');
     },
-    async get(op: Registration) {
-      const raw = await read(path(op), undefined, true);
-      return raw === undefined ? undefined : state(raw, accountId, op);
-    },
+    get: (op: Registration) => getState(op),
     async register(op: AuthoringOperation) {
       return state(await read(path(op) + '/register', registration(op)), accountId, op);
     },
     async cancel(op: Registration) {
-      const result = state(await read(path(op) + '/cancel', {}), accountId, op);
-      if (!('operationId' in result)) throw invalidAuthoring();
+      const result = await getState(op, true);
+      if (!result || !('operationId' in result)) throw invalidAuthoring();
       return result;
     },
     async authorize(op: AuthoringOperation, stage: 'dispatch' | 'accept', payloadDigest: string) {

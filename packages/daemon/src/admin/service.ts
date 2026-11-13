@@ -21,6 +21,7 @@ import { voiceView } from '../voice/view';
 import type { VoiceAction, VoiceView } from '../voice/types';
 import { readFile, realpath, rm, stat } from 'node:fs/promises';
 import { botIdentity, loadBots, setBotActivation, setBotBadgeNumber, removeBot, type BotIdentity } from '../config/bots';
+import { active as activeAuthoring, AuthoringJournal, authoringBotKey } from '../recipe/authoring-journal';
 import { assertRecipeRemovalSafe, RecipeRecoveryRequired } from '../recipe/store';
 import { dmPreparationError, prepareDmProjectForBot } from '../bot/dm-project';
 import { botPaths, botDir, paths } from '../config/paths';
@@ -1242,6 +1243,10 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         result = await removeBot(expected, {
           isRunning: async () => (await runState(appId)).running,
           cleanup: async () => {
+            const key = authoringBotKey(expected);
+            const pending = await new AuthoringJournal(paths.appDir, Date.now).run(ledger =>
+              Object.values(ledger.operations).some(op => op.bot === key && activeAuthoring(op)));
+            if (pending) throw new RecipeRecoveryRequired('这个 Bot 还有待恢复的配方草稿操作。请启用它，用原账号恢复或取消后再移除。');
             await assertRecipeRemovalSafe({file: botPaths(appId).projectsFile, dataRoot: paths.appDir});
             await removeSecret(secretKeyForApp(appId));
             await rm(botDir(appId), { recursive: true, force: true });

@@ -346,6 +346,8 @@ it.each(['relink', 'remove'] as const)('recovers only terminal arbitration after
   const receipt = {operationId:op.operationId, status:'accepted', stateRevision:3, draftId:randomUUID(), revision:1};
   await expect(rpc('settle', {operationId:op.operationId, receipt})).rejects.toThrow();
   await expect(rpc('reconcile', {operationId:op.operationId, receipt})).resolves.toEqual({kind:'reconciled',receipt});
+  const unknown = {operationId:op.operationId, status:'expired', outcome:'unknown'};
+  await expect(rpc('reconcile', {operationId:op.operationId, receipt:unknown})).rejects.toThrow();
   expect(bodies.length).toBe(before);
   restart(); await open();
   expect(kind(await rpc('status'), 'status').reconciliation[0]?.receipt).toEqual(receipt);
@@ -357,4 +359,67 @@ it.each(['relink', 'remove'] as const)('recovers only terminal arbitration after
     expect(kind(await request('status'), 'status').reconciliation).toEqual([]);
     await expect(request('reconcile', {operationId:op.operationId, receipt})).rejects.toThrow();
   }
+});
+
+
+it.each([6*60_000, 2*86400_000, 8*86400_000])('keeps revoked local IDs until checked, then releases all three slots at age %i', async (age) => {
+  await link();
+  const edit = async () => kind(await rpc('edit',{draftId:randomUUID(),baseRevision:1}),'operation').operation;
+  const ids = [];
+  for (let i=0;i<3;i++) ids.push((await edit()).operationId);
+  await link();
+  clock+=age;
+  restart(); await open();
+  const pending = kind(await rpc('status'),'status');
+  expect(pending.reconciliation.map(row=>row.operationId)).toEqual(ids);
+  await expect(edit()).rejects.toThrow('进行中');
+  for (const operationId of ids) {
+    const receipt = {operationId,status:'expired',outcome:'unknown'};
+    expect(await rpc('reconcile',{operationId,receipt})).toEqual({kind:'reconciled',receipt});
+  }
+  const next = await edit();
+  expect(ids).not.toContain(next.operationId);
+  expect(next.state).toBe('pendingMain');
+  restart(); await open();
+  expect(kind(await rpc('status'),'status').reconciliation.map(row=>row.receipt?.status)).toEqual(['expired','expired','expired']);
+});
+
+it('keeps only the registration and a possible winning receipt when pending acceptance outlives its deadline', async () => {
+  await link();
+  const op = await advance(await prepare(),'dispatch');
+  await act(ref());
+  expect((await status(op.operationId)).state).toBe('pendingCloud');
+  clock+=8*86400_000;
+  restart(); await open();
+  expect((await status(op.operationId)).state).toBe('cancelPending');
+  const journal = JSON.parse(await readFile(join(root,'recipe-authoring','journal.json'),'utf8'));
+  const waiting = journal.operations[op.operationId];
+  for (const key of ['payload','secret','nonce','source','dispatchAuthorization','proposalDigest']) expect(waiting).not.toHaveProperty(key);
+  const receipt = {operationId:op.operationId,status:'accepted',stateRevision:3,draftId:randomUUID(),revision:1};
+  expect(await rpc('settle',{operationId:op.operationId,receipt})).toMatchObject({operation:{state:'completed',receipt}});
+});
+
+it('blocks normal deletion of this Bot registration until its revoked operations settle', async () => {
+  const {createAdminService} = await import('../src/admin/service');
+  const {setBotActivation} = await import('../src/config/bots');
+  await link();
+  const op = await prepare();
+  await link();
+  service.close();
+  await setBotActivation(appId,false);
+  const admin = createAdminService({liveStatus:async()=>({running:false})});
+  expect(await admin.deleteBot(appId)).toMatchObject({ok:false,reason:expect.stringContaining('草稿')});
+  const registry = JSON.parse(await readFile(join(root,'bots.json'),'utf8'));
+  expect(registry.bots[0].registrationId).toBe(bot.registrationId);
+  // A different registration remains removable even with this account's unresolved operations.
+  const otherBot = 'cli_unrelated_fixture';
+  registry.bots.push({...registry.bots[0], name:'unrelated', appId:otherBot, registrationId:randomUUID(), active:false});
+  await writeFile(join(root,'bots.json'),JSON.stringify(registry));
+  expect(await admin.deleteBot(otherBot)).toEqual({ok:true});
+  await setBotActivation(appId,true);
+  restart(); await open();
+  await rpc('reconcile',{operationId:op.operationId,receipt:{operationId:op.operationId,status:'expired',outcome:'unknown'}});
+  service.close();
+  await setBotActivation(appId,false);
+  expect(await admin.deleteBot(appId)).toEqual({ok:true});
 });

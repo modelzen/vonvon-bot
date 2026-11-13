@@ -8,7 +8,7 @@ const copy: Record<CardMode, string> = {
   edit: '在此私聊发送 /recipe name 名称、/recipe summary 简介、/recipe overview 概览、/recipe version 版本、/recipe role 角色或 /recipe setup 步骤 JSON。',
   confirm: '有一份草稿改动等待确认。可在 App 核对完整内容。',
   pending: '已确认，正在等待 App 同步。', saved: '私人草稿已保存。可以在 App 查看或继续编辑。',
-  cancelled: '已取消本次草稿操作。', expired: '这次操作已到期，请回到 App 重新开始。',
+  cancelled: '已取消本次草稿操作。', expired: '这次操作已到期。若之前已经保存，请到 App 创作中心查看。',
   review: '来源或授权已经改变，请回到 App 核对。',
 };
 export function authoringCard(ref: string, mode: CardMode) {

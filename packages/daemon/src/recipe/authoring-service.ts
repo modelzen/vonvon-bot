@@ -2,12 +2,12 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { CardActionEvent, LarkChannel, NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import { groupIdSchema, recipeAuthoringRequestSchema, type AuthoringAuthorization, type AuthoringReceipt, type AuthoringReconciliation, type RecipeAuthoringRequest, type RecipeAuthoringReply } from '@vonvon/protocol';
-import { assertBotIdentity, type BotIdentity } from '../config/bots';
+import { assertBotIdentity, withRegisteredBot, type BotIdentity } from '../config/bots';
 import { isAdmin, type AppConfig } from '../config/schema';
 import { paths } from '../config/paths';
 import { configuredRecipeApiOrigin } from '../config/account-deployment';
 import { AuthoringIm, physicalChat, type CardMode } from './authoring-im';
-import { AuthoringJournal, active, linkKey, newCarrier, reserve, retire, sameRecipient, type AuthoringLedger, type Link, type LocalOperation, type Recipient, type Source } from './authoring-journal';
+import { authoringBotKey, discardAuthoringMaterial, AuthoringJournal, active, linkKey, newCarrier, reserve, retire, sameRecipient, type AuthoringLedger, type Link, type LocalOperation, type Recipient, type Source } from './authoring-journal';
 import { blankPublic, digest, freezePayload, newAuthoringKey, parseChanges, type DraftInstructionParser } from './authoring-wire';
 import { checkAuthorization, postAuthoring } from './authoring-cloud';
 import { reviewSource } from './authoring-source';
@@ -56,8 +56,7 @@ function revokeOperation(op: LocalOperation) {
   op.revoked = true;
   op.view.state = 'cancelPending';
   op.contextOpen = false;
-  delete op.payload; delete op.view.payloadDigest; delete op.proposalDigest; delete op.source;
-  delete op.secret; delete op.nonce; delete op.dispatchAuthorization;
+  discardAuthoringMaterial(op);
 }
 function bound(op: LocalOperation, link?: Link) {
   return !op.revoked && op.binding === link?.binding && sameRecipient(op.recipient,link.recipient);
@@ -80,7 +79,7 @@ export class AuthoringService {
   private readonly origin?: string;
   constructor(private readonly opts: Options) {
     this.now = opts.now ?? Date.now;
-    this.botKey = digest(JSON.stringify([opts.bot.appId,opts.bot.tenant,opts.bot.createdAt,opts.bot.registrationId ?? null]));
+    this.botKey = authoringBotKey(opts.bot);
     this.im = new AuthoringIm(opts.channel);
     this.origin = opts.origin ?? configuredRecipeApiOrigin();
     this.ledger = new AuthoringJournal(opts.root ?? paths.appDir, this.now);
@@ -263,7 +262,7 @@ export class AuthoringService {
     });
   }
   private async start(p: Presence, recipient: Recipient, target: {source?: Source; draftId?: string; baseRevision?: number; instructionId?: string; payload?: string; proposalDigest?: string}): Promise<RecipeAuthoringReply> {
-    const op = await this.ledger.run(db => {
+    const op = await withRegisteredBot(this.opts.bot.appId, () => this.ledger.run(db => {
       this.present(p);
       const link = db.links[linkKey(p.scope,p.account)];
       if (!sameRecipient(link?.recipient, recipient) || !isAdmin(this.opts.cfg,recipient.openId)) refusal();
@@ -296,7 +295,7 @@ export class AuthoringService {
       link!.context = {operationId, until:this.now()+CONTEXT};
       db.operations[operationId] = row;
       return row;
-    });
+    }), this.opts.bot);
     if (op.carrier.dirty) await this.refresh(p,op.view.operationId);
     return {kind:'operation',operation:op.view};
   }
