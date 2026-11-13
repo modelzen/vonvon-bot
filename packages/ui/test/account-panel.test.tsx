@@ -56,7 +56,7 @@ it('shows failure and expiry states, and only retries a usable native capability
   expect(html()).toContain('账户服务尚未配置');
   expect(html()).not.toContain('<button');
   h.account.supported = false; h.account.status = undefined;
-  expect(html()).toContain('账户功能在 Vonvon Bot 桌面应用中提供');
+  expect(html()).toContain('当前环境不支持账户功能，请使用最新版 Vonvon Bot 桌面应用。');
   expect(html()).not.toContain('<button');
 });
 
