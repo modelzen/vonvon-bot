@@ -178,6 +178,22 @@ try {
   assert.deepEqual(await accept(finalRenewed,body),finalReceipt);
   assert.deepEqual(await request('/authoring/'+fresh.operationId,{token:jwt(authorSubject)}),finalReceipt);
 
+  for(const interval of ['1 second','8 days']) {
+    const expiredDispatch=await dispatched();
+    sql(`update recipe_private.authoring_capabilities set deadline=0 where operation_id='${expiredDispatch.op.operationId}'`);
+    assert.deepEqual(await dispatch(expiredDispatch.cap),{operationId:expiredDispatch.op.operationId,status:'dispatched',stateRevision:2});
+    sql(`update recipe_private.authoring_operations set expires_at=clock_timestamp()-interval '${interval}' where id='${expiredDispatch.op.operationId}'`);
+    await dispatch(expiredDispatch.cap,410);
+  }
+  const acceptedRecovery=await ready(body);
+  const acceptedReceipt=await accept(acceptedRecovery.cap,body);
+  sql(`update recipe_private.authoring_operations set expires_at=clock_timestamp()-interval '8 days' where id='${acceptedRecovery.op.operationId}';
+    update recipe_private.authoring_capabilities set deadline=0 where operation_id='${acceptedRecovery.op.operationId}'`);
+  assert.deepEqual(await accept(acceptedRecovery.cap,body),acceptedReceipt);
+  await dispatch(acceptedRecovery.dispatchCap,410);
+  sql(`update recipe_private.authoring_operations set terminal_at=clock_timestamp()-interval '8 days' where id='${acceptedRecovery.op.operationId}'`);
+  await accept(acceptedRecovery.cap,body,410);
+
   const expired=await register();
   sql(`update recipe_private.authoring_operations set expires_at=clock_timestamp()-interval '1 second' where id='${expired.operationId}'`);
   assert.equal((await request('/authoring/'+expired.operationId,{token:author})).status,'expired');
@@ -221,6 +237,18 @@ try {
   }
   const lock=async()=>{await blocker.query('BEGIN');await blocker.query('select pg_advisory_xact_lock(hashtextextended($1,187511))',[account]);};
   try {
+    const deadlineRace=await dispatched();
+    await blocker.query('BEGIN');
+    const changedDeadline=await blocker.query(`update recipe_private.authoring_operations
+      set expires_at=clock_timestamp()+interval '1500 milliseconds' where id=$1
+      returning floor(extract(epoch from expires_at)*1000)::bigint as deadline`,[deadlineRace.op.operationId]);
+    const deadline=Number(changedDeadline.rows[0].deadline);
+    const expiredReplay=dispatch(deadlineRace.cap,410);
+    await waiting('possess_authoring');
+    assert.ok(Date.now()<deadline);
+    while(Date.now()<=deadline)await delay(Math.min(20,deadline-Date.now()+1));
+    await blocker.query('COMMIT');
+    await expiredReplay;
     for(const cancelFirst of [true,false]) {
       const operation=await ready(body);
       await lock();
