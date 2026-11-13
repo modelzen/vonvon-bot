@@ -9,6 +9,7 @@ import { runningBot, setCliContext, withDaemon, type Daemon } from '../src/cli/d
 import { NOT_DM_MESSAGE } from '../src/agent/entry/registry';
 import { folderPath, runGroupBind, runGroupCreate, runGroupSet, runGroupShow, runGroupUnbind } from '../src/cli/commands/group';
 import { CLI_PARITY_ALLOWLIST } from '../src/cli/parity-allowlist';
+import {runFeishuGroupIdentity} from '../src/cli/commands/feishu';
 import { loadCommands } from './helpers/cli-commands';
 
 /** cli-3-groups: group create / show / set / unbind and the changed group bind, through a fake client behind the real withDaemon. */
@@ -255,4 +256,14 @@ it('covers the nine C3 kinds, none still in the allowlist', async () => {
   }
   expect(commands.find(command => command.path === 'group bind')?.covers).toContain('library.list');
   expect(commands.find(command => command.path === 'group bind')?.options).toContain('--project');
+});
+
+
+it('reads an exact platform group identity through the typed command rather than listing groups', async () => {
+  const run = vi.fn(async () => ({kind: 'groupIdentity', agentId: 'cli_a', groupId: 'oc_exact', name: '平台群名'}));
+  const h = harness({run});
+  await runFeishuGroupIdentity('oc_exact', {bot: 'cli_a'}, h.io(true), h.daemon);
+  expect(run).toHaveBeenCalledExactlyOnceWith({type: 'readGroupIdentity', agentId: 'cli_a', groupId: 'oc_exact'});
+  expect(JSON.parse(h.out())).toEqual({ok: true, kind: 'groupIdentity', agentId: 'cli_a', groupId: 'oc_exact', name: '平台群名'});
+  expect((await loadCommands()).find(command => command.path === 'feishu group-identity')?.covers).toEqual(['command.readGroupIdentity']);
 });

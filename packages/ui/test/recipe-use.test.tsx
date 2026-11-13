@@ -95,7 +95,7 @@ beforeEach(() => {
     snapshot: async () => snapshot,
     environment: async () => ({kind: 'backends', entries: [{id: 'codex-appserver', displayName: 'Codex'}]}),
     settings: async () => ({kind: 'refused', message: '合成测试未配置默认决策模型。'}),
-    run: vi.fn(async raw => {const command = commandSchema.parse(raw); return command.type === 'listPendingGroups' ? {kind: 'pendingGroups', groups: []} : command.type === 'listJoinedGroups' ? {kind: 'groups', groups: [{id: groupId, name: '已连接的群', bound: true}, {id: 'oc_unbound', name: '待连接群', bound: false}]} : {kind: 'applied'};}),
+    run: vi.fn(async raw => {const command = commandSchema.parse(raw); return command.type === 'readGroupIdentity' ? {kind: 'groupIdentity', agentId: command.agentId, groupId: command.groupId, name: '已连接的群'} : command.type === 'listPendingGroups' ? {kind: 'pendingGroups', groups: []} : command.type === 'listJoinedGroups' ? {kind: 'groups', groups: [{id: groupId, name: '已连接的群', bound: true}, {id: 'oc_unbound', name: '待连接群', bound: false}]} : {kind: 'applied'};}),
     collaboration: vi.fn(async raw => {collaborationRequestSchema.parse(raw); return {kind: 'applied', project: {chatId: groupId}};}),
   });
   shell = fakeShell(); shell.devices.clientFor.mockImplementation(() => client);

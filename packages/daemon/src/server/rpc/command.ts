@@ -39,6 +39,11 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
       if (!service.pendingGroups) return unsupported();
       return { kind: 'read', value: { kind: 'pendingGroups', ...pendingGroupsSchema.parse(await service.pendingGroups(request.agentId)) } };
     }
+    case 'readGroupIdentity': {
+      await requireRunningAgent(service, request.agentId);
+      if (!service.readGroupIdentity) return unsupported();
+      return {kind: 'read', value: await service.readGroupIdentity(request.agentId, request.groupId)};
+    }
     case 'listJoinedGroups': {
       await requireRunningAgent(service, request.agentId);
       if (!service.joinedGroups) return unsupported();

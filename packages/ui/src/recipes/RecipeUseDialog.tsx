@@ -11,6 +11,7 @@ import type {RecipeUseSession} from './recipe-use-context';
 type Props = {
   session: RecipeUseSession; snapshot?: DesktopSnapshot; visible: boolean; reply?: RecipeUseReply; error?: string;
   busy: boolean; paused: boolean; accountChanged: boolean; unavailable: boolean; needsRecovery: boolean; reviewEpoch: number; groupId?: string;
+  groupName?: string; groupNameError?: string; onRefreshGroupName: () => void;
   acceptedResolution?: Resolution;
   onSelectBot: (id: AgentId) => void; onSelectGroup: (groupId: string) => void; onClose: () => void; onRecover: () => void;
   onRequest: (request: RecipeUseRequest) => Promise<void>;
@@ -22,8 +23,8 @@ export function RecipeUseDialog(props: Props) {
   const pending = usePendingGroups(visible && !paused ? snapshot : undefined);
   if (visible && !paused && !needsRecovery && !session.botId && snapshot) return <SelectJoinBotDialog snapshot={snapshot} onClose={onClose} onSelect={props.onSelectBot}/>;
   const agent = snapshot?.agents.find(item => item.id === session.botId);
-  const groupName = snapshot?.groups.find(group => group.id === props.groupId)?.name
-    ?? snapshot?.memberships.find(member => member.agentId === session.botId && member.groupId === props.groupId)?.name;
+  const groupName = props.groupName;
+  const localName = snapshot?.memberships.find(member => member.agentId === session.botId && member.groupId === props.groupId)?.name;
   const recovery = reply?.kind === 'pending' && reply.phase === 'joining' ? reply.recovery : undefined;
   const bound = recovery?.groupId ? snapshot?.memberships.find(member => member.agentId === session.botId && member.groupId === recovery.groupId) : undefined;
   const repairForm = repairing && recovery && !bound;
@@ -32,7 +33,7 @@ export function RecipeUseDialog(props: Props) {
   const join = !props.accountChanged && joining && reply && 'handle' in reply && agent ? <JoinGroupDialog key={repairForm ? 'repair' : 'join'} open={Boolean(choosing)}
     agent={agent} snapshot={snapshot} tools={snapshot?.tools} pending={pending.find(item => item.agentId === agent.id)}
     recipe={session.recipe} onClose={repairForm ? () => setRepairing(false) : onClose} onChanged={async () => {}}
-    existingOnly={Boolean(repairForm)} initialGroup={repairForm && recovery.groupId ? {chatId: recovery.groupId, name: snapshot?.groups.find(group => group.id === recovery.groupId)?.name ?? recovery.name ?? '', addedAt: 0} : undefined}
+    existingOnly={Boolean(repairForm)} initialGroup={repairForm && recovery.groupId ? {chatId: recovery.groupId, name: groupName ?? recovery.name ?? '', addedAt: 0} : undefined}
     onRecipeCancel={repairForm ? () => setRepairing(false) : () => void onRequest({type: 'cancel', handle: reply.handle})}
     onRecipeJoin={async input => {
       if (repairForm) {
@@ -60,14 +61,14 @@ export function RecipeUseDialog(props: Props) {
       : needsRecovery ? <InlineNotice title="需要核对原操作" tone="warning">群聊或应用可能已经完成。恢复后会核对同一个群，不会重新创建或连接。</InlineNotice>
       : <>
         <p className="recipe-use-target">设备：{session.device.name}<br/>Bot：{agent?.name ?? session.botId ?? '待选择'}{session.botId && `（${session.botId}）`}<br/>
-          群聊：{groupName ?? (props.groupId ? '正在核对群名' : '待选择')}{props.groupId && `（${props.groupId}）`}</p>
+          群聊：{groupName ?? (props.groupId ? '正在核对群名' : '待选择')}{props.groupId && `（${props.groupId}）`}{localName && <><br/>本地名称：{localName}</>}</p>
         <ol className="recipe-use-stages" aria-label="应用进度">
           <li>已获取配方，保存在账号中</li>
-          <li>{props.groupId ? `已连接群聊${agent ? ` · ${agent.name}` : ''}` : '选择 Bot 并连接群聊'}</li>
+          <li>{reply?.kind === 'pending' && reply.phase === 'joining' ? '群聊连接尚待确认' : props.groupId ? `已连接群聊${agent ? ` · ${agent.name}` : ''}` : '选择 Bot 并连接群聊'}</li>
           <li>{reply?.kind === 'applied' ? '已应用到目标群，云端已确认' : reply?.kind === 'pending' ? pendingText(reply.phase) : reply?.kind === 'rejected' ? '本次应用未完成' : '预览内容，确认后应用'}</li>
         </ol>
         {session.target && (reply?.kind === 'review' || reply?.kind === 'prepared') && <p className="recipe-use-note">沿用现有群聊的 Provider、工作目录和沟通方式。</p>}
-        {(reply?.kind === 'review' || reply?.kind === 'prepared') && !groupName && <p role="status">正在读取目标群名，核对后才能确认应用。</p>}
+        {(reply?.kind === 'review' || reply?.kind === 'prepared') && <p role="status">{props.groupNameError ?? (!groupName ? '正在读取目标群名，核对后才能确认应用。' : '已核对飞书群名。')} <Button disabled={busy} onClick={props.onRefreshGroupName}>刷新群名</Button></p>}
         {(reply?.kind === 'review' || reply?.kind === 'prepared') && <RecipeReview key={`${reply.review.reviewToken}:${props.reviewEpoch}`} review={reply.review} prepared={reply.kind === 'prepared'} busy={busy || !groupName}
           acceptedResolution={props.acceptedResolution}
           onResolve={resolution => onRequest({type: 'resolve', handle: reply.handle, reviewToken: reply.review.reviewToken, resolution})}
@@ -76,7 +77,7 @@ export function RecipeUseDialog(props: Props) {
         {recovery && reply?.kind === 'pending' && <InlineNotice title={recovery.state === 'createdUnsaved' ? '群已创建，连接尚未保存' : '群聊创建结果尚未确认'} tone="warning"
           actions={canAct && agent ? bound ? <Button onClick={() => void onRequest({type: 'repairJoin', handle: reply.handle, input: {type: 'existingBinding', agentId: agent.id, groupId: bound.groupId}})}>继续使用已连接的群</Button>
             : <Button onClick={() => setRepairing(true)}>{recovery.groupId ? '连接已创建的群' : '从已加入群中选择'}</Button> : undefined}>
-          {bound ? `「${snapshot?.groups.find(group => group.id === bound.groupId)?.name ?? bound.name}」已经连接。沿用 Provider ${backendLabel(bound.backend)}、工作目录 ${bound.directory} 和现有沟通方式。`
+          {bound ? `本地名称「${bound.name}」已经连接。沿用 Provider ${backendLabel(bound.backend)}、工作目录 ${bound.directory} 和现有沟通方式。`
             : recovery.groupId ? '继续连接这个群。请核对本地绑定名称和原有入群设置。' : '请先在飞书核对，再从 Bot 已加入的群中明确选择。不会重新创建群聊。'}
         </InlineNotice>}
         {dismiss && recovery && reply?.kind === 'pending' && <InlineNotice title="结束跟踪前，请先核对飞书群" tone="warning" actions={<>

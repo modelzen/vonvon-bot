@@ -4,12 +4,13 @@ import {createRoot, type Root} from 'react-dom/client';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {
   agentIdSchema, groupIdSchema, desktopSnapshotSchema,
-  type AccountStatus, type RecipeUseRequest, type RecipeUseReply, type ProjectSettingsView,
+  commandSchema, type Command, type AccountStatus, type RecipeUseRequest, type RecipeUseReply, type ProjectSettingsView,
 } from '@vonvon/protocol';
 import {createDesktopFacades} from '../../desktop/src/facade';
 import {desktopChannels} from '../../desktop/src/ipc-contract';
 import {DesktopRoot} from '../src/devices/DesktopRoot';
 import {projectState} from '../../daemon/src/server/projection';
+import type {AdminState} from '../../daemon/src/server/state';
 import {useCommunity} from '../src/community/community-context';
 import {RecipeSourcePanel} from '../src/recipes/RecipeSourcePanel';
 import {DraftGuardProvider} from '../src/settings/DraftGuard';
@@ -34,6 +35,18 @@ const snapshot = desktopSnapshotSchema.parse({revision: 1, observedAt: 1, stale:
   tools: [{tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '1'}], jobs: [], application: {platform: 'macos', version: 'test', loginItem: false, dataPath: '/synthetic'}});
 
 
+function projectedSnapshot(directory = '/synthetic') {
+  const bindings = [{id: botId, name: '本地绑定甲'}, {id: 'cli_second', name: '另一 Bot 的本地绑定乙'}];
+  const bots: AdminState['bots'] = bindings.map(({id, name}) => ({
+    appId: id, name: id, running: true, active: true, current: id === botId, tenant: 'feishu', connection: 'connected',
+    completionReminder: {mode: 'failures', longTaskMinutes: 3},
+    projects: [{chatId: groupId, name, cwd: directory, kind: 'single', backend: 'codex-appserver', mode: 'write', network: false,
+      guestMode: 'qa', blank: false, origin: 'joined', noMention: false, allowedUsersCount: 0, sessionCount: 0, createdAt: 1}],
+  }));
+  return desktopSnapshotSchema.parse({...snapshot, ...projectState({version: 'test', generatedAt: 1, bots}, snapshot, new Set())});
+}
+
+
 let root: Root, facade: ReturnType<typeof createDesktopFacades>;
 let dispatch: (event: unknown) => void;
 let requests: RecipeUseRequest[], status: AccountStatus;
@@ -41,6 +54,8 @@ let useReply: (r: RecipeUseRequest) => RecipeUseReply | Promise<RecipeUseReply>;
 let entitled: boolean;
 let readSnapshot: () => Promise<unknown>;
 let acquireReply: () => Promise<void>;
+let readIdentity: (request: Extract<Command, {type: 'readGroupIdentity'}>) => unknown | Promise<unknown>;
+let identityRequests: Array<Extract<Command, {type: 'readGroupIdentity'}>>;
 const groupTwo=groupIdSchema.parse('oc_second');
 function Launcher() {
   const community=useCommunity()!;
@@ -69,13 +84,14 @@ beforeEach(()=>{
     : r.type==='begin' ? {...prepared,groupId:r.groupId!,handle:r.groupId===groupTwo?secondHandle:handle}
     : r.type==='confirm' ? {kind:'applied',groupId:r.handle===secondHandle?groupTwo:groupId,handle:r.handle} : prepared;
   readSnapshot=async()=>({...snapshot,groups:[{id:groupId,name:'甲组'},{id:groupTwo,name:'乙组'}]});
-  acquireReply=async()=>{};
+  acquireReply=async()=>{}; identityRequests=[];
+  readIdentity=request=>({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: request.groupId === groupTwo ? '乙组' : '甲组'});
   facade=createDesktopFacades({receive: listener=>{dispatch=listener;return ()=>{};},invoke:async(channel,raw)=>{
     let v:unknown;
     if(channel===desktopChannels.subscribe) v=undefined;
     else if(channel===desktopChannels.accountStatus) v=status;
     else if(channel===desktopChannels.snapshot) v=await readSnapshot();
-    else if(channel===desktopChannels.run) v={kind:'pendingGroups',groups:[]};
+    else if(channel===desktopChannels.run) {const request=commandSchema.parse(raw); if(request.type==='readGroupIdentity'){identityRequests.push(request);v=await readIdentity(request);} else v={kind:'pendingGroups',groups:[]};}
     else if(channel===desktopChannels.environment) v={kind:'backends',entries:[]};
     else if(channel===desktopChannels.settings) v={kind:'refused',message:'not configured'};
     else if(channel===desktopChannels.recipeUse){requests.push(raw); v=await useReply(raw);}
@@ -190,25 +206,24 @@ it('requires the current detail action after a targeted acquisition crosses a de
   expect(requests).toEqual([{type: 'begin', accountId, viewId: B, recipeId, versionId: nextVersion, botId}]);
 });
 
-it('does not enable confirmation until the current snapshot identifies the target group', async () => {
+it('does not enable confirmation until the exact platform identity is read, and can retry without losing the preview', async () => {
   readSnapshot = async () => ({...snapshot, groups: []});
+  readIdentity = async () => {throw new Error('offline');};
   await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新');
   expect(button('确认应用到这个群')!.disabled).toBe(true);
-  expect(document.body.textContent).toContain('核对后才能确认应用');
-  await act(async () => dispatch({type: 'snapshot', view: A, value: {...snapshot, revision: 2, groups: [{id: groupId, name: '已核对的目标群'}]}}));
+  expect(document.body.textContent).toContain('输入已保留');
+  readIdentity = request => ({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '已核对的目标群'});
+  await click('刷新群名');
   expect(button('确认应用到这个群')!.disabled).toBe(false);
   expect(document.querySelector('[role="dialog"]')!.textContent).toContain('已核对的目标群');
 });
 
 
 it('requires platform group identity instead of another bot local binding alias', async () => {
-  const admin = {bots: [['cli_recipe_ui', '本地绑定甲'], ['cli_second', '另一 Bot 的本地绑定乙']].map(([id, label]) => ({
-    name: id, appId: id, running: true, active: true, connection: 'connected',
-    projects: [{chatId: groupId, name: label, cwd: '/synthetic', kind: 'single', backend: 'codex', mode: 'write', network: false}],
-  }))};
-  const projected = projectState(admin as never, snapshot, new Set());
+  const projected = projectedSnapshot();
   expect(projected.groups[0]?.name).toBe('另一 Bot 的本地绑定乙');
-  readSnapshot = async () => desktopSnapshotSchema.parse({...snapshot, ...projected});
+  readSnapshot = async () => projected;
+  readIdentity = () => {throw new Error('unavailable');};
   await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新');
   const dialog = document.querySelector('[role="dialog"]')!;
   expect(dialog.textContent).not.toContain('群聊：另一 Bot 的本地绑定乙');
@@ -234,4 +249,92 @@ it.each(['cancel', 'finish'] as const)('preserves the current target chooser aft
   useReply = request => ({...prepared, groupId: groupTwo, handle: secondHandle});
   await click('开始当前目标');
   expect(requests.at(-1)).toMatchObject({type: 'begin', groupId: groupTwo});
+});
+
+
+it('uses the chosen Bot and physical group through the strict facade despite colliding local aliases, and refreshes a rename without changing the install handle', async () => {
+  readSnapshot = async () => projectedSnapshot();
+  readIdentity = request => ({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '飞书物理群名'});
+  await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新');
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain(`群聊：飞书物理群名（${groupId}）`);
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('本地名称：本地绑定甲');
+  expect(identityRequests).toEqual([{type: 'readGroupIdentity', agentId: botId, groupId}]);
+  readIdentity = request => ({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '飞书改名后'});
+  await click('刷新群名'); await click('确认应用到这个群');
+  expect(requests.at(-1)).toEqual({type: 'confirm', handle});
+  expect(identityRequests.at(-1)).toEqual({type: 'readGroupIdentity', agentId: botId, groupId});
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain(`群聊：飞书改名后（${groupId}）`);
+});
+
+it.each(['wrongBot', 'wrongGroup', 'empty'] as const)('refuses %s identity evidence instead of enabling confirmation', async kind => {
+  readIdentity = request => ({kind: 'groupIdentity', agentId: kind === 'wrongBot' ? 'cli_other' : request.agentId, groupId: kind === 'wrongGroup' ? groupTwo : request.groupId, name: kind === 'empty' ? ' ' : '不能展示的名称'});
+  await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新');
+  expect(button('确认应用到这个群')!.disabled).toBe(true);
+  expect(document.querySelector('[role="dialog"]')!.textContent).not.toContain('不能展示的名称');
+});
+
+it.each(['account', 'accountSession', 'device', 'binding', 'registration'] as const)('discards late group-name evidence after a %s change', async kind => {
+  let done!: (value: unknown) => void;
+  readIdentity = () => new Promise(resolve => done = resolve);
+  if (kind === 'binding') readSnapshot = async () => projectedSnapshot();
+  await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新');
+  const oldDone = done;
+  if (kind === 'account') await account(otherAccount);
+  else if (kind === 'accountSession') await account(accountId);
+  else if (kind === 'device') await device(B);
+  else await act(async () => dispatch({type: 'snapshot', view: A, value: kind === 'binding' ? {...projectedSnapshot('/changed'), revision: 2} : {...snapshot, revision: 2, agents: [{...snapshot.agents[0]!, registeredAt: 99}]}}));
+  await act(async () => oldDone({kind: 'groupIdentity', agentId: botId, groupId, name: '迟到的私有群名'}));
+  expect(document.body.textContent).not.toContain('迟到的私有群名');
+  expect(requests.map(request => request.type)).toEqual(['begin']);
+  if (kind === 'account' || kind === 'accountSession' || kind === 'device') {
+    readIdentity = request => ({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '恢复后群名'});
+    if (kind === 'account' || kind === 'accountSession') await account(accountId); else await device(A);
+    await click('恢复原操作');
+    expect(requests.at(-1)).toMatchObject({type: 'begin', accountId, viewId: A, botId, groupId});
+    expect(button('确认应用到这个群')!.disabled).toBe(false);
+  } else expect(button('确认应用到这个群')!.disabled).toBe(true);
+});
+
+it('retains the custom role and same review while group-name refresh fails and recovers', async () => {
+  useReply = () => ({...prepared, kind: 'review', review: {...baseReview, roleChoiceRequired: true}});
+  await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新');
+  await act(async () => document.querySelector<HTMLInputElement>('input[name="recipe-role"][value="custom"]')!.click());
+  const input = document.querySelector<HTMLTextAreaElement>('[aria-label="合并后的本群角色"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, '保留的手动合并🦉');
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+  });
+  readIdentity = () => {throw new Error('offline');}; await click('刷新群名');
+  expect(document.body.textContent).toContain('输入已保留');
+  expect(input.value).toBe('保留的手动合并🦉');
+  expect(button('预览所选内容')!.disabled).toBe(true);
+  readIdentity = request => ({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '恢复后的群名'});
+  await click('刷新群名');
+  expect(document.querySelector('[aria-label="合并后的本群角色"]')).toBe(input);
+  expect(input.value).toBe('保留的手动合并🦉'); expect(button('预览所选内容')!.disabled).toBe(false);
+  expect(requests.map(request => request.type)).toEqual(['begin']);
+});
+
+it('disambiguates equal platform group names with immutable physical IDs', async () => {
+  readIdentity = request => ({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '同名群'});
+  await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新'); await click('稍后继续');
+  await inGroup(groupTwo, '检查新版'); await inGroup(groupTwo, '预览更新');
+  const chooser = document.querySelector('[role="dialog"]')!;
+  expect(chooser.textContent).toContain(`同名群（${groupId}）`);
+  expect(chooser.textContent).toContain(`同名群（${groupTwo}）`);
+  await click('开始当前目标'); await click('确认应用到这个群');
+  expect(requests.at(-1)).toEqual({type: 'confirm', handle: secondHandle});
+});
+
+it('does not let another account late closure dismiss the active account operation', async () => {
+  let done!: (reply: RecipeUseReply) => void;
+  useReply = request => request.type === 'cancel' ? new Promise(resolve => done = resolve) : {...prepared, groupId: request.type === 'begin' ? request.groupId! : groupId};
+  await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新'); await click('取消应用'); await click('稍后继续');
+  await account(otherAccount); await inGroup(groupTwo, '检查新版'); await inGroup(groupTwo, '预览更新');
+  const dialog = document.querySelector('[role="dialog"]');
+  await act(async () => done({kind: 'closed'}));
+  expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+  expect(dialog!.textContent).toContain(`（${groupTwo}）`);
+  expect(dialog!.textContent).not.toContain(`（${groupId}）`);
+  expect(button('开始当前目标')).toBeUndefined();
 });
