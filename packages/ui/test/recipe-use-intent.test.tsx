@@ -9,6 +9,7 @@ import {
 import {createDesktopFacades} from '../../desktop/src/facade';
 import {desktopChannels} from '../../desktop/src/ipc-contract';
 import {DesktopRoot} from '../src/devices/DesktopRoot';
+import {projectState} from '../../daemon/src/server/projection';
 import {useCommunity} from '../src/community/community-context';
 import {RecipeSourcePanel} from '../src/recipes/RecipeSourcePanel';
 import {DraftGuardProvider} from '../src/settings/DraftGuard';
@@ -197,4 +198,40 @@ it('does not enable confirmation until the current snapshot identifies the targe
   await act(async () => dispatch({type: 'snapshot', view: A, value: {...snapshot, revision: 2, groups: [{id: groupId, name: '已核对的目标群'}]}}));
   expect(button('确认应用到这个群')!.disabled).toBe(false);
   expect(document.querySelector('[role="dialog"]')!.textContent).toContain('已核对的目标群');
+});
+
+
+it('requires platform group identity instead of another bot local binding alias', async () => {
+  const admin = {bots: [['cli_recipe_ui', '本地绑定甲'], ['cli_second', '另一 Bot 的本地绑定乙']].map(([id, label]) => ({
+    name: id, appId: id, running: true, active: true, connection: 'connected',
+    projects: [{chatId: groupId, name: label, cwd: '/synthetic', kind: 'single', backend: 'codex', mode: 'write', network: false}],
+  }))};
+  const projected = projectState(admin as never, snapshot, new Set());
+  expect(projected.groups[0]?.name).toBe('另一 Bot 的本地绑定乙');
+  readSnapshot = async () => desktopSnapshotSchema.parse({...snapshot, ...projected});
+  await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新');
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.textContent).not.toContain('群聊：另一 Bot 的本地绑定乙');
+  expect(dialog.textContent).toContain('本地名称：本地绑定甲');
+  expect(button('确认应用到这个群')!.disabled).toBe(true);
+});
+
+it.each(['cancel', 'finish'] as const)('preserves the current target chooser after hidden old %s closes late', async action => {
+  let done!: (reply: RecipeUseReply) => void;
+  useReply = request => request.type === action ? new Promise(resolve => done = resolve)
+    : action === 'finish' ? {kind: 'applied', handle, groupId}
+    : {...prepared, kind: 'review', review: {...baseReview, roleChoiceRequired: true}};
+  await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新');
+  await click(action === 'finish' ? '完成' : '取消应用'); await click('稍后继续');
+  await inGroup(groupTwo, '检查新版'); await inGroup(groupTwo, '预览更新');
+  const current = button('开始当前目标')!; current.focus();
+  await act(async () => done({kind: 'closed'}));
+  expect(button('开始当前目标')).toBe(current);
+  expect(document.activeElement).toBe(current);
+  expect(button('继续旧目标')!.disabled).toBe(true);
+  expect(button('确认应用到这个群')).toBeUndefined();
+  expect(requests.map(request => request.type)).toEqual(['begin', action]);
+  useReply = request => ({...prepared, groupId: groupTwo, handle: secondHandle});
+  await click('开始当前目标');
+  expect(requests.at(-1)).toMatchObject({type: 'begin', groupId: groupTwo});
 });
