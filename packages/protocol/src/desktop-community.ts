@@ -79,7 +79,7 @@ export const communityResponseSchemas = {
 };
 export type CommunityResponses = {[K in keyof typeof communityResponseSchemas]: z.infer<(typeof communityResponseSchemas)[K]>};
 export const acquisitionFailureSchema = z.object({
-  code: z.enum(['operation_expired', 'operation_clock_skew', 'request_upgrade_required', 'acquire_rate_limited', 'invalid_code', 'conflict', 'auth_required', 'account_disabled', 'session_changed', 'unavailable']),
+  code: z.enum(['operation_expired', 'operation_clock_skew', 'request_upgrade_required', 'acquire_rate_limited', 'rate_limited', 'invalid_code', 'conflict', 'auth_required', 'account_disabled', 'session_changed', 'unavailable']),
   retryAfter: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
 }).strict();
 export type AcquisitionFailure = z.infer<typeof acquisitionFailureSchema>;

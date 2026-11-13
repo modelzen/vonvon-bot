@@ -5,6 +5,7 @@ const accountButton = document.querySelector('#account');
 const params = new URLSearchParams(location.search);
 const claimRequests = new Map();
 let detailGeneration = 0, modalGeneration = 0;
+let releaseModal;
 let session, catalogSeq = 0;
 
 function el(tag, text, className) {
@@ -36,13 +37,12 @@ async function request(path, options = {}) {
   return data;
 }
 function modal(title, ...nodes) {
-  ++modalGeneration;
-  if (dialog.open) dialog.close();
+  closeDialog();
   const h = el('h2', title); h.id = 'dialog-title';
   dialog.setAttribute('aria-labelledby', h.id); dialog.replaceChildren(h, ...nodes);
   dialog.showModal();
 }
-const closeDialog = () => {++modalGeneration; dialog.close();};
+const closeDialog = () => {++modalGeneration; releaseModal?.(); releaseModal = undefined; dialog.close();};
 const closeButton = () => button('关闭', closeDialog, 'secondary');
 const labels = { github: 'GitHub', google: 'Google', apple: 'Apple' };
 function openLogin(next = location.pathname) {
@@ -245,6 +245,7 @@ async function claim(recipe, trigger, sessionId, generation) {
     modal('输入分享码', form);
   }
   const modalId = modalGeneration;
+  if (coded) releaseModal = () => {trigger.disabled = false;};
   const current = () => generation === detailGeneration && path === location.pathname && sessionId === session?.displaySession && modalId === modalGeneration;
   async function reconcile() {
     const next = await request('/api/v1/recipes/' + recipe.recipeId + '/versions/' + recipe.versionId, {headers: {'X-Vonvon-Session': sessionId}});
@@ -278,12 +279,12 @@ async function claim(recipe, trigger, sessionId, generation) {
       await reconcile();
     } catch (e) {
       if (!current()) return;
-      if (['operation_expired', 'request_upgrade_required'].includes(e.code)) {
+      if (['operation_expired', 'request_upgrade_required', 'operation_clock_skew'].includes(e.code)) {
         try {
           const next = await reconcile();
           if (!next || next.owned || next.acquired) return;
           claimRequests.delete(logical);
-          const msg = '已确认尚未获取。请再次点击获取，重新提交。';
+          const msg = e.code === 'operation_clock_skew' ? '已确认尚未获取。请校准设备时间后，再次点击获取，重新提交。' : '已确认尚未获取。请再次点击获取，重新提交。';
           if (coded) error.textContent = msg; else message(msg);
         } catch {if (current()) {if (coded) error.textContent = '获取结果暂未确认，请保留输入并重试。'; else message('获取结果暂未确认，请重试。');}}
         return;
@@ -291,8 +292,7 @@ async function claim(recipe, trigger, sessionId, generation) {
       if (e.code === 'session_changed') {location.reload(); return;}
       if (e.status === 401) {session.signedIn = false; accountButton.textContent = '登录'; openLogin(); return;}
       if (e.code === 'invalid_code') claimRequests.delete(logical);
-      const msg = e.code === 'operation_clock_skew' ? '设备时间与服务端不一致，请校准设备时间后重试。' :
-        e.status === 429 ? '操作过于频繁，请保留输入。' + (e.retryAfter ? ` 请在 ${e.retryAfter} 秒后重试。` : '') :
+      const msg = e.status === 429 ? '操作过于频繁，请保留输入。' + (e.retryAfter ? ` 请在 ${e.retryAfter} 秒后重试。` : '') :
         e.code === 'invalid_code' ? '这个分享码无法兑换此版本，请核对后重试。' : '获取结果暂未确认，请重试同一操作。';
       if (coded) error.textContent = msg; else message(msg);
     } finally {if (current()) confirm.disabled = trigger.disabled = false;}
@@ -302,6 +302,7 @@ async function claim(recipe, trigger, sessionId, generation) {
 }
 
 accountButton.addEventListener('click', account);
+dialog.addEventListener('cancel', ev => {ev.preventDefault(); closeDialog();});
 try {
   session = await request('/auth/session');
   accountButton.hidden = false; accountButton.textContent = session.signedIn ? '账号' : '登录';
@@ -324,8 +325,7 @@ async function checkSession() {
   try {
     const current = await request('/auth/session');
     if (current.signedIn !== session.signedIn || current.displaySession !== session.displaySession) {
-      ++detailGeneration; ++modalGeneration;
-      if (dialog.open) dialog.close();
+      ++detailGeneration; closeDialog();
       main.replaceChildren();
       location.reload();
     }

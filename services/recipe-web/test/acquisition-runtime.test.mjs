@@ -53,10 +53,10 @@ test('actual Web runtime retains raw/key after committed response loss and confi
   const reads=h.calls.filter(c=>c.path.startsWith('/api/v1/recipes/'));
   assert.ok(reads.every(c=>c.options.headers['X-Vonvon-Session']==='session-a'));
 });
-test('actual Web runtime reconciles expiry, keeps offline input, and requires another explicit submit before changing keys',async t=>{
+for(const failure of ['operation_expired','request_upgrade_required']) test(`actual Web runtime reconciles ${failure}, keeps offline input, and requires another explicit submit before changing keys`,async t=>{
   let reads=0,offline=true;
   const h=await runtime(t,async(_path,options)=>{
-    if(options.method==='POST')return Response.json({error:{code:'operation_expired'}},{status:410});
+    if(options.method==='POST')return Response.json({error:{code:failure}},{status:failure==='operation_expired'?410:409});
     if(++reads>1 && offline)throw new Error('offline detail');
     return Response.json(recipe);
   });
@@ -176,4 +176,13 @@ for(const transition of ['route','account']) test(`actual Web runtime ignores a 
   finish(Response.json({...recipe,acquired:true}));await h.settle();
   assert.equal(h.document.querySelector('dialog').open,true);assert.equal(newer.querySelector('input').value,'NEW-CODE');
   assert.doesNotMatch(h.document.querySelector('main').textContent,/已获取/);
+});
+
+test('actual Web runtime keeps the rejected clock key when a detail response names another version',async t=>{
+  let reads=0;
+  const h=await runtime(t,async(_path,options)=>options.method==='POST'?Response.json({error:{code:'operation_clock_skew'}},{status:422}):Response.json(++reads>1?{...recipe,versionId:'33333333-3333-4333-8333-333333333333'}:recipe));
+  const form=await h.open();await h.submit(form,'Ab-CD');await h.submit(form,'Ab-CD');
+  assert.match(form.textContent,/暂未确认/);assert.equal(form.querySelector('input').value,'Ab-CD');
+  const posts=h.calls.filter(c=>c.options.method==='POST');assert.equal(posts.length,2);
+  assert.equal(posts[0].options.headers['Idempotency-Key'],posts[1].options.headers['Idempotency-Key']);
 });

@@ -24,7 +24,7 @@
 - 成功新写同时清理至少168h且可回收的 no-op、写 quota/highwater。partial index 只覆盖 no-op，避免扫描永久首授。冷账号可延后实际清理，承诺至少168h可重放，实际淘汰前可能继续重放。steady v2 no-op ≤2048/账号，过渡含legacy≤4096，实际权益和首次证明另计。
 - 429 的 Retry-After 由数据库 next effective UTC midnight 减 wall 向上取整。错误仅安全 code/数值，不透传 SQL 文本或分享码。
 - native request('acquire') 经原 IPC 返回 plain success/failure outcome，保留受控机器码和 retry 秒数。其他动作接口不变。Web 对账 GET 携 displaySession，BFF 必须匹配当前 cookie 且登录，响应前再验；公开匿名详情仍可读。
-- 两端同 logical attempt 固定原 raw 和 key。弱网同键重试；换输入、过期、升级先对账，无权益后明确再次点击才换键。离线保留未知和内存输入，分享码不持久化。重启先读取版本详情。时钟错单独提示，429保留输入不循环。POST/GET/error/finally 均验证账号/会话、版本及导航/弹窗代次。
+- 两端同 logical attempt 固定原 raw 和 key。弱网同键重试；换输入、过期、升级和时钟拒绝先对账，无权益后明确再次点击才换键。离线保留未知和内存输入，分享码不持久化。重启先读取版本详情。时钟错提示校准设备时间，429保留输入不循环。POST/GET/error/finally 均验证账号/会话、版本及导航/弹窗代次。取消或 Escape 关闭 Web 领取弹窗时释放旧弹窗的页面按钮，旧请求迟到不能修改新弹窗或新请求的按钮。
 
 ## 5. 测试
 
@@ -45,3 +45,11 @@ Mac 隔离临时 PostgreSQL 和 synthetic HTTP identity。运行 `PG_BINDIR=... 
 ## 9. 风险和行数
 
 涉及事务并发、迁移、错误路径和跨会话恢复。预计1000至1600行，按SQL/HTTP、native协议、Web和tests模块独立审查，父任务安排 fresh no-comments 及独立Astra review。保留水位可令时钟异常后的新领取暂停，不能重置绕过。迁移提交后的裁剪不能用降级旧函数恢复，只能前滚修复或使用独立一致备份。
+
+## 10. 客户端恢复修复
+
+基线为 `d06b9dc9db513bf7d6c812a7f7944559309fa9a5`。独立审查确认取消后按钮占用、时钟拒绝键无法恢复、普通限流码在 IPC 丢失。先提交 RED 回归 `6ed67ff12d4a5833b1546c3da8d626301c5033fb`。Web 失败8项，原生 UI 失败4项；真实 HTTP 第11次兑换返回的 `rate_limited` 和600秒经主进程序列化后变为 `unavailable`。
+
+修复复用既有代次与权益对账，不改 SQL、HTTP 错误行为或全局时钟状态。两端对账失败、离线、版本不符及迟到结果均保留原 raw/key；确认已有权益后结束，确认尚未获取后只允许下一次明确点击创建新键。原生允许的受控码补充 `rate_limited`，继续与每日额度的 `acquire_rate_limited` 区分。验收覆盖取消、Escape、迟到成功和错误、账号切换、路由 A-B-A、校准时间、已有权益、离线对账、版本不符、过期和升级恢复。父任务负责最终独立增量审查；本轮不推送或部署。
+
+本地验证通过 Web/BFF 39项、API HTTP 9项、UI 社区37项、desktop bridge/community-api 96项和 protocol limits 10项。命令为 `node --test services/recipe-web/test/*.test.mjs`、`node --test services/recipe-api/test/http.test.mjs`，以及对应 workspace 内 `npx vitest run` 指定上述测试文件。protocol、UI 和 desktop 的 typecheck/build 通过，构建保留既有依赖及 CommonJS 的警告。没有修改 SQL，沿用父任务已完成的 PostgreSQL 验证，本轮未重复全套数据库测试或浏览器验收。
