@@ -9,6 +9,7 @@ import {
   recipeAuthoringReplySchema,
   type AuthoringOperation,
   type AuthoringReceipt,
+  type AuthoringReconciliation,
   type DesktopAuthoringOperation,
   type DesktopAuthoringReply,
   type DesktopAuthoringRequest,
@@ -272,19 +273,12 @@ export class RecipeAuthoringController {
       h.busy = false;
     }
   }
-  private remember(h: Handle, op: AuthoringOperation, cancel = false) {
+  private binding(h: Handle) {
     this.check(h);
-    const row = this.journal.observe(
-      {
-        accountId: h.open.accountId,
-        viewId: h.open.viewId,
-        deviceId: h.deviceId,
-        deviceKey: h.deviceKey,
-        botId: h.open.botId,
-      },
-      op,
-      cancel,
-    );
+    return { accountId: h.open.accountId, viewId: h.open.viewId, deviceId: h.deviceId, deviceKey: h.deviceKey, botId: h.open.botId };
+  }
+  private remember(h: Handle, op: AuthoringOperation, cancel = false) {
+    const row = this.journal.observe(this.binding(h), op, cancel);
     h.operations.set(op.operationId, op);
     return row;
   }
@@ -303,8 +297,41 @@ export class RecipeAuthoringController {
     for (const op of status.operations) this.remember(h, op);
     return status;
   }
+  private async reconcile(h: Handle, op: AuthoringReconciliation): Promise<DesktopAuthoringOperation> {
+    this.journal.checkReconciliation(this.binding(h), op);
+    const { operationId, createdAt, purpose, draftId, baseRevision } = op;
+    const summary = { operationId, createdAt, purpose, draftId, baseRevision, target:h.target, deliveryUnknown:false };
+    let receipt = op.receipt;
+    if (!receipt) {
+      const recent = h.retry.get(operationId);
+      if (recent?.state !== 'revoked' || recent.until <= Date.now()) {
+        try {
+          const cloud = this.cloud(h);
+          // A registration must match this account and device operation before even a cancellation can mutate it.
+          const state = await cloud.get(op);
+          const winner = state && 'operationId' in state ? state : await cloud.cancel(op);
+          const result = expectKind(await this.daemon(h, { type:'reconcile', operationId, receipt:winner }), 'reconciled');
+          if (canonical(result.receipt) !== canonical(winner)) throw invalidAuthoring();
+          receipt = winner;
+          h.retry.delete(operationId);
+        } catch (error) {
+          this.check(h);
+          const delay = Math.min(120_000, Math.max(12_000, (recent?.delay ?? 0) * 2));
+          h.retry.set(operationId, {state:'revoked', until:Date.now()+delay, delay,
+            message:error instanceof AuthoringError ? error.message : '旧关联已停用，取消结果待同步。'});
+        }
+      }
+    }
+    if (!receipt) return { ...summary, state:'cancelPending', syncMessage:h.retry.get(operationId)?.message };
+    if (receipt.operationId !== operationId || (receipt.status === 'accepted' &&
+        (purpose === 'prepareDraft' ? receipt.revision !== 1 : receipt.draftId !== draftId || receipt.revision !== baseRevision! + 1)))
+      throw invalidAuthoring();
+    return { ...summary, receipt, state:receipt.status === 'accepted' ? 'completed' : receipt.status };
+  }
   private async refresh(h: Handle): Promise<DesktopAuthoringReply> {
     const status = await this.status(h);
+    const revoked = [];
+    for (const op of status.reconciliation) revoked.push(await this.reconcile(h, op));
     for (const op of status.operations) {
       if (terminal(op) || !status.linked) continue;
       // Each already-confirmed chat operation progresses independently of a conflict on another draft.
@@ -331,7 +358,7 @@ export class RecipeAuthoringController {
       operations: [...h.operations.values()].map((op) => {
         const syncMessage = h.retry.get(op.operationId)?.message;
         return { ...this.display(h, op), ...(syncMessage && !terminal(op) && { syncMessage }) };
-      }),
+      }).concat(revoked),
     };
   }
   private async operation(h: Handle, request: ScopedRequest & { operationId: string }) {

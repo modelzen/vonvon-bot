@@ -2930,9 +2930,15 @@ export function createOrchestrator(
         return;
       }
       if (msg.rawContentType === 'audio') {
-        if (options?.authoring && await options.authoring.onMessage(msg)) return;
+        const askReply = options?.authoring && asks.hasPendingDmReply({ openId: msg.senderId, quoted: quotedId(msg), createTime: msg.createTime });
+        if (options?.authoring && !askReply && await options.authoring.onMessage(msg)) return;
         const textMessage = await transcribeMessage(msg, intakeOwner, await dmProject().catch(() => undefined));
         if (!textMessage) return;
+        if (askReply) {
+          // The card may have closed during transcription. Its private answer still belongs to that card.
+          if (!askAnswered(textMessage)) await channel.send(msg.chatId, { markdown: '这条语音未能用于回答问题，请查看原问题卡片。' }, { replyTo: msg.messageId }).catch(() => undefined);
+          return;
+        }
         msg = textMessage;
       }
       if (askAnswered(msg)) return;
@@ -10016,7 +10022,12 @@ export function createOrchestrator(
 
   /** The removal's steps after the list is written (dm-agent 3.3): the door is shut already; each failure here is only logged. */
   async function endDmOf(openId: string): Promise<void> {
-    await options?.authoring?.adminRemoved(openId);
+    await Promise.all([
+      closeDmChatsOf(openId),
+      options?.authoring?.adminRemoved(openId).catch(() => log.warn('project', 'draft-admin-removal-failed')),
+    ]);
+  }
+  async function closeDmChatsOf(openId: string): Promise<void> {
     const chats = new Set(dmChatsOf.get(openId));
     dmChatsOf.delete(openId);
     // The files only add what this process has not seen: one that cannot be read must not keep a running turn alive.

@@ -312,3 +312,49 @@ it('verifies the published proof and rejects credentials before sending anything
   expect(()=>freezePayload({public:blankPublic(),config:{role:'文件位于 /Users/private/test'}})).toThrow();
   expect(digest('')).toBe(dispatchDigest);
 });
+
+it.each(['relink', 'remove'] as const)('recovers only terminal arbitration after %s, even after restart', async (reason) => {
+  await link();
+  const op = await prepare();
+  await advance(op, 'dispatch');
+  const button = ref();
+  await act(button);
+  const accept = await auth(await status(op.operationId), 'accept');
+  if (reason === 'relink') {
+    const c = kind(await rpc('beginLink'), 'challenge');
+    await service.onMessage(msg('/recipe link ' + c.code, 'om_relink', stranger, 'oc_private_other'));
+    const seen = kind(await rpc('inspectLink', {challengeId:c.challengeId}), 'link');
+    expect(seen.recipient?.openId).toBe(stranger);
+    await rpc('confirmLink', {challengeId:c.challengeId, evidence:seen.evidence});
+  } else {
+    cfg.preferences!.access!.admins = [stranger];
+    await service.adminRemoved(owner);
+  }
+  restart(); await open();
+  const listed = kind(await rpc('status'), 'status');
+  expect(listed.linked).toBe(reason === 'relink');
+  expect(listed.operations).toEqual([]);
+  expect(listed.reconciliation).toEqual([{
+    operationId:op.operationId, purpose:'prepareDraft', targetPublicKey:op.targetPublicKey,
+    nonceCommitment:op.nonceCommitment, createdAt:op.createdAt,
+  }]);
+  const before = bodies.length;
+  await act(button);
+  for (const type of ['inspectCandidate','deliver','resend','cancel'])
+    await expect(rpc(type, {operationId:op.operationId})).rejects.toThrow();
+  await expect(rpc('advance', {operationId:op.operationId, authorization:accept})).rejects.toThrow();
+  const receipt = {operationId:op.operationId, status:'accepted', stateRevision:3, draftId:randomUUID(), revision:1};
+  await expect(rpc('settle', {operationId:op.operationId, receipt})).rejects.toThrow();
+  await expect(rpc('reconcile', {operationId:op.operationId, receipt})).resolves.toEqual({kind:'reconciled',receipt});
+  expect(bodies.length).toBe(before); // No IM render or device submission to either recipient.
+  restart(); await open();
+  expect(kind(await rpc('status'), 'status').reconciliation[0]?.receipt).toEqual(receipt);
+  for (const [identity, accountId] of [[otherPeer, account], [peer, randomUUID()]] as const) {
+    const opened = kind(await service.request(identity, recipeAuthoringRequestSchema.parse({type:'open',botId:appId,accountId})), 'session');
+    const request = (type:string, fields = {}) => service.request(identity, recipeAuthoringRequestSchema.parse({
+      type, botId:appId, session:opened.session, ...fields,
+    }));
+    expect(kind(await request('status'), 'status').reconciliation).toEqual([]);
+    await expect(request('reconcile', {operationId:op.operationId, receipt})).rejects.toThrow();
+  }
+});

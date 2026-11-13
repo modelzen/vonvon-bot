@@ -41,6 +41,11 @@ export const authoringOperationSchema = z.object({
   groupId: groupIdSchema.optional(), createdAt: millis,
 }).strict();
 export type AuthoringOperation = z.infer<typeof authoringOperationSchema>;
+// Old links can reconcile cloud registration and its terminal receipt, never source, candidate or delivery.
+const reconciliation = z.object({
+  operationId: uuid, ...registration, createdAt: millis, receipt: authoringReceiptSchema.optional(),
+}).strict();
+export type AuthoringReconciliation = z.infer<typeof reconciliation>;
 const recipient = z.object({openId: z.string().max(210), chatId: groupIdSchema, tenantKey: z.string().max(200)}).strict();
 export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
   z.object({type: z.literal('open'), ...target, accountId: uuid}).strict(),
@@ -58,6 +63,7 @@ export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
   z.object({type: z.literal('deliver'), ...operation}).strict(),
   z.object({type: z.literal('resend'), ...operation}).strict(),
   z.object({type: z.literal('cancel'), ...operation}).strict(),
+  z.object({type: z.literal('reconcile'), ...operation, receipt: authoringReceiptSchema}).strict(),
   z.object({type: z.literal('settle'), ...operation, receipt: authoringReceiptSchema}).strict(),
 ]);
 export type RecipeAuthoringRequest = z.infer<typeof recipeAuthoringRequestSchema>;
@@ -69,6 +75,8 @@ export const recipeAuthoringReplySchema = z.discriminatedUnion('kind', [
   z.object({kind: z.literal('source'), groupId: groupIdSchema, reviewToken: digest, role: z.string().max(16384), untracked: z.boolean()}).strict(),
   z.object({kind: z.literal('candidate'), operationId: uuid, payloadDigest: digest, payload: z.string().max(180000)}).strict(),
   z.object({kind: z.literal('operation'), operation: authoringOperationSchema}).strict(),
-  z.object({kind: z.literal('status'), linked: z.boolean(), operations: z.array(authoringOperationSchema).max(540)}).strict(),
+  z.object({kind: z.literal('reconciled'), receipt: authoringReceiptSchema}).strict(),
+  z.object({kind: z.literal('status'), linked: z.boolean(), operations: z.array(authoringOperationSchema).max(540),
+    reconciliation: z.array(reconciliation).max(540)}).strict(),
 ]);
 export type RecipeAuthoringReply = z.infer<typeof recipeAuthoringReplySchema>;

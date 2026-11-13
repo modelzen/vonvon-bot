@@ -1,13 +1,13 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { CardActionEvent, LarkChannel, NormalizedMessage } from '@larksuiteoapi/node-sdk';
-import { groupIdSchema, recipeAuthoringRequestSchema, type AuthoringAuthorization, type AuthoringReceipt, type RecipeAuthoringRequest, type RecipeAuthoringReply } from '@vonvon/protocol';
+import { groupIdSchema, recipeAuthoringRequestSchema, type AuthoringAuthorization, type AuthoringReceipt, type AuthoringReconciliation, type RecipeAuthoringRequest, type RecipeAuthoringReply } from '@vonvon/protocol';
 import { assertBotIdentity, type BotIdentity } from '../config/bots';
 import { isAdmin, type AppConfig } from '../config/schema';
 import { paths } from '../config/paths';
 import { configuredRecipeApiOrigin } from '../config/account-deployment';
 import { AuthoringIm, physicalChat, type CardMode } from './authoring-im';
-import { AuthoringJournal, active, linkKey, newCarrier, reserve, retire, sameRecipient, type AuthoringLedger, type LocalOperation, type Recipient, type Source } from './authoring-journal';
+import { AuthoringJournal, active, linkKey, newCarrier, reserve, retire, sameRecipient, type AuthoringLedger, type Link, type LocalOperation, type Recipient, type Source } from './authoring-journal';
 import { blankPublic, digest, freezePayload, newAuthoringKey, parseChanges, type DraftInstructionParser } from './authoring-wire';
 import { checkAuthorization, postAuthoring } from './authoring-cloud';
 import { reviewSource } from './authoring-source';
@@ -51,6 +51,21 @@ function setCard(op: LocalOperation, mode: CardMode) {
   op.carrier.seq++;
   op.carrier.dirty = true;
 }
+function revokeOperation(op: LocalOperation) {
+  if (!active(op) || op.revoked) return;
+  op.revoked = true;
+  op.view.state = 'cancelPending';
+  op.contextOpen = false;
+  delete op.payload; delete op.view.payloadDigest; delete op.proposalDigest; delete op.source;
+  delete op.secret; delete op.nonce; delete op.dispatchAuthorization;
+}
+function bound(op: LocalOperation, link?: Link) {
+  return !op.revoked && op.binding === link?.binding && sameRecipient(op.recipient,link.recipient);
+}
+function reconciliationOf(op: LocalOperation): AuthoringReconciliation {
+  const {operationId,purpose,targetPublicKey,nonceCommitment,draftId,baseRevision,createdAt,receipt} = op.view;
+  return {operationId,purpose,targetPublicKey,nonceCommitment,draftId,baseRevision,createdAt,receipt};
+}
 function refusal(): never { throw new Error('身份、来源或草稿上下文已改变，请回到 App 核对。'); }
 
 export class AuthoringService {
@@ -86,20 +101,20 @@ export class AuthoringService {
     if (this.challenge?.recipient?.openId === openId) this.challenge = undefined;
     await this.ledger.run(db => {
       for (const [key,link] of Object.entries(db.links)) if (link.bot === this.botKey && link.recipient.openId === openId) delete db.links[key];
-      for (const op of Object.values(db.operations)) if (op.bot === this.botKey && op.recipient.openId === openId && active(op)) {
-        op.view.state = 'cancelPending'; op.contextOpen = false; setCard(op,'pending');
-      }
+      for (const op of Object.values(db.operations)) if (op.bot === this.botKey && op.recipient.openId === openId) revokeOperation(op);
     });
   }
   close() { this.stopped = true; this.p = undefined; this.challenge = undefined; }
-  private async link(p: Presence) {
+  private liveLink(db: AuthoringLedger, p: Presence) {
     this.present(p);
-    return this.ledger.run(db => {
-      const key = linkKey(p.scope, p.account), link = db.links[key];
-      if (link && !isAdmin(this.opts.cfg, link.recipient.openId)) { delete db.links[key]; return undefined; }
-      return link;
-    });
+    const key = linkKey(p.scope,p.account), link = db.links[key];
+    if (link && !isAdmin(this.opts.cfg,link.recipient.openId)) {
+      delete db.links[key];
+      return undefined;
+    }
+    return link;
   }
+  private link(p: Presence) { return this.ledger.run(db => this.liveLink(db,p)); }
   private async allowed(p: Presence, recipient?: Recipient) {
     await this.current();
     const linked = await this.link(p);
@@ -112,10 +127,14 @@ export class AuthoringService {
     if (!op || op.scope !== p.scope || op.accountId !== p.account) refusal();
     return op;
   }
-  private operation(p: Presence, id: string) { return this.ledger.run(db => this.locate(db, p, id)); }
-  private change<T>(p: Presence, id: string, fn: (op: LocalOperation, db: AuthoringLedger) => T) {
-    return this.ledger.run(db => fn(this.locate(db, p, id), db));
+  private change<T>(p: Presence, id: string, fn: (op: LocalOperation) => T) {
+    return this.ledger.run(db => {
+      const op = this.locate(db,p,id);
+      if (!bound(op,this.liveLink(db,p))) refusal();
+      return fn(op);
+    });
   }
+  private operation(p: Presence, id: string) { return this.change(p,id,op => op); }
   private source(p: Presence, group: string) {
     return this.opts.source?.(p.scope, p.account, group) ?? reviewSource(this.opts.channel, this.opts.bot, p.scope, p.account, group);
   }
@@ -179,18 +198,27 @@ export class AuthoringService {
           await this.ledger.run(db => {
             this.present(p);
             if (Object.keys(db.links).length >= 1024 && !db.links[linkKey(p.scope,p.account)]) throw new Error('本机关联数量已到上限。');
-            for (const op of Object.values(db.operations)) if (op.scope === p.scope && op.accountId === p.account && active(op)) { op.view.state = 'cancelPending'; op.contextOpen = false; }
+            for (const op of Object.values(db.operations)) if (op.scope === p.scope && op.accountId === p.account) revokeOperation(op);
             db.links[linkKey(p.scope,p.account)] = {bot:this.botKey, binding:randomUUID(), recipient, sources:[]};
           });
           this.challenge = undefined;
           return {kind:'link', linked:true, recipient};
         }
         case 'status': {
-          const link = await this.link(p);
-          const operations = await this.ledger.run(db => Object.values(db.operations)
-            .filter(o => o.scope === p.scope && o.accountId === p.account && sameRecipient(o.recipient,link?.recipient)).map(o => o.view));
-          this.present(p);
-          return {kind:'status', linked:Boolean(link), operations};
+          return this.ledger.run(db => {
+            const link = this.liveLink(db,p);
+            const operations = [], reconciliation = [];
+            for (const op of Object.values(db.operations)) {
+              if (op.scope !== p.scope || op.accountId !== p.account) continue;
+              if (bound(op,link)) operations.push(op.view);
+              else {
+                // Also recover a disk/journal failure during removal or an orphan from an older daemon.
+                revokeOperation(op);
+                if (op.revoked) reconciliation.push(reconciliationOf(op));
+              }
+            }
+            return {kind:'status' as const, linked:Boolean(link), operations, reconciliation};
+          });
         }
         case 'reviewSource': {
           await this.allowed(p); const source = await this.source(p,req.groupId); await this.allowed(p); return source;
@@ -216,6 +244,16 @@ export class AuthoringService {
         case 'cancel': {
           await this.change(p,req.operationId,op => { if (active(op)) { op.view.state = 'cancelPending'; setCard(op,'pending'); } });
           break;
+        }
+        case 'reconcile': {
+          await this.ledger.run(db => {
+            // This transaction cannot inspect a candidate, reactivate a link, or send/update a card.
+            this.present(p);
+            const op = this.locate(db,p,req.operationId);
+            if (!op.revoked) refusal();
+            this.recordReceipt(op,req.receipt);
+          });
+          return {kind:'reconciled', receipt:req.receipt};
         }
         case 'settle': await this.settle(p,req.receipt,req.operationId); break;
         case 'advance': await this.advance(p,req.operationId,req.authorization); break;
@@ -263,15 +301,17 @@ export class AuthoringService {
     if (op.carrier.dirty) await this.refresh(p,op.view.operationId);
     return {kind:'operation',operation:op.view};
   }
+  private recordReceipt(op: LocalOperation, receipt: AuthoringReceipt) {
+    if (receipt.operationId !== op.view.operationId) refusal();
+    if (op.view.receipt) { if (JSON.stringify(op.view.receipt) !== JSON.stringify(receipt)) refusal(); return; }
+    if (receipt.status === 'accepted' && (op.view.purpose === 'prepareDraft' ? receipt.revision !== 1 :
+        op.view.draftId !== receipt.draftId || op.view.baseRevision! + 1 !== receipt.revision)) refusal();
+    op.view.receipt = receipt;
+    retire(op,receipt.status === 'accepted' ? 'completed' : receipt.status, this.now());
+    if (!op.revoked) setCard(op,receipt.status === 'accepted' ? 'saved' : receipt.status);
+  }
   private async settle(p: Presence, receipt: AuthoringReceipt, id: string) {
-    if (receipt.operationId !== id) refusal();
-    await this.change(p,id,op => {
-      if (op.view.receipt) { if (JSON.stringify(op.view.receipt) !== JSON.stringify(receipt)) refusal(); return; }
-      if (receipt.status === 'accepted' && (op.view.purpose === 'editDraft' && (op.view.draftId !== receipt.draftId || op.view.baseRevision! + 1 !== receipt.revision))) refusal();
-      op.view.receipt = receipt;
-      retire(op,receipt.status === 'accepted' ? 'completed' : receipt.status, this.now());
-      setCard(op,receipt.status === 'accepted' ? 'saved' : receipt.status);
-    });
+    await this.change(p,id,op => this.recordReceipt(op,receipt));
     await this.refresh(p,id);
   }
   private async advance(p: Presence, id: string, auth: AuthoringAuthorization) {
