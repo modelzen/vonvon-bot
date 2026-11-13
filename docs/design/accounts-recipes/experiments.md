@@ -2,7 +2,7 @@
 
 这是并发与数据库约束的最小模型。2026-11-13 在独立 PostgreSQL 15.19、Unix socket 上执行；每个竞争者是独立 psql 连接。用合成账号和内容，未运行 Supabase Auth、飞书或正式 daemon。例子里的码用短测试标识；生产必须使用云设计里的随机码/摘要/授权，并且不能接受客户端自报身份。
 
-**复跑。** 只在全新、一次性、无业务数据的数据库中运行。需要可用的 PostgreSQL、Python 3、psql。将下面三个 Python 代码块按顺序分别保存为 `redeem.py`、`visibility.py`、`handoff.py`。以下为 macOS Homebrew PostgreSQL 15 的命令示例，其他环境使用对应 PostgreSQL bin 路径。目录故意保留，便于检查结果。
+**复跑。** 只在全新、一次性、无业务数据的数据库中运行。需要可用的 PostgreSQL、Python 3、psql。将下面四个 Python 代码块按顺序分别保存为 `redeem.py`、`visibility.py`、`handoff.py`、`quota.py`。以下为 macOS Homebrew PostgreSQL 15 的命令示例，其他环境使用对应 PostgreSQL bin 路径。目录故意保留，便于检查结果。
 
 ```sh
 export PATH="/opt/homebrew/opt/postgresql@15/bin:$PATH"
@@ -14,6 +14,7 @@ export PGHOST="$trial_dir/socket" PGPORT=56486 PGDATABASE=postgres
 python3 redeem.py
 python3 visibility.py
 python3 handoff.py
+python3 quota.py
 pg_ctl -D "$trial_dir/db" stop
 ```
 
@@ -157,3 +158,51 @@ with ThreadPoolExecutor(max_workers=8) as pool:
   summary[final]=summary.get(final,0)+1
 print('PASS 12 concurrent cancel/deliver/redeliver races: at most one private draft; no late resurrection. Wrong owner/device and expiry refused.',summary)
 ```
+
+## 体积与并发占额
+
+```python
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+import json, subprocess,sys,os
+cap=1024*1024
+def b(obj):return len(json.dumps(obj,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode('utf8'))
+def total(m,parts):return b(m)+sum(map(len,parts.values()))
+m={'name':'开发晨报','version':'1.0','parts':['doc','logo']}
+assert b(m)>len(json.dumps(m,sort_keys=True,ensure_ascii=False,separators=(',',':')))
+logo=b'x'*(16*1024); size=cap-b(m)-len(logo)
+assert total(m,{'doc':b'x'*size,'logo':logo})==cap
+assert total(m,{'doc':b'x'*(size+1),'logo':logo})>cap
+assert total(m,{'doc':'今天已完成事项'.encode(),'logo':logo})<cap
+print('PASS byte accounting: a small Chinese fixture, exact 1 MiB accepted, +1 byte rejected, binary Logo included.')
+def sql(s):
+ return subprocess.run(['psql','-XAtq','-v','ON_ERROR_STOP=1'],input=s,text=True,capture_output=True,check=True).stdout.strip()
+sql("""create table proof_quota(a text primary key,bytes bigint not null);
+create table proof_uploads(a text,op text,size bigint,primary key(a,op));
+insert into proof_quota values('demo',25*1024*1024-1024*1024);
+create function qpublish(id text,n bigint) returns text language plpgsql as $$
+declare used bigint; previous bigint;begin
+ select bytes into used from proof_quota where a='demo' for update;
+ select size into previous from proof_uploads where a='demo' and op=id;
+ if found then return case when previous=n then 'saved' else 'conflict' end;end if;
+ if n<0 or n>1048576 or used+n>26214400 then return 'over_limit';end if;
+ insert into proof_uploads values('demo',id,n);update proof_quota set bytes=bytes+n where a='demo';return 'saved';end $$;""")
+def put(n):return sql("select qpublish('op"+str(n)+"',1048576)")
+with ThreadPoolExecutor(max_workers=6) as pool:res=list(pool.map(put,range(6)))
+assert res.count('saved')==1 and res.count('over_limit')==5
+assert put(res.index('saved'))=='saved' and sql('select bytes from proof_quota')=='26214400'
+print('PASS real database: six concurrent releases with only 1 MiB remaining; 1 saved, 5 rejected, replay never double-charged.')
+```
+
+## 草稿与发码争用：额外一轮
+
+在独立数据库并行开启两个 READ COMMITTED 事务，第一连接持作者额度锁，第二连接提交同账号的另一请求。在观察连接用 `pg_blocking_pids` 确认第二连接确实阻塞，再提交第一连接。第二连接必须重新读剩余额度并拒绝超限操作。此轮也从真实表回读数量／字节／修订和日计数，不能只核对 HTTP 风格的返回值。每项输入都是合成数据。
+
+| 情况 | 实际观察 |
+| --- | --- |
+| 剩一个草稿名额，两请求 | 19 → 20，第二次被拒。 |
+| 只余 1 MiB，新建两份各 1 MiB | 只新建一份，总计 10,485,760 字节。 |
+| 只余 256 字节，两份旧稿各增加 256 字节 | 只有一个草稿修订成功，总量恰等于 10 MiB。 |
+| 同版本可用码已有 499；账号尚有日额与累计额 | 只新发一枚到 500。停用后可用变 499，当日/累计不减，可另签一枚。 |
+| 同账号跨版本：当日已签 499 / 历史已签 4,999，分别测试 | 当日最多到 500，停用当天不返还，次日可重发；累计到 5,000 后次日仍拒。 |
+| 仅余一个可用位却要求批量签两枚 | 整批拒绝，原 499 枚未变。 |
