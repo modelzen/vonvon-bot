@@ -102,6 +102,7 @@ export const commandSchema = z.discriminatedUnion("type", [
       cursor: z.string().min(1).max(2048).optional(),
     })
     .strict(),
+  z.object({type: z.literal("readGroupIdentity"), agentId: agentIdSchema, groupId: groupIdSchema}).strict(),
   z.object({ type: z.literal("listGroupMembers"), agentId: agentIdSchema, groupId: groupIdSchema, cursor: z.string().min(1).max(2048).optional() }).strict(),
   /**
    * dm-agent 7.3: a read of a Bot's Feishu tools, by the tool's name and its arguments, which the daemon checks as the tool
@@ -294,7 +295,10 @@ export type FolderChoice = z.infer<typeof folderChoiceSchema>;
 export const pendingGroupSchema = z.object({chatId: groupIdSchema, name: z.string().min(1).max(1000), addedAt: z.number().finite().nonnegative(), topic: z.boolean().optional(), hasOtherBots: z.boolean().optional()});
 export const pendingGroupsSchema = z.object({groups: z.array(pendingGroupSchema).max(1000)});
 export type PendingGroup = z.infer<typeof pendingGroupSchema>;
+export const groupIdentitySchema = z.object({kind: z.literal("groupIdentity"), agentId: agentIdSchema, groupId: groupIdSchema, name: z.string().trim().min(1).max(1000)}).strict();
+export type GroupIdentity = z.infer<typeof groupIdentitySchema>;
 export const commandResultSchema = z.discriminatedUnion("kind", [
+  groupIdentitySchema,
   z.object({ kind: z.literal("pendingGroups"), groups: z.array(pendingGroupSchema) }),
   z.object({ kind: z.literal("applied"), revision: z.number() }),
   z.object({ kind: z.literal("started"), jobId: jobIdSchema }),

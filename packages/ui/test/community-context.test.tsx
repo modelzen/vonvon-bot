@@ -7,9 +7,11 @@ const h = vi.hoisted(() => ({state: [] as unknown[], effects: [] as Effect[], pe
 vi.mock('react', async original => ({...await original<typeof import('react')>(),
   useState: (initial: unknown) => {const i = h.si++; if (!(i in h.state)) h.state[i] = typeof initial === 'function' ? (initial as () => unknown)() : initial; return [h.state[i], (next: unknown) => {h.state[i] = typeof next === 'function' ? (next as (old: unknown) => unknown)(h.state[i]) : next;}];},
   useMemo: (factory: () => unknown) => factory(),
+  useRef: (initial: unknown) => {const i = h.si++; if (!(i in h.state)) h.state[i] = {current: initial}; return h.state[i];},
   useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const i = h.ei++; const old = h.effects[i]; if (old?.deps && deps && deps.every((value, at) => Object.is(value, old.deps![at]))) return; h.pending.push(() => {old?.cleanup?.(); h.effects[i] = {deps, cleanup: effect() || undefined};});},
 }));
 vi.mock('../src/account-context', () => ({useAccount: () => ({status: h.account})}));
+vi.mock('../src/client-context', () => {const client = {}; return {useClient: () => client, useActiveDevice: () => ({id: 'local'})};});
 const a: AccountStatus = {kind: 'signedIn', accountId: '11111111-1111-4111-8111-111111111111', displayName: 'A', provider: 'github', persistence: 'memory'};
 const b: AccountStatus = {...a, accountId: '22222222-2222-4222-8222-222222222222', displayName: 'B'};
 function render() {

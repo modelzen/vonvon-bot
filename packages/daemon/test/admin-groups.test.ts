@@ -60,6 +60,35 @@ function axiosError(status: number, data: unknown): Error {
 const input = (directory: string): BindGroupInput => ({ chatId: 'oc_a', projectName: 'First', directory, backend: 'codex-appserver', kind: 'multi' });
 
 describe('desktop group commands in the owning bot', () => {
+  it('reads only exact membership and group metadata through real SDK serialization and IPC', async () => {
+    const fake = fakeLark(request => request.path.endsWith('/members/is_in_chat')
+      ? {code: 0, data: {is_in_chat: true}}
+      : request.path === '/open-apis/im/v1/chats/oc_exact'
+        ? {code: 0, data: {name: '飞书物理群🦉', description: 'private description', announcement: 'private announcement'}} : undefined);
+    const execute = createGroupExecutor({rawClient: fake.client} as unknown as LarkChannel);
+    let receive = (_raw: unknown): void => {};
+    const respond = createAdminIpcResponder(async op => {
+      if (op.kind !== 'groupIdentity') throw new Error('unexpected op');
+      return execute(op);
+    }, message => receive(message));
+    const caller = createAdminIpcCaller(respond); receive = caller.onMessage;
+    expect(await caller.call({kind: 'groupIdentity', chatId: 'oc_exact', identity: bot})).toEqual({kind: 'groupIdentity', agentId: bot.appId, groupId: 'oc_exact', name: '飞书物理群🦉'});
+    expect(fake.requests.map(request => [request.method, request.path])).toEqual([
+      ['POST', '/open-apis/auth/v3/tenant_access_token/internal'],
+      ['GET', '/open-apis/im/v1/chats/oc_exact/members/is_in_chat'],
+      ['GET', '/open-apis/im/v1/chats/oc_exact'],
+    ]);
+  });
+  it.each(['stale', 'nonMember', 'emptyName'] as const)('refuses %s exact group identity evidence', async failure => {
+    const fake = fakeLark(request => request.path.endsWith('/members/is_in_chat')
+      ? {code: 0, data: {is_in_chat: failure !== 'nonMember'}}
+      : request.path === '/open-apis/im/v1/chats/oc_exact' ? {code: 0, data: {name: ' '}} : undefined);
+    const execute = createGroupExecutor({rawClient: fake.client} as unknown as LarkChannel);
+    await expect(execute({kind: 'groupIdentity', chatId: 'oc_exact', identity: failure === 'stale' ? {...bot, registrationId: 'changed'} : bot})).rejects.toThrow();
+    const metadata = fake.requests.filter(request => request.path === '/open-apis/im/v1/chats/oc_exact');
+    expect(metadata).toHaveLength(failure === 'emptyName' ? 1 : 0);
+  });
+
   it('checks only the Bot membership when the members list is unavailable', async () => {
     const fixture = channelFixture();
     fixture.members.mockRejectedValue(new Error('member list scope unavailable'));
