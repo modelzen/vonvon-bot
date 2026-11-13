@@ -50,7 +50,7 @@ function DesktopDeviceView({state, fallback, shell, renderApp}: {state?: Devices
 
 function DesktopCommunityProvider({shell, children}: {shell?: ShellCapabilities; children: ReactNode}) {
   const useRecipe = useRecipeUse();
-  return <CommunityProvider shell={shell?.community} onUse={useRecipe?.available ? recipe => useRecipe.start(recipe) : undefined}>{children}</CommunityProvider>;
+  return <CommunityProvider shell={shell?.community} onUse={useRecipe?.available ? (recipe, target) => useRecipe.start(recipe, target) : undefined}>{children}</CommunityProvider>;
 }
 function DesktopDeviceContent({deviceId, state, renderApp, hasDevices}: {deviceId: string; state?: DevicesState; renderApp: () => ReactNode; hasDevices: boolean}) {
   const community = useCommunity();

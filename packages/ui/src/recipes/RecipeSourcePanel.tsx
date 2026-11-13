@@ -60,7 +60,7 @@ function RecipeSourceContent({view}: {view: ProjectSettingsView}) {
             const recipe = {recipeId: latest.recipeId, versionId: latest.versionId, name: '群聊配方', version: latest.version};
             const target = {botId: view.scope.botId, groupId: groupIdSchema.parse(scope.groupId)};
             if (latest.entitled) useRecipe?.start(recipe, target);
-            else navigate(() => {useRecipe?.acquireForGroup(recipe, target); community?.open({kind: 'detail', recipe});});
+            else navigate(() => community?.open({kind: 'detail', recipe, useTarget: target}));
           }}>{latest.entitled ? '预览更新' : '获取新版'}</Button></div>}/>}
       {!accountId && <p className="recipe-source-note">登录后可检查新版本。当前配方继续保留。</p>}
     </> : result ? <SettingsRow title="尚未应用社区配方" description="本群还没有社区配方来源。"/> : <p className="recipe-source-note" role="status">正在读取配方来源…</p>}

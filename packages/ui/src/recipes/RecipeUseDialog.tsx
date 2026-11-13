@@ -22,6 +22,8 @@ export function RecipeUseDialog(props: Props) {
   const pending = usePendingGroups(visible && !paused ? snapshot : undefined);
   if (visible && !paused && !needsRecovery && !session.botId && snapshot) return <SelectJoinBotDialog snapshot={snapshot} onClose={onClose} onSelect={props.onSelectBot}/>;
   const agent = snapshot?.agents.find(item => item.id === session.botId);
+  const groupName = snapshot?.groups.find(group => group.id === props.groupId)?.name
+    ?? snapshot?.memberships.find(member => member.agentId === session.botId && member.groupId === props.groupId)?.name;
   const recovery = reply?.kind === 'pending' && reply.phase === 'joining' ? reply.recovery : undefined;
   const bound = recovery?.groupId ? snapshot?.memberships.find(member => member.agentId === session.botId && member.groupId === recovery.groupId) : undefined;
   const repairForm = repairing && recovery && !bound;
@@ -57,13 +59,16 @@ export function RecipeUseDialog(props: Props) {
     {paused ? <InlineNotice title="操作已暂停" tone="warning">{props.accountChanged ? '请回到发起操作时的账号，再恢复原操作。' : props.unavailable ? '目标设备暂不可用。连接恢复后，请核对原操作。' : `请切回「${session.device.name}」，再恢复原操作。`}群聊和配方不会改到当前目标。</InlineNotice>
       : needsRecovery ? <InlineNotice title="需要核对原操作" tone="warning">群聊或应用可能已经完成。恢复后会核对同一个群，不会重新创建或连接。</InlineNotice>
       : <>
+        <p className="recipe-use-target">设备：{session.device.name}<br/>Bot：{agent?.name ?? session.botId ?? '待选择'}{session.botId && `（${session.botId}）`}<br/>
+          群聊：{groupName ?? (props.groupId ? '正在核对群名' : '待选择')}{props.groupId && `（${props.groupId}）`}</p>
         <ol className="recipe-use-stages" aria-label="应用进度">
           <li>已获取配方，保存在账号中</li>
           <li>{props.groupId ? `已连接群聊${agent ? ` · ${agent.name}` : ''}` : '选择 Bot 并连接群聊'}</li>
           <li>{reply?.kind === 'applied' ? '已应用到目标群，云端已确认' : reply?.kind === 'pending' ? pendingText(reply.phase) : reply?.kind === 'rejected' ? '本次应用未完成' : '预览内容，确认后应用'}</li>
         </ol>
         {session.target && (reply?.kind === 'review' || reply?.kind === 'prepared') && <p className="recipe-use-note">沿用现有群聊的 Provider、工作目录和沟通方式。</p>}
-        {(reply?.kind === 'review' || reply?.kind === 'prepared') && <RecipeReview key={`${reply.review.reviewToken}:${props.reviewEpoch}`} review={reply.review} prepared={reply.kind === 'prepared'} busy={busy}
+        {(reply?.kind === 'review' || reply?.kind === 'prepared') && !groupName && <p role="status">正在读取目标群名，核对后才能确认应用。</p>}
+        {(reply?.kind === 'review' || reply?.kind === 'prepared') && <RecipeReview key={`${reply.review.reviewToken}:${props.reviewEpoch}`} review={reply.review} prepared={reply.kind === 'prepared'} busy={busy || !groupName}
           acceptedResolution={props.acceptedResolution}
           onResolve={resolution => onRequest({type: 'resolve', handle: reply.handle, reviewToken: reply.review.reviewToken, resolution})}
           onConfirm={() => onRequest({type: 'confirm', handle: reply.handle})}/>}
