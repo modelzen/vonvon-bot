@@ -23,6 +23,7 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'recipeInstall.source': {reason:'desktop-only',note:'group settings show the exact local installation source'},
   'recipeInstall.ignoreVersion': {reason:'desktop-only',note:'group settings ignore a reviewed update for one binding'},
   'recipeInstall.createdGroup': {reason:'desktop-only',note:'the desktop looks up the original creation after a lost response'},
+  ...Object.fromEntries('open close status beginLink inspectLink confirmLink reviewSource prepare edit inspectCandidate advance deliver resend cancel settle reconcile'.split(' ').map(type => ['recipeAuthoring.' + type, {reason: 'desktop-only' as const, note: 'the signed-in desktop owns the private authoring session'}])),
   'recipeInstall.prepare': {reason: 'desktop-only', note: 'the signed-in desktop prepares an existing Bot/group role installation'},
   'recipeInstall.commit': {reason: 'desktop-only', note: 'the desktop hands over a scoped cloud operation ticket'},
   'recipeInstall.status': {reason: 'desktop-only', note: 'the desktop recovers the durable installation receipt'},
