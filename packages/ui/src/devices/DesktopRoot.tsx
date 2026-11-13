@@ -8,6 +8,8 @@ import {desktopPlatformMark} from './devices-presentation';
 import {DeviceConnectionView, DeviceOutsideFrame} from './DeviceConnectionView';
 import {MaintenanceView} from './MaintenanceView';
 import {PairedToasts} from './PairedToasts';
+import {CommunityWindow} from '../community/CommunityWindow';
+import {CommunityProvider, useCommunity} from '../community/community-context';
 import {AccountProvider} from '../account-context';
 import {AccountPageProvider} from '../accounts/account-page';
 import './devices.css';
@@ -27,26 +29,26 @@ export function DesktopRoot({fallback, shell, renderApp = () => <App/>}: {fallba
 
 /** No effects: tests give it the state. */
 export function DesktopRootView({state, fallback, shell, renderApp}: {state?: DevicesState; fallback: VonvonClient; shell?: ShellCapabilities; renderApp: () => ReactNode}) {
-  return <AccountProvider account={shell?.account}><AccountPageProvider><DesktopDeviceView state={state} fallback={fallback} shell={shell} renderApp={renderApp}/></AccountPageProvider></AccountProvider>;
+  return <AccountProvider account={shell?.account}><AccountPageProvider><CommunityProvider shell={shell?.community}><DesktopDeviceView state={state} fallback={fallback} shell={shell} renderApp={renderApp}/></CommunityProvider></AccountPageProvider></AccountProvider>;
 }
 
 function DesktopDeviceView({state, fallback, shell, renderApp}: {state?: DevicesState; fallback: VonvonClient; shell?: ShellCapabilities; renderApp: () => ReactNode}) {
   const devicesShell = shell?.devices;
+  const community = useCommunity();
   const device = state ? activeDeviceFrom(state) : LOCAL_ACTIVE_DEVICE;
   const client = useMemo(() => devicesShell ? devicesShell.clientFor(device.id) : fallback, [devicesShell, device.id, fallback]);
   // Kept while the same device stays remote or local, so subscriptions to the shell are not renewed on every state.
   const deviceShell = useMemo(() => shellForDevice(shell, device), [shell, device.isRemote]);
   if (!devicesShell) return <ClientProvider client={fallback} shell={shell}><DirectoryPickerProvider>{renderApp()}</DirectoryPickerProvider></ClientProvider>;
-  if (!state) return <ClientProvider client={fallback} shell={shell}><DeviceOutsideFrame title="正在打开 Vonvon Bot…">{() => null}</DeviceOutsideFrame></ClientProvider>;
   return <ClientProvider client={client} shell={deviceShell} device={device} devices={state}>
-    <DeviceGate key={device.id} state={state} renderApp={renderApp}/>
+    {community?.isOpen ? <DirectoryPickerProvider><CommunityWindow/></DirectoryPickerProvider> : <DeviceGate key={device.id} state={state} renderApp={renderApp}/>}
     {/* devices-ui-3 4.5: beside the gate, so a pairing with this computer shows whichever device is looked at */}
     <PairedToasts shell={shell} local={!device.isRemote}/>
   </ClientProvider>;
 }
 
-/** Built again for each device (`key`); the same device reconnecting keeps its page. */
-export function DeviceGate({state, renderApp}: {state: DevicesState; renderApp: () => ReactNode}) {
+export function DeviceGate({state, renderApp}: {state?: DevicesState; renderApp: () => ReactNode}) {
+  if (!state) return <DeviceOutsideFrame title="正在打开 Vonvon Bot…">{() => null}</DeviceOutsideFrame>;
   const active = state.active;
   if (active.id !== 'local') {
     if (active.phase === 'connecting' || active.phase === 'failed') return <DeviceConnectionView/>;
