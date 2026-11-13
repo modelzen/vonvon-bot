@@ -58,6 +58,7 @@ let entitled: boolean;
 let readSnapshot: () => Promise<unknown>;
 let acquireReply: () => Promise<void>;
 let readIdentity: (request: Extract<Command, {type: 'readGroupIdentity'}>) => unknown | Promise<unknown>;
+let directoryChoices: string[];
 let identityRequests: Array<Extract<Command, {type: 'readGroupIdentity'}>>;
 const groupTwo=groupIdSchema.parse('oc_second');
 function Launcher() {
@@ -87,7 +88,7 @@ beforeEach(()=>{
     : r.type==='begin' ? {...prepared,groupId:r.groupId!,handle:r.groupId===groupTwo?secondHandle:handle}
     : r.type==='confirm' ? {kind:'applied',groupId:r.handle===secondHandle?groupTwo:groupId,handle:r.handle} : prepared;
   readSnapshot=async()=>({...snapshot,groups:[{id:groupId,name:'甲组'},{id:groupTwo,name:'乙组'}]});
-  acquireReply=async()=>{}; identityRequests=[];
+  acquireReply=async()=>{}; identityRequests=[]; directoryChoices=[];
   readIdentity=request=>({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: request.groupId === groupTwo ? '乙组' : '甲组'});
   services=async(channel,raw)=>{
     let v:unknown;
@@ -95,6 +96,10 @@ beforeEach(()=>{
     else if(channel===desktopChannels.accountStatus) v=status;
     else if(channel===desktopChannels.snapshot) v=await readSnapshot();
     else if(channel===desktopChannels.run) {const request=commandSchema.parse(raw); if(request.type==='readGroupIdentity'){identityRequests.push(request);v=await readIdentity(request);} else if(request.type==='listJoinedGroups') v={kind:'groups',groups:[{id:groupTwo,name:'现有群',bound:false}]}; else v={kind:'pendingGroups',groups:[]};}
+    else if(channel===desktopChannels.directory) {
+      if (raw.type==='choose') {directoryChoices.push(raw.path); v={kind:'folderChosen',folder:{token:directoryChoices.length===1 ? handle : secondHandle,displayPath:raw.path}};}
+      else v={kind:'suggestions',root:'/synthetic',path:null,parent:null,entries:[{name:'工作目录',path:'/synthetic/work',hidden:false}],truncated:false};
+    }
     else if(channel===desktopChannels.environment) v={kind:'backends',entries:[]};
     else if(channel===desktopChannels.settings) v={kind:'refused',message:'not configured'};
     else if(channel===desktopChannels.recipeUse){requests.push(raw); v=await useReply(raw);}
@@ -560,4 +565,59 @@ it.each(['role','create','bind'] as const)('keeps unsent %s text and choices for
     expect(button({role:'预览所选内容',create:'创建并连接',bind:'连接并发送欢迎卡片'}[kind])!.disabled).toBe(false);
     expect(requests.map(r => r.type)).toEqual(['begin','begin']);
   } finally {stop();await devices.dispose();}
+});
+
+it('requires a fresh explicit directory choice after recovery without losing the create draft or silently choosing the default', async () => {
+  const {devices} = recipeConnections();
+  const stop = devices.onState(value => dispatch({type:'devices',value}));
+  dispatch({type:'devices',value:devices.state()});
+  let recovered = false;
+  useReply = r => r.type === 'begin' ? {kind:'choose',handle:recovered ? secondHandle : handle} : prepared;
+  async function chooseFolder() {
+    await act(async () => {await vi.advanceTimersByTimeAsync(200);});
+    await act(async () => document.querySelector<HTMLButtonElement>('.join-directory-select')!.click());
+  }
+  try {
+    await draw(); await click('打开配方'); await click('添加到群聊');
+    await act(async () => document.querySelector<HTMLInputElement>('input[name="join-bot"]')!.click()); await click('下一步');
+    await fillBuffer('[aria-label="飞书群名称"]','保留的群名称');
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find(el => el.textContent?.startsWith('独立话题'))!.click());
+    vi.useFakeTimers({toFake:['setTimeout','clearTimeout']});
+    await act(async () => document.querySelector<HTMLInputElement>('[aria-label="目录来源"] input[value="existing"]')!.click());
+    await chooseFolder();
+    expect(button('创建并连接')!.disabled).toBe(false);
+    recovered = true;
+    await act(async () => {devices.setLocal({status:'connecting'}); devices.setLocal({status:'online'});});
+    await click('恢复原操作');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="飞书群名称"]')?.value).toBe('保留的群名称');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="目录来源"] input[value="existing"]')?.checked).toBe(true);
+    expect(document.body.textContent).toContain('重新选择工作目录');
+    expect(button('创建并连接')!.disabled).toBe(true);
+    expect(directoryChoices).toEqual(['/synthetic/work']);
+    await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label="选择工作目录"]')!.click());
+    await chooseFolder(); await click('创建并连接');
+    expect(requests.filter(r => r.type === 'join')).toEqual([{type:'join',handle:secondHandle,input:{
+      action:'createProject',agentId:botId,name:'保留的群名称',folder:{kind:'existing',folderToken:secondHandle},tool:'codex',conversation:'threads',
+    }}]);
+  } finally {vi.useRealTimers(); stop(); await devices.dispose();}
+});
+
+it('discards the private review draft when recovery presents changed content or a different target', async () => {
+  let changed = false;
+  useReply = r => ({kind:'review',handle:changed ? secondHandle : handle,groupId:r.type==='begin' && r.groupId ? r.groupId : groupId,
+    review:{...baseReview,reviewToken:changed ? 'b'.repeat(64) : token,roleChoiceRequired:true}});
+  await draw(); await inGroup(groupId,'检查新版'); await inGroup(groupId,'预览更新');
+  const custom = () => document.querySelector<HTMLInputElement>('input[name="recipe-role"][value="custom"]')!;
+  const text = '[aria-label="合并后的本群角色"]';
+  await act(async () => custom().click()); await fillBuffer(text,'甲的私有草稿');
+  await account(otherAccount); expect(document.body.textContent).not.toContain('甲的私有草稿'); expect(document.querySelector(text)).toBeNull();
+  changed = true;
+  await account(accountId); await click('恢复原操作');
+  expect(document.querySelector(text)).toBeNull(); expect(custom().checked).toBe(false);
+  await act(async () => custom().click()); await fillBuffer(text,'版本乙同群私有草稿');
+  await click('稍后继续'); await inGroup(groupTwo,'检查新版'); await inGroup(groupTwo,'预览更新'); await click('开始当前目标');
+  expect(custom().checked).toBe(false);
+  await act(async () => custom().click());
+  expect(document.querySelector<HTMLTextAreaElement>(text)?.value).toBe(baseReview.currentRole);
+  expect(requests.every(r => r.type==='begin')).toBe(true);
 });

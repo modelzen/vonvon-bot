@@ -412,8 +412,8 @@ describe('devices-ui-1a facade', () => {
     const a = shell.devices.clientFor(A);
     expect(shell.devices.clientFor(A)).toBe(a);
     expect(() => shell.devices.clientFor('not-a-device')).toThrow();
-    const seen: number[] = [];
-    a.watchSnapshots(value => seen.push(value.revision));
+    const seen: Array<number | 'new connection'> = [];
+    const unsubscribe = a.watchSnapshots(value => seen.push(value.revision), () => seen.push('new connection'));
     h.event({ type: 'snapshot', view: A, value: snapshot(5) });
     h.event({ type: 'snapshot', view: B, value: snapshot(9) });
     h.event({ type: 'snapshot', view: 'local', value: snapshot(9) });
@@ -422,7 +422,10 @@ describe('devices-ui-1a facade', () => {
     h.event({ type: 'snapshot', view: A, value: snapshot(4) });
     h.event({ type: 'reattached', view: A });
     h.event({ type: 'snapshot', view: A, value: snapshot(1) });
-    expect(seen).toEqual([5, 1]);
+    expect(seen).toEqual([5, 'new connection', 1]);
+    unsubscribe();
+    h.event({ type: 'reattached', view: A });
+    expect(seen).toEqual([5, 'new connection', 1]);
     const read = { type: 'read', scope: { kind: 'host' } } as const;
     await a.settings(read).catch(() => {});
     await a.close();

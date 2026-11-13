@@ -131,11 +131,10 @@ function RecipeUseSessionView({session, visible, currentAccountId, currentDevice
 }) {
   const accountChanged = currentAccountId !== session.accountId;
   const deviceChanged = currentDeviceId !== session.device.id || currentClient !== session.client;
-  const {snapshot, scope: snapshotScope} = useRecipeTargetSnapshot(session.client, currentScope, !accountChanged && !deviceChanged && currentReady);
+  const {snapshot, scope: snapshotScope, isCurrent} = useRecipeTargetSnapshot(session.client, currentScope, !accountChanged && !deviceChanged && currentReady);
   const [reply, setReply] = useState<RecipeUseReply>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const [reviewEpoch, setReviewEpoch] = useState(0);
   const [acceptedResolution, setAcceptedResolution] = useState<Extract<RecipeUseRequest, {type: 'resolve'}>['resolution']>();
   const inFlight = useRef(false);
   const mounted = useRef(true);
@@ -151,18 +150,17 @@ function RecipeUseSessionView({session, visible, currentAccountId, currentDevice
   useEffect(() => {mounted.current = true; return () => {mounted.current = false;};}, []);
 
   async function send(input: RecipeUseRequest) {
-    if (inFlight.current || paused || input.type !== 'begin' && lease.current.state !== 'ready') return;
+    if (inFlight.current || paused || !isCurrent() || input.type !== 'begin' && lease.current.state !== 'ready') return;
     const epoch = lease.current.epoch;
     inFlight.current = true; setBusy(true); setError(undefined);
     try {
       const result = await request(input);
-      if (!mounted.current || lease.current.epoch !== epoch) return;
+      if (!mounted.current || !isCurrent() || lease.current.epoch !== epoch) return;
       if (result.kind === 'closed') {onFinished(); return;}
       setReply(result); lease.current.state = 'ready';
       setAcceptedResolution(input.type === 'resolve' && result.kind === 'prepared' ? input.resolution : undefined);
-      if (result.kind === 'review' || result.kind === 'prepared') setReviewEpoch(value => value + 1);
     } catch (failure) {
-      if (mounted.current && lease.current.epoch === epoch) {setError(failure instanceof Error ? failure.message : '暂时无法确认结果，请恢复原操作。'); lease.current.state = 'recover';}
+      if (mounted.current && isCurrent() && lease.current.epoch === epoch) {setError(failure instanceof Error ? failure.message : '暂时无法确认结果，请恢复原操作。'); lease.current.state = 'recover';}
     } finally {inFlight.current = false; if (mounted.current) setBusy(false);}
   }
   function begin() {
@@ -178,13 +176,14 @@ function RecipeUseSessionView({session, visible, currentAccountId, currentDevice
   }, [session.botId, session.target?.groupId, paused]);
   const needsRecovery = lease.current.state === 'recover';
   const groupId = reply && 'groupId' in reply && reply.groupId ? reply.groupId : reply?.kind === 'pending' && reply.phase === 'joining' ? reply.recovery?.groupId ?? session.target?.groupId : session.target?.groupId;
+  const draftKey = JSON.stringify([session.botId, session.target?.groupId, groupId, reply?.kind === 'review' || reply?.kind === 'prepared' ? reply.review.reviewToken : reply?.kind]);
   const botName = snapshot?.agents.find(agent => agent.id === session.botId)?.name;
   const identity = useRecipeGroupIdentity({client: session.client, scope: snapshotScope, snapshot, botId: session.botId, groupId, enabled: !paused});
   const groupName = identity.name;
   useEffect(() => {if (snapshot) onSummary({botName, groupId});}, [snapshot, botName, groupId]);
   return <ClientProvider client={session.client} device={session.device}>
-    <DraftGuardProvider><RecipeUseDialog session={session} snapshot={snapshot} visible={visible} reply={reply} error={error} busy={busy}
-      paused={paused} accountChanged={accountChanged} unavailable={unavailable && !deviceChanged} needsRecovery={needsRecovery} reviewEpoch={reviewEpoch} acceptedResolution={acceptedResolution}
+    <DraftGuardProvider><RecipeUseDialog key={draftKey} session={session} snapshot={snapshot} visible={visible} reply={reply} error={error} busy={busy}
+      paused={paused} accountChanged={accountChanged} unavailable={unavailable && !deviceChanged} needsRecovery={needsRecovery} acceptedResolution={acceptedResolution}
       onSelectBot={onSelectBot} onSelectGroup={onSelectGroup} onClose={onClose} onRecover={() => void begin()}
       onRequest={input => send(input)} groupId={groupId} groupName={groupName} groupNameError={identity.error} onRefreshGroupName={identity.refresh}/></DraftGuardProvider>
   </ClientProvider>;
