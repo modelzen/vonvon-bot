@@ -88,9 +88,7 @@ export async function verifyAccount(deployment: AccountDeployment, auth: ReturnT
   const picture = metadata.avatar_url ?? metadata.picture;
   let avatarUrl: string | undefined;
   if (typeof picture === 'string' && picture.length <= 2048 && URL.canParse(picture)) {
-    const url = new URL(picture);
-    url.search = ''; url.hash = '';
-    const avatar = accountAvatarUrlSchema.safeParse(url.href);
+    const avatar = accountAvatarUrlSchema.safeParse(picture);
     if (avatar.success) avatarUrl = avatar.data;
   }
   return { accountId, displayName, ...(avatarUrl ? { avatarUrl } : {}) };
