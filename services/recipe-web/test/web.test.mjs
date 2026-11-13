@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
+import { createServer, request } from 'node:http';
 import { createHash } from 'node:crypto';
 import { createRecipeWeb } from '../server.mjs';
 import { returnPath } from '../auth.mjs';
@@ -79,4 +79,35 @@ test('same-origin PKCE login and claim use opaque session cookies', async t => {
   let logout=await fetch(host+'/auth/logout',{method:'POST',redirect:'manual',headers});
   assert.equal(logout.status,303);
   assert.equal((await fetch(path,{method:'POST',headers,body:'{"code":"a"}'})).status,401);
+});
+
+test('logout while a write body is pending prevents API forwarding', async t => {
+  let forwarded = 0;
+  const api = await listen(createServer((req, res) => { forwarded++; toJson(res, { ok: true }); }), t);
+  const issuer = await listen(createServer((req, res) => toJson(res,
+    { access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600 })), t);
+  const origin = 'https://recipes.example';
+  const server = createRecipeWeb({ RECIPE_WEB_ORIGIN: origin, RECIPE_API_ORIGIN: api,
+    SUPABASE_URL: issuer, SUPABASE_PUBLISHABLE_KEY: 'test-publishable', RECIPE_WEB_PROVIDERS: 'github' });
+  const host = await listen(server, t);
+  const start = await fetch(host + '/auth/start', { method: 'POST', redirect: 'manual', headers: { origin },
+    body: new URLSearchParams({ provider: 'github' }) });
+  const finish = await fetch(host + '/auth/callback?code=synthetic', { redirect: 'manual', headers: { cookie: cookie(start) } });
+  const sessionCookie = cookie(finish);
+  const status = await fetch(host + '/auth/session', { headers: { cookie: sessionCookie } }).then(response => response.json());
+  const payload = JSON.stringify({ code: 'synthetic' });
+  const arrived = new Promise(resolve => server.once('request', resolve));
+  let write;
+  const result = new Promise((resolve, reject) => {
+    write = request(host + '/api/v1/versions/' + v + '/redeem', { method: 'POST', headers: {
+      origin, cookie: sessionCookie, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload),
+      'X-Vonvon-Session': status.displaySession,
+    } }, response => { response.resume(); response.on('end', () => resolve(response.statusCode)); });
+    write.on('error', reject); write.write(payload.slice(0, 1));
+  });
+  await arrived;
+  const logout = await fetch(host + '/auth/logout', { method: 'POST', redirect: 'manual', headers: { origin, cookie: sessionCookie } });
+  assert.equal(logout.status, 303);
+  write.end(payload.slice(1));
+  assert.equal(await result, 409); assert.equal(forwarded, 0);
 });

@@ -4,6 +4,7 @@ import { ApiError } from './errors.mjs';
 
 // Static parameterized calls. No request field becomes an SQL identifier.
 const calls = Object.freeze({
+  me: 'recipe_api.me()',
   catalog: 'recipe_api.catalog($1::text, $2::uuid)',
   versionDetail: 'recipe_api.version_detail($1::uuid, $2::uuid)',
   getDraft: 'recipe_api.get_draft($1::uuid)',
@@ -21,7 +22,7 @@ const calls = Object.freeze({
 });
 
 const businessErrors = new Map(Object.entries({
-  auth_required: 401, not_found: 404, forbidden: 403, invalid_input: 422, incomplete_setup: 422,
+  auth_required: 401, account_disabled: 403, not_found: 404, forbidden: 403, invalid_input: 422, incomplete_setup: 422,
   conflict: 409, quota_exceeded: 422, rate_limited: 429, invalid_code: 422,
 }));
 
@@ -47,7 +48,7 @@ function makePool(connectionString) {
   });
 }
 
-export async function openDatabase(url, codeKey) {
+export async function openDatabase(url, codeKey, issuer) {
   if (!/^[0-9a-f]{64}$/i.test(codeKey)) throw new Error('Invalid RECIPE_CODE_KEY');
   const pool = makePool(url);
   pool.on('error', () => console.error('Recipe database connection unavailable'));
@@ -68,12 +69,25 @@ export async function openDatabase(url, codeKey) {
       JOIN pg_roles api ON api.rolname='recipe_api'
       WHERE r.rolname=session_user`);
     if (!role?.ok) throw new Error('Database login must be dedicated to recipe_api');
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SET LOCAL ROLE recipe_api');
+      await client.query("SET LOCAL statement_timeout = '5s'");
+      await client.query('SELECT recipe_api.bind_identity_issuer($1::text)', [issuer]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   } catch (err) {
     await pool.end();
     throw err;
   }
 
-  async function execute(account, operation, args = []) {
+  async function execute(identity, operation, args = []) {
     if (pool.waitingCount >= 32) throw new ApiError(503, 'database_unavailable', 1);
     let client;
     let discard = false;
@@ -82,7 +96,12 @@ export async function openDatabase(url, codeKey) {
       await client.query('BEGIN');
       await client.query('SET LOCAL ROLE recipe_api');
       await client.query("SET LOCAL statement_timeout = '5s'");
-      await client.query("SELECT set_config('app.recipe_account',$1,true), set_config('app.recipe_code_key',$2,true)", [account ?? '', codeKey]);
+      await client.query("SELECT set_config('app.recipe_account','',true), set_config('app.recipe_code_key',$1,true)", [codeKey]);
+      if (identity) {
+        const { rows: [mapped] } = await client.query('SELECT recipe_api.resolve_identity($1::text,$2::uuid) AS account_id',
+          [identity.issuer, identity.subject]);
+        await client.query("SELECT set_config('app.recipe_account',$1,true)", [mapped.account_id]);
+      }
       const { rows } = await client.query('SELECT ' + calls[operation] + ' AS result', args);
       await client.query('COMMIT');
       return rows[0].result;
