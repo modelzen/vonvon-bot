@@ -660,7 +660,7 @@ export async function rememberDmChat(chatId: string, openId: string, name?: stri
 /** Add a project. Throws if the name — or the bound chat — is already taken.
  * The chatId check is the registry-level hard guard against binding one group
  * twice (createProject's chatId is freshly minted so it never trips). */
-export async function addProject(input: Project, target?: RegistryLocation): Promise<void> {
+export async function addProject(input: Project, target?: RegistryLocation): Promise<Project> {
   const p = structuredClone(input);
   return ownProjects(async location => {
     const projects = await read(location.file);
@@ -672,7 +672,7 @@ export async function addProject(input: Project, target?: RegistryLocation): Pro
       if (bound) throw new Error(`该群已绑定为项目「${bound.name}」`);
     }
     projects.push(p);
-    await write(location, projects);
+    return write(location, projects, p);
   }, target);
 }
 
