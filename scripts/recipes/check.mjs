@@ -189,6 +189,13 @@ try {
     await request('/drafts',{method:'POST',token:author,body:{public:{...pub,version:'3'},config,recipeId:v.recipeId,sourceVersionId:v.versionId},status:409});
     await request('/versions/'+v2.versionId+'/acquire',{method:'POST',token:other,body:{}});
     assert.equal((await request('/me/recipes',{token:other})).items[0].versionId,v2.versionId);
+    const budgetReader=jwt(randomUUID());
+    const acquisitionKey=()=>{
+      const bytes=randomBytes(16);bytes.writeUIntBE(Date.now(),0,6);bytes[6]=0x70|(bytes[6]&15);bytes[8]=0x80|(bytes[8]&63);
+      const hex=bytes.toString('hex');return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+    };
+    for(let n=0;n<260;n++) await request('/versions/'+v2.versionId+'/acquire',{
+      method:'POST',token:budgetReader,body:{},key:acquisitionKey(),status:n<256?200:429});
     const {build} = await import('esbuild');
     const nativeModule = join(tmp, 'native-community.mjs');
     await build({entryPoints: [join(root, 'packages/desktop/src/community-api.ts')], outfile: nativeModule,
