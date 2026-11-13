@@ -6,7 +6,7 @@ import {
   agentIdSchema, groupIdSchema, desktopSnapshotSchema, recipeUseRequestSchema, desktopRecipeSourceRequestSchema,
   communityRequestSchema, communityResponseSchemas, collaborationRequestSchema, commandSchema,
   type AccountStatus, type AccountShell, type RecipeUseRequest, type RecipeUseReply, type DesktopRecipeSourceRequest,
-  type DesktopRecipeSourceReply, type CommunityRequest, type CommunityResponses, type ProjectSettingsView,
+  type DesktopRecipeSourceReply, type CommunityRequest, type ProjectSettingsView,
 } from '@vonvon/protocol';
 import {createDesktopFacades} from '../../desktop/src/facade';
 import {desktopChannels} from '../../desktop/src/ipc-contract';
@@ -88,6 +88,14 @@ beforeEach(() => {
   const facade = createDesktopFacades({receive: () => () => {}, invoke: async (channel, raw) => {
     if (channel === desktopChannels.recipeUse) {const request = recipeUseRequestSchema.parse(raw); requests.push(request); return {ok: true, value: await useReply(request)};}
     if (channel === desktopChannels.recipeSource) {const request = desktopRecipeSourceRequestSchema.parse(raw); sourceRequests.push(request); return {ok: true, value: await sourceReply(request)};}
+    if (channel === desktopChannels.community) {
+      const request = communityRequestSchema.parse(raw); communityRequests.push(request);
+      const result = request.type === 'detail' ? {...detail, versionId: request.versionId, acquired}
+        : request.type === 'shareLink' ? {url: 'https://example.invalid/recipe'}
+        : request.type === 'acquire' ? (acquired = true, {recipeId, versionId: request.versionId, owned: false, acquired: true})
+        : request.type === 'catalog' ? {hero: detail, items: [], nextCursor: null} : {items: []};
+      return {ok: true, value: communityResponseSchemas[request.type].parse(result)};
+    }
     throw new Error('Unexpected synthetic IPC channel');
   }});
   client = Object.assign(newClient(), {
@@ -99,14 +107,7 @@ beforeEach(() => {
     collaboration: vi.fn(async raw => {collaborationRequestSchema.parse(raw); return {kind: 'applied', project: {chatId: groupId}};}),
   });
   shell = fakeShell(); shell.devices.clientFor.mockImplementation(() => client);
-  Object.assign(shell, {account, recipeUse: facade.shell.recipeUse, recipeSource: facade.shell.recipeSource, community: {request: async (raw: CommunityRequest) => {
-    const request = communityRequestSchema.parse(raw); communityRequests.push(request);
-    const result = request.type === 'detail' ? {...detail, versionId: request.versionId, acquired}
-      : request.type === 'shareLink' ? {url: 'https://example.invalid/recipe'}
-      : request.type === 'acquire' ? (acquired = true, {recipeId, versionId: request.versionId, owned: false, acquired: true})
-      : request.type === 'catalog' ? {hero: detail, items: []} : {items: []};
-    return communityResponseSchemas[request.type].parse(result) as CommunityResponses[typeof request.type];
-  }}});
+  Object.assign(shell, {account, recipeUse: facade.shell.recipeUse, recipeSource: facade.shell.recipeSource, community: facade.shell.community});
 });
 afterEach(async () => {await act(async () => root.unmount()); vi.unstubAllGlobals();});
 
