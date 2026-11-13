@@ -292,6 +292,10 @@ begin
   if not found or sha256(cap.ticket) is distinct from sha256(p_ticket) or cap.proof_hash is distinct from sha256(p_proof)
       or recipe_private.b64url(sha256(p_nonce)) is distinct from op.nonce_commitment then raise exception 'invalid_operation_proof'; end if;
   if op.terminal_at<clock_timestamp()-interval '7 days' then raise exception 'operation_expired'; end if;
+  now_ms:=floor(extract(epoch from clock_timestamp())*1000)::bigint;
+  if op.state='expired' or (op.expires_at<=clock_timestamp()
+      and (op.state in ('registered','dispatched') or (op.state='accepted' and p_stage='dispatch'))) then
+    raise exception 'operation_expired'; end if;
   if p_stage='accept' then
     if p_payload is null or octet_length(p_payload)>131072 then raise exception 'invalid_input'; end if;
     if sha256(p_payload) is distinct from cap.payload_digest then raise exception 'conflict'; end if;
@@ -301,8 +305,7 @@ begin
     return jsonb_build_object('operationId',op.id,'status','dispatched','stateRevision',2);
   end if;
   if op.state='cancelled' then raise exception 'operation_cancelled'; end if;
-  now_ms:=floor(extract(epoch from clock_timestamp())*1000)::bigint;
-  if op.state='expired' or op.expires_at<=clock_timestamp() or cap.deadline<=now_ms then raise exception 'operation_expired'; end if;
+  if cap.deadline<=now_ms then raise exception 'operation_expired'; end if;
   if (cap.binding->>'stateRevision')::int is distinct from op.revision
       or op.state<>(case when p_stage='dispatch' then 'registered' else 'dispatched' end) then raise exception 'conflict'; end if;
   if p_stage='dispatch' then
