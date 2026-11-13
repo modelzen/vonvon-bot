@@ -285,9 +285,12 @@ export class RecipeAuthoringController {
     h.operations.set(op.operationId, op);
     return row;
   }
-  private display(h: Handle, op: AuthoringOperation): DesktopAuthoringOperation {
-    const { targetPublicKey: _pk, nonceCommitment: _nonce, ...summary } = op;
-    return { ...summary, ...expiryNotice(op.receipt), target: h.target, ...(op.groupId && { groupName: h.groups.get(op.groupId) || op.groupId }) };
+  private display(h: Handle, op: AuthoringOperation, cloudMessage?: string): DesktopAuthoringOperation {
+    const { targetPublicKey: _pk, nonceCommitment: _nonce, cardUpdate, ...summary } = op;
+    const cardMessage = cardUpdate === 'unavailable' ? '原私聊卡片无法再更新，请以 App 中的状态为准。'
+      : cardUpdate ? '私聊卡片更新尚未确认，将在连接时重试。' : undefined;
+    const syncMessage = [expiryNotice(op.receipt).syncMessage, cloudMessage, cardMessage].filter(Boolean).join(' ');
+    return { ...summary, ...(syncMessage && {syncMessage}), target: h.target, ...(op.groupId && { groupName: h.groups.get(op.groupId) || op.groupId }) };
   }
   private async status(h: Handle) {
     const status = expectKind(await this.daemon(h, { type: 'status' }), 'status');
@@ -297,7 +300,11 @@ export class RecipeAuthoringController {
       if (!prior || prior.state !== op.state) h.lastActivity = Date.now();
     }
     h.operations.clear();
-    for (const op of status.operations) this.remember(h, op);
+    for (const [index,op] of status.operations.entries()) {
+      this.remember(h, op);
+      if (status.linked && op.cardUpdate === 'pending')
+        status.operations[index] = await this.operation(h, { type: 'updateCard', operationId: op.operationId });
+    }
     return status;
   }
   private async reconcile(h: Handle, op: AuthoringReconciliation): Promise<DesktopAuthoringOperation> {
@@ -358,10 +365,9 @@ export class RecipeAuthoringController {
       handle: h.id,
       target: h.target,
       linked: status.linked,
-      operations: [...h.operations.values()].map((op) => {
-        const syncMessage = h.retry.get(op.operationId)?.message;
-        return { ...this.display(h, op), ...(syncMessage && !terminal(op) && { syncMessage }) };
-      }).concat(revoked),
+      operations: [...h.operations.values()].map(op =>
+        this.display(h, op, terminal(op) ? undefined : h.retry.get(op.operationId)?.message),
+      ).concat(revoked),
     };
   }
   private async operation(h: Handle, request: ScopedRequest & { operationId: string }) {

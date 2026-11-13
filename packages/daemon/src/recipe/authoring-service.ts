@@ -6,8 +6,8 @@ import { assertBotIdentity, withRegisteredBot, type BotIdentity } from '../confi
 import { isAdmin, type AppConfig } from '../config/schema';
 import { paths } from '../config/paths';
 import { configuredRecipeApiOrigin } from '../config/account-deployment';
-import { AuthoringIm, physicalChat, type CardMode } from './authoring-im';
-import { authoringBotKey, discardAuthoringMaterial, AuthoringJournal, active, linkKey, newCarrier, reserve, retire, sameRecipient, type AuthoringLedger, type Link, type LocalOperation, type Recipient, type Source } from './authoring-journal';
+import { AuthoringIm, physicalChat } from './authoring-im';
+import { authoringBotKey, discardAuthoringMaterial, AuthoringJournal, active, cardUpdate, linkKey, newCarrier, operationView, reserve, retire, sameRecipient, setCard, type AuthoringLedger, type Link, type LocalOperation, type Recipient, type Source } from './authoring-journal';
 import { blankPublic, digest, freezePayload, newAuthoringKey, parseChanges, type DraftInstructionParser } from './authoring-wire';
 import { checkAuthorization, postAuthoring } from './authoring-cloud';
 import { reviewSource } from './authoring-source';
@@ -44,12 +44,6 @@ function fromMessage(msg: NormalizedMessage): Recipient | undefined {
   if (msg.chatType !== 'p2p' || !physicalChat(msg.chatId) || !raw || raw.message.chat_id !== msg.chatId ||
       raw.message.message_id !== msg.messageId || raw.sender.sender_id.open_id !== msg.senderId) return;
   return {openId: msg.senderId, chatId: msg.chatId, tenantKey: raw.sender.tenant_key};
-}
-function setCard(op: LocalOperation, mode: CardMode) {
-  op.carrier.mode = mode;
-  op.carrier.ref = randomUUID();
-  op.carrier.seq++;
-  op.carrier.dirty = true;
 }
 function revokeOperation(op: LocalOperation) {
   if (!active(op) || op.revoked) return;
@@ -209,7 +203,7 @@ export class AuthoringService {
             const operations = [], reconciliation = [];
             for (const op of Object.values(db.operations)) {
               if (op.scope !== p.scope || op.accountId !== p.account) continue;
-              if (bound(op,link)) operations.push(op.view);
+              if (bound(op,link)) operations.push(operationView(op,this.now()));
               else {
                 // Also recover a disk/journal failure during removal or an orphan from an older daemon.
                 revokeOperation(op);
@@ -253,12 +247,13 @@ export class AuthoringService {
           });
           return {kind:'reconciled', receipt:req.receipt};
         }
+        case 'updateCard': await this.refresh(p,req.operationId); break;
         case 'settle': await this.settle(p,req.receipt,req.operationId); break;
         case 'advance': await this.advance(p,req.operationId,req.authorization); break;
         case 'resend':
         case 'deliver': await this.deliver(p,req.operationId,req.type === 'resend'); break;
       }
-      return {kind:'operation',operation:(await this.operation(p,req.operationId)).view};
+      return {kind:'operation',operation:await this.change(p,req.operationId,op => operationView(op,this.now()))};
     });
   }
   private async start(p: Presence, recipient: Recipient, target: {source?: Source; draftId?: string; baseRevision?: number; instructionId?: string; payload?: string; proposalDigest?: string}): Promise<RecipeAuthoringReply> {
@@ -296,8 +291,9 @@ export class AuthoringService {
       db.operations[operationId] = row;
       return row;
     }), this.opts.bot);
-    if (op.carrier.dirty) await this.refresh(p,op.view.operationId);
-    return {kind:'operation',operation:op.view};
+    if (!op.carrier.dirty) return {kind:'operation',operation:op.view};
+    await this.refresh(p,op.view.operationId);
+    return {kind:'operation',operation:await this.change(p,op.view.operationId,row => operationView(row,this.now()))};
   }
   private recordReceipt(op: LocalOperation, receipt: AuthoringReceipt) {
     if (receipt.operationId !== op.view.operationId) refusal();
@@ -334,13 +330,33 @@ export class AuthoringService {
     });
   }
   private async refresh(p: Presence, id: string) {
-    const op = await this.operation(p,id);
-    if (!op.carrier.dirty || !op.carrier.cardId || !op.carrier.messageId) return;
-    if (!isAdmin(this.opts.cfg,op.recipient.openId)) return;
-    try {
-      await this.im.update(op.carrier.cardId, op.carrier.seq, op.carrier.ref, op.carrier.mode);
-      await this.change(p,id,row => { if (row.carrier.ref === op.carrier.ref) row.carrier.dirty = false; });
-    } catch { /* Same generation/sequence can be rendered after a reconnect. */ }
+    await this.current();
+    const pending = await this.change(p,id,op => {
+      const c = op.carrier;
+      if (cardUpdate(op,this.now()) !== 'pending') return;
+      return {cardId:c.cardId!, messageId:c.messageId!, seq:c.seq, ref:c.ref, mode:c.mode, recipient:op.recipient};
+    });
+    if (!pending) return;
+    this.present(p);
+    if (!isAdmin(this.opts.cfg,pending.recipient.openId)) refusal();
+    const {cardId,messageId,seq,ref,mode,recipient} = pending;
+    let result = await this.im.update(cardId,seq,ref,mode);
+    if (result === 'conflict') {
+      // A duplicate UUID or old sequence is not an acknowledgement of these bytes.
+      const current = await this.change(p,id,op => op.carrier.cardId === cardId && op.carrier.ref === ref);
+      this.present(p);
+      if (current && isAdmin(this.opts.cfg,recipient.openId) && await this.im.shows(messageId,recipient.chatId,ref,mode).catch(() => false)) result = 'updated';
+    }
+    await this.change(p,id,op => {
+      const c = op.carrier;
+      if (c.cardId !== cardId || c.ref !== ref || c.seq !== seq) return;
+      if (result === 'updated') { c.dirty = false; delete c.retryAt; delete c.retryDelay; }
+      else if (result === 'unavailable') c.unavailable = true;
+      else if (c.retryDelay !== undefined) {
+        c.retryDelay = Math.min(600_000,Math.max(12_000,(c.retryDelay ?? 0)*2));
+        c.retryAt = this.now() + c.retryDelay;
+      } else c.retryDelay = 0;
+    });
   }
   private async deliver(p: Presence, id: string, resend: boolean) {
     let op = await this.operation(p,id);
@@ -369,8 +385,9 @@ export class AuthoringService {
     }
     if (!op.carrier.cardId) {
       this.present(p);
+      const createdAt = this.now();
       const cardId = await this.im.create(op.carrier.ref,op.carrier.mode);
-      op = await this.change(p,id,row => { row.carrier.cardId = cardId; return row; });
+      op = await this.change(p,id,row => { row.carrier.cardId = cardId; row.carrier.createdAt = createdAt; return row; });
     }
     op = await this.change(p,id,row => {
       this.present(p);

@@ -35,6 +35,9 @@ let bodies: {path:string;body:string}[], cloud: {action:string;body:Record<strin
 let messages: Map<string,{message_id:string;chat_id:string;card_id:string}>, cards: Map<string,string>;
 const textSend = vi.fn(async (..._args: unknown[])=>({messageId:'om_fixed'}));
 let loseSend = false, loseAccept = false, loseDispatch = false;
+let updateFault: 'drop' | 'loseReply' | 'conflict' | 'expired' | undefined;
+const updateKeys = new Set<string>();
+const puts = () => bodies.filter(b => /cardkit\/v1\/cards\/card_/.test(b.path));
 const quiet = {error(){},warn(){},info(){},debug(){},trace(){}};
 const sourceRole = 'SELECTED-LEGACY-ROLE', hiddenMemory = 'UNSELECTED-MEMORY-SENTINEL';
 const accountApi = process.env.AUTHORING_TEST_ORIGIN;
@@ -60,6 +63,7 @@ function restart() {
     }});
 }
 beforeEach(async () => {
+  updateFault=undefined;updateKeys.clear();
   n = 0;clock=Date.now();bodies=[];cloud=[];messages=new Map();cards=new Map();results.clear();loseSend=loseAccept=loseDispatch=false;
   await rm(join(root,'recipe-authoring'),{recursive:true,force:true});
   await rm(botPaths(appId).dir,{recursive:true,force:true});
@@ -79,15 +83,22 @@ beforeEach(async () => {
     } else if (path === '/open-apis/cardkit/v1/cards/id_convert') {
       value = {code:0,data:{card_id:[...messages.values()].find(m => m.message_id === data.message_id)?.card_id}};
     } else if (path.startsWith('/open-apis/cardkit/v1/cards/') && req.method === 'PUT') {
-      cards.set(path.split('/').pop()!,data.card.data);
+      if (updateFault === 'drop') { res.destroy(); return; }
+      if (updateFault === 'expired' || updateFault === 'conflict' || updateKeys.has(data.uuid)) {
+        res.writeHead(400,{'content-type':'application/json'}).end(JSON.stringify({code:updateFault === 'expired' ? 200750 : 200770})); return;
+      }
+      updateKeys.add(data.uuid); cards.set(path.split('/').pop()!,data.card.data);
+      if (updateFault === 'loseReply') { res.destroy(); return; }
     } else if (path.startsWith('/open-apis/im/v1/messages?') && req.method === 'POST') {
       const m = messages.get(data.uuid) ?? {message_id:'om_card_'+ ++n,chat_id:data.receive_id,card_id:JSON.parse(data.content).data.card_id};
       messages.set(data.uuid,m);
       if (loseSend) { res.destroy(); return; }
       value = {code:0,data:m};
     } else if (path.startsWith('/open-apis/im/v1/messages/') && req.method === 'GET') {
-      const m = [...messages.values()].find(m => path.endsWith('/'+m.message_id));
-      value = {code:0,data:{items:m?[{...m,msg_type:'interactive'}]:[]}};
+      const url = new URL(path,origin);
+      const m = [...messages.values()].find(m => url.pathname.endsWith('/'+m.message_id));
+      const body = m && url.searchParams.get('card_msg_content_type') === 'user_card_content' ? {content:cards.get(m.card_id)} : undefined;
+      value = {code:0,data:{items:m?[{...m,msg_type:'interactive',body}]:[]}};
     } else if (path.startsWith('/v1/authoring/')) {
       const [, , , operationId, stage] = path.split('/');
       if (stage === 'dispatch') value = {operationId,status:'dispatched',stateRevision:2};
@@ -182,8 +193,14 @@ it('links the actual sender, then prepares and edits the same private draft thro
   expect(confirmed.state).toBe('pendingCloud');
   const frozen = kind(await rpc('inspectCandidate',{operationId:sent.operationId}),'candidate');
   expect(JSON.parse(Buffer.from(frozen.payload,'base64url').toString())).toEqual({public:blankPublic(),config:{role:sourceRole}});
+  updateFault='loseReply';
   const done=await advance(confirmed,'accept');
-  expect(done.receipt).toMatchObject({status:'accepted',revision:1});
+  expect(done).toMatchObject({receipt:{status:'accepted',revision:1},cardUpdate:'pending'});
+  const terminalUpdate=puts().at(-1);
+  updateFault=undefined;
+  const repaired=kind(await rpc('updateCard',{operationId:done.operationId}),'operation').operation;
+  expect(repaired.receipt).toEqual(done.receipt); expect(repaired.cardUpdate).toBeUndefined();
+  expect(puts().at(-1)).toEqual(terminalUpdate); expect(messages.size).toBe(1);
   const instruction = msg('/recipe name 作者提供的新标题');
   await orch.onMessage(instruction);
   const editing=kind(await rpc('status'),'status').operations.find(o=>o.purpose==='editDraft')!;
@@ -203,6 +220,63 @@ it('links the actual sender, then prepares and edits the same private draft thro
   const wire=bodies.filter(b=>b.path.includes('/open-apis/im/')||b.path.includes('/cardkit/')).map(b=>b.body).join('');
   for (const secret of [sourceRole,hiddenMemory,'PRIVATE-GROUP-SENTINEL','作者提供的新标题']) expect(wire).not.toContain(secret);
   for (const send of cloud.filter(c=>c.action==='accept')) expect(Buffer.from(send.body.payload!,'base64url').toString()).not.toContain(hiddenMemory);
+});
+
+it('replays a lost CardKit reply with the same entity, body, sequence and UUID and verifies a duplicate against the physical message',async()=>{
+  await link();
+  const {operationId}=kind(await rpc('edit',{draftId:randomUUID(),baseRevision:1}),'operation').operation;
+  await advance(await status(operationId),'dispatch');
+  updateFault='loseReply'; await orch.onMessage(msg('/recipe role 新候选'));
+  expect(puts()).toHaveLength(1); expect(updateKeys.size).toBe(1);
+  expect((await status(operationId)).cardUpdate).toBe('pending');
+  service.disconnect(peer.id); restart(); await open();
+  updateFault=undefined;
+  expect(kind(await rpc('updateCard',{operationId}),'operation').operation.cardUpdate).toBeUndefined();
+  expect(puts()).toHaveLength(2); expect(puts()[1]).toEqual(puts()[0]); expect(updateKeys.size).toBe(1);
+  expect(bodies.some(b=>b.path.includes('card_msg_content_type=user_card_content'))).toBe(true);
+  await rpc('updateCard',{operationId}); expect(puts()).toHaveLength(2); expect(messages.size).toBe(1);
+});
+
+it('keeps a mismatched duplicate dirty, persists retry pacing across reopen, and stops on a missing update window',async()=>{
+  await link(); const op=await prepare(), {operationId}=op;
+  await advance(op,'dispatch');
+  updateFault='drop'; await act(ref());
+  const attempt=puts().at(-1);
+  updateFault='conflict';
+  expect(kind(await rpc('updateCard',{operationId}),'operation').operation.cardUpdate).toBe('backoff');
+  expect(puts().at(-1)).toEqual(attempt);
+  restart(); await open(); const n=puts().length;
+  await rpc('updateCard',{operationId}); expect(puts()).toHaveLength(n);
+  clock+=12_000; updateFault='expired';
+  expect(kind(await rpc('updateCard',{operationId}),'operation').operation.cardUpdate).toBe('unavailable');
+  clock+=60_000; await open();
+  await rpc('updateCard',{operationId}); expect(puts()).toHaveLength(n+1);
+  expect(messages.size).toBe(1); expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+});
+
+it('keeps dirty cards scoped to the original live peer and registration; after 14 days a late receipt never calls CardKit',async()=>{
+  await link(); const op=await prepare(), {operationId}=op;
+  await advance(op,'dispatch'); updateFault='drop'; await act(ref());
+  const n=puts().length;
+  service.disconnect(peer.id); await expect(rpc('updateCard',{operationId})).rejects.toThrow();
+  session=kind(await service.request(peer,recipeAuthoringRequestSchema.parse({type:'open',botId:appId,accountId:randomUUID()})),'session').session;
+  await expect(rpc('updateCard',{operationId})).rejects.toThrow();
+  clock+=14*86400000; await open();
+  const receipt={operationId,status:'accepted',stateRevision:3,draftId:randomUUID(),revision:1};
+  const done=kind(await rpc('settle',{operationId,receipt}),'operation').operation;
+  expect(done).toMatchObject({state:'completed',receipt,cardUpdate:'unavailable'});
+  await rpc('updateCard',{operationId}); expect(puts()).toHaveLength(n);
+  expect(messages.size).toBe(1);
+});
+
+it('does not repair a dirty card after a removed admin or a new binding to the same recipient',async()=>{
+  await link(); const op=await prepare(), {operationId}=op;
+  await advance(op,'dispatch'); updateFault='drop'; await act(ref());
+  const n=puts().length; await service.adminRemoved(owner);
+  await expect(rpc('updateCard',{operationId})).rejects.toThrow(); await link();
+  await expect(rpc('updateCard',{operationId})).rejects.toThrow();
+  expect(kind(await rpc('status'),'status').operations).toHaveLength(0);
+  expect(puts()).toHaveLength(n); expect(messages.size).toBe(1);
 });
 
 it('recovers lost dispatch and delivery without a second card and rejects stale carriers after explicit resend',async()=>{

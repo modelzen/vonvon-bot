@@ -21,11 +21,28 @@ export interface Source { groupId: string; reviewToken: string; setup?: RecipeSe
 export interface Link { bot: string; binding: string; recipient: Recipient; sources: Source[]; context?: {operationId: string; until: number} }
 export interface Carrier {
   ref: string; sendUuid: string; generation: number; seq: number; mode: CardMode; dirty: boolean;
-  cardId?: string; messageId?: string; firstSend?: number;
+  cardId?: string; messageId?: string; firstSend?: number; createdAt?: number;
+  unavailable?: true; retryAt?: number; retryDelay?: number;
 }
 export const newCarrier = (mode: CardMode, generation = 1): Carrier => ({
   ref: randomUUID(), sendUuid: randomUUID(), generation, seq: 0, mode, dirty: false,
 });
+export function setCard(op: LocalOperation, mode: CardMode) {
+  const c = op.carrier;
+  c.mode = mode; c.ref = randomUUID(); c.seq++; c.dirty = true;
+  delete c.retryAt; delete c.retryDelay;
+}
+export function cardUpdate(op: LocalOperation, now: number): AuthoringOperation['cardUpdate'] {
+  const c = op.carrier;
+  if (!c.dirty || !c.messageId || !c.cardId) return;
+  const created = c.createdAt ?? op.view.createdAt;
+  if (c.unavailable || now < created || now - created >= 14 * DAY) return 'unavailable';
+  return (c.retryAt ?? 0) > now ? 'backoff' : 'pending';
+}
+export function operationView(op: LocalOperation, now: number): AuthoringOperation {
+  const update = cardUpdate(op, now);
+  return update ? {...op.view, cardUpdate:update} : op.view;
+}
 export interface LocalOperation {
   view: AuthoringOperation;
   accountId: string; scope: string; bot: string; binding: string; recipient: Recipient; carrier: Carrier;
@@ -56,7 +73,10 @@ export function maintain(ledger: AuthoringLedger, now: number) {
         op.view.state = 'cancelPending';
         // Recovery needs only the registration commitment and a receipt; do not retain candidate text or keys indefinitely.
         discardAuthoringMaterial(op);
-      } else retire(op, 'expired', op.view.createdAt + DAY);
+      } else {
+        retire(op, 'expired', op.view.createdAt + DAY);
+        if (!op.revoked) setCard(op, 'expired');
+      }
     } else if (op.terminalAt !== undefined && op.terminalAt + 7 * DAY <= now) delete ledger.operations[id];
   }
   const day = new Date(now).toISOString().slice(0,10);

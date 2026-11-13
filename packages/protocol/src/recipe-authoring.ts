@@ -39,7 +39,7 @@ export type AuthoringReceipt = z.infer<typeof authoringReceiptSchema>;
 export const authoringOperationSchema = z.object({
   operationId: uuid, ...registration,
   state: z.enum(['pendingMain', 'sending', 'waiting', 'candidate', 'pendingCloud', 'completed', 'cancelPending', 'cancelled', 'expired', 'needsReview']),
-  deliveryUnknown: z.boolean(), payloadDigest: digest.optional(), receipt: authoringReceiptSchema.optional(),
+  deliveryUnknown: z.boolean(), cardUpdate: z.enum(['pending','backoff','unavailable']).optional(), payloadDigest: digest.optional(), receipt: authoringReceiptSchema.optional(),
   groupId: groupIdSchema.optional(), createdAt: millis,
 }).strict();
 export type AuthoringOperation = z.infer<typeof authoringOperationSchema>;
@@ -62,6 +62,7 @@ export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
   z.object({type: z.literal('edit'), ...session, draftId: uuid, baseRevision: positive}).strict(),
   z.object({type: z.literal('inspectCandidate'), ...operation}).strict(),
   z.object({type: z.literal('advance'), ...operation, authorization: authoringAuthorizationSchema}).strict(),
+  z.object({type: z.literal('updateCard'), ...operation}).strict(),
   z.object({type: z.literal('deliver'), ...operation}).strict(),
   z.object({type: z.literal('resend'), ...operation}).strict(),
   z.object({type: z.literal('cancel'), ...operation}).strict(),
