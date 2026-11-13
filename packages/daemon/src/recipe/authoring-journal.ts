@@ -22,7 +22,7 @@ export interface Link { bot: string; binding: string; recipient: Recipient; sour
 export interface Carrier {
   ref: string; sendUuid: string; generation: number; seq: number; mode: CardMode; dirty: boolean;
   cardId?: string; messageId?: string; firstSend?: number; createdAt?: number;
-  unavailable?: true; retryAt?: number; retryDelay?: number;
+  showFields?: true; unavailable?: true; retryAt?: number; retryDelay?: number;
 }
 export const newCarrier = (mode: CardMode, generation = 1): Carrier => ({
   ref: randomUUID(), sendUuid: randomUUID(), generation, seq: 0, mode, dirty: false,
