@@ -497,22 +497,31 @@ function DesktopApp() {
     if (modal?.kind === 'join' && modal.suspended) restore();
     else navigate(restore);
   }
-  function openSearchResult(entry: SearchEntry) {
-    if (!snapshot) {flushSync(() => setSearchOpen(false)); if (entry.destination.page === 'collaboration') openList(entry.destination.view ?? 'agents'); else openPage(entry.destination.page, entry.destination); return;}
-    flushSync(() => setSearchOpen(false));
+  function openSearchResult(entry: SearchEntry) {flushSync(() => setSearchOpen(false)); openDestination(entry.destination);}
+  function openDestination(destination: Destination) {
+    if (!snapshot) {setSearchOpen(false); if (destination.page === 'collaboration') openList(destination.view ?? 'agents'); else openPage(destination.page, destination); return;}
+    setSearchOpen(false);
     navigate(() => {
       setJoinedTarget(undefined);
       setModal(current => current?.kind === 'join' && current.suspended ? null : current);
-      setPage(entry.destination.page);
+      setPage(destination.page);
       setSetupAgentId(undefined);
       setSettingsReturn(undefined);
       setFeatureId(undefined);
-      const target = routeFromSearch(entry.destination, snapshot);
-      if (target) {setRoute(target.route); if (target.route.kind === 'membership') {const memberId=target.route.id; setGroupTabs(current=>({...current,[memberId]:groupTabForSection(entry.destination.section)}));}}
-      setSearchTarget(target?.missing ? undefined : entry.destination.section ? entry.destination : undefined);
+      const target = routeFromSearch(destination, snapshot);
+      if (target) {setRoute(target.route); if (target.route.kind === 'membership') {const memberId=target.route.id; setGroupTabs(current=>({...current,[memberId]:groupTabForSection(destination.section)}));}}
+      setSearchTarget(target?.missing ? undefined : destination.section ? destination : undefined);
       setNotice(target?.missing ? {message: target.missing, error: false} : undefined);
     });
   }
+  useEffect(() => {
+    const departure = community?.departure;
+    if (!departure) return;
+    if (departure.deviceId !== device.id) {community.consumeDeparture(departure); return;}
+    if (!snapshot) return;
+    openDestination(departure.destination);
+    community.consumeDeparture(departure);
+  }, [community?.departure, snapshot, device.id]);
   async function register(agentId?: AgentId, provider?: SetupProvider) {
     if (!agentId && !provider && !snapshot?.agents.length) {openPage('setup'); return;}
     if (registrationPending.current) return;

@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
+import {useEffect, useMemo, useState, type ReactNode} from 'react';
 import type {VonvonClient} from '@vonvon/client/browser';
 import type {DevicesState} from '@vonvon/protocol';
 import {App} from '../App';
@@ -8,6 +8,7 @@ import {desktopPlatformMark} from './devices-presentation';
 import {DeviceConnectionView, DeviceOutsideFrame} from './DeviceConnectionView';
 import {MaintenanceView} from './MaintenanceView';
 import {PairedToasts} from './PairedToasts';
+import {CommunityWindow} from '../community/CommunityWindow';
 import {CommunityProvider, useCommunity} from '../community/community-context';
 import {AccountProvider} from '../account-context';
 import {AccountPageProvider} from '../accounts/account-page';
@@ -38,21 +39,16 @@ function DesktopDeviceView({state, fallback, shell, renderApp}: {state?: Devices
   const client = useMemo(() => devicesShell ? devicesShell.clientFor(device.id) : fallback, [devicesShell, device.id, fallback]);
   // Kept while the same device stays remote or local, so subscriptions to the shell are not renewed on every state.
   const deviceShell = useMemo(() => shellForDevice(shell, device), [shell, device.isRemote]);
-  const appIdentity = useRef({deviceId: device.id, generation: 0});
-  if (appIdentity.current.deviceId !== device.id) {
-    appIdentity.current = {deviceId: device.id, generation: appIdentity.current.generation + (community?.isOpen ? 0 : 1)};
-  }
   if (!devicesShell) return <ClientProvider client={fallback} shell={shell}><DirectoryPickerProvider>{renderApp()}</DirectoryPickerProvider></ClientProvider>;
   return <ClientProvider client={client} shell={deviceShell} device={device} devices={state}>
-    <DeviceGate key={appIdentity.current.generation} state={state} communityOpen={community?.isOpen} renderApp={renderApp}/>
+    {community?.isOpen ? <DirectoryPickerProvider><CommunityWindow/></DirectoryPickerProvider> : <DeviceGate key={device.id} state={state} renderApp={renderApp}/>}
     {/* devices-ui-3 4.5: beside the gate, so a pairing with this computer shows whichever device is looked at */}
     <PairedToasts shell={shell} local={!device.isRemote}/>
   </ClientProvider>;
 }
 
-/** Device pages reset on a device switch. The account-owned community retains its subtree and editor through switches. */
-export function DeviceGate({state, renderApp, communityOpen}: {state?: DevicesState; renderApp: () => ReactNode; communityOpen?: boolean}) {
-  if (communityOpen) return <DirectoryPickerProvider>{renderApp()}</DirectoryPickerProvider>;
+/** Device pages reset together on each device switch. Community has a separate account-owned window lifetime. */
+export function DeviceGate({state, renderApp}: {state?: DevicesState; renderApp: () => ReactNode}) {
   if (!state) return <DeviceOutsideFrame title="正在打开 Vonvon Bot…">{() => null}</DeviceOutsideFrame>;
   const active = state.active;
   if (active.id !== 'local') {

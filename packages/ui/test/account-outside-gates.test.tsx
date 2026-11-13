@@ -1,6 +1,7 @@
 import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement} from 'react';
 import type {AccountStatus, DevicesState} from '@vonvon/protocol';
+import {CommunityWindow} from '../src/community/CommunityWindow';
 import {DeviceGate, DesktopRootView} from '../src/devices/DesktopRoot';
 import {DeviceConnectionView, DeviceOutsideFrame, SnapshotPendingView} from '../src/devices/DeviceConnectionView';
 import {MaintenanceView} from '../src/devices/MaintenanceView';
@@ -115,8 +116,7 @@ it.each(['failed', 'maintenance', 'unknown'] as const)('renders community throug
   const root = DesktopRootView({state, shell: h.shell, fallback: newClient(), renderApp: () => <p>COMMUNITY-APP</p>});
   const device = root.props.children.props.children.props.children;
   const rendered = device.type(device.props);
-  const gate = nodes(rendered).find(node => node.type === DeviceGate)!;
-  expect(gate.props.communityOpen).toBe(true);
-  expect(nodes(DeviceGate(gate.props)).some(node => node.type === 'p' && node.props.children === 'COMMUNITY-APP')).toBe(true);
+  expect(nodes(rendered).some(node => node.type === CommunityWindow)).toBe(true);
+  expect(nodes(rendered).some(node => node.type === DeviceGate)).toBe(false);
   expect(h.shell!.devices.switchTo).not.toHaveBeenCalled();
 });
