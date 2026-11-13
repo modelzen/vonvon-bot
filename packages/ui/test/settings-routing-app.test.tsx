@@ -18,6 +18,7 @@ import {SnapshotPendingView} from '../src/devices/DeviceConnectionView';
 
 // DesktopApp is called as a plain function: hooks keep their values by call order, effects run when their deps change.
 const h = vi.hoisted(() => ({state: [] as unknown[], refs: [] as Array<{current: unknown}>, effects: [] as Array<{deps?: unknown[]}>, si: 0, ri: 0, ei: 0, pending: [] as Array<() => void>,
+  keydown: (_event: {key: string; metaKey?: boolean; ctrlKey?: boolean; preventDefault(): void}) => {},
   listener: (_snapshot: DesktopSnapshot) => {}, client: {run: vi.fn(), watchSnapshots: (_listener: (snapshot: unknown) => void) => () => {}},
   community: {isOpen: false, open: vi.fn(), close: vi.fn()},
   accountPage: {isOpen: false, open: vi.fn(), close: vi.fn()}, navigate: vi.fn((action: () => void) => action()),
@@ -80,7 +81,7 @@ beforeEach(() => {
   h.accountPage.open.mockClear().mockImplementation(() => {h.accountPage.isOpen = true;});
   h.accountPage.close.mockClear().mockImplementation(() => {h.accountPage.isOpen = false;});
   h.navigate.mockReset().mockImplementation(action => action());
-  vi.stubGlobal('window', {addEventListener: () => {}, removeEventListener: () => {}});
+  vi.stubGlobal('window', {addEventListener: (name: string, listener: typeof h.keydown) => {if (name === 'keydown') h.keydown = listener;}, removeEventListener: () => {}});
   vi.stubGlobal('HTMLDetailsElement', class {});
   vi.stubGlobal('document', {documentElement: {dataset: {}}, getElementById: () => ({parentElement: null, querySelectorAll: () => [], scrollIntoView: () => {}, matches: () => true, focus: () => {}})});
   h.client.run.mockReset().mockResolvedValue({kind: 'started', jobId: 'register_test'});
@@ -270,4 +271,22 @@ it('opens native community before any Provider or Bot is configured, and without
   expect(pending.find(AppShell)[0]!.props.page).toBe('community');
   expect(pending.find(CommunityPage)).toHaveLength(1);
   expect(pending.find(SnapshotPendingView)).toHaveLength(0);
+});
+
+it('keeps global search rendered and actionable while browsing community', () => {
+  h.community.isOpen = true;
+  Object.assign(h.client, {schedule: async () => ({kind: 'tasks', tasks: []})});
+  render().find(AppShell)[0]!.props.onSearch();
+  const search = render().find(SearchDialog)[0];
+  expect(search).toBeDefined();
+  expect(search!.props.open).toBe(true);
+  search!.props.onClose();
+  expect(render().find(SearchDialog)).toHaveLength(0);
+  h.keydown({key: 'k', metaKey: true, preventDefault() {}});
+  expect(render().find(SearchDialog)[0]!.props.open).toBe(true);
+  const provider = search!.props.entries.find(entry => entry.destination.page === 'providers');
+  expect(provider).toBeDefined();
+  search!.props.onSelect(provider!);
+  expect(h.community.isOpen).toBe(false);
+  expect(render().find(AppShell)[0]!.props.page).toBe('providers');
 });

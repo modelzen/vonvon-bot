@@ -498,7 +498,7 @@ function DesktopApp() {
     else navigate(restore);
   }
   function openSearchResult(entry: SearchEntry) {
-    if (!snapshot) return;
+    if (!snapshot) {flushSync(() => setSearchOpen(false)); if (entry.destination.page === 'collaboration') openList(entry.destination.view ?? 'agents'); else openPage(entry.destination.page, entry.destination); return;}
     flushSync(() => setSearchOpen(false));
     navigate(() => {
       setJoinedTarget(undefined);
@@ -556,11 +556,11 @@ function DesktopApp() {
     if (cancel) await run({ type: "cancelJob", jobId: cancel }, () => generation === modalGeneration.current);
     if (generation === modalGeneration.current) setModal(null);
   }
-  if (page === 'community') return <AppShell page="community" view={view} title="社区" onNavigate={openPage} onOpenList={openList}
+  if (page === 'community') return <><AppShell page="community" view={view} title="社区" onNavigate={openPage} onOpenList={openList}
     onSearch={() => setSearchOpen(true)} updateAction={<DesktopUpdateButton/>}
     deviceSwitcher={shell?.devices ? <DeviceSwitcher onManage={() => openPage('devices')} onAccount={() => openPage('account')}/> : undefined}>
     <div className="page-stack"><CommunityPage/></div>
-  </AppShell>;
+  </AppShell>{searchOpen && <SearchDialog open entries={searchEntries(snapshot, {externalCoreAvailable, schedules: searchSchedules, devices: Boolean(shell?.devices)})} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>}</>;
   if (!snapshot) return <SnapshotPendingView/>;
   const member =
     selection.kind === "membership"

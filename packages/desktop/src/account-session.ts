@@ -149,9 +149,9 @@ export function createAccountSession(options: {
 
   async function clearLocal(reason?: 'cancelled') {
     const signal = invalidate();
+    publish(deployment ? { kind: 'signedOut', ...(reason && { reason }) } : { kind: 'unavailable', reason: 'configuration' });
     try {
       await serialize(() => store.clear());
-      if (!signal.aborted) publish(deployment ? { kind: 'signedOut', ...(reason && { reason }) } : { kind: 'unavailable', reason: 'configuration' });
     } catch { if (!signal.aborted) publish({ kind: 'unavailable', reason: 'storage' }); }
     return view;
   }

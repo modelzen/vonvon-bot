@@ -13,13 +13,14 @@ import {Button} from '../src/reference/components/ui';
 import {activeDeviceFrom} from '../src/client-context';
 import {A, devicesState, fakeShell, info, newClient} from './devices-fixture';
 
-const h = vi.hoisted(() => ({state: [] as unknown[], si: 0, deviceState: undefined as DevicesState | undefined, shell: undefined as ReturnType<typeof fakeShell> | undefined,
+const h = vi.hoisted(() => ({state: [] as unknown[], refs: [] as Array<{current: unknown}>, si: 0, ri: 0, deviceState: undefined as DevicesState | undefined, shell: undefined as ReturnType<typeof fakeShell> | undefined,
   account: {supported: true, status: {kind: 'signedOut'} as AccountStatus, login: vi.fn(), cancelLogin: vi.fn(), logout: vi.fn()},
   community: {isOpen: false, open: vi.fn()},
   page: {isOpen: false, open: vi.fn(), close: vi.fn()},
 }));
 vi.mock('react', async original => ({...await original<typeof import('react')>(),
   useState: (initial: unknown) => {const i = h.si++; if (!(i in h.state)) h.state[i] = typeof initial === 'function' ? (initial as () => unknown)() : initial; return [h.state[i], (next: unknown) => {h.state[i] = typeof next === 'function' ? (next as (old: unknown) => unknown)(h.state[i]) : next;}];},
+  useRef: (initial: unknown) => {const i = h.ri++; return h.refs[i] ??= {current: initial};},
   useMemo: (factory: () => unknown) => factory(),
 }));
 vi.mock('../src/community/community-context', async original => ({...await original<typeof import('../src/community/community-context')>(), useCommunity: () => h.community}));
@@ -45,7 +46,7 @@ function click(list: Element[], label: string) {list.find(node => node.type === 
 const identity = {kind: 'signedIn', accountId: A, displayName: 'Clay', provider: 'github', persistence: 'secure'} as const;
 
 beforeEach(() => {
-  h.state = []; h.si = 0; h.community.isOpen = false; h.shell = fakeShell(); h.page.isOpen = false; h.account.status = {kind: 'signedOut'};
+  h.state = []; h.refs = []; h.si = h.ri = 0; h.community.isOpen = false; h.shell = fakeShell(); h.page.isOpen = false; h.account.status = {kind: 'signedOut'};
   vi.clearAllMocks();
   h.page.open.mockImplementation(() => {h.page.isOpen = true;});
   h.page.close.mockImplementation(() => {h.page.isOpen = false;});
@@ -114,7 +115,8 @@ it.each(['failed', 'maintenance', 'unknown'] as const)('renders community throug
   const root = DesktopRootView({state, shell: h.shell, fallback: newClient(), renderApp: () => <p>COMMUNITY-APP</p>});
   const device = root.props.children.props.children.props.children;
   const rendered = device.type(device.props);
-  expect(nodes(rendered).some(node => node.type === 'p' && node.props.children === 'COMMUNITY-APP')).toBe(true);
-  expect(nodes(rendered).some(node => node.type === DeviceGate)).toBe(false);
+  const gate = nodes(rendered).find(node => node.type === DeviceGate)!;
+  expect(gate.props.communityOpen).toBe(true);
+  expect(nodes(DeviceGate(gate.props)).some(node => node.type === 'p' && node.props.children === 'COMMUNITY-APP')).toBe(true);
   expect(h.shell!.devices.switchTo).not.toHaveBeenCalled();
 });

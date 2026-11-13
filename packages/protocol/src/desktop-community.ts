@@ -2,9 +2,11 @@ import {z} from 'zod';
 
 const id = z.string().uuid();
 const revision = z.number().int().positive().max(2147483647);
-const text = (max: number) => z.string().max(max).refine(value => !value.includes('\0'));
-export const recipePublicSchema = z.object({name: text(60), summary: text(240), overview: text(32768), version: text(40), access: z.enum(['direct', 'coded'])}).strict();
-export const recipeConfigSchema = z.object({role: text(16384), setup: z.object({steps: z.array(z.object({kind: z.enum(['config','tool','context']), title: text(80), instructions: text(2048), required: z.boolean(), check: text(512).optional()}).strict()).min(1).max(8)}).strict().optional()}).strict();
+const wellFormed = (value: string) => !value.includes('\0') && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value);
+const text = (max: number) => z.string().max(max * 2).refine(value => wellFormed(value) && Array.from(value).length <= max);
+const bytes = (max: number) => z.string().max(max).refine(value => wellFormed(value) && new TextEncoder().encode(value).byteLength <= max);
+export const recipePublicSchema = z.object({name: text(60), summary: text(240), overview: bytes(32768), version: text(40), access: z.enum(['direct', 'coded'])}).strict();
+export const recipeConfigSchema = z.object({role: bytes(16384), setup: z.object({steps: z.array(z.object({kind: z.enum(['config','tool','context']), title: text(80), instructions: bytes(2048), required: z.boolean(), check: bytes(512).optional()}).strict()).min(1).max(8)}).strict().optional()}).strict();
 export type RecipeConfig = z.infer<typeof recipeConfigSchema>;
 export type RecipePublic = z.infer<typeof recipePublicSchema>;
 const summary = z.object({recipeId: id, versionId: id, revision, public: recipePublicSchema.partial({summary: true, overview: true})}).strict();
@@ -59,7 +61,10 @@ export const communityResponseSchemas = {
   publishDraft: summary.extend({public: recipePublicSchema, firstCode: z.string().regex(/^[A-F0-9-]{32,40}$/i).optional()}).strict(),
   acquire: z.object({...version, owned: z.boolean(), acquired: z.boolean()}).strict(),
   codes: z.object({items: z.array(z.object({codeId: id, suffix: text(8), status: codeState, redeemedAt: z.string().datetime({offset: true}).nullable()}).strict()).max(50), nextCursor}).strict(),
-  issueCodes: z.object({items: z.array(fullCode).max(100)}).strict(),
+  issueCodes: z.object({items: z.array(z.discriminatedUnion('status', [fullCode,
+    z.object({codeId: id, status: z.literal('redeemed')}).strict(),
+    z.object({codeId: id, status: z.literal('disabled')}).strict(),
+  ])).max(100)}).strict(),
   disableCode: z.object({codeId: id, status: z.literal('disabled')}).strict(),
   revealCode: fullCode,
 };
