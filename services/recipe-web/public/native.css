@@ -1,0 +1,5 @@
+.native-shell{width:min(100% - 32px,440px);margin:clamp(40px,12vh,120px) auto;padding:0 0 40px}
+.native-shell .panel{padding:28px}.native-shell h1{font-size:1.8rem}.native-shell .notice{margin:18px 0}
+.provider-list{display:grid;gap:10px;margin:20px 0}.provider-list button{width:100%;min-height:44px}
+.native-shell .fine{margin-top:20px}.native-shell #cancel{margin-top:20px}
+@media(max-width:400px){.native-shell .panel{padding:22px}}
