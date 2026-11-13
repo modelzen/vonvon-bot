@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { AuthoringAuthorization, AuthoringOperation, RecipeSetup } from '@vonvon/protocol';
+import type { BotIdentity } from '../config/bots';
 import { acquireMutex, closeMutex } from '../config/data-access';
 import { ensureDurableDirectory, syncDirectory } from '../config/bot-namespace';
 import { readLocalText } from '../import/bridge/bounded-local-files';
@@ -8,6 +9,9 @@ import { writeFileAtomic } from '../server/atomic-file';
 import { digest } from './authoring-wire';
 import type { CardMode } from './authoring-im';
 
+export function authoringBotKey(bot: BotIdentity) {
+  return digest(JSON.stringify([bot.appId,bot.tenant,bot.createdAt,bot.registrationId ?? null]));
+}
 export const DAY = 86_400_000;
 export interface Recipient { openId: string; chatId: string; tenantKey: string }
 export function sameRecipient(a: Recipient | undefined, b: Recipient | undefined) {
@@ -17,11 +21,28 @@ export interface Source { groupId: string; reviewToken: string; setup?: RecipeSe
 export interface Link { bot: string; binding: string; recipient: Recipient; sources: Source[]; context?: {operationId: string; until: number} }
 export interface Carrier {
   ref: string; sendUuid: string; generation: number; seq: number; mode: CardMode; dirty: boolean;
-  cardId?: string; messageId?: string; firstSend?: number;
+  cardId?: string; messageId?: string; firstSend?: number; createdAt?: number;
+  unavailable?: true; retryAt?: number; retryDelay?: number;
 }
 export const newCarrier = (mode: CardMode, generation = 1): Carrier => ({
   ref: randomUUID(), sendUuid: randomUUID(), generation, seq: 0, mode, dirty: false,
 });
+export function setCard(op: LocalOperation, mode: CardMode) {
+  const c = op.carrier;
+  c.mode = mode; c.ref = randomUUID(); c.seq++; c.dirty = true;
+  delete c.retryAt; delete c.retryDelay;
+}
+export function cardUpdate(op: LocalOperation, now: number): AuthoringOperation['cardUpdate'] {
+  const c = op.carrier;
+  if (!c.dirty || !c.messageId || !c.cardId) return;
+  const created = c.createdAt ?? op.view.createdAt;
+  if (c.unavailable || now < created || now - created >= 14 * DAY) return 'unavailable';
+  return (c.retryAt ?? 0) > now ? 'backoff' : 'pending';
+}
+export function operationView(op: LocalOperation, now: number): AuthoringOperation {
+  const update = cardUpdate(op, now);
+  return update ? {...op.view, cardUpdate:update} : op.view;
+}
 export interface LocalOperation {
   view: AuthoringOperation;
   accountId: string; scope: string; bot: string; binding: string; recipient: Recipient; carrier: Carrier;
@@ -34,21 +55,28 @@ export interface AuthoringLedger {
   daily: Record<string, {day: string; count: number}>;
 }
 export const active = (op: LocalOperation) => op.terminalAt === undefined;
+export function discardAuthoringMaterial(op: LocalOperation) {
+  delete op.secret; delete op.nonce; delete op.dispatchAuthorization; delete op.payload; delete op.source;
+  delete op.view.payloadDigest; delete op.proposalDigest;
+}
 export function retire(op: LocalOperation, state: 'completed' | 'cancelled' | 'expired', now: number) {
   op.view.state = state;
   op.view.deliveryUnknown = false;
   op.terminalAt = now;
-  delete op.secret; delete op.nonce; delete op.dispatchAuthorization; delete op.payload; delete op.source;
-  delete op.view.payloadDigest; delete op.proposalDigest;
+  discardAuthoringMaterial(op);
 }
 export function maintain(ledger: AuthoringLedger, now: number) {
   for (const [id, op] of Object.entries(ledger.operations)) {
     if (active(op) && op.view.createdAt + DAY <= now) {
-      // An accept response may have been lost. Only an authoritative cloud receipt settles it.
+      // An accept response may have been lost. Keep tracking until the original account settles it, even after cloud retention.
       if (op.view.state === 'pendingCloud' || op.view.state === 'cancelPending') {
         op.view.state = 'cancelPending';
-        if (op.view.createdAt + 8 * DAY <= now) delete ledger.operations[id];
-      } else retire(op, 'expired', op.view.createdAt + DAY);
+        // Recovery needs only the registration commitment and a receipt; do not retain candidate text or keys indefinitely.
+        discardAuthoringMaterial(op);
+      } else {
+        retire(op, 'expired', op.view.createdAt + DAY);
+        if (!op.revoked) setCard(op, 'expired');
+      }
     } else if (op.terminalAt !== undefined && op.terminalAt + 7 * DAY <= now) delete ledger.operations[id];
   }
   const day = new Date(now).toISOString().slice(0,10);

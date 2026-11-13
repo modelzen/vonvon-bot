@@ -54,6 +54,9 @@ type ScopedRequest<T = SessionRequest> = T extends SessionRequest ? Omit<T, 'ses
 const changed = () => new AuthoringError('账号或设备连接已改变，请重新打开原来的配方操作。');
 const recheck = () => new AuthoringError('本次选择已改变，请重新核对来源或草稿。');
 const terminal = (op: AuthoringOperation) => ['completed', 'cancelled', 'expired'].includes(op.state);
+function expiryNotice(receipt?: AuthoringReceipt) {
+  return receipt && 'outcome' in receipt ? {syncMessage:'这次操作已到期，无法确认之前是否保存。若已保存，请到创作中心查看。'} : {};
+}
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
   if (value && typeof value === 'object') {
@@ -282,9 +285,12 @@ export class RecipeAuthoringController {
     h.operations.set(op.operationId, op);
     return row;
   }
-  private display(h: Handle, op: AuthoringOperation): DesktopAuthoringOperation {
-    const { targetPublicKey: _pk, nonceCommitment: _nonce, ...summary } = op;
-    return { ...summary, target: h.target, ...(op.groupId && { groupName: h.groups.get(op.groupId) || op.groupId }) };
+  private display(h: Handle, op: AuthoringOperation, cloudMessage?: string): DesktopAuthoringOperation {
+    const { targetPublicKey: _pk, nonceCommitment: _nonce, cardUpdate, ...summary } = op;
+    const cardMessage = cardUpdate === 'unavailable' ? '原私聊卡片无法再更新，请以 App 中的状态为准。'
+      : cardUpdate ? '私聊卡片更新尚未确认，将在连接时重试。' : undefined;
+    const syncMessage = [expiryNotice(op.receipt).syncMessage, cloudMessage, cardMessage].filter(Boolean).join(' ');
+    return { ...summary, ...(syncMessage && {syncMessage}), target: h.target, ...(op.groupId && { groupName: h.groups.get(op.groupId) || op.groupId }) };
   }
   private async status(h: Handle) {
     const status = expectKind(await this.daemon(h, { type: 'status' }), 'status');
@@ -294,7 +300,11 @@ export class RecipeAuthoringController {
       if (!prior || prior.state !== op.state) h.lastActivity = Date.now();
     }
     h.operations.clear();
-    for (const op of status.operations) this.remember(h, op);
+    for (const [index,op] of status.operations.entries()) {
+      this.remember(h, op);
+      if (status.linked && op.cardUpdate === 'pending')
+        status.operations[index] = await this.operation(h, { type: 'updateCard', operationId: op.operationId });
+    }
     return status;
   }
   private async reconcile(h: Handle, op: AuthoringReconciliation): Promise<DesktopAuthoringOperation> {
@@ -326,7 +336,7 @@ export class RecipeAuthoringController {
     if (receipt.operationId !== operationId || (receipt.status === 'accepted' &&
         (purpose === 'prepareDraft' ? receipt.revision !== 1 : receipt.draftId !== draftId || receipt.revision !== baseRevision! + 1)))
       throw invalidAuthoring();
-    return { ...summary, receipt, state:receipt.status === 'accepted' ? 'completed' : receipt.status };
+    return { ...summary, receipt, ...expiryNotice(receipt), state:receipt.status === 'accepted' ? 'completed' : receipt.status };
   }
   private async refresh(h: Handle): Promise<DesktopAuthoringReply> {
     const status = await this.status(h);
@@ -355,10 +365,9 @@ export class RecipeAuthoringController {
       handle: h.id,
       target: h.target,
       linked: status.linked,
-      operations: [...h.operations.values()].map((op) => {
-        const syncMessage = h.retry.get(op.operationId)?.message;
-        return { ...this.display(h, op), ...(syncMessage && !terminal(op) && { syncMessage }) };
-      }).concat(revoked),
+      operations: [...h.operations.values()].map(op =>
+        this.display(h, op, terminal(op) ? undefined : h.retry.get(op.operationId)?.message),
+      ).concat(revoked),
     };
   }
   private async operation(h: Handle, request: ScopedRequest & { operationId: string }) {
@@ -402,6 +411,8 @@ export class RecipeAuthoringController {
     return { kind: 'candidate' as const, operation: this.display(h, op), payloadDigest: op.payloadDigest, content };
   }
   private async settle(h: Handle, op: AuthoringOperation, receipt: AuthoringReceipt) {
+    // A pruned cloud receipt cannot contradict an exact terminal receipt already stored by this device.
+    if ('outcome' in receipt && terminal(op) && op.receipt) return op;
     if (
       op.receipt &&
       canonical(op.receipt) === canonical(receipt) &&

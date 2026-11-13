@@ -50,7 +50,7 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['session', 'stop-subagent', 'x', '--group', 'g'], 3], [['session', 'reminder', '--on', '--group', 'g'], 3],
   [['usage', 'show'], 3], [['usage', 'share', '--group', 'g'], 3], [['usage', 'judge'], 3],
   [['memory', 'people'], 2],
-  [['feishu', 'groups'], 3], [['feishu', 'members', 'oc_x'], 3],
+  [['feishu', 'groups'], 3], [['feishu', 'group-identity', 'oc_x', '--bot', 'cli_test'], 3], [['feishu', 'members', 'oc_x'], 3],
   [['feishu', 'messages', 'oc_x'], 3], [['feishu', 'message', 'om_x'], 3], [['feishu', 'file', 'om_x', 'file_x', '--type', 'file'], 3], [['feishu', 'chat', 'oc_x'], 3],
   [['feishu', 'doc', 'dox'], 3], [['feishu', 'sheet', 'sht'], 3], [['feishu', 'base', 'bas'], 3], [['feishu', 'slides', 'sld'], 3], [['feishu', 'mindnote', 'bmn'], 3],
   [['feishu', 'board', 'brd'], 3], [['feishu', 'minutes', 'min'], 3], [['feishu', 'drive', 'box'], 3], [['feishu', 'folder'], 3], [['feishu', 'wiki'], 3],

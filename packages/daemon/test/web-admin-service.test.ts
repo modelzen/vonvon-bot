@@ -722,3 +722,24 @@ it('reads pending events from all inviters and filters bound groups and disabled
     await expect(reader.pendingGroups?.(id)).rejects.toThrow();
   } finally { await reader.close?.(); await seedBots(prior); }
 });
+
+
+it('keeps the group identity read bound to the captured Bot registration and exact echoed group', async () => {
+  const original = await loadBots();
+  const id = 'cli_group_identity';
+  const bot = {appId: id, name: 'Identity fixture', tenant: 'feishu' as const, createdAt: 1, registrationId: 'captured'};
+  await seedBots({...original, bots: [...original.bots, bot]});
+  const executeGroups = vi.fn(async (_botId: string, _op: unknown): Promise<unknown> => ({kind: 'groupIdentity', agentId: id, groupId: 'oc_exact', name: '飞书平台群'}));
+  const reader = createAdminService({executeGroups});
+  try {
+    expect(await reader.readGroupIdentity!(id, 'oc_exact')).toEqual({kind: 'groupIdentity', agentId: id, groupId: 'oc_exact', name: '飞书平台群'});
+    expect(executeGroups).toHaveBeenCalledWith(id, {kind: 'groupIdentity', chatId: 'oc_exact', identity: {appId: id, tenant: 'feishu', createdAt: 1, registrationId: 'captured'}});
+    executeGroups.mockResolvedValueOnce({kind: 'groupIdentity', agentId: id, groupId: 'oc_other', name: 'wrong target'});
+    await expect(reader.readGroupIdentity!(id, 'oc_exact')).rejects.toThrow('目标不一致');
+    executeGroups.mockImplementationOnce(async () => {
+      await seedBots({...original, bots: [...original.bots, {...bot, registrationId: 'replaced'}]});
+      return {kind: 'groupIdentity', agentId: id, groupId: 'oc_exact', name: 'late name'};
+    });
+    await expect(reader.readGroupIdentity!(id, 'oc_exact')).rejects.toThrow('重新注册');
+  } finally {await reader.close?.(); await seedBots(original);}
+});

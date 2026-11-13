@@ -43,6 +43,8 @@
 - 网络结果不明时复用原操作与消息 UUID；过了上游去重期只能明确重发。旧卡立即失效。
 - IM 不携带源群名、职责正文、setup、记忆或敏感路径。云只收本次允许的字段。diff 不含真实凭据、收件人和本机路径。
 
+已投递的卡片更新失败时，原账号通过 owner 会话重试同一实体、序号、UUID 和固定文案；回包丢失也不重发 IM。UUID 或序号冲突不证明成功，只有原消息返回的卡片内容与目标一致才能清除待更新标记。持续失败的请求按次退避，最多间隔十分钟。撤销关联或关闭会话后不更新；飞书报告实体不存在、过期，或创建后已达 14 天时，App 提示原卡无法再更新。[全量更新卡片实体](https://open.feishu.cn/document/cardkit-v1/card/update) · [获取指定消息的内容](https://open.feishu.cn/document/server-docs/im-v1/message/get)
+
 ## 9. 风险和行数
 
 本片约 1,300 行，按身份与来源、持久化与发送、云证明与本地编排、真实边界测试分开审查。上游消息 UUID 一小时内至多发送一次。自动重试使用 55 分钟窗口，给处理与网络延时留余量。[官方 SDK 的 uuid 说明](https://larksuite.github.io/oapi-sdk-java/com/lark/oapi/service/im/v1/model/CreateMessageReqBody.Builder.html)
