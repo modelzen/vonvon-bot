@@ -1,10 +1,11 @@
 import {createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import type {VonvonClient} from '@vonvon/client/browser';
-import {groupIdSchema, type AgentId, type GroupId, type DesktopSnapshot, type RecipeDetail, type RecipeUseReply, type RecipeUseRequest} from '@vonvon/protocol';
+import {groupIdSchema, type AccountStatus, type AgentId, type GroupId, type DesktopSnapshot, type RecipeDetail, type RecipeUseReply, type RecipeUseRequest} from '@vonvon/protocol';
 import {useAccount} from '../account-context';
 import {ClientProvider, useActiveDevice, useClient, useDevicesState, useShellCapabilities, type ActiveDevice} from '../client-context';
 import {DraftGuardProvider} from '../settings/DraftGuard';
 import {RecipeUseDialog} from './RecipeUseDialog';
+import {useRecipeGroupIdentity} from './recipe-group-identity';
 import {Button} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 import './recipe-use.css';
@@ -15,10 +16,10 @@ export type RecipeUseSession = {
   id: number; intentTarget?: RecipeGroupTarget;
   recipe: RecipeReference; accountId: string; device: ActiveDevice; client: VonvonClient;
   target?: RecipeGroupTarget; botId?: AgentId;
-  summary?: {botName?: string; groupId?: string; groupName?: string};
+  summary?: {botName?: string; groupId?: string};
 };
 type ContextValue = {start: (recipe: RecipeReference | RecipeDetail, target?: RecipeGroupTarget) => void; available: boolean; refreshVersion: number};
-type Display = {kind: 'closed'; selected?: number} | {kind: 'session'; selected: number} | {kind: 'choice'; selected: number; next: RecipeUseSession};
+type Display = {kind: 'closed'; selected?: number} | {kind: 'session'; selected: number} | {kind: 'choice'; selected: number; previous: RecipeUseSession; next: RecipeUseSession};
 const SESSION_SUMMARY_LIMIT = 8;
 const Context = createContext<ContextValue | undefined>(undefined);
 export function useRecipeUse() {return useContext(Context);}
@@ -47,7 +48,7 @@ export function RecipeUseProvider({children}: {children: ReactNode}) {
     const next = matching ?? {id: ++sequence.current, recipe: reference, accountId, device, client, intentTarget: target, target, botId: target?.botId};
     const previous = sessions.find(item => item.id === display.selected && item.accountId === accountId);
     if (previous && previous.id !== next.id) {
-      setDisplay({kind: 'choice', selected: previous.id, next});
+      setDisplay({kind: 'choice', selected: previous.id, previous, next});
       return;
     }
     activate(next);
@@ -61,30 +62,30 @@ export function RecipeUseProvider({children}: {children: ReactNode}) {
   }
   function finish(session: RecipeUseSession) {
     setSessions(items => items.filter(item => item.id !== session.id));
-    if (display.selected === session.id) setDisplay({kind: 'closed'});
+    setDisplay(current => current.kind === 'session' && current.selected === session.id ? {kind: 'closed'} : current);
     setRefreshVersion(value => value + 1);
   }
   const session = sessions.find(item => item.id === display.selected);
-  const currentChoice = display.kind === 'choice' && session && display.next.accountId === accountId && display.next.device.id === device.id && display.next.client === client ? {previous: session, next: display.next} : undefined;
+  const currentChoice = display.kind === 'choice' && display.previous.accountId === accountId && display.next.accountId === accountId && display.next.device.id === device.id && display.next.client === client ? {previous: session ?? display.previous, previousClosed: !session, next: display.next} : undefined;
   return <Context.Provider value={{start, available, refreshVersion}}>
     {children}
     {shell?.recipeUse && session && <RecipeUseSessionView key={session.id} session={session} visible={display.kind === 'session'}
-      currentAccountId={accountId} currentDeviceId={device.id} currentClient={client}
+      currentAccountId={accountId} currentAccountStatus={account.status} currentDeviceId={device.id} currentClient={client}
       currentReady={!devices || devices.active.phase === 'ready' && device.mode === 'full'}
       request={request => shell.recipeUse!.request(request)} onSelectBot={botId => update(session, {botId})}
       onSelectGroup={groupId => {if (session.botId) update(session, {target: {botId: session.botId, groupId: groupIdSchema.parse(groupId)}});}}
       onSummary={summary => setSessions(items => {
         const previous = items.find(item => item.id === session.id)?.summary;
-        if (previous?.botName === summary?.botName && previous?.groupId === summary?.groupId && previous?.groupName === summary?.groupName) return items;
+        if (previous?.botName === summary?.botName && previous?.groupId === summary?.groupId) return items;
         return items.map(item => item.id === session.id ? {...item, summary} : item);
       })}
       onClose={() => {setDisplay({kind: 'closed', selected: session.botId ? session.id : undefined}); if (!session.botId) setSessions(items => items.filter(item => item.id !== session.id));}}
       onFinished={() => finish(session)}/>}
-    {currentChoice && <RecipeIntentChoice choice={currentChoice} onClose={() => setDisplay({kind: 'closed', selected: currentChoice.previous.id})} onSelect={activate}/>}
+    {currentChoice && <RecipeIntentChoice accountScope={account.status} choice={currentChoice} onClose={() => setDisplay({kind: 'closed', selected: currentChoice.previousClosed ? undefined : currentChoice.previous.id})} onSelect={activate}/>}
   </Context.Provider>;
 }
 
-function RecipeIntentChoice({choice, onClose, onSelect}: {choice: {previous: RecipeUseSession; next: RecipeUseSession}; onClose: () => void; onSelect: (session: RecipeUseSession) => void}) {
+function RecipeIntentChoice({choice, accountScope, onClose, onSelect}: {accountScope?: AccountStatus; choice: {previous: RecipeUseSession; previousClosed: boolean; next: RecipeUseSession}; onClose: () => void; onSelect: (session: RecipeUseSession) => void}) {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>();
   useEffect(() => {
     let active = true;
@@ -92,28 +93,32 @@ function RecipeIntentChoice({choice, onClose, onSelect}: {choice: {previous: Rec
     return () => {active = false; unsubscribe();};
   }, [choice.next.client]);
   return <Dialog open title="选择本次应用目标" onClose={onClose} footer={<>
-    <Button onClick={() => onSelect(choice.previous)}>继续旧目标</Button>
+    <Button disabled={choice.previousClosed} onClick={() => onSelect(choice.previous)}>继续旧目标</Button>
     <Button variant="primary" onClick={() => onSelect(choice.next)}>开始当前目标</Button>
   </>}>
     <p>你选择了不同的应用目标。旧操作会保留，可从原配方和目标继续核对；开始当前目标不会取消旧操作。尚未提交的入群表单需要重新填写。</p>
-    <h3>旧目标</h3><RecipeIntentSummary session={choice.previous} snapshot={choice.previous.client === choice.next.client ? snapshot : undefined}/>
-    <h3>当前目标</h3><RecipeIntentSummary session={choice.next} snapshot={snapshot}/>
+    {choice.previousClosed && <p role="status">旧操作已结束。请明确选择是否开始当前目标。</p>}
+    <h3>旧目标</h3><RecipeIntentSummary accountScope={accountScope} session={choice.previous} snapshot={choice.previous.client === choice.next.client ? snapshot : undefined}/>
+    <h3>当前目标</h3><RecipeIntentSummary accountScope={accountScope} session={choice.next} snapshot={snapshot}/>
   </Dialog>;
 }
-function RecipeIntentSummary({session, snapshot}: {session: RecipeUseSession; snapshot?: DesktopSnapshot}) {
+function RecipeIntentSummary({session, snapshot, accountScope}: {session: RecipeUseSession; snapshot?: DesktopSnapshot; accountScope?: AccountStatus}) {
   const groupId = session.target?.groupId ?? session.summary?.groupId;
+  const scope = useMemo(() => ({session, accountScope}), [session, accountScope]);
+  const identity = useRecipeGroupIdentity({client: session.client, scope, snapshot, botId: session.botId, groupId, enabled: snapshot?.host.kind === 'connected' && !snapshot.stale});
+  const localName = snapshot?.memberships.find(member => member.agentId === session.botId && member.groupId === groupId)?.name;
   return <p className="recipe-use-target">{session.recipe.name} · {session.recipe.version} · {session.device.name}<br/>
     Bot：{snapshot?.agents.find(agent => agent.id === session.botId)?.name ?? session.summary?.botName ?? session.botId ?? '待选择'}<br/>
-    群聊：{snapshot?.groups.find(group => group.id === groupId)?.name ?? session.summary?.groupName ?? '待选择'}{groupId && `（${groupId}）`}</p>;
+    群聊：{identity.name ?? (groupId ? '待核对飞书群名' : '待选择')}{groupId && `（${groupId}）`}{localName && <><br/>本地名称：{localName}</>}</p>;
 }
 
-function RecipeUseSessionView({session, visible, currentAccountId, currentDeviceId, currentClient, currentReady, request, onSelectBot, onSelectGroup, onSummary, onClose, onFinished}: {
-  session: RecipeUseSession; visible: boolean; currentAccountId?: string; currentDeviceId: string; currentClient: VonvonClient; currentReady: boolean;
+function RecipeUseSessionView({session, visible, currentAccountId, currentAccountStatus, currentDeviceId, currentClient, currentReady, request, onSelectBot, onSelectGroup, onSummary, onClose, onFinished}: {
+  session: RecipeUseSession; visible: boolean; currentAccountId?: string; currentAccountStatus?: AccountStatus; currentDeviceId: string; currentClient: VonvonClient; currentReady: boolean;
   request: (request: RecipeUseRequest) => Promise<RecipeUseReply>; onSelectBot: (id: AgentId) => void; onClose: () => void; onFinished: () => void;
   onSelectGroup: (groupId: string) => void;
   onSummary: (summary: RecipeUseSession['summary']) => void;
 }) {
-  const snapshotScope = useMemo(() => ({currentAccountId, currentDeviceId, currentClient, currentReady}), [currentAccountId, currentDeviceId, currentClient, currentReady]);
+  const snapshotScope = useMemo(() => ({currentAccountId, currentAccountStatus, currentDeviceId, currentClient, currentReady}), [currentAccountId, currentAccountStatus, currentDeviceId, currentClient, currentReady]);
   const [read, setRead] = useState<{scope: typeof snapshotScope; snapshot: DesktopSnapshot}>();
   const snapshot = read?.scope === snapshotScope ? read.snapshot : undefined;
   const [reply, setReply] = useState<RecipeUseReply>();
@@ -166,14 +171,15 @@ function RecipeUseSessionView({session, visible, currentAccountId, currentDevice
     void begin();
   }, [session.botId, session.target?.groupId, paused]);
   const needsRecovery = lease.current.state === 'recover';
-  const groupId = reply && 'groupId' in reply ? reply.groupId : session.target?.groupId;
+  const groupId = reply && 'groupId' in reply && reply.groupId ? reply.groupId : reply?.kind === 'pending' && reply.phase === 'joining' ? reply.recovery?.groupId ?? session.target?.groupId : session.target?.groupId;
   const botName = snapshot?.agents.find(agent => agent.id === session.botId)?.name;
-  const groupName = snapshot?.groups.find(group => group.id === groupId)?.name;
-  useEffect(() => {if (snapshot) onSummary({botName, groupId, groupName});}, [snapshot, botName, groupId, groupName]);
+  const identity = useRecipeGroupIdentity({client: session.client, scope: snapshotScope, snapshot, botId: session.botId, groupId, enabled: !paused});
+  const groupName = identity.name;
+  useEffect(() => {if (snapshot) onSummary({botName, groupId});}, [snapshot, botName, groupId]);
   return <ClientProvider client={session.client} device={session.device}>
     <DraftGuardProvider><RecipeUseDialog session={session} snapshot={snapshot} visible={visible} reply={reply} error={error} busy={busy}
       paused={paused} accountChanged={accountChanged} unavailable={unavailable && !deviceChanged} needsRecovery={needsRecovery} reviewEpoch={reviewEpoch} acceptedResolution={acceptedResolution}
       onSelectBot={onSelectBot} onSelectGroup={onSelectGroup} onClose={onClose} onRecover={() => void begin()}
-      onRequest={input => send(input)} groupId={groupId}/></DraftGuardProvider>
+      onRequest={input => send(input)} groupId={groupId} groupName={groupName} groupNameError={identity.error} onRefreshGroupName={identity.refresh}/></DraftGuardProvider>
   </ClientProvider>;
 }

@@ -1,3 +1,4 @@
+import {agentIdSchema, groupIdSchema} from '@vonvon/protocol';
 import { describe, expect, it } from 'vitest';
 import { desktopChannels } from '../src/ipc-contract.js';
 import { createDesktopFacades, type FacadeTransport } from '../src/facade.js';
@@ -461,4 +462,22 @@ describe('devices-ui-1a facade', () => {
     await expect(shell.devices.switchTo(B)).rejects.toMatchObject({ message: '设备列表里没有这台设备。', code: 'unknown_device' });
     expect(h.calls.slice(-3)).toEqual([desktopChannels.devicesState, desktopChannels.devicesRemove, desktopChannels.devicesSwitch]);
   });
+});
+
+
+it('validates minimal exact group identity replies through the captured device client facade', async () => {
+  const request = {type: 'readGroupIdentity' as const, agentId: agentIdSchema.parse('cli_exact'), groupId: groupIdSchema.parse('oc_exact')};
+  const calls: unknown[][] = [];
+  let value: unknown = {kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '平台群'};
+  const facade = createDesktopFacades({receive: () => () => {}, invoke: async (channel, ...args) => {
+    if (channel === desktopChannels.subscribe) return {ok: true, value: undefined};
+    calls.push([channel, ...args]); return {ok: true, value};
+  }});
+  const client = facade.shell.devices.clientFor('11111111-1111-4111-8111-111111111111');
+  expect(await client.run(request)).toEqual(value);
+  expect(calls).toEqual([[desktopChannels.run, request, '11111111-1111-4111-8111-111111111111']]);
+  for (const invalid of [{kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: ' '},
+    {kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '平台群', description: 'not allowed'}]) {
+    value = invalid; await expect(client.run(request)).rejects.toThrow();
+  }
 });
