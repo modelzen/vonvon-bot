@@ -41,6 +41,8 @@ export const recipeInstallRequestSchema = z.discriminatedUnion('type', [
     manifest: z.string().min(1).max(80000), manifestSha256: digest, reviewToken: digest.optional(), resolution: recipeResolutionSchema.optional()}).strict(),
   z.object({type: z.literal('commit'), ...target, operationId: uuid, authorization: recipeAuthorizationSchema.optional()}).strict(),
   z.object({type: z.literal('status'), ...target, operationId: uuid}).strict(),
+  z.object({type: z.literal('issuing'), ...target, operationId: uuid}).strict(),
+  z.object({type: z.literal('reconcile'), ...target, operationId: uuid}).strict(),
   z.object({type: z.literal('cancel'), ...target, operationId: uuid}).strict(),
 ]);
 export type RecipeInstallRequest = z.infer<typeof recipeInstallRequestSchema>;
@@ -58,6 +60,7 @@ export const recipeInstallReplySchema = z.discriminatedUnion('kind', [
     nonceCommitment: recipeBinary32Schema, versionId: uuid, manifestSha256: digest, ...review}).strict(),
   z.object({kind: z.literal('alreadyInstalled'), groupId: groupIdSchema, recipeId: uuid, versionId: uuid}).strict(),
   z.object({kind: z.literal('status'), operationId: uuid, status: z.enum(['prepared', 'in_progress', 'applied', 'rejected']),
+    issuerState: z.enum(['unissued', 'issuing', 'authorized']), stillNeedsTicket: z.boolean(),
     reason: z.string().optional(), groupId: groupIdSchema}).strict(),
 ]);
 export type RecipeInstallReply = z.infer<typeof recipeInstallReplySchema>;
