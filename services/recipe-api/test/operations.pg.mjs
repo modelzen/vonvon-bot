@@ -61,6 +61,20 @@ export async function checkInstallOperations({request,sql,jwt,author,reader,othe
   await redeem(auth,403,{ticket:randomBytes(32).toString('base64url')});
   const wrongKey=generateKeyPairSync('x25519').privateKey;
   await redeem(auth,403,{proof:installProof(wrongKey,auth).toString('base64url')});
+  const credentials=[auth.ticket,nonce.toString('base64url'),installProof(privateKey,auth).toString('base64url')]
+    .map(value=>`decode('${Buffer.from(value,'base64url').toString('hex')}','hex')`);
+  for (const missing of [0,1,2,-1]) {
+    const args=credentials.map((value,index)=>missing===-1 || index===missing?'null':value);
+    sql(`begin; set local role recipe_api;
+      do $$ declare denied boolean := false; begin
+        begin
+          perform recipe_api.possess_operation('${id}',${args.join(',')});
+        exception when raise_exception then
+          if sqlerrm='invalid_operation_proof' then denied:=true; else raise; end if;
+        end;
+        if not denied then raise exception 'NULL possession credential was accepted'; end if;
+      end $$; rollback;`);
+  }
   const received=await redeem(auth);
   assert.equal(received.status,'redeemed');
   assert.equal(received.manifest,preview.manifest);
