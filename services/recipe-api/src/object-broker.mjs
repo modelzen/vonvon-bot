@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { ApiError, UUID } from './errors.mjs';
 import { normalizeLogo, verifyNormalizedLogo } from './logo.mjs';
 import { boundedObjectBytes } from './object-storage.mjs';
+import { objectMemberScope, objectPackageScope } from './object-store.mjs';
 
 const media = {text:'text/plain;charset=utf-8',finalLogo:'image/webp',manifest:'application/json'};
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -50,11 +51,10 @@ export function createObjectBroker({store,storage,validateCanonicalManifest,auth
 
   return {
     async receive(actor, operationId, {ordinal,kind,bytes,sha256}, stream) {
-      if (!UUID.test(actor) || !UUID.test(operationId) || !Number.isInteger(ordinal) ||
-          !Object.hasOwn(media,kind) || !Number.isInteger(bytes) || !/^[0-9a-f]{64}$/.test(sha256)) {
+      const scope = objectMemberScope(actor,operationId,ordinal);
+      if (!Object.hasOwn(media,kind) || !Number.isInteger(bytes) || !/^[0-9a-f]{64}$/.test(sha256)) {
         throw new ApiError(422,'invalid_object_member');
       }
-      const scope = [actor,operationId,ordinal];
       return store.withMember(...scope,async call => {
         let m = await call('open_member',...scope,kind,bytes,sha256);
         if (m.state === 'ready') return descriptor(m);
@@ -84,10 +84,11 @@ export function createObjectBroker({store,storage,validateCanonicalManifest,auth
       });
     },
     async reconcileQuiescent(actor,operationId,ordinal,lane,evidenceSha256) {
-      await store.withMember(actor,operationId,ordinal,call =>
-        call('confirm_quiescence',actor,operationId,ordinal,lane,evidenceSha256));
+      const scope = objectMemberScope(actor,operationId,ordinal);
+      await store.withMember(...scope,call => call('confirm_quiescence',...scope,lane,evidenceSha256));
     },
     async collect(actor,operationId) {
+      [actor,operationId] = objectPackageScope(actor,operationId);
       const inventory = await store.call('inventory',actor,operationId);
       if (inventory.state === 'open') {
         return {pending:inventory.members.map(m=>({ordinal:m.ordinal,reason:'object_held'})),inventory};

@@ -1,9 +1,24 @@
-import { ApiError } from './errors.mjs';
+import { ApiError, UUID } from './errors.mjs';
 
 const rowCalls = new Set(['member','open_member','ready']);
 const calls = new Set([...rowCalls, 'start_write','saw_bytes','saw_absence','begin_delete','end_ingress',
   'close_package','inventory','pin_backup','prune_closed','confirm_quiescence','pending_cleanup','storage_absent']);
 const limit = code => new ApiError(429, code, 10);
+
+export function objectPackageScope(actor, operationId) {
+  if (typeof actor !== 'string' || actor.length !== 36 || !UUID.test(actor) ||
+      typeof operationId !== 'string' || operationId.length !== 36 || !UUID.test(operationId)) {
+    throw new ApiError(422,'invalid_object_member');
+  }
+  return [actor.toLowerCase(),operationId.toLowerCase()];
+}
+
+export function objectMemberScope(actor, operationId, ordinal) {
+  if (!Number.isInteger(ordinal) || ordinal < 0 || ordinal > 65) {
+    throw new ApiError(422,'invalid_object_member');
+  }
+  return [...objectPackageScope(actor,operationId),ordinal];
+}
 
 export async function createObjectStore(pool) {
   const {rows:[login]} = await pool.query(`
@@ -52,8 +67,9 @@ export async function createObjectStore(pool) {
       finally { client.release(); }
     },
     async withMember(actor, operationId, ordinal, work) {
+      const scope = objectMemberScope(actor,operationId,ordinal);
       const client = await connect();
-      const key = [actor,operationId,ordinal].join('/');
+      const key = scope.join('/');
       let locked = false;
       let discard = false;
       try {

@@ -169,6 +169,13 @@ try {
     assert.equal(aliasReaders,1,'UUID aliases must enter only one body reader');
     assert.deepEqual(aliasStarts,['reading',...Array.from({length:3},()=>({error:'object_member_busy'}))]);
     assert.equal(aliasInventory.members[0].inFlight,true,'busy aliases must not clear the active member ingress');
+    let aliasWork=0;
+    for (const [actor,operation] of spellingPairs.slice(1)) {
+      await expect(store.withMember(actor,operation,-0,async ()=>{aliasWork++;}),'object_member_busy');
+    }
+    assert.equal(aliasWork,0,'store callers must share the broker member lock');
+    await expect(broker.reconcileQuiescent(owner.toUpperCase(),aliases.toUpperCase(),0,'temp',sha(aliasBody)),
+      'object_member_busy');
     let secondEntered;
     const secondReading=new Promise(resolve=>{secondEntered=resolve;});
     const second=broker.receive(owner,aliases,info(1,aliasBody),new ReadableStream({async pull(controller) {
@@ -209,7 +216,7 @@ try {
   await both;
   await expect(delayed.receive(owner,active,info(2,body),body),'object_stream_limit');
   await cancel(active);
-  const collecting=await broker.collect(owner,active);
+  const collecting=await broker.collect(owner.toUpperCase(),active.toUpperCase());
   assert.deepEqual(collecting.pending.map(p=>p.reason),['object_member_busy','object_member_busy']);
   assert.equal(collecting.inventory.actorHeld,300);
   release();
