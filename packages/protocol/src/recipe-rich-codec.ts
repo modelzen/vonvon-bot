@@ -23,7 +23,12 @@ function checkJson(value: unknown, depth = 0, budget = {nodes: 0, bytes: 0}): vo
   if (typeof value !== 'object') fail('invalid_json', 'value');
   if (Array.isArray(value)) {
     if (value.length > RECIPE_RICH_LIMITS.nodes) fail('limit_exceeded', 'array');
-    for (const child of value) checkJson(child, depth + 1, budget);
+    if (Object.getPrototypeOf(value) !== Array.prototype || Reflect.ownKeys(value).length !== value.length + 1) fail('invalid_json', 'array');
+    for (let index = 0; index < value.length; index++) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor?.enumerable || !('value' in descriptor)) fail('invalid_json', 'array.property');
+      checkJson(descriptor.value, depth + 1, budget);
+    }
     return;
   }
   if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) fail('invalid_json', 'object');
@@ -86,6 +91,9 @@ export function canonicalizeRichRecipeContent(input: unknown): CanonicalRichReci
     if (item.field === 'permission.claude.requirement' && item.value.permissionMode === 'bypassPermissions' && item.value.network !== 'all') {
       fail('invalid_content', 'permission.claude.requirement.network');
     }
+    if (item.field === 'permission.codex.requirement' && item.value.sandbox === 'danger-full-access' && !item.value.network) {
+      fail('invalid_content', 'permission.codex.requirement.network');
+    }
   }
   const descriptors = new Map<string, RecipeRichPartDescriptor>();
   for (const part of content.parts) {
@@ -126,8 +134,10 @@ export function canonicalizeRichRecipeContent(input: unknown): CanonicalRichReci
     for (const fileId of skill.fileIds) {
       const file = files.get(fileId);
       if (!file) fail('invalid_reference', 'skills.fileIds');
-      const name = file.name.normalize('NFC').toLowerCase();
-      if (names.has(name)) fail('invalid_reference', 'skills.files.name');
+      const name = file.name.normalize('NFC').toLowerCase().toUpperCase().toLowerCase().normalize('NFC');
+      if ([...names].some(existing => existing === name || existing.startsWith(`${name}/`) || name.startsWith(`${existing}/`))) {
+        fail('invalid_reference', 'skills.files.name');
+      }
       names.add(name);
       referencedFiles.add(fileId);
     }
@@ -168,6 +178,12 @@ function checkPublishable(content: RecipeRichContent): void {
   content.setup.forEach((step, index) => {
     if (!step.title.trim() || !step.instructions.trim()) fail('invalid_content', `setup.${index}`);
   });
+  content.tasks.forEach((task, index) => {
+    const instruction = task.instruction;
+    const emptyInstruction = instruction.kind === 'inline' ? !instruction.value.trim()
+      : content.parts.find(part => part.objectId === instruction.objectId)?.bytes === 0;
+    if (!task.name.trim() || emptyInstruction) fail('invalid_content', `tasks.${index}`);
+  });
 }
 
 export function validatePublishableRichRecipeContent(input: unknown): CanonicalRichRecipeContent {
@@ -177,6 +193,7 @@ export function validatePublishableRichRecipeContent(input: unknown): CanonicalR
 }
 
 export async function verifyRichRecipeRelease(release: unknown, canonicalUTF8: string | Uint8Array): Promise<CanonicalRichRecipeContent> {
+  checkJson(release);
   const parsed = recipeRichReleaseSchema.safeParse(release);
   if (!parsed.success) fail('invalid_content', 'release');
   const content = decodeRichRecipeContent(canonicalUTF8);
