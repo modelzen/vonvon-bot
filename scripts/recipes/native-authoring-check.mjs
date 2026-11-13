@@ -9,6 +9,8 @@ function imTransport() {
   const cards = new Map(),
     messages = new Map(),
     replies = [];
+  const updates = [];
+  const faults = { update: false };
   const channel = {
     send: async (chat, data) => {
       replies.push({ chat, data });
@@ -23,6 +25,8 @@ function imTransport() {
               return { code: 0, data: { card_id } };
             },
             update: async ({ path, data }) => {
+              updates.push({cardId:path.card_id, ...data});
+              if (faults.update) throw Error('card update offline');
               cards.set(path.card_id, JSON.parse(data.card.data));
               return { code: 0 };
             },
@@ -50,6 +54,7 @@ function imTransport() {
   };
   return {
     channel,
+    faults, updates, cards,
     messages,
     replies,
     click(verb, operator, chatId, tenantKey) {
@@ -303,7 +308,15 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     const edit = await act('edit', { draftId, baseRevision: 1 });
     const editId = edit.operation.operationId;
     const last = [...im.messages.values()].at(-1);
+    im.faults.update = true;
     await running.daemon.onMessage(message('/recipe role 独立的新角色', operator, last.message_id));
+    const candidateUpdate = im.updates.at(-1);
+    assert.throws(() => im.click('confirm', operator, dm, tenantKey));
+    im.faults.update = false;
+    await act('status');
+    assert.deepEqual(im.updates.at(-1), candidateUpdate);
+    im.click('confirm', operator, dm, tenantKey);
+    assert.equal(im.messages.size, 2);
     const candidate = await act('inspectCandidate', { operationId: editId });
     assert.deepEqual(candidate.content.changes, [{ op: 'setDraftRole', value: '独立的新角色' }]);
     await assert.rejects(act('accept', { operationId: editId, payloadDigest: candidate.payloadDigest }));
@@ -321,8 +334,21 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     assert.equal(seen.filter((t) => t === 'advance').length, before);
     await assert.rejects(act('status'));
     assert.equal((await request('/drafts/' + draftId, { token: author })).revision, 1);
+    im.faults.update = true;
     recovered = await rebase();
-    assert.equal(recovered.operations.find((o) => o.operationId === editId).receipt.revision, 2);
+    const stale = recovered.operations.find(o => o.operationId === editId);
+    assert.equal(stale.receipt.revision, 2);
+    assert.match(stale.syncMessage, /私聊卡片/);
+    assert.doesNotMatch(JSON.stringify(im.cards.get(last.card)), /私人草稿已保存/);
+    const savedUpdate = im.updates.at(-1);
+    const sent = im.messages.size;
+    im.faults.update = false;
+    recovered = await rebase();
+    assert.equal(recovered.operations.find(o => o.operationId === editId).syncMessage, undefined);
+    assert.deepEqual(im.updates.at(-1), savedUpdate);
+    assert.match(JSON.stringify(im.cards.get(last.card)), /私人草稿已保存/);
+    assert.equal(im.messages.size, sent);
+    console.log('PASS: status repairs the original candidate card; reopen repairs the saved card with the same receipt and no second message.');
     assert.equal((await request('/drafts/' + draftId, { token: author })).config.role, '独立的新角色');
     await assert.rejects(act('edit', { draftId, baseRevision: 1 }));
     const again = await act('edit', { draftId, baseRevision: 2 });
