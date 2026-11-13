@@ -10,6 +10,7 @@ import {
 import {createDesktopFacades} from '../../desktop/src/facade';
 import {desktopChannels} from '../../desktop/src/ipc-contract';
 import {DesktopRoot} from '../src/devices/DesktopRoot';
+import * as authoringUi from '../src/community/authoring/RecipeAuthoring';
 import {A, B, devicesState} from './devices-fixture';
 
 const accountA = '44444444-4444-4444-8444-444444444444';
@@ -50,6 +51,7 @@ let sourceRecord: unknown;
 let facade: ReturnType<typeof createDesktopFacades>;
 const success = (value: unknown) => ({ok:true,value});
 const text = () => document.querySelector('main')?.textContent ?? '';
+const dialog = (title: string) => [...document.querySelectorAll('[role="dialog"]')].find(element=>element.querySelector('header h2')?.textContent===title);
 async function click(label: string) {
   const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.trim() === label);
   expect(button, label).toBeDefined(); expect(button!.disabled, label).toBe(false);
@@ -83,6 +85,16 @@ async function prepare() {
   expect(send.disabled).toBe(true);
   await act(async () => document.querySelector<HTMLInputElement>('.community-checkbox input')!.click());
   await click('发送私人草稿卡片');
+}
+async function openDraftChat(editing=false) {
+  linked=true;await draw();await click('社区');await click('创作中心');await click('查看草稿');
+  if(editing)await click('编辑草稿');
+  await click('在飞书继续编辑');await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());
+  await click('确认编辑 Bot');await click('发送继续编辑卡片');
+}
+async function acceptChatRevision(revision:number) {
+  operations=[{...operations[0]!,state:'completed',receipt:{operationId,status:'accepted',stateRevision:3,draftId: draft.draftId,revision}}];
+  await click('重新核验并继续');
 }
 function sessionFor(request: DesktopAuthoringRequest): Session {
   if (!('handle' in request)) throw new Error('Expected scoped authoring request');
@@ -154,7 +166,7 @@ beforeEach(() => {
     }catch(error){return {ok:false,error:{kind:'rpc',message:error instanceof Error?error.message:'Fixture failed'}};}
   }});
 });
-afterEach(async()=>{await act(async()=>root.unmount());vi.useRealTimers();Reflect.deleteProperty(navigator,'clipboard');vi.unstubAllGlobals();});
+afterEach(async()=>{await act(async()=>root.unmount());vi.useRealTimers();Reflect.deleteProperty(navigator,'clipboard');vi.unstubAllGlobals();vi.restoreAllMocks();});
 async function draw(view=A) {
   await act(async()=>{emit({type:'devices',value:devicesState({id:view})});emit({type:'account',value:status});root.render(<DesktopRoot fallback={facade.client} shell={facade.shell}/>);});
 }
@@ -344,10 +356,12 @@ it('keeps a newer successful save when an earlier chat refresh arrives late',asy
   await fill('配方名称','本地已保存修订');await click('保存私人草稿');expect(text()).toContain('修订冲突');
   await click('读取最新草稿');await click('保留当前输入，使用此修订继续编辑');await click('保存私人草稿');
   expect(draft.revision).toBe(3);
+  await click('预览发布');expect(dialog('确认发布到社区')?.textContent).toContain('本地已保存修订');
   await act(async()=>finish!(stale));
   expect((document.querySelector('[aria-label="配方名称"]') as HTMLInputElement).value).toBe('本地已保存修订');
   expect(document.querySelector('.authoring-draft-panel .community-muted')?.textContent).toContain('修订 3');
   expect(text()).toContain('私人草稿已保存');
+  expect(dialog('确认发布到社区')?.textContent).toContain('本地已保存修订');
 });
 
 it('shows a failed accepted revision refresh on the read-only draft and retries the same draft',async()=>{
@@ -364,4 +378,97 @@ it('shows a failed accepted revision refresh on the read-only draft and retries 
   expect(document.querySelector('.authoring-draft-panel .community-muted')?.textContent).toContain('修订 2');
   expect(cloudCalls.filter(request=>request.type==='draft').every(request=>request.draftId===draftId)).toBe(true);
   expect(cloudCalls.some(request=>request.type==='saveDraft')).toBe(false);
+});
+
+it('shows a slow accepted-revision read and retains input entered while it is pending',async()=>{
+  await openDraftChat();
+  draft={...draft,revision:2,public:{...draft.public,name:'飞书已保存的内容'}};
+  let finish:((value:RecipeDraft)=>void)|undefined;const prior=cloud;
+  cloud=async request=>request.type==='draft'?new Promise(resolve=>{finish=resolve;}):prior(request);
+  await acceptChatRevision(2);
+  expect(text()).toContain('正在读取最新草稿');expect(text()).toContain('当前显示修订 1');expect(text()).toContain('云端已保存修订 2');
+  await click('编辑草稿');const input=await fill('配方名称','读取期间继续输入');input.focus();input.setSelectionRange(2,4);
+  await act(async()=>finish!(draft));
+  expect(document.querySelector('[aria-label="配方名称"]')).toBe(input);expect(input.value).toBe('读取期间继续输入');
+  expect(input.selectionStart).toBe(2);expect(input.selectionEnd).toBe(4);expect(text()).toContain('云端已有修订 2');
+  await click('核对新修订');expect(document.querySelector('[role="dialog"]')?.textContent).toContain('飞书已保存的内容');
+  await click('保留当前输入，使用此修订继续编辑');expect(input.value).toBe('读取期间继续输入');
+  expect(document.querySelector('.authoring-draft-panel .community-muted')?.textContent).toContain('修订 2');
+});
+
+it('discards a late refresh failure after rebasing and saving a newer local revision',async()=>{
+  await openDraftChat(true);
+  draft={...draft,revision:2};let reject:((error:Error)=>void)|undefined;let delay=true;const prior=cloud;
+  cloud=async request=>{
+    if(request.type==='draft'&&delay){delay=false;return new Promise((_,fail)=>{reject=fail;});}
+    if(request.type==='saveDraft'&&request.target.kind==='existing'&&request.target.revision!==draft.revision)throw new Error('修订冲突');
+    return prior(request);
+  };
+  await acceptChatRevision(2);await fill('配方名称','本地成功的新修订');await click('保存私人草稿');
+  await click('读取最新草稿');await click('保留当前输入，使用此修订继续编辑');await click('保存私人草稿');await click('预览发布');
+  await act(async()=>reject!(new Error('已经过时的刷新错误')));
+  expect(text()).not.toContain('已经过时的刷新错误');expect(text()).not.toContain('App 尚未读取最新修订');
+  expect(dialog('确认发布到社区')?.textContent).toContain('本地成功的新修订');
+  expect(document.querySelector('.authoring-draft-panel .community-muted')?.textContent).toContain('修订 3');
+});
+
+it.each(['success','failure'] as const)('keeps the newest overlapping refresh pending after an older %s',async(outcome)=>{
+  await openDraftChat();
+  draft={...draft,revision:2};const stale=draft;
+  let finishFirst:((value:RecipeDraft)=>void)|undefined;let rejectFirst:((error:Error)=>void)|undefined;let finishSecond:((value:RecipeDraft)=>void)|undefined;let reads=0;const prior=cloud;
+  cloud=async request=>{
+    if(request.type==='draft')return ++reads===1?new Promise((resolve,reject)=>{finishFirst=resolve;rejectFirst=reject;}):new Promise(resolve=>{finishSecond=resolve;});
+    return prior(request);
+  };
+  await acceptChatRevision(2);await click('发送继续编辑卡片');
+  draft={...draft,revision:3,public:{...draft.public,name:'第二次读取的修订'}};await acceptChatRevision(3);
+  await act(async()=>{if(outcome==='success')finishFirst!(stale);else rejectFirst!(new Error('更早读取的错误'));});
+  expect(text()).toContain('正在读取最新草稿');expect(text()).toContain('当前显示修订 1');expect(text()).toContain('云端已保存修订 3');expect(text()).not.toContain('更早读取的错误');
+  await act(async()=>finishSecond!(draft));
+  expect(text()).toContain('第二次读取的修订');expect(text()).not.toContain('更早读取的错误');
+  expect(document.querySelector('.authoring-draft-panel .community-muted')?.textContent).toContain('修订 3');
+});
+
+it('requires retry when the server read is older than the accepted cloud receipt',async()=>{
+  await openDraftChat();await acceptChatRevision(2);
+  expect(text()).toContain('云端已保存，但 App 尚未读取最新修订');expect(text()).toContain('尚未读取到目标草稿的新修订');
+  expect(text()).toContain('当前显示修订 1');
+  draft={...draft,revision:2,public:{...draft.public,name:'读取恢复后的原稿'}};await click('重新读取新修订');
+  expect(text()).toContain('读取恢复后的原稿');expect(text()).not.toContain('尚未读取到目标草稿的新修订');
+});
+
+it('retains dirty input through a failed chat refresh and a successful retry until explicit conflict review',async()=>{
+  await openDraftChat(true);const input=await fill('配方名称','失败与重试期间的输入');
+  draft={...draft,revision:2,public:{...draft.public,name:'云端保留的修订'}};const prior=cloud;
+  cloud=async request=>{if(request.type==='draft')throw new Error('读取暂时失败');return prior(request);};
+  await acceptChatRevision(2);expect(text()).toContain('读取暂时失败');expect(input.value).toBe('失败与重试期间的输入');
+  cloud=prior;await click('重新读取新修订');expect(input.value).toBe('失败与重试期间的输入');expect(text()).not.toContain('读取暂时失败');
+  await click('核对新修订');expect(dialog('核对最新草稿')?.textContent).toContain('云端保留的修订');
+  await click('保留当前输入，使用此修订继续编辑');expect(input.value).toBe('失败与重试期间的输入');
+  expect(cloudCalls.some(request=>request.type==='saveDraft')).toBe(false);
+});
+
+it.each(['route','account'] as const)('ignores an abandoned %s refresh and its original onSaved callback after returning',async(kind)=>{
+  const callbacks:Array<Parameters<typeof authoringUi.RecipeAuthoringPage>[0]['onSaved']>=[];
+  const original=authoringUi.RecipeAuthoringPage;
+  vi.spyOn(authoringUi,'RecipeAuthoringPage').mockImplementation(props=>{callbacks.push(props.onSaved);return original(props);});
+  await openDraftChat();const oldCallback=callbacks[0]!;
+  let reject:((error:Error)=>void)|undefined;const prior=cloud;
+  cloud=async request=>request.type==='draft'?new Promise((_,fail)=>{reject=fail;}):prior(request);
+  await acceptChatRevision(2);
+  if(kind==='account') {
+    await act(async()=>{status=signedIn(accountB);emit({type:'account',value:status});});
+    expect(text()).not.toContain('同一份私人草稿');expect(text()).not.toContain('当前显示修订');
+    const reads=cloudCalls.filter(request=>request.type==='draft').length;await act(async()=>oldCallback(draftId,2));
+    expect(cloudCalls.filter(request=>request.type==='draft')).toHaveLength(reads);
+    await act(async()=>{status=signedIn();emit({type:'account',value:status});});
+  } else await click('返回创作中心');
+  cloud=prior;operations=[];
+  draft={...draft,draftId:challengeId,public:{...draft.public,name:'现在打开的另一份草稿'}};
+  if(kind==='account')await click('创作中心');
+  await click('查看草稿');
+  const reads=cloudCalls.filter(request=>request.type==='draft').length;
+  await act(async()=>{oldCallback(draftId,2);reject!(new Error('离开前的私有刷新错误'));});
+  expect(cloudCalls.filter(request=>request.type==='draft')).toHaveLength(reads);
+  expect(document.querySelector('.community-detail h1')?.textContent).toBe('现在打开的另一份草稿');expect(text()).not.toContain('离开前的私有刷新错误');
 });
