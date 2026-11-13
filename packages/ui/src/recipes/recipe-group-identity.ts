@@ -2,6 +2,25 @@ import {useEffect, useMemo, useState} from 'react';
 import type {VonvonClient} from '@vonvon/client/browser';
 import {groupIdentitySchema, groupIdSchema, type AgentId, type DesktopSnapshot} from '@vonvon/protocol';
 
+export function useRecipeTargetSnapshot(client: VonvonClient, scope: object, enabled: boolean) {
+  const [read, setRead] = useState<{scope: object; connection: object; snapshot: DesktopSnapshot}>();
+  useEffect(() => {
+    if (!enabled) return;
+    let active = true;
+    let connection = {};
+    let revision = -1;
+    const unsubscribe = client.watchSnapshots(snapshot => {
+      // The desktop facade only delivers a repeated or lower revision after reattachment.
+      if (snapshot.revision <= revision) connection = {};
+      revision = snapshot.revision;
+      if (active) setRead({scope, connection, snapshot});
+    });
+    return () => {active = false; unsubscribe();};
+  }, [client, scope, enabled]);
+  const current = enabled && read?.scope === scope ? read : undefined;
+  return {snapshot: current?.snapshot, scope: current?.connection ?? scope};
+}
+
 export function useRecipeGroupIdentity({client, scope, snapshot, botId, groupId, enabled}: {
   client: VonvonClient; scope: object; snapshot?: DesktopSnapshot; botId?: AgentId; groupId?: string; enabled: boolean;
 }) {
