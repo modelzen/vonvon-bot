@@ -15,8 +15,9 @@ const auth = (exp = Date.now()/1000+7200) => JSON.stringify({auth_mode:'chatgpt'
   access_token:fakeToken(exp),account_id:'fixture-account',refresh_token:'SECRET-REFRESH',id_token:'SECRET-ID',
 }});
 const item = {type:'message',role:'assistant',content:[{type:'output_text',text:JSON.stringify(result)}]};
-function stream(events:object[]) {
-  return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\r\n\r\n').join(''),{headers:{'content-type':'text/event-stream'}});
+function stream(events:object[], contentType:string|null = 'text/event-stream') {
+  const bytes = new TextEncoder().encode(events.map(event=>'data: '+JSON.stringify(event)+'\r\n\r\n').join(''));
+  return new Response(bytes,{headers:contentType === null ? {} : {'content-type':contentType}});
 }
 const ok = () => stream([{type:'response.metadata',metadata:{}},{type:'response.output_item.done',item},{type:'response.completed',response:{id:'fixture',status:'completed',output:[item]}}]);
 const selected = async () => ({backend:'codex-appserver',model});
@@ -58,6 +59,44 @@ it('keeps a non-Lite model on the regular response profile',async()=>{
   expect(new Headers(opts!.headers).has('x-openai-internal-codex-responses-lite')).toBe(false);
   expect(JSON.parse(String(opts!.body)).reasoning).toEqual({effort:'low'});
 });
+it('accepts the observed headerless Codex SSE message and completed response',async()=>{
+  const proposal = {kind:'proposal',changes:[{field:'name',action:'set',before:'',value:'每周项目简报'}]};
+  const text = JSON.stringify(proposal);
+  const output = {type:'message',role:'assistant',content:[{type:'output_text',text,annotations:[],logprobs:[]}]};
+  const response = stream([
+    {type:'response.created',response:{status:'in_progress'}},
+    {type:'response.in_progress',response:{status:'in_progress'}},
+    {type:'response.output_item.added',item:{type:'message',role:'assistant',content:[]}},
+    {type:'response.content_part.added',part:{type:'output_text',text:''}},
+    {type:'response.output_text.delta',delta:text},
+    {type:'response.metadata',metadata:{}},
+    {type:'response.output_text.done',text},
+    {type:'response.content_part.done',part:output.content[0]},
+    {type:'response.output_item.done',item:output},
+    {type:'response.completed',response:{status:'completed',output:[output]}},
+  ],null);
+  expect(response.headers.has('content-type')).toBe(false);
+  const request=vi.fn<typeof fetch>().mockResolvedValueOnce(response);
+  expect(await codexDraftParser(selected,{home,env:{},fetch:request}).propose({instruction:'把名称改成「每周项目简报」'},signal())).toEqual(proposal);
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(request.mock.calls[0]![0]).toBe('https://chatgpt.com/backend-api/codex/responses');
+  expect(request.mock.calls[0]![1]).toMatchObject({redirect:'error'});
+});
+it.each(['application/json','text/plain','text/html',''])('rejects an explicit non-SSE Content-Type %j',async contentType=>{
+  const request=vi.fn<typeof fetch>().mockResolvedValueOnce(stream([
+    {type:'response.output_item.done',item},{type:'response.completed',response:{status:'completed',output:[item]}},
+  ],contentType));
+  await expect(codexDraftParser(selected,{home,env:{},fetch:request}).propose(input,signal())).rejects.toThrow();
+  expect(request).toHaveBeenCalledTimes(1);
+});
+it.each([null,'text/event-stream'])('rejects an SSE body over 256 KiB with Content-Type %j',async contentType=>{
+  const request=vi.fn<typeof fetch>().mockResolvedValueOnce(stream([
+    {type:'response.metadata',metadata:{padding:'x'.repeat(256*1024)}},
+    {type:'response.output_item.done',item},{type:'response.completed',response:{status:'completed',output:[item]}},
+  ],contentType));
+  await expect(codexDraftParser(selected,{home,env:{},fetch:request}).propose(input,signal())).rejects.toThrow();
+  expect(request).toHaveBeenCalledTimes(1);
+});
 it('never sends on an unsupported provider, stale login, redirected config, API key mode or missing selected model',async()=>{
   const request=vi.fn<typeof fetch>();
   const run = (backend='codex-appserver',id=model,env={}) => codexDraftParser(async()=>({backend,model:id}),{home,env,fetch:request}).propose(input,signal());
@@ -77,9 +116,11 @@ it.each([
   [{type:'response.output_item.done',item},{type:'response.completed',response:{status:'completed',output:[{type:'web_search_call'}]}}],
   [{type:'response.output_item.done',item},{type:'response.output_item.done',item},{type:'response.completed',response:{status:'completed'}}],
 ] as object[][])('fails closed on an incomplete or unexpected provider stream %#',async(...events)=>{
-  const request=vi.fn<typeof fetch>().mockResolvedValueOnce(stream(events));
-  await expect(codexDraftParser(selected,{home,env:{},fetch:request}).propose(input,signal())).rejects.toThrow();
-  expect(request).toHaveBeenCalledTimes(1);
+  for(const contentType of [null,'text/event-stream']) {
+    const request=vi.fn<typeof fetch>().mockResolvedValueOnce(stream(events,contentType));
+    await expect(codexDraftParser(selected,{home,env:{},fetch:request}).propose(input,signal())).rejects.toThrow();
+    expect(request).toHaveBeenCalledTimes(1);
+  }
 });
 
 it('handles the observed SSE overload without retry, fallback or a proposal',async()=>{
