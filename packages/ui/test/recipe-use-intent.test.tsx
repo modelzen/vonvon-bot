@@ -361,7 +361,7 @@ it('hides cached and delayed chooser group names when the real remote connection
   } finally {stop(); await connection.devices.dispose();}
 });
 
-it('pauses a prepared local operation and drops its identity across a real offline and reattached transition', async () => {
+it.each(['connecting', 'offline'] as const)('pauses a prepared local operation across a real %s and reattached transition', async status => {
   const connection = recipeConnections();
   const stop = connection.devices.onState(value => dispatch({type: 'devices', value}));
   dispatch({type: 'devices', value: connection.devices.state()});
@@ -369,9 +369,9 @@ it('pauses a prepared local operation and drops its identity across a real offli
     await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新');
     expect(button('确认应用到这个群')!.disabled).toBe(false);
     readIdentity = request => ({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '重连后重新读取'});
-    await act(async () => connection.devices.setLocal({status: 'connecting'}));
+    await act(async () => connection.devices.setLocal({status}));
     expect(connection.devices.state().active.phase).toBe('ready');
-    expect(connection.devices.state().devices[0]!.status).toBe('connecting');
+    expect(connection.devices.state().devices[0]!.status).toBe(status);
     expect.soft(button('确认应用到这个群')?.disabled ?? true).toBe(true);
     await act(async () => {
       connection.devices.setLocal({status: 'online'});
@@ -386,5 +386,102 @@ it('pauses a prepared local operation and drops its identity across a real offli
     expect(requests.map(request => request.type)).toEqual(['begin', 'begin']);
     await click('确认应用到这个群');
     expect(requests.filter(request => request.type === 'confirm')).toEqual([{type: 'confirm', handle}]);
+  } finally {stop(); await connection.devices.dispose();}
+});
+
+it.each(['account', 'same account', 'device', 'local reconnect'] as const)('rejects the previous lookup after a fresh identity across a real %s round trip', async kind => {
+  const connection = recipeConnections();
+  if (kind === 'device') {connection.add(A); connection.add(B); await connection.ready(A);}
+  const view = connection.devices.state().active.id;
+  const originalClient = facade.shell.devices.clientFor(view);
+  const stop = connection.devices.onState(value => dispatch({type: 'devices', value}));
+  dispatch({type: 'devices', value: connection.devices.state()});
+  try {
+    let done!: (value: unknown) => void;
+    readIdentity = () => new Promise(resolve => done = resolve);
+    await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新');
+    const oldDone = done;
+    readIdentity = request => ({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '新连接已核对'});
+    await act(async () => {
+      if (kind === 'device') {
+        await connection.ready(B); await connection.ready(A);
+      } else if (kind === 'local reconnect') {
+        connection.devices.setLocal({status: 'connecting'});
+        connection.devices.setLocal({status: 'online'});
+      } else {
+        if (kind === 'account') {status = {...status, accountId: otherAccount}; dispatch({type: 'account', value: status});}
+        status = {...status, accountId}; dispatch({type: 'account', value: status});
+      }
+      if (kind === 'device' || kind === 'local reconnect') {
+        dispatch({type: 'reattached', view}); dispatch({type: 'snapshot', view, value: snapshot});
+      }
+    });
+    expect(facade.shell.devices.clientFor(view)).toBe(originalClient);
+    expect(button('确认应用到这个群')).toBeUndefined();
+    await click('恢复原操作');
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('群聊：新连接已核对');
+    await act(async () => oldDone({kind: 'groupIdentity', agentId: botId, groupId, name: '过期连接迟到的群名'}));
+    expect(document.querySelector('[role="dialog"]')!.textContent).not.toContain('过期连接迟到的群名');
+    await act(async () => {
+      connection.devices.setLocal({status: 'online'});
+      for (const revision of [2, 3, 4]) dispatch({type: 'snapshot', view, value: {...snapshot, revision, observedAt: revision}});
+    });
+    expect(identityRequests).toHaveLength(2);
+    expect(button('确认应用到这个群')!.disabled).toBe(false);
+    expect(requests.map(request => request.type)).toEqual(['begin', 'begin']);
+    await click('确认应用到这个群');
+    expect(requests.filter(request => request.type === 'confirm')).toEqual([{type: 'confirm', handle}]);
+  } finally {stop(); await connection.devices.dispose();}
+});
+
+it('requires a new identity and review when the same facade client receives reattachment with an identical snapshot', async () => {
+  const connection = recipeConnections();
+  const stop = connection.devices.onState(value => dispatch({type: 'devices', value}));
+  dispatch({type: 'devices', value: connection.devices.state()});
+  try {
+    await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新');
+    readIdentity = request => ({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '重附加后核对'});
+    await act(async () => {
+      dispatch({type: 'reattached', view: 'local'});
+      dispatch({type: 'snapshot', view: 'local', value: snapshot});
+    });
+    expect(button('确认应用到这个群')).toBeUndefined();
+    await click('恢复原操作');
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('群聊：重附加后核对');
+    expect(identityRequests).toHaveLength(2);
+    expect(requests.map(request => request.type)).toEqual(['begin', 'begin']);
+  } finally {stop(); await connection.devices.dispose();}
+});
+
+it('clears chooser evidence during a real remote disconnect and rereads on recovery', async () => {
+  const connection = recipeConnections(); connection.add(A);
+  const link = await connection.ready(A);
+  const stop = connection.devices.onState(value => dispatch({type: 'devices', value}));
+  dispatch({type: 'devices', value: connection.devices.state()});
+  try {
+    await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新'); await click('稍后继续');
+    const pending: Array<(value: unknown) => void> = [];
+    readIdentity = () => new Promise(resolve => pending.push(resolve));
+    await inGroup(groupTwo, '检查新版'); await inGroup(groupTwo, '预览更新');
+    await act(async () => link.end('closed'));
+    expect(connection.devices.state().active.phase).toBe('reconnecting');
+    expect(button('继续旧目标')!.disabled).toBe(true);
+    expect(button('开始当前目标')!.disabled).toBe(true);
+    expect(document.querySelector('[role="dialog"]')!.textContent).not.toContain('群聊：甲组');
+    await act(async () => {
+      for (const resolve of pending) resolve({kind: 'groupIdentity', agentId: botId, groupId: groupTwo, name: '连接断开后迟到'});
+    });
+    expect(document.querySelector('[role="dialog"]')!.textContent).not.toContain('连接断开后迟到');
+    readIdentity = request => ({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: '恢复核对-' + request.groupId});
+    await act(async () => {await connection.devices.switchTo('local'); await connection.ready(A);});
+    expect(button('开始当前目标')!.disabled).toBe(false);
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('群聊：恢复核对-' + groupId);
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('群聊：恢复核对-' + groupTwo);
+    const reads = identityRequests.length;
+    await act(async () => dispatch({type: 'snapshot', view: A, value: {...snapshot, revision: 2}}));
+    expect(identityRequests).toHaveLength(reads);
+    await click('开始当前目标'); await click('确认应用到这个群');
+    expect(requests.map(request => request.type)).toEqual(['begin', 'begin', 'confirm']);
+    expect(requests.at(-1)).toEqual({type: 'confirm', handle: secondHandle});
   } finally {stop(); await connection.devices.dispose();}
 });

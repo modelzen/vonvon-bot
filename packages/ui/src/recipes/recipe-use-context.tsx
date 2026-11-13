@@ -1,11 +1,11 @@
 import {createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import type {VonvonClient} from '@vonvon/client/browser';
-import {groupIdSchema, type AccountStatus, type AgentId, type GroupId, type DesktopSnapshot, type RecipeDetail, type RecipeUseReply, type RecipeUseRequest} from '@vonvon/protocol';
+import {groupIdSchema, type AgentId, type GroupId, type DesktopSnapshot, type DevicesState, type RecipeDetail, type RecipeUseReply, type RecipeUseRequest} from '@vonvon/protocol';
 import {useAccount} from '../account-context';
 import {ClientProvider, useActiveDevice, useClient, useDevicesState, useShellCapabilities, type ActiveDevice} from '../client-context';
 import {DraftGuardProvider} from '../settings/DraftGuard';
 import {RecipeUseDialog} from './RecipeUseDialog';
-import {useRecipeGroupIdentity} from './recipe-group-identity';
+import {useRecipeGroupIdentity, useRecipeTargetSnapshot} from './recipe-group-identity';
 import {Button} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 import './recipe-use.css';
@@ -26,6 +26,9 @@ export function useRecipeUse() {return useContext(Context);}
 export function recipeReference(recipe: RecipeReference | RecipeDetail): RecipeReference {
   return 'public' in recipe ? {recipeId: recipe.recipeId, versionId: recipe.versionId, name: recipe.public.name, version: recipe.public.version} : recipe;
 }
+function connectionState(state?: DevicesState) {
+  return JSON.stringify([state?.active.id, state?.active.phase, state?.active.mode, state?.devices.find(row => row.id === state.active.id)?.status]);
+}
 
 export function RecipeUseProvider({children}: {children: ReactNode}) {
   const account = useAccount();
@@ -39,6 +42,18 @@ export function RecipeUseProvider({children}: {children: ReactNode}) {
   const [refreshVersion, setRefreshVersion] = useState(0);
   const accountId = account.status?.kind === 'signedIn' ? account.status.accountId : undefined;
   const available = Boolean(shell?.recipeUse);
+  const currentReady = !devices || devices.active.phase === 'ready' && device.mode === 'full'
+    && (device.isRemote || devices.devices.find(row => row.id === devices.active.id)?.status === 'online');
+  const [connectionEpoch, setConnectionEpoch] = useState(0);
+  useEffect(() => {
+    let previous = connectionState(devices);
+    return shell?.devices?.onState(state => {
+      const next = connectionState(state);
+      if (next !== previous) setConnectionEpoch(value => value + 1);
+      previous = next;
+    });
+  }, [shell?.devices]);
+  const currentScope = useMemo(() => ({account: account.status, deviceId: device.id, client, currentReady, connectionEpoch}), [account.status, device.id, client, currentReady, connectionEpoch]);
   function start(recipe: RecipeReference | RecipeDetail, target?: RecipeGroupTarget) {
     if (!available || !accountId) return;
     const reference = recipeReference(recipe);
@@ -70,8 +85,7 @@ export function RecipeUseProvider({children}: {children: ReactNode}) {
   return <Context.Provider value={{start, available, refreshVersion}}>
     {children}
     {shell?.recipeUse && session && <RecipeUseSessionView key={session.id} session={session} visible={display.kind === 'session'}
-      currentAccountId={accountId} currentAccountStatus={account.status} currentDeviceId={device.id} currentClient={client}
-      currentReady={!devices || devices.active.phase === 'ready' && device.mode === 'full'}
+      currentAccountId={accountId} currentDeviceId={device.id} currentClient={client} currentScope={currentScope} currentReady={currentReady}
       request={request => shell.recipeUse!.request(request)} onSelectBot={botId => update(session, {botId})}
       onSelectGroup={groupId => {if (session.botId) update(session, {target: {botId: session.botId, groupId: groupIdSchema.parse(groupId)}});}}
       onSummary={summary => setSessions(items => {
@@ -81,30 +95,27 @@ export function RecipeUseProvider({children}: {children: ReactNode}) {
       })}
       onClose={() => {setDisplay({kind: 'closed', selected: session.botId ? session.id : undefined}); if (!session.botId) setSessions(items => items.filter(item => item.id !== session.id));}}
       onFinished={() => finish(session)}/>}
-    {currentChoice && <RecipeIntentChoice accountScope={account.status} choice={currentChoice} onClose={() => setDisplay({kind: 'closed', selected: currentChoice.previousClosed ? undefined : currentChoice.previous.id})} onSelect={activate}/>}
+    {currentChoice && <RecipeIntentChoice currentScope={currentScope} currentReady={currentReady} choice={currentChoice} onClose={() => setDisplay({kind: 'closed', selected: currentChoice.previousClosed ? undefined : currentChoice.previous.id})} onSelect={activate}/>}
   </Context.Provider>;
 }
 
-function RecipeIntentChoice({choice, accountScope, onClose, onSelect}: {accountScope?: AccountStatus; choice: {previous: RecipeUseSession; previousClosed: boolean; next: RecipeUseSession}; onClose: () => void; onSelect: (session: RecipeUseSession) => void}) {
-  const [snapshot, setSnapshot] = useState<DesktopSnapshot>();
-  useEffect(() => {
-    let active = true;
-    const unsubscribe = choice.next.client.watchSnapshots(snapshot => {if (active) setSnapshot(snapshot);});
-    return () => {active = false; unsubscribe();};
-  }, [choice.next.client]);
+function RecipeIntentChoice({choice, currentScope, currentReady, onClose, onSelect}: {currentScope: object; currentReady: boolean; choice: {previous: RecipeUseSession; previousClosed: boolean; next: RecipeUseSession}; onClose: () => void; onSelect: (session: RecipeUseSession) => void}) {
+  const {snapshot, scope} = useRecipeTargetSnapshot(choice.next.client, currentScope, currentReady);
+  const ready = currentReady && snapshot?.host.kind === 'connected' && !snapshot.stale;
   return <Dialog open title="选择本次应用目标" onClose={onClose} footer={<>
-    <Button disabled={choice.previousClosed} onClick={() => onSelect(choice.previous)}>继续旧目标</Button>
-    <Button variant="primary" onClick={() => onSelect(choice.next)}>开始当前目标</Button>
+    <Button disabled={choice.previousClosed || !ready} onClick={() => onSelect(choice.previous)}>继续旧目标</Button>
+    <Button variant="primary" disabled={!ready} onClick={() => onSelect(choice.next)}>开始当前目标</Button>
   </>}>
     <p>你选择了不同的应用目标。旧操作会保留，可从原配方和目标继续核对；开始当前目标不会取消旧操作。尚未提交的入群表单需要重新填写。</p>
     {choice.previousClosed && <p role="status">旧操作已结束。请明确选择是否开始当前目标。</p>}
-    <h3>旧目标</h3><RecipeIntentSummary accountScope={accountScope} session={choice.previous} snapshot={choice.previous.client === choice.next.client ? snapshot : undefined}/>
-    <h3>当前目标</h3><RecipeIntentSummary accountScope={accountScope} session={choice.next} snapshot={snapshot}/>
+    {!ready && <p role="status">目标设备暂不可用。连接恢复后，请重新核对目标。</p>}
+    <h3>旧目标</h3><RecipeIntentSummary connectionScope={scope} session={choice.previous} snapshot={choice.previous.client === choice.next.client ? snapshot : undefined}/>
+    <h3>当前目标</h3><RecipeIntentSummary connectionScope={scope} session={choice.next} snapshot={snapshot}/>
   </Dialog>;
 }
-function RecipeIntentSummary({session, snapshot, accountScope}: {session: RecipeUseSession; snapshot?: DesktopSnapshot; accountScope?: AccountStatus}) {
+function RecipeIntentSummary({session, snapshot, connectionScope}: {session: RecipeUseSession; snapshot?: DesktopSnapshot; connectionScope: object}) {
   const groupId = session.target?.groupId ?? session.summary?.groupId;
-  const scope = useMemo(() => ({session, accountScope}), [session, accountScope]);
+  const scope = useMemo(() => ({session, connectionScope}), [session, connectionScope]);
   const identity = useRecipeGroupIdentity({client: session.client, scope, snapshot, botId: session.botId, groupId, enabled: snapshot?.host.kind === 'connected' && !snapshot.stale});
   const localName = snapshot?.memberships.find(member => member.agentId === session.botId && member.groupId === groupId)?.name;
   return <p className="recipe-use-target">{session.recipe.name} · {session.recipe.version} · {session.device.name}<br/>
@@ -112,15 +123,15 @@ function RecipeIntentSummary({session, snapshot, accountScope}: {session: Recipe
     群聊：{identity.name ?? (groupId ? '待核对飞书群名' : '待选择')}{groupId && `（${groupId}）`}{localName && <><br/>本地名称：{localName}</>}</p>;
 }
 
-function RecipeUseSessionView({session, visible, currentAccountId, currentAccountStatus, currentDeviceId, currentClient, currentReady, request, onSelectBot, onSelectGroup, onSummary, onClose, onFinished}: {
-  session: RecipeUseSession; visible: boolean; currentAccountId?: string; currentAccountStatus?: AccountStatus; currentDeviceId: string; currentClient: VonvonClient; currentReady: boolean;
+function RecipeUseSessionView({session, visible, currentAccountId, currentDeviceId, currentClient, currentScope, currentReady, request, onSelectBot, onSelectGroup, onSummary, onClose, onFinished}: {
+  session: RecipeUseSession; visible: boolean; currentAccountId?: string; currentDeviceId: string; currentClient: VonvonClient; currentScope: object; currentReady: boolean;
   request: (request: RecipeUseRequest) => Promise<RecipeUseReply>; onSelectBot: (id: AgentId) => void; onClose: () => void; onFinished: () => void;
   onSelectGroup: (groupId: string) => void;
   onSummary: (summary: RecipeUseSession['summary']) => void;
 }) {
-  const snapshotScope = useMemo(() => ({currentAccountId, currentAccountStatus, currentDeviceId, currentClient, currentReady}), [currentAccountId, currentAccountStatus, currentDeviceId, currentClient, currentReady]);
-  const [read, setRead] = useState<{scope: typeof snapshotScope; snapshot: DesktopSnapshot}>();
-  const snapshot = read?.scope === snapshotScope ? read.snapshot : undefined;
+  const accountChanged = currentAccountId !== session.accountId;
+  const deviceChanged = currentDeviceId !== session.device.id || currentClient !== session.client;
+  const {snapshot, scope: snapshotScope} = useRecipeTargetSnapshot(session.client, currentScope, !accountChanged && !deviceChanged && currentReady);
   const [reply, setReply] = useState<RecipeUseReply>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -130,19 +141,14 @@ function RecipeUseSessionView({session, visible, currentAccountId, currentAccoun
   const mounted = useRef(true);
   const begunTarget = useRef<string | undefined>(undefined);
   const lease = useRef<{epoch: number; state: 'initial' | 'ready' | 'paused' | 'recover'}>({epoch: 0, state: 'initial'});
-  const accountChanged = currentAccountId !== session.accountId;
-  const deviceChanged = currentDeviceId !== session.device.id || currentClient !== session.client;
+  const observedScope = useRef(snapshotScope);
   const unavailable = !currentReady || !snapshot || snapshot.host.kind !== 'connected' || snapshot.stale;
   const paused = accountChanged || deviceChanged || unavailable;
   if (paused && lease.current.state !== 'paused') {lease.current = {epoch: lease.current.epoch + 1, state: 'paused'};}
   else if (!paused && lease.current.state === 'paused') lease.current.state = begunTarget.current ? 'recover' : 'initial';
+  else if (!paused && begunTarget.current && observedScope.current !== snapshotScope) lease.current = {epoch: lease.current.epoch + 1, state: 'recover'};
+  observedScope.current = snapshotScope;
   useEffect(() => {mounted.current = true; return () => {mounted.current = false;};}, []);
-  useEffect(() => {
-    if (accountChanged || deviceChanged || !currentReady) return;
-    let active = true;
-    const unsubscribe = session.client.watchSnapshots(snapshot => {if (active) setRead({scope: snapshotScope, snapshot});});
-    return () => {active = false; unsubscribe();};
-  }, [session.client, snapshotScope, accountChanged, deviceChanged, currentReady]);
 
   async function send(input: RecipeUseRequest) {
     if (inFlight.current || paused || input.type !== 'begin' && lease.current.state !== 'ready') return;
