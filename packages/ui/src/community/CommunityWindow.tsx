@@ -28,42 +28,41 @@ function CommunityWindowContent() {
   const {navigate} = useDraftGuard();
   const [searchOpen, setSearchOpen] = useState(false);
   const [quitError, setQuitError] = useState<string>();
-  // Returning to the same client creates a fresh lease, so prior search data cannot revive.
-  const scope = useMemo(() => ({client, deviceId: device.id}), [client, device.id]);
-  const [read, setRead] = useState<{scope: typeof scope; snapshot: DesktopSnapshot}>();
-  const [coreRead, setCoreRead] = useState<{scope: typeof scope; available: boolean}>();
-  const [scheduleRead, setScheduleRead] = useState<{scope: typeof scope; tasks: ScheduledTaskView[]}>();
-  const snapshot = read?.scope === scope ? read.snapshot : undefined;
-  const schedules = scheduleRead?.scope === scope ? scheduleRead.tasks : [];
+  const deviceReadLease = useMemo(() => ({client, deviceId: device.id}), [client, device.id]);
+  const [read, setRead] = useState<{deviceReadLease: typeof deviceReadLease; snapshot: DesktopSnapshot}>();
+  const [coreRead, setCoreRead] = useState<{deviceReadLease: typeof deviceReadLease; available: boolean}>();
+  const [scheduleRead, setScheduleRead] = useState<{deviceReadLease: typeof deviceReadLease; tasks: ScheduledTaskView[]}>();
+  const snapshot = read?.deviceReadLease === deviceReadLease ? read.snapshot : undefined;
+  const schedules = scheduleRead?.deviceReadLease === deviceReadLease ? scheduleRead.tasks : [];
   const running = snapshot?.agents.filter(agent => agent.running).map(agent => agent.id) ?? [];
   const runningKey = JSON.stringify(running);
-  const externalCoreAvailable = coreRead?.scope === scope && coreRead.available;
+  const externalCoreAvailable = coreRead?.deviceReadLease === deviceReadLease && coreRead.available;
   const connectedVersion = snapshot?.host.kind === 'connected' ? snapshot.host.version : undefined;
   useEffect(() => {
     let active = true;
-    const unsubscribe = scope.client.watchSnapshots(next => {if (active) setRead({scope, snapshot: next});});
+    const unsubscribe = deviceReadLease.client.watchSnapshots(next => {if (active) setRead({deviceReadLease, snapshot: next});});
     return () => {active = false; unsubscribe();};
-  }, [scope]);
+  }, [deviceReadLease]);
   useEffect(() => {
     if (!searchOpen) return;
     let active = true;
-    setScheduleRead({scope, tasks: []});
-    void Promise.all(running.map(botId => scope.client.schedule(botId, {action: 'listBot'}).then(reply => reply.kind === 'tasks' ? reply.tasks : [], () => [])))
-      .then(lists => {if (active) setScheduleRead({scope, tasks: lists.flat()});});
+    setScheduleRead({deviceReadLease, tasks: []});
+    void Promise.all(running.map(botId => deviceReadLease.client.schedule(botId, {action: 'listBot'}).then(reply => reply.kind === 'tasks' ? reply.tasks : [], () => [])))
+      .then(lists => {if (active) setScheduleRead({deviceReadLease, tasks: lists.flat()});});
     return () => {active = false;};
-  }, [scope, searchOpen, runningKey]);
+  }, [deviceReadLease, searchOpen, runningKey]);
   useEffect(() => {
     if (!searchOpen || snapshot?.host.kind !== 'connected') return;
     let active = true;
-    setCoreRead({scope, available: false});
-    void scope.client.admin({type: 'daemonStatus'}).then(reply => {if (active) setCoreRead({scope, available: reply.kind === 'daemonStatus' && coreUpdatable(reply.status.distribution?.kind)});}, () => {});
+    setCoreRead({deviceReadLease, available: false});
+    void deviceReadLease.client.admin({type: 'daemonStatus'}).then(reply => {if (active) setCoreRead({deviceReadLease, available: reply.kind === 'daemonStatus' && coreUpdatable(reply.status.distribution?.kind)});}, () => {});
     return () => {active = false;};
-  }, [scope, searchOpen, snapshot?.host.kind, connectedVersion]);
+  }, [deviceReadLease, searchOpen, snapshot?.host.kind, connectedVersion]);
   function leave(destination: Destination) {
     flushSync(() => setSearchOpen(false));
     navigate(() => {
-      if (destination.page === 'account') accountPage?.open(); else accountPage?.close();
-      community.leave({deviceId: device.id, destination});
+      if (destination.page === 'account') {accountPage?.open(); community.close();}
+      else {accountPage?.close(); community.leave({deviceId: device.id, destination});}
     });
   }
   useEffect(() => {
@@ -84,7 +83,7 @@ function CommunityWindowContent() {
       onNavigate={page => {if (page !== 'community') leave({page});}}
       onOpenList={view => leave({page: 'collaboration', view, selection: {kind: 'overview'}})}
       onSearch={() => setSearchOpen(true)} updateAction={<DesktopUpdateButton/>}
-      deviceSwitcher={shell?.devices ? <DeviceSwitcher onManage={() => leave({page: 'devices'})} onAccount={() => leave({page: 'account'})}/> : undefined}>
+      deviceSwitcher={shell?.devices ? <DeviceSwitcher switchKeepsPage onManage={() => leave({page: 'devices'})} onAccount={() => leave({page: 'account'})}/> : undefined}>
       <div className="page-stack">{quitError && <InlineNotice title="退出未完成" tone="warning">{quitError}</InlineNotice>}<CommunityPage/></div>
     </AppShell>
     {searchOpen && <SearchDialog open entries={searchEntries(snapshot, {schedules, externalCoreAvailable, devices: Boolean(shell?.devices)})} onClose={() => setSearchOpen(false)} onSelect={entry => leave(entry.destination)}/>}
