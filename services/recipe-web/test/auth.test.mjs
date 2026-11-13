@@ -53,6 +53,61 @@ test('a token obtained before logout cannot be forwarded after an await boundary
   assert.throws(() => login.assertAccess(req, access, { write: true }), { status: 409, message: 'session_changed' });
 });
 
+for (const action of ['logout', 'start']) {
+  test(action + ' invalidates a callback waiting for its PKCE exchange', async t => {
+    const originalFetch = globalThis.fetch;
+    let release, exchanges = 0;
+    globalThis.fetch = async () => {
+      if (++exchanges === 1) await new Promise(resolve => { release = resolve; });
+      return Response.json({ access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600 });
+    };
+    t.after(() => { globalThis.fetch = originalFetch; });
+    const login = createLogin({ publicOrigin: 'http://localhost:1234', supabaseOrigin: 'http://localhost:1235',
+      publishableKey: 'test', providerNames: ['github'] });
+    t.after(() => login.stop());
+    const start = response();
+    login.start({ headers: {} }, start, new URLSearchParams({ provider: 'github' }));
+    const req = { headers: { cookie: cookie(start.headers['Set-Cookie']) } }, finish = response();
+    const pending = login.callback(req, finish, new URL('http://localhost:1234/auth/callback?code=synthetic'));
+    const next = response();
+    if (action === 'logout') login.logout(req, next);
+    else login.start(req, next, new URLSearchParams({ provider: 'github' }));
+    release(); await pending;
+    assert.equal(finish.headers.Location, '/?auth=failed');
+    assert.equal(finish.headers['Set-Cookie'], undefined);
+    if (action === 'start') {
+      const current = response();
+      await login.callback({ headers: { cookie: cookie(next.headers['Set-Cookie']) } }, current,
+        new URL('http://localhost:1234/auth/callback?code=current'));
+      assert.equal(current.headers.Location, '/');
+      const sessionCookie = cookie(current.headers['Set-Cookie'][1]);
+      assert.equal(login.status({ headers: { cookie: sessionCookie } }).signedIn, true);
+    }
+  });
+}
+
+test('a duplicate callback cannot exchange the same flow concurrently', async t => {
+  const originalFetch = globalThis.fetch;
+  let release, exchanges = 0;
+  globalThis.fetch = async () => {
+    exchanges++; await new Promise(resolve => { release = resolve; });
+    return Response.json({ access_token: 'synthetic-access', refresh_token: 'synthetic-refresh', expires_in: 3600 });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const login = createLogin({ publicOrigin: 'http://localhost:1234', supabaseOrigin: 'http://localhost:1235',
+    publishableKey: 'test', providerNames: ['github'] });
+  t.after(() => login.stop());
+  const start = response();
+  login.start({ headers: {} }, start, new URLSearchParams({ provider: 'github' }));
+  const req = { headers: { cookie: cookie(start.headers['Set-Cookie']) } }, finish = response();
+  const url = new URL('http://localhost:1234/auth/callback?code=synthetic');
+  const pending = login.callback(req, finish, url), duplicate = response();
+  await login.callback(req, duplicate, url);
+  assert.equal(duplicate.headers['Set-Cookie'], undefined); assert.equal(exchanges, 1);
+  release(); await pending;
+  assert.equal(finish.headers.Location, '/');
+});
+
 test('anonymous login admission has a bounded burst and recovers over time', () => {
   let now = 1000;
   const admit = createLoginAdmission({ now: () => now });

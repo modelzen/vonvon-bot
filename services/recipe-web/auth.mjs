@@ -94,23 +94,27 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
     },
     async callback(req, res, url) {
       const key = cookieValue(req, flowName), flow = flows.get(key);
-      const cookies = [cookie(flowName, '', 0)];
-      flows.delete(key);
+      const cookies = [];
+      const consume = () => {
+        if (flows.get(key) !== flow) return false;
+        flows.delete(key); cookies.push(cookie(flowName, '', 0)); return true;
+      };
       const code = url.searchParams.get('code');
       let location = (flow?.returnTo || '/') + '?auth=failed';
-      if (flow?.deadline > Date.now() && code && code.length <= 2048 && !url.searchParams.has('error')) {
+      if (flow?.deadline > Date.now() && !flow.exchanging && code && code.length <= 2048 && !url.searchParams.has('error')) {
+        flow.exchanging = true;
         try {
           const token = await tokenRequest('pkce', { auth_code: code, code_verifier: flow.verifier });
-          if (sessions.size < 4096) {
+          if (flow.deadline > Date.now() && consume() && sessions.size < 4096) {
             sessions.delete(cookieValue(req, sessionName));
             const id = random();
             sessions.set(id, { ...token, displaySession: random(), deadline: Date.now() + 8 * 60 * minute });
             cookies.push(cookie(sessionName, id, 8 * 3600));
             location = flow.returnTo;
           }
-        } catch { /* A clean redirect also removes the one-time code from the address bar. */ }
-      }
-      res.writeHead(303, { Location: location, 'Set-Cookie': cookies }); res.end();
+        } catch {} finally { consume(); }
+      } else if (flow && !flow.exchanging) consume();
+      res.writeHead(303, { Location: location, ...(cookies.length && { 'Set-Cookie': cookies }) }); res.end();
     },
     async access(req, { write = false } = {}) {
       const session = getSession(req);
