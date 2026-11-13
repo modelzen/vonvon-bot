@@ -61,6 +61,8 @@ try {
   const keyPair=generateKeyPairSync('x25519'),nonce=randomBytes(32);
   const registration={purpose:'prepareDraft',targetPublicKey:keyPair.publicKey.export({format:'der',type:'spki'}).subarray(-32).toString('base64url'),nonceCommitment:sha256(nonce).toString('base64url')};
   const register=(id=operationId(),changes={},token=author,status=200)=>request('/authoring/'+id+'/register',{method:'POST',token,body:{...registration,...changes},status});
+  const recover=(id,token=author,status=200)=>request('/authoring/'+id+'/recovery',{token,status});
+  const closedId=id=>({operationId:id,accountId:account,unredeemable:true});
   const cancel=(id,token=author,status=200)=>request('/authoring/'+id+'/cancel',{method:'POST',token,body:{},status});
   const authorize=(id,stage,revision,payloadDigest,token=author,status=200)=>request('/authoring/'+id+'/authorize',{method:'POST',token,body:{stage,stateRevision:revision,payloadDigest},status});
   const possession=(cap,changes={})=>({ticket:cap.ticket,nonce:nonce.toString('base64url'),proof:authoringProof(keyPair.privateKey,cap).toString('base64url'),...changes});
@@ -82,8 +84,16 @@ try {
     return {op,cap,dispatchCap};
   }
   const id=operationId();
+  await recover(operationId(),author,404);
+  const unregistered=operationId(Date.now()-6*60_000);
+  await recover(unregistered,null,401);
+  assert.deepEqual(await recover(unregistered),closedId(unregistered));
+  await register(unregistered,{},author,410);
+  await cancel(unregistered,author,410);
   const registrations=await Promise.all(Array.from({length:8},()=>register(id)));
   registrations.forEach(value=>assert.deepEqual(value,registrations[0]));
+  assert.deepEqual(await recover(id),registrations[0]);
+  await recover(id,other,404);
   assert.equal(registrations[0].stateRevision,1);
   assert.ok(registrations[0].operationDeadline-Date.now()>23*3600000);
   await register(id,{},other,404);await cancel(id,other,404);
@@ -142,6 +152,7 @@ try {
   const first=await accept(cap,body);
   assert.deepEqual(await accept(cap,body),first);
   assert.deepEqual(await cancel(id),first);
+  assert.deepEqual(await recover(id),first);
   assert.deepEqual(await register(id),first);
   assert.equal(first.revision,1);
   const draft=await request('/drafts/'+first.draftId,{token:author});
@@ -205,6 +216,19 @@ try {
   await cancel(operationId());assert.equal(sql(`select count(*) from recipe_private.authoring_operations where id='${ancient}'`),'0');
   await register(ancient,{},author,410);
 
+  // A committed draft survives pruning of its operation. The negative assertion says nothing about past saves.
+  const pastId=operationId(Date.now()-8*86400_000);
+  const retained=await ready(body);
+  const saved=await accept(retained.cap,body);
+  sql(`delete from recipe_private.authoring_capabilities where operation_id='${retained.op.operationId}';
+    update recipe_private.authoring_operations set id='${pastId}',receipt=jsonb_set(receipt,'{operationId}',to_jsonb('${pastId}'::text)),
+      terminal_at=clock_timestamp()-interval '6 days' where id='${retained.op.operationId}'`);
+  assert.deepEqual(await recover(pastId),{...saved,operationId:pastId});
+  await recover(pastId,other,404);
+  sql(`update recipe_private.authoring_operations set terminal_at=clock_timestamp()-interval '7 days 1 second' where id='${pastId}'`);
+  assert.deepEqual(await recover(pastId),closedId(pastId));
+  assert.equal((await request('/drafts/'+saved.draftId,{token:author})).revision,saved.revision);
+  await register(pastId,{},author,410);
   const editDraft=await request('/drafts',{method:'POST',token:author,body:completeBody});
   const patch={schemaVersion:1,draftId:editDraft.draftId,baseRevision:1,changes:[{op:'setDraftRole',value:'PATCHED-ROLE'},{op:'setPublicText',field:'summary',value:'新简介'}]};
   const edit=await ready(patch,{purpose:'editDraft',draftId:editDraft.draftId,baseRevision:1});
@@ -237,6 +261,30 @@ try {
   }
   const lock=async()=>{await blocker.query('BEGIN');await blocker.query('select pg_advisory_xact_lock(hashtextextended($1,187511))',[account]);};
   try {
+    // Both queries start while a UUID is still fresh and finish after its registration window closes.
+    // An uncommitted real registration wins; only the absent ID can receive the negative assertion.
+    const birth=Date.now()-298500, concurrent=operationId(birth), absent=operationId(birth);
+    await lock();
+    await blocker.query("select set_config('app.recipe_account',$1,true)",[account]);
+    const registered=await blocker.query('select recipe_api.register_authoring($1,$2) as result',[concurrent,registration]);
+    const checked=recover(concurrent);
+    await waiting('recover_authoring');
+    // Use a second SQL connection with the actor set to bypass the HTTP identity lock, but retain the actual operation lock.
+    const checker=new pg.Client({host:sock,port:5432,database:'postgres',user:'bootstrap_test',application_name:'vonvon-recipe-api'});
+    await checker.connect();
+    try {
+      await checker.query('begin');
+      await checker.query("select set_config('app.recipe_account',$1,true)",[account]);
+      const unknown=checker.query('select recipe_api.recover_authoring($1) as absent_check',[absent]);
+      await waiting('absent_check');
+      assert.ok(Date.now()<birth+300000);
+      await delay(Math.max(0,birth+300002-Date.now()));
+      await blocker.query('COMMIT');
+      assert.deepEqual(await checked,registered.rows[0].result);
+      assert.deepEqual((await unknown).rows[0].absent_check,closedId(absent));
+      await checker.query('commit');
+    } finally {await checker.end();}
+    await cancel(concurrent);
     const deadlineRace=await dispatched();
     await blocker.query('BEGIN');
     const changedDeadline=await blocker.query(`update recipe_private.authoring_operations

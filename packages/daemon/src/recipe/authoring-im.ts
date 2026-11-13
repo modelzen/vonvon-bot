@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { button, card, md } from '../card/cards';
 
@@ -8,7 +9,7 @@ const copy: Record<CardMode, string> = {
   edit: '在此私聊发送 /recipe name 名称、/recipe summary 简介、/recipe overview 概览、/recipe version 版本、/recipe role 角色或 /recipe setup 步骤 JSON。',
   confirm: '有一份草稿改动等待确认。可在 App 核对完整内容。',
   pending: '已确认，正在等待 App 同步。', saved: '私人草稿已保存。可以在 App 查看或继续编辑。',
-  cancelled: '已取消本次草稿操作。', expired: '这次操作已到期，请回到 App 重新开始。',
+  cancelled: '已取消本次草稿操作。', expired: '这次操作已到期。若之前已经保存，请到 App 创作中心查看。',
   review: '来源或授权已经改变，请回到 App 核对。',
 };
 export function authoringCard(ref: string, mode: CardMode) {
@@ -47,10 +48,25 @@ export class AuthoringIm {
     return converted.code === 0 && converted.data?.card_id === cardId;
   }
   async update(cardId: string, seq: number, ref: string, mode: CardMode) {
-    const result = await this.channel.rawClient.cardkit.v1.card.update({path: {card_id: cardId}, data: {
-      sequence: seq, uuid: 'a_' + seq + '_' + ref, card: {type: 'card_json', data: JSON.stringify(authoringCard(ref, mode))},
-    }});
-    if (result.code !== 0) throw new Error('卡片更新待重试。');
+    let code: number | undefined;
+    try {
+      const result = await this.channel.rawClient.cardkit.v1.card.update({path: {card_id: cardId}, data: {
+        sequence: seq, uuid: 'a_' + seq + '_' + ref, card: {type: 'card_json', data: JSON.stringify(authoringCard(ref, mode))},
+      }});
+      code = result.code;
+    } catch (error) {
+      code = (error as {response?: {data?: {code?: number}}} | null)?.response?.data?.code;
+    }
+    if (code === 0) return 'updated';
+    if (code === 200740 || code === 200750) return 'unavailable';
+    if (code === 200770 || code === 300317) return 'conflict';
+    return 'pending';
+  }
+  async shows(messageId: string, chatId: string, ref: string, mode: CardMode) {
+    const result = await this.channel.rawClient.im.v1.message.get({path:{message_id:messageId}, params:{card_msg_content_type:'user_card_content'}});
+    const item = result.data?.items?.find(m => m.message_id === messageId && m.chat_id === chatId && m.msg_type === 'interactive' && !m.deleted);
+    const content = item?.body?.content;
+    return result.code === 0 && !!content && isDeepStrictEqual(JSON.parse(content),authoringCard(ref,mode));
   }
   async reply(chatId: string, messageId: string, text: string) {
     await this.channel.send(chatId, {text}, {replyTo: messageId}).catch(() => undefined);

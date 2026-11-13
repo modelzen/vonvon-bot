@@ -47,7 +47,7 @@ export const authoringTargetSchema = z
   })
   .strict();
 export const desktopAuthoringOperationSchema = authoringOperationSchema
-  .omit({ targetPublicKey: true, nonceCommitment: true })
+  .omit({ targetPublicKey: true, nonceCommitment: true, cardUpdate: true })
   .extend({ target: authoringTargetSchema, groupName: name.optional(), syncMessage: z.string().max(180).optional() });
 export const authoringCandidateContentSchema = z.union([
   z.object({ public: recipePublicSchema, config: recipeConfigSchema }).strict(),

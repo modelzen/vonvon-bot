@@ -28,16 +28,18 @@ export const authoringAuthorizationSchema = z.object({
   payloadDigest: digest, serverPublicKey: recipeBinary32Schema, ticket: recipeBinary32Schema, deadline: millis,
 }).strict();
 export type AuthoringAuthorization = z.infer<typeof authoringAuthorizationSchema>;
-export const authoringReceiptSchema = z.discriminatedUnion('status', [
+export const authoringReceiptSchema = z.union([
   z.object({operationId: uuid, status: z.literal('accepted'), stateRevision: z.literal(3), draftId: uuid, revision: positive}).strict(),
   z.object({operationId: uuid, status: z.literal('cancelled'), stateRevision: positive}).strict(),
   z.object({operationId: uuid, status: z.literal('expired'), stateRevision: positive}).strict(),
+  // The registration window is closed and no receipt remains; a past save is still possible.
+  z.object({operationId: uuid, status: z.literal('expired'), outcome: z.literal('unknown')}).strict(),
 ]);
 export type AuthoringReceipt = z.infer<typeof authoringReceiptSchema>;
 export const authoringOperationSchema = z.object({
   operationId: uuid, ...registration,
   state: z.enum(['pendingMain', 'sending', 'waiting', 'candidate', 'pendingCloud', 'completed', 'cancelPending', 'cancelled', 'expired', 'needsReview']),
-  deliveryUnknown: z.boolean(), payloadDigest: digest.optional(), receipt: authoringReceiptSchema.optional(),
+  deliveryUnknown: z.boolean(), cardUpdate: z.enum(['pending','backoff','unavailable']).optional(), payloadDigest: digest.optional(), receipt: authoringReceiptSchema.optional(),
   groupId: groupIdSchema.optional(), createdAt: millis,
 }).strict();
 export type AuthoringOperation = z.infer<typeof authoringOperationSchema>;
@@ -60,6 +62,7 @@ export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
   z.object({type: z.literal('edit'), ...session, draftId: uuid, baseRevision: positive}).strict(),
   z.object({type: z.literal('inspectCandidate'), ...operation}).strict(),
   z.object({type: z.literal('advance'), ...operation, authorization: authoringAuthorizationSchema}).strict(),
+  z.object({type: z.literal('updateCard'), ...operation}).strict(),
   z.object({type: z.literal('deliver'), ...operation}).strict(),
   z.object({type: z.literal('resend'), ...operation}).strict(),
   z.object({type: z.literal('cancel'), ...operation}).strict(),

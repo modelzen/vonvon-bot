@@ -14,6 +14,7 @@ import {OPEN_SETTING_EVENT, searchEntries, type Destination} from '../search';
 import {useAccountPage} from '../accounts/account-page';
 import {CommunityPage} from './CommunityPage';
 import {useCommunity} from './community-context';
+import {hasOpenDialog} from '../reference/components/ui/Dialog';
 
 export function CommunityWindow() {
   return <DraftGuardProvider><DesktopUpdateProvider><CommunityWindowContent/></DesktopUpdateProvider></DraftGuardProvider>;
@@ -67,7 +68,7 @@ function CommunityWindowContent() {
   }
   useEffect(() => {
     function keydown(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {event.preventDefault(); setSearchOpen(true);}
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {event.preventDefault(); if (!hasOpenDialog()) setSearchOpen(true);}
     }
     window.addEventListener('keydown', keydown);
     return () => window.removeEventListener('keydown', keydown);
@@ -82,7 +83,7 @@ function CommunityWindowContent() {
     <AppShell page="community" view="agents" title="社区"
       onNavigate={page => {if (page !== 'community') leave({page});}}
       onOpenList={view => leave({page: 'collaboration', view, selection: {kind: 'overview'}})}
-      onSearch={() => setSearchOpen(true)} updateAction={<DesktopUpdateButton/>}
+      onSearch={() => {if (!hasOpenDialog()) setSearchOpen(true);}} updateAction={<DesktopUpdateButton/>}
       deviceSwitcher={shell?.devices ? <DeviceSwitcher switchKeepsPage onManage={() => leave({page: 'devices'})} onAccount={() => leave({page: 'account'})}/> : undefined}>
       <div className="page-stack">{quitError && <InlineNotice title="退出未完成" tone="warning">{quitError}</InlineNotice>}<CommunityPage/></div>
     </AppShell>
