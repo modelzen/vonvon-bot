@@ -173,6 +173,26 @@ export class RecipeStore {
       return result;
     });
   }
+  async source(request:Extract<RecipeInstallRequest,{type:'source'|'ignoreVersion'}>):Promise<RecipeInstallReply> {
+    return withRegisteredBot(request.botId,()=>mutateProjectStore(this.location(request.botId),async (_stored,rows)=>{
+      const row=rows.find(r=>r.chatId===request.groupId && !r.dm);
+      if(!row) throw new Error('群绑定已改变');
+      const source=row.recipeInstall;
+      if(request.type==='ignoreVersion' && (!source || source.recipeId!==request.recipeId ||
+        source.versionId!==request.installedVersionId || source.versionId===request.versionId)) throw new Error('安装来源已改变，请重新检查。');
+      const changed=!!source && request.type==='ignoreVersion' && source.ignoredVersionId!==request.versionId;
+      if(source && request.type==='ignoreVersion') source.ignoredVersionId=request.versionId;
+      return {changed,value:{kind:'source' as const,groupId:request.groupId,source:source ? {
+        recipeId:source.recipeId,versionId:source.versionId,revision:source.revision,authorId:source.authorId,installedAt:source.installedAt,
+        ...(source.setup && {setup:source.setup}),...(source.ignoredVersionId && {ignoredVersionId:source.ignoredVersionId}),
+      }:null}};
+    }));
+  }
+  async createdGroup(botId: string, requestId: string): Promise<RecipeInstallReply> {
+    return withRegisteredBot(botId, () => mutateProjectStore(this.location(botId), async (_stored, rows) => ({changed:false, value:{
+      kind: 'createdGroup' as const, groupId: groupIdSchema.nullable().parse(rows.find(row => !row.dm && row.creationRequestId === requestId)?.chatId ?? null),
+    }})));
+  }
   async get(botId: string, operationId: string): Promise<RecipeOperation> {
     return mutateProjectStore(this.location(botId), async stored => {
       const history = operations(stored), operation = history[operationId];

@@ -1,15 +1,14 @@
 import { z } from 'zod';
 import { agentIdSchema, groupIdSchema } from './domain.js';
 
+import {recipeSetupSchema} from './recipe-setup.js';
+import {recipeSourceSchema} from './recipe-source.js';
+export {recipeSetupSchema,type RecipeSetup} from './recipe-setup.js';
+
 const uuid = z.string().uuid();
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 export const recipeBinary32Schema = z.string().regex(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/);
 const text = (limit: number) => z.string().refine(value => [...value].length <= limit);
-export const recipeSetupSchema = z.object({ steps: z.array(z.object({
-  kind: z.enum(['config', 'tool', 'context']), title: text(80), instructions: z.string().max(2048),
-  check: z.string().max(512).optional(), required: z.boolean(),
-}).strict()).min(1).max(8) }).strict();
-export type RecipeSetup = z.infer<typeof recipeSetupSchema>;
 export const recipeManifestSchema = z.object({
   schema: z.literal(1), recipeId: uuid, versionId: uuid, authorId: uuid,
   revision: z.number().int().positive(), access: z.enum(['direct', 'coded']),
@@ -35,6 +34,9 @@ export const recipeResolutionSchema = z.object({
 }).strict();
 const target = {botId: agentIdSchema};
 export const recipeInstallRequestSchema = z.discriminatedUnion('type', [
+  z.object({type:z.literal('source'),...target,groupId:groupIdSchema}).strict(),
+  z.object({type:z.literal('ignoreVersion'),...target,groupId:groupIdSchema,recipeId:uuid,installedVersionId:uuid,versionId:uuid}).strict(),
+  z.object({type: z.literal('createdGroup'), ...target, requestId: uuid}).strict(),
   z.object({type: z.literal('prepare'), ...target, groupId: groupIdSchema, accountId: uuid,
     manifest: z.string().min(1).max(80000), manifestSha256: digest, reviewToken: digest.optional(), resolution: recipeResolutionSchema.optional()}).strict(),
   z.object({type: z.literal('commit'), ...target, operationId: uuid, authorization: recipeAuthorizationSchema.optional()}).strict(),
@@ -49,6 +51,8 @@ const review = {
   roleChoiceRequired: z.boolean(), setupChoiceRequired: z.boolean(),
 };
 export const recipeInstallReplySchema = z.discriminatedUnion('kind', [
+  z.object({kind:z.literal('source'),groupId:groupIdSchema,source:recipeSourceSchema.nullable()}).strict(),
+  z.object({kind: z.literal('createdGroup'), groupId: groupIdSchema.nullable()}).strict(),
   z.object({kind: z.literal('review'), ...review}).strict(),
   z.object({kind: z.literal('prepared'), operationId: uuid, targetPublicKey: recipeBinary32Schema,
     nonceCommitment: recipeBinary32Schema, versionId: uuid, manifestSha256: digest, ...review}).strict(),

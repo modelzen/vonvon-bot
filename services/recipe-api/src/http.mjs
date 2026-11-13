@@ -23,6 +23,8 @@ const endpoints = [
   ['GET', '/versions/:v/codes', 'listCodes'],
   ['POST', '/codes/:c/disable', 'disableCode'],
   ['POST', '/codes/:c/reveal', 'revealCode'],
+  ['GET', '/recipes/:r/latest-install-version', 'latestInstallVersion'],
+  ['POST', '/operations/:o/unredeemable', 'unredeemableOperation', 'possession'],
   ['GET', '/versions/:v/install-preview', 'installPreview'],
   ['POST', '/operations/:o/authorize', 'authorizeOperation'],
   ['POST', '/operations/:o/cancel', 'cancelOperation'],

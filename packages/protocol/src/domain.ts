@@ -68,6 +68,27 @@ const empty = <T extends string>(type: T) =>
   z.object({ type: z.literal(type) }).strict();
 export const MAX_BADGE_NUMBER_LENGTH = 7;
 export const badgeNumberSchema = z.string().min(1).max(MAX_BADGE_NUMBER_LENGTH).regex(/^\d+$/);
+export const bindGroupCommandSchema = z
+    .object({
+      type: z.literal("bindGroup"),
+      agentId: agentIdSchema,
+      groupId: groupIdSchema,
+      projectName: z
+        .string()
+        .trim()
+        .min(1)
+        .max(100)
+        .regex(/^[^/\\\x00-\x1f]+$/),
+      folder: folderSelectionSchema,
+      /** Join this project instead of making one; with it the folder is not used and must be `default`. */
+      project: projectIdSchema.optional(),
+      tool: toolSchema,
+      conversation: conversationSchema,
+      judge: groupDecisionSchema.optional(),
+      response: replyModeSchema.optional(),
+    })
+    .strict();
+
 export const commandSchema = z.discriminatedUnion("type", [
   z.object({type: z.literal("refresh"), tools: z.boolean().optional()}).strict(),
   z.object({type: z.literal("listPendingGroups"), agentId: agentIdSchema}).strict(),
@@ -87,26 +108,7 @@ export const commandSchema = z.discriminatedUnion("type", [
    * does. No `agentId`: the daemon picks the Bot, the session's or the one bound to the chat asked about.
    */
   z.object({ type: z.literal("feishuRead"), agentId: agentIdSchema.optional(), tool: z.string().min(1).max(100), args: z.record(z.string(), z.unknown()) }).strict(),
-  z
-    .object({
-      type: z.literal("bindGroup"),
-      agentId: agentIdSchema,
-      groupId: groupIdSchema,
-      projectName: z
-        .string()
-        .trim()
-        .min(1)
-        .max(100)
-        .regex(/^[^/\\\x00-\x1f]+$/),
-      folder: folderSelectionSchema,
-      /** Join this project instead of making one; with it the folder is not used and must be `default`. */
-      project: projectIdSchema.optional(),
-      tool: toolSchema,
-      conversation: conversationSchema,
-      judge: groupDecisionSchema.optional(),
-      response: replyModeSchema.optional(),
-    })
-    .strict(),
+  bindGroupCommandSchema,
   z
     .object({
       type: z.literal("setResponse"),
