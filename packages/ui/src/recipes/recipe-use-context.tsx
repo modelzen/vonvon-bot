@@ -21,7 +21,6 @@ export function recipeReference(recipe: RecipeReference | RecipeDetail): RecipeR
   return 'public' in recipe ? {recipeId: recipe.recipeId, versionId: recipe.versionId, name: recipe.public.name, version: recipe.public.version} : recipe;
 }
 
-/** This outlives the device's App. A hidden operation remains bound to its original account and target. */
 export function RecipeUseProvider({children}: {children: ReactNode}) {
   const account = useAccount();
   const client = useClient();
@@ -36,7 +35,6 @@ export function RecipeUseProvider({children}: {children: ReactNode}) {
   const available = Boolean(shell?.recipeUse);
   function start(recipe: RecipeReference | RecipeDetail, target?: RecipeGroupTarget) {
     if (!available || !accountId) return;
-    // An unfinished operation must be acknowledged or cancelled before choosing another target.
     if (!session) {
       const original = awaitingAcquisition.current;
       const reference = recipeReference(recipe);
