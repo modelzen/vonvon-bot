@@ -32,6 +32,7 @@ export interface RecipePreparation {
   createdAt: number;
   cloudCompletion: 'none' | 'required' | 'confirmed';
   preparationSha256?: string;
+  issuerState: 'unissued' | 'issuing' | 'authorized';
 }
 export type RecipeOperation = RecipePreparation & (
   | {status: 'prepared'; authorization?: RecipeAuthorization}
