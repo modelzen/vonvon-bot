@@ -7,7 +7,7 @@ import { isAdmin, type AppConfig } from '../config/schema';
 import { paths } from '../config/paths';
 import { configuredRecipeApiOrigin } from '../config/account-deployment';
 import { AuthoringIm, physicalChat, type CardMode } from './authoring-im';
-import { AuthoringJournal, active, DAY, linkKey, newCarrier, reserve, retire, sameRecipient, type AuthoringLedger, type LocalOperation, type Recipient, type Source } from './authoring-journal';
+import { AuthoringJournal, active, linkKey, newCarrier, reserve, retire, sameRecipient, type AuthoringLedger, type LocalOperation, type Recipient, type Source } from './authoring-journal';
 import { blankPublic, digest, freezePayload, newAuthoringKey, parseChanges, type DraftInstructionParser } from './authoring-wire';
 import { checkAuthorization, postAuthoring } from './authoring-cloud';
 import { reviewSource } from './authoring-source';
@@ -175,7 +175,7 @@ export class AuthoringService {
           if (!isAdmin(this.opts.cfg, c.recipient.openId)) refusal();
           const recipient = {...c.recipient, chatId:groupIdSchema.parse(c.recipient.chatId)};
           if (req.type === 'inspectLink') return {kind:'link', linked:false, recipient, evidence:c.evidence};
-          if (req.evidence !== c.evidence) refusal();
+          if (req.evidence !== c.evidence || c.session !== this.p?.session) refusal();
           await this.ledger.run(db => {
             this.present(p);
             if (Object.keys(db.links).length >= 1024 && !db.links[linkKey(p.scope,p.account)]) throw new Error('本机关联数量已到上限。');
@@ -236,6 +236,10 @@ export class AuthoringService {
           o.source?.groupId === target.source?.groupId && o.source?.reviewToken === target.source?.reviewToken));
       if (prior) {
         if (active(prior) && (target.draftId ? prior.view.baseRevision !== target.baseRevision : JSON.stringify(prior.source) !== JSON.stringify(target.source))) refusal();
+        if (active(prior) && !target.instructionId && (!prior.contextOpen || (prior.contextUntil ?? 0) <= this.now())) {
+          prior.contextOpen = true; prior.contextUntil = this.now()+CONTEXT; setCard(prior,prior.carrier.mode);
+          link!.context = {operationId:prior.view.operationId,until:prior.contextUntil};
+        }
         return prior;
       }
       reserve(db,p.account,this.now());
@@ -243,7 +247,7 @@ export class AuthoringService {
       const operationId = operationUuid(this.now());
       const row: LocalOperation = {accountId:p.account, scope:p.scope, bot:this.botKey, binding:link!.binding, recipient, secret:material.secret, nonce:material.nonce,
         source:target.source, instructionId: target.instructionId, payload: target.payload, proposalDigest: target.proposalDigest,
-        carrier:newCarrier(target.source ? 'prepare' : target.payload ? 'confirm' : 'edit'), dispatched:false, contextOpen:true,
+        contextUntil:this.now()+CONTEXT, carrier:newCarrier(target.source ? 'prepare' : target.payload ? 'confirm' : 'edit'), dispatched:false, contextOpen:true,
         view:{operationId, targetPublicKey:material.targetPublicKey, nonceCommitment:material.nonceCommitment,
           purpose:target.source ? 'prepareDraft' : 'editDraft', draftId:target.draftId, baseRevision:target.baseRevision,
           groupId:target.source ? groupIdSchema.parse(target.source.groupId) : undefined,
@@ -251,10 +255,12 @@ export class AuthoringService {
       if (target.source) {
         link!.sources = [target.source, ...link!.sources.filter(s => s.groupId !== target.source!.groupId)].slice(0,16);
       }
+      for (const prior of current) if (prior.view.state === 'completed') prior.contextOpen = false;
       link!.context = {operationId, until:this.now()+CONTEXT};
       db.operations[operationId] = row;
       return row;
     });
+    if (op.carrier.dirty) await this.refresh(p,op.view.operationId);
     return {kind:'operation',operation:op.view};
   }
   private async settle(p: Presence, receipt: AuthoringReceipt, id: string) {
@@ -313,10 +319,15 @@ export class AuthoringService {
       await this.markDispatched(p,id);
     }
     op = await this.operation(p,id);
-    if (op.carrier.messageId) { await this.refresh(p,id); return; }
+    if (op.carrier.messageId) {
+      if ((op.contextUntil ?? 0) <= this.now() && op.contextOpen && (op.view.state === 'waiting' || op.view.state === 'candidate')) {
+        await this.change(p,id,row => { row.contextUntil = this.now()+CONTEXT; setCard(row,row.carrier.mode); });
+      }
+      await this.refresh(p,id); return;
+    }
     if (op.carrier.firstSend !== undefined && (this.now() < op.carrier.firstSend || this.now()-op.carrier.firstSend >= SEND_WINDOW)) {
       if (!resend) return;
-      op = await this.change(p,id,row => { row.carrier = newCarrier(row.carrier.mode,row.carrier.generation+1); row.view.deliveryUnknown = false; return row; });
+      op = await this.change(p,id,row => { row.contextUntil = this.now()+CONTEXT; row.carrier = newCarrier(row.carrier.mode,row.carrier.generation+1); row.view.deliveryUnknown = false; return row; });
     }
     if (!op.carrier.cardId) {
       this.present(p);
@@ -331,14 +342,19 @@ export class AuthoringService {
     this.present(p);
     const messageId = await this.im.send(op.recipient.chatId,op.carrier.cardId!,op.carrier.sendUuid);
     await this.change(p,id,row => {
-      row.carrier.messageId = messageId; row.view.deliveryUnknown = false;
+      row.carrier.messageId = messageId; row.view.deliveryUnknown = false; row.contextUntil = this.now()+CONTEXT;
       if (row.view.state === 'sending') { row.view.state = row.payload ? 'candidate' : 'waiting'; row.view.payloadDigest = row.proposalDigest; }
     });
   }
   async onMessage(msg: NormalizedMessage): Promise<boolean> {
-    const explicit = /^\/recipe(?:\s|$)/i.test(msg.content);
+    const explicit = /^\/recipe(?:\s|$)/i.test(msg.content.trimStart());
     const recipient = fromMessage(msg);
-    if (!recipient) return explicit;
+    if (!recipient) {
+      if (explicit || msg.chatType !== 'p2p' || !this.origin) return explicit;
+      // An incomplete identity on a message in an active private draft must never fall through to the ordinary tool-enabled Agent.
+      return this.ledger.run(db => Object.values(db.operations).some(op => op.bot === this.botKey && op.contextOpen &&
+        op.recipient.chatId === msg.chatId && op.recipient.openId === msg.senderId && (op.contextUntil ?? 0) > this.now())).catch(() => true);
+    }
     if (!this.origin) { if (explicit) await this.im.reply(msg.chatId,msg.messageId,paused); return explicit; }
     return this.serial(async () => {
       const reply = (text: string) => this.im.reply(msg.chatId,msg.messageId,text);
@@ -362,10 +378,17 @@ export class AuthoringService {
         }
         await reply(genericLink); return true;
       }
-      const contexts = await this.ledger.run(db => Object.values(db.operations).filter(o =>
-        o.bot === this.botKey && sameRecipient(o.recipient,recipient) && o.contextOpen && (o.carrier.messageId === msg.replyToMessageId && Boolean(msg.replyToMessageId) ||
-        o.view.createdAt + DAY > this.now() && (active(o) || o.view.state === 'completed'))));
+      const {duplicate,contexts} = await this.ledger.run(db => {
+        const own = Object.values(db.operations).filter(o => o.bot === this.botKey && sameRecipient(o.recipient,recipient));
+        return {
+          duplicate: own.some(o => o.instructionId === msg.messageId || o.seenInstructions?.includes(msg.messageId)),
+          contexts: own.filter(o => o.contextOpen && (Boolean(msg.replyToMessageId) && o.carrier.messageId === msg.replyToMessageId ||
+            (o.contextUntil ?? 0) > this.now() && (active(o) || o.view.state === 'completed'))),
+        };
+      });
+      if (duplicate) return true;
       if (!explicit && !contexts.length) return false;
+      if (msg.rawContentType !== 'text') { await reply(privateOnly); return true; }
       if (!live || !p) { await reply(explicit ? genericLink : paused); return true; }
       const link = await this.link(p);
       if (!sameRecipient(link?.recipient, recipient)) { await reply(genericLink); return true; }
@@ -374,22 +397,27 @@ export class AuthoringService {
       const quoted = msg.replyToMessageId ? eligible.find(o => o.carrier.messageId === msg.replyToMessageId) : undefined;
       if (msg.replyToMessageId && !quoted) { await reply(appChoose); return true; }
       const open = eligible.filter(o => active(o));
-      const selected = quoted ?? (open.length === 1 ? open[0] : !open.length && link.context?.until! > this.now() ?
-        eligible.find(o => o.view.operationId === link.context?.operationId) : undefined);
+      const selected = quoted ?? (open.length === 1 ? open[0] : !open.length ? eligible.find(o => o.view.operationId === link.context?.operationId) : undefined);
       if (cmd === '/recipe end') {
-        if (selected) await this.change(p,selected.view.operationId,row => {row.contextOpen = false;});
+        await this.ledger.run(db => {
+          for (const row of Object.values(db.operations)) {
+            if (row.scope === p.scope && row.accountId === p.account && row.binding === link.binding && sameRecipient(row.recipient,recipient) && (!quoted || row.view.operationId === quoted.view.operationId)) row.contextOpen = false;
+          }
+          const bound = db.links[linkKey(p.scope,p.account)];
+          if (bound && (!quoted || bound.context?.operationId === quoted.view.operationId)) delete bound.context;
+        });
         await reply('已结束本次私聊编辑。'); return true;
       }
       if (/^\/recipe(?:\s+(?:create|start))?$/i.test(cmd)) {
         if (selected && (active(selected) || cmd === '/recipe' && selected.view.state === 'completed')) { await reply(active(selected) ? '请在当前草稿卡片操作，或用 /recipe name 名称 等命令编辑。' : '私人草稿已保存。可用 /recipe name 名称 等命令继续修改。'); return true; }
-        if (!link.sources.length || link.sources.length !== 1) { await reply(appChoose); return true; }
+        if (link.sources.length !== 1) { await reply(appChoose); return true; }
         const source = link.sources[0]!;
         const reviewed = await this.source(p,source.groupId);
         if (reviewed.reviewToken !== source.reviewToken) { await reply(appChoose); return true; }
         await this.start(p,recipient,{source,instructionId:msg.messageId});
         await reply('已请求准备私人草稿。云端登记后，Bot 会在这里发确认卡。'); return true;
       }
-      if (!selected || !selected.contextOpen || (link.context?.until ?? 0) <= this.now()) { await reply(appChoose); return true; }
+      if (!selected || !selected.contextOpen || (selected.contextUntil ?? 0) <= this.now()) { await reply(appChoose); return true; }
       if (selected.seenInstructions?.includes(msg.messageId) || selected.instructionId === msg.messageId) return true;
       const prior = selected.view.receipt;
       const draftId = prior?.status === 'accepted' ? prior.draftId : selected.view.draftId;
@@ -407,6 +435,7 @@ export class AuthoringService {
         await this.start(p,recipient,{draftId,baseRevision,instructionId:msg.messageId,payload:frozen.payload,proposalDigest:frozen.payloadDigest});
       } else {
         await this.change(p,selected.view.operationId,row => {
+          this.present(p);
           if ((row.seenInstructions?.length ?? 0) >= 32) throw new Error('本次草稿提案已到输入上限。');
           row.payload = frozen.payload; row.proposalDigest = frozen.payloadDigest;
           (row.seenInstructions ??= []).push(msg.messageId); row.view.state = 'candidate'; row.view.payloadDigest = frozen.payloadDigest;
@@ -430,12 +459,12 @@ export class AuthoringService {
       const link = await this.allowed(p,recipient);
       const op = await this.ledger.run(db => Object.values(db.operations).find(o => o.scope === p.scope && o.accountId === p.account &&
         o.binding === link.binding && o.carrier.ref === value.ref && sameRecipient(o.recipient,recipient) && sameRecipient(link.recipient,recipient)));
-      if (!op || !active(op) || !op.dispatched || !op.contextOpen || op.carrier.firstSend === undefined || !op.carrier.cardId) return;
+      if (!op || !active(op) || !op.dispatched || !op.contextOpen || (op.contextUntil ?? 0) <= this.now() || op.carrier.firstSend === undefined || !op.carrier.cardId) return;
       if (op.carrier.messageId !== evt.messageId) {
         if (op.carrier.messageId || !await this.im.matches(evt.messageId,evt.chatId,op.carrier.cardId)) return;
         await this.change(p,op.view.operationId,row => {
           row.carrier.messageId = evt.messageId; row.view.deliveryUnknown = false;
-          if (row.view.state === 'sending') row.view.state = row.payload ? 'candidate' : 'waiting';
+          if (row.view.state === 'sending') { row.view.state = row.payload ? 'candidate' : 'waiting'; row.view.payloadDigest = row.proposalDigest; }
         });
       }
       if (value.verb === 'cancel') {
