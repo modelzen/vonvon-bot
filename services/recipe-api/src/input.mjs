@@ -1,7 +1,7 @@
 import { ApiError, badInput, UUID } from './errors.mjs';
 import { credentialField } from './credential-shapes.mjs';
 
-const BODY_LIMIT = 320 * 1024; // Includes JSON escape sequences for the allowed UTF-8 text.
+const BODY_LIMIT = 448 * 1024; // Includes JSON escape sequences for the allowed UTF-8 text.
 export const uuid = value => {
   if (typeof value !== 'string' || !UUID.test(value)) throw badInput();
   return value.toLowerCase();
@@ -17,11 +17,26 @@ function safeString(value) {
   return typeof value === 'string' && value.isWellFormed() && !value.includes('\0');
 }
 
+function checkSetup(setup) {
+  objectKeys(setup, ['steps']);
+  if (!Array.isArray(setup.steps) || setup.steps.length < 1 || setup.steps.length > 8) throw badInput();
+  for (const step of setup.steps) {
+    objectKeys(step, ['kind', 'title', 'instructions', 'required'], ['check']);
+    if (!['config', 'tool', 'context'].includes(step.kind) || typeof step.required !== 'boolean' ||
+        !safeString(step.title) || [...step.title].length > 80 ||
+        !safeString(step.instructions) || Buffer.byteLength(step.instructions) > 2048 ||
+        (Object.hasOwn(step, 'check') && (!safeString(step.check) || Buffer.byteLength(step.check) > 512))) {
+      throw badInput();
+    }
+  }
+}
+
 export function checkDraft(body, isNew) {
   objectKeys(body, ['public', 'config'], isNew ? ['recipeId', 'sourceVersionId'] : []);
   const {public: meta, config} = body;
   objectKeys(meta, ['name', 'summary', 'overview', 'version', 'access']);
-  objectKeys(config, ['role']);
+  objectKeys(config, ['role'], ['setup']);
+  if (Object.hasOwn(config, 'setup')) checkSetup(config.setup);
   for (const [field, max] of [['name', 60], ['summary', 240], ['version', 40]]) {
     if (!safeString(meta[field]) || [...meta[field]].length > max) throw badInput();
   }

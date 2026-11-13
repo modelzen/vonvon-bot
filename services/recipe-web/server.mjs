@@ -18,6 +18,7 @@ const assets = new Map([
   ['/studio.html', ['studio.html', 'text/html; charset=utf-8']],
   ['/studio.css', ['studio.css', 'text/css; charset=utf-8']],
   ['/studio.mjs', ['studio.mjs', 'text/javascript; charset=utf-8']],
+  ['/setup.mjs', ['setup.mjs', 'text/javascript; charset=utf-8']],
   ['/app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']],
   ['/vendor/markdown-it.mjs', ['../node_modules/markdown-it/dist/browser/markdown-it.esm.min.mjs', 'text/javascript; charset=utf-8']],
   ['/credential-shapes.mjs', ['../../recipe-api/src/credential-shapes.mjs', 'text/javascript; charset=utf-8']],
@@ -87,7 +88,7 @@ export function createRecipeWeb(env = process.env) {
         headers['Content-Type'] = 'application/json';
         headers['Idempotency-Key'] = String(req.headers['idempotency-key'] || '');
         if (req.headers['if-match']) headers['If-Match'] = req.headers['if-match'];
-        payload = await body(req, creatorWrite ? 320 * 1024 : 4096);
+        payload = await body(req, creatorWrite ? 448 * 1024 : 4096);
       }
       const response = await fetch(apiOrigin + path + url.search, {
         method: req.method, headers, body: payload, redirect: 'error', signal: AbortSignal.timeout(12_000),

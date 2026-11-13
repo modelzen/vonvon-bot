@@ -12,9 +12,17 @@ const privateKey = /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY(?: BLOCK)?-----/;
 const fields = [['public','name'], ['public','summary'], ['public','overview'], ['public','version'], ['config','role']];
 
 export function credentialField(draft) {
+  const sensitive = value => typeof value === 'string' && (privateKey.test(value) || tokens.test(value));
   for (const [group, field] of fields) {
-    const value = draft?.[group]?.[field];
-    if (typeof value === 'string' && (privateKey.test(value) || tokens.test(value))) return group + '.' + field;
+    if (sensitive(draft?.[group]?.[field])) return group + '.' + field;
+  }
+  const steps = draft?.config?.setup?.steps;
+  if (Array.isArray(steps)) {
+    for (const [index, step] of steps.entries()) {
+      for (const field of ['title', 'instructions', 'check']) {
+        if (sensitive(step?.[field])) return 'config.setup.steps.' + index + '.' + field;
+      }
+    }
   }
   return null;
 }

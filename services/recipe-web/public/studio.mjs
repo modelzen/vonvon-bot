@@ -1,12 +1,14 @@
+import {setupEditor, setupList} from './setup.mjs';
 import {credentialField} from '/credential-shapes.mjs';
 const $ = id => document.getElementById(id);
 const editor=$('editor'), fields=editor.elements, confirmDialog=$('confirm');
 let generation=null;
 let model=null, reviewing=null, managing=null, cursor=null, loading=false, changed=false;
 const keys=new Map();
+const setup=setupEditor($('setup-steps'),$('add-setup'),()=>{changed=true;});
 const text=(id,v)=>$(id).textContent=v;
 const show=(id,on)=>$(id).hidden=!on;
-const errorMessages={login_required:'请先登录。',conflict:'草稿已在其他地方变更。你的输入仍在这里；请先重新打开最新草稿，再决定如何修改。',quota_exceeded:'已达到账号或版本的限额，请检查草稿或稍后再试。',rate_limited:'操作过于频繁，请稍后再试。',auth_required:'登录已过期，请重新登录。',invalid_input:'请检查输入长度、版本和获取方式。',forbidden:'当前账号不能进行这项操作。',not_found:'没有找到这份草稿或版本。'};
+const errorMessages={login_required:'请先登录。',conflict:'草稿已在其他地方变更。你的输入仍在这里；请先重新打开最新草稿，再决定如何修改。',quota_exceeded:'已达到账号或版本的限额，请检查草稿或稍后再试。',rate_limited:'操作过于频繁，请稍后再试。',auth_required:'登录已过期，请重新登录。',invalid_input:'请检查输入长度、版本和获取方式。',incomplete_setup:'发布前请补全准备步骤的名称和操作说明。',forbidden:'当前账号不能进行这项操作。',not_found:'没有找到这份草稿或版本。'};
 async function api(path,{method='GET',body,rev,logical}={}){
   const headers={};if(method!=='GET'){
     headers['content-type']='application/json';
@@ -28,20 +30,27 @@ async function run(fn){
   loading=true;
   const controls=[...document.querySelectorAll('#workspace button:not(:disabled),dialog button:not(:disabled),#editor input,#editor textarea,#editor select')];
   controls.forEach(b=>b.disabled=true);
-  try{await fn();}catch(e){text('notice',e.message||'无法完成请求，请重试。');}
-  finally{controls.forEach(b=>b.disabled=false);loading=false;}
+  let focus;
+  try{await fn();}catch(e){text('notice',e.message||'无法完成请求，请重试。');focus=e.control;}
+  finally{controls.forEach(b=>b.disabled=false);loading=false;focus?.focus();}
 }
 const metaLabels={'public.name':'名称','public.summary':'简介','public.overview':'公开概览','public.version':'版本','config.role':'角色说明'};
-function credentialMessage(field){return (metaLabels[field]||'配方文字')+'中似乎有密钥或令牌。请移除后再保存。';}
-function contents(){
-  return {public:{name:fields.name.value,summary:fields.summary.value,overview:fields.overview.value,version:fields.version.value,access:fields.access.value},config:{role:fields.role.value}};
+function setupMatch(path){return /^config\.setup\.steps\.(\d+)\.(title|instructions|check)$/.exec(path);}
+function credentialMessage(field){
+  const match=setupMatch(field);
+  const label=match?'准备步骤 '+(Number(match[1])+1):metaLabels[field]||'配方文字';
+  return label+'中似乎有密钥或令牌。请移除后再保存。';
 }
-function scopeLabel(){text('scope-label',fields.access.value==='coded'?'角色说明仅自己和已获取此版本的人可见。':'角色说明在社区公开展示。');}
+function contents(){
+  const preparation=setup.read();
+  return {public:{name:fields.name.value,summary:fields.summary.value,overview:fields.overview.value,version:fields.version.value,access:fields.access.value},config:{role:fields.role.value,...(preparation?{setup:preparation}:{})}};
+}
+function scopeLabel(){text('scope-label',fields.access.value==='coded'?'角色说明和准备步骤仅自己和已获取此版本的人可见。':'角色说明和准备步骤在社区公开展示。');}
 fields.access.addEventListener('change',scopeLabel);
 function fill(d){
   model=d??{draftId:null,revision:0,recipeId:null,public:{name:'',summary:'',overview:'',version:'1.0',access:'direct'},config:{role:''}};
   for(const [k,v] of Object.entries(model.public))if(fields[k])fields[k].value=v;
-  fields.role.value=model.config?.role||'';scopeLabel();changed=false;show('editor',true);show('result',false);text('notice','');
+  fields.role.value=model.config?.role||'';setup.load(model.config?.setup?.steps);scopeLabel();changed=false;show('editor',true);show('result',false);text('notice','');
 }
 function discardOK(){return !changed||window.confirm('离开会放弃尚未保存的修改。继续吗？');}
 async function loadDrafts(){
@@ -57,7 +66,11 @@ async function loadDrafts(){
 }
 async function save(){
   if(model.draftId&&!changed)return model;
-  const body=contents();const suspicious=credentialField(body);if(suspicious){fields[suspicious.split('.')[1]]?.focus();throw new Error(credentialMessage(suspicious));}if(!model.draftId&&model.recipeId){body.recipeId=model.recipeId;body.sourceVersionId=model.versionId;}
+  const body=contents();const suspicious=credentialField(body);if(suspicious){
+    const error=new Error(credentialMessage(suspicious)),match=setupMatch(suspicious);
+    error.control=match?setup.control(Number(match[1]),match[2]):fields[suspicious.split('.')[1]];
+    throw error;
+  }if(!model.draftId&&model.recipeId){body.recipeId=model.recipeId;body.sourceVersionId=model.versionId;}
   const tag='save:'+model.draftId+':'+model.revision+':'+JSON.stringify(body);
   const res=await api('/drafts'+(model.draftId?'/'+model.draftId:''),{method:model.draftId?'PATCH':'POST',body,rev:model.draftId?model.revision:undefined,logical:tag});
   model=res;changed=false;await loadDrafts();return res;
@@ -96,10 +109,16 @@ editor.oninput=()=>{changed=true;};
 editor.onsubmit=e=>{e.preventDefault();run(async()=>{await save();text('notice','私人草稿已保存。');});};
 $('review').onclick=()=>run(async()=>{
   if(!fields.name.value.trim()||!fields.summary.value.trim()||!fields.version.value.trim()){text('notice','先填写配方名称、简介和版本，再预览发布。');return;}
+  setup.read(true);
   const d=await save();reviewing={id:d.draftId,rev:d.revision};
   $('preview').replaceChildren();
   for(const [k,v] of Object.entries({'名称':d.public.name,'简介':d.public.summary,'公开概览':d.public.overview,'版本':d.public.version,'获取方式':d.public.access==='coded'?'凭分享码获取':'直接获取',[d.public.access==='coded'?'仅获取者和作者可见 · 角色说明':'公开 · 角色说明']:d.config.role})){
     const a=document.createElement('dt'),b=document.createElement('dd');a.textContent=k;b.textContent=v;$('preview').append(a,b);
+  }
+  if(d.config.setup?.steps.length){
+    const label=document.createElement('dt'),body=document.createElement('dd');
+    label.textContent=d.public.access==='coded'?'仅获取者和作者可见 · 使用前准备':'公开 · 使用前准备';
+    body.append(setupList(d.config.setup.steps));$('preview').append(label,body);
   }
   confirmDialog.showModal();
 });
@@ -117,7 +136,7 @@ run(async()=>{const s=await fetch('/auth/session',{cache:'no-store'}).then(r=>r.
 
 window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
 
-function forget(){changed=false;model=null;reviewing=null;managing=null;generation=null;keys.clear();editor.reset();confirmDialog.close();for(const id of ['drafts','history','code-list','initial-code','newcodes','preview','code-for'])$(id).replaceChildren();show('workspace',false);}
+function forget(){changed=false;model=null;reviewing=null;managing=null;generation=null;keys.clear();editor.reset();setup.load();confirmDialog.close();for(const id of ['drafts','history','code-list','initial-code','newcodes','preview','code-for'])$(id).replaceChildren();show('workspace',false);}
 async function checkSession(){
   if(!generation||document.hidden)return;
   try {

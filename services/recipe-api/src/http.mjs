@@ -64,6 +64,39 @@ async function inputFor(req, url, {action, ids}) {
   return [action, ids];
 }
 
+const DISCARD_LIMIT = 8 * 1024 * 1024;
+const DISCARD_TIMEOUT = 1_000;
+
+// Draining a bounded amount prevents an unread upload from resetting the error response.
+function discardBody(req) {
+  if (req.readableEnded || req.destroyed) return;
+  return new Promise(resolve => {
+    let length = 0;
+    const finish = () => {
+      clearTimeout(timeout);
+      req.off('data', onData);
+      req.off('end', finish);
+      req.off('error', finish);
+      req.off('aborted', finish);
+      req.off('close', finish);
+      req.pause();
+      resolve();
+    };
+    const onData = chunk => {
+      length += chunk.length;
+      if (length >= DISCARD_LIMIT) finish();
+    };
+    const timeout = setTimeout(finish, DISCARD_TIMEOUT);
+    timeout.unref();
+    req.on('data', onData);
+    req.once('end', finish);
+    req.once('error', finish);
+    req.once('aborted', finish);
+    req.once('close', finish);
+    req.resume();
+  });
+}
+
 export function createRecipeServer({ verify, execute, attempts = codeAttempts() }) {
   const server = createServer({ maxHeaderSize: 16 * 1024, requestTimeout: 15_000, headersTimeout: 10_000 },
     async (req, res) => {
@@ -89,8 +122,14 @@ export function createRecipeServer({ verify, execute, attempts = codeAttempts() 
         if (problem.status === 401) res.setHeader('WWW-Authenticate', 'Bearer');
         if (problem.status === 413 || !req.complete) res.setHeader('Connection', 'close');
         if (problem.retryAfter) res.setHeader('Retry-After', problem.retryAfter);
+        const response = JSON.stringify({ error: { code: problem.code, field: problem.field } });
+        res.setHeader('Content-Length', Buffer.byteLength(response));
         res.writeHead(problem.status);
-        res.end(JSON.stringify({ error: { code: problem.code, field: problem.field } }));
+        if (problem.status === 413) {
+          res.write(response);
+          await discardBody(req);
+          res.end();
+        } else res.end(response);
       }
     });
   server.keepAliveTimeout = 5_000;
