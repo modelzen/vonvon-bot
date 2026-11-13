@@ -146,6 +146,13 @@ it('keeps dirty production group settings behind the original guard before unmou
   const editor = document.querySelector<HTMLElement>('[aria-label="判断规则"]')!;
   expect(editor).not.toBeNull();
   await act(async () => {editor.textContent = '未保存的群规则'; editor.dispatchEvent(new Event('input', {bubbles: true}));});
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label^="当前设备："]')!.click());
+  const otherDevice = [...document.querySelectorAll<HTMLButtonElement>('.device-switcher__device')].find(button => button.querySelector('[title="家里"]'))!;
+  await act(async () => otherDevice.click());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('有未保存的修改');
+  expect(shell.devices.switchTo).not.toHaveBeenCalled();
+  await click('继续编辑');
+  expect(editor.textContent).toBe('未保存的群规则');
   await click('社区');
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain('有未保存的修改');
   expect(document.querySelector('.community-heading')).toBeNull();
@@ -188,4 +195,35 @@ it('does not reuse the first A search generation when B never returned a snapsho
   expect(document.querySelector('[role="listbox"]')?.textContent).not.toContain('设备A机器人');
   await fill('搜索设置、Bot 或飞书群', '新一代A机器人');
   expect(document.querySelector('[role="listbox"]')?.textContent).toContain('新一代A机器人');
+});
+
+it('switches the community target through the actual menu without discarding its dirty editor', async () => {
+  shell.devices.switchTo.mockImplementation(async (id: string) => {root.render(<DesktopRootView state={devicesState({id})} fallback={first.client} shell={shell} renderApp={() => <App/>}/>);});
+  await draw(A); await click('社区'); await click('创作中心'); await click('创作配方');
+  const editor = await fill('配方名称', '切目标不会放弃草稿'); await click('保存私人草稿'); editor.focus(); editor.setSelectionRange(2, 4);
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label^="当前设备："]')!.click());
+  const target = [...document.querySelectorAll<HTMLButtonElement>('.device-switcher__device')].find(button => button.querySelector('[title="家里"]'))!;
+  await act(async () => target.click());
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(shell.devices.switchTo).toHaveBeenCalledExactlyOnceWith(B);
+  expect(document.querySelector('[aria-label="配方名称"]')).toBe(editor);
+  expect(editor.value).toBe('切目标不会放弃草稿'); expect(editor.selectionStart).toBe(2); expect(editor.selectionEnd).toBe(4);
+  await click('Bot');
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('有未保存的修改');
+  await click('继续编辑');
+  expect(document.querySelector('[aria-label="配方名称"]')).toBe(editor);
+  expect(editor.value).toBe('切目标不会放弃草稿'); expect(editor.selectionStart).toBe(2); expect(editor.selectionEnd).toBe(4);
+  await click('保存私人草稿');
+  const saves = requests.filter(request => request.type === 'saveDraft'); expect(saves).toHaveLength(2); expect(saves[1]).toEqual(saves[0]);
+});
+it('does not reopen account management when an offline device reconnects after returning to connection controls', async () => {
+  await draw(A); await click('社区'); await draw(A, 'failed');
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label^="当前设备："]')!.click());
+  await act(async () => document.querySelector<HTMLButtonElement>('.device-switcher__account-button')!.click());
+  expect(document.querySelector('.account-panel')).not.toBeNull();
+  await click('返回设备连接');
+  expect(document.querySelector('.account-panel')).toBeNull();
+  await draw(A);
+  expect(document.querySelector('.account-panel')).toBeNull();
+  expect(document.querySelector('.today-intro h1')?.textContent).toBe('此刻');
 });
