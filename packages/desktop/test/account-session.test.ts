@@ -434,6 +434,7 @@ describe('native desktop account', () => {
 it('invalidates a fully buffered private community response immediately when logout begins, before secure storage acknowledges it', async () => {
   const f = fixture(); const a = f.create();
   await a.login(); await waitFor(() => expect(a.status().kind).toBe('signedIn'));
+  const lease=a.lease?.(business);expect(lease?.aborted).toBe(false);
   const cleared = deferred<void>();
   f.store.clear.mockImplementationOnce(() => cleared.promise);
   const base = f.transport.getMockImplementation()!;
@@ -443,6 +444,7 @@ it('invalidates a fully buffered private community response immediately when log
   const pending = communityRequest(a, {type: 'drafts', accountId: business});
   for (let i = 0; i < 8; i++) await Promise.resolve();
   const loggingOut = a.logout();
+  expect(lease?.aborted).toBe(true);expect(a.lease?.(business)).toBeUndefined();
   controller.enqueue(new TextEncoder().encode(JSON.stringify({items: []}))); controller.close();
   const result = pending.then(() => 'leaked', () => 'rejected');
   try {expect(await result).toBe('rejected');} finally {cleared.resolve(); await loggingOut;}
