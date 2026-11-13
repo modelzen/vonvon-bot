@@ -2,6 +2,7 @@ import pg from 'pg';
 import { loopback } from './auth.mjs';
 import { ApiError } from './errors.mjs';
 import { authorizationMaterial, binary32 } from './install-proof.mjs';
+import { authoringMaterial } from './authoring-proof.mjs';
 
 // Static parameterized calls. No request field becomes an SQL identifier.
 const calls = Object.freeze({
@@ -27,6 +28,13 @@ const calls = Object.freeze({
   cancelOperation: 'recipe_api.cancel_operation($1::uuid)',
   redeemOperation: 'recipe_api.possess_operation($1::uuid,$2::bytea,$3::bytea,$4::bytea)',
   completeOperation: 'recipe_api.possess_operation($1::uuid,$2::bytea,$3::bytea,$4::bytea,$5::text)',
+  registerAuthoring: 'recipe_api.register_authoring($1::uuid,$2::jsonb)',
+  getAuthoring: 'recipe_api.get_authoring($1::uuid)',
+  cancelAuthoring: 'recipe_api.cancel_authoring($1::uuid)',
+  authorizeAuthoring: 'recipe_api.authorize_authoring($1::uuid,$2::jsonb,$3::bytea,$4::bytea,$5::bytea,$6::bigint)',
+  dispatchAuthoring: "recipe_api.possess_authoring($1::uuid,$2::bytea,$3::bytea,$4::bytea,$5::bytea,'dispatch')",
+  acceptAuthoring: "recipe_api.possess_authoring($1::uuid,$2::bytea,$3::bytea,$4::bytea,$5::bytea,'accept')",
+  patchDraft: 'recipe_api.patch_draft($1::uuid,$2::jsonb,$3::uuid)',
 });
 
 const businessErrors = new Map(Object.entries({
@@ -34,6 +42,7 @@ const businessErrors = new Map(Object.entries({
   conflict: 409, quota_exceeded: 422, rate_limited: 429, invalid_code: 422,
   operation_pending_limit: 429, operation_expired: 410, operation_clock_skew: 422,
   operation_cancelled: 409, invalid_operation_proof: 403,
+  proposal_active: 409,
 }));
 
 function makePool(connectionString) {
@@ -118,6 +127,12 @@ export async function openDatabase(url, codeKey, issuer) {
         const { accountId, deadline } = context.result;
         const material = authorizationMaterial({ ...request, operationId, accountId, deadline });
         args = [operationId, request, binary32(material.serverPublicKey), material.ticket, material.proofHash, deadline];
+      }
+      if (operation === 'authorizeAuthoring') {
+        const [operationId, request] = args;
+        const { rows:[context] } = await client.query('SELECT recipe_api.authoring_context($1::uuid,$2::jsonb) AS result', args);
+        const material = authoringMaterial(context.result);
+        args = [operationId, request, binary32(material.serverPublicKey), material.ticket, material.proofHash, context.result.deadline];
       }
       const { rows } = await client.query('SELECT ' + calls[operation] + ' AS result', args);
       await client.query('COMMIT');
