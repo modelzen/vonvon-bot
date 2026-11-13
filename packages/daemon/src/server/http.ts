@@ -316,10 +316,11 @@ export async function startApi(options: { service: AdminService; port?: number; 
         }), payload => ({ type: 'response', id, method: 'memory', payload: shown(payload) }));
         case 'contextPreview': return finish(peer, await contextPreviewRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'contextPreview', payload }));
         case 'recipeAuthoring': {
-          if (peer.principal.kind !== 'owner' || !peer.open) throw new RpcError('permission_denied', '只有已连接的主人可操作配方。');
+          if (peer.principal.kind !== 'owner' || peer.clientKind !== 'desktop' || !peer.open) throw new RpcError('permission_denied', '请从已连接设备的 Vonvon App 操作配方草稿。');
           if (options.service.readonlyPreview || !options.service.recipeAuthoring) throw new RpcError('unsupported', '此设备尚未配置配方草稿。');
           const bots = authoringBots.get(peer) ?? new Set<string>();
-          bots.add(request.payload.botId); authoringBots.set(peer,bots);
+          if (!bots.has(request.payload.botId) && bots.size >= 64) throw new RpcError('invalid_request', '这个连接已达到 Bot 数量上限。');
+          if (request.payload.type === 'open') { bots.add(request.payload.botId); authoringBots.set(peer,bots); }
           const value = await options.service.recipeAuthoring(request.payload.botId, {kind:'recipeAuthoring',peer:authoringPeer(peer),request:request.payload});
           peer.send({type:'response',id,method:'recipeAuthoring',payload:recipeAuthoringReplySchema.parse(value)});
           return;
