@@ -23,7 +23,7 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
   useEffect(() => {if (foreignRoute) setRoute({route: {kind: 'catalog'}});}, [foreignRoute]);
   const [catalog, setCatalog] = useState<CommunityContextValue['catalog']>({query: '', search: '', scrollTop: 0});
   const value = useMemo(() => ({shell, isOpen, route, onUse, catalog, setCatalog,
-    open: (next?: CommunityRoute) => {if (next) setRoute({route: next, owner: accountId}); setOpen(true);}, close: () => setOpen(false),
+    open: (next?: CommunityRoute) => {if (next) setRoute({route: next.kind === 'detail' ? {...next, recipe: {recipeId: next.recipe.recipeId, versionId: next.recipe.versionId}} : next, owner: accountId}); setOpen(true);}, close: () => setOpen(false),
   }), [shell, isOpen, route, onUse, accountId, catalog]);
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
