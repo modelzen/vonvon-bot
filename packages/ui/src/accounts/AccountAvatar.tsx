@@ -1,7 +1,7 @@
 import type {AccountStatus} from '@vonvon/protocol';
 import './accounts.css';
 
-type Identity = Extract<AccountStatus, {kind: 'signedIn'}> & {avatarDataUrl?: string};
+type Identity = Extract<AccountStatus, {kind: 'signedIn'}>;
 export function AccountAvatar({identity, size = 'small'}: {identity: Identity; size?: 'small' | 'large'}) {
   const initials = Array.from(identity.displayName.trim()).slice(0, 2).join('').toLocaleUpperCase();
   const avatar = identity.avatarDataUrl;
