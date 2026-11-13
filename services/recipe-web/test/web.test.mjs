@@ -111,3 +111,39 @@ test('logout while a write body is pending prevents API forwarding', async t => 
   write.end(payload.slice(1));
   assert.equal(await result, 409); assert.equal(forwarded, 0);
 });
+
+test('reconciliation detail binds the displayed session, blocks changed cookies and rechecks logout after upstream await', async t => {
+  let release, arrived;
+  let waiting = false;
+  const seen = [];
+  const api = await listen(createServer(async (req,res) => {
+    seen.push(req.headers.authorization);
+    if (waiting) {arrived(); await new Promise(resolve => {release=resolve;});}
+    toJson(res,{owned:!!req.headers.authorization});
+  }),t);
+  let identity=0;
+  const issuer=await listen(createServer((_req,res)=>toJson(res,{access_token:'synthetic-'+ ++identity,refresh_token:'synthetic-refresh',expires_in:3600})),t);
+  const origin='https://recipes.example';
+  const host=await listen(createRecipeWeb({RECIPE_WEB_ORIGIN:origin,RECIPE_API_ORIGIN:api,SUPABASE_URL:issuer,SUPABASE_PUBLISHABLE_KEY:'fixture',RECIPE_WEB_PROVIDERS:'github'}),t);
+  async function login() {
+    const start=await fetch(host+'/auth/start',{method:'POST',redirect:'manual',headers:{origin},body:new URLSearchParams({provider:'github'})});
+    const finish=await fetch(host+'/auth/callback?code=fixture',{redirect:'manual',headers:{cookie:cookie(start)}});
+    const sessionCookie=cookie(finish);
+    const view=await fetch(host+'/auth/session',{headers:{cookie:sessionCookie}}).then(r=>r.json());
+    return {cookie:sessionCookie,'X-Vonvon-Session':view.displaySession};
+  }
+  const a=await login(),b=await login(), path=host+'/api/v1'+detail;
+  assert.equal((await fetch(path,{headers:a})).status,200);
+  const count=seen.length;
+  for (const headers of [{'X-Vonvon-Session':a['X-Vonvon-Session']},{...b,'X-Vonvon-Session':a['X-Vonvon-Session']}]) {
+    const response=await fetch(path,{headers});assert.equal(response.status,409);assert.equal((await response.json()).error.code,'session_changed');
+  }
+  assert.equal(seen.length,count);
+  assert.equal((await fetch(path)).status,200);assert.equal(seen.at(-1),undefined);
+  waiting=true;
+  const started=new Promise(resolve=>{arrived=resolve;});
+  const pending=fetch(path,{headers:a});await started;
+  await fetch(host+'/auth/logout',{method:'POST',redirect:'manual',headers:{...a,origin}});
+  release();const response=await pending;
+  assert.equal(response.status,409);assert.equal((await response.json()).error.code,'session_changed');
+});

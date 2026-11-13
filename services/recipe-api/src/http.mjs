@@ -61,7 +61,7 @@ async function inputFor(req, url, {action, ids}) {
     return [action, ids];
   }
   if (action.endsWith('Operation')) return [action, operationInput(action, ids[0], await bodyJson(req, 2048))];
-  const key = requestKey(req);
+  const key = requestKey(req, action === 'direct' || action === 'redeem');
   const body = await bodyJson(req);
   if (action === 'patchDraft') {
     checkDraftPatch(body);

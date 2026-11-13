@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createServer } from 'node:http';
+import {acquisitionKey as newAcquisitionKey,seedAcquisitionHistory,checkAcquisitionBudget} from '../../services/recipe-api/test/acquisition.pg.mjs';
 import { execFileSync } from 'node:child_process';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -20,6 +21,7 @@ const pgEnv = { ...process.env, PGHOST:sock, PGPORT:String(port), PGDATABASE:'po
 const sql = stmt => pg('psql', ['-XAtq','-v','ON_ERROR_STOP=1','-c',stmt], {env:pgEnv}).trim();
 const review=process.argv.includes('--review');
 const legacy={owner:randomUUID(),reader:randomUUID(),recipe:randomUUID(),version:randomUUID(),request:randomUUID()};
+let acquisitionHistory;
 let up=false, service, issuerServer,webServer;
 let reviewAuth=null;
 const closeServer = s => new Promise((resolve,reject)=>s.close(err => err ? reject(err) : resolve()));
@@ -40,6 +42,7 @@ try {
         values('${legacy.reader}','${legacy.version}','${legacy.request}',
           sha256(convert_to(jsonb_build_array('${legacy.version}'::uuid,null)::text,'UTF8')));`);
     }
+    if (!review && f.endsWith('_recipe_acquisition_budget.sql')) acquisitionHistory=seedAcquisitionHistory(sql,legacy);
     pg('psql',['-Xq','-1','-v','ON_ERROR_STOP=1','-f',join(migrations,f)],{env:pgEnv,stdio:['ignore','ignore','pipe']});
   }
   sql('create role recipe_check_login login noinherit; grant recipe_api to recipe_check_login');
@@ -67,7 +70,7 @@ try {
   const { origin }=service;
   async function request(path,{token,method='GET',body,revision,key,status=200}={}){
     const headers={};if(token) headers.authorization='Bearer '+token;
-    if(method!=='GET'){Object.assign(headers,json);headers['idempotency-key']=key??randomUUID();}
+    if(method!=='GET'){Object.assign(headers,json);headers['idempotency-key']=key??(/\/(acquire|redeem)$/.test(path)?newAcquisitionKey():randomUUID());}
     if(revision!==undefined)headers['if-match']='"'+revision+'"';
     const res=await fetch(origin+'/v1'+path,{method,headers,body:body===undefined?undefined:JSON.stringify(body)});
     const data=await res.json();assert.equal(res.status,status,path+' '+res.status+' '+(data.error?.code||''));return data;
@@ -163,14 +166,14 @@ try {
     assert.ok(!('config' in await request(detail)));
     await request('/me/recipes',{token:jwt(rid,{aud:'other'}),status:401});
     const claim='/versions/'+v.versionId+'/redeem';
-    const key=randomUUID();
+    const key=newAcquisitionKey();
     await request(claim,{method:'POST',token:reader,body:{code:v.firstCode},key});
     await request(claim,{method:'POST',token:reader,body:{code:v.firstCode},key});
     await request(claim,{method:'POST',token:reader,body:{code:'changed'},key,status:409});
     assert.deepEqual((await request(detail,{token:reader})).config,config);
     assert.equal((await request('/me/recipes',{token:reader})).items.length,1);
     assert.equal((await request('/me/recipes',{token:other})).items.length,0);
-    const denied=await fetch(origin+'/v1'+claim,{method:'POST',headers:{...json,authorization:'Bearer '+other,'idempotency-key':randomUUID()},body:JSON.stringify({code:v.firstCode})});
+    const denied=await fetch(origin+'/v1'+claim,{method:'POST',headers:{...json,authorization:'Bearer '+other,'idempotency-key':newAcquisitionKey()},body:JSON.stringify({code:v.firstCode})});
     assert.ok(denied.status>=400&&denied.status<500);
     assert.ok(!(await denied.text()).includes(v.firstCode));
     assert.ok(!('config' in await request(detail,{token:other})));
@@ -189,6 +192,10 @@ try {
     await request('/drafts',{method:'POST',token:author,body:{public:{...pub,version:'3'},config,recipeId:v.recipeId,sourceVersionId:v.versionId},status:409});
     await request('/versions/'+v2.versionId+'/acquire',{method:'POST',token:other,body:{}});
     assert.equal((await request('/me/recipes',{token:other})).items[0].versionId,v2.versionId);
+    const budgetReader=jwt(randomUUID());
+    for(let n=0;n<260;n++) await request('/versions/'+v2.versionId+'/acquire',{
+      method:'POST',token:budgetReader,body:{},key:newAcquisitionKey(),status:n<256?200:429});
+    await checkAcquisitionBudget({sql,request,jwt,origin,v,v2,legacy,history:acquisitionHistory,pgEnv});
     const {build} = await import('esbuild');
     const nativeModule = join(tmp, 'native-community.mjs');
     await build({entryPoints: [join(root, 'packages/desktop/src/community-api.ts')], outfile: nativeModule,
@@ -236,14 +243,14 @@ try {
     console.log('PASS: native boundary reads Unicode versions and recovers a lost code batch after cross-client redemption and disable.');
     const spare=await request('/versions/'+v.versionId+'/codes',{method:'POST',token:author,body:{count:2}});
     for (const token of [author,other]) {
-      const noOpKey=randomUUID();
+      const noOpKey=newAcquisitionKey();
       const noOp={method:'POST',token,body:{},key:noOpKey};
       const acquired=await request('/versions/'+v2.versionId+'/acquire',noOp);
       assert.deepEqual(await request('/versions/'+v2.versionId+'/acquire',noOp),acquired);
       await request('/versions/'+v.versionId+'/acquire',{...noOp,status:409});
       await request(claim,{method:'POST',token,body:{code:spare.items[0].code},key:noOpKey,status:409});
     }
-    const alreadyGrantedKey=randomUUID();
+    const alreadyGrantedKey=newAcquisitionKey();
     const alreadyGranted={method:'POST',token:reader,body:{code:spare.items[0].code},key:alreadyGrantedKey};
     await request(claim,alreadyGranted);
     await request(claim,alreadyGranted);
@@ -253,7 +260,7 @@ try {
     // Two different accounts submit the same still-valid code at the same time.
     const issued=await request('/versions/'+v.versionId+'/codes',{method:'POST',token:author,body:{count:1}});
     const competitors=[jwt(randomUUID()),jwt(randomUUID())];
-    const statuses=await Promise.all(competitors.map(token=>fetch(origin+'/v1'+claim,{method:'POST',headers:{...json,authorization:'Bearer '+token,'idempotency-key':randomUUID()},body:JSON.stringify({code:issued.items[0].code})}).then(r=>r.status)));
+    const statuses=await Promise.all(competitors.map(token=>fetch(origin+'/v1'+claim,{method:'POST',headers:{...json,authorization:'Bearer '+token,'idempotency-key':newAcquisitionKey()},body:JSON.stringify({code:issued.items[0].code})}).then(r=>r.status)));
     assert.equal(statuses.filter(s=>s===200).length,1);assert.ok(statuses.some(s=>s>=400&&s<500));
     const bodies=await Promise.all(competitors.map(token=>request(detail,{token})));
     assert.equal(bodies.filter(d=>d.config?.role===config.role).length,1);

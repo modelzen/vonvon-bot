@@ -59,7 +59,7 @@ beforeEach(() => {
   const community = createDesktopFacades({receive: () => () => {}, invoke: async (channel, raw) => {
     if (channel !== desktopChannels.community) return {ok: true, value: undefined};
     try {const request = communityRequestSchema.parse(raw); calls.push(request); return {ok: true, value: await handle(request)};}
-    catch {return {ok: false, error: {kind: 'validation', message: 'strict boundary rejected request'}};}
+    catch (failure) {return {ok: false, error: {kind: 'validation', message: 'strict boundary rejected request', ...(failure && typeof failure === 'object' && 'code' in failure ? {code: failure.code} : {}), ...(failure && typeof failure === 'object' && 'retryAfter' in failure ? {retryAfter: failure.retryAfter} : {})}};}
   }}).shell.community;
   shell = {...fakeShell(), account, community} as typeof shell;
 });
@@ -152,4 +152,188 @@ it('preserves valid astral field and search limits all the way through the stric
   expect(name.maxLength).toBe(-1);
   await click('保存私人草稿');
   expect(calls.filter(request => request.type === 'saveDraft').at(-1)).toMatchObject({public: {name: '🦉'.repeat(60), summary: '🦉'.repeat(240), version: '🦉'.repeat(40)}});
+});
+
+it.each(['operation_expired','request_upgrade_required'])('reconciles a native %s attempt through the facade and requires explicit confirmation before replacing the key', async failure => {
+  let offline = false;
+  const normal = handle;
+  handle = async request => {
+    if (request.type === 'acquire') throw {code: failure};
+    if (request.type === 'detail' && offline) throw new Error('offline');
+    return normal(request);
+  };
+  await draw(); await click('打开已发布版本');
+  offline = true; await click('获取配方');
+  const first = calls.find(request => request.type === 'acquire')!;
+  expect(first.requestId).toMatch(/^a2\./);
+  offline = false; await click('获取配方');
+  expect(document.body.textContent).toContain('已确认尚未获取');
+  const attempts = () => calls.filter(request => request.type === 'acquire');
+  expect(attempts()).toHaveLength(2); expect(attempts()[1]).toEqual(first);
+  await click('获取配方');
+  expect(attempts()).toHaveLength(3); expect(attempts()[2]!.requestId).not.toBe(first.requestId);
+});
+
+it.each(['acquire_rate_limited','rate_limited'])('retains a native uncertain raw code after %s across a failed detail refresh and device changes', async failure => {
+  const normal = handle;
+  let failedRead = false;
+  handle = async request => {
+    if (request.type === 'acquire') throw {code: failure, retryAfter: 60};
+    if (request.type === 'detail') {if (failedRead) throw new Error('offline'); const {config: _config, ...publicRecipe} = recipe; return {...publicRecipe, public: {...recipe.public, access: 'coded'}};}
+    return normal(request);
+  };
+  await draw(); await click('打开已发布版本'); await fill('分享码', 'Ab-CD'); await click('获取配方');
+  expect(document.body.textContent).toContain('60 秒');
+  expect(document.body.textContent).not.toContain('分享码不可用');
+  for (const state of [devicesState({id:A,phase:'connecting'}),devicesState({id:A,phase:'ready'}),devicesState({id:'local'})]) await draw(state);
+  expect(document.querySelector<HTMLInputElement>('[aria-label="分享码"]')?.value).toBe('Ab-CD');
+  await click('获取配方');
+  const attempts=calls.filter(request=>request.type==='acquire');expect(attempts).toHaveLength(2);expect(attempts[1]).toEqual(attempts[0]);
+  failedRead=true;await click('重试读取');
+  failedRead=false;await click('重试读取');
+  expect(document.querySelector<HTMLInputElement>('[aria-label="分享码"]')?.value).toBe('Ab-CD');
+});
+
+it('ignores a native late successful attempt after route A-B-A and leaves the new page editable', async () => {
+  let finish!: (value: unknown) => void;
+  const normal=handle;
+  handle=async request=>request.type==='acquire'?new Promise(resolve=>{finish=resolve;}):normal(request);
+  await draw();await click('打开已发布版本');
+  await click('获取配方');
+  await click('返回 Bot 配方');await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  await act(async()=>{finish({recipeId:A,versionId:B,owned:false,acquired:true});});
+  expect(document.body.textContent).not.toContain('已获取，已保存在你的账号中');
+  expect([...document.querySelectorAll('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(false);
+  expect(calls.filter(request=>request.type==='acquire')).toHaveLength(1);
+});
+
+it('ignores a native old-account receipt after another account opens the same version', async () => {
+  const listeners = new Set<Parameters<AccountShell['onStatus']>[0]>();
+  let current = status;
+  shell.account = {...account, status: async () => current, onStatus: listener => {listeners.add(listener); listener(current); return () => {listeners.delete(listener);};}};
+  const normal=handle;
+  let finish!: (value: unknown) => void;
+  handle=async request=>request.type==='acquire'?new Promise(resolve=>{finish=resolve;}):normal(request);
+  await draw();await click('打开已发布版本');await click('获取配方');
+  await act(async()=>{current={...status,accountId:draftId};listeners.forEach(listener=>listener(current));});
+  await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  const before=calls.filter(request=>request.type==='detail').length;
+  await act(async()=>{finish({recipeId:A,versionId:B,owned:false,acquired:true});});
+  expect(document.body.textContent).not.toContain('已获取，已保存在你的账号中');
+  expect(calls.filter(request=>request.type==='detail')).toHaveLength(before);
+  expect([...document.querySelectorAll('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(false);
+});
+
+it('recovers a clock-rejected native attempt only after a checked explicit retry with a corrected key', async () => {
+  const now=Date.now();let clock=now+86400000,acquired=false;
+  vi.spyOn(Date,'now').mockImplementation(()=>clock);
+  const normal=handle;
+  handle=async request=>{
+    if(request.type==='acquire') {
+      const born=parseInt(request.requestId.slice(3).replaceAll('-','').slice(0,12),16);
+      if(born>now+120000)throw {code:'operation_clock_skew'};
+      acquired=true;return {recipeId:A,versionId:B,owned:false,acquired:true};
+    }
+    if(request.type==='detail'){const {config:_config,...publicRecipe}=recipe;return {...publicRecipe,public:{...recipe.public,access:'coded'},acquired,...(acquired?{config:recipe.config}:{})};}
+    return normal(request);
+  };
+  try {
+    await draw();await click('打开已发布版本');await fill('分享码','Ab-CD');await click('获取配方');
+    expect(document.body.textContent).toContain('校准设备时间');expect(document.body.textContent).toContain('再次点击');
+    expect(calls.filter(request=>request.type==='detail')).toHaveLength(2);
+    expect(calls.filter(request=>request.type==='acquire')).toHaveLength(1);
+    await click('重试读取');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="分享码"]')?.value).toBe('Ab-CD');
+    expect(calls.filter(request=>request.type==='acquire')).toHaveLength(1);
+    clock=now;await click('获取配方');
+    const attempts=calls.filter(request=>request.type==='acquire');expect(attempts).toHaveLength(2);
+    expect(attempts[1]!.requestId).not.toBe(attempts[0]!.requestId);expect(attempts[1]).toMatchObject({code:'Ab-CD'});
+    expect(document.body.textContent).toContain('已获取，已保存在你的账号中');
+  } finally {vi.restoreAllMocks();}
+});
+
+it('keeps a native clock-rejected raw/key until an online exact-version read confirms the existing entitlement', async () => {
+  let offline=false,acquired=false;const normal=handle;
+  handle=async request=>{
+    if(request.type==='acquire')throw {code:'operation_clock_skew'};
+    if(request.type==='detail'){
+      if(offline)throw new Error('offline');
+      const {config:_config,...publicRecipe}=recipe;return {...publicRecipe,public:{...recipe.public,access:'coded'},acquired,...(acquired?{config:recipe.config}:{})};
+    }
+    return normal(request);
+  };
+  await draw();await click('打开已发布版本');await fill('分享码','Ab-CD');offline=true;await click('获取配方');
+  expect(document.querySelector<HTMLInputElement>('[aria-label="分享码"]')?.value).toBe('Ab-CD');
+  offline=false;acquired=true;await click('获取配方');
+  const attempts=calls.filter(request=>request.type==='acquire');expect(attempts).toHaveLength(2);expect(attempts[1]).toEqual(attempts[0]);
+  expect(document.body.textContent).toContain('已获取，已保存在你的账号中');
+});
+
+it('keeps a clock-rejected native key when reconciliation returns another version',async()=>{
+  let mismatched=false;const normal=handle;
+  handle=async request=>{
+    if(request.type==='acquire')throw {code:'operation_clock_skew'};
+    if(request.type==='detail'&&mismatched)return {...recipe,versionId:draftId};
+    return normal(request);
+  };
+  await draw();await click('打开已发布版本');mismatched=true;await click('获取配方');await click('获取配方');
+  const attempts=calls.filter(request=>request.type==='acquire');expect(attempts).toHaveLength(2);expect(attempts[1]).toEqual(attempts[0]);
+  expect(document.body.textContent).toContain('获取结果暂未确认');
+});
+
+it('ignores a native clock reconciliation after route A-B-A and preserves the current attempt',async()=>{
+  let finish!:(value:unknown)=>void,reads=0;const normal=handle;
+  handle=async request=>{
+    if(request.type==='acquire')throw {code:'operation_clock_skew'};
+    if(request.type==='detail'&&++reads===2)return new Promise(resolve=>{finish=resolve;});
+    return normal(request);
+  };
+  await draw();await click('打开已发布版本');await click('获取配方');expect(finish).toBeTypeOf('function');
+  await click('返回 Bot 配方');await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  await act(async()=>{finish({...recipe,acquired:true});});
+  expect(document.body.textContent).not.toContain('已获取，已保存在你的账号中');
+  await click('获取配方');const attempts=calls.filter(request=>request.type==='acquire');expect(attempts).toHaveLength(2);expect(attempts[1]).toEqual(attempts[0]);
+});
+
+it('ignores native clock reconciliation after an account change and preserves the new account input',async()=>{
+  const listeners=new Set<Parameters<AccountShell['onStatus']>[0]>();let current=status;
+  shell.account={...account,status:async()=>current,onStatus:listener=>{listeners.add(listener);listener(current);return()=>{listeners.delete(listener);};}};
+  let finish!:(value:unknown)=>void,reads=0;const normal=handle;
+  handle=async request=>{
+    if(request.type==='acquire')throw {code:'operation_clock_skew'};
+    if(request.type==='detail'){
+      if(++reads===2)return new Promise(resolve=>{finish=resolve;});
+      const {config:_config,...publicRecipe}=recipe;return {...publicRecipe,public:{...recipe.public,access:'coded'}};
+    }
+    return normal(request);
+  };
+  await draw();await click('打开已发布版本');await fill('分享码','OLD-CODE');await click('获取配方');expect(finish).toBeTypeOf('function');
+  await act(async()=>{current={...status,accountId:draftId};listeners.forEach(listener=>listener(current));});
+  await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());await fill('分享码','NEW-CODE');
+  await act(async()=>{finish({...recipe,acquired:true});});
+  expect(document.body.textContent).not.toContain('已获取，已保存在你的账号中');
+  expect(document.querySelector<HTMLInputElement>('[aria-label="分享码"]')?.value).toBe('NEW-CODE');
+  expect([...document.querySelectorAll('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(false);
+});
+
+it('retains edited text and reconciles an uncertain submission across a native detail reread',async()=>{
+  let offline=false;const normal=handle;
+  handle=async request=>{
+    if(request.type==='acquire')throw {code:'unavailable'};
+    if(request.type==='detail'){
+      if(offline)throw new Error('offline');
+      return {recipeId:A,versionId:B,revision:1,owned:false,acquired:false,public:{...recipe.public,access:'coded'}};
+    }
+    return normal(request);
+  };
+  const attempts=()=>calls.filter(request=>request.type==='acquire');
+  await draw();await click('打开已发布版本');await fill('分享码','Old-Code');await click('获取配方');
+  await fill('分享码','New-Code');await click('重试读取');
+  expect(document.querySelector<HTMLInputElement>('[aria-label="分享码"]')?.value).toBe('New-Code');
+  offline=true;await click('获取配方');expect(attempts()).toHaveLength(1);
+  offline=false;await click('获取配方');expect(attempts()).toHaveLength(1);
+  expect(document.body.textContent).toContain('已确认尚未获取');
+  await click('获取配方');expect(attempts()).toHaveLength(2);
+  expect(attempts()[1]!.requestId).not.toBe(attempts()[0]!.requestId);
+  expect(attempts()[1]!.code).toBe('New-Code');
 });
