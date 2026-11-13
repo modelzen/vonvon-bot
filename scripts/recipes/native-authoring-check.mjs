@@ -234,6 +234,7 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
       messageId,
       senderId,
       content,
+      rawContentType: 'text',
       replyToMessageId,
       raw: {
         message: { chat_type: 'p2p', chat_id: dm, message_id: messageId },
