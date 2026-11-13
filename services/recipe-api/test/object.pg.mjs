@@ -135,6 +135,62 @@ try {
   await broker.collect(owner,id);
   assert.equal((await store.call('inventory',owner,id)).actorHeld,0);
 
+  const aliases=operationId(), aliasBody=Buffer.from('UUID spelling keeps one member');
+  await reserve(aliases,1024);
+  const spellingPairs=[[owner,aliases],[owner,aliases.toUpperCase()],
+    [owner.toUpperCase(),aliases],[owner.toUpperCase(),aliases.toUpperCase()]];
+  let releaseAlias;
+  const aliasGate=new Promise(resolve=>{releaseAlias=resolve;});
+  let aliasReaders=0;
+  const aliasCalls=[];
+  const aliasStarts=[];
+  const bounded=async promise => {
+    let timer;
+    try { return await Promise.race([promise,new Promise((_,reject)=>{
+      timer=setTimeout(()=>reject(new Error('object_member_test_timeout')),3000);
+    })]); } finally { clearTimeout(timer); }
+  };
+  try {
+    for (const [actor,operation] of spellingPairs) {
+      let entered;
+      const reading=new Promise(resolve=>{entered=resolve;});
+      const stream=new ReadableStream({async pull(controller) {
+        aliasReaders++; entered('reading'); await aliasGate;
+        controller.enqueue(aliasBody); controller.close();
+      }},{highWaterMark:0});
+      const result=broker.receive(actor,operation,info(0,aliasBody),stream)
+        .then(value=>({value}),error=>({error:error.message}));
+      aliasCalls.push(result);
+      aliasStarts.push(await bounded(Promise.race([reading,result])));
+    }
+    const aliasInventory=await store.call('inventory',owner,aliases);
+    console.log('UUID aliases',JSON.stringify({bodyReaders:aliasReaders,
+      ingressRows:aliasInventory.members.filter(m=>m.inFlight).length,starts:aliasStarts}));
+    assert.equal(aliasReaders,1,'UUID aliases must enter only one body reader');
+    assert.deepEqual(aliasStarts,['reading',...Array.from({length:3},()=>({error:'object_member_busy'}))]);
+    assert.equal(aliasInventory.members[0].inFlight,true,'busy aliases must not clear the active member ingress');
+    let secondEntered;
+    const secondReading=new Promise(resolve=>{secondEntered=resolve;});
+    const second=broker.receive(owner,aliases,info(1,aliasBody),new ReadableStream({async pull(controller) {
+      aliasReaders++; secondEntered(); await aliasGate;
+      controller.enqueue(aliasBody); controller.close();
+    }},{highWaterMark:0})).then(value=>({value}),error=>({error:error.message}));
+    aliasCalls.push(second);
+    await bounded(Promise.race([secondReading,second.then(result=>{
+      if (result.error) throw new Error(result.error);
+    })]));
+    await expect(broker.receive(owner,aliases,info(2,aliasBody),aliasBody),'object_stream_limit');
+    assert.equal((await store.call('inventory',owner,aliases)).members[0].inFlight,true);
+    assert.equal(aliasReaders,2);
+  } finally { releaseAlias(); await Promise.all(aliasCalls); }
+  const aliasResults=await Promise.all(aliasCalls);
+  assert.ok(aliasResults[0].value);
+  assert.ok(aliasResults[4].value);
+  const aliasWriteCount=writes;
+  assert.deepEqual(await broker.receive(owner.toUpperCase(),aliases.toUpperCase(),info(0,aliasBody),null),aliasResults[0].value);
+  assert.equal(writes,aliasWriteCount,'ready replay must not create remote objects');
+  await cancel(aliases); await broker.collect(owner.toUpperCase(),aliases.toUpperCase());
+
   const held=await broker.collect(owner,id);
   assert.deepEqual(held.pending,[{ordinal:0,reason:'object_held'}]);
   await admin.query("update recipe_private.accounts set status='disabled' where id=$1",[other]);
