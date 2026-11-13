@@ -62,8 +62,8 @@ function CommunityWindowContent() {
   function leave(destination: Destination) {
     flushSync(() => setSearchOpen(false));
     navigate(() => {
-      if (destination.page === 'account') accountPage?.open(); else accountPage?.close();
-      community.leave({deviceId: device.id, destination});
+      if (destination.page === 'account') {accountPage?.open(); community.close();}
+      else {accountPage?.close(); community.leave({deviceId: device.id, destination});}
     });
   }
   useEffect(() => {
@@ -84,7 +84,7 @@ function CommunityWindowContent() {
       onNavigate={page => {if (page !== 'community') leave({page});}}
       onOpenList={view => leave({page: 'collaboration', view, selection: {kind: 'overview'}})}
       onSearch={() => setSearchOpen(true)} updateAction={<DesktopUpdateButton/>}
-      deviceSwitcher={shell?.devices ? <DeviceSwitcher onManage={() => leave({page: 'devices'})} onAccount={() => leave({page: 'account'})}/> : undefined}>
+      deviceSwitcher={shell?.devices ? <DeviceSwitcher switchKeepsPage onManage={() => leave({page: 'devices'})} onAccount={() => leave({page: 'account'})}/> : undefined}>
       <div className="page-stack">{quitError && <InlineNotice title="退出未完成" tone="warning">{quitError}</InlineNotice>}<CommunityPage/></div>
     </AppShell>
     {searchOpen && <SearchDialog open entries={searchEntries(snapshot, {schedules, externalCoreAvailable, devices: Boolean(shell?.devices)})} onClose={() => setSearchOpen(false)} onSelect={entry => leave(entry.destination)}/>}
