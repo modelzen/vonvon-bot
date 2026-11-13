@@ -19,8 +19,16 @@ export const desktopAuthoringRequestSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('inspectLink'), ...link }).strict(),
   z.object({ type: z.literal('confirmLink'), ...link, evidence: digest }).strict(),
   z.object({ type: z.literal('reviewSource'), ...handle, groupId: groupIdSchema }).strict(),
-  z.object({ type: z.literal('prepare'), ...handle, groupId: groupIdSchema, reviewToken: digest,
-    sourceAttested: z.literal(true), setup: recipeSetupSchema.optional() }).strict(),
+  z
+    .object({
+      type: z.literal('prepare'),
+      ...handle,
+      groupId: groupIdSchema,
+      reviewToken: digest,
+      sourceAttested: z.literal(true),
+      setup: recipeSetupSchema.optional(),
+    })
+    .strict(),
   z.object({ type: z.literal('edit'), ...handle, draftId: uuid, baseRevision: revision }).strict(),
   z.object({ type: z.literal('inspectCandidate'), ...operation }).strict(),
   z.object({ type: z.literal('accept'), ...operation, payloadDigest: digest }).strict(),
@@ -29,31 +37,83 @@ export const desktopAuthoringRequestSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('cancel'), ...operation }).strict(),
 ]);
 const name = z.string().min(1).max(512);
-export const authoringTargetSchema = z.object({
-  accountId: uuid, accountName: name, viewId: viewIdSchema, botId: agentIdSchema, botName: name,
-}).strict();
+export const authoringTargetSchema = z
+  .object({
+    accountId: uuid,
+    accountName: name,
+    viewId: viewIdSchema,
+    botId: agentIdSchema,
+    botName: name,
+  })
+  .strict();
 export const desktopAuthoringOperationSchema = authoringOperationSchema
   .omit({ targetPublicKey: true, nonceCommitment: true })
-  .extend({ target: authoringTargetSchema, groupName: name.optional() });
+  .extend({ target: authoringTargetSchema, groupName: name.optional(), syncMessage: z.string().max(180).optional() });
 export const authoringCandidateContentSchema = z.union([
   z.object({ public: recipePublicSchema, config: recipeConfigSchema }).strict(),
-  z.object({ schemaVersion: z.literal(1), draftId: uuid, baseRevision: revision,
-    changes: z.array(authoringChangeSchema).min(1).max(16) }).strict(),
+  z
+    .object({
+      schemaVersion: z.literal(1),
+      draftId: uuid,
+      baseRevision: revision,
+      changes: z.array(authoringChangeSchema).min(1).max(16),
+    })
+    .strict(),
 ]);
 const group = { groupId: groupIdSchema, groupName: name };
 export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('session'), ...handle, target: authoringTargetSchema, linked: z.boolean(),
-    operations: z.array(desktopAuthoringOperationSchema).max(540) }).strict(),
+  z
+    .object({
+      kind: z.literal('session'),
+      ...handle,
+      target: authoringTargetSchema,
+      linked: z.boolean(),
+      operations: z.array(desktopAuthoringOperationSchema).max(540),
+    })
+    .strict(),
   z.object({ kind: z.literal('closed') }).strict(),
-  z.object({ kind: z.literal('challenge'), challengeId: uuid, code: z.string().max(32), expiresAt: z.number().int().nonnegative().safe() }).strict(),
-  z.object({ kind: z.literal('link'), linked: z.boolean(), recipient: z.object({
-    openId: z.string().max(210), chatId: groupIdSchema, tenantKey: z.string().max(200),
-  }).strict().optional(), evidence: digest.optional() }).strict(),
-  z.object({ kind: z.literal('source'), target: authoringTargetSchema, ...group, role: z.string().max(16384),
-    reviewToken: digest, untracked: z.boolean() }).strict(),
+  z
+    .object({
+      kind: z.literal('challenge'),
+      challengeId: uuid,
+      code: z.string().max(32),
+      expiresAt: z.number().int().nonnegative().safe(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('link'),
+      linked: z.boolean(),
+      recipient: z
+        .object({
+          openId: z.string().max(210),
+          chatId: groupIdSchema,
+          tenantKey: z.string().max(200),
+        })
+        .strict()
+        .optional(),
+      evidence: digest.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('source'),
+      target: authoringTargetSchema,
+      ...group,
+      role: z.string().max(16384),
+      reviewToken: digest,
+      untracked: z.boolean(),
+    })
+    .strict(),
   z.object({ kind: z.literal('operation'), operation: desktopAuthoringOperationSchema }).strict(),
-  z.object({ kind: z.literal('candidate'), operation: desktopAuthoringOperationSchema,
-    payloadDigest: digest, content: authoringCandidateContentSchema }).strict(),
+  z
+    .object({
+      kind: z.literal('candidate'),
+      operation: desktopAuthoringOperationSchema,
+      payloadDigest: digest,
+      content: authoringCandidateContentSchema,
+    })
+    .strict(),
 ]);
 export type DesktopAuthoringRequest = z.infer<typeof desktopAuthoringRequestSchema>;
 export type DesktopAuthoringReply = z.infer<typeof desktopAuthoringReplySchema>;

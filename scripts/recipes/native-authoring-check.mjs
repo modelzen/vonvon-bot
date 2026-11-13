@@ -1,0 +1,387 @@
+// The issuer, PostgreSQL and recipe HTTP service belong to check.mjs. Only the external Feishu transport is synthetic.
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { build } from 'esbuild';
+
+function imTransport() {
+  const cards = new Map(),
+    messages = new Map(),
+    replies = [];
+  const channel = {
+    send: async (chat, data) => {
+      replies.push({ chat, data });
+    },
+    rawClient: {
+      cardkit: {
+        v1: {
+          card: {
+            create: async ({ data }) => {
+              const card_id = randomUUID();
+              cards.set(card_id, JSON.parse(data.data));
+              return { code: 0, data: { card_id } };
+            },
+            update: async ({ path, data }) => {
+              cards.set(path.card_id, JSON.parse(data.card.data));
+              return { code: 0 };
+            },
+          },
+        },
+      },
+      im: {
+        v1: {
+          chatMembers: { isInChat: async () => ({ code: 0, data: { is_in_chat: true } }) },
+          message: {
+            create: async ({ data }) => {
+              const prior = messages.get(data.uuid);
+              const message = prior ?? {
+                message_id: randomUUID(),
+                chat_id: data.receive_id,
+                card: JSON.parse(data.content).data.card_id,
+              };
+              messages.set(data.uuid, message);
+              return { code: 0, data: message };
+            },
+          },
+        },
+      },
+    },
+  };
+  return {
+    channel,
+    messages,
+    replies,
+    click(verb, operator, chatId, tenantKey) {
+      const message = [...messages.values()].at(-1);
+      const card = cards.get(message.card);
+      const action = card.body.elements.flatMap((el) => el.behaviors ?? []).find((b) => b.value?.verb === verb);
+      assert.ok(action, 'the displayed private card has the requested button');
+      return {
+        chatId,
+        messageId: message.message_id,
+        operator: { openId: operator },
+        raw: { operator: { open_id: operator, tenant_key: tenantKey } },
+        action: { value: action.value },
+      };
+    },
+  };
+}
+export async function checkNativeAuthoring({ root, tmp, origin, author, reader, accountId, sql, request }) {
+  const home = join(realpathSync(tmp), 'authoring-state');
+  mkdirSync(home, { mode: 0o700 });
+  process.env.VONVON_HOME = home;
+  const botId = 'cli_authoring_fixture',
+    groupId = 'oc_authoring_fixture',
+    dm = 'oc_private_fixture';
+  const operator = 'ou_author',
+    tenantKey = 'test-fixture',
+    deviceId = randomUUID(),
+    peerId = randomUUID();
+  const bot = { appId: botId, tenant: 'feishu', createdAt: 1, registrationId: randomUUID() };
+  writeFileSync(join(home, 'bots.json'), JSON.stringify({ version: 1, bots: [{ ...bot, name: '测试助手' }] }));
+  const journalPath = join(home, 'desktop-authoring.json');
+  const entry = join(tmp, 'authoring-entry.ts'),
+    compiled = join(tmp, 'authoring-entry.cjs');
+  const modules = [
+    ['AuthoringService', 'packages/daemon/src/recipe/authoring-service.ts'],
+    ['RecipeAuthoringController', 'packages/desktop/src/recipe-authoring.ts'],
+    ['AuthoringJournal', 'packages/desktop/src/recipe-authoring-journal.ts'],
+    ['createDesktopFacades', 'packages/desktop/src/facade.ts'],
+    ['desktopChannels', 'packages/desktop/src/ipc-contract.ts'],
+    ['botPaths,useBotDir', 'packages/daemon/src/config/paths.ts'],
+    ['addProject,getProjectByChatId', 'packages/daemon/src/project/registry.ts'],
+    ['loadOrCreateDevice', 'packages/daemon/src/remote/device.ts'],
+    [
+      'recipeAuthoringRequestSchema,recipeAuthoringReplySchema,desktopAuthoringReplySchema,desktopAuthoringRequestSchema',
+      'packages/protocol/src/index.ts',
+    ],
+  ];
+  writeFileSync(
+    entry,
+    modules.map(([names, path]) => 'export {' + names + '} from ' + JSON.stringify(join(root, path)) + ';').join('\n'),
+  );
+  await build({
+    entryPoints: [entry],
+    outfile: compiled,
+    alias: { '@vonvon/protocol': join(root, 'packages/protocol/src/index.ts') },
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    target: 'node22',
+    logLevel: 'silent',
+  });
+  const code = (await import(pathToFileURL(compiled))).default;
+  const dev = await code.loadOrCreateDevice(home, deviceId),
+    pk = dev.keypair.publicKey;
+  const peer = { id: peerId, device: deviceId + '/' + pk };
+  code.useBotDir(botId);
+  mkdirSync(code.botPaths(botId).dir, { recursive: true });
+  const location = { file: code.botPaths(botId).projectsFile, dataRoot: home };
+  await code.addProject(
+    { chatId: groupId, name: 'fixture', cwd: home, blank: false, createdAt: 1, supplement: '群角色' },
+    location,
+  );
+  const im = imTransport();
+  let loseRegister = true,
+    loseAccept = true,
+    afterAuthorize;
+  let generation = new AbortController(),
+    actor = accountId,
+    deviceGeneration = 0;
+  const alternate = (await request('/me', { token: reader })).accountId;
+  const seen = [];
+  const account = {
+    lease: (id) => (id === actor ? generation.signal : undefined),
+    status: () => ({
+      kind: 'signedIn',
+      accountId: actor,
+      displayName: '测试作者',
+      provider: 'google',
+      persistence: 'memory',
+    }),
+    request: async (id, path, init, beforeSend) => {
+      assert.equal(id, actor);
+      beforeSend();
+      const headers = new Headers(init.headers);
+      headers.set('Authorization', 'Bearer ' + (actor === accountId ? author : reader));
+      const res = await fetch(origin + path, { ...init, headers });
+      if (path.endsWith('/register') && res.ok && loseRegister) {
+        loseRegister = false;
+        await res.text();
+        throw Error('lost registration reply');
+      }
+      if (path.endsWith('/authorize') && res.ok && afterAuthorize) {
+        const fn = afterAuthorize;
+        afterAuthorize = undefined;
+        fn();
+      }
+      return res;
+    },
+  };
+  const deviceHttp = async (url, init) => {
+    assert.equal(new URL(url).origin, origin);
+    assert.equal(new Headers(init.headers).has('Authorization'), false);
+    const response = await fetch(url, init);
+    if (url.endsWith('/accept') && response.ok && loseAccept) {
+      loseAccept = false;
+      await response.text();
+      throw Error('lost accept reply');
+    }
+    return response;
+  };
+  function boot() {
+    const daemon = new code.AuthoringService({
+      bot,
+      cfg: { preferences: { access: { admins: [operator] } } },
+      channel: im.channel,
+      root: home,
+      origin,
+      fetch: deviceHttp,
+      loopback: true,
+    });
+    const client = {
+      snapshot: async () => ({
+        agents: [{ id: botId, name: '测试助手' }],
+        groups: [{ id: groupId, name: '产品群' }],
+        memberships: [{ agentId: botId, groupId }],
+      }),
+      device: async () => ({
+        kind: 'deviceStatus',
+        status: {
+          device: { id: deviceId, publicKey: pk, name: '测试设备' },
+          remote: { port: 3000, addresses: [] },
+          clients: { active: 1, total: 1 },
+        },
+      }),
+      recipeAuthoring: async (raw) => {
+        const r = code.recipeAuthoringRequestSchema.parse(raw);
+        assert.ok(!JSON.stringify(r).includes(author));
+        seen.push(r.type);
+        return code.recipeAuthoringReplySchema.parse(await daemon.request(peer, r));
+      },
+    };
+    const ctrl = new code.RecipeAuthoringController(
+      account,
+      (viewId) => {
+        const gen = deviceGeneration;
+        return { viewId, client, check: () => assert.equal(deviceGeneration, gen, 'stale device view') };
+      },
+      new code.AuthoringJournal(journalPath),
+    );
+    const { shell } = code.createDesktopFacades({
+      invoke: async (channel, raw) => {
+        if (channel === code.desktopChannels.subscribe) return { ok: true, value: undefined };
+        assert.equal(channel, code.desktopChannels.recipeAuthoring);
+        const r = code.desktopAuthoringRequestSchema.parse(raw);
+        const reply = code.desktopAuthoringReplySchema.parse(await ctrl.request(r));
+        const text = JSON.stringify(reply);
+        assert.ok(!text.includes(author));
+        for (const key of ['ticket', 'nonceCommitment', 'targetPublicKey', 'serverPublicKey', 'authorization'])
+          assert.ok(!text.includes('"' + key + '"'));
+        return { ok: true, value: reply };
+      },
+      receive: () => () => {},
+    });
+    const main = shell.recipeAuthoring.request;
+    return { daemon, ctrl, main };
+  }
+  function message(content, senderId = operator, replyToMessageId) {
+    const messageId = randomUUID();
+    return {
+      chatType: 'p2p',
+      chatId: dm,
+      messageId,
+      senderId,
+      content,
+      replyToMessageId,
+      raw: {
+        message: { chat_type: 'p2p', chat_id: dm, message_id: messageId },
+        sender: { sender_type: 'user', tenant_key: tenantKey, sender_id: { open_id: senderId } },
+      },
+    };
+  }
+  let running = boot();
+  const start = () => running.main({ type: 'open', accountId, viewId: 'local', botId });
+  let handle;
+  const act = (type, fields) => running.main({ type, handle, ...fields });
+  const rebase = async () => {
+    running.ctrl.closeAll();
+    running.daemon.close();
+    running = boot();
+    const session = await start();
+    handle = session.handle;
+    return session;
+  };
+  try {
+    const session = await start();
+    handle = session.handle;
+    const challenge = await act('beginLink');
+    await running.daemon.onMessage(message('/recipe link ' + challenge.code, 'ou_other'));
+    assert.equal((await act('inspectLink', { challengeId: challenge.challengeId })).evidence, undefined);
+    await running.daemon.onMessage(message('/recipe link ' + challenge.code));
+    const link = await act('inspectLink', { challengeId: challenge.challengeId });
+    assert.equal(link.recipient.openId, operator);
+    await act('confirmLink', { challengeId: challenge.challengeId, evidence: link.evidence });
+    const source = await act('reviewSource', { groupId });
+    assert.equal(source.role, '群角色');
+    assert.equal(source.groupName, '产品群');
+    const prepare = { groupId, reviewToken: source.reviewToken, sourceAttested: true };
+    await assert.rejects(act('prepare', prepare), /lost registration reply/);
+    assert.equal(im.messages.size, 0);
+    const registered = sql("select id from recipe_private.authoring_operations where account_id='" + accountId + "'");
+    assert.ok(registered);
+    let recovered = await rebase();
+    assert.equal(recovered.operations[0].operationId, registered);
+    assert.equal(recovered.operations[0].state, 'waiting');
+    assert.equal(im.messages.size, 1);
+    await running.daemon.onAction(im.click('confirm', 'ou_other', dm, tenantKey));
+    assert.equal((await act('status')).operations[0].state, 'waiting');
+    await running.daemon.onAction(im.click('confirm', operator, dm, tenantKey));
+    const pending = await act('status');
+    assert.equal(pending.operations[0].state, 'pendingCloud');
+    assert.equal(
+      sql("select state from recipe_private.authoring_operations where id='" + registered + "'"),
+      'accepted',
+    );
+    recovered = await rebase();
+    const saved = recovered.operations.find((o) => o.operationId === registered);
+    assert.equal(saved.state, 'completed');
+    const draftId = saved.receipt.draftId;
+    assert.equal(saved.receipt.revision, 1);
+    assert.deepEqual((await request('/drafts/' + draftId, { token: author })).config, { role: '群角色' });
+    const cancelledLate = await act('cancel', { operationId: registered });
+    assert.deepEqual(cancelledLate.operation.receipt, saved.receipt);
+
+    const edit = await act('edit', { draftId, baseRevision: 1 });
+    const editId = edit.operation.operationId;
+    const last = [...im.messages.values()].at(-1);
+    await running.daemon.onMessage(message('/recipe role 独立的新角色', operator, last.message_id));
+    const candidate = await act('inspectCandidate', { operationId: editId });
+    assert.deepEqual(candidate.content.changes, [{ op: 'setDraftRole', value: '独立的新角色' }]);
+    await assert.rejects(act('accept', { operationId: editId, payloadDigest: candidate.payloadDigest }));
+    await running.daemon.onAction(im.click('confirm', operator, dm, tenantKey));
+    afterAuthorize = () => {
+      generation.abort();
+      actor = alternate;
+      generation = new AbortController();
+      generation.abort();
+      actor = accountId;
+      generation = new AbortController();
+    };
+    const before = seen.filter((t) => t === 'advance').length;
+    await assert.rejects(act('resume', { operationId: editId }));
+    assert.equal(seen.filter((t) => t === 'advance').length, before);
+    await assert.rejects(act('status'));
+    assert.equal((await request('/drafts/' + draftId, { token: author })).revision, 1);
+    recovered = await rebase();
+    assert.equal(recovered.operations.find((o) => o.operationId === editId).receipt.revision, 2);
+    assert.equal((await request('/drafts/' + draftId, { token: author })).config.role, '独立的新角色');
+    await assert.rejects(act('edit', { draftId, baseRevision: 1 }));
+    const again = await act('edit', { draftId, baseRevision: 2 });
+    const activeId = again.operation.operationId;
+    await running.daemon.onMessage(
+      message('/recipe summary 仅私人稿', operator, [...im.messages.values()].at(-1).message_id),
+    );
+    const lateButton = im.click('confirm', operator, dm, tenantKey);
+    await act('cancel', { operationId: activeId });
+    await running.daemon.onAction(lateButton);
+    assert.equal((await request('/drafts/' + draftId, { token: author })).revision, 2);
+    assert.equal(sql("select state from recipe_private.authoring_operations where id='" + activeId + "'"), 'cancelled');
+    assert.equal((await code.getProjectByChatId(groupId, location.file)).supplement, '群角色');
+    assert.equal(
+      sql(
+        "select count(*) from recipe_private.authoring_operations where account_id='" +
+          accountId +
+          "' and state='accepted'",
+      ),
+      '2',
+    );
+    assert.ok(!readFileSync(journalPath, 'utf8').includes('独立的新角色'));
+    const fromChat = message('/recipe create');
+    await running.daemon.onMessage(fromChat);
+    const chatStatus = await act('status');
+    const chatOp = chatStatus.operations.find((o) => o.state === 'waiting');
+    assert.equal(chatOp.groupId, groupId);
+    assert.notEqual(chatOp.operationId, registered);
+    await running.daemon.onMessage(fromChat);
+    const clickSave = im.click('confirm', operator, dm, tenantKey);
+    await act('close');
+    await running.daemon.onAction(clickSave);
+    assert.equal(
+      sql("select state from recipe_private.authoring_operations where id='" + chatOp.operationId + "'"),
+      'dispatched',
+    );
+    actor = alternate;
+    generation.abort();
+    generation = new AbortController();
+    const otherSession = await running.main({ type: 'open', accountId: alternate, viewId: 'local', botId });
+    assert.deepEqual(otherSession.operations, []);
+    await assert.rejects(
+      running.main({ type: 'cancel', handle: otherSession.handle, operationId: chatOp.operationId }),
+    );
+    await running.daemon.onAction(clickSave);
+    actor = accountId;
+    generation.abort();
+    generation = new AbortController();
+    recovered = await rebase();
+    await running.daemon.onAction(clickSave);
+    const fromChatSaved = (await act('status')).operations.find((o) => o.operationId === chatOp.operationId);
+    assert.equal(fromChatSaved.receipt.revision, 1);
+    assert.notEqual(fromChatSaved.receipt.draftId, draftId);
+    assert.equal((await request('/drafts/' + fromChatSaved.receipt.draftId, { token: author })).config.role, '群角色');
+    assert.equal(
+      sql("select count(*) from recipe_private.authoring_operations where account_id='" + accountId + "'"),
+      '4',
+    );
+    console.log(
+      'PASS: typed desktop authoring, real device proofs, original account, two-way link, App/chat creation and chat edit, close/reopen, A→B→A and retained cancel/accept receipts.',
+    );
+    deviceGeneration += 2;
+    await assert.rejects(act('status'), /stale device view/);
+  } finally {
+    running.ctrl.closeAll();
+    running.daemon.close();
+  }
+}
