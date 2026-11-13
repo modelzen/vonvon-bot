@@ -20,9 +20,21 @@ export class WebError extends Error {
   constructor(status, code) { super(code); this.status = status; }
 }
 
+export function createLoginAdmission({ now = Date.now } = {}) {
+  let tokens = 32, updated = now();
+  return () => {
+    const current = now();
+    tokens = Math.min(32, tokens + Math.max(0, current - updated) / 1000);
+    updated = current;
+    if (tokens < 1) throw new WebError(429, 'busy');
+    tokens--;
+  };
+}
+
 export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, providerNames }) {
   const available = supabaseOrigin && publishableKey ? providerNames.filter(p => providers.has(p)) : [];
   const flows = new Map(), sessions = new Map();
+  const admit = createLoginAdmission();
   const secure = new URL(publicOrigin).protocol === 'https:';
   const flowName = secure ? '__Host-vv-flow' : 'vv-local-flow';
   const sessionName = secure ? '__Host-vv-session' : 'vv-local-session';
@@ -67,6 +79,7 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
     start(req, res, form) {
       const provider = form.get('provider');
       if (!available.includes(provider)) throw new WebError(400, 'provider_unavailable');
+      admit();
       if (flows.size >= 1024) throw new WebError(429, 'busy');
       const key = random(), verifier = random();
       flows.delete(cookieValue(req, flowName));
@@ -81,23 +94,27 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
     },
     async callback(req, res, url) {
       const key = cookieValue(req, flowName), flow = flows.get(key);
-      const cookies = [cookie(flowName, '', 0)];
-      flows.delete(key);
+      const cookies = [];
+      const consume = () => {
+        if (flows.get(key) !== flow) return false;
+        flows.delete(key); cookies.push(cookie(flowName, '', 0)); return true;
+      };
       const code = url.searchParams.get('code');
       let location = (flow?.returnTo || '/') + '?auth=failed';
-      if (flow?.deadline > Date.now() && code && code.length <= 2048 && !url.searchParams.has('error')) {
+      if (flow?.deadline > Date.now() && !flow.exchanging && code && code.length <= 2048 && !url.searchParams.has('error')) {
+        flow.exchanging = true;
         try {
           const token = await tokenRequest('pkce', { auth_code: code, code_verifier: flow.verifier });
-          if (sessions.size < 4096) {
+          if (flow.deadline > Date.now() && consume() && sessions.size < 4096) {
             sessions.delete(cookieValue(req, sessionName));
             const id = random();
             sessions.set(id, { ...token, displaySession: random(), deadline: Date.now() + 8 * 60 * minute });
             cookies.push(cookie(sessionName, id, 8 * 3600));
             location = flow.returnTo;
           }
-        } catch { /* A clean redirect also removes the one-time code from the address bar. */ }
-      }
-      res.writeHead(303, { Location: location, 'Set-Cookie': cookies }); res.end();
+        } catch {} finally { consume(); }
+      } else if (flow && !flow.exchanging) consume();
+      res.writeHead(303, { Location: location, ...(cookies.length && { 'Set-Cookie': cookies }) }); res.end();
     },
     async access(req, { write = false } = {}) {
       const session = getSession(req);
@@ -106,13 +123,25 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
       if (session.accessUntil > Date.now() + 15_000) return session.access;
       if (!session.refreshing) {
         session.refreshing = tokenRequest('refresh_token', { refresh_token: session.refresh })
-          .then(values => { Object.assign(session, values); return session.access; })
+          .then(values => {
+            if (getSession(req) !== session) throw new WebError(409, 'session_changed');
+            Object.assign(session, values); return session.access;
+          })
           .catch(error => {
-            if (error.status === 401) sessions.delete(cookieValue(req, sessionName));
+            if (error.status === 401 && getSession(req) === session) sessions.delete(cookieValue(req, sessionName));
             throw error;
           }).finally(() => { delete session.refreshing; });
       }
-      return session.refreshing;
+      const access = await session.refreshing;
+      if (getSession(req) !== session) throw new WebError(409, 'session_changed');
+      return access;
+    },
+    assertAccess(req, access, { write = false } = {}) {
+      if (!access) return;
+      const session = getSession(req);
+      if (!session || session.access !== access || (write && req.headers['x-vonvon-session'] !== session.displaySession)) {
+        throw new WebError(409, 'session_changed');
+      }
     },
     logout(req, res) {
       sessions.delete(cookieValue(req, sessionName));
