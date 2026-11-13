@@ -16,7 +16,8 @@ test('invalid object member identity fails before acquiring a pool client or ent
     async connect() { connections++; throw new Error('unexpected_pool_acquisition'); },
   });
   const invalid=e=>e.status===422 && e.code==='invalid_object_member';
-  const malformedIds=['not-a-uuid',actor.replaceAll('-',''),'{'+actor+'}',null,0,[actor],{toString:()=>actor}];
+  const malformedIds=['not-a-uuid',actor.replaceAll('-',''),'{'+actor+'}',actor+'\n',actor+'\r\n',
+    ' '+actor,actor+' ',null,0,[actor],{toString:()=>actor}];
   const badScopes=[...malformedIds.map(value=>[value,operation,0]),
     ...malformedIds.map(value=>[actor,value,0]),
     ...['0','00','0.0',null,-1,66,0.5,NaN,Infinity,2147483648].map(value=>[actor,operation,value])];
