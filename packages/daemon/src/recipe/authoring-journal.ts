@@ -27,7 +27,7 @@ export interface LocalOperation {
   accountId: string; scope: string; bot: string; binding: string; recipient: Recipient; carrier: Carrier;
   secret?: string; nonce?: string; source?: Source; payload?: string; proposalDigest?: string;
   dispatchAuthorization?: AuthoringAuthorization;
-  dispatched: boolean; contextOpen?: boolean; instructionId?: string; seenInstructions?: string[]; terminalAt?: number;
+  dispatched: boolean; contextOpen?: boolean; instructionId?: string; seenInstructions?: string[]; terminalAt?: number; contextUntil?: number;
 }
 export interface AuthoringLedger {
   version: 1; links: Record<string, Link>; operations: Record<string, LocalOperation>;
@@ -39,7 +39,7 @@ export function retire(op: LocalOperation, state: 'completed' | 'cancelled' | 'e
   op.view.deliveryUnknown = false;
   op.terminalAt = now;
   delete op.secret; delete op.nonce; delete op.dispatchAuthorization; delete op.payload; delete op.source;
-  delete op.view.payloadDigest; delete op.proposalDigest; delete op.seenInstructions;
+  delete op.view.payloadDigest; delete op.proposalDigest;
 }
 export function maintain(ledger: AuthoringLedger, now: number) {
   for (const [id, op] of Object.entries(ledger.operations)) {

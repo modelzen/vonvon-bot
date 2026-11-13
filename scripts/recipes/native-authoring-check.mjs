@@ -1,4 +1,3 @@
-// The issuer, PostgreSQL and recipe HTTP service belong to check.mjs. Only the external Feishu transport is synthetic.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
