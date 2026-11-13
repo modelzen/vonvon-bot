@@ -6,6 +6,18 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { recipeInstallRequestSchema, type RecipeAuthorization, type RecipeInstallReply, type RecipeManifest } from '@vonvon/protocol';
 import type { DeviceIdentity } from '../src/remote/device';
 
+const durability = vi.hoisted(() => ({fail: false}));
+vi.mock('../src/config/bot-namespace', async original => {
+  const actual = await original<typeof import('../src/config/bot-namespace')>();
+  return {...actual, syncDirectory: async (directory: string) => {
+    if (durability.fail && directory.endsWith('/cli_recipe_fixture')) {
+      const raw = JSON.parse(await readFile(join(directory, 'projects.json'), 'utf8'));
+      if (Object.values(raw.recipeInstallOperations ?? {}).some(value => (value as {status: string}).status === 'applied')) throw Object.assign(new Error('directory fsync failed'), {code: 'EIO'});
+    }
+    return actual.syncDirectory(directory);
+  }};
+});
+
 const root = await mkdtemp(join(tmpdir(), 'vonvon-recipe-'));
 vi.stubEnv('VONVON_HOME', root);
 const { RecipeStore } = await import('../src/recipe/store');
@@ -22,13 +34,18 @@ const device: DeviceIdentity = {v: 1, deviceId: randomUUID(), name: 'Fixture', k
   publicKey: publicKey.export({format: 'jwk'}).x!, secretKey: privateKey.export({format: 'jwk'}).d!,
 }};
 const location = (id: string) => ({file: botPaths(id).projectsFile, dataRoot: root});
-const store = () => new RecipeStore({targetPublicKey: device.keypair.publicKey, location});
+const store = () => new RecipeStore({targetPublicKey: device.keypair.publicKey, location, isInChat: async () => {}});
 const manifest = (overrides: Partial<RecipeManifest> = {}): RecipeManifest => ({schema: 1, recipeId: '11111111-1111-4111-8111-111111111111',
   versionId: randomUUID(), authorId: randomUUID(), revision: 1, access: 'direct', role: '负责整理群内问题。', ...overrides});
 function encoded(value: RecipeManifest) { const bytes = Buffer.from(JSON.stringify(value)); return {manifest: bytes.toString('base64url'), manifestSha256: sha256(bytes)}; }
 const prepare = (value = manifest(), extra = {}) => recipeInstallRequestSchema.parse({type: 'prepare', botId, groupId, accountId, ...encoded(value), ...extra});
 async function prepared(value = manifest(), extra = {}) {
-  const request = prepare(value, {resolution: {role: {kind: 'replace'}}, ...extra});
+  const initial = prepare(value);
+  if (initial.type !== 'prepare') throw new Error('fixture');
+  const review = await store().prepare(initial);
+  if (review.kind === 'prepared' && Object.keys(extra).length === 0) return review;
+  if (review.kind !== 'review' && review.kind !== 'prepared') throw new Error('fixture');
+  const request = prepare(value, {resolution: {role: {kind: 'replace'}}, reviewToken: review.reviewToken, ...extra});
   if (request.type !== 'prepare') throw new Error('fixture');
   const result = await store().prepare(request);
   expect(result.kind).toBe('prepared');
@@ -52,6 +69,7 @@ async function bind(id = botId, persona?: string) {
     ...(persona === undefined ? {} : {profile: {persona, memory: '', inheritPersona: false, inheritMemory: false}})}, location(id));
 }
 beforeEach(async () => {
+  durability.fail = false;
   await mkdir(root, {recursive: true});
   await rm(join(root, 'bots'), {recursive: true, force: true});
   await writeFile(join(root, 'bots.json'), JSON.stringify({version: 1, bots: [botId, 'cli_other_fixture'].map(appId => ({
@@ -63,10 +81,10 @@ beforeEach(async () => {
 afterAll(async () => { vi.unstubAllEnvs(); await rm(root, {recursive: true, force: true}); });
 
 describe('durable role installation', () => {
-  it('requires an explicit first choice, including an empty local role, and reads legacy persona', async () => {
+  it('adopts the incoming role when empty and requires a choice for a different legacy persona', async () => {
     const first = prepare();
     if (first.type !== 'prepare') throw new Error('fixture');
-    expect(await store().prepare(first)).toMatchObject({kind: 'review', currentRole: '', roleChoiceRequired: true});
+    expect(await store().prepare(first)).toMatchObject({kind: 'prepared', currentRole: '', roleChoiceRequired: false});
     await mutateProjectByChatId(groupId, value => { value.profile = {persona: '旧的职责', memory: '', inheritPersona: false, inheritMemory: false}; }, undefined, location(botId));
     expect(await store().prepare(first)).toMatchObject({kind: 'review', currentRole: '旧的职责'});
     const result = await ready(manifest(), {resolution: {role: {kind: 'keep'}}});
@@ -130,7 +148,7 @@ describe('durable role installation', () => {
   });
   it('retains a prepared operation after a failed rename and applies once on retry', async () => {
     const result = await ready();
-    const broken = new RecipeStore({targetPublicKey: device.keypair.publicKey, location, beforeCommit: () => {throw new Error('before rename');}});
+    const broken = new RecipeStore({targetPublicKey: device.keypair.publicKey, location, isInChat: async () => {}, beforeCommit: () => {throw new Error('before rename');}});
     await expect(broken.apply(botId, result.operationId, async () => {})).rejects.toThrow('before rename');
     expect((await row())?.supplement).toBeUndefined();
     expect(await store().status(botId, result.operationId)).toMatchObject({status: 'in_progress'});
@@ -181,6 +199,163 @@ describe('durable role installation', () => {
 });
 
 describe('wire and security boundaries', () => {
+  it('does not report or complete a visible terminal receipt while its post-rename durability fence fails', async () => {
+    const value = manifest(), preparation = await prepared(value), auth = authorization(preparation);
+    const {ticket: _ticket, ...binding} = auth;
+    const transport = vi.fn(async (url: string | URL | Request) => String(url).endsWith('/redeem')
+      ? Response.json({...binding, status: 'redeemed', manifest: encoded(value).manifest})
+      : Response.json({operationId: auth.operationId, status: 'applied'}));
+    const member = vi.fn(async () => {});
+    const installer = () => new RecipeInstaller({apiOrigin: 'https://recipes.example', device, location, isInChat: member, fetch: transport as typeof fetch});
+    durability.fail = true;
+    await expect(installer().request(recipeInstallRequestSchema.parse({type: 'commit', botId, operationId: preparation.operationId, authorization: auth}))).rejects.toMatchObject({code: 'EIO'});
+    expect(transport.mock.calls.filter(([url]) => String(url).endsWith('/complete'))).toHaveLength(0);
+    expect((await row())?.supplement).toBe(value.role);
+    await expect(store().status(botId, preparation.operationId)).rejects.toMatchObject({code: 'EIO'});
+    durability.fail = false;
+    expect(await installer().request(recipeInstallRequestSchema.parse({type: 'commit', botId, operationId: preparation.operationId}))).toMatchObject({status: 'applied'});
+    expect(member).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls.filter(([url]) => String(url).endsWith('/complete'))).toHaveLength(1);
+  });
+  it('returns a fresh review if the role changes before the owner sends the reviewed choice', async () => {
+    await mutateProjectByChatId(groupId, value => {value.supplement = '正在审阅的职责';}, undefined, location(botId));
+    const input = prepare();
+    if (input.type !== 'prepare') throw new Error('fixture');
+    const review = await store().prepare(input);
+    await mutateProjectByChatId(groupId, value => {value.supplement = '后来的职责';}, undefined, location(botId));
+    const result = await store().prepare({...input, resolution: {role: {kind: 'replace'}}, reviewToken: (review as {reviewToken?: string}).reviewToken} as typeof input);
+    expect(result).toMatchObject({kind: 'review', currentRole: '后来的职责'});
+    const raw = JSON.parse(await readFile(botPaths(botId).projectsFile, 'utf8'));
+    expect(Object.keys(raw.recipeInstallOperations ?? {})).toHaveLength(0);
+  });
+  it.each(['binding', 'registration', 'manifest'] as const)('does not reuse a reviewed choice after %s changes', async change => {
+    await mutateProjectByChatId(groupId, value => {value.supplement = '正在审阅的职责';}, undefined, location(botId));
+    const input = prepare();
+    if (input.type !== 'prepare') throw new Error('fixture');
+    const review = await store().prepare(input);
+    if (review.kind !== 'review') throw new Error('fixture');
+    if (change === 'binding') {await removeProject('Fixture group'); await bind();}
+    if (change === 'registration') {
+      const bots = JSON.parse(await readFile(join(root, 'bots.json'), 'utf8'));
+      bots.bots[0].registrationId = randomUUID();
+      await writeFile(join(root, 'bots.json'), JSON.stringify(bots));
+    }
+    const updated = change === 'manifest' ? {...input, ...encoded(manifest())} : input;
+    const result = await store().prepare({...updated, reviewToken: review.reviewToken, resolution: {role: {kind: 'replace'}}});
+    expect(result.kind).toBe('review');
+    expect('reviewToken' in result && result.reviewToken).not.toBe(review.reviewToken);
+    const raw = JSON.parse(await readFile(botPaths(botId).projectsFile, 'utf8'));
+    expect(Object.keys(raw.recipeInstallOperations ?? {})).toHaveLength(0);
+  });
+  it('durably names a legacy binding before its first review without creating an operation or nonce', async () => {
+    const file = botPaths(botId).projectsFile, raw = JSON.parse(await readFile(file, 'utf8'));
+    delete raw.projects[0].bindingIncarnation; delete raw.projects[0].projectSettingsRevision;
+    raw.projects[0].supplement = '历史职责';
+    await writeFile(file, JSON.stringify(raw));
+    const input = prepare();
+    if (input.type !== 'prepare') throw new Error('fixture');
+    const review = await store().prepare(input);
+    if (review.kind !== 'review') throw new Error('fixture');
+    const saved = JSON.parse(await readFile(file, 'utf8'));
+    expect(saved.projects[0].bindingIncarnation).toMatch(/^[a-f0-9-]{36}$/);
+    expect(saved.projects[0].projectSettingsRevision).toBe(0);
+    expect(Object.keys(saved.recipeInstallOperations ?? {})).toHaveLength(0);
+    await removeProject('Fixture group'); await bind();
+    expect((await row())?.bindingIncarnation).not.toBe(saved.projects[0].bindingIncarnation);
+    expect(await store().prepare({...input, reviewToken: review.reviewToken, resolution: {role: {kind: 'replace'}}})).toMatchObject({kind: 'review'});
+    const after = JSON.parse(await readFile(file, 'utf8'));
+    expect(Object.keys(after.recipeInstallOperations ?? {})).toHaveLength(0);
+  });
+  it('refuses preparation when the live Bot is not in the group without creating a nonce or operation', async () => {
+    const memberStore = new RecipeStore({targetPublicKey: device.keypair.publicKey, location,
+      isInChat: async () => {throw new Error('not in chat');}} as ConstructorParameters<typeof RecipeStore>[0]);
+    const input = prepare();
+    if (input.type !== 'prepare') throw new Error('fixture');
+    await expect(memberStore.prepare(input)).rejects.toThrow('not in chat');
+    const raw = JSON.parse(await readFile(botPaths(botId).projectsFile, 'utf8'));
+    expect(Object.keys(raw.recipeInstallOperations ?? {})).toHaveLength(0);
+  });
+  it('bounds a stalled membership check and releases the project lock without creating an operation', async () => {
+    const memberStore = new RecipeStore({targetPublicKey: device.keypair.publicKey, location, membershipTimeoutMs: 10,
+      isInChat: () => new Promise<void>(() => {})});
+    const input = prepare();
+    if (input.type !== 'prepare') throw new Error('fixture');
+    await expect(memberStore.prepare(input)).rejects.toThrow('核验超时');
+    await mutateProjectByChatId(groupId, value => {value.supplement = '锁已释放';}, undefined, location(botId));
+    expect((await row())?.supplement).toBe('锁已释放');
+    const raw = JSON.parse(await readFile(botPaths(botId).projectsFile, 'utf8'));
+    expect(Object.keys(raw.recipeInstallOperations ?? {})).toHaveLength(0);
+  });
+  it('cancels an unissued operation and never dispatches a late authorization for it', async () => {
+    const preparation = await prepared(), auth = authorization(preparation), transport = vi.fn();
+    const installer = () => new RecipeInstaller({apiOrigin: 'https://recipes.example', device, location, isInChat: async () => {}, fetch: transport as typeof fetch});
+    expect(await installer().request(recipeInstallRequestSchema.parse({type: 'cancel', botId, operationId: preparation.operationId}))).toMatchObject({status: 'rejected'});
+    expect(await installer().request(recipeInstallRequestSchema.parse({type: 'commit', botId, operationId: preparation.operationId, authorization: auth}))).toMatchObject({status: 'rejected'});
+    expect((await store().get(botId, preparation.operationId)).cloudCompletion).toBe('none');
+    expect(transport).not.toHaveBeenCalled();
+  });
+  it.each(['authorized', 'redeemed'] as const)('reports in progress on cancel after %s, including after restart', async phase => {
+    const preparation = await prepared();
+    await store().authorize(botId, preparation.operationId, authorization(preparation));
+    if (phase === 'redeemed') await store().redeemed(botId, preparation.operationId);
+    const installer = () => new RecipeInstaller({apiOrigin: 'https://recipes.example', device, location, isInChat: async () => {}});
+    expect(await installer().request(recipeInstallRequestSchema.parse({type: 'cancel', botId, operationId: preparation.operationId}))).toMatchObject({status: 'in_progress'});
+    expect(await installer().request(recipeInstallRequestSchema.parse({type: 'status', botId, operationId: preparation.operationId}))).toMatchObject({status: 'in_progress'});
+    expect((await store().get(botId, preparation.operationId)).status).toBe(phase === 'authorized' ? 'prepared' : 'in_progress');
+  });
+  it('does not promise cancellation while an authorized redeem response is still outstanding', async () => {
+    const value = manifest(), preparation = await prepared(value), auth = authorization(preparation);
+    const {ticket: _ticket, ...binding} = auth;
+    let release!: () => void, entered!: () => void;
+    const waiting = new Promise<void>(resolve => {release = resolve;}), started = new Promise<void>(resolve => {entered = resolve;});
+    const installer = new RecipeInstaller({apiOrigin: 'https://recipes.example', device, location, isInChat: async () => {},
+      fetch: (async (url: string | URL | Request) => {
+        if (String(url).endsWith('/redeem')) {entered(); await waiting; return Response.json({...binding, status: 'redeemed', manifest: encoded(value).manifest});}
+        return Response.json({operationId: auth.operationId, status: 'applied'});
+      }) as typeof fetch});
+    const commit = installer.request(recipeInstallRequestSchema.parse({type: 'commit', botId, operationId: preparation.operationId, authorization: auth}));
+    await started;
+    try {expect(await installer.request(recipeInstallRequestSchema.parse({type: 'cancel', botId, operationId: preparation.operationId}))).toMatchObject({status: 'in_progress'});}
+    finally {release(); await commit.catch(() => undefined);}
+    expect((await row())?.supplement).toBe(value.role);
+  });
+  it.each([{code: 'operation_cancelled', status: 409}, {code: 'operation_expired', status: 410}])('settles definitive pre-redeem $code without attempting a completion', async error => {
+    const preparation = await prepared(), auth = authorization(preparation);
+    const transport = vi.fn(async () => Response.json({error: {code: error.code}}, {status: error.status}));
+    const installer = new RecipeInstaller({apiOrigin: 'https://recipes.example', device, location, isInChat: async () => {}, fetch: transport as typeof fetch});
+    expect(await installer.request(recipeInstallRequestSchema.parse({type: 'commit', botId, operationId: preparation.operationId, authorization: auth}))).toMatchObject({status: 'rejected'});
+    expect(await installer.request(recipeInstallRequestSchema.parse({type: 'commit', botId, operationId: preparation.operationId}))).toMatchObject({status: 'rejected'});
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect((await row())?.supplement).toBeUndefined();
+  });
+  it('does not turn an already redeemed operation into an unredeemed cloud rejection', async () => {
+    const preparation = await ready();
+    const installer = new RecipeInstaller({apiOrigin: 'https://recipes.example', device, location, isInChat: async () => {},
+      fetch: (async () => Response.json({error: {code: 'operation_expired'}}, {status: 410})) as typeof fetch});
+    await expect(installer.request(recipeInstallRequestSchema.parse({type: 'commit', botId, operationId: preparation.operationId}))).rejects.toThrow('(410)');
+    expect(await store().status(botId, preparation.operationId)).toMatchObject({status: 'in_progress'});
+    expect((await store().get(botId, preparation.operationId)).cloudCompletion).toBe('required');
+  });
+  it('reports a local CAS rejection to cloud after redemption and retains that completion obligation on retry', async () => {
+    const value = manifest(), preparation = await prepared(value), auth = authorization(preparation);
+    const {ticket: _ticket, ...binding} = auth;
+    await mutateProjectByChatId(groupId, value => {value.supplement = '并发修改';}, undefined, location(botId));
+    const outcomes: string[] = [];
+    let failComplete = true;
+    const transport = vi.fn(async (url: string | URL | Request, options?: RequestInit) => {
+      if (String(url).endsWith('/redeem')) return Response.json({...binding, status: 'redeemed', manifest: encoded(value).manifest});
+      const body = JSON.parse(options!.body as string); outcomes.push(body.outcome);
+      if (failComplete) {failComplete = false; throw new Error('lost rejected receipt');}
+      return Response.json({operationId: auth.operationId, status: body.outcome});
+    });
+    const installer = () => new RecipeInstaller({apiOrigin: 'https://recipes.example', device, location, isInChat: async () => {}, fetch: transport as typeof fetch});
+    await expect(installer().request(recipeInstallRequestSchema.parse({type: 'commit', botId, operationId: preparation.operationId, authorization: auth}))).rejects.toThrow('lost rejected receipt');
+    expect((await store().get(botId, preparation.operationId)).cloudCompletion).toBe('required');
+    expect(await installer().request(recipeInstallRequestSchema.parse({type: 'commit', botId, operationId: preparation.operationId}))).toMatchObject({status: 'rejected'});
+    expect(outcomes).toEqual(['rejected', 'rejected']);
+    expect((await store().get(botId, preparation.operationId)).cloudCompletion).toBe('confirmed');
+    expect((await row())?.supplement).toBe('并发修改');
+  });
   it('accepts 5000 Unicode code points and rejects 5001', () => {
     const max = encoded(manifest({role: '😀'.repeat(5000)}));
     expect(parseManifest(max.manifest, max.manifestSha256).role).toHaveLength(10000);

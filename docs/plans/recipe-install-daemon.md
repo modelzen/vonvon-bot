@@ -24,17 +24,19 @@ setup 只保存现有 `config.setup.steps` 的 `kind/title/instructions/check/re
 
 安装状态是 `prepared → in_progress → applied/rejected`。每个 operation 使用一次 UUIDv7、私有随机 32 字节 nonce 和 SHA-256 commitment。准备捕获可信 Bot 注册身份、binding incarnation、settings revision、完整行摘要、本机公钥和精确 manifest。manifest 先验原始字节摘要，再严格解析，职责最多 5,000 Unicode 码点。
 
-首次安装遇到空或不同职责，必须明确保留、替换或提供合并文本。同配方同版本直接返回打开群设置的目标，不刷新来源元数据。其他配方占用时拒绝。更新比较 base、当前本地值和 incoming，双方冲突时要求明确解决，setup 按整体结构比较。
+首次安装的现有职责为空时，在正常安装确认中采用 incoming；现有职责非空且不同时，必须明确保留、替换或提供合并文本。review 返回绑定可信 Bot 身份、绑定 lifetime、设置摘要、账号、设备公钥及精确 manifest 摘要的 reviewToken。带 resolution 的准备必须原样带回该 token；缺失或过期返回新 review，不生成操作和 nonce。历史绑定在第一次 review 前先持久补齐 incarnation 与 revision。同配方同版本直接返回打开群设置的目标，不刷新来源元数据。其他配方占用时拒绝。更新比较 base、当前本地值和 incoming，双方冲突时要求明确解决，setup 按整体结构比较。
 
-prepare、apply 固定取得 bots 后取得 projects。提交重新核对注册身份、绑定 lifetime、revision 和完整设置摘要，在锁内向真实 Bot 核对群成员身份。唯一一次 fsync 后的 rename 同时写 supplement、recipeInstall base/来源和 applied/rejected receipt。回执位于 projects.json 顶层，解绑不会删除。所有 projects.json 临时文件使用 0600，普通设置改写也保持 nonce 私密。
+prepare、apply 固定取得 bots 后取得 projects，两次均在锁内向真实 Bot 核对群成员身份，并以十秒期限释放卡住的核验。准备核验失败不创建操作和 nonce。提交重新核对注册身份、绑定 lifetime、revision 和完整设置摘要。唯一一次 fsync 后的 rename 同时写 supplement、recipeInstall base/来源和 applied/rejected receipt。回执位于 projects.json 顶层，解绑不会删除。所有 projects.json 临时文件使用 0600，普通设置改写也保持 nonce 私密。恢复读取在 projects 锁内再次同步实际 registry 文件和目录；持久化错误未解除前不返回终态成功，也不向云端提交 applied。
 
 daemon 只使用配置的 HTTPS origin。测试可显式允许 loopback HTTP。请求拒绝重定向，不发送 JWT。Scoped ticket、nonce 和 X25519/HKDF/HMAC 证明用于 redeem/complete。兑换成功只表示进行中。本地 CAS 拒绝会持久记录 rejected。响应丢失后复用同一操作和凭据；本地已应用时只重发完成回执，不重复写职责。
+
+取消只在本机尚未保存授权时直接终结。已有授权、兑换已发出或已兑换时，daemon 返回进行中，主人由主进程凭当前账号请求云取消，再恢复原操作。精确的云端 operation_cancelled 或 operation_expired 可以终结尚未兑换的本地操作。独立的 cloudCompletion 保存 none、required、confirmed，只有已兑换的终态才需要提交 complete，云端预兑换取消和本机提前取消均不提交 complete。
 
 ## 5. 测试
 
 主分支缺失的行为包括原子 receipt、解绑 ABA 防护、注册 incarnation 防护、同群双 Bot 隔离、legacy persona 读取、5000/5001 Unicode 边界及 purpose/key/nonce 绑定。增加真实 registry 文件测试和独立子进程在 rename 前后退出、重新启动恢复的测试。
 
-测试还覆盖首次明确选择、并发编辑 CAS、三方合并、不同配方占用、相同版本不改元数据、setup 新版本不继承下标状态、错误兑换清单不落盘，以及完成响应丢失后恢复。跨端黄金样例使用公开 RFC 7748 测试密钥。现有 authz、CLI parity 和 Bot namespace 测试继续运行。
+测试还覆盖空职责采用、非空职责明确选择、review 与准备之间的编辑及解绑/重注册、并发编辑 CAS、三方合并、不同配方占用、相同版本不改元数据、setup 新版本不继承下标状态、错误兑换清单不落盘，以及完成响应丢失后恢复。目录同步 EIO 必须阻止可见终态和云 applied，解除故障后的重试只确认持久化，不重复应用。取消覆盖授权前、授权后尚未发送、等待兑换响应、已兑换、重启及终态；兑换前取消不会错误提交 complete。跨端黄金样例使用公开 RFC 7748 测试密钥。现有 authz、CLI parity 和 Bot namespace 测试继续运行。
 
 ## 6. Codex 的自测
 
