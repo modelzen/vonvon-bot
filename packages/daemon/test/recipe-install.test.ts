@@ -109,6 +109,15 @@ describe('durable role installation', () => {
     expect(await store().apply(botId, result.operationId, async () => {})).toMatchObject({status: 'rejected'});
     expect((await row())?.recipeInstall).toBeUndefined();
   });
+  it('captures a legacy Bot identity without changing the running process registration', async () => {
+    const bots = JSON.parse(await readFile(join(root, 'bots.json'), 'utf8'));
+    delete bots.bots[0].registrationId;
+    await writeFile(join(root, 'bots.json'), JSON.stringify(bots));
+    const bytes = await readFile(join(root, 'bots.json'), 'utf8');
+    const result = await ready();
+    expect(await store().apply(botId, result.operationId, async () => {})).toMatchObject({status: 'applied'});
+    expect(await readFile(join(root, 'bots.json'), 'utf8')).toBe(bytes);
+  });
   it('isolates two Bots sharing the same physical group and checks actual membership at commit', async () => {
     await bind('cli_other_fixture');
     const result = await ready();
