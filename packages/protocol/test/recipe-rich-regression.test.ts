@@ -92,6 +92,32 @@ describe('rich-v2 independent review regressions', () => {
   it('preserves legitimate Chinese and Unicode filenames in a portable skill tree', () => {
     expect(() => validatePublishableRichRecipeContent(files(['SKILL.md', '参考/使用说明.md', 'résumé.txt', '資料/😀.rst']))).not.toThrow();
   });
+  const subscript = '\u03b1\u0323\u0345.txt';
+  const iota = '\u03b1\u0323\u03b9.txt';
+  it.each([
+    [subscript, iota], [subscript, iota + '/ref.md'], [iota + '/ref.md', subscript],
+    ['read/' + subscript, 'READ/' + iota], ['I.txt', 'i.txt'], ['İ.txt', 'i\u0307.txt'],
+  ])('rejects canonically caseless file or directory conflicts: %s and %s', (first, second) => {
+    expect(() => validatePublishableRichRecipeContent(files(['SKILL.md', first, second]))).toThrow('skills.files.name');
+  });
+  it.each(['CONOUT$.md', 'CONIN$/readme.md', 'NUL .rst', 'COM1 .txt'])('rejects the Windows device component in %s', path => {
+    expect(() => validatePublishableRichRecipeContent(files(['SKILL.md', path]))).toThrow('files.1.name');
+  });
+  it('checks all device stems before the first dot in each component', () => {
+    const stems = ['con', 'prn', 'aux', 'nul', 'conin$', 'conout$', ...Array.from('123456789¹²³').flatMap(digit => ['com' + digit, 'lpt' + digit])];
+    for (const stem of stems) {
+      for (const path of [stem + '  .log.md', 'docs/' + stem + '/ref.txt', '资料/' + stem + ' .draft/说明.rst']) {
+        expect(() => validatePublishableRichRecipeContent(files(['SKILL.md', path])), path).toThrow('files.1.name');
+      }
+    }
+  });
+  it('preserves distinct Unicode names, ordinary stems, and the UTF-8 filename budget', () => {
+    const atLimit = 'é'.repeat(118) + '.txt';
+    const names = ['SKILL.md', subscript, 'I.md', 'ı.md', 'CONOUT.md', 'NULx .rst', 'COM0/a.md', 'LPT10.md', 'NUL\u00a0.txt', atLimit];
+    const result = validatePublishableRichRecipeContent(files(names));
+    expect(decodeRichRecipeContent(result.canonicalUTF8).content.files.map(file => file.name)).toEqual(names);
+    expect(() => validatePublishableRichRecipeContent(files(['SKILL.md', 'a' + atLimit]))).toThrow('files.1.name');
+  });
   it.each(['60 24 32 13 8', '*/0 * * * *', '5/2 * * * *', '30-10 * * * *'])('rejects native-invalid cron %s', expr => {
     expect(() => validatePublishableRichRecipeContent({...fresh(), tasks: [{...task(), spec: {kind: 'cron', expr}}]})).toThrow();
   });
