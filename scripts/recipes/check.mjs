@@ -5,7 +5,7 @@ import { randomBytes, randomUUID, generateKeyPairSync, sign } from 'node:crypto'
 import { mkdtempSync, readdirSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createServer } from 'node:http';
 import { execFileSync } from 'node:child_process';
 
@@ -189,6 +189,45 @@ try {
     await request('/drafts',{method:'POST',token:author,body:{public:{...pub,version:'3'},config,recipeId:v.recipeId,sourceVersionId:v.versionId},status:409});
     await request('/versions/'+v2.versionId+'/acquire',{method:'POST',token:other,body:{}});
     assert.equal((await request('/me/recipes',{token:other})).items[0].versionId,v2.versionId);
+    const {build} = await import('esbuild');
+    const nativeModule = join(tmp, 'native-community.mjs');
+    await build({entryPoints: [join(root, 'packages/desktop/src/community-api.ts')], outfile: nativeModule,
+      alias: {'@vonvon/protocol': join(root, 'packages/protocol/src/index.ts')}, bundle: true, platform: 'node', format: 'esm'});
+    const {communityRequest: nativeRequest} = await import(pathToFileURL(nativeModule));
+    let droppedBatch; let dropReceipt = true;
+    const native = {
+      status: () => ({kind: 'signedIn', accountId}), onStatus: () => () => {},
+      request: async (_account, path, init) => {
+        const headers = new Headers(init.headers); headers.set('Authorization', 'Bearer ' + author);
+        const response = await fetch(origin + path, {...init, headers});
+        if (dropReceipt && path === '/v1/versions/' + v.versionId + '/codes' && init.method === 'POST') {
+          dropReceipt = false; droppedBatch = await response.clone().json();
+          throw new Error('Synthetic response loss after real transaction commit');
+        }
+        return response;
+      },
+    };
+    const batchRequest = {type: 'issueCodes', accountId, versionId: v.versionId, count: 3, requestId: randomUUID()};
+    await assert.rejects(nativeRequest(native, batchRequest));
+    await request(claim, {method: 'POST', token: jwt(randomUUID()), body: {code: droppedBatch.items[0].code}});
+    await request('/codes/' + droppedBatch.items[1].codeId + '/disable', {method: 'POST', token: author, body: {}});
+    const recoveredBatch = await nativeRequest(native, batchRequest);
+    assert.deepEqual(recoveredBatch.items.map(item => item.status).sort(), ['available', 'disabled', 'redeemed']);
+    assert.deepEqual(recoveredBatch.items.filter(item => 'code' in item).map(item => item.code), [droppedBatch.items[2].code]);
+    assert.equal(recoveredBatch.items.length, 3);
+    for (const item of recoveredBatch.items) {
+      const command = {type: 'revealCode', accountId, codeId: item.codeId, requestId: randomUUID()};
+      if (item.status === 'available') assert.equal((await nativeRequest(native, command)).code, item.code);
+      else await assert.rejects(nativeRequest(native, command));
+    }
+    const unicode = {public: {...pub, name: '🦉'.repeat(60), summary: '🦉'.repeat(240), version: '🦉'.repeat(40), access: 'direct'},
+      config: {role: '角色', setup: {steps: [{kind: 'config', title: '🦉'.repeat(80), instructions: '准备', required: false}]}}};
+    const unicodeDraft = await request('/drafts', {method: 'POST', token: author, body: unicode});
+    const unicodeVersion = await request('/drafts/' + unicodeDraft.draftId + '/publish', {method: 'POST', token: author, revision: unicodeDraft.revision, body: {}});
+    const unicodeCatalog = await nativeRequest(native, {type: 'catalog', accountId, query: unicode.public.name});
+    assert.equal(unicodeCatalog.items[0].versionId, unicodeVersion.versionId);
+    assert.deepEqual((await nativeRequest(native, {type: 'detail', accountId, recipeId: unicodeVersion.recipeId, versionId: unicodeVersion.versionId})).public, unicode.public);
+    console.log('PASS: native boundary reads Unicode versions and recovers a lost code batch after cross-client redemption and disable.');
     const spare=await request('/versions/'+v.versionId+'/codes',{method:'POST',token:author,body:{count:2}});
     for (const token of [author,other]) {
       const noOpKey=randomUUID();
@@ -238,6 +277,8 @@ try {
     assert.equal(sql(`select owner_id::text from recipe_private.versions where id='${v.versionId}'`),accountId);
     assert.equal(sql(`select actor::text from recipe_private.grants where version_id='${v.versionId}' and actor='${(await request('/me',{token:reader})).accountId}'`),
       (await request('/me',{token:reader})).accountId);
+    const { checkInstallOperations } = await import('../../services/recipe-api/test/operations.pg.mjs');
+    await checkInstallOperations({request,sql,jwt,author,reader,other,v,v2,legacy,pgEnv,config});
     let remaining=500-Number(sql(`select count(*) from recipe_private.codes where owner_id='${accountId}'`));
     let lastBatch;
     while (remaining>0) {

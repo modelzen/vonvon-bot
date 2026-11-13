@@ -16,6 +16,8 @@ export interface NativeAccount {
   login(): Promise<AccountStatus>;
   cancelLogin(): Promise<AccountStatus>;
   logout(): Promise<AccountStatus>;
+  recipeLink?(recipeId: string, versionId: string): string;
+  publicRequest?(path: string): Promise<Response>;
   request(accountId: string, path: string, init?: RequestInit): Promise<Response>;
   dispose(): Promise<void>;
 }
@@ -147,9 +149,9 @@ export function createAccountSession(options: {
 
   async function clearLocal(reason?: 'cancelled') {
     const signal = invalidate();
+    publish(deployment ? { kind: 'signedOut', ...(reason && { reason }) } : { kind: 'unavailable', reason: 'configuration' });
     try {
       await serialize(() => store.clear());
-      if (!signal.aborted) publish(deployment ? { kind: 'signedOut', ...(reason && { reason }) } : { kind: 'unavailable', reason: 'configuration' });
     } catch { if (!signal.aborted) publish({ kind: 'unavailable', reason: 'storage' }); }
     return view;
   }
@@ -199,6 +201,16 @@ export function createAccountSession(options: {
     },
     async cancelLogin() { return view.kind === 'signingIn' && !disposed ? clearLocal('cancelled') : view; },
     async logout() { return disposed ? view : clearLocal(); },
+    recipeLink(recipeId, versionId) {
+      if (!deployment || !/^[0-9a-f-]{36}$/.test(recipeId) || !/^[0-9a-f-]{36}$/.test(versionId)) throw new AccountFault('invalid');
+      return `${deployment.webOrigin}/recipes/${recipeId}/versions/${versionId}`;
+    },
+    async publicRequest(path) {
+      if (!deployment || disposed || !/^\/v1\/(?:community\/recipes(?:\?[^#]*)?|recipes\/[0-9a-f-]+\/versions\/[0-9a-f-]+)$/.test(path)) throw new AccountFault('invalid');
+      const url = new URL(path, deployment.apiOrigin);
+      if (url.origin !== deployment.apiOrigin || url.hash) throw new AccountFault('invalid');
+      return transport(url, {credentials: 'omit', redirect: 'error', cache: 'no-store', signal: requestSignal(owner.signal)});
+    },
     async request(accountId, path, init = {}) {
       const signal = owner.signal;
       if (!deployment || disposed || !credential || credential.accountId !== accountId || !path.startsWith('/v1/')) throw new AccountFault('invalid');

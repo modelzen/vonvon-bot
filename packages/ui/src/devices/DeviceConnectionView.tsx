@@ -5,6 +5,7 @@ import {Button} from '../reference/components/ui';
 import {addBlockedReason, failureCopy, networkFailure, rowView, routeHints} from './devices-presentation';
 import {CopyText, DeviceTile, OutsideWindow, platformIcon, StatusDot, StatusPill, TailscaleAdvice, useNow} from './device-bits';
 import {AddDeviceDialog, Problem} from './AddDeviceDialog';
+import {useCommunity} from '../community/community-context';
 import {useAccount} from '../account-context';
 import {AccountMenuItem} from '../accounts/AccountMenuItem';
 import {AccountPanel} from '../accounts/AccountPanel';
@@ -18,6 +19,7 @@ export function DeviceOutsideFrame({title, children}: {title: string; children: 
   const state = useDevicesState();
   const account = useAccount();
   const accountPage = useAccountPage();
+  const community = useCommunity();
   const [dialog, setDialog] = useState<{repairOf?: DeviceRow}>();
   const now = useNow(60_000);
   const switchTo = (id: string) => void shell?.devices?.switchTo(id).catch(reportSwitchFailure);
@@ -37,6 +39,7 @@ export function DeviceOutsideFrame({title, children}: {title: string; children: 
       {children(repairOf => setDialog(repairOf ? {repairOf} : {}))}
     </>}
     <footer className="device-outside-foot">
+      {community && <div className="device-actions"><Button onClick={() => community.open()}>浏览社区</Button></div>}
       {state && shell?.devices && <div className="device-actions">
         {current?.id !== 'local' && <Button onClick={() => switchTo('local')}>回到这台电脑</Button>}
         <Button variant="ghost" disabled={Boolean(blocked)} title={blocked} onClick={() => setDialog({})}>添加设备</Button>
