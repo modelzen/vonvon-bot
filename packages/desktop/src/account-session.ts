@@ -8,7 +8,7 @@ import type { AccountStore } from './account-store.js';
 type PublicIdentity = Awaited<ReturnType<typeof verifyAccount>>;
 type Access = { token: string; expiresAt: number };
 type Persistence = 'secure' | 'memory';
-type Avatar = { accountId: string; url: string; dataUrl?: string };
+type Avatar = { accountId: string; url: string; dataUrl?: string; retryAt?: number };
 
 export interface NativeAccount {
   status(): AccountStatus;
@@ -73,13 +73,14 @@ export function createAccountSession(options: {
     if (avatar?.accountId !== verified.accountId || avatar?.url !== verified.avatarUrl) avatar = undefined;
     publish({ kind: 'signedIn', ...verified, provider: record.provider, persistence,
       ...(avatar?.dataUrl ? { avatarDataUrl: avatar.dataUrl } : {}) });
-    if (!verified.avatarUrl || avatar) return;
+    if (!verified.avatarUrl || (avatar && (avatar.retryAt === undefined || avatar.retryAt > Date.now()))) return;
     const current: Avatar = { accountId: verified.accountId, url: verified.avatarUrl };
     avatar = current;
     void fetchAccountAvatar(current.url, signal, transport).then(dataUrl => {
-      if (!dataUrl || signal.aborted || avatar !== current || view.kind !== 'signedIn' || view.accountId !== current.accountId) return;
+      if (signal.aborted || avatar !== current) return;
+      if (!dataUrl) { current.retryAt = Date.now() + 60_000; return; }
       current.dataUrl = dataUrl;
-      publish({ ...view, avatarDataUrl: dataUrl });
+      if (view.kind === 'signedIn' && view.accountId === current.accountId) publish({ ...view, avatarDataUrl: dataUrl });
     });
   }
 
