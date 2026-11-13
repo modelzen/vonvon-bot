@@ -29,6 +29,7 @@ export interface RecipePreparation {
   nonceCommitment: string;
   targetPublicKey: string;
   createdAt: number;
+  cloudCompletion: 'none' | 'required' | 'confirmed';
 }
 export type RecipeOperation = RecipePreparation & (
   | {status: 'prepared'; authorization?: RecipeAuthorization}

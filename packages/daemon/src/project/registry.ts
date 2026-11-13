@@ -494,6 +494,17 @@ export function mutateProjectStore<T>(target: RegistryLocation, operation: (stor
     return result.value;
   }, target);
 }
+
+export function readDurableProjectStore<T>(target: RegistryLocation, operation: (store: Record<string, unknown>) => T): Promise<T> {
+  return ownProjects(async location => {
+    const value = operation(await readStored(location.file));
+    const file = await open(location.file, 'r+');
+    try { await file.sync(); }
+    finally { await file.close(); }
+    await syncDirectory(dirname(location.file));
+    return value;
+  }, target);
+}
 async function write(location: RegistryLocation, projects: Project[], selected?: undefined, options?: ProjectCommitOptions): Promise<void>;
 async function write(location: RegistryLocation, projects: Project[], selected: Project, options?: ProjectCommitOptions): Promise<Project>;
 async function write(location: RegistryLocation, projects: Project[], selected?: Project, options?: ProjectCommitOptions): Promise<Project | void> {

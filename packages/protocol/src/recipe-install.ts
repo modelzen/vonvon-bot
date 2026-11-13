@@ -36,13 +36,14 @@ export const recipeResolutionSchema = z.object({
 const target = {botId: agentIdSchema};
 export const recipeInstallRequestSchema = z.discriminatedUnion('type', [
   z.object({type: z.literal('prepare'), ...target, groupId: groupIdSchema, accountId: uuid,
-    manifest: z.string().min(1).max(80000), manifestSha256: digest, resolution: recipeResolutionSchema.optional()}).strict(),
+    manifest: z.string().min(1).max(80000), manifestSha256: digest, reviewToken: digest.optional(), resolution: recipeResolutionSchema.optional()}).strict(),
   z.object({type: z.literal('commit'), ...target, operationId: uuid, authorization: recipeAuthorizationSchema.optional()}).strict(),
   z.object({type: z.literal('status'), ...target, operationId: uuid}).strict(),
   z.object({type: z.literal('cancel'), ...target, operationId: uuid}).strict(),
 ]);
 export type RecipeInstallRequest = z.infer<typeof recipeInstallRequestSchema>;
 const review = {
+  reviewToken: digest,
   groupId: groupIdSchema, currentRole: z.string(), incomingRole: z.string(), baseRole: z.string().optional(),
   currentSetup: recipeSetupSchema.optional(), incomingSetup: recipeSetupSchema.optional(), baseSetup: recipeSetupSchema.optional(),
   roleChoiceRequired: z.boolean(), setupChoiceRequired: z.boolean(),

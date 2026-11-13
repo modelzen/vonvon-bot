@@ -22,10 +22,11 @@ for (const phase of ['before', 'after'] as const) it(`recovers after process dea
   await mkdir(botDir, {recursive: true});
   await writeFile(join(home, 'bots.json'), JSON.stringify({version: 1, bots: [{name: 'Fixture', appId: botId, tenant: 'feishu', createdAt: 1, registrationId: randomUUID()}]}));
   await writeFile(file, JSON.stringify({version: 1, projects: [{name: 'Group', chatId: 'oc_crash', cwd: '/tmp', blank: false, createdAt: 1, supplement: 'old'}]}));
-  const prelude = `const fs=require('node:fs/promises');const m=require(${JSON.stringify(entry)});const store=new m.RecipeStore({targetPublicKey:Buffer.alloc(32,4).toString('base64url')});`;
+  const prelude = `const fs=require('node:fs/promises');const m=require(${JSON.stringify(entry)});const store=new m.RecipeStore({targetPublicKey:Buffer.alloc(32,4).toString('base64url'),isInChat:async()=>{}});`;
   const value = {schema: 1, recipeId: randomUUID(), versionId: randomUUID(), authorId: randomUUID(), revision: 1, access: 'direct', role: 'new'};
   const script = `${prelude}(async()=>{const bytes=Buffer.from(JSON.stringify(${JSON.stringify(value)}));
-    const p=await store.prepare({type:'prepare',botId:${JSON.stringify(botId)},groupId:'oc_crash',accountId:${JSON.stringify(randomUUID())},manifest:bytes.toString('base64url'),manifestSha256:m.sha256(bytes),resolution:{role:{kind:'replace'}}});
+    const request={type:'prepare',botId:${JSON.stringify(botId)},groupId:'oc_crash',accountId:${JSON.stringify(randomUUID())},manifest:bytes.toString('base64url'),manifestSha256:m.sha256(bytes)};
+    const review=await store.prepare(request);const p=await store.prepare({...request,reviewToken:review.reviewToken,resolution:{role:{kind:'replace'}}});
     const original=await store.get(${JSON.stringify(botId)},p.operationId);
     await store.authorize(${JSON.stringify(botId)},p.operationId,{operationId:p.operationId,accountId:original.accountId,purpose:'installBoundRole',generation:1,deadline:Date.now()+300000,versionId:p.versionId,manifestSha256:p.manifestSha256,targetPublicKey:p.targetPublicKey,nonceCommitment:p.nonceCommitment,serverPublicKey:Buffer.alloc(32,8).toString('base64url'),ticket:Buffer.alloc(32,12).toString('base64url'),status:'authorized'});
     await store.redeemed(${JSON.stringify(botId)},p.operationId);
