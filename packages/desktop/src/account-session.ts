@@ -2,11 +2,13 @@ import type { AccountStatus } from '@vonvon/protocol';
 import { accountAuth, AccountFault, accountOrigin, checkAuth, requestSignal, sessionTokens, verifyAccount,
   type AccountCredential, type AccountDeployment } from './account-auth.js';
 import { nativeLogin } from './account-login.js';
+import { fetchAccountAvatar } from './account-avatar.js';
 import type { AccountStore } from './account-store.js';
 
 type PublicIdentity = Awaited<ReturnType<typeof verifyAccount>>;
 type Access = { token: string; expiresAt: number };
 type Persistence = 'secure' | 'memory';
+type Avatar = { accountId: string; url: string; dataUrl?: string; retryAt?: number };
 
 export interface NativeAccount {
   status(): AccountStatus;
@@ -34,6 +36,7 @@ export function createAccountSession(options: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let writes = Promise.resolve();
   let loginActive = false;
+  let avatar: Avatar | undefined;
 
   function publish(next: AccountStatus) {
     view = next;
@@ -55,6 +58,7 @@ export function createAccountSession(options: {
     access = undefined;
     refreshing = undefined;
     loginActive = false;
+    avatar = undefined;
     return owner.signal;
   }
   function schedule(signal: AbortSignal, ms: number) {
@@ -66,7 +70,18 @@ export function createAccountSession(options: {
     credential = record;
     access = token;
     schedule(signal, token.expiresAt - Date.now() - 60_000);
-    publish({ kind: 'signedIn', ...verified, provider: record.provider, persistence });
+    if (avatar?.accountId !== verified.accountId || avatar?.url !== verified.avatarUrl) avatar = undefined;
+    publish({ kind: 'signedIn', ...verified, provider: record.provider, persistence,
+      ...(avatar?.dataUrl ? { avatarDataUrl: avatar.dataUrl } : {}) });
+    if (!verified.avatarUrl || (avatar && (avatar.retryAt === undefined || avatar.retryAt > Date.now()))) return;
+    const current: Avatar = { accountId: verified.accountId, url: verified.avatarUrl };
+    avatar = current;
+    void fetchAccountAvatar(current.url, signal, transport).then(dataUrl => {
+      if (signal.aborted || avatar !== current) return;
+      if (!dataUrl) { current.retryAt = Date.now() + 60_000; return; }
+      current.dataUrl = dataUrl;
+      if (view.kind === 'signedIn' && view.accountId === current.accountId) publish({ ...view, avatarDataUrl: dataUrl });
+    });
   }
 
   function refresh(signal: AbortSignal): Promise<void> {
