@@ -93,6 +93,7 @@ import {appCardFor, coreUpdatable, UpdatePanel} from './management/UpdatePanel';
 import {DesktopUpdateProvider, useDesktopUpdate} from './desktop-update';
 import {DesktopUpdateButton} from './DesktopUpdateButton';
 import {AccountPanel} from './accounts/AccountPanel';
+import {useAccountPage} from './accounts/account-page';
 
 type Modal =
   | RegisterModal
@@ -169,7 +170,13 @@ function DesktopApp() {
   });
   const [setupProvider, setSetupProvider] = useState<SetupProvider>();
   const [setupAgentId, setSetupAgentId] = useState<AgentId>();
-  const [page, setPage] = useState<Page>(() => typeof window !== 'undefined' && window.vonvonCardPreviewScope ? 'collaboration' : 'home');
+  const accountPage = useAccountPage();
+  const [currentPage, setCurrentPage] = useState<Page>(() => typeof window !== 'undefined' && window.vonvonCardPreviewScope ? 'collaboration' : 'home');
+  const page = accountPage?.isOpen ? 'account' : currentPage;
+  function setPage(next: Page) {
+    if (next === 'account' && accountPage) accountPage.open();
+    else {accountPage?.close(); setCurrentPage(next);}
+  }
   const [externalCoreAvailable, setExternalCoreAvailable] = useState(false);
   const connectedVersion = snapshot?.host.kind === 'connected' ? snapshot.host.version : undefined;
   useEffect(() => {

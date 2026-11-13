@@ -2,6 +2,7 @@ import {beforeEach, expect, it, vi} from 'vitest';
 import type {AccountShell, AccountStatus} from '@vonvon/protocol';
 import {AccountProvider, type useAccount} from '../src/account-context';
 import {DesktopRootView} from '../src/devices/DesktopRoot';
+import {AccountPageProvider} from '../src/accounts/account-page';
 import {A, devicesState, fakeShell, info, newClient} from './devices-fixture';
 
 type Effect = {deps?: unknown[]; cleanup?: () => void};
@@ -54,6 +55,14 @@ it('keeps one native subscription and the signed-in identity across device switc
   expect(account.onStatus).toHaveBeenCalledOnce();
   expect(account.status).toHaveBeenCalledOnce();
   expect(off).not.toHaveBeenCalled();
+  for (const state of [undefined, devicesState({id: A, phase: 'failed'}), devicesState({id: A, phase: 'ready', mode: 'maintenance', serverInfo: info()})]) {
+    const gated = DesktopRootView({state, fallback, shell: native, renderApp: () => null});
+    expect(gated.type).toBe(AccountProvider);
+    expect(gated.props.children.type).toBe(AccountPageProvider);
+    expect(gated.props.children.key).toBeNull();
+    expect(render(gated.props.account).status).toEqual(signedIn);
+  }
+  expect(account.onStatus).toHaveBeenCalledOnce();
 });
 
 it('does not let a late initial read replace a newer native event', async () => {
@@ -89,6 +98,8 @@ it('cleans up the subscription and has no login capability in the browser', asyn
   expect(fixture.off).toHaveBeenCalledOnce();
   await render().login();
   expect(fixture.account.login).not.toHaveBeenCalled();
+  fixture.emit(signedIn);
+  expect(render().status).toBeUndefined();
 });
 
 it('shows a failed native operation without exposing native exception details', async () => {

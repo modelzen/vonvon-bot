@@ -22,6 +22,7 @@ vi.mock('../src/client-context', async original => {
 });
 vi.mock('../src/settings/DraftGuard', () => ({DraftGuardProvider: () => null, useDraftGuard: () => ({navigate: (action: () => void) => action()})}));
 vi.mock('../src/desktop-update', () => ({DesktopUpdateProvider: () => null, useDesktopUpdate: () => [undefined]}));
+vi.mock('../src/accounts/account-page', () => ({useAccountPage: () => undefined}));
 vi.mock('../src/new-counts', async original => ({...await original<typeof import('../src/new-counts')>(), useNewCounts: () => ({projects: {}, bots: {}, dm: {}})}));
 vi.mock('../src/pending-groups', () => ({usePendingGroups: () => []}));
 

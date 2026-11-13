@@ -5,11 +5,11 @@ import {App} from '../App';
 import {DirectoryPickerProvider} from '../directory-picker';
 import {activeDeviceFrom, ClientProvider, LOCAL_ACTIVE_DEVICE, shellForDevice, type ShellCapabilities} from '../client-context';
 import {desktopPlatformMark} from './devices-presentation';
-import {OutsideWindow} from './device-bits';
-import {DeviceConnectionView} from './DeviceConnectionView';
+import {DeviceConnectionView, DeviceOutsideFrame} from './DeviceConnectionView';
 import {MaintenanceView} from './MaintenanceView';
 import {PairedToasts} from './PairedToasts';
 import {AccountProvider} from '../account-context';
+import {AccountPageProvider} from '../accounts/account-page';
 import './devices.css';
 
 export {desktopPlatformMark, shouldMarkPlatform} from './devices-presentation';
@@ -27,7 +27,7 @@ export function DesktopRoot({fallback, shell, renderApp = () => <App/>}: {fallba
 
 /** No effects: tests give it the state. */
 export function DesktopRootView({state, fallback, shell, renderApp}: {state?: DevicesState; fallback: VonvonClient; shell?: ShellCapabilities; renderApp: () => ReactNode}) {
-  return <AccountProvider account={shell?.account}><DesktopDeviceView state={state} fallback={fallback} shell={shell} renderApp={renderApp}/></AccountProvider>;
+  return <AccountProvider account={shell?.account}><AccountPageProvider><DesktopDeviceView state={state} fallback={fallback} shell={shell} renderApp={renderApp}/></AccountPageProvider></AccountProvider>;
 }
 
 function DesktopDeviceView({state, fallback, shell, renderApp}: {state?: DevicesState; fallback: VonvonClient; shell?: ShellCapabilities; renderApp: () => ReactNode}) {
@@ -37,7 +37,7 @@ function DesktopDeviceView({state, fallback, shell, renderApp}: {state?: Devices
   // Kept while the same device stays remote or local, so subscriptions to the shell are not renewed on every state.
   const deviceShell = useMemo(() => shellForDevice(shell, device), [shell, device.isRemote]);
   if (!devicesShell) return <ClientProvider client={fallback} shell={shell}><DirectoryPickerProvider>{renderApp()}</DirectoryPickerProvider></ClientProvider>;
-  if (!state) return <OutsideWindow shell={shell}><h1>正在打开 Vonvon Bot…</h1></OutsideWindow>;
+  if (!state) return <ClientProvider client={fallback} shell={shell}><DeviceOutsideFrame title="正在打开 Vonvon Bot…">{() => null}</DeviceOutsideFrame></ClientProvider>;
   return <ClientProvider client={client} shell={deviceShell} device={device} devices={state}>
     <DeviceGate key={device.id} state={state} renderApp={renderApp}/>
     {/* devices-ui-3 4.5: beside the gate, so a pairing with this computer shows whichever device is looked at */}

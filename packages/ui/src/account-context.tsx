@@ -53,7 +53,7 @@ export function useAccount() {return useContext(Context);}
 
 export const accountProviderNames = {github: 'GitHub', google: 'Google', apple: 'Apple'} as const;
 export function accountStatusText(status: AccountStatus | undefined, supported: boolean): string {
-  if (!supported) return '账户功能在 Vonvon Bot 桌面应用中提供。';
+  if (!supported) return '当前环境不支持账户功能，请使用最新版 Vonvon Bot 桌面应用。';
   if (!status) return '正在读取账户状态…';
   switch (status.kind) {
     case 'signedIn': return `通过 ${accountProviderNames[status.provider]} 登录`;

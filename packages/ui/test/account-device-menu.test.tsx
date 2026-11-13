@@ -4,6 +4,7 @@ import type {AccountStatus} from '@vonvon/protocol';
 import {DeviceSwitcher, DeviceSwitcherMenu} from '../src/devices/DeviceSwitcher';
 import {AddDeviceDialog} from '../src/devices/AddDeviceDialog';
 import {AccountAvatar} from '../src/accounts/AccountAvatar';
+import {AccountMenuItem} from '../src/accounts/AccountMenuItem';
 import {A, devicesState, fakeShell, info} from './devices-fixture';
 
 const h = vi.hoisted(() => ({state: [] as unknown[], refs: [] as Array<{current: unknown}>, pending: [] as Array<() => void>, si: 0, ri: 0,
@@ -64,7 +65,8 @@ it('includes the account row in menu keyboard movement and returns focus on Shif
   const onLeave = vi.fn();
   const element = DeviceSwitcherMenu({state: h.deviceState as ReturnType<typeof devicesState>, now: Date.now(), onPick: vi.fn(), onAdd: vi.fn(), onManage: vi.fn(), onLeave,
     menuRef: menu as unknown as RefObject<HTMLDivElement | null>, autoFocus: 'first', account: {supported: true, status: {kind: 'signedOut'}, onLogin: vi.fn(), onManage: vi.fn()}});
-  const rows = nodes(element).filter(node => node.props.role === 'menuitem');
+  const menuNodes = nodes(element).flatMap(node => node.type === AccountMenuItem ? nodes(AccountMenuItem(node.props)) : [node]);
+  const rows = menuNodes.filter(node => node.props.role === 'menuitem');
   expect(rows).toHaveLength(buttons.length);
   for (const effect of h.pending.splice(0)) effect();
   expect(focus).toHaveBeenLastCalledWith(0);
