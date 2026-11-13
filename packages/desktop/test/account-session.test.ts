@@ -15,7 +15,7 @@ const user = {
   id: subject, is_anonymous: false,
   app_metadata: { provider: 'google' },
   identities: [{ provider, user_id: subject }],
-  user_metadata: { full_name: 'Example User', avatar_url: 'https://avatars.example/user.png', email: 'private@example.com' },
+  user_metadata: { full_name: 'Example User', avatar_url: 'https://avatars.githubusercontent.com/u/123?v=4', email: 'private@example.com' },
 };
 const access = 'access-test-value', refresh = 'refresh-test-value', code = 'one-use-code';
 const random = () => randomBytes(32).toString('base64url');
@@ -23,7 +23,7 @@ const sessionReply = (rotated = false) => ({
   user, token_type: 'bearer', access_token: access, refresh_token: rotated ? 'rotated-refresh-token' : refresh, expires_in: 3600,
 });
 const sessions = new Set<NativeAccount>();
-afterEach(async () => { for (const session of sessions) await session.dispose(); sessions.clear(); });
+afterEach(async () => { for (const session of sessions) await session.dispose(); sessions.clear(); vi.restoreAllMocks(); });
 
 function memoryStore() {
   let record: AccountCredential | undefined;
@@ -61,9 +61,17 @@ function fixture() {
   const rotate = vi.fn(async () => Response.json(sessionReply(true)));
   const ack = vi.fn(async () => Response.json({ status: 'completed' }));
   const cancel = vi.fn(async () => Response.json({ status: 'cancelled' }));
+  const avatar = vi.fn(async () => new Response(null, { status: 404 }));
   const transport = vi.fn<typeof fetch>(async (input, init = {}) => {
     const url = new URL(String(input));
     const headers = new Headers(init.headers);
+    if (url.hostname === 'avatars.githubusercontent.com') {
+      expect(url.href).toBe(user.user_metadata.avatar_url);
+      expect(init.redirect).toBe('manual');
+      expect(init.credentials).toBe('omit');
+      expect(headers.has('Authorization') || headers.has('apikey') || headers.has('Cookie')).toBe(false);
+      return avatar();
+    }
     expect(init.redirect).toBe('error');
     expect(init.credentials).toBe('omit');
     expect(headers.has('Cookie') || headers.has('Origin')).toBe(false);
@@ -95,7 +103,7 @@ function fixture() {
     sessions.add(session);
     return session;
   }
-  return { create, store, transport, issued, openBrowser, poll, ack, cancel, rotate, authorize, exchange, verifyUser, me };
+  return { create, store, transport, issued, openBrowser, poll, ack, cancel, rotate, authorize, exchange, verifyUser, me, avatar };
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -105,6 +113,82 @@ function deferred<T>() {
 const waitFor = (assertion: () => void) => vi.waitFor(assertion, { interval: 5, timeout: 2500 });
 
 describe('native desktop account', () => {
+  it('publishes sign-in before the avatar, then keeps that bounded avatar across token refresh', async () => {
+    const f = fixture();
+    const held = deferred<Response>();
+    f.avatar.mockReturnValueOnce(held.promise);
+    const a = f.create();
+    await a.login();
+    await waitFor(() => expect(f.avatar).toHaveBeenCalledOnce());
+    expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: business });
+    expect(a.status()).not.toHaveProperty('avatarDataUrl');
+    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEElEQVR4nGP4w8AARAwQCgAfjgPxzzTeXgAAAABJRU5ErkJggg==', 'base64');
+    held.resolve(new Response(bytes, { headers: { 'Content-Type': 'image/png' } }));
+    const avatarDataUrl = 'data:image/png;base64,' + bytes.toString('base64');
+    await waitFor(() => expect(a.status()).toMatchObject({ avatarDataUrl }));
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3_590_000);
+    await a.request(business, '/v1/me/recipes');
+    expect(f.rotate).toHaveBeenCalledOnce();
+    expect(f.avatar).toHaveBeenCalledOnce();
+    expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: business, avatarDataUrl });
+  });
+
+  it('aborts avatar work at logout and never gives its late image to a subsequent account', async () => {
+    const f = fixture();
+    const held = deferred<Response>();
+    f.avatar.mockReturnValueOnce(held.promise);
+    const a = f.create();
+    const statuses: unknown[] = [];
+    a.onStatus(value => statuses.push(value));
+    await a.login();
+    await waitFor(() => expect(f.avatar).toHaveBeenCalledOnce());
+    expect(a.status().kind).toBe('signedIn');
+    const request = f.transport.mock.calls.find(([input]) => String(input) === user.user_metadata.avatar_url);
+    expect(request?.[1]?.signal?.aborted).toBe(false);
+    expect(await a.logout()).toEqual({ kind: 'signedOut' });
+    expect(request?.[1]?.signal?.aborted).toBe(true);
+    const nextAccount = randomUUID();
+    f.me.mockResolvedValueOnce(Response.json({ accountId: nextAccount }));
+    await a.login();
+    await waitFor(() => expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: nextAccount }));
+    expect(f.avatar).toHaveBeenCalledTimes(2);
+    const published = statuses.length;
+    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEElEQVR4nGP4w8AARAwQCgAfjgPxzzTeXgAAAABJRU5ErkJggg==', 'base64');
+    held.resolve(new Response(bytes, { headers: { 'Content-Type': 'image/png' } }));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: nextAccount });
+    expect(a.status()).not.toHaveProperty('avatarDataUrl');
+    expect(statuses).toHaveLength(published);
+  });
+
+  it('keeps a failed avatar optional, avoids refetching it on refresh, and clears the cache on logout', async () => {
+    const f = fixture();
+    const a = f.create();
+    await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: business });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3_590_000);
+    await a.request(business, '/v1/me/recipes');
+    clock.mockRestore();
+    expect(f.avatar).toHaveBeenCalledOnce();
+    expect(a.status()).not.toHaveProperty('avatarDataUrl');
+    await a.logout();
+    await a.login();
+    await waitFor(() => expect(f.avatar).toHaveBeenCalledTimes(2));
+    expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: business });
+  });
+
+  it('drops unsafe profile avatar metadata without failing verified sign-in', async () => {
+    const f = fixture();
+    f.verifyUser.mockResolvedValueOnce(Response.json({ ...user, user_metadata: { ...user.user_metadata,
+      avatar_url: 'https://avatars.githubusercontent.com/u/123?access_token=private' } }));
+    const a = f.create();
+    await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    expect(a.status()).toEqual({ kind: 'signedIn', accountId: business, displayName: 'Example User', provider, persistence: 'secure' });
+    expect(f.avatar).not.toHaveBeenCalled();
+  });
+
   it('uses one SDK verifier, validates linked identity and reads the mapped business account before acknowledging', async () => {
     const f = fixture();
     f.authorize.mockRejectedValueOnce(new TypeError('lost response'));
