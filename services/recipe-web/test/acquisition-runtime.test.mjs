@@ -143,7 +143,11 @@ test('actual Web runtime recovers after correcting the clock with a checked expl
   assert.match(form.textContent,/校准设备时间/);assert.match(form.textContent,/再次点击/);
   assert.equal(h.calls.filter(c=>c.path.startsWith('/api/v1/recipes/')).length,2);
   assert.equal(h.calls.filter(c=>c.options.method==='POST').length,1);
-  clock=now;await h.submit(form,'Ab-CD');
+  form.querySelector('button.secondary').click();
+  const reopened=await h.open();
+  assert.equal(reopened.querySelector('input').value,'Ab-CD');
+  assert.equal(h.calls.filter(c=>c.options.method==='POST').length,1);
+  clock=now;await h.submit(reopened,reopened.querySelector('input').value);
   const posts=h.calls.filter(c=>c.options.method==='POST');assert.equal(posts.length,2);
   assert.notEqual(posts[0].options.headers['Idempotency-Key'],posts[1].options.headers['Idempotency-Key']);
   assert.equal(posts[1].options.body,'{"code":"Ab-CD"}');assert.equal(h.document.querySelector('dialog').open,false);
@@ -185,4 +189,28 @@ test('actual Web runtime keeps the rejected clock key when a detail response nam
   assert.match(form.textContent,/暂未确认/);assert.equal(form.querySelector('input').value,'Ab-CD');
   const posts=h.calls.filter(c=>c.options.method==='POST');assert.equal(posts.length,2);
   assert.equal(posts[0].options.headers['Idempotency-Key'],posts[1].options.headers['Idempotency-Key']);
+});
+
+test('a confirmed grant retires the old claim action even if a later detail fetch stalls',async t=>{
+  let reads=0;
+  const h=await runtime(t,async(_path,options)=>{
+    if(options.method==='POST')return Response.json({});
+    if(++reads>2)return new Promise(()=>{});
+    return Response.json({...recipe,acquired:reads===2});
+  });
+  const trigger=h.document.querySelector('main .actions button:last-child');
+  const form=await h.open();await h.submit(form,'Ab-CD');
+  trigger.click();await h.settle();
+  assert.equal(h.document.querySelector('dialog').open,false);
+  assert.match(h.document.querySelector('main').textContent,/已获取/);
+  assert.equal(h.calls.filter(c=>c.options.method==='POST').length,1);
+});
+
+test('a claimed detail from a previous account cannot open a dialog for the current session',async t=>{
+  const h=await runtime(t,async()=>Response.json(recipe));
+  const trigger=h.document.querySelector('main .actions button:last-child');
+  h.api.setSession({signedIn:true,displaySession:'session-b',providers:[]});
+  trigger.click();await h.settle();
+  assert.equal(h.document.querySelector('dialog').open,false);
+  assert.equal(h.calls.filter(c=>c.options.method==='POST').length,0);
 });
