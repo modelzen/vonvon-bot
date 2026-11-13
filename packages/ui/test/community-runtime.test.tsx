@@ -43,6 +43,7 @@ async function fill(label: string, value: string) {
 }
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.stubGlobal('ResizeObserver', class {observe() {} unobserve() {} disconnect() {}});
   vi.stubGlobal('matchMedia', () => ({matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}}));
   HTMLElement.prototype.scrollIntoView = vi.fn();
   document.body.innerHTML = '<div id="root"></div>';
