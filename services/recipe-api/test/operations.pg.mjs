@@ -205,6 +205,17 @@ export async function checkInstallOperations({request,sql,jwt,author,reader,othe
     assert.fail('expected database row lock waiter for '+fragment);
   }
   try {
+    const heldId=operationId(Date.now()-310000);
+    await blocker.query('begin');
+    await blocker.query('select pg_advisory_xact_lock(hashtextextended($1,187511))',[preview.accountId]);
+    await blocker.query(`insert into recipe_private.install_operations(id,account_id,state,request_digest,version_id,binding,ticket,expected_proof_hash,deadline)
+      select $1,account_id,'authorized',request_digest,version_id,binding,ticket,expected_proof_hash,floor(extract(epoch from clock_timestamp())*1000)::bigint+300000
+      from recipe_private.install_operations where id=$2`,[heldId,id]);
+    const evidence=negative(heldId);
+    await waiting('unredeemable_operation');
+    await blocker.query('commit');
+    assert.equal((await evidence).unredeemable,false,'an in-flight authorization must become visible before ruling out redemption');
+    sql(`delete from recipe_private.install_operations where id='${heldId}'`);
     const deadlineRace=await authorize(operationId());
     await blocker.query('BEGIN');
     const deadlineUpdate=await blocker.query(`update recipe_private.install_operations
