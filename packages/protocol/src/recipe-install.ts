@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { agentIdSchema, groupIdSchema } from './domain.js';
 
 import {recipeSetupSchema} from './recipe-setup.js';
-import {recipeSourceSchema} from './recipe-source.js';
+import {recipeSourceSchema, recipeSourceTokenSchema} from './recipe-source.js';
 export {recipeSetupSchema,type RecipeSetup} from './recipe-setup.js';
 
 const uuid = z.string().uuid();
@@ -35,7 +35,7 @@ export const recipeResolutionSchema = z.object({
 const target = {botId: agentIdSchema};
 export const recipeInstallRequestSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('source'),...target,groupId:groupIdSchema}).strict(),
-  z.object({type:z.literal('ignoreVersion'),...target,groupId:groupIdSchema,recipeId:uuid,installedVersionId:uuid,versionId:uuid}).strict(),
+  z.object({type:z.literal('ignoreVersion'),...target,sourceToken:recipeSourceTokenSchema,groupId:groupIdSchema,recipeId:uuid,installedVersionId:uuid,versionId:uuid}).strict(),
   z.object({type: z.literal('createdGroup'), ...target, requestId: uuid}).strict(),
   z.object({type: z.literal('prepare'), ...target, groupId: groupIdSchema, accountId: uuid,
     manifest: z.string().min(1).max(80000), manifestSha256: digest, reviewToken: digest.optional(), resolution: recipeResolutionSchema.optional()}).strict(),

@@ -4,6 +4,7 @@ import { viewIdSchema } from './desktop-devices.js';
 import { recipeSetupSchema } from './recipe-setup.js';
 
 const uuid = z.string().uuid();
+export const recipeSourceTokenSchema = z.string().regex(/^[a-f0-9]{64}$/);
 export const recipeSourceSchema = z
   .object({
     recipeId: uuid,
@@ -11,6 +12,7 @@ export const recipeSourceSchema = z
     revision: z.number().int().positive(),
     authorId: uuid,
     installedAt: z.number().int(),
+    sourceToken: recipeSourceTokenSchema,
     setup: recipeSetupSchema.optional(),
     ignoredVersionId: uuid.optional(),
   })
@@ -29,7 +31,7 @@ export const desktopRecipeSourceRequestSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('read'), ...location }).strict(),
   z.object({ type: z.literal('check'), ...location, accountId: uuid }).strict(),
   z
-    .object({ type: z.literal('ignore'), ...location, accountId: uuid, installedVersionId: uuid, versionId: uuid })
+    .object({ type: z.literal('ignore'), ...location, sourceToken: recipeSourceTokenSchema, accountId: uuid, installedVersionId: uuid, versionId: uuid })
     .strict(),
 ]);
 export const desktopRecipeSourceReplySchema = z
