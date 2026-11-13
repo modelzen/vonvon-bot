@@ -225,6 +225,9 @@ it('recovers a clock-rejected native attempt only after a checked explicit retry
     expect(document.body.textContent).toContain('校准设备时间');expect(document.body.textContent).toContain('再次点击');
     expect(calls.filter(request=>request.type==='detail')).toHaveLength(2);
     expect(calls.filter(request=>request.type==='acquire')).toHaveLength(1);
+    await click('重试读取');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="分享码"]')?.value).toBe('Ab-CD');
+    expect(calls.filter(request=>request.type==='acquire')).toHaveLength(1);
     clock=now;await click('获取配方');
     const attempts=calls.filter(request=>request.type==='acquire');expect(attempts).toHaveLength(2);
     expect(attempts[1]!.requestId).not.toBe(attempts[0]!.requestId);expect(attempts[1]).toMatchObject({code:'Ab-CD'});
