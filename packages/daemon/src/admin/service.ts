@@ -1,3 +1,4 @@
+import {groupIdentitySchema, type GroupIdentity} from '@vonvon/protocol';
 import { pendingGroupsFile, readPendingGroups, type PendingGroup } from '../project/pending-groups';
 import type { CollaborationRequest } from './collaboration';
 import {runtimeDistribution} from '../service/distribution';
@@ -20,7 +21,7 @@ import { parseJoinedGroups, parseGroupMembers, parseGroupMembership, type GroupM
 import { voiceView } from '../voice/view';
 import type { VoiceAction, VoiceView } from '../voice/types';
 import { readFile, realpath, rm, stat } from 'node:fs/promises';
-import { botIdentity, loadBots, setBotActivation, setBotBadgeNumber, removeBot, type BotIdentity } from '../config/bots';
+import { botIdentity, withRegisteredBot, loadBots, setBotActivation, setBotBadgeNumber, removeBot, type BotIdentity } from '../config/bots';
 import { active as activeAuthoring, AuthoringJournal, authoringBotKey } from '../recipe/authoring-journal';
 import { assertRecipeRemovalSafe, RecipeRecoveryRequired } from '../recipe/store';
 import { dmPreparationError, prepareDmProjectForBot } from '../bot/dm-project';
@@ -140,6 +141,7 @@ export interface AdminService {
   codexSetup?(opts?: { refresh?: boolean }): Promise<CodexSetup>;
   close?(): Promise<void>;
   pendingGroups?(botId: string): Promise<{ groups: PendingGroup[] }>;
+  readGroupIdentity?(botId: string, chatId: string): Promise<GroupIdentity>;
   joinedGroups?(botId: string, cursor?: string): Promise<JoinedGroups>;
   groupMembers?(botId: string, chatId: string, cursor?: string): Promise<GroupMembers>;
   recipeAuthoring?: (botId: string, op: import('../recipe/authoring-service').AuthoringIpc) => Promise<unknown>;
@@ -734,6 +736,15 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
           ? [{ chatId: group.chatId, name: group.name, addedAt: group.addedAt, ...(group.topic === undefined ? {} : { topic: group.topic }), ...(group.hasOtherBots === undefined ? {} : { hasOtherBots: group.hasOtherBots }) }] : []);
       return { groups: groups.length > MAX_PENDING_GROUPS
         ? groups.sort((a, b) => b.addedAt - a.addedAt).slice(0, MAX_PENDING_GROUPS) : groups };
+    },
+    async readGroupIdentity(botId, chatId) {
+      if (!deps.executeGroups) throw new NotWiredYetError('群聊信息');
+      const bot = (await loadBots()).bots.find(item => item.appId === botId);
+      if (!bot) throw new AdminWriteError('机器人已移除或重新注册');
+      const identity = botIdentity(bot);
+      const result = groupIdentitySchema.parse(await deps.executeGroups(botId, {kind: 'groupIdentity', chatId, identity}));
+      if (result.agentId !== botId || result.groupId !== chatId) throw new AdminWriteError('群聊身份响应与目标不一致');
+      return withRegisteredBot(botId, async () => result, identity);
     },
     async joinedGroups(botId, cursor) {
       if (!deps.executeGroups) throw new NotWiredYetError('群列表');

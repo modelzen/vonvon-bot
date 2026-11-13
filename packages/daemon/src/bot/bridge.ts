@@ -9,7 +9,7 @@ import type { Project } from '../project/registry';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { AdminWriteOp } from '../admin/ops';
 import type { AdminLibraryOp } from '../admin/library';
-import type { ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
+import type { GroupIdentity, ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
 import type { ScheduleActor } from '../admin/schedule-commands';
 import { isAdmin, type AppConfig } from '../config/schema';
 import { createCommandTools } from '../agent/entry/command-tools';
@@ -57,7 +57,7 @@ export interface BridgeHandle {
   entries: AgentEntries;
   channel: LarkChannel;
   collaboration: (request: CollaborationRequest) => Promise<unknown>;
-  adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | GroupMembership | Project>;
+  adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | GroupMembership | GroupIdentity | Project>;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
   /** A read this Bot runs as itself, the host asking (dm-agent 7.3). */
   feishuRead: (request: FeishuReadRequest) => Promise<FeishuReadReply>;
@@ -147,7 +147,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   };
   scheduleRoles();
   const offCrash = onCrashSync(() => orchestrator.saveDroppedSync('crash'));
-  const groupTasks = new Set<Promise<JoinedGroups | GroupMembers | GroupMembership | Project>>();
+  const groupTasks = new Set<Promise<JoinedGroups | GroupMembers | GroupMembership | GroupIdentity | Project>>();
   let closing: Promise<void> | undefined;
   const shutdown = (reason?: () => StopReason): Promise<void> => {
     if (closing) return closing;

@@ -3,8 +3,8 @@ import {DirectorySearchStep} from './DirectorySearchStep';
 import {RpcError} from '@vonvon/client/browser';
 import {useActiveDevice, useClient, type ActiveDevice} from './client-context';
 import {configureProvider, onDevice} from './device-copy';
-import {useEffect, useRef, useState} from 'react';
-import type {Agent, AgentSettingsView, HostSettingsView, DecisionModelsView, JudgeSelectionView, DesktopSnapshot, CommandResult, Conversation, FolderChoice, PendingGroup, ToolState} from '@vonvon/protocol';
+import {useEffect, useRef, useState, type Dispatch, type SetStateAction} from 'react';
+import type {Agent, AgentSettingsView, HostSettingsView, DecisionModelsView, JudgeSelectionView, DesktopSnapshot, CommandResult, Conversation, FolderChoice, PendingGroup, ToolState, RecipeJoinInput} from '@vonvon/protocol';
 import {FULL_ACCESS_WARNING, toolSchema} from '@vonvon/protocol';
 import {providerDecisionProblem} from './settings/DecisionFields';
 import {useProviders} from './settings/GroupDesignSettings';
@@ -71,14 +71,21 @@ export function CreationLockNotice({failure}: {failure: CreationFailure}) {
     : <InlineNotice title="不确定建好没有" tone="warning">{CREATION_UNKNOWN}要重试，关掉这个窗口再建。</InlineNotice>;
 }
 type ProviderTool = 'codex' | 'claude';
+/** Local choices only. A folder token, provider status or directory search result belongs to the live connection. */
+export type JoinGroupDraft = {
+  mode: Mode; name: string; existingDirectory: boolean; pickedTool?: ProviderTool;
+  conversation?: Conversation; response?: 'all' | 'mention';
+};
 /** A setup suggestion is accepted only if the current snapshot says it can run. */
 export function initialGroupProvider(initialProvider?: ProviderTool, tools?: ToolState[]): ProviderTool | undefined {
   const ready = (provider: ProviderTool) => providerUsable(tools?.find(item => item.tool === provider));
   if (initialProvider && ready(initialProvider)) return initialProvider;
   return (['codex', 'claude'] as const).find(ready);
 }
-type Props = {snapshot?: DesktopSnapshot; open?: boolean; agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; initialProvider?: ProviderTool; tools?: ToolState[]; onClose: () => void; onChanged: (target: {agentId: Agent['id']; chatId: string}) => Promise<void>; onOpenProviders?: () => void; onOpenDecisionModel?: (provider?: string) => void};
-export function JoinGroupDialog({open = true, agent, pending, initialGroup, initialProvider, tools, onClose, onChanged, onOpenProviders, onOpenDecisionModel}: Props) {
+type Props = {snapshot?: DesktopSnapshot; open?: boolean; agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; initialProvider?: ProviderTool; tools?: ToolState[]; onClose: () => void; onChanged: (target: {agentId: Agent['id']; chatId: string}) => Promise<void>; onOpenProviders?: () => void; onOpenDecisionModel?: (provider?: string) => void;
+  recipeDraft?: [JoinGroupDraft | undefined, Dispatch<SetStateAction<JoinGroupDraft | undefined>>];
+  recipe?: {name: string; version: string}; onRecipeJoin?: (input: RecipeJoinInput) => Promise<void>; onRecipeGroup?: (groupId: string) => void; onRecipeCancel?: () => void; existingOnly?: boolean};
+export function JoinGroupDialog({open = true, agent, pending, initialGroup, initialProvider, tools, onClose, onChanged, onOpenProviders, onOpenDecisionModel, recipe, onRecipeJoin, onRecipeGroup, onRecipeCancel, existingOnly, recipeDraft}: Props) {
   const {navigate} = useDraftGuard();
   const client = useClient();
   const device = useActiveDevice();
@@ -109,17 +116,19 @@ export function JoinGroupDialog({open = true, agent, pending, initialGroup, init
     } catch (failure) {if (serial === decisionSerial.current) setDecisionReadError(failure instanceof Error ? failure.message : '无法读取决策模型设置。');}
   }
   useEffect(() => {if (open) void readDecision(); return () => {decisionSerial.current++;};}, [client, agent.id, open]);
-  const [mode, setMode] = useState<Mode>(initialGroup ? {kind: 'bind', group: initialGroup} : {kind: 'create'});
-  const [name, setName] = useState(initialGroup?.name ?? '');
+  const localDraft = useState<JoinGroupDraft>();
+  const [savedDraft, setDraft] = recipeDraft ?? localDraft;
+  const initial = useRef<JoinGroupDraft>({
+    mode: initialGroup ? {kind: 'bind', group: initialGroup} : {kind: existingOnly ? 'existing' : 'create'},
+    name: initialGroup?.name ?? '', existingDirectory: false,
+  }).current;
+  const {mode, name, existingDirectory, pickedTool, conversation, response} = savedDraft ?? initial;
+  function edit(fields: Partial<JoinGroupDraft>) {
+    setDraft(previous => ({...(previous ?? initial), ...fields}));
+  }
   const [folder, setFolder] = useState<FolderChoice>();
-  const [existingDirectory, setExistingDirectory] = useState(false);
-  // A snapshot refresh can improve the suggested default, but never replaces a hand pick.
-  const [pickedTool, setPickedTool] = useState<ProviderTool | undefined>(undefined);
   const ready = (provider: ProviderTool) => providerUsable(tools?.find(item => item.tool === provider));
   const tool = pickedTool ?? initialGroupProvider(initialProvider, tools);
-  const [conversation, setConversation] = useState<Conversation>();
-  /** Set once the user picks 免@ by hand; until then it follows the 沟通方式. */
-  const [response, setResponse] = useState<'all' | 'mention'>();
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (choosingDirectory) directoryWasOpen.current = true;
@@ -139,11 +148,11 @@ export function JoinGroupDialog({open = true, agent, pending, initialGroup, init
   const decisionFresh = open && decisionReady.serial === decisionSerial.current && decisionReady.epoch === decisionOpenEpoch.current;
   const judgeProblem = conversation === 'smart' ? decisionReadError || (!decisionFresh || !decisionView ? '正在读取默认决策模型，请稍候。' : judgeSetupProblem({kind: 'default'}, decisionView.services, providers.map(item => item.id), {kind: 'ready', configuration: decisionView.configuration}, device)) : undefined;
   const dirty = Boolean(name !== (mode.kind === 'bind' ? mode.group.name : '') || folder || existingDirectory || pickedTool !== undefined || conversation || response);
-  function discard() {setName(''); setFolder(undefined); setExistingDirectory(false); setPickedTool(undefined); setConversation(undefined); setResponse(undefined);}
+  function discard() {edit({name: '', existingDirectory: false, pickedTool: undefined, conversation: undefined, response: undefined}); setFolder(undefined);}
   function close() {if (!busy) navigate(() => {active.current = false; onClose();});}
   function switchMode(next: Mode) {
     if (busy) return;
-    navigate(() => {setMode(next); setName(next.kind === 'bind' ? next.group.name : ''); setFolder(undefined); setExistingDirectory(false); setError('');});
+    navigate(() => {edit({mode: next, name: next.kind === 'bind' ? next.group.name : '', existingDirectory: false}); setFolder(undefined); setError('');});
   }
   async function save() {
     if (busy || mode.kind === 'existing' || locked) return false;
@@ -159,9 +168,11 @@ export function JoinGroupDialog({open = true, agent, pending, initialGroup, init
     setBusy(true); setError('');
     try {
       const where = {folder: existingDirectory && folder ? {kind: 'existing' as const, folderToken: folder.token} : {kind: 'default' as const}};
-      const reply = mode.kind === 'create'
-        ? await client.collaboration({action: 'createProject', agentId: agent.id, name: name.trim(), ...where, tool, conversation, ...picked, ...decision})
-        : await client.run({type: 'bindGroup', agentId: agent.id, groupId: mode.group.chatId, projectName: name.trim(), ...where, tool, conversation, ...picked, ...decision});
+      const input: RecipeJoinInput = mode.kind === 'create'
+        ? {action: 'createProject', agentId: agent.id, name: name.trim(), ...where, tool, conversation, ...picked, ...decision}
+        : {type: 'bindGroup', agentId: agent.id, groupId: mode.group.chatId, projectName: name.trim(), ...where, tool, conversation, ...picked, ...decision};
+      if (onRecipeJoin) {await onRecipeJoin(input); return true;}
+      const reply = 'action' in input ? await client.collaboration(input) : await client.run(input);
       if (!reply || reply.kind !== 'applied') {setError(reply && 'message' in reply && typeof reply.message === 'string' ? reply.message : '操作未完成，请重试。'); return false;}
       const chatId = mode.kind === 'bind' ? mode.group.chatId : 'project' in reply ? reply.project?.chatId : undefined;
       if (!chatId) {
@@ -195,10 +206,11 @@ export function JoinGroupDialog({open = true, agent, pending, initialGroup, init
     finally {setBusy(false);}
   }
   return <Dialog open={open} size="lg" title={<span className="join-group-title"><span className="join-group-heading">{choosingDirectory && <IconButton label="返回添加群聊" variant="ghost" size="sm" disabled={busy} onClick={() => setChoosingDirectory(false)}><ArrowLeft size={16}/></IconButton>}{choosingDirectory ? '选择工作目录' : mode.kind === 'bind' ? '连接飞书群' : '添加飞书群'}</span><span className="join-group-agent"><AgentAvatar agent={agent}/><span title={agent.name}>{agent.name}</span></span></span>} onClose={busy ? undefined : choosingDirectory ? () => setChoosingDirectory(false) : close}
-    footer={choosingDirectory ? <><span className="directory-key-hints">↑ ↓ 选择 <span>↵ 使用目录</span></span><Button disabled={busy} onClick={() => setChoosingDirectory(false)}>返回</Button></> : mode.kind !== 'existing' ? <><Button disabled={busy} onClick={close}>取消</Button><Button variant="primary" loading={busy} disabled={locked || !tool || !ready(tool) || !name.trim() || Boolean(nameProblem) || (existingDirectory && !folder) || !conversation || Boolean(judgeProblem)} onClick={() => void save()}>{mode.kind === 'create' ? '创建并连接' : '连接并发送欢迎卡片'}</Button></> : undefined}>
+    footer={choosingDirectory ? <><span className="directory-key-hints">↑ ↓ 选择 <span>↵ 使用目录</span></span><Button disabled={busy} onClick={() => setChoosingDirectory(false)}>返回</Button></> : mode.kind !== 'existing' ? <><Button disabled={busy} onClick={onRecipeCancel ? () => navigate(onRecipeCancel) : close}>取消</Button><Button variant="primary" loading={busy} disabled={locked || !tool || !ready(tool) || !name.trim() || Boolean(nameProblem) || (existingDirectory && !folder) || !conversation || Boolean(judgeProblem)} onClick={() => void save()}>{mode.kind === 'create' ? '创建并连接' : '连接并发送欢迎卡片'}</Button></> : onRecipeCancel ? <Button disabled={busy} onClick={() => navigate(onRecipeCancel)}>取消</Button> : undefined}>
     {choosingDirectory ? <DirectorySearchStep onBusyChange={setBusy} onChoose={choice => {setFolder(choice); setChoosingDirectory(false);}}/> : <div className="page-stack join-group-flow">
+      {recipe && <SettingsGroup><SettingsRow title="配方" value={<span className="recipe-use-name">{recipe.name} · {recipe.version}</span>} description="已获取，连接群聊后预览并确认应用。"/></SettingsGroup>}
       {mode.kind !== 'bind' && <div className="join-group-flow__modes" role="group" aria-label="加入方式">
-        <Button aria-pressed={mode.kind === 'create'} disabled={busy} onClick={() => switchMode({kind: 'create'})}>创建群聊</Button>
+        {!existingOnly && <Button aria-pressed={mode.kind === 'create'} disabled={busy} onClick={() => switchMode({kind: 'create'})}>创建群聊</Button>}
         <Button aria-pressed={mode.kind === 'existing'} disabled={busy} onClick={() => switchMode({kind: 'existing'})}>连接已有群聊</Button>
       </div>}
       {mode.kind === 'existing' ? <>
@@ -206,25 +218,25 @@ export function JoinGroupDialog({open = true, agent, pending, initialGroup, init
         {pending?.problem && <InlineNotice title={pending.problem.kind === 'unsupported' ? '暂不支持自动发现' : '暂未获取新群聊'} tone="warning">{pending.problem.message} {pending.problem.kind === 'unsupported' && '请更新应用，或使用下方的群查找。'}</InlineNotice>}
         {pending?.groups.map(group => <InlineNotice key={group.chatId} title={`${agent.name} 已加入 ${group.name}`} actions={<Button disabled={busy} onClick={() => switchMode({kind: 'bind', group})}>继续连接</Button>}>选择沟通方式和工作目录。</InlineNotice>)}
         <Button loading={busy} disabled={busy} onClick={() => void findGroups()}>查找已经加入的群</Button>
-        {manual && <><div className="join-group-list" aria-label="已经加入的飞书群">{manual.groups.map(group => <button type="button" key={group.id} disabled={busy || group.bound} onClick={() => switchMode({kind: 'bind', group: {chatId: group.id, name: group.name, addedAt: 0, hasOtherBots: group.hasOtherBots}})}><span>{group.name}</span><small>{group.bound ? '已连接' : '连接'}</small></button>)}</div>{!manual.groups.length && <p>未找到群聊，请确认 Bot 已加入。</p>}{manual.nextCursor && <Button disabled={busy} onClick={() => void findGroups(manual.nextCursor)}>加载更多</Button>}</>}
+        {manual && <><div className="join-group-list" aria-label="已经加入的飞书群">{manual.groups.map(group => <button type="button" key={group.id} disabled={busy || group.bound && !onRecipeGroup} onClick={() => group.bound && onRecipeGroup ? onRecipeGroup(group.id) : switchMode({kind: 'bind', group: {chatId: group.id, name: group.name, addedAt: 0, hasOtherBots: group.hasOtherBots}})}><span>{group.name}</span><small>{group.bound ? onRecipeGroup ? '应用配方' : '已连接' : '连接'}</small></button>)}</div>{!manual.groups.length && <p>未找到群聊，请确认 Bot 已加入。</p>}{manual.nextCursor && <Button disabled={busy} onClick={() => void findGroups(manual.nextCursor)}>加载更多</Button>}</>}
       </> : <>
-        <FormField label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} error={nameProblem}><input aria-label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} placeholder={mode.kind === 'create' ? '例如：产品讨论' : undefined} autoComplete="off" maxLength={100} disabled={busy} value={name} onChange={event => setName(event.target.value)} /></FormField>
+        <FormField label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} error={nameProblem}><input aria-label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} placeholder={mode.kind === 'create' ? '例如：产品讨论' : undefined} autoComplete="off" maxLength={100} disabled={busy} value={name} onChange={event => edit({name: event.target.value})} /></FormField>
         <SettingsGroup>
-          <SettingsRow className="group-choice-row" title="工作目录" trailing={<SettingChoices label="目录来源" disabled={busy} value={existingDirectory ? 'existing' : 'default'} choices={[{value: 'default', label: '自动创建'}, {value: 'existing', label: '选择目录'}]} onChange={value => {setExistingDirectory(value === 'existing'); if(value === 'existing' && !folder) setChoosingDirectory(true);}}/>} />
-          {existingDirectory && <button type="button" className="join-directory-field" ref={directoryTrigger} disabled={busy} onClick={() => setChoosingDirectory(true)} aria-label="选择工作目录"><Folder size={16}/><span title={folder?.displayPath}>{folder?.displayPath ?? '搜索目录或输入路径'}</span><ChevronRight size={15}/></button>}
-          <SettingsRow className="group-choice-row" title="Provider" trailing={<SettingChoices<ProviderTool | ''> label="执行工具" disabled={busy} value={tool ?? ''} choices={[{value: 'codex', label: 'Codex', disabled: !ready('codex')}, {value: 'claude', label: 'Claude', disabled: !ready('claude')}]} onChange={value => {if ((value === 'codex' || value === 'claude') && ready(value)) setPickedTool(toolSchema.parse(value));}}/>} />
+          <SettingsRow className="group-choice-row" title="工作目录" trailing={<SettingChoices label="目录来源" disabled={busy} value={existingDirectory ? 'existing' : 'default'} choices={[{value: 'default', label: '自动创建'}, {value: 'existing', label: '选择目录'}]} onChange={value => {edit({existingDirectory: value === 'existing'}); if(value === 'existing' && !folder) setChoosingDirectory(true);}}/>} />
+          {existingDirectory && <button type="button" className="join-directory-field" ref={directoryTrigger} disabled={busy} onClick={() => setChoosingDirectory(true)} aria-label="选择工作目录"><Folder size={16}/><span title={folder?.displayPath}>{folder?.displayPath ?? (recipeDraft && savedDraft?.existingDirectory ? '请重新选择工作目录' : '搜索目录或输入路径')}</span><ChevronRight size={15}/></button>}
+          <SettingsRow className="group-choice-row" title="Provider" trailing={<SettingChoices<ProviderTool | ''> label="执行工具" disabled={busy} value={tool ?? ''} choices={[{value: 'codex', label: 'Codex', disabled: !ready('codex')}, {value: 'claude', label: 'Claude', disabled: !ready('claude')}]} onChange={value => {if ((value === 'codex' || value === 'claude') && ready(value)) edit({pickedTool: toolSchema.parse(value)});}}/>} />
           {(!tool || !ready(tool)) && <SettingsRow title="Provider 尚未就绪" description={tool ? `当前选择不可用：${configureProvider(device, tool)}或选别的 Provider。` : `请先${onDevice(device, '安装 Codex 或 Claude')} 并配置好（账号或自定义 API 都行）。`} trailing={onOpenProviders && <Button disabled={busy} onClick={onOpenProviders}>设置 Provider</Button>}/>}
           {mode.kind === 'bind' && <SettingsRow title="权限" value="只读（不联网）" />}
           {/* 新建的群默认就是完全访问（devices-ui-2 4.10），在这里说出来并带上第 15 节的警示。 */}
           {mode.kind === 'create' && <SettingsRow title="权限" value="完全访问" description={FULL_ACCESS_WARNING} />}
         </SettingsGroup>
         <FormField label="沟通方式">
-          <ChoiceGroup<Conversation | ''> label="沟通方式" aria-required disabled={busy} value={conversation ?? ''} options={conversationsFor(mode.kind === 'bind' && mode.group.topic === true)} onChange={value => {if (value) {setConversation(value); setResponse(picked => keptResponse(value, picked));}}} />
+          <ChoiceGroup<Conversation | ''> label="沟通方式" aria-required disabled={busy} value={conversation ?? ''} options={conversationsFor(mode.kind === 'bind' && mode.group.topic === true)} onChange={value => {if (value) {edit({conversation: value, response: keptResponse(value, response)});}}} />
         </FormField>
         {conversation === 'smart' && judgeProblem && <div className="join-decision-problem" role="status"><span>{judgeProblem}</span><span className="join-decision-actions">{decisionReadError ? <IconButton size="sm" variant="ghost" label="重试读取默认决策模型" disabled={busy} onClick={() => void readDecision()}><RefreshCw size={15}/></IconButton> : !decisionFresh ? null : <Button size="sm" onClick={() => onOpenDecisionModel?.()}>前往设置</Button>}</span></div>}
         {mode.kind === 'bind' && mode.group.hasOtherBots && <p className="join-group-flow__hint">群内 Bot 都使用智能模式后，可互相 @ 并判断是否接话。</p>}
         {freeAt && <SettingsGroup>
-          <SettingsRow className="group-choice-row" title="响应方式" trailing={<SettingChoices label="免 @" disabled={busy} value={freeAt} choices={[{value: 'all', label: '无需 @'}, {value: 'mention', label: '仅 @ 时'}]} onChange={value => setResponse(value === 'all' ? 'all' : 'mention')}/>} />
+          <SettingsRow className="group-choice-row" title="响应方式" trailing={<SettingChoices label="免 @" disabled={busy} value={freeAt} choices={[{value: 'all', label: '无需 @'}, {value: 'mention', label: '仅 @ 时'}]} onChange={value => edit({response: value === 'all' ? 'all' : 'mention'})}/>} />
         </SettingsGroup>}
       </>}
       {mode.kind === 'create' && lock && <CreationLockNotice failure={lock} />}

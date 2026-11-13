@@ -384,7 +384,7 @@ describe('the bot-session column (unit)', () => {
   // dm-agent 6.2. Every row, by name, so that a row added later is decided here and not by accident.
   it('refuses a private chat exactly what it may not do, saying where to do it, and takes the rest to its Bot process', async () => {
     const refused = new Set([
-      'command.registerAgent', 'command.refreshAgentCredentials', 'command.deleteAgent', 'command.restartHost',
+      'command.registerAgent', 'command.refreshAgentCredentials', 'command.deleteAgent', 'command.restartHost', 'command.readGroupIdentity',
       'machine.status', 'machine.service.install', 'machine.service.start', 'machine.service.stop', 'machine.service.uninstall', 'machine.setServiceSkipped',
       'machine.startHost', 'machine.stopHost', 'machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus', 'machine.desktopUpdateReport',
       'machine.bridgeImport.detect', 'machine.bridgeImport.preflight', 'machine.bridgeImport.start', 'machine.bridgeImport.status', 'machine.bridgeImport.rollback',
@@ -806,4 +806,9 @@ describe('a Bot session against the daemon', () => {
       await other.client.close();
     } finally { await fixture.close(); }
   });
+});
+
+
+it.each(['dm', 'group', 'comment'] as const)('keeps exact group identity reads owner-only in %s sessions', async place => {
+  expect(await authorize(peer(place), request('command', {type: 'readGroupIdentity', agentId: BOT, groupId: GROUP}), deps)).toMatchObject({ok: false});
 });
