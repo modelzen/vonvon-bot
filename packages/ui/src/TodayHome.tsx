@@ -1,4 +1,4 @@
-import {Activity, ArrowRight, ChartNoAxesColumn, ChevronRight, Cpu, Download, Link, MonitorSmartphone, Power, Wrench, type LucideIcon} from 'lucide-react';
+import {Activity, ArrowRight, ChartNoAxesColumn, ChevronRight, CircleUserRound, Cpu, Download, Link, MonitorSmartphone, Power, Wrench, type LucideIcon} from 'lucide-react';
 import type {AgentId, DesktopSnapshot} from '@vonvon/protocol';
 import {NowBotList} from './NowBotList';
 import {NowActivity} from './NowActivity';
@@ -8,6 +8,8 @@ import {uiFeatures} from './features';
 import type {Page} from './collaboration-model';
 import {useActiveDevice, useClient} from './client-context';
 import {whereName} from './device-copy';
+import {accountStatusText, useAccount} from './account-context';
+import {AccountAvatar} from './accounts/AccountAvatar';
 
 export function TodayHome({snapshot, onSetup, onRegister, onOpenUsage, disabled}: {snapshot: DesktopSnapshot; onSetup: () => void; onRegister: () => void; onOpenUsage: () => void; disabled: boolean}) {
   const client = useClient();
@@ -51,11 +53,17 @@ const settingsEntries: {page: Page; title: string; description: string; icon: Lu
  * 2026-11-03 moved it there from 应用与启动). */
 export function SettingsHome({onNavigate, onFeature, updateNotice, devices}: {onNavigate: (page: Page) => void; onFeature: (id: string) => void; updateNotice?: string; devices?: boolean}) {
   const where = useActiveDevice();
+  const account = useAccount();
+  const identity = account.status?.kind === 'signedIn' ? account.status : undefined;
   // The Provider page is the shown device's: 「X」's configuration on a remote one.
   const entries = settingsEntries
     .map(item => item.page === 'devices' && !devices ? {...item, description: '管理对当前设备的访问'} : item)
     .map(item => item.page === 'providers' && where.isRemote ? {...item, description: `执行任务的服务、${whereName(where)}上的组件与模型`} : item);
   return <section className="today-settings-home"><header className="today-page-heading"><h1>设置</h1></header>
+    <div className="today-list-surface"><button type="button" className="today-settings-row" onClick={() => onNavigate('account')}>
+      {identity ? <AccountAvatar identity={identity}/> : <span className="today-setting-icon" data-page="account"><CircleUserRound size={19} strokeWidth={1.7}/></span>}
+      <span className="today-entity-copy"><strong>{identity?.displayName ?? '账号'}</strong><small>{accountStatusText(account.status, account.supported)}</small></span><ChevronRight size={14}/>
+    </button></div>
     {[{label: '模型与工具', entries: entries.slice(0, 4)}, {label: '连接与应用', entries: entries.slice(4)}].map(section => <section className="today-settings-section" aria-label={section.label} key={section.label}><h2>{section.label}</h2><div className="today-list-surface">{section.entries.map(item => <button type="button" className="today-settings-row" key={item.page} onClick={() => onNavigate(item.page)}>
       <span className="today-setting-icon" data-page={item.page}><item.icon size={17} strokeWidth={1.7}/></span><span className="today-entity-copy"><strong>{item.title}</strong><small>{item.page === 'application' && updateNotice ? updateNotice : item.description}</small></span>{item.page === 'application' && updateNotice && <span className="today-update-dot" aria-hidden="true"/>}<ChevronRight size={14}/>
     </button>)}</div></section>)}

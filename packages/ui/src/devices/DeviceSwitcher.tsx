@@ -1,11 +1,13 @@
 import {useEffect, useRef, useState, type KeyboardEvent, type RefObject} from 'react';
-import {ChevronDown, Plus, Settings2} from 'lucide-react';
-import type {DevicesState} from '@vonvon/protocol';
+import {ChevronDown, ChevronRight, CircleUserRound, Plus, Settings2} from 'lucide-react';
+import type {AccountStatus, DevicesState} from '@vonvon/protocol';
 import {useActiveDevice, useDevicesState, useShellCapabilities} from '../client-context';
 import {useDraftGuard} from '../settings/DraftGuard';
 import {addBlockedReason, rowView} from './devices-presentation';
 import {DeviceTile, platformIcon, StatusDot, useDismiss, useNow} from './device-bits';
 import {AddDeviceDialog} from './AddDeviceDialog';
+import {accountStatusText, useAccount} from '../account-context';
+import {AccountAvatar} from '../accounts/AccountAvatar';
 
 const reportSwitchFailure = (error: unknown) => console.error('Device switch failed', error);
 
@@ -21,9 +23,10 @@ function focusItem(menu: HTMLElement | null, which: Focus) {
  * the menu and closes it; Shift+Tab goes back to the trigger (`onLeave`). `autoFocus`: the item to focus once it opens,
  * when it was opened by keyboard.
  */
-export function DeviceSwitcherMenu({state, now, onPick, onAdd, onManage, onLeave, menuRef, autoFocus}: {
+export function DeviceSwitcherMenu({state, now, onPick, onAdd, onManage, onLeave, menuRef, autoFocus, account}: {
   state: DevicesState; now: number; onPick: (id: string) => void; onAdd: () => void; onManage: () => void;
   onLeave?: () => void; menuRef?: RefObject<HTMLDivElement | null>; autoFocus?: Focus;
+  account?: {status?: AccountStatus; supported: boolean; onLogin: () => void; onManage: () => void; error?: string};
 }) {
   const own = useRef<HTMLDivElement>(null);
   const menu = menuRef ?? own;
@@ -65,6 +68,15 @@ export function DeviceSwitcherMenu({state, now, onPick, onAdd, onManage, onLeave
     <div role="separator" className="device-menu__separator"/>
     <button type="button" role="menuitem" tabIndex={-1} className="device-switcher__action" disabled={Boolean(blocked)} title={blocked} onClick={onAdd}><Plus size={14} aria-hidden="true"/><span>添加设备…</span></button>
     <button type="button" role="menuitem" tabIndex={-1} className="device-switcher__action" onClick={onManage}><Settings2 size={14} aria-hidden="true"/><span>管理设备…</span></button>
+    {account && <div className="device-switcher__account">
+      <button type="button" role="menuitem" tabIndex={-1} className="device-switcher__account-button"
+        onClick={account.status?.kind === 'signedOut' ? account.onLogin : account.onManage}>
+        {account.status?.kind === 'signedIn' ? <AccountAvatar identity={account.status}/> : <CircleUserRound size={22} strokeWidth={1.5} aria-hidden="true"/>}
+        <span className="device-switcher__account-copy"><strong>{account.status?.kind === 'signedIn' ? account.status.displayName : account.status?.kind === 'signedOut' ? '登录 Vonvon' : '账号'}</strong>
+          <small>{account.error ?? (account.status?.kind === 'signedIn' ? '账号管理' : accountStatusText(account.status, account.supported))}</small></span>
+        <ChevronRight size={13} aria-hidden="true"/>
+      </button>
+    </div>}
   </div>;
 }
 
@@ -72,11 +84,12 @@ export function DeviceSwitcherMenu({state, now, onPick, onAdd, onManage, onLeave
  * The desktop's top-left, in the brand's place, like a workspace switcher: which device the window shows and its state,
  * shown with this computer alone too, so 添加设备 can be found. Switching goes through DraftGuard.
  */
-export function DeviceSwitcher({onManage}: {onManage: () => void}) {
+export function DeviceSwitcher({onManage, onAccount}: {onManage: () => void; onAccount?: () => void}) {
   const state = useDevicesState();
   const devices = useShellCapabilities()?.devices;
   const {isRemote} = useActiveDevice();
   const {navigate} = useDraftGuard();
+  const account = useAccount();
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [focusOnOpen, setFocusOnOpen] = useState<Focus>();
@@ -103,7 +116,7 @@ export function DeviceSwitcher({onManage}: {onManage: () => void}) {
     <button ref={trigger} type="button" className="device-switcher__button" aria-haspopup="menu" aria-expanded={open}
       aria-label={`当前设备：${view.title}，点击切换`} title={`${view.title} · ${view.status}`}
       onClick={event => { if (open) setOpen(false); else show(event.detail === 0 ? 'first' : undefined); }} onKeyDown={onTriggerKey}>
-      <img className="device-switcher__logo" src="./vonvon-logo.png" alt=""/>
+      {account.status?.kind === 'signedIn' ? <AccountAvatar identity={account.status}/> : <img className="device-switcher__logo" src="./vonvon-logo.png" alt=""/>}
       <StatusDot tone={view.tone}/>
       <span className="device-switcher__name">{view.title}</span>
       {view.tone !== 'green' && <span className="device-switcher__state">{` · ${view.status}`}</span>}
@@ -112,7 +125,8 @@ export function DeviceSwitcher({onManage}: {onManage: () => void}) {
     {open && <DeviceSwitcherMenu state={state} now={now} menuRef={menu} autoFocus={focusOnOpen}
       onPick={id => choose(() => { if (id !== current.id) switchTo(id); })}
       onAdd={() => choose(() => setAdding(true))}
-      onManage={() => choose(onManage)} onLeave={() => { trigger.current?.focus(); setOpen(false); }}/>}
+      onManage={() => choose(onManage)} onLeave={() => { trigger.current?.focus(); setOpen(false); }}
+      account={onAccount ? {...account, onLogin: () => choose(() => void account.login()), onManage: () => choose(onAccount)} : undefined}/>}
     {adding && <AddDeviceDialog onClose={() => setAdding(false)} onSwitch={switchTo}/>}
   </div>;
 }
