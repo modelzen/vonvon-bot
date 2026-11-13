@@ -43,6 +43,11 @@ export function cardDisplayPresentationDefaults(cfg:Partial<AppConfig>):ProjectP
 
 /** A project = a Feishu group bound to a fixed working directory. */
 export interface Project {
+  /** One physical Bot/group binding lifetime, never reused after unbinding. */
+  bindingIncarnation?: string;
+  /** Incremented for every persisted setting change, including legacy role edits. */
+  projectSettingsRevision?: number;
+  recipeInstall?: import('../recipe/types').RecipeInstallation;
   /** Default for new sessions; omitted uses the provider's native default. */
   serviceTier?: import('../agent/types').ServiceTier;
   profile?: GroupProfile;
@@ -423,6 +428,15 @@ async function writeStored(location: RegistryLocation, body: Record<string, unkn
   const oldProjects = directoryRows(previous.projects);
   const nextProjects = directoryRows(next.projects);
   for (const row of nextProjects) {
+    const priorBinding = oldProjects.find(project => project.chatId === row.chatId);
+    if (!row.dm) {
+      row.bindingIncarnation = typeof priorBinding?.bindingIncarnation === 'string' ? priorBinding.bindingIncarnation
+        : priorBinding && typeof row.bindingIncarnation === 'string' ? row.bindingIncarnation : randomUUID();
+      const settings = (value: DirectoryRow): string => JSON.stringify(Object.fromEntries(Object.entries(value)
+        .filter(([key]) => !['projectSettingsRevision', 'bindingIncarnation', 'recipeInstall'].includes(key))));
+      const revision = typeof priorBinding?.projectSettingsRevision === 'number' ? priorBinding.projectSettingsRevision : 0;
+      row.projectSettingsRevision = revision + (priorBinding && settings(row) !== settings(priorBinding) ? 1 : 0);
+    }
     validateGroupSettings(row);
     const directories = parseDirectorySettings(row.directories);
     const old = oldProjects.find(project => project.chatId === row.chatId && project.name === row.name);
@@ -448,12 +462,12 @@ async function writeStored(location: RegistryLocation, body: Record<string, unkn
   const tmp = `${location.file}.tmp-${process.pid}-${randomUUID()}`;
   try {
     if (durable) {
-      const file = await open(tmp, 'wx');
+      const file = await open(tmp, 'wx', 0o600);
       let failed = false;
       try { await file.writeFile(serialized, 'utf8'); await file.sync(); }
       catch (error) { failed = true; throw error; }
       finally { try { await file.close(); } catch (error) { if (!failed) throw error; } }
-    } else await writeFile(tmp, serialized, 'utf8');
+    } else await writeFile(tmp, serialized, {encoding: 'utf8', mode: 0o600});
     await renameOverReaders(tmp, location.file, beforeCommit);
   } catch (error) {
     await unlink(tmp).catch(() => undefined);
@@ -467,6 +481,18 @@ export interface ProjectCommitOptions {
   /** Set only by the host's workspace funnel (admin/library.ts): the one writer allowed to change the folders of a row
    * that belongs to a library project, to make them the project's again. */
   mirror?: boolean;
+}
+
+/** The role, its provenance and its durable operation receipt share this one commit point. */
+export function mutateProjectStore<T>(target: RegistryLocation, operation: (store: Record<string, unknown>, rows: Project[]) => Promise<{changed: boolean; value: T}>, beforeCommit?: () => void): Promise<T> {
+  return ownProjects(async location => {
+    const stored = await readStored(location.file);
+    const rows = stored.projects === undefined ? [] : storedRows(stored);
+    const previous = structuredClone(stored);
+    const result = await operation(stored, rows);
+    if (result.changed) await writeStored(location, {...stored, version: FILE_VERSION, projects: rows}, previous, beforeCommit, true);
+    return result.value;
+  }, target);
 }
 async function write(location: RegistryLocation, projects: Project[], selected?: undefined, options?: ProjectCommitOptions): Promise<void>;
 async function write(location: RegistryLocation, projects: Project[], selected: Project, options?: ProjectCommitOptions): Promise<Project>;
