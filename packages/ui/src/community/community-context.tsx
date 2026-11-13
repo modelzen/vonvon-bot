@@ -3,7 +3,7 @@ import type {Destination} from '../search';
 import {useAccount} from '../account-context';
 import type {CommunityShell, RecipeDetail, CommunityResponses} from '@vonvon/protocol';
 
-export type CommunityRoute = {kind: 'catalog'} | {kind: 'library'} | {kind: 'workspace'} | {kind: 'detail'; recipe: {recipeId: string; versionId: string}; privateView?: boolean} | {kind: 'draft'; draftId?: string; source?: RecipeDetail};
+export type CommunityRoute = {kind: 'catalog'} | {kind: 'library'} | {kind: 'workspace'} | {kind: 'authoring'} | {kind: 'detail'; recipe: {recipeId: string; versionId: string}; privateView?: boolean} | {kind: 'draft'; draftId?: string; source?: RecipeDetail};
 export type CommunityDeparture = {deviceId: string; destination: Destination};
 type CommunityContextValue = {
   shell?: CommunityShell; isOpen: boolean; route: CommunityRoute;
@@ -21,7 +21,7 @@ export function CommunityProvider({shell, onUse, children}: {shell?: CommunitySh
   const account = useAccount();
   const accountId = account.status?.kind === 'signedIn' ? account.status.accountId : undefined;
   const [stored, setRoute] = useState<{route: CommunityRoute; owner?: string}>({route: {kind: 'catalog'}});
-  const privateRoute = stored.route.kind === 'draft' || stored.route.kind === 'workspace' || stored.route.kind === 'library' || stored.route.kind === 'detail' && stored.route.privateView;
+  const privateRoute = stored.route.kind === 'authoring' || stored.route.kind === 'draft' || stored.route.kind === 'workspace' || stored.route.kind === 'library' || stored.route.kind === 'detail' && stored.route.privateView;
   const foreignRoute = privateRoute && stored.owner !== undefined && stored.owner !== accountId;
   const route = foreignRoute ? {kind: 'catalog'} as const : stored.route;
   useEffect(() => {if (foreignRoute) setRoute({route: {kind: 'catalog'}});}, [foreignRoute]);

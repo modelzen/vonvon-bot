@@ -4,12 +4,14 @@ import type {CommunityRequest, CommunityShell, RecipeConfig, RecipeDetail, Recip
 import {Button, InlineNotice} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 import {useDraft, useDraftGuard} from '../settings/DraftGuard';
+import {RecipeAuthoringPage} from './authoring/RecipeAuthoring';
 import {RecipeConfiguration, RecipeDetails, RecipeMarkdown, RecipeMetadata} from './RecipeContent';
 
 const blank: {public: RecipePublic; config: RecipeConfig} = {public: {name: '', summary: '', overview: '', version: '1.0', access: 'direct'}, config: {role: ''}};
 export function RecipeEditor({shell, accountId, draftId, source, onBack, onPublished}: {
   shell: CommunityShell; accountId: string; draftId?: string; source?: RecipeDetail; onBack: () => void; onPublished: (recipe: RecipeDetail & {firstCode?: string}) => void;
 }) {
+  const sourceAllowed = !source || source.owned || source.public.access === 'direct';
   const [model, setModel] = useState<RecipeDraft>();
   const [contents, setContents] = useState(() => source ? {public: {...source.public, summary: source.public.summary ?? '', overview: source.public.overview ?? '', version: ''}, config: source.config ?? blank.config} : blank);
   const [editing, setEditing] = useState(!draftId);
@@ -21,9 +23,12 @@ export function RecipeEditor({shell, accountId, draftId, source, onBack, onPubli
   const [deleting, setDeleting] = useState(false);
   const [latest, setLatest] = useState<RecipeDraft>();
   const [saved, setSaved] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [remoteUpdate, setRemoteUpdate] = useState<RecipeDraft>();
   const keys = useRef(new Map<string, string>());
   const pendingSave = useRef<Extract<CommunityRequest, {type: 'saveDraft'}> | undefined>(undefined);
   const live = useRef(true);
+  const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
   const {navigate} = useDraftGuard();
   useEffect(() => {live.current = true; return () => {live.current = false;};}, []);
   useEffect(() => {
@@ -38,6 +43,7 @@ export function RecipeEditor({shell, accountId, draftId, source, onBack, onPubli
   const changePublic = (patch: Partial<RecipePublic>) => {setContents(old => ({...old, public: {...old.public, ...patch}})); setDirty(true); setSaved(false);};
   const changeConfig = (patch: Partial<RecipeConfig>) => {setContents(old => ({...old, config: {...old.config, ...patch}})); setDirty(true); setSaved(false);};
   async function save(): Promise<RecipeDraft | undefined> {
+    if (!sourceAllowed) {setError('其他作者的受限配方不能改编或重新发布。请分享原版本链接。'); return;}
     if (model && !dirty) return model;
     setError(undefined);
     if (!recipePublicSchema.safeParse(contents.public).success || !recipeConfigSchema.safeParse(contents.config).success) {setError('请检查内容长度。名称最多 60 个字符，简介 240 个字符，版本 40 个字符，步骤名称 80 个字符；正文与步骤说明按 UTF-8 字节限制。'); return;}
@@ -73,13 +79,28 @@ export function RecipeEditor({shell, accountId, draftId, source, onBack, onPubli
     setDirty(false); setReview(undefined);
     onPublished({...result, owned: true, acquired: false, config: review.config});
   }
+  async function chatUpdated(id: string, revision: number) {
+    if (!model || model.draftId !== id || revision <= model.revision) return;
+    try {
+      const next = await shell.request({type: 'draft', accountId, draftId: id});
+      if (!live.current || next.draftId !== id) return;
+      if (next.revision < revision) {setError('私聊已保存，新修订尚未读取到，请重新读取。'); return;}
+      if (dirtyRef.current) setRemoteUpdate(next);
+      else {setModel(next); setContents({public: next.public, config: next.config}); setSaved(true);}
+    } catch (e) {if (live.current) setError(e instanceof Error ? e.message : '私聊已保存，App 尚未读取到新修订。');}
+  }
+  const chat = model && <section className="authoring-draft-panel"><div className="community-actions"><Button onClick={() => setChatOpen(value => !value)}>{chatOpen ? '暂停聊天编辑' : '在飞书继续编辑'}</Button><span className="community-muted">修订 {model.revision} · 与飞书共享同一份私人草稿</span></div>
+    {remoteUpdate && <InlineNotice title="飞书已保存新修订" actions={<Button onClick={() => {setLatest(remoteUpdate); setRemoteUpdate(undefined);}}>核对新修订</Button>}>云端已有修订 {remoteUpdate.revision}。你的未保存输入仍保留，请核对后再保存。</InlineNotice>}
+    {chatOpen && <RecipeAuthoringPage draft={{draftId:model.draftId,revision:model.revision}} onSaved={(id,revision) => void chatUpdated(id,revision)}/>}
+  </section>;
   if (loading) return <p role="status">正在读取私人草稿…</p>;
   if (draftId && !model) return <><InlineNotice title="草稿读取未完成" tone="warning">{error}</InlineNotice><Button onClick={onBack}>返回创作中心</Button></>;
-  if (!editing && model) return <div className="community-page"><div className="community-actions"><Button variant="ghost" onClick={onBack}>返回创作中心</Button><Button variant="primary" onClick={() => setEditing(true)}>编辑草稿</Button></div><p className="community-muted">私人草稿 · 仅自己可见</p><RecipeDetails recipe={{recipeId: model.recipeId ?? model.draftId, versionId: model.draftId, revision: model.revision, public: model.public, config: model.config, owned: true, acquired: false}}/></div>;
+  if (!editing && model) return <div className="community-page"><div className="community-actions"><Button variant="ghost" onClick={onBack}>返回创作中心</Button><Button variant="primary" onClick={() => setEditing(true)}>编辑草稿</Button></div><p className="community-muted">私人草稿 · 仅自己可见</p><RecipeDetails recipe={{recipeId: model.recipeId ?? model.draftId, versionId: model.draftId, revision: model.revision, public: model.public, config: model.config, owned: true, acquired: false}}/>{chat}</div>;
   const steps = contents.config.setup?.steps ?? [];
   const updateStep = (i: number, patch: Partial<NonNullable<RecipeConfig['setup']>['steps'][number]>) => changeConfig({setup: {steps: steps.map((step, at) => at === i ? {...step, ...patch} : step)}});
   return <div className="community-page"><div className="community-heading"><div><h1>{contents.public.name || '新建私人草稿'}</h1><p>先审核配置，再填写发布信息。保存草稿不会公开。</p></div><div className="community-actions"><Button variant="ghost" onClick={() => navigate(onBack)}>返回创作中心</Button>{model && <Button disabled={busy} onClick={() => setDeleting(true)}>删除草稿</Button>}</div></div>
     {error && <InlineNotice title="操作未完成" tone="warning" actions={model && <Button disabled={busy} onClick={() => void run(async () => {const current = await shell.request({type: 'draft', accountId, draftId: model.draftId}); if (live.current) setLatest(current);})}>读取最新草稿</Button>}>{error}</InlineNotice>}{saved && <p role="status" className="community-muted">私人草稿已保存</p>}
+    {source && <InlineNotice title="基于已有配方准备新草稿">来源：{source.public.name} · {source.public.version}。来源关系会保留；请核对你拥有分享权的内容。{!sourceAllowed && '其他作者的受限内容不能重新发布。'}</InlineNotice>}
     <form className="community-editor" onSubmit={event => {event.preventDefault(); void run(async () => {await save();});}}>
       <fieldset disabled={busy}><legend>发布信息</legend><label>名称<input aria-label="配方名称" value={contents.public.name} onChange={event => changePublic({name: event.target.value})}/></label><label>公开简介<textarea aria-label="公开简介" value={contents.public.summary} rows={3} onChange={event => changePublic({summary: event.target.value})}/></label>
         <div className="community-editor-grid"><label>版本<input aria-label="版本" value={contents.public.version} onChange={event => changePublic({version: event.target.value})}/></label><label>获取方式<select aria-label="获取方式" value={contents.public.access} onChange={event => changePublic({access: event.target.value as RecipePublic['access']})}><option value="direct">直接获取</option><option value="coded">凭分享码获取</option></select></label></div>
@@ -90,8 +111,9 @@ export function RecipeEditor({shell, accountId, draftId, source, onBack, onPubli
         {steps.map((step, i) => <fieldset key={i}><legend>步骤 {i + 1}</legend><div className="community-editor-grid"><label>名称<input value={step.title} onChange={event => updateStep(i, {title: event.target.value})}/></label><label>类型<select value={step.kind} onChange={event => updateStep(i, {kind: event.target.value as typeof step.kind})}><option value="config">配置</option><option value="tool">工具</option><option value="context">上下文</option></select></label></div><label>操作说明<textarea value={step.instructions} maxLength={2048} onChange={event => updateStep(i, {instructions: event.target.value})}/></label><label>检查方式<input value={step.check ?? ''} maxLength={512} onChange={event => updateStep(i, {check: event.target.value})}/></label><label className="community-checkbox"><input type="checkbox" checked={step.required} onChange={event => updateStep(i, {required: event.target.checked})}/>必需步骤</label><Button type="button" onClick={() => {const next = steps.filter((_, at) => at !== i); changeConfig({setup: next.length ? {steps: next} : undefined});}}>移除此步骤</Button></fieldset>)}
         <Button type="button" disabled={steps.length >= 8} onClick={() => changeConfig({setup: {steps: [...steps, {kind: 'config', title: '', instructions: '', required: false}]}})}>添加准备步骤</Button>
       </fieldset>
-      <div className="community-actions"><Button type="submit" disabled={busy}>保存私人草稿</Button><Button type="button" variant="primary" disabled={busy} onClick={() => void run(preparePublish)}>预览发布</Button></div>
+      <div className="community-actions"><Button type="submit" disabled={busy || !sourceAllowed}>保存私人草稿</Button><Button type="button" variant="primary" disabled={busy || !sourceAllowed} onClick={() => void run(preparePublish)}>预览发布</Button></div>
     </form>
+    {chat}
     <Dialog open={Boolean(latest)} title="核对最新草稿" size="lg" onClose={() => setLatest(undefined)} footer={<><Button onClick={() => setLatest(undefined)}>继续核对</Button><Button variant="primary" onClick={() => {if (!latest) return; setModel(latest); pendingSave.current = undefined; setLatest(undefined); setError(undefined); setDirty(true); setSaved(false);}}>保留当前输入，使用此修订继续编辑</Button></>}>
       <p>下面是云端最新保存的内容。你的未保存输入仍保留。确认后，再点击保存才会更新这份草稿。</p>{latest && <><h2>{latest.public.name}</h2><p>{latest.public.summary}</p><RecipeMetadata meta={latest.public}/><RecipeMarkdown text={latest.public.overview}/><RecipeConfiguration config={latest.config} section="能力"/><RecipeConfiguration config={latest.config} section="使用前准备"/></>}
     </Dialog>
