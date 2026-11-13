@@ -63,17 +63,62 @@ export async function checkInstallOperations({request,sql,jwt,author,reader,othe
   await redeem(auth,403,{proof:installProof(wrongKey,auth).toString('base64url')});
   const credentials=[auth.ticket,nonce.toString('base64url'),installProof(privateKey,auth).toString('base64url')]
     .map(value=>`decode('${Buffer.from(value,'base64url').toString('hex')}','hex')`);
-  for (const missing of [0,1,2,-1]) {
+  for (const missing of [0,1,2,-1]) for (const outcome of ['null',"'applied'"]) {
     const args=credentials.map((value,index)=>missing===-1 || index===missing?'null':value);
     sql(`begin; set local role recipe_api;
       do $$ declare denied boolean := false; begin
         begin
-          perform recipe_api.possess_operation('${id}',${args.join(',')});
+          perform recipe_api.possess_operation('${id}',${args.join(',')},${outcome});
         exception when raise_exception then
           if sqlerrm='invalid_operation_proof' then denied:=true; else raise; end if;
         end;
         if not denied then raise exception 'NULL possession credential was accepted'; end if;
       end $$; rollback;`);
+  }
+  const quoted=value=>"'"+value.replaceAll("'","''")+"'";
+  const requestSql=quoted(JSON.stringify(body))+'::jsonb';
+  const materialSql=[requestSql,...Array(3).fill("decode('"+'11'.repeat(32)+"','hex')"),
+    "floor(extract(epoch from clock_timestamp())*1000)::bigint+10000"];
+  function invalidAuthorization(candidate,args) {
+    sql(`begin; set local role recipe_api; select set_config('app.recipe_account','${preview.accountId}',true);
+      do $$ declare denied boolean := false; begin
+        begin
+          perform recipe_api.authorize_operation('${candidate}',${args.join(',')});
+        exception when raise_exception then
+          if sqlerrm='invalid_input' then denied:=true; else raise; end if;
+        end;
+        if not denied then raise exception 'Malformed SQL authorization input was accepted'; end if;
+      end $$; rollback;`);
+  }
+  const invalidRequests=['null',"'null'::jsonb","'1'::jsonb","'true'::jsonb",`'"text"'::jsonb`,"'[]'::jsonb","'{}'::jsonb"];
+  for (const field of Object.keys(body)) {
+    invalidRequests.push(quoted(JSON.stringify({...body,[field]:null}))+'::jsonb');
+    invalidRequests.push(quoted(JSON.stringify({...body,[field]:field==='generation'?'1':32}))+'::jsonb');
+  }
+  invalidRequests.push(quoted(JSON.stringify({...body,targetPublicKey:'_'.repeat(43)}))+'::jsonb');
+  for (const candidate of [operationId(),id]) {
+    for (const invalid of invalidRequests) invalidAuthorization(candidate,[invalid,...materialSql.slice(1)]);
+    for (const index of [1,2,3,4]) {
+      const invalid=[...materialSql]; invalid[index]='null';
+      invalidAuthorization(candidate,invalid);
+      if (index<4) for (const length of [31,33]) {
+        invalid[index]="decode('"+'11'.repeat(length)+"','hex')";
+        invalidAuthorization(candidate,invalid);
+      }
+    }
+  }
+  for (const [field,value] of [
+    ['request_digest','null'], ['version_id','null'], ['binding','null'], ['binding',"'null'::jsonb"],
+    ['binding',"'[]'::jsonb"], ['binding',"'1'::jsonb"],
+    ['ticket','null'], ['expected_proof_hash','null'], ['deadline','null'],
+  ]) {
+    sql(`do $$ declare denied boolean := false; begin
+      begin
+        update recipe_private.install_operations set ${field}=${value} where id='${id}';
+      exception when check_violation then denied:=true;
+      end;
+      if not denied then raise exception 'Malformed operation row was accepted'; end if;
+    end $$;`);
   }
   const received=await redeem(auth);
   assert.equal(received.status,'redeemed');
@@ -105,6 +150,12 @@ export async function checkInstallOperations({request,sql,jwt,author,reader,othe
   await cancel(operationId(Date.now()-300001),author,410);
   await authorize(operationId(Date.now()+130000),author,{},422);
   await cancel(operationId(Date.now()+130000),author,422);
+  const future=operationId(Date.now()+130000),credentialsBody=possession(auth);
+  for (const action of ['redeem','complete']) {
+    const result=await request('/operations/'+future+'/'+action,{method:'POST',status:422,
+      body:{...credentialsBody,...(action==='complete'?{outcome:'applied'}:{})}});
+    assert.equal(result.error.code,'operation_clock_skew');
+  }
   const clockAllowed=await authorize(operationId(Date.now()+100000));
   await cancel(clockAllowed.operationId);
   await authorize(operationId(),author,{targetPublicKey:Buffer.alloc(32).toString('base64url')},422);
@@ -141,6 +192,19 @@ export async function checkInstallOperations({request,sql,jwt,author,reader,othe
     assert.fail('expected database row lock waiter for '+fragment);
   }
   try {
+    const deadlineRace=await authorize(operationId());
+    await blocker.query('BEGIN');
+    const deadlineUpdate=await blocker.query(`update recipe_private.install_operations
+      set deadline=floor(extract(epoch from clock_timestamp())*1000)::bigint+1500 where id=$1 returning deadline`,[deadlineRace.operationId]);
+    const deadline=Number(deadlineUpdate.rows[0].deadline);
+    const expiredRetry=authorize(deadlineRace.operationId,author,{},410);
+    await waiting('authorize_operation');
+    assert.ok(Date.now()<deadline,'authorize must enter its row-lock wait before the deadline');
+    while (Date.now()<=deadline) await delay(Math.min(20,deadline-Date.now()+1));
+    await blocker.query('COMMIT');
+    assert.equal((await expiredRetry).error.code,'operation_expired');
+    await redeem(deadlineRace,410);
+
     const disabledRace=await authorize(operationId());
     await blocker.query('BEGIN');
     await blocker.query("update recipe_private.accounts set status='disabled' where id=$1",[preview.accountId]);
