@@ -66,18 +66,19 @@ export class RecipeUseController {
   private cloud(h: Handle) {
     return recipeCloud(this.account, { accountId: h.input.accountId, signal: h.signal, check: () => this.check(h) });
   }
+  private verifyIdentity(lease: RecipeDeviceLease, device: { id: string; publicKey: string }) {
+    const pk = recipeBinary32Schema.parse(device.publicKey),
+      id = z.string().uuid().parse(device.id);
+    if (lease.viewId !== 'local' && (lease.pairedKey !== pk || lease.viewId !== id)) throw changed();
+    return { pk, id };
+  }
   private async identity(h: Handle) {
     this.check(h);
     const res = deviceReplySchema.parse(await h.lease.client.device({ type: 'status' }));
     this.check(h);
     if (res.kind !== 'deviceStatus') throw invalid();
-    const pk = recipeBinary32Schema.parse(res.status.device.publicKey),
-      id = z.string().uuid().parse(res.status.device.id);
-    if (
-      (h.pk && (h.pk !== pk || h.deviceId !== id)) ||
-      (h.lease.viewId !== 'local' && (h.lease.pairedKey !== pk || h.lease.viewId !== id))
-    )
-      throw changed();
+    const { pk, id } = this.verifyIdentity(h.lease, res.status.device);
+    if (h.pk && (h.pk !== pk || h.deviceId !== id)) throw changed();
     h.pk = pk;
     h.deviceId = id;
   }
@@ -395,6 +396,15 @@ export class RecipeUseController {
     };
     check();
     if (!lease.client.recipeInstall) throw retry();
+    const identity = async () => {
+      check();
+      const status = deviceReplySchema.parse(await lease.client.device({ type: 'status' }));
+      check();
+      if (status.kind !== 'deviceStatus') throw invalid();
+      return this.verifyIdentity(lease, status.status.device);
+    };
+    const device = await identity();
+    check();
     const read = recipeInstallReplySchema.parse(await lease.client.recipeInstall({ type: 'source', botId, groupId }));
     check();
     if (read.kind !== 'source' || read.groupId !== groupId) throw invalid();
@@ -408,6 +418,9 @@ export class RecipeUseController {
         request.installedVersionId !== read.source.versionId
       )
         throw changed();
+      const now = await identity();
+      check();
+      if (now.pk !== device.pk || now.id !== device.id) throw changed();
       const applied = recipeInstallReplySchema.parse(
         await lease.client.recipeInstall({
           type: 'ignoreVersion',
@@ -444,6 +457,12 @@ export class RecipeUseController {
       let reply: RecipeUseReply;
       const row = h.row;
       switch (r.type) {
+        case 'retry':
+          if (row?.stage !== 'done' || row.outcome !== 'rejected') throw changed();
+          this.save(h, { ...this.base(h), stage: 'group', groupId: row.groupId });
+          h.preview = undefined;
+          reply = await this.prepare(h, row.groupId);
+          break;
         case 'finish':
           if (row && row.stage !== 'done') throw retry();
           if (row) this.journal.remove(row.id);

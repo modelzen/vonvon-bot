@@ -30,6 +30,7 @@ export const recipeUseRequestSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('confirm'), handle: uuid }).strict(),
   z.object({ type: z.literal('cancel'), handle: uuid }).strict(),
   z.object({ type: z.literal('resume'), handle: uuid }).strict(),
+  z.object({ type: z.literal('retry'), handle: uuid }).strict(),
   z.object({ type: z.literal('finish'), handle: uuid }).strict(),
 ]);
 const handle = { handle: uuid };
