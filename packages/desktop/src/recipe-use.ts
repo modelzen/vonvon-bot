@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { type VonvonClient, RpcError } from '@vonvon/client/browser';
 import {
@@ -145,6 +146,11 @@ export class RecipeUseController {
     )
       return this.done(h, groupId, 'applied');
     if ((reply.kind !== 'prepared' && reply.kind !== 'review') || reply.groupId !== groupId) throw invalid();
+    if (
+      reply.incomingRole !== h.preview.content.role ||
+      !isDeepStrictEqual(reply.incomingSetup, h.preview.content.setup)
+    )
+      throw invalid();
     const {
       reviewToken,
       currentRole,
