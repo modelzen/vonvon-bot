@@ -10,6 +10,7 @@ export function operationId(value) {
 
 export function operationInput(action, id, body) {
   operationId(id);
+  if (action === 'unredeemableOperation') {objectKeys(body,['accountId']);return [id,uuid(body.accountId)];}
   if (action === 'authorizeOperation') {
     objectKeys(body, ['purpose', 'versionId', 'manifestSha256', 'targetPublicKey', 'nonceCommitment', 'generation']);
     if (body.purpose !== 'installBoundRole' || body.generation !== 1 ||

@@ -42,6 +42,7 @@ export interface DeviceConnections {
   onState(listener: (state: DevicesState) => void): () => void;
   onView(listener: (change: ViewChange) => void): () => void;
   view(): ViewChange;
+  pairedPublicKey?(id: string): string | undefined;
   /** Returns once switched, without waiting for the connection. */
   switchTo(id: ViewId): Promise<void>;
   retry(): void;
@@ -732,6 +733,7 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
     onState(listener) { stateListeners.add(listener); return () => { stateListeners.delete(listener); }; },
     onView(listener) { viewListeners.add(listener); return () => { viewListeners.delete(listener); }; },
     view: () => currentView,
+    pairedPublicKey: id => registry.get(id)?.pk,
     switchTo,
     retry,
     wake,

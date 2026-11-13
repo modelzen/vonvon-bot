@@ -37,3 +37,5 @@ export * from './schedule.js';
 export * from "./desktop-account.js";
 export * from './desktop-community.js';
 export * from './recipe-install.js';
+export * from './desktop-recipe-use.js';
+export * from './recipe-source.js';

@@ -11,6 +11,7 @@ type Persistence = 'secure' | 'memory';
 type Avatar = { accountId: string; url: string; dataUrl?: string; retryAt?: number };
 
 export interface NativeAccount {
+  lease?(accountId: string): AbortSignal | undefined;
   status(): AccountStatus;
   onStatus(listener: (value: AccountStatus) => void): () => void;
   login(): Promise<AccountStatus>;
@@ -31,6 +32,7 @@ export function createAccountSession(options: {
   const listeners = new Set<(value: AccountStatus) => void>();
   let view: AccountStatus = deployment ? { kind: 'signingIn' } : { kind: 'unavailable', reason: 'configuration' };
   let owner = new AbortController();
+  let leaseOwner = new AbortController();
   let disposed = false;
   let credential: AccountCredential | undefined;
   let access: Access | undefined;
@@ -41,6 +43,9 @@ export function createAccountSession(options: {
   let avatar: Avatar | undefined;
 
   function publish(next: AccountStatus) {
+    if (view.kind==='signedIn' && (next.kind!=='signedIn' || next.accountId!==view.accountId)) {
+      leaseOwner.abort(); leaseOwner=new AbortController();
+    }
     view = next;
     for (const listener of listeners) {
       try { listener(next); } catch { /* A closed window cannot interrupt a credential change. */ }
@@ -53,6 +58,7 @@ export function createAccountSession(options: {
     return run;
   }
   function invalidate() {
+    leaseOwner.abort(); leaseOwner=new AbortController();
     owner.abort();
     owner = new AbortController();
     clearTimeout(timer);
@@ -157,6 +163,7 @@ export function createAccountSession(options: {
   }
 
   return {
+    lease: accountId => !disposed && credential?.accountId === accountId && view.kind === 'signedIn' && view.accountId === accountId ? leaseOwner.signal : undefined,
     status: () => view,
     onStatus(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     async login() {
