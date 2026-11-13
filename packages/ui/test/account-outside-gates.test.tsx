@@ -1,7 +1,8 @@
 import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement} from 'react';
 import type {AccountStatus, DevicesState} from '@vonvon/protocol';
-import {DeviceGate} from '../src/devices/DesktopRoot';
+import {CommunityWindow} from '../src/community/CommunityWindow';
+import {DeviceGate, DesktopRootView} from '../src/devices/DesktopRoot';
 import {DeviceConnectionView, DeviceOutsideFrame, SnapshotPendingView} from '../src/devices/DeviceConnectionView';
 import {MaintenanceView} from '../src/devices/MaintenanceView';
 import {AccountPageProvider} from '../src/accounts/account-page';
@@ -13,14 +14,17 @@ import {Button} from '../src/reference/components/ui';
 import {activeDeviceFrom} from '../src/client-context';
 import {A, devicesState, fakeShell, info, newClient} from './devices-fixture';
 
-const h = vi.hoisted(() => ({state: [] as unknown[], si: 0, deviceState: undefined as DevicesState | undefined, shell: undefined as ReturnType<typeof fakeShell> | undefined,
+const h = vi.hoisted(() => ({state: [] as unknown[], refs: [] as Array<{current: unknown}>, si: 0, ri: 0, deviceState: undefined as DevicesState | undefined, shell: undefined as ReturnType<typeof fakeShell> | undefined,
   account: {supported: true, status: {kind: 'signedOut'} as AccountStatus, login: vi.fn(), cancelLogin: vi.fn(), logout: vi.fn()},
+  community: {isOpen: false, open: vi.fn()},
   page: {isOpen: false, open: vi.fn(), close: vi.fn()},
 }));
 vi.mock('react', async original => ({...await original<typeof import('react')>(),
   useState: (initial: unknown) => {const i = h.si++; if (!(i in h.state)) h.state[i] = typeof initial === 'function' ? (initial as () => unknown)() : initial; return [h.state[i], (next: unknown) => {h.state[i] = typeof next === 'function' ? (next as (old: unknown) => unknown)(h.state[i]) : next;}];},
+  useRef: (initial: unknown) => {const i = h.ri++; return h.refs[i] ??= {current: initial};},
   useMemo: (factory: () => unknown) => factory(),
 }));
+vi.mock('../src/community/community-context', async original => ({...await original<typeof import('../src/community/community-context')>(), useCommunity: () => h.community}));
 vi.mock('../src/account-context', async original => ({...await original<typeof import('../src/account-context')>(), useAccount: () => h.account}));
 vi.mock('../src/accounts/account-page', async original => ({...await original<typeof import('../src/accounts/account-page')>(), useAccountPage: () => h.page}));
 vi.mock('../src/client-context', async original => ({...await original<typeof import('../src/client-context')>(),
@@ -43,7 +47,7 @@ function click(list: Element[], label: string) {list.find(node => node.type === 
 const identity = {kind: 'signedIn', accountId: A, displayName: 'Clay', provider: 'github', persistence: 'secure'} as const;
 
 beforeEach(() => {
-  h.state = []; h.si = 0; h.shell = fakeShell(); h.page.isOpen = false; h.account.status = {kind: 'signedOut'};
+  h.state = []; h.refs = []; h.si = h.ri = 0; h.community.isOpen = false; h.shell = fakeShell(); h.page.isOpen = false; h.account.status = {kind: 'signedOut'};
   vi.clearAllMocks();
   h.page.open.mockImplementation(() => {h.page.isOpen = true;});
   h.page.close.mockImplementation(() => {h.page.isOpen = false;});
@@ -96,4 +100,23 @@ it('keeps the window account route independent of the selected device connection
   }
   render().close();
   expect(render().isOpen).toBe(false);
+});
+
+it('keeps community available outside device gates without opening any device controls', () => {
+  h.deviceState = devicesState({id: A, phase: 'failed'});
+  click(frame(), '浏览社区');
+  expect(h.community.open).toHaveBeenCalledOnce();
+  expect(h.shell!.devices.switchTo).not.toHaveBeenCalled();
+  expect(h.shell!.devices.add).not.toHaveBeenCalled();
+});
+
+it.each(['failed', 'maintenance', 'unknown'] as const)('renders community through the %s device gate without a daemon snapshot', phase => {
+  const state = phase === 'unknown' ? undefined : devicesState({id: A, phase: phase === 'failed' ? 'failed' : 'ready', mode: phase === 'maintenance' ? 'maintenance' : 'full'});
+  h.community.isOpen = true;
+  const root = DesktopRootView({state, shell: h.shell, fallback: newClient(), renderApp: () => <p>COMMUNITY-APP</p>});
+  const device = root.props.children.props.children.props.children;
+  const rendered = device.type(device.props);
+  expect(nodes(rendered).some(node => node.type === CommunityWindow)).toBe(true);
+  expect(nodes(rendered).some(node => node.type === DeviceGate)).toBe(false);
+  expect(h.shell!.devices.switchTo).not.toHaveBeenCalled();
 });
