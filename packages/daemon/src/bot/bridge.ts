@@ -3,7 +3,7 @@ import { APP_ROLE_CACHE_MS, APP_ROLE_RETRY_MS, createAppRoleRefresher, getAppRol
 import type { CollaborationRequest } from '../admin/collaboration';
 import type { HostSettings } from '../admin/settings-types';
 import type { AdminWriteResult } from '../admin/ops';
-import { createGroupExecutor, type AdminGroupOp, type GroupMembers, type JoinedGroups } from '../admin/groups';
+import { createGroupExecutor, type AdminGroupOp, type GroupMembers, type GroupMembership, type JoinedGroups } from '../admin/groups';
 import type { Project } from '../project/registry';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { AdminWriteOp } from '../admin/ops';
@@ -55,7 +55,7 @@ export interface BridgeHandle {
   entries: AgentEntries;
   channel: LarkChannel;
   collaboration: (request: CollaborationRequest) => Promise<unknown>;
-  adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | Project>;
+  adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | GroupMembership | Project>;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
   /** A read this Bot runs as itself, the host asking (dm-agent 7.3). */
   feishuRead: (request: FeishuReadRequest) => Promise<FeishuReadReply>;
@@ -144,7 +144,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   };
   scheduleRoles();
   const offCrash = onCrashSync(() => orchestrator.saveDroppedSync('crash'));
-  const groupTasks = new Set<Promise<JoinedGroups | GroupMembers | Project>>();
+  const groupTasks = new Set<Promise<JoinedGroups | GroupMembers | GroupMembership | Project>>();
   let closing: Promise<void> | undefined;
   const shutdown = (reason?: () => StopReason): Promise<void> => {
     if (closing) return closing;

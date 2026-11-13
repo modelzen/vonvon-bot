@@ -10,7 +10,6 @@ export interface RecipeInstallerOptions extends Omit<RecipeStoreOptions, 'target
   apiOrigin: string;
   allowLoopbackForTests?: boolean;
   device: DeviceIdentity;
-  isInChat: (botId: string, groupId: string) => Promise<void>;
   fetch?: typeof fetch;
 }
 export function recipeApiOrigin(value: string, allowLoopbackForTests = false): string {

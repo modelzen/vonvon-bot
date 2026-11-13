@@ -30,6 +30,7 @@ export interface RecipePreparation {
   targetPublicKey: string;
   createdAt: number;
   cloudCompletion: 'none' | 'required' | 'confirmed';
+  preparationSha256?: string;
 }
 export type RecipeOperation = RecipePreparation & (
   | {status: 'prepared'; authorization?: RecipeAuthorization}

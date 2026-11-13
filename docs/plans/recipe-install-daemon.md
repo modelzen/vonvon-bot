@@ -16,7 +16,7 @@ setup 只保存现有 `config.setup.steps` 的 `kind/title/instructions/check/re
 
 `project/registry.ts` 是 projects.json 的唯一事务写入口，已经持有跨进程 projects 锁并保留顶层未知键。`config/bots.ts` 保存注册 incarnation。`bot/context-assembly.ts` 的 `supplementOf` 决定实际补充职责，兼容迁移前的 `profile.persona`。
 
-`remote/device.ts` 已保存本数据根的 X25519 密钥。`server/authz.ts` 逐项声明 RPC 权限，`server/http.ts` 分发客户端请求。既有 `groupMembers` 由运行中的对应 Bot 调用真实 `chatMembers.isInChat`，成员身份失败时拒绝。
+`remote/device.ts` 已保存本数据根的 X25519 密钥。`server/authz.ts` 逐项声明 RPC 权限，`server/http.ts` 分发客户端请求。安装使用内部 `groupMembership` 操作，在运行中的对应 Bot 比对可信注册身份，只调用真实 `chatMembers.isInChat`。不读取成员列表，不要求列表权限。
 
 ## 4. 怎么改
 
@@ -25,6 +25,12 @@ setup 只保存现有 `config.setup.steps` 的 `kind/title/instructions/check/re
 安装状态是 `prepared → in_progress → applied/rejected`。每个 operation 使用一次 UUIDv7、私有随机 32 字节 nonce 和 SHA-256 commitment。准备捕获可信 Bot 注册身份、binding incarnation、settings revision、完整行摘要、本机公钥和精确 manifest。manifest 先验原始字节摘要，再严格解析，职责最多 5,000 Unicode 码点。
 
 首次安装的现有职责为空时，在正常安装确认中采用 incoming；现有职责非空且不同时，必须明确保留、替换或提供合并文本。review 返回绑定可信 Bot 身份、绑定 lifetime、设置摘要、账号、设备公钥及精确 manifest 摘要的 reviewToken。带 resolution 的准备必须原样带回该 token；缺失或过期返回新 review，不生成操作和 nonce。历史绑定在第一次 review 前先持久补齐 incarnation 与 revision。同配方同版本直接返回打开群设置的目标，不刷新来源元数据。其他配方占用时拒绝。更新比较 base、当前本地值和 incoming，双方冲突时要求明确解决，setup 按整体结构比较。
+
+同配方的 incoming 发布 revision 不得小于当前安装 revision。准备阶段在创建 nonce 或操作前拒绝降级；提交阶段再次检查，不能用先前准备的旧版本覆盖之后安装的新版本。
+
+同账号、可信 Bot/绑定、完整设置、精确清单及相同选择的五分钟内未授权准备，复用原 UUID 和 nonce。过期未授权准备转为 rejected；旧 UUID 不重新登记。全设备所有 Bot 合计每账号最多三个活动操作，包含不确定授权和仍待提交云完成回执的终态；每 UTC 日最多创建六十个新本机准备，重试不计数。准备及授权的活动增加均受 bots 锁保护，跨 Bot 配额读取只会与减少活动的操作并发。
+
+每个 Bot 的账本新建准入受 512 条和 8 MiB 双重上限约束，体积包含格式化存储及每条未来授权/终态的预留。只有超过八天、无需云完成回执的安全终态才回收。授权状态不明、已兑换或 cloudCompletion required 的记录不会被清理；无法安全腾出空间时拒绝新准备，原操作仍可恢复。每日预算只保留当日计数。
 
 prepare、apply 固定取得 bots 后取得 projects，两次均在锁内向真实 Bot 核对群成员身份，并以十秒期限释放卡住的核验。准备核验失败不创建操作和 nonce。提交重新核对注册身份、绑定 lifetime、revision 和完整设置摘要。唯一一次 fsync 后的 rename 同时写 supplement、recipeInstall base/来源和 applied/rejected receipt。回执位于 projects.json 顶层，解绑不会删除。所有 projects.json 临时文件使用 0600，普通设置改写也保持 nonce 私密。恢复读取在 projects 锁内再次同步实际 registry 文件和目录；持久化错误未解除前不返回终态成功，也不向云端提交 applied。
 
@@ -57,6 +63,6 @@ Mac Codex 使用临时隔离数据根和虚构 Bot/group，不启动 owner daemo
 
 ## 9. 风险和行数
 
-预计约 1,000 行，分为 protocol/RPC、纯本地事务、proof/HTTP 和安全测试四个审查单元。风险是跨进程写入、关闭中断和错误路径。独立审查应按这四个单元检查准确提交，并确认 API、desktop 与 daemon 的清单、回执和证明黄金样例一致。
+预计约 1,500 行，分为 protocol/RPC、纯本地事务与限额、proof/HTTP 和安全测试四个审查单元。风险是跨进程写入、关闭中断和错误路径。独立审查应按这四个单元检查准确提交，并确认 API、desktop 与 daemon 的清单、回执和证明黄金样例一致。
 
 吞吐安排先固定云契约和项目事务入口，再并行推进云端、daemon 及桌面界面。共享 registry 写操作只在现有跨进程锁内进行。此片由一个 owner 维护同一文件集，避免多个代理同时改事务入口。
