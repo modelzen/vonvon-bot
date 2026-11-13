@@ -26,7 +26,8 @@ const itemSchema = z.object({type:z.literal('message'),role:z.literal('assistant
 const unavailable = () => new Error('当前 Provider 无法解析这条草稿指令。');
 
 async function answerFromStream(response: Response) {
-  if (!response.ok || !response.body || response.headers.get('content-type')?.split(';')[0]?.trim() !== 'text/event-stream') {
+  const contentType = response.headers.get('content-type');
+  if (!response.ok || !response.body || contentType !== null && contentType.split(';')[0]?.trim() !== 'text/event-stream') {
     await response.body?.cancel();
     if ([429,503].includes(response.status)) throw new DraftProviderBusy();
     throw unavailable();
