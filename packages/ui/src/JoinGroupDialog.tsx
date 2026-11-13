@@ -4,7 +4,7 @@ import {RpcError} from '@vonvon/client/browser';
 import {useActiveDevice, useClient, type ActiveDevice} from './client-context';
 import {configureProvider, onDevice} from './device-copy';
 import {useEffect, useRef, useState} from 'react';
-import type {Agent, AgentSettingsView, HostSettingsView, DecisionModelsView, JudgeSelectionView, DesktopSnapshot, CommandResult, Conversation, FolderChoice, PendingGroup, ToolState} from '@vonvon/protocol';
+import type {Agent, AgentSettingsView, HostSettingsView, DecisionModelsView, JudgeSelectionView, DesktopSnapshot, CommandResult, Conversation, FolderChoice, PendingGroup, ToolState, RecipeJoinInput} from '@vonvon/protocol';
 import {FULL_ACCESS_WARNING, toolSchema} from '@vonvon/protocol';
 import {providerDecisionProblem} from './settings/DecisionFields';
 import {useProviders} from './settings/GroupDesignSettings';
@@ -77,8 +77,9 @@ export function initialGroupProvider(initialProvider?: ProviderTool, tools?: Too
   if (initialProvider && ready(initialProvider)) return initialProvider;
   return (['codex', 'claude'] as const).find(ready);
 }
-type Props = {snapshot?: DesktopSnapshot; open?: boolean; agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; initialProvider?: ProviderTool; tools?: ToolState[]; onClose: () => void; onChanged: (target: {agentId: Agent['id']; chatId: string}) => Promise<void>; onOpenProviders?: () => void; onOpenDecisionModel?: (provider?: string) => void};
-export function JoinGroupDialog({open = true, agent, pending, initialGroup, initialProvider, tools, onClose, onChanged, onOpenProviders, onOpenDecisionModel}: Props) {
+type Props = {snapshot?: DesktopSnapshot; open?: boolean; agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; initialProvider?: ProviderTool; tools?: ToolState[]; onClose: () => void; onChanged: (target: {agentId: Agent['id']; chatId: string}) => Promise<void>; onOpenProviders?: () => void; onOpenDecisionModel?: (provider?: string) => void;
+  recipe?: {name: string; version: string}; onRecipeJoin?: (input: RecipeJoinInput) => Promise<void>; onRecipeGroup?: (groupId: string) => void};
+export function JoinGroupDialog({open = true, agent, pending, initialGroup, initialProvider, tools, onClose, onChanged, onOpenProviders, onOpenDecisionModel, recipe, onRecipeJoin, onRecipeGroup}: Props) {
   const {navigate} = useDraftGuard();
   const client = useClient();
   const device = useActiveDevice();
@@ -159,9 +160,11 @@ export function JoinGroupDialog({open = true, agent, pending, initialGroup, init
     setBusy(true); setError('');
     try {
       const where = {folder: existingDirectory && folder ? {kind: 'existing' as const, folderToken: folder.token} : {kind: 'default' as const}};
-      const reply = mode.kind === 'create'
-        ? await client.collaboration({action: 'createProject', agentId: agent.id, name: name.trim(), ...where, tool, conversation, ...picked, ...decision})
-        : await client.run({type: 'bindGroup', agentId: agent.id, groupId: mode.group.chatId, projectName: name.trim(), ...where, tool, conversation, ...picked, ...decision});
+      const input: RecipeJoinInput = mode.kind === 'create'
+        ? {action: 'createProject', agentId: agent.id, name: name.trim(), ...where, tool, conversation, ...picked, ...decision}
+        : {type: 'bindGroup', agentId: agent.id, groupId: mode.group.chatId, projectName: name.trim(), ...where, tool, conversation, ...picked, ...decision};
+      if (onRecipeJoin) {await onRecipeJoin(input); return true;}
+      const reply = 'action' in input ? await client.collaboration(input) : await client.run(input);
       if (!reply || reply.kind !== 'applied') {setError(reply && 'message' in reply && typeof reply.message === 'string' ? reply.message : '操作未完成，请重试。'); return false;}
       const chatId = mode.kind === 'bind' ? mode.group.chatId : 'project' in reply ? reply.project?.chatId : undefined;
       if (!chatId) {
@@ -197,6 +200,7 @@ export function JoinGroupDialog({open = true, agent, pending, initialGroup, init
   return <Dialog open={open} size="lg" title={<span className="join-group-title"><span className="join-group-heading">{choosingDirectory && <IconButton label="返回添加群聊" variant="ghost" size="sm" disabled={busy} onClick={() => setChoosingDirectory(false)}><ArrowLeft size={16}/></IconButton>}{choosingDirectory ? '选择工作目录' : mode.kind === 'bind' ? '连接飞书群' : '添加飞书群'}</span><span className="join-group-agent"><AgentAvatar agent={agent}/><span title={agent.name}>{agent.name}</span></span></span>} onClose={busy ? undefined : choosingDirectory ? () => setChoosingDirectory(false) : close}
     footer={choosingDirectory ? <><span className="directory-key-hints">↑ ↓ 选择 <span>↵ 使用目录</span></span><Button disabled={busy} onClick={() => setChoosingDirectory(false)}>返回</Button></> : mode.kind !== 'existing' ? <><Button disabled={busy} onClick={close}>取消</Button><Button variant="primary" loading={busy} disabled={locked || !tool || !ready(tool) || !name.trim() || Boolean(nameProblem) || (existingDirectory && !folder) || !conversation || Boolean(judgeProblem)} onClick={() => void save()}>{mode.kind === 'create' ? '创建并连接' : '连接并发送欢迎卡片'}</Button></> : undefined}>
     {choosingDirectory ? <DirectorySearchStep onBusyChange={setBusy} onChoose={choice => {setFolder(choice); setChoosingDirectory(false);}}/> : <div className="page-stack join-group-flow">
+      {recipe && <SettingsGroup><SettingsRow title="配方" value={<span className="recipe-use-name">{recipe.name} · {recipe.version}</span>} description="已获取，连接群聊后预览并确认应用。"/></SettingsGroup>}
       {mode.kind !== 'bind' && <div className="join-group-flow__modes" role="group" aria-label="加入方式">
         <Button aria-pressed={mode.kind === 'create'} disabled={busy} onClick={() => switchMode({kind: 'create'})}>创建群聊</Button>
         <Button aria-pressed={mode.kind === 'existing'} disabled={busy} onClick={() => switchMode({kind: 'existing'})}>连接已有群聊</Button>
@@ -206,7 +210,7 @@ export function JoinGroupDialog({open = true, agent, pending, initialGroup, init
         {pending?.problem && <InlineNotice title={pending.problem.kind === 'unsupported' ? '暂不支持自动发现' : '暂未获取新群聊'} tone="warning">{pending.problem.message} {pending.problem.kind === 'unsupported' && '请更新应用，或使用下方的群查找。'}</InlineNotice>}
         {pending?.groups.map(group => <InlineNotice key={group.chatId} title={`${agent.name} 已加入 ${group.name}`} actions={<Button disabled={busy} onClick={() => switchMode({kind: 'bind', group})}>继续连接</Button>}>选择沟通方式和工作目录。</InlineNotice>)}
         <Button loading={busy} disabled={busy} onClick={() => void findGroups()}>查找已经加入的群</Button>
-        {manual && <><div className="join-group-list" aria-label="已经加入的飞书群">{manual.groups.map(group => <button type="button" key={group.id} disabled={busy || group.bound} onClick={() => switchMode({kind: 'bind', group: {chatId: group.id, name: group.name, addedAt: 0, hasOtherBots: group.hasOtherBots}})}><span>{group.name}</span><small>{group.bound ? '已连接' : '连接'}</small></button>)}</div>{!manual.groups.length && <p>未找到群聊，请确认 Bot 已加入。</p>}{manual.nextCursor && <Button disabled={busy} onClick={() => void findGroups(manual.nextCursor)}>加载更多</Button>}</>}
+        {manual && <><div className="join-group-list" aria-label="已经加入的飞书群">{manual.groups.map(group => <button type="button" key={group.id} disabled={busy || group.bound && !onRecipeGroup} onClick={() => group.bound && onRecipeGroup ? onRecipeGroup(group.id) : switchMode({kind: 'bind', group: {chatId: group.id, name: group.name, addedAt: 0, hasOtherBots: group.hasOtherBots}})}><span>{group.name}</span><small>{group.bound ? onRecipeGroup ? '应用配方' : '已连接' : '连接'}</small></button>)}</div>{!manual.groups.length && <p>未找到群聊，请确认 Bot 已加入。</p>}{manual.nextCursor && <Button disabled={busy} onClick={() => void findGroups(manual.nextCursor)}>加载更多</Button>}</>}
       </> : <>
         <FormField label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} error={nameProblem}><input aria-label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} placeholder={mode.kind === 'create' ? '例如：产品讨论' : undefined} autoComplete="off" maxLength={100} disabled={busy} value={name} onChange={event => setName(event.target.value)} /></FormField>
         <SettingsGroup>
