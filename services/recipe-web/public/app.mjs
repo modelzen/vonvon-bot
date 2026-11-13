@@ -1,3 +1,4 @@
+import {setupList} from './setup.mjs';
 const main = document.querySelector('#main');
 const dialog = document.querySelector('#modal');
 const accountButton = document.querySelector('#account');
@@ -208,7 +209,10 @@ async function detail() {
   function setTab(mode) {
     for (const elem of tabs.children) elem.setAttribute('aria-pressed', String(elem.dataset.tab === mode));
     if (mode === 'intro') overview();
-    else content.replaceChildren(el('h2', '角色', 'section-title'), el('p', data.config.role || '未指定', 'panel role'));
+    else {
+      content.replaceChildren(el('h2', '角色', 'section-title'), el('p', data.config.role || '未指定', 'panel role'));
+      if (data.config.setup?.steps.length) content.append(el('h2', '使用前准备', 'section-title'), setupList(data.config.setup.steps));
+    }
   }
   for (const [key,label] of [['intro','概览'], ...(Object.hasOwn(data, 'config') ? [['settings','配置']] : [])]) {
     const b = button(label, () => setTab(key), 'secondary'); b.dataset.tab = key; tabs.append(b);

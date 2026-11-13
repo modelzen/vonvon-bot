@@ -21,7 +21,7 @@ const calls = Object.freeze({
 });
 
 const businessErrors = new Map(Object.entries({
-  auth_required: 401, not_found: 404, forbidden: 403, invalid_input: 422,
+  auth_required: 401, not_found: 404, forbidden: 403, invalid_input: 422, incomplete_setup: 422,
   conflict: 409, quota_exceeded: 422, rate_limited: 429, invalid_code: 422,
 }));
 

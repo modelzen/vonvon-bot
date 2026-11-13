@@ -1,6 +1,6 @@
 # 配方数据库
 
-在专用的空测试数据库中，以迁移管理员一次事务执行 `migrations/20261113000100_recipe_catalog.sql`。PostgreSQL 15 的 psql 可用 `psql -X --single-transaction -v ON_ERROR_STOP=1 -f <migration>`。迁移需要创建 schema、非登录角色和 pgcrypto 扩展的权限。Supabase 中 pgcrypto 应安装在 `extensions` schema。部署前先在目标项目的 staging 环境验证权限和扩展位置。
+在专用的空测试数据库中，以迁移管理员按文件名前的时间戳顺序执行 `migrations/*.sql`，每个文件使用独立事务。PostgreSQL 15 的 psql 可用 `psql -X --single-transaction -v ON_ERROR_STOP=1 -f <migration>`。记录已执行版本，已有数据库升级时只执行新增迁移，不重复运行建库文件。迁移需要创建 schema、非登录角色和 pgcrypto 扩展的权限。Supabase 中 pgcrypto 应安装在 `extensions` schema。部署前先在目标项目的 staging 环境验证权限和扩展位置。
 
 API 使用单独的 LOGIN 角色，只授予 `recipe_api` 成员资格。API 每个请求开始事务、切换到 `recipe_api`，设置事务局部的 `app.recipe_account`（本环境已验证的 Supabase subject，游客传空串）和 `app.recipe_code_key`（32 字节随机专用服务端密钥，64 个十六进制字符），然后执行 `recipe_api` schema 的对应函数并提交。连接池不得在事务以外设置这两项。定域凭据、查询参数和回执须从数据库及代理调用日志中排除。备份专用密钥，使现有可用码在应用重启和恢复后仍可复制、兑换。该切片固定使用 v1 密钥，轮换应先迁移、验证现有可用码。
 

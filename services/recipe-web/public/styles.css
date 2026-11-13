@@ -10,3 +10,9 @@ dialog{max-width:min(420px,calc(100% - 30px));width:100%;border:1px solid var(--
 @media(prefers-color-scheme:dark){:root{--bg:#1b1b1e;--paper:#242428;--soft:#303036;--ink:#f3f3f5;--muted:#b5b6bf;--stroke:#434349;--action:#eeeef0;--onaction:#222227;--hero:#503e2d;--herotext:#f5e2cf}.error{color:#ffa79b}}
 
 [hidden]{display:none!important}
+
+.setup-list { margin: 0; padding: 0 18px 0 44px; background: var(--paper); border: 1px solid var(--stroke); border-radius: 12px; }
+.setup-list li { padding: 12px 0 12px 2px; overflow-wrap: anywhere; }
+.setup-list li + li { border-top: 1px solid var(--stroke); }
+.setup-list small { display: block; color: var(--muted); }
+.setup-list p { margin-top: 5px; white-space: pre-wrap; }
