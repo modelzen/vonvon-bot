@@ -434,6 +434,7 @@ describe('native desktop account', () => {
 it('invalidates a fully buffered private community response immediately when logout begins, before secure storage acknowledges it', async () => {
   const f = fixture(); const a = f.create();
   await a.login(); await waitFor(() => expect(a.status().kind).toBe('signedIn'));
+  const lease=a.lease?.(business);expect(lease?.aborted).toBe(false);
   const cleared = deferred<void>();
   f.store.clear.mockImplementationOnce(() => cleared.promise);
   const base = f.transport.getMockImplementation()!;
@@ -443,7 +444,23 @@ it('invalidates a fully buffered private community response immediately when log
   const pending = communityRequest(a, {type: 'drafts', accountId: business});
   for (let i = 0; i < 8; i++) await Promise.resolve();
   const loggingOut = a.logout();
+  expect(lease?.aborted).toBe(true);expect(a.lease?.(business)).toBeUndefined();
   controller.enqueue(new TextEncoder().encode(JSON.stringify({items: []}))); controller.close();
   const result = pending.then(() => 'leaked', () => 'rejected');
   try {expect(await result).toBe('rejected');} finally {cleared.resolve(); await loggingOut;}
+});
+
+it('checks the captured device again after a credential refresh and before sending an authorization', async () => {
+  const f=fixture(), a=f.create();
+  await a.login();await waitFor(()=>expect(a.status().kind).toBe('signedIn'));
+  vi.spyOn(Date,'now').mockReturnValue(Date.now()+3_590_000);
+  const held=deferred<Response>();
+  f.rotate.mockReturnValueOnce(held.promise);
+  let valid=true;
+  const path='/v1/operations/'+randomUUID()+'/authorize';
+  const send=a.request(business,path,{method:'POST'},()=>{if(!valid)throw Error('device switched');});
+  await waitFor(()=>expect(f.rotate).toHaveBeenCalled());
+  valid=false;held.resolve(Response.json(sessionReply(true)));
+  await expect(send).rejects.toThrow('device switched');
+  expect(f.transport.mock.calls.some(([url])=>String(url).endsWith(path))).toBe(false);
 });

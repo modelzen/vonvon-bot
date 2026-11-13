@@ -9,6 +9,7 @@ export interface RecipeInstallation {
   access: 'direct' | 'coded';
   manifestSha256: string;
   installedAt: number;
+  ignoredVersionId?: string;
   base: {role: string; setup?: RecipeSetup};
   setup?: RecipeSetup;
 }
