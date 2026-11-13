@@ -43,9 +43,7 @@ export function cardDisplayPresentationDefaults(cfg:Partial<AppConfig>):ProjectP
 
 /** A project = a Feishu group bound to a fixed working directory. */
 export interface Project {
-  /** One physical Bot/group binding lifetime, never reused after unbinding. */
   bindingIncarnation?: string;
-  /** Incremented for every persisted setting change, including legacy role edits. */
   projectSettingsRevision?: number;
   recipeInstall?: import('../recipe/types').RecipeInstallation;
   /** Default for new sessions; omitted uses the provider's native default. */
@@ -483,7 +481,6 @@ export interface ProjectCommitOptions {
   mirror?: boolean;
 }
 
-/** The role, its provenance and its durable operation receipt share this one commit point. */
 export function mutateProjectStore<T>(target: RegistryLocation, operation: (store: Record<string, unknown>, rows: Project[]) => Promise<{changed: boolean; value: T; durableRead?: true}>, beforeCommit?: () => void): Promise<T> {
   return ownProjects(async location => {
     const stored = await readStored(location.file);
