@@ -24,6 +24,15 @@ export const recipeUseRequestSchema = z.discriminatedUnion('type', [
     })
     .strict(),
   z.object({ type: z.literal('join'), handle: uuid, input: recipeJoinInputSchema }).strict(),
+  z.object({
+    type: z.literal('repairJoin'),
+    handle: uuid,
+    input: z.discriminatedUnion('type', [
+      bindGroupCommandSchema,
+      z.object({ type: z.literal('existingBinding'), agentId: agentIdSchema, groupId: groupIdSchema }).strict(),
+    ]),
+  }).strict(),
+  z.object({ type: z.literal('dismissJoin'), handle: uuid }).strict(),
   z
     .object({ type: z.literal('resolve'), handle: uuid, reviewToken: digest, resolution: recipeResolutionSchema })
     .strict(),
@@ -61,6 +70,11 @@ export const recipeUseReplySchema = z.discriminatedUnion('kind', [
       ...handle,
       groupId: groupIdSchema.optional(),
       phase: z.enum(['joining', 'installing', 'cancelling']),
+      recovery: z.object({
+        state: z.enum(['unknown', 'createdUnsaved']),
+        groupId: groupIdSchema.optional(),
+        name: z.string().max(1000).optional(),
+      }).strict().optional(),
     })
     .strict(),
   z.object({ kind: z.literal('applied'), ...handle, groupId: groupIdSchema }).strict(),
