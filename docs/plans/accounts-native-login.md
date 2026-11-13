@@ -34,11 +34,13 @@
 
 ### 原生端合同
 
+本片的 `/auth/native/flows` 是独立 Web 中转的内部合同。账号设计中的 `/v1/auth/desktop-flows` 是早期拟议命名，后续统一为本计划路径，双方不能同时支持两个消费者。创建请求可附仅含不透明 ID 的 pendingActionRef，登录不会执行待办。
+
 使用固定版本的 Supabase Auth SDK 生成一次 authorize URL 和一次换票。每次尝试持有独立内存 SDK storage，关闭 URL 自动换票和自动刷新，启用 PKCE。提供方来自受认证 flow 的轮询结果。原生主进程校验 state 和当前登录代次，调用 exchangeCodeForSession 后从可信身份服务验证本人信息；保存成功才 ACK。换票结果未知且没有有效本机会话时重新登录，不盲目重兑一次性码。
 
 `AccountStatus` 是带判别字段的安全视图，包含 signedOut、signingIn、signedIn、unavailable，以及 signedIn 的稳定账号 ID、公开显示名、可选头像和当前提供方。UI 不接收原始 SDK session、refresh/access token、verifier、pollToken 或任意跳转 URL。登录代次用于拒绝退出或切号前的迟到结果。
 
-主进程是刷新令牌唯一持有人。复用 SecretBox，以独立账号文件原子写入加密会话；安全存储不可用或拒绝时只留内存，不回退明文，不修改 devices.json。登录、刷新、退出和关闭串行协调；退出清除本端材料并使未完成工作失效。公开身份由可信服务返回，不从未验证 JWT 或邮箱推断所有权。当前单 Supabase 项目使用该项目已验证 UUID 作为稳定账号 ID，与既有配方所有权一致。
+主进程是刷新令牌唯一持有人。复用 SecretBox，以独立账号文件原子写入加密会话；安全存储不可用或拒绝时只留内存，不回退明文，不修改 devices.json。登录、刷新、退出和关闭串行协调；退出清除本端材料并使未完成工作失效。公开身份由可信服务返回，不从未验证 JWT 或邮箱推断所有权。独立业务账号 ID 由账号 API 按已验证的 issuer 和 subject 映射。原生端换票后用同一 access token 请求固定 API 的 GET `/v1/me`，读取 `{accountId}`，不把 Supabase subject 或邮箱当业务 ID。既有草稿和授权的 owner ID 在迁移中保留，新身份由映射表确定业务 ID。公开姓名和头像可从 SDK 的可信 getUser 结果取值，不能用于授权。
 
 账号 facade 提供 status、login、cancelLogin、logout、订阅状态；供后续社区访问的带身份 HTTP 操作留在主进程，不暴露取 token 的 renderer API。主进程仅打开部署配置生成的受信 HTTPS 登录地址，不放宽 renderer 的通用 openExternal。没有部署配置时显示不可用的可恢复状态。本地回环只用于显式开发配置。
 
