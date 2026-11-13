@@ -1201,3 +1201,27 @@ describe('devices-ui-1a views', () => {
     await h.bridge.dispose();
   });
 });
+
+it('carries only typed acquisition outcomes through the actual community IPC and facade', async () => {
+  const h = harness();
+  const accountId = '11111111-1111-4111-8111-111111111111';
+  const versionId = '22222222-2222-4222-8222-222222222222';
+  Object.assign(h.account, {status: () => ({kind: 'signedIn', accountId})});
+  const {shell} = createDesktopFacades({
+    invoke: async (channel, ...args) => structuredClone(await handlers.get(channel)!(h.event, ...args)),
+    receive: () => () => {},
+  });
+  const request = {type: 'acquire' as const, accountId, versionId, requestId: 'a2.01932a00-0000-7abc-8def-0123456789ab', code: 'TEST-CODE'};
+  for (const [code, status] of [['operation_expired',410],['operation_clock_skew',422],['request_upgrade_required',409],['acquire_rate_limited',429]] as const) {
+    h.account.request.mockResolvedValueOnce(Response.json({error:{code, message:'DO-NOT-FORWARD-CODE'}}, {status, headers:{'Retry-After':'123'}}));
+    expect(await shell.community.request(request)).toEqual({ok:false,error:{code,retryAfter:123}});
+  }
+  h.account.request.mockResolvedValueOnce(Response.json({error:{code:'DO-NOT-FORWARD-CODE'}}, {status:503}));
+  expect(await shell.community.request(request)).toEqual({ok:false,error:{code:'unavailable'}});
+  h.account.request.mockRejectedValueOnce(new Error('DO-NOT-FORWARD-CODE'));
+  expect(await shell.community.request(request)).toEqual({ok:false,error:{code:'unavailable'}});
+  h.account.request.mockResolvedValueOnce(Response.json({recipeId:versionId,versionId,owned:false,acquired:true}));
+  expect(await shell.community.request(request)).toEqual({ok:true,value:{recipeId:versionId,versionId,owned:false,acquired:true}});
+  expect(Object.keys(shell.community)).toEqual(['request']);
+  await h.bridge.dispose();
+});

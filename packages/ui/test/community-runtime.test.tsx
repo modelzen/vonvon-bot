@@ -59,7 +59,7 @@ beforeEach(() => {
   const community = createDesktopFacades({receive: () => () => {}, invoke: async (channel, raw) => {
     if (channel !== desktopChannels.community) return {ok: true, value: undefined};
     try {const request = communityRequestSchema.parse(raw); calls.push(request); return {ok: true, value: await handle(request)};}
-    catch {return {ok: false, error: {kind: 'validation', message: 'strict boundary rejected request'}};}
+    catch (failure) {return {ok: false, error: {kind: 'validation', message: 'strict boundary rejected request', ...(failure && typeof failure === 'object' && 'code' in failure ? {code: failure.code} : {}), ...(failure && typeof failure === 'object' && 'retryAfter' in failure ? {retryAfter: failure.retryAfter} : {})}};}
   }}).shell.community;
   shell = {...fakeShell(), account, community} as typeof shell;
 });
@@ -135,4 +135,57 @@ it('preserves valid astral field and search limits all the way through the stric
   expect(name.maxLength).toBe(-1);
   await click('保存私人草稿');
   expect(calls.filter(request => request.type === 'saveDraft').at(-1)).toMatchObject({public: {name: '🦉'.repeat(60), summary: '🦉'.repeat(240), version: '🦉'.repeat(40)}});
+});
+
+it('reconciles an expired native attempt through the facade and requires explicit confirmation before replacing the key', async () => {
+  let offline = false;
+  const normal = handle;
+  handle = async request => {
+    if (request.type === 'acquire') throw {code: 'operation_expired'};
+    if (request.type === 'detail' && offline) throw new Error('offline');
+    return normal(request);
+  };
+  await draw(); await click('打开已发布版本');
+  offline = true; await click('获取配方');
+  const first = calls.find(request => request.type === 'acquire')!;
+  expect(first.requestId).toMatch(/^a2\./);
+  offline = false; await click('获取配方');
+  expect(document.body.textContent).toContain('已确认尚未获取');
+  const attempts = () => calls.filter(request => request.type === 'acquire');
+  expect(attempts()).toHaveLength(2); expect(attempts()[1]).toEqual(first);
+  await click('获取配方');
+  expect(attempts()).toHaveLength(3); expect(attempts()[2]!.requestId).not.toBe(first.requestId);
+});
+
+it('retains a native uncertain raw code across a failed detail refresh and device changes', async () => {
+  const normal = handle;
+  let failedRead = false;
+  handle = async request => {
+    if (request.type === 'acquire') throw {code: 'acquire_rate_limited', retryAfter: 60};
+    if (request.type === 'detail') {if (failedRead) throw new Error('offline'); const {config: _config, ...publicRecipe} = recipe; return {...publicRecipe, public: {...recipe.public, access: 'coded'}};}
+    return normal(request);
+  };
+  await draw(); await click('打开已发布版本'); await fill('分享码', 'Ab-CD'); await click('获取配方');
+  expect(document.body.textContent).toContain('60 秒');
+  expect(document.body.textContent).not.toContain('分享码不可用');
+  for (const state of [devicesState({id:A,phase:'connecting'}),devicesState({id:A,phase:'ready'}),devicesState({id:'local'})]) await draw(state);
+  expect(document.querySelector<HTMLInputElement>('[aria-label="分享码"]')?.value).toBe('Ab-CD');
+  await click('获取配方');
+  const attempts=calls.filter(request=>request.type==='acquire');expect(attempts).toHaveLength(2);expect(attempts[1]).toEqual(attempts[0]);
+  failedRead=true;await click('重试读取');
+  failedRead=false;await click('重试读取');
+  expect(document.querySelector<HTMLInputElement>('[aria-label="分享码"]')?.value).toBe('Ab-CD');
+});
+
+it('ignores a native late successful attempt after route A-B-A and leaves the new page editable', async () => {
+  let finish!: (value: unknown) => void;
+  const normal=handle;
+  handle=async request=>request.type==='acquire'?new Promise(resolve=>{finish=resolve;}):normal(request);
+  await draw();await click('打开已发布版本');
+  await click('获取配方');
+  await click('返回 Bot 配方');await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  await act(async()=>{finish({recipeId:A,versionId:B,owned:false,acquired:true});});
+  expect(document.body.textContent).not.toContain('已获取，已保存在你的账号中');
+  expect([...document.querySelectorAll('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(false);
+  expect(calls.filter(request=>request.type==='acquire')).toHaveLength(1);
 });

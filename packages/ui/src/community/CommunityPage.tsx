@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
-import {communityFailureMessages} from '@vonvon/protocol';
+import {communityFailureMessages, newAcquisitionKey} from '@vonvon/protocol';
 import type {CommunityResponses, CommunityShell, RecipeDetail, RecipeDraft, RecipeSummary} from '@vonvon/protocol';
 import {Button, InlineNotice} from '../reference/components/ui';
 import {useAccount, accountStatusText} from '../account-context';
@@ -43,6 +43,9 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   const [refresh, setRefresh] = useState(0);
   const live = useRef(true);
   const generation = useRef(0);
+  const acquisition = useRef(new Map<string, {raw: string; key: string}>());
+  const navigation = useRef({route, isOpen: community.isOpen});
+  if (navigation.current.route !== route || navigation.current.isOpen !== community.isOpen) {navigation.current = {route, isOpen: community.isOpen}; ++generation.current;}
   const requestKeys = useRef(new Map<string, string>());
   useEffect(() => {live.current = true; return () => {live.current = false; ++generation.current;};}, []);
   const key = (logical: string) => {if (!requestKeys.current.has(logical)) requestKeys.current.set(logical, crypto.randomUUID()); return requestKeys.current.get(logical)!;};
@@ -50,7 +53,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   useEffect(() => {
     let active = true;
     const current = ++generation.current;
-    setError(undefined); setCode(''); setDetail(undefined); setShareUrl(undefined);
+    setError(undefined); setCode(route.kind === 'detail' ? acquisition.current.get(route.recipe.versionId)?.raw ?? '' : ''); setDetail(undefined); setShareUrl(undefined);
     const request = async () => {
       if (route.kind === 'catalog') {
         if (catalog) {requestAnimationFrame(() => {const element = document.getElementById('main-content'); if (element) element.scrollTop = community.catalog.scrollTop;}); return;}
@@ -86,13 +89,43 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   async function acquire() {
     if (!accountId) {await account.login(); return;}
     if (!detail) return;
-    const selected = detail;
-    const current = generation.current;
-    await shell.request({type: 'acquire', accountId, versionId: selected.versionId, requestId: key(`acquire:${selected.versionId}:${code.trim()}`), ...(selected.public.access === 'coded' ? {code: code.trim()} : {})});
-    if (!live.current || current !== generation.current) return;
-    const next = await shell.request({type: 'detail', accountId, recipeId: selected.recipeId, versionId: selected.versionId});
-    if (!live.current || current !== generation.current) return;
-    setDetail(next); setNotice('已获取，已保存在你的账号中。可以稍后从「已获取」添加到群聊。');
+    const selected = detail, current = generation.current;
+    const active = () => live.current && current === generation.current;
+    const raw = selected.public.access === 'coded' ? code.trim() : '';
+    let attempt = acquisition.current.get(selected.versionId);
+    const reconcile = async () => {
+      const next = await shell.request({type: 'detail', accountId, recipeId: selected.recipeId, versionId: selected.versionId});
+      if (!active()) return undefined;
+      if (next.versionId !== selected.versionId || next.recipeId !== selected.recipeId) throw new Error('获取结果暂未确认，请重试同一操作。');
+      setDetail(next);
+      if (next.owned || next.acquired) {
+        acquisition.current.delete(selected.versionId);
+        setNotice('已获取，已保存在你的账号中。可以稍后从「已获取」添加到群聊。');
+      }
+      return next;
+    };
+    if (attempt && attempt.raw !== raw) {
+      const next = await reconcile();
+      if (!next || next.owned || next.acquired) return;
+      acquisition.current.delete(selected.versionId);
+      throw new Error('已确认尚未获取。请再次点击获取，提交当前输入。');
+    }
+    if (!attempt) {attempt = {raw, key: newAcquisitionKey()}; acquisition.current.set(selected.versionId, attempt);}
+    const request = {type: 'acquire' as const, accountId, versionId: selected.versionId, requestId: attempt.key, ...(selected.public.access === 'coded' ? {code: attempt.raw} : {})};
+    const outcome = await shell.request(request);
+    if (!active()) return;
+    if (!outcome.ok) {
+      const failure = outcome.error;
+      if (failure.code === 'operation_expired' || failure.code === 'request_upgrade_required') {
+        const next = await reconcile();
+        if (!next || next.owned || next.acquired) return;
+        acquisition.current.delete(selected.versionId);
+        throw new Error('已确认尚未获取。请再次点击获取，重新提交。');
+      }
+      if (failure.code === 'invalid_code') acquisition.current.delete(selected.versionId);
+      throw new Error(communityFailureMessages[failure.code] + (failure.retryAfter ? ` 请在 ${failure.retryAfter} 秒后重试。` : ''));
+    }
+    await reconcile();
   }
   const login = <div className="community-empty"><h2>登录后继续</h2><p>{accountStatusText(account.status, account.supported)}</p><Button variant="primary" disabled={!account.supported || account.status?.kind === 'signingIn'} onClick={() => void account.login()}>登录</Button></div>;
   const privatePage = route.kind === 'library' || route.kind === 'workspace' || route.kind === 'draft' || route.kind === 'detail' && route.privateView;
