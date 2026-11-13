@@ -298,3 +298,25 @@ it('ignores native clock reconciliation after an account change and preserves th
   expect(document.querySelector<HTMLInputElement>('[aria-label="分享码"]')?.value).toBe('NEW-CODE');
   expect([...document.querySelectorAll('button')].find(button=>button.textContent==='获取配方')?.disabled).toBe(false);
 });
+
+it('retains edited text and reconciles an uncertain submission across a native detail reread',async()=>{
+  let offline=false;const normal=handle;
+  handle=async request=>{
+    if(request.type==='acquire')throw {code:'unavailable'};
+    if(request.type==='detail'){
+      if(offline)throw new Error('offline');
+      return {recipeId:A,versionId:B,revision:1,owned:false,acquired:false,public:{...recipe.public,access:'coded'}};
+    }
+    return normal(request);
+  };
+  const attempts=()=>calls.filter(request=>request.type==='acquire');
+  await draw();await click('打开已发布版本');await fill('分享码','Old-Code');await click('获取配方');
+  await fill('分享码','New-Code');await click('重试读取');
+  expect(document.querySelector<HTMLInputElement>('[aria-label="分享码"]')?.value).toBe('New-Code');
+  offline=true;await click('获取配方');expect(attempts()).toHaveLength(1);
+  offline=false;await click('获取配方');expect(attempts()).toHaveLength(1);
+  expect(document.body.textContent).toContain('已确认尚未获取');
+  await click('获取配方');expect(attempts()).toHaveLength(2);
+  expect(attempts()[1]!.requestId).not.toBe(attempts()[0]!.requestId);
+  expect(attempts()[1]!.code).toBe('New-Code');
+});

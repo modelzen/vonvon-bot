@@ -78,7 +78,7 @@ test('actual Web runtime never maps clock/quota failures to code-invalid and doe
 });
 test('actual Web runtime ignores late route A-B-A results and leaves a newly opened dialog intact',async t=>{
   let finish;
-  const h=await runtime(t,async(_path,options)=>options.method==='POST'?new Promise(resolve=>{finish=resolve;}):Response.json(recipe));
+  const h=await runtime(t,async(_path,options)=>options.method==='POST'?new Promise(resolve=>{finish=resolve;}):Response.json({...recipe, versionId:_path.split('/').at(-1)}));
   const form=await h.open();await h.submit(form);
   h.dom.reconfigure({url:'https://recipes.example'+route.replace(recipe.versionId,'33333333-3333-4333-8333-333333333333')});await h.api.detail();
   h.dom.reconfigure({url:'https://recipes.example'+route});await h.api.detail();
@@ -171,7 +171,7 @@ for(const transition of ['route','account']) test(`actual Web runtime ignores a 
   let finish,reads=0;
   const h=await runtime(t,async(_path,options)=>{
     if(options.method==='POST')return Response.json({error:{code:'operation_clock_skew'}},{status:422});
-    if(++reads===2)return new Promise(resolve=>{finish=resolve;});return Response.json(recipe);
+    if(++reads===2)return new Promise(resolve=>{finish=resolve;});const versionId=_path.split('/').at(-1);return Response.json({...recipe,versionId});
   });
   const old=await h.open();await h.submit(old,'OLD-CODE');assert.equal(typeof finish,'function');
   if(transition==='account')h.api.setSession({signedIn:true,displaySession:'session-b',providers:[]});
@@ -206,11 +206,53 @@ test('a confirmed grant retires the old claim action even if a later detail fetc
   assert.equal(h.calls.filter(c=>c.options.method==='POST').length,1);
 });
 
-test('a claimed detail from a previous account cannot open a dialog for the current session',async t=>{
+test('a detail action from a previous account cannot open a dialog for the current session',async t=>{
   const h=await runtime(t,async()=>Response.json(recipe));
   const trigger=h.document.querySelector('main .actions button:last-child');
   h.api.setSession({signedIn:true,displaySession:'session-b',providers:[]});
   trigger.click();await h.settle();
   assert.equal(h.document.querySelector('dialog').open,false);
   assert.equal(h.calls.filter(c=>c.options.method==='POST').length,0);
+});
+
+test('editing an uncertain claim preserves the draft and reconciles the old submission before redeeming the edit',async t=>{
+  let offline=false;
+  const h=await runtime(t,async(_path,options)=>{
+    if(options.method==='POST')throw new Error('receipt lost');
+    if(offline)throw new Error('offline');
+    return Response.json(recipe);
+  });
+  const form=await h.open();await h.submit(form,'Old-Code');
+  const input=form.querySelector('input');
+  input.value='New-Code';input.dispatchEvent(new h.dom.window.Event('input'));
+  form.querySelector('button.secondary').click();
+  const next=await h.open();
+  const retained=next.querySelector('input');
+  assert.equal(retained.value,'New-Code');
+  const posts=()=>h.calls.filter(c=>c.options.method==='POST');
+  offline=true;await h.submit(next,retained.value);
+  assert.equal(posts().length,1);
+  offline=false;await h.submit(next,retained.value);
+  assert.match(next.textContent,/已确认尚未获取/);assert.equal(posts().length,1);
+  await h.submit(next,retained.value);
+  assert.equal(posts().length,2);
+  assert.notEqual(posts()[0].options.headers['Idempotency-Key'],posts()[1].options.headers['Idempotency-Key']);
+  assert.equal(posts()[1].options.body,'{"code":"New-Code"}');
+});
+
+test('a pending direct claim cannot strand its button or close an unrelated account dialog',async t=>{
+  let attempts=0,finish;
+  const h=await runtime(t,async(_path,options)=>{
+    if(options.method==='POST'){attempts++;return new Promise(resolve=>{finish=resolve;});}
+    return Response.json({...recipe,public:{...recipe.public,access:'direct'},acquired:attempts===2});
+  });
+  const trigger=h.document.querySelector('main .actions button:last-child');
+  const dialog=h.document.querySelector('dialog'),account=h.document.querySelector('#account');
+  trigger.click();await h.settle();account.click();
+  finish(Response.json({error:{code:'rate_limited'}},{status:429}));await h.settle();
+  assert.equal(dialog.open,true);assert.equal(trigger.disabled,false);
+  dialog.querySelector('button.secondary').click();trigger.click();await h.settle();account.click();
+  finish(Response.json({}));await h.settle();
+  assert.equal(dialog.open,true);assert.equal(dialog.querySelector('h2').textContent,'账号');
+  assert.match(h.document.querySelector('main').textContent,/已获取/);
 });
