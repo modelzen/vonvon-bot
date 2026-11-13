@@ -238,6 +238,8 @@ try {
     assert.equal(sql(`select owner_id::text from recipe_private.versions where id='${v.versionId}'`),accountId);
     assert.equal(sql(`select actor::text from recipe_private.grants where version_id='${v.versionId}' and actor='${(await request('/me',{token:reader})).accountId}'`),
       (await request('/me',{token:reader})).accountId);
+    const { checkInstallOperations } = await import('../../services/recipe-api/test/operations.pg.mjs');
+    await checkInstallOperations({request,sql,jwt,author,reader,other,v,v2,legacy,pgEnv,config});
     let remaining=500-Number(sql(`select count(*) from recipe_private.codes where owner_id='${accountId}'`));
     let lastBatch;
     while (remaining>0) {
