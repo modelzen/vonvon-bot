@@ -6,7 +6,7 @@ import {
   agentIdSchema, groupIdSchema, desktopSnapshotSchema,
   commandSchema, type Command, type AccountStatus, type RecipeUseRequest, type RecipeUseReply, type ProjectSettingsView,
 } from '@vonvon/protocol';
-import {createDesktopFacades} from '../../desktop/src/facade';
+import {createDesktopFacades, type FacadeTransport} from '../../desktop/src/facade';
 import {desktopChannels} from '../../desktop/src/ipc-contract';
 import {DesktopRoot} from '../src/devices/DesktopRoot';
 import {projectState} from '../../daemon/src/server/projection';
@@ -15,6 +15,7 @@ import {useCommunity} from '../src/community/community-context';
 import {RecipeSourcePanel} from '../src/recipes/RecipeSourcePanel';
 import {DraftGuardProvider} from '../src/settings/DraftGuard';
 import {A, B, devicesState} from './devices-fixture';
+import {recipeBridge} from './helpers/recipe-bridge';
 import {recipeConnections} from './helpers/recipe-connections';
 
 const accountId = '44444444-4444-4444-8444-444444444444';
@@ -49,6 +50,7 @@ function projectedSnapshot(directory = '/synthetic') {
 
 
 let root: Root, facade: ReturnType<typeof createDesktopFacades>;
+let services: FacadeTransport['invoke'];
 let dispatch: (event: unknown) => void;
 let requests: RecipeUseRequest[], status: AccountStatus;
 let useReply: (r: RecipeUseRequest) => RecipeUseReply | Promise<RecipeUseReply>;
@@ -87,12 +89,12 @@ beforeEach(()=>{
   readSnapshot=async()=>({...snapshot,groups:[{id:groupId,name:'甲组'},{id:groupTwo,name:'乙组'}]});
   acquireReply=async()=>{}; identityRequests=[];
   readIdentity=request=>({kind: 'groupIdentity', agentId: request.agentId, groupId: request.groupId, name: request.groupId === groupTwo ? '乙组' : '甲组'});
-  facade=createDesktopFacades({receive: listener=>{dispatch=listener;return ()=>{};},invoke:async(channel,raw)=>{
+  services=async(channel,raw)=>{
     let v:unknown;
     if(channel===desktopChannels.subscribe) v=undefined;
     else if(channel===desktopChannels.accountStatus) v=status;
     else if(channel===desktopChannels.snapshot) v=await readSnapshot();
-    else if(channel===desktopChannels.run) {const request=commandSchema.parse(raw); if(request.type==='readGroupIdentity'){identityRequests.push(request);v=await readIdentity(request);} else v={kind:'pendingGroups',groups:[]};}
+    else if(channel===desktopChannels.run) {const request=commandSchema.parse(raw); if(request.type==='readGroupIdentity'){identityRequests.push(request);v=await readIdentity(request);} else if(request.type==='listJoinedGroups') v={kind:'groups',groups:[{id:groupTwo,name:'现有群',bound:false}]}; else v={kind:'pendingGroups',groups:[]};}
     else if(channel===desktopChannels.environment) v={kind:'backends',entries:[]};
     else if(channel===desktopChannels.settings) v={kind:'refused',message:'not configured'};
     else if(channel===desktopChannels.recipeUse){requests.push(raw); v=await useReply(raw);}
@@ -100,7 +102,8 @@ beforeEach(()=>{
     else if(channel===desktopChannels.community){if(raw.type==='acquire') await acquireReply(); v=raw.type==='detail'?{...detail,versionId:raw.versionId,acquired:entitled}:raw.type==='shareLink'?{url:'https://example.invalid/share'}:raw.type==='catalog'?{hero:{recipeId,versionId:nextVersion,revision:2,public:detail.public},items:[],nextCursor:null}:raw.type==='acquire'?(entitled=true,{recipeId,versionId:raw.versionId,owned:false,acquired:true}):{items:[]};}
     else return {ok:false,error:{kind:'rpc',message:'synthetic channel unavailable'}};
     return {ok:true,value:v};
-  }});
+  };
+  facade=createDesktopFacades({receive:listener=>{dispatch=listener;return ()=>{};},invoke:services});
   dispatch({type:'account',value:status});dispatch({type:'devices',value:devicesState({id:A,phase:'ready'})});
 });
 afterEach(async()=>{await act(async()=>root.unmount());vi.unstubAllGlobals();});
@@ -484,4 +487,77 @@ it('clears chooser evidence during a real remote disconnect and rereads on recov
     expect(requests.map(request => request.type)).toEqual(['begin', 'begin', 'confirm']);
     expect(requests.at(-1)).toEqual({type: 'confirm', handle: secondHandle});
   } finally {stop(); await connection.devices.dispose();}
+});
+
+
+it('requires fresh evidence after a controlled restart whose first revision is higher, even though the device never went offline', async () => {
+  const {devices} = recipeConnections();
+  let newOwner = false;
+  const h = recipeBridge(devices, status, snapshot, async command => {
+    if (command.type !== 'readGroupIdentity') return {kind:'pendingGroups',groups:[]};
+    identityRequests.push(command);
+    return {kind:'groupIdentity',agentId:command.agentId,groupId:command.groupId,name:newOwner ? '重启后群名' : '重启前群名'};
+  }, services);
+  facade = createDesktopFacades(h.transport);
+  useReply = request => request.type === 'confirm' ? {kind:'applied',groupId,handle:request.handle} : {...prepared,handle:newOwner ? secondHandle : handle};
+  try {
+    await draw(); await inGroup(groupId, '检查新版'); await inGroup(groupId, '预览更新');
+    const original = facade.shell.devices.clientFor('local');
+    expect(button('确认应用到这个群')!.disabled).toBe(false);
+    newOwner = true;
+    await act(async () => h.replace({...snapshot,revision:2}));
+    expect(devices.state().devices[0]!.status).toBe('online');
+    expect(facade.shell.devices.clientFor('local')).toBe(original);
+    expect(button('确认应用到这个群')).toBeUndefined();
+    expect(document.body.textContent).not.toContain('群聊：重启前群名');
+    await click('恢复原操作');
+    expect(document.body.textContent).toContain('群聊：重启后群名');
+    await act(async () => {for (const revision of [3,4,5]) h.push({...snapshot,revision});});
+    expect(identityRequests).toHaveLength(2);
+    expect(requests.map(r => r.type)).toEqual(['begin','begin']);
+    await click('确认应用到这个群');
+    expect(requests.at(-1)).toEqual({type:'confirm',handle:secondHandle});
+  } finally {await h.dispose(); await devices.dispose();}
+});
+
+async function fillBuffer(selector: string, text: string) {
+  const el = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!;
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  await act(async () => {Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(el, text); el.dispatchEvent(new Event('input', {bubbles:true}));});
+}
+
+it.each(['role','create','bind'] as const)('keeps unsent %s text and choices for the original target through a local outage', async kind => {
+  const {devices} = recipeConnections();
+  const stop = devices.onState(value => dispatch({type:'devices',value}));
+  dispatch({type:'devices',value:devices.state()});
+  let recovered = false;
+  useReply = () => kind === 'role'
+    ? {...prepared,handle:recovered ? secondHandle : handle,kind:'review',review:{...baseReview,roleChoiceRequired:true,setupChoiceRequired:true}}
+    : {kind:'choose',handle:recovered ? secondHandle : handle};
+  try {
+    await draw();
+    if (kind === 'role') {
+      await inGroup(groupId,'检查新版'); await inGroup(groupId,'预览更新');
+      await act(async () => {document.querySelector<HTMLInputElement>('input[name="recipe-role"][value="custom"]')!.click(); document.querySelector<HTMLInputElement>('input[name="recipe-setup"]')!.click();});
+    } else {
+      await click('打开配方'); await click('添加到群聊');
+      await act(async () => document.querySelector<HTMLInputElement>('input[name="join-bot"]')!.click()); await click('下一步');
+      if (kind === 'bind') {
+        await click('连接已有群聊'); await click('查找已经加入的群');
+        await act(async () => document.querySelector<HTMLButtonElement>('.join-group-list button')!.click());
+      }
+      const mode = [...document.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find(el => el.textContent?.startsWith('独立话题'))!;
+      await act(async () => mode.click());
+    }
+    const selector = '[aria-label="' + ({role:'合并后的本群角色',create:'飞书群名称',bind:'本地绑定名称'}[kind]) + '"]';
+    const value = '未提交的输入🦉' + kind;
+    await fillBuffer(selector,value);
+    recovered = true;
+    await act(async () => {devices.setLocal({status:'connecting'});devices.setLocal({status:'online'});dispatch({type:'reattached',view:'local'});dispatch({type:'snapshot',view:'local',value:snapshot});});
+    expect(document.querySelector(selector)).toBeNull();
+    await click('恢复原操作');
+    expect(document.querySelector<HTMLInputElement>(selector)?.value).toBe(value);
+    expect(button({role:'预览所选内容',create:'创建并连接',bind:'连接并发送欢迎卡片'}[kind])!.disabled).toBe(false);
+    expect(requests.map(r => r.type)).toEqual(['begin','begin']);
+  } finally {stop();await devices.dispose();}
 });
