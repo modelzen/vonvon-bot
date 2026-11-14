@@ -3,6 +3,7 @@ import { chmod, mkdtemp, mkdir, cp, readFile, realpath, rm, writeFile } from 'no
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildRecipeFiles, recipeFileTargets } from './build-recipe-files.mjs';
 import { stageDaemon } from './stage-daemon.mjs';
 import { fileEntries, sha256, validateTree } from './package-tools.mjs';
 
@@ -38,6 +39,7 @@ try {
     dependencies: daemon.dependencies,
     bundleDependencies: Object.keys(daemon.dependencies),
   });
+  for (const target of recipeFileTargets) buildRecipeFiles(join(stage, 'dist'), target, true);
   await mkdir(join(stage, 'ui'), { recursive: true });
   await cp(join(root, 'packages/ui/dist'), join(stage, 'ui/dist'), { recursive: true });
   const preview = JSON.parse(npm(['pack', '--dry-run', '--json', '--ignore-scripts'], {
