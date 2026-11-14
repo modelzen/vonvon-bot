@@ -52,6 +52,9 @@
 .community-markdown h3 { margin:20px 0 10px; font-size:19px; line-height:1.4; font-weight:620; }
 .community-markdown pre { white-space:pre-wrap; overflow-wrap:anywhere; border-radius:8px; padding:14px; background:var(--color-surface-muted); font-size:12px; }
 .community-markdown code { font-family:monospace; }
+.community-markdown a { color:var(--color-text); text-decoration:underline; text-underline-offset:3px; text-decoration-color:var(--color-text-secondary); }
+.community-markdown a:hover { text-decoration-color:currentColor; }
+.community-markdown a:focus-visible { outline:2px solid var(--color-accent); outline-offset:3px; border-radius:2px; }
 .community-access-note { background:var(--color-surface-muted); padding:18px; border-radius:8px; color:var(--color-text-secondary); font-size:13px; }
 .community-config h2 { font-size:19px; margin:0 0 20px; }
 .community-config dt { font-size:12px; color:var(--color-text-secondary); margin-top:20px; }

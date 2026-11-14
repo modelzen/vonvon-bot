@@ -1,5 +1,6 @@
 import {expect, it} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
+import {readFileSync} from 'node:fs';
 import {recipeDetailSchema, type RecipeDetail} from '@vonvon/protocol';
 import {RecipeCard, RecipeDetails, RecipeConfiguration, RecipeMarkdown} from '../src/community/RecipeContent';
 import {uniqueRecipes} from '../src/community/CommunityPage';
@@ -58,4 +59,19 @@ it('shows missing config honestly and keeps imported setup as readable text with
 it('appends paginated results without duplicate versions or changing the loaded order', () => {
   const other = {...recipe, versionId: '33333333-3333-4333-8333-333333333333'};
   expect(uniqueRecipes([recipe], [recipe, other, other])).toEqual([recipe, other]);
+});
+it('renders the launch recipe feedback and troubleshooting links as real safe links', () => {
+  const help=JSON.parse(readFileSync(new URL('../../../content/recipes/vonvon-help/recipe.json',import.meta.url),'utf8'));
+  const html=renderToStaticMarkup(<RecipeMarkdown text={help.public.overview}/>);
+  expect(html).toContain('<a href="https://my.feishu.cn/share/base/shrcn3x5xZv5jqYAt2uNIFRr0be" target="_blank" rel="noopener noreferrer">官方问题反馈表单</a>');
+  expect(html).toContain('<a href="https://vonvon.cc/docs/troubleshooting/" target="_blank" rel="noopener noreferrer">官方排错指南</a>');
+  expect(html).not.toContain('[官方问题反馈表单]');
+});
+it('keeps unsafe Markdown destinations and links inside code as literal text', () => {
+  const unsafe=['javascript:alert(1)','data:text/html;base64,PHNjcmlwdD4=','file:///tmp/private','//example.com/path','https://user:pass@example.com/path'];
+  const text=unsafe.map(url=>`[链接](${url})`).join('\n')+'\n`[代码](https://example.com)`\n```md\n[围栏](https://example.com)\n```';
+  const html=renderToStaticMarkup(<RecipeMarkdown text={text}/>);
+  expect(html).not.toContain('<a ');
+  for(const url of unsafe)expect(html).toContain(url);
+  expect(html).toContain('<code>[代码](https://example.com)</code>');
 });

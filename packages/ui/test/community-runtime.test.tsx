@@ -2,7 +2,7 @@
 import {act} from 'react';
 import {createRoot, type Root} from 'react-dom/client';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import {communityRequestSchema, type AccountShell, type CommunityRequest, type RecipeDetail} from '@vonvon/protocol';
+import {communityRequestSchema, type AccountShell, type CommunityRequest, type RecipeDetail, type RecipeRoleDraft} from '@vonvon/protocol';
 import {createDesktopFacades} from '../../desktop/src/facade';
 import {desktopChannels} from '../../desktop/src/ipc-contract';
 import {DesktopRootView} from '../src/devices/DesktopRoot';
@@ -99,6 +99,45 @@ it('edits an older draft without a setup editor or dropping its existing notes',
   expect(document.querySelector('.community-editor')?.textContent).not.toContain('必需步骤');
   await fill('配方名称','修改后的名称');await click('保存私人草稿');
   expect(calls.filter(request=>request.type==='saveDraft').at(-1)).toMatchObject({public:{name:'修改后的名称'},config:{setup:legacySetup}});
+});
+it('removes incomplete old notes explicitly and publishes the same private draft without changing its overview',async()=>{
+  let stored:RecipeRoleDraft={draftId,recipeId:null,revision:1,public:recipe.public,config:{role:'原角色',setup:{steps:[{kind:'tool',title:'',instructions:'',required:true}]}}};
+  const normal=handle;
+  handle=async request=>{
+    if(request.type==='draft')return stored;
+    if(request.type==='saveDraft'){
+      expect(request.target).toEqual({kind:'existing',draftId,revision:1});
+      expect(request.config).toEqual({role:'原角色'});
+      expect(request.public.overview).toBe(recipe.public.overview);
+      return stored={...stored,revision:2,public:request.public,config:request.config};
+    }
+    if(request.type==='publishDraft')expect(request).toMatchObject({draftId,revision:2});
+    return normal(request);
+  };
+  await draw();await click('打开旧私人草稿');
+  expect([...document.querySelectorAll('button')].some(button=>button.textContent==='移除旧补充说明')).toBe(false);
+  await click('编辑草稿');await click('移除旧补充说明');
+  expect(calls.some(request=>request.type==='saveDraft')).toBe(false);
+  expect(document.querySelector('.community-additional-notes')).toBeNull();
+  await click('保存私人草稿');await click('预览发布');await click('发布到社区');
+  expect(calls.filter(request=>request.type==='saveDraft')).toHaveLength(1);
+  expect(calls.filter(request=>request.type==='publishDraft')).toHaveLength(1);
+});
+it('opens both launch recipe links using the explicit App external-document bridge',async()=>{
+  const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
+  const help=JSON.parse(readFileSync(resolve(process.cwd(),'../../content/recipes/vonvon-help/recipe.json'),'utf8'));
+  const normal=handle;handle=async request=>request.type==='detail'?{...recipe,public:help.public}:normal(request);
+  shell={...shell,openExternal:vi.fn(async()=>{})};
+  await draw();await click('打开已发布版本');
+  for(const label of ['官方问题反馈表单','官方排错指南']) {
+    const link=[...document.querySelectorAll<HTMLAnchorElement>('.community-markdown a')].find(link=>link.textContent===label)!;
+    expect(link).toBeDefined();
+    const event=new MouseEvent('click',{bubbles:true,cancelable:true});
+    await act(async()=>{link.dispatchEvent(event);});
+    expect(event.defaultPrevented).toBe(true);
+    expect(shell.openExternal).toHaveBeenLastCalledWith(link.href,'recipe-document');
+  }
+  expect(shell.openExternal).toHaveBeenCalledTimes(2);
 });
 it('keeps the actual editor DOM, caret, unsaved text and uncertain request key across reconnects and device switches', async () => {
   let attempts = 0;
