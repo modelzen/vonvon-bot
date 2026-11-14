@@ -1,3 +1,4 @@
+import {richRuntimeRequests,richRuntimeReplies} from './recipe-runtime.js';
 import { z } from 'zod';
 import { agentIdSchema, groupIdSchema } from './domain.js';
 
@@ -7,7 +8,8 @@ export {recipeSetupSchema,type RecipeSetup} from './recipe-setup.js';
 
 const uuid = z.string().uuid();
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
-export const recipeBinary32Schema = z.string().regex(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/);
+import {recipeBinary32Schema} from './recipe-binary.js';
+export {recipeBinary32Schema};
 const text = (limit: number) => z.string().refine(value => [...value].length <= limit);
 export const recipeManifestSchema = z.object({
   schema: z.literal(1), recipeId: uuid, versionId: uuid, authorId: uuid,
@@ -34,6 +36,7 @@ export const recipeResolutionSchema = z.object({
 }).strict();
 const target = {botId: agentIdSchema};
 export const recipeInstallRequestSchema = z.discriminatedUnion('type', [
+  ...richRuntimeRequests,
   z.object({type:z.literal('source'),...target,groupId:groupIdSchema}).strict(),
   z.object({type:z.literal('ignoreVersion'),...target,sourceToken:recipeSourceTokenSchema,groupId:groupIdSchema,recipeId:uuid,installedVersionId:uuid,versionId:uuid}).strict(),
   z.object({type: z.literal('createdGroup'), ...target, requestId: uuid}).strict(),
@@ -53,6 +56,7 @@ const review = {
   roleChoiceRequired: z.boolean(), setupChoiceRequired: z.boolean(),
 };
 export const recipeInstallReplySchema = z.discriminatedUnion('kind', [
+  ...richRuntimeReplies,
   z.object({kind:z.literal('source'),groupId:groupIdSchema,source:recipeSourceSchema.nullable()}).strict(),
   z.object({kind: z.literal('createdGroup'), groupId: groupIdSchema.nullable()}).strict(),
   z.object({kind: z.literal('review'), ...review}).strict(),

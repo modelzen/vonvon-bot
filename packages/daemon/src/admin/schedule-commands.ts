@@ -296,6 +296,7 @@ export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleComm
       // By id only among this group's tasks: another group's id reads as missing, not as forbidden.
       const task = store.get(request.taskId);
       if (!task || task.chatId !== request.chatId) return notFound(request.chatId);
+      if(store.managed?.review(task.id) && (['edit','resume','delete'].includes(request.action)||request.action==='runNow'&&task.state!=='active'))return refused('bad-schedule','请通过配方设置确认此任务的运行条件');
       const denied = denial(actor, request.action, task);
       if (denied) return refuse(denied);
       switch (request.action) {

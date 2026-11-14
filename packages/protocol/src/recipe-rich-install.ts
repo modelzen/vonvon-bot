@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {recipeBinary32Schema} from './recipe-install.js';
+import {recipeBinary32Schema} from './recipe-binary.js';
 import {recipeRichReleaseSchema} from './recipe-rich.js';
 const uuid=z.string().uuid().regex(/^[0-9a-f-]+$/), digest=z.string().regex(/^[0-9a-f]{64}$/);
 export const recipeRichManifestObjectSchema=z.object({objectId:uuid,kind:z.literal('manifest'),sha256:digest,
