@@ -135,7 +135,11 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     const backend = group.modelAccess?.backend ?? group.backend ?? 'codex-appserver';
     return {backend, model:resolveModelPreference({bot:opts.cfg.preferences, group},backend)?.model};
   });
-  const authoring = new AuthoringService({bot: identity, cfg: opts.cfg, channel, parser});
+  const authoring = new AuthoringService({bot: identity, cfg: opts.cfg, channel, parser,tasks:async chatId=>{
+    const result=await orchestrator.scheduleAs({kind:'local',via:'desktop'},{action:'list',chatId});
+    if(result.kind!=='tasks')throw new Error('无法读取所选群的任务。');
+    return result.tasks;
+  }});
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
     { entries, memory, authoring, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}), ...(sessionCli ? { sessionCli } : {}) });
   const firstHello = createFirstHello({ cfg: opts.cfg, appSecret: opts.appSecret, channel, write: orchestrator.writePreferences });

@@ -1,3 +1,4 @@
+import { richModelFormat, richModelPrompt, checkedRichInput, type RichModelInput } from './authoring-rich-model';
 import { join } from 'node:path';
 import { parse } from 'smol-toml';
 import { z } from 'zod';
@@ -84,16 +85,14 @@ async function answerFromStream(response: Response) {
     }
   }
   if (!completed || !answer) throw unavailable();
-  return draftModelAnswer.parse(JSON.parse(answer));
+  return JSON.parse(answer) as unknown;
 }
 
 export interface DraftProviderSelection {backend: string; model?: string}
 export function codexDraftParser(selection: () => Promise<DraftProviderSelection | undefined>, options: {
   home?: string; fetch?: typeof fetch; env?: NodeJS.ProcessEnv;
-} = {}): DraftInstructionParser {
-  return {async propose(input, signal) {
-    checkModelText(input.instruction);
-    if (input.current) checkModelText(input.current.value);
+} = {}): DraftInstructionParser & {proposeRich(input:RichModelInput, signal:AbortSignal):Promise<unknown>} {
+  async function run(data:object, instructions:string, format:object, signal:AbortSignal) {
     const bounded = AbortSignal.any([signal,AbortSignal.timeout(25_000)]);
     const selected = await selection();
     if (selected?.backend !== 'codex-appserver') throw unavailable();
@@ -120,10 +119,17 @@ export function codexDraftParser(selection: () => Promise<DraftProviderSelection
         'content-type':'application/json',accept:'text/event-stream',
         ...(metadata.use_responses_lite ? {'x-openai-internal-codex-responses-lite':'true'} : {})},
       body:JSON.stringify({model,stream:true,store:false,tool_choice:'none',parallel_tool_calls:false,reasoning:{effort:'low',...(metadata.use_responses_lite ? {context:'all_turns'} : {})},include:[],
-        input:[message('developer',prompt),message('user',JSON.stringify({instruction:input.instruction,
-          ...(input.current ? {current:{field:input.current.field,value:input.current.value}} : {})}))],
-        text:{format:modelAnswerFormat}}),
+        input:[message('developer',instructions),message('user',JSON.stringify(data))],
+        text:{format}}),
     });
     return answerFromStream(response);
+  }
+  return {async propose(input,signal) {
+    checkModelText(input.instruction);
+    if(input.current)checkModelText(input.current.value);
+    const data={instruction:input.instruction,...(input.current && {current:{field:input.current.field,value:input.current.value}})};
+    return draftModelAnswer.parse(await run(data,prompt,modelAnswerFormat,signal));
+  },proposeRich(input,signal) {
+    return run(checkedRichInput(input),richModelPrompt,richModelFormat,signal);
   }};
 }

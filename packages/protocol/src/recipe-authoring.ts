@@ -1,3 +1,6 @@
+import {richInventoryOptionsSchema,richLocalInventorySchema,richSourceAttestationSchema,richPreparationSchema,richFreezeInputSchema,
+  richFrozenResponseSchema,richAuthoringAuthorizationSchema} from './recipe-rich-authoring.js';
+import {recipeRichPartDescriptorSchema} from './recipe-rich.js';
 import { z } from 'zod';
 import { agentIdSchema, groupIdSchema } from './domain.js';
 import { recipeBinary32Schema, recipeSetupSchema } from './recipe-install.js';
@@ -39,7 +42,7 @@ export const authoringReceiptSchema = z.union([
 ]);
 export type AuthoringReceipt = z.infer<typeof authoringReceiptSchema>;
 export const authoringOperationSchema = z.object({
-  operationId: uuid, ...registration,
+  operationId: uuid, ...registration, format:z.literal('rich-v2').optional(),
   state: z.enum(['pendingMain', 'sending', 'waiting', 'candidate', 'pendingCloud', 'completed', 'cancelPending', 'cancelled', 'expired', 'needsReview']),
   deliveryUnknown: z.boolean(), cardUpdate: z.enum(['pending','backoff','unavailable']).optional(), payloadDigest: digest.optional(), receipt: authoringReceiptSchema.optional(),
   groupId: groupIdSchema.optional(), createdAt: millis,
@@ -47,11 +50,19 @@ export const authoringOperationSchema = z.object({
 export type AuthoringOperation = z.infer<typeof authoringOperationSchema>;
 // Old links can reconcile cloud registration and its terminal receipt, never source, candidate or delivery.
 const reconciliation = z.object({
-  operationId: uuid, ...registration, createdAt: millis, receipt: authoringReceiptSchema.optional(),
+  operationId: uuid, ...registration, format:z.literal('rich-v2').optional(), createdAt: millis, receipt: authoringReceiptSchema.optional(),
 }).strict();
 export type AuthoringReconciliation = z.infer<typeof reconciliation>;
 const recipient = z.object({openId: z.string().max(210), chatId: groupIdSchema, tenantKey: z.string().max(200)}).strict();
 export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
+  z.object({type:z.literal('richInventory'),...session,groupId:groupIdSchema,options:richInventoryOptionsSchema}).strict(),
+  z.object({type:z.literal('richPrepare'),...session,groupId:groupIdSchema,selection:richPreparationSchema,attestations:richSourceAttestationSchema.array().max(64)}).strict(),
+  z.object({type:z.literal('richEdit'),...session,draftId:uuid,baseRevision:positive,canonical:z.string().max(1401000),selected:uuid.array().max(32)}).strict(),
+  z.object({type:z.literal('richMembers'),...operation}).strict(),
+  z.object({type:z.literal('richBindMembers'),...operation,reviewDigest:digest,descriptors:recipeRichPartDescriptorSchema.array().max(65)}).strict(),
+  z.object({type:z.literal('richInspect'),...operation}).strict(),
+  z.object({type:z.literal('richAdvance'),...operation,destinationDraftId:uuid,authorization:richAuthoringAuthorizationSchema,
+    accepted:z.object({frozen:richFrozenResponseSchema,manifestId:uuid,packageId:uuid}).strict().optional()}).strict(),
   z.object({type: z.literal('open'), ...target, accountId: uuid}).strict(),
   z.object({type: z.literal('close'), ...session}).strict(),
   z.object({type: z.literal('status'), ...session}).strict(),
@@ -78,6 +89,10 @@ export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
 ]);
 export type RecipeAuthoringRequest = z.infer<typeof recipeAuthoringRequestSchema>;
 export const recipeAuthoringReplySchema = z.discriminatedUnion('kind', [
+  z.object({kind:z.literal('richInventory'),groupId:groupIdSchema,inventory:richLocalInventorySchema}).strict(),
+  z.object({kind:z.literal('richMembers'),operationId:uuid,reviewDigest:digest,cap:positive,members:z.array(z.object({
+    kind:z.enum(['text','finalLogo']),bytes:z.string().max(2796203),sha256:digest}).strict()).max(65)}).strict(),
+  z.object({kind:z.literal('richCandidate'),operationId:uuid,reviewDigest:digest,request:richFreezeInputSchema}).strict(),
   z.object({kind: z.literal('session'), session: uuid, linked: z.boolean(), leaseMs: positive}).strict(),
   z.object({kind: z.literal('closed')}).strict(),
   z.object({kind: z.literal('workflow'), activity:millis, ageMs:millis, field:fieldRequest.optional(),
