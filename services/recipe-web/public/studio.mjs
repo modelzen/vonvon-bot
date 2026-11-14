@@ -9,7 +9,7 @@ const setup=setupEditor($('setup-steps'),$('add-setup'),()=>{changed=true;});
 const text=(id,v)=>$(id).textContent=v;
 const show=(id,on)=>$(id).hidden=!on;
 const errorMessages={login_required:'请先登录。',conflict:'草稿已在其他地方变更。你的输入仍在这里；请先重新打开最新草稿，再决定如何修改。',quota_exceeded:'已达到账号或版本的限额，请检查草稿或稍后再试。',rate_limited:'操作过于频繁，请稍后再试。',auth_required:'登录已过期，请重新登录。',invalid_input:'请检查输入长度、版本和获取方式。',incomplete_setup:'发布前请补全准备步骤的名称和操作说明。',forbidden:'当前账号不能进行这项操作。',not_found:'没有找到这份草稿或版本。'};
-async function api(path,{method='GET',body,rev,logical}={}){
+async function api(path,{method='GET',body,rev,logical,version=1}={}){
   const headers={};if(method!=='GET'){
     headers['content-type']='application/json';
     headers['x-vonvon-session']=generation??'';
@@ -17,7 +17,7 @@ async function api(path,{method='GET',body,rev,logical}={}){
     headers['idempotency-key']=keys.get(logical);
     if(rev!==undefined)headers['if-match']='"'+rev+'"';
   }
-  const resp=await fetch('/api/v1'+path,{method,headers,body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});
+  const resp=await fetch('/api/v'+version+path,{method,headers,body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});
   const data=await resp.json();
   if(!resp.ok){const code=data.error?.code;if(code==='credential_detected')throw new Error(credentialMessage(data.error.field));if(code==='session_changed'){forget();location.replace('/studio');throw new Error('账号已切换。');}if(resp.status===401)show('login',true);throw new Error(errorMessages[code]||'请求未完成。请重试同一操作。');}
   if(method!=='GET')keys.delete(logical);
@@ -76,13 +76,14 @@ async function save(){
   model=res;changed=false;await loadDrafts();return res;
 }
 async function history(){
-  const result=await api('/me/publications');$('history').replaceChildren();
+  const result=await api('/me/publications',{version:2});$('history').replaceChildren();
   text('record-note',result.items.length?'':'发布后，你可以在这里查看版本和管理分享码。');
   const latest=new Map();for(const v of result.items)latest.set(v.recipeId,Math.max(latest.get(v.recipeId)||0,v.revision));
   for(const v of result.items){
     const name=v.public.name+' · '+v.public.version;
     const a=document.createElement('a');a.href='/recipes/'+v.recipeId+'/versions/'+v.versionId;a.textContent='查看';
-    const buttons=[a];if(v.revision===latest.get(v.recipeId))buttons.push(button('准备新版',async()=>{
+    const buttons=[a];if(v.format==='rich-v2')buttons.push(button('如何编辑',()=>{text('notice','请在 Vonvon Bot App 的创作中心准备新版，核对所选来源和内容后再确认发布。');}));
+    else if(v.revision===latest.get(v.recipeId))buttons.push(button('准备新版',async()=>{
       if(!discardOK())return;
       const data=await api('/recipes/'+v.recipeId+'/versions/'+v.versionId);
       fill({...data,public:{...data.public,version:''},draftId:null,revision:0});changed=true;fields.version.focus();

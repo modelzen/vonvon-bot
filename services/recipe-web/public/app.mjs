@@ -92,7 +92,7 @@ async function home() {
   q.value = params.get('q')?.slice(0, 120) || ''; search.append(q);
   const results = el('section'); results.setAttribute('aria-label', '配方目录'); results.setAttribute('aria-busy','true');
   main.replaceChildren(group('page-top', title, seg), search, results);
-  let cursor, items, hero, timer, stableQuery, loadingMore;
+  let cursor, items, hero, heroKind, timer, stableQuery, loadingMore;
   const restore = history.state?.catalog;
   function remember() {
     history.replaceState({ catalog: { query: stableQuery, count: items?.length || 0, y: scrollY } }, '');
@@ -101,7 +101,7 @@ async function home() {
   function render() {
     results.replaceChildren();
     search.hidden = !stableQuery && !hero && !items.length;
-    if (hero) results.append(el('h2', '最新配方', 'section-title'), card(hero, true));
+    if (hero) results.append(el('h2', heroKind === 'featured' ? '场景精选' : '最新配方', 'section-title'), card(hero, true));
     if (items.length) {
       results.append(el('h2', stableQuery ? '搜索结果' : (hero ? '更多配方' : '配方'), 'section-title'));
       results.append(group('cards', ...items.map(x => card(x))));
@@ -114,7 +114,7 @@ async function home() {
   const listUrl = (s, next) => {
     const query = new URLSearchParams(); if (s) query.set('q', s);
     if (next) query.set('cursor', next);
-    return '/api/v1/community/recipes?' + query;
+    return '/api/v2/community/recipes?' + query;
   };
   function appendPage(data) {
     const ids = new Set([hero?.recipeId, ...items.map(x => x.recipeId)]);
@@ -136,7 +136,7 @@ async function home() {
     history.replaceState(null, '', url); results.setAttribute('aria-busy', 'true');
     try {
       const data = await request(listUrl(term)); if (seq !== catalogSeq) return;
-      stableQuery = term; hero = data.hero; items = []; appendPage(data);
+      stableQuery = term; hero = data.hero; heroKind = data.heroKind; items = []; appendPage(data);
       if (initial && restore?.query === term) {
         while (cursor && items.length < restore.count) {
           const before = cursor, next = await request(listUrl(term, cursor)); if (seq !== catalogSeq) return;
@@ -156,7 +156,7 @@ async function home() {
 async function library() {
   main.replaceChildren(link('← 社区', '/', 'back'), group('page-top', el('h1', '已获取')));
   if (!session?.signedIn) { main.append(empty('登录后查看已获取的配方', null, button('登录', () => openLogin('/library')))); return; }
-  const firstPage = await request('/api/v1/me/recipes');
+  const firstPage = await request('/api/v2/me/recipes');
   if (!firstPage.items.length) {
     main.append(empty('还没有获取配方', null, link('浏览社区', '/', 'secondary'))); return;
   }
@@ -166,7 +166,7 @@ async function library() {
   const next = button('加载更多', async () => {
     if (next.disabled || !cursor) return;
     next.disabled = true;
-    try { add(await request('/api/v1/me/recipes?cursor=' + encodeURIComponent(cursor))); }
+    try { add(await request('/api/v2/me/recipes?cursor=' + encodeURIComponent(cursor))); }
     catch { message('加载失败，请重试。'); }
     finally { next.disabled = false; }
   }, 'secondary more');
@@ -192,14 +192,28 @@ async function copy(button) {
   }
 }
 function metric(label, value) { return group('metric', el('span', label), el('strong', value)); }
+async function readDetail(path, displaySession) {
+  const options = displaySession ? {headers: {'X-Vonvon-Session': displaySession}} : {};
+  try {return await request('/api/v1' + path, options);}
+  catch (error) {
+    if (error.code !== 'request_upgrade_required') throw error;
+    return request('/api/v2' + path, options);
+  }
+}
 async function detail(confirmed) {
   const generation = ++detailGeneration, path = location.pathname;
   const detailSession = session?.displaySession;
   const currentDetail = () => generation === detailGeneration && path === location.pathname && detailSession === session?.displaySession;
-  const data = confirmed ?? await request('/api/v1' + path, detailSession ? {headers: {'X-Vonvon-Session': detailSession}} : {});
+  const data = confirmed ?? await readDetail(path, detailSession);
   if (!currentDetail()) return;
   if (path.toLowerCase() !== detailUrl(data).toLowerCase()) throw new Error('unconfirmed');
   const p = data.public; document.title = p.name + ' · Vonvon Bot';
+  if (data.format === 'rich-v2') {
+    const {renderRecipe} = await import('/viewer.mjs');
+    if (!currentDetail()) return;
+    renderRecipe(main, data, trigger => claim(data, trigger, detailSession, currentDetail));
+    return;
+  }
   const sharing = button('分享链接', ev => copy(ev.currentTarget), 'secondary');
   const actions = group('actions', sharing);
   if (data.acquired || data.owned) actions.append(el('span', data.owned ? '我的作品' : '已获取', 'pill'));
@@ -257,7 +271,7 @@ async function claim(recipe, trigger, sessionId, currentDetail) {
     field.addEventListener('input', () => {if (current()) intent.input = field.value;});
   }
   async function reconcile() {
-    const next = await request('/api/v1/recipes/' + recipe.recipeId + '/versions/' + recipe.versionId, {headers: {'X-Vonvon-Session': sessionId}});
+    const next = await readDetail('/recipes/' + recipe.recipeId + '/versions/' + recipe.versionId, sessionId);
     if (!current()) return;
     if (next.versionId !== recipe.versionId || next.recipeId !== recipe.recipeId) throw new Error('unconfirmed');
     if (next.owned || next.acquired) {
@@ -281,7 +295,7 @@ async function claim(recipe, trigger, sessionId, currentDetail) {
         error.textContent = '已确认尚未获取。请再次点击获取，提交当前输入。'; return;
       }
       const submitted = intent.submitted ??= {raw, key: newAcquisitionKey()};
-      await request('/api/v1/versions/' + recipe.versionId + (coded ? '/redeem' : '/acquire'), {
+      await request('/api/' + (recipe.format === 'rich-v2' ? 'v2' : 'v1') + '/versions/' + recipe.versionId + (coded ? '/redeem' : '/acquire'), {
         method: 'POST', headers: {'Content-Type':'application/json', 'Idempotency-Key':submitted.key, 'X-Vonvon-Session':sessionId},
         body: JSON.stringify(coded ? {code: submitted.raw} : {}),
       });
