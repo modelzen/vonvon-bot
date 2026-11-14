@@ -8,13 +8,14 @@ import (
 )
 
 type request struct {
-	Operation, Root, Installation, Generation, ExpectedRoot string
-	Names                                                   []string
-	Entries                                                 []entry
+	Operation, Root, Provider, Installation, Generation, ExpectedRoot string
+	Names                                                             []string
+	Entries                                                           []entry
 }
 type response struct {
-	Root  string     `json:"root"`
-	Files []document `json:"files,omitempty"`
+	Root   string        `json:"root"`
+	Skills []skillOption `json:"skills,omitempty"`
+	Files  []document    `json:"files,omitempty"`
 }
 
 func run(r request) (response, error) {
@@ -26,6 +27,10 @@ func run(r request) (response, error) {
 	out := response{Root: hash([]byte(h.meta.id))}
 	if r.ExpectedRoot != "" && r.ExpectedRoot != out.Root {
 		return response{}, refused
+	}
+	if r.Operation == "skills" {
+		out.Skills, e = skillOptions(h, r.Provider)
+		return out, e
 	}
 	if r.Operation == "identity" {
 		return out, nil
