@@ -586,6 +586,7 @@ it('discards delayed inventory across memory ABA and offers an individual setup 
   const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
   const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));
   content.parts=[];content.skills=[];content.files=[];content.memories=[];delete content.finalLogo;
+  content.setup=[{itemId:'80000000-0000-4000-8000-000000000001',originId:'80000000-0000-4000-8000-000000000002',kind:'tool',title:'确认工具',instructions:'SETUP_SENTINEL',required:true,action:{kind:'manual'}}];
   const normal=authoring,waiting:{request:Extract<DesktopAuthoringRequest,{type:'richInventory'}>;resolve:(v:DesktopAuthoringReply)=>void}[]=[];
   linked=true;
   authoring=async request=>{
@@ -597,13 +598,24 @@ it('discards delayed inventory across memory ABA and offers an individual setup 
   const memory=()=>[...document.querySelectorAll('label')].find(l=>l.textContent==='包含可分享的 Bot 记忆')!.querySelector<HTMLInputElement>('input')!;
   await act(async()=>memory().click());await act(async()=>memory().click());
   expect(waiting).toHaveLength(3);
-  const deliver=(index:number)=>waiting[index]!.resolve({kind:'richInventory',groupId:waiting[index]!.request.groupId,inventory:{content:{...content,public:{...content.public,name:{...content.public.name,value:'READ_'+index}}},reviewToken:'token-'+index,unavailable:[],versions:[]}});
-  await act(async()=>deliver(2));await act(async()=>deliver(0));await act(async()=>deliver(1));
+  const memoryItem={itemId:'90000000-0000-4000-8000-000000000001',originId:'90000000-0000-4000-8000-000000000002',text:{kind:'inline',value:'EXCLUDED_MEMORY_SENTINEL'}};
+  const deliver=(index:number)=>waiting[index]!.resolve({kind:'richInventory',groupId:waiting[index]!.request.groupId,inventory:{content:{...content,memories:waiting[index]!.request.options.includeBotMemories?[memoryItem]:[],public:{...content.public,name:{...content.public.name,value:'READ_'+index}}},reviewToken:String(index).repeat(64),unavailable:[],versions:[]}});
+  await act(async()=>deliver(2));
+  await click('重新读取来源配置');
+  await act(async()=>emit({type:'devices',value:devicesState({id:B})}));
+  await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
+  await act(async()=>emit({type:'devices',value:devicesState({id:A})}));
+  await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="选择已绑定群聊"] button')!.click());
+  expect(waiting).toHaveLength(6);
+  await act(async()=>deliver(5));
+  for(const index of [0,1,3,4])await act(async()=>deliver(index));
+  expect(text()).not.toContain('EXCLUDED_MEMORY_SENTINEL');
+  expect(text()).toContain('记忆不包含');
   const step=content.setup[0];
   const checkbox=[...document.querySelectorAll('label')].find(l=>l.textContent==='准备步骤 · '+step.title)?.querySelector<HTMLInputElement>('input');
   expect(checkbox).toBeDefined();expect(checkbox!.checked).toBe(true);await act(async()=>checkbox!.click());
   const attest=[...document.querySelectorAll('label')].find(l=>l.textContent?.includes('我已核对来源和全部所选内容'))!.querySelector<HTMLInputElement>('input')!;
   await act(async()=>attest.click());await click('确认让 Bot 准备私人草稿');
-  const prepared=calls.find(r=>r.type==='richPrepare');expect(prepared).toMatchObject({selection:{reviewToken:'token-2',options:{includeBotMemories:false}}});
-  if(prepared?.type!=='richPrepare')throw new Error('Missing preparation');expect(prepared.selection.selected).not.toContain(step.itemId);
+  const prepared=calls.find(r=>r.type==='richPrepare');expect(prepared).toMatchObject({selection:{reviewToken:'5'.repeat(64),options:{includeBotMemories:false}}});
+  if(prepared?.type!=='richPrepare')throw new Error('Missing preparation');expect(prepared.selection.selected).not.toContain(step.itemId);expect(prepared.selection.selected).not.toContain(memoryItem.itemId);
 });
