@@ -1,4 +1,4 @@
-import {decodeRichRecipeContent,recipeRichPartDescriptorSchema} from '../../../packages/protocol/dist/index.js';
+import {decodeRichRecipeContent,recipeRichPartDescriptorSchema,recipeRichInstallIntentSchema} from '../../../packages/protocol/dist/index.js';
 import {authoringInput,payloadBytes} from './authoring-input.mjs';
 import {ApiError,badInput} from './errors.mjs';
 import {bodyJson,expectedRevision,objectKeys,queryParams,requestKey,uuid} from './input.mjs';
@@ -7,6 +7,9 @@ import {operationId} from './operation-input.mjs';
 import {parseRichPayload} from './rich-document.mjs';
 
 const routes=[
+ ['GET','versions/:v/install-preview','richInstallPreview'],['POST','operations/:o/authorize','richInstallAuthorize'],
+ ['GET','operations/:o/recovery','richInstallRecover'],['POST','operations/:o/cancel','richInstallCancel'],
+ ['POST','operations/:o/redeem','richInstallRedeem','possession'],['POST','operations/:o/complete','richInstallComplete','possession'],
  ['POST','authoring/:o/register','richRegister'],['POST','authoring/:o/authorize','richAuthorize'],
  ['POST','authoring/:o/dispatch','richDispatch','possession'],['POST','authoring/:o/accept','richAccept','possession'],
  ['POST','authoring/:o/freeze','richFreeze'],['GET','authoring/:o','richGet'],['GET','authoring/:o/recovery','richRecover'],['POST','authoring/:o/cancel','richCancel'],
@@ -33,6 +36,12 @@ export async function richInput(req,url,{action,ids:[id,...other]}) {
   if(action==='richCatalog')return [action,[q,cursor]];
   if(req.method==='GET')return [action,id?[id,...other]:[]];
   const b=await bodyJson(req,['richFreeze','richAccept','richPublish'].includes(action)?4*1048576:2048);
+  if(action==='richInstallAuthorize'){const result=recipeRichInstallIntentSchema.safeParse(b);if(!result.success)throw badInput();return [action,[operationId(id),result.data]];}
+  if(action==='richInstallRedeem'||action==='richInstallComplete'){
+    const complete=action==='richInstallComplete';objectKeys(b,['ticket','nonce','proof',...(complete?['outcome']:[])]);
+    if(complete&&!['applied','rejected'].includes(b.outcome))throw badInput();
+    return [action,[operationId(id),...['ticket','nonce','proof'].map(k=>binary32(b[k])),b.outcome??null]];
+  }
   if(action==='richRegister') {
     const {format,...rest}=b;if(format!=='rich-v2')throw badInput();authoringInput('registerAuthoring',id,rest);return [action,[id,b]];
   }

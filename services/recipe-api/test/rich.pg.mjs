@@ -11,6 +11,8 @@ import {startRecipeService} from '../src/main.mjs';
 import {createRichBrokerServer} from '../src/rich-broker.mjs';
 import {createObjectStore} from '../src/object-store.mjs';
 import {createVerifier} from '../src/auth.mjs';
+import {richInstallProof} from '../src/rich-install-proof.mjs';
+import {installProof} from '../src/install-proof.mjs';
 import {richProof} from '../src/rich-proof.mjs';
 import {inventory} from '../src/rich-document.mjs';
 import {authoringProof,DISPATCH_DIGEST} from '../src/authoring-proof.mjs';
@@ -31,7 +33,7 @@ try{
   run('pg_ctl',['-D',db,'-l',join(dir,'log'),'-w','-o',"-k '"+sock+"' -p 5432 -c listen_addresses='' -c unix_socket_permissions=0700",'start']);pgUp=true;
   const files=readdirSync(folders).filter(f=>f.endsWith('.sql')).sort();
   const apply=f=>run('psql',['-h',sock,'-p','5432','-U','cloud_test','-d','postgres','-Xq','-1','-v','ON_ERROR_STOP=1','-f',join(folders,f)]);
-  files.forEach(apply);
+  const firstRich=files.findIndex(f=>f.endsWith('_recipe_rich_cloud.sql'));assert.ok(firstRich>=0);files.slice(0,firstRich).forEach(apply);
   sql('create role main_test login noinherit; grant recipe_api to main_test; create role verifier_test login noinherit; grant recipe_object_verifier to verifier_test');
   const pair=generateKeyPairSync('ec',{namedCurve:'P-256'}),jwk={...pair.publicKey.export({format:'jwk'}),kid:'rich-pg',alg:'ES256',use:'sig'};
   issuerServer=createServer((req,res)=>res.end(JSON.stringify({keys:[jwk]})));await listen(issuerServer);
@@ -64,6 +66,25 @@ try{
     return Buffer.from(await r.arrayBuffer());
   }
   const account=(await req('/v1/me',a)).accountId,reader=(await req('/v1/me',b)).accountId;
+  // Issue real v1 install and authoring tickets before applying the rich migrations.
+  const legacyKey=generateKeyPairSync('x25519'),legacyNonce=randomBytes(32),legacyDevice={
+    targetPublicKey:b64(legacyKey.publicKey.export({type:'spki',format:'der'}).subarray(-32)),nonceCommitment:b64(sha(legacyNonce))};
+  const legacyDoc={public:{name:'legacy',summary:'legacy',overview:'字节',version:'1',access:'direct'},config:{role:'留存 legacy'}};
+  const ld=await req('/v1/drafts',a,legacyDoc,{key:randomUUID()});
+  const lv=await req('/v1/drafts/'+ld.draftId+'/publish',a,{}, {key:randomUUID(),rev:1});
+  const historical=sql("select bytes::text||':'||encode(recipe_private.install_manifest(v),'hex') from recipe_private.versions v where id='"+lv.versionId+"'");
+  const lp=await req('/v1/versions/'+lv.versionId+'/install-preview',a);
+  const lid=opId(),li=await req('/v1/operations/'+lid+'/authorize',a,{purpose:'installBoundRole',generation:1,versionId:lv.versionId,
+    manifestSha256:lp.manifestSha256,...legacyDevice});
+  const lido=opId(),lo='/v1/authoring/'+lido;
+  await req(lo+'/register',a,{purpose:'prepareDraft',...legacyDevice});
+  const lc=await req(lo+'/authorize',a,{stage:'dispatch',stateRevision:1,payloadDigest:DISPATCH_DIGEST});
+  files.slice(firstRich).forEach(apply);
+  assert.equal(sql("select bytes::text||':'||encode(recipe_private.install_manifest(v),'hex') from recipe_private.versions v where id='"+lv.versionId+"'"),historical);
+  const lred=await req('/v1/operations/'+lid+'/redeem',null,{ticket:li.ticket,nonce:b64(legacyNonce),proof:b64(installProof(legacyKey.privateKey,li))});
+  assert.equal(lred.manifest,lp.manifest);
+  await req(lo+'/dispatch',null,{ticket:lc.ticket,nonce:b64(legacyNonce),proof:b64(authoringProof(legacyKey.privateKey,lc))});
+  await req(lo+'/cancel',a,{});
   const fixture=JSON.parse(readFileSync(join(root,'packages/protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));
   delete fixture.finalLogo;fixture.parts=[];fixture.memories=[];
   fixture.rules.push({itemId:randomUUID(),originId:randomUUID(),purpose:'work',text:{kind:'inline',value:'私有规则'}});
@@ -122,8 +143,51 @@ try{
   await req(thief.path+'/freeze',b,foreign,{status:403});
   foreign.origins.find(o=>o.itemId===copied.role.itemId).source={kind:'accountClaim'};await req(thief.path+'/freeze',b,foreign,{status:403});
   await req(thief.path+'/cancel',b,{});
+  const opInstall=async(token,release,extra={})=>{
+    const oid=opId(),path='/v2/operations/'+oid,device=generateKeyPairSync('x25519'),nonce=randomBytes(32);
+    const reqBody={format:'rich-v2',purpose:'installRichRecipe',generation:2,versionId:release.versionId,manifestSha256:release.contentSha256,
+      targetPublicKey:b64(device.publicKey.export({format:'der',type:'spki'}).subarray(-32)),nonceCommitment:b64(sha(nonce)),...extra};
+    const cap=await req(path+'/authorize',token,reqBody);
+    assert.deepEqual(await req(path+'/authorize',token,reqBody),cap);
+    const proof=stage=>({ticket:cap.ticket,nonce:b64(nonce),proof:b64(richInstallProof(device.privateKey,cap,stage))});
+    await req('/v1/operations/'+oid+'/cancel',token,{},{status:404});
+    await req(path+'/redeem',null,{...proof('redeem'),proof:b64(installProof(device.privateKey,cap))},{status:403});
+    await req(path+'/complete',null,{...proof('applied'),outcome:'applied'},{status:409});
+    const redeemed=await req(path+'/redeem',null,proof('redeem'));assert.deepEqual(redeemed.release,release);
+    await req(path+'/complete',null,{...proof('redeem'),outcome:'applied'},{status:403});
+    const readPart=async(obj,status=200)=>{
+      const r=await fetch(orig(broker)+path+'/objects/'+obj,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(proof('redeem'))});
+      assert.equal(r.status,status);return Buffer.from(await r.arrayBuffer());
+    };
+    assert.equal(sha(await readPart(redeemed.manifest.objectId)).toString('hex'),release.contentSha256);
+    await readPart(randomUUID(),404);
+    return {oid,readPart,complete:(outcome,expected=200)=>req(path+'/complete',null,{...proof(outcome),outcome},{status:expected})};
+  };
+  const install=await opInstall(b,(await req('/v2/versions/'+v.versionId+'/install-preview',b)).release);
+  assert.equal((await install.complete('applied')).disposition,'recorded');await install.complete('rejected',409);
   sql("select recipe_api.rich_moderate('feature','"+v.versionId+"','"+reader+"')");
   assert.equal((await req('/v2/community/recipes')).hero.versionId,v.versionId);
+  // New version of the author's coded work: stable item IDs/origins but a new
+  // exact release and freshly verified owner-scoped object membership.
+  const newer=structuredClone(updated);newer.public.version.value='2.0';newer.memories=[];newer.parts=[];
+  const oldIndex=new Map(inventory(updated).map(i=>[i.itemId,i])),nextInput=body(newer,'direct');
+  nextInput.sourceVersionId=v.versionId;
+  nextInput.origins=nextInput.origins.map(({itemId})=>({itemId,source:{kind:'releaseItem',versionId:v.versionId,itemId,baselineSha256:oldIndex.get(itemId).baselineSha256}}));
+  const prep2=await start(a),nextPlan=await prep2.freeze(nextInput);
+  assert.deepEqual(JSON.parse(Buffer.from(nextPlan.canonical,'base64url')).role,updated.role);
+  const draft2=await prep2.commit(nextPlan);
+  const nextVersion=await req('/v2/drafts/'+draft2.draftId+'/publish',a,{canonical:nextPlan.canonical},{rev:1,key:randomUUID()});
+  const nextDetail=await req('/v2/recipes/'+nextVersion.recipeId+'/versions/'+nextVersion.versionId);
+  assert.equal(nextDetail.visibility,'full');
+  await req('/v2/versions/'+nextVersion.versionId+'/install-preview',b,undefined,{status:403});
+  const pending=await opInstall(b,nextDetail.release,{purpose:'updateDirectRichRecipe',fromVersionId:v.versionId,localPlanSha256:'12'.repeat(32)});
+  assert.equal(sql("select count(*) from recipe_private.grants where actor='"+reader+"' and version_id='"+nextVersion.versionId+"'"),'0');
+  await req('/v2/versions/'+nextVersion.versionId+'/withdraw',a,{});
+  assert.equal((await pending.complete('applied')).disposition,'settled');
+  assert.equal((await pending.complete('applied')).disposition,'settled');
+  assert.equal((await req('/v2/versions/'+nextVersion.versionId+'/install-preview',b)).release.versionId,nextVersion.versionId);
+  sql("select recipe_api.rich_moderate('ban','"+nextVersion.versionId+"',null)");await pending.readPart(nextDetail.manifest.objectId,403);
+  console.log('PASS: native-device operation proofs, old-domain refusal, verified member read, distinct settlement proof, direct update grant only on completion after withdrawal.');
   await req('/v2/versions/'+v.versionId+'/withdraw',a,{});
   assert.equal((await req(detail)).state,'withdrawn');assert.deepEqual(await read(b,'versions',v.versionId,p.objectId),privateBytes);
   sql("select recipe_api.rich_moderate('ban','"+v.versionId+"',null)");await read(b,'versions',v.versionId,p.objectId,404);
