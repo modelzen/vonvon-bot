@@ -240,6 +240,7 @@ describe('desktop IPC boundary', () => {
       recipeAuthoring:async (r:RecipeAuthoringRequest):Promise<RecipeAuthoringReply> => {
         calls.push(r);
         if (r.type === 'open') return {kind:'session', session, leaseMs:45000,linked:false};
+        if (r.type === 'workflow') return {kind:'workflow',activity:0,ageMs:0,pausedContexts:[]};
         if (r.type === 'status') return {kind:'status',linked:false,operations:[],reconciliation:[]};
         if (r.type === 'beginLink') return {kind:'challenge',challengeId,code:'123456',expiresAt:Date.now()+30000};
         if (r.type === 'inspectLink') return {kind:'link',linked:false,evidence,recipient:{openId:'ou_admin',chatId:groupId,tenantKey:'test'}};
@@ -256,6 +257,7 @@ describe('desktop IPC boundary', () => {
     const {handle} = opened;
     expect(opened.target).toMatchObject({botName:'助手',accountName:'写作者'});
     expect(handle).not.toBe(session);
+    expect(await h.invoke(desktopChannels.recipeAuthoring,{type:'answerField',session,botId,request:{},value:'fake'})).toMatchObject({ok:false});
     expect(await h.invoke(desktopChannels.recipeAuthoring,{type:'advance',session,ticket:'test'})).toMatchObject({ok:false});
     expect(await h.invoke(desktopChannels.recipeAuthoring,{type:'status',handle,accountId})).toMatchObject({ok:false});
     expect(await request({type:'beginLink',handle})).toMatchObject({kind:'challenge',challengeId});
@@ -267,7 +269,19 @@ describe('desktop IPC boundary', () => {
     await expect(request({type:'status',handle})).rejects.toThrow();
     expect(calls.at(-1)).toEqual({type:'close',session,botId});
     expect(calls.filter(r => r.type === 'confirmLink')).toHaveLength(1);
-    await h.bridge.dispose();
+    const fresh = await request({type:'open',viewId:'local',accountId,botId});
+    if (fresh.kind !== 'session') throw Error('expected renewed session');
+    const started = Date.now();
+    const now = vi.spyOn(Date,'now');
+    try {
+      for (const minute of [10,20,29]) {
+        now.mockReturnValue(started+minute*60_000);
+        expect(await request({type:'status',handle:fresh.handle})).toMatchObject({kind:'session'});
+      }
+      now.mockReturnValue(started+30*60_000);
+      await expect(request({type:'status',handle:fresh.handle})).rejects.toThrow('暂停');
+      expect(calls.at(-1)).toEqual({type:'close',session,botId});
+    } finally {now.mockRestore(); await h.bridge.dispose();}
   });
   it('forwards a schedule request with its bot and checks both arguments', async () => {
     const h = harness();

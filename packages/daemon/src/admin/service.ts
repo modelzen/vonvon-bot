@@ -296,6 +296,7 @@ export class NotWiredYetError extends Error {
 
 export interface AdminBot {
   registeredAt?: number;
+  registrationId?: string;
   ownerName?: string;
   name: string;
   badgeNumber?: string;
@@ -334,6 +335,7 @@ export interface AdminProject {
   name: string;
   chatId: string;
   cwd: string;
+  bindingIncarnation?: string;
   /** The library project this binding belongs to (project/library.ts); absent until the daemon has linked the row. */
   projectId?: string;
   blank: boolean;
@@ -548,6 +550,7 @@ function adminRow(p: Project): Omit<AdminProject, 'sessionCount'> {
     chatId: p.chatId,
     cwd: p.cwd,
     ...(isProjectId(p.projectId) ? { projectId: p.projectId } : {}),
+    ...(p.bindingIncarnation && {bindingIncarnation:p.bindingIncarnation}),
     blank: p.blank,
     branch: p.branch,
     kind: sessionModeOf(p),
@@ -806,6 +809,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
           tenant: b.tenant,
           botName: b.botName,
           registeredAt: b.createdAt,
+          ...(b.registrationId && {registrationId:b.registrationId}),
           ownerName: owners.get(b.appId, getAppRoleSnapshot(b.appId, b.tenant), run.running && !closing),
           avatarDataUrl: avatars.get(b.appId),
           // 与 config/bots.activeBots 同语义：从未配置过活跃集 → 回退 current。
