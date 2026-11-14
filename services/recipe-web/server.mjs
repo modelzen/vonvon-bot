@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { createLogin, detailPath, WebError } from './auth.mjs';
 import { createNativeLogin } from './native-auth.mjs';
+import { richDetail } from './dist/rich-detail.mjs';
 
 function origin(value, name, loopbackOnly = false) {
   const url = new URL(value);
@@ -25,6 +26,8 @@ const assets = new Map([
   ['/studio.mjs', ['studio.mjs', 'text/javascript; charset=utf-8']],
   ['/setup.mjs', ['setup.mjs', 'text/javascript; charset=utf-8']],
   ['/app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']],
+  ['/viewer.mjs', ['../dist/viewer.mjs', 'text/javascript; charset=utf-8']],
+  ['/viewer.css', ['../dist/viewer.css', 'text/css; charset=utf-8']],
   ['/vendor/markdown-it.mjs', ['../node_modules/markdown-it/dist/browser/markdown-it.esm.min.mjs', 'text/javascript; charset=utf-8']],
   ['/credential-shapes.mjs', ['../../recipe-api/src/credential-shapes.mjs', 'text/javascript; charset=utf-8']],
   ['/markdown.mjs', ['markdown.mjs', 'text/javascript; charset=utf-8']],
@@ -32,8 +35,8 @@ const assets = new Map([
   ['/mark.png', ['mark.png', 'image/png']],
 ]);
 const idPattern = '[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}';
-const versionRead = new RegExp('^/v1/recipes/' + idPattern + '/versions/' + idPattern + '$', 'i');
-const claimPath = new RegExp('^/v1/versions/' + idPattern + '/(redeem|acquire)$', 'i');
+const versionRead = new RegExp('^/v[12]/recipes/(' + idPattern + ')/versions/(' + idPattern + ')$', 'i');
+const claimPath = new RegExp('^/v[12]/versions/' + idPattern + '/(redeem|acquire)$', 'i');
 
 const draftPath = new RegExp('^/v1/drafts/' + idPattern + '$', 'i');
 const publishPath = new RegExp('^/v1/drafts/' + idPattern + '/publish$', 'i');
@@ -57,6 +60,7 @@ export function createRecipeWeb(env = process.env) {
   const port = Number(env.RECIPE_WEB_PORT || 49151);
   const publicOrigin = origin(env.RECIPE_WEB_ORIGIN || 'http://127.0.0.1:' + port, 'RECIPE_WEB_ORIGIN');
   const apiOrigin = origin(env.RECIPE_API_ORIGIN || 'http://127.0.0.1:4317', 'RECIPE_API_ORIGIN', true);
+  const brokerOrigin = origin(env.RECIPE_BROKER_ORIGIN || 'http://127.0.0.1:4318', 'RECIPE_BROKER_ORIGIN', true);
   const supabaseOrigin = env.SUPABASE_URL ? origin(env.SUPABASE_URL, 'SUPABASE_URL') : null;
   const authConfig = { publicOrigin, supabaseOrigin, publishableKey: env.SUPABASE_PUBLISHABLE_KEY,
     providerNames: (env.RECIPE_WEB_PROVIDERS || 'github,google,apple').split(',').map(x => x.trim()) };
@@ -66,7 +70,7 @@ export function createRecipeWeb(env = process.env) {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Referrer-Policy', /^\/auth\/(?:callback|native)/.test(req.url || '') ? 'no-referrer' : 'same-origin');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
     const url = new URL(req.url, publicOrigin);
     if (url.origin !== publicOrigin) throw new WebError(400, 'invalid_path');
     if (await native.handle(req, res, url)) return;
@@ -80,7 +84,7 @@ export function createRecipeWeb(env = process.env) {
     if (req.method === 'POST' && url.pathname === '/auth/logout') return login.logout(req, res);
     if (url.pathname.startsWith('/api/')) {
       const path = url.pathname.slice(4);
-      const read = req.method === 'GET' && (versionRead.test(path) || ['/v1/community/recipes', '/v1/me/recipes'].includes(path));
+      const read = req.method === 'GET' && (versionRead.test(path) || ['/v1/community/recipes', '/v1/me/recipes', '/v2/community/recipes', '/v2/me/recipes', '/v2/me/publications'].includes(path));
       const claim = req.method === 'POST' && claimPath.test(path);
       const creatorRead = req.method === 'GET' && (['/v1/me/drafts', '/v1/me/publications'].includes(path) || draftPath.test(path) || codesPath.test(path));
       const creatorWrite = (req.method === 'POST' && (path === '/v1/drafts' || publishPath.test(path) || codesPath.test(path) || disableCode.test(path))) || (['PATCH', 'DELETE'].includes(req.method) && draftPath.test(path));
@@ -89,7 +93,7 @@ export function createRecipeWeb(env = process.env) {
       const guarded = claim || creatorWrite || guardedRead;
       const access = await login.access(req, { write: guarded });
       if (guardedRead && !access) throw new WebError(409, 'session_changed');
-      if ((claim || creatorRead || creatorWrite || path === '/v1/me/recipes') && !access) throw new WebError(401, 'login_required');
+      if ((claim || creatorRead || creatorWrite || /^\/v[12]\/me\//.test(path)) && !access) throw new WebError(401, 'login_required');
       const headers = { Accept: 'application/json' };
       if (access) headers.Authorization = 'Bearer ' + access;
       let payload;
@@ -104,8 +108,26 @@ export function createRecipeWeb(env = process.env) {
       const response = await fetch(apiOrigin + path + url.search, {
         method: req.method, headers, body: payload, redirect: 'error', signal: AbortSignal.timeout(12_000),
       });
-      const data = await response.json();
+      let data = await response.json();
       login.assertAccess(req, access, { write: guarded });
+      if (response.ok && path.startsWith('/v2/recipes/')) {
+        if (['withdrawn', 'blocked'].includes(data.state)) throw new WebError(404, 'not_found');
+        const [, recipeId, versionId] = versionRead.exec(path.toLowerCase());
+        data = await richDetail(data, recipeId, versionId, async (memberPath, limit) => {
+          login.assertAccess(req, access, { write: guarded });
+          const member = await fetch(brokerOrigin + memberPath, {headers, redirect: 'error', signal: AbortSignal.timeout(12_000)});
+          if (!member.ok) throw new WebError(503, 'content_unavailable');
+          const chunks = []; let size = 0;
+          for await (const chunk of member.body) {
+            size += chunk.length;
+            if (size > limit) throw new WebError(503, 'content_unavailable');
+            chunks.push(chunk);
+          }
+          login.assertAccess(req, access, { write: guarded });
+          return Buffer.concat(chunks);
+        });
+        login.assertAccess(req, access, { write: guarded });
+      }
       if (response.headers.has('retry-after')) res.setHeader('Retry-After', response.headers.get('retry-after'));
       return json(res, response.status, data);
     }
