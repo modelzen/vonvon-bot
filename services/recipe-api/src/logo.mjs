@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { decoderEnvironment, linuxDecoderLaunch } from './logo-sandbox.mjs';
 import { ApiError } from './errors.mjs';
 
 const worker = fileURLToPath(new URL('./logo-child.mjs',import.meta.url));
@@ -14,11 +15,14 @@ async function decode(bytes, mode) {
   const linux = process.platform === 'linux';
   const limits = linux ? 'ulimit -v 1572864 && ulimit -d 393216 && ' : '';
   const command = limits + 'ulimit -c 0 && ulimit -t 4 && exec "$@"';
+  let launch;
+  try { launch = linux ? linuxDecoderLaunch(mode) : {command:process.execPath,args:['--jitless','--max-old-space-size=48',worker,mode]}; }
+  catch { throw new ApiError(503,'logo_decoder_unavailable'); }
   active++;
   try {
     return await new Promise((resolve,reject) => {
-      const child = spawn('/bin/sh',['-c',command,'logo',process.execPath,'--jitless','--max-old-space-size=48',worker,mode],{
-        cwd:'/',env:{UV_THREADPOOL_SIZE:'1',VIPS_CONCURRENCY:'1',MALLOC_ARENA_MAX:'1'},stdio:['pipe','pipe','ignore'],
+      const child = spawn('/bin/sh',['-c',command,'logo',launch.command,...launch.args],{
+        cwd:'/',env:decoderEnvironment,stdio:['pipe','pipe','ignore'],
       });
       const chunks = [];
       let size = 0;
@@ -44,7 +48,8 @@ async function decode(bytes, mode) {
       child.once('close',code => {
         clearTimeout(timer);
         clearInterval(rss);
-        if (code !== 0 || size > 131072 || (mode !== 'check' && size === 0)) reject(new ApiError(422,'invalid_logo'));
+        if (linux && code === 1) reject(new ApiError(503,'logo_decoder_unavailable'));
+        else if (code !== 0 || size > 131072 || (mode !== 'check' && size === 0)) reject(new ApiError(422,'invalid_logo'));
         else resolve(Buffer.concat(chunks,size));
       });
       child.stdin.end(bytes);
