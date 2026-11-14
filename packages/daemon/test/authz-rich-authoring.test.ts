@@ -41,6 +41,13 @@ test.each(payloads)('owner desktop dispatches $type to the authoring business ha
   expect(handler).toHaveBeenCalledExactlyOnceWith(botId, { kind: 'recipeAuthoring', peer: expect.any(Object), request: payload });
 });
 
+test('unknown rich authoring actions do not reach the business handler', async () => {
+  const id = randomUUID();
+  owner.socket.send(JSON.stringify({ type: 'request', id, method: 'recipeAuthoring', payload: { type: 'richUnknown', botId, session } }));
+  expect(await owner.wait(frame => frame.type === 'error' && frame.id === id)).toMatchObject({ type: 'error', code: 'invalid_request' });
+  expect(handler).not.toHaveBeenCalled();
+});
+
 test.each(['web', 'cli'] as const)('owner %s observer cannot dispatch rich authoring', async clientKind => {
   const observer = await socketClient(fixture.api.port, fixture.credential, PROTOCOL_VERSION, 3000, clientKind);
   try {
@@ -55,7 +62,8 @@ test.each(['dm', 'group', 'comment'] as const)('Bot %s session cannot dispatch r
   const bot = await socketClient(fixture.api.port, credential, PROTOCOL_VERSION, 3000, 'desktop');
   try {
     await bot.ready();
-    expect(await bot.call({ type: 'request', id: 'negotiate', method: 'admin', payload: { type: 'negotiate', capabilities: ['cli'], scope: { bot: botId, group: groupId } } })).toMatchObject({ type: 'response' });
+    const scope = place === 'comment' ? { bot: botId } : { bot: botId, group: groupId };
+    expect(await bot.call({ type: 'request', id: 'negotiate', method: 'admin', payload: { type: 'negotiate', capabilities: ['cli'], scope } })).toMatchObject({ type: 'response' });
     for (const payload of payloads) expect(await bot.call(request(payload))).toMatchObject({ type: 'error', code: 'permission_denied' });
     expect(handler).not.toHaveBeenCalled();
   } finally { await bot.close(); }
