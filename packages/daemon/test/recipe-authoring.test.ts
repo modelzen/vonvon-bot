@@ -49,11 +49,12 @@ const acct = async (route: string, body?: object) => {
   return res.json();
 };
 const results = new Map<string,{draftId:string;revision:number}>();
+const proposeRich=vi.fn();
 const propose = vi.fn<DraftInstructionParser['propose']>();
 const readDraftField = vi.fn<ReadDraftField>();
 function restart() {
   service?.close();
-  service = new AuthoringService({bot,cfg,channel,parser:{propose},readDraftField,now:()=>clock,origin:accountApi ?? origin,loopback:true,
+  service = new AuthoringService({bot,cfg,channel,parser:{propose,proposeRich},readDraftField,now:()=>clock,origin:accountApi ?? origin,loopback:true,
     fetch: async (url,options) => {
       const {pathname} = new URL(String(url)), action = pathname.split('/').pop()!, body = JSON.parse(String(options!.body));
       expect(new Headers(options?.headers).has('authorization')).toBe(false);
@@ -66,6 +67,7 @@ function restart() {
     }});
 }
 beforeEach(async () => {
+  proposeRich.mockReset();
   propose.mockReset().mockRejectedValue(new Error('offline')); readDraftField.mockReset();
   updateFault=undefined;updateKeys.clear();
   n = 0;clock=Date.now();bodies=[];cloud=[];messages=new Map();cards=new Map();results.clear();loseSend=loseAccept=loseDispatch=false;
@@ -103,6 +105,13 @@ beforeEach(async () => {
       const m = [...messages.values()].find(m => url.pathname.endsWith('/'+m.message_id));
       const body = m && url.searchParams.get('card_msg_content_type') === 'user_card_content' ? {content:cards.get(m.card_id)} : undefined;
       value = {code:0,data:{items:m?[{...m,msg_type:'interactive',body}]:[]}};
+    } else if(path.startsWith('/v2/authoring/')){
+      const [, , , operationId,stage]=path.split('/');
+      if(stage==='dispatch')value={format:'rich-v2',operationId,status:'dispatched',stateRevision:2};
+      else{
+        const saved=results.get(operationId!)!;
+        value={format:'rich-v2',operationId,status:'accepted',stateRevision:3,...saved,recipeId:randomUUID(),packageId:data.packageId,manifestId:data.manifestId};
+      }
     } else if (path.startsWith('/v1/authoring/')) {
       const [, , , operationId, stage] = path.split('/');
       if (stage === 'dispatch') value = {operationId,status:'dispatched',stateRevision:2};
@@ -875,4 +884,48 @@ it('keeps an exact edit approval across process restarts and reconciles a lost a
   const receipt={operationId:op.operationId,status:'accepted',stateRevision:3,...results.get(op.operationId)};
   expect(await rpc('settle',{operationId:op.operationId,receipt})).toMatchObject({operation:{state:'completed',receipt:{draftId,revision:3}}});
   expect(cloud.map(c=>c.action)).toEqual(['dispatch','accept']);
+});
+
+it('saves only the private-chat-reviewed rich source and continues against its saved rich revision',async()=>{
+  const {freezeSnapshot,richWireBytes}=await import('../../../services/recipe-api/src/rich-document.mjs');
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  await open();await link();
+  const options={includeTasks:false,includeBotMemories:false,skills:[]};
+  const {inventory}=kind(await rpc('richInventory',{groupId,options}),'richInventory');
+  expect(inventory.content.role?.text).toEqual({kind:'inline',value:sourceRole});
+  const selection={options,reviewToken:inventory.reviewToken,selected:[inventory.content.role!.itemId],sourceAttested:true,
+    public:{name:'周报',summary:'每周整理',overview:'',version:'1'},access:'direct',setup:[]};
+  const op=kind(await rpc('richPrepare',{groupId,selection,attestations:[]}),'operation').operation;
+  const destinationDraftId=randomUUID();
+  const advanceRich=(authorization:object,accepted?:object)=>rpc('richAdvance',{operationId:op.operationId,destinationDraftId,authorization,...(accepted&&{accepted})});
+  await advanceRich({...await auth(op,'dispatch'),format:'rich-v2'});
+  expect((await status(op.operationId)).state).toBe('candidate');
+  expect([...cards.values()].join('')).not.toContain(sourceRole);
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'addSetup',target:'',valueJson:JSON.stringify({
+    kind:'config',title:'确认输出格式',instructions:'先在群里确认周报格式。',action:{kind:'manual'},required:true,
+  })}]});
+  await orch.onMessage(msg('建议一个使用前的配置步骤'));
+  const post=await status(op.operationId);
+  expect(post.state).toBe('candidate');
+  expect([...cards.values()].join('')).toContain('先在群里确认周报格式');
+  expect(JSON.stringify(proposeRich.mock.calls[0]?.[0])).not.toContain(hiddenMemory);
+  await act(ref(),{by:stranger});
+  await expect(rpc('richInspect',{operationId:op.operationId})).rejects.toThrow();
+  await act(ref());
+  const reviewed=kind(await rpc('richInspect',{operationId:op.operationId}),'richCandidate');
+  const {content}=freezeSnapshot(reviewed.request,Buffer.alloc(32,2));
+  const doc=canonicalizeRichRecipeContent(content),bytes=Buffer.from(doc.canonicalUTF8);
+  const payload=richWireBytes({format:'rich-v2',purpose:'prepareDraft',sourceIntentId:op.operationId,content});
+  const frozen={format:'rich-v2',sourceReviewSha256:reviewed.reviewDigest,destinationDraftId,canonical:bytes.toString('base64url'),
+    contentSha256:digest(bytes),logicalBytes:doc.logicalBytes,payload:payload.toString('base64url'),payloadDigest:digest(payload)};
+  const binding={...await auth({...op,payloadDigest:frozen.payloadDigest},'accept'),format:'rich-v2',sourceReviewSha256:reviewed.reviewDigest};
+  const accepted={frozen,manifestId:randomUUID(),packageId:op.operationId};
+  await expect(advanceRich({...binding,sourceReviewSha256:'0'.repeat(64)},accepted)).rejects.toThrow();
+  results.set(op.operationId,{draftId:destinationDraftId,revision:1});
+  await advanceRich(binding,accepted);
+  expect((await status(op.operationId)).receipt).toMatchObject({draftId:destinationDraftId,revision:1});
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'edit',target:'T1',valueJson:JSON.stringify('新的周报')}]});
+  await orch.onMessage(msg('把名称改成新的周报'));
+  const all=kind(await rpc('status'),'status').operations;
+  expect(all.find(o=>o.purpose==='editDraft')).toMatchObject({format:'rich-v2',draftId:destinationDraftId,baseRevision:1,state:'pendingMain'});
 });

@@ -8,7 +8,7 @@ export async function startRecipeService(env = process.env) {
   const port = Number(env.PORT ?? 4317);
   if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new Error('Invalid PORT');
   const db = await openDatabase(env.RECIPE_DATABASE_URL, env.RECIPE_CODE_KEY, env.RECIPE_AUTH_ISSUER);
-  const server = createRecipeServer({ verify, execute: db.execute });
+  const server = createRecipeServer({ verify, execute: db.execute, admitRich:env.RECIPE_RICH_WRITES==="1" });
   try {
     await new Promise((resolve, reject) => {
       server.once('error', reject);

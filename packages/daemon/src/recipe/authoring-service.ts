@@ -1,3 +1,8 @@
+import {readRichSource,preparedRich,richReviewDigest,bindRichMembers,richMemberCap,richCardReview,verifyEditBase,chatRichProposal,type RichLocalDraft,type RichNativeOptions} from './authoring-rich-flow';
+import {postRichStage,verifyFrozenRich} from './authoring-rich-proof';
+import {itemsOf,wireDigest} from './authoring-rich-snapshot';
+import {decodeRichRecipeContent,richFreezeInputSchema} from '@vonvon/protocol';
+import type {RichModelInput} from './authoring-rich-model';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { CardActionEvent, LarkChannel, NormalizedMessage } from '@larksuiteoapi/node-sdk';
@@ -24,7 +29,7 @@ interface Challenge {
 }
 interface Options {
   bot: BotIdentity; cfg: AppConfig; channel: LarkChannel; root?: string; now?: () => number;
-  origin?: string; fetch?: typeof fetch; loopback?: boolean; parser?: DraftInstructionParser; readDraftField?: ReadDraftField;
+  origin?: string; fetch?: typeof fetch; loopback?: boolean; parser?: DraftInstructionParser & {proposeRich?(input:RichModelInput,signal:AbortSignal):Promise<unknown>}; tasks?:RichNativeOptions['tasks'];managedSources?:RichNativeOptions['managedSources']; readDraftField?: ReadDraftField;
   currentBot?: () => Promise<void>; source?: (scope: string, account: string, group: string) => Promise<ReviewedSource>;
 }
 const LEASE = 45_000;
@@ -64,13 +69,14 @@ function bound(op: LocalOperation, link?: Link) {
   return !op.revoked && op.binding === link?.binding && sameRecipient(op.recipient,link.recipient);
 }
 function editCandidate(op: LocalOperation) {
+  if(op.view.format==='rich-v2')return richCardReview(op);
   const details = candidateCardDetails(op.payload);
   if (op.view.purpose === 'editDraft' && details && details.draftId === op.view.draftId &&
       details.revision === op.view.baseRevision && details.payloadDigest === op.proposalDigest) return details;
 }
 function reconciliationOf(op: LocalOperation): AuthoringReconciliation {
   const {operationId,purpose,targetPublicKey,nonceCommitment,draftId,baseRevision,createdAt,receipt} = op.view;
-  return {operationId,purpose,targetPublicKey,nonceCommitment,draftId,baseRevision,createdAt,receipt};
+  return {operationId,purpose,targetPublicKey,nonceCommitment,draftId,baseRevision,createdAt,receipt,...(op.view.format&&{format:op.view.format})};
 }
 function refusal(): never { throw new Error('身份、来源或草稿上下文已改变，请回到 App 核对。'); }
 
@@ -174,6 +180,11 @@ export class AuthoringService {
     return this.opts.source?.(p.scope, p.account, group) ?? reviewSource(this.opts.channel, this.opts.bot, p.scope, p.account, group);
   }
   private async sourceNow(p: Presence, op: LocalOperation) {
+    if(op.view.format==='rich-v2'&&op.rich?.source){
+      const src=op.rich.source, current=await readRichSource(this.opts,p.scope,p.account,src.groupId,src.options);
+      if(current.lease!==src.token)refusal();
+      return;
+    }
     if (!op.source) return;
     const source = await this.source(p, op.source.groupId);
     if (source.reviewToken !== op.source.reviewToken) {
@@ -290,6 +301,74 @@ export class AuthoringService {
           this.present(p);
           return {kind:'operationSourceIdentity', operationId:req.operationId, groupId:op.view.groupId, identity:identity ?? null};
         }
+        case 'richInventory':
+        case 'richPrepare': {
+          const link=await this.allowed(p);
+          this.interact(p);
+          const inv=await readRichSource(this.opts,p.scope,p.account,req.groupId,req.type==='richInventory'?req.options:req.selection.options);
+          if((await this.allowed(p)).binding!==link.binding)refusal();
+          if(req.type==='richInventory')return {kind:'richInventory',groupId:req.groupId,inventory:{content:inv.content,reviewToken:inv.lease,
+            unavailable:[...inv.evidence].filter(([,v])=>v.kind==='unresolved').map(([id])=>id),
+            versions:[...new Set([...inv.evidence.values()].flatMap(v=>v.kind==='managed'?v.parents.map(e=>e.versionId):[]))]}};
+          const rich=preparedRich(req,inv,p.account);
+          const sourceIdentity=await groupSourceIdentity(this.opts.channel,this.opts.bot,p.scope,req.groupId);
+          return this.start(p,link.recipient,{rich,sourceIdentity});
+        }
+        case 'richEdit': {
+          const link=await this.allowed(p);
+          this.interact(p); verifyEditBase(req.canonical,req.selected);
+          return this.start(p,link.recipient,{draftId:req.draftId,baseRevision:req.baseRevision,rich:{base:{canonical:req.canonical,selected:req.selected}}});
+        }
+        case 'richMembers':
+        case 'richBindMembers': {
+          const op=await this.operation(p,req.operationId);
+          await this.validate(p,op);
+          if(!op.rich?.request||op.view.state!=='pendingCloud'||op.editApproval!==editApproval(op,richReviewDigest(op.rich)))refusal();
+          const reviewDigest=richReviewDigest(op.rich);
+          if(req.type==='richMembers')return {kind:'richMembers',operationId:req.operationId,reviewDigest,cap:op.rich.members?.length?richMemberCap(op.rich):1,
+            members:op.rich.members?.map(({kind,bytes,sha256})=>({kind,bytes,sha256}))??[]};
+          if(reviewDigest!==req.reviewDigest)refusal();
+          const request=bindRichMembers(op.rich,req.descriptors);
+          await this.change(p,req.operationId,row=>{if(!row.rich||richReviewDigest(row.rich)!==reviewDigest)refusal();row.rich.boundRequest=request;});
+          return {kind:'richCandidate',operationId:req.operationId,reviewDigest,request};
+        }
+        case 'richInspect': {
+          const op=await this.operation(p,req.operationId);
+          await this.validate(p,op);
+          const request=op.rich?.members?.length?op.rich.boundRequest:op.rich?.request;
+          if(!op.rich||!request||op.view.state!=='pendingCloud'||op.view.payloadDigest!==richReviewDigest(op.rich)||op.editApproval!==editApproval(op,richReviewDigest(op.rich)))refusal();
+          return {kind:'richCandidate',operationId:req.operationId,reviewDigest:richReviewDigest(op.rich),request};
+        }
+        case 'richAdvance': {
+          const op=await this.operation(p,req.operationId);
+          await this.validate(p,op);
+          if(!op.rich||op.view.format!=='rich-v2'||op.view.draftId&&op.view.draftId!==req.destinationDraftId||
+            op.rich.destinationDraftId&&op.rich.destinationDraftId!==req.destinationDraftId)refusal();
+          if(req.authorization.stage==='dispatch'&&op.dispatched){await this.deliver(p,req.operationId,false);break;}
+          if(req.authorization.stage==='accept'&&(!op.rich.request||op.editApproval!==editApproval(op,richReviewDigest(op.rich))))refusal();
+          await this.change(p,req.operationId,row=>{if(!row.rich)refusal();row.rich.destinationDraftId=req.destinationDraftId;});
+          op.rich.destinationDraftId=req.destinationDraftId;
+          this.present(p);
+          if(req.accepted&&op.rich.request){
+            const frozen=verifyFrozenRich(op.view.operationId,req.destinationDraftId,op.rich.boundRequest??op.rich.request,req.accepted.frozen);
+            const saved=decodeRichRecipeContent(Buffer.from(frozen.canonical,'base64url')).content;
+            const original=op.rich.request;
+            let selected=op.rich.base?.selected??[];
+            let origins=op.rich.base?.origins;
+            if('content' in original){
+              const allow=itemsOf(original.content).filter(x=>Object.values(original.content.public).some(f=>f.itemId===x.itemId)||original.content.setup.some(f=>f.itemId===x.itemId)||op.rich!.source?.selected.includes(x.itemId));
+              const accepted=itemsOf(saved),items=itemsOf(original.content);
+              selected=allow.map(i=>accepted[items.findIndex(x=>x.itemId===i.itemId)]!.itemId);
+              const sourceMap=new Map(original.origins.map(o=>[o.itemId,o.source]));
+              origins=Object.fromEntries(items.map((item,i)=>[accepted[i]!.itemId,sourceMap.get(item.itemId)!]));
+            }
+            await this.change(p,req.operationId,row=>{row.richSaved={canonical:frozen.canonical,origins,selected:selected.filter(id=>itemsOf(saved).some(item=>item.itemId===id))};});
+          }
+          const receipt=await postRichStage(this.origin!,op,req,this.now(),this.opts.fetch,this.opts.loopback);
+          if(receipt)await this.settle(p,receipt,req.operationId);
+          else {await this.markDispatched(p,req.operationId);await this.deliver(p,req.operationId,false);}
+          break;
+        }
         case 'reviewSource': {
           await this.allowed(p);
           const {identity: _localBinding, ...source} = await this.source(p,req.groupId);
@@ -356,7 +435,7 @@ export class AuthoringService {
       return {kind:'operation',operation:await this.change(p,req.operationId,op => operationView(op,this.now()))};
     });
   }
-  private async start(p: Presence, recipient: Recipient, target: {source?: Source; sourceIdentity?: string; sourceCard?: Pick<SourceMenu,'cardId'|'messageId'|'createdAt'>; draftId?: string; baseRevision?: number; instructionId?: string; payload?: string; proposalDigest?: string}): Promise<RecipeAuthoringReply> {
+  private async start(p: Presence, recipient: Recipient, target: {rich?:RichLocalDraft;source?: Source; sourceIdentity?: string; sourceCard?: Pick<SourceMenu,'cardId'|'messageId'|'createdAt'>; draftId?: string; baseRevision?: number; instructionId?: string; payload?: string; proposalDigest?: string}): Promise<RecipeAuthoringReply> {
     if (target.source && !target.sourceIdentity) refusal();
     this.menu = undefined;
     const op = await withRegisteredBot(this.opts.bot.appId, () => this.ledger.run(db => {
@@ -365,9 +444,14 @@ export class AuthoringService {
       if (!sameRecipient(link?.recipient, recipient) || !isAdmin(this.opts.cfg,recipient.openId)) refusal();
       const current = Object.values(db.operations).filter(o => o.scope === p.scope && o.accountId === p.account && o.binding === link!.binding && sameRecipient(o.recipient,recipient));
       const prior = current.find(o => target.instructionId && (o.instructionId === target.instructionId || active(o) && o.seenInstructions?.includes(target.instructionId))) ??
-        current.find(o => active(o) && (target.draftId ? o.view.draftId === target.draftId :
-          o.source?.groupId === target.source?.groupId && o.source?.reviewToken === target.source?.reviewToken));
+        current.find(o => active(o) && Boolean(o.view.format)===Boolean(target.rich) && (target.draftId ? o.view.draftId === target.draftId :
+          target.rich?.source ? o.rich?.source?.groupId===target.rich.source.groupId : o.source?.groupId === target.source?.groupId && o.source?.reviewToken === target.source?.reviewToken));
       if (prior) {
+        if(target.rich&&active(prior)){
+          const matches=target.rich.selectionDigest ? target.rich.selectionDigest===prior.rich?.selectionDigest :
+            target.rich.base&&prior.rich?.base&&wireDigest(target.rich.base)===wireDigest(prior.rich.base);
+          if(!matches)refusal();
+        }
         if (target.sourceIdentity && !prior.sourceIdentity && prior.source?.reviewToken === target.source?.reviewToken) prior.sourceIdentity = target.sourceIdentity;
         if (active(prior) && (target.draftId ? prior.view.baseRevision !== target.baseRevision : JSON.stringify(prior.source) !== JSON.stringify(target.source))) refusal();
         if (active(prior) && !target.instructionId && (!prior.contextOpen || (prior.contextUntil ?? 0) <= this.now())) {
@@ -380,16 +464,23 @@ export class AuthoringService {
       const material = newAuthoringKey();
       const operationId = operationUuid(this.now());
       const row: LocalOperation = {accountId:p.account, scope:p.scope, bot:this.botKey, binding:link!.binding, recipient, secret:material.secret, nonce:material.nonce,
-        source:target.source, sourceIdentity:target.sourceIdentity, instructionId: target.instructionId, payload: target.payload, proposalDigest: target.proposalDigest,
-        contextUntil:this.now()+CONTEXT, carrier:newCarrier(target.source ? 'prepare' : target.payload ? 'confirm' : 'edit'), dispatched:false, contextOpen:true,
+        rich:target.rich, source:target.source, sourceIdentity:target.sourceIdentity, instructionId: target.instructionId, payload: target.payload, proposalDigest: target.proposalDigest,
+        contextUntil:this.now()+CONTEXT, carrier:newCarrier(target.rich?.request ? 'confirm' : target.source ? 'prepare' : target.payload ? 'confirm' : 'edit'), dispatched:false, contextOpen:true,
         view:{operationId, targetPublicKey:material.targetPublicKey, nonceCommitment:material.nonceCommitment,
-          purpose:target.source ? 'prepareDraft' : 'editDraft', draftId:target.draftId, baseRevision:target.baseRevision,
-          groupId:target.source ? groupIdSchema.parse(target.source.groupId) : undefined,
+          ...(target.rich&&{format:'rich-v2'}),purpose:target.source||target.rich?.source ? 'prepareDraft' : 'editDraft', draftId:target.draftId, baseRevision:target.baseRevision,
+          groupId:target.source||target.rich?.source ? groupIdSchema.parse(target.source?.groupId??target.rich!.source!.groupId) : undefined,
           state:'pendingMain', deliveryUnknown:false,createdAt:this.now()}};
+      if(target.rich?.request)row.proposalDigest=richReviewDigest(target.rich);
       if (target.sourceCard) Object.assign(row.carrier,{
         cardId:target.sourceCard.cardId,messageId:target.sourceCard.messageId,createdAt:target.sourceCard.createdAt,
         firstSend:target.sourceCard.createdAt,
       });
+      if(target.rich?.source && target.sourceIdentity){
+        const source=target.rich.source;
+        const saved:Source={groupId:source.groupId,reviewToken:source.token,rich:{ref:target.rich.sourceRef??randomUUID(),
+          draft:target.rich,identity:target.sourceIdentity}};
+        link!.sources=[saved,...link!.sources.filter(s=>s.groupId!==source.groupId)].slice(0,16);
+      }
       if (target.source) {
         link!.sources = [target.source, ...link!.sources.filter(s => s.groupId !== target.source!.groupId)].slice(0,16);
       }
@@ -500,7 +591,7 @@ export class AuthoringService {
     op = await this.operation(p,id);
     if (op.carrier.messageId) {
       if (op.view.state === 'sending') {
-        await this.change(p,id,row => { row.view.state = row.payload ? 'candidate' : 'waiting'; row.view.payloadDigest = row.proposalDigest; setCard(row,row.carrier.mode); });
+        await this.change(p,id,row => { row.view.state = row.payload||row.rich?.request ? 'candidate' : 'waiting'; row.view.payloadDigest = row.proposalDigest; setCard(row,row.carrier.mode); });
       }
       if (resend && (op.contextUntil ?? 0) <= this.now() && op.contextOpen && (op.view.state === 'waiting' || op.view.state === 'candidate')) {
         await this.change(p,id,row => { row.contextUntil = this.now()+CONTEXT; setCard(row,row.carrier.mode); });
@@ -531,7 +622,7 @@ export class AuthoringService {
     const messageId = await this.im.send(op.recipient.chatId,op.carrier.cardId!,op.carrier.sendUuid);
     await this.change(p,id,row => {
       row.carrier.messageId = messageId; row.view.deliveryUnknown = false; row.contextUntil = this.now()+CONTEXT;
-      if (row.view.state === 'sending') { row.view.state = row.payload ? 'candidate' : 'waiting'; row.view.payloadDigest = row.proposalDigest; }
+      if (row.view.state === 'sending') { row.view.state = row.payload||row.rich?.request ? 'candidate' : 'waiting'; row.view.payloadDigest = row.proposalDigest; }
     });
   }
   private async offerSources(p: Presence, link: Link, recipient: Recipient, instructionId: string) {
@@ -624,6 +715,47 @@ export class AuthoringService {
       }
       if (!selected || !selected.contextOpen || (selected.contextUntil ?? 0) <= this.now()) { await reply(selected ? expiredContext : appChoose); return true; }
       if (selected.seenInstructions?.includes(msg.messageId) || selected.instructionId === msg.messageId) return true;
+      if(selected.view.format==='rich-v2'&&selected.view.state==='completed'){
+        const saved=selected.view.receipt;
+        if(saved?.status!=='accepted'||!selected.richSaved||!this.opts.parser?.proposeRich){await reply(appChoose);return true;}
+        await this.allowed(p,recipient);
+        const rich={base:selected.richSaved};
+        const attempt=new AbortController();this.parsing=attempt;
+        try{
+          const signal=AbortSignal.any([attempt.signal,this.lifetime.signal,AbortSignal.timeout(Math.max(1,Math.min(28000,p.until-this.now())))]);
+          const result=await chatRichProposal({...selected,rich,view:{...selected.view,purpose:'editDraft',draftId:saved.draftId,baseRevision:saved.revision}},cmd,signal,{proposeRich:this.opts.parser.proposeRich});
+          await this.allowed(p,recipient);
+          if(result.kind!=='proposal'){await reply(result.kind==='clarify'?clarify:privateOnly);return true;}
+          await this.change(p,selected.view.operationId,row=>{if(!row.contextOpen||(row.contextUntil??0)<=this.now()||row.view.receipt?.status!=='accepted'||row.view.receipt.revision!==saved.revision)refusal();});
+          await this.start(p,recipient,{draftId:saved.draftId,baseRevision:saved.revision,instructionId:msg.messageId,rich:{base:selected.richSaved,request:richFreezeInputSchema.parse(result.request)}});
+        }finally{this.parsing=undefined;}
+        return true;
+      }
+      if(selected.view.format==='rich-v2'&&selected.view.state!=='completed'){
+        if(!['waiting','candidate'].includes(selected.view.state)||!this.opts.parser?.proposeRich){await reply(unavailable);return true;}
+        await this.validate(p,selected);
+        const ref=await this.change(p,selected.view.operationId,row=>{
+          if(row.carrier.ref!==selected.carrier.ref||!row.contextOpen||(row.contextUntil??0)<=this.now()||(row.seenInstructions?.length??0)>=32)refusal();
+          (row.seenInstructions??=[]).push(msg.messageId); this.interact(p); row.contextUntil=this.now()+CONTEXT;
+          setCard(row,'edit');row.view.state='waiting';delete row.view.payloadDigest;return row.carrier.ref;
+        });
+        const attempt=new AbortController();this.parsing=attempt;
+        try{
+          const signal=AbortSignal.any([attempt.signal,this.lifetime.signal,AbortSignal.timeout(Math.min(28000,Math.max(1,p.until-this.now())))]);
+          const result=await chatRichProposal(selected,cmd,signal,{proposeRich:this.opts.parser.proposeRich});
+          await this.validate(p,selected);
+          if(result.kind!=='proposal'){await this.refresh(p,selected.view.operationId);await reply(result.kind==='clarify'?clarify:privateOnly);return true;}
+          const request=richFreezeInputSchema.parse(result.request);
+          await this.change(p,selected.view.operationId,row=>{
+            if(!row.rich||!row.contextOpen||(row.contextUntil??0)<=this.now()||row.carrier.ref!==ref)refusal();
+            row.rich.request=request;
+            if('content' in request)row.rich.members=row.rich.members?.filter(m=>m.kind==='finalLogo'||request.content.files.some(f=>f.itemId===m.itemId));
+            delete row.rich.boundRequest;row.proposalDigest=richReviewDigest(row.rich);row.view.payloadDigest=row.proposalDigest;row.view.state='candidate';setCard(row,'confirm');
+          });
+          await this.refresh(p,selected.view.operationId);
+        }finally{this.parsing=undefined;}
+        return true;
+      }
       const prior = selected.view.receipt;
       const draftId = prior?.status === 'accepted' ? prior.draftId : selected.view.draftId;
       const baseRevision = prior?.status === 'accepted' ? prior.revision : selected.view.baseRevision;
@@ -740,6 +872,17 @@ export class AuthoringService {
         if (!source) return;
         this.menu = undefined;
         const current = link.sources.find(s => s.groupId === source.groupId);
+        if(current?.rich){
+          if(current.rich.ref!==source.rich?.ref||current.reviewToken!==source.reviewToken)return;
+          const draft=structuredClone(current.rich.draft),src=draft.source;
+          if(!src)return;
+          const live=await readRichSource(this.opts,p.scope,p.account,src.groupId,src.options);
+          if(live.lease!==src.token){await this.im.reply(evt.chatId,evt.messageId,appChoose);return;}
+          if((await this.allowed(p,recipient)).binding!==menu.binding)return;
+          this.interact(p);
+          await this.start(p,recipient,{rich:draft,sourceIdentity:current.rich.identity,sourceCard:menu,instructionId:menu.instructionId});
+          return;
+        }
         const reviewed = current && await this.source(p,current.groupId).catch(() => undefined);
         if (!reviewed || current?.reviewToken !== source.reviewToken || reviewed.reviewToken !== source.reviewToken) {
           await this.im.reply(evt.chatId,evt.messageId,appChoose); return;
@@ -760,7 +903,7 @@ export class AuthoringService {
         if (op.carrier.messageId || !await this.im.matches(evt.messageId,evt.chatId,op.carrier.cardId)) return;
         await this.change(p,op.view.operationId,row => {
           row.carrier.messageId = evt.messageId; row.view.deliveryUnknown = false;
-          if (row.view.state === 'sending') { row.view.state = row.payload ? 'candidate' : 'waiting'; row.view.payloadDigest = row.proposalDigest; }
+          if (row.view.state === 'sending') { row.view.state = row.payload||row.rich?.request ? 'candidate' : 'waiting'; row.view.payloadDigest = row.proposalDigest; }
         });
       }
       if (value.verb === 'cancel') {
@@ -769,7 +912,7 @@ export class AuthoringService {
         await this.change(p,op.view.operationId,row => { row.view.state = 'cancelPending'; setCard(row,'pending'); });
       } else {
         if (!['prepare','confirm'].includes(op.carrier.mode) || !['sending','waiting','candidate'].includes(op.view.state)) return;
-        if ((op.view.purpose === 'editDraft') !== (op.carrier.mode === 'confirm')) return;
+        if (op.view.format!=='rich-v2' && (op.view.purpose === 'editDraft') !== (op.carrier.mode === 'confirm')) return;
         if (op.carrier.mode === 'confirm') {
           const details = editCandidate(op);
           if (!details || op.carrier.previewDigest !== details.payloadDigest ||
@@ -781,6 +924,17 @@ export class AuthoringService {
         }
         this.interact(p);
         const source = await this.validate(p,op);
+        if(op.view.format==='rich-v2'){
+          const request=op.rich?.request;
+          if(!request||op.carrier.mode!=='confirm'||op.carrier.previewDigest!==richReviewDigest(op.rich!))refusal();
+          await this.change(p,op.view.operationId,row=>{
+            if(!row.contextOpen||(row.contextUntil??0)<=this.now()||row.carrier.ref!==value.ref||row.carrier.dirty||
+              !row.rich?.request||richReviewDigest(row.rich)!==row.carrier.previewDigest)refusal();
+            row.view.payloadDigest=richReviewDigest(row.rich);row.view.state='pendingCloud';
+            row.editApproval=editApproval(row,row.view.payloadDigest);setCard(row,'pending');
+          });
+          await this.refresh(p,op.view.operationId);return;
+        }
         const frozen = source ? freezePayload({public:blankPublic(),config:{role:source.role, ...(op.source?.setup ? {setup:op.source.setup} : {})}}) :
           op.payload && op.proposalDigest ? {payload:op.payload,payloadDigest:op.proposalDigest} : undefined;
         if (!frozen || digest(Buffer.from(frozen.payload,'base64url')) !== frozen.payloadDigest) refusal();

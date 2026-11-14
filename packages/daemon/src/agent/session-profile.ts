@@ -9,8 +9,8 @@ export interface SessionProfile {
   env: Readonly<Record<string, string>>;
   nativeSettings: { automaticMemory: false };
   additionalRoots: readonly { path: string; access: 'read' | 'write' }[];
-  /** Plugin-shaped directories handed over natively; today only vonvon's builtin package (T4b), s39d adds `'user'`. */
-  capabilityPackages: readonly { path: string; kind: 'builtin' }[];
+  /** Verified native package roots selected for this session. */
+  capabilityPackages: readonly ({ path:string; kind:'builtin' } | {path:string; kind:'recipe'; pluginId:string; skills:readonly {qualifiedName:string}[]})[];
   /** Explicit MCP delivery is added with capability packages in s39. */
   mcpServers: readonly { name: string }[];
   /**

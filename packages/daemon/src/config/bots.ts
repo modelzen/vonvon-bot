@@ -2,7 +2,7 @@ import { constants, existsSync } from 'node:fs';
 import { renameOverReaders } from '../server/atomic-file';
 import { randomInt, randomUUID } from 'node:crypto';
 import { badgeNumberSchema } from '@vonvon/protocol';
-import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath, rename, unlink, link, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { paths, botDir, botPaths } from './paths';
 import { loadConfig } from './store';
@@ -39,6 +39,7 @@ export interface BotEntry {
 
 export interface BotsRegistry extends GroupNamespaceState {
   version: 1;
+  recipeRegistryFormat?: 2;
   /**
    * Primary bot's appId — kept in sync with the active set (first active bot)
    * for the single-bot code paths (doctor, the implicit no-selector `run`,
@@ -91,6 +92,11 @@ export async function loadBots(): Promise<BotsRegistry> {
       }
       if (offset > MAX_REGISTRY_BYTES) throw new Error('Bot registry size limit exceeded');
       const reg = JSON.parse(bytes.subarray(0, offset).toString('utf8')) as BotsRegistry;
+      if(reg.recipeRegistryFormat!==undefined){
+        const envelope=reg.allocations as unknown as {format?:unknown;entries?:unknown};
+        if(reg.recipeRegistryFormat!==2 || !envelope || envelope.format!=='bot-allocations-v2' || Object.keys(envelope).some(k=>k!=='format'&&k!=='entries'))throw new Error('此 Bot 注册表需要更新版本');
+        reg.allocations=parseAllocations(envelope.entries);
+      }
       const allocations = parseAllocations(reg.allocations);
       const groups = parseGroupNamespaces({ groupContainers: reg.groupContainers, groupAllocations: reg.groupAllocations }, allocations);
       return { ...reg, version: 1, current: reg.current, bots: Array.isArray(reg.bots) ? reg.bots : [],
@@ -105,7 +111,7 @@ export async function loadBots(): Promise<BotsRegistry> {
 async function publish(reg: BotsRegistry): Promise<void> {
   parseAllocations(reg.allocations);
   parseGroupNamespaces({ groupContainers: reg.groupContainers, groupAllocations: reg.groupAllocations }, reg.allocations);
-  const content = `${JSON.stringify(reg, null, 2)}\n`;
+  const content = `${JSON.stringify(reg.recipeRegistryFormat===2 ? {...reg,allocations:{format:'bot-allocations-v2',entries:reg.allocations??{}}} : reg, null, 2)}\n`;
   if (Buffer.byteLength(content) > MAX_REGISTRY_BYTES) throw new Error('Bot registry size limit exceeded');
   await ensureDurableDirectory(dirname(paths.botsFile));
   const tmp = `${paths.botsFile}.tmp-${process.pid}-${randomUUID()}`;
@@ -172,6 +178,17 @@ function ownBots<T>(operation: (registry: BotsRegistry) => Promise<T>): Promise<
   writers = run.catch(() => undefined);
   return run;
 }
+
+/** Old readers strictly parse every allocation as an Allocation and refuse the whole registry before Bot ownership or removal. */
+export function requireRichRegistry():Promise<void>{return ownBots(async registry=>{
+  if(registry.recipeRegistryFormat===2)return;
+  const backup=join(paths.appDir,'bots.before-recipe-v2.json'), bytes=await readFile(paths.botsFile);
+  const tmp=backup+'.'+randomUUID();
+  const f=await open(tmp,'wx',0o600);try{await f.writeFile(bytes);await f.sync();}finally{await f.close();}
+  try{await link(tmp,backup);}catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;}finally{await unlink(tmp);}
+  await syncDirectory(paths.appDir);
+  registry.recipeRegistryFormat=2;await publish(registry);
+});}
 
 export function ensureRegistry(): Promise<BotsRegistry> {
   return ownBots(async registry => {

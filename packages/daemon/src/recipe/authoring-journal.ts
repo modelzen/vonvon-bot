@@ -1,3 +1,4 @@
+import type {RichLocalDraft} from './authoring-rich-flow';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { AuthoringAuthorization, AuthoringOperation, RecipeSetup } from '@vonvon/protocol';
@@ -17,7 +18,7 @@ export interface Recipient { openId: string; chatId: string; tenantKey: string }
 export function sameRecipient(a: Recipient | undefined, b: Recipient | undefined) {
   return Boolean(a && b && a.openId === b.openId && a.chatId === b.chatId && a.tenantKey === b.tenantKey);
 }
-export interface Source { groupId: string; reviewToken: string; setup?: RecipeSetup }
+export interface Source { groupId: string; reviewToken: string; setup?: RecipeSetup; rich?:{ref:string;draft:RichLocalDraft;identity:string} }
 export interface Link { bot: string; binding: string; recipient: Recipient; sources: Source[]; context?: {operationId: string; until: number} }
 export interface Carrier {
   ref: string; sendUuid: string; generation: number; seq: number; mode: CardMode; dirty: boolean;
@@ -48,6 +49,8 @@ export interface LocalOperation {
   view: AuthoringOperation;
   accountId: string; scope: string; bot: string; binding: string; recipient: Recipient; carrier: Carrier;
   secret?: string; nonce?: string; source?: Source; sourceIdentity?: string; payload?: string; proposalDigest?: string;
+  rich?: RichLocalDraft;
+  richSaved?:NonNullable<RichLocalDraft['base']>;
   editApproval?: string;
   dispatchAuthorization?: AuthoringAuthorization;
   dispatched: boolean; revoked?: true; contextOpen?: boolean; instructionId?: string; seenInstructions?: string[]; terminalAt?: number; contextUntil?: number;
@@ -64,10 +67,11 @@ export interface AuthoringLedger {
 export const active = (op: LocalOperation) => op.terminalAt === undefined;
 export function discardAuthoringMaterial(op: LocalOperation) {
   delete op.secret; delete op.nonce; delete op.dispatchAuthorization; delete op.payload; delete op.source;
-  delete op.editApproval; delete op.view.payloadDigest; delete op.proposalDigest;
+  delete op.rich; delete op.editApproval; delete op.view.payloadDigest; delete op.proposalDigest;
 }
 export function retire(op: LocalOperation, state: 'completed' | 'cancelled' | 'expired', now: number) {
   op.view.state = state;
+  if(state!=='completed')delete op.richSaved;
   op.view.deliveryUnknown = false;
   op.terminalAt = now;
   discardAuthoringMaterial(op);

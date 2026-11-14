@@ -9,7 +9,7 @@ import { mutateProjectStore, type Project } from '../project/registry';
 import { blankPublic, digest, freezePayload } from './authoring-wire';
 import { physicalChat } from './authoring-im';
 
-async function atSource<T>(channel: LarkChannel, bot: BotIdentity, groupId: string, read: (row: Project) => T) {
+export async function atSource<T>(channel: LarkChannel, bot: BotIdentity, groupId: string, read: (row: Project) => T) {
   if (!physicalChat(groupId)) throw new Error('请选择已绑定的群。');
   await createGroupExecutor(channel, bot)({kind:'groupMembership', chatId: groupId, identity: bot});
   return withRegisteredBot(bot.appId, () => mutateProjectStore({file: botPaths(bot.appId).projectsFile, dataRoot: paths.appDir}, async (_store, rows) => {

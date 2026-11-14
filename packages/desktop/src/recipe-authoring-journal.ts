@@ -22,6 +22,7 @@ const record = z
     deviceKey: recipeBinary32Schema,
     botId: agentIdSchema,
     operationId: uuid,
+    format:z.literal('rich-v2').optional(),
     purpose: z.enum(['prepareDraft', 'editDraft']),
     targetPublicKey: recipeBinary32Schema,
     nonceCommitment: recipeBinary32Schema,
@@ -58,7 +59,7 @@ export class AuthoringJournal {
     const prior = this.all().find(row => row.operationId === recovery.operationId);
     if (!prior) return; // Revoked before first Main observation: verify against the authenticated daemon and cloud registration.
     const { operationId, purpose, targetPublicKey, nonceCommitment, draftId, baseRevision, createdAt } = recovery;
-    const identity = { ...binding, operationId, purpose, targetPublicKey, nonceCommitment, draftId, baseRevision, createdAt };
+    const identity = { ...binding, format:recovery.format, operationId, purpose, targetPublicKey, nonceCommitment, draftId, baseRevision, createdAt };
     if (Object.entries(identity).some(([key,value]) => prior[key as keyof Row] !== value)) throw invalidAuthoring();
   }
   observe(binding: Binding, op: AuthoringOperation, cancel = false) {
@@ -71,6 +72,7 @@ export class AuthoringJournal {
     const { operationId, purpose, groupId, draftId, baseRevision, targetPublicKey, nonceCommitment, createdAt } = op;
     const identity = {
       ...binding,
+      format:op.format,
       operationId,
       purpose,
       groupId,

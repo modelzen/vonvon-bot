@@ -1,3 +1,4 @@
+import {RichInstaller,type RichPorts} from './rich-installer';
 import { z } from 'zod';
 import { recipeRedemptionSchema, type RecipeAuthorization, type RecipeInstallReply, type RecipeInstallRequest } from '@vonvon/protocol';
 import type { DeviceIdentity } from '../remote/device';
@@ -7,6 +8,7 @@ import { RecipeStore, type RecipeStoreOptions } from './store';
 import type { RecipeOperation } from './types';
 
 export interface RecipeInstallerOptions extends Omit<RecipeStoreOptions, 'targetPublicKey'> {
+  rich?:RichPorts;
   apiOrigin: string;
   allowLoopbackForTests?: boolean;
   device: DeviceIdentity;
@@ -24,11 +26,13 @@ class RecipeServiceError extends Error {
 }
 export class RecipeInstaller {
   readonly store: RecipeStore;
+  private readonly rich?:RichInstaller;
   private readonly origin: string;
   private readonly turns = new Map<string, Promise<RecipeInstallReply>>();
   constructor(private readonly options: RecipeInstallerOptions) {
     this.origin = recipeApiOrigin(options.apiOrigin, options.allowLoopbackForTests);
     this.store = new RecipeStore({...options, targetPublicKey: options.device.keypair.publicKey});
+    if(options.rich)this.rich=new RichInstaller(options,this.origin,{...options.rich,brokerOrigin:recipeApiOrigin(options.rich.brokerOrigin,options.allowLoopbackForTests)},this.store);
   }
   private async post(operationId: string, action: 'redeem' | 'complete' | 'unredeemable', body: object): Promise<unknown> {
     const response = await (this.options.fetch ?? fetch)(`${this.origin}/v1/operations/${operationId}/${action}`, {
@@ -103,6 +107,7 @@ export class RecipeInstaller {
     return applied;
   }
   async request(request: RecipeInstallRequest): Promise<RecipeInstallReply> {
+    if(request.type==='richPrepare'||request.type==='richCommit'||request.type==='richStatus'||request.type==='richSetup'){if(!this.rich)throw new Error('此设备尚未启用完整配方');return this.rich.request(request);}
     if (request.type==='source' || request.type==='ignoreVersion') return this.store.source(request);
     if (request.type === 'createdGroup') return this.store.createdGroup(request.botId, request.requestId);
     if (request.type === 'prepare') return this.store.prepare(request);

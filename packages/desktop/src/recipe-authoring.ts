@@ -1,3 +1,4 @@
+import {richAuthoringCloud,richTerminal} from './recipe-authoring-rich-cloud.js';
 import {safeDraftModelText, safeEditValue} from '../../../services/recipe-api/src/draft-model-text.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -103,6 +104,7 @@ export class RecipeAuthoringController {
       throw new AuthoringError('聊天编辑已暂停，请重新打开原来的配方操作。');
     }
   }
+  private richCloud(h:Handle){return richAuthoringCloud(this.account,h.open.accountId,AbortSignal.any([h.signal,h.stop.signal]),()=>this.check(h));}
   private cloud(h: Handle) {
     return authoringCloud(this.account, h.open.accountId, AbortSignal.any([h.signal, h.stop.signal]), () =>
       this.check(h),
@@ -390,8 +392,14 @@ export class RecipeAuthoringController {
         try {
           const cloud = this.cloud(h);
           // A registration must match this account and device operation before even a cancellation can mutate it.
-          const state = await cloud.get(op);
-          const winner = state && 'operationId' in state ? state : await cloud.cancel(op);
+          let winner:AuthoringReceipt|undefined;
+          if(op.format==='rich-v2'){
+            winner=richTerminal(await this.richCloud(h).cancel(operationId));
+          }else{
+            const state=await cloud.get(op);
+            winner=state&&'operationId' in state?state:await cloud.cancel(op);
+          }
+          if(!winner)throw invalidAuthoring();
           const result = expectKind(await this.daemon(h, { type:'reconcile', operationId, receipt:winner }), 'reconciled');
           if (canonical(result.receipt) !== canonical(winner)) throw invalidAuthoring();
           receipt = winner;
@@ -507,12 +515,64 @@ export class RecipeAuthoringController {
       throw invalidAuthoring();
     return result;
   }
+  private async syncRich(h:Handle,op:AuthoringOperation,action:'sync'|'resume'|'cancel'|'resend'|'accept'){
+    const cloud=this.richCloud(h),id=op.operationId;
+    const row=this.remember(h,op,action==='cancel');
+    if(row.cancelling||op.state==='cancelPending'){
+      if(op.state!=='cancelPending'&&!terminal(op))await this.operation(h,{type:'cancel',operationId:id});
+      const winner=richTerminal(await cloud.cancel(id));
+      if(!winner)throw invalidAuthoring();
+      await cloud.cancelPackage(id).catch(()=>{});
+      return this.settle(h,op,winner);
+    }
+    if(terminal(op))return op;
+    await this.rememberSource(h,op);
+    const recovered=await cloud.recover(id);
+    const winner=richTerminal(recovered);
+    if(winner)return this.settle(h,op,winner);
+    const destinationDraftId=await cloud.register(op);
+    if(op.state==='pendingMain'){
+      const authorization=await cloud.authorize(id,'dispatch',dispatchDigest);
+      return this.operation(h,{type:'richAdvance',operationId:id,destinationDraftId,authorization});
+    }
+    if(action==='resend'||op.state==='sending')return this.operation(h,{type:action==='resend'?'resend':'deliver',operationId:id});
+    if(action==='resume'&&h.pausedContexts.has(id))return this.operation(h,{type:'resumeContext',operationId:id});
+    if(op.cardUpdate==='pending')op=await this.operation(h,{type:'updateCard',operationId:id});
+    if(op.state!=='pendingCloud')return op;
+    const read=async()=>expectKind(await this.daemon(h,{type:'richInspect',operationId:id}),'richCandidate');
+    const transfer=expectKind(await this.daemon(h,{type:'richMembers',operationId:id}),'richMembers');
+    if(transfer.operationId!==id||transfer.reviewDigest!==op.payloadDigest)throw recheck();
+    if(transfer.members.length){
+      await cloud.reserve(id,destinationDraftId,transfer.cap);
+      const descriptors=[];
+      for(const [ordinal,m] of transfer.members.entries()){
+        const bytes=Buffer.from(m.bytes,'base64url');
+        if(createHash('sha256').update(bytes).digest('hex')!==m.sha256)throw recheck();
+        const part=await cloud.upload(id,ordinal,m.kind,bytes);
+        if(part.kind==='manifest')throw recheck();
+        descriptors.push(part);
+      }
+      await this.daemon(h,{type:'richBindMembers',operationId:id,reviewDigest:transfer.reviewDigest,descriptors});
+    }
+    const approved=await read();
+    if(approved.operationId!==id||approved.reviewDigest!==op.payloadDigest)throw recheck();
+    const frozen=await cloud.freeze(id,approved.request);
+    if(frozen.destinationDraftId!==destinationDraftId||frozen.sourceReviewSha256!==createHash('sha256').update(canonical(approved.request)).digest('hex'))throw recheck();
+    const bytes=Buffer.from(frozen.canonical,'base64url');
+    if(createHash('sha256').update(bytes).digest('hex')!==frozen.contentSha256)throw invalidAuthoring();
+    if(!transfer.members.length)await cloud.reserve(id,destinationDraftId,2*bytes.length);
+    const member=await cloud.upload(id,65,'manifest',bytes);
+    const binding=await cloud.authorize(id,'accept',frozen.payloadDigest);
+    if((await read()).reviewDigest!==approved.reviewDigest)throw recheck();
+    return this.operation(h,{type:'richAdvance',operationId:id,destinationDraftId,authorization:binding,accepted:{frozen,manifestId:member.objectId,packageId:id}});
+  }
   private async sync(
     h: Handle,
     op: AuthoringOperation,
     action: 'sync' | 'resume' | 'cancel' | 'resend' | 'accept' = 'sync',
     digest?: string,
   ) {
+    if(op.format==='rich-v2')return this.syncRich(h,op,action);
     const row = this.remember(h, op, action === 'cancel');
     const operationId = op.operationId,
       cloud = this.cloud(h);
@@ -600,6 +660,29 @@ export class RecipeAuthoringController {
         if (source.groupId !== r.groupId) throw recheck();
         h.source = { groupId: r.groupId, reviewToken: source.reviewToken };
         return { ...source, target: h.target, groupName };
+      }
+      case 'richInventory': {
+        if(!h.groups.has(r.groupId))throw recheck();
+        return expectKind(await this.daemon(h,{type:r.type,groupId:r.groupId,options:r.options}),'richInventory');
+      }
+      case 'richPrepare':
+      case 'richEdit': {
+        const cloud=this.richCloud(h);
+        let req:ScopedRequest;
+        if(r.type==='richPrepare'){
+          if(!h.groups.has(r.groupId))throw recheck();
+          const inv=expectKind(await this.daemon(h,{type:'richInventory',groupId:r.groupId,options:r.selection.options}),'richInventory').inventory;
+          if(inv.reviewToken!==r.selection.reviewToken)throw recheck();
+          const attestations=await Promise.all(inv.versions.map(v=>cloud.sourceItems(v)));
+          req={type:r.type,groupId:r.groupId,selection:r.selection,attestations};
+        }else{
+          if(h.open.groupId)throw recheck();
+          const {canonical}=await cloud.draft(r.draftId,r.baseRevision);
+          req={type:r.type,draftId:r.draftId,baseRevision:r.baseRevision,canonical,selected:r.selected};
+        }
+        const op=expectKind(await this.daemon(h,req),'operation').operation;
+        if(op.format!=='rich-v2'||(r.type==='richPrepare'?op.groupId!==r.groupId:op.draftId!==r.draftId||op.baseRevision!==r.baseRevision))throw recheck();
+        return {kind:'operation',operation:this.display(h,await this.syncRich(h,op,'sync'))};
       }
       case 'prepare':
       case 'edit': {

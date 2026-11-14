@@ -55,6 +55,7 @@ export interface BridgeOptions {
 }
 
 export interface BridgeHandle {
+  richRecipe:(op:import('../recipe/rich-installer').RichBotOp)=>Promise<unknown>;
   authoring: (op: AuthoringIpc) => Promise<unknown>;
   entries: AgentEntries;
   channel: LarkChannel;
@@ -135,7 +136,11 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     const backend = group.modelAccess?.backend ?? group.backend ?? 'codex-appserver';
     return {backend, model:resolveModelPreference({bot:opts.cfg.preferences, group},backend)?.model};
   });
-  const authoring = new AuthoringService({bot: identity, cfg: opts.cfg, channel, parser});
+  const authoring = new AuthoringService({bot: identity, cfg: opts.cfg, channel, parser,tasks:async chatId=>{
+    const result=await orchestrator.scheduleAs({kind:'local',via:'desktop'},{action:'list',chatId});
+    if(result.kind!=='tasks')throw new Error('无法读取所选群的任务。');
+    return result.tasks;
+  }});
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
     { entries, memory, authoring, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}), ...(sessionCli ? { sessionCli } : {}) });
   const firstHello = createFirstHello({ cfg: opts.cfg, appSecret: opts.appSecret, channel, write: orchestrator.writePreferences });
@@ -273,7 +278,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       void task.then(() => groupTasks.delete(task), () => groupTasks.delete(task));
       return task;
     };
-    return { channel, entries, authoring: async op => op.kind === 'recipeAuthoringDisconnect' ? authoring.disconnect(op.peer.id) : authoring.request(op.peer, op.request), collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, feishuRead: createFeishuReads({ feishu, members }), feishuApi: createFeishuCalls(feishu), firstHello: firstHello.attempt, shutdown };
+    return { channel, entries, richRecipe:op=>orchestrator.richRecipe!(op,identity,async chatId=>{await adminGroups({kind:'groupMembership',chatId,identity});}), authoring: async op => op.kind === 'recipeAuthoringDisconnect' ? authoring.disconnect(op.peer.id) : authoring.request(op.peer, op.request), collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.scheduleAs, feishuRead: createFeishuReads({ feishu, members }), feishuApi: createFeishuCalls(feishu), firstHello: firstHello.attempt, shutdown };
   } catch (error) {
     try { await shutdown(); }
     catch (cleanupError) {
