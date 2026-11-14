@@ -249,6 +249,17 @@ try{
   await req(derivative.path+'/freeze',b,derivedInput,{status:403});
   origin.source={kind:'releaseItem',...edge(nextVersion.versionId,donor)};
   const derivedPlan=await derivative.freeze(derivedInput),derivedSaved=await derivative.commit(derivedPlan);
+  const exactOnly=jwt(randomUUID()),noGrant=jwt(randomUUID());
+  const exactAccount=(await req('/v1/me',exactOnly)).accountId;
+  await req('/v1/me',noGrant);
+  await req('/v2/versions/'+nextVersion.versionId+'/acquire',exactOnly,{},{key:'a2.'+opId()});
+  assert.equal(sql("select count(*) from recipe_private.grants where actor='"+exactAccount+"' and version_id='"+v.versionId+"'"),'0');
+  const exactInstall=await opInstall(exactOnly,nextDetail.release);
+  assert.equal((await exactInstall.complete('applied')).disposition,'recorded');
+  const deniedDevice=generateKeyPairSync('x25519');
+  const deniedIntent={format:'rich-v2',purpose:'installRichRecipe',generation:2,versionId:nextVersion.versionId,manifestSha256:nextDetail.release.contentSha256,targetPublicKey:b64(deniedDevice.publicKey.export({type:'spki',format:'der'}).subarray(-32)),nonceCommitment:b64(sha(randomBytes(32)))};
+  await req('/v2/operations/'+opId()+'/authorize',noGrant,deniedIntent,{status:403});
+  await req('/v2/operations/'+opId()+'/authorize',noGrant,{...deniedIntent,purpose:'updateDirectRichRecipe',fromVersionId:v.versionId,localPlanSha256:'34'.repeat(32)},{status:403});
   const pending=await opInstall(b,nextDetail.release,{purpose:'updateDirectRichRecipe',fromVersionId:v.versionId,localPlanSha256:'12'.repeat(32)});
   assert.equal(sql("select count(*) from recipe_private.grants where actor='"+reader+"' and version_id='"+nextVersion.versionId+"'"),'0');
   await req('/v2/versions/'+nextVersion.versionId+'/withdraw',a,{});

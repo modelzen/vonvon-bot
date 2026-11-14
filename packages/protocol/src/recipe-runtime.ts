@@ -14,6 +14,7 @@ export const richRuntimeRequests = [
   z
     .object({
       type: z.literal('richPrepare'),
+      authority:z.enum(['exactVersion','directUpdate']).optional(),
       ...target,
       preview: recipeRichInstallPreviewSchema,
       canonical: z.string().max(1048576),

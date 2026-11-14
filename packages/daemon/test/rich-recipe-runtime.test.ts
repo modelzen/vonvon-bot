@@ -167,8 +167,8 @@ test('a redeemed install drains existing work and commits only the selected slot
       bytes: encoded.canonicalUTF8,
     };
   };
-  async function prepare(choices?: Record<string, string>) {
-    const { request, bytes } = await preview();
+  async function prepare(choices?: Record<string, string>,authority?:'exactVersion'|'directUpdate',actorAccount=accountId) {
+    const { request, bytes } = await preview();Object.assign(request,{...(authority?{authority}:{})});request.preview.accountId=actorAccount;
     const first = await installer().request(recipeInstallRequestSchema.parse(request));
     if (first.kind !== 'richReview') throw Error('missing review');
     const next = await installer().request(
@@ -182,7 +182,7 @@ test('a redeemed install drains existing work and commits only the selected slot
     const auth = {
       ...next.intent,
       operationId: next.operationId,
-      accountId,
+      accountId:actorAccount,
       ticket: Buffer.alloc(32, 1).toString('base64url'),
       deadline: Date.now() + 60000,
       serverPublicKey: keys.publicKey.export({ format: 'jwk' }).x!,
@@ -284,6 +284,7 @@ test('a redeemed install drains existing work and commits only the selected slot
   expect((await group())?.supplement).toBe('local');
   expect(store.all()[0]).toMatchObject({ id: taskId, state: 'paused', instruction: 'changed schedule' });
   expect((await setup({ kind: 'read' })).steps[0]!.readiness).toBe('acknowledged');
+  const exactFromOtherAccount=await prepare(undefined,'exactVersion',randomUUID());expect(exactFromOtherAccount.kind).toBe('installRichRecipe');await expect(installer().request(exactFromOtherAccount.commit)).resolves.toMatchObject({status:'applied'});expect((await group())?.supplement).toBe('local');
   expect(JSON.parse(await readFile(join(root, 'bots.json'), 'utf8')).allocations.format).toBe('bot-allocations-v2');
   expect(JSON.parse(await readFile(join(root, 'bots.before-recipe-v2.json'), 'utf8')).recipeRegistryFormat).toBeUndefined();
 });
