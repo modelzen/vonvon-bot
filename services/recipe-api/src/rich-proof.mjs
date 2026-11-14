@@ -6,7 +6,8 @@ const domain=Buffer.from('vonvon.recipe.authoring.v2\0'), keyInfo=Buffer.from('v
 const publicKey=wire=>createPublicKey({key:Buffer.concat([Buffer.from('302a300506032b656e032100','hex'),binary32(wire)]),format:'der',type:'spki'});
 export function richTranscript(b) {
   if(b.format!=='rich-v2')throw badInput();
-  return Buffer.concat([domain,authoringTranscript(b).subarray(domain.length)]);
+  if(b.stage==='accept'&&!/^[0-9a-f]{64}$/.test(b.sourceReviewSha256??''))throw badInput();
+  return Buffer.concat([domain,authoringTranscript(b).subarray(domain.length),...(b.stage==='accept'?[Buffer.from(b.sourceReviewSha256,'hex')]:[])]);
 }
 function proof(priv,pub,b) {
   const shared=diffieHellman({privateKey:priv,publicKey:pub});

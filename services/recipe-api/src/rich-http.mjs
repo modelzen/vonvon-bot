@@ -1,10 +1,10 @@
 import {decodeRichRecipeContent,recipeRichPartDescriptorSchema,recipeRichInstallIntentSchema} from '../../../packages/protocol/dist/index.js';
-import {authoringInput,payloadBytes} from './authoring-input.mjs';
+import {authoringInput} from './authoring-input.mjs';
 import {ApiError,badInput} from './errors.mjs';
 import {bodyJson,expectedRevision,objectKeys,queryParams,requestKey,uuid} from './input.mjs';
 import {binary32} from './install-proof.mjs';
 import {operationId} from './operation-input.mjs';
-import {parseRichPayload} from './rich-document.mjs';
+import {richWireBytes,parseRichPayload} from './rich-document.mjs';
 
 const routes=[
  ['GET','versions/:v/install-preview','richInstallPreview'],['POST','operations/:o/authorize','richInstallAuthorize'],
@@ -56,7 +56,7 @@ export async function richInput(req,url,{action,ids:[id,...other]}) {
     objectKeys(b,['ticket','nonce','proof','payload','canonical','manifestId','packageId']);
     const p=wireBytes(b.payload,1049600);let parsed;
     try{parsed=parseRichPayload(JSON.parse(p.toString('utf8')));}catch{throw badInput();}
-    if(!p.equals(payloadBytes(parsed)))throw badInput();
+    if(!p.equals(richWireBytes(parsed)))throw badInput();
     const doc=readDocument(b.canonical);
     return [action,[operationId(id),...['ticket','nonce','proof'].map(k=>binary32(b[k])),p,Buffer.from(doc.canonicalUTF8),uuid(b.manifestId),operationId(b.packageId)]];
   }

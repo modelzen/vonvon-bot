@@ -1,14 +1,20 @@
 import {createHmac,createHash} from 'node:crypto';
 import {canonicalizeRichRecipeContent,recipeRichAuthoringPayloadSchema,recipeRichOriginEdgeSchema,validatePublishableRichRecipeContent} from '../../../packages/protocol/dist/index.js';
 import {ApiError,badInput} from './errors.mjs';
-import {canonicalJson} from './authoring-input.mjs';
 import {objectKeys,uuid} from './input.mjs';
 import {credentialField} from './credential-shapes.mjs';
 
 const collections = {setting:'settings',rule:'rules',skill:'skills',file:'files',task:'tasks',memory:'memories',setup:'setup'};
 const denies = () => new ApiError(403,'source_unavailable');
 const digest = value => createHash('sha256').update(value).digest('hex');
-export const richDigest = value => digest(canonicalJson(value));
+function sorted(value,depth=0) {
+  if(depth>24)throw badInput();
+  if(Array.isArray(value))return '['+value.map(v=>sorted(v,depth+1)).join(',')+']';
+  if(value!==null&&typeof value==='object')return '{'+Object.keys(value).sort().map(k=>JSON.stringify(k)+':'+sorted(value[k],depth+1)).join(',')+'}';
+  return JSON.stringify(value);
+}
+export const richWireBytes=value=>Buffer.from(sorted(value));
+export const richDigest=value=>digest(richWireBytes(value));
 export function document(value, published=false) {
   let result;
   try {result=(published ? validatePublishableRichRecipeContent : canonicalizeRichRecipeContent)(value);}
@@ -53,7 +59,7 @@ function stableValue(content,entry) {
 }
 export function inventory(content) {
   return entries(content).map(e=>({kind:e.kind,itemId:e.item.itemId,originId:e.item.originId,
-    baselineSha256:richDigest(stableValue(content,e)),...(e.kind==='publicText'?{field:e.key}:{})}));
+    baselineSha256:richDigest(e.item),contentFingerprint:richDigest(stableValue(content,e)),...(e.kind==='publicText'?{field:e.key}:{})}));
 }
 function remap(content,ids) {
   for(const {item} of entries(content)) {const id=ids.get(item.itemId);if(!id)throw badInput();Object.assign(item,id);}
@@ -82,6 +88,11 @@ export function freezeSnapshot(body,seed,prior=new Map()) {
     else if(source.kind==='releaseItem') {
       objectKeys(source,['kind','versionId','itemId','baselineSha256']);
       if(!recipeRichOriginEdgeSchema.safeParse({versionId:source.versionId,itemId:source.itemId,baselineSha256:source.baselineSha256}).success)throw badInput();
+    } else if(source.kind==='releaseItems') {
+      objectKeys(source,['kind','parents']);
+      if(!Array.isArray(source.parents)||source.parents.length<1||source.parents.length>64||
+        source.parents.some(p=>!recipeRichOriginEdgeSchema.safeParse(p).success)||
+        new Set(source.parents.map(p=>p.versionId+':'+p.itemId)).size!==source.parents.length)throw badInput();
     } else throw denies();
     origins.set(itemId,source);
   }
@@ -121,7 +132,7 @@ export function applyChanges(original,changes,resolveCandidate,seed,newParts=[])
   }
   function clone(kind,donor,sourceContent) {
     const item={...structuredClone(donor),itemId:randomUUID(),originId:randomUUID()};
-    copies.push({itemId:item.itemId,originId:item.originId,donorOriginId:donor.originId,kind});
+    copies.push({itemId:item.itemId,originId:item.originId,donorOriginId:donor.originId,kind,baselineSha256:richDigest(donor)});
     if(kind==='skill') {
       const ids=new Map();
       for(const id of donor.fileIds){const f=sourceContent.files.find(f=>f.itemId===id);if(!f)throw denies();const copy=clone('file',f,sourceContent);content.files.push(copy);ids.set(id,copy.itemId);}
