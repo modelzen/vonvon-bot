@@ -519,6 +519,8 @@ begin
   scope:=recipe_private.rich_access(a,v,rv.state);
   if scope in ('withdrawn','blocked') then return jsonb_build_object('state',scope,'versionId',v.id); end if;
   result:=recipe_private.summary(v)||jsonb_build_object('format','rich-v2','state',rv.state,'visibility',scope,'creator',recipe_private.public_creator(v.owner_id),
+    'hasDisplayLogo',rv.state='listed' and exists(select from recipe_private.object_version_refs dr join recipe_private.object_attempts m on m.id=dr.object_id
+       where dr.version_id=v.id and m.kind='finalLogo'),
     'owned',coalesce(v.owner_id=a,false),'acquired',exists(select from recipe_private.grants where version_id=v.id and actor=a));
   if scope='full' then
     manifest:=recipe_private.object_descriptor(v.owner_id,rv.manifest_id);
@@ -553,6 +555,14 @@ begin
   if own is null then raise exception 'not_found'; end if;return recipe_private.object_descriptor(own,obj);
 end $$;
 grant execute on function recipe_objects.business_actor(text,uuid),recipe_objects.read_descriptor(text,uuid,text,uuid,uuid) to recipe_object_verifier;
+
+create function recipe_objects.display_logo(v_id uuid) returns jsonb
+language sql stable security definer set search_path=pg_catalog,pg_temp as $$
+  select recipe_private.object_descriptor(v.owner_id,m.id) from recipe_private.rich_versions rv join recipe_private.versions v on v.id=rv.id
+    join recipe_private.object_version_refs r on r.version_id=v.id join recipe_private.object_attempts m on m.id=r.object_id and m.kind='finalLogo'
+    where rv.id=v_id and rv.state='listed'
+$$;
+grant execute on function recipe_objects.display_logo(uuid) to recipe_object_verifier;
 
 create function recipe_private.close_rich_version(v_id uuid,next_state text) returns void language plpgsql set search_path=pg_catalog,pg_temp as $$
 begin
@@ -599,6 +609,8 @@ create trigger guard_legacy_parent before insert on recipe_private.drafts for ea
 create function recipe_private.catalog_card(v recipe_private.versions,rich boolean) returns jsonb
 language sql stable set search_path=pg_catalog,pg_temp as $$
   select recipe_private.summary(v) || case when rich then jsonb_build_object('creator',recipe_private.public_creator(v.owner_id),
+    'hasDisplayLogo',exists(select from recipe_private.rich_versions rv join recipe_private.object_version_refs dr on dr.version_id=rv.id
+      join recipe_private.object_attempts m on m.id=dr.object_id where rv.id=v.id and rv.state='listed' and m.kind='finalLogo'),
     'format',case when exists(select from recipe_private.rich_versions where id=v.id) then 'rich-v2' else 'role-v1' end) else '{}' end
 $$;
 create function recipe_private.listed_catalog(term text,after_id uuid,rich boolean) returns jsonb
@@ -658,6 +670,48 @@ begin
 end $$;
 grant execute on function recipe_api.rich_moderate(text,uuid,uuid) to recipe_editor;
 
+create function recipe_api.rich_catalog_page(q text,token text,access_ text) returns jsonb
+language plpgsql stable security definer set search_path=pg_catalog,pg_temp as $$
+declare term text:=lower(btrim(coalesce(q,''))); query_hash text; anchor timestamptz:=statement_timestamp(); last_time timestamptz;
+  last_recipe uuid; hero_recipe uuid; hero recipe_private.versions; body bytea; sig text; cur jsonb; result jsonb; next_data jsonb;
+begin
+  if length(term)>120 or (access_ is not null and access_ not in ('coded','direct')) then raise exception 'invalid_input'; end if;
+  query_hash:=encode(sha256(convert_to(jsonb_build_array(term,access_,'published_desc')::text,'UTF8')),'hex');
+  if token is not null then
+    if length(token)>1600 or token!~'^[a-f0-9]+[.][a-f0-9]{64}$' then raise exception 'invalid_input'; end if;
+    begin
+      body:=decode(split_part(token,'.',1),'hex');sig:=encode(recipe_private.code_mac('catalog-cursor:v2',body),'hex');
+      if sig<>split_part(token,'.',2) then raise exception 'invalid_input'; end if;
+      cur:=convert_from(body,'UTF8')::jsonb;
+      if cur->>'query' is distinct from query_hash then raise exception 'invalid_input'; end if;
+      anchor:=(cur->>'anchor')::timestamptz;last_time:=(cur->>'time')::timestamptz;last_recipe:=(cur->>'recipe')::uuid;
+      hero_recipe:=(cur->>'hero')::uuid;
+    exception when others then raise exception 'invalid_input'; end;
+  elsif term='' and access_ is null then
+    select v.* into hero from recipe_private.versions v join recipe_private.recipes r on r.id=v.recipe_id and r.revision=v.revision
+      left join recipe_private.rich_versions rv on rv.id=v.id left join recipe_private.rich_feature f on f.version_id=v.id
+      where (rv.id is null or rv.state='listed') and v.published_at<=anchor order by (f.version_id is not null) desc,
+        v.published_at desc,v.recipe_id desc limit 1;
+    hero_recipe:=hero.recipe_id;
+  end if;
+  with page as (
+    select v as version,v.recipe_id,v.published_at from recipe_private.versions v join recipe_private.recipes r on r.id=v.recipe_id and r.revision=v.revision
+      left join recipe_private.rich_versions rv on rv.id=v.id left join recipe_private.creator_profiles cp on cp.account_id=v.owner_id
+    where (rv.id is null or rv.state='listed') and v.published_at<=anchor and v.recipe_id is distinct from hero_recipe
+      and (last_time is null or (v.published_at,v.recipe_id)<(last_time,last_recipe))
+      and (access_ is null or v.public_info->>'access'=access_) and (term='' or strpos(lower(v.public_info->>'name'),term)>0
+        or strpos(lower(v.public_info->>'summary'),term)>0 or strpos(lower(cp.display_name),term)>0)
+    order by v.published_at desc,v.recipe_id desc limit 9
+  ), items as(select * from page order by published_at desc,recipe_id desc limit 8)
+  select jsonb_build_object('hero',case when hero.id is not null then recipe_private.catalog_card(hero,true) end,
+      'items',coalesce(jsonb_agg(recipe_private.catalog_card(version,true) order by published_at desc,recipe_id desc),'[]')),
+    case when (select count(*) from page)>8 then jsonb_build_object('query',query_hash,'anchor',anchor,'hero',hero_recipe,
+      'time',(array_agg(published_at order by published_at,recipe_id))[1],'recipe',(array_agg(recipe_id order by published_at,recipe_id))[1]) end
+    into result,next_data from items;
+  body:=convert_to(next_data::text,'UTF8');
+  return result||jsonb_build_object('nextCursor',case when body is not null then encode(body,'hex')||'.'||encode(recipe_private.code_mac('catalog-cursor:v2',body),'hex') end);
+end $$;
+grant execute on function recipe_api.rich_catalog_page(text,text,text) to recipe_api;
 create function recipe_api.rich_update_items(v_id uuid) returns jsonb language plpgsql stable security definer set search_path=pg_catalog,pg_temp as $$
 declare a uuid:=recipe_private.actor(); rows_ jsonb;
 begin

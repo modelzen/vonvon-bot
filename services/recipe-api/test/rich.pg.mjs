@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {createServer} from 'node:http';
 import {execFileSync} from 'node:child_process';
 import pg from 'pg';
+import sharp from 'sharp';
 import {startRecipeService} from '../src/main.mjs';
 import {createRichBrokerServer} from '../src/rich-broker.mjs';
 import {createObjectStore} from '../src/object-store.mjs';
@@ -100,7 +101,7 @@ try{
     const dispatch=await cap('dispatch',DISPATCH_DIGEST);await req('/v1/authoring/'+op+'/dispatch',null,possess(dispatch),{status:404});
     await req(path+'/dispatch',null,{...possess(dispatch),proof:b64(authoringProof(device.privateKey,dispatch))},{status:403});
     await req(path+'/dispatch',null,possess(dispatch));
-    await req('/v2/objects/'+pkg+'/reserve',token,{draftId:draft,cap:100000});
+    await req('/v2/objects/'+pkg+'/reserve',token,{draftId:draft,cap:250000});
     return {op,pkg,path,draft,
       freeze:async b=>req(path+'/freeze',token,b),
       async commit(plan){
@@ -111,7 +112,9 @@ try{
   }
   const prep=await start(a);const privateBytes=Buffer.from('SELECTED PRIVATE MEMORY');
   const p=await upload(a,prep.pkg,0,'text',privateBytes);
-  fixture.parts=[p];fixture.memories=[{itemId:randomUUID(),originId:randomUUID(),text:{kind:'part',objectId:p.objectId}}];
+  const png=await sharp({create:{width:20,height:30,channels:3,background:'#22aa33'}}).png().toBuffer();
+  const logo=await upload(a,prep.pkg,1,'finalLogo',png);
+  fixture.finalLogo={itemId:randomUUID(),originId:randomUUID(),objectId:logo.objectId};fixture.parts=[p,logo];fixture.memories=[{itemId:randomUUID(),originId:randomUUID(),text:{kind:'part',objectId:p.objectId}}];
   const input=body(fixture),plan=await prep.freeze(input);
   assert.deepEqual(await prep.freeze(input),plan);
   const initial=JSON.parse(Buffer.from(plan.canonical,'base64url'));
@@ -131,6 +134,9 @@ try{
   const key=randomUUID(),pub=()=>req('/v2/drafts/'+draft.draftId+'/publish',a,{canonical:edited.canonical},{key,rev:2});
   const v=await pub();assert.deepEqual(await pub(),v);assert.ok(v.firstCode);
   const detail='/v2/recipes/'+v.recipeId+'/versions/'+v.versionId;assert.equal((await req(detail)).visibility,'intro');
+  const publicLogo=async status=>{const r=await fetch(orig(broker)+'/v2/versions/'+v.versionId+'/display-logo');assert.equal(r.status,status);
+    if(status===200){assert.equal(r.headers.get('content-type'),'image/webp');assert.equal(sha(Buffer.from(await r.arrayBuffer())).toString('hex'),logo.sha256);}};
+  await publicLogo(200);await read(null,'versions',v.versionId,logo.objectId,404);
   assert.ok(!('manifest' in await req(detail)));await read(null,'versions',v.versionId,p.objectId,404);
   await req('/v1/versions/'+v.versionId+'/install-preview',a,undefined,{status:409});
   await req('/v1/versions/'+v.versionId+'/redeem',b,{code:v.firstCode},{key:'a2.'+opId()});
@@ -138,7 +144,7 @@ try{
   assert.equal((await req(detail,b)).release.contentSha256,edited.contentSha256);
   assert.equal((await req('/v1/authoring/source-history',a,{operationIds:[prep.op]})).entries[0].versionId,v.versionId);
   const thief=await start(b);const role=updated.role,baseline=inventory(updated).find(i=>i.itemId===role.itemId).baselineSha256;
-  const copied=structuredClone(fixture);copied.role.text=structuredClone(role.text);copied.parts=[];copied.memories=[];
+  const copied=structuredClone(fixture);copied.role.text=structuredClone(role.text);copied.parts=[];copied.memories=[];delete copied.finalLogo;
   const foreign=body(copied,'direct');foreign.origins.find(o=>o.itemId===copied.role.itemId).source={kind:'releaseItem',versionId:v.versionId,itemId:role.itemId,baselineSha256:baseline};
   await req(thief.path+'/freeze',b,foreign,{status:403});
   foreign.origins.find(o=>o.itemId===copied.role.itemId).source={kind:'accountClaim'};await req(thief.path+'/freeze',b,foreign,{status:403});
@@ -169,7 +175,7 @@ try{
   assert.equal((await req('/v2/community/recipes')).hero.versionId,v.versionId);
   // New version of the author's coded work: stable item IDs/origins but a new
   // exact release and freshly verified owner-scoped object membership.
-  const newer=structuredClone(updated);newer.public.version.value='2.0';newer.memories=[];newer.parts=[];
+  const newer=structuredClone(updated);newer.public.version.value='2.0';newer.memories=[];newer.parts=[];delete newer.finalLogo;
   const oldIndex=new Map(inventory(updated).map(i=>[i.itemId,i])),nextInput=body(newer,'direct');
   nextInput.sourceVersionId=v.versionId;
   nextInput.origins=nextInput.origins.map(({itemId})=>({itemId,source:{kind:'releaseItem',versionId:v.versionId,itemId,baselineSha256:oldIndex.get(itemId).baselineSha256}}));
@@ -189,9 +195,16 @@ try{
   sql("select recipe_api.rich_moderate('ban','"+nextVersion.versionId+"',null)");await pending.readPart(nextDetail.manifest.objectId,403);
   console.log('PASS: native-device operation proofs, old-domain refusal, verified member read, distinct settlement proof, direct update grant only on completion after withdrawal.');
   await req('/v2/versions/'+v.versionId+'/withdraw',a,{});
-  assert.equal((await req(detail)).state,'withdrawn');assert.deepEqual(await read(b,'versions',v.versionId,p.objectId),privateBytes);
+  await publicLogo(404);assert.equal((await req(detail)).state,'withdrawn');assert.deepEqual(await read(b,'versions',v.versionId,p.objectId),privateBytes);
   sql("select recipe_api.rich_moderate('ban','"+v.versionId+"',null)");await read(b,'versions',v.versionId,p.objectId,404);
   assert.equal((await req(detail,b)).state,'blocked');
+  sql("with seq as (select gen_random_uuid() rid,x from generate_series(1,12)x),rp as (insert into recipe_private.recipes(id,owner_id,revision) select rid,'"+account+"',1 from seq returning id) insert into recipe_private.versions(recipe_id,owner_id,revision,public_info,config,bytes) select id,'"+account+"',1,jsonb_build_object('name','分页','summary','page','version','1','overview','','access','direct'),'{\"role\":\"\"}',80 from rp");
+  const first=await req('/v2/community/recipes?q='+encodeURIComponent('分页'));assert.equal(first.hero,null);assert.equal(first.items.length,8);
+  const next=await req('/v2/community/recipes?q='+encodeURIComponent('分页')+'&cursor='+first.nextCursor);assert.equal(next.items.length,4);
+  assert.equal(new Set([...first.items,...next.items].map(i=>i.recipeId)).size,12);
+  await req('/v2/community/recipes?cursor='+first.nextCursor,undefined,undefined,{status:422});
+  await req('/v2/community/recipes?cursor='+first.nextCursor.slice(0,-3),undefined,undefined,{status:422});
+  console.log('PASS: normalized public Logo without private selector, signed stable pagination, tamper and query mismatch rejection.');
   console.log('PASS: exact broker bytes; separate proof domain; typed copy/edit; atomic replay; foreign coded origin/redacted text; historical refs, feature, withdraw, ban.');
 }finally{if(broker)await close(broker);if(pool)await pool.end();if(api)await api.close();if(issuerServer)await close(issuerServer);
   if(pgUp)run('pg_ctl',['-D',db,'-m','immediate','-w','stop']);rmSync(dir,{recursive:true,force:true});}

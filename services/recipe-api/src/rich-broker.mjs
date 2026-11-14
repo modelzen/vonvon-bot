@@ -16,14 +16,19 @@ import {makePool} from './database.mjs';
 const singleton=(req,k)=>{const x=req.headersDistinct[k];if(x?.length!==1)throw badInput();return x[0];};
 export function createRichBrokerServer({verify,store,storage,admit=false}) {
   const broker=createObjectBroker({store,storage,recordTextChecks:true,validateCanonicalManifest:b=>decodeRichRecipeContent(b),
-    authorizeRead:({identity,scope,target,obj,proof})=>proof?store.call('install_descriptor',target,...proof,obj):store.call('read_descriptor',identity?.issuer??null,identity?.subject??null,scope,target,obj)});
+    authorizeRead:({identity,scope,target,obj,proof})=>scope==='displayLogo'?store.call('display_logo',target):proof?store.call('install_descriptor',target,...proof,obj):store.call('read_descriptor',identity?.issuer??null,identity?.subject??null,scope,target,obj)});
   return createServer({requestTimeout:20000,headersTimeout:10000,maxHeaderSize:16384},async(req,res)=>{
     res.setHeader('Cache-Control','private, no-store');res.setHeader('X-Content-Type-Options','nosniff');
     try{
       const put=/^(?:\/api)?\/v2\/objects\/([^/]+)\/members\/(0|[1-9]\d?)$/.exec(req.url);
       const get=/^(?:\/api)?\/v2\/(drafts|versions)\/([^/]+)\/objects\/([^/]+)$/.exec(req.url);
       const installed=/^(?:\/api)?\/v2\/operations\/([^/]+)\/objects\/([^/]+)$/.exec(req.url);
-      if(installed&&req.method==='POST'){
+      const logo=/^(?:\/api)?\/v2\/versions\/([^/]+)\/display-logo$/.exec(req.url);
+      if(logo&&req.method==='GET'){
+        await identityFromRequest(req,true,verify);
+        const bytes=await broker.readAuthorized({scope:'displayLogo',target:uuid(logo[1])});
+        res.setHeader('Content-Type','image/webp');res.end(bytes);
+      }else if(installed&&req.method==='POST'){
         if(req.headersDistinct.authorization)throw badInput();
         const body=await bodyJson(req,512);objectKeys(body,['ticket','nonce','proof']);
         const proof=['ticket','nonce','proof'].map(k=>binary32(body[k]));
