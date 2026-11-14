@@ -581,3 +581,29 @@ it('edits rich public metadata through native attested chat and preserves newer 
   await click('采用已保存版本');expect(document.querySelector<HTMLInputElement>('[aria-label="配方名称"]')?.value).toBe('本次提交的名称');
   const publish=[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='预览发布');expect(publish?.disabled).toBe(false);
 });
+
+it('discards delayed inventory across memory ABA and offers an individual setup opt-out',async()=>{
+  const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
+  const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));
+  content.parts=[];content.skills=[];content.files=[];content.memories=[];delete content.finalLogo;
+  const normal=authoring,waiting:{request:Extract<DesktopAuthoringRequest,{type:'richInventory'}>;resolve:(v:DesktopAuthoringReply)=>void}[]=[];
+  linked=true;
+  authoring=async request=>{
+    if(request.type==='richInventory')return new Promise<DesktopAuthoringReply>(resolve=>waiting.push({request,resolve}));
+    if(request.type==='richPrepare')return {kind:'operation',operation:{...op(sessionFor(request)),format:'rich-v2'}};
+    return normal(request);
+  };
+  await draw();await chooseSource();expect(waiting).toHaveLength(1);
+  const memory=()=>[...document.querySelectorAll('label')].find(l=>l.textContent==='包含可分享的 Bot 记忆')!.querySelector<HTMLInputElement>('input')!;
+  await act(async()=>memory().click());await act(async()=>memory().click());
+  expect(waiting).toHaveLength(3);
+  const deliver=(index:number)=>waiting[index]!.resolve({kind:'richInventory',groupId:waiting[index]!.request.groupId,inventory:{content:{...content,public:{...content.public,name:{...content.public.name,value:'READ_'+index}}},reviewToken:'token-'+index,unavailable:[],versions:[]}});
+  await act(async()=>deliver(2));await act(async()=>deliver(0));await act(async()=>deliver(1));
+  const step=content.setup[0];
+  const checkbox=[...document.querySelectorAll('label')].find(l=>l.textContent==='准备步骤 · '+step.title)?.querySelector<HTMLInputElement>('input');
+  expect(checkbox).toBeDefined();expect(checkbox!.checked).toBe(true);await act(async()=>checkbox!.click());
+  const attest=[...document.querySelectorAll('label')].find(l=>l.textContent?.includes('我已核对来源和全部所选内容'))!.querySelector<HTMLInputElement>('input')!;
+  await act(async()=>attest.click());await click('确认让 Bot 准备私人草稿');
+  const prepared=calls.find(r=>r.type==='richPrepare');expect(prepared).toMatchObject({selection:{reviewToken:'token-2',options:{includeBotMemories:false}}});
+  if(prepared?.type!=='richPrepare')throw new Error('Missing preparation');expect(prepared.selection.selected).not.toContain(step.itemId);
+});
