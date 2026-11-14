@@ -14,12 +14,12 @@ test('Preview packaging refuses ordinary stages, stale main bytes, updates and n
   const write = (name,value) => writeFile(join(root,name),JSON.stringify(value));
   const config = {appId:'com.vonvon.bot.preview',productName:'Vonvon Bot Preview'};
   const stamp = {format:1,channel:'preview',mainSha256:createHash('sha256').update(bytes).digest('hex'),webOrigin:'https://recipes-staging.example',apiOrigin:'https://recipes-staging.example'};
-  await write('package.json',{name:'vonvon-bot-preview'}); await write('dist/update-config.json',{});
+  await write('package.json',{name:'vonvon-bot-desktop',vonvonPreview:true}); await write('dist/update-config.json',{});
   await write('dist/preview-config.json',stamp); await writeFile(join(root,'desktop/main.cjs'),bytes);
   await assert.doesNotReject(assertPreviewStage(root,config));
   await assert.rejects(assertPreviewStage(root,{...config,appId:'com.vonvon.bot.desktop'}));
   await write('package.json',{name:'vonvon-bot-desktop'}); await assert.rejects(assertPreviewStage(root,config));
-  await write('package.json',{name:'vonvon-bot-preview'});
+  await write('package.json',{name:'vonvon-bot-desktop',vonvonPreview:true});
   await writeFile(join(root,'desktop/main.cjs'),'ordinary entry'); await assert.rejects(assertPreviewStage(root,config));
   await writeFile(join(root,'desktop/main.cjs'),bytes);
   await write('dist/update-config.json',{manifestURL:'https://prod.example/stable'}); await assert.rejects(assertPreviewStage(root,config));

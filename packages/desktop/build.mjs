@@ -88,7 +88,8 @@ await cp(join(root, 'assets/tray.png'), join(stage, 'assets/tray.png'));
 await cp(join(root, 'assets/macos-icon.png'), join(stage, 'assets/macos-icon.png'));
 await cp(join(root, 'assets/windows-icon.ico'), join(stage, 'assets/windows-icon.ico'));
 await writeFile(join(stage, 'package.json'), JSON.stringify({
-  name: preview ? 'vonvon-bot-preview' : 'vonvon-bot-desktop',
+  name: 'vonvon-bot-desktop',
+  ...(preview ? { vonvonPreview: true } : {}),
   version,
   license: 'UNLICENSED',
   private: true,

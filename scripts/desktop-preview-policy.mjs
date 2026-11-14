@@ -10,7 +10,7 @@ export async function assertPreviewStage(appDir, config) {
   const stamp = JSON.parse(await readFile(join(appDir, 'dist/preview-config.json'), 'utf8'));
   const updates = JSON.parse(await readFile(join(appDir, 'dist/update-config.json'), 'utf8'));
   const bytes = await readFile(join(appDir, 'desktop/main.cjs'));
-  if (metadata.name !== 'vonvon-bot-preview' || stamp.format !== 1 || stamp.channel !== 'preview' ||
+  if (metadata.name !== 'vonvon-bot-desktop' || metadata.vonvonPreview !== true || stamp.format !== 1 || stamp.channel !== 'preview' ||
       stamp.mainSha256 !== createHash('sha256').update(bytes).digest('hex') ||
       Object.keys(updates).length !== 0) throw new Error('Build the isolated Preview entry before packaging');
   for (const name of ['webOrigin', 'apiOrigin']) {
