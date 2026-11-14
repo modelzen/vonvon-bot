@@ -1,3 +1,4 @@
+import {describeSpec} from '../bot/schedule/time';
 import { recipeRichContentSchema, type RecipeInstallReply, type RecipeInstallRequest } from '@vonvon/protocol';
 import type { HostSettings } from '../admin/settings-types';
 import { botPaths, paths } from '../config/paths';
@@ -11,6 +12,7 @@ export async function richSetup(
   store: ScheduleStore,
   settings: HostSettings,
   allowedActor: (id: string) => boolean,
+  defaultActor?: string,
 ): Promise<RecipeInstallReply> {
   const { botId, groupId, action } = req,
     loc = { file: botPaths(botId).projectsFile, dataRoot: paths.appDir };
@@ -53,10 +55,11 @@ export async function richSetup(
     };
     let open: Extract<RecipeInstallReply, { kind: 'richSetup' }>['open'];
     if (action.kind === 'enableTask') {
+      const actor=defaultActor;
       const consent = store.managed?.review(action.taskId);
-      if (!tasks.some((t) => t.id === action.taskId) || !consent || !allowedActor(action.actor))
+      if (!tasks.some((t) => t.id === action.taskId) || !consent || action.taskToken!==sha256(consent) || (!actor||!allowedActor(actor)))
         throw new Error('请确认本群任务与当前管理员身份');
-      await store.managed!.consent(action.taskId, consent, { actor: action.actor, timeZone: action.timeZone });
+      await store.managed!.consent(action.taskId, consent, { actor: actor!, timeZone: action.timeZone });
     } else if (action.kind !== 'read') {
       const item = steps.find((s) => s.itemId === action.stepId);
       if (!item) throw new Error('此准备步骤已改变');
@@ -77,7 +80,7 @@ export async function richSetup(
           };
           return { changed: true, value: undefined };
         });
-        return richSetup({ ...req, action: { kind: 'read' } }, store, settings, allowedActor);
+        return richSetup({ ...req, action: { kind: 'read' } }, store, settings, allowedActor,defaultActor);
       }
     }
     return {
@@ -94,7 +97,7 @@ export async function richSetup(
       tasks: store
         .byChat(groupId)
         .filter((t) => store.managed?.review(t.id))
-        .map((t) => ({ id: t.id, name: t.name, state: t.state })),
+        .map((t) => ({id:t.id,name:t.name,state:t.state,token:sha256(store.managed!.review(t.id)!),instruction:t.instruction,schedule:describeSpec(t.spec,t.timeZone,t.timeZone,Date.now()),timeZone:t.timeZone,placement:t.placement.kind==='follow'?'follow' as const:'newTopic' as const})),
       ...(open ? { open } : {}),
     };
   } finally {

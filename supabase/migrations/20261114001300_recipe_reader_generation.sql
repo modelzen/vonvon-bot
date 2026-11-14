@@ -102,4 +102,19 @@ language sql stable security definer set search_path=pg_catalog,pg_temp as $$
 $$;
 revoke all on function recipe_api.reader_catalog_page(text,text,text) from public;
 grant execute on function recipe_api.reader_catalog_page(text,text,text) to recipe_api;
+create function recipe_api.reader_latest(recipe_ uuid) returns jsonb
+language plpgsql stable security definer set search_path=pg_catalog,pg_temp as $$
+declare a uuid:=recipe_private.actor();v recipe_private.versions;rich boolean;
+begin
+  select ver.* into v from recipe_private.versions ver left join recipe_private.rich_versions rv on rv.id=ver.id
+    where ver.recipe_id=recipe_ and (rv.id is null or rv.state='listed') order by ver.revision desc limit 1;
+  if not found then raise exception 'not_found'; end if;
+  rich:=exists(select from recipe_private.rich_versions where id=v.id);
+  return jsonb_build_object('recipeId',v.recipe_id,'versionId',v.id,'revision',v.revision,'version',v.public_info->>'version',
+    'format',case when rich then 'rich-v2' else 'role-v1' end,'access',v.public_info->>'access',
+    'entitled',v.owner_id=a or exists(select from recipe_private.grants g where g.actor=a and g.version_id=v.id)
+      or rich and v.public_info->>'access'='direct' and exists(select from recipe_private.grants g join recipe_private.versions older on older.id=g.version_id where g.actor=a and older.recipe_id=v.recipe_id and older.revision<v.revision));
+end $$;
+revoke all on function recipe_api.reader_latest(uuid) from public;
+grant execute on function recipe_api.reader_latest(uuid) to recipe_api;
 commit;

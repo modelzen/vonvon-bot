@@ -7,6 +7,7 @@ const uuid = z.string().uuid();
 export const recipeSourceTokenSchema = z.string().regex(/^[a-f0-9]{64}$/);
 export const recipeSourceSchema = z
   .object({
+    format:z.literal('rich-v2').optional(),
     recipeId: uuid,
     versionId: uuid,
     revision: z.number().int().positive(),
@@ -24,6 +25,8 @@ export const recipeLatestSchema = z
     revision: z.number().int().positive(),
     version: z.string().max(80),
     entitled: z.boolean(),
+    format:z.enum(['rich-v2','role-v1']).optional(),
+    access:z.enum(['direct','coded']).optional(),
   })
   .strict();
 const location = { viewId: viewIdSchema, botId: agentIdSchema, groupId: groupIdSchema };

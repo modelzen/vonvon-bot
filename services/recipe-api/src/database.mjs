@@ -6,6 +6,7 @@ import { authoringMaterial } from './authoring-proof.mjs';
 
 // Static parameterized calls. No request field becomes an SQL identifier.
 const calls = Object.freeze({
+  readerLatest: 'recipe_api.reader_latest($1::uuid)',
   readerLibrary: 'recipe_api.reader_library($1::uuid)',
   readerPublications: 'recipe_api.reader_publications()',
   readerDrafts: 'recipe_api.reader_drafts()',

@@ -235,6 +235,7 @@ try{
   const nextVersion=await req('/v2/drafts/'+draft2.draftId+'/publish',a,{canonical:nextPlan.canonical},{rev:1,key:randomUUID()});
   const nextDetail=await req('/v2/recipes/'+nextVersion.recipeId+'/versions/'+nextVersion.versionId);
   assert.equal(nextDetail.visibility,'full');
+  const newest=await req('/v2/recipes/'+v.recipeId+'/latest-install-version',b);assert.equal(newest.versionId,nextVersion.versionId);assert.equal(newest.format,'rich-v2');assert.equal(newest.entitled,true);assert.equal(newest.access,'direct');
   await req('/v2/versions/'+nextVersion.versionId+'/install-preview',b,undefined,{status:403});
   const derivative=await start(b),derivedDoc=structuredClone(newer);derivedDoc.rules[0].text.value='重新组织的规则';
   derivedDoc.role.text.value='自己的新角色';derivedDoc.public.name.value='来源校验';const derivedInput=body(derivedDoc,'direct');
@@ -251,6 +252,7 @@ try{
   const pending=await opInstall(b,nextDetail.release,{purpose:'updateDirectRichRecipe',fromVersionId:v.versionId,localPlanSha256:'12'.repeat(32)});
   assert.equal(sql("select count(*) from recipe_private.grants where actor='"+reader+"' and version_id='"+nextVersion.versionId+"'"),'0');
   await req('/v2/versions/'+nextVersion.versionId+'/withdraw',a,{});
+  assert.equal((await req('/v2/recipes/'+v.recipeId+'/latest-install-version',b)).versionId,v.versionId);
   await req('/v2/drafts/'+derivedSaved.draftId+'/publish',b,{canonical:derivedPlan.canonical},{key:randomUUID(),rev:1,status:403});
   assert.equal((await req('/v2/drafts/'+derivedSaved.draftId,b)).revision,1);
   assert.equal((await pending.complete('applied')).disposition,'settled');

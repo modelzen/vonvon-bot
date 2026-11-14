@@ -48,9 +48,9 @@ export const richRuntimeRequests = [
           .object({
             kind: z.literal('enableTask'),
             taskId: z.string(),
+            taskToken:digest,
             token: digest,
             timeZone: z.string().max(100),
-            actor: z.string().max(200),
           })
           .strict(),
       ]),
@@ -96,7 +96,7 @@ export const richRuntimeReplies = [
       steps: z.array(
         recipeRichContentSchema.shape.setup.element.extend({ readiness: z.enum(['pending', 'acknowledged', 'observed']) }),
       ),
-      tasks: z.array(z.object({ id: z.string(), name: z.string(), state: z.string() }).strict()),
+      tasks: z.array(z.object({id:z.string(),name:z.string(),state:z.enum(['active','paused','finished']),token:digest,instruction:z.string().max(4000),schedule:z.string().max(500),timeZone:z.string().max(100),placement:z.enum(['follow','newTopic'])}).strict()),
       open: z
         .enum([
           'model',

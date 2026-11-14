@@ -229,6 +229,13 @@ test('a redeemed install drains existing work and commits only the selected slot
     status: 'applied',
     settled: true,
   });
+  const source = await installer().request(recipeInstallRequestSchema.parse({type:'source',botId,groupId}));
+  expect(source).toMatchObject({kind:'source',source:{format:'rich-v2',recipeId}});
+  if(source.kind!=='source'||!source.source)throw new Error('Missing installed source');
+  const ignoredVersionId=randomUUID();
+  const ignored=await installer().request(recipeInstallRequestSchema.parse({type:'ignoreVersion',botId,groupId,recipeId,sourceToken:source.source.sourceToken,installedVersionId:source.source.versionId,versionId:ignoredVersionId}));
+  expect(ignored).toMatchObject({source:{ignoredVersionId}});
+  await expect(installer().request(recipeInstallRequestSchema.parse({type:'ignoreVersion',botId,groupId,recipeId,sourceToken:source.source.sourceToken,installedVersionId:source.source.versionId,versionId:randomUUID()}))).rejects.toThrow('来源已改变');
   const ordinary = await readFile(dir.schedulesFile, 'utf8').catch(() => '{"tasks":[]}');
   expect(JSON.parse(ordinary).tasks).toEqual([]);
   const taskId = store.all()[0]!.id;
@@ -248,6 +255,7 @@ test('a redeemed install drains existing work and commits only the selected slot
         }),
       } as never,
       () => true,
+      'ou_fixture',
     ) as Promise<Extract<RecipeInstallReply, { kind: 'richSetup' }>>;
   const shown = await setup({ kind: 'read' });
   const done = await setup({ kind: 'acknowledge', stepId: step.itemId, token: shown.token });
@@ -256,7 +264,9 @@ test('a redeemed install drains existing work and commits only the selected slot
   expect(observed.steps[1]!.readiness).toBe('observed');
   observedNoMention = false;
   expect((await setup({ kind: 'read' })).steps[1]!.readiness).toBe('pending');
-  await setup({ kind: 'enableTask', taskId, actor: 'ou_fixture', timeZone: 'Asia/Shanghai', token: observed.token });
+  expect(()=>recipeInstallRequestSchema.parse({type:'richSetup',botId,groupId,action:{kind:'enableTask',taskId,actor:'ou_untrusted',taskToken:observed.tasks[0]!.token,timeZone:'Asia/Shanghai',token:observed.token}})).toThrow();
+  await expect(setup({kind:'enableTask',taskId,taskToken:'f'.repeat(64),timeZone:'Asia/Shanghai',token:observed.token})).rejects.toThrow('管理员身份');
+  await setup({ kind: 'enableTask', taskId,taskToken:observed.tasks[0]!.token, timeZone: 'Asia/Shanghai', token: observed.token });
   expect(store.all()[0]?.state).toBe('active');
   await mutateProjectByChatId(
     groupId,
