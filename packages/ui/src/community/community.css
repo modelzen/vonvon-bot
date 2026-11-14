@@ -140,7 +140,9 @@
  .community-detail-heading > .community-actions { width:100%; }
 }
 
-.community-page .ui-button--primary,.community-acquire-submit.ui-button--primary { background:var(--color-text); border-color:var(--color-text); color:var(--color-surface); }
-.community-page .ui-button--primary:hover:not(:disabled),.community-acquire-submit.ui-button--primary:hover:not(:disabled) { background:color-mix(in srgb,var(--color-text) 85%,var(--color-surface)); }
+.community-page button.ui-button.ui-button--primary,button.ui-button.community-acquire-submit.ui-button--primary { background:var(--color-text); border-color:var(--color-text); color:var(--color-surface); }
+.community-page button.ui-button.ui-button--primary:hover:not(:disabled),button.ui-button.community-acquire-submit.ui-button--primary:hover:not(:disabled) { background:color-mix(in srgb,var(--color-text) 85%,var(--color-surface)); }
 
 .community-markdown h4 { font-size:15px; font-weight:620; line-height:1.5; margin:18px 0 8px; }
+
+.community-page button.ui-button.ui-button--primary:active:not(:disabled),button.ui-button.community-acquire-submit.ui-button--primary:active:not(:disabled) { background:var(--color-text); border-color:var(--color-text); }
