@@ -109,7 +109,6 @@ function stripParts(content,candidates) {
   const pool=new Map([...content.parts,...candidates].map(p=>[p.objectId,p]));
   content.parts=[...pool.values()].filter(p=>wanted.has(p.objectId));
 }
-// Identity, file membership and nested block IDs never come from a change value.
 export function applyChanges(original,changes,resolveCandidate,seed,newParts=[]) {
   const randomUUID=allocator(seed);
   const content=structuredClone(original),copies=[],parts=[...newParts];
