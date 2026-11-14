@@ -2,6 +2,7 @@ import {z} from 'zod';
 import {cardDisplayConfigSchema} from './card-display.js';
 import {completionTemplateSchema} from './completion-template.js';
 import {JUDGE_PROVIDER_IDS} from './decision-providers.js';
+import {isPortableDocumentName} from './recipe-rich-filename.js';
 import {hhmmSchema} from './schedule.js';
 import {parseScheduleCron, resolveScheduleTimeZone} from './schedule-grammar.js';
 import {judgeSectionSchema} from './settings.js';
@@ -132,12 +133,7 @@ export const recipeRichSettingSchema = z.discriminatedUnion('field', [
 export type RecipeRichSetting = z.infer<typeof recipeRichSettingSchema>;
 
 const rule = z.object({...identity, purpose: z.enum(['work','smartRespond','smartNewTopic']), text: recipeRichTextSchema}).strict();
-const relativeName = text(240, 240, 1).refine(value => {
-  const segments = value.split('/');
-  return /\.(?:md|txt|rst)$/i.test(value) && !/[\\:\u0000-\u001f<>"|?*]/u.test(value) && !value.startsWith('/') && segments.every(segment =>
-    segment !== '' && !segment.startsWith('.') && !/[. ]$/.test(segment) &&
-    !/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(segment));
-}, 'Unsafe portable filename');
+const relativeName = text(240, 240, 1).refine(isPortableDocumentName, 'Unsafe portable filename');
 const file = z.object({...identity, name: relativeName, use: z.enum(['skillDescription','reference','declaration']), text: recipeRichTextSchema}).strict();
 const skill = z.object({...identity, name: text(320, 80, 1), entryFileId: uuid, fileIds: z.array(uuid).min(1).max(64)}).strict();
 const cadence = z.discriminatedUnion('kind', [
