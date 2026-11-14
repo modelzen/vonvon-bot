@@ -2,9 +2,10 @@ import { z } from 'zod';
 import { freezePayload, blankPublic } from './authoring-payload';
 import type { AuthoringChange } from '@vonvon/protocol';
 
-const privateInput = /(?:[/\\](?:Users|home|root|private|var|tmp|etc|mnt|Volumes)[/\\]|[A-Za-z]:[\\/]|~[/\\]|https?:\/\/|(?:ou|oc|cli)_[\w-]{4,}|\bBearer\s+\S+|(?:password|api[_ -]?key|access[_ -]?token|密码|令牌|密钥)\s*[:=：]\s*\S+)/iu;
+import {safeDraftModelText} from '../../../../services/recipe-api/src/draft-model-text.mjs';
+
 export function checkModelText(text: string) {
-  if ([...text].length > 2000 || privateInput.test(text)) throw new Error('请在 App 编辑。');
+  if (!safeDraftModelText(text)) throw new Error('请在 App 编辑。');
   freezePayload({public:blankPublic(), config:{role:text}});
 }
 

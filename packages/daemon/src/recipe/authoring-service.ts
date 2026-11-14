@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { CardActionEvent, LarkChannel, NormalizedMessage } from '@larksuiteoapi/node-sdk';
-import { groupIdSchema, recipeAuthoringRequestSchema, type AuthoringAuthorization, type AuthoringReceipt, type AuthoringReconciliation, type RecipeAuthoringRequest, type RecipeAuthoringReply } from '@vonvon/protocol';
+import { groupIdSchema, recipeAuthoringRequestSchema, type AuthoringFieldRequest, type AuthoringAuthorization, type AuthoringReceipt, type AuthoringReconciliation, type RecipeAuthoringRequest, type RecipeAuthoringReply } from '@vonvon/protocol';
 import { assertBotIdentity, withRegisteredBot, type BotIdentity } from '../config/bots';
 import { isAdmin, type AppConfig } from '../config/schema';
 import { paths } from '../config/paths';
@@ -9,7 +9,7 @@ import { configuredRecipeApiOrigin } from '../config/account-deployment';
 import { AuthoringIm, physicalChat } from './authoring-im';
 import { authoringBotKey, discardAuthoringMaterial, AuthoringJournal, active, cardUpdate, linkKey, newCarrier, operationView, reserve, retire, sameRecipient, setCard, type AuthoringLedger, type Link, type LocalOperation, type Recipient, type Source } from './authoring-journal';
 import { blankPublic, candidateCardDetails, digest, freezePayload, newAuthoringKey, parseChanges } from './authoring-wire';
-import { DraftProviderBusy, draftIntent, type DraftInstructionParser, type ReadDraftField } from './draft-instruction';
+import { DraftProviderBusy, draftIntent, requestedField, type DraftInstructionParser, type ReadDraftField } from './draft-instruction';
 import { checkAuthorization, postAuthoring } from './authoring-cloud';
 import { groupSourceIdentity, reviewSource, type ReviewedSource } from './authoring-source';
 import { operationUuid } from './manifest';
@@ -17,7 +17,7 @@ import { operationUuid } from './manifest';
 export interface AuthoringPeer {id: string; device: string}
 export type AuthoringIpc = {kind: 'recipeAuthoring'; peer: AuthoringPeer; request: RecipeAuthoringRequest} |
   {kind: 'recipeAuthoringDisconnect'; peer: AuthoringPeer};
-interface Presence {peer: AuthoringPeer; session: string; account: string; scope: string; until: number}
+interface Presence {peer: AuthoringPeer; session: string; account: string; scope: string; until: number; activity: number; activeAt: number}
 interface Challenge {
   id: string; session: string; hash: Buffer; expiresAt: number; attempts: number;
   recipient?: Recipient; messageId?: string; evidence?: string;
@@ -36,6 +36,7 @@ const privateOnly = '此处仅编辑私人草稿。请用 /recipe 查看命令�
 const commandHelp = '可直接发 /recipe name 新名称、/recipe summary 新简介、/recipe overview 新概览、/recipe version 新版本，也可在 App 编辑。';
 const clarify = '请写明要修改的字段和完整新内容。'+commandHelp;
 const unavailable = '当前无法使用所选 Provider 解析。'+commandHelp;
+const expiredContext = '本次聊天编辑已暂停，请在 Vonvon App 打开原操作，点「重新核验并继续」。';
 const paused = '请打开 Vonvon App 并登录原账号，继续本次草稿操作。';
 const messageSender = z.object({sender: z.object({sender_type: z.literal('user'), tenant_key: z.string().min(1).max(200),
   sender_id: z.object({open_id: z.string().regex(/^ou_[\w-]{1,200}$/)})}),
@@ -74,6 +75,7 @@ export class AuthoringService {
   private menu?: SourceMenu;
   private readonly lifetime = new AbortController();
   private parsing?: AbortController;
+  private field?: {presence: Presence; request: AuthoringFieldRequest; resolve(value: string | null): void};
   private stopped = false;
   private queue: Promise<void> = Promise.resolve();
   private readonly ledger: AuthoringJournal;
@@ -95,7 +97,30 @@ export class AuthoringService {
   }
   private current() { return this.opts.currentBot?.() ?? assertBotIdentity(this.opts.bot); }
   private present(p: Presence) {
+    if (this.now() < p.activeAt || this.now() - p.activeAt >= CONTEXT) throw new Error(expiredContext);
     if (this.stopped || this.p !== p || p.until <= this.now()) throw new Error(paused);
+  }
+  private interact(p: Presence) {
+    this.present(p);
+    p.activity++;
+    p.activeAt = this.now();
+  }
+  private async requestField(p: Presence, request: AuthoringFieldRequest, signal: AbortSignal) {
+    signal.throwIfAborted();
+    this.present(p);
+    const value = await new Promise<string | null>(resolve => {
+      const pending = {presence:p, request, resolve:(v: string | null) => {
+        if (this.field === pending) this.field = undefined;
+        signal.removeEventListener('abort',abort);
+        resolve(v);
+      }};
+      const abort = () => pending.resolve(null);
+      this.field = pending;
+      signal.addEventListener('abort',abort,{once:true});
+    });
+    signal.throwIfAborted();
+    this.present(p);
+    return value === null ? undefined : {draftId:request.draftId,revision:request.revision,field:request.field,value};
   }
   disconnect(id: string) {
     if (this.p?.peer.id === id) { this.parsing?.abort(); this.menu = undefined; this.p = undefined; this.challenge = undefined; }
@@ -167,12 +192,8 @@ export class AuthoringService {
     }
     if (req.type === 'open') {
       const scope = digest(JSON.stringify([peer.device, this.opts.bot.appId, this.opts.bot.tenant, this.opts.bot.createdAt, this.opts.bot.registrationId ?? null]));
-      if (this.p?.account !== req.accountId || this.p?.peer.id !== peer.id || this.p?.scope !== scope || this.p.until <= this.now()) {
-        this.parsing?.abort(); this.menu = undefined; this.challenge = undefined;
-        this.p = {peer, session: randomUUID(), account: req.accountId, scope, until: this.now()+LEASE};
-      }
-      const p = this.p;
-      p.until = this.now()+LEASE;
+      this.parsing?.abort(); this.menu = undefined; this.challenge = undefined;
+      const p = this.p = {peer, session: randomUUID(), account: req.accountId, scope, until: this.now()+LEASE, activity:0, activeAt:this.now()};
       await this.current();
       const linked = Boolean(await this.link(p));
       this.present(p);
@@ -182,9 +203,34 @@ export class AuthoringService {
     if (!p || p.peer.id !== peer.id || p.peer.device !== peer.device || p.session !== req.session) refusal();
     this.present(p);
     p.until = this.now()+LEASE;
+    if (req.type === 'groupSourceIdentity') {
+      const identity = await groupSourceIdentity(this.opts.channel,this.opts.bot,p.scope,req.groupId);
+      this.present(p);
+      return {kind:'groupSourceIdentity',groupId:req.groupId,identity};
+    }
+    if (req.type === 'workflow' || req.type === 'answerField') {
+      await this.current();
+      this.present(p);
+      if (req.type === 'answerField') {
+        const field = this.field;
+        if (!field || field.presence !== p || Object.entries(field.request).some(([k,v]) => req.request[k as keyof AuthoringFieldRequest] !== v)) refusal();
+        const row = await this.operation(p,field.request.operationId);
+        if (!row.contextOpen || (row.contextUntil ?? 0) <= this.now() || this.field !== field || !['waiting','candidate','completed'].includes(row.view.state)) refusal();
+        field.resolve(req.value);
+        return {kind:'fieldAnswered'};
+      }
+      return this.ledger.run(db => {
+        const current = this.liveLink(db,p);
+        const pausedContexts = Object.values(db.operations).filter(op => op.accountId === p.account && op.scope === p.scope &&
+          bound(op,current) && ['waiting','candidate'].includes(op.view.state) && (!op.contextOpen || (op.contextUntil ?? 0) <= this.now())).map(op => op.view.operationId);
+        return {kind:'workflow' as const, activity:p.activity, ageMs:Math.max(0,this.now()-p.activeAt), pausedContexts,
+          ...(this.field?.presence === p && current && {field:this.field.request})};
+      });
+    }
     return this.serial(async () => {
       this.present(p);
       await this.current();
+      if (['beginLink','confirmLink','prepare','edit','reviewSource','resumeContext'].includes(req.type)) this.interact(p);
       switch (req.type) {
         case 'beginLink': {
           const code = randomBytes(10).toString('hex');
@@ -224,11 +270,6 @@ export class AuthoringService {
             }
             return {kind:'status' as const, linked:Boolean(link), operations, reconciliation};
           });
-        }
-        case 'groupSourceIdentity': {
-          const identity = await groupSourceIdentity(this.opts.channel, this.opts.bot, p.scope, req.groupId);
-          this.present(p);
-          return {kind:'groupSourceIdentity', groupId:req.groupId, identity};
         }
         case 'operationSourceIdentity': {
           const op = await this.operation(p,req.operationId);
@@ -280,6 +321,19 @@ export class AuthoringService {
             this.recordReceipt(op,req.receipt);
           });
           return {kind:'reconciled', receipt:req.receipt};
+        }
+        case 'resumeContext': {
+          const op = await this.operation(p,req.operationId);
+          if (!['waiting','candidate'].includes(op.view.state) || !op.dispatched || !op.carrier.messageId) refusal();
+          await this.validate(p,op);
+          await this.ledger.run(db => {
+            const linked = this.liveLink(db,p), row = this.locate(db,p,req.operationId);
+            if (!linked || !bound(row,linked)) refusal();
+            row.contextOpen = true; row.contextUntil = this.now()+CONTEXT;
+            linked.context = {operationId:req.operationId,until:row.contextUntil};
+            setCard(row,row.carrier.mode);
+          });
+          await this.refresh(p,req.operationId); break;
         }
         case 'updateCard': await this.refresh(p,req.operationId); break;
         case 'settle': await this.settle(p,req.receipt,req.operationId); break;
@@ -419,7 +473,7 @@ export class AuthoringService {
       if (op.view.state === 'sending') {
         await this.change(p,id,row => { row.view.state = row.payload ? 'candidate' : 'waiting'; row.view.payloadDigest = row.proposalDigest; setCard(row,row.carrier.mode); });
       }
-      if ((op.contextUntil ?? 0) <= this.now() && op.contextOpen && (op.view.state === 'waiting' || op.view.state === 'candidate')) {
+      if (resend && (op.contextUntil ?? 0) <= this.now() && op.contextOpen && (op.view.state === 'waiting' || op.view.state === 'candidate')) {
         await this.change(p,id,row => { row.contextUntil = this.now()+CONTEXT; setCard(row,row.carrier.mode); });
       }
       await this.refresh(p,id); return;
@@ -472,7 +526,7 @@ export class AuthoringService {
     return this.serial(async () => {
       const reply = (text: string) => this.im.reply(msg.chatId,msg.messageId,text);
       const p = this.p;
-      const live = Boolean(p && !this.stopped && p.until > this.now());
+      const live = Boolean(p && !this.stopped && p.until > this.now() && this.now()-p.activeAt < CONTEXT);
       const cmd = msg.content.trim();
       const challenge = /^\/recipe\s+link\s+([a-f0-9]{20})$/i.exec(cmd);
       if (challenge || /^\/recipe\s+link\b/i.test(cmd)) {
@@ -491,18 +545,21 @@ export class AuthoringService {
         }
         await reply(genericLink); return true;
       }
-      const {duplicate,contexts} = await this.ledger.run(db => {
+      const {duplicate,contexts,pausedEdit} = await this.ledger.run(db => {
         const own = Object.values(db.operations).filter(o => o.bot === this.botKey && sameRecipient(o.recipient,recipient));
         return {
+          pausedEdit: own.some(o => o.contextOpen && (o.contextUntil ?? 0) <= this.now() && (active(o) || o.view.state === 'completed') &&
+            (msg.replyToMessageId && msg.replyToMessageId === o.carrier.messageId || requestedField(cmd) !== undefined || /角色|步骤/.test(cmd))),
           duplicate: own.some(o => o.instructionId === msg.messageId || o.seenInstructions?.includes(msg.messageId)),
           contexts: own.filter(o => o.contextOpen && (Boolean(msg.replyToMessageId) && o.carrier.messageId === msg.replyToMessageId ||
             (o.contextUntil ?? 0) > this.now() && (active(o) || o.view.state === 'completed'))),
         };
       });
       if (duplicate) return true;
+      if (!contexts.length && pausedEdit && intent !== 'create') { await reply(expiredContext); return true; }
       if (!explicit && !contexts.length) return false;
       if (msg.rawContentType !== 'text') { await reply(privateOnly); return true; }
-      if (!live || !p) { await reply(explicit ? genericLink : paused); return true; }
+      if (!live || !p) { await reply(contexts.length ? paused : genericLink); return true; }
       const link = await this.link(p);
       if (!sameRecipient(link?.recipient, recipient)) { await reply(genericLink); return true; }
       if (!link) refusal();
@@ -531,7 +588,7 @@ export class AuthoringService {
         if (!await this.offerSources(p,link,recipient,msg.messageId)) await reply(appChoose);
         return true;
       }
-      if (!selected || !selected.contextOpen || (selected.contextUntil ?? 0) <= this.now()) { await reply(appChoose); return true; }
+      if (!selected || !selected.contextOpen || (selected.contextUntil ?? 0) <= this.now()) { await reply(selected ? expiredContext : appChoose); return true; }
       if (selected.seenInstructions?.includes(msg.messageId) || selected.instructionId === msg.messageId) return true;
       const prior = selected.view.receipt;
       const draftId = prior?.status === 'accepted' ? prior.draftId : selected.view.draftId;
@@ -541,6 +598,11 @@ export class AuthoringService {
       }
       const natural = !cmd.startsWith('/');
       if (natural) await this.validate(p,selected);
+      selected.contextUntil = await this.change(p,selected.view.operationId,row => {
+        if (!row.contextOpen || (row.contextUntil ?? 0) <= this.now()) refusal();
+        this.interact(p);
+        return row.contextUntil = this.now()+CONTEXT;
+      });
       if (natural && selected.view.state === 'completed') {
         await this.change(p,selected.view.operationId,row => {
           if (!row.contextOpen || (row.contextUntil ?? 0) <= this.now() || (row.seenInstructions?.length ?? 0) >= 32) refusal();
@@ -571,10 +633,18 @@ export class AuthoringService {
         if (natural && this.opts.parser) await reply('已收到草稿修改。解析后会在卡片上请你确认。');
         this.present(p);
         const read = this.opts.readDraftField;
-        const result = await parseChanges(cmd,{parser:this.opts.parser,signal,readField:read ? async field => {
-          const row = await read({accountId:p.account,scope:p.scope,draftId,baseRevision,field});
-          return row?.draftId === draftId && row.revision === baseRevision && row.field === field ? {field,value:row.value} : undefined;
-        } : undefined});
+        let currentField: {field: AuthoringFieldRequest['field']; value: string} | undefined;
+        const getField = async (field: AuthoringFieldRequest['field']) => {
+          const row = read ? await read({accountId:p.account,scope:p.scope,draftId,baseRevision,field})
+            : await this.requestField(p,{requestId:randomUUID(),operationId:selected.view.operationId,draftId,revision:baseRevision,field},signal);
+          if (!row || row.field !== field || row.draftId !== draftId || row.revision !== baseRevision) return;
+          if ((await this.allowed(p,recipient)).binding !== selected.binding) refusal();
+          return {field,value:row.value};
+        };
+        const result = await parseChanges(cmd,{parser:this.opts.parser,signal,readField:async field => currentField = await getField(field)});
+        if (result.kind === 'proposal' && currentField && (await getField(currentField.field))?.value !== currentField.value) {
+          await reply('原草稿修订已变化或暂时无法核验。请在 App 重新打开这份草稿。'); return true;
+        }
         this.present(p);
         if (result.kind !== 'proposal') {
           if (selected.view.state === 'candidate') await this.refresh(p,selected.view.operationId);
@@ -618,7 +688,14 @@ export class AuthoringService {
     if (!value || !raw || evt.operator.openId !== raw.operator.open_id || !physicalChat(evt.chatId)) return;
     return this.serial(async () => {
       const p = this.p;
-      if (!p || p.until <= this.now()) return;
+      if (!p || p.until <= this.now() || this.now()-p.activeAt >= CONTEXT) {
+        const recipient = {openId:evt.operator.openId,chatId:evt.chatId,tenantKey:raw.operator.tenant_key};
+        const known = await this.ledger.run(db => Object.values(db.operations).some(op => op.bot === this.botKey && active(op) &&
+          !op.revoked && bound(op,db.links[linkKey(op.scope,op.accountId)]) && sameRecipient(op.recipient,recipient) &&
+          op.carrier.messageId === evt.messageId && op.carrier.ref === value.ref));
+        if (known && isAdmin(this.opts.cfg,recipient.openId)) await this.im.reply(evt.chatId,evt.messageId,expiredContext);
+        return;
+      }
       const recipient = {openId:evt.operator.openId, chatId:evt.chatId, tenantKey:raw.operator.tenant_key};
       const link = await this.allowed(p,recipient);
       if (value.verb === 'source') {
@@ -634,12 +711,17 @@ export class AuthoringService {
           await this.im.reply(evt.chatId,evt.messageId,appChoose); return;
         }
         if ((await this.allowed(p,recipient)).binding !== menu.binding) refusal();
+        this.interact(p);
         await this.start(p,recipient,{source,sourceIdentity:reviewed.identity,sourceCard:menu,instructionId:menu.instructionId});
         return;
       }
       const op = await this.ledger.run(db => Object.values(db.operations).find(o => o.scope === p.scope && o.accountId === p.account &&
         o.binding === link.binding && o.carrier.ref === value.ref && sameRecipient(o.recipient,recipient) && sameRecipient(link.recipient,recipient)));
-      if (!op || !active(op) || !op.dispatched || !op.contextOpen || (op.contextUntil ?? 0) <= this.now() || op.carrier.firstSend === undefined || !op.carrier.cardId) return;
+      if (!op || !active(op) || !op.dispatched || op.carrier.firstSend === undefined || !op.carrier.cardId) return;
+      if (!op.contextOpen || (op.contextUntil ?? 0) <= this.now()) {
+        if (op.carrier.messageId === evt.messageId) await this.im.reply(evt.chatId,evt.messageId,expiredContext);
+        return;
+      }
       if (op.carrier.messageId !== evt.messageId) {
         if (op.carrier.messageId || !await this.im.matches(evt.messageId,evt.chatId,op.carrier.cardId)) return;
         await this.change(p,op.view.operationId,row => {
@@ -648,16 +730,20 @@ export class AuthoringService {
         });
       }
       if (value.verb === 'cancel') {
+        if (op.view.state === 'cancelPending') return;
+        this.interact(p);
         await this.change(p,op.view.operationId,row => { row.view.state = 'cancelPending'; setCard(row,'pending'); });
       } else {
         if (!['prepare','confirm'].includes(op.carrier.mode) || !['sending','waiting','candidate'].includes(op.view.state)) return;
+        this.interact(p);
         const source = await this.validate(p,op);
         const frozen = source ? freezePayload({public:blankPublic(),config:{role:source.role, ...(op.source?.setup ? {setup:op.source.setup} : {})}}) :
           op.payload && op.proposalDigest ? {payload:op.payload,payloadDigest:op.proposalDigest} : undefined;
         if (!frozen || digest(Buffer.from(frozen.payload,'base64url')) !== frozen.payloadDigest) refusal();
         await this.change(p,op.view.operationId,row => {
           this.present(p);
-          row.payload = frozen.payload; row.view.payloadDigest = frozen.payloadDigest;
+          if (!row.contextOpen || (row.contextUntil ?? 0) <= this.now() || row.carrier.ref !== value.ref) refusal();
+          row.contextUntil = this.now()+CONTEXT; row.payload = frozen.payload; row.view.payloadDigest = frozen.payloadDigest;
           row.view.state = 'pendingCloud'; setCard(row,'pending');
         });
       }
