@@ -4,9 +4,7 @@ import {createHash,createPrivateKey} from 'node:crypto';
 import {richAuthoringAuthorizationSchema,richFrozenResponseSchema,decodeRichRecipeContent,recipeRichAuthoringPayloadSchema,
   type RichFreezeInput,type RecipeRichContent} from '@vonvon/protocol';
 import {itemsOf,wireDigest,wireJson} from './authoring-rich-snapshot';
-// @ts-expect-error Shared native/service binary proof transcript.
 import {richProof} from '../../../../services/recipe-api/src/rich-proof.mjs';
-// @ts-expect-error Shared typed command interpreter. The service assigns fresh IDs with its private operation seed.
 import {applyChanges} from '../../../../services/recipe-api/src/rich-document.mjs';
 
 export const richAuthorization=richAuthoringAuthorizationSchema;

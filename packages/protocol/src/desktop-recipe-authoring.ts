@@ -1,4 +1,5 @@
-import {richPreparationSchema,richInventoryOptionsSchema,richLocalInventorySchema} from './recipe-rich-authoring.js';
+import {recipeRichDraftChangeSchema} from './recipe-rich.js';
+import {richFreezeInputSchema,richPreparationSchema,richInventoryOptionsSchema,richLocalInventorySchema} from './recipe-rich-authoring.js';
 import { z } from 'zod';
 import { agentIdSchema, groupIdSchema } from './domain.js';
 import { viewIdSchema } from './desktop-devices.js';
@@ -13,9 +14,10 @@ const handle = { handle: uuid };
 const operation = { ...handle, operationId: uuid };
 const link = { ...handle, challengeId: uuid };
 export const desktopAuthoringRequestSchema = z.discriminatedUnion('type', [
+  z.object({type:z.literal('richInspectCandidate'),...operation}).strict(),
   z.object({type:z.literal('richInventory'),...handle,groupId:groupIdSchema,options:richInventoryOptionsSchema}).strict(),
   z.object({type:z.literal('richPrepare'),...handle,groupId:groupIdSchema,selection:richPreparationSchema}).strict(),
-  z.object({type:z.literal('richEdit'),...handle,draftId:uuid,baseRevision:revision,selected:uuid.array().max(32)}).strict(),
+  z.object({type:z.literal('richEdit'),...handle,draftId:uuid,baseRevision:revision,selected:uuid.array().max(32),access:z.enum(['direct','coded']).optional(),changes:recipeRichDraftChangeSchema.array().min(1).max(16).optional()}).strict(),
   z.object({ type: z.literal('open'), accountId: uuid, viewId: viewIdSchema, botId: agentIdSchema, groupId: groupIdSchema.optional() }).strict(),
   z.object({ type: z.literal('close'), ...handle }).strict(),
   z.object({ type: z.literal('detach'), ...handle }).strict(),
@@ -78,6 +80,7 @@ export const sourceHistoryEntrySchema = z.discriminatedUnion('state', [
 ]);
 export type SourceHistoryEntry = z.infer<typeof sourceHistoryEntrySchema>;
 export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
+  z.object({kind:z.literal('richCandidate'),operation:desktopAuthoringOperationSchema,reviewDigest:digest,request:richFreezeInputSchema}).strict(),
   z.object({kind:z.literal('richInventory'),groupId:groupIdSchema,inventory:richLocalInventorySchema}).strict(),
   z
     .object({

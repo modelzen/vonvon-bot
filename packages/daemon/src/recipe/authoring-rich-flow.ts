@@ -101,15 +101,54 @@ export function richMemberCap(rich:RichLocalDraft){
   const sizes=rich.members?.map(m=>({kind:m.kind,bytes:Buffer.from(m.bytes,'base64url').length}))??[];
   const text=sizes.filter(x=>x.kind==='text').reduce((sum,x)=>sum+x.bytes,0);
   const logo=sizes.find(x=>x.kind==='finalLogo');
-  const manifestMax=Math.min(1048576,Buffer.byteLength(wireJson(rich.request.content))+512*(sizes.length+1));
-  return Math.max(1,2*text+(logo?logo.bytes+131072:0),text+(logo?131072:0)+2*manifestMax);
+  const skeleton=structuredClone(rich.request.content);
+  for(const m of rich.members??[]){
+    const bytes=Buffer.from(m.bytes,'base64url').length;
+    if(m.kind==='text'){
+      const file=skeleton.files.find(f=>f.itemId===m.itemId)!;
+      file.text={kind:'part',objectId:m.itemId};
+      skeleton.parts.push({objectId:m.itemId,kind:'text',bytes,sha256:m.sha256,mediaType:'text/plain;charset=utf-8'});
+    }else{
+      skeleton.finalLogo={itemId:m.itemId,originId:m.itemId,objectId:m.itemId};
+      skeleton.parts.push({objectId:m.itemId,kind:'finalLogo',bytes:131072,sha256:m.sha256,mediaType:'image/webp'});
+    }
+  }
+  // UUID and digest widths survive remapping. The largest normalized Logo length has six digits.
+  const manifestMax=Buffer.byteLength(wireJson(skeleton));
+  const finalLogo=logo?131072:0;
+  return Math.max(1,2*text,text+(logo?.bytes??0)+finalLogo,text+finalLogo+2*manifestMax);
+}
+export function typedRichEdit(req:Extract<RecipeAuthoringRequest,{type:'richEdit'}>):RichLocalDraft{
+  const base={canonical:req.canonical,selected:req.selected};
+  const content=verifyEditBase(req.canonical,req.selected);
+  if(!req.changes){if(req.access)throw new Error('请附上需保存的草稿字段。');return {base};}
+  const allowed=new Set(req.selected);
+  for(const change of req.changes){
+    if(!safeEditValue(change))throw new Error('所选编辑含敏感内容。');
+    if(change.op==='addSetup'){
+      if(change.source.kind!=='accountClaim')throw new Error('请在源设备选择需要继承的步骤。');
+    }else if(change.op==='includeCandidate'){
+      const ref=change.value.source;
+      if(!req.source||ref.sourceIntentId!==req.source.sourceIntentId||ref.expectedRevision!==req.baseRevision||
+        !itemsOf(decodeRichRecipeContent(Buffer.from(req.source.canonical,'base64url')).content).some(i=>i.itemId===ref.candidateId))throw new Error('候选来源已改变。');
+      if('parentItemId' in change.value&&!allowed.has(change.value.parentItemId))throw new Error('需选择对应的父条目。');
+    }else if(change.op==='copyItem'){
+      if(!allowed.has(change.source.itemId)||'parentItemId' in change.source&&!allowed.has(change.source.parentItemId))throw new Error('需要选中复制来源和目标。');
+    }else if(!allowed.has(change.itemId))throw new Error('编辑目标不在核对范围内。');
+  }
+  canonicalizeRichRecipeContent(content);
+  return {base,request:{format:'rich-v2',...(req.access&&{access:req.access}),baseCanonical:req.canonical,...(req.source&&{candidates:[req.source]}),payload:{
+    format:'rich-v2',purpose:'editDraft',draftId:req.draftId,baseRevision:req.baseRevision,requestId:randomUUID(),schemaVersion:2,changes:req.changes}}};
 }
 export function richEditTargets(content:RecipeRichContent,selected:readonly string[]):RichModelItem[]{
   const items:RichModelItem[]=[];
   const add=(item: {itemId:string;originId:string}&Record<string,unknown>,kind:RichModelItem['kind'],field?:string)=>{
     if(!selected.includes(item.itemId))return;
     const {itemId,originId:_origin,...data}=item;
-    const value=kind==='publicText'||kind==='setting'?data.value:kind==='role'?data.text:data;
+    let value=kind==='publicText'||kind==='setting'?data.value:kind==='role'?data.text:data;
+    if(kind==='skill')value={name:data.name};
+    if(kind==='file')value={name:data.name,use:data.use};
+    if(kind==='memory'||kind==='finalLogo')value={selected:true};
     items.push({itemId,kind,value,...(field&&{field})});
   };
   for(const [name,item] of Object.entries(content.public))add(item,'publicText',name);
@@ -134,7 +173,7 @@ export function richCardReview(op:LocalOperation){
     ...request.content.setup.map((step,i)=>({label:'准备步骤 '+(i+1),valueJson:wireJson({title:step.title,instructions:step.instructions,
       kind:step.kind,required:step.required,action:step.action,...(step.check!==undefined&&{check:step.check})})})),
     {label:'已在 App 核对的来源',valueJson:'规则 '+request.content.rules.length+'、技能 '+request.content.skills.length+'、任务 '+request.content.tasks.length+'、记忆 '+request.content.memories.length+'、设置 '+request.content.settings.length+'。'},
-  ] : request.payload.changes.map(c=>({label:c.op,valueJson:wireJson(c)}));
+  ] : [...request.payload.changes.map(c=>({label:c.op,valueJson:wireJson(c)})),...(request.access?[{label:'获取方式',valueJson:request.access==='coded'?'凭码获取':'直接获取'}]:[])];
   return {draftId:op.view.draftId??op.view.operationId,revision:op.view.baseRevision??1,payloadDigest:richReviewDigest(op.rich!),fields};
 }
 export function verifyEditBase(raw:string,selected:readonly string[]){
@@ -150,13 +189,17 @@ export async function chatRichProposal(op:LocalOperation,instruction:string,sign
   const rich=op.rich;
   if(!rich)throw new Error('找不到当前草稿。');
   const base=rich.base, original=rich.request&&'content' in rich.request?rich.request:undefined;
-  const selected=base?.selected??(original?[...Object.values(original.content.public).map(i=>i.itemId),
-    ...original.content.setup.map(i=>i.itemId),...(rich.source?.selected??[])]:[]);
+  const selected=base?.selected??(original?[...new Set([...Object.values(original.content.public).map(i=>i.itemId),
+    ...original.content.setup.map(i=>i.itemId),...(rich.source?.selected??[])])]:[]);
   const content=base?verifyEditBase(base.canonical,selected):original?.content;
   if(!content)throw new Error('缺少本次草稿快照。');
   const presentIds=new Set(itemsOf(content).map(i=>i.itemId));
   const targets=richEditTargets(content,selected.filter(id=>presentIds.has(id)));
-  const grounding=targets.map(t=>['memory','file','skill','finalLogo'].includes(t.kind)||Buffer.byteLength(wireJson(t.value))>4000?
+  const named=targets.filter(t=>t.field&&({
+    name:/名称|名字|标题|\bname\b/i, summary:/简介|摘要|\bsummary\b/i,overview:/概览|概述|\boverview\b/i,version:/版本|\bversion\b/i,
+  } as Record<string,RegExp>)[t.field]?.test(instruction));
+  const scoped=named.length&&!/步骤|准备|setup|角色|技能|任务|规则|权限/i.test(instruction)?named:targets;
+  const grounding=scoped.map(t=>['memory','file','skill','finalLogo'].includes(t.kind)||Buffer.byteLength(wireJson(t.value))>4000?
     {...t,value:{selected:true}}:t);
   const parsed=await proposeRich({instruction,phase:original?'create':'edit',selected:grounding},signal,parser);
   if(parsed.kind!=='proposal')return parsed;

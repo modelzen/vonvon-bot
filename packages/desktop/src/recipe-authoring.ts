@@ -661,6 +661,14 @@ export class RecipeAuthoringController {
         h.source = { groupId: r.groupId, reviewToken: source.reviewToken };
         return { ...source, target: h.target, groupName };
       }
+      case 'richInspectCandidate': {
+        await this.status(h);
+        const op=h.operations.get(r.operationId);
+        if(!op||op.format!=='rich-v2'||!this.visible(h,this.display(h,op)))throw recheck();
+        const preview=expectKind(await this.daemon(h,{type:'richInspect',operationId:r.operationId,preview:true}),'richCandidate');
+        if(preview.operationId!==op.operationId||preview.reviewDigest!==op.payloadDigest)throw recheck();
+        return {kind:'richCandidate',operation:this.display(h,op),reviewDigest:preview.reviewDigest,request:preview.request};
+      }
       case 'richInventory': {
         if(!h.groups.has(r.groupId))throw recheck();
         return expectKind(await this.daemon(h,{type:r.type,groupId:r.groupId,options:r.options}),'richInventory');
@@ -677,8 +685,10 @@ export class RecipeAuthoringController {
           req={type:r.type,groupId:r.groupId,selection:r.selection,attestations};
         }else{
           if(h.open.groupId)throw recheck();
-          const {canonical}=await cloud.draft(r.draftId,r.baseRevision);
-          req={type:r.type,draftId:r.draftId,baseRevision:r.baseRevision,canonical,selected:r.selected};
+          const {canonical,meta}=await cloud.draft(r.draftId,r.baseRevision);
+          const source=r.changes?.some(c=>c.op==='includeCandidate')?{sourceIntentId:meta.sourceIntentId,
+            canonical:(await cloud.readMember(r.draftId,meta.sourceManifest)).toString('base64url')}:undefined;
+          req={type:r.type,draftId:r.draftId,baseRevision:r.baseRevision,canonical,selected:r.selected,changes:r.changes,access:r.access,source};
         }
         const op=expectKind(await this.daemon(h,req),'operation').operation;
         if(op.format!=='rich-v2'||(r.type==='richPrepare'?op.groupId!==r.groupId:op.draftId!==r.draftId||op.baseRevision!==r.baseRevision))throw recheck();

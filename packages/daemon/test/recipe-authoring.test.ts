@@ -887,6 +887,12 @@ it('keeps an exact edit approval across process restarts and reconciles a lost a
 });
 
 it('saves only the private-chat-reviewed rich source and continues against its saved rich revision',async()=>{
+  const production=process.env.RICH_NATIVE_PG==='1';
+  const {richAuthoringCloud}=await import('../../desktop/src/recipe-authoring-rich-cloud');
+  const cloudApi=richAuthoringCloud({request:async (_id:string,path:string,init:RequestInit={})=>{
+    const h=new Headers(init.headers);h.set('authorization','Bearer '+process.env.AUTHORING_TEST_JWT);
+    return fetch((path.includes('/members/')||path.includes('/objects/')&&path.includes('/drafts/')?process.env.RICH_NATIVE_BROKER:accountApi)+path,{...init,headers:h});
+  }} as Parameters<typeof richAuthoringCloud>[0],account,new AbortController().signal,()=>{});
   const {freezeSnapshot,richWireBytes}=await import('../../../services/recipe-api/src/rich-document.mjs');
   const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
   await open();await link();
@@ -896,9 +902,9 @@ it('saves only the private-chat-reviewed rich source and continues against its s
   const selection={options,reviewToken:inventory.reviewToken,selected:[inventory.content.role!.itemId],sourceAttested:true,
     public:{name:'周报',summary:'每周整理',overview:'',version:'1'},access:'direct',setup:[]};
   const op=kind(await rpc('richPrepare',{groupId,selection,attestations:[]}),'operation').operation;
-  const destinationDraftId=randomUUID();
+  const destinationDraftId=production?await cloudApi.register(op):randomUUID();
   const advanceRich=(authorization:object,accepted?:object)=>rpc('richAdvance',{operationId:op.operationId,destinationDraftId,authorization,...(accepted&&{accepted})});
-  await advanceRich({...await auth(op,'dispatch'),format:'rich-v2'});
+  await advanceRich(production?await cloudApi.authorize(op.operationId,'dispatch',dispatchDigest):{...await auth(op,'dispatch'),format:'rich-v2'});
   expect((await status(op.operationId)).state).toBe('candidate');
   expect([...cards.values()].join('')).not.toContain(sourceRole);
   proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'addSetup',target:'',valueJson:JSON.stringify({
@@ -916,16 +922,40 @@ it('saves only the private-chat-reviewed rich source and continues against its s
   const {content}=freezeSnapshot(reviewed.request,Buffer.alloc(32,2));
   const doc=canonicalizeRichRecipeContent(content),bytes=Buffer.from(doc.canonicalUTF8);
   const payload=richWireBytes({format:'rich-v2',purpose:'prepareDraft',sourceIntentId:op.operationId,content});
-  const frozen={format:'rich-v2',sourceReviewSha256:reviewed.reviewDigest,destinationDraftId,canonical:bytes.toString('base64url'),
+  const frozen=production?await cloudApi.freeze(op.operationId,reviewed.request):{format:'rich-v2',sourceReviewSha256:reviewed.reviewDigest,destinationDraftId,canonical:bytes.toString('base64url'),
     contentSha256:digest(bytes),logicalBytes:doc.logicalBytes,payload:payload.toString('base64url'),payloadDigest:digest(payload)};
-  const binding={...await auth({...op,payloadDigest:frozen.payloadDigest},'accept'),format:'rich-v2',sourceReviewSha256:reviewed.reviewDigest};
-  const accepted={frozen,manifestId:randomUUID(),packageId:op.operationId};
+  const binding=production?await cloudApi.authorize(op.operationId,'accept',frozen.payloadDigest):
+    {...await auth({...op,payloadDigest:frozen.payloadDigest},'accept'),format:'rich-v2',sourceReviewSha256:reviewed.reviewDigest};
+  let manifestId:string=randomUUID();
+  if(production){
+    const data=Buffer.from(frozen.canonical,'base64url');
+    await cloudApi.reserve(op.operationId,destinationDraftId,2*data.length);
+    manifestId=(await cloudApi.upload(op.operationId,65,'manifest',data)).objectId;
+  }
+  const accepted={frozen,manifestId,packageId:op.operationId};
   await expect(advanceRich({...binding,sourceReviewSha256:'0'.repeat(64)},accepted)).rejects.toThrow();
-  results.set(op.operationId,{draftId:destinationDraftId,revision:1});
+  if(!production)results.set(op.operationId,{draftId:destinationDraftId,revision:1});
   await advanceRich(binding,accepted);
   expect((await status(op.operationId)).receipt).toMatchObject({draftId:destinationDraftId,revision:1});
   proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'edit',target:'T1',valueJson:JSON.stringify('新的周报')}]});
   await orch.onMessage(msg('把名称改成新的周报'));
   const all=kind(await rpc('status'),'status').operations;
+  if(production){
+    const metadata=await cloudApi.draft(destinationDraftId,1);
+    expect(metadata.canonical).toBe(frozen.canonical);
+    const edit=all.find(o=>o.purpose==='editDraft')!;
+    expect(await cloudApi.register(edit)).toBe(destinationDraftId);
+    await rpc('richAdvance',{operationId:edit.operationId,destinationDraftId,authorization:await cloudApi.authorize(edit.operationId,'dispatch',dispatchDigest)});
+    const message=[...messages.values()].at(-1)!.message_id;
+    await act(ref(message));
+    const candidate=kind(await rpc('richInspect',{operationId:edit.operationId}),'richCandidate');
+    const next=await cloudApi.freeze(edit.operationId,candidate.request),bytes=Buffer.from(next.canonical,'base64url');
+    await cloudApi.reserve(edit.operationId,destinationDraftId,2*bytes.length);
+    const artifact=await cloudApi.upload(edit.operationId,65,'manifest',bytes);
+    await rpc('richAdvance',{operationId:edit.operationId,destinationDraftId,authorization:await cloudApi.authorize(edit.operationId,'accept',next.payloadDigest),
+      accepted:{frozen:next,manifestId:artifact.objectId,packageId:edit.operationId}});
+    const after=await cloudApi.draft(destinationDraftId,2);
+    expect(JSON.parse(Buffer.from(after.canonical,'base64url').toString('utf8')).public.name.value).toBe('新的周报');
+  }
   expect(all.find(o=>o.purpose==='editDraft')).toMatchObject({format:'rich-v2',draftId:destinationDraftId,baseRevision:1,state:'pendingMain'});
 });
