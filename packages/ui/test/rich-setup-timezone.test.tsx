@@ -59,3 +59,23 @@ it('closes old consent on a new source read and rejects an invalid zone',async()
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   await click('核对并启用');expect(document.querySelector<HTMLInputElement>('input')!.value).toBe('UTC');
 });
+it('defaults recurring Tokyo tasks to Tokyo on a remote device and keeps the chosen clock',async()=>{
+  read={...read,tasks:[task('daily','Asia/Tokyo')]};
+  await render();await click('核对并启用');
+  expect(document.querySelector<HTMLInputElement>('input')!.value).toBe('Asia/Tokyo');
+  await fill('America/New_York');
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('启用后：每天 09:00（America/New_York）');
+});
+it('keeps the previous calendar date when converting a fixed once instant',async()=>{
+  read={...read,tasks:[{...task('once','Asia/Tokyo',true),spec:{kind:'once',at:Date.parse('2027-01-01T15:30:00Z')}}]};
+  await render();await click('核对并启用');await fill('Asia/Shanghai');
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('2027-01-01 23:30');
+});
+it('keeps old daemon replies in their native zone without offering an unpreviewable override',async()=>{
+  const {spec:_,...legacy}=task('once','Asia/Tokyo',true);
+  read={...read,tasks:[legacy]};await render();await click('核对并启用');
+  const input=document.querySelector<HTMLInputElement>('input')!;
+  expect(input.value).toBe('Asia/Tokyo');expect(input.disabled).toBe(true);
+  await click('启用此任务');
+  expect(calls.at(-1)).toMatchObject({action:{timeZone:'Asia/Tokyo'}});
+});

@@ -87,6 +87,7 @@ test('a redeemed install drains existing work and commits only the selected slot
         timeZone: { kind: 'targetChoice' },
       },
       {...identity(),name:'Tokyo explicit',instruction:text('explicit zone'),spec:{kind:'daily',time:'09:00'},placement:'follow',timeZone:{kind:'recommended',iana:'Asia/Tokyo'}},
+      {...identity(),name:'Tokyo once',instruction:text('fixed instant'),spec:{kind:'once',at:Date.parse('2027-01-02T00:00:00Z')},placement:'follow',timeZone:{kind:'recommended',iana:'Asia/Tokyo'}},
     ],
     memories: [{ ...identity(), text: text('selected') }],
     skills: [],
@@ -271,6 +272,9 @@ test('a redeemed install drains existing work and commits only the selected slot
   await expect(setup({kind:'enableTask',taskId,taskToken:'f'.repeat(64),timeZone:'Asia/Shanghai',token:observed.token})).rejects.toThrow('管理员身份');
   await setup({ kind: 'enableTask', taskId,taskToken:observed.tasks[0]!.token, timeZone: 'Asia/Shanghai', token: observed.token });
   expect(store.all()[0]?.state).toBe('active');
+  const once=observed.tasks.find(task=>task.name==='Tokyo once')!;
+  await setup({kind:'enableTask',taskId:once.id,taskToken:once.token,timeZone:'Asia/Shanghai',token:observed.token});
+  expect(store.all().find(task=>task.id===once.id)).toMatchObject({timeZone:'Asia/Shanghai',spec:{kind:'once',at:Date.parse('2027-01-02T00:00:00Z')}});
   expect((await setup({kind:'read'})).tasks[0]).toMatchObject({timeZone:'Asia/Shanghai',spec:{kind:'daily',time:'12:00'}});
   const unchanged=await prepare();
   await installer().request(unchanged.commit);

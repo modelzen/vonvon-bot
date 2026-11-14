@@ -8,6 +8,7 @@ import {
   type RecipeRichContent,
   type RecipeRichText,
 } from '@vonvon/protocol';
+import {hostTimeZone} from '../bot/schedule/time';
 import type { ScheduleStore } from '../bot/schedule/store';
 import { managedId, type ManagedTaskDefinition } from '../bot/schedule/managed';
 import { botDir, botPaths, paths } from '../config/paths';
@@ -321,7 +322,7 @@ export async function applyRich(bot: BotIdentity, input: Activation, schedules: 
             name: t.name,
             instruction: String(item.value.instruction),
             spec: t.spec.kind === 'every' ? { ...t.spec, anchor: Math.ceil(now / 60000) * 60000 } : t.spec,
-            timeZone: t.timeZone.kind === 'recommended' ? t.timeZone.iana : 'UTC',
+            timeZone: t.timeZone.kind === 'recommended' ? t.timeZone.iana : hostTimeZone(),
             placement: { kind: t.placement },
             state: 'paused',
             createdBy: { via: 'desktop' },
