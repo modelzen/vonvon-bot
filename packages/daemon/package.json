@@ -30,7 +30,8 @@
     "build:holder": "node scripts/build-holder.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "start": "node bin/vonvon.mjs daemon run"
+    "start": "node bin/vonvon.mjs daemon run",
+    "verify:built": "node scripts/verify-built.mjs"
   },
   "dependencies": {
     "@vonvon/client": "0.1.0",
