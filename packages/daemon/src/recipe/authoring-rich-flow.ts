@@ -140,7 +140,7 @@ export function richMemberCap(rich:RichLocalDraft){
   // UUID and digest widths survive remapping. The largest normalized Logo length has six digits.
   const manifestMax=Buffer.byteLength(wireJson(skeleton));
   const finalLogo=logo?131072:0;
-  return Math.max(1,2*text,text+(logo?.bytes??0)+finalLogo,text+finalLogo+2*manifestMax);
+  return Math.max(1,text+sizes.filter(x=>x.kind==='text').sort((a,b)=>b.bytes-a.bytes).slice(0,2).reduce((n,s)=>n+s.bytes,0),text+(logo?.bytes??0)+finalLogo,text+finalLogo+2*manifestMax);
 }
 export function typedRichEdit(req:Extract<RecipeAuthoringRequest,{type:'richEdit'}>):RichLocalDraft{
   const base={canonical:req.canonical,selected:req.selected};

@@ -17,8 +17,9 @@ export function richTerminal(raw:unknown){
 const fail=()=>new Error('云端配方资料与本次请求不一致。');
 export function richAuthoringCloud(account:AccountTransport,accountId:string,signal:AbortSignal,check:()=>void){
   async function bounded(path:string,init:RequestInit,cap:number){
+    const active=init.signal?AbortSignal.any([signal,init.signal]):signal;
     check();signal.throwIfAborted();
-    const response=await account.request(accountId,path,{...init,signal},check);
+    const response=await account.request(accountId,path,{...init,signal:active},check);
     if(!response.ok||!response.body){await response.body?.cancel();if(response.status===404)throw new MissingRichOperation();throw fail();}
     const reader=response.body.getReader(), chunks:Uint8Array[]=[];
     let bytes=0;
@@ -70,10 +71,10 @@ export function richAuthoringCloud(account:AccountTransport,accountId:string,sig
       if(!Number.isSafeInteger(cap)||cap<1||cap>4194304)throw fail();
       await json(pkg(packageId)+'/reserve',{draftId:uuid.parse(draftId),cap});
     },
-    async upload(packageId:string,ordinal:number,kind:'text'|'manifest'|'finalLogo',bytes:Uint8Array){
+    async upload(packageId:string,ordinal:number,kind:'text'|'manifest'|'finalLogo',bytes:Uint8Array,transferSignal?:AbortSignal){
       if(!Number.isInteger(ordinal)||ordinal<0||ordinal>65||bytes.length>(kind==='manifest'?1048576:kind==='finalLogo'?2097152:131072))throw fail();
       const digest=sha(bytes);
-      const data=await bounded(pkg(packageId)+'/members/'+ordinal,{method:'PUT',headers:{'content-type':'application/octet-stream',
+      const data=await bounded(pkg(packageId)+'/members/'+ordinal,{method:'PUT',signal:transferSignal,headers:{'content-type':'application/octet-stream',
         'content-length':String(bytes.length),'x-recipe-kind':kind,'x-recipe-sha256':digest},body:new Uint8Array(bytes)},2048);
       const descriptor=(kind==='manifest'?recipeRichManifestObjectSchema:recipeRichPartDescriptorSchema).parse(JSON.parse(data.toString('utf8')));
       if(descriptor.kind!==kind || kind!=='finalLogo'&&(descriptor.sha256!==digest||descriptor.bytes!==bytes.length))throw fail();
