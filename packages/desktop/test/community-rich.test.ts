@@ -57,3 +57,11 @@ it('rejects metadata that disagrees with the verified content and reports lifecy
   await expect(communityRequest(f.account,{type:'detail',recipeId,versionId})).rejects.toThrow('社区请求未完成');
   for(const state of ['withdrawn','blocked']){f.request.mockResolvedValue(Response.json({state,versionId}));await expect(communityRequest(f.account,{type:'detail',recipeId,versionId})).rejects.toThrow(state==='withdrawn'?'作者已撤下':'平台停止分发');}
 });
+
+it.each(['library','publications'] as const)('loads bounded public logos for %s without losing entries when the image is unavailable',async type=>{
+  const f=fixture();f.account.status=()=>({kind:'signedIn',accountId,displayName:'Owner',provider:'github',persistence:'memory'});
+  const item={format:'rich-v2',recipeId,versionId,revision:1,public:f.detail.public,hasDisplayLogo:true};let missing=false;
+  f.request.mockImplementation(async path=>path.endsWith('/display-logo')?missing?new Response(null,{status:404}):new Response(new Uint8Array([1,2,3])):Response.json({items:[item],...(type==='library'?{nextCursor:null}:{})}));
+  expect((await communityRequest(f.account,{type,accountId})).items[0]?.logo).toBe('data:image/webp;base64,AQID');
+  missing=true;expect((await communityRequest(f.account,{type,accountId})).items[0]).toEqual(item);
+});

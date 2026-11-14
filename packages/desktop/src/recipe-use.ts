@@ -238,6 +238,15 @@ export class RecipeUseController {
     if(reply.kind==='alreadyInstalled'&&reply.groupId===groupId&&reply.recipeId===h.input.recipeId&&reply.versionId===h.input.versionId)return this.done(h,groupId,'applied');
     if(reply.kind==='richReview'){
       if(reply.groupId!==groupId)throw invalid();
+      const previous=h.row;
+      if(previous?.stage==='operation'){
+        const status=await this.daemon(h,{type:'richStatus',botId:h.input.botId,operationId:previous.operation.id});
+        if(status.kind!=='richStatus'||status.operationId!==previous.operation.id)throw invalid();
+        if(status.issuerState!=='unissued')return this.pending(h,'installing');
+        const cancelled=await this.daemon(h,{type:'richCancel',botId:h.input.botId,operationId:previous.operation.id});
+        if(cancelled.kind!=='richStatus'||cancelled.status!=='rejected'||!cancelled.settled)throw changed();
+        this.save(h,{...this.base(h),stage:'group',groupId});
+      }
       h.richReview={...reply,handle:h.id}; return h.richReview;
     }
     if(reply.kind!=='richPrepared'||reply.intent.versionId!==h.input.versionId||reply.intent.targetPublicKey!==h.pk||reply.intent.manifestSha256!==h.richPreview.preview.release.contentSha256)throw invalid();
@@ -294,7 +303,7 @@ export class RecipeUseController {
         }
         if (stale) this.handles.delete(id);
       }
-      const row = this.journal
+      let row = this.journal
         .all()
         .find(
           (r) =>
@@ -323,8 +332,12 @@ export class RecipeUseController {
       if (this.handles.size >= 32) throw new RecipeUseError('请先完成或关闭其他配方安装。');
       h.row = row;
       if (row?.stage === 'done') {
-        this.handles.set(h.id, h);
-        return { kind: row.outcome, handle: h.id, groupId: row.groupId };
+        if(row.outcome==='applied'){
+          const current=await this.daemon(h,{type:'source',botId:input.botId,groupId:row.groupId});
+          if(current.kind!=='source'||current.groupId!==row.groupId)throw invalid();
+          if(current.source?.recipeId!==input.recipeId||current.source.versionId!==input.versionId){this.journal.remove(row.id);h.row=undefined;row=undefined;}
+        }
+        if(row?.stage==='done'){this.handles.set(h.id,h);return {kind:row.outcome,handle:h.id,groupId:row.groupId};}
       }
       if (row?.stage === 'joining' || (row?.stage === 'operation' && row.action !== 'reviewed')) {
         this.handles.set(h.id, h);
@@ -418,7 +431,7 @@ export class RecipeUseController {
     return this.prepare(h, input.groupId);
   }
   private async join(h: Handle, input: Extract<RecipeUseRequest, { type: 'join' }>['input']): Promise<RecipeUseReply> {
-    if (h.row || h.input.groupId || input.agentId !== h.input.botId || !h.preview) throw invalid();
+    if (h.row || h.input.groupId || input.agentId !== h.input.botId || (!h.preview&&!h.richPreview)) throw invalid();
     await this.identity(h);
     this.check(h);
     const row = {
@@ -566,6 +579,13 @@ export class RecipeUseController {
     const shown = await localSource();
     check();
     if (request.type === 'ignore' && shown?.sourceToken !== request.sourceToken) throw staleSource();
+    if(request.type==='setup'){
+      if(shown?.format!=='rich-v2'||shown.sourceToken!==request.sourceToken)throw staleSource();
+      const reply=recipeInstallReplySchema.parse(await install({type:'richSetup',botId,groupId,action:request.action}));check();
+      const now=await identity();if(now.id!==device.id||now.pk!==device.pk)throw changed();
+      if(reply.kind!=='richSetup'||reply.groupId!==groupId)throw invalid();
+      return {source:shown,setup:reply};
+    }
     if (request.type === 'read' || !shown || !accountId || !signal) return { source: shown };
     const latest = await recipeCloud(this.account, { accountId, signal, check }).latest(shown.recipeId);
     check();

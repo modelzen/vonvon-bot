@@ -56,12 +56,25 @@ export function richCommunity(account: NativeAccount, accountId: string | undefi
       public: {name: fields.name.value, summary: fields.summary.value, overview: fields.overview.value, version: fields.version.value, access: value.access},
       rich: loaded.rich, ...(loaded.logo?{logo:loaded.logo}:{})};
   }
+  async function logo(item: z.infer<typeof recipeSummarySchema>) {
+    if (!item.hasDisplayLogo) return item;
+    try {const bytes = await read(`/v2/versions/${item.versionId}/display-logo`, 131072);
+      return {...item, logo: 'data:image/webp;base64,' + bytes.toString('base64')};
+    }catch{check();return item;}
+  }
+  async function logos(items:z.infer<typeof recipeSummarySchema>[]) {
+    const result:z.infer<typeof recipeSummarySchema>[]=[];
+    for(let index=0;index<items.length;index+=8)result.push(...await Promise.all(items.slice(index,index+8).map(logo)));
+    return result;
+  }
   return {
     async library(cursor?: string): Promise<CommunityResponses['library']> {
-      return z.object({items: recipeSummarySchema.array().max(50), nextCursor: uuid.nullable()}).strict().parse(await json('/v2/me/recipes' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '')));
+      const page=z.object({items: recipeSummarySchema.array().max(50), nextCursor: uuid.nullable()}).strict().parse(await json('/v2/me/recipes' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '')));
+      return {...page,items:await logos(page.items)};
     },
     async publications(): Promise<CommunityResponses['publications']> {
-      return z.object({items: recipeSummarySchema.array().max(1000)}).strict().parse(await json('/v2/me/publications'));
+      const page=z.object({items: recipeSummarySchema.array().max(1000)}).strict().parse(await json('/v2/me/publications'));
+      return {items:await logos(page.items)};
     },
     async drafts(): Promise<CommunityResponses['drafts']> {
       const role = recipeRoleDraftSchema.omit({format:true,rich:true,logo:true,sourceIntentId:true}).extend({format:z.literal('role-v1')});
@@ -72,11 +85,6 @@ export function richCommunity(account: NativeAccount, accountId: string | undefi
     async catalog(query?: string, cursor?: string): Promise<CommunityResponses['catalog']> {
       const params = new URLSearchParams(); if (query) params.set('q', query); if (cursor) params.set('cursor', cursor);
       const page = z.object({heroKind:z.enum(['featured','latest']).nullable(),hero: recipeSummarySchema.nullable(), items: recipeSummarySchema.array().max(8), nextCursor: z.string().max(1600).nullable()}).strict().parse(await json('/v2/community/recipes?' + params));
-      async function logo(item: z.infer<typeof recipeSummarySchema>) {
-        if (!item.hasDisplayLogo) return item;
-        const bytes = await read(`/v2/versions/${item.versionId}/display-logo`, 131072);
-        return {...item, logo: 'data:image/webp;base64,' + bytes.toString('base64')};
-      }
       return {...page, hero: page.hero ? await logo(page.hero) : null, items: await Promise.all(page.items.map(logo))};
     },
     async detail(recipeId: string, versionId: string): Promise<RecipeDetail> {

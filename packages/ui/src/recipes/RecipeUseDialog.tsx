@@ -70,7 +70,7 @@ export function RecipeUseDialog(props: Props) {
           <li>{reply?.kind === 'applied' ? '已应用到目标群，云端已确认' : reply?.kind === 'pending' ? pendingText(reply.phase) : reply?.kind === 'rejected' ? '本次应用未完成' : '预览内容，确认后应用'}</li>
         </ol>
         {session.target && (reply?.kind === 'review' || reply?.kind === 'prepared') && <p className="recipe-use-note">沿用现有群聊的 Provider、工作目录和沟通方式。</p>}
-        {(reply?.kind === 'review' || reply?.kind === 'prepared') && <p role="status">{props.groupNameError ?? (!groupName ? '正在读取目标群名，核对后才能确认应用。' : '已核对飞书群名。')} <Button disabled={busy} onClick={props.onRefreshGroupName}>刷新群名</Button></p>}
+        {(reply?.kind === 'review' || reply?.kind === 'prepared' || reply?.kind === 'richReview' || reply?.kind === 'richPrepared') && <p role="status">{props.groupNameError ?? (!groupName ? '正在读取目标群名，核对后才能确认应用。' : '已核对飞书群名。')} <Button disabled={busy} onClick={props.onRefreshGroupName}>刷新群名</Button></p>}
         {(reply?.kind === 'review' || reply?.kind === 'prepared') && <RecipeReview draft={reviewDraft} onChange={setReviewDraft} review={reply.review} prepared={reply.kind === 'prepared'} busy={busy || !groupName}
           acceptedResolution={props.acceptedResolution}
           onResolve={resolution => onRequest({type: 'resolve', handle: reply.handle, reviewToken: reply.review.reviewToken, resolution})}

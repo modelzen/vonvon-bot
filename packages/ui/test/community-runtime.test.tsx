@@ -81,6 +81,9 @@ it('uses only immutable IDs when opening a just-published receipt', async () => 
   expect(calls.filter(request => request.type === 'detail' || request.type === 'shareLink')).toEqual([
     {type: 'detail', accountId, recipeId: A, versionId: B}, {type: 'shareLink', recipeId: A, versionId: B},
   ]);
+  const catalogs=calls.filter(request=>request.type==='catalog').length;
+  await click('返回 Bot 配方');
+  expect(calls.filter(request=>request.type==='catalog')).toHaveLength(catalogs+1);
 });
 it('keeps the actual editor DOM, caret, unsaved text and uncertain request key across reconnects and device switches', async () => {
   let attempts = 0;

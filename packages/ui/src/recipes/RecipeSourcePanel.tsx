@@ -31,7 +31,7 @@ function RecipeSourceContent({botId,groupId}:{botId:AgentId;groupId:GroupId}) {
   const error = failure?.scope === scope ? failure.message : undefined;
   const source = result?.source;
   const latest = result?.latest;
-  async function request(type: DesktopRecipeSourceRequest['type']) {
+  async function request(type:'read'|'check'|'ignore') {
     if (!shell?.recipeSource || locked.current === scope) return;
     const {accountId, ...target} = scope;
     if (type !== 'read' && !accountId) return;
@@ -61,7 +61,7 @@ function RecipeSourceContent({botId,groupId}:{botId:AgentId;groupId:GroupId}) {
             if (latest.entitled) useRecipe?.start(recipe, target);
             else navigate(() => community?.open({kind: 'detail', recipe, useTarget: target}));
           }}>{latest.entitled ? '预览更新' : '获取新版'}</Button></div>}/>}
-      {source.format==='rich-v2'&&<RichSetupPanel key={`${device.id}:${botId}:${groupId}:${source.sourceToken}`} botId={botId} groupId={groupId}/>}
+      {source.format==='rich-v2'&&<RichSetupPanel key={`${device.id}:${botId}:${groupId}:${source.sourceToken}`} botId={botId} groupId={groupId} sourceToken={source.sourceToken}/>}
       {!accountId && <p className="recipe-source-note">登录后可检查新版本。当前配方继续保留。</p>}
     </> : result ? <SettingsRow title="尚未应用社区配方" description="本群还没有社区配方来源。"/> : <p className="recipe-source-note" role="status">正在读取配方来源…</p>}
     {busy && result && <p className="recipe-source-note" role="status">正在核对配方版本…</p>}

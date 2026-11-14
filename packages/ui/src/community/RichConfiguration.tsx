@@ -2,7 +2,7 @@ import type {RecipeRichContent, RecipeRichSetting, RecipeRichText} from '@vonvon
 import {RecipeMarkdown} from './RecipeContent';
 
 export type RichView = {content: RecipeRichContent; texts: Record<string,string>};
-const settingNames: Record<RecipeRichSetting['field'], string> = {
+export const recipeSettingNames: Record<RecipeRichSetting['field'], string> = {
   sessionMode: '会话模式', 'response.noMention': '无需提及 Bot', 'run.pendingPolicy': '执行期间的新消息',
   'presentation.voiceEnabled': '语音回复', 'presentation.showToolCalls': '展示工具调用', 'presentation.showModel': '模型标记',
   'presentation.completionMode': '完成通知', 'presentation.longTaskMinutes': '长任务分钟数', 'presentation.completionTemplate': '完成通知模板',
@@ -12,7 +12,7 @@ const settingNames: Record<RecipeRichSetting['field'], string> = {
 };
 const fieldNames:Record<string,string>={backend:'执行工具',selection:'模型选择',kind:'类型',model:'模型',effort:'思考强度',custom:'自定义',models:'可用模型',efforts:'可用思考强度',modelEfforts:'各模型思考强度',modelServiceTiers:'各模型速度',defaultModel:'默认模型',defaultEffort:'默认思考强度',tier:'速度',provider:'判断服务',mode:'启用时机',sandbox:'文件访问范围',network:'网络访问',permissionMode:'权限模式',version:'配置版本',blocks:'卡片内容',reply:'回复显示',streamText:'流式回复',collapseAfterRun:'完成后折叠',name:'名称',slot:'位置',appearance:'显示形式',template:'显示模板',requestedTemplate:'请求模板',size:'字号',color:'颜色',warning:'阈值提醒',warningAt:'提醒阈值',contextRules:'上下文提醒',yellowAt:'黄色阈值',orangeAt:'橙色阈值',redAt:'红色阈值',showFrom:'开始显示阈值',enabledColors:'启用颜色'};
 const values: Record<string,string> = {multi:'多会话',single:'单会话',smart:'智能会话',default:'默认',steer:'引导当前执行',queue:'排队',
-  explicit:'指定模型',llm:'模型',decision:'判断模型',provider:'内置判断服务',context:'上下文',model:'模型',time:'用时',status:'状态',tools:'工具',thinking:'思考',stop:'停止',reminder:'提醒',custom:'自定义',off:'关闭',running:'运行时展示',always:'始终',done:'完成后展示',manual:'手动',long:'仅长任务',failures:'仅失败',
+  direct:'直接获取',coded:'凭分享码获取',explicit:'指定模型',llm:'模型',decision:'判断模型',provider:'内置判断服务',context:'上下文',model:'模型',time:'用时',status:'状态',tools:'工具',thinking:'思考',stop:'停止',reminder:'提醒',custom:'自定义',off:'关闭',running:'运行时展示',always:'始终',done:'完成后展示',manual:'手动',long:'仅长任务',failures:'仅失败',
   'read-only':'只读','workspace-write':'工作区可写','danger-full-access':'完全访问',acceptEdits:'自动接受编辑',plan:'计划',auto:'自动',bypassPermissions:'跳过权限确认',text:'文字',percent:'百分比',bar:'进度条',icon:'图标','top-left':'顶部左侧','top-right':'顶部右侧',top:'顶部',process:'执行过程','bottom-left':'底部左侧','bottom-right':'底部右侧',bottom:'底部',notation:'小字',normal:'正常',grey:'灰色',blue:'蓝色',qa:'问答',write:'允许写入',full:'完整权限',inherit:'跟随默认',standard:'标准',fast:'快速',ultrafast:'极速'};
 export function richText(text: RecipeRichText, view: RichView) {
   return text.kind === 'inline' ? text.value : view.texts[text.objectId] ?? '内容尚未读取，请重新打开此版本。';
@@ -27,7 +27,7 @@ function SettingValue({value}: {value: unknown}) {
   return null;
 }
 export function RichSettings({items}: {items: RecipeRichSetting[]}) {
-  return <dl className="community-rich-settings">{items.map(item => <div key={item.itemId}><dt>{settingNames[item.field]}</dt><dd><SettingValue value={item.value}/></dd></div>)}</dl>;
+  return <dl className="community-rich-settings">{items.map(item => <div key={item.itemId}><dt>{recipeSettingNames[item.field]}</dt><dd><SettingValue value={item.value}/></dd></div>)}</dl>;
 }
 export function RichConfiguration({view, section}: {view: RichView; section: string}) {
   const {content} = view;
@@ -43,5 +43,5 @@ export function RichConfiguration({view, section}: {view: RichView; section: str
 }
 
 export function RichChangeList({changes}: {changes: import('@vonvon/protocol').RecipeRichDraftChange[]}) {
-  return <div className="community-config">{changes.map((change,index) => <article key={index}><h3>{change.op === 'setPublicText' ? {name:'名称',summary:'公开简介',overview:'公开概览',version:'版本'}[change.field] : change.op === 'setRoleText' ? '角色' : change.op === 'setSetting' ? '配置' : change.op === 'setTask' ? '任务' : change.op === 'setSetup' || change.op === 'addSetup' ? '使用前准备' : change.op === 'removeItem' ? '移除项目' : change.op === 'setFile' ? '文档' : change.op === 'setRule' ? '规则' : '所选配置变更'}</h3>{'value' in change ? <SettingValue value={change.value}/> : <p>{change.op === 'removeItem' ? `移除 ${change.kind}` : '按已核对的来源加入所选内容'}</p>}</article>)}</div>;
+  return <div className="community-config">{changes.map((change,index) => <article key={index}><h3>{change.op === 'setPublicText' ? {name:'名称',summary:'公开简介',overview:'公开概览',version:'版本'}[change.field] : change.op === 'setAccess' ? '获取方式' : change.op === 'setFinalLogo' ? 'Logo' : change.op === 'setRoleText' ? '角色' : change.op === 'setSetting' ? '配置' : change.op === 'setTask' ? '任务' : change.op === 'setSetup' || change.op === 'addSetup' ? '使用前准备' : change.op === 'removeItem' ? '移除项目' : change.op === 'setFile' ? '文档' : change.op === 'setRule' ? '规则' : '所选配置变更'}</h3>{'value' in change ? <SettingValue value={change.value}/> : <p>{change.op === 'setFinalLogo' ? '使用本次明确选择并通过归一化检查的 Logo。保存后可核对最终图片。' : change.op === 'removeItem' ? `移除 ${change.kind}` : '按已核对的来源加入所选内容'}</p>}</article>)}</div>;
 }

@@ -621,3 +621,37 @@ it('discards the private review draft when recovery presents changed content or 
   expect(document.querySelector<HTMLTextAreaElement>(text)?.value).toBe(baseReview.currentRole);
   expect(requests.every(r => r.type==='begin')).toBe(true);
 });
+
+it('opens installed rich setup through the real shell source facade, labels manual evidence and confirms exact task conditions',async()=>{
+  const projected=projectedSnapshot();readSnapshot=async()=>projected;
+  const normal=services,setupCalls:unknown[]=[];const stepId='11111111-1111-4111-8111-111111111112',nativeStep='11111111-1111-4111-8111-111111111113';let readiness='pending',taskState='paused';
+  services=async(channel,raw,...rest)=>{
+    if(channel!==desktopChannels.recipeSource||raw.groupId!==groupId)return normal(channel,raw,...rest);
+    const source={...asRead,format:'rich-v2'};
+    if(raw.type!=='setup')return {ok:true,value:{source}};
+    setupCalls.push(raw);
+    if(raw.action.kind==='acknowledge')readiness='acknowledged';
+    if(raw.action.kind==='enableTask')taskState='active';
+    return {ok:true,value:{source,setup:{kind:'richSetup',groupId,token:'d'.repeat(64),steps:[{itemId:stepId,originId:stepId,kind:'context',title:'核对报告',instructions:'提交前手动检查内容。',required:true,action:{kind:'manual'},readiness},{itemId:nativeStep,originId:nativeStep,kind:'config',title:'本群权限',instructions:'打开权限设置。',required:false,action:{kind:'nativeSettings',entry:'permission'},readiness:'pending'}],tasks:[{id:'rt_fixture',name:'定期摘要',state:taskState,token:'e'.repeat(64),instruction:'核对所选文档，准备待确认摘要。',schedule:'每周一 09:00',timeZone:'Asia/Shanghai',placement:'newTopic'}],...(raw.action.kind==='openSettings'?{open:'permission'}:{})}}};
+  };
+  facade=createDesktopFacades({receive:listener=>{dispatch=listener;return()=>{};},invoke:services});dispatch({type:'account',value:status});dispatch({type:'devices',value:devicesState({id:A,phase:'ready'})});
+  const destinations:unknown[]=[];const opened=(event:Event)=>destinations.push((event as CustomEvent).detail);window.addEventListener('vonvon:open-setting',opened);
+  try{
+    await draw();const scope=document.querySelector('[data-scope="'+groupId+'"]')!;expect(scope.textContent).toContain('使用设置');expect(scope.textContent).toContain('尚未核对');
+    await click('我已手动核对',scope);expect(scope.textContent).toContain('本人已手动确认');expect(scope.textContent).not.toContain('已由当前设备核验');
+    await click('前往设置',scope);expect(destinations[0]).toMatchObject({page:'collaboration',selection:{kind:'membership',id:projected.memberships[0]!.id},section:'权限'});
+    await click('核对并启用',scope);const dialog=document.querySelector('[role="dialog"]')!;expect(dialog.textContent).toContain('核对所选文档，准备待确认摘要。');expect(dialog.textContent).toContain('每周一 09:00');expect(dialog.textContent).toContain('这台设备上此 Bot 的管理员配置');
+    await click('启用此任务',dialog);expect(setupCalls.at(-1)).toMatchObject({type:'setup',viewId:A,botId,groupId,sourceToken:token,action:{kind:'enableTask',taskToken:'e'.repeat(64),token:'d'.repeat(64)}});expect(JSON.stringify(setupCalls.at(-1))).not.toContain('actor');
+  }finally{window.removeEventListener('vonvon:open-setting',opened);}
+});
+
+it('offers the group identity retry while a rich review is blocked by an unreadable group name',async()=>{
+  readIdentity=()=>{throw new Error('offline');};
+  useReply=()=>({kind:'richReview',handle,groupId,reviewToken:token,conflicts:[]});
+  await draw();await inGroup(groupId,'检查新版');await inGroup(groupId,'预览更新');
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('暂时无法读取飞书群名');
+  const confirm=Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(button=>button.textContent==='确认这些选择并预览应用')!;
+  expect(confirm.disabled).toBe(true);
+  readIdentity=request=>({kind:'groupIdentity',agentId:request.agentId,groupId:request.groupId,name:'重新核对群名'});
+  await click('刷新群名');expect(confirm.disabled).toBe(false);
+});

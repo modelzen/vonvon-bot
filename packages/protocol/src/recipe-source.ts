@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import {richRuntimeRequests,richRuntimeReplies} from './recipe-runtime.js';
 import { agentIdSchema, groupIdSchema } from './domain.js';
 import { viewIdSchema } from './desktop-devices.js';
 import { recipeSetupSchema } from './recipe-setup.js';
@@ -31,6 +32,7 @@ export const recipeLatestSchema = z
   .strict();
 const location = { viewId: viewIdSchema, botId: agentIdSchema, groupId: groupIdSchema };
 export const desktopRecipeSourceRequestSchema = z.discriminatedUnion('type', [
+  z.object({type:z.literal('setup'),...location,sourceToken:recipeSourceTokenSchema,action:richRuntimeRequests[6].shape.action}).strict(),
   z.object({ type: z.literal('read'), ...location }).strict(),
   z.object({ type: z.literal('check'), ...location, accountId: uuid }).strict(),
   z
@@ -38,7 +40,7 @@ export const desktopRecipeSourceRequestSchema = z.discriminatedUnion('type', [
     .strict(),
 ]);
 export const desktopRecipeSourceReplySchema = z
-  .object({ source: recipeSourceSchema.nullable(), latest: recipeLatestSchema.optional() })
+  .object({source:recipeSourceSchema.nullable(),latest:recipeLatestSchema.optional(),setup:richRuntimeReplies[3].optional()})
   .strict();
 export type DesktopRecipeSourceRequest = z.infer<typeof desktopRecipeSourceRequestSchema>;
 export type DesktopRecipeSourceReply = z.infer<typeof desktopRecipeSourceReplySchema>;
