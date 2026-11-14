@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { realpathSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, chmodSync } from 'node:fs';
+import { realpathSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, chmodSync, readlinkSync } from 'node:fs';
+import { cloneLogoProbeArtifact } from '../scripts/clone-logo-probe-artifact.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validateDecoderRoot, linuxDecoderLaunch } from '../src/logo-sandbox.mjs';
@@ -27,4 +28,17 @@ test('missing artifact, missing launcher and unsupported mode fail before spawni
   assert.throws(() => linuxDecoderLaunch('normalize',{root:'/nonexistent'}));
   assert.throws(() => linuxDecoderLaunch('normalize',{root:artifact(),bwrap:'/nonexistent'}));
   assert.throws(() => linuxDecoderLaunch('probe',{root:artifact()}),/mode/);
+});
+
+test('probe clone preserves internal npm executable symlinks and rejects external dependencies',async () => {
+  const original = artifact();
+  mkdirSync(join(original,'node_modules/.bin'));
+  mkdirSync(join(original,'node_modules/semver/bin'),{recursive:true});
+  writeFileSync(join(original,'node_modules/semver/bin/semver.js'),'process.exit(0);');
+  symlinkSync('../semver/bin/semver.js',join(original,'node_modules/.bin/semver'));
+  const target = join(realpathSync(mkdtempSync(join(tmpdir(),'logo-clone-'))),'artifact');
+  assert.equal(await cloneLogoProbeArtifact(original,target),target);
+  assert.equal(readlinkSync(join(target,'node_modules/.bin/semver')),'../semver/bin/semver.js');
+  symlinkSync('/etc',join(original,'node_modules/external'));
+  await assert.rejects(cloneLogoProbeArtifact(original,`${target}-invalid`),/escapes/);
 });

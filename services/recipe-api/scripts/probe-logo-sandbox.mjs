@@ -4,13 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { spawn } from 'node:child_process';
+import { cloneLogoProbeArtifact } from './clone-logo-probe-artifact.mjs';
 import { linuxDecoderLaunch, decoderEnvironment, validateDecoderRoot } from '../src/logo-sandbox.mjs';
 
 if (process.platform !== 'linux') throw new Error('This probe requires actual Linux bubblewrap');
 const original = validateDecoderRoot(process.env.LOGO_DECODER_ROOT);
 const directory = await realpath(await mkdtemp(join(tmpdir(),'logo-isolation-')));
 const root = join(directory,'artifact');
-await cp(original,root,{recursive:true});
+await cloneLogoProbeArtifact(original,root);
 const sentinel = 'fake-decoder-credential-do-not-expose';
 const credential = join(directory,'parent-credential');
 await writeFile(credential,sentinel);
