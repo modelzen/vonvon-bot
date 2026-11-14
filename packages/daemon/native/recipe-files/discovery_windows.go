@@ -19,7 +19,6 @@ func documentMetadata(parent *held, name string) bool {
 	return e == nil && !m.directory && m.size <= fileCap
 }
 
-// FILE_FULL_DIR_INFO is queried using the held handle, never a path-based search.
 func listNames(dir *held, limit int) ([]string, error) {
 	var buffer [16384]byte
 	var names []string

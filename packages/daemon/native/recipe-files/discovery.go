@@ -15,7 +15,6 @@ type skillOption struct {
 
 var skillName = regexp.MustCompile(`^[\pL\pN][\pL\pN _-]{0,79}$`)
 
-// Only the bound workspace's named provider catalog is visited. No file bytes are opened for reading.
 func skillOptions(workspace *held, provider string) ([]skillOption, error) {
 	if provider != ".agents" && provider != ".claude" {
 		return nil, refused

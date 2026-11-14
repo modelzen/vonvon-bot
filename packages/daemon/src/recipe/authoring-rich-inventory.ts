@@ -83,7 +83,6 @@ export async function nativeRichInventory(options:InventoryOptions){
     if(!memory.verified)throw new Error('无法核对这个 Bot 的记忆。');
     for(const item of memory.items){
       if(item.scope.kind!=='bot'||item.state!=='active'||item.source.botId!==options.botId||!safeEditValue(item.text)||looksLikeSecret(item.text))continue;
-      // Imported/moved/promoted records can carry private or unresolvable provenance.
       if(item.source.fromItemId||item.source.importFile||['import','moved','promoted'].includes(item.source.via))continue;
       if(item.source.chatId && item.source.chatId!==row.chatId)continue;
       if(!item.source.chatId&&!['ui','cli'].includes(item.source.via))continue;
@@ -107,7 +106,6 @@ export async function nativeRichInventory(options:InventoryOptions){
     content.skills.push({...identity('skill:'+choice.skill),name:choice.skill,entryFileId:selected.find(f=>f.name==='SKILL.md')!.itemId,fileIds:selected.map(i=>i.itemId)});
   }
   const evidence=new Map<string,SourceEvidence>(itemsOf(content).map(i=>[i.itemId,{kind:'native'}]));
-  // v1 manifests do not give the installed role a rich item edge.
   if(row.recipeInstall&&content.role)evidence.set(content.role.itemId,{kind:'unresolved'});
   return {content,evidence,files,lease:wireDigest({binding:row.bindingIncarnation,revision:row.projectSettingsRevision??0,content,
     files:Object.entries(files).map(([skill,s])=>[skill,s.rootIdentity,s.files.map(f=>[f.identity,f.sha256])])})};

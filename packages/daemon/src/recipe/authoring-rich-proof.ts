@@ -35,7 +35,6 @@ function compareRemapped(expected:RecipeRichContent,received:RecipeRichContent,p
     skill.fileIds=skill.fileIds.map(id=>aliases.get(id)!);
     skill.entryFileId=aliases.get(skill.entryFileId)!;
   }
-  // Copied card blocks receive a generated native block id derived from their new itemId.
   for(const setting of rebound.settings)if(setting.field==='presentation.cardDisplay'&&setting.value)
     for(const block of setting.value.blocks) {
       const original=received.settings.find(x=>x.field===setting.field);

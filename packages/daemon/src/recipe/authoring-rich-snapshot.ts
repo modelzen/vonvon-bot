@@ -66,7 +66,6 @@ export function selectRichSnapshot(args:{
   const wanted=new Set(selected);
   if(wanted.size!==selected.length)throw new Error('所选内容重复。');
   const content=structuredClone(inventory);
-  // Public metadata belongs to every draft. All optional fields, including child files and card blocks, need their own choice.
   if(content.role&&!wanted.has(content.role.itemId))delete content.role;
   if(content.finalLogo&&!wanted.has(content.finalLogo.itemId))delete content.finalLogo;
   function keep<K extends RichCollection>(key:K) {
