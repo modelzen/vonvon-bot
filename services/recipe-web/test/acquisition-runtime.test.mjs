@@ -9,7 +9,7 @@ const recipe={recipeId:'11111111-1111-4111-8111-111111111111',versionId:'2222222
 const route='/recipes/'+recipe.recipeId+'/versions/'+recipe.versionId;
 const source=(await readFile(new URL('../public/app.mjs',import.meta.url),'utf8')).replace("import {setupList} from './setup.mjs';", "const setupList=()=>document.createElement('div');");
 const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
-async function runtime(t,respond) {
+async function runtime(t,respond,auth = {signedIn:true,displaySession:'session-a',providers:[]}) {
   const dom=new JSDOM('<main id="main"></main><dialog id="modal"></dialog><button id="account"></button><div id="feedback"></div>',{url:'https://recipes.example'+route});
   const {window}=dom;
   window.HTMLDialogElement.prototype.showModal=function(){this.open=true;};
@@ -17,7 +17,7 @@ async function runtime(t,respond) {
   const calls=[];
   const fetch=async (path,options={})=>{
     calls.push({path,options});
-    if(path==='/auth/session')return Response.json({signedIn:true,displaySession:'session-a',providers:[]});
+    if(path==='/auth/session')return Response.json(auth);
     return respond(path,options,calls);
   };
   const run=new AsyncFunction('document','window','location','history','navigator','crypto','fetch','BroadcastChannel','setTimeout','clearTimeout','setup',source+'\nreturn {detail,claim,setSession:value=>{session=value;}};');
@@ -255,4 +255,48 @@ test('a pending direct claim cannot strand its button or close an unrelated acco
   finish(Response.json({}));await h.settle();
   assert.equal(dialog.open,true);assert.equal(dialog.querySelector('h2').textContent,'账号');
   assert.match(h.document.querySelector('main').textContent,/已获取/);
+});
+
+for (const access of ['coded', 'public']) test(`OAuth acquisition continuation opens ${access} confirmation without a write`, async t => {
+  const h = await runtime(t, async () => Response.json({...recipe, public:{...recipe.public, access}}),
+    {signedIn:true, displaySession:'session-a', providers:['github'], continuation:route});
+  assert.equal(h.document.querySelector('dialog').open, true);
+  assert.match(h.document.querySelector('dialog').textContent, access === 'coded' ? /输入分享码/ : /确认获取配方/);
+  assert.equal(h.calls.filter(c => c.options.method === 'POST').length, 0);
+  h.document.querySelector('dialog button').click();
+  await h.api.detail();
+  assert.equal(h.document.querySelector('dialog').open, false);
+});
+test('ordinary login does not open acquisition, anonymous acquisition alone records continuation', async t => {
+  const h = await runtime(t, async () => Response.json(recipe), {signedIn:false, providers:['github']});
+  assert.equal(h.document.querySelector('dialog').open, false);
+  h.document.querySelector('#account').click();
+  assert.equal(h.document.querySelector('dialog').open, true);
+  assert.ok(h.document.querySelector('input[name=provider]'));
+  assert.equal(h.document.querySelector('input[name=continuation]'), null);
+  await h.open();
+  assert.equal(h.document.querySelector('input[name=continuation]').value, 'acquire');
+  assert.equal(h.document.querySelector('input[name=returnTo]').value, route);
+  assert.equal(h.calls.filter(c => c.options.method === 'POST').length, 0);
+});
+test('already acquired continuation shows entitlement and never opens a dialog', async t => {
+  const h = await runtime(t, async () => Response.json({...recipe, acquired:true}),
+    {signedIn:true, displaySession:'session-a', providers:[], continuation:route});
+  assert.match(h.document.querySelector('#main').textContent, /已获取/);
+  assert.equal(h.document.querySelector('dialog').open, false);
+  assert.equal(h.calls.filter(c => c.options.method === 'POST').length, 0);
+});
+
+test('resumed public acquisition requires explicit confirmation and posts only once', async t => {
+  let acquired = false;
+  const h = await runtime(t, async (_path, options) => {
+    if (options.method === 'POST') {acquired = true; return Response.json({});}
+    return Response.json({...recipe, acquired, public:{...recipe.public, access:'public'}});
+  }, {signedIn:true, displaySession:'session-a', providers:[], continuation:route});
+  const form = h.document.querySelector('dialog form');
+  form.dispatchEvent(new h.dom.window.Event('submit',{bubbles:true,cancelable:true}));
+  await h.settle();
+  assert.equal(h.calls.filter(c => c.options.method === 'POST').length, 1);
+  assert.equal(h.document.querySelector('dialog').open, false);
+  assert.match(h.document.querySelector('#main').textContent, /已获取/);
 });
