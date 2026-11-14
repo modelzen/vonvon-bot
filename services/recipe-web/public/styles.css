@@ -11,6 +11,18 @@ dialog{max-width:min(420px,calc(100% - 30px));width:100%;border:1px solid var(--
 
 [hidden]{display:none!important}
 
+.back { display:inline-flex; align-items:center; gap:6px; min-height:28px; margin-left:-7px; padding:3px 7px; border-radius:6px; color:var(--muted); font-size:12px; text-decoration:none; }
+.back:hover { background:var(--soft); color:var(--ink); }
+.back:focus-visible { outline:2px solid var(--ink); outline-offset:3px; }
+.claim-recipe { display:grid; gap:3px; margin:0 0 16px; overflow-wrap:anywhere; }
+.claim-recipe strong { font-size:14px; line-height:1.5; }
+.claim-recipe span { color:var(--muted); font-size:12px; }
+.additional-notes { margin-top:24px; padding-top:16px; border-top:1px solid var(--stroke); font-size:13px; }
+.additional-notes summary { color:var(--muted); cursor:pointer; }
+.additional-notes article { margin-top:16px; overflow-wrap:anywhere; }
+.additional-notes h3 { font-size:14px; margin:0 0 6px; }
+.additional-notes p { white-space:pre-wrap; }
+
 .setup-list { margin: 0; padding: 0 18px 0 44px; background: var(--paper); border: 1px solid var(--stroke); border-radius: 12px; }
 .setup-list li { padding: 12px 0 12px 2px; overflow-wrap: anywhere; }
 .setup-list li + li { border-top: 1px solid var(--stroke); }
