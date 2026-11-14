@@ -3,7 +3,7 @@ import { identityFromRequest } from './auth.mjs';
 import { ApiError, badInput } from './errors.mjs';
 import { bodyJson, checkDraft, expectedRevision, objectKeys, queryParams, requestKey, uuid } from './input.mjs';
 import { codeAttempts } from './limiter.mjs';
-import { operationInput } from './operation-input.mjs';
+import { operationId, operationInput } from './operation-input.mjs';
 import { authoringInput, checkDraftPatch } from './authoring-input.mjs';
 
 const endpoints = [
@@ -32,6 +32,7 @@ const endpoints = [
   ['POST', '/operations/:o/cancel', 'cancelOperation'],
   ['POST', '/operations/:o/redeem', 'redeemOperation', 'possession'],
   ['POST', '/operations/:o/complete', 'completeOperation', 'possession'],
+  ['POST', '/authoring/source-history', 'sourceHistory'],
   ['POST', '/authoring/:o/register', 'registerAuthoring'],
   ['GET', '/authoring/:o/recovery', 'recoverAuthoring'],
   ['GET', '/authoring/:o', 'getAuthoring'],
@@ -53,6 +54,14 @@ function identify(req, url) {
 
 async function inputFor(req, url, {action, ids}) {
   const { q, cursor } = queryParams(url, action === 'catalog' ? ['q','cursor'] : ['listCodes','library'].includes(action) ? ['cursor'] : []);
+  if (action === 'sourceHistory') {
+    const body = await bodyJson(req, 2048);
+    objectKeys(body, ['operationIds']);
+    if (!Array.isArray(body.operationIds) || body.operationIds.length < 1 || body.operationIds.length > 32) throw badInput();
+    const operations = body.operationIds.map(operationId);
+    if (new Set(operations).size !== operations.length) throw badInput();
+    return [action, [operations]];
+  }
   if (action.endsWith('Authoring')) return [action, authoringInput(action, ids[0],
     req.method === 'GET' ? {} : await bodyJson(req, action === 'acceptAuthoring' ? 196608 : 2048))];
   if (req.method === 'GET') {
@@ -123,7 +132,7 @@ function discardBody(req) {
   });
 }
 
-export function createRecipeServer({ verify, execute, attempts = codeAttempts() }) {
+export function createRecipeServer({ verify, execute, admitRich=false, attempts = codeAttempts() }) {
   const server = createServer({ maxHeaderSize: 16 * 1024, requestTimeout: 15_000, headersTimeout: 10_000 },
     async (req, res) => {
       res.setHeader('Cache-Control', 'private, no-store');
@@ -133,10 +142,12 @@ export function createRecipeServer({ verify, execute, attempts = codeAttempts() 
       try {
         if (!req.url.startsWith('/') || req.url.startsWith('//')) throw badInput();
         const url = new URL(req.url, 'http://localhost');
-        const route = identify(req, url);
+        const rich=/^(?:\/api)?\/v2\//.test(url.pathname);
+        const v2=rich ? await import('./rich-http.mjs') : null;
+        const route = rich ? v2.richRoute(req.method,url.pathname,admitRich) : identify(req, url);
         if (route.isPublic === 'possession' && req.headersDistinct.authorization) throw badInput();
         const identity = route.isPublic === 'possession' ? null : await identityFromRequest(req, route.isPublic, verify);
-        const [operation, args] = await inputFor(req, url, route);
+        const [operation, args] = await (rich?v2.richInput:inputFor)(req, url, route);
         if (route.action === 'redeem') finishAttempt = attempts.begin(identity.issuer + '\0' + identity.subject);
         const result = await execute(identity, operation, args);
         const response = JSON.stringify(result);

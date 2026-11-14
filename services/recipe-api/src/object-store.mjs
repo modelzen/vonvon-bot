@@ -2,7 +2,7 @@ import { ApiError, UUID } from './errors.mjs';
 
 const rowCalls = new Set(['member','open_member','ready']);
 const calls = new Set([...rowCalls, 'start_write','saw_bytes','saw_absence','begin_delete','end_ingress',
-  'close_package','inventory','pin_backup','prune_closed','confirm_quiescence','pending_cleanup','storage_absent']);
+  'close_package','inventory','pin_backup','prune_closed','confirm_quiescence','pending_cleanup','storage_absent','business_actor','read_descriptor','record_text_check','install_descriptor']);
 const limit = code => new ApiError(429, code, 10);
 
 export function objectPackageScope(actor, operationId) {

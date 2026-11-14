@@ -1,31 +1,10 @@
+import { digest, freezePayload, hasLocalPath } from './authoring-payload';
+import { checkModelText, fieldLabels, interpretDraftAnswer, relativeEdit, requestedField, type DraftField, type DraftInstructionParser, type DraftInterpretation, type PublicField, type CandidateCardDetails } from './draft-instruction';
 import { createHash, createPrivateKey, generateKeyPairSync, randomBytes } from 'node:crypto';
-import { authoringChangeSchema, type AuthoringAuthorization, type AuthoringChange } from '@vonvon/protocol';
+import { authoringChangeSchema, type AuthoringAuthorization } from '@vonvon/protocol';
 // @ts-expect-error The cloud service exports plain ESM. tsup bundles these same implementations into the daemon.
 import { authoringProof } from '../../../../services/recipe-api/src/authoring-proof.mjs';
-// @ts-expect-error Shared with the HTTP API to preserve byte-for-byte validation and proof compatibility.
-import { canonicalJson, checkDraftPatch } from '../../../../services/recipe-api/src/authoring-input.mjs';
-// @ts-expect-error The HTTP API's field and credential validator.
-import { checkDraft } from '../../../../services/recipe-api/src/input.mjs';
-
-export const digest = (value: Buffer | string): string => createHash('sha256').update(value).digest('hex');
-export const dispatchDigest = digest('');
-export const blankPublic = () => ({name: '', summary: '', overview: '', version: '', access: 'direct' as const});
-const localPath = /(?:^|[\s"'(])(?:\/(?:Users|home|root|private|var|tmp|etc|mnt|Volumes)\/|~\/|[A-Za-z]:[\\/]|\\\\[a-zA-Z0-9])/;
-
-function hasLocalPath(value: unknown): boolean {
-  if (typeof value === 'string') return localPath.test(value);
-  return Boolean(value && typeof value === 'object' && Object.values(value).some(hasLocalPath));
-}
-export function freezePayload(payload: object): {payload: string; payloadDigest: string} {
-  try {
-    if (hasLocalPath(payload)) throw new Error();
-    if ('schemaVersion' in payload) checkDraftPatch(payload);
-    else checkDraft(payload, false);
-    const bytes = Buffer.from(canonicalJson(payload), 'utf8');
-    if (bytes.length > 128 * 1024) throw new Error();
-    return {payload: bytes.toString('base64url'), payloadDigest: digest(bytes)};
-  } catch { throw new Error('所选内容含敏感信息或超出草稿字段限制，请在 App 核对。'); }
-}
+export {blankPublic, digest, dispatchDigest, freezePayload} from './authoring-payload';
 export function newAuthoringKey() {
   const {privateKey} = generateKeyPairSync('x25519');
   const key = privateKey.export({format: 'jwk'});
@@ -38,22 +17,52 @@ export function makeAuthoringProof(secret: string, binding: AuthoringAuthorizati
   return (authoringProof(privateKey, binding) as Buffer).toString('base64url');
 }
 
-export interface DraftInstructionParser {
-  propose(instruction: string): Promise<unknown>;
+const privatePreview = /(?:\b(?:ou|oc|cli)_[\w-]{4,}|\bBearer\s+\S+|(?:password|api[_ -]?key|access[_ -]?token|密码|令牌|密钥)\s*[:=：]\s*\S+)/iu;
+export function candidateCardDetails(payload?: string): CandidateCardDetails | undefined {
+  if (!payload) return;
+  try {
+    const bytes = Buffer.from(payload,'base64url');
+    const patch = JSON.parse(bytes.toString('utf8'));
+    if (patch.schemaVersion !== 1 || freezePayload(patch).payload !== payload) return;
+    const changes = authoringChangeSchema.array().max(16).parse(patch.changes);
+    const texts = changes.flatMap(change => change.op === 'setSetup' ?
+      change.value?.steps.flatMap(step => [step.title,step.instructions,step.check ?? '']) ?? [] : [change.value]);
+    if (texts.some(text => privatePreview.test(text))) return;
+    const fields = changes.map(change => ({
+      label:change.op === 'setPublicText' ? fieldLabels[change.field] : change.op === 'setDraftRole' ? '角色' : '使用前准备',
+      valueJson:JSON.stringify(change.value),
+    }));
+    return {revision:patch.baseRevision, payloadDigest:digest(bytes), fields};
+  } catch { return; }
 }
-export async function parseChanges(instruction: string, parser?: DraftInstructionParser): Promise<AuthoringChange[]> {
+
+const restricted = /(?:忽略.{0,10}(?:指令|约束|规则)|(?:执行|运行|启动|启用).{0,12}(?:脚本|命令|任务|调度)|(?:读取|查询|加入|导出).{0,8}(?:私聊|记忆|文件)|(?:删除|清空).{0,8}(?:目录|文件)|(?:直接|马上|立即|不用确认.{0,5})发布|\b(?:ignore (?:all |previous )?(?:instructions|rules)|execute|publish|run (?:a |the )?(?:command|script|task)|read (?:my |the )?(?:files|private chat))\b)/iu;
+export async function parseChanges(instruction: string, options: {
+  parser?: DraftInstructionParser; signal: AbortSignal; readField?: (field: PublicField) => Promise<DraftField | undefined>;
+}): Promise<DraftInterpretation> {
   if ([...instruction].length > 2000 || hasLocalPath(instruction)) throw new Error('请在 App 编辑。');
-  // Check even the instruction before passing it to the optional external text-only parser.
-  freezePayload({public: blankPublic(), config: {role: instruction}});
   const match = /^\/recipe\s+(name|summary|overview|version|role|setup)(?:\s+([\s\S]*))?$/i.exec(instruction);
-  let changes: unknown;
   if (match) {
     const field = match[1]!.toLowerCase(), value = match[2] ?? '';
-    if (field === 'role') changes = [{op: 'setDraftRole', value}];
-    else if (field === 'setup') changes = [{op: 'setSetup', value: JSON.parse(value)}];
-    else changes = [{op: 'setPublicText', field, value}];
-  } else if (parser) {
-    changes = await parser.propose(instruction);
-  } else throw new Error('请使用配方编辑命令。');
-  return authoringChangeSchema.array().min(1).max(16).parse(changes);
+    const change = field === 'role' ? {op:'setDraftRole', value} :
+      field === 'setup' ? {op:'setSetup', value:JSON.parse(value)} : {op:'setPublicText',field,value};
+    return {kind:'proposal',changes:[authoringChangeSchema.parse(change)]};
+  }
+  if (instruction.startsWith('/')) return {kind:'unavailable'};
+  checkModelText(instruction);
+  if (restricted.test(instruction)) return {kind:'refuse'};
+  if (!options.parser) return {kind:'unavailable'};
+  let current: DraftField | undefined;
+  if (relativeEdit(instruction)) {
+    const field = requestedField(instruction);
+    if (!field || !options.readField) return {kind:'clarify'};
+    current = await options.readField(field);
+    if (!current || current.field !== field) return {kind:'clarify'};
+    checkModelText(current.value);
+  }
+  options.signal.throwIfAborted();
+  const input = {instruction, ...(current ? {current:{field:current.field,value:current.value}} : {})};
+  const result = await options.parser.propose(input,options.signal);
+  options.signal.throwIfAborted();
+  return interpretDraftAnswer(result,input);
 }
