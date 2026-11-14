@@ -24,7 +24,7 @@ const sessionReply = (rotated = false) => ({
   user, token_type: 'bearer', access_token: access, refresh_token: rotated ? 'rotated-refresh-token' : refresh, expires_in: 3600,
 });
 const sessions = new Set<NativeAccount>();
-afterEach(async () => { for (const session of sessions) await session.dispose(); sessions.clear(); vi.restoreAllMocks(); });
+afterEach(async () => { for (const session of sessions) await session.dispose(); sessions.clear(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 function memoryStore() {
   let record: AccountCredential | undefined;
@@ -114,6 +114,119 @@ function deferred<T>() {
 const waitFor = (assertion: () => void) => vi.waitFor(assertion, { interval: 5, timeout: 2500 });
 
 describe('native desktop account', () => {
+  it('recovers a failed avatar in the background without waiting for token refresh', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEElEQVR4nGP4w8AARAwQCgAfjgPxzzTeXgAAAABJRU5ErkJggg==', 'base64');
+    f.avatar.mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(bytes, { headers: { 'Content-Type': 'image/png' } }));
+    const a = f.create();
+    await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: business });
+    expect(a.status()).not.toHaveProperty('avatarDataUrl');
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(f.avatar).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.avatar).toHaveBeenCalledTimes(2);
+    expect(a.status()).toMatchObject({ avatarDataUrl: 'data:image/png;base64,' + bytes.toString('base64') });
+    expect(f.rotate).not.toHaveBeenCalled();
+    expect(f.store.save).toHaveBeenCalledOnce();
+  });
+
+  it('bounds automatic avatar retries while keeping the verified account usable', async () => {
+    vi.useFakeTimers();
+    const f = fixture(), a = f.create();
+    await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(f.avatar).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(f.avatar).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(f.avatar).toHaveBeenCalledTimes(3);
+    expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: business });
+    expect(a.status()).not.toHaveProperty('avatarDataUrl');
+    expect(f.rotate).not.toHaveBeenCalled();
+    expect(await (await a.request(business, '/v1/me/recipes')).json()).toEqual({ items: [] });
+  });
+
+  it.each(['logout', 'dispose'] as const)('cancels queued avatar retries at %s', async action => {
+    vi.useFakeTimers();
+    const f = fixture(), a = f.create();
+    await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    expect(f.avatar).toHaveBeenCalledOnce();
+    const statuses: unknown[] = [];
+    a.onStatus(value => statuses.push(value));
+    await a[action]();
+    const published = statuses.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.avatar).toHaveBeenCalledOnce();
+    expect(statuses).toHaveLength(published);
+  });
+
+  it('cancels queued work when verified metadata no longer has an avatar URL', async () => {
+    vi.useFakeTimers();
+    const f = fixture(), a = f.create();
+    await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    f.verifyUser.mockResolvedValueOnce(Response.json({ ...user, user_metadata: { full_name: 'Example User' } }));
+    vi.setSystemTime(Date.now() + 3_590_000);
+    await a.request(business, '/v1/me/recipes');
+    expect(a.status()).not.toHaveProperty('avatarUrl');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.avatar).toHaveBeenCalledOnce();
+    expect(a.status()).not.toHaveProperty('avatarDataUrl');
+  });
+
+  it('replaces the retry queue when the verified avatar URL changes', async () => {
+    vi.useFakeTimers();
+    const f = fixture(), a = f.create();
+    await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    const nextUrl = 'https://avatars.githubusercontent.com/u/456?v=4';
+    const held = deferred<Response>();
+    const base = f.transport.getMockImplementation()!;
+    f.transport.mockImplementation((url, init) => String(url) === nextUrl ? held.promise : base(url, init));
+    f.verifyUser.mockResolvedValueOnce(Response.json({ ...user,
+      user_metadata: { ...user.user_metadata, avatar_url: nextUrl } }));
+    vi.setSystemTime(Date.now() + 3_590_000);
+    await a.request(business, '/v1/me/recipes');
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(f.avatar).toHaveBeenCalledOnce();
+    expect(f.transport.mock.calls.filter(([url]) => String(url) === nextUrl)).toHaveLength(1);
+    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEElEQVR4nGP4w8AARAwQCgAfjgPxzzTeXgAAAABJRU5ErkJggg==', 'base64');
+    held.resolve(new Response(bytes, { headers: { 'Content-Type': 'image/png' } }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(a.status()).toMatchObject({ avatarUrl: nextUrl, avatarDataUrl: 'data:image/png;base64,' + bytes.toString('base64') });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.avatar).toHaveBeenCalledOnce();
+    expect(f.transport.mock.calls.filter(([url]) => String(url) === nextUrl)).toHaveLength(1);
+  });
+
+  it('does not use the previous account retry timer during the next account avatar request', async () => {
+    vi.useFakeTimers();
+    const f = fixture(), a = f.create();
+    await a.login();
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
+    await a.logout();
+    const held = deferred<Response>(), nextAccount = randomUUID();
+    f.me.mockResolvedValueOnce(Response.json({ accountId: nextAccount }));
+    f.avatar.mockReturnValueOnce(held.promise);
+    await a.login();
+    await waitFor(() => expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: nextAccount }));
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(f.avatar).toHaveBeenCalledTimes(2);
+    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEElEQVR4nGP4w8AARAwQCgAfjgPxzzTeXgAAAABJRU5ErkJggg==', 'base64');
+    held.resolve(new Response(bytes, { headers: { 'Content-Type': 'image/png' } }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: nextAccount,
+      avatarDataUrl: 'data:image/png;base64,' + bytes.toString('base64') });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.avatar).toHaveBeenCalledTimes(2);
+  });
+
   it('publishes sign-in before the avatar, then keeps that bounded avatar across token refresh', async () => {
     const f = fixture();
     const held = deferred<Response>();
@@ -121,6 +234,7 @@ describe('native desktop account', () => {
     const a = f.create();
     await a.login();
     await waitFor(() => expect(f.avatar).toHaveBeenCalledOnce());
+    await waitFor(() => expect(f.ack).toHaveBeenCalledOnce());
     expect(a.status()).toMatchObject({ kind: 'signedIn', accountId: business });
     expect(a.status()).not.toHaveProperty('avatarDataUrl');
     const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEElEQVR4nGP4w8AARAwQCgAfjgPxzzTeXgAAAABJRU5ErkJggg==', 'base64');
@@ -171,6 +285,8 @@ describe('native desktop account', () => {
     vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3_590_000);
     await a.request(business, '/v1/me/recipes');
     expect(a.status()).not.toHaveProperty('avatarUrl');
+    const request = f.transport.mock.calls.find(([input]) => String(input) === user.user_metadata.avatar_url);
+    expect(request?.[1]?.signal?.aborted).toBe(true);
     const published = statuses.length;
     const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEElEQVR4nGP4w8AARAwQCgAfjgPxzzTeXgAAAABJRU5ErkJggg==', 'base64');
     held.resolve(new Response(bytes, { headers: { 'Content-Type': 'image/png' } }));
