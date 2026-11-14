@@ -167,7 +167,6 @@ func erase(parent *os.File, name string, dir bool) error {
 }
 func isExists(e error) bool { return e == windows.STATUS_OBJECT_NAME_COLLISION }
 
-// FILE_STREAM_INFO is inspected on this handle, so an alternate stream cannot be selected or hidden behind a path lookup.
 func onlyDefaultStream(h windows.Handle) bool {
 	var data [512]byte
 	if windows.GetFileInformationByHandleEx(h, windows.FileStreamInfo, &data[0], uint32(len(data))) != nil {
