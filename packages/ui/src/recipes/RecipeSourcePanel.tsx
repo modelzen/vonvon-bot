@@ -52,7 +52,6 @@ function RecipeSourceContent({botId,groupId}:{botId:AgentId;groupId:GroupId}) {
     {source ? <>
       <SettingsRow title={`当前配方 · 第 ${source.revision} 版`} description={`应用于 ${new Date(source.installedAt).toLocaleDateString()}`}
         trailing={<Button size="sm" disabled={busy || !accountId} onClick={() => void request('check')}>检查新版</Button>}/>
-      {source.setup && <div className="recipe-source-setup"><details><summary>使用准备</summary><p>请按需处理这些说明，应用配方不会自动执行。</p><ol>{source.setup.steps.map((step, index) => <li key={index}><strong>{step.title}</strong><p>{step.instructions}</p>{step.check && <small>检查方式：{step.check}</small>}</li>)}</ol></details></div>}
       {latest && <SettingsRow title={`有新版本 · ${latest.version}`} description={latest.entitled ? '预览当前内容与新版差异，确认后再更新。' : '此版本需要先在社区获取。'}
         trailing={<div className="recipe-source-actions"><Button size="sm" disabled={busy} onClick={() => void request('ignore')}>忽略此版本</Button><Button size="sm" variant="primary" disabled={busy || !useRecipe?.available || !latest.entitled && !community}
           onClick={() => {

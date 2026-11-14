@@ -374,7 +374,7 @@ export class AuthoringService {
             let selected=op.rich.base?.selected??[];
             let origins=op.rich.base?.origins;
             if('content' in original){
-              const allow=itemsOf(original.content).filter(x=>Object.values(original.content.public).some(f=>f.itemId===x.itemId)||original.content.setup.some(f=>f.itemId===x.itemId)||op.rich!.source?.selected.includes(x.itemId));
+              const allow=itemsOf(original.content).filter(x=>Object.values(original.content.public).some(f=>f.itemId===x.itemId)||op.rich!.source?.selected.includes(x.itemId));
               const accepted=itemsOf(saved),items=itemsOf(original.content);
               selected=allow.map(i=>accepted[items.findIndex(x=>x.itemId===i.itemId)]!.itemId);
               const sourceMap=new Map(original.origins.map(o=>[o.itemId,o.source]));
@@ -407,8 +407,9 @@ export class AuthoringService {
         case 'prepare': {
           const linked = await this.allowed(p), review = await this.source(p,req.groupId);
           if (review.reviewToken !== req.reviewToken) refusal();
-          freezePayload({public:blankPublic(),config:{role:review.role, ...(req.setup ? {setup:req.setup} : {})}});
-          const source = {groupId:req.groupId, reviewToken:req.reviewToken, setup:req.setup};
+          if(req.setup?.steps.length)throw new Error('setup 是普通技能，请在配方介绍中说明运行方式。');
+          freezePayload({public:blankPublic(),config:{role:review.role}});
+          const source = {groupId:req.groupId, reviewToken:req.reviewToken};
           return this.start(p, linked.recipient, {source,sourceIdentity:review.identity});
         }
         case 'edit': {
@@ -971,7 +972,8 @@ export class AuthoringService {
           });
           await this.refresh(p,op.view.operationId);return;
         }
-        const frozen = source ? freezePayload({public:blankPublic(),config:{role:source.role, ...(op.source?.setup ? {setup:op.source.setup} : {})}}) :
+        if(source&&op.source?.setup?.steps.length)throw new Error('请重新选择群配置；setup 按普通技能分享。');
+        const frozen = source ? freezePayload({public:blankPublic(),config:{role:source.role}}) :
           op.payload && op.proposalDigest ? {payload:op.payload,payloadDigest:op.proposalDigest} : undefined;
         if (!frozen || digest(Buffer.from(frozen.payload,'base64url')) !== frozen.payloadDigest) refusal();
         await this.change(p,op.view.operationId,row => {
