@@ -7,7 +7,7 @@ import { isAdmin, type AppConfig } from '../config/schema';
 import { paths } from '../config/paths';
 import { configuredRecipeApiOrigin } from '../config/account-deployment';
 import { AuthoringIm, candidateConfirmation, physicalChat } from './authoring-im';
-import { authoringBotKey, discardAuthoringMaterial, AuthoringJournal, active, cardUpdate, linkKey, newCarrier, operationView, reserve, retire, sameRecipient, setCard, type AuthoringLedger, type Link, type LocalOperation, type Recipient, type Source } from './authoring-journal';
+import { authoringBotKey, discardAuthoringMaterial, editApproval, AuthoringJournal, active, cardUpdate, linkKey, newCarrier, operationView, reserve, retire, sameRecipient, setCard, type AuthoringLedger, type Link, type LocalOperation, type Recipient, type Source } from './authoring-journal';
 import { blankPublic, candidateCardDetails, digest, freezePayload, newAuthoringKey, parseChanges } from './authoring-wire';
 import { DraftProviderBusy, draftIntent, requestedField, type DraftInstructionParser, type ReadDraftField } from './draft-instruction';
 import { checkAuthorization, postAuthoring } from './authoring-cloud';
@@ -62,6 +62,11 @@ function revokeOperation(op: LocalOperation) {
 }
 function bound(op: LocalOperation, link?: Link) {
   return !op.revoked && op.binding === link?.binding && sameRecipient(op.recipient,link.recipient);
+}
+function editCandidate(op: LocalOperation) {
+  const details = candidateCardDetails(op.payload);
+  if (op.view.purpose === 'editDraft' && details && details.draftId === op.view.draftId &&
+      details.revision === op.view.baseRevision && details.payloadDigest === op.proposalDigest) return details;
 }
 function reconciliationOf(op: LocalOperation): AuthoringReconciliation {
   const {operationId,purpose,targetPublicKey,nonceCommitment,draftId,baseRevision,createdAt,receipt} = op.view;
@@ -305,9 +310,16 @@ export class AuthoringService {
         case 'inspectCandidate': {
           const op = await this.operation(p,req.operationId);
           await this.validate(p,op);
-          const payloadDigest = op.view.state === 'candidate' ? op.proposalDigest : op.view.state === 'pendingCloud' ? op.view.payloadDigest : undefined;
-          if (!op.payload || !payloadDigest) refusal();
-          return {kind:'candidate',operationId:req.operationId,payloadDigest,payload:op.payload};
+          const pending = op.view.state === 'pendingCloud';
+          const edit = op.view.purpose === 'editDraft';
+          if (pending && edit && !await this.requireEditApproval(p,op)) {
+            return {kind:'operation',operation:await this.change(p,req.operationId,row => operationView(row,this.now()))};
+          }
+          if (req.requireEditApproval && (!pending || !edit)) refusal();
+          const payloadDigest = op.view.state === 'candidate' ? op.proposalDigest : pending ? op.view.payloadDigest : undefined;
+          if (!op.payload || !payloadDigest || (edit && editCandidate(op)?.payloadDigest !== payloadDigest)) refusal();
+          return {kind:'candidate',operationId:req.operationId,payloadDigest,payload:op.payload,
+            ...(req.requireEditApproval && {reviewedDigest:payloadDigest})};
         }
         case 'cancel': {
           await this.change(p,req.operationId,op => { if (active(op)) { op.view.state = 'cancelPending'; setCard(op,'pending'); } });
@@ -403,11 +415,29 @@ export class AuthoringService {
     await this.change(p,id,op => this.recordReceipt(op,receipt));
     await this.refresh(p,id);
   }
+  private async requireEditApproval(p: Presence, op: LocalOperation) {
+    const details = editCandidate(op);
+    if (details && op.view.payloadDigest === details.payloadDigest && op.editApproval === editApproval(op,details.payloadDigest)) return true;
+    await this.change(p,op.view.operationId,row => {
+      if (row.view.state !== 'pendingCloud') refusal();
+      if (!details) {
+        delete row.payload; delete row.view.payloadDigest; delete row.proposalDigest;
+        row.view.state = 'waiting'; setCard(row,'edit');
+      } else {
+        row.view.payloadDigest = details.payloadDigest;
+        row.view.state = 'candidate'; setCard(row,'confirm');
+      }
+    });
+    await this.refresh(p,op.view.operationId);
+    return false;
+  }
   private async advance(p: Presence, id: string, auth: AuthoringAuthorization) {
     const op = await this.operation(p,id);
     if (!active(op) || op.view.receipt) return;
     await this.validate(p,op);
     if (auth.stage === 'dispatch' && op.dispatched) { await this.deliver(p,id,false); return; }
+    if (auth.stage === 'accept' && op.view.state === 'pendingCloud' && op.view.purpose === 'editDraft' &&
+        !await this.requireEditApproval(p,op)) return;
     checkAuthorization(op,auth,this.now());
     if (auth.stage === 'dispatch') await this.change(p,id,row => { row.dispatchAuthorization = auth; });
     this.present(p);
@@ -429,7 +459,7 @@ export class AuthoringService {
     const pending = await this.change(p,id,op => {
       const c = op.carrier;
       if (cardUpdate(op,this.now()) !== 'pending') return;
-      return {cardId:c.cardId!, messageId:c.messageId!, seq:c.seq, ref:c.ref, mode:c.mode, recipient:op.recipient, details:c.mode === 'confirm' ? candidateCardDetails(op.payload) : undefined};
+      return {cardId:c.cardId!, messageId:c.messageId!, seq:c.seq, ref:c.ref, mode:c.mode, recipient:op.recipient, details:c.mode === 'confirm' ? editCandidate(op) : undefined};
     });
     if (!pending) return;
     this.present(p);
@@ -484,7 +514,7 @@ export class AuthoringService {
     if (!op.carrier.cardId) {
       this.present(p);
       const createdAt = this.now();
-      const details = op.carrier.mode === 'confirm' ? candidateCardDetails(op.payload) : undefined;
+      const details = op.carrier.mode === 'confirm' ? editCandidate(op) : undefined;
       const cardId = await this.im.create(op.carrier.ref,op.carrier.mode,details);
       op = await this.change(p,id,row => {
         row.carrier.cardId = cardId; row.carrier.createdAt = createdAt;
@@ -739,9 +769,10 @@ export class AuthoringService {
         await this.change(p,op.view.operationId,row => { row.view.state = 'cancelPending'; setCard(row,'pending'); });
       } else {
         if (!['prepare','confirm'].includes(op.carrier.mode) || !['sending','waiting','candidate'].includes(op.view.state)) return;
+        if ((op.view.purpose === 'editDraft') !== (op.carrier.mode === 'confirm')) return;
         if (op.carrier.mode === 'confirm') {
-          const details = candidateCardDetails(op.payload);
-          if (!details || details.payloadDigest !== op.proposalDigest || op.carrier.previewDigest !== details.payloadDigest ||
+          const details = editCandidate(op);
+          if (!details || op.carrier.previewDigest !== details.payloadDigest ||
               op.carrier.dirty || !candidateConfirmation(op.carrier.ref,details)) {
             await this.change(p,op.view.operationId,row => setCard(row,'confirm'));
             await this.refresh(p,op.view.operationId);
@@ -756,6 +787,11 @@ export class AuthoringService {
         await this.change(p,op.view.operationId,row => {
           this.present(p);
           if (!row.contextOpen || (row.contextUntil ?? 0) <= this.now() || row.carrier.ref !== value.ref) refusal();
+          if (row.view.purpose === 'editDraft') {
+            if (row.carrier.dirty || row.carrier.previewDigest !== frozen.payloadDigest ||
+                row.proposalDigest !== frozen.payloadDigest || row.payload !== op.payload) refusal();
+            row.editApproval = editApproval(row,frozen.payloadDigest);
+          }
           row.contextUntil = this.now()+CONTEXT; row.payload = frozen.payload; row.view.payloadDigest = frozen.payloadDigest;
           row.view.state = 'pendingCloud'; setCard(row,'pending');
         });

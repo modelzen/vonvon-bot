@@ -138,6 +138,7 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     deviceGeneration = 0;
   const alternate = (await request('/me', { token: reader })).accountId;
   const seen = [];
+  let omitApprovalResponse = false;
   const account = {
     lease: (id) => (id === actor ? generation.signal : undefined),
     status: () => ({
@@ -231,7 +232,9 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
         const r = code.recipeAuthoringRequestSchema.parse(raw);
         assert.ok(!JSON.stringify(r).includes(author));
         seen.push(r.type);
-        return code.recipeAuthoringReplySchema.parse(await daemon.request(peer, r));
+        const reply = code.recipeAuthoringReplySchema.parse(await daemon.request(peer, r));
+        if (omitApprovalResponse && reply.kind === 'candidate') delete reply.reviewedDigest;
+        return reply;
       },
     };
     const ctrl = new code.RecipeAuthoringController(
@@ -344,6 +347,26 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     assert.deepEqual(candidate.content.changes, [{ op: 'setDraftRole', value: '独立的新角色' }]);
     await assert.rejects(act('accept', { operationId: editId, payloadDigest: candidate.payloadDigest }));
     await running.daemon.onAction(im.click('confirm', operator, dm, tenantKey));
+    omitApprovalResponse = true;
+    const tickets = () => sql("select count(*) from recipe_private.authoring_capabilities where operation_id='"+editId+"' and stage='accept'");
+    await assert.rejects(act('resume',{operationId:editId}));
+    assert.equal(tickets(),'0');
+    omitApprovalResponse = false;
+    running.ctrl.closeAll(); running.daemon.close();
+    const ledgerFile = join(home,'recipe-authoring','journal.json');
+    const ledger = JSON.parse(readFileSync(ledgerFile,'utf8'));
+    delete ledger.operations[editId].editApproval;
+    writeFileSync(ledgerFile,JSON.stringify(ledger));
+    running = boot();
+    const upgraded = await start(); handle=upgraded.handle;
+    assert.equal(upgraded.operations.find(o=>o.operationId===editId).state,'candidate');
+    assert.equal(tickets(),'0');
+    assert.equal((await request('/drafts/'+draftId,{token:author})).revision,1);
+    assert.equal(im.messages.size,2);
+    const repairedAction = im.click('confirm',operator,dm,tenantKey);
+    assert.match(JSON.stringify(im.cards.get(last.card)),/独立的新角色/);
+    await running.daemon.onAction(repairedAction);
+    console.log('PASS: absent daemon proof blocks the accept ticket; upgrading an unproven pending edit restores the original card before any cloud write.');
     afterAuthorize = () => {
       generation.abort();
       actor = alternate;
