@@ -10,7 +10,7 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const windowsRootTests = ['stage-daemon', 'package-windows', 'windows-runtime-smoke', 'windows-supervisor-runtime', 'publish-windows']
   .map(name => `scripts/${name}.test.mjs`);
 const windowsPackageTests = {
-  daemon: ['environment-windows-launch', 'provider/windows-command-line', 'provider/windows-supervisor',
+  daemon: ['rich-recipe-files', 'environment-windows-launch', 'provider/windows-command-line', 'provider/windows-supervisor',
     'windows-owned-process', 'card-display-scripts', 'card-display-validation', 'card-display-render', 'data-compatibility', 'register-bot', 'locate', 'codex-version',
     'codex-managed-install', 'codex-source', 'appserver-pool', 'environment-rpc',
     'codex-environment-install', 'codex-windows-backend', 'admin-ipc', 'codex-catalog-cache', 'claude-model-discovery', 'codex-setup', 'provider-model-discovery', 'provider-models-rpc', 'codex-model-discovery', 'server-snapshot', 'dm-project', 'dm-upgrade', 'dm-directory-recovery', 'server-state', 'host-library-startup', 'atomic-file-windows', 'project-atomic-windows'].map(name => `test/${name}.test.ts`),
