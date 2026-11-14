@@ -203,6 +203,12 @@ const copyReference = z.discriminatedUnion('kind', [
   z.object({kind: z.enum(['rule', 'skill', 'task', 'memory', 'setup']), itemId: uuid}).strict(),
   z.object({kind: z.enum(['file', 'cardBlock']), itemId: uuid, parentItemId: uuid}).strict(),
 ]);
+const newSetupSource = z.union([
+  z.object({kind: z.literal('accountClaim')}).strict(),
+  z.object({kind: z.literal('releaseItems'), parents: z.array(recipeRichOriginEdgeSchema).min(1).max(64).refine(
+    parents => new Set(parents.map(parent => `${parent.versionId}:${parent.itemId}`)).size === parents.length,
+    'Duplicate origin edge')}).strict(),
+]);
 export const recipeRichDraftChangeSchema = z.union([
   publicTextChange,
   z.object({op: z.literal('setRoleText'), itemId: uuid, value: recipeRichTextSchema}).strict(),
@@ -213,6 +219,7 @@ export const recipeRichDraftChangeSchema = z.union([
   z.object({op: z.literal('setSkill'), itemId: uuid, value: skill.pick({name: true})}).strict(),
   z.object({op: z.literal('setFile'), itemId: uuid, value: file.pick({name: true, text: true})}).strict(),
   z.object({op: z.literal('setTask'), itemId: uuid, value: task.omit({itemId: true, originId: true})}).strict(),
+  z.object({op: z.literal('addSetup'), value: setup.omit({itemId: true, originId: true}), source: newSetupSource}).strict(),
   z.object({op: z.literal('setSetup'), itemId: uuid, value: setup.omit({itemId: true, originId: true})}).strict(),
   z.object({op: z.literal('removeItem'), kind: itemKind, itemId: uuid}).strict(),
   z.object({op: z.literal('copyItem'), source: copyReference}).strict(),
