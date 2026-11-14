@@ -24,7 +24,7 @@ const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
-function fixture() {
+function fixture(options: {legacySetup?: boolean} = {}) {
   const root = mkdtempSync(join(tmpdir(), 'recipe-use-'));
   roots.push(root);
   const path = join(root, 'journal.json'),
@@ -40,6 +40,7 @@ function fixture() {
     commitment = binary(2),
     ticket = binary(3),
     serverKey = binary(4);
+  const legacySetup={steps:[{kind:'tool',title:'旧说明',instructions:'由作者说明运行方式。',required:true}]};
   const bytes = Buffer.from(
     JSON.stringify({
       schema: 1,
@@ -49,6 +50,7 @@ function fixture() {
       revision: 1,
       access: 'direct',
       role: '角色🦉',
+      ...(options.legacySetup&&{setup:legacySetup}),
     }),
   );
   const manifest = bytes.toString('base64url'),
@@ -81,6 +83,8 @@ function fixture() {
     found: false,
     extra: false,
     wrongPreview: false,
+    echoSetup: false,
+    wrongSetup: false,
     steps: [] as string[],
     commitIds: [] as string[],
     createIds: [] as string[],
@@ -204,6 +208,7 @@ function fixture() {
           reviewToken: (state.changedReview ? 'c' : 'b').repeat(64),
           currentRole: state.changedReview ? '已变更' : '本地职责',
           incomingRole: state.wrongPreview ? '别的职责' : '角色🦉',
+          ...(state.echoSetup&&{incomingSetup:state.wrongSetup?{steps:[{...legacySetup.steps[0],instructions:'未核对内容'}]}:legacySetup}),
           roleChoiceRequired: state.conflict,
           setupChoiceRequired: false,
         };
@@ -324,6 +329,19 @@ describe('native recipe installation', () => {
     await expect(f.begin()).rejects.toThrow('回执无效');
     expect(f.state.userValues).toEqual([]);
     expect(f.state.rawAuths).toEqual([]);
+  });
+  it('installs the exact legacy manifest when the new daemon omits retired setup review data',async()=>{
+    const f=fixture({legacySetup:true}),prepared=await f.begin();
+    expect(prepared).toMatchObject({kind:'prepared'});
+    expect(prepared.kind==='prepared'&&prepared.review.incomingSetup).toBeUndefined();
+    expect(await f.main({type:'confirm',handle:f.handle(prepared)})).toMatchObject({kind:'applied'});
+    expect(f.state.rawAuths).toHaveLength(1);expect(f.state.commitIds).toEqual([f.operationId]);
+  });
+  it('still validates any explicitly echoed legacy setup data before forwarding a preview',async()=>{
+    const f=fixture({legacySetup:true});f.state.echoSetup=true;
+    expect(await f.begin()).toMatchObject({kind:'prepared',review:{incomingSetup:{steps:[{title:'旧说明'}]}}});
+    const other=fixture({legacySetup:true});other.state.echoSetup=true;other.state.wrongSetup=true;
+    await expect(other.begin()).rejects.toThrow('回执无效');expect(other.state.rawAuths).toEqual([]);
   });
   it('replaces an outdated resolution with a fresh review and requests no authorization until confirmation', async () => {
     const f = fixture();
