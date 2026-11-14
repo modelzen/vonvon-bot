@@ -137,7 +137,6 @@ export function richMemberCap(rich:RichLocalDraft){
       skeleton.parts.push({objectId:m.itemId,kind:'finalLogo',bytes:131072,sha256:m.sha256,mediaType:'image/webp'});
     }
   }
-  // UUID and digest widths survive remapping. The largest normalized Logo length has six digits.
   const manifestMax=Buffer.byteLength(wireJson(skeleton));
   const finalLogo=logo?131072:0;
   return Math.max(1,text+sizes.filter(x=>x.kind==='text').sort((a,b)=>b.bytes-a.bytes).slice(0,2).reduce((n,s)=>n+s.bytes,0),text+(logo?.bytes??0)+finalLogo,text+finalLogo+2*manifestMax);
@@ -253,7 +252,6 @@ export async function chatRichProposal(op:LocalOperation,instruction:string,sign
     return false;
   });
   if(parsed.setup.length&&unknownSources){
-    // With no native ledger for a cross-device draft, generate a fresh suggestion using only the author's new instruction.
     const independent=await proposeRich({instruction,phase:'edit',selected:[]},signal,parser);
     if(independent.kind!=='proposal'||independent.changes.length||!independent.setup.length)throw new Error('请说明要新增的独立准备步骤。');
     parsed.setup.splice(0,parsed.setup.length,...independent.setup);

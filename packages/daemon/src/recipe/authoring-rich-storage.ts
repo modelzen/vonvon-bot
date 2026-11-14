@@ -27,7 +27,6 @@ function visit(ledger:AuthoringLedger,fn:(owner:object,key:string)=>void){
   }
   for(const link of Object.values(ledger.links))for(const source of link.sources)if(source.rich)fn(source.rich,'draft');
 }
-// The small index is committed only after its immutable blobs. Old indexes remain readable after a crash.
 export function localRichStorage(dir:string,ledger:AuthoringLedger){
   const originals=new WeakMap<object,Map<string,{hash:string;loaded:boolean}>>();
   visit(ledger,(owner,key)=>{
