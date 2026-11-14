@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { Client, DefaultCache, type LarkChannel, type NormalizedMessage } from '@larksuiteoapi/node-sdk';
-import { authoringAuthorizationSchema, groupIdSchema, recipeAuthoringRequestSchema, type AuthoringAuthorization, type AuthoringOperation, type RecipeAuthoringReply } from '@vonvon/protocol';
+import { authoringAuthorizationSchema, agentIdSchema, groupIdSchema, recipeAuthoringRequestSchema, type AuthoringAuthorization, type AuthoringOperation, type RecipeAuthoringReply } from '@vonvon/protocol';
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { DraftInstructionParser, ReadDraftField } from '../src/recipe/draft-instruction';
 import type { AppConfig } from '../src/config/schema';
@@ -967,6 +967,26 @@ it('saves only the private-chat-reviewed rich source and continues against its s
       accepted:{frozen:next,manifestId:artifact.objectId,packageId:edit.operationId}});
     const after=await cloudApi.draft(destinationDraftId,2);
     expect(JSON.parse(Buffer.from(after.canonical,'base64url').toString('utf8')).public.name.value).toBe('新的周报');
+    const {mainController}=await import('./fixtures/rich-desktop-authoring.mjs');
+    const {controller,saved}=mainController({accountId:account,botId:appId,groupId,daemon:(r:unknown)=>service.request(peer,recipeAuthoringRequestSchema.parse(r)),
+      api:accountApi,broker:process.env.RICH_NATIVE_BROKER,bearer:process.env.AUTHORING_TEST_JWT});
+    try{
+      const opened=await controller.request({type:'open',accountId:account,botId:agentIdSchema.parse(appId),viewId:'local'});
+      if(opened.kind!=='session')throw new Error('session missing');
+      const base=JSON.parse(Buffer.from(after.canonical,'base64url').toString('utf8')),logo=base.finalLogo;
+      const reply=await controller.request({type:'richEdit',handle:opened.handle,draftId:destinationDraftId,baseRevision:2,
+        selected:[logo.itemId],logo:selection.logo});
+      if(reply.kind!=='operation')throw new Error('operation missing');
+      expect(reply.operation.state).toBe('candidate');
+      const candidate=await controller.request({type:'richInspectCandidate',handle:opened.handle,operationId:reply.operation.operationId});
+      if(candidate.kind!=='richCandidate'||!('payload' in candidate.request))throw new Error('candidate missing');
+      expect(candidate.request.payload.changes[0]?.op).toBe('setFinalLogo');
+      await act(ref([...messages.values()].at(-1)!.message_id));
+      await controller.request({type:'status',handle:opened.handle});
+      expect(saved).toContainEqual({accountId:account,draftId:destinationDraftId,revision:3});
+      const latest=await cloudApi.draft(destinationDraftId,3);
+      expect(JSON.parse(Buffer.from(latest.canonical,'base64url').toString('utf8')).finalLogo.itemId).toBe(logo.itemId);
+    }finally{controller.closeAll();}
   }
   expect(all.find(o=>o.purpose==='editDraft')).toMatchObject({format:'rich-v2',draftId:destinationDraftId,baseRevision:1,state:'pendingMain'});
 });
