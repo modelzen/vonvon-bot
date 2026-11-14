@@ -145,10 +145,12 @@ export function richMemberCap(rich:RichLocalDraft){
 export function typedRichEdit(req:Extract<RecipeAuthoringRequest,{type:'richEdit'}>):RichLocalDraft{
   const base={canonical:req.canonical,selected:req.selected};
   const content=verifyEditBase(req.canonical,req.selected);
-  if(!req.changes&&!req.logo){if(req.access)throw new Error('请附上需保存的草稿字段。');return {base};}
+  if(!req.changes&&!req.logo&&!req.access)return {base};
   const allowed=new Set(req.selected);
   const changes=[...(req.changes??[])];
+  if(req.access&&!changes.length&&!req.logo)changes.push({op:'setAccess',value:req.access});
   for(const change of changes){
+    if(change.op==='setAccess'){if(req.access!==change.value)throw new Error('获取方式不一致。');continue;}
     if(change.op==='setFinalLogo')throw new Error('请选择原始 Logo 文件。');
     if(!safeEditValue(change))throw new Error('所选编辑含敏感内容。');
     if(change.op==='addSetup'){

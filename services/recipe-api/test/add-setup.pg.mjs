@@ -145,6 +145,10 @@ try{
   const readerPrep=await start(b),readerPlan=await readerPrep.freeze(body(fixture,'direct')),readerSaved=await readerPrep.commit(readerPlan);
   const readerEdit=await start(b,{purpose:'editDraft',draftId:readerSaved.draftId,baseRevision:1});
   const derived={format:'rich-v2',baseCanonical:readerPlan.canonical,payload:{...input.payload,draftId:readerSaved.draftId,requestId:randomUUID(),changes:[{op:'addSetup',value,source:{kind:'releaseItems',parents:[{versionId:published.versionId,itemId:member.itemId,baselineSha256:member.baselineSha256}]}}]}};
+  const badBaseline=structuredClone(derived);badBaseline.payload.changes[0].source.parents[0].baselineSha256='0'.repeat(64);
+  await req(readerEdit.path+'/freeze',b,badBaseline,{status:403});
+  const foreignKind=structuredClone(derived);foreignKind.payload.changes[0].source.parents[0].kind='setup';
+  await req(readerEdit.path+'/freeze',b,foreignKind,{status:422});
   const derivedPlan=await readerEdit.freeze(derived);const derivedSaved=await readerEdit.commit(derivedPlan);
   assert.equal(derivedSaved.revision,2);assert.notEqual(JSON.parse(Buffer.from(derivedPlan.canonical,'base64url')).setup[0].itemId,member.itemId);
   const detail=await req('/v2/recipes/'+published.recipeId+'/versions/'+published.versionId,a);assert.equal(detail.release.contentSha256,plan.contentSha256);
@@ -158,6 +162,15 @@ try{
   const relabel=structuredClone(mixedInput);relabel.payload.changes[0].source={kind:'accountClaim'};
   await req(mixed.path+'/freeze',b,relabel,{status:403});
   assert.equal((await req('/v2/drafts/'+readerSaved.draftId,b)).revision,2);
+  await req(mixed.path+'/cancel',b,{});await req('/v2/objects/'+mixed.pkg+'/cancel',b,{});
+  const independent=structuredClone(fixture);delete independent.role;independent.rules=[];
+  const prepared=await start(a),createdPlan=await prepared.freeze(body(independent,'direct')),created=await prepared.commit(createdPlan);
+  const permission=await start(a,{purpose:'editDraft',draftId:created.draftId,baseRevision:1});
+  const accessInput={format:'rich-v2',access:'coded',baseCanonical:createdPlan.canonical,payload:{...derived.payload,draftId:created.draftId,requestId:randomUUID(),baseRevision:1,changes:[{op:'setAccess',value:'coded'}]}};
+  await req(permission.path+'/freeze',a,{...accessInput,access:'direct'},{status:422});
+  const privatePlan=await permission.freeze(accessInput);assert.equal(privatePlan.canonical,createdPlan.canonical);
+  await permission.commit(privatePlan);
+  assert.equal((await req('/v2/drafts/'+created.draftId,a)).access,'coded');
   console.log('PASS: empty draft typed setup creation; deterministic retry; server identity; exact source proof; stale CAS; limits; inert manual action; direct lineage; foreign coded mixed DAG rejection; immutable release.');
 }finally{if(broker)await close(broker);if(pool)await pool.end();if(api)await api.close();if(issuerServer)await close(issuerServer);
   if(pgUp)run('pg_ctl',['-D',db,'-m','immediate','-w','stop']);rmSync(dir,{recursive:true,force:true});}
