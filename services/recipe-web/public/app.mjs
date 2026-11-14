@@ -207,13 +207,24 @@ async function detail(confirmed) {
   const data = confirmed ?? await readDetail(path, detailSession);
   if (!currentDetail()) return;
   if (path.toLowerCase() !== detailUrl(data).toLowerCase()) throw new Error('unconfirmed');
-  const resumeAcquisition = session?.continuation === path;
-  if (resumeAcquisition) delete session.continuation;
+  async function resumeAcquisition() {
+    if (!currentDetail() || session?.continuation !== path) return;
+    const result = await request('/auth/continuation', {method: 'POST', headers: {
+      'Content-Type': 'application/x-www-form-urlencoded', 'X-Vonvon-Session': detailSession,
+    }, body: new URLSearchParams({returnTo: path}).toString()});
+    if (!currentDetail()) return;
+    delete session.continuation;
+    if (result.consumed && !data.acquired && !data.owned) {
+      const trigger = [...main.querySelectorAll('button')].find(b => b.textContent === '获取配方');
+      if (trigger) await claim(data, trigger, detailSession, currentDetail, true);
+    }
+  }
   const p = data.public; document.title = p.name + ' · Vonvon Bot';
   if (data.format === 'rich-v2') {
     const {renderRecipe} = await import('/viewer.mjs');
     if (!currentDetail()) return;
     renderRecipe(main, data, trigger => claim(data, trigger, detailSession, currentDetail));
+    await resumeAcquisition();
     return;
   }
   const sharing = button('分享链接', ev => copy(ev.currentTarget), 'secondary');
@@ -222,9 +233,6 @@ async function detail(confirmed) {
   else {
     const acquire = button('获取配方', ev => claim(data, ev.currentTarget, detailSession, currentDetail));
     actions.append(acquire);
-    if (resumeAcquisition) {
-      await claim(data, acquire, detailSession, currentDetail, true);
-    }
   }
   const top = group('page-top detail-title', group('intro', el('p', 'Bot 配方', 'eyebrow'), el('h1', p.name), el('p', p.summary, 'muted')), actions);
   const meta = group('metrics panel', metric('版本', p.version), metric('获取方式', p.access === 'coded' ? '需要分享码' : '直接获取'));
@@ -247,6 +255,7 @@ async function detail(confirmed) {
     const b = button(label, () => setTab(key), 'secondary'); b.dataset.tab = key; tabs.append(b);
   }
   main.replaceChildren(link('← 社区', '/', 'back'), top, tabs, content); setTab('intro');
+  await resumeAcquisition();
 }
 
 function newAcquisitionKey() {

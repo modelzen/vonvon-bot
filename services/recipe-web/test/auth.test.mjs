@@ -148,6 +148,14 @@ test('only allowlisted acquisition flows return a one-use exact-version continua
     assert.equal(finish.headers.Location, returnTo.startsWith('https:') ? '/' : returnTo);
     const req = {headers:{cookie:cookie(finish.headers['Set-Cookie'][1])}};
     assert.equal(login.status(req).continuation, expected);
+    assert.equal(login.status(req).continuation, expected);
+    req.headers['x-vonvon-session'] = 'stale-session';
+    assert.throws(() => login.consumeContinuation(req, path), {status:409});
+    req.headers['x-vonvon-session'] = login.status(req).displaySession;
+    assert.deepEqual(login.consumeContinuation(req, '/library'), {consumed:false});
+    assert.equal(login.status(req).continuation, expected);
+    assert.deepEqual(login.consumeContinuation(req, path), {consumed:Boolean(expected)});
+    assert.deepEqual(login.consumeContinuation(req, path), {consumed:false});
     assert.equal(login.status(req).continuation, undefined);
   }
   const start = response();

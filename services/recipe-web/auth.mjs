@@ -75,8 +75,14 @@ export function createLogin({ publicOrigin, supabaseOrigin, publishableKey, prov
     status(req) {
       const session = getSession(req);
       const continuation = session?.continuation;
-      if (session) delete session.continuation;
       return { ...(continuation && { continuation }), signedIn: Boolean(session), ...(session && { displaySession: session.displaySession }), providers: available };
+    },
+    consumeContinuation(req, path) {
+      const session = getSession(req);
+      if (!session || req.headers['x-vonvon-session'] !== session.displaySession) throw new WebError(409, 'session_changed');
+      if (!detailPath.test(path) || session.continuation !== path) return { consumed: false };
+      delete session.continuation;
+      return { consumed: true };
     },
     start(req, res, form) {
       const provider = form.get('provider');

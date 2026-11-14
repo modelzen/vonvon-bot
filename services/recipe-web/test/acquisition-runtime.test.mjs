@@ -18,6 +18,7 @@ async function runtime(t,respond,auth = {signedIn:true,displaySession:'session-a
   const fetch=async (path,options={})=>{
     calls.push({path,options});
     if(path==='/auth/session')return Response.json(auth);
+    if(path==='/auth/continuation')return Response.json({consumed:true});
     return respond(path,options,calls);
   };
   const run=new AsyncFunction('document','window','location','history','navigator','crypto','fetch','BroadcastChannel','setTimeout','clearTimeout','setup',source+'\nreturn {detail,claim,setSession:value=>{session=value;}};');
@@ -262,7 +263,7 @@ for (const access of ['coded', 'public']) test(`OAuth acquisition continuation o
     {signedIn:true, displaySession:'session-a', providers:['github'], continuation:route});
   assert.equal(h.document.querySelector('dialog').open, true);
   assert.match(h.document.querySelector('dialog').textContent, access === 'coded' ? /输入分享码/ : /确认获取配方/);
-  assert.equal(h.calls.filter(c => c.options.method === 'POST').length, 0);
+  assert.equal(h.calls.filter(c => c.options.method === 'POST' && c.path !== '/auth/continuation').length, 0);
   h.document.querySelector('dialog button').click();
   await h.api.detail();
   assert.equal(h.document.querySelector('dialog').open, false);
@@ -277,14 +278,14 @@ test('ordinary login does not open acquisition, anonymous acquisition alone reco
   await h.open();
   assert.equal(h.document.querySelector('input[name=continuation]').value, 'acquire');
   assert.equal(h.document.querySelector('input[name=returnTo]').value, route);
-  assert.equal(h.calls.filter(c => c.options.method === 'POST').length, 0);
+  assert.equal(h.calls.filter(c => c.options.method === 'POST' && c.path !== '/auth/continuation').length, 0);
 });
 test('already acquired continuation shows entitlement and never opens a dialog', async t => {
   const h = await runtime(t, async () => Response.json({...recipe, acquired:true}),
     {signedIn:true, displaySession:'session-a', providers:[], continuation:route});
   assert.match(h.document.querySelector('#main').textContent, /已获取/);
   assert.equal(h.document.querySelector('dialog').open, false);
-  assert.equal(h.calls.filter(c => c.options.method === 'POST').length, 0);
+  assert.equal(h.calls.filter(c => c.options.method === 'POST' && c.path !== '/auth/continuation').length, 0);
 });
 
 test('resumed public acquisition requires explicit confirmation and posts only once', async t => {
@@ -296,7 +297,7 @@ test('resumed public acquisition requires explicit confirmation and posts only o
   const form = h.document.querySelector('dialog form');
   form.dispatchEvent(new h.dom.window.Event('submit',{bubbles:true,cancelable:true}));
   await h.settle();
-  assert.equal(h.calls.filter(c => c.options.method === 'POST').length, 1);
+  assert.equal(h.calls.filter(c => c.options.method === 'POST' && c.path !== '/auth/continuation').length, 1);
   assert.equal(h.document.querySelector('dialog').open, false);
   assert.match(h.document.querySelector('#main').textContent, /已获取/);
 });
