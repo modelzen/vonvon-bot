@@ -1,3 +1,5 @@
+import { codexDraftParser } from '../recipe/codex-draft-parser';
+import { resolveModelPreference } from '../config/execution';
 import { AuthoringService, type AuthoringIpc } from '../recipe/authoring-service';
 import { createBridgeChannel } from './bridge-channel';
 import { APP_ROLE_CACHE_MS, APP_ROLE_RETRY_MS, createAppRoleRefresher, getAppRoleSnapshot } from '../config/app-roles';
@@ -18,7 +20,7 @@ import { createFeishuCalls, createFeishuReads } from '../agent/entry/feishu-tool
 import type { ApiRequest } from '../feishu-read/api';
 import { createMemoryWriter } from './memory-writer';
 import { createFirstHello } from './first-hello';
-import { dmPersonOf, getProjectByChatId, listProjects } from '../project/registry';
+import { dmProject, dmPersonOf, getProjectByChatId, listProjects } from '../project/registry';
 import { isProjectId } from '../project/library';
 import { createAgentEntries, type AgentEntries } from '../agent/entry/registry';
 import { log } from '../core/logger';
@@ -27,7 +29,7 @@ import { putSessionCliOnPath, writeSessionCli } from '../agent/session-cli';
 import { createTopicRegistry } from './topic-registry';
 import type { BotIdentity } from '../config/bots';
 import { adoptAdminSessions } from './session-store';
-import { paths } from '../config/paths';
+import { botPaths, paths } from '../config/paths';
 import { setTierMergePending, splitTierChats } from '../project/registry';
 import type { PermissionMode } from '../agent/types';
 import { onCrashSync } from '../host/crash-guard';
@@ -127,7 +129,13 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   }) });
   const sessionCli = await writeSessionCli();
   if (sessionCli) putSessionCliOnPath(sessionCli);
-  const authoring = new AuthoringService({bot: identity, cfg: opts.cfg, channel});
+  const parser = codexDraftParser(async () => {
+    const group = await dmProject(botPaths(identity.appId).projectsFile);
+    if (!group) return;
+    const backend = group.modelAccess?.backend ?? group.backend ?? 'codex-appserver';
+    return {backend, model:resolveModelPreference({bot:opts.cfg.preferences, group},backend)?.model};
+  });
+  const authoring = new AuthoringService({bot: identity, cfg: opts.cfg, channel, parser});
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
     { entries, memory, authoring, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity, ...(host ? { host } : {}), ...(sessionCli ? { sessionCli } : {}) });
   const firstHello = createFirstHello({ cfg: opts.cfg, appSecret: opts.appSecret, channel, write: orchestrator.writePreferences });

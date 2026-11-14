@@ -22,7 +22,7 @@ export interface Link { bot: string; binding: string; recipient: Recipient; sour
 export interface Carrier {
   ref: string; sendUuid: string; generation: number; seq: number; mode: CardMode; dirty: boolean;
   cardId?: string; messageId?: string; firstSend?: number; createdAt?: number;
-  unavailable?: true; retryAt?: number; retryDelay?: number;
+  previewDigest?: string; unavailable?: true; retryAt?: number; retryDelay?: number;
 }
 export const newCarrier = (mode: CardMode, generation = 1): Carrier => ({
   ref: randomUUID(), sendUuid: randomUUID(), generation, seq: 0, mode, dirty: false,
@@ -30,7 +30,7 @@ export const newCarrier = (mode: CardMode, generation = 1): Carrier => ({
 export function setCard(op: LocalOperation, mode: CardMode) {
   const c = op.carrier;
   c.mode = mode; c.ref = randomUUID(); c.seq++; c.dirty = true;
-  delete c.retryAt; delete c.retryDelay;
+  delete c.retryAt; delete c.retryDelay; delete c.previewDigest;
 }
 export function cardUpdate(op: LocalOperation, now: number): AuthoringOperation['cardUpdate'] {
   const c = op.carrier;
@@ -46,7 +46,7 @@ export function operationView(op: LocalOperation, now: number): AuthoringOperati
 export interface LocalOperation {
   view: AuthoringOperation;
   accountId: string; scope: string; bot: string; binding: string; recipient: Recipient; carrier: Carrier;
-  secret?: string; nonce?: string; source?: Source; payload?: string; proposalDigest?: string;
+  secret?: string; nonce?: string; source?: Source; sourceIdentity?: string; payload?: string; proposalDigest?: string;
   dispatchAuthorization?: AuthoringAuthorization;
   dispatched: boolean; revoked?: true; contextOpen?: boolean; instructionId?: string; seenInstructions?: string[]; terminalAt?: number; contextUntil?: number;
 }
