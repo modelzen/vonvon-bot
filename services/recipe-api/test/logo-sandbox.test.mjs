@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { realpathSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, chmodSync, readlinkSync } from 'node:fs';
+import { realpathSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, chmodSync, readlinkSync, chownSync } from 'node:fs';
 import { cloneLogoProbeArtifact } from '../scripts/clone-logo-probe-artifact.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,4 +41,18 @@ test('probe clone preserves internal npm executable symlinks and rejects externa
   assert.equal(readlinkSync(join(target,'node_modules/.bin/semver')),'../semver/bin/semver.js');
   symlinkSync('/etc',join(original,'node_modules/external'));
   await assert.rejects(cloneLogoProbeArtifact(original,`${target}-invalid`),/escapes/);
+});
+
+test('artifact validation rejects directory links and non-directory roots',() => {
+  const root = artifact();
+  mkdirSync(join(root,'dependencies'));
+  symlinkSync('../dependencies',join(root,'node_modules/linked'));
+  assert.throws(() => validateDecoderRoot(root),/directory symlink/);
+  assert.throws(() => validateDecoderRoot(join(root,'logo-child.mjs')),/root/);
+});
+
+test('artifact root rejects foreign ownership',{skip:process.getuid?.() !== 0},() => {
+  const root = artifact();
+  chownSync(root,65534,65534);
+  assert.throws(() => validateDecoderRoot(root),/Writable/);
 });
