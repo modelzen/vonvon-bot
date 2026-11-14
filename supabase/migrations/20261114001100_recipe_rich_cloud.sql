@@ -14,7 +14,7 @@ create table recipe_private.rich_intents (
 );
 create table recipe_private.rich_drafts (
   id uuid primary key references recipe_private.drafts on delete cascade,
-  manifest_id uuid not null references recipe_private.object_attempts, items jsonb not null, retained_bytes int not null default 0
+  manifest_id uuid not null references recipe_private.object_attempts, items jsonb not null, retained_bytes int not null default 0, parent_version uuid references recipe_private.versions
 );
 create table recipe_private.rich_candidates(
   source_intent uuid primary key, owner_id uuid not null references recipe_private.accounts,
@@ -24,7 +24,8 @@ alter table recipe_private.rich_candidates enable row level security;
 create table recipe_private.rich_versions (
   id uuid primary key references recipe_private.versions,
   manifest_id uuid not null references recipe_private.object_attempts,
-  state text not null default 'listed' check(state in ('listed','withdrawn','banned'))
+  state text not null default 'listed' check(state in ('listed','withdrawn','banned')),
+  parent_version uuid references recipe_private.versions
 );
 create table recipe_private.rich_origins (
   id uuid primary key, account_id uuid not null references recipe_private.accounts,
@@ -245,6 +246,28 @@ begin
   end loop;
 end $$;
 
+create function recipe_private.check_rich_logo(a uuid,items jsonb,parent uuid) returns void
+language plpgsql set search_path=pg_catalog,pg_temp as $$
+begin
+  if exists(
+    with recursive ancestry(kind,id) as (
+      select 'origin'::text,(x->>'originId')::uuid from jsonb_array_elements(items) x
+      union select 'version',parent where parent is not null
+      union
+      select next.kind,next.id from ancestry n cross join lateral (
+        select 'origin'::text kind,o.donor id from recipe_private.rich_origins o where n.kind='origin' and o.id=n.id and o.donor is not null
+        union select 'version',o.parent_version from recipe_private.rich_origins o where n.kind='origin' and o.id=n.id and o.parent_version is not null
+        union select 'version',e.version_id from recipe_private.rich_parent_edges e where n.kind='origin' and e.origin=n.id
+        union select 'origin',m.origin_id from recipe_private.rich_members m where n.kind='version' and m.version_id=n.id
+        union select 'version',v.parent_version from recipe_private.rich_versions v where n.kind='version' and v.id=n.id and v.parent_version is not null
+      ) next
+    )
+    select from ancestry n join recipe_private.versions v on n.kind='version' and v.id=n.id and v.owner_id<>a
+      join recipe_private.rich_members m on m.version_id=v.id and m.kind='finalLogo'
+      join jsonb_array_elements(items) x on x->>'kind'='finalLogo' and x->>'contentFingerprint'=m.fingerprint
+  ) then raise exception 'source_unavailable'; end if;
+end $$;
+
 create function recipe_private.prune_intent_origins() returns trigger language plpgsql set search_path=pg_catalog,pg_temp as $$
 begin
   if old.state<>'accepted' then delete from recipe_private.rich_origins where intent=old.id; end if;
@@ -297,6 +320,7 @@ begin
       then raise exception 'source_unavailable'; end if;
     perform recipe_private.check_rich_origin(a,(row->>'originId')::uuid,row->>'kind');
   end loop;
+  perform recipe_private.check_rich_logo(a,p_items,coalesce(p_parent,(select parent_version from recipe_private.rich_drafts where id=i.draft_id)));
   update recipe_private.rich_intents set input_hash=p_inputs,manifest_hash=p_manifest,payload_hash=p_payload,
     access=p_access,parent_version=p_parent,reviewed_items=p_items where id=p_id;
 end $$;
@@ -352,6 +376,7 @@ begin
   c:=convert_from(canonical,'UTF8')::jsonb;
   if c->>'format' is distinct from 'rich-v2' or c->>'schemaVersion' is distinct from '2' then raise exception 'invalid_input'; end if;
   for x in select value from jsonb_array_elements(i.reviewed_items) loop perform recipe_private.check_rich_origin(a,(x->>'originId')::uuid,x->>'kind'); end loop;
+  perform recipe_private.check_rich_logo(a,i.reviewed_items,coalesce(i.parent_version,(select parent_version from recipe_private.rich_drafts where id=i.draft_id)));
   select jsonb_object_agg(key,value->'value') into info from jsonb_each(c->'public');info:=info||jsonb_build_object('access',i.access);
   perform set_config('app.rich_mutation','v2',true);
   if op.purpose='prepareDraft' then
@@ -375,7 +400,7 @@ begin
     where refs.draft_id=d.id and refs.object_id<>manifest and not exists(select from jsonb_array_elements(c->'parts') p where (p->>'objectId')::uuid=m.id);
   if (select coalesce(sum(bytes),0) from recipe_private.drafts where owner_id=a and id<>d.id)+total+retained>10485760 and total+retained>d.bytes then raise exception 'quota_exceeded'; end if;
   update recipe_private.drafts set bytes=total+retained,retained_candidate_bytes=retained where id=d.id;
-  insert into recipe_private.rich_drafts values(d.id,manifest,i.reviewed_items,retained)
+  insert into recipe_private.rich_drafts values(d.id,manifest,i.reviewed_items,retained,i.parent_version)
     on conflict(id) do update set manifest_id=excluded.manifest_id,items=excluded.items,retained_bytes=excluded.retained_bytes;
   if op.purpose='prepareDraft' then
     insert into recipe_private.rich_candidates(source_intent,owner_id,draft_id,manifest_id,content_hash,items)
@@ -493,6 +518,7 @@ begin
       where t->'instruction'->>'kind'='part' and not exists(select from recipe_private.rich_text_checks tc
       where tc.object_id=(t->'instruction'->>'objectId')::uuid and tc.nonblank)) then raise exception 'incomplete_setup'; end if;
     for row in select value from jsonb_array_elements(rd.items) loop perform recipe_private.check_rich_origin(a,(row->>'originId')::uuid,row->>'kind'); end loop;
+    perform recipe_private.check_rich_logo(a,rd.items,rd.parent_version);
     if (select count(*) from recipe_private.versions where owner_id=a and published_at>=date_trunc('day',statement_timestamp(),'UTC'))>=10 then raise exception 'rate_limited'; end if;
     if (select coalesce(sum(bytes),0) from recipe_private.versions where owner_id=a)+d.bytes-rd.retained_bytes>26214400 then raise exception 'quota_exceeded'; end if;
     if d.base_revision=0 then
@@ -506,7 +532,7 @@ begin
     if exists(select from recipe_private.versions where recipe_id=d.recipe_id and public_info->>'version'=d.public_info->>'version') then raise exception 'conflict'; end if;
     insert into recipe_private.versions(recipe_id,owner_id,revision,public_info,config,bytes)
       values(d.recipe_id,a,parent+1,d.public_info,'{}',d.bytes-rd.retained_bytes) returning * into v;
-    insert into recipe_private.rich_versions(id,manifest_id) values(v.id,rd.manifest_id);
+    insert into recipe_private.rich_versions(id,manifest_id,parent_version) values(v.id,rd.manifest_id,rd.parent_version);
     insert into recipe_private.rich_members select v.id,(i->>'itemId')::uuid,(i->>'originId')::uuid,i->>'kind',i->>'baselineSha256',i->>'contentFingerprint' from jsonb_array_elements(rd.items) i;
     insert into recipe_private.object_version_refs select v.id,object_id from recipe_private.object_draft_refs where draft_id=d.id and
       (object_id=rd.manifest_id or exists(select from jsonb_array_elements(convert_from(canonical,'UTF8')::jsonb->'parts') pp where (pp->>'objectId')::uuid=object_id));
