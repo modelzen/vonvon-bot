@@ -8,6 +8,7 @@ import {parseRichPayload} from './rich-document.mjs';
 
 const routes=[
  ['GET','versions/:v/install-preview','richInstallPreview'],['POST','operations/:o/authorize','richInstallAuthorize'],
+ ['POST','operations/:o/unredeemable','richUnredeemable','possession'],
  ['GET','operations/:o/recovery','richInstallRecover'],['POST','operations/:o/cancel','richInstallCancel'],
  ['POST','operations/:o/redeem','richInstallRedeem','possession'],['POST','operations/:o/complete','richInstallComplete','possession'],
  ['POST','authoring/:o/register','richRegister'],['POST','authoring/:o/authorize','richAuthorize'],
@@ -36,6 +37,7 @@ export async function richInput(req,url,{action,ids:[id,...other]}) {
   if(action==='richCatalog')return [action,[q,cursor]];
   if(req.method==='GET')return [action,id?[id,...other]:[]];
   const b=await bodyJson(req,['richFreeze','richAccept','richPublish'].includes(action)?4*1048576:2048);
+  if(action==='richUnredeemable'){objectKeys(b,['accountId']);return [action,[operationId(id),uuid(b.accountId)]];}
   if(action==='richInstallAuthorize'){const result=recipeRichInstallIntentSchema.safeParse(b);if(!result.success)throw badInput();return [action,[operationId(id),result.data]];}
   if(action==='richInstallRedeem'||action==='richInstallComplete'){
     const complete=action==='richInstallComplete';objectKeys(b,['ticket','nonce','proof',...(complete?['outcome']:[])]);
