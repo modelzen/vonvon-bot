@@ -19,7 +19,7 @@ it("names every request once, nested variants by their own field", () => {
   // machine.desktopUpdateReport. main 必败: 152 kinds, none of them device
   // dm-agent 7.3: command.feishuRead. Badges added command.setAgentBadgeNumber.
   const installs=kinds.filter(kind=>kind.startsWith('recipeInstall.')).sort();
-  expect(installs).toEqual(['cancel','commit','createdGroup','ignoreVersion','issuing','prepare','reconcile','richCommit','richPrepare','richSetup','richStatus','source','status'].map(kind=>'recipeInstall.'+kind));
+  expect(installs).toEqual(['cancel','commit','createdGroup','ignoreVersion','issuing','prepare','reconcile','richCancel','richCommit','richIssuing','richPrepare','richReconcile','richSetup','richStatus','source','status'].map(kind=>'recipeInstall.'+kind));
   const authoring = kinds.filter(kind => kind.startsWith('recipeAuthoring.')).sort();
   expect(authoring).toEqual('advance answerField beginLink cancel close confirmLink deliver edit groupSourceIdentity inspectCandidate inspectLink open operationSourceIdentity prepare reconcile resend resumeContext reviewSource settle status updateCard workflow'.split(' ').map(kind => 'recipeAuthoring.' + kind));
   expect(kinds.length - installs.length - authoring.length).toBe(155);

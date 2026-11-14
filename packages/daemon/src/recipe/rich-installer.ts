@@ -13,6 +13,7 @@ import { stageRichRecipeGeneration } from './rich-generation';
 import { richInstallProof, type RichProofStage } from './rich-install-proof';
 import {
   prepareRich,
+  expireRich,
   editRichJournal,
   readRichJournal,
   richStatus,
@@ -50,7 +51,37 @@ export class RichInstaller {
     }
     if (req.type === 'richSetup')
       return (await this.ports.bot(req.botId, { kind: 'richSetup', request: req })) as RecipeInstallReply;
-    if (req.type === 'richStatus') return richStatus(await readRichJournal(req.botId, req.operationId));
+    if (req.type === 'richStatus' || req.type === 'richCancel' || req.type === 'richIssuing') {
+      return editRichJournal(req.botId, req.operationId, (op) => {
+        expireRich(op, Date.now());
+        if (op.status === 'prepared' && op.issuerState === 'unissued') {
+          if (req.type === 'richIssuing') op.issuerState = 'issuing';
+          if (req.type === 'richCancel') {
+            op.settled = true;
+            op.status = 'rejected';
+            op.reason = '主人已取消';
+          }
+        }
+        return richStatus(op);
+      });
+    }
+    if (req.type === 'richReconcile') {
+      const op = await readRichJournal(req.botId, req.operationId);
+      if (op.status !== 'prepared' || op.issuerState !== 'issuing') return richStatus(op);
+      const result = z
+        .object({ operationId: z.string().uuid(), unredeemable: z.boolean() })
+        .strict()
+        .parse(JSON.parse((await this.send(op, 'unredeemable', { accountId: op.account }, 4096, false)).toString('utf8')));
+      if (result.operationId !== op.id) throw new Error('配方服务回执不一致');
+      return editRichJournal(req.botId, op.id, (j) => {
+        if (result.unredeemable && j.status === 'prepared' && j.issuerState === 'issuing' && !j.authorization) {
+          j.status = 'rejected';
+          j.reason = '云端确认无法首次兑换';
+          j.settled = true;
+        }
+        return richStatus(j);
+      });
+    }
     const prior = this.turns.get(req.operationId);
     const run = (prior ?? Promise.resolve()).catch(() => undefined).then(() => this.commit(req));
     this.turns.set(req.operationId, run);
@@ -68,6 +99,9 @@ export class RichInstaller {
       proof: richInstallProof(this.options.device, auth, stage),
       ...(stage === 'redeem' ? {} : { outcome: stage }),
     };
+    return this.send(op, path, body, max, object);
+  }
+  private async send(op: RichJournal, path: string, body: object, max: number, object: boolean): Promise<Buffer> {
     const response = await (this.options.fetch ?? fetch)(
       `${object ? this.ports.brokerOrigin : this.origin}/v2/operations/${op.id}/${path}`,
       {
@@ -120,7 +154,10 @@ export class RichInstaller {
           (j.authorization && !isDeepStrictEqual({ ...j.authorization, status: a.status }, a))
         )
           throw new Error('授权与本机准备不符');
+        if (j.issuerState === 'unissued' || (j.status === 'rejected' && !j.authorization))
+          throw new Error('本机未开始授权或准备已取消');
         j.authorization ??= a;
+        j.issuerState = 'authorized';
       });
     let op = await readRichJournal(botId, id);
     if (op.settled) return richStatus(op);

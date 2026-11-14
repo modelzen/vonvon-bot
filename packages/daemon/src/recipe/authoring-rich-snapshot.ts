@@ -1,10 +1,10 @@
+/// <reference path="./authoring-cloud-modules.d.ts" />
 import {createHash} from 'node:crypto';
 import {
   canonicalizeRichRecipeContent, recipeRichOriginEdgeSchema,
   type RecipeRichContent, type RecipeRichOriginEdge,
 } from '@vonvon/protocol';
 import {hasLocalPath} from './authoring-payload';
-// @ts-expect-error The service and native writer use the same credential policy.
 import {credentialField} from '../../../../services/recipe-api/src/credential-shapes.mjs';
 
 export const richCollections = ['settings','rules','skills','files','tasks','memories','setup'] as const;

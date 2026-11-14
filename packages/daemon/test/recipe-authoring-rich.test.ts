@@ -54,3 +54,33 @@ describe('explicit rich source review',()=>{
     await expect(proposeRich(input,new AbortController().signal,parser)).rejects.toThrow();
   });
 });
+
+it('derives the exact selected text-package digest and verifies each broker receipt before binding the independent freeze',async()=>{
+  const {bindRichMembers,richMemberCap,richReviewDigest}=await import('../src/recipe/authoring-rich-flow');
+  const doc=fixture(),f={...id(),name:'SKILL.md',use:'skillDescription' as const,text:{kind:'inline' as const,value:'# 整理资料'}};
+  const skill={...id(),name:'整理',entryFileId:f.itemId,fileIds:[f.itemId]};
+  doc.skills=[skill];doc.files=[f];
+  const options=source(doc);
+  options.selected.push(f.itemId,skill.itemId);
+  const request=selectRichSnapshot(options),bytes=Buffer.from(f.text.value);
+  const sha256=createHash('sha256').update(bytes).digest('hex'), member={itemId:f.itemId,kind:'text' as const,bytes:bytes.toString('base64url'),sha256};
+  const local={request,members:[member]};
+  const descriptor={objectId:randomUUID(),kind:'text' as const,bytes:bytes.length,sha256,mediaType:'text/plain;charset=utf-8' as const};
+  expect(()=>bindRichMembers(local,[{...descriptor,sha256:'0'.repeat(64)}])).toThrow();
+  const bound=bindRichMembers(local,[descriptor]);
+  expect(bound.content.files[0]!.text).toEqual({kind:'part',objectId:descriptor.objectId});
+  expect(richMemberCap(local)).toBeGreaterThanOrEqual(2*Buffer.byteLength(wireJson(bound.content))+bytes.length);
+  expect(richReviewDigest(local)).not.toBe(wireDigest(bound));
+});
+
+it('adds a model-suggested inert step to an empty saved draft, preserving reviewed ancestry',async()=>{
+  const {chatRichProposal}=await import('../src/recipe/authoring-rich-flow');
+  const c=fixture(),selected=c.public.name.itemId,draftId=randomUUID();
+  c.setup=[];
+  const origin={kind:'releaseItem' as const,versionId:randomUUID(),itemId:randomUUID(),baselineSha256:'1'.repeat(64)};
+  const parser={proposeRich:vi.fn().mockResolvedValue({kind:'proposal',commands:[{action:'addSetup',target:'',
+    valueJson:JSON.stringify({kind:'tool',title:'确认工具',instructions:'在使用前检查可用工具。',required:true,action:{kind:'manual'}})}]})};
+  const operation={view:{draftId,baseRevision:3},rich:{base:{canonical:Buffer.from(canonicalizeRichRecipeContent(c).canonicalUTF8).toString('base64url'),selected:[selected],origins:{[selected]:origin}}}};
+  const result=await chatRichProposal(operation as Parameters<typeof chatRichProposal>[0],'给我建议使用前的步骤',new AbortController().signal,parser);
+  expect(result.kind==='proposal'&&'payload' in result.request&&result.request.payload.changes[0]).toMatchObject({op:'addSetup',source:{kind:'releaseItems',parents:[{versionId:origin.versionId,itemId:origin.itemId}]}});
+});

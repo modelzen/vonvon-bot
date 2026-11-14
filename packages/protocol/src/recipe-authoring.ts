@@ -1,6 +1,6 @@
 import {richInventoryOptionsSchema,richLocalInventorySchema,richSourceAttestationSchema,richPreparationSchema,richFreezeInputSchema,
   richFrozenResponseSchema,richAuthoringAuthorizationSchema} from './recipe-rich-authoring.js';
-import {recipeRichPartDescriptorSchema} from './recipe-rich.js';
+import {recipeRichPartDescriptorSchema,recipeRichDraftChangeSchema} from './recipe-rich.js';
 import { z } from 'zod';
 import { agentIdSchema, groupIdSchema } from './domain.js';
 import { recipeBinary32Schema, recipeSetupSchema } from './recipe-install.js';
@@ -57,10 +57,11 @@ const recipient = z.object({openId: z.string().max(210), chatId: groupIdSchema, 
 export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('richInventory'),...session,groupId:groupIdSchema,options:richInventoryOptionsSchema}).strict(),
   z.object({type:z.literal('richPrepare'),...session,groupId:groupIdSchema,selection:richPreparationSchema,attestations:richSourceAttestationSchema.array().max(64)}).strict(),
-  z.object({type:z.literal('richEdit'),...session,draftId:uuid,baseRevision:positive,canonical:z.string().max(1401000),selected:uuid.array().max(32)}).strict(),
+  z.object({type:z.literal('richEdit'),...session,draftId:uuid,baseRevision:positive,canonical:z.string().max(1401000),selected:uuid.array().max(32),access:z.enum(['direct','coded']).optional(),changes:recipeRichDraftChangeSchema.array().min(1).max(16).optional(),
+    source:z.object({sourceIntentId:uuid,canonical:z.string().max(1401000)}).strict().optional()}).strict(),
   z.object({type:z.literal('richMembers'),...operation}).strict(),
   z.object({type:z.literal('richBindMembers'),...operation,reviewDigest:digest,descriptors:recipeRichPartDescriptorSchema.array().max(65)}).strict(),
-  z.object({type:z.literal('richInspect'),...operation}).strict(),
+  z.object({type:z.literal('richInspect'),...operation,preview:z.literal(true).optional()}).strict(),
   z.object({type:z.literal('richAdvance'),...operation,destinationDraftId:uuid,authorization:richAuthoringAuthorizationSchema,
     accepted:z.object({frozen:richFrozenResponseSchema,manifestId:uuid,packageId:uuid}).strict().optional()}).strict(),
   z.object({type: z.literal('open'), ...target, accountId: uuid}).strict(),

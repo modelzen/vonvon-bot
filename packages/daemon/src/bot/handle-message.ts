@@ -1601,7 +1601,7 @@ export function createOrchestrator(
   /** sessions.set + 打点 —— 所有放进 LIVE 缓存的会话一律走这里。 */
   function epochOf(project: Project | undefined):string|undefined {
     if (!project?.richRecipe) return;
-    return JSON.stringify([project.bindingIncarnation, project.richRecipe.pointer.generationId, permissionFingerprint(turnPerm(project))]);
+    return JSON.stringify([project.bindingIncarnation, project.richRecipe.pointer.resolvedSha256, project.richRecipe.pointer.generationId, project.cwd, project.directories, project.skills, project.modelAccess, permissionFingerprint(turnPerm(project))]);
   }
   async function openGroupThread(be:AgentBackend, opts:StartThreadOptions, place:AgentPlace, previous?:string):Promise<AgentThread> {
     const create = (options:StartThreadOptions,id?:string) => createWithPermission(be,options,place,actual=> id ? be.resumeThread({...actual,sessionId:id}) : be.startThread(actual));

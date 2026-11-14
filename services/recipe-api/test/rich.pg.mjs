@@ -23,7 +23,7 @@ const bin=process.env.PG_BINDIR??execFileSync('pg_config',['--bindir'],{encoding
 const run=(name,args)=>execFileSync(join(bin,name),args,{encoding:'utf8',stdio:['ignore','pipe','pipe']});
 const sql=s=>run('psql',['-XAtq','-h',sock,'-p','5432','-U','cloud_test','-d','postgres','-v','ON_ERROR_STOP=1','-c',s]).trim();
 const sha=b=>createHash('sha256').update(b).digest();
-const opId=()=>{const h=Date.now().toString(16).padStart(12,'0'),id=randomUUID();return h.slice(0,8)+'-'+h.slice(8)+'-7'+id.slice(15);};
+const opId=(now=Date.now())=>{const h=now.toString(16).padStart(12,'0'),id=randomUUID();return h.slice(0,8)+'-'+h.slice(8)+'-7'+id.slice(15);};
 const b64=b=>Buffer.from(b).toString('base64url');
 const listen=s=>new Promise((resolve,reject)=>s.once('error',reject).listen(0,'127.0.0.1',resolve));
 const close=s=>new Promise(resolve=>s.close(resolve));
@@ -166,17 +166,44 @@ try{
   await req(thief.path+'/freeze',b,foreign,{status:403});
   foreign.origins.find(o=>o.itemId===copied.role.itemId).source={kind:'accountClaim'};await req(thief.path+'/freeze',b,foreign,{status:403});
   await req(thief.path+'/cancel',b,{});
+  const negative=(id,who)=>req('/v2/operations/'+id+'/unredeemable',null,{accountId:who});
+  assert.equal((await negative(opId(),reader)).unredeemable,false);
+  const oldMissing=opId(Date.now()-310000);assert.equal((await negative(oldMissing,reader)).unredeemable,true);
   const opInstall=async(token,release,extra={})=>{
     const oid=opId(),path='/v2/operations/'+oid,device=generateKeyPairSync('x25519'),nonce=randomBytes(32);
     const reqBody={format:'rich-v2',purpose:'installRichRecipe',generation:2,versionId:release.versionId,manifestSha256:release.contentSha256,
       targetPublicKey:b64(device.publicKey.export({format:'der',type:'spki'}).subarray(-32)),nonceCommitment:b64(sha(nonce)),...extra};
     const cap=await req(path+'/authorize',token,reqBody);
     assert.deepEqual(await req(path+'/authorize',token,reqBody),cap);
+    assert.equal((await negative(oid,cap.accountId)).unredeemable,false);
+    if(!extra.purpose && token===b){
+      const expired=opId(),expiredPath='/v2/operations/'+expired;
+      await req(expiredPath+'/authorize',token,reqBody);
+      sql("update recipe_private.install_operations set deadline=0 where id='"+expired+"'");
+      assert.equal((await negative(expired,cap.accountId)).unredeemable,true);
+      assert.equal((await negative(expired,randomUUID())).unredeemable,false);
+      await req('/v2/operations/'+oldMissing+'/authorize',token,reqBody,{status:410});
+      const late=opId(Date.now()-310000), blocker=new pg.Client({user:'cloud_test',database:'postgres',host:sock,port:5432});
+      await blocker.connect();
+      try{
+        await blocker.query('begin');await blocker.query('select pg_advisory_xact_lock(hashtextextended($1,187511))',[cap.accountId]);
+        await blocker.query("insert into recipe_private.install_operations(id,account_id,state,request_digest,version_id,binding,ticket,expected_proof_hash,deadline) select $1,account_id,state,request_digest,version_id,binding,ticket,expected_proof_hash,deadline from recipe_private.install_operations where id=$2",[late,oid]);
+        await blocker.query("insert into recipe_private.rich_install_cap select $1,applied_hash,rejected_hash from recipe_private.rich_install_cap where id=$2",[late,oid]);
+        const pending=negative(late,cap.accountId);
+        let waiting=false;
+        for(let i=0;i<100&&!waiting;i++){
+          waiting=Number(sql("select count(*) from pg_stat_activity where wait_event_type='Lock' and query like '%rich_install_unredeemable%'"))>0;
+          if(!waiting)await new Promise(r=>setTimeout(r,10));
+        }
+        await blocker.query('commit');assert.equal((await pending).unredeemable,false);assert.ok(waiting);
+        sql("delete from recipe_private.install_operations where id='"+late+"'");
+      }finally{await blocker.end();}
+    }
     const proof=stage=>({ticket:cap.ticket,nonce:b64(nonce),proof:b64(richInstallProof(device.privateKey,cap,stage))});
     await req('/v1/operations/'+oid+'/cancel',token,{},{status:404});
     await req(path+'/redeem',null,{...proof('redeem'),proof:b64(installProof(device.privateKey,cap))},{status:403});
     await req(path+'/complete',null,{...proof('applied'),outcome:'applied'},{status:409});
-    const redeemed=await req(path+'/redeem',null,proof('redeem'));assert.deepEqual(redeemed.release,release);
+    const redeemed=await req(path+'/redeem',null,proof('redeem'));assert.deepEqual(redeemed.release,release);assert.equal((await negative(oid,cap.accountId)).unredeemable,false);
     await req(path+'/complete',null,{...proof('redeem'),outcome:'applied'},{status:403});
     const readPart=async(obj,status=200)=>{
       const r=await fetch(orig(broker)+path+'/objects/'+obj,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(proof('redeem'))});

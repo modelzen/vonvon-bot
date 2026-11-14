@@ -1,5 +1,6 @@
 import type { RecipeRichContent, RecipeRichOriginEdge } from '@vonvon/protocol';
 import type { Project } from '../project/registry';
+import { localRecipeItems } from './rich-settings';
 import type { LocalRecipeItem } from './rich-merge';
 import { sha256 } from './manifest';
 import { openRichRecipeGeneration } from './rich-generation';
@@ -45,7 +46,7 @@ export async function nativeRichSourceItems(row: Project, botDataRoot: string): 
   if (!active) return [];
   if (row.bindingIncarnation !== active.bindingIncarnation) throw new Error('配方来源群绑定已改变');
   await openRichRecipeGeneration({ ...active.pointer, expected: active.pointer, botDataRoot });
-  return active.resolved.map((item) => {
+  return localRecipeItems(row, []).map((item) => {
     const source = active.sources[item.itemId];
     if (!source?.parents.length) throw new Error('配方条目缺少来源');
     return structuredClone({ ...item, ...source });

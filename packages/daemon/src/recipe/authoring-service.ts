@@ -1,4 +1,4 @@
-import {readRichSource,preparedRich,richReviewDigest,bindRichMembers,richMemberCap,richCardReview,verifyEditBase,chatRichProposal,type RichLocalDraft,type RichNativeOptions} from './authoring-rich-flow';
+import {readRichSource,preparedRich,richReviewDigest,bindRichMembers,richMemberCap,richCardReview,typedRichEdit,chatRichProposal,type RichLocalDraft,type RichNativeOptions} from './authoring-rich-flow';
 import {postRichStage,verifyFrozenRich} from './authoring-rich-proof';
 import {itemsOf,wireDigest} from './authoring-rich-snapshot';
 import {decodeRichRecipeContent,richFreezeInputSchema} from '@vonvon/protocol';
@@ -316,8 +316,8 @@ export class AuthoringService {
         }
         case 'richEdit': {
           const link=await this.allowed(p);
-          this.interact(p); verifyEditBase(req.canonical,req.selected);
-          return this.start(p,link.recipient,{draftId:req.draftId,baseRevision:req.baseRevision,rich:{base:{canonical:req.canonical,selected:req.selected}}});
+          this.interact(p);
+          return this.start(p,link.recipient,{draftId:req.draftId,baseRevision:req.baseRevision,rich:typedRichEdit(req)});
         }
         case 'richMembers':
         case 'richBindMembers': {
@@ -335,6 +335,10 @@ export class AuthoringService {
         case 'richInspect': {
           const op=await this.operation(p,req.operationId);
           await this.validate(p,op);
+          if(req.preview){
+            if(!op.rich?.request||!['candidate','pendingCloud'].includes(op.view.state))refusal();
+            return {kind:'richCandidate',operationId:req.operationId,reviewDigest:richReviewDigest(op.rich),request:op.rich.request};
+          }
           const request=op.rich?.members?.length?op.rich.boundRequest:op.rich?.request;
           if(!op.rich||!request||op.view.state!=='pendingCloud'||op.view.payloadDigest!==richReviewDigest(op.rich)||op.editApproval!==editApproval(op,richReviewDigest(op.rich)))refusal();
           return {kind:'richCandidate',operationId:req.operationId,reviewDigest:richReviewDigest(op.rich),request};
@@ -352,7 +356,7 @@ export class AuthoringService {
           if(req.accepted&&op.rich.request){
             const frozen=verifyFrozenRich(op.view.operationId,req.destinationDraftId,op.rich.boundRequest??op.rich.request,req.accepted.frozen);
             const saved=decodeRichRecipeContent(Buffer.from(frozen.canonical,'base64url')).content;
-            const original=op.rich.request;
+            const original=op.rich.boundRequest??op.rich.request;
             let selected=op.rich.base?.selected??[];
             let origins=op.rich.base?.origins;
             if('content' in original){

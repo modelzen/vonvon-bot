@@ -6,7 +6,6 @@ import {
   type RecipeInstallReply,
   type RecipeInstallRequest,
   type RecipeRichContent,
-  type RecipeRichInstallAuthorization,
   type RecipeRichText,
 } from '@vonvon/protocol';
 import type { ScheduleStore } from '../bot/schedule/store';
@@ -24,36 +23,20 @@ import { verifiedDocumentText } from './rich-source-files';
 import type { RichRecipeState } from './rich-state';
 
 type Req<K extends string> = Extract<RecipeInstallRequest, { type: K }>;
-export type RichRequest = Req<'richPrepare' | 'richCommit' | 'richStatus' | 'richSetup'>;
+export type RichRequest = Req<
+  'richCancel' | 'richIssuing' | 'richReconcile' | 'richPrepare' | 'richCommit' | 'richStatus' | 'richSetup'
+>;
 type Intent = Extract<RecipeInstallReply, { kind: 'richPrepared' }>['intent'];
-export interface RichJournal {
-  id: string;
-  bot: BotIdentity;
-  group: string;
-  account: string;
-  rowDigest: string;
-  reviewToken: string;
-  nonce: string;
-  intent: Intent;
-  preview: Req<'richPrepare'>['preview'];
-  choices: Record<string, 'local' | 'incoming'>;
-  install: string;
-  generation: string;
-  staging: string;
-  status: 'prepared' | 'redeemed' | 'applied' | 'rejected';
-  settled: boolean;
-  authorization?: RecipeRichInstallAuthorization;
-  reason?: string;
-  createdAt: number;
-}
+import { richLedger as history, unissuedExpired, type RichJournal } from './rich-journal';
+export type { RichJournal } from './rich-journal';
 const location = (id: string) => ({ file: botPaths(id).projectsFile, dataRoot: paths.appDir });
-const history = (stored: Record<string, unknown>) => (stored.richInstallJournal ??= {}) as Record<string, RichJournal>;
 const hash = (v: unknown) => sha256(canonicalLocal(v));
 const frozen = (row: Project) => hash(row);
 export const richStatus = (op: RichJournal): RecipeInstallReply => ({
   kind: 'richStatus',
   operationId: op.id,
   status: op.status,
+  issuerState: op.issuerState,
   settled: op.settled,
   ...(op.reason ? { reason: op.reason } : {}),
 });
@@ -61,6 +44,13 @@ function getOp(stored: Record<string, unknown>, id: string): RichJournal {
   const op = history(stored)[id];
   if (!op) throw new Error('配方操作不存在');
   return op;
+}
+export function expireRich(op: RichJournal, now: number) {
+  if (unissuedExpired(op, now)) {
+    op.status = 'rejected';
+    op.settled = true;
+    op.reason = '本机准备已过期';
+  }
 }
 export const readRichJournal = (bot: string, id: string) =>
   readDurableProjectStore(location(bot), (stored) => structuredClone(getOp(stored, id)));
@@ -165,8 +155,14 @@ export async function prepareRich(
       const choices = request.choices ?? {},
         plan = hash([token, choices, merged.resolved]);
       const ledger = history(stored);
+      const now = Date.now();
+      for (const o of Object.values(ledger)) expireRich(o, now);
       const reused = Object.values(ledger).find(
-        (o) => o.reviewToken === token && isDeepStrictEqual(o.choices, choices) && o.status === 'prepared',
+        (o) =>
+          o.reviewToken === token &&
+          isDeepStrictEqual(o.choices, choices) &&
+          o.status === 'prepared' &&
+          o.issuerState === 'unissued',
       );
       if (reused)
         return {
@@ -174,7 +170,6 @@ export async function prepareRich(
           durableRead: true,
           value: { kind: 'richPrepared', operationId: reused.id, intent: reused.intent, reviewToken: token },
         };
-      const now = Date.now();
       for (const [id, o] of Object.entries(ledger)) if (o.settled && now - o.createdAt > 8 * 86400000) delete ledger[id];
       if (
         Object.keys(ledger).length >= 512 ||
@@ -210,6 +205,7 @@ export async function prepareRich(
         generation: randomUUID(),
         staging: randomUUID(),
         status: 'prepared',
+        issuerState: 'unissued',
         settled: false,
         createdAt: now,
       };
