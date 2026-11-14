@@ -1,4 +1,4 @@
-import {safeDraftModelText} from '../../../services/recipe-api/src/draft-model-text.mjs';
+import {safeDraftModelText, safeEditValue} from '../../../services/recipe-api/src/draft-model-text.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -457,11 +457,16 @@ export class RecipeAuthoringController {
   }
   private async inspect(h: Handle, op: AuthoringOperation) {
     if (!op.payloadDigest || !['candidate', 'pendingCloud'].includes(op.state)) throw recheck();
-    const reply = expectKind(
-      await this.daemon(h, { type: 'inspectCandidate', operationId: op.operationId }),
-      'candidate',
-    );
-    if (reply.operationId !== op.operationId || reply.payloadDigest !== op.payloadDigest) throw recheck();
+    const approval = op.state === 'pendingCloud' && op.purpose === 'editDraft';
+    const result = await this.daemon(h,{type:'inspectCandidate',operationId:op.operationId,...(approval && {requireEditApproval:true})});
+    if (result.kind === 'operation' && approval && result.operation.operationId === op.operationId &&
+        ['candidate','waiting'].includes(result.operation.state)) {
+      this.remember(h,result.operation);
+      throw new AuthoringError('请在原飞书私聊查看最新候选并重新确认。');
+    }
+    const reply = expectKind(result,'candidate');
+    if (reply.operationId !== op.operationId || reply.payloadDigest !== op.payloadDigest ||
+        (approval && reply.reviewedDigest !== op.payloadDigest)) throw recheck();
     const bytes = Buffer.from(reply.payload, 'base64url');
     if (
       bytes.length > 128 * 1024 ||
@@ -477,6 +482,7 @@ export class RecipeAuthoringController {
         op.purpose !== 'editDraft' ||
         content.draftId !== op.draftId ||
         content.baseRevision !== op.baseRevision ||
+        !content.changes.every(change => safeEditValue(change.value)) ||
         new Set(content.changes.map((c) => (c.op === 'setPublicText' ? c.field : c.op))).size !== content.changes.length
       )
         throw invalidAuthoring();

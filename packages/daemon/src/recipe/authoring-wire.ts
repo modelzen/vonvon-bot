@@ -17,7 +17,6 @@ export function makeAuthoringProof(secret: string, binding: AuthoringAuthorizati
   return (authoringProof(privateKey, binding) as Buffer).toString('base64url');
 }
 
-const privatePreview = /(?:\b(?:ou|oc|cli)_[\w-]{4,}|\bBearer\s+\S+|(?:password|api[_ -]?key|access[_ -]?token|密码|令牌|密钥)\s*[:=：]\s*\S+)/iu;
 export function candidateCardDetails(payload?: string): CandidateCardDetails | undefined {
   if (!payload) return;
   try {
@@ -25,14 +24,11 @@ export function candidateCardDetails(payload?: string): CandidateCardDetails | u
     const patch = JSON.parse(bytes.toString('utf8'));
     if (patch.schemaVersion !== 1 || freezePayload(patch).payload !== payload) return;
     const changes = authoringChangeSchema.array().max(16).parse(patch.changes);
-    const texts = changes.flatMap(change => change.op === 'setSetup' ?
-      change.value?.steps.flatMap(step => [step.title,step.instructions,step.check ?? '']) ?? [] : [change.value]);
-    if (texts.some(text => privatePreview.test(text))) return;
     const fields = changes.map(change => ({
       label:change.op === 'setPublicText' ? fieldLabels[change.field] : change.op === 'setDraftRole' ? '角色' : '使用前准备',
       valueJson:JSON.stringify(change.value),
     }));
-    return {revision:patch.baseRevision, payloadDigest:digest(bytes), fields};
+    return {draftId:patch.draftId, revision:patch.baseRevision, payloadDigest:digest(bytes), fields};
   } catch { return; }
 }
 
