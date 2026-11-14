@@ -6,7 +6,8 @@ import {pathToFileURL} from 'node:url';
 import {decodeRichRecipeContent} from '../../../packages/protocol/dist/index.js';
 import {createVerifier,identityFromRequest} from './auth.mjs';
 import {ApiError,badInput} from './errors.mjs';
-import {uuid} from './input.mjs';
+import {uuid,bodyJson,objectKeys} from './input.mjs';
+import {binary32} from './install-proof.mjs';
 import {operationId} from './operation-input.mjs';
 import {createObjectBroker} from './object-broker.mjs';
 import {createObjectStore} from './object-store.mjs';
@@ -15,13 +16,20 @@ import {makePool} from './database.mjs';
 const singleton=(req,k)=>{const x=req.headersDistinct[k];if(x?.length!==1)throw badInput();return x[0];};
 export function createRichBrokerServer({verify,store,storage,admit=false}) {
   const broker=createObjectBroker({store,storage,recordTextChecks:true,validateCanonicalManifest:b=>decodeRichRecipeContent(b),
-    authorizeRead:({identity,scope,target,obj})=>store.call('read_descriptor',identity?.issuer??null,identity?.subject??null,scope,target,obj)});
+    authorizeRead:({identity,scope,target,obj,proof})=>proof?store.call('install_descriptor',target,...proof,obj):store.call('read_descriptor',identity?.issuer??null,identity?.subject??null,scope,target,obj)});
   return createServer({requestTimeout:20000,headersTimeout:10000,maxHeaderSize:16384},async(req,res)=>{
     res.setHeader('Cache-Control','private, no-store');res.setHeader('X-Content-Type-Options','nosniff');
     try{
       const put=/^(?:\/api)?\/v2\/objects\/([^/]+)\/members\/(0|[1-9]\d?)$/.exec(req.url);
       const get=/^(?:\/api)?\/v2\/(drafts|versions)\/([^/]+)\/objects\/([^/]+)$/.exec(req.url);
-      if(put&&req.method==='PUT'){
+      const installed=/^(?:\/api)?\/v2\/operations\/([^/]+)\/objects\/([^/]+)$/.exec(req.url);
+      if(installed&&req.method==='POST'){
+        if(req.headersDistinct.authorization)throw badInput();
+        const body=await bodyJson(req,512);objectKeys(body,['ticket','nonce','proof']);
+        const proof=['ticket','nonce','proof'].map(k=>binary32(body[k]));
+        const bytes=await broker.readAuthorized({target:operationId(installed[1]),obj:uuid(installed[2]),proof});
+        res.setHeader('Content-Type','application/octet-stream');res.end(bytes);
+      }else if(put&&req.method==='PUT'){
         if(!admit)throw new ApiError(503,'rich_writes_disabled');
         const identity=await identityFromRequest(req,false,verify);
         const actor=await store.call('business_actor',identity.issuer,identity.subject);
@@ -36,7 +44,7 @@ export function createRichBrokerServer({verify,store,storage,admit=false}) {
         res.setHeader('Content-Type','application/octet-stream');res.end(bytes);
       }else throw new ApiError(404,'not_found');
     }catch(e){
-      const status={auth_required:401,account_disabled:403,not_found:404,conflict:409,operation_expired:410,
+      const status={forbidden:403,invalid_operation_proof:403,operation_cancelled:409,auth_required:401,account_disabled:403,not_found:404,conflict:409,operation_expired:410,
         object_unavailable:409,object_capacity:429,object_stream_limit:429,invalid_input:422}[e.message];
       const err=e instanceof ApiError?e:new ApiError(status??503,status?e.message:'object_broker_unavailable');
       res.statusCode=err.status;res.setHeader('Content-Type','application/json');if(!req.complete)res.setHeader('Connection','close');

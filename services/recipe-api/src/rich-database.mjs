@@ -2,11 +2,14 @@ import {createHash} from 'node:crypto';
 import {ApiError,badInput} from './errors.mjs';
 import {payloadBytes} from './authoring-input.mjs';
 import {uuid} from './input.mjs';
+import {richInstallMaterial} from './rich-install-proof.mjs';
 import {richMaterial} from './rich-proof.mjs';
 import {applyChanges,document,freezeSnapshot,inventory,richDigest} from './rich-document.mjs';
 import {parseEditFreeze} from './rich-http.mjs';
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const calls={
+  richInstallPreview:'rich_install_preview($1)',richInstallRecover:"rich_install_control($1,'recover')",richInstallCancel:"rich_install_control($1,'cancel')",
+  richInstallRedeem:'rich_possess_install($1,$2,$3,$4,$5)',richInstallComplete:'rich_possess_install($1,$2,$3,$4,$5)',
   richSourceItems:'rich_source_items($1)',richRegister:'rich_register($1,$2)',richDraft:'rich_draft($1)',richDraftList:'rich_draft_list()',richDelete:'rich_delete($1,$2,$3)',
   richDetail:'rich_detail($1,$2)',richWithdraw:'rich_withdraw($1)',richProfile:'rich_profile($1)',richCatalog:'rich_catalog($1,$2)',
   richGet:"rich_op_context($1,'get',null)",richRecover:"rich_op_context($1,'recover',null)",richCancel:"rich_op_context($1,'cancel',null)",
@@ -16,6 +19,11 @@ const calls={
 export async function richExecute(client,op,args) {
   const call=async(expr,params)=>(await client.query('select recipe_api.'+expr+' as result',params)).rows[0].result;
   if(Object.hasOwn(calls,op))return call(calls[op],args);
+  if(op==='richInstallAuthorize'){
+    const ctx=await call('operation_context()',[]),[id,req]=args;
+    const m=richInstallMaterial({...req,...ctx,operationId:id});
+    return call('rich_install_authorize($1,$2,$3,$4,$5,$6,$7,$8)',[id,req,m.server,m.ticket,...m.hashes,ctx.deadline]);
+  }
   if(op==='richAuthorize') {
     const context=await call("rich_op_context($1,'context',$2)",args),m=richMaterial(context);
     return call('rich_authorize($1,$2,$3,$4,$5,$6)',[...args,m.key,m.ticket,m.hash,context.deadline]);
