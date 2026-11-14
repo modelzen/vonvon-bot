@@ -786,3 +786,40 @@ it('renews idle for an actual revised candidate and ignores duplicate messages, 
   expect(kind(await rpc('workflow'),'workflow')).toMatchObject({activity:renewed.activity,ageMs:30_000,pausedContexts:[]});
   await act(ref());expect((await status(op.operationId)).state).toBe('pendingCloud');
 });
+
+it('checks final assembled edit values before releasing a candidate to Main or CardKit',async()=>{
+  await link();
+  const draftId=randomUUID(), op=kind(await rpc('edit',{draftId,baseRevision:1}),'operation').operation;
+  await advance(op,'dispatch');
+  readDraftField.mockResolvedValue({field:'overview',draftId,revision:1,value:'目录：BASE/demo/project'});
+  propose.mockResolvedValue({kind:'proposal',changes:[{field:'overview',action:'replace',before:'BASE',value:'/Users'}]});
+  await orch.onMessage(msg('把概览中的 BASE 替换成 /Users'));
+  expect(propose).toHaveBeenCalledTimes(1);
+  expect((await status(op.operationId)).state).toBe('waiting');
+  await expect(rpc('inspectCandidate',{operationId:op.operationId})).rejects.toThrow();
+  expect(bodies.filter(b=>b.path.includes('/cardkit/')).every(b=>!b.body.includes('/Users/demo/project'))).toBe(true);
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+});
+
+it('repairs a persisted pending edit without exact review evidence before returning its bytes',async()=>{
+  await link();
+  const draftId=randomUUID(), op=kind(await rpc('edit',{draftId,baseRevision:7}),'operation').operation;
+  await advance(op,'dispatch');
+  await orch.onMessage(msg('/recipe name 合成的示例'));
+  const previous=ref();
+  await act(previous);
+  const file=join(root,'recipe-authoring','journal.json'), journal=JSON.parse(await readFile(file,'utf8'));
+  expect(journal.operations[op.operationId].view.state).toBe('pendingCloud');
+  delete journal.operations[op.operationId].editApproval;
+  await writeFile(file,JSON.stringify(journal));
+  await orch.shutdown();restart();await open();orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});
+  const repaired = await rpc('inspectCandidate',{operationId:op.operationId}).catch(()=>undefined);
+  expect(repaired?.kind).not.toBe('candidate');
+  expect((await status(op.operationId)).state).toBe('candidate');
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+  expect(messages.size).toBe(1);
+  const fresh=ref();expect(fresh.messageId).toBe(previous.messageId);expect(fresh.ref).not.toBe(previous.ref);
+  expect([...cards.values()].at(-1)).toContain('合成的示例');
+  await act(previous);expect((await status(op.operationId)).state).toBe('candidate');
+  await act(fresh);expect((await advance(await status(op.operationId),'accept')).receipt).toMatchObject({draftId,revision:8});
+});
