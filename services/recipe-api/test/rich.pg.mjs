@@ -216,7 +216,7 @@ try{
   const install=await opInstall(b,(await req('/v2/versions/'+v.versionId+'/install-preview',b)).release);
   assert.equal((await install.complete('applied')).disposition,'recorded');await install.complete('rejected',409);
   sql("select recipe_api.rich_moderate('feature','"+v.versionId+"','"+reader+"')");
-  assert.equal((await req('/v2/community/recipes')).hero.versionId,v.versionId);
+  const featured=await req('/v2/community/recipes');assert.equal(featured.hero.versionId,v.versionId);assert.equal(featured.heroKind,'featured');
   const newer=structuredClone(updated);newer.public.version.value='2.0';newer.memories=[];newer.parts=[];delete newer.finalLogo;
   const oldIndex=new Map(inventory(updated).map(i=>[i.itemId,i])),nextInput=body(newer,'direct');
   nextInput.sourceVersionId=v.versionId;
@@ -256,6 +256,7 @@ try{
   sql("select recipe_api.rich_moderate('ban','"+v.versionId+"',null)");await read(b,'versions',v.versionId,p.objectId,404);
   assert.equal((await req(detail,b)).state,'blocked');
   sql("with seq as (select gen_random_uuid() rid,x from generate_series(1,12)x),rp as (insert into recipe_private.recipes(id,owner_id,revision) select rid,'"+account+"',1 from seq returning id) insert into recipe_private.versions(recipe_id,owner_id,revision,public_info,config,bytes) select id,'"+account+"',1,jsonb_build_object('name','分页','summary','page','version','1','overview','','access','direct'),'{\"role\":\"\"}',80 from rp");
+  assert.equal((await req('/v2/community/recipes')).heroKind,'latest');
   const first=await req('/v2/community/recipes?q='+encodeURIComponent('分页'));assert.equal(first.hero,null);assert.equal(first.items.length,8);
   const next=await req('/v2/community/recipes?q='+encodeURIComponent('分页')+'&cursor='+first.nextCursor);assert.equal(next.items.length,4);
   assert.equal(new Set([...first.items,...next.items].map(i=>i.recipeId)).size,12);

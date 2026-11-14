@@ -11,7 +11,7 @@ const calls={
   richInstallPreview:'rich_install_preview($1)',richInstallRecover:"rich_install_control($1,'recover')",richInstallCancel:"rich_install_control($1,'cancel')",
   richInstallRedeem:'rich_possess_install($1,$2,$3,$4,$5)',richInstallComplete:'rich_possess_install($1,$2,$3,$4,$5)',
   richSourceItems:'rich_source_items($1)',richRegister:'rich_register($1,$2)',richDraft:'rich_draft($1)',richDraftList:'rich_draft_list()',richDelete:'rich_delete($1,$2,$3)',
-  richDetail:'rich_detail($1,$2)',richWithdraw:'rich_withdraw($1)',richProfile:'rich_profile($1)',richCatalog:'rich_catalog_page($1,$2,$3)',
+  richDetail:'rich_detail($1,$2)',richWithdraw:'rich_withdraw($1)',richProfile:'rich_profile($1)',richCatalog:'reader_catalog_page($1,$2,$3)',
   richGet:"rich_op_context($1,'get',null)",richRecover:"rich_op_context($1,'recover',null)",richCancel:"rich_op_context($1,'cancel',null)",
   richDispatch:'rich_dispatch($1,$2,$3,$4)',richAccept:'rich_accept($1,$2,$3,$4,$5,$6,$7,$8)',
   richReserve:'reserve_object_package($1,$2,$3)',richCancelPackage:'cancel_object_package($1)',richCapacity:'object_capacity()',

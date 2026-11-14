@@ -94,4 +94,12 @@ revoke all on function recipe_api.reader_library(uuid),recipe_api.reader_publica
  recipe_api.library(uuid),recipe_api.publications(),recipe_api.list_drafts(),recipe_api.version_detail(uuid,uuid),recipe_api.get_draft(uuid),recipe_api.install_preview(uuid) from public;
 grant execute on function recipe_api.reader_library(uuid),recipe_api.reader_publications(),recipe_api.reader_drafts(),recipe_api.reader_acquire(uuid,text,text),
  recipe_api.library(uuid),recipe_api.publications(),recipe_api.list_drafts(),recipe_api.version_detail(uuid,uuid),recipe_api.get_draft(uuid),recipe_api.install_preview(uuid) to recipe_api;
+create function recipe_api.reader_catalog_page(q text,token text,access_ text) returns jsonb
+language sql stable security definer set search_path=pg_catalog,pg_temp as $$
+  select page||jsonb_build_object('heroKind',case when page->'hero'='null'::jsonb then null
+    when exists(select from recipe_private.rich_feature f where f.version_id=(page->'hero'->>'versionId')::uuid) then 'featured' else 'latest' end)
+  from (select recipe_api.rich_catalog_page(q,token,access_) page) p
+$$;
+revoke all on function recipe_api.reader_catalog_page(text,text,text) from public;
+grant execute on function recipe_api.reader_catalog_page(text,text,text) to recipe_api;
 commit;
