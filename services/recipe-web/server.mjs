@@ -79,7 +79,7 @@ export function createRecipeWeb(env = process.env) {
     if (req.method === 'POST' && url.pathname === '/auth/continuation') {
       if (!req.headers['content-type']?.startsWith('application/x-www-form-urlencoded')) throw new WebError(415, 'invalid_body');
       const form = new URLSearchParams(await body(req, 4096));
-      return json(res, 200, login.consumeContinuation(req, form.get('returnTo')));
+      return json(res, 200, login.consumeContinuation(req, form.get('returnTo'), form.get('continuationNonce')));
     }
     if (req.method === 'POST' && url.pathname === '/auth/start') {
       if (!req.headers['content-type']?.startsWith('application/x-www-form-urlencoded')) throw new WebError(415, 'invalid_body');

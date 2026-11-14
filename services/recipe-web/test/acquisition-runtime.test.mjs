@@ -9,9 +9,10 @@ const recipe={recipeId:'11111111-1111-4111-8111-111111111111',versionId:'2222222
 const route='/recipes/'+recipe.recipeId+'/versions/'+recipe.versionId;
 const source=(await readFile(new URL('../public/app.mjs',import.meta.url),'utf8')).replace("import {setupList} from './setup.mjs';", "const setupList=()=>document.createElement('div');");
 const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
-async function runtime(t,respond,auth = {signedIn:true,displaySession:'session-a',providers:[]}) {
-  const dom=new JSDOM('<main id="main"></main><dialog id="modal"></dialog><button id="account"></button><div id="feedback"></div>',{url:'https://recipes.example'+route});
+async function runtime(t,respond,auth = {signedIn:true,displaySession:'session-a',providers:[]}, search = '') {
+  const dom=new JSDOM('<main id="main"></main><dialog id="modal"></dialog><button id="account"></button><div id="feedback"></div>',{url:'https://recipes.example'+route+search});
   const {window}=dom;
+  if (auth.continuation) window.sessionStorage.setItem('vv-recipe-login-continuation', JSON.stringify({path:auth.continuation, nonce:'a'.repeat(64)}));
   window.HTMLDialogElement.prototype.showModal=function(){this.open=true;};
   window.HTMLDialogElement.prototype.close=function(){this.open=false;};
   const calls=[];
@@ -278,6 +279,10 @@ test('ordinary login does not open acquisition, anonymous acquisition alone reco
   await h.open();
   assert.equal(h.document.querySelector('input[name=continuation]').value, 'acquire');
   assert.equal(h.document.querySelector('input[name=returnTo]').value, route);
+  const saved = JSON.parse(h.dom.window.sessionStorage.getItem('vv-recipe-login-continuation'));
+  assert.equal(saved.path, route);
+  assert.equal(saved.nonce, h.document.querySelector('input[name=continuationNonce]').value);
+  assert.match(saved.nonce, /^[a-f0-9]{64}$/);
   assert.equal(h.calls.filter(c => c.options.method === 'POST' && c.path !== '/auth/continuation').length, 0);
 });
 test('already acquired continuation shows entitlement and never opens a dialog', async t => {
@@ -300,4 +305,28 @@ test('resumed public acquisition requires explicit confirmation and posts only o
   assert.equal(h.calls.filter(c => c.options.method === 'POST' && c.path !== '/auth/continuation').length, 1);
   assert.equal(h.document.querySelector('dialog').open, false);
   assert.match(h.document.querySelector('#main').textContent, /已获取/);
+});
+
+test('unavailable tab storage preserves login and falls back to manual acquisition', async t => {
+  const h = await runtime(t, async () => Response.json(recipe), {signedIn:false, providers:['github']});
+  Object.defineProperty(h.dom.window, 'sessionStorage', {get(){throw new Error('disabled');}});
+  await h.open();
+  assert.ok(h.document.querySelector('input[name=provider]'));
+  assert.equal(h.document.querySelector('input[name=continuationNonce]'), null);
+  assert.equal(h.document.querySelector('input[name=continuation]'), null);
+});
+test('canceling acquisition login clears only the pending tab nonce', async t => {
+  const h = await runtime(t, async () => Response.json(recipe), {signedIn:false, providers:['github']});
+  await h.open();
+  assert.ok(h.dom.window.sessionStorage.getItem('vv-recipe-login-continuation'));
+  const close = [...h.document.querySelectorAll('dialog button')].find(b => b.textContent === '关闭');
+  close.click();
+  assert.equal(h.dom.window.sessionStorage.getItem('vv-recipe-login-continuation'), null);
+});
+
+test('failed OAuth clears the tab nonce even when the returning detail cannot load', async t => {
+  const h = await runtime(t, async () => Response.json({error:{code:'unavailable'}},{status:503}),
+    {signedIn:false, providers:['github'], continuation:route}, '?auth=failed');
+  assert.equal(h.dom.window.sessionStorage.getItem('vv-recipe-login-continuation'), null);
+  assert.equal(h.calls.some(c => c.path === '/auth/continuation'), false);
 });

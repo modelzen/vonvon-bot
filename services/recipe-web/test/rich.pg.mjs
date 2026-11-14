@@ -21,6 +21,7 @@ async function browser(t, fixture, path, identity = {}, options = {}) {
   const dom = new JSDOM(html, {url: fixture.publicOrigin + path, runScripts: 'outside-only'});
   t.after(() => dom.window.close());
   const {window} = dom, calls = [];
+  if (options.continuationNonce) window.sessionStorage.setItem('vv-recipe-login-continuation', JSON.stringify({path, nonce:options.continuationNonce}));
   const state = {identity, loseClaim: false, ...options};
   window.matchMedia = () => ({matches: false, addEventListener() {}, removeEventListener() {}});
   window.TextEncoder = TextEncoder; window.TextDecoder = TextDecoder;
@@ -32,6 +33,7 @@ async function browser(t, fixture, path, identity = {}, options = {}) {
     if (state.identity.cookie) headers.cookie = state.identity.cookie;
     if (options.method && options.method !== 'GET') headers.origin = fixture.publicOrigin;
     calls.push({path: url.pathname, options});
+    if (state.detailGate && /^\/api\/v2\/recipes\//.test(url.pathname)) {state.detailStarted?.(); await state.detailGate;}
     if (state.failDetail && /^\/api\/v2\/recipes\//.test(url.pathname)) return Response.json({error:{code:'unavailable'}}, {status:503});
     const response = await fetch(fixture.host + url.pathname + url.search, {...options, headers});
     if (state.loseClaim && options.method === 'POST') {
@@ -167,7 +169,7 @@ test('OAuth continuation resumes shipped rich-v2 direct and coded confirmation w
   const fixture = await richFixture(t);
   for (const access of ['direct', 'coded']) {
     const version = await fixture.publish(access), path = detailPath(version);
-    const start = await fetch(fixture.host + '/auth/start', {method:'POST', redirect:'manual', headers:{origin:fixture.publicOrigin}, body:new URLSearchParams({provider:'github', returnTo:path, continuation:'acquire'})});
+    const start = await fetch(fixture.host + '/auth/start', {method:'POST', redirect:'manual', headers:{origin:fixture.publicOrigin}, body:new URLSearchParams({provider:'github', returnTo:path, continuation:'acquire', continuationNonce:'a'.repeat(64)})});
     const flowCookie = start.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
     const finish = await fetch(fixture.host + '/auth/callback?code=reader', {redirect:'manual', headers:{cookie:flowCookie}});
     assert.equal(finish.headers.get('location'), path);
@@ -176,18 +178,28 @@ test('OAuth continuation resumes shipped rich-v2 direct and coded confirmation w
     const peek = await fetch(fixture.host + '/auth/session', {headers:identity}).then(r => r.json());
     assert.equal(peek.continuation, path);
     identity['X-Vonvon-Session'] = peek.displaySession;
-    const consume = (returnTo, headers = identity) => fetch(fixture.host + '/auth/continuation', {method:'POST', headers:{origin:fixture.publicOrigin, ...headers}, body:new URLSearchParams({returnTo})});
+    const consume = (returnTo, headers = identity) => fetch(fixture.host + '/auth/continuation', {method:'POST', headers:{origin:fixture.publicOrigin, ...headers}, body:new URLSearchParams({returnTo, continuationNonce:'a'.repeat(64)})});
     assert.equal((await consume(path, {...identity, origin:'https://other.example'})).status, 403);
     assert.equal((await consume(path, {...identity, 'X-Vonvon-Session':'stale'})).status, 409);
     assert.deepEqual(await consume('/library').then(r => r.json()), {consumed:false});
-    const failed = await browser(t, fixture, path, identity, {failDetail:true});
+    const failed = await browser(t, fixture, path, identity, {failDetail:true, continuationNonce:'a'.repeat(64)});
     assert.match(failed.text(), /暂时无法打开/);
     assert.equal(failed.calls.some(c => c.path === '/auth/continuation'), false);
     const pending = await fetch(fixture.host + '/auth/session', {headers:identity}).then(r => r.json());
     assert.equal(pending.continuation, path);
-    const tabs = await Promise.all([browser(t, fixture, path, identity), browser(t, fixture, path, identity)]);
-    assert.equal(tabs.filter(page => page.window.document.querySelector('dialog').open).length, 1);
-    const page = tabs.find(page => page.window.document.querySelector('dialog').open);
+    let release, started;
+    const detailGate = new Promise(resolve => {release = resolve;});
+    const detailStarted = new Promise(resolve => {started = resolve;});
+    const initiatingTab = browser(t, fixture, path, identity, {continuationNonce:'a'.repeat(64), detailGate, detailStarted:started});
+    await detailStarted;
+    const otherTab = await browser(t, fixture, path, identity);
+    assert.equal(otherTab.window.document.querySelector('dialog').open, false);
+    assert.equal(otherTab.calls.some(c => c.path === '/auth/continuation'), false);
+    assert.equal((await fetch(fixture.host + '/auth/session', {headers:identity}).then(r => r.json())).continuation, path);
+    release();
+    const page = await initiatingTab;
+    assert.equal(page.window.document.querySelector('dialog').open, true);
+    assert.equal(page.window.sessionStorage.getItem('vv-recipe-login-continuation'), null);
     assert.match(page.window.document.querySelector('dialog').textContent, access === 'coded' ? /输入分享码/ : /确认获取配方/);
     assert.equal(page.calls.filter(c => /\/(redeem|acquire)$/.test(c.path)).length, 0);
     const second = await browser(t, fixture, path, identity);

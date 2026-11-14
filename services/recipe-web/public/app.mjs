@@ -46,16 +46,34 @@ const closeDialog = () => {++modalGeneration; releaseModal = undefined; dialog.c
 const dismissDialog = () => {releaseModal?.(); closeDialog();};
 const closeButton = () => button('关闭', dismissDialog, 'secondary');
 const labels = { github: 'GitHub', google: 'Google', apple: 'Apple' };
+const continuationStorageKey = 'vv-recipe-login-continuation';
+function storedContinuation() {
+  try { return JSON.parse(window.sessionStorage.getItem(continuationStorageKey)); } catch { return null; }
+}
+function clearContinuation(nonce) {
+  try {
+    if (!nonce || storedContinuation()?.nonce === nonce) window.sessionStorage.removeItem(continuationStorageKey);
+  } catch { /* Login still works when tab storage is unavailable. */ }
+}
 function openLogin(next = location.pathname, continuation) {
+  clearContinuation();
+  let continuationNonce;
+  if (continuation === 'acquire') {
+    try {
+      continuationNonce = Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('');
+      window.sessionStorage.setItem(continuationStorageKey, JSON.stringify({path: next, nonce: continuationNonce}));
+    } catch { continuationNonce = undefined; }
+  }
   const forms = (session?.providers || []).filter(p => Object.hasOwn(labels, p)).map(p => {
     const form = el('form', null, 'provider'); form.method = 'post'; form.action = '/auth/start';
-    for (const [name, value] of Object.entries({ provider: p, returnTo: next, ...(continuation && {continuation}) })) {
+    for (const [name, value] of Object.entries({ provider: p, returnTo: next, ...(continuationNonce && {continuation, continuationNonce}) })) {
       const field = el('input'); field.type = 'hidden'; field.name = name; field.value = value; form.append(field);
     }
     const submit = el('button', '使用 ' + labels[p] + ' 登录', 'secondary'); form.append(submit); return form;
   });
   if (!forms.length) forms.push(el('p', '暂时无法登录，请稍后再试。', 'muted'));
   modal('登录', ...forms, group('actions', closeButton()));
+  if (continuationNonce) releaseModal = () => clearContinuation(continuationNonce);
 }
 function account() {
   if (!session?.signedIn) return openLogin();
@@ -208,11 +226,13 @@ async function detail(confirmed) {
   if (!currentDetail()) return;
   if (path.toLowerCase() !== detailUrl(data).toLowerCase()) throw new Error('unconfirmed');
   async function resumeAcquisition() {
-    if (!currentDetail() || session?.continuation !== path) return;
+    const pending = storedContinuation();
+    if (!currentDetail() || session?.continuation !== path || pending?.path !== path || !/^[a-f0-9]{64}$/.test(pending.nonce)) return;
     const result = await request('/auth/continuation', {method: 'POST', headers: {
       'Content-Type': 'application/x-www-form-urlencoded', 'X-Vonvon-Session': detailSession,
-    }, body: new URLSearchParams({returnTo: path}).toString()});
+    }, body: new URLSearchParams({returnTo: path, continuationNonce: pending.nonce}).toString()});
     if (!currentDetail()) return;
+    clearContinuation(pending.nonce);
     delete session.continuation;
     if (result.consumed && !data.acquired && !data.owned) {
       const trigger = [...main.querySelectorAll('button')].find(b => b.textContent === '获取配方');
@@ -346,6 +366,7 @@ async function claim(recipe, trigger, sessionId, currentDetail, resumed = false)
 accountButton.addEventListener('click', account);
 dialog.addEventListener('cancel', ev => {ev.preventDefault(); dismissDialog();});
 try {
+  if (params.has('auth')) clearContinuation();
   session = await request('/auth/session');
   accountButton.hidden = false; accountButton.textContent = session.signedIn ? '账号' : '登录';
   if (location.pathname === '/') await home();
