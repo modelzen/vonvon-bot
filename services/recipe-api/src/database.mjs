@@ -40,6 +40,7 @@ const calls = Object.freeze({
 });
 
 const businessErrors = new Map(Object.entries({
+  source_unavailable:403, object_unavailable:409, object_capacity:429, object_stream_limit:429,
   auth_required: 401, account_disabled: 403, not_found: 404, forbidden: 403, invalid_input: 422, incomplete_setup: 422,
   conflict: 409, quota_exceeded: 422, rate_limited: 429, invalid_code: 422,
   operation_pending_limit: 429, operation_expired: 410, operation_clock_skew: 422,
@@ -47,7 +48,7 @@ const businessErrors = new Map(Object.entries({
   proposal_active: 409, acquire_rate_limited: 429, request_upgrade_required: 409, integrity_error: 503,
 }));
 
-function makePool(connectionString) {
+export function makePool(connectionString) {
   const url = new URL(connectionString);
   if (!['postgresql:', 'postgres:'].includes(url.protocol) || !url.hostname) {
     throw new Error('Invalid RECIPE_DATABASE_URL');
@@ -122,6 +123,11 @@ export async function openDatabase(url, codeKey, issuer) {
         const { rows: [mapped] } = await client.query('SELECT recipe_api.resolve_identity($1::text,$2::uuid) AS account_id',
           [identity.issuer, identity.subject]);
         await client.query("SELECT set_config('app.recipe_account',$1,true)", [mapped.account_id]);
+      }
+      if (operation.startsWith('rich')) {
+        const {richExecute}=await import('./rich-database.mjs');
+        const result=await richExecute(client,operation,args);
+        await client.query('COMMIT');return result;
       }
       if (operation === 'authorizeOperation') {
         const { rows:[context] } = await client.query('SELECT recipe_api.operation_context() AS result');

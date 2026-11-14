@@ -44,3 +44,4 @@ export * from './desktop-recipe-authoring.js';
 export * from './recipe-rich.js';
 export * from './recipe-rich-codec.js';
 export * from './schedule-grammar.js';
+export * from './recipe-rich-install.js';
