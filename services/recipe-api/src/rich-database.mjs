@@ -51,7 +51,6 @@ export async function richExecute(client,op,args) {
     if(edit.candidates.length)throw badInput();
     const next=applyChanges(edit.base.content,edit.payload.changes,s=>cache.get(richDigest(s)),ctx.seed,edit.parts);
     doc=next.doc;const index=new Map(inventory(doc.content).map(i=>[i.itemId,i]));
-    // A copied then removed donor may still have descendants in this same batch.
     records=next.copies.map(c=>({...c,baselineSha256:index.get(c.itemId)?.baselineSha256??richDigest({removed:c.kind})}));
     payload=edit.payload;
   }

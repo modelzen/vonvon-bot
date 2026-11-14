@@ -1,7 +1,6 @@
 grant recipe_owner to current_user;
 set local role recipe_owner;
 
--- Neither canonical manifests nor asset bytes belong in these indexes.
 create table recipe_private.rich_intents (
   id uuid primary key references recipe_private.authoring_operations on delete cascade,
   account_id uuid not null references recipe_private.accounts, draft_id uuid not null,
@@ -51,8 +50,6 @@ begin
   if exists(select from recipe_private.rich_intents where id=p_id)<>p_rich then raise exception 'not_found'; end if;
 end $$;
 
--- Shared registration limits, expiry, account-specific recovery and active-edit exclusion.
--- The v1 signature and transcript remain separate from the rich operation namespace.
 alter function recipe_api.register_authoring(uuid,jsonb) rename to register_authoring_core;
 alter function recipe_api.register_authoring_core(uuid,jsonb) set schema recipe_private;
 revoke execute on function recipe_private.register_authoring_core(uuid,jsonb) from recipe_api;
@@ -80,7 +77,6 @@ begin
   return r||jsonb_build_object('format','rich-v2','destinationDraftId',dest);
 end $$;
 
--- Caller-visible v1 operations cannot authorize or act on a rich operation ID.
 
 alter function recipe_api.get_authoring(uuid) rename to get_authoring_core;
 alter function recipe_api.get_authoring_core(uuid) set schema recipe_private;
@@ -142,8 +138,6 @@ begin
   return recipe_private.possess_authoring_core($1,$2,$3,$4,$5,$6);
 end $$;
 
--- The existing body asks for context internally. Bind this private copy to
--- its private context, so public v1 guards cannot be bypassed by a session flag.
 do $bind$
 declare src text:=pg_get_functiondef('recipe_private.authorize_authoring_core(uuid,jsonb,bytea,bytea,bytea,bigint)'::regprocedure);
 begin
@@ -251,8 +245,6 @@ begin
   for row in select value from jsonb_array_elements(p_records) loop
     src:=row->'source';
     if src->>'kind'='accountClaim' then
-      -- Stable origin handles, not a text match, are authoritative. For subjective
-      -- native bodies also reject identical known, account-acquired restricted material.
       if row->>'kind' in ('role','rule','skill','file','task','memory','setup','finalLogo') and exists(
         select from recipe_private.rich_members m join recipe_private.versions v on v.id=m.version_id
         join recipe_private.grants g on g.version_id=v.id and g.actor=a
@@ -296,8 +288,6 @@ begin
   return n;
 end $$;
 
--- Fresh proof-bound commit. A replay returns the original receipt even if the
--- draft was subsequently edited or published; a changed byte or package cannot.
 create function recipe_api.rich_accept(op_id uuid,ticket bytea,nonce bytea,proof bytea,payload bytea,canonical bytea,manifest uuid,pkg uuid) returns jsonb
 language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
 declare i recipe_private.rich_intents; op recipe_private.authoring_operations; cap recipe_private.authoring_capabilities;
@@ -395,7 +385,6 @@ begin
   return recipe_private.draft_json(d);
 end $$;
 
--- Evidence exists only after the broker has read the actual final UTF-8 bytes.
 create table recipe_private.rich_text_checks(object_id uuid primary key references recipe_private.object_attempts on delete cascade, nonblank boolean not null);
 alter table recipe_private.rich_text_checks enable row level security;
 create function recipe_objects.record_text_check(a uuid,pkg uuid,ordinal_ int,nonblank_ boolean) returns void
@@ -530,8 +519,6 @@ begin
   return result;
 end $$;
 
--- The broker maps the verified JWT issuer/subject itself; anonymous reads are
--- allowed only by the public direct-release rule. No client-chosen business ID.
 create function recipe_objects.business_actor(iss text,sub uuid) returns uuid language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
 declare a uuid;
 begin
@@ -579,8 +566,6 @@ begin
   perform recipe_private.close_rich_version(v_id,'withdrawn');
 end $$;
 
--- Guard all old/new claim and issue routes, including v1 receipt recovery,
--- against current lifecycle before an issuing/acquiring transaction proceeds.
 alter function recipe_api.acquire(uuid,text,text) rename to acquire_core;
 alter function recipe_api.acquire_core(uuid,text,text) set schema recipe_private;
 revoke execute on function recipe_private.acquire_core(uuid,text,text) from recipe_api;

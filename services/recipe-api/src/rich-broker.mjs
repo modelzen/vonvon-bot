@@ -1,5 +1,3 @@
-// Run on separate backend compute; the general HTTP API never opens this pool
-// or receives the Storage token. Route both processes behind one HTTPS origin.
 import {createServer} from 'node:http';
 import {Readable} from 'node:stream';
 import {pathToFileURL} from 'node:url';
