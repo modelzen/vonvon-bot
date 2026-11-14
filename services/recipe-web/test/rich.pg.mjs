@@ -89,7 +89,10 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   assert.equal(anonymous.window.document.querySelector('main h2').textContent, '配方介绍');
   assert.equal(anonymous.window.document.querySelector('main strong').textContent, '公开说明');
   assert.match(anonymous.window.document.querySelector('main img').src, /^data:image\/webp;base64,/);
-  const expected = {'模型与权限': '推荐模型', '能力': '样例技能', '沟通方式': '智能会话', '记忆': '完整正文', '任务': '每日整理', '使用前准备': '核对本地环境'};
+  assert.deepEqual([...anonymous.window.document.querySelectorAll('[aria-label="配方详细信息"] button')].map(button=>button.textContent), ['概览','模型与权限','能力','沟通方式','记忆','任务']);
+  assert.equal(anonymous.find('使用前准备'), undefined);
+  assert.match(anonymous.window.document.querySelector('.community-additional-notes').textContent, /核对本地环境/);
+  const expected = {'模型与权限': '推荐模型', '能力': '样例技能', '沟通方式': '智能会话', '记忆': '完整正文', '任务': '每日整理'};
   for (const [tab, text] of Object.entries(expected)) {await anonymous.click(tab); assert.match(anonymous.text(), new RegExp(text));}
   assert.equal(anonymous.window.document.querySelector('main script, main img[src="x"]'), null);
   assert.equal(anonymous.window.document.querySelector('main').innerHTML.includes('<script>alert(1)</script>'), false);
@@ -98,6 +101,8 @@ test('real PostgreSQL API, member broker and shipped Web modules preserve rich s
   assert.equal(anonymous.window.document.querySelector('input[aria-label="手动复制"]').value, fixture.publicOrigin + directPath);
   const locked = await browser(t, fixture, codedPath);
   assert.equal(locked.find('能力'), undefined); assert.match(locked.text(), /获取此版本后/);
+  assert.equal(locked.window.document.querySelector('.community-additional-notes'), null);
+  assert.doesNotMatch(locked.text(), /核对本地环境/);
   assert.equal(locked.calls.some(call => call.path.includes('/objects/')), false);
   await locked.click('获取配方'); assert.match(locked.window.document.querySelector('dialog').textContent, /GitHub/);
   const reader = await fixture.login('reader'), other = await fixture.login('other'), author = await fixture.login('author');
