@@ -1,4 +1,4 @@
-import { hasLocalPath } from './authoring-payload';
+import { digest, freezePayload, hasLocalPath } from './authoring-payload';
 import { checkModelText, fieldLabels, interpretDraftAnswer, relativeEdit, requestedField, type DraftField, type DraftInstructionParser, type DraftInterpretation, type PublicField, type CandidateCardDetails } from './draft-instruction';
 import { createHash, createPrivateKey, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { authoringChangeSchema, type AuthoringAuthorization } from '@vonvon/protocol';
@@ -17,13 +17,23 @@ export function makeAuthoringProof(secret: string, binding: AuthoringAuthorizati
   return (authoringProof(privateKey, binding) as Buffer).toString('base64url');
 }
 
+const privatePreview = /(?:\b(?:ou|oc|cli)_[\w-]{4,}|\bBearer\s+\S+|(?:password|api[_ -]?key|access[_ -]?token|密码|令牌|密钥)\s*[:=：]\s*\S+)/iu;
 export function candidateCardDetails(payload?: string): CandidateCardDetails | undefined {
   if (!payload) return;
-  const patch = JSON.parse(Buffer.from(payload,'base64url').toString('utf8'));
-  if (patch.schemaVersion !== 1 || !Number.isSafeInteger(patch.baseRevision)) return;
-  const changes = authoringChangeSchema.array().max(16).parse(patch.changes);
-  return {revision:patch.baseRevision, fields:changes.map(change =>
-    change.op === 'setPublicText' ? fieldLabels[change.field] : change.op === 'setDraftRole' ? '角色' : '使用前准备')};
+  try {
+    const bytes = Buffer.from(payload,'base64url');
+    const patch = JSON.parse(bytes.toString('utf8'));
+    if (patch.schemaVersion !== 1 || freezePayload(patch).payload !== payload) return;
+    const changes = authoringChangeSchema.array().max(16).parse(patch.changes);
+    const texts = changes.flatMap(change => change.op === 'setSetup' ?
+      change.value?.steps.flatMap(step => [step.title,step.instructions,step.check ?? '']) ?? [] : [change.value]);
+    if (texts.some(text => privatePreview.test(text))) return;
+    const fields = changes.map(change => ({
+      label:change.op === 'setPublicText' ? fieldLabels[change.field] : change.op === 'setDraftRole' ? '角色' : '使用前准备',
+      valueJson:JSON.stringify(change.value),
+    }));
+    return {revision:patch.baseRevision, payloadDigest:digest(bytes), fields};
+  } catch { return; }
 }
 
 const restricted = /(?:忽略.{0,10}(?:指令|约束|规则)|(?:执行|运行|启动|启用).{0,12}(?:脚本|命令|任务|调度)|(?:读取|查询|加入|导出).{0,8}(?:私聊|记忆|文件)|(?:删除|清空).{0,8}(?:目录|文件)|(?:直接|马上|立即|不用确认.{0,5})发布|\b(?:ignore (?:all |previous )?(?:instructions|rules)|execute|publish|run (?:a |the )?(?:command|script|task)|read (?:my |the )?(?:files|private chat))\b)/iu;

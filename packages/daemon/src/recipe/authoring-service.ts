@@ -6,7 +6,7 @@ import { assertBotIdentity, withRegisteredBot, type BotIdentity } from '../confi
 import { isAdmin, type AppConfig } from '../config/schema';
 import { paths } from '../config/paths';
 import { configuredRecipeApiOrigin } from '../config/account-deployment';
-import { AuthoringIm, physicalChat } from './authoring-im';
+import { AuthoringIm, candidateConfirmation, physicalChat } from './authoring-im';
 import { authoringBotKey, discardAuthoringMaterial, AuthoringJournal, active, cardUpdate, linkKey, newCarrier, operationView, reserve, retire, sameRecipient, setCard, type AuthoringLedger, type Link, type LocalOperation, type Recipient, type Source } from './authoring-journal';
 import { blankPublic, candidateCardDetails, digest, freezePayload, newAuthoringKey, parseChanges } from './authoring-wire';
 import { DraftProviderBusy, draftIntent, requestedField, type DraftInstructionParser, type ReadDraftField } from './draft-instruction';
@@ -374,7 +374,6 @@ export class AuthoringService {
           purpose:target.source ? 'prepareDraft' : 'editDraft', draftId:target.draftId, baseRevision:target.baseRevision,
           groupId:target.source ? groupIdSchema.parse(target.source.groupId) : undefined,
           state:'pendingMain', deliveryUnknown:false,createdAt:this.now()}};
-      if (target.payload) row.carrier.showFields = true;
       if (target.sourceCard) Object.assign(row.carrier,{
         cardId:target.sourceCard.cardId,messageId:target.sourceCard.messageId,createdAt:target.sourceCard.createdAt,
         firstSend:target.sourceCard.createdAt,
@@ -430,7 +429,7 @@ export class AuthoringService {
     const pending = await this.change(p,id,op => {
       const c = op.carrier;
       if (cardUpdate(op,this.now()) !== 'pending') return;
-      return {cardId:c.cardId!, messageId:c.messageId!, seq:c.seq, ref:c.ref, mode:c.mode, recipient:op.recipient, details:c.mode === 'confirm' && c.showFields ? candidateCardDetails(op.payload) : undefined};
+      return {cardId:c.cardId!, messageId:c.messageId!, seq:c.seq, ref:c.ref, mode:c.mode, recipient:op.recipient, details:c.mode === 'confirm' ? candidateCardDetails(op.payload) : undefined};
     });
     if (!pending) return;
     this.present(p);
@@ -446,7 +445,7 @@ export class AuthoringService {
     await this.change(p,id,op => {
       const c = op.carrier;
       if (c.cardId !== cardId || c.ref !== ref || c.seq !== seq) return;
-      if (result === 'updated') { c.dirty = false; delete c.retryAt; delete c.retryDelay; }
+      if (result === 'updated') { c.dirty = false; c.previewDigest = mode === 'confirm' && details && candidateConfirmation(ref,details) ? details.payloadDigest : undefined; delete c.retryAt; delete c.retryDelay; }
       else if (result === 'unavailable') c.unavailable = true;
       else if (c.retryDelay !== undefined) {
         c.retryDelay = Math.min(600_000,Math.max(12_000,(c.retryDelay ?? 0)*2));
@@ -485,8 +484,13 @@ export class AuthoringService {
     if (!op.carrier.cardId) {
       this.present(p);
       const createdAt = this.now();
-      const cardId = await this.im.create(op.carrier.ref,op.carrier.mode,op.carrier.mode === 'confirm' && op.carrier.showFields ? candidateCardDetails(op.payload) : undefined);
-      op = await this.change(p,id,row => { row.carrier.cardId = cardId; row.carrier.createdAt = createdAt; return row; });
+      const details = op.carrier.mode === 'confirm' ? candidateCardDetails(op.payload) : undefined;
+      const cardId = await this.im.create(op.carrier.ref,op.carrier.mode,details);
+      op = await this.change(p,id,row => {
+        row.carrier.cardId = cardId; row.carrier.createdAt = createdAt;
+        if (details && candidateConfirmation(row.carrier.ref,details)) row.carrier.previewDigest = details.payloadDigest;
+        return row;
+      });
     }
     op = await this.change(p,id,row => {
       this.present(p);
@@ -673,7 +677,7 @@ export class AuthoringService {
           }
           row.payload = frozen.payload; row.proposalDigest = frozen.payloadDigest;
           row.view.state = 'candidate'; row.view.payloadDigest = frozen.payloadDigest;
-          row.carrier.showFields = true; setCard(row,'confirm');
+          setCard(row,'confirm');
         });
         await this.refresh(p,selected.view.operationId);
       }
@@ -735,6 +739,15 @@ export class AuthoringService {
         await this.change(p,op.view.operationId,row => { row.view.state = 'cancelPending'; setCard(row,'pending'); });
       } else {
         if (!['prepare','confirm'].includes(op.carrier.mode) || !['sending','waiting','candidate'].includes(op.view.state)) return;
+        if (op.carrier.mode === 'confirm') {
+          const details = candidateCardDetails(op.payload);
+          if (!details || details.payloadDigest !== op.proposalDigest || op.carrier.previewDigest !== details.payloadDigest ||
+              op.carrier.dirty || !candidateConfirmation(op.carrier.ref,details)) {
+            await this.change(p,op.view.operationId,row => setCard(row,'confirm'));
+            await this.refresh(p,op.view.operationId);
+            return;
+          }
+        }
         this.interact(p);
         const source = await this.validate(p,op);
         const frozen = source ? freezePayload({public:blankPublic(),config:{role:source.role, ...(op.source?.setup ? {setup:op.source.setup} : {})}}) :

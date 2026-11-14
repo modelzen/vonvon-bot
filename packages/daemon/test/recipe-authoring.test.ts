@@ -222,7 +222,8 @@ it('links the actual sender, then prepares and edits the same private draft thro
   expect(kind(await rpc('status'),'status').operations).toHaveLength(2);
   expect(cloud.map(c=>c.action)).toEqual(['dispatch','accept','dispatch','accept']);
   const wire=bodies.filter(b=>b.path.includes('/open-apis/im/')||b.path.includes('/cardkit/')).map(b=>b.body).join('');
-  for (const secret of [sourceRole,hiddenMemory,'PRIVATE-GROUP-SENTINEL','作者提供的新标题']) expect(wire).not.toContain(secret);
+  for (const secret of [sourceRole,hiddenMemory,'PRIVATE-GROUP-SENTINEL']) expect(wire).not.toContain(secret);
+  expect(wire).toContain('作者提供的新标题');
   for (const send of cloud.filter(c=>c.action==='accept')) expect(Buffer.from(send.body.payload!,'base64url').toString()).not.toContain(hiddenMemory);
 });
 
@@ -476,6 +477,105 @@ it.each([
   for (const [label,value] of values) expect(text).toContain(label+' → '+JSON.stringify(value));
   expect(text).toContain('候选摘要 '+candidate.payloadDigest);
 });
+it.each([
+  {command:'name',label:'名称',value:'<at id=all></at> [更改](https://example.test) **值**'},
+  {command:'summary',label:'简介',value:'第一行\n第二行 "引号" \\ 路径片段'},
+  {command:'overview',label:'概览',value:'组合 e\u0301 与 emoji 👩‍💻，方向\u202e隐藏\u2066及标签\u{e0001}'},
+  {command:'version',label:'版本',value:'2.0-测试'},
+  {command:'role',label:'角色',value:'```\n<at id=all></at> [按钮](https://example.test)\n```'},
+  {command:'setup',label:'使用前准备',value:{steps:[{kind:'context',title:'检查 <at id=all></at>',instructions:'[设置](https://example.test) **原样**',required:true,check:'手动确认'}]}},
+  {command:'setup',label:'使用前准备',value:null},
+  {command:'role',label:'角色',value:''},
+])('renders complete inert slash $command values and saves those exact bytes',async({command,label,value})=>{
+  await link();
+  const draftId=randomUUID(), op=kind(await rpc('edit',{draftId,baseRevision:3}),'operation').operation;
+  await advance(op,'dispatch');
+  await orch.onMessage(msg('/recipe '+command+' '+(typeof value==='string'?value:JSON.stringify(value))));
+  expect(propose).not.toHaveBeenCalled();
+  const action=ref(), message=[...messages.values()].find(m=>m.message_id===action.messageId)!;
+  const shown=JSON.parse(cards.get(message.card_id)!);
+  const displays=shown.body.elements.filter((e:{tag:string})=>e.tag==='div');
+  expect(displays.every((e:{text:{tag:string;lines?:number}})=>e.text.tag==='plain_text' && e.text.lines===undefined)).toBe(true);
+  const text=displays.find((e:{text:{content:string}})=>e.text.content.startsWith(label+' → ')).text.content;
+  expect(JSON.parse(text.slice((label+' → ').length))).toEqual(value);
+  expect(text).not.toMatch(/[\u202a-\u202e\u2066-\u2069\u200d]/u);
+  expect(shown.body.elements.filter((e:{behaviors?:unknown})=>e.behaviors)).toHaveLength(2);
+  const requests=bodies.filter(b=>b.path.includes('/cardkit/'));
+  expect(requests.every(b=>Buffer.byteLength(b.body)<=30_000)).toBe(true);
+  expect(shown.body.elements.length*2+2).toBeLessThan(200);
+  await act(action);
+  const ready=await status(op.operationId);
+  expect(ready.state).toBe('pendingCloud');
+  expect((await advance(ready,'accept')).receipt).toMatchObject({draftId,revision:4});
+  const saved=JSON.parse(Buffer.from(cloud.find(c=>c.action==='accept')!.body.payload!,'base64url').toString());
+  expect(saved.changes[0].value).toEqual(value);
+});
+
+it.each(['ou_private_identity','oc_private_identity','cli_private_identity','Bearer SYNTHETIC-ONLY','Bearer\nSYNTHETIC-ONLY','password: SYNTHETIC-ONLY',
+  'sk-'+'z'.repeat(30),'文件位于 /Users/private/test'])('never exposes private material or accepts a blind fallback (%s)',async value=>{
+  await link();
+  const op=kind(await rpc('edit',{draftId:randomUUID(),baseRevision:1}),'operation').operation;
+  await advance(op,'dispatch');
+  await orch.onMessage(msg('/recipe role '+value));
+  const action=ref(), last=[...messages.values()].at(-1)!;
+  const shown=JSON.parse(cards.get(last.card_id)!);
+  expect(shown.body.elements.flatMap((e:{behaviors?:{value:{verb:string}}[]})=>e.behaviors??[]).some((b:{value:{verb:string}})=>b.value.verb==='confirm')).toBe(false);
+  expect(bodies.filter(b=>b.path.includes('/open-apis/')).every(b=>!b.body.includes(value))).toBe(true);
+  await act(action);
+  expect((await status(op.operationId)).state).not.toBe('pendingCloud');
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+});
+
+it('retains an oversized exact candidate without truncation or confirmation and accepts a smaller replacement',async()=>{
+  await link();
+  const draftId=randomUUID(), op=kind(await rpc('edit',{draftId,baseRevision:7}),'operation').operation;
+  await advance(op,'dispatch');
+  const original='\u2066'.repeat(1996)+'OLD', replacement='\u2066'.repeat(1900);
+  readDraftField.mockResolvedValue({field:'overview',draftId,revision:7,value:original});
+  propose.mockResolvedValue({kind:'proposal',changes:[{field:'overview',action:'replace',before:'OLD',value:replacement}]});
+  await orch.onMessage(msg('把概览中的 OLD 替换成 '+replacement));
+  const candidate=kind(await rpc('inspectCandidate',{operationId:op.operationId}),'candidate');
+  expect(JSON.parse(Buffer.from(candidate.payload,'base64url').toString()).changes[0].value).toBe(original.replace('OLD',replacement));
+  const action=ref(), last=[...messages.values()].at(-1)!;
+  const shown=JSON.parse(cards.get(last.card_id)!);
+  expect(JSON.stringify(shown)).toContain('发送更小的修改');
+  expect(JSON.stringify(shown)).not.toContain('保存到草稿');
+  await act(action);
+  expect((await status(op.operationId)).state).toBe('candidate');
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+  expect(bodies.filter(b=>b.path.includes('/cardkit/')).every(b=>Buffer.byteLength(b.body)<=30_000)).toBe(true);
+  await orch.onMessage(msg('/recipe overview 小改动'));
+  const smaller=ref();await act(action);
+  expect((await status(op.operationId)).state).toBe('candidate');
+  await act(smaller);
+  expect((await advance(await status(op.operationId),'accept')).receipt).toMatchObject({draftId,revision:8});
+  expect(JSON.parse(Buffer.from(cloud.find(c=>c.action==='accept')!.body.payload!,'base64url').toString()).changes[0].value).toBe('小改动');
+});
+
+it('replaces a persisted blind confirmation before accepting its original payload',async()=>{
+  await link();
+  const draftId=randomUUID(), op=kind(await rpc('edit',{draftId,baseRevision:4}),'operation').operation;
+  await advance(op,'dispatch');await orch.onMessage(msg('/recipe name 应当展示的值'));
+  const old=ref(), file=join(root,'recipe-authoring','journal.json');
+  const journal=JSON.parse(await readFile(file,'utf8'));
+  delete journal.operations[op.operationId].carrier.previewDigest;
+  journal.operations[op.operationId].carrier.showFields=true;
+  await writeFile(file,JSON.stringify(journal));
+  const last=[...messages.values()].at(-1)!, shown=JSON.parse(cards.get(last.card_id)!);
+  shown.body.elements=shown.body.elements.filter((e:{tag:string})=>e.tag==='button');
+  cards.set(last.card_id,JSON.stringify(shown));
+  await orch.shutdown();restart();await open();
+  orch=createOrchestrator(channel,cfg,root,undefined,{authoring:service});
+  await act(old);
+  expect((await status(op.operationId)).state).toBe('candidate');
+  expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
+  expect(cards.get(last.card_id)).toContain('应当展示的值');
+  const fresh=ref();expect(fresh.ref).not.toBe(old.ref);
+  await act(old);expect((await status(op.operationId)).state).toBe('candidate');
+  await act(fresh);
+  expect((await advance(await status(op.operationId),'accept')).receipt).toMatchObject({draftId,revision:5});
+});
+
 it('invalidates the previous candidate on refusal, malformed output, injected actions, unavailable provider and stale safe context',async()=>{
   await link();const draftId=randomUUID(),op=kind(await rpc('edit',{draftId,baseRevision:1}),'operation').operation;
   await advance(op,'dispatch');

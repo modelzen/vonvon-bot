@@ -1,26 +1,44 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { CandidateCardDetails } from './draft-instruction';
-import { button, card, md } from '../card/cards';
+import { button, card, md, type CardElement } from '../card/cards';
 
 export const AUTHORING_ACTION = 'recipe.authoring';
 export type CardMode = 'prepare' | 'edit' | 'confirm' | 'pending' | 'saved' | 'cancelled' | 'expired' | 'review';
 const copy: Record<CardMode, string> = {
   prepare: '已在 App 选好群角色。确认后保存为私人草稿。',
   edit: '在此私聊发送 /recipe name 名称、/recipe summary 简介、/recipe overview 概览、/recipe version 版本、/recipe role 角色或 /recipe setup 步骤 JSON。',
-  confirm: '有一份草稿改动等待确认。可在 App 核对完整内容。',
+  confirm: '请核对每个字段的实际新值。模型可能理解有误，确认后才保存到私人草稿。',
   pending: '已确认，正在等待 App 同步。', saved: '私人草稿已保存。可以在 App 查看或继续编辑。',
   cancelled: '已取消本次草稿操作。', expired: '这次操作已到期。若之前已经保存，请到 App 创作中心查看。',
   review: '来源或授权已经改变，请回到 App 核对。',
 };
-export function authoringCard(ref: string, mode: CardMode, details?: CandidateCardDetails) {
-  const action = (verb: string, label: string, primary = false) => button(label, {a: AUTHORING_ACTION, ref, verb}, primary ? 'primary' : 'default');
-  const elements = [md(copy[mode])];
-  if (mode === 'confirm' && details) elements.push(md('将修改第 '+details.revision+' 次修订中的'+details.fields.join('、')+'。'));
-  if (mode === 'prepare' || mode === 'confirm') elements.push(action('confirm', mode === 'prepare' ? '生成私人草稿' : '保存到草稿', true));
-  if (['prepare','edit','confirm','pending','review'].includes(mode)) elements.push(action('cancel', '取消'));
-  return card(elements, {header: {title: '配方草稿'}, forward: false});
+const plain = (content: string) => ({tag:'div', text:{tag:'plain_text',content}});
+const action = (ref: string, verb: string, label: string, primary = false) => button(label, {a: AUTHORING_ACTION, ref, verb}, primary ? 'primary' : 'default');
+const authoringBody = (elements: CardElement[]) => card(elements, {header:{title:'配方草稿'},forward:false});
+export function candidateConfirmation(ref: string, details?: CandidateCardDetails) {
+  if (!details) return;
+  const elements = [plain(copy.confirm), plain('第 '+details.revision+' 次修订。以下字段将替换为这些完整新值（JSON 文本，转义字符表示原值）。'),
+    ...details.fields.map(field => plain(field.label+' → '+field.valueJson.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu,
+      char => char.split('').map(unit => '\\u'+unit.charCodeAt(0).toString(16).padStart(4,'0')).join('')))),
+    plain('候选摘要 '+details.payloadDigest), action(ref,'confirm','保存到草稿',true), action(ref,'cancel','取消')];
+  const body = authoringBody(elements), data = JSON.stringify(body);
+  // CardKit recommends 30 KB. Budget both serialized request envelopes, including JSON escapes.
+  const create = {type:'card_json',data};
+  const update = {sequence:Number.MAX_SAFE_INTEGER,uuid:'a_'+Number.MAX_SAFE_INTEGER+'_'+ref,card:create};
+  if (Math.max(Buffer.byteLength(JSON.stringify(create)),Buffer.byteLength(JSON.stringify(update))) > 30_000) return;
+  return body;
 }
+export function authoringCard(ref: string, mode: CardMode, details?: CandidateCardDetails) {
+  if (mode === 'confirm') return candidateConfirmation(ref,details) ?? authoringBody([
+    plain('本次改动无法在卡片完整、安全地展示，不能在这里确认。请发送更小的修改，或到 App 直接编辑该字段。'), action(ref,'cancel','取消'),
+  ]);
+  const elements = [md(copy[mode])];
+  if (mode === 'prepare') elements.push(action(ref,'confirm','生成私人草稿',true));
+  if (['prepare','edit','pending','review'].includes(mode)) elements.push(action(ref,'cancel','取消'));
+  return authoringBody(elements);
+}
+
 export const physicalChat = (id: string): boolean => /^oc_[a-zA-Z0-9_-]{1,200}$/.test(id) && !id.startsWith('oc_dm_');
 
 export class AuthoringIm {
