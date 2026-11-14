@@ -32,8 +32,13 @@ export function readDocument(raw) {
   try{return decodeRichRecipeContent(wireBytes(raw));}catch{throw badInput();}
 }
 export async function richInput(req,url,{action,ids:[id,...other]}) {
-  const {q,cursor}=queryParams(url,action==='richCatalog'?['q','cursor']:[]);
-  if(action==='richCatalog')return [action,[q,cursor]];
+  if(action==='richCatalog'){
+    const copy=new URL(url);const cursors=copy.searchParams.getAll('cursor'),access=copy.searchParams.getAll('access');
+    if(cursors.length>1||access.length>1||cursors.some(x=>x.length>1600)||access.some(x=>!['coded','direct'].includes(x)))throw badInput();
+    copy.searchParams.delete('cursor');copy.searchParams.delete('access');
+    const {q}=queryParams(copy,['q']);return [action,[q,cursors[0]??null,access[0]??null]];
+  }
+  queryParams(url,[]);
   if(req.method==='GET')return [action,id?[id,...other]:[]];
   const b=await bodyJson(req,['richFreeze','richAccept','richPublish'].includes(action)?4*1048576:2048);
   if(action==='richInstallAuthorize'){const result=recipeRichInstallIntentSchema.safeParse(b);if(!result.success)throw badInput();return [action,[operationId(id),result.data]];}
