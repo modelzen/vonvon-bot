@@ -30,7 +30,7 @@ const draw = async (state = devicesState({id: 'local'})) => {
   await act(async () => {root.render(<DesktopRootView state={state} fallback={client} shell={shell} renderApp={() => <Host/>}/>);});
 };
 async function click(text: string) {
-  const button = [...document.querySelectorAll('[role="dialog"] button'), ...document.querySelectorAll('button')].find(button => button.textContent === text);
+  const button = [...document.querySelectorAll('[role="dialog"] button'), ...document.querySelectorAll('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent) === text);
   expect(button, text).toBeDefined();
   await act(async () => {button!.click();});
 }
