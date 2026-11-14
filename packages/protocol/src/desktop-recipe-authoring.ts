@@ -12,8 +12,10 @@ const handle = { handle: uuid };
 const operation = { ...handle, operationId: uuid };
 const link = { ...handle, challengeId: uuid };
 export const desktopAuthoringRequestSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('open'), accountId: uuid, viewId: viewIdSchema, botId: agentIdSchema }).strict(),
+  z.object({ type: z.literal('open'), accountId: uuid, viewId: viewIdSchema, botId: agentIdSchema, groupId: groupIdSchema.optional() }).strict(),
   z.object({ type: z.literal('close'), ...handle }).strict(),
+  z.object({ type: z.literal('detach'), ...handle }).strict(),
+  z.object({ type: z.literal('sourceHistory'), ...handle, groupId: groupIdSchema, cursor: uuid.optional() }).strict(),
   z.object({ type: z.literal('status'), ...handle }).strict(),
   z.object({ type: z.literal('beginLink'), ...handle }).strict(),
   z.object({ type: z.literal('inspectLink'), ...link }).strict(),
@@ -48,7 +50,7 @@ export const authoringTargetSchema = z
   .strict();
 export const desktopAuthoringOperationSchema = authoringOperationSchema
   .omit({ targetPublicKey: true, nonceCommitment: true, cardUpdate: true })
-  .extend({ target: authoringTargetSchema, groupName: name.optional(), syncMessage: z.string().max(180).optional() });
+  .extend({ target: authoringTargetSchema, contextPaused:z.boolean().optional(), groupName: name.optional(), syncMessage: z.string().max(180).optional() });
 export const authoringCandidateContentSchema = z.union([
   z.object({ public: recipePublicSchema, config: recipeConfigSchema }).strict(),
   z
@@ -61,6 +63,16 @@ export const authoringCandidateContentSchema = z.union([
     .strict(),
 ]);
 const group = { groupId: groupIdSchema, groupName: name };
+const historyMetadata = {
+  operationId: uuid, draftId: uuid, recipeId: uuid, name: recipePublicSchema.shape.name,
+  version: recipePublicSchema.shape.version, revision,
+};
+export const sourceHistoryEntrySchema = z.discriminatedUnion('state', [
+  z.object({state: z.literal('draft'), ...historyMetadata, versionId: z.null()}).strict(),
+  z.object({state: z.literal('published'), ...historyMetadata, versionId: uuid}).strict(),
+  z.object({state: z.literal('unknown'), operationId: uuid, draftId: z.null(), recipeId: z.null(), versionId: z.null()}).strict(),
+]);
+export type SourceHistoryEntry = z.infer<typeof sourceHistoryEntrySchema>;
 export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
   z
     .object({
@@ -71,6 +83,7 @@ export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
       operations: z.array(desktopAuthoringOperationSchema).max(540),
     })
     .strict(),
+  z.object({kind: z.literal('sourceHistory'), entries: z.array(sourceHistoryEntrySchema).max(32), nextCursor: uuid.nullable()}).strict(),
   z.object({ kind: z.literal('closed') }).strict(),
   z
     .object({
@@ -118,6 +131,9 @@ export const desktopAuthoringReplySchema = z.discriminatedUnion('kind', [
 export type DesktopAuthoringRequest = z.infer<typeof desktopAuthoringRequestSchema>;
 export type DesktopAuthoringReply = z.infer<typeof desktopAuthoringReplySchema>;
 export type DesktopAuthoringOperation = z.infer<typeof desktopAuthoringOperationSchema>;
+export const authoringSavedSchema = z.object({accountId:uuid,draftId:uuid,revision}).strict();
+export type AuthoringSaved = z.infer<typeof authoringSavedSchema>;
 export interface RecipeAuthoringShell {
+  onSaved?(listener: (receipt:AuthoringSaved) => void): () => void;
   request(input: DesktopAuthoringRequest): Promise<DesktopAuthoringReply>;
 }

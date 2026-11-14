@@ -22,15 +22,16 @@ export interface Link { bot: string; binding: string; recipient: Recipient; sour
 export interface Carrier {
   ref: string; sendUuid: string; generation: number; seq: number; mode: CardMode; dirty: boolean;
   cardId?: string; messageId?: string; firstSend?: number; createdAt?: number;
-  unavailable?: true; retryAt?: number; retryDelay?: number;
+  previewDigest?: string; unavailable?: true; retryAt?: number; retryDelay?: number;
 }
 export const newCarrier = (mode: CardMode, generation = 1): Carrier => ({
   ref: randomUUID(), sendUuid: randomUUID(), generation, seq: 0, mode, dirty: false,
 });
 export function setCard(op: LocalOperation, mode: CardMode) {
   const c = op.carrier;
+  if (mode !== 'pending' || op.view.state !== 'pendingCloud') delete op.editApproval;
   c.mode = mode; c.ref = randomUUID(); c.seq++; c.dirty = true;
-  delete c.retryAt; delete c.retryDelay;
+  delete c.retryAt; delete c.retryDelay; delete c.previewDigest;
 }
 export function cardUpdate(op: LocalOperation, now: number): AuthoringOperation['cardUpdate'] {
   const c = op.carrier;
@@ -46,9 +47,15 @@ export function operationView(op: LocalOperation, now: number): AuthoringOperati
 export interface LocalOperation {
   view: AuthoringOperation;
   accountId: string; scope: string; bot: string; binding: string; recipient: Recipient; carrier: Carrier;
-  secret?: string; nonce?: string; source?: Source; payload?: string; proposalDigest?: string;
+  secret?: string; nonce?: string; source?: Source; sourceIdentity?: string; payload?: string; proposalDigest?: string;
+  editApproval?: string;
   dispatchAuthorization?: AuthoringAuthorization;
   dispatched: boolean; revoked?: true; contextOpen?: boolean; instructionId?: string; seenInstructions?: string[]; terminalAt?: number; contextUntil?: number;
+}
+export function editApproval(op: LocalOperation, payloadDigest: string) {
+  return digest(JSON.stringify(['exact-edit-v1', op.view.operationId, op.accountId, op.scope, op.bot, op.binding,
+    op.recipient.tenantKey, op.recipient.chatId, op.recipient.openId, op.carrier.cardId, op.carrier.messageId,
+    op.view.targetPublicKey, op.view.nonceCommitment, op.view.draftId, op.view.baseRevision, payloadDigest]));
 }
 export interface AuthoringLedger {
   version: 1; links: Record<string, Link>; operations: Record<string, LocalOperation>;
@@ -57,7 +64,7 @@ export interface AuthoringLedger {
 export const active = (op: LocalOperation) => op.terminalAt === undefined;
 export function discardAuthoringMaterial(op: LocalOperation) {
   delete op.secret; delete op.nonce; delete op.dispatchAuthorization; delete op.payload; delete op.source;
-  delete op.view.payloadDigest; delete op.proposalDigest;
+  delete op.editApproval; delete op.view.payloadDigest; delete op.proposalDigest;
 }
 export function retire(op: LocalOperation, state: 'completed' | 'cancelled' | 'expired', now: number) {
   op.view.state = state;
