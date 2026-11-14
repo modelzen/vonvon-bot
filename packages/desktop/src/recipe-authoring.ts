@@ -532,6 +532,8 @@ export class RecipeAuthoringController {
     if(winner)return this.settle(h,op,winner);
     const destinationDraftId=await cloud.register(op);
     if(op.state==='pendingMain'){
+      const already=z.object({status:z.literal('dispatched'),format:z.literal('rich-v2'),operationId:z.literal(id),accountId:z.literal(h.open.accountId)}).safeParse(recovered);
+      if(already.success)return this.operation(h,{type:'deliver',operationId:id});
       const authorization=await cloud.authorize(id,'dispatch',dispatchDigest);
       return this.operation(h,{type:'richAdvance',operationId:id,destinationDraftId,authorization});
     }
@@ -546,9 +548,11 @@ export class RecipeAuthoringController {
       await cloud.reserve(id,destinationDraftId,transfer.cap);
       const descriptors=[];
       for(const [ordinal,m] of transfer.members.entries()){
-        const bytes=Buffer.from(m.bytes,'base64url');
+        const raw=expectKind(await this.daemon(h,{type:'richReadMember',operationId:id,reviewDigest:transfer.reviewDigest,index:ordinal}),'richMember');
+        if(raw.operationId!==id||raw.index!==ordinal||raw.reviewDigest!==transfer.reviewDigest)throw recheck();
+        const bytes=Buffer.from(raw.bytes,'base64url');
         if(createHash('sha256').update(bytes).digest('hex')!==m.sha256)throw recheck();
-        const part=await cloud.upload(id,ordinal,m.kind,bytes);
+        const part=await cloud.upload(id,m.kind==='finalLogo'?64:ordinal,m.kind,bytes);
         if(part.kind==='manifest')throw recheck();
         descriptors.push(part);
       }
@@ -669,6 +673,10 @@ export class RecipeAuthoringController {
         if(preview.operationId!==op.operationId||preview.reviewDigest!==op.payloadDigest)throw recheck();
         return {kind:'richCandidate',operation:this.display(h,op),reviewDigest:preview.reviewDigest,request:preview.request};
       }
+      case 'richSourceOptions': {
+        if(!h.groups.has(r.groupId))throw recheck();
+        return expectKind(await this.daemon(h,{type:r.type,groupId:r.groupId}),'richSourceOptions');
+      }
       case 'richInventory': {
         if(!h.groups.has(r.groupId))throw recheck();
         return expectKind(await this.daemon(h,{type:r.type,groupId:r.groupId,options:r.options}),'richInventory');
@@ -688,7 +696,7 @@ export class RecipeAuthoringController {
           const {canonical,meta}=await cloud.draft(r.draftId,r.baseRevision);
           const source=r.changes?.some(c=>c.op==='includeCandidate')?{sourceIntentId:meta.sourceIntentId,
             canonical:(await cloud.readMember(r.draftId,meta.sourceManifest)).toString('base64url')}:undefined;
-          req={type:r.type,draftId:r.draftId,baseRevision:r.baseRevision,canonical,selected:r.selected,changes:r.changes,access:r.access,source};
+          req={type:r.type,draftId:r.draftId,baseRevision:r.baseRevision,canonical,selected:r.selected,changes:r.changes,logo:r.logo,access:r.access,source};
         }
         const op=expectKind(await this.daemon(h,req),'operation').operation;
         if(op.format!=='rich-v2'||(r.type==='richPrepare'?op.groupId!==r.groupId:op.draftId!==r.draftId||op.baseRevision!==r.baseRevision))throw recheck();

@@ -1,4 +1,4 @@
-import {readRichSource,preparedRich,richReviewDigest,bindRichMembers,richMemberCap,richCardReview,typedRichEdit,chatRichProposal,type RichLocalDraft,type RichNativeOptions} from './authoring-rich-flow';
+import {richSkillOptions,readRichSource,preparedRich,richReviewDigest,bindRichMembers,richMemberCap,richCardReview,typedRichEdit,chatRichProposal,type RichLocalDraft,type RichNativeOptions} from './authoring-rich-flow';
 import {postRichStage,verifyFrozenRich} from './authoring-rich-proof';
 import {itemsOf,wireDigest} from './authoring-rich-snapshot';
 import {decodeRichRecipeContent,richFreezeInputSchema} from '@vonvon/protocol';
@@ -182,7 +182,10 @@ export class AuthoringService {
   private async sourceNow(p: Presence, op: LocalOperation) {
     if(op.view.format==='rich-v2'&&op.rich?.source){
       const src=op.rich.source, current=await readRichSource(this.opts,p.scope,p.account,src.groupId,src.options);
-      if(current.lease!==src.token)refusal();
+      if(current.lease!==src.token){
+        await this.change(p,op.view.operationId,row=>{if(active(row)){row.view.state='needsReview';setCard(row,'review');}});
+        refusal();
+      }
       return;
     }
     if (!op.source) return;
@@ -301,6 +304,11 @@ export class AuthoringService {
           this.present(p);
           return {kind:'operationSourceIdentity', operationId:req.operationId, groupId:op.view.groupId, identity:identity ?? null};
         }
+        case 'richSourceOptions': {
+          const link=await this.allowed(p),skills=await richSkillOptions(this.opts,req.groupId);
+          if((await this.allowed(p)).binding!==link.binding)refusal();
+          return {kind:'richSourceOptions',skills};
+        }
         case 'richInventory':
         case 'richPrepare': {
           const link=await this.allowed(p);
@@ -319,16 +327,22 @@ export class AuthoringService {
           this.interact(p);
           return this.start(p,link.recipient,{draftId:req.draftId,baseRevision:req.baseRevision,rich:typedRichEdit(req)});
         }
+        case 'richReadMember':
         case 'richMembers':
         case 'richBindMembers': {
           const op=await this.operation(p,req.operationId);
           await this.validate(p,op);
           if(!op.rich?.request||op.view.state!=='pendingCloud'||op.editApproval!==editApproval(op,richReviewDigest(op.rich)))refusal();
           const reviewDigest=richReviewDigest(op.rich);
+          if(req.type==='richReadMember'){
+            const member=op.rich.members?.[req.index];
+            if(req.reviewDigest!==reviewDigest||!member)refusal();
+            return {kind:'richMember',operationId:req.operationId,reviewDigest,index:req.index,bytes:member.bytes};
+          }
           if(req.type==='richMembers')return {kind:'richMembers',operationId:req.operationId,reviewDigest,cap:op.rich.members?.length?richMemberCap(op.rich):1,
-            members:op.rich.members?.map(({kind,bytes,sha256})=>({kind,bytes,sha256}))??[]};
+            members:op.rich.members?.map(({kind,sha256})=>({kind,sha256}))??[]};
           if(reviewDigest!==req.reviewDigest)refusal();
-          const request=bindRichMembers(op.rich,req.descriptors);
+          const request=bindRichMembers(op.rich,req.descriptors,req.operationId);
           await this.change(p,req.operationId,row=>{if(!row.rich||richReviewDigest(row.rich)!==reviewDigest)refusal();row.rich.boundRequest=request;});
           return {kind:'richCandidate',operationId:req.operationId,reviewDigest,request};
         }
@@ -366,8 +380,19 @@ export class AuthoringService {
               const sourceMap=new Map(original.origins.map(o=>[o.itemId,o.source]));
               origins=Object.fromEntries(items.map((item,i)=>[accepted[i]!.itemId,sourceMap.get(item.itemId)!]));
             }
+            if('payload' in original && op.rich.base){
+              const before=decodeRichRecipeContent(Buffer.from(op.rich.base.canonical,'base64url')).content;
+              const inserted=saved.setup.filter(step=>!before.setup.some(old=>old.itemId===step.itemId));
+              const adds=original.payload.changes.filter(c=>c.op==='addSetup');
+              if(adds.length && adds.length===inserted.length){
+                origins={...origins};
+                selected=[...selected,...inserted.map(item=>item.itemId)];
+                for(const [index,item] of inserted.entries())origins[item.itemId]=adds[index]!.source;
+              }
+            }
             await this.change(p,req.operationId,row=>{row.richSaved={canonical:frozen.canonical,origins,selected:selected.filter(id=>itemsOf(saved).some(item=>item.itemId===id))};});
           }
+          if(req.authorization.stage==='dispatch')await this.change(p,req.operationId,row=>{row.richDispatch=req.authorization;});
           const receipt=await postRichStage(this.origin!,op,req,this.now(),this.opts.fetch,this.opts.loopback);
           if(receipt)await this.settle(p,receipt,req.operationId);
           else {await this.markDispatched(p,req.operationId);await this.deliver(p,req.operationId,false);}
@@ -469,7 +494,7 @@ export class AuthoringService {
       const operationId = operationUuid(this.now());
       const row: LocalOperation = {accountId:p.account, scope:p.scope, bot:this.botKey, binding:link!.binding, recipient, secret:material.secret, nonce:material.nonce,
         rich:target.rich, source:target.source, sourceIdentity:target.sourceIdentity, instructionId: target.instructionId, payload: target.payload, proposalDigest: target.proposalDigest,
-        contextUntil:this.now()+CONTEXT, carrier:newCarrier(target.rich?.request ? 'confirm' : target.source ? 'prepare' : target.payload ? 'confirm' : 'edit'), dispatched:false, contextOpen:true,
+        contextUntil:this.now()+CONTEXT, carrier:newCarrier(target.rich?.request ? 'confirm' : target.source ? 'prepare' : target.payload ? 'confirm' : target.rich?'richEdit':'edit'), dispatched:false, contextOpen:true,
         view:{operationId, targetPublicKey:material.targetPublicKey, nonceCommitment:material.nonceCommitment,
           ...(target.rich&&{format:'rich-v2'}),purpose:target.source||target.rich?.source ? 'prepareDraft' : 'editDraft', draftId:target.draftId, baseRevision:target.baseRevision,
           groupId:target.source||target.rich?.source ? groupIdSchema.parse(target.source?.groupId??target.rich!.source!.groupId) : undefined,
@@ -488,7 +513,7 @@ export class AuthoringService {
       if (target.source) {
         link!.sources = [target.source, ...link!.sources.filter(s => s.groupId !== target.source!.groupId)].slice(0,16);
       }
-      for (const prior of current) if (prior.view.state === 'completed') prior.contextOpen = false;
+      for (const prior of current) if (prior.view.state === 'completed') {prior.contextOpen = false;delete prior.richSaved;}
       link!.context = {operationId, until:this.now()+CONTEXT};
       db.operations[operationId] = row;
       return row;
@@ -545,7 +570,7 @@ export class AuthoringService {
   private markDispatched(p: Presence, id: string) {
     return this.change(p,id,row => {
       row.dispatched = true;
-      delete row.dispatchAuthorization;
+      delete row.dispatchAuthorization; delete row.richDispatch;
       if (row.view.state === 'pendingMain') row.view.state = 'sending';
     });
   }
@@ -585,11 +610,17 @@ export class AuthoringService {
     }
     await this.validate(p,op);
     if (!op.dispatched) {
+      if(op.view.format==='rich-v2'){
+        if(!op.richDispatch||!op.rich?.destinationDraftId)refusal();
+        this.present(p);
+        await postRichStage(this.origin!,op,{destinationDraftId:op.rich.destinationDraftId,authorization:op.richDispatch},this.now(),this.opts.fetch,this.opts.loopback,true);
+      }else{
       const cap = op.dispatchAuthorization;
       if (!cap) refusal();
       this.present(p);
       const result = await postAuthoring(this.origin!,op,cap,this.opts.fetch,this.opts.loopback);
       if (result.status !== 'dispatched') refusal();
+      }
       await this.markDispatched(p,id);
     }
     op = await this.operation(p,id);
@@ -741,7 +772,7 @@ export class AuthoringService {
         const ref=await this.change(p,selected.view.operationId,row=>{
           if(row.carrier.ref!==selected.carrier.ref||!row.contextOpen||(row.contextUntil??0)<=this.now()||(row.seenInstructions?.length??0)>=32)refusal();
           (row.seenInstructions??=[]).push(msg.messageId); this.interact(p); row.contextUntil=this.now()+CONTEXT;
-          setCard(row,'edit');row.view.state='waiting';delete row.view.payloadDigest;return row.carrier.ref;
+          setCard(row,'richEdit');row.view.state='waiting';delete row.view.payloadDigest;return row.carrier.ref;
         });
         const attempt=new AbortController();this.parsing=attempt;
         try{
@@ -753,6 +784,7 @@ export class AuthoringService {
           await this.change(p,selected.view.operationId,row=>{
             if(!row.rich||!row.contextOpen||(row.contextUntil??0)<=this.now()||row.carrier.ref!==ref)refusal();
             row.rich.request=request;
+            if(result.newFields)row.rich.newFields=result.newFields;
             if('content' in request)row.rich.members=row.rich.members?.filter(m=>m.kind==='finalLogo'||request.content.files.some(f=>f.itemId===m.itemId));
             delete row.rich.boundRequest;row.proposalDigest=richReviewDigest(row.rich);row.view.payloadDigest=row.proposalDigest;row.view.state='candidate';setCard(row,'confirm');
           });

@@ -55,7 +55,8 @@ export function verifyFrozenRich(
   if(wireJson(parsed)!==payload.toString('utf8'))throw mismatch();
   if('content' in reviewed) {
     if(parsed.purpose!=='prepareDraft'||parsed.sourceIntentId!==operationId||wireJson(parsed.content)!==doc.canonical)throw mismatch();
-    compareRemapped(reviewed.content,doc.content,new Set());
+    const preserved=new Set(reviewed.origins.filter(o=>o.source.kind==='releaseItem'&&o.source.versionId===reviewed.sourceVersionId&&o.itemId===o.source.itemId).map(o=>o.itemId));
+    compareRemapped(reviewed.content,doc.content,preserved);
   }else{
     if(parsed.purpose!=='editDraft'||parsed.draftId!==destinationDraftId||wireJson(parsed)!==wireJson(reviewed.payload))throw mismatch();
     const base=decodeRichRecipeContent(decode(reviewed.baseCanonical));
@@ -81,12 +82,12 @@ export function richPossessionProof(secret:string,binding:RichAuthorization,revi
 }
 
 export async function postRichStage(url:string,op:import('./authoring-journal').LocalOperation,
-  request:Extract<import('@vonvon/protocol').RecipeAuthoringRequest,{type:'richAdvance'}>,now:number,http=fetch,loopback=false){
+  request:Pick<Extract<import('@vonvon/protocol').RecipeAuthoringRequest,{type:'richAdvance'}>,'authorization'|'destinationDraftId'|'accepted'>,now:number,http=fetch,loopback=false,replaying=false){
   const binding=request.authorization,view=op.view,dispatch=binding.stage==='dispatch';
   if(view.format!=='rich-v2'||!op.rich||!op.secret||!op.nonce||binding.operationId!==view.operationId||binding.accountId!==op.accountId||
     binding.purpose!==view.purpose||binding.targetPublicKey!==view.targetPublicKey||binding.nonceCommitment!==view.nonceCommitment||
     binding.draftId!==view.draftId||binding.baseRevision!==view.baseRevision||binding.stateRevision!==(dispatch?1:2)||binding.status!==(dispatch?'registered':'dispatched')||
-    binding.deadline<=now||binding.deadline>now+305000||binding.deadline>binding.operationDeadline||
+    (binding.deadline<=now&&!(replaying&&dispatch&&op.richDispatch&&wireDigest(binding)===wireDigest(op.richDispatch)))||binding.deadline>now+305000||binding.deadline>binding.operationDeadline||
     request.destinationDraftId!==op.rich.destinationDraftId||dispatch!==!request.accepted||view.state!==(dispatch?'pendingMain':'pendingCloud'))throw mismatch();
   const accepted=request.accepted;
   const review=accepted&&op.rich.request?{request:op.rich.boundRequest??op.rich.request,frozen:accepted.frozen,destinationDraftId:request.destinationDraftId}:undefined;

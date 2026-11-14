@@ -66,8 +66,9 @@ it('derives the exact selected text-package digest and verifies each broker rece
   const sha256=createHash('sha256').update(bytes).digest('hex'), member={itemId:f.itemId,kind:'text' as const,bytes:bytes.toString('base64url'),sha256};
   const local={request,members:[member]};
   const descriptor={objectId:randomUUID(),kind:'text' as const,bytes:bytes.length,sha256,mediaType:'text/plain;charset=utf-8' as const};
-  expect(()=>bindRichMembers(local,[{...descriptor,sha256:'0'.repeat(64)}])).toThrow();
-  const bound=bindRichMembers(local,[descriptor]);
+  expect(()=>bindRichMembers(local,[{...descriptor,sha256:'0'.repeat(64)}],randomUUID())).toThrow();
+  const bound=bindRichMembers(local,[descriptor],randomUUID());
+  if(!('content' in bound))throw new Error();
   expect(bound.content.files[0]!.text).toEqual({kind:'part',objectId:descriptor.objectId});
   expect(richMemberCap(local)).toBeGreaterThanOrEqual(2*Buffer.byteLength(wireJson(bound.content))+bytes.length);
   expect(richReviewDigest(local)).not.toBe(wireDigest(bound));
