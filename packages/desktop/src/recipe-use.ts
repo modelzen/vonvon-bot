@@ -1,3 +1,4 @@
+import {richUseCloud} from './recipe-use-rich-cloud.js';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
@@ -38,6 +39,8 @@ type Handle = {
   deviceId: string;
   pk: string;
   preview?: InstallPreview;
+  richPreview?: Awaited<ReturnType<ReturnType<typeof richUseCloud>['preview']>>;
+  richReview?: Extract<RecipeUseReply,{kind:'richReview'|'richPrepared'}>;
   review?: DesktopRecipeReview;
   row?: RecipeJournalRow;
   touched: number;
@@ -90,10 +93,12 @@ export class RecipeUseController {
     this.check(h);
     return reply;
   }
+  private richCloud(h: Handle) {return richUseCloud(this.account,{accountId:h.input.accountId,signal:h.signal,check:()=>this.check(h)});}
   private base(h: Handle) {
     return {
       id: h.row?.id ?? h.id,
       accountId: h.input.accountId,
+      ...(h.input.format && {format:h.input.format}),
       deviceId: h.deviceId,
       viewId: h.input.viewId,
       pk: h.pk,
@@ -136,6 +141,7 @@ export class RecipeUseController {
     groupId: GroupId,
     selection?: Extract<RecipeUseRequest, { type: 'resolve' }>,
   ): Promise<RecipeUseReply> {
+    if (h.input.format === 'rich-v2') return this.prepareRich(h,groupId);
     if (!h.preview) {
       h.preview = await this.cloud(h).preview(h.input.recipeId, h.input.versionId);
       this.check(h);
@@ -225,6 +231,40 @@ export class RecipeUseController {
     h.review = review;
     return { kind: reply.kind, handle: h.id, groupId, review };
   }
+  private async prepareRich(h:Handle,groupId:GroupId,selection?:Extract<RecipeUseRequest,{type:'richResolve'}>):Promise<RecipeUseReply> {
+    h.richPreview ??= await this.richCloud(h).preview(h.input.recipeId,h.input.versionId);
+    await this.identity(h);
+    const reply=await this.daemon(h,{type:'richPrepare',botId:h.input.botId,groupId,...h.richPreview,...(selection?{reviewToken:selection.reviewToken,choices:selection.choices}:{})});
+    if(reply.kind==='alreadyInstalled'&&reply.groupId===groupId&&reply.recipeId===h.input.recipeId&&reply.versionId===h.input.versionId)return this.done(h,groupId,'applied');
+    if(reply.kind==='richReview'){
+      if(reply.groupId!==groupId)throw invalid();
+      h.richReview={...reply,handle:h.id}; return h.richReview;
+    }
+    if(reply.kind!=='richPrepared'||reply.intent.versionId!==h.input.versionId||reply.intent.targetPublicKey!==h.pk||reply.intent.manifestSha256!==h.richPreview.preview.release.contentSha256)throw invalid();
+    this.save(h,{...this.base(h),stage:'operation',groupId,action:'reviewed',operation:{id:reply.operationId,sha:reply.intent.manifestSha256,commitment:reply.intent.nonceCommitment},richIntent:reply.intent});
+    h.richReview={kind:'richPrepared',handle:h.id,groupId,reviewToken:reply.reviewToken};return h.richReview;
+  }
+  private async settleRich(h:Handle,row:Operation,cancel:boolean):Promise<RecipeUseReply> {
+    await this.identity(h);
+    const target={botId:h.input.botId,operationId:row.operation.id};
+    const status=async(type:'richStatus'|'richIssuing'|'richReconcile'|'richCancel')=>{const value=await this.daemon(h,{type,...target});if(value.kind!=='richStatus'||value.operationId!==row.operation.id)throw invalid();return value;};
+    let current=await status('richStatus');
+    if(cancel){
+      if(current.issuerState==='unissued')current=await status('richCancel');
+      else {await this.richCloud(h).cancel(row);current=await status('richReconcile');}
+    }
+    if(current.status==='applied'||current.status==='rejected')return current.settled?this.done(h,row.groupId,current.status,current.reason):this.pending(h,'installing');
+    if(cancel)return this.pending(h,'cancelling');
+    let authorization;
+    if(current.status==='prepared'&&current.issuerState!=='authorized'){
+      current=await status('richIssuing');
+      if(current.status!=='prepared'||current.issuerState!=='issuing')throw invalid();
+      try{authorization=await this.richCloud(h).authorize(row);}catch(error){if(error instanceof Unredeemable){const reconciled=await status('richReconcile');return reconciled.status==='rejected'?this.done(h,row.groupId,'rejected',reconciled.reason):this.pending(h,'installing');}throw error;}
+    }
+    const applied=await this.daemon(h,{type:'richCommit',...target,...(authorization?{authorization}:{})});
+    if(applied.kind!=='richStatus'||applied.operationId!==row.operation.id)throw invalid();
+    return (applied.status==='applied'||applied.status==='rejected')&&applied.settled?this.done(h,row.groupId,applied.status,applied.reason):this.pending(h,'installing');
+  }
   private async begin(input: Begin): Promise<RecipeUseReply> {
     if (this.starting) throw retry();
     this.starting = true;
@@ -293,7 +333,8 @@ export class RecipeUseController {
           row.stage === 'joining' ? 'joining' : row.action === 'cancel' ? 'cancelling' : 'installing',
         );
       }
-      h.preview = await this.cloud(h).preview(input.recipeId, input.versionId);
+      if(input.format==='rich-v2') h.richPreview=await this.richCloud(h).preview(input.recipeId,input.versionId);
+      else h.preview = await this.cloud(h).preview(input.recipeId, input.versionId);
       this.check(h);
       const groupId = input.groupId ?? (row && 'groupId' in row ? row.groupId : undefined);
       if (groupId && !row) this.save(h, { ...this.base(h), stage: 'group', groupId });
@@ -436,6 +477,7 @@ export class RecipeUseController {
     return reply;
   }
   private async settle(h: Handle, row: Operation, cancel: boolean): Promise<RecipeUseReply> {
+    if(row.format==='rich-v2')return this.settleRich(h,row,cancel);
     await this.identity(h);
     this.check(h);
     const target = { operationId: row.operation.id, botId: h.input.botId };
@@ -601,6 +643,10 @@ export class RecipeUseController {
           this.handles.delete(h.id);
           reply = { kind: 'closed' };
           break;
+        case 'richResolve':
+          if(row?.stage!=='group'||!h.richReview||r.reviewToken!==h.richReview.reviewToken)throw changed();
+          reply=await this.prepareRich(h,row.groupId,r);
+          break;
         case 'resolve':
           if (row?.stage !== 'group' || !h.review || r.reviewToken !== h.review.reviewToken) throw changed();
           reply = await this.prepare(h, row.groupId, r);
@@ -624,7 +670,7 @@ export class RecipeUseController {
           reply = await this.settle(h, row, true);
           break;
         case 'confirm':
-          if (!row || row.stage !== 'operation' || row.action !== 'reviewed' || !h.review) throw changed();
+          if (!row || row.stage !== 'operation' || row.action !== 'reviewed' || !(h.review||h.richReview)) throw changed();
           this.save(h, { ...row, action: 'confirm' });
           reply = await this.settle(h, row, false);
           break;

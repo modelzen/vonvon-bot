@@ -1,6 +1,7 @@
+import {RichRecipeEditor} from './RichRecipeEditor';
 import {useEffect, useReducer, useRef, useState} from 'react';
 import {communityFailureMessages, recipePublicSchema, recipeConfigSchema} from '@vonvon/protocol';
-import type {CommunityRequest, CommunityShell, RecipeConfig, RecipeDetail, RecipeDraft, RecipePublic} from '@vonvon/protocol';
+import type {CommunityRequest, CommunityShell, RecipeConfig, RecipeDetail, RecipeDraft, RecipeRoleDraft, RecipePublic} from '@vonvon/protocol';
 import {Button, InlineNotice} from '../reference/components/ui';
 import {useShellCapabilities} from '../client-context';
 import {Dialog} from '../reference/components/ui/Dialog';
@@ -9,25 +10,25 @@ import {RecipeAuthoringPage} from './authoring/RecipeAuthoring';
 import {RecipeConfiguration, RecipeDetails, RecipeMarkdown, RecipeMetadata} from './RecipeContent';
 
 const blank: {public: RecipePublic; config: RecipeConfig} = {public: {name: '', summary: '', overview: '', version: '1.0', access: 'direct'}, config: {role: ''}};
-type DraftContents = Pick<RecipeDraft, 'public' | 'config'>;
+type DraftContents = Pick<RecipeRoleDraft, 'public' | 'config'>;
 type DraftRead = {id: number; draftId: string; baseRevision: number; bufferRevision: number; minimumRevision: number; kind: 'chat' | 'conflict'} & ({status: 'loading'} | {status: 'failed'; error: string});
 type EditorDraft = {
-  model?: RecipeDraft; contents: DraftContents; bufferRevision: number; dirty: boolean; saved: boolean;
-  error?: string; review?: RecipeDraft; latest?: RecipeDraft; remoteUpdate?: RecipeDraft; read?: DraftRead;
+  model?: RecipeRoleDraft; contents: DraftContents; bufferRevision: number; dirty: boolean; saved: boolean;
+  error?: string; review?: RecipeRoleDraft; latest?: RecipeRoleDraft; remoteUpdate?: RecipeRoleDraft; read?: DraftRead;
 };
 type DraftAction =
-  | {type: 'loaded'; draft: RecipeDraft}
+  | {type: 'loaded'; draft: RecipeRoleDraft}
   | {type: 'public'; patch: Partial<RecipePublic>}
   | {type: 'config'; patch: Partial<RecipeConfig>}
   | {type: 'error'; message?: string}
   | {type: 'discard'}
-  | {type: 'saveBase'; draft: RecipeDraft}
-  | {type: 'saved'; draft: RecipeDraft; bufferRevision: number}
-  | {type: 'review'; draft?: RecipeDraft}
-  | {type: 'latest'; draft?: RecipeDraft}
+  | {type: 'saveBase'; draft: RecipeRoleDraft}
+  | {type: 'saved'; draft: RecipeRoleDraft; bufferRevision: number}
+  | {type: 'review'; draft?: RecipeRoleDraft}
+  | {type: 'latest'; draft?: RecipeRoleDraft}
   | {type: 'rebase'}
   | {type: 'readStarted'; id: number; draftId: string; minimumRevision: number; kind: DraftRead['kind']}
-  | {type: 'readResolved'; id: number; draft: RecipeDraft}
+  | {type: 'readResolved'; id: number; draft: RecipeRoleDraft}
   | {type: 'readFailed'; id: number; message: string};
 function editorDraft(state: EditorDraft, action: DraftAction): EditorDraft {
   switch (action.type) {
@@ -68,16 +69,27 @@ function editorDraft(state: EditorDraft, action: DraftAction): EditorDraft {
     }
   }
 }
-export function RecipeEditor({shell, accountId, draftId, source, onBack, onPublished}: {
-  shell: CommunityShell; accountId: string; draftId?: string; source?: RecipeDetail; onBack: () => void; onPublished: (recipe: RecipeDetail & {firstCode?: string}) => void;
+export function RecipeEditor(props: Parameters<typeof RoleRecipeEditor>[0]) {
+  const [read, setRead] = useState<RecipeDraft>();
+  const [error, setError] = useState<string>();
+  const [retry,setRetry]=useState(0);
+  useEffect(() => {if (!props.draftId) return; let active=true; void props.shell.request({type:'draft',accountId:props.accountId,draftId:props.draftId}).then(value => {if(active)setRead(value);},e => {if(active)setError(e instanceof Error?e.message:'草稿读取失败。');}); return () => {active=false;};},[props.shell,props.accountId,props.draftId,retry]);
+  if (props.draftId && !read) return <><p role="status">{error ?? '正在读取私人草稿…'}</p>{error&&<Button onClick={()=>{setError(undefined);setRetry(value=>value+1);}}>重试读取</Button>}<Button onClick={props.onBack}>返回创作中心</Button></>;
+  if (read?.format==='rich-v2') return <RichRecipeEditor {...props} draft={read}/>;
+  if (props.source?.format === 'rich-v2') return <><InlineNotice title="从来源群准备新版">请回到已应用此配方的群，核对本地来源并准备新版。富配方不会转换成仅角色草稿。</InlineNotice><Button onClick={props.onBack}>返回创作中心</Button></>;
+  return <RoleRecipeEditor {...props} initialDraft={read}/>;
+}
+function RoleRecipeEditor({shell, accountId, draftId, source, onBack, onPublished, initialDraft}: {
+  shell: CommunityShell; accountId: string; draftId?: string; source?: RecipeDetail; initialDraft?: RecipeRoleDraft; onBack: () => void; onPublished: (recipe: RecipeDetail & {firstCode?: string}) => void;
 }) {
   const sourceAllowed = !source || source.owned || source.public.access === 'direct';
   const [{model, contents, bufferRevision, dirty, saved, error, review, latest, remoteUpdate, read}, dispatch] = useReducer(editorDraft, undefined, (): EditorDraft => ({
-    contents: source ? {public: {...source.public, summary: source.public.summary ?? '', overview: source.public.overview ?? '', version: ''}, config: source.config ?? blank.config} : blank,
+    model: initialDraft,
+    contents: initialDraft ? {public:initialDraft.public,config:initialDraft.config} : source ? {public: {...source.public, summary: source.public.summary ?? '', overview: source.public.overview ?? '', version: ''}, config: source.config ?? blank.config} : blank,
     bufferRevision: 0, dirty: Boolean(source), saved: false,
   }));
   const [editing, setEditing] = useState(!draftId);
-  const [loading, setLoading] = useState(Boolean(draftId));
+  const [loading, setLoading] = useState(Boolean(draftId && !initialDraft));
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -89,17 +101,17 @@ export function RecipeEditor({shell, accountId, draftId, source, onBack, onPubli
   const {navigate} = useDraftGuard();
   useEffect(() => {live.current = true; return () => {live.current = false;};}, []);
   useEffect(() => {
-    if (!draftId) return;
+    if (!draftId || initialDraft) return;
     let active = true;
     void shell.request({type: 'draft', accountId, draftId}).then(value => {
-      if (!active) return; dispatch({type: 'loaded', draft: value}); setLoading(false);
+      if (!active) return;if(value.format==='rich-v2'){setError('草稿格式已变化，请重新打开。');setLoading(false);return;} dispatch({type: 'loaded', draft: value}); setLoading(false);
     }, e => {if (active) {setError(e instanceof Error ? e.message : '草稿读取失败。'); setLoading(false);}});
     return () => {active = false;};
   }, [shell, accountId, draftId]);
   const key = (logical: string) => {if (!keys.current.has(logical)) keys.current.set(logical, crypto.randomUUID()); return keys.current.get(logical)!;};
   const changePublic = (patch: Partial<RecipePublic>) => dispatch({type: 'public', patch});
   const changeConfig = (patch: Partial<RecipeConfig>) => dispatch({type: 'config', patch});
-  async function save(): Promise<RecipeDraft | undefined> {
+  async function save(): Promise<RecipeRoleDraft | undefined> {
     if (!sourceAllowed) {setError('其他作者的受限配方不能改编或重新发布。请分享原版本链接。'); return;}
     if (model && !dirty) return model;
     setError(undefined);
@@ -142,6 +154,7 @@ export function RecipeEditor({shell, accountId, draftId, source, onBack, onPubli
     dispatch({type: 'readStarted', id: request, draftId: id, minimumRevision, kind});
     try {
       const next = await shell.request({type: 'draft', accountId, draftId: id});
+      if(next.format==='rich-v2')throw new Error('草稿格式已变化，请重新打开。');
       if (live.current) dispatch({type: 'readResolved', id: request, draft: next});
     } catch (e) {if (live.current) dispatch({type: 'readFailed', id: request, message: e instanceof Error ? e.message : '草稿读取失败。'});}
   }
@@ -159,7 +172,7 @@ export function RecipeEditor({shell, accountId, draftId, source, onBack, onPubli
   </section>;
   if (loading) return <p role="status">正在读取私人草稿…</p>;
   if (draftId && !model) return <><InlineNotice title="草稿读取未完成" tone="warning">{error}</InlineNotice><Button onClick={onBack}>返回创作中心</Button></>;
-  if (!editing && model) return <div className="community-page"><div className="community-actions"><Button variant="ghost" onClick={onBack}>返回创作中心</Button><Button variant="primary" onClick={() => setEditing(true)}>编辑草稿</Button></div><p className="community-muted">私人草稿 · 仅自己可见</p><RecipeDetails recipe={{recipeId: model.recipeId ?? model.draftId, versionId: model.draftId, revision: model.revision, public: model.public, config: model.config, owned: true, acquired: false}}/>{chat}</div>;
+  if (!editing && model) return <div className="community-page"><div className="community-actions"><Button variant="ghost" onClick={onBack}>返回创作中心</Button><Button variant="primary" onClick={() => setEditing(true)}>编辑草稿</Button></div><p className="community-muted">私人草稿 · 仅自己可见</p><RecipeDetails draft recipe={{recipeId: model.recipeId ?? model.draftId, versionId: model.draftId, revision: model.revision, public: model.public, config: model.config, owned: true, acquired: false}}/>{chat}</div>;
   const steps = contents.config.setup?.steps ?? [];
   const updateStep = (i: number, patch: Partial<NonNullable<RecipeConfig['setup']>['steps'][number]>) => changeConfig({setup: {steps: steps.map((step, at) => at === i ? {...step, ...patch} : step)}});
   return <div className="community-page"><div className="community-heading"><div><h1>{contents.public.name || '新建私人草稿'}</h1><p>先审核配置，再填写发布信息。保存草稿不会公开。</p></div><div className="community-actions"><Button variant="ghost" onClick={() => navigate(onBack)}>返回创作中心</Button>{model && <Button disabled={busy} onClick={() => setDeleting(true)}>删除草稿</Button>}</div></div>

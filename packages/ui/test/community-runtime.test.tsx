@@ -135,7 +135,9 @@ it('recovers a lost code-batch receipt using the same key while retaining only s
   await click('重试上一批');
   const issues = calls.filter(request => request.type === 'issueCodes');
   expect(issues).toHaveLength(2); expect(issues[1]).toEqual(issues[0]);
-  expect(document.querySelector('.community-code-text')?.textContent).toBe(available.code);
+  expect(document.querySelector('.community-code-text')).toBeNull();
+  expect(document.querySelector('.community-codes')?.textContent).not.toContain(available.code);
+  expect(document.querySelector('.community-codes')?.textContent).toContain('复制分享码');
   expect(document.querySelector('.community-codes')?.textContent).toContain('已兑换');
   expect(document.querySelector('.community-codes')?.textContent).toContain('已停用');
 });
@@ -336,4 +338,27 @@ it('retains edited text and reconciles an uncertain submission across a native d
   await click('获取配方');expect(attempts()).toHaveLength(2);
   expect(attempts()[1]!.requestId).not.toBe(attempts()[0]!.requestId);
   expect(attempts()[1]!.code).toBe('New-Code');
+});
+
+it('renders complete rich configuration through the strict facade and hides every private tab in coded introductions',async()=>{
+  const {canonicalizeRichRecipeContent}=await import('@vonvon/protocol');
+  const {readFileSync}=await import('node:fs');const {resolve}=await import('node:path');
+  const content=JSON.parse(readFileSync(resolve(process.cwd(),'../protocol/test/fixtures/recipe-rich-v2.content.json'),'utf8'));
+  content.parts=[];content.memories=[];delete content.finalLogo;
+  const doc=canonicalizeRichRecipeContent(content);
+  const normal=handle;let acquired=false;
+  handle=async request=>{
+    if(request.type==='detail')return {...summary,format:'rich-v2',public:{...recipe.public,access:'coded'},owned:false,acquired,...(acquired?{rich:{content:doc.content,texts:{},canonical:Buffer.from(doc.canonicalUTF8).toString('base64url')}}:{})};
+    if(request.type==='acquire'){acquired=true;return {recipeId:A,versionId:B,owned:false,acquired:true};}
+    return normal(request);
+  };
+  await draw();await act(async()=>document.querySelector<HTMLButtonElement>('.community-card')!.click());
+  expect(document.querySelector('[aria-label="配方详细信息"]')?.textContent).toBe('概览');
+  expect(document.querySelector('.community-detail')?.textContent).not.toContain(content.role.text.value);
+  await fill('分享码','VALID');await click('获取配方');
+  for(const section of ['模型与权限','能力','沟通方式','记忆','任务','使用前准备']){
+    await click(section);expect(document.querySelector('.community-detail-content h2')?.textContent).toBe(section==='能力'?'角色':section);
+  }
+  await click('记忆');expect(document.querySelector('.community-config')?.textContent).toBe('记忆');
+  await click('能力');expect(document.querySelector('.community-detail-content')?.textContent).toContain(content.role.text.value);
 });

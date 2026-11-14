@@ -33,7 +33,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   const setQuery = (query: string) => community.setCatalog(old => ({...old, query}));
   const setCatalog = (result: CommunityResponses['catalog'] | ((old: CommunityResponses['catalog'] | undefined) => CommunityResponses['catalog'] | undefined)) => community.setCatalog(old => ({...old, result: typeof result === 'function' ? result(old.result) : result}));
   const [library, setLibrary] = useState<CommunityResponses['library']>();
-  const [drafts, setDrafts] = useState<RecipeDraft[]>();
+  const [drafts, setDrafts] = useState<CommunityResponses['drafts']['items']>();
   const [publications, setPublications] = useState<RecipeSummary[]>();
   const [detail, setDetail] = useState<RecipeDetail>();
   const [shareUrl, setShareUrl] = useState<string>();
@@ -136,9 +136,9 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
   }
   const login = <div className="community-empty"><h2>登录后继续</h2><p>{accountStatusText(account.status, account.supported)}</p><Button variant="primary" disabled={!account.supported || account.status?.kind === 'signingIn'} onClick={() => void account.login()}>登录</Button></div>;
   const privatePage = route.kind === 'library' || route.kind === 'workspace' || route.kind === 'authoring' || route.kind === 'draft' || route.kind === 'detail' && route.privateView;
-  if (route.kind === 'authoring' && accountId) return <RecipeAuthoringPage onBack={() => open({kind: 'workspace'})} onSaved={draftId => open({kind: 'draft', draftId})}/>;
+  if (route.kind === 'authoring' && accountId) return <RecipeAuthoringPage parent={route.parent} onBack={() => open({kind: 'workspace'})} onSaved={draftId => open({kind: 'draft', draftId})}/>;
   if (route.kind === 'draft' && accountId) return <RecipeEditor key={route.draftId ?? route.source?.versionId ?? 'new'} shell={shell} accountId={accountId} draftId={route.draftId} source={route.source}
-    onBack={() => open({kind: 'workspace'})} onPublished={recipe => {setNotice(recipe.firstCode ? '本版本已发布。首枚分享码：' + recipe.firstCode : '本版本已发布。'); community.open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}, privateView: true});}}/>;
+    onBack={() => open({kind: 'workspace'})} onPublished={recipe => {setNotice(recipe.firstCode ? '本版本已发布。首枚分享码已生成，可在分享码管理中复制。' : '本版本已发布。'); community.open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}, privateView: true});}}/>;
   return <div className="community-page">
     <header className="community-heading"><div><h1>社区</h1><p>把适合你的 Bot 配方，带进自己的群聊。</p></div><div className="community-actions"><Button variant={route.kind === 'library' ? 'primary' : 'ghost'} onClick={() => open({kind: 'library'})}>已获取</Button><Button variant={route.kind === 'workspace' ? 'primary' : 'ghost'} onClick={() => open({kind: 'workspace'})}>创作中心</Button></div></header>
     {route.kind !== 'catalog' && <div><Button variant="ghost" onClick={() => open({kind: 'catalog'})}>返回 Bot 配方</Button></div>}
@@ -147,9 +147,9 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
     {privatePage && !accountId ? login : <>
       {route.kind === 'catalog' && <>
         <nav className="community-tabs" aria-label="社区类型"><button type="button" aria-current={tab === 'recipes' ? 'page' : undefined} onClick={() => setTab('recipes')}>Bot 配方</button><button type="button" aria-current={tab === 'rental' ? 'page' : undefined} onClick={() => setTab('rental')}>Bot 租赁</button></nav>
-        {tab === 'rental' ? <div className="community-empty"><h2>敬请期待</h2><p>Bot 租赁正在准备中。</p></div> : <>
-          <form className="community-search" role="search" onSubmit={event => {event.preventDefault(); if (Array.from(query).length > 120) {setError('搜索词最多 120 个字符。'); return;} community.setCatalog(old => ({...old, search: query.trim(), result: undefined, scrollTop: 0})); setRefresh(old => old + 1);}}><input aria-label="搜索配方" placeholder="搜索名称、简介" value={query} onChange={event => setQuery(event.target.value)}/><Button disabled={busy} type="submit">搜索</Button></form>
-          {catalog?.hero && <RecipeCard recipe={catalog.hero} hero onOpen={() => open({kind: 'detail', recipe: {recipeId: catalog.hero!.recipeId, versionId: catalog.hero!.versionId}})}/>}
+        {tab === 'rental' ? <div className="community-empty"><h2>敬请期待</h2></div> : <>
+          {(search || catalog?.hero || Boolean(catalog?.items.length)) && <form className="community-search" role="search" onSubmit={event => {event.preventDefault(); if (Array.from(query).length > 120) {setError('搜索词最多 120 个字符。'); return;} community.setCatalog(old => ({...old, search: query.trim(), result: undefined, scrollTop: 0})); setRefresh(old => old + 1);}}><input aria-label="搜索配方" placeholder="搜索名称、简介" value={query} onChange={event => setQuery(event.target.value)}/><Button disabled={busy} type="submit">搜索</Button></form>}
+          {catalog?.hero && <RecipeCard recipe={catalog.hero} hero heroKind={catalog.heroKind} onOpen={() => open({kind: 'detail', recipe: {recipeId: catalog.hero!.recipeId, versionId: catalog.hero!.versionId}})}/>}
           {catalog && <div className="community-grid">{catalog.items.map(recipe => <RecipeCard key={recipe.versionId} recipe={recipe} onOpen={() => open({kind: 'detail', recipe: {recipeId: recipe.recipeId, versionId: recipe.versionId}})}/>)}</div>}
           {catalog && !catalog.hero && !catalog.items.length && <div className="community-empty"><h2>{search ? '没有找到匹配的配方' : '社区正在准备第一份配方'}</h2><p>{search ? '换一个名称或关键词试试。' : '你也可以在创作中心准备自己的作品。'}</p></div>}
           {catalog?.nextCursor && <div><Button disabled={busy} onClick={() => void run(async () => {const current = generation.current; const next = await shell.request({type: 'catalog', ...(accountId ? {accountId} : {}), query: search, cursor: catalog.nextCursor!}); if (live.current && current === generation.current) setCatalog(old => old ? {...old, items: uniqueRecipes(old.items, next.items), nextCursor: next.nextCursor} : next);})}>加载更多</Button></div>}
@@ -164,7 +164,7 @@ function CommunitySession({shell, accountId}: {shell: CommunityShell; accountId?
       </>}
       {route.kind === 'detail' && detail && <>
         <RecipeDetails recipe={detail} share={shareUrl && <CopyButton key={shareUrl} value={shareUrl}/>} action={detail.owned || detail.acquired ? <Button variant="primary" disabled={!community.onUse} onClick={() => community.onUse?.(detail)}>添加到群聊</Button> : <Button variant="primary" disabled={busy || detail.public.access === 'coded' && Boolean(accountId) && !code.trim()} onClick={() => void run(acquire)}>获取配方</Button>}
-          management={route.privateView && detail.owned ? <div className="community-actions"><Button onClick={() => open({kind: 'draft', source: detail})}>准备新版</Button></div> : undefined}/>
+          management={route.privateView && detail.owned ? <div className="community-actions"><Button onClick={() => open(detail.format==='rich-v2'?{kind:'authoring',parent:{recipeId:detail.recipeId,versionId:detail.versionId}}:{kind:'draft',source:detail})}>准备新版</Button></div> : undefined}/>
         {!detail.owned && !detail.acquired && detail.public.access === 'coded' && accountId && <label className="community-editor">分享码<input aria-label="分享码" autoComplete="off" value={code} maxLength={128} onChange={event => editCode(detail.versionId, event.target.value)}/></label>}
         {(detail.owned || detail.acquired) && !community.onUse && <p className="community-muted">已保存在账号中。请使用最新版 Vonvon Bot 桌面应用，把配方添加到群聊。</p>}
         {route.privateView && detail.owned && detail.public.access === 'coded' && <RecipeCodes key={detail.versionId} shell={shell} accountId={accountId!} versionId={detail.versionId}/>}
@@ -207,9 +207,9 @@ function RecipeCodes({shell, accountId, versionId}: {shell: CommunityShell; acco
       }
     })}>{pendingIssue.current ? '重试上一批' : '生成分享码'}</Button></div>
     {batch && <p role="status" className="community-muted">本批 {batch.items.length} 枚：{batch.items.filter(item => item.status === 'available').length} 枚可用，{batch.items.filter(item => item.status === 'redeemed').length} 枚已兑换，{batch.items.filter(item => item.status === 'disabled').length} 枚已停用。</p>}
-    {codes && <><pre className="community-code-text">{codes}</pre><CopyButton key={codes} value={codes} label="复制分享码"/></>}
+    {codes && <><CopyButton key={codes} value={codes} label="复制分享码"/></>}
     {page?.items.length === 0 && <p className="community-muted">没有分享码。</p>}
-    {Boolean(page?.items.length) && <div className="community-list">{page?.items.map(item => <div className="community-list-row" key={item.codeId}><div><strong>…{item.suffix}</strong><small>{{available: '可用', redeemed: '已兑换', disabled: '已停用'}[item.status]}{item.redeemedAt ? ' · ' + new Date(item.redeemedAt).toLocaleString() : ''}</small></div>{item.status === 'available' && <><Button disabled={busy} onClick={() => void run(async () => {const result = await shell.request({type: 'revealCode', accountId, codeId: item.codeId, requestId: requestId('reveal:' + item.codeId)}); if (live.current) setCodes(result.code ?? '');})}>显示</Button><Button disabled={busy} onClick={() => setDisable(item.codeId)}>停用</Button></>}</div>)}</div>}
+    {Boolean(page?.items.length) && <div className="community-list">{page?.items.map(item => <div className="community-list-row" key={item.codeId}><div><strong>…{item.suffix}</strong><small>{{available: '可用', redeemed: '已兑换', disabled: '已停用'}[item.status]}{item.redeemedAt ? ' · ' + new Date(item.redeemedAt).toLocaleString() : ''}</small></div>{item.status === 'available' && <><Button disabled={busy} onClick={() => void run(async () => {const result = await shell.request({type: 'revealCode', accountId, codeId: item.codeId, requestId: requestId('reveal:' + item.codeId)}); if (live.current) setCodes(result.code ?? '');})}>准备复制</Button><Button disabled={busy} onClick={() => setDisable(item.codeId)}>停用</Button></>}</div>)}</div>}
     {page?.nextCursor && <div><Button disabled={busy} onClick={() => void run(() => load(page.nextCursor!))}>加载更多</Button></div>}
     <Dialog open={Boolean(disable)} title="停用这枚分享码" onClose={busy ? undefined : () => setDisable(undefined)} footer={<><Button onClick={() => setDisable(undefined)} disabled={busy}>保留</Button><Button disabled={busy} onClick={() => void run(async () => {if (!disable) return; await shell.request({type: 'disableCode', accountId, codeId: disable, requestId: requestId('disable:' + disable)}); if (!live.current) return; setCodes(''); setDisable(undefined); await load();})}>停用</Button></>}><p>这枚尚未使用的分享码将无法再兑换。</p>{error && <InlineNotice title="停用未完成" tone="warning">{error}</InlineNotice>}</Dialog>
   </section>;

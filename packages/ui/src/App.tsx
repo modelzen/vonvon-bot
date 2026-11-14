@@ -476,7 +476,7 @@ function DesktopApp() {
   }
   // devices-ui-3: the paired toast sits outside App and asks for 设备 → 已配对的设备 this way (on 应用与启动 until 2026-11-03).
   const openSetting = useRef<(destination: Destination) => void>(() => undefined);
-  openSetting.current = destination => { navigate(() => { setModal(current => current?.kind === 'join' && current.suspended ? null : current); setJoinedTarget(undefined); setPage(destination.page); setSetupAgentId(undefined); setFeatureId(undefined); setSettingsReturn(undefined); setSearchTarget(destination.section ? destination : undefined); }); };
+  openSetting.current = openDestination;
   useEffect(() => {
     const open = (event: Event) => { const detail = (event as CustomEvent<Destination | undefined>).detail; if (detail?.page) openSetting.current(detail); };
     window.addEventListener(OPEN_SETTING_EVENT, open);

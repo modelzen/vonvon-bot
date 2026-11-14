@@ -1,5 +1,6 @@
+import {RichSetupPanel} from './RichSetupPanel';
 import {useEffect, useMemo, useRef, useState} from 'react';
-import {groupIdSchema, type DesktopRecipeSourceReply, type DesktopRecipeSourceRequest, type ProjectSettingsView} from '@vonvon/protocol';
+import {groupIdSchema, type AgentId,type GroupId,type DesktopRecipeSourceReply, type DesktopRecipeSourceRequest, type ProjectSettingsView} from '@vonvon/protocol';
 import {useAccount} from '../account-context';
 import {useActiveDevice, useShellCapabilities} from '../client-context';
 import {Button, InlineNotice} from '../reference/components/ui';
@@ -8,11 +9,9 @@ import {useRecipeUse} from './recipe-use-context';
 import {useCommunity} from '../community/community-context';
 import {useDraftGuard} from '../settings/DraftGuard';
 
-export function RecipeSourcePanel({view}: {view: ProjectSettingsView}) {
-  const shell = useShellCapabilities();
-  return shell?.recipeSource ? <RecipeSourceContent view={view}/> : null;
-}
-function RecipeSourceContent({view}: {view: ProjectSettingsView}) {
+export function RecipeSourcePanel({view}: {view: ProjectSettingsView}) {return <RecipeSourceTargetPanel botId={view.scope.botId} groupId={groupIdSchema.parse(view.identity.chatId)}/>;}
+export function RecipeSourceTargetPanel({botId,groupId}:{botId:AgentId;groupId:GroupId}){const shell=useShellCapabilities();return shell?.recipeSource?<RecipeSourceContent botId={botId} groupId={groupId}/>:null;}
+function RecipeSourceContent({botId,groupId}:{botId:AgentId;groupId:GroupId}) {
   const shell = useShellCapabilities();
   const useRecipe = useRecipeUse();
   const community = useCommunity();
@@ -20,7 +19,7 @@ function RecipeSourceContent({view}: {view: ProjectSettingsView}) {
   const device = useActiveDevice();
   const account = useAccount();
   const accountId = account.status?.kind === 'signedIn' ? account.status.accountId : undefined;
-  const scope = useMemo(() => ({viewId: device.id, botId: view.scope.botId, groupId: view.identity.chatId, accountId}), [device.id, view.scope.botId, view.identity.chatId, accountId, shell?.recipeSource, useRecipe?.refreshVersion]);
+  const scope = useMemo(() => ({viewId: device.id, botId: botId, groupId: groupId, accountId}), [device.id, botId, groupId, accountId, shell?.recipeSource, useRecipe?.refreshVersion]);
   const [read, setRead] = useState<{scope: typeof scope; result: DesktopRecipeSourceReply}>();
   const [failure, setFailure] = useState<{scope: typeof scope; message: string}>();
   const [working, setWorking] = useState<typeof scope>();
@@ -57,11 +56,12 @@ function RecipeSourceContent({view}: {view: ProjectSettingsView}) {
       {latest && <SettingsRow title={`有新版本 · ${latest.version}`} description={latest.entitled ? '预览当前内容与新版差异，确认后再更新。' : '此版本需要先在社区获取。'}
         trailing={<div className="recipe-source-actions"><Button size="sm" disabled={busy} onClick={() => void request('ignore')}>忽略此版本</Button><Button size="sm" variant="primary" disabled={busy || !useRecipe?.available || !latest.entitled && !community}
           onClick={() => {
-            const recipe = {recipeId: latest.recipeId, versionId: latest.versionId, name: '群聊配方', version: latest.version};
-            const target = {botId: view.scope.botId, groupId: groupIdSchema.parse(scope.groupId)};
+            const recipe = {...(latest.format==='rich-v2'?{format:'rich-v2' as const}:{}),recipeId: latest.recipeId, versionId: latest.versionId, name: '群聊配方', version: latest.version};
+            const target = {botId: botId, groupId: groupIdSchema.parse(scope.groupId)};
             if (latest.entitled) useRecipe?.start(recipe, target);
             else navigate(() => community?.open({kind: 'detail', recipe, useTarget: target}));
           }}>{latest.entitled ? '预览更新' : '获取新版'}</Button></div>}/>}
+      {source.format==='rich-v2'&&<RichSetupPanel key={`${device.id}:${botId}:${groupId}:${source.sourceToken}`} botId={botId} groupId={groupId}/>}
       {!accountId && <p className="recipe-source-note">登录后可检查新版本。当前配方继续保留。</p>}
     </> : result ? <SettingsRow title="尚未应用社区配方" description="本群还没有社区配方来源。"/> : <p className="recipe-source-note" role="status">正在读取配方来源…</p>}
     {busy && result && <p className="recipe-source-note" role="status">正在核对配方版本…</p>}

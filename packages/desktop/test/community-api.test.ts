@@ -22,7 +22,7 @@ function fixture() {
     status: () => state, onStatus: listener => {listeners.add(listener); return () => {listeners.delete(listener);};},
     login: async () => state, cancelLogin: async () => state, logout: async () => state, dispose: async () => {},
     request: vi.fn(async () => Response.json(draft)),
-    publicRequest: vi.fn(async () => Response.json({hero: summary, items: [], nextCursor: null})),
+    publicRequest: vi.fn(async () => Response.json({heroKind:'latest',hero: summary, items: [], nextCursor: null})),
     recipeLink: () => `https://community.example/recipes/${recipeId}/versions/${versionId}`,
   };
   return {account, emit: (next: AccountStatus) => {state = next; listeners.forEach(listener => listener(next));}, listeners};
@@ -31,8 +31,8 @@ function fixture() {
 describe('native community boundary', () => {
   it('keeps anonymous catalog requests on the public route and encodes search as query data', async () => {
     const f = fixture(); f.emit({kind: 'signedOut'});
-    expect(await communityRequest(f.account, {type: 'catalog', query: '文字 & cursor=bad'})).toEqual({hero: summary, items: [], nextCursor: null});
-    expect(f.account.publicRequest).toHaveBeenCalledWith('/v1/community/recipes?q=%E6%96%87%E5%AD%97+%26+cursor%3Dbad');
+    expect(await communityRequest(f.account, {type: 'catalog', query: '文字 & cursor=bad'})).toEqual({heroKind:'latest',hero: summary, items: [], nextCursor: null});
+    expect(f.account.publicRequest).toHaveBeenCalledWith('/v2/community/recipes?q=%E6%96%87%E5%AD%97+%26+cursor%3Dbad');
     expect(f.account.request).not.toHaveBeenCalled();
     expect(f.listeners.size).toBe(0);
   });
