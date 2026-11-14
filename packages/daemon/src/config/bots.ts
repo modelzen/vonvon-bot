@@ -179,7 +179,6 @@ function ownBots<T>(operation: (registry: BotsRegistry) => Promise<T>): Promise<
   return run;
 }
 
-/** Old readers strictly parse every allocation as an Allocation and refuse the whole registry before Bot ownership or removal. */
 export function requireRichRegistry():Promise<void>{return ownBots(async registry=>{
   if(registry.recipeRegistryFormat===2)return;
   const backup=join(paths.appDir,'bots.before-recipe-v2.json'), bytes=await readFile(paths.botsFile);

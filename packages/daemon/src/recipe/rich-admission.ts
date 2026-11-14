@@ -1,4 +1,3 @@
-/** Acquire before reading the active pointer. A switch can never commit while an old holder is executing. */
 export class RecipeAdmissions {
   private slots = new Map<string, { readers: number; closed: boolean; drained?: () => void }>();
   private entry(slot: string) {
