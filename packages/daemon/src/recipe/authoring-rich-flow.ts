@@ -1,3 +1,5 @@
+import {recipeFileIO} from './rich-file-helper';
+import {groupBackendId} from '../config/execution';
 import {staticLogoFormat} from '../../../../services/recipe-api/src/logo-format.mjs';
 import {createHash,randomUUID} from 'node:crypto';
 import type {LarkChannel} from '@larksuiteoapi/node-sdk';
@@ -18,6 +20,7 @@ type Preparation=Extract<RecipeAuthoringRequest,{type:'richPrepare'}>;
 type InventoryOptions=Preparation['selection']['options'];
 export interface RichLocalDraft {
   selectionDigest?:string;
+  newFields?:string[];
   sourceRef?:string;
   source?:{groupId:string;options:InventoryOptions;token:string;selected:string[]};
   base?:{canonical:string;selected:string[];origins?:Record<string,RichOrigin>};
@@ -27,6 +30,13 @@ export interface RichLocalDraft {
   destinationDraftId?:string;
 }
 export interface RichNativeOptions {bot:BotIdentity;channel:LarkChannel;tasks?:(chat:string)=>Promise<ScheduledTaskView[]>;managedSources?:(row:Project,root:string)=>Promise<ManagedSourceItem[]>}
+export async function richSkillOptions(native:RichNativeOptions,group:string){
+  const row=await atSource(native.channel,native.bot,group,r=>structuredClone(r));
+  const provider=groupBackendId(row)==='claude-agent'?'.claude':'.agents';
+  const result=await recipeFileIO({operation:'skills',provider,root:row.cwd});
+  if(!await atSource(native.channel,native.bot,group,r=>r.bindingIncarnation===row.bindingIncarnation&&r.projectSettingsRevision===row.projectSettingsRevision&&r.cwd===row.cwd))throw new Error('来源群已变化。');
+  return result.skills??[];
+}
 export async function readRichSource(native:RichNativeOptions,scope:string,account:string,group:string,options:InventoryOptions){
   const row=await atSource(native.channel,native.bot,group,row=>structuredClone(row));
   const seed=wireDigest([scope,account,row.bindingIncarnation]);
@@ -35,7 +45,8 @@ export async function readRichSource(native:RichNativeOptions,scope:string,accou
   if('richRecipe' in row && row.richRecipe){
     if(!native.managedSources)throw new Error('需要核对当前已安装配方的来源。');
     const managed=await native.managedSources(row,botPaths(native.bot.appId).dir);
-    applyManagedInventory(inventory.content,inventory.evidence,managed,account);
+    const visible=managed.filter(item=>(options.includeBotMemories||item.kind!=='memories')&&(options.includeTasks||item.kind!=='tasks'));
+    applyManagedInventory(inventory.content,inventory.evidence,visible,account);
     inventory.lease=wireDigest([inventory.lease,managed]);
   }
   const recheck=await atSource(native.channel,native.bot,group,live=>live.bindingIncarnation===row.bindingIncarnation&&live.projectSettingsRevision===row.projectSettingsRevision);
@@ -70,18 +81,26 @@ export function preparedRich(req:Preparation,inventory:Awaited<ReturnType<typeof
     staticLogoFormat(bytes);
     members.push({itemId:inventoryAlias(inventory.lease,'logo'),kind:'finalLogo',bytes:selection.logo,sha256:createHash('sha256').update(bytes).digest('hex')});
   }
-  return {selectionDigest:wireDigest(selection),members,source:{groupId:req.groupId,options:selection.options,token:inventory.lease,selected:selection.selected},request};
+  return {newFields:[],selectionDigest:wireDigest(selection),members,source:{groupId:req.groupId,options:selection.options,token:inventory.lease,selected:selection.selected},request};
 }
 export function richReviewDigest(rich:RichLocalDraft){
   if(!rich.request)throw new Error('缺少当前审核内容。');
   return rich.members?.length ? wireDigest({request:rich.request,members:rich.members.map(({itemId,kind,sha256})=>({itemId,kind,sha256}))}):wireDigest(rich.request);
 }
-export function bindRichMembers(rich:RichLocalDraft,descriptors:RecipeRichContent['parts']){
-  if(!rich.request||!('content' in rich.request)||!rich.members||descriptors.length!==rich.members.length)throw new Error('附件核对失败。');
+export function bindRichMembers(rich:RichLocalDraft,descriptors:RecipeRichContent['parts'],packageId:string){
+  if(!rich.request||!rich.members||descriptors.length!==rich.members.length)throw new Error('附件核对失败。');
   const request=structuredClone(rich.request);
   for(const [index,m] of rich.members.entries()){
     const d=descriptors[index]!;
     if(d.kind!==m.kind)throw new Error('附件类型改变。');
+    if(m.kind==='finalLogo')request.logoUpload={packageId,inputSha256:m.sha256};
+    if(!('content' in request)){
+      const set=request.payload.changes.find(c=>c.op==='setFinalLogo'&&c.objectId===m.itemId);
+      if(!set||set.op!=='setFinalLogo'||m.kind!=='finalLogo'||request.newParts?.length)throw new Error('Logo 核对失败。');
+      set.objectId=d.objectId;
+      request.newParts=[d];
+      continue;
+    }
     if(m.kind==='text'){
       const file=request.content.files.find(f=>f.itemId===m.itemId);
       if(file?.text.kind!=='inline'||d.sha256!==m.sha256||d.bytes!==Buffer.byteLength(file.text.value))throw new Error('所选附件内容改变。');
@@ -92,15 +111,20 @@ export function bindRichMembers(rich:RichLocalDraft,descriptors:RecipeRichConten
     }
     request.content.parts.push(d);
   }
-  canonicalizeRichRecipeContent(request.content);
+  if('content' in request)canonicalizeRichRecipeContent(request.content);
   if(rich.boundRequest&&wireDigest(rich.boundRequest)!==wireDigest(request))throw new Error('附件收据已变化。');
   return request;
 }
 export function richMemberCap(rich:RichLocalDraft){
-  if(!rich.request||!('content' in rich.request))throw new Error('缺少核对过的来源。');
+  if(!rich.request)throw new Error('缺少核对过的来源。');
   const sizes=rich.members?.map(m=>({kind:m.kind,bytes:Buffer.from(m.bytes,'base64url').length}))??[];
   const text=sizes.filter(x=>x.kind==='text').reduce((sum,x)=>sum+x.bytes,0);
   const logo=sizes.find(x=>x.kind==='finalLogo');
+  if(!('content' in rich.request)){
+    if(!logo||sizes.length!==1)throw new Error('Logo 核对失败。');
+    const base=Buffer.from(rich.request.baseCanonical,'base64url').length;
+    return Math.max(logo.bytes+131072,131072+2*Math.min(1048576,base+Buffer.byteLength(wireJson(rich.request.payload))+2048));
+  }
   const skeleton=structuredClone(rich.request.content);
   for(const m of rich.members??[]){
     const bytes=Buffer.from(m.bytes,'base64url').length;
@@ -121,9 +145,11 @@ export function richMemberCap(rich:RichLocalDraft){
 export function typedRichEdit(req:Extract<RecipeAuthoringRequest,{type:'richEdit'}>):RichLocalDraft{
   const base={canonical:req.canonical,selected:req.selected};
   const content=verifyEditBase(req.canonical,req.selected);
-  if(!req.changes){if(req.access)throw new Error('请附上需保存的草稿字段。');return {base};}
+  if(!req.changes&&!req.logo){if(req.access)throw new Error('请附上需保存的草稿字段。');return {base};}
   const allowed=new Set(req.selected);
-  for(const change of req.changes){
+  const changes=[...(req.changes??[])];
+  for(const change of changes){
+    if(change.op==='setFinalLogo')throw new Error('请选择原始 Logo 文件。');
     if(!safeEditValue(change))throw new Error('所选编辑含敏感内容。');
     if(change.op==='addSetup'){
       if(change.source.kind!=='accountClaim')throw new Error('请在源设备选择需要继承的步骤。');
@@ -136,9 +162,19 @@ export function typedRichEdit(req:Extract<RecipeAuthoringRequest,{type:'richEdit
       if(!allowed.has(change.source.itemId)||'parentItemId' in change.source&&!allowed.has(change.source.parentItemId))throw new Error('需要选中复制来源和目标。');
     }else if(!allowed.has(change.itemId))throw new Error('编辑目标不在核对范围内。');
   }
+  const members:NonNullable<RichLocalDraft['members']>=[];
+  if(req.logo){
+    if(content.finalLogo&&!allowed.has(content.finalLogo.itemId))throw new Error('请先选择要替换的 Logo。');
+    const bytes=Buffer.from(req.logo,'base64url');
+    if(bytes.length>2097152||bytes.toString('base64url')!==req.logo)throw new Error('Logo 无效。');
+    staticLogoFormat(bytes);
+    const objectId=randomUUID();
+    changes.push({op:'setFinalLogo',...(content.finalLogo&&{itemId:content.finalLogo.itemId}),objectId});
+    members.push({itemId:objectId,kind:'finalLogo',bytes:req.logo,sha256:createHash('sha256').update(bytes).digest('hex')});
+  }
   canonicalizeRichRecipeContent(content);
-  return {base,request:{format:'rich-v2',...(req.access&&{access:req.access}),baseCanonical:req.canonical,...(req.source&&{candidates:[req.source]}),payload:{
-    format:'rich-v2',purpose:'editDraft',draftId:req.draftId,baseRevision:req.baseRevision,requestId:randomUUID(),schemaVersion:2,changes:req.changes}}};
+  return {base,members,selectionDigest:wireDigest({draftId:req.draftId,revision:req.baseRevision,selected:req.selected,changes:req.changes??[],access:req.access??null,logo:members[0]?.sha256??null}),request:{format:'rich-v2',...(req.access&&{access:req.access}),baseCanonical:req.canonical,...(req.source&&{candidates:[req.source]}),payload:{
+    format:'rich-v2',purpose:'editDraft',draftId:req.draftId,baseRevision:req.baseRevision,requestId:randomUUID(),schemaVersion:2,changes}}};
 }
 export function richEditTargets(content:RecipeRichContent,selected:readonly string[]):RichModelItem[]{
   const items:RichModelItem[]=[];
@@ -169,11 +205,11 @@ export function richCardReview(op:LocalOperation){
   const request=op.rich?.request;
   if(!request)return;
   const fields='content' in request ? [
-    ...Object.entries(request.content.public).map(([field,v])=>({label:field,valueJson:JSON.stringify(v.value)})),
-    ...request.content.setup.map((step,i)=>({label:'准备步骤 '+(i+1),valueJson:wireJson({title:step.title,instructions:step.instructions,
+    ...Object.entries(request.content.public).filter(([,v])=>!op.rich?.newFields||op.rich.newFields.includes(v.itemId)).map(([field,v])=>({label:field,valueJson:JSON.stringify(v.value)})),
+    ...request.content.setup.filter(v=>!op.rich?.newFields||op.rich.newFields.includes(v.itemId)).map((step,i)=>({label:'准备步骤 '+(i+1),valueJson:wireJson({title:step.title,instructions:step.instructions,
       kind:step.kind,required:step.required,action:step.action,...(step.check!==undefined&&{check:step.check})})})),
-    {label:'已在 App 核对的来源',valueJson:'规则 '+request.content.rules.length+'、技能 '+request.content.skills.length+'、任务 '+request.content.tasks.length+'、记忆 '+request.content.memories.length+'、设置 '+request.content.settings.length+'。'},
-  ] : [...request.payload.changes.map(c=>({label:c.op,valueJson:wireJson(c)})),...(request.access?[{label:'获取方式',valueJson:request.access==='coded'?'凭码获取':'直接获取'}]:[])];
+    {label:'已在 App 核对的来源',valueJson:'公开字段 4、准备步骤 '+request.content.setup.length+'、规则 '+request.content.rules.length+'、技能 '+request.content.skills.length+'、任务 '+request.content.tasks.length+'、记忆 '+request.content.memories.length+'、设置 '+request.content.settings.length+'。'},
+  ] : [...request.payload.changes.map(c=>c.op==='setFinalLogo'?{label:'所选 Logo 原图 SHA-256',valueJson:op.rich?.members?.find(m=>m.kind==='finalLogo')?.sha256??''}:{label:c.op,valueJson:wireJson(c)}),...(request.access?[{label:'获取方式',valueJson:request.access==='coded'?'凭码获取':'直接获取'}]:[])];
   return {draftId:op.view.draftId??op.view.operationId,revision:op.view.baseRevision??1,payloadDigest:richReviewDigest(op.rich!),fields};
 }
 export function verifyEditBase(raw:string,selected:readonly string[]){
@@ -248,7 +284,9 @@ export async function chatRichProposal(op:LocalOperation,instruction:string,sign
       request.origins.push({itemId,source});
     }
     canonicalizeRichRecipeContent(request.content);
-    return {kind:'proposal',request} as const;
+    const newFields=[...new Set([...(rich.newFields??[]),...parsed.changes.flatMap(c=>'itemId' in c&&c.itemId?[c.itemId]:[]),
+      ...request.content.setup.filter(step=>!original.content.setup.some(s=>s.itemId===step.itemId)).map(s=>s.itemId)])];
+    return {kind:'proposal',request,newFields} as const;
   }
   if(!op.view.draftId||!op.view.baseRevision||!base)throw new Error('缺少当前草稿修订。');
   for(const value of parsed.setup)parsed.changes.push({op:'addSetup',value,source});

@@ -121,3 +121,90 @@ func TestHeldDirectoryReplacement(t *testing.T) {
 		t.Fatal("replaced approved root accepted")
 	}
 }
+
+func TestReadAfterMutationWithAliasedMetadata(t *testing.T) {
+	dir := fixtureRoot(t)
+	path := filepath.Join(dir, "readme.txt")
+	if e := os.WriteFile(path, []byte("first"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	root, done, e := openRoot(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer done()
+	file, e := child(root, "readme.txt", read)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer file.close()
+	if e = os.WriteFile(path, []byte("other"), 0600); e != nil {
+		if writerExcluded(e) {
+			return
+		}
+		t.Fatal(e)
+	}
+	// Model a filesystem whose revision timestamps alias across this overwrite.
+	file.meta, e = inspect(file.file)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = file.bytes(fileCap); e == nil {
+		t.Fatal("changed bytes with aliased metadata accepted")
+	}
+	if e = file.check(); e == nil {
+		t.Fatal("final check accepted changed bytes with aliased metadata")
+	}
+}
+
+func TestHeldReadIsRepeatable(t *testing.T) {
+	dir := fixtureRoot(t)
+	if e := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("stable"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	root, done, e := openRoot(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer done()
+	file, e := child(root, "readme.txt", read)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer file.close()
+	for i := 0; i < 2; i++ {
+		b, e := file.bytes(fileCap)
+		if e != nil || string(b) != "stable" {
+			t.Fatalf("unchanged held read failed: %q %v", b, e)
+		}
+	}
+}
+
+func TestHeldReadLimits(t *testing.T) {
+	dir := fixtureRoot(t)
+	path := filepath.Join(dir, "readme.txt")
+	if e := os.WriteFile(path, make([]byte, fileCap+1), 0600); e != nil {
+		t.Fatal(e)
+	}
+	root, done, e := openRoot(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer done()
+	file, e := child(root, "readme.txt", read)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = file.bytes(fileCap); e == nil {
+		t.Fatal("oversized source read accepted")
+	}
+	file.close()
+	if e = os.WriteFile(path, make([]byte, logicalCap+1), 0600); e != nil {
+		t.Fatal(e)
+	}
+	file, e = child(root, "readme.txt", read)
+	if e == nil {
+		file.close()
+		t.Fatal("oversized held snapshot accepted")
+	}
+}

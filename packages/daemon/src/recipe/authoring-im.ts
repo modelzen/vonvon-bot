@@ -4,8 +4,9 @@ import type { CandidateCardDetails } from './draft-instruction';
 import { button, card, md, type CardElement } from '../card/cards';
 
 export const AUTHORING_ACTION = 'recipe.authoring';
-export type CardMode = 'prepare' | 'edit' | 'confirm' | 'pending' | 'saved' | 'cancelled' | 'expired' | 'review';
+export type CardMode = 'prepare' | 'richEdit' | 'edit' | 'confirm' | 'pending' | 'saved' | 'cancelled' | 'expired' | 'review';
 const copy: Record<CardMode, string> = {
+  richEdit:'可以直接说想如何修改所选草稿，例如「建议两个使用前准备步骤」。请核对候选内容后保存。',
   prepare: '已在 App 选好群角色。确认后保存为私人草稿。',
   edit: '在此私聊发送 /recipe name 名称、/recipe summary 简介、/recipe overview 概览、/recipe version 版本、/recipe role 角色或 /recipe setup 步骤 JSON。',
   confirm: '请核对每个字段的实际新值。模型可能理解有误，确认后才保存到私人草稿。',
@@ -35,7 +36,7 @@ export function authoringCard(ref: string, mode: CardMode, details?: CandidateCa
   ]);
   const elements = [md(copy[mode])];
   if (mode === 'prepare') elements.push(action(ref,'confirm','生成私人草稿',true));
-  if (['prepare','edit','pending','review'].includes(mode)) elements.push(action(ref,'cancel','取消'));
+  if (['prepare','edit','richEdit','pending','review'].includes(mode)) elements.push(action(ref,'cancel','取消'));
   return authoringBody(elements);
 }
 

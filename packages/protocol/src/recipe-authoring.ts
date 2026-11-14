@@ -1,4 +1,4 @@
-import {richInventoryOptionsSchema,richLocalInventorySchema,richSourceAttestationSchema,richPreparationSchema,richFreezeInputSchema,
+import {richSourceOptionsSchema,richInventoryOptionsSchema,richLocalInventorySchema,richSourceAttestationSchema,richPreparationSchema,richFreezeInputSchema,
   richFrozenResponseSchema,richAuthoringAuthorizationSchema} from './recipe-rich-authoring.js';
 import {recipeRichPartDescriptorSchema,recipeRichDraftChangeSchema} from './recipe-rich.js';
 import { z } from 'zod';
@@ -55,10 +55,12 @@ const reconciliation = z.object({
 export type AuthoringReconciliation = z.infer<typeof reconciliation>;
 const recipient = z.object({openId: z.string().max(210), chatId: groupIdSchema, tenantKey: z.string().max(200)}).strict();
 export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
+  z.object({type:z.literal('richSourceOptions'),...session,groupId:groupIdSchema}).strict(),
   z.object({type:z.literal('richInventory'),...session,groupId:groupIdSchema,options:richInventoryOptionsSchema}).strict(),
   z.object({type:z.literal('richPrepare'),...session,groupId:groupIdSchema,selection:richPreparationSchema,attestations:richSourceAttestationSchema.array().max(64)}).strict(),
-  z.object({type:z.literal('richEdit'),...session,draftId:uuid,baseRevision:positive,canonical:z.string().max(1401000),selected:uuid.array().max(32),access:z.enum(['direct','coded']).optional(),changes:recipeRichDraftChangeSchema.array().min(1).max(16).optional(),
+  z.object({type:z.literal('richEdit'),...session,draftId:uuid,baseRevision:positive,canonical:z.string().max(1401000),selected:uuid.array().max(32),logo:richPreparationSchema.shape.logo,access:z.enum(['direct','coded']).optional(),changes:recipeRichDraftChangeSchema.array().min(1).max(16).optional(),
     source:z.object({sourceIntentId:uuid,canonical:z.string().max(1401000)}).strict().optional()}).strict(),
+  z.object({type:z.literal('richReadMember'),...operation,index:z.number().int().min(0).max(64),reviewDigest:digest}).strict(),
   z.object({type:z.literal('richMembers'),...operation}).strict(),
   z.object({type:z.literal('richBindMembers'),...operation,reviewDigest:digest,descriptors:recipeRichPartDescriptorSchema.array().max(65)}).strict(),
   z.object({type:z.literal('richInspect'),...operation,preview:z.literal(true).optional()}).strict(),
@@ -90,9 +92,11 @@ export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
 ]);
 export type RecipeAuthoringRequest = z.infer<typeof recipeAuthoringRequestSchema>;
 export const recipeAuthoringReplySchema = z.discriminatedUnion('kind', [
+  richSourceOptionsSchema,
   z.object({kind:z.literal('richInventory'),groupId:groupIdSchema,inventory:richLocalInventorySchema}).strict(),
+  z.object({kind:z.literal('richMember'),operationId:uuid,index:z.number().int().min(0).max(64),reviewDigest:digest,bytes:z.string().max(2796203)}).strict(),
   z.object({kind:z.literal('richMembers'),operationId:uuid,reviewDigest:digest,cap:positive,members:z.array(z.object({
-    kind:z.enum(['text','finalLogo']),bytes:z.string().max(2796203),sha256:digest}).strict()).max(65)}).strict(),
+    kind:z.enum(['text','finalLogo']),sha256:digest}).strict()).max(65)}).strict(),
   z.object({kind:z.literal('richCandidate'),operationId:uuid,reviewDigest:digest,request:richFreezeInputSchema}).strict(),
   z.object({kind: z.literal('session'), session: uuid, linked: z.boolean(), leaseMs: positive}).strict(),
   z.object({kind: z.literal('closed')}).strict(),

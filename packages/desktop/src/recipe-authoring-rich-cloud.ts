@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import {authoringReceiptSchema,decodeRichRecipeContent,recipeRichManifestObjectSchema,recipeRichPartDescriptorSchema,richAuthoringAuthorizationSchema,richFrozenResponseSchema,
   richSourceAttestationSchema,richFreezeInputSchema,type RichFreezeInput,type AuthoringOperation} from '@vonvon/protocol';
-import type {NativeAccount} from './account-session.js';
+interface AccountTransport {request(accountId:string,path:string,init:RequestInit,beforeSend:()=>void):Promise<Response>}
 
 const uuid=z.string().uuid();
 const sha=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
@@ -15,7 +15,7 @@ export function richTerminal(raw:unknown){
   return authoringReceiptSchema.parse(data);
 }
 const fail=()=>new Error('云端配方资料与本次请求不一致。');
-export function richAuthoringCloud(account:NativeAccount,accountId:string,signal:AbortSignal,check:()=>void){
+export function richAuthoringCloud(account:AccountTransport,accountId:string,signal:AbortSignal,check:()=>void){
   async function bounded(path:string,init:RequestInit,cap:number){
     check();signal.throwIfAborted();
     const response=await account.request(accountId,path,{...init,signal},check);

@@ -56,10 +56,13 @@ try{
     const r=await fetch(orig(api.server)+path,{method:method??(body!==undefined?'POST':'GET'),headers,body:body===undefined?undefined:JSON.stringify(body)});
     const out=await r.json();assert.equal(r.status,status,path+' '+JSON.stringify(out.error));return out;
   }
+  const logoReceipts=new Map();
   async function upload(token,pkg,idx,kind,buf,status=200) {
     const r=await fetch(orig(broker)+'/v2/objects/'+pkg+'/members/'+idx,{method:'PUT',headers:{authorization:'Bearer '+token,
       'content-type':'application/octet-stream','x-recipe-kind':kind,'x-recipe-sha256':sha(buf).toString('hex')},body:buf});
-    const j=await r.json();assert.equal(r.status,status,JSON.stringify(j));return j;
+    const j=await r.json();assert.equal(r.status,status,JSON.stringify(j));
+    if(status===200&&kind==='finalLogo')logoReceipts.set(j.objectId,{packageId:pkg,inputSha256:sha(buf).toString('hex')});
+    return j;
   }
   async function read(token,scope,target,obj,status=200){
     const r=await fetch(orig(broker)+'/v2/'+scope+'/'+target+'/objects/'+obj,{headers:token?{authorization:'Bearer '+token}:{}});
@@ -95,7 +98,7 @@ try{
   delete fixture.finalLogo;fixture.parts=[];fixture.memories=[];
   fixture.rules.push({itemId:randomUUID(),originId:randomUUID(),purpose:'work',text:{kind:'inline',value:'私有规则'}});
   const own=c=>inventory(c).map(({itemId})=>({itemId,source:{kind:'accountClaim'}}));
-  const body=(c,access='coded')=>({format:'rich-v2',content:c,access,origins:own(c)});
+  const body=(c,access='coded')=>({format:'rich-v2',content:c,access,origins:own(c),...(c.finalLogo?{logoUpload:logoReceipts.get(c.finalLogo.objectId)}:{})});
   async function start(token,edit={}){
     const op=opId(),pkg=opId(),device=generateKeyPairSync('x25519'),nonce=randomBytes(32);
     const reg={format:'rich-v2',purpose:'prepareDraft',targetPublicKey:b64(device.publicKey.export({type:'spki',format:'der'}).subarray(-32)),nonceCommitment:b64(sha(nonce)),...edit};
@@ -120,7 +123,7 @@ try{
   const prep=await start(a);const privateBytes=Buffer.from('SELECTED PRIVATE MEMORY');
   const p=await upload(a,prep.pkg,0,'text',privateBytes);
   const png=await sharp({create:{width:20,height:30,channels:3,background:'#22aa33'}}).png().toBuffer();
-  const logo=await upload(a,prep.pkg,1,'finalLogo',png);
+  const logo=await upload(a,prep.pkg,64,'finalLogo',png);
   fixture.finalLogo={itemId:randomUUID(),originId:randomUUID(),objectId:logo.objectId};fixture.parts=[p,logo];fixture.memories=[{itemId:randomUUID(),originId:randomUUID(),text:{kind:'part',objectId:p.objectId}}];
   const input=body(fixture),plan=await prep.freeze(input);
   assert.deepEqual(await prep.freeze(input),plan);
@@ -150,13 +153,13 @@ try{
   const skewed=structuredClone(updated);skewed.role.text.value='未经核实的编辑';
   await req('/v2/drafts/'+draft.draftId+'/publish',a,{canonical:b64(JSON.stringify(skewed))},{key,rev:2,status:409});
   const v=await pub();assert.deepEqual(await pub(),v);assert.ok(v.firstCode);
-  const logoSource=await start(a),sourceLogo=await upload(a,logoSource.pkg,0,'finalLogo',png);
+  const logoSource=await start(a),sourceLogo=await upload(a,logoSource.pkg,64,'finalLogo',png);
   const directSource=structuredClone(fixture);directSource.memories=[];directSource.parts=[sourceLogo];directSource.finalLogo.objectId=sourceLogo.objectId;
   directSource.public.name.value='known direct logo source';
   const logoSourcePlan=await logoSource.freeze(body(directSource,'direct')),logoSourceSaved=await logoSource.commit(logoSourcePlan);
   const logoRelease=await req('/v2/drafts/'+logoSourceSaved.draftId+'/publish',a,{canonical:logoSourcePlan.canonical},{key:randomUUID(),rev:1});
   const logoDonor=JSON.parse(Buffer.from(logoSourcePlan.canonical,'base64url'));
-  const derivedLogoOp=await start(b),derivedLogoPart=await upload(b,derivedLogoOp.pkg,0,'finalLogo',png);
+  const derivedLogoOp=await start(b),derivedLogoPart=await upload(b,derivedLogoOp.pkg,64,'finalLogo',png);
   const derivedLogoDoc=structuredClone(logoDonor);derivedLogoDoc.parts=[derivedLogoPart];derivedLogoDoc.finalLogo.objectId=derivedLogoPart.objectId;
   derivedLogoDoc.public.name.value='explicit derivative reuploaded logo';derivedLogoDoc.role.text.value='independent role';
   const derivedLogoInput=body(derivedLogoDoc,'direct');
@@ -166,15 +169,15 @@ try{
   honestLogoInput.origins.find(x=>x.itemId===knownLogoItem.itemId).source={kind:'releaseItem',versionId:logoRelease.versionId,itemId:knownLogoItem.itemId,baselineSha256:knownLogoItem.baselineSha256};
   await req(derivedLogoOp.path+'/freeze',b,honestLogoInput,{status:403});
   await req(derivedLogoOp.path+'/freeze',b,derivedLogoInput,{status:403});
-  const unrelated=await start(b),unrelatedPart=await upload(b,unrelated.pkg,0,'finalLogo',png),unrelatedDoc=structuredClone(derivedLogoDoc);
+  const unrelated=await start(b),unrelatedPart=await upload(b,unrelated.pkg,64,'finalLogo',png),unrelatedDoc=structuredClone(derivedLogoDoc);
   unrelatedDoc.parts=[unrelatedPart];unrelatedDoc.finalLogo.objectId=unrelatedPart.objectId;const unrelatedInput=body(unrelatedDoc,'direct');
-  const unrelatedPlan=await unrelated.freeze(unrelatedInput);await unrelated.commit(unrelatedPlan);
-  const newArt=await start(b),newPart=await upload(b,newArt.pkg,0,'finalLogo',await sharp({create:{width:8,height:8,channels:4,background:'#ffeedd'}}).png().toBuffer());
-  const newArtInput=structuredClone(derivedLogoInput);newArtInput.content.parts=[newPart];newArtInput.content.finalLogo.objectId=newPart.objectId;
+  const unrelatedPlan=await unrelated.freeze(unrelatedInput),privateLogoDraft=await unrelated.commit(unrelatedPlan);
+  const newArt=await start(b),newPart=await upload(b,newArt.pkg,64,'finalLogo',await sharp({create:{width:8,height:8,channels:4,background:'#ffeedd'}}).png().toBuffer());
+  const newArtInput=structuredClone(derivedLogoInput);newArtInput.logoUpload=logoReceipts.get(newPart.objectId);newArtInput.content.parts=[newPart];newArtInput.content.finalLogo.objectId=newPart.objectId;
   const newArtPlan=await newArt.freeze(newArtInput),newArtSaved=await newArt.commit(newArtPlan);
   const newArtRelease=await req('/v2/drafts/'+newArtSaved.draftId+'/publish',b,{canonical:newArtPlan.canonical},{key:randomUUID(),rev:1});
   const ownUpdate=await start(b),ownUpdateDoc=JSON.parse(Buffer.from(newArtPlan.canonical,'base64url'));ownUpdateDoc.public.version.value='2';
-  const ownPart=await upload(b,ownUpdate.pkg,0,'finalLogo',await sharp({create:{width:8,height:8,channels:4,background:'#ffeedd'}}).png().toBuffer());
+  const ownPart=await upload(b,ownUpdate.pkg,64,'finalLogo',await sharp({create:{width:8,height:8,channels:4,background:'#ffeedd'}}).png().toBuffer());
   ownUpdateDoc.parts=[ownPart];ownUpdateDoc.finalLogo.objectId=ownPart.objectId;const ownUpdateInput=body(ownUpdateDoc,'direct');ownUpdateInput.sourceVersionId=newArtRelease.versionId;
   const ownIndex=inventory(JSON.parse(Buffer.from(newArtPlan.canonical,'base64url')));
   ownUpdateInput.origins=ownUpdateInput.origins.map(({itemId})=>({itemId,source:{kind:'releaseItem',versionId:newArtRelease.versionId,itemId,baselineSha256:ownIndex.find(x=>x.itemId===itemId).baselineSha256}}));
@@ -190,11 +193,34 @@ try{
     {op:'removeItem',kind:'rule',itemId:ancestryRule.itemId},
   ]}});await privateEdit.commit(privatePlan);
   const ancestryVersion=await req('/v2/drafts/'+ancestrySaved.draftId+'/publish',b,{canonical:privatePlan.canonical},{key:randomUUID(),rev:2});
-  const indirect=await start(b),indirectPart=await upload(b,indirect.pkg,0,'finalLogo',png),indirectDoc=JSON.parse(Buffer.from(privatePlan.canonical,'base64url'));
+  const indirect=await start(b),indirectPart=await upload(b,indirect.pkg,64,'finalLogo',png),indirectDoc=JSON.parse(Buffer.from(privatePlan.canonical,'base64url'));
   indirectDoc.public.version.value='2';indirectDoc.finalLogo={itemId:randomUUID(),originId:randomUUID(),objectId:indirectPart.objectId};indirectDoc.parts=[indirectPart];
   const indirectInput=body(indirectDoc,'direct');indirectInput.sourceVersionId=ancestryVersion.versionId;
   await req(indirect.path+'/freeze',b,indirectInput,{status:403});
   assert.equal((await req('/v2/recipes/'+ancestryVersion.recipeId+'/versions/'+ancestryVersion.versionId,b)).state,'listed');
+  const oldLogo=JSON.parse(Buffer.from(unrelatedPlan.canonical,'base64url')).finalLogo;
+  const logoEdit=await start(b,{purpose:'editDraft',draftId:privateLogoDraft.draftId,baseRevision:1});
+  const editedPart=await upload(b,logoEdit.pkg,64,'finalLogo',await sharp({create:{width:9,height:5,channels:4,background:'#112233'}}).png().toBuffer());
+  const logoPatch=(baseCanonical,baseRevision,changes)=>({format:'rich-v2',baseCanonical,payload:{format:'rich-v2',purpose:'editDraft',
+    draftId:privateLogoDraft.draftId,baseRevision,requestId:randomUUID(),schemaVersion:2,changes}});
+  const replace={...logoPatch(unrelatedPlan.canonical,1,[{op:'setFinalLogo',itemId:oldLogo.itemId,objectId:editedPart.objectId}]),
+    newParts:[editedPart],logoUpload:logoReceipts.get(editedPart.objectId)};
+  await req(logoEdit.path+'/freeze',b,{...replace,logoUpload:{...replace.logoUpload,packageId:unrelated.pkg}},{status:410});
+  const replaced=await logoEdit.freeze(replace);
+  assert.deepEqual(await logoEdit.freeze(replace),replaced);
+  const newLogo=JSON.parse(Buffer.from(replaced.canonical,'base64url')).finalLogo;
+  assert.deepEqual(newLogo,{...oldLogo,objectId:editedPart.objectId});
+  await logoEdit.commit(replaced);
+  const removal=await start(b,{purpose:'editDraft',draftId:privateLogoDraft.draftId,baseRevision:2});
+  const removed=await removal.freeze(logoPatch(replaced.canonical,2,[{op:'removeItem',kind:'finalLogo',itemId:newLogo.itemId}]));
+  assert.ok(!JSON.parse(Buffer.from(removed.canonical,'base64url')).finalLogo);
+  await removal.commit(removed);
+  const addLogo=await start(b,{purpose:'editDraft',draftId:privateLogoDraft.draftId,baseRevision:3});
+  const addedPart=await upload(b,addLogo.pkg,64,'finalLogo',png);
+  const added=await addLogo.freeze({...logoPatch(removed.canonical,3,[{op:'setFinalLogo',objectId:addedPart.objectId}]),
+    newParts:[addedPart],logoUpload:logoReceipts.get(addedPart.objectId)});
+  assert.notEqual(JSON.parse(Buffer.from(added.canonical,'base64url')).finalLogo.itemId,newLogo.itemId);
+  await addLogo.commit(added);
   console.log('PASS: known ancestor Logo rejects direct and DAG relabels and own parent versions without Logo; unrelated common artwork, fresh Logo and own author Logo updates remain allowed.');
   for(const pending of [derivedLogoOp,indirect]){await req(pending.path+'/cancel',b,{});await req('/v2/objects/'+pending.pkg+'/cancel',b,{});}
 }finally{if(broker)await close(broker);if(pool)await pool.end();if(api)await api.close();if(issuerServer)await close(issuerServer);

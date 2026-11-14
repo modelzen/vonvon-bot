@@ -219,6 +219,7 @@ export const recipeRichDraftChangeSchema = z.union([
   z.object({op: z.literal('setSkill'), itemId: uuid, value: skill.pick({name: true})}).strict(),
   z.object({op: z.literal('setFile'), itemId: uuid, value: file.pick({name: true, text: true})}).strict(),
   z.object({op: z.literal('setTask'), itemId: uuid, value: task.omit({itemId: true, originId: true})}).strict(),
+  z.object({op:z.literal('setFinalLogo'),itemId:uuid.optional(),objectId:uuid}).strict(),
   z.object({op: z.literal('addSetup'), value: setup.omit({itemId: true, originId: true}), source: newSetupSource}).strict(),
   z.object({op: z.literal('setSetup'), itemId: uuid, value: setup.omit({itemId: true, originId: true})}).strict(),
   z.object({op: z.literal('removeItem'), kind: itemKind, itemId: uuid}).strict(),

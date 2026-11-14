@@ -10,7 +10,7 @@ create table recipe_private.rich_intents (
   account_id uuid not null references recipe_private.accounts, draft_id uuid not null,
   seed uuid not null default gen_random_uuid(), input_hash text, manifest_hash text, payload_hash text,
   access text check(access in ('direct','coded')), parent_version uuid references recipe_private.versions,
-  reviewed_items jsonb
+  logo_package uuid unique, logo_evidence jsonb, reviewed_items jsonb
 );
 create table recipe_private.rich_drafts (
   id uuid primary key references recipe_private.drafts on delete cascade,
@@ -222,25 +222,25 @@ end $$;
 
 create function recipe_private.check_rich_origin(a uuid,o uuid,k text) returns void
 language plpgsql set search_path=pg_catalog,pg_temp as $$
-declare n int:=0; seen uuid[]:='{}'; todo uuid[]:=array[o]; accounts uuid[]:=array[a];
+declare n int:=0; seen uuid[]:='{}'; todo uuid[]:=array[o]; accounts uuid[]:=array[a]; kinds text[]:=array[k]; expected_kind text;
   r recipe_private.rich_origins; v recipe_private.versions; m recipe_private.rich_members; edge record; lifecycle text; principal uuid;
 begin
   while cardinality(todo)>0 loop
-    o:=todo[1];principal:=accounts[1];todo:=todo[2:];accounts:=accounts[2:];
-    select * into r from recipe_private.rich_origins where id=o and account_id=principal and kind=k;
+    o:=todo[1];principal:=accounts[1];expected_kind:=kinds[1];todo:=todo[2:];accounts:=accounts[2:];kinds:=kinds[2:];
+    select * into r from recipe_private.rich_origins where id=o and account_id=principal and kind=expected_kind;
     if not found then raise exception 'source_unavailable'; end if;
     if o=any(seen) then continue; end if;
     seen:=array_append(seen,o);n:=n+1;
     if n>64 then raise exception 'source_unavailable'; end if;
-    if r.donor is not null then todo:=array_append(todo,r.donor);accounts:=array_append(accounts,principal); end if;
+    if r.donor is not null then todo:=array_append(todo,r.donor);accounts:=array_append(accounts,principal);kinds:=array_append(kinds,expected_kind); end if;
     for edge in select r.parent_version as version_id,r.parent_item as item_id,r.parent_digest as baseline where r.parent_version is not null
       union all select e.version_id,e.item_id,e.baseline from recipe_private.rich_parent_edges e where e.origin=r.id loop
       select * into v from recipe_private.versions where id=edge.version_id;
       select state into lifecycle from recipe_private.rich_versions where id=v.id for share;
       select * into m from recipe_private.rich_members where version_id=v.id and item_id=edge.item_id;
-      if not found or m.kind<>k or m.baseline<>edge.baseline or lifecycle is distinct from 'listed'
-        or (v.owner_id<>a and (v.public_info->>'access'='coded' or k='finalLogo')) then raise exception 'source_unavailable'; end if;
-      todo:=array_append(todo,m.origin_id);accounts:=array_append(accounts,v.owner_id);
+      if not found or (m.kind<>expected_kind and expected_kind<>'setup') or m.baseline<>edge.baseline or lifecycle is distinct from 'listed'
+        or (v.owner_id<>a and (v.public_info->>'access'='coded' or 'finalLogo' in (k,expected_kind,m.kind))) then raise exception 'source_unavailable'; end if;
+      todo:=array_append(todo,m.origin_id);accounts:=array_append(accounts,v.owner_id);kinds:=array_append(kinds,m.kind);
       if cardinality(todo)>64 then raise exception 'source_unavailable'; end if;
     end loop;
   end loop;
@@ -275,13 +275,28 @@ begin
 end $$;
 create trigger prune_intent_origins after delete on recipe_private.authoring_operations for each row execute function recipe_private.prune_intent_origins();
 
-create function recipe_api.rich_save_plan(p_id uuid,p_inputs text,p_manifest text,p_payload text,p_access text,p_parent uuid,p_records jsonb,p_items jsonb) returns void
+create function recipe_private.check_rich_upload(a uuid,d uuid,e jsonb) returns void
+language plpgsql set search_path=pg_catalog,pg_temp as $$
+declare pkg recipe_private.object_packages;
+begin
+  if e is null then return; end if;
+  pkg:=recipe_private.object_lock((e->>'packageId')::uuid,a);
+  perform recipe_private.object_check_open(pkg);
+  if pkg.draft_id is distinct from d or not exists(
+    select from recipe_private.object_attempts m where m.package_id=pkg.id and m.ordinal=64 and m.kind='finalLogo'
+      and m.id=(e#>>'{descriptor,objectId}')::uuid and m.state='ready' and m.final_state='present'
+      and m.input_hash=e->>'inputSha256' and m.final_hash=e#>>'{descriptor,sha256}' and m.final_bytes=(e#>>'{descriptor,bytes}')::integer
+  ) then raise exception 'conflict'; end if;
+end $$;
+
+create function recipe_api.rich_save_plan(p_id uuid,p_inputs text,p_manifest text,p_payload text,p_access text,p_parent uuid,p_records jsonb,p_items jsonb,p_logo jsonb) returns void
 language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
 declare a uuid:=recipe_private.actor(); i recipe_private.rich_intents; row jsonb; src jsonb; edge jsonb;
 begin
   perform recipe_api.rich_plan_context(p_id);
   select * into strict i from recipe_private.rich_intents where id=p_id;
   if i.input_hash is not null and (i.input_hash,i.manifest_hash,i.payload_hash) is distinct from (p_inputs,p_manifest,p_payload) then raise exception 'conflict'; end if;
+  perform recipe_private.check_rich_upload(a,i.draft_id,p_logo);
   if p_access not in ('direct','coded') or p_inputs!~'^[a-f0-9]{64}$' or p_manifest!~'^[a-f0-9]{64}$' or p_payload!~'^[a-f0-9]{64}$'
     or jsonb_array_length(p_records)>320 or jsonb_array_length(p_items) not between 4 and 320 then raise exception 'invalid_input'; end if;
   if p_parent is not null and not exists(select from recipe_private.versions v join recipe_private.recipes r on r.id=v.recipe_id and r.revision=v.revision
@@ -301,7 +316,7 @@ begin
       if jsonb_array_length(src->'parents') not between 1 and 64 then raise exception 'source_unavailable'; end if;
       for edge in select value from jsonb_array_elements(src->'parents') loop
         if not exists(select from recipe_private.rich_members m where m.version_id=(edge->>'versionId')::uuid and m.item_id=(edge->>'itemId')::uuid
-          and m.kind=row->>'kind' and m.baseline=edge->>'baselineSha256') then raise exception 'source_unavailable'; end if;
+          and (m.kind=row->>'kind' or row->>'kind'='setup') and m.baseline=edge->>'baselineSha256') then raise exception 'source_unavailable'; end if;
       end loop;
     elsif row->>'donorOriginId' is null then raise exception 'source_unavailable'; end if;
     insert into recipe_private.rich_origins(id,account_id,kind,intent,candidate,baseline,parent_version,parent_item,parent_digest,donor)
@@ -322,7 +337,7 @@ begin
   end loop;
   perform recipe_private.check_rich_logo(a,p_items,coalesce(p_parent,(select parent_version from recipe_private.rich_drafts where id=i.draft_id)));
   update recipe_private.rich_intents set input_hash=p_inputs,manifest_hash=p_manifest,payload_hash=p_payload,
-    access=p_access,parent_version=p_parent,reviewed_items=p_items where id=p_id;
+    logo_package=(p_logo->>'packageId')::uuid,logo_evidence=p_logo,access=p_access,parent_version=p_parent,reviewed_items=p_items where id=p_id;
 end $$;
 
 create function recipe_private.rich_set_refs(a uuid,d uuid,pkg uuid,manifest uuid,h text,canonical bytea,parts jsonb) returns integer
@@ -373,6 +388,8 @@ begin
   if op.state<>'dispatched' or op.revision<>(cap.binding->>'stateRevision')::int then raise exception 'conflict'; end if;
   if op.expires_at<=clock_timestamp() or cap.deadline<=extract(epoch from clock_timestamp())*1000 then raise exception 'operation_expired'; end if;
   if convert_from(payload,'UTF8')::jsonb->>'purpose' is distinct from op.purpose then raise exception 'conflict'; end if;
+  if i.logo_package is not null and i.logo_package is distinct from pkg then raise exception 'conflict'; end if;
+  perform recipe_private.check_rich_upload(a,i.draft_id,i.logo_evidence);
   c:=convert_from(canonical,'UTF8')::jsonb;
   if c->>'format' is distinct from 'rich-v2' or c->>'schemaVersion' is distinct from '2' then raise exception 'invalid_input'; end if;
   for x in select value from jsonb_array_elements(i.reviewed_items) loop perform recipe_private.check_rich_origin(a,(x->>'originId')::uuid,x->>'kind'); end loop;

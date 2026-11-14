@@ -32,10 +32,11 @@ export async function richExecute(client,op,args) {
   if(op!=='richFreeze')throw badInput();
   const [id,b]=args;
   const ctx=await call('rich_plan_context($1)',[id]);
-  let payload,doc,records;
+  let payload,doc,records,needsLogo;
   if(ctx.purpose==='prepareDraft') {
     const prior=b.sourceVersionId? await call('rich_update_items($1)',[uuid(b.sourceVersionId)]) : [];
     const result=freezeSnapshot(b,ctx.seed,new Map(prior.map(i=>[i.itemId,i])));doc=document(result.content);records=result.records;
+    needsLogo=!!doc.content.finalLogo;
     payload={format:'rich-v2',purpose:'prepareDraft',sourceIntentId:id,content:doc.content};
   }else{
     const edit=parseEditFreeze(b,ctx.draftId,ctx.revision);
@@ -57,11 +58,24 @@ export async function richExecute(client,op,args) {
 
     const next=applyChanges(edit.base.content,edit.payload.changes,s=>cache.get(richDigest(s)),ctx.seed,edit.parts);
     doc=next.doc;records=next.copies;
+    const sets=edit.payload.changes.filter(c=>c.op==='setFinalLogo');
+    if(sets.length>1 || sets.length && sets[0].objectId!==doc.content.finalLogo?.objectId)throw badInput();
+    needsLogo=sets.length===1;
     payload=edit.payload;
   }
   const bytes=richWireBytes(payload),hash=sha(doc.canonicalUTF8),digest=sha(bytes);
-  await call('rich_save_plan($1,$2,$3,$4,$5,$6,$7,$8)',[id,richDigest(b),hash,digest,b.access??ctx.access,b.sourceVersionId??null,
-    JSON.stringify(records),JSON.stringify(inventory(doc.content))]);
+  if(needsLogo!==(b.logoUpload!==undefined))throw badInput();
+  let evidence=null;
+  if(needsLogo){
+    objectKeys(b.logoUpload,['packageId','inputSha256']);
+    const packageId=uuid(b.logoUpload.packageId);
+    if(typeof b.logoUpload.inputSha256!=='string'||!/^[0-9a-f]{64}$/.test(b.logoUpload.inputSha256))throw badInput();
+    const descriptor=doc.content.parts.find(p=>p.kind==='finalLogo'&&p.objectId===doc.content.finalLogo.objectId);
+    if(!descriptor)throw badInput();
+    evidence={packageId,inputSha256:b.logoUpload.inputSha256,descriptor};
+  }
+  await call('rich_save_plan($1,$2,$3,$4,$5,$6,$7,$8,$9)',[id,richDigest(b),hash,digest,b.access??ctx.access,b.sourceVersionId??null,
+    JSON.stringify(records),JSON.stringify(inventory(doc.content)),evidence]);
   return {format:'rich-v2',sourceReviewSha256:richDigest(b),destinationDraftId:ctx.draftId,canonical:Buffer.from(doc.canonicalUTF8).toString('base64url'),contentSha256:hash,
     logicalBytes:doc.logicalBytes,payload:bytes.toString('base64url'),payloadDigest:digest};
 }

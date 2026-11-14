@@ -1,3 +1,4 @@
+import {localRichStorage} from './authoring-rich-storage';
 import type {RichLocalDraft} from './authoring-rich-flow';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -53,6 +54,7 @@ export interface LocalOperation {
   richSaved?:NonNullable<RichLocalDraft['base']>;
   editApproval?: string;
   dispatchAuthorization?: AuthoringAuthorization;
+  richDispatch?:import('./authoring-rich-proof').RichAuthorization;
   dispatched: boolean; revoked?: true; contextOpen?: boolean; instructionId?: string; seenInstructions?: string[]; terminalAt?: number; contextUntil?: number;
 }
 export function editApproval(op: LocalOperation, payloadDigest: string) {
@@ -66,7 +68,7 @@ export interface AuthoringLedger {
 }
 export const active = (op: LocalOperation) => op.terminalAt === undefined;
 export function discardAuthoringMaterial(op: LocalOperation) {
-  delete op.secret; delete op.nonce; delete op.dispatchAuthorization; delete op.payload; delete op.source;
+  delete op.richDispatch; delete op.secret; delete op.nonce; delete op.dispatchAuthorization; delete op.payload; delete op.source;
   delete op.rich; delete op.editApproval; delete op.view.payloadDigest; delete op.proposalDigest;
 }
 export function retire(op: LocalOperation, state: 'completed' | 'cancelled' | 'expired', now: number) {
@@ -112,8 +114,10 @@ export class AuthoringJournal {
       const before = await readLocalText(dir, file, undefined, 8 * 1024 * 1024);
       const ledger: AuthoringLedger = before === undefined ? {version: 1, links: {}, operations: {}, daily: {}} : JSON.parse(before);
       if (ledger.version !== 1 || !ledger.links || !ledger.operations || !ledger.daily) throw new Error('配方操作记录无法读取。');
+      const persist=localRichStorage(dir,ledger);
       maintain(ledger, this.now());
-      const result = edit(ledger);
+      const result = structuredClone(edit(ledger));
+      const clean=await persist();
       const after = JSON.stringify(ledger);
       if (after !== before) {
         if (Buffer.byteLength(after) > 8 * 1024 * 1024) throw new Error('本机配方操作记录已满。');
@@ -121,7 +125,8 @@ export class AuthoringJournal {
       }
       // The atomic writer allows a best-effort directory fsync. Authoring's next irreversible action needs a durable result.
       await syncDirectory(dir);
-      return structuredClone(result);
+      await clean();
+      return result;
     } finally { await closeMutex(lock); }
   }
 }
