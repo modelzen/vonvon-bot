@@ -115,7 +115,7 @@ async function defaultAuthoring(request: DesktopAuthoringRequest):Promise<Deskto
   }
   const session = sessionFor(request);
   switch(request.type) {
-    case 'close': sessions.delete(request.handle);return {kind:'closed'};
+    case 'detach': case 'close': sessions.delete(request.handle);return {kind:'closed'};
     case 'sourceHistory': return {kind:'sourceHistory',entries:[],nextCursor:null};
     case 'status': return {...session,linked,operations:operations.filter(item=>item.target.accountId===session.target.accountId&&item.target.viewId===session.target.viewId&&item.target.botId===session.target.botId)};
     case 'beginLink': return {kind:'challenge',challengeId,code:'0123456789abcdefabcd',expiresAt:Date.now()+300000};
@@ -181,7 +181,7 @@ it('selects an existing group before linking, confirms the actual recipient, att
   operations=[{...operations[0]!,state:'completed',receipt:{operationId,status:'accepted',stateRevision:3,draftId,revision:1}}];
   await click('重新核验并继续');
   expect(text()).toContain('同一份私人草稿');expect(cloudCalls.filter(request=>request.type==='draft')).toEqual([{type:'draft',accountId:accountA,draftId}]);
-  expect(calls.some(request=>request.type==='close')).toBe(true);expect(calls.some(request=>request.type==='accept')).toBe(false);
+  expect(calls.some(request=>request.type==='detach')).toBe(true);expect(calls.some(request=>request.type==='close')).toBe(false);expect(calls.some(request=>request.type==='accept')).toBe(false);
 });
 
 it('keeps unconfirmed or wrong recipients unsent, replaces the challenge and cancels by closing its handle',async()=>{
@@ -190,7 +190,7 @@ it('keeps unconfirmed or wrong recipients unsent, replaces the challenge and can
   recipient=true;await click('我已发送，核对收件人');await click('这不是我，重新关联');
   expect(text()).not.toContain('ou_verified');expect(calls.filter(request=>request.type==='beginLink')).toHaveLength(2);
   const handle=calls.find(request=>request.type==='open');expect(handle).toBeDefined();
-  await click('取消关联');expect(calls.filter(request=>request.type==='close')).toHaveLength(2);expect(calls.filter(request=>request.type==='open')).toHaveLength(2);
+  await click('取消关联');expect(calls.filter(request=>request.type==='close')).toHaveLength(1);expect(calls.filter(request=>request.type==='open')).toHaveLength(2);
   expect(calls.some(request=>request.type==='confirmLink')).toBe(false);
 });
 
@@ -220,7 +220,7 @@ it('creates fresh handles for account A/B/A, hides old private state and ignores
   const button=[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='重新核验并继续')!;
   await act(async()=>button.click());
   await act(async()=>{status=signedIn(accountB);emit({type:'account',value:status});});
-  expect(text()).not.toContain('账号甲');expect(text()).not.toContain('等待本人在飞书操作');expect(calls).toContainEqual({type:'close',handle:first.handle});
+  expect(text()).not.toContain('账号甲');expect(text()).not.toContain('等待本人在飞书操作');expect(calls).toContainEqual({type:'detach',handle:first.handle});
   await act(async()=>finish?.({kind:'operation',operation:{...operations[0]!,state:'completed',receipt:{operationId,status:'accepted',stateRevision:3,draftId,revision:1}}}));
   expect(text()).not.toContain('同一份私人草稿');
   await click('创作中心');await click('分享群聊配方');await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await click('核对所选群聊');
@@ -235,7 +235,7 @@ it('closes device A, uses only device B groups, and rechecks a fresh handle on A
   linked=true;await draw();await chooseSource();
   const first=[...sessions.keys()][0]!;
   await act(async()=>emit({type:'devices',value:devicesState({id:B})}));
-  expect(calls).toContainEqual({type:'close',handle:first});expect(text()).not.toContain('群聊 A');expect(text()).not.toContain('Bot A');
+  expect(calls).toContainEqual({type:'detach',handle:first});expect(text()).not.toContain('群聊 A');expect(text()).not.toContain('Bot A');
   await act(async()=>document.querySelector<HTMLButtonElement>('.authoring-source-list button')!.click());await click('核对所选群聊');
   expect(calls.filter(request=>request.type==='open').at(-1)).toMatchObject({viewId:B,botId:'cli_author_b'});
   await act(async()=>emit({type:'devices',value:devicesState({id:A})}));
@@ -507,4 +507,30 @@ it('opens the exact published version from private group history and keeps uncer
   expect(text()).toContain('历史版本角色');
   expect(cloudCalls.find(r=>r.type==='detail')).toMatchObject({recipeId:A,versionId:B,accountId:accountA});
   expect(cloudCalls.some(r=>r.type==='publishDraft')).toBe(false);
+});
+
+it('shows a paused chat context as distinct from an expired request and keeps the source selection',async()=>{
+  linked=true;await draw();await chooseSource();await prepare();
+  operations=[{...operations[0]!,contextPaused:true}];
+  vi.useFakeTimers();
+  await click('重新核验并继续');
+  expect(text()).toContain('聊天编辑已暂停，原请求仍保留');
+  expect(text()).not.toContain('请求已到期');
+  operations=[{...operations[0]!,contextPaused:false}];
+  await click('重新核验并继续');
+  expect(text()).toContain('等待本人在飞书操作');
+  expect(calls.filter(call=>call.type==='resend'||call.type==='cancel')).toEqual([]);
+});
+
+it('refreshes a detached draft detail only for its account and draft without opening another chat lease',async()=>{
+  linked=true;await draw();await click('社区');await click('创作中心');await click('查看草稿');
+  const before=cloudCalls.filter(r=>r.type==='draft').length;
+  draft={...draft,revision:2,public:{...draft.public,name:'后台保存后的新名称'}};
+  for(const ids of [{accountId:accountB,draftId},{accountId:accountA,draftId:challengeId}]) {
+    await act(async()=>emit({type:'authoringSaved',value:{...ids,revision:2}}));
+  }
+  expect(cloudCalls.filter(r=>r.type==='draft')).toHaveLength(before);
+  await act(async()=>emit({type:'authoringSaved',value:{accountId:accountA,draftId,revision:2}}));
+  expect(text()).toContain('后台保存后的新名称'); expect(text()).toContain('修订 2');
+  expect(calls.filter(r=>r.type==='open')).toHaveLength(0);
 });

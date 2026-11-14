@@ -1,3 +1,4 @@
+import {safeDraftModelText} from '../../../services/recipe-api/src/draft-model-text.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -9,6 +10,7 @@ import {
   recipeAuthoringReplySchema,
   type AuthoringOperation,
   type AuthoringReceipt,
+  type AuthoringSaved,
   type AuthoringReconciliation,
   type DesktopAuthoringOperation,
   type DesktopAuthoringReply,
@@ -34,7 +36,11 @@ type Handle = {
   session?: string;
   tail: Promise<void>;
   queued: number;
-  lastInteraction: number;
+  attached: boolean;
+  workflow?: Promise<void>;
+  nextRefresh: number;
+  sequence: number;
+  pausedContexts: Set<string>;
   lastActivity: number;
   lastVerified: number;
   retry: Map<string, { state: string; until: number; delay: number; message?: string }>;
@@ -84,11 +90,18 @@ export class RecipeAuthoringController {
     private readonly account: NativeAccount,
     private readonly capture: (viewId: string) => RecipeDeviceLease,
     private readonly journal: AuthoringJournal,
+    private readonly onSaved?: (receipt: AuthoringSaved) => void,
   ) {}
   private check(h: Handle) {
     h.lease.check();
     if (h.stop.signal.aborted || this.account.lease?.(h.open.accountId) !== h.signal || h.signal.aborted)
       throw changed();
+  }
+  private checkIdle(h: Handle) {
+    if (Date.now() - h.lastActivity >= 30 * 60_000) {
+      this.revoke(h);
+      throw new AuthoringError('聊天编辑已暂停，请重新打开原来的配方操作。');
+    }
   }
   private cloud(h: Handle) {
     return authoringCloud(this.account, h.open.accountId, AbortSignal.any([h.signal, h.stop.signal]), () =>
@@ -199,7 +212,7 @@ export class RecipeAuthoringController {
       stop: new AbortController(),
       deviceId: '',
       deviceKey: '',
-      lastInteraction: Date.now(),
+      attached:true, nextRefresh:0, sequence:0, pausedContexts:new Set(),
       lastActivity: Date.now(),
       lastVerified: 0,
       retry: new Map(),
@@ -246,30 +259,10 @@ export class RecipeAuthoringController {
       }
       this.check(h);
       if (input.groupId) h.groupIdentity = await this.groupIdentity(h, input.groupId);
+      await this.workflow(h);
       const result = await this.refresh(h);
       this.check(h);
-      h.timer = setInterval(
-        () => {
-          if (Date.now() - Math.max(h.lastInteraction, h.lastActivity) > 30 * 60_000) {
-            this.revoke(h);
-            return;
-          }
-          if (h.busy) return;
-          h.busy = true;
-          h.tail = this.present(h, false)
-            .then(() => this.refresh(h))
-            .then(
-              () => {},
-              () => {
-                this.invalidateStale();
-              },
-            )
-            .finally(() => {
-              h.busy = h.queued > 0;
-            });
-        },
-        Math.max(100, Math.min(12_000, Math.floor(session.leaseMs / 3))),
-      );
+      h.timer = setInterval(() => {void this.tick(h);}, Math.max(100,Math.min(3_000,Math.floor(session.leaseMs/3))));
       h.timer.unref();
       return result;
     } catch (error) {
@@ -278,6 +271,59 @@ export class RecipeAuthoringController {
     } finally {
       h.busy = false;
     }
+  }
+  // The parser can be waiting for Main while the ordinary operation queue is occupied.
+  private workflow(h: Handle) {
+    return h.workflow ??= this.checkWorkflow(h).finally(() => {h.workflow = undefined;});
+  }
+  private async checkWorkflow(h: Handle) {
+    await this.present(h,false);
+    const start = Date.now();
+    const info = expectKind(await this.daemon(h,{type:'workflow'}),'workflow');
+    if (info.activity > h.sequence) {
+      h.sequence = info.activity;
+      h.lastActivity = Math.max(h.lastActivity,start-info.ageMs);
+    }
+    this.checkIdle(h);
+    h.pausedContexts = new Set(info.pausedContexts);
+    const request = info.field;
+    if (!request) return;
+    const op = h.operations.get(request.operationId);
+    const saved = op?.receipt?.status === 'accepted' ? op.receipt : undefined;
+    let value: string | null = null;
+    if (op && (saved?.draftId ?? op.draftId) === request.draftId && (saved?.revision ?? op.baseRevision) === request.revision &&
+        (saved || op.purpose === 'editDraft' && ['waiting','candidate'].includes(op.state))) {
+      try {
+        await this.present(h,true);
+        await this.checkGroup(h);
+        const cloud = this.cloud(h);
+        const registration = await cloud.get(op);
+        if (saved ? !registration || canonical(registration) !== canonical(saved) : registration?.status !== 'dispatched') throw recheck();
+        const draft = await cloud.draft(request.draftId,request.revision);
+        const text = draft.public[request.field];
+        if (safeDraftModelText(text)) value = text;
+      } catch { this.check(h); }
+    }
+    this.checkIdle(h);
+    // An instruction can expire while the account read is in flight.
+    const pending = expectKind(await this.daemon(h,{type:'workflow'}),'workflow').field;
+    if (pending?.requestId !== request.requestId) return;
+    await this.checkGroup(h);
+    this.checkIdle(h);
+    expectKind(await this.daemon(h,{type:'answerField',request,value}),'fieldAnswered');
+  }
+  private async tick(h: Handle) {
+    if (h.workflow) return;
+    try {
+      await this.workflow(h);
+    } catch {
+      this.revoke(h);
+      return;
+    }
+    if (h.busy || Date.now() < h.nextRefresh) return;
+    h.nextRefresh = Date.now()+12_000;
+    h.busy = true;
+    h.tail = this.refresh(h).then(() => {}, () => {this.invalidateStale();}).finally(() => {h.busy = h.queued > 0;});
   }
   private binding(h: Handle) {
     this.check(h);
@@ -288,6 +334,12 @@ export class RecipeAuthoringController {
     const reply = expectKind(await this.daemon(h, {type:'groupSourceIdentity', groupId}), 'groupSourceIdentity');
     if (reply.groupId !== groupId) throw invalidAuthoring();
     return reply.identity;
+  }
+  private async checkGroup(h: Handle) {
+    if (!h.open.groupId) return;
+    try {
+      if (h.groupIdentity !== await this.groupIdentity(h,h.open.groupId)) throw recheck();
+    } catch (error) { this.revoke(h); throw error; }
   }
   private async rememberSource(h: Handle, op: AuthoringOperation) {
     if (op.purpose !== 'prepareDraft' || this.journal.history.source(this.binding(h),op.operationId)) return;
@@ -302,7 +354,11 @@ export class RecipeAuthoringController {
   }
   private remember(h: Handle, op: AuthoringOperation, cancel = false) {
     const row = this.journal.observe(this.binding(h), op, cancel);
+    const prior = h.operations.get(op.operationId);
     h.operations.set(op.operationId, op);
+    if (prior && prior.receipt?.status !== 'accepted' && op.state === 'completed' && op.receipt?.status === 'accepted') {
+      this.onSaved?.({accountId:h.open.accountId,draftId:op.receipt.draftId,revision:op.receipt.revision});
+    }
     return row;
   }
   private display(h: Handle, op: AuthoringOperation, cloudMessage?: string): DesktopAuthoringOperation {
@@ -310,16 +366,13 @@ export class RecipeAuthoringController {
     const cardMessage = cardUpdate === 'unavailable' ? '原私聊卡片无法再更新，请以 App 中的状态为准。'
       : cardUpdate ? '私聊卡片更新尚未确认，将在连接时重试。' : undefined;
     const syncMessage = [expiryNotice(op.receipt).syncMessage, cloudMessage, cardMessage].filter(Boolean).join(' ');
-    return { ...summary, ...(syncMessage && {syncMessage}), target: h.target, ...(op.groupId && { groupName: h.groups.get(op.groupId) || op.groupId }) };
+    return { ...summary, ...(h.pausedContexts.has(op.operationId) && {contextPaused:true}), ...(syncMessage && {syncMessage}), target: h.target, ...(op.groupId && { groupName: h.groups.get(op.groupId) || op.groupId }) };
   }
   private async status(h: Handle) {
     const status = expectKind(await this.daemon(h, { type: 'status' }), 'status');
     this.check(h);
-    for (const op of status.operations) {
-      const prior = h.operations.get(op.operationId);
-      if (!prior || prior.state !== op.state) h.lastActivity = Date.now();
-    }
-    h.operations.clear();
+    const current = new Set(status.operations.map(op => op.operationId));
+    for (const id of h.operations.keys()) if (!current.has(id)) h.operations.delete(id);
     for (const [index,op] of status.operations.entries()) {
       this.remember(h, op);
       if (terminal(op) && op.receipt?.status === 'accepted') await this.rememberSource(h, op);
@@ -360,6 +413,7 @@ export class RecipeAuthoringController {
     return { ...summary, receipt, ...expiryNotice(receipt), state:receipt.status === 'accepted' ? 'completed' : receipt.status };
   }
   private async refresh(h: Handle): Promise<DesktopAuthoringReply> {
+    await this.checkGroup(h);
     const status = await this.status(h);
     const revoked = [];
     for (const op of status.reconciliation) revoked.push(await this.reconcile(h, op));
@@ -379,10 +433,6 @@ export class RecipeAuthoringController {
         const delay = Math.min(120_000, Math.max(12_000, (recent?.delay ?? 0) * 2));
         h.retry.set(op.operationId, { state: stamp, until: Date.now() + delay, delay, message });
       }
-    }
-    if (h.open.groupId && h.groupIdentity !== await this.groupIdentity(h,h.open.groupId)) {
-      this.revoke(h);
-      throw recheck();
     }
     this.check(h);
     return {
@@ -456,7 +506,7 @@ export class RecipeAuthoringController {
   private async sync(
     h: Handle,
     op: AuthoringOperation,
-    action: 'resume' | 'cancel' | 'resend' | 'accept' = 'resume',
+    action: 'sync' | 'resume' | 'cancel' | 'resend' | 'accept' = 'sync',
     digest?: string,
   ) {
     const row = this.remember(h, op, action === 'cancel');
@@ -484,6 +534,12 @@ export class RecipeAuthoringController {
     if (op.state === 'pendingMain' || op.state === 'sending' || action === 'resend') {
       return this.operation(h, { type: action === 'resend' ? 'resend' : 'deliver', operationId });
     }
+    if (action === 'resume' && h.pausedContexts.has(operationId) && ['waiting','candidate'].includes(op.state)) {
+      if (op.draftId && op.baseRevision) await cloud.draft(op.draftId,op.baseRevision);
+      const resumed = await this.operation(h,{type:'resumeContext',operationId});
+      h.pausedContexts.delete(operationId);
+      return resumed;
+    }
     if (op.state !== 'pendingCloud') return op;
     const candidate = await this.inspect(h, op);
     this.check(h);
@@ -493,7 +549,7 @@ export class RecipeAuthoringController {
     this.check(h);
     return this.confirmedOperation(h, await this.operation(h, { type: 'advance', operationId, authorization }));
   }
-  private async action(h: Handle, r: Exclude<Action, { type: 'close' }>): Promise<DesktopAuthoringReply> {
+  private async action(h: Handle, r: Exclude<Action, { type: 'close' | 'detach' }>): Promise<DesktopAuthoringReply> {
     await this.present(h, r.type !== 'status');
     if (h.open.groupId && r.type !== 'status' && r.type !== 'sourceHistory') {
       if (h.groupIdentity !== await this.groupIdentity(h,h.open.groupId) || ('groupId' in r && r.groupId !== h.open.groupId)) throw recheck();
@@ -591,17 +647,25 @@ export class RecipeAuthoringController {
     if (r.type === 'open') return desktopAuthoringReplySchema.parse(await this.open(r));
     const h = this.handles.get(r.handle);
     if (!h) throw changed();
+    if (r.type === 'detach') {
+      h.attached = false;
+      if (!h.queued && !h.operations.size) this.revoke(h);
+      return {kind:'closed' as const};
+    }
+    if (!h.attached) throw changed();
     if (r.type === 'close') {
       this.revoke(h);
       return { kind: 'closed' as const };
     }
     this.check(h);
-    h.lastInteraction = Date.now();
     if (h.queued >= 8) throw new AuthoringError('正在核对上一次操作，请稍后继续。');
     h.queued++;
     h.busy = true;
     const run = h.tail.then(async () => {
       this.check(h);
+      if (!h.attached) throw changed();
+      await this.workflow(h);
+      if (!h.attached) throw changed();
       const reply = await this.action(h, r);
       this.check(h);
       return desktopAuthoringReplySchema.parse(reply);

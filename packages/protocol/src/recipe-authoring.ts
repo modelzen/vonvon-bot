@@ -8,6 +8,8 @@ const positive = z.number().int().positive().max(2147483647);
 const millis = z.number().int().nonnegative().safe();
 const purpose = z.enum(['prepareDraft', 'editDraft']);
 const publicField = z.enum(['name', 'summary', 'overview', 'version']);
+const fieldRequest = z.object({requestId: uuid, operationId: uuid, draftId: uuid, revision: positive, field: publicField}).strict();
+export type AuthoringFieldRequest = z.infer<typeof fieldRequest>;
 const target = {botId: agentIdSchema};
 const session = {...target, session: uuid};
 const operation = {...session, operationId: uuid};
@@ -53,6 +55,9 @@ export const recipeAuthoringRequestSchema = z.discriminatedUnion('type', [
   z.object({type: z.literal('open'), ...target, accountId: uuid}).strict(),
   z.object({type: z.literal('close'), ...session}).strict(),
   z.object({type: z.literal('status'), ...session}).strict(),
+  z.object({type: z.literal('workflow'), ...session}).strict(),
+  z.object({type: z.literal('answerField'), ...session, request:fieldRequest, value:z.string().max(4000).nullable()}).strict(),
+  z.object({type: z.literal('resumeContext'), ...operation}).strict(),
   z.object({type: z.literal('beginLink'), ...session}).strict(),
   z.object({type: z.literal('inspectLink'), ...session, challengeId: uuid}).strict(),
   z.object({type: z.literal('confirmLink'), ...session, challengeId: uuid, evidence: digest}).strict(),
@@ -75,6 +80,9 @@ export type RecipeAuthoringRequest = z.infer<typeof recipeAuthoringRequestSchema
 export const recipeAuthoringReplySchema = z.discriminatedUnion('kind', [
   z.object({kind: z.literal('session'), session: uuid, linked: z.boolean(), leaseMs: positive}).strict(),
   z.object({kind: z.literal('closed')}).strict(),
+  z.object({kind: z.literal('workflow'), activity:millis, ageMs:millis, field:fieldRequest.optional(),
+    pausedContexts:z.array(uuid).max(540)}).strict(),
+  z.object({kind: z.literal('fieldAnswered')}).strict(),
   z.object({kind: z.literal('challenge'), challengeId: uuid, code: z.string().max(32), expiresAt: millis}).strict(),
   z.object({kind: z.literal('link'), linked: z.boolean(), recipient: recipient.optional(), evidence: digest.optional()}).strict(),
   z.object({kind: z.literal('groupSourceIdentity'), groupId: groupIdSchema, identity: digest}).strict(),

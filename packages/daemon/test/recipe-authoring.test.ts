@@ -613,3 +613,47 @@ it('blocks normal deletion of this Bot registration until its revoked operations
   await setBotActivation(appId,false);
   expect(await admin.deleteBot(appId)).toEqual({ok:true});
 });
+
+it('keeps idle separate from status, then explicitly resumes the original card with a fresh confirmation',async()=>{
+  await link();
+  const prep = await prepare();
+  await advance(prep,'dispatch');
+  const original = ref();
+  const before = kind(await rpc('workflow'),'workflow');
+  for (let i=0;i<59;i++) {
+    clock+=30_000; await rpc('status');
+    const tick=kind(await rpc('workflow'),'workflow');
+    expect(tick.activity).toBe(before.activity);
+  }
+  clock+=30_000;
+  await expect(rpc('status')).rejects.toThrow('暂停');
+  await act(original);
+  expect(textSend.mock.lastCall?.[1]).toEqual({text:expect.stringContaining('重新核验并继续')});
+  expect(cloud.map(row=>row.action)).toEqual(['dispatch']);
+  await open();
+  expect(kind(await rpc('workflow'),'workflow').pausedContexts).toEqual([prep.operationId]);
+  await rpc('status'); await rpc('deliver',{operationId:prep.operationId});
+  expect(ref()).toEqual(original);
+  expect(kind(await rpc('workflow'),'workflow').pausedContexts).toEqual([prep.operationId]);
+  await rpc('resumeContext',{operationId:prep.operationId});
+  const resumed=ref();
+  expect(messages.size).toBe(1); expect(resumed.messageId).toBe(original.messageId); expect(resumed.ref).not.toBe(original.ref);
+  await act(original); expect((await status(prep.operationId)).state).toBe('waiting');
+  await act(resumed); expect((await status(prep.operationId)).state).toBe('pendingCloud');
+});
+
+it('renews idle for an actual revised candidate and ignores duplicate messages, CardKit retries and polls',async()=>{
+  await link();const op=kind(await rpc('edit',{draftId:randomUUID(),baseRevision:1}),'operation').operation;
+  await advance(op,'dispatch');await orch.onMessage(msg('/recipe name 初稿'));
+  const earlier = kind(await rpc('workflow'),'workflow');
+  const original = await status(op.operationId);
+  for(let i=0;i<59;i++){clock+=30_000;await rpc('status');}
+  const changed=msg('/recipe name 新稿');
+  await orch.onMessage(changed);
+  const next=await status(op.operationId);
+  expect(next.state).toBe('candidate');expect(next.payloadDigest).not.toBe(original.payloadDigest);
+  const renewed=kind(await rpc('workflow'),'workflow');expect(renewed.activity).toBe(earlier.activity+1);
+  clock+=30_000;await orch.onMessage(changed);await rpc('updateCard',{operationId:op.operationId});
+  expect(kind(await rpc('workflow'),'workflow')).toMatchObject({activity:renewed.activity,ageMs:30_000,pausedContexts:[]});
+  await act(ref());expect((await status(op.operationId)).state).toBe('pendingCloud');
+});

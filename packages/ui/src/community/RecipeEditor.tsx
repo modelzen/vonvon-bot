@@ -2,6 +2,7 @@ import {useEffect, useReducer, useRef, useState} from 'react';
 import {communityFailureMessages, recipePublicSchema, recipeConfigSchema} from '@vonvon/protocol';
 import type {CommunityRequest, CommunityShell, RecipeConfig, RecipeDetail, RecipeDraft, RecipePublic} from '@vonvon/protocol';
 import {Button, InlineNotice} from '../reference/components/ui';
+import {useShellCapabilities} from '../client-context';
 import {Dialog} from '../reference/components/ui/Dialog';
 import {useDraft, useDraftGuard} from '../settings/DraftGuard';
 import {RecipeAuthoringPage} from './authoring/RecipeAuthoring';
@@ -144,7 +145,12 @@ export function RecipeEditor({shell, accountId, draftId, source, onBack, onPubli
       if (live.current) dispatch({type: 'readResolved', id: request, draft: next});
     } catch (e) {if (live.current) dispatch({type: 'readFailed', id: request, message: e instanceof Error ? e.message : '草稿读取失败。'});}
   }
-  const chat = model && <section className="authoring-draft-panel"><div className="community-actions"><Button onClick={() => setChatOpen(value => !value)}>{chatOpen ? '暂停聊天编辑' : '在飞书继续编辑'}</Button><span className="community-muted">修订 {model.revision} · 与飞书共享同一份私人草稿</span></div>
+  const authoringShell = useShellCapabilities()?.recipeAuthoring;
+  const readRef = useRef(readDraft); readRef.current = readDraft;
+  useEffect(() => authoringShell?.onSaved?.(receipt => {
+    if (receipt.accountId === accountId && receipt.draftId === draftId && !chatOpen) void readRef.current(receipt.draftId,receipt.revision,'chat');
+  }), [authoringShell,accountId,draftId,chatOpen]);
+  const chat = model && <section className="authoring-draft-panel"><div className="community-actions"><Button onClick={() => setChatOpen(value => !value)}>{chatOpen ? '收起聊天设置' : '在飞书继续编辑'}</Button><span className="community-muted">修订 {model.revision} · 与飞书共享同一份私人草稿</span></div>
     {read && <InlineNotice title={read.status === 'loading' ? '正在读取最新草稿' : read.minimumRevision > model.revision ? '云端已保存，但 App 尚未读取最新修订' : '草稿读取未完成'} tone={read.status === 'failed' ? 'warning' : 'info'} actions={read.status === 'failed' && <Button onClick={() => void readDraft(read.draftId, read.minimumRevision, read.kind)}>重新读取新修订</Button>}>
       当前显示修订 {model.revision}。{read.minimumRevision > model.revision && <>云端已保存修订 {read.minimumRevision}。</>}{dirty && '你的未保存输入仍保留。'}{read.status === 'failed' && <p>{read.error}</p>}
     </InlineNotice>}

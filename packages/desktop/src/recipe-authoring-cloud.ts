@@ -169,6 +169,7 @@ export function authoringCloud(account: NativeAccount, accountId: string, signal
       const draft = recipeDraftSchema.parse(await read('/v1/drafts/' + draftId));
       if (draft.draftId !== draftId || draft.revision !== revision)
         throw new AuthoringError('草稿修订已改变，请重新打开草稿。');
+      return draft;
     },
     get: (op: Registration) => getState(op),
     async register(op: AuthoringOperation) {

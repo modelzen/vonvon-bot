@@ -14,7 +14,7 @@ CommunityPage 管理公开目录、作者工作区与 RecipeEditor。GroupWorksp
 
 ## 4. 怎么改
 
-新增独立 authoring 页面和流程组件。数据结构以 typed session handle、challenge、source review、operation 为界。每次账户、设备或 Bot 改变都销毁旧流程并 close 旧 handle；迟到 open 也必须关闭。UI 不接触 JWT、设备 nonce 或票据。首次关联只显示 short code，在收到真实候选后显式核对 openId、租户与私聊再 confirm。来源 reviewToken 只在本轮明确 sourceAttested 后 prepare。等待期间前台退避查询，后台心跳仍归 main。候选只 inspect，不提供跳过飞书确认的 accept 按钮。取消处理中不显示已取消。
+新增独立 authoring 页面和流程组件。数据结构以 typed session handle、challenge、source review、operation 为界。页面离开时 detach 旧 handle，迟到且无人使用的 open 要 close。Main 单独检查原账号和设备的连接代次。点击「暂停聊天编辑」时才显式 close；普通页面跳转后，已开始的操作仍可在飞书继续。UI 不接触 JWT、设备 nonce 或票据。首次关联只显示 short code，在收到真实候选后显式核对 openId、租户与私聊再 confirm。来源 reviewToken 只在本轮明确 sourceAttested 后 prepare。等待期间前台退避查询，后台心跳仍归 main。候选只 inspect，不提供跳过飞书确认的 accept 按钮。取消处理中不显示已取消。
 
 云 accepted 使用原 draftId，聊天编辑复用同一编辑器。收到新修订时保留 dirty 输入并提供读取/核对，不覆盖本地缓冲。群分享只显示本来源关联操作和有确切来源关系的版本；其他作者已装作品仅分享原链接。公开详情不含作者管理。
 
