@@ -164,6 +164,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
           if (op.kind === 'status') {
             return { connection: handle.channel.getConnectionStatus?.()?.state ?? 'unknown' };
           }
+          if(op.kind==='richActivate'||op.kind==='richSetup')return handle.richRecipe(op);
           if (op.kind === 'recipeAuthoring' || op.kind === 'recipeAuthoringDisconnect') return handle.authoring(op);
           if (op.kind === 'firstHello') return handle.firstHello();
           if (op.kind === 'collaboration') return handle.collaboration(op.request);
@@ -195,6 +196,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
             if (botId !== ownAppId) throw new AdminWriteError('这个 Bot 不归本进程管');
             return handle.collaboration(request);
           },
+          richRecipe:async(botId,op)=>{if(botId!==ownAppId)throw new AdminWriteError('这个 Bot 不归本进程管');return handle.richRecipe(op);},
           recipeAuthoring: async (botId, op) => {
             if (botId !== ownAppId) throw new AdminWriteError('这个 Bot 不归本进程管');
             return handle.authoring(op);

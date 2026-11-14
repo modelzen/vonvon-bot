@@ -45,6 +45,7 @@ export function cardDisplayPresentationDefaults(cfg:Partial<AppConfig>):ProjectP
 export interface Project {
   bindingIncarnation?: string;
   projectSettingsRevision?: number;
+  richRecipe?: import('../recipe/rich-state').RichRecipeState;
   recipeInstall?: import('../recipe/types').RecipeInstallation;
   /** Default for new sessions; omitted uses the provider's native default. */
   serviceTier?: import('../agent/types').ServiceTier;

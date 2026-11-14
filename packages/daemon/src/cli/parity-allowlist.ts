@@ -20,6 +20,7 @@ const pending = (slice: ParitySlice, note: string): ParityEntry => ({ reason: 'p
 const dead = (slice: ParitySlice, note = 'the daemon answers unsupported'): ParityEntry => ({ reason: 'dead', slice, note });
 
 export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
+  ...Object.fromEntries(['richPrepare','richCommit','richStatus','richSetup'].map(type=>['recipeInstall.'+type,{reason:'desktop-only' as const,note:'the account owner reviews and applies this installation on the selected device'}])),
   'recipeInstall.source': {reason:'desktop-only',note:'group settings show the exact local installation source'},
   'recipeInstall.ignoreVersion': {reason:'desktop-only',note:'group settings ignore a reviewed update for one binding'},
   'recipeInstall.createdGroup': {reason:'desktop-only',note:'the desktop looks up the original creation after a lost response'},

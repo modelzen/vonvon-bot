@@ -233,6 +233,13 @@ import { serviceStdoutPath, serviceStderrPath } from '../service/common';
 import { bridgeVersion } from '../core/version';
 import { desktopDownloadForHost } from '../service/desktop-release';
 import { runtimeDistribution } from '../service/distribution';
+import {recipeSmartRules} from '../recipe/rich-settings';
+import {applyRich,readRichJournal} from '../recipe/rich-runtime';
+import {richSetup} from '../recipe/rich-setup';
+import {recipeAdmissions,recipeSlot} from '../recipe/rich-admission';
+import {guardRecipeThread,managedThreadOwner,recipeHistoryId,isRecipeSession,recipeResumeId,rememberRecipeThread} from '../recipe/rich-thread';
+import {openRichRecipeGeneration} from '../recipe/rich-generation';
+import {join as joinRecipePath} from 'node:path';
 import { botPaths, paths } from '../config/paths';
 import { claudeReadScope } from '../config/read-scope';
 import { resolveProjectsRootDir } from '../config/directories';
@@ -977,6 +984,7 @@ export interface RecallEvent {
 }
 
 export interface Orchestrator {
+  richRecipe?:(op:import('../recipe/rich-installer').RichBotOp,bot:import('../config/bots').BotIdentity,member:(chat:string)=>Promise<void>)=>Promise<unknown>;
   /** Called by the production bridge before event intake; never runs in unit harnesses implicitly. */
   initialize?(): Promise<void>;
   collaboration: (request: CollaborationRequest) => Promise<unknown>;
@@ -1260,7 +1268,15 @@ export function createOrchestrator(
     // The generic tool is a private chat's alone: a group cannot reach other groups or write to Feishu through it (7.6).
     const feishuApi = schedule && Boolean(project?.dm);
     // The task skill goes with the tools (T4b); a package that cannot be written leaves the last whole one, or none.
-    const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId, project?.dm ? 'dm' : 'group') : [];
+    let capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId, project?.dm ? 'dm' : 'group') : [];
+    if (project?.richRecipe) {
+      const {pointer} = project.richRecipe;
+      const pkg = await openRichRecipeGeneration({botDataRoot:joinRecipePath(paths.appDir,'bots',cfg.accounts.app.id),installationId:pointer.installationId,generationId:pointer.generationId,expected:pointer});
+      if (pkg.nativePackage) {
+        if (!backend.profileCapabilities?.capabilityPackages) throw new Error('此 Provider 不支持本群配方的技能');
+        capabilityPackages = [...capabilityPackages,pkg.nativePackage];
+      }
+    }
     // What the Feishu tools download must be readable outside full access too.
     const downloads = schedule && project ? inboundChatDir(project.chatId) : undefined;
     if (downloads) await prepareInboundDir(downloads);
@@ -1539,6 +1555,7 @@ export function createOrchestrator(
   /** The profile a thread was actually started with: a permission save can swap in a rebuilt one (and its opening). */
   const profileUsed = new WeakMap<AgentThread, object>();
   /** A save can finish while a provider is starting, before eviction can see its thread. */
+  const deferredEntries=new WeakMap<AgentThread,NonNullable<StartThreadOptions['entry']>>();
   async function createWithPermission<T extends StartThreadOptions>(be: AgentBackend, original: T, place: AgentPlace, create: (opts: T) => Promise<AgentThread>): Promise<AgentThread> {
     for (let attempt = 0; attempt < 2; attempt++) {
       let opts = original;
@@ -1557,7 +1574,8 @@ export function createOrchestrator(
         // Every session finds `vonvon`, whichever Provider and place (dm-agent 9): on the PATH it inherits, or by this.
         const env = { ...(sessionCli ? { [SESSION_CLI_ENV]: sessionCli } : {}), ...session };
         thread = await create({...opts, ...(entry ? {entry} : {}), ...(Object.keys(env).length ? {profile: withSessionEnv(opts.profile, env)} : {})});
-        entry?.attach(thread);
+        if(place.kind!=='group'||!place.chatId)entry?.attach(thread);
+        else if(entry) deferredEntries.set(thread,entry);
       }
       catch (error) { entry?.revoke('start-failed'); throw error; }
       if (opts.profile) profileUsed.set(thread, opts.profile);
@@ -1581,15 +1599,45 @@ export function createOrchestrator(
    * （touchSession）打点；空闲时长 = now − 最后打点。 */
   const sessionTouchedAt = new Map<string, number>();
   /** sessions.set + 打点 —— 所有放进 LIVE 缓存的会话一律走这里。 */
+  function epochOf(project: Project | undefined):string|undefined {
+    if (!project?.richRecipe) return;
+    return JSON.stringify([project.bindingIncarnation, project.richRecipe.pointer.generationId, permissionFingerprint(turnPerm(project))]);
+  }
+  async function openGroupThread(be:AgentBackend, opts:StartThreadOptions, place:AgentPlace, previous?:string):Promise<AgentThread> {
+    const create = (options:StartThreadOptions,id?:string) => createWithPermission(be,options,place,actual=> id ? be.resumeThread({...actual,sessionId:id}) : be.startThread(actual));
+    if (place.kind !== 'group' || !place.chatId) return create(opts,previous);
+    const chatId=place.chatId, root=joinRecipePath(paths.appDir,'bots',cfg.accounts.app.id), slot=recipeSlot(cfg.accounts.app.id,chatId), release=recipeAdmissions.acquire(slot);
+    try {
+      const project=await getProjectByChatId(chatId), epoch=epochOf(project);
+      const assertEpoch=()=>{if(epochOf(getProjectByChatIdSync(chatId))!==epoch) throw new ThreadPermissionChanged('本群配方已更新，请重新打开会话。');};
+      if(previous&&!isRecipeSession(previous)&&await managedThreadOwner(root,previous))throw new ThreadPermissionChanged('请使用本群配方会话记录');
+      const id=previous && epoch ? await recipeResumeId(root,previous,slot,epoch) : previous && !isRecipeSession(previous) ? previous : undefined;
+      const options=epoch ? {...opts,profile:await profileOf(project,opts.cwd,be,opts.mode)} : opts;
+      const native=await create(options,id);
+      try {
+        assertEpoch();
+        const alias=epoch ? (id ? previous : await rememberRecipeThread(root,slot,epoch,native.sessionId)) : undefined;
+        const guarded=guardRecipeThread(native,slot,assertEpoch,alias);deferredEntries.get(native)?.attach(guarded);
+        const fingerprint=threadPermissions.get(native); if(fingerprint)threadPermissions.set(guarded,fingerprint);
+        const profile=profileUsed.get(native); if(profile)profileUsed.set(guarded,profile);
+        return guarded;
+      } catch(error) {await native.close();throw error;}
+    } finally {release();}
+  }
+  async function scopedThreads(be: AgentBackend, chatId:string, cwd:string,limit?:number){
+    const threads=await be.listThreads(cwd,limit);
+    return (await Promise.all(threads.map(async thread=>{const owner=await managedThreadOwner(joinRecipePath(paths.appDir,'bots',cfg.accounts.app.id),thread.sessionId);return !owner?thread:owner.slot===recipeSlot(cfg.accounts.app.id,chatId)?{...thread,sessionId:owner.alias}:undefined;}))).filter((t):t is NonNullable<typeof t>=>!!t);
+  }
+  async function scopedHistory(be:AgentBackend,chatId:string,cwd:string,id:string){return be.readHistory(cwd,await recipeHistoryId(joinRecipePath(paths.appDir,'bots',cfg.accounts.app.id),id,recipeSlot(cfg.accounts.app.id,chatId)));}
   async function startWith(be: AgentBackend, opts: StartThreadOptions, place: AgentPlace): Promise<AgentThread> {
-    const thread = await createWithPermission(be, opts, place, options => be.startThread(options));
+    const thread = await openGroupThread(be,opts,place);
     const used = profileUsed.get(thread);
     const opening = used ? openings.get(used) : undefined;
     if (opening) contextDelivered.set(thread, opening);
     return thread;
   }
   async function resumeWith(be: AgentBackend, opts: ResumeThreadOptions, place: AgentPlace): Promise<AgentThread> {
-    return createWithPermission(be, opts, place, options => be.resumeThread(options));
+    return openGroupThread(be,opts,place,opts.sessionId);
   }
 
   /**
@@ -2600,7 +2648,7 @@ export function createOrchestrator(
       persona: judged.role, memory: judged.memory,
       ...(facts ? { facts } : {}),
       variant: item.variant, appId: cfg.accounts.app.id, botName: channel.botIdentity?.name ?? '',
-      group: { chatId: project.chatId, name: project.dm ? `和 ${name} 的私聊` : project.name, backend: project.backend, judge: project.judge, smartRules: project.smartRules ?? (project.dm ? DEFAULT_DM_SMART_RULES : undefined) },
+      group: { chatId: project.chatId, name: project.dm ? `和 ${name} 的私聊` : project.name, backend: project.backend, judge: project.judge, smartRules: recipeSmartRules(project) ?? (project.dm ? DEFAULT_DM_SMART_RULES : undefined) },
       botJudge: cfg.preferences?.judge, ...(title ? { topicTitle: title } : {}),
       context, message: look?.glance ? { ...line, fresh: true as const } : line,
       ...(why ? { why } : {}),
@@ -4386,7 +4434,9 @@ export function createOrchestrator(
         const prior = elsewhere ? undefined : await getSession(threadId).catch(() => undefined);
         project = await getProjectByChatId(chatId);
         if (project) perm = turnPerm(project);
-        const permissionChanged = threadPermissions.get(live) !== permissionFingerprint(perm);
+        const currentEpoch=epochOf(project);
+        const epochChanged=currentEpoch ? !(await recipeResumeId(joinRecipePath(paths.appDir,'bots',cfg.accounts.app.id),live.sessionId,recipeSlot(cfg.accounts.app.id,chatId),currentEpoch)) : isRecipeSession(live.sessionId);
+        const permissionChanged = epochChanged || threadPermissions.get(live) !== permissionFingerprint(perm);
         // Evicted while it looked (a tier change, the reaper): resume below like any other.
         if (sessions.get(threadId) === live && live.isAlive()) {
           if (!elsewhere && !permissionChanged) {
@@ -4436,6 +4486,14 @@ export function createOrchestrator(
         mode: perm.mode,
         network: perm.network, native: perm.native, readScope: perm.readScope,
       }, sessionPlace(project, chatId));
+      if (resumed.sessionId !== rec.sessionId) {
+        const freshProfile=profileUsed.get(resumed);
+        const opening=freshProfile && openings.get(freshProfile);
+        if (opening) contextDelivered.set(resumed,opening);
+        await patchSession(threadId,{sessionId:resumed.sessionId,context:opening,usage:undefined});
+        trackSession(threadId,resumed);lastUsage.delete(threadId);
+        return {thread:resumed,recreated:false};
+      }
       trackSession(threadId, resumed);
       // The opening handed to a resumed session carries a new mark. Claude takes its system append again on resume, so that
       // opening is what it now holds (the record's mark stays accepted); Codex keeps the instructions it was started with,
@@ -4721,7 +4779,7 @@ export function createOrchestrator(
         // button's callback value (`b`), so the pick → readHistory → rebind path
         // stays on the same backend that listed the sessions.
         const be = groupBackend(project);
-        const listed = await (project?.dm ? be.listThreads(cwd, DM_RESUME_SCAN) : be.listThreads(cwd));
+        const listed = await scopedThreads(be,msg.chatId,cwd,project?.dm ? DM_RESUME_SCAN : undefined);
         // Sessions another place of this group holds are left off (s15f): resuming one here
         // would give it two writers. The key being resumed may pick its own again.
         const records = await listSessions();
@@ -6906,7 +6964,7 @@ export function createOrchestrator(
         const reserved: ActiveState = { queue: [], requesterOpenId: state.requesterOpenId };
         active.set(sessionKey, reserved);
         try {
-          const history = await be.readHistory(state.cwd, sessionId);
+          const history = await scopedHistory(be,state.chatId,state.cwd,sessionId);
           resumePending.delete(evt.messageId);
           let taken: SessionRecord | undefined;
           await withTrace({ chatId: state.chatId, msgId: state.originalMsgId }, async () => {
@@ -6961,7 +7019,7 @@ export function createOrchestrator(
       // thread/read: fetch the transcript without starting a turn or holding the
       // session live (model/effort left to the thread's own remembered config).
       // Never throws — empty history just yields a minimal card.
-      const history = await be.readHistory(state.cwd, sessionId);
+      const history = await scopedHistory(be,state.chatId,state.cwd,sessionId);
       resumePending.delete(evt.messageId);
 
       let bound = false;
@@ -7144,7 +7202,7 @@ export function createOrchestrator(
     if (!currentProject || projectRevision(currentProject) !== projectRevision(project)) throw new AdminWriteError('项目已改变，请刷新后重试');
     const be = groupBackend(project);
     if (request.action === 'history') {
-      try { return { sessions: records, threads: (await be.listThreads(project.cwd)).map(resumableThread), backend: be.id }; }
+      try { return { sessions: records, threads: (await scopedThreads(be,project.chatId,project.cwd)).map(resumableThread), backend: be.id }; }
       catch (error) { return { sessions: records, threads: [], backend: be.id, threadsError: error instanceof Error ? error.message : '无法读取后端历史' }; }
     }
     if (request.action === 'editProject' || request.action === 'removeProject') {
@@ -7249,7 +7307,7 @@ export function createOrchestrator(
     const perm = turnSession(project.chatId, project);
     if (request.action === 'resume') {
       if (request.backend !== be.id) throw new AdminWriteError('项目后端已改变');
-      const available = await be.listThreads(project.cwd);
+      const available = await scopedThreads(be,project.chatId,project.cwd);
       if (!available.some(item => item.sessionId === request.sessionId)) throw new AdminWriteError('历史会话不属于当前项目');
       // Another place of the group holds it (s15f); a single group's own key may take it again.
       const holder = await resumeHolder(project.chatId, ruleKind(project) === 'single' ? perm.sessionKey : undefined, be.id, request.sessionId);
@@ -7266,7 +7324,7 @@ export function createOrchestrator(
       let cardState: HistoryCardState | undefined;
       let applied: DesktopSessionResult | undefined;
       try {
-        const history = await be.readHistory(project.cwd, request.sessionId);
+        const history = await scopedHistory(be,project.chatId,project.cwd,request.sessionId);
         cardState = { cwd: project.cwd, projectName: project.name, backendName: backendLabel(be), history, source: 'desktop' };
         let threadId = key;
         if (ruleKind(project) !== 'single') {
@@ -10311,10 +10369,17 @@ export function createOrchestrator(
    * first request of a harness that never calls it. The tick is not started here: bridge.ts does, once connected.
    */
   const scheduleDiagnostic = ({ kind, ...fields }: ScheduleDiagnosticEvent): void => log.info('schedule', kind, fields);
-  const scheduleStore = createScheduleStore(botPaths(cfg.accounts.app.id).schedulesFile, { now: () => Date.now(), log, diagnostics: scheduleDiagnostic });
+  const scheduleStore = createScheduleStore(botPaths(cfg.accounts.app.id).schedulesFile, { now: () => Date.now(), log, diagnostics: scheduleDiagnostic, activeRecipe:chat=>{
+    const p=getProjectByChatIdSync(chat), a=p?.richRecipe;if(!p||!a||p.bindingIncarnation!==a.bindingIncarnation)return;
+    return {installation:a.pointer.installationId,generation:a.pointer.generationId,context:JSON.stringify([p.bindingIncarnation,permissionFingerprint(turnPerm(p)),p.backend,p.cwd,p.directories,p.allowedUsers])};
+  } });
   const scheduler = createScheduler({
     store: scheduleStore, now: () => Date.now(), timers: { setTimeout, clearTimeout },
-    run: runScheduled,
+    acquireTask:task=>recipeAdmissions.acquire(recipeSlot(cfg.accounts.app.id,task.chatId)),
+    run:async job=>{
+      const current=scheduleStore.get(job.task.id);if(!current||current.revision!==job.task.revision || (scheduleStore.managed?.review(current.id) && current.state!=='active'))return SCHEDULE_UPDATING;
+      return runScheduled(job);
+    },
     gate: scheduleGate, notifyAutoPause, notifyGateFailure,
     // Half the run slots at most, so people always find one (总设计第 15 节第 8 条).
     maxInflight: () => Math.max(1, Math.floor(getMaxConcurrentRuns(cfg) / 2)),
@@ -10379,6 +10444,11 @@ export function createOrchestrator(
     writePreferences,
     libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
+    richRecipe:async(op,bot,member)=>{
+      await loadStore();if(shuttingDown||bot.appId!==cfg.accounts.app.id)throw new Error('Bot 已停止');
+      if(op.kind==='richSetup'){if(op.request.botId!==bot.appId)throw new Error('配方所属 Bot 不符');await member(op.request.groupId);return richSetup(op.request,scheduleStore,settings,id=>isAdmin(cfg,id));}
+      const journal=await readRichJournal(bot.appId,op.activation.operationId);return applyRich(bot,op.activation,scheduleStore,()=>member(journal.group));
+    },
     scheduleAs: admittedScheduleAs,
     permissionOf: async chatId => {
       const project = await getProjectByChatId(chatId);
