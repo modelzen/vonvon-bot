@@ -56,10 +56,13 @@ try{
     const r=await fetch(orig(api.server)+path,{method:method??(body!==undefined?'POST':'GET'),headers,body:body===undefined?undefined:JSON.stringify(body)});
     const out=await r.json();assert.equal(r.status,status,path+' '+JSON.stringify(out.error));return out;
   }
+  const logoReceipts=new Map();
   async function upload(token,pkg,idx,kind,buf,status=200) {
     const r=await fetch(orig(broker)+'/v2/objects/'+pkg+'/members/'+idx,{method:'PUT',headers:{authorization:'Bearer '+token,
       'content-type':'application/octet-stream','x-recipe-kind':kind,'x-recipe-sha256':sha(buf).toString('hex')},body:buf});
-    const j=await r.json();assert.equal(r.status,status,JSON.stringify(j));return j;
+    const j=await r.json();assert.equal(r.status,status,JSON.stringify(j));
+    if(status===200&&kind==='finalLogo')logoReceipts.set(j.objectId,{packageId:pkg,inputSha256:sha(buf).toString('hex')});
+    return j;
   }
   async function read(token,scope,target,obj,status=200){
     const r=await fetch(orig(broker)+'/v2/'+scope+'/'+target+'/objects/'+obj,{headers:token?{authorization:'Bearer '+token}:{}});
@@ -89,7 +92,7 @@ try{
   delete fixture.finalLogo;fixture.parts=[];fixture.memories=[];
   fixture.rules.push({itemId:randomUUID(),originId:randomUUID(),purpose:'work',text:{kind:'inline',value:'私有规则'}});
   const own=c=>inventory(c).map(({itemId})=>({itemId,source:{kind:'accountClaim'}}));
-  const body=(c,access='coded')=>({format:'rich-v2',content:c,access,origins:own(c)});
+  const body=(c,access='coded')=>({format:'rich-v2',content:c,access,origins:own(c),...(c.finalLogo?{logoUpload:logoReceipts.get(c.finalLogo.objectId)}:{})});
   async function start(token,edit={}){
     const op=opId(),pkg=opId(),device=generateKeyPairSync('x25519'),nonce=randomBytes(32);
     const reg={format:'rich-v2',purpose:'prepareDraft',targetPublicKey:b64(device.publicKey.export({type:'spki',format:'der'}).subarray(-32)),nonceCommitment:b64(sha(nonce)),...edit};
@@ -112,9 +115,13 @@ try{
   const prep=await start(a);const privateBytes=Buffer.from('SELECTED PRIVATE MEMORY');
   const p=await upload(a,prep.pkg,0,'text',privateBytes);
   const png=await sharp({create:{width:20,height:30,channels:3,background:'#22aa33'}}).png().toBuffer();
-  const logo=await upload(a,prep.pkg,1,'finalLogo',png);
+  const logo=await upload(a,prep.pkg,64,'finalLogo',png);
   fixture.finalLogo={itemId:randomUUID(),originId:randomUUID(),objectId:logo.objectId};fixture.parts=[p,logo];fixture.memories=[{itemId:randomUUID(),originId:randomUUID(),text:{kind:'part',objectId:p.objectId}}];
-  const input=body(fixture),plan=await prep.freeze(input);
+  const input=body(fixture);
+  await req(prep.path+'/freeze',a,{...input,logoUpload:{...input.logoUpload,inputSha256:'0'.repeat(64)}},{status:409});
+  const missing={...input};delete missing.logoUpload;
+  await req(prep.path+'/freeze',a,missing,{status:422});
+  const plan=await prep.freeze(input);
   assert.deepEqual(await prep.freeze(input),plan);
   const initial=JSON.parse(Buffer.from(plan.canonical,'base64url'));
   assert.notEqual(initial.role.itemId,fixture.role.itemId);

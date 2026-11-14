@@ -72,7 +72,7 @@ function allocator(seed) {
     return [h.slice(0,8),h.slice(8,12),h.slice(12,16),h.slice(16,20),h.slice(20)].join('-');};
 }
 export function freezeSnapshot(body,seed,prior=new Map()) {
-  objectKeys(body,['format','content','origins','access'],['sourceVersionId','packageId']);
+  objectKeys(body,['format','content','origins','access'],['sourceVersionId','packageId','logoUpload']);
   if(body.format!=='rich-v2'||!['direct','coded'].includes(body.access))throw badInput();
   if(body.sourceVersionId)uuid(body.sourceVersionId);
   if(body.packageId)uuid(body.packageId);
@@ -143,6 +143,21 @@ export function applyChanges(original,changes,resolveCandidate,seed,newParts=[])
     return item;
   }
   for(const c of changes) {
+    if(c.op==='setFinalLogo') {
+      if(content.finalLogo){
+        if(content.finalLogo.itemId!==c.itemId)throw badInput();
+        content.finalLogo.objectId=c.objectId;
+      }else{
+        if(c.itemId!==undefined)throw badInput();
+        const item={itemId:randomUUID(),originId:randomUUID(),objectId:c.objectId};
+        content.finalLogo=item;
+        const part=newParts.find(p=>p.objectId===c.objectId&&p.kind==='finalLogo');
+        if(!part)throw badInput();
+        copies.push({kind:'finalLogo',itemId:item.itemId,originId:item.originId,baselineSha256:richDigest(item),
+          contentFingerprint:richDigest({sha256:part.sha256}),source:{kind:'accountClaim'}});
+      }
+      continue;
+    }
     if(c.op==='addSetup') {
       const item={...structuredClone(c.value),itemId:randomUUID(),originId:randomUUID()};
       content.setup.push(item);

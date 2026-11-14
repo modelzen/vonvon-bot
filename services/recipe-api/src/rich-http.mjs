@@ -71,7 +71,7 @@ export async function richInput(req,url,{action,ids:[id,...other]}) {
   return [action,[id]];
 }
 export function parseEditFreeze(b,id,revision) {
-  objectKeys(b,['format','payload','baseCanonical'],['newParts','candidates','access']);
+  objectKeys(b,['format','payload','baseCanonical'],['newParts','candidates','access','logoUpload']);
   if(b.format!=='rich-v2'||(b.access!==undefined&&!['direct','coded'].includes(b.access)))throw badInput();
   const payload=parseRichPayload(b.payload);
   if(payload.purpose!=='editDraft'||payload.draftId!==id||payload.baseRevision!==revision)throw new ApiError(409,'conflict');
