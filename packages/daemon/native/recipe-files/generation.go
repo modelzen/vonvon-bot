@@ -327,6 +327,9 @@ func load(slot *held, gen string, names []string) ([]document, error) {
 		if s == "manifest.json" || s == "effective.json" {
 			cap = logicalCap
 		}
+		if remaining := int64(logicalCap + fileCap - total); cap > remaining {
+			cap = remaining
+		}
 		b, e := f.bytes(cap)
 		f.close()
 		if e != nil || !f.meta.readonly {
