@@ -272,7 +272,6 @@ export class RecipeAuthoringController {
       h.busy = false;
     }
   }
-  // The parser can be waiting for Main while the ordinary operation queue is occupied.
   private workflow(h: Handle) {
     return h.workflow ??= this.checkWorkflow(h).finally(() => {h.workflow = undefined;});
   }
@@ -305,7 +304,6 @@ export class RecipeAuthoringController {
       } catch { this.check(h); }
     }
     this.checkIdle(h);
-    // An instruction can expire while the account read is in flight.
     const pending = expectKind(await this.daemon(h,{type:'workflow'}),'workflow').field;
     if (pending?.requestId !== request.requestId) return;
     await this.checkGroup(h);
