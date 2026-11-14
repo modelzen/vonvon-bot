@@ -32,8 +32,13 @@ const externalKinds: readonly ExternalUrlKind[] = [
 ];
 
 export async function openAllowedExternal(raw: unknown): Promise<void> {
-  if (typeof raw !== 'string') throw new Error('Unsupported external link');
-  const url = externalKinds.map(kind => allowedExternalUrl(raw, kind)).find(value => value !== null);
+  let url: string | null | undefined;
+  // Plain URL calls retain the official allowlist. Arbitrary web documents require an explicit purpose.
+  if (typeof raw === 'string') url = externalKinds.map(kind => allowedExternalUrl(raw, kind)).find(value => value !== null);
+  else if (raw && typeof raw === 'object' && !Array.isArray(raw) && Object.keys(raw).length === 2 &&
+      'kind' in raw && raw.kind === 'recipe-document' && 'url' in raw && typeof raw.url === 'string') {
+    url = allowedExternalUrl(raw.url, 'recipe-document');
+  }
   if (!url) throw new Error('Unsupported external link');
   await shell.openExternal(url);
 }

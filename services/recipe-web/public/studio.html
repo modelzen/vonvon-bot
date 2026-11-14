@@ -8,7 +8,7 @@
 <h3>公开介绍</h3><p class="muted">名称、简介、概览和版本对所有人可见，包括凭码配方。</p><label>配方名称<input name="name" maxlength="120"></label><label>一句话简介<input name="summary" maxlength="480"></label><label>概览 · Markdown<textarea name="overview" rows="4" placeholder="介绍使用场景、依赖和技能的运行方式。"></textarea></label>
 <div class="columns"><label>版本<input name="version" placeholder="例如 1.0"></label><label>获取方式<select name="access"><option value="direct">直接获取</option><option value="coded">凭分享码获取</option></select></label></div>
 <h3>配方配置</h3><p id="scope-label" class="muted"></p><label>角色说明<textarea name="role" rows="5" placeholder="这个角色如何协助使用者？"></textarea></label>
-<details id="additional-notes" hidden><summary>补充说明</summary><div id="additional-notes-body"></div></details>
+<details id="additional-notes" hidden><summary>补充说明</summary><div id="additional-notes-body"></div><button id="remove-legacy-notes" type="button">移除旧补充说明</button><p>保存后生效，已发布版本不受影响。</p></details>
 <p class="actions"><button type="submit">保存草稿</button><button type="button" id="review">预览发布</button></p></form>
 <section id="result" hidden><h2>已发布</h2><p><a id="published" href="/">查看社区详情</a></p><p id="initial-code"></p></section>
 <section id="records"><h2>我的发布</h2><p class="muted" id="record-note"></p><ul class="entries" id="history"></ul></section>

@@ -2,11 +2,11 @@ import {credentialField} from '/credential-shapes.mjs';
 const $ = id => document.getElementById(id);
 const editor=$('editor'), fields=editor.elements, confirmDialog=$('confirm');
 let generation=null;
-let model=null, reviewing=null, managing=null, cursor=null, loading=false, changed=false;
+let model=null, reviewing=null, managing=null, cursor=null, loading=false, changed=false, notesRemoved=false;
 const keys=new Map();
 const text=(id,v)=>$(id).textContent=v;
 const show=(id,on)=>$(id).hidden=!on;
-const errorMessages={login_required:'请先登录。',conflict:'草稿已在其他地方变更。你的输入仍在这里；请先重新打开最新草稿，再决定如何修改。',quota_exceeded:'已达到账号或版本的限额，请检查草稿或稍后再试。',rate_limited:'操作过于频繁，请稍后再试。',auth_required:'登录已过期，请重新登录。',invalid_input:'请检查输入长度、版本和获取方式。',incomplete_setup:'这份旧草稿的补充说明尚未完整，请先在 App 核对。',forbidden:'当前账号不能进行这项操作。',not_found:'没有找到这份草稿或版本。'};
+const errorMessages={login_required:'请先登录。',conflict:'草稿已在其他地方变更。你的输入仍在这里；请先重新打开最新草稿，再决定如何修改。',quota_exceeded:'已达到账号或版本的限额，请检查草稿或稍后再试。',rate_limited:'操作过于频繁，请稍后再试。',auth_required:'登录已过期，请重新登录。',invalid_input:'请检查输入长度、版本和获取方式。',incomplete_setup:'这份旧草稿的补充说明尚未完整。请核对并移除旧补充说明，保存后再发布。',forbidden:'当前账号不能进行这项操作。',not_found:'没有找到这份草稿或版本。'};
 async function api(path,{method='GET',body,rev,logical,version=1}={}){
   const headers={};if(method!=='GET'){
     headers['content-type']='application/json';
@@ -48,11 +48,13 @@ function renderNotes(host,notes=[]){
   }
 }
 function contents(){
-  return {public:{name:fields.name.value,summary:fields.summary.value,overview:fields.overview.value,version:fields.version.value,access:fields.access.value},config:{...model.config,role:fields.role.value}};
+  const config={...model.config,role:fields.role.value};if(notesRemoved)delete config.setup;
+  return {public:{name:fields.name.value,summary:fields.summary.value,overview:fields.overview.value,version:fields.version.value,access:fields.access.value},config};
 }
 function scopeLabel(){text('scope-label',fields.access.value==='coded'?'配方配置仅自己和已获取此版本的人可见。':'配方配置在社区公开展示。');}
 fields.access.addEventListener('change',scopeLabel);
 function fill(d){
+  notesRemoved=false;
   model=d??{draftId:null,revision:0,recipeId:null,public:{name:'',summary:'',overview:'',version:'1.0',access:'direct'},config:{role:''}};
   for(const [k,v] of Object.entries(model.public))if(fields[k])fields[k].value=v;
   fields.role.value=model.config?.role||'';renderNotes($('additional-notes-body'),model.config?.setup?.steps);show('additional-notes',Boolean(model.config?.setup?.steps.length));scopeLabel();changed=false;show('editor',true);show('result',false);text('notice','');
@@ -78,7 +80,7 @@ async function save(){
   }if(!model.draftId&&model.recipeId){body.recipeId=model.recipeId;body.sourceVersionId=model.versionId;}
   const tag='save:'+model.draftId+':'+model.revision+':'+JSON.stringify(body);
   const res=await api('/drafts'+(model.draftId?'/'+model.draftId:''),{method:model.draftId?'PATCH':'POST',body,rev:model.draftId?model.revision:undefined,logical:tag});
-  model=res;changed=false;await loadDrafts();return res;
+  model=res;changed=false;notesRemoved=false;await loadDrafts();return res;
 }
 async function history(){
   const result=await api('/me/publications',{version:2});$('history').replaceChildren();
@@ -111,6 +113,7 @@ async function listCodes(append){
   }
 }
 $('new').onclick=()=>{if(discardOK())fill(null);};
+$('remove-legacy-notes').onclick=()=>{notesRemoved=true;changed=true;reviewing=null;$('additional-notes-body').replaceChildren();show('additional-notes',false);text('notice','旧补充说明已从当前编辑内容移除，保存后生效。');};
 editor.oninput=()=>{changed=true;};
 editor.onsubmit=e=>{e.preventDefault();run(async()=>{await save();text('notice','私人草稿已保存。');});};
 $('review').onclick=()=>run(async()=>{
@@ -141,7 +144,7 @@ run(async()=>{const s=await fetch('/auth/session',{cache:'no-store'}).then(r=>r.
 
 window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
 
-function forget(){changed=false;model=null;reviewing=null;managing=null;generation=null;keys.clear();editor.reset();$('additional-notes-body').replaceChildren();show('additional-notes',false);confirmDialog.close();for(const id of ['drafts','history','code-list','initial-code','newcodes','preview','code-for'])$(id).replaceChildren();show('workspace',false);}
+function forget(){changed=false;notesRemoved=false;model=null;reviewing=null;managing=null;generation=null;keys.clear();editor.reset();$('additional-notes-body').replaceChildren();show('additional-notes',false);confirmDialog.close();for(const id of ['drafts','history','code-list','initial-code','newcodes','preview','code-for'])$(id).replaceChildren();show('workspace',false);}
 async function checkSession(){
   if(!generation||document.hidden)return;
   try {

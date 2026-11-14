@@ -26,7 +26,7 @@ export type ShellCapabilities = {
   recipeAuthoring?: RecipeAuthoringShell;
   recipeUse?: RecipeUseShell;
   recipeSource?: RecipeSourceShell;
-  openExternal?: (url: string) => Promise<void>;
+  openExternal?: (url: string, kind?: "recipe-document") => Promise<void>;
   chooseExecutablePath?: () => Promise<string | null>;
   chooseDirectoryPaths?: (multiple: boolean) => Promise<string[] | null>;
   setLoginItem?: (enabled: boolean) => Promise<void>;

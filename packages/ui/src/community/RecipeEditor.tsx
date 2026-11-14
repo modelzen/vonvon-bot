@@ -22,6 +22,7 @@ type DraftAction =
   | {type: 'loaded'; draft: RecipeRoleDraft}
   | {type: 'public'; patch: Partial<RecipePublic>}
   | {type: 'config'; patch: Partial<RecipeConfig>}
+  | {type: 'removeLegacyNotes'}
   | {type: 'error'; message?: string}
   | {type: 'discard'}
   | {type: 'saveBase'; draft: RecipeRoleDraft}
@@ -37,6 +38,10 @@ function editorDraft(state: EditorDraft, action: DraftAction): EditorDraft {
     case 'loaded': return {...state, model: action.draft, contents: {public: action.draft.public, config: action.draft.config}, bufferRevision: state.bufferRevision + 1};
     case 'public': return {...state, contents: {...state.contents, public: {...state.contents.public, ...action.patch}}, bufferRevision: state.bufferRevision + 1, dirty: true, saved: false, review: undefined};
     case 'config': return {...state, contents: {...state.contents, config: {...state.contents.config, ...action.patch}}, bufferRevision: state.bufferRevision + 1, dirty: true, saved: false, review: undefined};
+    case 'removeLegacyNotes': {
+      const {setup: _setup, ...config} = state.contents.config;
+      return {...state, contents: {...state.contents, config}, bufferRevision: state.bufferRevision + 1, dirty: true, saved: false, review: undefined};
+    }
     case 'error': return {...state, error: action.message};
     case 'discard': return {...state, dirty: false, bufferRevision: state.bufferRevision + 1};
     case 'saveBase': case 'saved': {
@@ -184,7 +189,7 @@ function RoleRecipeEditor({shell, accountId, draftId, source, onBack, onPublishe
         <label>公开概览 · Markdown<textarea aria-label="公开概览" value={contents.public.overview} maxLength={32768} onChange={event => changePublic({overview: event.target.value})}/><small className="community-muted">有依赖或需要先运行的技能时，请在介绍中说明。</small></label>
       </fieldset>
       <fieldset disabled={busy}><legend>角色与规则</legend><p className="community-muted">{contents.public.access === 'coded' ? '仅作者与已获取此版本的人可见。' : '这些配置将在社区公开展示。'}请移除凭据、主机路径和私人内容。</p><label>角色与规则<textarea aria-label="角色与规则" value={contents.config.role} maxLength={16384} onChange={event => changeConfig({role: event.target.value})}/></label></fieldset>
-      {Boolean(contents.config.setup?.steps.length) && <details className="community-additional-notes"><summary>补充说明</summary>{contents.config.setup!.steps.map((note, index) => <article key={index}><h3>{note.title || `说明 ${index + 1}`}</h3><p>{note.instructions}</p>{note.check && <p>核对方式：{note.check}</p>}</article>)}</details>}
+      {Boolean(contents.config.setup?.steps.length) && <details className="community-additional-notes"><summary>补充说明</summary>{contents.config.setup!.steps.map((note, index) => <article key={index}><h3>{note.title || `说明 ${index + 1}`}</h3><p>{note.instructions}</p>{note.check && <p>核对方式：{note.check}</p>}</article>)}<Button type="button" disabled={busy} onClick={() => dispatch({type: 'removeLegacyNotes'})}>移除旧补充说明</Button><p className="community-muted">保存后生效，已发布版本不受影响。</p></details>}
 
       <div className="community-actions"><Button type="submit" disabled={busy || !sourceAllowed}>保存私人草稿</Button><GlowButton type="button" variant="dark" disabled={busy || !sourceAllowed} onClick={() => void run(preparePublish)}>预览发布</GlowButton></div>
     </form>

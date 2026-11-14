@@ -3,6 +3,8 @@ import {useState, type ReactNode} from 'react';
 import {ArrowRight, ArrowUpRight, Bot, Check, Copy, KeyRound} from 'lucide-react';
 import type {RecipeConfig, RecipeDetail, RecipePublic, RecipeSummary} from '@vonvon/protocol';
 import {Button} from '../reference/components/ui';
+import {useShellCapabilities} from '../client-context';
+import {allowedExternalUrl, openExternalUrl} from '../url-actions';
 
 export const recipeSections = ['概览', '模型与权限', '能力', '沟通方式', '记忆', '任务'] as const;
 type Section = typeof recipeSections[number];
@@ -19,8 +21,23 @@ export function CopyButton({value, label = '分享链接'}: {value: string; labe
     {state === 'failed' && <label className="community-copy-fallback">未能复制，请手动复制<input aria-label="手动复制" readOnly value={value} onFocus={event => event.target.select()}/></label>}</>;
 }
 
+function RecipeDocumentLink({href, children}: {href: string; children: string}) {
+  const shell = useShellCapabilities();
+  const [failed, setFailed] = useState(false);
+  return <><a href={href} target="_blank" rel="noopener noreferrer" onClick={event => {
+    if (!shell?.openExternal) return;
+    event.preventDefault(); setFailed(false);
+    void openExternalUrl(href, 'recipe-document', shell).catch(() => setFailed(true));
+  }}>{children}</a>{failed && <span role="alert">（未能打开，请重试或复制链接）</span>}</>;
+}
 function inline(value: string): ReactNode[] {
-  return value.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, i) => part.startsWith('**') ? <strong key={i}>{part.slice(2,-2)}</strong> : part.startsWith('`') ? <code key={i}>{part.slice(1,-1)}</code> : part);
+  return value.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]\n]+\]\([^\s)]+\))/g).map((part, i) => {
+    if (part.startsWith('**')) return <strong key={i}>{part.slice(2,-2)}</strong>;
+    if (part.startsWith('`')) return <code key={i}>{part.slice(1,-1)}</code>;
+    const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(part);
+    const href = link && allowedExternalUrl(link[2]!, 'recipe-document');
+    return href ? <RecipeDocumentLink key={i} href={href}>{link![1]!}</RecipeDocumentLink> : part;
+  });
 }
 export function RecipeMarkdown({text}: {text: string}) {
   let code = false; let buffer: string[] = [];
