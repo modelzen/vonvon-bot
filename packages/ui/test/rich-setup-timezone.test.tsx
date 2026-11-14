@@ -79,3 +79,10 @@ it('keeps old daemon replies in their native zone without offering an unpreviewa
   await click('启用此任务');
   expect(calls.at(-1)).toMatchObject({action:{timeZone:'Asia/Tokyo'}});
 });
+
+it('does not expose legacy preparation checks or an empty task panel',async()=>{
+  read={...read,tasks:[],steps:[{itemId:'11111111-1111-4111-8111-111111111111',originId:'22222222-2222-4222-8222-222222222222',kind:'tool',title:'Legacy step',instructions:'LEGACY_SETUP_SENTINEL',required:true,action:{kind:'manual'},readiness:'pending'}]};
+  await render();expect(document.querySelector('.recipe-source-setup')).toBeNull();
+  expect(document.body.textContent).not.toContain('LEGACY_SETUP_SENTINEL');
+  expect(calls.every(call=>call.type==='setup'&&call.action.kind==='read')).toBe(true);
+});

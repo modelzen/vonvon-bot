@@ -493,8 +493,6 @@ it.each([
   {command:'version',label:'版本',value:'2.0-测试'},
   {command:'overview',label:'概览',value:'请参考 https://docs.example.org/Users/manual 或 https://example.org/home/help?q=example。'},
   {command:'role',label:'角色',value:'```\n<at id=all></at> [按钮](https://example.test)\n```'},
-  {command:'setup',label:'使用前准备',value:{steps:[{kind:'context',title:'检查 <at id=all></at>',instructions:'[设置](https://example.test) **原样**',required:true,check:'手动确认'}]}},
-  {command:'setup',label:'使用前准备',value:null},
   {command:'role',label:'角色',value:''},
 ])('renders complete inert slash $command values and saves those exact bytes',async({command,label,value})=>{
   await link();
@@ -910,10 +908,8 @@ it('saves only the private-chat-reviewed rich source and continues against its s
   await rpc('deliver',{operationId:op.operationId});
   expect((await status(op.operationId)).state).toBe('candidate');
   expect([...cards.values()].join('')).not.toContain(sourceRole);
-  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'addSetup',target:'',valueJson:JSON.stringify({
-    kind:'config',title:'确认输出格式',instructions:'先在群里确认周报格式。',action:{kind:'manual'},required:true,
-  })}]});
-  await orch.onMessage(msg('建议一个使用前的配置步骤'));
+  proposeRich.mockResolvedValueOnce({kind:'proposal',commands:[{action:'edit',target:'T3',valueJson:JSON.stringify('使用前请运行 setup 技能，先在群里确认周报格式。')}]});
+  await orch.onMessage(msg('把概览改为：使用前请运行 setup 技能，先在群里确认周报格式。'));
   const post=await status(op.operationId);
   expect(post.state).toBe('candidate');
   expect([...cards.values()].join('')).toContain('先在群里确认周报格式');
@@ -931,6 +927,8 @@ it('saves only the private-chat-reviewed rich source and continues against its s
   }
   const reviewed=kind(await rpc('richInspect',{operationId:op.operationId}),'richCandidate');
   const {content}=freezeSnapshot(reviewed.request,Buffer.alloc(32,2));
+  expect(content.setup).toEqual([]);
+  expect(content.public.overview.value).toBe('使用前请运行 setup 技能，先在群里确认周报格式。');
   const doc=canonicalizeRichRecipeContent(content),bytes=Buffer.from(doc.canonicalUTF8);
   const payload=richWireBytes({format:'rich-v2',purpose:'prepareDraft',sourceIntentId:op.operationId,content});
   const frozen=production?await cloudApi.freeze(op.operationId,reviewed.request):{format:'rich-v2',sourceReviewSha256:reviewed.reviewDigest,destinationDraftId,canonical:bytes.toString('base64url'),
@@ -989,4 +987,10 @@ it('saves only the private-chat-reviewed rich source and continues against its s
     }finally{controller.closeAll();}
   }
   expect(all.find(o=>o.purpose==='editDraft')).toMatchObject({format:'rich-v2',draftId:destinationDraftId,baseRevision:1,state:'pendingMain'});
+});
+
+it('does not interpret the retired setup slash command as an editable product field',async()=>{
+  const {parseChanges}=await import('../src/recipe/authoring-wire');
+  expect(await parseChanges('/recipe setup {\"steps\":[]}',{signal:new AbortController().signal,parser:{propose}})).toEqual({kind:'unavailable'});
+  expect(propose).not.toHaveBeenCalled();
 });
