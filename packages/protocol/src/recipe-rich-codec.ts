@@ -2,6 +2,7 @@ import {
   RECIPE_RICH_LIMITS, recipeRichContentSchema, recipeRichReleaseSchema, recipeRichIsUnicode, recipeRichUtf8Bytes,
   type RecipeRichContent, type RecipeRichPartDescriptor, type RecipeRichText,
 } from './recipe-rich.js';
+import {canonicalCaselessSegment} from './recipe-rich-filename.js';
 
 export class RecipeRichValidationError extends Error {
   constructor(readonly code: 'invalid_json' | 'invalid_content' | 'noncanonical' | 'limit_exceeded' | 'invalid_reference', readonly field: string) {
@@ -134,7 +135,7 @@ export function canonicalizeRichRecipeContent(input: unknown): CanonicalRichReci
     for (const fileId of skill.fileIds) {
       const file = files.get(fileId);
       if (!file) fail('invalid_reference', 'skills.fileIds');
-      const name = file.name.normalize('NFC').toLowerCase().toUpperCase().toLowerCase().normalize('NFC');
+      const name = file.name.split('/').map(canonicalCaselessSegment).join('/');
       if ([...names].some(existing => existing === name || existing.startsWith(`${name}/`) || name.startsWith(`${existing}/`))) {
         fail('invalid_reference', 'skills.files.name');
       }
