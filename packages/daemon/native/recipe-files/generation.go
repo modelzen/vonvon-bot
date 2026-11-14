@@ -82,7 +82,6 @@ func (t *tree) dir(s string, create bool) (*held, error) {
 }
 func (t *tree) verify(entries []entry) error {
 	revisions := map[*held]metadata{}
-	// Enumerate only a known generation. Limit each directory read to its exact planned child count plus one.
 	names := map[string]map[string]bool{}
 	for _, v := range entries {
 		for s := v.Name; s != "."; s = path.Dir(s) {
@@ -156,7 +155,6 @@ func makeOrOpen(parent *held, name string) (*held, error) {
 	return child(parent, name, writableDir)
 }
 func slotDir(root *held, id string, write bool) (*held, func(), error) {
-	// Reopen the already-verified Bot root with rights to sync its directory entries.
 	bot := root
 	var created []*held
 	closeAll := func() {
