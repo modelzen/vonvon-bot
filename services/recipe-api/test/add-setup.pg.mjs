@@ -141,7 +141,7 @@ try{
   ])await req(over.path+'/freeze',a,{...overInput,payload:{...overInput.payload,changes:[invalid]}},{status:422});
   await req(over.path+'/cancel',a,{});await req('/v2/objects/'+over.pkg+'/cancel',a,{});
   const published=await req('/v2/drafts/'+saved.draftId+'/publish',a,{canonical:plan.canonical},{key:randomUUID(),rev:2});
-  const member=inventory(next).find(x=>x.kind==='setup');
+  const member=inventory(next).find(x=>x.kind==='rule');
   const readerPrep=await start(b),readerPlan=await readerPrep.freeze(body(fixture,'direct')),readerSaved=await readerPrep.commit(readerPlan);
   const readerEdit=await start(b,{purpose:'editDraft',draftId:readerSaved.draftId,baseRevision:1});
   const derived={format:'rich-v2',baseCanonical:readerPlan.canonical,payload:{...input.payload,draftId:readerSaved.draftId,requestId:randomUUID(),changes:[{op:'addSetup',value,source:{kind:'releaseItems',parents:[{versionId:published.versionId,itemId:member.itemId,baselineSha256:member.baselineSha256}]}}]}};
@@ -152,7 +152,7 @@ try{
   const codedVersion=await req('/v2/drafts/'+codedSaved.draftId+'/publish',a,{canonical:codedPlan.canonical},{key:randomUUID(),rev:1});
   await req('/v1/versions/'+codedVersion.versionId+'/redeem',b,{code:codedVersion.firstCode},{key:'a2.'+opId()});
   const mixed=await start(b,{purpose:'editDraft',draftId:readerSaved.draftId,baseRevision:2});
-  const codedMember=inventory(JSON.parse(Buffer.from(codedPlan.canonical,'base64url'))).find(x=>x.kind==='setup');
+  const codedMember=inventory(JSON.parse(Buffer.from(codedPlan.canonical,'base64url'))).find(x=>x.kind==='rule');
   const mixedInput={...derived,baseCanonical:derivedPlan.canonical,payload:{...derived.payload,baseRevision:2,requestId:randomUUID(),changes:[{op:'addSetup',value,source:{kind:'releaseItems',parents:[...derived.payload.changes[0].source.parents,{versionId:codedVersion.versionId,itemId:codedMember.itemId,baselineSha256:codedMember.baselineSha256}]}}]}};
   await req(mixed.path+'/freeze',b,mixedInput,{status:403});
   const relabel=structuredClone(mixedInput);relabel.payload.changes[0].source={kind:'accountClaim'};

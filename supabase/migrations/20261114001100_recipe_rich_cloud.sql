@@ -222,25 +222,25 @@ end $$;
 
 create function recipe_private.check_rich_origin(a uuid,o uuid,k text) returns void
 language plpgsql set search_path=pg_catalog,pg_temp as $$
-declare n int:=0; seen uuid[]:='{}'; todo uuid[]:=array[o]; accounts uuid[]:=array[a];
+declare n int:=0; seen uuid[]:='{}'; todo uuid[]:=array[o]; accounts uuid[]:=array[a]; kinds text[]:=array[k]; expected_kind text;
   r recipe_private.rich_origins; v recipe_private.versions; m recipe_private.rich_members; edge record; lifecycle text; principal uuid;
 begin
   while cardinality(todo)>0 loop
-    o:=todo[1];principal:=accounts[1];todo:=todo[2:];accounts:=accounts[2:];
-    select * into r from recipe_private.rich_origins where id=o and account_id=principal and kind=k;
+    o:=todo[1];principal:=accounts[1];expected_kind:=kinds[1];todo:=todo[2:];accounts:=accounts[2:];kinds:=kinds[2:];
+    select * into r from recipe_private.rich_origins where id=o and account_id=principal and kind=expected_kind;
     if not found then raise exception 'source_unavailable'; end if;
     if o=any(seen) then continue; end if;
     seen:=array_append(seen,o);n:=n+1;
     if n>64 then raise exception 'source_unavailable'; end if;
-    if r.donor is not null then todo:=array_append(todo,r.donor);accounts:=array_append(accounts,principal); end if;
+    if r.donor is not null then todo:=array_append(todo,r.donor);accounts:=array_append(accounts,principal);kinds:=array_append(kinds,expected_kind); end if;
     for edge in select r.parent_version as version_id,r.parent_item as item_id,r.parent_digest as baseline where r.parent_version is not null
       union all select e.version_id,e.item_id,e.baseline from recipe_private.rich_parent_edges e where e.origin=r.id loop
       select * into v from recipe_private.versions where id=edge.version_id;
       select state into lifecycle from recipe_private.rich_versions where id=v.id for share;
       select * into m from recipe_private.rich_members where version_id=v.id and item_id=edge.item_id;
-      if not found or m.kind<>k or m.baseline<>edge.baseline or lifecycle is distinct from 'listed'
-        or (v.owner_id<>a and (v.public_info->>'access'='coded' or k='finalLogo')) then raise exception 'source_unavailable'; end if;
-      todo:=array_append(todo,m.origin_id);accounts:=array_append(accounts,v.owner_id);
+      if not found or (m.kind<>expected_kind and expected_kind<>'setup') or m.baseline<>edge.baseline or lifecycle is distinct from 'listed'
+        or (v.owner_id<>a and (v.public_info->>'access'='coded' or 'finalLogo' in (k,expected_kind,m.kind))) then raise exception 'source_unavailable'; end if;
+      todo:=array_append(todo,m.origin_id);accounts:=array_append(accounts,v.owner_id);kinds:=array_append(kinds,m.kind);
       if cardinality(todo)>64 then raise exception 'source_unavailable'; end if;
     end loop;
   end loop;
@@ -316,7 +316,7 @@ begin
       if jsonb_array_length(src->'parents') not between 1 and 64 then raise exception 'source_unavailable'; end if;
       for edge in select value from jsonb_array_elements(src->'parents') loop
         if not exists(select from recipe_private.rich_members m where m.version_id=(edge->>'versionId')::uuid and m.item_id=(edge->>'itemId')::uuid
-          and m.kind=row->>'kind' and m.baseline=edge->>'baselineSha256') then raise exception 'source_unavailable'; end if;
+          and (m.kind=row->>'kind' or row->>'kind'='setup') and m.baseline=edge->>'baselineSha256') then raise exception 'source_unavailable'; end if;
       end loop;
     elsif row->>'donorOriginId' is null then raise exception 'source_unavailable'; end if;
     insert into recipe_private.rich_origins(id,account_id,kind,intent,candidate,baseline,parent_version,parent_item,parent_digest,donor)
