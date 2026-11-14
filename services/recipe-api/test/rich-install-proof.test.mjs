@@ -12,3 +12,12 @@ for(const {binding,transcriptHex,proofs} of fx('rich-install-proof')){
     if(binding.localPlanSha256)assert.notEqual(richInstallProof(priv,{...binding,localPlanSha256:'01'.repeat(32)},'applied').toString('hex'),proofs.applied);
   });
 }
+
+import {richProof,richTranscript} from '../src/rich-proof.mjs';
+test('a device cannot sign a different ownership review with the approved rich draft proof',()=>{
+  const f=fx('authoring-proof'),target=createPrivateKey({key:Buffer.from('302e020100300506032b656e04220420'+f.targetPrivateKeyHex,'hex'),format:'der',type:'pkcs8'});
+  const binding={...f.binding,format:'rich-v2',sourceReviewSha256:'12'.repeat(32)};
+  assert.equal(richTranscript(binding).subarray(-32).toString('hex'),binding.sourceReviewSha256);
+  assert.notDeepEqual(richProof(target,binding),richProof(target,{...binding,sourceReviewSha256:'ab'.repeat(32)}));
+  assert.throws(()=>richProof(target,{...binding,sourceReviewSha256:undefined}));
+});

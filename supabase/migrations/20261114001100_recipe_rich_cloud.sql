@@ -1,5 +1,9 @@
 grant recipe_owner to current_user;
 set local role recipe_owner;
+alter table recipe_private.drafts add column retained_candidate_bytes integer not null default 0 check(retained_candidate_bytes between 0 and 1048576);
+alter table recipe_private.drafts drop constraint drafts_bytes_check;
+alter table recipe_private.drafts add check (bytes-retained_candidate_bytes between 0 and 1048576);
+
 
 create table recipe_private.rich_intents (
   id uuid primary key references recipe_private.authoring_operations on delete cascade,
@@ -10,8 +14,13 @@ create table recipe_private.rich_intents (
 );
 create table recipe_private.rich_drafts (
   id uuid primary key references recipe_private.drafts on delete cascade,
-  manifest_id uuid not null references recipe_private.object_attempts, items jsonb not null
+  manifest_id uuid not null references recipe_private.object_attempts, items jsonb not null, retained_bytes int not null default 0
 );
+create table recipe_private.rich_candidates(
+  source_intent uuid primary key, owner_id uuid not null references recipe_private.accounts,
+  draft_id uuid not null unique references recipe_private.drafts on delete cascade, manifest_id uuid not null references recipe_private.object_attempts, content_hash text not null, items jsonb not null
+);
+alter table recipe_private.rich_candidates enable row level security;
 create table recipe_private.rich_versions (
   id uuid primary key references recipe_private.versions,
   manifest_id uuid not null references recipe_private.object_attempts,
@@ -27,10 +36,16 @@ create table recipe_private.rich_origins (
 );
 create table recipe_private.rich_members (
   version_id uuid not null references recipe_private.rich_versions, item_id uuid not null,
-  origin_id uuid not null references recipe_private.rich_origins, kind text not null, baseline text not null,
+  origin_id uuid not null references recipe_private.rich_origins, kind text not null, baseline text not null, fingerprint text not null,
   primary key(version_id,item_id)
 );
-create index rich_member_digest on recipe_private.rich_members(kind,baseline);
+create index rich_member_digest on recipe_private.rich_members(kind,fingerprint);
+create table recipe_private.rich_parent_edges(
+ origin uuid not null references recipe_private.rich_origins on delete cascade,
+ version_id uuid not null, item_id uuid not null, baseline text not null,
+ foreign key(version_id,item_id) references recipe_private.rich_members,
+ primary key(origin,version_id,item_id));
+alter table recipe_private.rich_parent_edges enable row level security;
 create table recipe_private.rich_feature (
   singleton boolean primary key check(singleton), version_id uuid not null references recipe_private.rich_versions,
   editor uuid not null references recipe_private.accounts
@@ -166,6 +181,9 @@ begin
   elsif p_action='cancel' then r:=recipe_private.cancel_authoring_core(p_id);
   elsif p_action in ('get','recover') then r:=recipe_private.get_authoring_core(p_id);
   else raise exception 'invalid_input'; end if;
+  if p_action='context' and p_request->>'stage'='accept' then
+    r:=r||jsonb_build_object('sourceReviewSha256',(select input_hash from recipe_private.rich_intents where id=p_id));
+  end if;
   return r||jsonb_build_object('format','rich-v2');
 end $$;
 create function recipe_api.rich_authorize(p_id uuid,p_request jsonb,p_server bytea,p_ticket bytea,p_proof bytea,p_deadline bigint) returns jsonb
@@ -173,7 +191,8 @@ language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
 begin
   perform recipe_api.rich_op_context(p_id,'context',p_request);
 
-  return recipe_private.authorize_authoring_core(p_id,p_request,p_server,p_ticket,p_proof,p_deadline)||jsonb_build_object('format','rich-v2');
+  return recipe_private.authorize_authoring_core(p_id,p_request,p_server,p_ticket,p_proof,p_deadline)||jsonb_build_object('format','rich-v2')
+    ||case when p_request->>'stage'='accept' then jsonb_build_object('sourceReviewSha256',(select input_hash from recipe_private.rich_intents where id=p_id)) else '{}'::jsonb end;
 end $$;
 
 create function recipe_api.rich_dispatch(p_id uuid,p_ticket bytea,p_nonce bytea,p_proof bytea) returns jsonb
@@ -202,26 +221,28 @@ end $$;
 
 create function recipe_private.check_rich_origin(a uuid,o uuid,k text) returns void
 language plpgsql set search_path=pg_catalog,pg_temp as $$
-declare n int:=0; seen uuid[]:='{}'; r recipe_private.rich_origins; v recipe_private.versions; m recipe_private.rich_members;
-  lifecycle text; principal uuid:=a;
+declare n int:=0; seen uuid[]:='{}'; todo uuid[]:=array[o]; accounts uuid[]:=array[a];
+  r recipe_private.rich_origins; v recipe_private.versions; m recipe_private.rich_members; edge record; lifecycle text; principal uuid;
 begin
-  while o is not null loop
-    n:=n+1;
-    if n>64 or o=any(seen) then raise exception 'source_unavailable'; end if;
-    seen:=array_append(seen,o);
+  while cardinality(todo)>0 loop
+    o:=todo[1];principal:=accounts[1];todo:=todo[2:];accounts:=accounts[2:];
     select * into r from recipe_private.rich_origins where id=o and account_id=principal and kind=k;
     if not found then raise exception 'source_unavailable'; end if;
-    if r.donor is not null then o:=r.donor; continue; end if;
-    if r.parent_version is null then return; end if;
-    select * into v from recipe_private.versions where id=r.parent_version;
-    select state into lifecycle from recipe_private.rich_versions where id=v.id for share;
-    select * into m from recipe_private.rich_members where version_id=v.id and item_id=r.parent_item;
-    if not found or m.kind<>k or m.baseline<>r.parent_digest or lifecycle is distinct from 'listed'
-      or (v.owner_id<>a and (v.public_info->>'access'='coded' or k='finalLogo'))
-      then raise exception 'source_unavailable'; end if;
-    o:=m.origin_id;principal:=v.owner_id;
+    if o=any(seen) then continue; end if;
+    seen:=array_append(seen,o);n:=n+1;
+    if n>64 then raise exception 'source_unavailable'; end if;
+    if r.donor is not null then todo:=array_append(todo,r.donor);accounts:=array_append(accounts,principal); end if;
+    for edge in select r.parent_version as version_id,r.parent_item as item_id,r.parent_digest as baseline where r.parent_version is not null
+      union all select e.version_id,e.item_id,e.baseline from recipe_private.rich_parent_edges e where e.origin=r.id loop
+      select * into v from recipe_private.versions where id=edge.version_id;
+      select state into lifecycle from recipe_private.rich_versions where id=v.id for share;
+      select * into m from recipe_private.rich_members where version_id=v.id and item_id=edge.item_id;
+      if not found or m.kind<>k or m.baseline<>edge.baseline or lifecycle is distinct from 'listed'
+        or (v.owner_id<>a and (v.public_info->>'access'='coded' or k='finalLogo')) then raise exception 'source_unavailable'; end if;
+      todo:=array_append(todo,m.origin_id);accounts:=array_append(accounts,v.owner_id);
+      if cardinality(todo)>64 then raise exception 'source_unavailable'; end if;
+    end loop;
   end loop;
-  raise exception 'source_unavailable';
 end $$;
 
 create function recipe_private.prune_intent_origins() returns trigger language plpgsql set search_path=pg_catalog,pg_temp as $$
@@ -233,7 +254,7 @@ create trigger prune_intent_origins after delete on recipe_private.authoring_ope
 
 create function recipe_api.rich_save_plan(p_id uuid,p_inputs text,p_manifest text,p_payload text,p_access text,p_parent uuid,p_records jsonb,p_items jsonb) returns void
 language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
-declare a uuid:=recipe_private.actor(); i recipe_private.rich_intents; row jsonb; src jsonb; matched uuid;
+declare a uuid:=recipe_private.actor(); i recipe_private.rich_intents; row jsonb; src jsonb; edge jsonb;
 begin
   perform recipe_api.rich_plan_context(p_id);
   select * into strict i from recipe_private.rich_intents where id=p_id;
@@ -248,21 +269,31 @@ begin
       if row->>'kind' in ('role','rule','skill','file','task','memory','setup','finalLogo') and exists(
         select from recipe_private.rich_members m join recipe_private.versions v on v.id=m.version_id
         join recipe_private.grants g on g.version_id=v.id and g.actor=a
-        where v.owner_id<>a and v.public_info->>'access'='coded' and m.kind=row->>'kind' and m.baseline=row->>'baselineSha256')
+        where v.owner_id<>a and v.public_info->>'access'='coded' and m.kind=row->>'kind' and m.fingerprint=row->>'contentFingerprint')
         then raise exception 'source_unavailable'; end if;
     elsif src->>'kind'='releaseItem' then
       if not exists(select from recipe_private.rich_members m where m.version_id=(src->>'versionId')::uuid
          and m.item_id=(src->>'itemId')::uuid and m.baseline=src->>'baselineSha256' and m.kind=row->>'kind') then raise exception 'source_unavailable'; end if;
+    elsif src->>'kind'='releaseItems' then
+      if jsonb_array_length(src->'parents') not between 1 and 64 then raise exception 'source_unavailable'; end if;
+      for edge in select value from jsonb_array_elements(src->'parents') loop
+        if not exists(select from recipe_private.rich_members m where m.version_id=(edge->>'versionId')::uuid and m.item_id=(edge->>'itemId')::uuid
+          and m.kind=row->>'kind' and m.baseline=edge->>'baselineSha256') then raise exception 'source_unavailable'; end if;
+      end loop;
     elsif row->>'donorOriginId' is null then raise exception 'source_unavailable'; end if;
     insert into recipe_private.rich_origins(id,account_id,kind,intent,candidate,baseline,parent_version,parent_item,parent_digest,donor)
     values((row->>'originId')::uuid,a,row->>'kind',p_id,coalesce((row->>'candidateId')::uuid,(row->>'itemId')::uuid),row->>'baselineSha256',
       (src->>'versionId')::uuid,(src->>'itemId')::uuid,src->>'baselineSha256',(row->>'donorOriginId')::uuid) on conflict do nothing;
+    if src->>'kind'='releaseItems' then
+      insert into recipe_private.rich_parent_edges select (row->>'originId')::uuid,(e->>'versionId')::uuid,(e->>'itemId')::uuid,e->>'baselineSha256'
+        from jsonb_array_elements(src->'parents') e on conflict do nothing;
+    end if;
   end loop;
   if (select count(*) from recipe_private.rich_origins where account_id=a)>250000 then raise exception 'quota_exceeded'; end if;
   for row in select value from jsonb_array_elements(p_items) loop
     if exists(select from recipe_private.rich_members m join recipe_private.versions v on v.id=m.version_id
         join recipe_private.grants g on g.version_id=v.id and g.actor=a where v.owner_id<>a and v.public_info->>'access'='coded'
-        and m.kind in ('role','rule','skill','file','task','memory','setup','finalLogo') and m.kind=row->>'kind' and m.baseline=row->>'baselineSha256')
+        and m.kind in ('role','rule','skill','file','task','memory','setup','finalLogo') and m.kind=row->>'kind' and m.fingerprint=row->>'contentFingerprint')
       then raise exception 'source_unavailable'; end if;
     perform recipe_private.check_rich_origin(a,(row->>'originId')::uuid,row->>'kind');
   end loop;
@@ -284,6 +315,10 @@ begin
   if n>1048576 then raise exception 'quota_exceeded'; end if;
   select array_agg(id) into added from unnest(ids) u(id) where not exists(select from recipe_private.object_draft_refs r where r.draft_id=d and r.object_id=u.id);
   if added is not null then perform recipe_private.attach_object_package(pkg,d,added); end if;
+  select array_agg(distinct id) into ids from (
+    select unnest(ids) as id union all select m.id from recipe_private.rich_candidates c join recipe_private.object_attempts initial on initial.id=c.manifest_id
+      join recipe_private.object_attempts m on m.package_id=initial.package_id where c.draft_id=d and m.state='ready'
+  ) retained;
   delete from recipe_private.object_draft_refs where draft_id=d and not(object_id=any(ids));
   return n;
 end $$;
@@ -291,7 +326,7 @@ end $$;
 create function recipe_api.rich_accept(op_id uuid,ticket bytea,nonce bytea,proof bytea,payload bytea,canonical bytea,manifest uuid,pkg uuid) returns jsonb
 language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
 declare i recipe_private.rich_intents; op recipe_private.authoring_operations; cap recipe_private.authoring_capabilities;
-  d recipe_private.drafts; base recipe_private.versions; a uuid; info jsonb; c jsonb; r jsonb; x jsonb; total int; published_at_ timestamptz;
+  d recipe_private.drafts; base recipe_private.versions; a uuid; info jsonb; c jsonb; r jsonb; x jsonb; total int; retained int;
 begin
   select account_id into a from recipe_private.rich_intents where id=op_id;
   if not found then raise exception 'not_found'; end if;
@@ -336,10 +371,16 @@ begin
     update recipe_private.drafts set revision=revision+1,public_info=info where id=d.id returning * into d;
   end if;
   total:=recipe_private.rich_set_refs(a,d.id,pkg,manifest,i.manifest_hash,canonical,c->'parts');
-  if (select coalesce(sum(bytes),0) from recipe_private.drafts where owner_id=a and id<>d.id)+total>10485760 and total>d.bytes then raise exception 'quota_exceeded'; end if;
-  update recipe_private.drafts set bytes=total where id=d.id;
-  insert into recipe_private.rich_drafts values(d.id,manifest,i.reviewed_items)
-    on conflict(id) do update set manifest_id=excluded.manifest_id,items=excluded.items;
+  select coalesce(sum(m.final_bytes),0) into retained from recipe_private.object_draft_refs refs join recipe_private.object_attempts m on m.id=refs.object_id
+    where refs.draft_id=d.id and refs.object_id<>manifest and not exists(select from jsonb_array_elements(c->'parts') p where (p->>'objectId')::uuid=m.id);
+  if (select coalesce(sum(bytes),0) from recipe_private.drafts where owner_id=a and id<>d.id)+total+retained>10485760 and total+retained>d.bytes then raise exception 'quota_exceeded'; end if;
+  update recipe_private.drafts set bytes=total+retained,retained_candidate_bytes=retained where id=d.id;
+  insert into recipe_private.rich_drafts values(d.id,manifest,i.reviewed_items,retained)
+    on conflict(id) do update set manifest_id=excluded.manifest_id,items=excluded.items,retained_bytes=excluded.retained_bytes;
+  if op.purpose='prepareDraft' then
+    insert into recipe_private.rich_candidates(source_intent,owner_id,draft_id,manifest_id,content_hash,items)
+    values(op_id,a,d.id,manifest,i.manifest_hash,i.reviewed_items);
+  end if;
   r:=jsonb_build_object('format','rich-v2','operationId',op.id,'status','accepted','stateRevision',op.revision+1,
     'draftId',d.id,'recipeId',d.recipe_id,'revision',d.revision,'manifestId',manifest,'packageId',pkg);
   update recipe_private.authoring_operations set state='accepted',revision=revision+1,receipt=r,terminal_at=clock_timestamp() where id=op_id;
@@ -404,7 +445,8 @@ begin
   select * into r from recipe_private.rich_drafts where id=d.id;
   if not found then raise exception 'not_found'; end if;
   return jsonb_build_object('format','rich-v2','draftId',d.id,'recipeId',d.recipe_id,'revision',d.revision,
-    'access',d.public_info->>'access','sourceIntentId',d.source_operation_id,'manifest',recipe_private.object_descriptor(a,r.manifest_id),'logicalBytes',d.bytes);
+    'access',d.public_info->>'access','sourceIntentId',d.source_operation_id,'manifest',recipe_private.object_descriptor(a,r.manifest_id),'logicalBytes',d.bytes-r.retained_bytes,'retainedCandidateBytes',r.retained_bytes,
+    'sourceManifest',(select recipe_private.object_descriptor(a,c.manifest_id) from recipe_private.rich_candidates c where c.draft_id=d.id));
 end $$;
 create function recipe_api.rich_draft_list() returns jsonb
 language sql stable security definer set search_path=pg_catalog,pg_temp as $$
@@ -415,11 +457,11 @@ create function recipe_api.rich_candidate(src uuid,alias uuid,rev int) returns j
 language plpgsql stable security definer set search_path=pg_catalog,pg_temp as $$
 declare a uuid:=recipe_private.actor(); result jsonb;
 begin
-  select jsonb_build_object('itemId',i->>'itemId','manifestHash',m.final_hash) into result
-    from recipe_private.drafts d join recipe_private.rich_drafts r on r.id=d.id
-    join recipe_private.object_attempts m on m.id=r.manifest_id cross join lateral jsonb_array_elements(r.items) i
-    join recipe_private.rich_origins o on o.id=(i->>'originId')::uuid
-    where d.source_operation_id=src and d.owner_id=a and d.revision=rev and o.candidate=alias and o.intent=src;
+  if not exists(select from recipe_private.drafts d join recipe_private.rich_drafts r on r.id=d.id where d.source_operation_id=src and d.owner_id=a and d.revision=rev)
+    then raise exception 'source_unavailable'; end if;
+  select jsonb_build_object('itemId',i->>'itemId','candidateHash',rc.content_hash) into result
+    from recipe_private.rich_candidates rc cross join lateral jsonb_array_elements(rc.items) i
+    where rc.source_intent=src and rc.owner_id=a and i->>'itemId'=alias::text;
   if result is null then raise exception 'source_unavailable'; end if;return result;
 end $$;
 
@@ -452,7 +494,7 @@ begin
       where tc.object_id=(t->'instruction'->>'objectId')::uuid and tc.nonblank)) then raise exception 'incomplete_setup'; end if;
     for row in select value from jsonb_array_elements(rd.items) loop perform recipe_private.check_rich_origin(a,(row->>'originId')::uuid,row->>'kind'); end loop;
     if (select count(*) from recipe_private.versions where owner_id=a and published_at>=date_trunc('day',statement_timestamp(),'UTC'))>=10 then raise exception 'rate_limited'; end if;
-    if (select coalesce(sum(bytes),0) from recipe_private.versions where owner_id=a)+d.bytes>26214400 then raise exception 'quota_exceeded'; end if;
+    if (select coalesce(sum(bytes),0) from recipe_private.versions where owner_id=a)+d.bytes-rd.retained_bytes>26214400 then raise exception 'quota_exceeded'; end if;
     if d.base_revision=0 then
       if (select count(*) from recipe_private.recipes where owner_id=a)>=20 then raise exception 'quota_exceeded'; end if;
       insert into recipe_private.recipes(id,owner_id) values(d.recipe_id,a) on conflict do nothing;
@@ -463,10 +505,11 @@ begin
     if parent>=30 then raise exception 'quota_exceeded'; end if;
     if exists(select from recipe_private.versions where recipe_id=d.recipe_id and public_info->>'version'=d.public_info->>'version') then raise exception 'conflict'; end if;
     insert into recipe_private.versions(recipe_id,owner_id,revision,public_info,config,bytes)
-      values(d.recipe_id,a,parent+1,d.public_info,'{}',d.bytes) returning * into v;
+      values(d.recipe_id,a,parent+1,d.public_info,'{}',d.bytes-rd.retained_bytes) returning * into v;
     insert into recipe_private.rich_versions(id,manifest_id) values(v.id,rd.manifest_id);
-    insert into recipe_private.rich_members select v.id,(i->>'itemId')::uuid,(i->>'originId')::uuid,i->>'kind',i->>'baselineSha256' from jsonb_array_elements(rd.items) i;
-    insert into recipe_private.object_version_refs select v.id,object_id from recipe_private.object_draft_refs where draft_id=d.id;
+    insert into recipe_private.rich_members select v.id,(i->>'itemId')::uuid,(i->>'originId')::uuid,i->>'kind',i->>'baselineSha256',i->>'contentFingerprint' from jsonb_array_elements(rd.items) i;
+    insert into recipe_private.object_version_refs select v.id,object_id from recipe_private.object_draft_refs where draft_id=d.id and
+      (object_id=rd.manifest_id or exists(select from jsonb_array_elements(convert_from(canonical,'UTF8')::jsonb->'parts') pp where (pp->>'objectId')::uuid=object_id));
     update recipe_private.recipes set revision=v.revision where id=v.recipe_id;
     if v.public_info->>'access'='coded' then first_id:=(recipe_private.new_codes(a,v.id,1)->>0)::uuid; end if;
     perform set_config('app.rich_mutation','v2',true);

@@ -1,11 +1,10 @@
 import {createHash} from 'node:crypto';
 import {ApiError,badInput} from './errors.mjs';
-import {payloadBytes} from './authoring-input.mjs';
-import {uuid} from './input.mjs';
+import {objectKeys,uuid} from './input.mjs';
 import {richInstallMaterial} from './rich-install-proof.mjs';
 import {richMaterial} from './rich-proof.mjs';
-import {applyChanges,document,freezeSnapshot,inventory,richDigest} from './rich-document.mjs';
-import {parseEditFreeze} from './rich-http.mjs';
+import {richWireBytes,applyChanges,document,freezeSnapshot,inventory,richDigest} from './rich-document.mjs';
+import {parseEditFreeze,readDocument} from './rich-http.mjs';
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const calls={
   richInstallPreview:'rich_install_preview($1)',richInstallRecover:"rich_install_control($1,'recover')",richInstallCancel:"rich_install_control($1,'cancel')",
@@ -40,23 +39,28 @@ export async function richExecute(client,op,args) {
   }else{
     const edit=parseEditFreeze(b,ctx.draftId,ctx.revision);
     if(sha(edit.base.canonicalUTF8)!==ctx.manifest.sha256)throw new ApiError(409,'conflict');
-    const cache=new Map();
+    const cache=new Map(),originals=new Map();
+    for(const candidate of edit.candidates){
+      objectKeys(candidate,['sourceIntentId','canonical']);uuid(candidate.sourceIntentId);
+      if(originals.has(candidate.sourceIntentId))throw badInput();
+      originals.set(candidate.sourceIntentId,readDocument(candidate.canonical));
+    }
     for(const {value} of edit.payload.changes.filter(c=>c.op==='includeCandidate')){
       const {source}=value;
       if(source.sourceIntentId!==ctx.sourceIntentId)throw new ApiError(403,'source_unavailable');
       const match=await call('rich_candidate($1,$2,$3)',[source.sourceIntentId,source.candidateId,source.expectedRevision]);
-      if(match.manifestHash!==ctx.manifest.sha256)throw new ApiError(409,'conflict');
-      cache.set(richDigest(source),{content:edit.base.content,itemId:match.itemId});
+      const donor=originals.get(source.sourceIntentId)??edit.base;
+      if(sha(donor.canonicalUTF8)!==match.candidateHash)throw new ApiError(409,'conflict');
+      cache.set(richDigest(source),{content:donor.content,itemId:match.itemId});
     }
-    if(edit.candidates.length)throw badInput();
+
     const next=applyChanges(edit.base.content,edit.payload.changes,s=>cache.get(richDigest(s)),ctx.seed,edit.parts);
-    doc=next.doc;const index=new Map(inventory(doc.content).map(i=>[i.itemId,i]));
-    records=next.copies.map(c=>({...c,baselineSha256:index.get(c.itemId)?.baselineSha256??richDigest({removed:c.kind})}));
+    doc=next.doc;records=next.copies;
     payload=edit.payload;
   }
-  const bytes=payloadBytes(payload),hash=sha(doc.canonicalUTF8),digest=sha(bytes);
+  const bytes=richWireBytes(payload),hash=sha(doc.canonicalUTF8),digest=sha(bytes);
   await call('rich_save_plan($1,$2,$3,$4,$5,$6,$7,$8)',[id,richDigest(b),hash,digest,b.access??ctx.access,b.sourceVersionId??null,
     JSON.stringify(records),JSON.stringify(inventory(doc.content))]);
-  return {format:'rich-v2',destinationDraftId:ctx.draftId,canonical:Buffer.from(doc.canonicalUTF8).toString('base64url'),contentSha256:hash,
+  return {format:'rich-v2',sourceReviewSha256:richDigest(b),destinationDraftId:ctx.draftId,canonical:Buffer.from(doc.canonicalUTF8).toString('base64url'),contentSha256:hash,
     logicalBytes:doc.logicalBytes,payload:bytes.toString('base64url'),payloadDigest:digest};
 }

@@ -127,11 +127,18 @@ try{
   const edit=await start(a,{purpose:'editDraft',draftId:draft.draftId,baseRevision:1});
   const patch={format:'rich-v2',purpose:'editDraft',draftId:draft.draftId,baseRevision:1,requestId:randomUUID(),schemaVersion:2,changes:[
     {op:'setRoleText',itemId:initial.role.itemId,value:{kind:'inline',value:'自动化验证的私有角色'}},
-    {op:'copyItem',source:{kind:'rule',itemId:initial.rules[0].itemId}}]};
+    {op:'removeItem',kind:'rule',itemId:initial.rules[0].itemId},
+    {op:'includeCandidate',value:{kind:'rule',source:{sourceIntentId:prep.op,candidateId:initial.rules[0].itemId,expectedRevision:1}}},
+    {op:'copyItem',source:{kind:'memory',itemId:initial.memories[0].itemId}}]};
   const edited=await edit.freeze({format:'rich-v2',baseCanonical:plan.canonical,payload:patch}),updated=JSON.parse(Buffer.from(edited.canonical,'base64url'));
-  assert.equal(updated.role.originId,initial.role.originId);assert.notEqual(updated.rules[1].originId,initial.rules[0].originId);
+  assert.equal(updated.role.originId,initial.role.originId);assert.notEqual(updated.rules[0].originId,initial.rules[0].originId);
   assert.equal((await edit.commit(edited)).revision,2);
+  const restored=await req('/v2/drafts/'+draft.draftId,a);assert.equal(restored.sourceManifest.objectId,draft.manifest.objectId);
+  assert.equal((await read(a,'drafts',draft.draftId,restored.sourceManifest.objectId)).toString('base64url'),plan.canonical);
+  assert.equal(restored.retainedCandidateBytes,Buffer.from(plan.canonical,'base64url').length);
   const key=randomUUID(),pub=()=>req('/v2/drafts/'+draft.draftId+'/publish',a,{canonical:edited.canonical},{key,rev:2});
+  const skewed=structuredClone(updated);skewed.role.text.value='未经核实的编辑';
+  await req('/v2/drafts/'+draft.draftId+'/publish',a,{canonical:b64(JSON.stringify(skewed))},{key,rev:2,status:409});
   const v=await pub();assert.deepEqual(await pub(),v);assert.ok(v.firstCode);
   const detail='/v2/recipes/'+v.recipeId+'/versions/'+v.versionId;assert.equal((await req(detail)).visibility,'intro');
   const publicLogo=async status=>{const r=await fetch(orig(broker)+'/v2/versions/'+v.versionId+'/display-logo');assert.equal(r.status,status);
@@ -182,13 +189,28 @@ try{
   const prep2=await start(a),nextPlan=await prep2.freeze(nextInput);
   assert.deepEqual(JSON.parse(Buffer.from(nextPlan.canonical,'base64url')).role,updated.role);
   const draft2=await prep2.commit(nextPlan);
+  await read(b,'versions',v.versionId,draft.manifest.objectId,404);
   const nextVersion=await req('/v2/drafts/'+draft2.draftId+'/publish',a,{canonical:nextPlan.canonical},{rev:1,key:randomUUID()});
   const nextDetail=await req('/v2/recipes/'+nextVersion.recipeId+'/versions/'+nextVersion.versionId);
   assert.equal(nextDetail.visibility,'full');
   await req('/v2/versions/'+nextVersion.versionId+'/install-preview',b,undefined,{status:403});
+  const derivative=await start(b),derivedDoc=structuredClone(newer);derivedDoc.rules[0].text.value='重新组织的规则';
+  derivedDoc.role.text.value='自己的新角色';derivedDoc.public.name.value='来源校验';const derivedInput=body(derivedDoc,'direct');
+  const newItems=(await req('/v2/versions/'+nextVersion.versionId+'/source-items',b)).items;
+  const edge=(vid,item)=>({versionId:vid,itemId:item.itemId,baselineSha256:item.baselineSha256});
+  const donor=newItems.find(item=>item.itemId===derivedDoc.rules[0].itemId);
+  const origin=derivedInput.origins.find(x=>x.itemId===donor.itemId);
+  origin.source={kind:'releaseItems',parents:[edge(nextVersion.versionId,donor),edge(v.versionId,oldIndex.get(donor.itemId))]};
+  await req(derivative.path+'/freeze',b,derivedInput,{status:403});
+  origin.source={kind:'releaseItem',...edge(nextVersion.versionId,donor),baselineSha256:'00'.repeat(32)};
+  await req(derivative.path+'/freeze',b,derivedInput,{status:403});
+  origin.source={kind:'releaseItem',...edge(nextVersion.versionId,donor)};
+  const derivedPlan=await derivative.freeze(derivedInput),derivedSaved=await derivative.commit(derivedPlan);
   const pending=await opInstall(b,nextDetail.release,{purpose:'updateDirectRichRecipe',fromVersionId:v.versionId,localPlanSha256:'12'.repeat(32)});
   assert.equal(sql("select count(*) from recipe_private.grants where actor='"+reader+"' and version_id='"+nextVersion.versionId+"'"),'0');
   await req('/v2/versions/'+nextVersion.versionId+'/withdraw',a,{});
+  await req('/v2/drafts/'+derivedSaved.draftId+'/publish',b,{canonical:derivedPlan.canonical},{key:randomUUID(),rev:1,status:403});
+  assert.equal((await req('/v2/drafts/'+derivedSaved.draftId,b)).revision,1);
   assert.equal((await pending.complete('applied')).disposition,'settled');
   assert.equal((await pending.complete('applied')).disposition,'settled');
   assert.equal((await req('/v2/versions/'+nextVersion.versionId+'/install-preview',b)).release.versionId,nextVersion.versionId);
