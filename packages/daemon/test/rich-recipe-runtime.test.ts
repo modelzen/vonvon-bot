@@ -90,7 +90,7 @@ test('a redeemed install drains existing work and commits only the selected slot
     memories: [{ ...identity(), text: text('selected') }],
     skills: [],
     files: [],
-    setup: [step],
+    setup: [step, { ...step, ...identity(), title: '应用响应设置', action: { kind: 'nativeSettings', entry: 'response' } }],
     parts: [],
   };
   const api = 'https://api.example.test',
@@ -115,6 +115,10 @@ test('a redeemed install drains existing work and commits only the selected slot
           [, , , id, stage] = u.pathname.split('/');
         const held = refs.get(id!)!;
         const body = JSON.parse(String(init?.body));
+        if (stage === 'unredeemable') {
+          expect(body).toEqual({ accountId });
+          return Response.json({ operationId: id, unredeemable: true });
+        }
         if (stage === 'objects') {
           expect(u.origin).toBe(broker);
           return new Response(Buffer.from(held.bytes));
@@ -171,6 +175,10 @@ test('a redeemed install drains existing work and commits only the selected slot
       recipeInstallRequestSchema.parse({ ...request, reviewToken: first.reviewToken, choices }),
     );
     if (next.kind !== 'richPrepared') throw Error('missing plan');
+    const issuing = await installer().request(
+      recipeInstallRequestSchema.parse({ type: 'richIssuing', botId, operationId: next.operationId }),
+    );
+    expect(issuing).toMatchObject({ issuerState: 'issuing' });
     const auth = {
       ...next.intent,
       operationId: next.operationId,
@@ -191,6 +199,22 @@ test('a redeemed install drains existing work and commits only the selected slot
       }),
     };
   }
+  const bootstrap = async () => {
+    const { request } = await preview();
+    const r = await installer().request(recipeInstallRequestSchema.parse(request));
+    if (r.kind !== 'richReview') throw Error('expected review');
+    const p = await installer().request(recipeInstallRequestSchema.parse({ ...request, reviewToken: r.reviewToken }));
+    if (p.kind !== 'richPrepared') throw Error('expected preparation');
+    const action = (type: string) =>
+      installer().request(recipeInstallRequestSchema.parse({ type, botId, operationId: p.operationId }));
+    return action;
+  };
+  const canceled = await bootstrap();
+  expect(await canceled('richCancel')).toMatchObject({ status: 'rejected', settled: true, issuerState: 'unissued' });
+  const lost = await bootstrap();
+  expect(await lost('richIssuing')).toMatchObject({ status: 'prepared', issuerState: 'issuing' });
+  expect(await lost('richCancel')).toMatchObject({ status: 'prepared', settled: false });
+  expect(await lost('richReconcile')).toMatchObject({ status: 'rejected', settled: true });
   const one = await prepare();
   const release = recipeAdmissions.acquire(recipeSlot(botId, groupId));
   const run = installer().request(one.commit);
@@ -209,6 +233,7 @@ test('a redeemed install drains existing work and commits only the selected slot
   expect(JSON.parse(ordinary).tasks).toEqual([]);
   const taskId = store.all()[0]!.id;
   expect(store.all()[0]!.state).toBe('paused');
+  let observedNoMention = true;
   const setup = (action: object) =>
     richSetup(
       recipeInstallRequestSchema.parse({ type: 'richSetup', botId, groupId, action }) as Extract<
@@ -216,13 +241,22 @@ test('a redeemed install drains existing work and commits only the selected slot
         { type: 'richSetup' }
       >,
       store,
-      {} as never,
+      {
+        read: async () => ({
+          scope: { kind: 'project' },
+          sections: { response: { effective: { noMention: observedNoMention } } },
+        }),
+      } as never,
       () => true,
     ) as Promise<Extract<RecipeInstallReply, { kind: 'richSetup' }>>;
   const shown = await setup({ kind: 'read' });
   const done = await setup({ kind: 'acknowledge', stepId: step.itemId, token: shown.token });
   expect(done.steps[0]!.readiness).toBe('acknowledged');
-  await setup({ kind: 'enableTask', taskId, actor: 'ou_fixture', timeZone: 'Asia/Shanghai', token: done.token });
+  const observed = await setup({ kind: 'check', stepId: content.setup[1]!.itemId, token: done.token });
+  expect(observed.steps[1]!.readiness).toBe('observed');
+  observedNoMention = false;
+  expect((await setup({ kind: 'read' })).steps[1]!.readiness).toBe('pending');
+  await setup({ kind: 'enableTask', taskId, actor: 'ou_fixture', timeZone: 'Asia/Shanghai', token: observed.token });
   expect(store.all()[0]?.state).toBe('active');
   await mutateProjectByChatId(
     groupId,

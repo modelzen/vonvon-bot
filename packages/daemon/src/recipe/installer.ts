@@ -107,7 +107,7 @@ export class RecipeInstaller {
     return applied;
   }
   async request(request: RecipeInstallRequest): Promise<RecipeInstallReply> {
-    if(request.type==='richPrepare'||request.type==='richCommit'||request.type==='richStatus'||request.type==='richSetup'){if(!this.rich)throw new Error('此设备尚未启用完整配方');return this.rich.request(request);}
+    if(request.type==='richCancel'||request.type==='richIssuing'||request.type==='richReconcile'||request.type==='richPrepare'||request.type==='richCommit'||request.type==='richStatus'||request.type==='richSetup'){if(!this.rich)throw new Error('此设备尚未启用完整配方');return this.rich.request(request);}
     if (request.type==='source' || request.type==='ignoreVersion') return this.store.source(request);
     if (request.type === 'createdGroup') return this.store.createdGroup(request.botId, request.requestId);
     if (request.type === 'prepare') return this.store.prepare(request);

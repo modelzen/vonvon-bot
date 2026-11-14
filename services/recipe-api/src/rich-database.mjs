@@ -7,6 +7,7 @@ import {richWireBytes,applyChanges,document,freezeSnapshot,inventory,richDigest}
 import {parseEditFreeze,readDocument} from './rich-http.mjs';
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const calls={
+  richUnredeemable:'rich_install_unredeemable($1,$2)',
   richInstallPreview:'rich_install_preview($1)',richInstallRecover:"rich_install_control($1,'recover')",richInstallCancel:"rich_install_control($1,'cancel')",
   richInstallRedeem:'rich_possess_install($1,$2,$3,$4,$5)',richInstallComplete:'rich_possess_install($1,$2,$3,$4,$5)',
   richSourceItems:'rich_source_items($1)',richRegister:'rich_register($1,$2)',richDraft:'rich_draft($1)',richDraftList:'rich_draft_list()',richDelete:'rich_delete($1,$2,$3)',

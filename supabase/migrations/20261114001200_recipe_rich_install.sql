@@ -183,6 +183,24 @@ begin
   raise exception 'invalid_input';
 end $$;
 
+create function recipe_api.rich_install_unredeemable(op_id uuid, account_ uuid) returns jsonb
+language plpgsql security definer set search_path=pg_catalog,pg_temp as $$
+declare op recipe_private.install_operations; negative boolean:=false;
+begin
+  perform pg_advisory_xact_lock(hashtextextended(account_::text,187511));
+  select * into op from recipe_private.install_operations where id=op_id;
+  if not found then
+    begin perform recipe_private.check_operation_birth(op_id);
+    exception when raise_exception then
+      if sqlerrm<>'operation_expired' then raise; end if;
+      negative:=true;
+    end;
+  elsif op.account_id=account_ and exists(select from recipe_private.rich_install_cap where id=op_id) then
+    negative:=op.state='cancelled' or (op.state='authorized' and op.deadline<=floor(extract(epoch from clock_timestamp())*1000)::bigint);
+  end if;
+  return jsonb_build_object('operationId',op_id,'unredeemable',negative);
+end $$;
+grant execute on function recipe_api.rich_install_unredeemable(uuid,uuid) to recipe_api;
 grant execute on function recipe_api.cancel_operation(uuid),recipe_api.rich_install_preview(uuid),recipe_api.rich_install_authorize(uuid,jsonb,bytea,bytea,bytea,bytea,bytea,bigint),
   recipe_api.rich_install_control(uuid,text),recipe_api.rich_possess_install(uuid,bytea,bytea,bytea,text) to recipe_api;
 reset role;

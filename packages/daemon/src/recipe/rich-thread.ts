@@ -54,7 +54,6 @@ export async function recipeResumeId(root: string, alias: string, slot: string, 
   if (record.slot === slot && record.epoch === epoch && typeof record.nativeId === 'string') return record.nativeId;
 }
 
-/** Even threads opened before a first installation hold admission for their active turns. */
 export function guardRecipeThread(thread: AgentThread, slot: string, assertEpoch: () => void, alias?: string): AgentThread {
   const pending = new Set<() => void>();
   function acquire() {
@@ -86,7 +85,6 @@ export function guardRecipeThread(thread: AgentThread, slot: string, assertEpoch
                 yield* stream;
                 consumed = true;
               } finally {
-                // A consumer can leave while the host still has a running child.
                 if (!consumed) await thread.close();
                 end();
               }

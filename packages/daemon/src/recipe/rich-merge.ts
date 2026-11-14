@@ -9,7 +9,6 @@ export type RecipeSnapshot = readonly LocalRecipeItem[];
 export type RecipeItemChoices = Readonly<Record<string, 'local' | 'incoming'>>;
 const collections: Collection[] = ['settings', 'rules', 'skills', 'files', 'tasks', 'memories', 'setup'];
 
-/** Compare actual text, including a file whose author moved its bytes into a verified part. */
 export function recipeSnapshot(content: RecipeRichContent, resolve: (value: RecipeRichText) => string): LocalRecipeItem[] {
   const items: LocalRecipeItem[] = [];
   function add(kind: LocalRecipeItem['kind'], { itemId, originId, ...fields }: Identity & Record<string, unknown>) {
