@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, writeFile, readFile, realpath, readlink } from 'node:fs/promises';
+import { cp, mkdtemp, writeFile, readFile, realpath, readlink, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
@@ -15,14 +15,22 @@ await cloneLogoProbeArtifact(original,root);
 const sentinel = 'fake-decoder-credential-do-not-expose';
 const credential = join(directory,'parent-credential');
 await writeFile(credential,sentinel);
+const credentialHandle = await open(credential,'r');
+const credentialStat = await credentialHandle.stat();
 const server = createServer(socket => socket.end(sentinel));
 await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
 const port = server.address().port;
 const namespaces = Object.fromEntries(await Promise.all(['user','pid','net','ipc','uts','mnt'].map(async name => [name,await readlink(`/proc/self/ns/${name}`)])));
 const worker = `
 import {readFile,writeFile,readlink} from 'node:fs/promises';
+import {fstatSync,readdirSync} from 'node:fs';
 import {connect} from 'node:net';
 const result = {};
+for (const fd of [0,1,2]) result['standardFd'+fd] = !fstatSync(fd).isCharacterDevice();
+result.parentDescriptor = readdirSync('/proc/self/fd').every(fd => {
+  try { const info = fstatSync(Number(fd)); return info.dev !== ${credentialStat.dev} || info.ino !== ${credentialStat.ino}; }
+  catch { return true; }
+});
 for (const [name,parent] of Object.entries(${JSON.stringify(namespaces)})) result['namespace-'+name] = await readlink('/proc/self/ns/'+name) !== parent;
 const limits = await readFile('/proc/self/limits','utf8');
 result.cpuLimit = /Max cpu time\\s+4\\s+4/.test(limits);
@@ -43,28 +51,23 @@ result.network = await new Promise(resolve => {
   socket.on('error',() => resolve(true));
   socket.setTimeout(500,() => {socket.destroy();resolve(true);});
 });
+await new Promise(resolve => process.stderr.write(Buffer.alloc(524288,120),resolve));
 process.stdout.write(JSON.stringify(result));
 `;
 await writeFile(join(root,'logo-child.mjs'),worker);
-const launch = linuxDecoderLaunch('normalize',{root});
-const child = spawn('/bin/sh',['-c','ulimit -v 1572864 && ulimit -d 393216 && ulimit -c 0 && ulimit -t 4 && exec "$@"','logo',launch.command,...launch.args],{
-  env:{...decoderEnvironment,FAKE_LOGO_CREDENTIAL:sentinel},stdio:['pipe','pipe','pipe'],cwd:'/',
-});
-const out = [], errors = [];
-child.stdout.on('data',data => out.push(data));
-child.stderr.on('data',data => errors.push(data));
-child.stdin.end();
-const timeout = setTimeout(() => child.kill('SIGKILL'),5000);
+process.env.LOGO_DECODER_ROOT = root;
+process.env.FAKE_LOGO_CREDENTIAL = sentinel;
+const { normalizeLogo, verifyNormalizedLogo } = await import('../src/logo.mjs');
 try {
-  const code = await new Promise((resolve,reject) => {child.on('error',reject);child.on('close',resolve);});
-  assert.equal(code,0,Buffer.concat(errors).toString());
-  const stdout = Buffer.concat(out).toString();
-  assert.ok(!stdout.includes(sentinel));
-  const results = JSON.parse(stdout);
-  for (const [name,denied] of Object.entries(results)) assert.equal(denied,true,name);
+  for (const [mode,decode] of [['normalize',normalizeLogo],['check',verifyNormalizedLogo]]) {
+    const stdout = String(await decode(Buffer.from('probe')));
+    assert.ok(!stdout.includes(sentinel));
+    const results = JSON.parse(stdout);
+    for (const [name,denied] of Object.entries(results)) assert.equal(denied,true,`${mode}: ${name}`);
+    console.log(JSON.stringify({isolation:'PASS',mode,results}));
+  }
   assert.equal(await readFile(credential,'utf8'),sentinel);
-  console.log(JSON.stringify({isolation:'PASS',results}));
-} finally { clearTimeout(timeout); server.close(); }
+} finally { await credentialHandle.close(); server.close(); delete process.env.FAKE_LOGO_CREDENTIAL; }
 
 await writeFile(join(root,'logo-child.mjs'),`
 import {spawn} from 'node:child_process';
@@ -73,8 +76,6 @@ child.on('error',() => process.exit(2));
 child.on('spawn',() => process.stdout.write('grandchild-started'));
 setInterval(() => {},1000);
 `);
-process.env.LOGO_DECODER_ROOT = root;
-const { normalizeLogo, verifyNormalizedLogo } = await import('../src/logo.mjs');
 const descendants = async pid => {
   let children;
   try { children = (await readFile(`/proc/${pid}/task/${pid}/children`,'utf8')).trim().split(/\s+/).filter(Boolean); }
@@ -109,7 +110,10 @@ for (const [name,source,expected] of [
 ]) {
   await writeFile(join(root,'logo-child.mjs'),source);
   const limitLaunch = linuxDecoderLaunch('normalize',{root});
-  const limited = spawn('/bin/sh',['-c','ulimit -v 1572864 && ulimit -d 393216 && ulimit -c 0 && ulimit -t 4 && exec "$@"','logo',limitLaunch.command,...limitLaunch.args],{env:decoderEnvironment,stdio:'ignore'});
+  const limited = spawn('/bin/sh',['-c','ulimit -v 1572864 && ulimit -d 393216 && ulimit -c 0 && ulimit -t 4 && exec "$@"','logo',limitLaunch.command,...limitLaunch.args],{env:decoderEnvironment,stdio:['pipe','pipe','pipe']});
+  limited.stdout.resume();
+  limited.stderr.resume();
+  limited.stdin.end();
   const limitStarted = Date.now();
   const watchdog = setTimeout(() => limited.kill('SIGTERM'),6500);
   const result = await new Promise((resolve,reject) => {limited.on('error',reject);limited.on('close',(code,signal) => resolve({code,signal}));});
