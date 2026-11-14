@@ -67,7 +67,6 @@ try{
     return Buffer.from(await r.arrayBuffer());
   }
   const account=(await req('/v1/me',a)).accountId,reader=(await req('/v1/me',b)).accountId;
-  // Issue real v1 install and authoring tickets before applying the rich migrations.
   const legacyKey=generateKeyPairSync('x25519'),legacyNonce=randomBytes(32),legacyDevice={
     targetPublicKey:b64(legacyKey.publicKey.export({type:'spki',format:'der'}).subarray(-32)),nonceCommitment:b64(sha(legacyNonce))};
   const legacyDoc={public:{name:'legacy',summary:'legacy',overview:'字节',version:'1',access:'direct'},config:{role:'留存 legacy'}};
@@ -180,8 +179,6 @@ try{
   assert.equal((await install.complete('applied')).disposition,'recorded');await install.complete('rejected',409);
   sql("select recipe_api.rich_moderate('feature','"+v.versionId+"','"+reader+"')");
   assert.equal((await req('/v2/community/recipes')).hero.versionId,v.versionId);
-  // New version of the author's coded work: stable item IDs/origins but a new
-  // exact release and freshly verified owner-scoped object membership.
   const newer=structuredClone(updated);newer.public.version.value='2.0';newer.memories=[];newer.parts=[];delete newer.finalLogo;
   const oldIndex=new Map(inventory(updated).map(i=>[i.itemId,i])),nextInput=body(newer,'direct');
   nextInput.sourceVersionId=v.versionId;
