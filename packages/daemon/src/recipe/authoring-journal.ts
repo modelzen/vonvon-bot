@@ -52,7 +52,6 @@ export interface LocalOperation {
   dispatchAuthorization?: AuthoringAuthorization;
   dispatched: boolean; revoked?: true; contextOpen?: boolean; instructionId?: string; seenInstructions?: string[]; terminalAt?: number; contextUntil?: number;
 }
-// The acknowledged display ref rotates away on confirm. Bind the durable approval to this operation and physical message.
 export function editApproval(op: LocalOperation, payloadDigest: string) {
   return digest(JSON.stringify(['exact-edit-v1', op.view.operationId, op.accountId, op.scope, op.bot, op.binding,
     op.recipient.tenantKey, op.recipient.chatId, op.recipient.openId, op.carrier.cardId, op.carrier.messageId,
