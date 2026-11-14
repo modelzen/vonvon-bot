@@ -143,6 +143,13 @@ export function applyChanges(original,changes,resolveCandidate,seed,newParts=[])
     return item;
   }
   for(const c of changes) {
+    if(c.op==='addSetup') {
+      const item={...structuredClone(c.value),itemId:randomUUID(),originId:randomUUID()};
+      content.setup.push(item);
+      copies.push({kind:'setup',itemId:item.itemId,originId:item.originId,baselineSha256:richDigest(item),
+        contentFingerprint:richDigest(stableValue(content,{kind:'setup',item})),source:c.source});
+      continue;
+    }
     if(c.op==='copyItem'||c.op==='includeCandidate') {
       const ref=c.source??c.value;let donor,sourceContent;
       if(c.op==='copyItem'){donor=find(ref.itemId,ref.kind).item;sourceContent=content;}
