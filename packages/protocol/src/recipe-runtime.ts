@@ -30,6 +30,10 @@ export const richRuntimeRequests = [
       authorization: recipeRichInstallAuthorizationSchema.optional(),
     })
     .strict(),
+  z.object({ type: z.literal('richIssuing'), botId: agentIdSchema, operationId: uuid }).strict(),
+  z.object({ type: z.literal('richCancel'), botId: agentIdSchema, operationId: uuid }).strict(),
+  z.object({ type: z.literal('richReconcile'), botId: agentIdSchema, operationId: uuid }).strict(),
+
   z.object({ type: z.literal('richStatus'), botId: agentIdSchema, operationId: uuid }).strict(),
   z
     .object({
@@ -79,6 +83,7 @@ export const richRuntimeReplies = [
       kind: z.literal('richStatus'),
       operationId: uuid,
       status: z.enum(['prepared', 'redeemed', 'applied', 'rejected']),
+      issuerState: z.enum(['unissued', 'issuing', 'authorized']),
       settled: z.boolean(),
       reason: z.string().optional(),
     })

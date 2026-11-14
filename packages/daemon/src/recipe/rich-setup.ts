@@ -25,6 +25,32 @@ export async function richSetup(
     const steps = active.resolved
       .filter((i) => i.kind === 'setup')
       .map((i) => recipeRichContentSchema.shape.setup.element.parse({ ...i.value, itemId: i.itemId, originId: i.originId }));
+    type Step = (typeof steps)[number];
+    let cached: ReturnType<HostSettings['read']> | undefined;
+    const observe = async (step: Step): Promise<boolean> => {
+      if (step.action.kind !== 'nativeSettings' || step.check?.trim()) return false;
+      const entry = step.action.entry;
+      const expected = active.resolved
+        .filter((i) => i.kind === 'settings')
+        .flatMap((i) => {
+          const field = String(i.value.field);
+          if (field === 'sessionMode' && entry === 'conversation') return [['mode', i.value.value] as const];
+          if (!field.startsWith(entry + '.') || field === 'presentation.cardDisplay' || i.value.value === 'default')
+            return [];
+          return [[field.slice(entry.length + 1), i.value.value] as const];
+        });
+      if (!expected.length) return false;
+      const view = await (cached ??= settings.read({ kind: 'project', botId, projectName: row.name }));
+      if (view.scope.kind !== 'project') return false;
+      const section = (view.sections as Record<string, { effective: Record<string, unknown> }>)[entry];
+      return (
+        !!section?.effective &&
+        expected.every(
+          ([field, value]) =>
+            Object.hasOwn(section.effective, field) && canonicalLocal(section.effective[field]) === canonicalLocal(value),
+        )
+      );
+    };
     let open: Extract<RecipeInstallReply, { kind: 'richSetup' }>['open'];
     if (action.kind === 'enableTask') {
       const consent = store.managed?.review(action.taskId);
@@ -40,12 +66,7 @@ export async function richSetup(
       } else {
         const manual = action.kind === 'acknowledge';
         if (!manual && item.action.kind === 'manual') throw new Error('这一步需要不同的确认方式');
-        if (!manual && item.action.kind === 'nativeSettings') {
-          const view = await settings.read({ kind: 'project', botId, projectName: row.name });
-          const sections = view.sections as Record<string, { effective: unknown }>;
-          if (!sections[item.action.entry] || item.check?.trim())
-            throw new Error('无法自动验证作者的文字条件，请先核对本机设置');
-        }
+        if (!manual && !(await observe(item))) throw new Error('无法从本机设置验证这一步，请先核对本机设置');
         await mutateProjectStore(loc, async (_, rows) => {
           const current = rows.find((r) => r.chatId === groupId && !r.dm);
           if (!current?.richRecipe || sha256(canonicalLocal(current)) !== token) throw new Error('群设置已改变');
@@ -63,7 +84,13 @@ export async function richSetup(
       kind: 'richSetup',
       groupId,
       token,
-      steps: steps.map((step) => ({ ...step, readiness: active.setup[step.itemId]?.kind ?? 'pending' })),
+      steps: await Promise.all(
+        steps.map(async (step) => {
+          const held = active.setup[step.itemId]?.kind;
+          const readiness = held === 'observed' && !(await observe(step)) ? 'pending' : (held ?? 'pending');
+          return { ...step, readiness };
+        }),
+      ),
       tasks: store
         .byChat(groupId)
         .filter((t) => store.managed?.review(t.id))
