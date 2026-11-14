@@ -120,6 +120,7 @@ try{
   assert.notEqual(initial.role.itemId,fixture.role.itemId);
   const saved=await prep.commit(plan);
   assert.equal(saved.revision,1);const draft=await req('/v2/drafts/'+saved.draftId,a);
+  const mixedDrafts=await req('/v2/me/drafts',a);assert.equal(mixedDrafts.items[0].format,'rich-v2');assert.equal(mixedDrafts.items[0].draftId,saved.draftId);
   assert.equal((await read(a,'drafts',draft.draftId,draft.manifest.objectId)).toString('base64url'),plan.canonical);
   await read(b,'drafts',draft.draftId,p.objectId,404);
   assert.deepEqual((await req('/v1/me/drafts',a)).items,[]);await req('/v1/drafts/'+draft.draftId,a,undefined,{status:409});
@@ -145,7 +146,17 @@ try{
   await publicLogo(200);await read(null,'versions',v.versionId,logo.objectId,404);
   assert.ok(!('manifest' in await req(detail)));await read(null,'versions',v.versionId,p.objectId,404);
   await req('/v1/versions/'+v.versionId+'/install-preview',a,undefined,{status:409});
-  await req('/v1/versions/'+v.versionId+'/redeem',b,{code:v.firstCode},{key:'a2.'+opId()});
+  const legacyBefore = await req('/v1/me/publications',a);
+  assert.deepEqual(legacyBefore.items.map(item=>item.versionId),[lv.versionId]);
+  const mixedPublications=await req('/v2/me/publications',a);
+  assert.equal(mixedPublications.items.find(item=>item.versionId===lv.versionId).format,'role-v1');
+  assert.equal(mixedPublications.items.find(item=>item.versionId===v.versionId).format,'rich-v2');
+  await req('/v1/versions/'+v.versionId+'/redeem',b,{code:v.firstCode},{key:'a2.'+opId(),status:409});
+  await req('/v1/recipes/'+v.recipeId+'/versions/'+v.versionId,a,undefined,{status:409});
+  assert.equal(sql("select count(*) from recipe_private.grants where actor='"+reader+"' and version_id='"+v.versionId+"'"),'0');
+  await req('/v2/versions/'+v.versionId+'/redeem',b,{code:v.firstCode},{key:'a2.'+opId()});
+  assert.equal((await req('/v2/me/recipes',b)).items[0].versionId,v.versionId);
+  assert.deepEqual((await req('/v1/me/recipes',b)).items,[]);
   assert.deepEqual(await read(b,'versions',v.versionId,p.objectId),privateBytes);
   assert.equal((await req(detail,b)).release.contentSha256,edited.contentSha256);
   assert.equal((await req('/v1/authoring/source-history',a,{operationIds:[prep.op]})).entries[0].versionId,v.versionId);
