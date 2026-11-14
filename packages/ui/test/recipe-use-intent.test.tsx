@@ -640,7 +640,7 @@ it('opens installed rich setup through the real shell source facade, labels manu
     await draw();const scope=document.querySelector('[data-scope="'+groupId+'"]')!;expect(scope.textContent).toContain('使用设置');expect(scope.textContent).toContain('尚未核对');
     await click('我已手动核对',scope);expect(scope.textContent).toContain('本人已手动确认');expect(scope.textContent).not.toContain('已由当前设备核验');
     await click('前往设置',scope);expect(destinations[0]).toMatchObject({page:'collaboration',selection:{kind:'membership',id:projected.memberships[0]!.id},section:'权限'});
-    await click('核对并启用',scope);const dialog=document.querySelector('[role="dialog"]')!;expect(dialog.textContent).toContain('核对所选文档，准备待确认摘要。');expect(dialog.textContent).toContain('每周一 09:00');expect(dialog.textContent).toContain('这台设备上此 Bot 的管理员配置');
+    await click('核对并启用',scope);const dialog=document.querySelector('[role="dialog"]')!;expect(dialog.textContent).toContain('核对所选文档，准备待确认摘要。');expect(dialog.textContent).toContain('每周一 09:00');expect(dialog.textContent).toContain('目标设备上此 Bot 的管理员配置');
     await click('启用此任务',dialog);expect(setupCalls.at(-1)).toMatchObject({type:'setup',viewId:A,botId,groupId,sourceToken:token,action:{kind:'enableTask',taskToken:'e'.repeat(64),token:'d'.repeat(64)}});expect(JSON.stringify(setupCalls.at(-1))).not.toContain('actor');
   }finally{window.removeEventListener('vonvon:open-setting',opened);}
 });
