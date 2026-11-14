@@ -1,11 +1,12 @@
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
+import {isDeepStrictEqual} from 'node:util';
 import {
   decodeRichRecipeContent, recipeRichReleaseSchema, verifyRichRecipeRelease, type RecipeRichContent, type RecipeRichPartDescriptor,
   type RecipeRichRelease, type RecipeRichText,
 } from '@vonvon/protocol';
 import {recipeFileIO, type RecipeFileEntry} from './rich-file-helper';
-import {selectRecipeSkills, restoreRecipeSelection, type EffectiveRecipeSkills, type RecipeSkillSelection} from './rich-skill-selection';
+import {selectRecipeSkills, restoreRecipeSelection, recipeSelectionMetadata, type EffectiveRecipeSkills, type RecipeSkillSelection} from './rich-skill-selection';
 import {verifiedDocumentText} from './rich-source-files';
 import {staticLogoFormat} from '../../../../services/recipe-api/src/logo-format.mjs';
 
@@ -47,11 +48,14 @@ function readText(text: RecipeRichText, parts: ReadonlyMap<string, string>): str
   return value;
 }
 const nativeName = (id: string) => `r-${id}`;
-function nativeFiles(content: RecipeRichContent, texts: ReadonlyMap<string,string>, version: string): Map<string,Buffer> {
-  const native = new Map<string,Buffer>();
+type NativeFile = Omit<RecipeFileEntry,'data'> & ({data:string;text?:never}|{text:RecipeRichText;data?:never});
+function nativeFilePlan(content: RecipeRichContent, version: string): Map<string,NativeFile> {
+  const native = new Map<string,NativeFile>();
+  const literal = (name: string, bytes: Buffer) => native.set(name,{name,bytes:bytes.length,sha256:digest(bytes),data:bytes.toString('base64')});
   if (!content.skills.length) return native;
-  native.set('native/.claude-plugin/plugin.json', Buffer.from(JSON.stringify({name: 'vonvon-recipe', version}) + '\n'));
+  literal('native/.claude-plugin/plugin.json', Buffer.from(JSON.stringify({name: 'vonvon-recipe', version}) + '\n'));
   const files = new Map(content.files.map(file => [file.itemId, file]));
+  const parts = new Map(content.parts.map(part => [part.objectId,part]));
   for (const skill of content.skills) {
     const name = nativeName(skill.itemId);
     const base = `native/skills/${name}`;
@@ -60,15 +64,19 @@ function nativeFiles(content: RecipeRichContent, texts: ReadonlyMap<string,strin
     const description = skill.name.replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, ' ').trim() || name;
     for (const id of skill.fileIds) {
       const file = files.get(id)!;
-      const bytes = Buffer.from(readText(file.text, texts));
-      const local = `references/${digest(bytes)}.txt`;
-      native.set(`${base}/${local}`, bytes);
+      const identity = file.text.kind==='inline' ? {bytes:Buffer.byteLength(file.text.value),sha256:digest(file.text.value)} : parts.get(file.text.objectId)!;
+      const local = `references/${identity.sha256}.txt`;
+      const path = `${base}/${local}`;
+      native.set(path,{name:path,bytes:identity.bytes,sha256:identity.sha256,text:file.text});
       references.push(`- ${JSON.stringify(file.name)}: ${local}${id === entry.itemId ? ' (entry document)' : ''}`);
     }
     const wrapper = `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\nRead the entry document for this skill. Read additional documents by their listed relative paths.\n\n${references.join('\n')}\n`;
-    native.set(`${base}/SKILL.md`, Buffer.from(wrapper));
+    literal(`${base}/SKILL.md`, Buffer.from(wrapper));
   }
   return native;
+}
+function nativeFiles(content: RecipeRichContent, texts: ReadonlyMap<string,string>, version: string): Map<string,Buffer> {
+  return new Map([...nativeFilePlan(content,version)].map(([name,file])=>[name,file.text ? Buffer.from(readText(file.text,texts)) : Buffer.from(file.data,'base64')]));
 }
 async function materialize(input: Stage, rootIdentity: string, selection?: RecipeSkillSelection) {
   const release = Object.freeze(recipeRichReleaseSchema.parse(input.release));
@@ -140,4 +148,42 @@ export async function openRichRecipeGeneration(input: Slot & {expected: RecipeGe
   if (pointer.resolvedSha256 !== plan.descriptor.pointer.resolvedSha256) throw new Error('Recipe generation digest changed');
   await recipeFileIO({...address, operation: 'verify', expectedRoot: pointer.rootIdentity, entries: plan.inventory});
   return plan.descriptor;
+}
+export async function openRichRecipeGenerationMetadata(input: Slot & {expected: RecipeGenerationPointer}) {
+  const pointer = structuredClone(input.expected);
+  const address = slotIO(input);
+  if (!['baseline','effective'].includes(pointer.selection) || pointer.format !== 'recipe-generation-1' || pointer.installationId !== input.installationId || pointer.generationId !== input.generationId || !/^[a-f0-9]{64}$/.test(pointer.rootIdentity) || !/^[a-f0-9]{64}$/.test(pointer.resolvedSha256)) throw new Error('Invalid recipe generation pointer');
+  const load = async (names: string[]) => {
+    const {files} = await recipeFileIO({...address,operation:'load',expectedRoot:pointer.rootIdentity,names});
+    if (!files || files.length!==names.length || files.some((file,index)=>file.name!==names[index])) throw new Error('Missing staged recipe files');
+    return new Map(files.map(file=>[file.name,Buffer.from(file.data,'base64')]));
+  };
+  const metadata = await load(['manifest.json','receipt.json']);
+  if (pointer.selection==='effective') metadata.set('effective.json',(await load(['effective.json'])).get('effective.json')!);
+  const manifest = metadata.get('manifest.json')!;
+  const baseline = await verifyRichRecipeRelease(pointer.release,manifest);
+  if (!isDeepStrictEqual(JSON.parse(metadata.get('receipt.json')!.toString('utf8')),pointer)) throw new Error('Recipe generation receipt changed');
+  const effective = pointer.selection==='effective' ? recipeSelectionMetadata(metadata.get('effective.json')!,baseline.content.public) : undefined;
+  const content = effective?.content ?? baseline.content;
+  const files = new Map<string,RecipeFileEntry>();
+  for (const [name,data] of metadata) if (name!=='receipt.json') files.set(name,{name,bytes:data.length,sha256:digest(data)});
+  for (const part of baseline.referencedParts) files.set(`parts/${part.objectId}`,{name:`parts/${part.objectId}`,bytes:part.bytes,sha256:part.sha256});
+  for (const part of effective?.referencedParts??[]) files.set(`effective/${part.objectId}`,{name:`effective/${part.objectId}`,bytes:part.bytes,sha256:part.sha256});
+  for (const [name,{bytes,sha256}] of nativeFilePlan(content,(effective ? digest(effective.canonicalUTF8) : pointer.release.contentSha256).slice(0,12))) files.set(name,{name,bytes,sha256});
+  const inventory = [...files.values()].sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
+  if (digest(JSON.stringify(['recipe-files-v1',inventory]))!==pointer.resolvedSha256) throw new Error('Recipe generation digest changed');
+  return {skills:pristine(content.skills),files:pristine(content.files.map(({text:_,...file})=>file)),async readFiles(ids:readonly string[]) {
+    const selected = ids.map(id=>{const file=content.files.find(file=>file.itemId===id);if(!file)throw new Error('Unknown selected recipe file');return file;});
+    const prefix = effective ? 'effective/' : 'parts/';
+    const names = [...new Set(selected.flatMap(file=>file.text.kind==='part'?[prefix+file.text.objectId]:[]))];
+    const bodies = names.length ? await load(names) : new Map<string,Buffer>();
+    return new Map(selected.map(file=>{
+      if(file.text.kind==='inline')return [file.itemId,file.text.value];
+      const objectId=file.text.objectId;
+      const part=content.parts.find(part=>part.objectId===objectId)!;
+      const bytes=bodies.get(prefix+part.objectId)!;
+      if(bytes.length!==part.bytes||digest(bytes)!==part.sha256)throw new Error('Selected recipe file changed');
+      return [file.itemId,verifiedDocumentText(bytes)];
+    }));
+  }};
 }

@@ -6,6 +6,7 @@ export interface ManagedSourceItem {
   kind:'settings'|'rules'|'skills'|'files'|'tasks'|'memories'|'setup'|'role'|'cardBlock';
   itemId:string;originId:string;value:Record<string,unknown>;parents:RecipeRichOriginEdge[];authorId:string;access:'direct'|'coded';
 }
+export interface ManagedSourceSelection {fileIds:readonly string[];includeBotMemories:boolean;includeTasks:boolean}
 export function applyManagedInventory(content:RecipeRichContent,evidence:Map<string,SourceEvidence>,managed:ManagedSourceItem[],account:string){
   const blocks=new Map(managed.filter(m=>m.kind==='cardBlock').map(b=>[b.itemId,b]));
   for(const item of managed){
