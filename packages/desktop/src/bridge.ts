@@ -430,9 +430,13 @@ export function installBridge(
     }};
   };
   const recipes = new RecipeUseController(account, captureRecipeDevice, new RecipeJournal(recipeJournalPath));
-  const authoring = new RecipeAuthoringController(account, captureRecipeDevice, new AuthoringJournal(authoringJournalPath));
+  const authoring = new RecipeAuthoringController(account, captureRecipeDevice, new AuthoringJournal(authoringJournalPath), value => send({type:'authoringSaved',value}));
   const noArg = (_: unknown): undefined => undefined;
-  const onNavigation = (): void => { subscribed = false; authoring.closeAll(); };
+  const onNavigation = (event: Electron.WebContentsDidStartNavigationEventParams): void => {
+    if (!event.isMainFrame || event.isSameDocument) return;
+    subscribed = false;
+    if (event.url !== expectedUrl) authoring.closeAll();
+  };
   try {
     registerClient(desktopChannels.snapshot, 0, noArg, () => {
       if (view.kind === 'local' && localDown() && localSnapshot) return Promise.resolve(localSnapshot);
