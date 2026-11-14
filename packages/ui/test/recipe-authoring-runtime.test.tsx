@@ -53,7 +53,7 @@ const success = (value: unknown) => ({ok:true,value});
 const text = () => document.querySelector('main')?.textContent ?? '';
 const dialog = (title: string) => [...document.querySelectorAll('[role="dialog"]')].find(element=>element.querySelector('header h2')?.textContent===title);
 async function click(label: string) {
-  const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.trim() === label);
+  const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent?.trim()) === label);
   expect(button, label).toBeDefined(); expect(button!.disabled, label).toBe(false);
   await act(async () => button!.click());
 }

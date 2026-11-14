@@ -1,3 +1,5 @@
+import {BackButton} from '../BackButton';
+import {GlowButton} from '../GlowButton';
 import {RichRecipeEditor} from './RichRecipeEditor';
 import {useEffect, useReducer, useRef, useState} from 'react';
 import {communityFailureMessages, recipePublicSchema, recipeConfigSchema} from '@vonvon/protocol';
@@ -74,9 +76,9 @@ export function RecipeEditor(props: Parameters<typeof RoleRecipeEditor>[0]) {
   const [error, setError] = useState<string>();
   const [retry,setRetry]=useState(0);
   useEffect(() => {if (!props.draftId) return; let active=true; void props.shell.request({type:'draft',accountId:props.accountId,draftId:props.draftId}).then(value => {if(active)setRead(value);},e => {if(active)setError(e instanceof Error?e.message:'草稿读取失败。');}); return () => {active=false;};},[props.shell,props.accountId,props.draftId,retry]);
-  if (props.draftId && !read) return <><p role="status">{error ?? '正在读取私人草稿…'}</p>{error&&<Button onClick={()=>{setError(undefined);setRetry(value=>value+1);}}>重试读取</Button>}<Button onClick={props.onBack}>返回创作中心</Button></>;
+  if (props.draftId && !read) return <><p role="status">{error ?? '正在读取私人草稿…'}</p>{error&&<Button onClick={()=>{setError(undefined);setRetry(value=>value+1);}}>重试读取</Button>}<BackButton onClick={props.onBack} label="返回创作中心"/></>;
   if (read?.format==='rich-v2') return <RichRecipeEditor {...props} draft={read}/>;
-  if (props.source?.format === 'rich-v2') return <><InlineNotice title="从来源群准备新版">请回到已应用此配方的群，核对本地来源并准备新版。富配方不会转换成仅角色草稿。</InlineNotice><Button onClick={props.onBack}>返回创作中心</Button></>;
+  if (props.source?.format === 'rich-v2') return <><InlineNotice title="从来源群准备新版">请回到已应用此配方的群，核对本地来源并准备新版。富配方不会转换成仅角色草稿。</InlineNotice><BackButton onClick={props.onBack} label="返回创作中心"/></>;
   return <RoleRecipeEditor {...props} initialDraft={read}/>;
 }
 function RoleRecipeEditor({shell, accountId, draftId, source, onBack, onPublished, initialDraft}: {
@@ -171,11 +173,11 @@ function RoleRecipeEditor({shell, accountId, draftId, source, onBack, onPublishe
     {chatOpen && <RecipeAuthoringPage draft={{draftId:model.draftId,revision:model.revision}} onSaved={(id,revision) => void readDraft(id,revision,'chat')}/>}
   </section>;
   if (loading) return <p role="status">正在读取私人草稿…</p>;
-  if (draftId && !model) return <><InlineNotice title="草稿读取未完成" tone="warning">{error}</InlineNotice><Button onClick={onBack}>返回创作中心</Button></>;
-  if (!editing && model) return <div className="community-page"><div className="community-actions"><Button variant="ghost" onClick={onBack}>返回创作中心</Button><Button variant="primary" onClick={() => setEditing(true)}>编辑草稿</Button></div><p className="community-muted">私人草稿 · 仅自己可见</p><RecipeDetails draft recipe={{recipeId: model.recipeId ?? model.draftId, versionId: model.draftId, revision: model.revision, public: model.public, config: model.config, owned: true, acquired: false}}/>{chat}</div>;
+  if (draftId && !model) return <><InlineNotice title="草稿读取未完成" tone="warning">{error}</InlineNotice><BackButton onClick={onBack} label="返回创作中心"/></>;
+  if (!editing && model) return <div className="community-page"><div className="community-actions"><BackButton onClick={onBack} label="返回创作中心"/><GlowButton variant="dark" onClick={() => setEditing(true)}>编辑草稿</GlowButton></div><p className="community-muted">私人草稿 · 仅自己可见</p><RecipeDetails draft recipe={{recipeId: model.recipeId ?? model.draftId, versionId: model.draftId, revision: model.revision, public: model.public, config: model.config, owned: true, acquired: false}}/>{chat}</div>;
   const steps = contents.config.setup?.steps ?? [];
   const updateStep = (i: number, patch: Partial<NonNullable<RecipeConfig['setup']>['steps'][number]>) => changeConfig({setup: {steps: steps.map((step, at) => at === i ? {...step, ...patch} : step)}});
-  return <div className="community-page"><div className="community-heading"><div><h1>{contents.public.name || '新建私人草稿'}</h1><p>先审核配置，再填写发布信息。保存草稿不会公开。</p></div><div className="community-actions"><Button variant="ghost" onClick={() => navigate(onBack)}>返回创作中心</Button>{model && <Button disabled={busy} onClick={() => setDeleting(true)}>删除草稿</Button>}</div></div>
+  return <div className="community-page"><div className="community-heading"><div><h1>{contents.public.name || '新建私人草稿'}</h1><p>先审核配置，再填写发布信息。保存草稿不会公开。</p></div><div className="community-actions"><BackButton label="返回创作中心" onClick={() => navigate(onBack)}/>{model && <Button disabled={busy} onClick={() => setDeleting(true)}>删除草稿</Button>}</div></div>
     {error && <InlineNotice title="操作未完成" tone="warning" actions={model && <Button disabled={busy} onClick={() => void readDraft(model.draftId, model.revision, 'conflict')}>读取最新草稿</Button>}>{error}</InlineNotice>}{saved && <p role="status" className="community-muted">私人草稿已保存 · 修订 {model?.revision}</p>}
     {source && <InlineNotice title="基于已有配方准备新草稿">来源：{source.public.name} · {source.public.version}。来源关系会保留；请核对你拥有分享权的内容。{!sourceAllowed && '其他作者的受限内容不能重新发布。'}</InlineNotice>}
     <form className="community-editor" onSubmit={event => {event.preventDefault(); void run(async () => {await save();});}}>
@@ -188,13 +190,13 @@ function RoleRecipeEditor({shell, accountId, draftId, source, onBack, onPublishe
         {steps.map((step, i) => <fieldset key={i}><legend>步骤 {i + 1}</legend><div className="community-editor-grid"><label>名称<input value={step.title} onChange={event => updateStep(i, {title: event.target.value})}/></label><label>类型<select value={step.kind} onChange={event => updateStep(i, {kind: event.target.value as typeof step.kind})}><option value="config">配置</option><option value="tool">工具</option><option value="context">上下文</option></select></label></div><label>操作说明<textarea value={step.instructions} maxLength={2048} onChange={event => updateStep(i, {instructions: event.target.value})}/></label><label>检查方式<input value={step.check ?? ''} maxLength={512} onChange={event => updateStep(i, {check: event.target.value})}/></label><label className="community-checkbox"><input type="checkbox" checked={step.required} onChange={event => updateStep(i, {required: event.target.checked})}/>必需步骤</label><Button type="button" onClick={() => {const next = steps.filter((_, at) => at !== i); changeConfig({setup: next.length ? {steps: next} : undefined});}}>移除此步骤</Button></fieldset>)}
         <Button type="button" disabled={steps.length >= 8} onClick={() => changeConfig({setup: {steps: [...steps, {kind: 'config', title: '', instructions: '', required: false}]}})}>添加准备步骤</Button>
       </fieldset>
-      <div className="community-actions"><Button type="submit" disabled={busy || !sourceAllowed}>保存私人草稿</Button><Button type="button" variant="primary" disabled={busy || !sourceAllowed} onClick={() => void run(preparePublish)}>预览发布</Button></div>
+      <div className="community-actions"><Button type="submit" disabled={busy || !sourceAllowed}>保存私人草稿</Button><GlowButton type="button" variant="dark" disabled={busy || !sourceAllowed} onClick={() => void run(preparePublish)}>预览发布</GlowButton></div>
     </form>
     {chat}
-    <Dialog open={Boolean(latest)} title="核对最新草稿" size="lg" onClose={() => dispatch({type: 'latest'})} footer={<><Button onClick={() => dispatch({type: 'latest'})}>继续核对</Button><Button variant="primary" onClick={() => {pendingSave.current = undefined; dispatch({type: 'rebase'});}}>保留当前输入，使用此修订继续编辑</Button></>}>
+    <Dialog open={Boolean(latest)} title="核对最新草稿" size="lg" onClose={() => dispatch({type: 'latest'})} footer={<><Button onClick={() => dispatch({type: 'latest'})}>继续核对</Button><GlowButton variant="dark" onClick={() => {pendingSave.current = undefined; dispatch({type: 'rebase'});}}>保留当前输入，使用此修订继续编辑</GlowButton></>}>
       <p>下面是云端最新保存的内容。你的未保存输入仍保留。确认后，再点击保存才会更新这份草稿。</p>{latest && <><h2>{latest.public.name}</h2><p>{latest.public.summary}</p><RecipeMetadata meta={latest.public}/><RecipeMarkdown text={latest.public.overview}/><RecipeConfiguration config={latest.config} section="能力"/><RecipeConfiguration config={latest.config} section="使用前准备"/></>}
     </Dialog>
-    <Dialog open={Boolean(review)} title="确认发布到社区" size="lg" onClose={busy ? undefined : () => dispatch({type: 'review'})} footer={<><Button disabled={busy} onClick={() => dispatch({type: 'review'})}>继续编辑</Button><Button variant="primary" disabled={busy} onClick={() => void run(publish)}>发布到社区</Button></>}>
+    <Dialog open={Boolean(review)} title="确认发布到社区" size="lg" onClose={busy ? undefined : () => dispatch({type: 'review'})} footer={<><Button disabled={busy} onClick={() => dispatch({type: 'review'})}>继续编辑</Button><GlowButton variant="dark" disabled={busy} onClick={() => void run(publish)}>发布到社区</GlowButton></>}>
       {error && <InlineNotice title="发布未完成" tone="warning">{error}</InlineNotice>}
       {review && <><h2>{review.public.name}</h2><p>{review.public.summary}</p><RecipeMetadata meta={review.public}/><RecipeMarkdown text={review.public.overview}/><RecipeConfiguration config={review.config} section="能力"/><RecipeConfiguration config={review.config} section="使用前准备"/></>}
     </Dialog>
