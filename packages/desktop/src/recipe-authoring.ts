@@ -1,3 +1,4 @@
+import {uploadRichMembers} from './recipe-authoring-upload.js';
 import {richAuthoringCloud,richTerminal} from './recipe-authoring-rich-cloud.js';
 import {safeDraftModelText, safeEditValue} from '../../../services/recipe-api/src/draft-model-text.mjs';
 import { createHash, randomUUID } from 'node:crypto';
@@ -32,6 +33,7 @@ type Handle = {
   lease: RecipeDeviceLease;
   signal: AbortSignal;
   stop: AbortController;
+  transfer?:{operationId:string;cancel:AbortController};
   deviceId: string;
   deviceKey: string;
   session?: string;
@@ -87,6 +89,7 @@ function expectKind<K extends RecipeAuthoringReply['kind']>(reply: RecipeAuthori
 export class RecipeAuthoringController {
   private handles = new Map<string, Handle>();
   private opening = new Set<string>();
+  private accountTransfer = new Map<string,Promise<void>>();
   constructor(
     private readonly account: NativeAccount,
     private readonly capture: (viewId: string) => RecipeDeviceLease,
@@ -515,8 +518,9 @@ export class RecipeAuthoringController {
       throw invalidAuthoring();
     return result;
   }
-  private async syncRich(h:Handle,op:AuthoringOperation,action:'sync'|'resume'|'cancel'|'resend'|'accept'){
+  private async syncRich(h:Handle,op:AuthoringOperation,action:'sync'|'resume'|'cancel'|'resend'|'accept',digest?:string){
     const cloud=this.richCloud(h),id=op.operationId;
+    if(action==='accept'&&(op.state!=='pendingCloud'||op.payloadDigest!==digest))throw recheck();
     const row=this.remember(h,op,action==='cancel');
     if(row.cancelling||op.state==='cancelPending'){
       if(op.state!=='cancelPending'&&!terminal(op))await this.operation(h,{type:'cancel',operationId:id});
@@ -541,21 +545,38 @@ export class RecipeAuthoringController {
     if(action==='resume'&&h.pausedContexts.has(id))return this.operation(h,{type:'resumeContext',operationId:id});
     if(op.cardUpdate==='pending')op=await this.operation(h,{type:'updateCard',operationId:id});
     if(op.state!=='pendingCloud')return op;
+    const cancel=new AbortController(),signal=AbortSignal.any([h.signal,h.stop.signal,cancel.signal]);
+    const accountId=h.open.accountId,prior=this.accountTransfer.get(accountId);
+    h.transfer={operationId:id,cancel};
+    const run=(async()=>{
+      await prior;
+      signal.throwIfAborted();
+      return this.transferRich(h,op,destinationDraftId,signal);
+    })();
+    const settled=run.then(()=>{},()=>{});
+    this.accountTransfer.set(accountId,settled);
+    try{return await run;}finally{
+      if(this.accountTransfer.get(accountId)===settled)this.accountTransfer.delete(accountId);
+      delete h.transfer;
+    }
+  }
+  private async transferRich(h:Handle,op:AuthoringOperation,destinationDraftId:string,signal:AbortSignal){
+    const cloud=richAuthoringCloud(this.account,h.open.accountId,signal,()=>this.check(h)),id=op.operationId;
     const read=async()=>expectKind(await this.daemon(h,{type:'richInspect',operationId:id}),'richCandidate');
     const transfer=expectKind(await this.daemon(h,{type:'richMembers',operationId:id}),'richMembers');
     if(transfer.operationId!==id||transfer.reviewDigest!==op.payloadDigest)throw recheck();
     if(transfer.members.length){
       await cloud.reserve(id,destinationDraftId,transfer.cap);
-      const descriptors=[];
-      for(const [ordinal,m] of transfer.members.entries()){
-        const raw=expectKind(await this.daemon(h,{type:'richReadMember',operationId:id,reviewDigest:transfer.reviewDigest,index:ordinal}),'richMember');
-        if(raw.operationId!==id||raw.index!==ordinal||raw.reviewDigest!==transfer.reviewDigest)throw recheck();
+      const descriptors=await uploadRichMembers(transfer.members,signal,async(index,ordinal,m,signal)=>{
+        const raw=expectKind(await this.daemon(h,{type:'richReadMember',operationId:id,reviewDigest:transfer.reviewDigest,index}),'richMember');
+        if(raw.operationId!==id||raw.index!==index||raw.reviewDigest!==transfer.reviewDigest)throw recheck();
         const bytes=Buffer.from(raw.bytes,'base64url');
         if(createHash('sha256').update(bytes).digest('hex')!==m.sha256)throw recheck();
-        const part=await cloud.upload(id,m.kind==='finalLogo'?64:ordinal,m.kind,bytes);
+        signal.throwIfAborted();
+        const part=await cloud.upload(id,ordinal,m.kind,bytes,signal);
         if(part.kind==='manifest')throw recheck();
-        descriptors.push(part);
-      }
+        return part;
+      });
       await this.daemon(h,{type:'richBindMembers',operationId:id,reviewDigest:transfer.reviewDigest,descriptors});
     }
     const approved=await read();
@@ -565,9 +586,10 @@ export class RecipeAuthoringController {
     const bytes=Buffer.from(frozen.canonical,'base64url');
     if(createHash('sha256').update(bytes).digest('hex')!==frozen.contentSha256)throw invalidAuthoring();
     if(!transfer.members.length)await cloud.reserve(id,destinationDraftId,2*bytes.length);
-    const member=await cloud.upload(id,65,'manifest',bytes);
+    const member=await cloud.upload(id,65,'manifest',bytes,signal);
     const binding=await cloud.authorize(id,'accept',frozen.payloadDigest);
     if((await read()).reviewDigest!==approved.reviewDigest)throw recheck();
+    signal.throwIfAborted();
     return this.operation(h,{type:'richAdvance',operationId:id,destinationDraftId,authorization:binding,accepted:{frozen,manifestId:member.objectId,packageId:id}});
   }
   private async sync(
@@ -576,7 +598,7 @@ export class RecipeAuthoringController {
     action: 'sync' | 'resume' | 'cancel' | 'resend' | 'accept' = 'sync',
     digest?: string,
   ) {
-    if(op.format==='rich-v2')return this.syncRich(h,op,action);
+    if(op.format==='rich-v2')return this.syncRich(h,op,action,digest);
     const row = this.remember(h, op, action === 'cancel');
     const operationId = op.operationId,
       cloud = this.cloud(h);
@@ -764,6 +786,7 @@ export class RecipeAuthoringController {
     }
     this.check(h);
     if (h.queued >= 8) throw new AuthoringError('正在核对上一次操作，请稍后继续。');
+    if(r.type==='cancel'&&h.transfer?.operationId===r.operationId)h.transfer.cancel.abort();
     h.queued++;
     h.busy = true;
     const run = h.tail.then(async () => {

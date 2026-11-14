@@ -77,6 +77,8 @@ export function parseEditFreeze(b,id,revision) {
   if(b.format!=='rich-v2'||(b.access!==undefined&&!['direct','coded'].includes(b.access)))throw badInput();
   const payload=parseRichPayload(b.payload);
   if(payload.purpose!=='editDraft'||payload.draftId!==id||payload.baseRevision!==revision)throw new ApiError(409,'conflict');
+  const accessChanges=payload.changes.filter(c=>c.op==='setAccess');
+  if(accessChanges.length>1||accessChanges.length&&accessChanges[0].value!==b.access)throw badInput();
   const base=readDocument(b.baseCanonical);
   if(!Array.isArray(b.newParts??[])||(b.newParts?.length??0)>65)throw badInput();
   const parts=(b.newParts??[]).map(p=>{if(!recipeRichPartDescriptorSchema.safeParse(p).success)throw badInput();return p;});

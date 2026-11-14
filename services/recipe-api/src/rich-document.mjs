@@ -143,6 +143,7 @@ export function applyChanges(original,changes,resolveCandidate,seed,newParts=[])
     return item;
   }
   for(const c of changes) {
+    if(c.op==='setAccess')continue;
     if(c.op==='setFinalLogo') {
       if(content.finalLogo){
         if(content.finalLogo.itemId!==c.itemId)throw badInput();
