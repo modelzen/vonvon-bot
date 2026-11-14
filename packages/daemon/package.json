@@ -26,7 +26,7 @@
     "import-core.json"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node ../../scripts/build-recipe-files.mjs",
     "build:holder": "node scripts/build-holder.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

@@ -27,6 +27,7 @@ async function sources(root) {
   await put(app, 'package.json', '{"name":"@vonvon/daemon","version":"0.9.0"}');
   await put(app, 'bin/vonvon.mjs');
   await put(app, 'server-update.json', '{"publicKey":"","baseURL":"https://example.invalid/bot/server"}');
+  await put(app, 'dist/native/recipe-files');
   await put(app, 'dist/cli.js', `var a=${'1+'.repeat(400)}1;`);
   for (const file of ['ui/dist/index.html', 'NOTICE', 'LICENSE.paseo', 'LICENSE.bridge', 'node_modules/dep/package.json']) await put(app, file);
   await put(app, 'node_modules/dep/src/index.js', 'module.exports = 1;');
