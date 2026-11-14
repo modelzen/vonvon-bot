@@ -464,3 +464,28 @@ it('checks the captured device again after a credential refresh and before sendi
   await expect(send).rejects.toThrow('device switched');
   expect(f.transport.mock.calls.some(([url])=>String(url).endsWith(path))).toBe(false);
 });
+
+it('routes only canonical v1/v2 paths to the configured API and keeps public member reads anonymous', async()=>{
+  const f=fixture(),a=f.create(),version=randomUUID(),object=randomUUID();
+  await a.login();await waitFor(()=>expect(a.status().kind).toBe('signedIn'));
+  f.transport.mockResolvedValue(Response.json({}));
+  const seen: (string|null)[]=[];
+  for(const path of ['/v1/me/recipes','/v2/versions/'+version+'/source-items']){
+    await a.request(business,path);
+    seen.push(new Headers(f.transport.mock.lastCall?.[1]?.headers).get('Authorization'));
+  }
+  for(const path of ['/v2/community/recipes?q=%E7%BE%A4','/v2/recipes/'+object+'/versions/'+version,'/v2/versions/'+version+'/display-logo','/v2/versions/'+version+'/objects/'+object]){
+    await a.publicRequest!(path);
+    seen.push(new Headers(f.transport.mock.lastCall?.[1]?.headers).get('Authorization'));
+  }
+  expect(seen).toEqual(['Bearer '+access,'Bearer '+access,null,null,null,null]);
+  const prior=f.transport.mock.calls.length;
+  for(const path of ['https://wrong.example/v2/me','//wrong.example/v2/me','/v3/me','/v2/a/../me','/v2/%2e%2e/v1/me','/v2/a%2fb','/v2/a%252fb','/v2/me#','/v2/me?x=1#x','/v2//me','/v2/\\me']){
+    await expect(a.request(business,path)).rejects.toThrow();
+  }
+  for(const path of ['/v2/me/drafts','/v2/drafts/'+version+'/objects/'+object,'/v2/versions/'+version+'/source-items','/v2/versions/'+version+'/display-logo?token=x'])
+    await expect(a.publicRequest!(path)).rejects.toThrow();
+  expect(f.transport.mock.calls).toHaveLength(prior);
+  await a.logout();
+  await expect(a.request(business,'/v2/authoring/'+version+'/authorize')).rejects.toThrow();
+});
