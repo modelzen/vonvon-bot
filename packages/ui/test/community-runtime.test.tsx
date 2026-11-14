@@ -393,3 +393,20 @@ it('opens coded acquisition in a focused dialog and keeps an uncertain retry bou
   expect(requests).toHaveLength(2); expect(requests[1]).toEqual(requests[0]);
   expect(document.body.textContent).toContain('已获取，已保存在你的账号中');
 });
+
+
+it('keeps rental content distinct and explicitly returns other routes to recipes', async () => {
+  const normal = handle;
+  handle = async request => request.type === 'drafts' || request.type === 'publications' ? {items: []} : normal(request);
+  await draw();
+  const rental = [...document.querySelectorAll('button')].find(button => button.textContent?.startsWith('Bot 租赁'))!;
+  await act(async () => rental.click());
+  expect(document.querySelector('.community-section-heading')).toBeNull();
+  expect(document.querySelector('.community-empty h2')?.textContent).toBe('Bot 租赁');
+  expect(document.body.textContent?.match(/敬请期待/g)).toHaveLength(1);
+  await click('打开已发布版本');
+  await click('返回 Bot 配方');
+  expect(document.querySelector('.community-tabs button[aria-current="page"]')?.textContent).toBe('Bot 配方');
+  expect(document.querySelector('.community-card')).not.toBeNull();
+  expect(document.querySelector('.community-empty')).toBeNull();
+});
