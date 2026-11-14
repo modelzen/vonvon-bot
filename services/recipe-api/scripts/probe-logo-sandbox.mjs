@@ -29,10 +29,11 @@ result.cpuLimit = /Max cpu time\\s+4\\s+4/.test(limits);
 result.addressLimit = /Max address space\\s+1610612736\\s+1610612736/.test(limits);
 result.dataLimit = /Max data size\\s+402653184\\s+402653184/.test(limits);
 result.coreLimit = /Max core file size\\s+0\\s+0/.test(limits);
-for (const [key,path] of Object.entries(${JSON.stringify({credential, parentEnvironment:`/proc/${process.pid}/environ`})})) {
+for (const [key,path] of Object.entries(${JSON.stringify({credential, parentEnvironment:`/proc/${process.pid}/environ`, nullDevice:'/dev/null'})})) {
   try { await readFile(path); result[key] = false; } catch { result[key] = true; }
 }
 result.environment = !process.env.FAKE_LOGO_CREDENTIAL;
+result.workingDirectory = process.cwd() === '/decoder' && process.env.PWD === '/decoder';
 for (const path of ['/tmp/escape','/decoder/escape','/usr/escape',${JSON.stringify(join(directory,'escape'))}]) {
   try { await writeFile(path,'escape'); result[path] = false; } catch { result[path] = true; }
 }
@@ -125,4 +126,4 @@ const sharp = createRequire(join(original,'logo-child.mjs'))('sharp');
 const input = await sharp({create:{width:16,height:16,channels:4,background:'red'}}).png().toBuffer();
 const normalized = await normalizeLogo(input);
 await verifyNormalizedLogo(normalized);
-console.log(JSON.stringify({timeoutReap:'PASS',concurrencyAndRecovery:'PASS',observedProcesses:running.length,grandchildren}));
+console.log(JSON.stringify({timeoutReap:'PASS',concurrencyAndRecovery:'PASS',observedProcesses:running.length,observedPids:running,grandchildren}));

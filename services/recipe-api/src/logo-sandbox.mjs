@@ -36,7 +36,7 @@ export function linuxDecoderLaunch(mode, {root = process.env.LOGO_DECODER_ROOT, 
   const info = statSync(binary);
   if (binary !== bwrap || info.uid !== 0 || info.mode & 0o022 || !info.isFile()) throw new Error('Untrusted bubblewrap');
   const args = ['--unshare-all','--unshare-user','--die-with-parent','--new-session','--cap-drop','ALL','--clearenv',
-    '--ro-bind','/usr','/usr','--dir','/decoder','--dir','/dev','--dev-bind','/dev/null','/dev/null',
+    '--ro-bind','/usr','/usr','--dir','/decoder','--dir','/dev',
     '--dir','/tmp','--proc','/proc','--remount-ro','/proc'];
   for (const path of ['/lib','/lib64']) {
     try {
