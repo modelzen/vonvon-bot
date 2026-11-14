@@ -22,8 +22,9 @@ async function decode(bytes, mode) {
   try {
     return await new Promise((resolve,reject) => {
       const child = spawn('/bin/sh',['-c',command,'logo',launch.command,...launch.args],{
-        cwd:'/',env:decoderEnvironment,stdio:['pipe','pipe','ignore'],
+        cwd:'/',env:decoderEnvironment,stdio:['pipe','pipe','pipe'],
       });
+      child.stderr.resume();
       const chunks = [];
       let size = 0;
       const stop = () => child.kill('SIGKILL');
