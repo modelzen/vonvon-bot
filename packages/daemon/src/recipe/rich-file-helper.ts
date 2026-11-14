@@ -23,7 +23,7 @@ export async function recipeFileIO(request: Request): Promise<Response> {
       if (error) {reject(new Error('Recipe file operation refused or packaged helper unavailable')); return;}
       try {resolve(JSON.parse(stdout) as Response);} catch {reject(new Error('Invalid recipe file helper response'));}
     });
-    child.stdin!.on('error', () => { /* execFile reports the failed child. */ });
+    child.stdin!.on('error', () => { });
     child.stdin!.end(JSON.stringify(request));
   });
 }

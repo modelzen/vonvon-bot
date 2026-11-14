@@ -7,7 +7,6 @@ import {
 import {recipeFileIO, type RecipeFileEntry} from './rich-file-helper';
 import {selectRecipeSkills, restoreRecipeSelection, type EffectiveRecipeSkills, type RecipeSkillSelection} from './rich-skill-selection';
 import {verifiedDocumentText} from './rich-source-files';
-// @ts-expect-error The broker and daemon use the same normalized WebP container validator.
 import {staticLogoFormat} from '../../../../services/recipe-api/src/logo-format.mjs';
 
 interface Slot {botDataRoot: string; installationId: string; generationId: string}
@@ -66,7 +65,6 @@ function nativeFiles(content: RecipeRichContent, texts: ReadonlyMap<string,strin
       native.set(`${base}/${local}`, bytes);
       references.push(`- ${JSON.stringify(file.name)}: ${local}${id === entry.itemId ? ' (entry document)' : ''}`);
     }
-    // Author-controlled frontmatter and filenames live in ordinary documents. Only generated fields enter native discovery.
     const wrapper = `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\nRead the entry document for this skill. Read additional documents by their listed relative paths.\n\n${references.join('\n')}\n`;
     native.set(`${base}/SKILL.md`, Buffer.from(wrapper));
   }
