@@ -10,6 +10,7 @@ import {
   type AuthoringOperation,
   type AuthoringReconciliation,
 } from '@vonvon/protocol';
+import { SourceHistory } from './recipe-source-history.js';
 import { AuthoringError, invalidAuthoring } from './recipe-authoring-cloud.js';
 
 const uuid = z.string().uuid();
@@ -36,7 +37,10 @@ type Binding = Pick<z.infer<typeof record>, 'accountId' | 'viewId' | 'deviceId' 
 type Row = z.infer<typeof record>;
 export class AuthoringJournal {
   private rows?: Row[];
-  constructor(private readonly path?: string) {}
+  readonly history: SourceHistory;
+  constructor(private readonly path?: string) {
+    this.history = new SourceHistory(path && path + '.sources.sqlite');
+  }
   private all() {
     if (this.rows) return this.rows;
     try {

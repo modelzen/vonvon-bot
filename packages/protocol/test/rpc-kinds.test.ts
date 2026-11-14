@@ -21,7 +21,7 @@ it("names every request once, nested variants by their own field", () => {
   const installs=kinds.filter(kind=>kind.startsWith('recipeInstall.')).sort();
   expect(installs).toEqual(['cancel','commit','createdGroup','ignoreVersion','issuing','prepare','reconcile','source','status'].map(kind=>'recipeInstall.'+kind));
   const authoring = kinds.filter(kind => kind.startsWith('recipeAuthoring.')).sort();
-  expect(authoring).toEqual('advance beginLink cancel close confirmLink deliver edit inspectCandidate inspectLink open prepare reconcile resend reviewSource settle status updateCard'.split(' ').map(kind => 'recipeAuthoring.' + kind));
+  expect(authoring).toEqual('advance answerField beginLink cancel close confirmLink deliver edit groupSourceIdentity inspectCandidate inspectLink open operationSourceIdentity prepare reconcile resend resumeContext reviewSource settle status updateCard workflow'.split(' ').map(kind => 'recipeAuthoring.' + kind));
   expect(kinds.length - installs.length - authoring.length).toBe(155);
   for (const kind of ["device.pair", "device.setPort", "admin.negotiate", "memory.branchDelete", "machine.desktopUpdateReport"]) expect(kinds).toContain(kind);
   for (const kind of ["machine.repairCli", "collaboration.openGroup", "environment.installCodex", "environment.startCodexLogin"]) expect(kinds).not.toContain(kind);

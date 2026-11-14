@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ServerInfo, VonvonClient } from '@vonvon/client/browser';
 import {
-  agentIdSchema, viewIdSchema, type AccountShell, type CommunityShell, type RecipeUseShell, type RecipeAuthoringShell, type RecipeSourceShell, type AccountStatus, type BackendInstallEventPayload, type CommandResult, type DesktopSnapshot, type DesktopUpdate, type DeviceEventPayload,
+  agentIdSchema, viewIdSchema, type AuthoringSaved, type AccountShell, type CommunityShell, type RecipeUseShell, type RecipeAuthoringShell, type RecipeSourceShell, type AccountStatus, type BackendInstallEventPayload, type CommandResult, type DesktopSnapshot, type DesktopUpdate, type DeviceEventPayload,
   type DevicesState, type LogEventPayload, type MachineReply, type ViewId,
 } from '@vonvon/protocol';
 import type { ShellCapabilities } from '../../ui/src/client-context.js';
@@ -101,6 +101,7 @@ export type DesktopEvent =
   /** This computer's own device events, whichever device the page shows (U3's "new device paired"). */
   | { type: 'localDevice'; value: DeviceEventPayload }
   | { type: 'account'; value: AccountStatus }
+  | { type: 'authoringSaved'; value: AuthoringSaved }
   | { type: 'devices'; value: DevicesState }
   /** 自动检查更新的结果；窗口之后才订阅时由主进程补发最近一次。 */
   | { type: 'update'; value: DesktopUpdate }

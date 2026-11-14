@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import {setTimeout as delay} from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 
@@ -95,7 +96,7 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     ['createDesktopFacades', 'packages/desktop/src/facade.ts'],
     ['desktopChannels', 'packages/desktop/src/ipc-contract.ts'],
     ['botPaths,useBotDir', 'packages/daemon/src/config/paths.ts'],
-    ['addProject,getProjectByChatId', 'packages/daemon/src/project/registry.ts'],
+    ['addProject,removeProject,getProjectByChatId', 'packages/daemon/src/project/registry.ts'],
     ['loadOrCreateDevice', 'packages/daemon/src/remote/device.ts'],
     [
       'recipeAuthoringRequestSchema,recipeAuthoringReplySchema,desktopAuthoringReplySchema,desktopAuthoringRequestSchema',
@@ -131,12 +132,13 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
   let loseRegister = true,
     loseAccept = true,
     unavailableCancel,
-    afterAuthorize, offlineAuthoring = false, substituteRecovery, daemonOffset = 0;
+    afterDraftRead, afterAuthorize, offlineAuthoring = false, substituteRecovery, daemonOffset = 0;
   let generation = new AbortController(),
     actor = accountId,
     deviceGeneration = 0;
   const alternate = (await request('/me', { token: reader })).accountId;
   const seen = [];
+  let omitApprovalResponse = false;
   const account = {
     lease: (id) => (id === actor ? generation.signal : undefined),
     status: () => ({
@@ -152,9 +154,22 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
       if (offlineAuthoring && path.startsWith('/v1/authoring/')) throw Error('before first cloud registration');
       if (substituteRecovery && path.endsWith('/recovery')) return substituteRecovery(path.split('/')[3]);
       if (unavailableCancel && path === '/v1/authoring/' + unavailableCancel + '/cancel') throw Error('offline cancellation');
+      if (path.endsWith('/register')) {
+        const id = path.split('/').at(-2);
+        const record = new code.AuthoringJournal(journalPath);
+        if (JSON.parse(init.body).purpose === 'prepareDraft') {
+          assert.ok(record.history.source({accountId:actor,deviceId,deviceKey:pk,botId},id));
+          record.history.close();
+        }
+      }
+      if (path.endsWith('/source-history')) assert.deepEqual(Object.keys(JSON.parse(init.body)), ['operationIds']);
       const headers = new Headers(init.headers);
       headers.set('Authorization', 'Bearer ' + (actor === accountId ? author : reader));
       const res = await fetch(origin + path, { ...init, headers });
+      if (afterDraftRead && path.startsWith('/v1/drafts/') && res.ok) {
+        const hook = afterDraftRead; afterDraftRead = undefined;
+        await hook();
+      }
       if (path.endsWith('/register') && res.ok && loseRegister) {
         loseRegister = false;
         await res.text();
@@ -180,6 +195,8 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     return response;
   };
   const access = { admins: [operator] };
+  const modelInputs = [], savedEvents = [];
+  let afterPropose;
   function boot() {
     const daemon = new code.AuthoringService({
       bot,
@@ -190,6 +207,12 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
       origin,
       fetch: deviceHttp,
       loopback: true,
+      parser:{async propose(input) {
+        modelInputs.push(input);
+        const hook = afterPropose; afterPropose = undefined; await hook?.();
+        if (input.instruction.includes('周报替换成草稿')) return {kind:'proposal',changes:[{action:'replace',field:'name',before:'周报',value:'草稿'}]};
+        return {kind:'proposal',changes:[{action:'replace',field:'name',before:'草稿',value:'周报'}]};
+      }},
     });
     const client = {
       snapshot: async () => ({
@@ -209,7 +232,9 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
         const r = code.recipeAuthoringRequestSchema.parse(raw);
         assert.ok(!JSON.stringify(r).includes(author));
         seen.push(r.type);
-        return code.recipeAuthoringReplySchema.parse(await daemon.request(peer, r));
+        const reply = code.recipeAuthoringReplySchema.parse(await daemon.request(peer, r));
+        if (omitApprovalResponse && reply.kind === 'candidate') delete reply.reviewedDigest;
+        return reply;
       },
     };
     const ctrl = new code.RecipeAuthoringController(
@@ -219,6 +244,7 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
         return { viewId, client, check: () => assert.equal(deviceGeneration, gen, 'stale device view') };
       },
       new code.AuthoringJournal(journalPath),
+      receipt=>savedEvents.push(receipt),
     );
     const { shell } = code.createDesktopFacades({
       invoke: async (channel, raw) => {
@@ -321,6 +347,26 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     assert.deepEqual(candidate.content.changes, [{ op: 'setDraftRole', value: '独立的新角色' }]);
     await assert.rejects(act('accept', { operationId: editId, payloadDigest: candidate.payloadDigest }));
     await running.daemon.onAction(im.click('confirm', operator, dm, tenantKey));
+    omitApprovalResponse = true;
+    const tickets = () => sql("select count(*) from recipe_private.authoring_capabilities where operation_id='"+editId+"' and stage='accept'");
+    await assert.rejects(act('resume',{operationId:editId}));
+    assert.equal(tickets(),'0');
+    omitApprovalResponse = false;
+    running.ctrl.closeAll(); running.daemon.close();
+    const ledgerFile = join(home,'recipe-authoring','journal.json');
+    const ledger = JSON.parse(readFileSync(ledgerFile,'utf8'));
+    delete ledger.operations[editId].editApproval;
+    writeFileSync(ledgerFile,JSON.stringify(ledger));
+    running = boot();
+    const upgraded = await start(); handle=upgraded.handle;
+    assert.equal(upgraded.operations.find(o=>o.operationId===editId).state,'candidate');
+    assert.equal(tickets(),'0');
+    assert.equal((await request('/drafts/'+draftId,{token:author})).revision,1);
+    assert.equal(im.messages.size,2);
+    const repairedAction = im.click('confirm',operator,dm,tenantKey);
+    assert.match(JSON.stringify(im.cards.get(last.card)),/独立的新角色/);
+    await running.daemon.onAction(repairedAction);
+    console.log('PASS: absent daemon proof blocks the accept ticket; upgrading an unproven pending edit restores the original card before any cloud write.');
     afterAuthorize = () => {
       generation.abort();
       actor = alternate;
@@ -373,6 +419,7 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     assert.ok(!readFileSync(journalPath, 'utf8').includes('独立的新角色'));
     const fromChat = message('/recipe create');
     await running.daemon.onMessage(fromChat);
+    await running.daemon.onAction(im.click('source', operator, dm, tenantKey));
     const chatStatus = await act('status');
     const chatOp = chatStatus.operations.find((o) => o.state === 'waiting');
     assert.equal(chatOp.groupId, groupId);
@@ -510,6 +557,100 @@ export async function checkNativeAuthoring({ root, tmp, origin, author, reader, 
     assert.equal(newOp.state,'waiting');
     await act('cancel',{operationId:newOp.operationId});
     console.log('PASS: three unregistered revoked IDs retain quota on 410 and mismatched proofs, then release it only on authenticated original-ID recovery; old accepts stay saved.');
+    await act('close');
+    running.ctrl.closeAll();
+    running.daemon.close();
+    const old = await request('/drafts/'+draftId,{token:author});
+    const ready = await request('/drafts/'+draftId,{method:'PATCH',revision:old.revision,token:author,
+      body:{public:{name:'来源群版本',summary:'摘要',overview:'说明',version:'1',access:'direct'},config:old.config}});
+    const version = await request('/drafts/'+draftId+'/publish',{method:'POST',revision:ready.revision,token:author,body:{}});
+    sql(`update recipe_private.authoring_operations set terminal_at=clock_timestamp()-interval '10 days'
+      where account_id='${accountId}' and state='accepted'; select recipe_private.maintain_authoring('${accountId}')`);
+    assert.equal(sql(`select count(*) from recipe_private.authoring_operations where id='${registered}'`),'0');
+    daemonOffset = 10 * 86400000;
+    running = boot();
+    const groupSession = await running.main({type:'open',accountId,viewId:'local',botId,groupId});
+    handle = groupSession.handle;
+    const history = await act('sourceHistory',{groupId});
+    assert.ok(history.entries.some(row=>row.operationId===registered && row.state==='published' && row.versionId===version.versionId));
+    assert.ok(history.entries.some(row=>row.operationId===chatOp.operationId && row.state==='draft' && row.draftId===fromChatSaved.receipt.draftId));
+    assert.ok(!history.entries.some(row=>row.operationId===editId));
+    await code.removeProject('fixture');
+    await code.addProject({chatId:groupId,name:'rebound',cwd:home,blank:false,createdAt:2,supplement:'群角色'},location);
+    await assert.rejects(act('sourceHistory',{groupId}));
+    const rebound = await running.main({type:'open',accountId,viewId:'local',botId,groupId});
+    handle = rebound.handle;
+    assert.deepEqual((await act('sourceHistory',{groupId})).entries,[]);
+    console.log('PASS: private source intents persisted before registration, exact draft and remote publication recovered after ten days, same physical group rebound without prior history.');
+    daemonOffset=0;
+    const liveGroup = await running.main({type:'open',accountId,viewId:'local',botId,groupId});handle=liveGroup.handle;
+    const groupReview = await act('reviewSource',{groupId});
+    const workflow = (await act('prepare',{groupId,reviewToken:groupReview.reviewToken,sourceAttested:true})).operation;
+    await running.daemon.onAction(im.click('confirm',operator,dm,tenantKey));
+    const firstSave = (await act('status')).operations.find(o=>o.operationId===workflow.operationId);
+    assert.equal(firstSave.receipt.revision,1);
+    const continuedId = firstSave.receipt.draftId;
+    const readContinued = () => request('/drafts/'+continuedId,{token:author});
+    const awaitCondition = async (fn) => {
+      const until = Date.now()+24_000;
+      do { if (await fn()) return; await delay(120); } while (Date.now()<until);
+      throw Error('timed out waiting for detached Main workflow');
+    };
+    const firstMessage = [...im.messages.values()].at(-1).message_id;
+    await act('detach');
+    await assert.rejects(act('status'));
+    await running.daemon.onMessage(message('/recipe name 每周草稿'));
+    await awaitCondition(() => {
+      const card = im.cards.get([...im.messages.values()].at(-1).card);
+      return card.body.elements.some(el=>el.behaviors?.some(b=>b.value.verb==='confirm')) &&
+        [...im.messages.values()].at(-1).message_id !== firstMessage;
+    });
+    await running.daemon.onAction(im.click('confirm',operator,dm,tenantKey));
+    await awaitCondition(async ()=>(await readContinued()).revision===2);
+    assert.equal((await readContinued()).public.name,'每周草稿');
+    const scoped = '把名称中的草稿替换成周报';
+    await running.daemon.onMessage(message(scoped));
+    assert.deepEqual(modelInputs.at(-1),{instruction:scoped,current:{field:'name',value:'每周草稿'}});
+    const priorMessages=im.messages.size;
+    await awaitCondition(() => im.messages.size>priorMessages ||
+      im.cards.get([...im.messages.values()].at(-1).card).body.elements.some(el=>el.behaviors?.some(b=>b.value.verb==='confirm')));
+    await running.daemon.onAction(im.click('confirm',operator,dm,tenantKey));
+    await awaitCondition(async ()=>(await readContinued()).revision===3);
+    assert.equal((await readContinued()).public.name,'每周周报');
+    assert.equal((await readContinued()).config.role,'群角色');
+    await awaitCondition(() => savedEvents.some(event=>event.draftId===continuedId && event.revision===3));
+    assert.deepEqual(savedEvents.filter(event=>event.draftId===continuedId),[1,2,3].map(revision=>({accountId,draftId:continuedId,revision})));
+    console.log('PASS: detached group workflow saved a second revision, then replaced only the exact public field of the same draft through Main and PostgreSQL.');
+
+    const reopenedFlow = await start();handle = reopenedFlow.handle;
+    const current=await readContinued();
+    const concurrentEdit = (await act('edit',{draftId:continuedId,baseRevision:3})).operation;
+    afterPropose = () => request('/drafts/'+continuedId,{method:'PATCH',token:author,revision:3,body:{public:{...current.public,name:'独立第三方修订'},config:current.config}});
+    const beforeStale=modelInputs.length;
+    await running.daemon.onMessage(message('把名称中的周报替换成草稿'));
+    const noCandidate=(await act('status')).operations.find(o=>o.operationId===concurrentEdit.operationId);
+    assert.equal(modelInputs.length,beforeStale+1); assert.equal(noCandidate.state,'waiting');
+    assert.equal((await readContinued()).public.name,'独立第三方修订');
+    await act('cancel',{operationId:concurrentEdit.operationId});
+    await act('edit',{draftId:continuedId,baseRevision:4});
+    const beforeLogout=modelInputs.length;
+    afterDraftRead = () => {generation.abort();actor=alternate;generation=new AbortController();};
+    await running.daemon.onMessage(message('把名称中的第三方替换成同事'));
+    assert.equal(modelInputs.length,beforeLogout);
+    await assert.rejects(act('status')); assert.equal((await readContinued()).revision,4);
+    actor=accountId;generation.abort();generation=new AbortController();
+    const beforeSwitch=await rebase();
+    const pendingEdit=beforeSwitch.operations.find(o=>o.draftId===continuedId && o.baseRevision===4 && o.state==='waiting');
+    assert.ok(pendingEdit);
+    afterDraftRead=()=>{deviceGeneration+=2;running.ctrl.invalidateStale();};
+    await running.daemon.onMessage(message('把名称中的第三方替换成同事'));
+    assert.equal(modelInputs.length,beforeLogout);
+    await assert.rejects(act('status'));
+    await rebase();
+    assert.equal((await readContinued()).revision,4);
+    console.log('PASS: device A/B/A during the field response discards it without invoking the parser.');
+    console.log('PASS: a revision change during parsing invalidated the candidate; logout during the exact field read released no text to the parser.');
+
     deviceGeneration += 2;
     await assert.rejects(act('status'), /stale device view/);
   } finally {

@@ -11,6 +11,7 @@ import pg from 'pg';
 import { authoringProof, DISPATCH_DIGEST } from '../src/authoring-proof.mjs';
 import { payloadBytes } from '../src/authoring-input.mjs';
 import { sha256 } from '../src/install-proof.mjs';
+import { checkSourceHistory } from './source-history.pg.mjs';
 import { startRecipeService } from '../src/main.mjs';
 
 const root=fileURLToPath(new URL('../../../',import.meta.url));
@@ -31,9 +32,13 @@ try {
   mkdirSync(sock,{mode:0o700});
   command('initdb',['-D',db,'-U','bootstrap_test','--encoding=UTF8','--locale=C','--auth=trust'],{stdio:'ignore'});
   command('pg_ctl',['-D',db,'-w','-l',join(tmp,'pg.log'),'-o',`-k '${sock}' -p 5432 -c listen_addresses='' -c unix_socket_permissions=0700`,'start']);up=true;
-  for (const name of readdirSync(join(root,'supabase/migrations')).filter(name=>name.endsWith('.sql')).sort()) {
-    command('psql',['-Xq','-1','-v','ON_ERROR_STOP=1','-f',join(root,'supabase/migrations',name)],{env:pgEnv,stdio:['ignore','ignore','pipe']});
-  }
+  const migrations = readdirSync(join(root,'supabase/migrations')).filter(name=>name.endsWith('.sql')).sort();
+  const sourceMigration = migrations.findIndex(name=>name.endsWith('_recipe_source_history.sql'));
+  assert.ok(sourceMigration >= 0);
+  const apply = name => command('psql',['-Xq','-1','-v','ON_ERROR_STOP=1','-f',join(root,'supabase/migrations',name)],{
+    env:pgEnv,stdio:['ignore','ignore','pipe'],
+  });
+  migrations.slice(0,sourceMigration).forEach(apply);
   sql('create role recipe_check_login login noinherit; grant recipe_api to recipe_check_login');
   const {publicKey,privateKey}=generateKeyPairSync('ec',{namedCurve:'P-256'});
   const jwk={...publicKey.export({format:'jwk'}),kid:'synthetic-authoring',alg:'ES256',use:'sig'};
@@ -83,6 +88,10 @@ try {
     assert.deepEqual(await authorize(op.operationId,'accept',2,cap.payloadDigest),cap);
     return {op,cap,dispatchCap};
   }
+  await checkSourceHistory({request, ready, accept, operationId, author, other,
+    secondDevice:jwt(authorSubject,{session_id:randomUUID()}), completeBody, account, sql,
+    upgrade:()=>migrations.slice(sourceMigration).forEach(apply),
+  });
   const id=operationId();
   await recover(operationId(),author,404);
   const unregistered=operationId(Date.now()-6*60_000);
@@ -129,6 +138,10 @@ try {
         end;
         if not denied then raise exception 'Malformed SQL input was accepted';end if;
       end $$;rollback;`);
+  }
+  for (const invalid of ['null', "'{}'::uuid[]", "array[null]::uuid[]", `array['${id}','${id}']::uuid[]`,
+      `array[array['${id}']]::uuid[]`, `array['${randomUUID()}']::uuid[]`]) {
+    deniedSql(`recipe_api.source_history(${invalid})`,'invalid_input');
   }
   for(const index of [0,1,2,3,4]) {
     const args=[...credentials,encodedPayload,"'accept'"];args[index]='null';
@@ -347,7 +360,7 @@ try {
   assert.equal(sql(`select count(*) from recipe_private.authoring_operations where account_id='${quotaAccount}'`),'60');
   assert.equal(sql(`select to_jsonb(o)::text like '%SELECTED-ROLE%' from recipe_private.authoring_operations o where id='${id}'`),'f');
   assert.equal(sql(`select count(*) from recipe_private.versions where config->>'role'='RACE-ROLE'`),'0');
-  console.log('PASS: PostgreSQL 15 + HTTP authoring registration, stage isolation, exact canonical bytes, X25519 possession, renewal, restart, stable receipts, one proposal, cancellation/publication/disable races, quotas, retention, private fields.');
+  console.log('PASS: PostgreSQL 15 + HTTP authoring registration, stage isolation, exact canonical bytes, X25519 possession, renewal, restart, stable receipts, one proposal, cancellation/publication/disable races, quotas, retention, private source history across migration and device publication, private fields.');
 } finally {
   try {await service?.close();if(issuerServer)await new Promise(resolve=>issuerServer.close(resolve));}
   finally {if(up)command('pg_ctl',['-D',db,'-m','fast','-w','stop']);rmSync(tmp,{recursive:true,force:true});}
