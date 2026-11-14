@@ -439,15 +439,23 @@ it('invalidates a fully buffered private community response immediately when log
   f.store.clear.mockImplementationOnce(() => cleared.promise);
   const base = f.transport.getMockImplementation()!;
   let controller!: ReadableStreamDefaultController<Uint8Array>;
-  f.transport.mockImplementation((url, init) => String(url).includes('/v1/me/drafts')
+  f.transport.mockImplementation((url, init) => /\/v[12]\/me\/drafts$/.test(String(url))
     ? Promise.resolve(new Response(new ReadableStream<Uint8Array>({start(value) {controller = value;}}))) : base(url, init));
   const pending = communityRequest(a, {type: 'drafts', accountId: business});
-  for (let i = 0; i < 8; i++) await Promise.resolve();
-  const loggingOut = a.logout();
-  expect(lease?.aborted).toBe(true);expect(a.lease?.(business)).toBeUndefined();
-  controller.enqueue(new TextEncoder().encode(JSON.stringify({items: []}))); controller.close();
   const result = pending.then(() => 'leaked', () => 'rejected');
-  try {expect(await result).toBe('rejected');} finally {cleared.resolve(); await loggingOut;}
+  let loggingOut: ReturnType<typeof a.logout> | undefined;
+  try {
+    await waitFor(() => expect(controller).toBeDefined());
+    loggingOut = a.logout();
+    expect(lease?.aborted).toBe(true);expect(a.lease?.(business)).toBeUndefined();
+    controller.enqueue(new TextEncoder().encode(JSON.stringify({items: []}))); controller.close();
+    expect(await result).toBe('rejected');
+  } finally {
+    cleared.resolve();
+    try {controller?.close();} catch {}
+    await loggingOut;
+    await result;
+  }
 });
 
 it('checks the captured device again after a credential refresh and before sending an authorization', async () => {
