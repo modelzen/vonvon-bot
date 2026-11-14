@@ -32,6 +32,10 @@ import { ConnectionError, RpcError } from '@vonvon/client/browser';
 
 declare const __VONVON_ACCOUNT_WEB_ORIGIN__: string | undefined;
 declare const __VONVON_ACCOUNT_API_ORIGIN__: string | undefined;
+declare const __VONVON_DESKTOP_PREVIEW__: boolean | undefined;
+
+const previewBuild = typeof __VONVON_DESKTOP_PREVIEW__ !== 'undefined' && __VONVON_DESKTOP_PREVIEW__;
+const previewIntegrationMessage = '预览版不注册命令行工具或登录启动服务，请在应用中手动启动。';
 
 /** 应用内更新没生效时给用户的手动下载地址，和设置页里的链接一致。 */
 const downloadPage = 'https://vonvon.cc/get/';
@@ -307,7 +311,7 @@ export async function startDesktop(): Promise<void> {
       platform: process.platform, packaged: app.isPackaged, root, home: homedir(),
       executable: process.execPath, resources: process.resourcesPath,
     };
-    const managerDependencies = createDaemonDependencies(serviceRuntime);
+    const managerDependencies = createDaemonDependencies({ ...serviceRuntime, allowRegisteredService: !previewBuild });
     const manager = createDaemonManager(managerDependencies);
     // devices 7.4: a server installed and registered on its own, and not the one this app carries, stays on quit.
     const keepOnQuit = (owner: VerifiedDaemon): Promise<boolean> =>
@@ -322,9 +326,9 @@ export async function startDesktop(): Promise<void> {
     });
     const cliOptions = desktopCliOptions({ platform: process.platform, executable: process.execPath,
       resources: process.resourcesPath, packaged: app.isPackaged });
-    if (app.isPackaged && !process.env.VONVON_DESKTOP_TEST_HOME) await registerCli(cliOptions);
+    if (!previewBuild && app.isPackaged && !process.env.VONVON_DESKTOP_TEST_HOME) await registerCli(cliOptions);
     // A moved or updated app points its service at itself first. If the desktop then cannot attach, that is the cause.
-    const repairNotice = await repairServiceAtStartup(serviceRuntime, managerDependencies);
+    const repairNotice = previewBuild ? undefined : await repairServiceAtStartup(serviceRuntime, managerDependencies);
     try { await manager.ensureReady(0); }
     catch (error) { throw repairNotice ? new Error(repairNotice) : error; }
     owner = await attachExisting(root);
@@ -533,6 +537,7 @@ export async function startDesktop(): Promise<void> {
 
     /** The bundled helper changes the service; the window expects the daemon to go and reattaches to its successor. */
     function setLoginItem(enabled: boolean, previous?: AttachedDaemon['identity'] | null): Promise<void> {
+      if (previewBuild) throw new StartHostRefusal(previewIntegrationMessage);
       return guardedService(() => changeLoginItem(serviceRuntime, enabled, previous, loginItemHooks));
     }
 
@@ -646,6 +651,7 @@ export async function startDesktop(): Promise<void> {
     bridge = installBridge(owner, current, paths, {
       observeCli: () => observeCli(cliOptions),
       repairCli: async () => {
+        if (previewBuild) throw new StartHostRefusal(previewIntegrationMessage);
         const result = await registerCli(cliOptions);
         if (result.kind === 'error') throw new StartHostRefusal(result.message);
         return { type: 'done', message: result.message };
@@ -670,6 +676,7 @@ export async function startDesktop(): Promise<void> {
       recoverConnection,
       setLoginItem,
       service: async (action, previous) => {
+        if (previewBuild) throw new StartHostRefusal(previewIntegrationMessage);
         if (action === 'install' || action === 'uninstall') {
           await setLoginItem(action === 'install', previous);
           return { type: 'done', message: action === 'install' ? '已打开登录时启动。' : '已关闭登录时启动。' };

@@ -8,6 +8,7 @@ import { stageDaemon } from '../../scripts/stage-daemon.mjs';
 import { normalizeWindowsPublicKey } from './src/windows-update-manifest.mjs';
 import { assertNoBundledClaude } from '../../scripts/desktop-backend-policy.mjs';
 import { buildWindowsCli } from '../../scripts/build-windows-cli.mjs';
+import { createHash } from 'node:crypto';
 
 const version = await checkedProductVersion();
 const root = dirname(fileURLToPath(import.meta.url));
@@ -16,7 +17,8 @@ const stage = join(root, 'stage');
 const ui = join(root, '../ui/dist');
 const daemonSource = join(root, '../daemon');
 const daemonStage = join(stage, 'daemon');
-const updateConfig = JSON.parse(await readFile(process.env.VONVON_DESKTOP_UPDATE_CONFIG || join(root, 'desktop-update.json'), 'utf8'));
+const preview = process.env.VONVON_DESKTOP_PREVIEW === '1';
+const updateConfig = preview ? {} : JSON.parse(await readFile(process.env.VONVON_DESKTOP_UPDATE_CONFIG || join(root, 'desktop-update.json'), 'utf8'));
 const windowsUpdateConfig = JSON.parse(await readFile(process.env.VONVON_WINDOWS_UPDATE_CONFIG || join(root,'windows-update.json'),'utf8'));
 if (!windowsUpdateConfig || Object.keys(windowsUpdateConfig).length !== 1 || !windowsUpdateConfig.publicKey) throw new Error('Windows update configuration must contain only publicKey');
 windowsUpdateConfig.publicKey = normalizeWindowsPublicKey(windowsUpdateConfig.publicKey);
@@ -46,7 +48,7 @@ const windowsCli = join(dist, 'cli');
 const windowsCliSha256 = process.platform === 'win32' ? await buildWindowsCli(windowsCli) : undefined;
 await build({
   absWorkingDir: root,
-  entryPoints: { main: 'src/main.ts', preload: 'src/preload.ts' },
+  entryPoints: { main: preview ? 'src/preview-main.ts' : 'src/main.ts', preload: 'src/preload.ts' },
   outdir: dist,
   outExtension: { '.js': '.cjs' },
   bundle: true,
@@ -55,6 +57,7 @@ await build({
   format: 'cjs',
   external: ['electron'],
   define: {
+    __VONVON_DESKTOP_PREVIEW__: JSON.stringify(preview),
     __VONVON_ACCOUNT_WEB_ORIGIN__: JSON.stringify(process.env.VONVON_ACCOUNT_WEB_ORIGIN) ?? 'undefined',
     __VONVON_ACCOUNT_API_ORIGIN__: JSON.stringify(process.env.VONVON_ACCOUNT_API_ORIGIN) ?? 'undefined',
     'process.env.NODE_ENV': '"production"',
@@ -72,12 +75,20 @@ await cp(join(dist, 'main.cjs'), join(stage, 'desktop/main.cjs'));
 await cp(join(dist, 'preload.cjs'), join(stage, 'desktop/preload.cjs'));
 await cp(join(dist, 'update-config.json'), join(stage, 'dist/update-config.json'));
 await cp(join(dist, 'windows-update-config.json'), join(stage, 'dist/windows-update-config.json'));
+if (preview) {
+  await writeFile(join(stage, 'dist/preview-config.json'), JSON.stringify({
+    format: 1, channel: 'preview',
+    mainSha256: createHash('sha256').update(await readFile(join(dist, 'main.cjs'))).digest('hex'),
+    webOrigin: process.env.VONVON_ACCOUNT_WEB_ORIGIN,
+    apiOrigin: process.env.VONVON_ACCOUNT_API_ORIGIN,
+  }, null, 2) + '\n');
+}
 await cp(ui, join(stage, 'ui'), { recursive: true });
 await cp(join(root, 'assets/tray.png'), join(stage, 'assets/tray.png'));
 await cp(join(root, 'assets/macos-icon.png'), join(stage, 'assets/macos-icon.png'));
 await cp(join(root, 'assets/windows-icon.ico'), join(stage, 'assets/windows-icon.ico'));
 await writeFile(join(stage, 'package.json'), JSON.stringify({
-  name: 'vonvon-bot-desktop',
+  name: preview ? 'vonvon-bot-preview' : 'vonvon-bot-desktop',
   version,
   license: 'UNLICENSED',
   private: true,

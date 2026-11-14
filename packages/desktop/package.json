@@ -10,6 +10,7 @@
     "build": "node build.mjs",
     "start": "electron .",
     "package:dir": "electron-builder --config electron-builder.yml --dir",
+    "package:preview": "electron-builder --config electron-builder.preview.yml --dir",
     "package:universal": "node ../../scripts/package-desktop.mjs"
   },
   "dependencies": {
