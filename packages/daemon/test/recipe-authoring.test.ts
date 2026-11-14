@@ -434,7 +434,7 @@ it('freezes a natural-language proposal only for the chosen revision and origina
   expect(cloud.map(c=>c.action)).toEqual(['dispatch']);
   const first=ref(); expect((await status(op.operationId)).state).toBe('candidate');
   const preview=[...cards.values()].join('');
-  expect(preview).toContain('第 7 次修订中的名称');expect(preview).not.toContain('周报');
+  expect(preview).toContain('第 7 次修订');expect(preview).toContain('周报');
   readDraftField.mockResolvedValue({field:'summary',draftId,revision:7,value:'每周五汇总进展'});
   propose.mockResolvedValue({kind:'proposal',changes:[{action:'replace',field:'summary',before:'周五',value:'周四'}]});
   await orch.onMessage(msg('把简介中的周五替换成周四'));
@@ -446,6 +446,35 @@ it('freezes a natural-language proposal only for the chosen revision and origina
   expect((await status(op.operationId)).state).toBe('candidate');await act(ref());
   const ready=await status(op.operationId);expect(ready.state).toBe('pendingCloud');
   expect((await advance(ready,'accept')).receipt).toMatchObject({draftId,revision:8});
+});
+it.each([
+  {instruction:'把名称改成甲，简介改成乙',changes:[
+    {action:'set',field:'name',before:'',value:'乙'}, {action:'set',field:'summary',before:'',value:'甲'},
+  ],values:[['名称','乙'],['简介','甲']]},
+  {instruction:'把名称改成甲，不要改成乙',changes:[{action:'set',field:'name',before:'',value:'乙'}],values:[['名称','乙']]},
+])('shows the actual fallible proposal before the same card authorizes its exact cloud payload ($instruction)',async({instruction,changes,values})=>{
+  await link();
+  const draftId=randomUUID(), op=kind(await rpc('edit',{draftId,baseRevision:7}),'operation').operation;
+  await advance(op,'dispatch');
+  propose.mockResolvedValue({kind:'proposal',changes});
+  await orch.onMessage(msg(instruction));
+  const candidate=await status(op.operationId), action=ref();
+  expect(candidate.state).toBe('candidate');
+  const message=[...messages.values()].find(m=>m.message_id===action.messageId)!;
+  const shown=JSON.parse(cards.get(message.card_id)!);
+  const text=shown.body.elements.flatMap((e:{content?:string;text?:{content:string}})=>e.content ?? e.text?.content ?? []);
+  expect(JSON.stringify(shown)).not.toContain(draftId);
+  const pendingBefore=cloud.filter(c=>c.action==='accept');expect(pendingBefore).toHaveLength(0);
+  await act(action);const confirmed=await status(op.operationId);
+  expect(confirmed).toMatchObject({state:'pendingCloud',payloadDigest:candidate.payloadDigest});
+  expect((await advance(confirmed,'accept')).receipt).toMatchObject({draftId,revision:8});
+  const accepted=cloud.find(c=>c.action==='accept')!;
+  const bytes=Buffer.from(accepted.body.payload!,'base64url');
+  expect(digest(bytes)).toBe(candidate.payloadDigest);
+  expect(JSON.parse(bytes.toString())).toEqual({schemaVersion:1,draftId,baseRevision:7,
+    changes:changes.map(c=>({op:'setPublicText',field:c.field,value:c.value}))});
+  for (const [label,value] of values) expect(text).toContain(label+' → '+JSON.stringify(value));
+  expect(text).toContain('候选摘要 '+candidate.payloadDigest);
 });
 it('invalidates the previous candidate on refusal, malformed output, injected actions, unavailable provider and stale safe context',async()=>{
   await link();const draftId=randomUUID(),op=kind(await rpc('edit',{draftId,baseRevision:1}),'operation').operation;
