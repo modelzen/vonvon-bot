@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, InlineNotice } from "../reference/components/ui";
 import { SettingsGroup, SettingsRow } from "../reference/components/system-settings";
-import type { AgentId, GroupId } from "../../shared/bridge";
+import type { Agent, Group, Membership, MembershipId } from "../../shared/bridge";
 import type { CollaborationClient, CollaborationReply, UsageShareSection } from "../../shared/collaboration";
+import { settingAnchor } from "../search";
 import "./usage.css";
 
 type Usage = Extract<CollaborationReply, { kind: "usage" }>["data"];
@@ -10,6 +11,7 @@ type Profile = Usage["profile"];
 type Props = {
   request: CollaborationClient;
   onOpenEnvironment: () => void;
+  onOpenShare: () => void;
 };
 
 const shareSections: { key: UsageShareSection; label: string }[] = [
@@ -66,7 +68,7 @@ function Heatmap({ profile }: { profile: Profile }) {
   </div>;
 }
 
-export function UsagePanel({ request, onOpenEnvironment }: Props) {
+export function UsagePanel({ request, onOpenEnvironment, onOpenShare }: Props) {
   const requestRef = useRef(request);
   requestRef.current = request;
   const [data, setData] = useState<Usage>();
@@ -110,6 +112,9 @@ export function UsagePanel({ request, onOpenEnvironment }: Props) {
       <div><span>{primaryLabel}</span><strong>{Math.round(data.usage.main.primary.usedPercent)}<small>% 已用</small></strong><div className="usage-progress" role="progressbar" aria-label={`${primaryLabel}已用`} aria-valuenow={data.usage.main.primary.usedPercent} aria-valuemin={0} aria-valuemax={100}><span style={{width: `${Math.max(0, Math.min(100, data.usage.main.primary.usedPercent))}%`}}/></div></div>
       <div><span>{secondaryLabel}</span><strong>{data.usage.main.secondary ? Math.round(data.usage.main.secondary.usedPercent) : '—'}<small>{data.usage.main.secondary ? '% 已用' : '暂不可用'}</small></strong><div className="usage-progress" role="progressbar" aria-label={`${secondaryLabel}已用`} aria-valuenow={data.usage.main.secondary?.usedPercent ?? 0} aria-valuemin={0} aria-valuemax={100}><span style={{width: `${Math.max(0, Math.min(100, data.usage.main.secondary?.usedPercent ?? 0))}%`}}/></div></div>
     </div>}
+    <SettingsGroup id={settingAnchor('分享 Codex 用量')}>
+      <SettingsRow title="分享 Codex 用量" description="选择飞书群并生成可转发的用量卡片。" trailing={<Button size="sm" onClick={onOpenShare}>选择飞书群</Button>} />
+    </SettingsGroup>
     <SettingsGroup label="当前账号" footer="数据来自本机 Codex 登录账号。">
       {data ? <>
         <SettingsRow title="账号" value={profile?.displayName || "当前 Codex 账号"} />
@@ -139,30 +144,49 @@ export function UsagePanel({ request, onOpenEnvironment }: Props) {
   </div>;
 }
 
-export function ShareUsagePanel({agentId, project, request}: {agentId: AgentId; project: {projectName: string; groupId: GroupId}; request: CollaborationClient}) {
+export function ShareUsagePanel({memberships, agents, groups, request}: {memberships: readonly Membership[]; agents: readonly Agent[]; groups: readonly Group[]; request: CollaborationClient}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [sections, setSections] = useState<UsageShareSection[]>([]);
+  const [selectedId, setSelectedId] = useState<MembershipId>();
+  const selected = memberships.find(member => member.id === selectedId);
+  const eligible = selected && !selected.stale && agents.some(agent => agent.id === selected.agentId && !agent.readError);
+  const anyEligible = memberships.some(member => !member.stale && agents.some(agent => agent.id === member.agentId && !agent.readError));
   async function share() {
+    const member = memberships.find(item => item.id === selectedId);
+    if (!member || member.stale || !agents.some(agent => agent.id === member.agentId && !agent.readError)) {
+      setError("所选飞书群绑定已不可用，请重新选择。");
+      return;
+    }
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      const reply = await request({ action: "shareUsage", agentId, projectName: project.projectName, groupId: project.groupId, sections });
+      const reply = await request({ action: "shareUsage", agentId: member.agentId, projectName: member.name, groupId: member.groupId, sections });
       if (reply.kind === "applied") setNotice("已在当前飞书群生成可转发的用量卡片。");
       else setError(reply.kind === "refused" ? reply.message : "无法生成用量卡片。");
     } catch (failure) { setError(failure instanceof Error ? failure.message : "无法生成用量卡片。"); }
     finally { setBusy(false); }
   }
   return <div className="usage-panel"><SettingsGroup label="分享到飞书群" footer="生成后可在飞书中转发。不选区块则包含全部内容。">
+      <SettingsRow title="飞书群" value={<select aria-label="选择分享飞书群" value={selectedId ?? ''} disabled={busy} style={{maxWidth: '100%'}} onChange={event => {setSelectedId(memberships.find(member => member.id === event.target.value)?.id); setError(''); setNotice('');}}>
+        <option value="">请选择飞书群</option>
+        {memberships.map(member => {
+          const agent = agents.find(item => item.id === member.agentId);
+          const groupName = groups.find(item => item.id === member.groupId)?.name ?? member.name;
+          const reason = member.stale ? '绑定状态已过期' : !agent ? 'Agent 已移除' : agent.readError ? 'Agent 暂不可用' : '';
+          return <option key={member.id} value={member.id} disabled={Boolean(reason)}>{groupName} · {agent?.name ?? '未知 Agent'}{member.name !== groupName ? ` · 绑定名称：${member.name}` : ''}{reason ? `（${reason}）` : ''}</option>;
+        })}
+        {selectedId && !selected && <option value={selectedId} disabled>原绑定已移除</option>}
+      </select>} />
       <div className="usage-sections" role="group" aria-label="选择分享内容">
         {shareSections.map(option => <label key={option.key} className="usage-sections__item">
           <input type="checkbox" checked={sections.includes(option.key)} onChange={event => setSections(current => event.target.checked ? [...current, option.key] : current.filter(key => key !== option.key))} />
           {option.label}
         </label>)}
       </div>
-      <SettingsRow title="当前飞书群" value={project.projectName} trailing={<Button size="sm" disabled={busy} onClick={() => void share()}>生成分享卡</Button>} />
+      <SettingsRow title="生成卡片" description={!anyEligible ? '暂无可分享的飞书群，请先连接群聊。' : !selectedId ? '先选择飞书群。' : !eligible ? '所选飞书群绑定已不可用，请重新选择。' : undefined} trailing={<Button size="sm" disabled={busy || !eligible} onClick={() => void share()}>生成分享卡</Button>} />
       {error && <InlineNotice title="分享未完成" tone="warning">{error}</InlineNotice>}
       {notice && <InlineNotice title="分享完成">{notice}</InlineNotice>}
     </SettingsGroup>

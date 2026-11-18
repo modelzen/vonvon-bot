@@ -58,7 +58,7 @@ type Modal =
   | { kind: "register"; jobId: JobId; refresh?: boolean }
   | { kind: "join"; agentId: AgentId; group?: PendingGroup }
   | { kind: "collaboration"; membership: Membership }
-  | { kind: "shareUsage"; membership: Membership }
+  | { kind: "shareUsage" }
   | { kind: "deleteAgent"; agentId: AgentId; name: string }
   | null;
 
@@ -809,7 +809,6 @@ function DesktopApp() {
                   <ConversationPanel key={`sessions-${member.id}`} agentId={agent.id} groupId={group.id} projectName={member.name} conversation={member.conversation} request={window.bridge.collaboration}/>
                   <SettingsGroup label="快捷操作">
                     <SettingsRow title="飞书群" value={group.name} trailing={<Button size="sm" onClick={() => void window.bridge.collaboration({action: 'openGroup', agentId: agent.id, groupId: group.id, projectName: member.name}).then(reply => {if (reply.kind === 'refused') setNotice({message: reply.message, error: true});}).catch(error => setNotice({message: error instanceof Error ? error.message : '无法打开飞书群。', error: true}))}>在飞书打开</Button>}/>
-                    <SettingsRow title="分享 Codex 用量" description="生成可转发的用量卡片。" trailing={<Button size="sm" onClick={() => setModal({kind: 'shareUsage', membership: member})}>选择内容</Button>}/>
                   </SettingsGroup>
                   <div className="desktop-actions"><Button disabled={member.stale} onClick={() => setModal({kind: 'collaboration', membership: member})}>开始一次协作</Button></div>
                   </> : <>
@@ -831,7 +830,7 @@ function DesktopApp() {
           )}
           {page === "environment" && <><EnvironmentPanel reveal={searchTarget?.reveal} codexBusy={snapshot.jobs.some(job => (job.type === "loginCodex" || job.type === "installCodex") && isActive(job))} request={window.bridge.environment} onCodexLogin={async () => {await run({type: "startCodexLogin"});}} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" || job.type === "installCodex").map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/></>}
           {page === "coffee" && <SettingsPanel scope="host" target={{kind: 'host'}} category="coffee" reveal={searchTarget?.reveal}/> }
-          {page === "usage" && <UsagePanel request={window.bridge.collaboration} onOpenEnvironment={() => openPage('environment')}/>}
+          {page === "usage" && <UsagePanel request={window.bridge.collaboration} onOpenEnvironment={() => openPage('environment')} onOpenShare={() => setModal({kind: 'shareUsage'})}/>}
           {page === "application" && (
             <>
               <SettingsGroup label="这台设备">
@@ -1021,7 +1020,7 @@ function DesktopApp() {
               </p>
             </>
           )}
-          {modal?.kind === 'shareUsage' && <ShareUsagePanel agentId={modal.membership.agentId} project={{projectName: modal.membership.name, groupId: modal.membership.groupId}} request={window.bridge.collaboration}/>}
+          {modal?.kind === 'shareUsage' && <ShareUsagePanel memberships={snapshot.memberships} agents={snapshot.agents} groups={snapshot.groups} request={window.bridge.collaboration}/>}
         </div>
       </Dialog>
       <ConfirmDialog

@@ -103,8 +103,8 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
     entries.push(...expand(member.id, context, base, membershipGroups, {kind: 'membership-settings'}));
     ['搜索历史会话', '筛选历史会话', '恢复会话', '当前会话上下文', '刷新上下文', '清空会话', '压缩上下文', '自主任务目标', '停止当前任务', '结束目标', '完成时提醒'].forEach((title, index) => entries.push({id: `${member.id}-session-${index}`, title, context: `${context} · 当前会话`, aliases: ({'搜索历史会话': ['搜索'], '筛选历史会话': ['筛选'], '当前会话上下文': ['会话', '上下文'], '清空会话': ['会话操作'], '完成时提醒': ['正在运行']} as Record<string, string[]>)[title] ?? [], destination: {...base, section: '会话管理', field: ({'搜索历史会话': '搜索', '筛选历史会话': '筛选', '当前会话上下文': '上下文', '清空会话': '会话操作', '压缩上下文': '会话操作', '停止当前任务': '正在运行', '结束目标': '正在运行'} as Record<string, string>)[title] ?? title, guide: '进入「会话与状态」中的「会话管理」，选择会话后可执行此操作。'}, kind: 'action'}));
     entries.push({id: `${member.id}-connection`, title: 'Agent 连接', context, aliases: [], destination: base, kind: 'item'});
-    entries.push({id: `${member.id}-share-usage`, title: '分享 Codex 用量', context, aliases: [], destination: base, kind: 'action'});
   }
+  entries.push({id: 'usage-share', title: '分享 Codex 用量', context: '用量', aliases: ['用量卡片'], destination: {page: 'usage', section: '分享 Codex 用量'}, kind: 'action'});
   return entries;
 }
 export function findEntries(entries: readonly SearchEntry[], query: string): SearchEntry[] {

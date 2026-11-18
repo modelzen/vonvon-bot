@@ -60,6 +60,17 @@ test('coffee and Hook settings are indexed once globally, including without Agen
   assert.equal(entries.some(entry => entry.destination.detail?.kind === 'agent-settings' && entry.title === 'CLI 协作'), false);
 });
 
+test('usage sharing has one global result even without a group binding', () => {
+  for (const state of [snapshot, {...snapshot, memberships: [], groups: []}]) {
+    const matches = searchEntries(state).filter(entry => entry.title === '分享 Codex 用量');
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0]?.destination.page, 'usage');
+    assert.equal(matches[0]?.destination.section, '分享 Codex 用量');
+    assert.equal(matches[0]?.destination.selection, undefined);
+    assert.equal(findEntries(searchEntries(state), '分享 Codex 用量')[0]?.id, 'usage-share');
+  }
+});
+
 test('results are complete, ranked, uniquely identified, and have valid destinations', () => {
   const many: DesktopSnapshot = {...snapshot, agents: Array.from({length: 70}, (_, index) => ({...snapshot.agents[0]!, id: agentIdSchema.parse(`cli_search${index}`), name: `Agent ${index}`}))};
   const catalog = searchEntries(many);
