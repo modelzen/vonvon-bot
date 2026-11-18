@@ -74,7 +74,7 @@ Claude 通过 MCP 读结果，把摘要写进 PR 评论（状态仍以 PR 为准
 ## 主人需要做的设置
 
 1. **建 Linear 工作区（Free 计划）。** 建团队 `DSK`，状态设为 Todo、In Progress、Needs Claude、Done，建标签 `codex-app`。在 iPhone 和 Mac 上装 Linear app，打开"指派给我"和"评论"的推送。
-2. **给 Claude 开身份。** 按上面推荐建独立成员和受限 API key，把 key 放在 JP-VPS 上一个只有 `ops` 能读的文件里，并让 Paseo daemon 的环境里有这个变量，然后执行 `paseo restart`。
+2. **给 Claude 开身份。** 按上面推荐建独立成员和受限 API key，把 key 放在 JP-VPS 上一个只有 `operator` 能读的文件里，并让 Paseo daemon 的环境里有这个变量，然后执行 `paseo restart`。
 3. **在 JP-VPS 上接 MCP，三种方式选一：**
    - Bearer token（单引号让变量在运行时才展开）：
      ```
@@ -196,7 +196,7 @@ Two items are still unknown from official sources: whether archived issues count
 - **属实**：Computer Use cannot approve security and privacy prompts, cannot authenticate as an administrator, and cannot drive terminal apps. The iPhone remote path is ChatGPT desktop Settings → Connections → Control this Mac, and the Mac must stay awake. Whether remote threads can use Computer Use is undocumented.
   - 依据：learn.chatgpt.com/docs/computer-use.md: 'can't approve security and privacy permission prompts', 'can't authenticate as an administrator', 'can't automate terminal apps or ChatGPT itself', 'Locked use is for macOS'. learn.chatgpt.com/docs/mobile: 'Settings > Connections > Control this Mac or PC', QR pairing, 'Keep your computer awake and online'; Computer Use and MCP in remote threads are not covered.
 - **unsupported**：claude.ai connectors (such as Linear added at claude.ai/customize/connectors) load automatically in Claude Code under a subscription login, and SDK sessions such as Paseo's load them too. CLAUDE_CODE_OAUTH_TOKEN disables connectors. OAuth cannot run inside -p or SDK sessions, so it needs `claude mcp login --no-browser` over `ssh -t`.
-  - 依据：code.claude.com/docs/en/mcp: connectors are 'fetched only when your active authentication method is a claude.ai subscription login' and are not loaded when 'CLAUDE_CODE_OAUTH_TOKEN holds a token from claude setup-token'; 'A claude -p or Agent SDK run has no /mcp panel, so Claude Code can't run the OAuth flow there'; `claude mcp login` 'needs an interactive terminal ... connect with ssh -t'. Local `claude mcp login --help` (v2.1.299) shows `--no-browser`. `ps` shows Paseo running `/home/ops/.local/bin/claude --output-format stream-json --input-format stream-json ...`. In Paseo agent.js, lines 39-43 hold CLAUDE_SETTING_SOURCES (user, project, local) and line 2722 passes it to the SDK; both confirmed.
+  - 依据：code.claude.com/docs/en/mcp: connectors are 'fetched only when your active authentication method is a claude.ai subscription login' and are not loaded when 'CLAUDE_CODE_OAUTH_TOKEN holds a token from claude setup-token'; 'A claude -p or Agent SDK run has no /mcp panel, so Claude Code can't run the OAuth flow there'; `claude mcp login` 'needs an interactive terminal ... connect with ssh -t'. Local `claude mcp login --help` (v2.1.299) shows `--no-browser`. `ps` shows Paseo running `/home/operator/.local/bin/claude --output-format stream-json --input-format stream-json ...`. In Paseo agent.js, lines 39-43 hold CLAUDE_SETTING_SOURCES (user, project, local) and line 2722 passes it to the SDK; both confirmed.
 
 ### 正文遗漏的事实
 

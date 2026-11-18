@@ -16,12 +16,12 @@
 
 ## How Paseo launches Codex (local inspection)
 
-- **CLI on JP-VPS.** `readlink -f $(which paseo)` resolves to `/home/ops/.local/share/paseo-runtime/0.11.1/node_modules/@getpaseo/cli/bin/paseo` (version 0.11.1).
+- **CLI on JP-VPS.** `readlink -f $(which paseo)` resolves to `/home/operator/.local/share/paseo-runtime/0.11.1/node_modules/@getpaseo/cli/bin/paseo` (version 0.11.1).
 - **Spawn command.** `codex-app-server-agent.js:5765-5783` runs `args = [...launchPrefix.args, "app-server"]` through `spawnProcess` with `stdio: ["pipe","pipe","pipe"]`. That is `codex app-server` over stdio JSON-RPC (`thread/start` at :4090, `thread/resume` at :3051). There is no `codex exec`.
 - **Session store.** `CODEX_HOME` defaults to `~/.codex` (:375), the same store the desktop app and CLI use.
 - **Client name.** Paseo connects with `clientInfo` name `codex_app_server_daemon` (:54-58), described in the code as a "reserved Codex name [that] is non-originating".
 - **Binary override.** The binary can be replaced through the provider command config (`mode: "replace"`, `argv`), in `provider-launch-config.js:27-35`.
-- **The Mac mini's daemon** (`paseo --host 100.127.134.58:6767 status` and `provider diagnostic codex`):
+- **The Mac mini's daemon** (`paseo --host 10.0.0.11:6767 status` and `provider diagnostic codex`):
   - Daemon version 0.11.2, running inside `/Applications/Paseo.app`.
   - Codex is enabled and Claude is disabled.
   - The Codex binary is `~/.nvm/versions/node/v24.14.1/bin/codex`, `codex-cli 0.162.1`, an npm install rather than the copy bundled with the app.
@@ -104,7 +104,7 @@ Codex in Linear "creates a cloud chat", which cannot reach the Mac. The Linear M
   - It is a research preview with one Computer Use lock per machine and per-session app approvals.
   - Whether the Computer Use app-approval dialogs go through the relay is unknown.
 - **Other options:** Claude Desktop Computer Use, Dispatch (only for existing beta users) or Remote Control.
-- **Rule conflict:** all of these break the current rule at `/home/ops/.claude/vonvon-collaboration.md:9` ("不在 Mac 上做 Claude 推理", no Claude inference on the Mac), and the Mac's Paseo Claude provider is disabled. Using any of them is the owner's decision.
+- **Rule conflict:** all of these break the current rule at `/home/operator/.claude/vonvon-collaboration.md:9` ("不在 Mac 上做 Claude 推理", no Claude inference on the Mac), and the Mac's Paseo Claude provider is disabled. Using any of them is the owner's decision.
 
 ## Still unknown (needs checking on the Mac)
 
@@ -136,7 +136,7 @@ Fetched 2026-10-14. developers.openai.com now redirects with a 308 to learn.chat
 - [Claude Desktop](https://code.claude.com/docs/en/desktop.md)
 - [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control.md)
 - [Dispatch](https://support.claude.com/en/articles/13947068)
-- Local Paseo files: `/home/ops/.local/share/paseo-runtime/0.11.1/node_modules/@getpaseo/server/dist/server/server/agent/providers/codex-app-server-agent.js` and `.../agent/provider-launch-config.js`
+- Local Paseo files: `/home/operator/.local/share/paseo-runtime/0.11.1/node_modules/@getpaseo/server/dist/server/server/agent/providers/codex-app-server-agent.js` and `.../agent/provider-launch-config.js`
 
 
 ---
@@ -183,7 +183,7 @@ Still unknown and needing checks on the Mac: whether the ChatGPT desktop app and
 - **有误**：Claude Remote Control requires Pro/Max.
   - 依据：code.claude.com/docs/en/remote-control.md line 28: "available on Pro, Max, Team, and Enterprise plans. API keys are not supported." Team and Enterprise need an Owner to enable it.
 - **属实**：Paseo spawns `codex app-server` over stdio (codex-app-server-agent.js:5765-5783), uses clientInfo `codex_app_server_daemon` (:54-58), and CODEX_HOME defaults to ~/.codex (:375). The Mac mini daemon is 0.11.2 inside /Applications/Paseo.app, with Codex enabled, Claude disabled, and the npm codex-cli 0.162.1.
-  - 依据：sed on /home/ops/.local/share/paseo-runtime/0.11.1/.../codex-app-server-agent.js shows the cited lines. `paseo --host 100.127.134.58:6767 status`: daemonVersion 0.11.2, daemonNode under /Applications/Paseo.app. `provider diagnostic codex`: ~/.nvm/versions/node/v24.14.1/bin/codex, codex-cli 0.162.1. `provider ls`: claude Disabled, codex Enabled. `npm view @openai/codex version` = 0.162.1, so it is current as of 2026-10-14. The CLI docs label `codex app-server` (and `remote-control`, `cloud`) "experimental" and say app-server "may change without notice".
+  - 依据：sed on /home/operator/.local/share/paseo-runtime/0.11.1/.../codex-app-server-agent.js shows the cited lines. `paseo --host 10.0.0.11:6767 status`: daemonVersion 0.11.2, daemonNode under /Applications/Paseo.app. `provider diagnostic codex`: ~/.nvm/versions/node/v24.14.1/bin/codex, codex-cli 0.162.1. `provider ls`: claude Disabled, codex Enabled. `npm view @openai/codex version` = 0.162.1, so it is current as of 2026-10-14. The CLI docs label `codex app-server` (and `remote-control`, `cloud`) "experimental" and say app-server "may change without notice".
 
 ### 正文遗漏的事实
 

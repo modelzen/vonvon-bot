@@ -82,7 +82,7 @@ export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMem
                 const agent = agents.get(member.agentId);
                 const status = memberStatus(member);
                 const provider = backendLabel(member.backend);
-                const icon = member.backend === 'codex-appserver' ? './agent-icons/codex-light.png' : member.backend === 'claude-agent' ? './agent-icons/claude-code.svg' : undefined;
+                const icon = member.backend === 'codex-appserver' ? './agent-icons/terminal.png' : member.backend === 'claude-agent' ? './agent-icons/code.png' : undefined;
                 return <li key={member.id}><button type="button" className="group-directory-bot" data-unavailable={status.tone !== 'success' || undefined} aria-label={`设置 ${group.name} 中的 ${agent?.name ?? member.agentId}`} disabled={!agent} onClick={() => onMembership(member.id)}>
                   <span className="group-directory-bot-identity">{agent ? <AgentAvatar agent={agent}/> : <span className="collaboration-avatar agent"><Bot size={15}/></span>}<strong title={agent?.name ?? member.agentId}>{agent?.name ?? member.agentId}</strong>{status.tone !== 'success' && <span className="group-directory-status" data-tone={status.tone}>{status.label}</span>}</span>
                   <span className="group-directory-provider" title={provider === member.backend ? `${provider}（暂不支持修改）` : provider}>{icon && <img src={icon} alt=""/>}{provider === member.backend ? `${provider}（暂不支持修改）` : provider}</span>

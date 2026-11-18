@@ -18,22 +18,22 @@
 
 | 缩写 | 位置 | 版本 |
 |---|---|---|
-| CX | `/home/ops/vonvon/vonvon-bot/packages/daemon/src/agent/codex-appserver/protocol/generated/`（`CX/v2/` 为 v2 目录） | 仓库内生成类型，托管安装钉在 0.156.1（`origin/main:…/managed-install.ts:10`） |
+| CX | `/home/operator/vonvon/vonvon-bot/packages/daemon/src/agent/codex-appserver/protocol/generated/`（`CX/v2/` 为 v2 目录） | 仓库内生成类型，托管安装钉在 0.156.1（`origin/main:…/managed-install.ts:10`） |
 | VB | `git show origin/main:packages/daemon/src/agent/codex-appserver/backend.ts` | main 7a101ce |
 | VC | `git show origin/main:packages/daemon/src/agent/codex-appserver/app-server-client.ts` | 同上 |
-| SDK | `/home/ops/.local/share/paseo-runtime/0.11.1/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` | 0.3.246，与 Paseo 钉的版本一致。Orca 用 0.3.284，本机未安装 |
+| SDK | `/home/operator/.local/share/paseo-runtime/0.11.1/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` | 0.3.246，与 Paseo 钉的版本一致。Orca 用 0.3.284，本机未安装 |
 | TOOLS | 同目录 `sdk-tools.d.ts` | 0.3.246 |
-| ACP | `/home/ops/.local/share/paseo-runtime/0.11.1/node_modules/@agentclientprotocol/sdk/dist/schema/types.gen.d.ts`，`ACPI` 为同目录 `index.d.ts` | 0.17.1，与 Paseo 一致 |
-| GF | `/home/ops/orca/src/main/acp/fixtures/s*.jsonl`，Orca 录制的真实 Grok 会话 | Grok `agentVersion` 1.0.46（GF `s1-full-notifications.jsonl:2`） |
-| GD | `/home/ops/orca/src/main/acp/acp-dialects/` | Orca 本地检出 |
+| ACP | `/home/operator/.local/share/paseo-runtime/0.11.1/node_modules/@agentclientprotocol/sdk/dist/schema/types.gen.d.ts`，`ACPI` 为同目录 `index.d.ts` | 0.17.1，与 Paseo 一致 |
+| GF | `/home/operator/orca/src/main/acp/fixtures/s*.jsonl`，Orca 录制的真实 Grok 会话 | Grok `agentVersion` 1.0.46（GF `s1-full-notifications.jsonl:2`） |
+| GD | `/home/operator/orca/src/main/acp/acp-dialects/` | Orca 本地检出 |
 | CUR | https://cursor.com/docs/cli/acp ，Cursor 官方 ACP 文档，2026-10-12 抓取 | 文档未写版本 |
-| PIR / PIS / PIA | `/home/ops/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/` 下的 `modes/rpc/rpc-types.d.ts`、`core/agent-session.d.ts`，以及 `node_modules/@earendil-works/pi-ai/dist/types.d.ts` | 本机安装的 pi 0.99.1 |
-| P | `/home/ops/vonvon/references/paseo-0009/packages/server/src/server/agent/` | 0009a7e7 |
-| PA | `/home/ops/vonvon/references/paseo-0009/packages/app/src/` | 同上 |
+| PIR / PIS / PIA | `/home/operator/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/` 下的 `modes/rpc/rpc-types.d.ts`、`core/agent-session.d.ts`，以及 `node_modules/@earendil-works/pi-ai/dist/types.d.ts` | 本机安装的 pi 0.99.1 |
+| P | `/home/operator/vonvon/references/paseo-0009/packages/server/src/server/agent/` | 0009a7e7 |
+| PA | `/home/operator/vonvon/references/paseo-0009/packages/app/src/` | 同上 |
 
 本机只装了 `claude`（2.1.296）和 `pi`（0.99.1），没有 `codex`、`cursor-agent`、`grok`。CLI 只跑过 `--help` 和 `--version`。
 
-新版 Paseo（`/home/ops/paseo`，b63a325）和钉住的 0009 在 provider 层只有 Claude 模型发现不同。`diff -rq` 显示 agent 目录下只有 `providers/claude/agent.ts`、`models.ts`、`model-manifest.ts` 不同，新增 `model-discovery.ts`。`agent-sdk-types.ts`、`agent-stream/`、`tool-call-details.tsx` 完全相同【读】。所以下面的 Paseo 结论对两个版本都成立，行号以 0009 为准。
+新版 Paseo（`/home/operator/paseo`，b63a325）和钉住的 0009 在 provider 层只有 Claude 模型发现不同。`diff -rq` 显示 agent 目录下只有 `providers/claude/agent.ts`、`models.ts`、`model-manifest.ts` 不同，新增 `model-discovery.ts`。`agent-sdk-types.ts`、`agent-stream/`、`tool-call-details.tsx` 完全相同【读】。所以下面的 Paseo 结论对两个版本都成立，行号以 0009 为准。
 
 ## 矩阵
 
@@ -129,7 +129,7 @@
 - Codex 用 `turn/steer`，带 `expectedTurnId`（VB:457，CX `ClientRequest.ts:83`）。不可插入时错误码是 `activeTurnNotSteerable`（CX `v2/CodexErrorInfo.ts`）【读】。
 - Claude 的 `SDKUserMessage.priority` 取 `'now' | 'next' | 'later'`（SDK:5032），通过流式输入送入（`streamInput` SDK:2698）。Paseo 用 `priority = "next"`（P `providers/claude/agent.ts:2375`）【读】。
 - Pi 有 `steer` 和 `follow_up`（PIR:22，:27），`prompt.streamingBehavior` 也可以选 steer（PIR:19）。另有 `queue_update` 事件（PIS:56）【读】。
-- ACP 基础协议没有插入方法（ACPI:2-16）【读】。Orca 的 ACP steer 是先取消再重发（`/home/ops/orca/src/main/acp/acp-structured-turns.ts:1-9`）【读】，属于模拟，不采用。
+- ACP 基础协议没有插入方法（ACPI:2-16）【读】。Orca 的 ACP steer 是先取消再重发（`/home/operator/orca/src/main/acp/acp-structured-turns.ts:1-9`）【读】，属于模拟，不采用。
 - Grok 有 `_x.ai/queue/changed`（GF，GD `grok-dialect.ts:131`）【读】。这说明 Grok 原生给提示排队，但录制里看不出是不是插入到正在运行的回合，所以记未知。
 
 **中断。** Codex 用 `turn/interrupt`（VB:465）【读】。Claude 用 `Query.interrupt()`（SDK:2425）【读】。ACP 用 `session/cancel`（ACPI:6）【读】。Pi 用 `abort`（PIR:32）【读】。超时后杀进程树属于生命周期保障，不算模拟。
@@ -147,7 +147,7 @@
 **Codex。**
 - 启动信号是 `collabAgentToolCall`，`tool` 为 spawnAgent、sendInput、resumeAgent、wait、closeAgent，带 `receiverThreadIds`、`prompt`、`model`、`agentsStates`（CX `v2/ThreadItem.ts:64-101`，`v2/CollabAgentTool.ts`）【读】。
 - 子 agent 是独立 thread。`Thread.source` 为 `thread_spawn{parent_thread_id, depth, agent_nickname, agent_role}`（CX `v2/SubAgentSource.ts`）【读】。子 thread 的所有 `item/*` 通知带自己的 `threadId`，所以逐条事件是原生的。
-- 停止单个子 agent 没有专门方法。Orca 对子 thread 的 turn 发 `turn/interrupt`（`/home/ops/orca/src/main/codex/codex-subagent-interrupts.ts:1-3`）【读】。这是原生方法用在子 thread 上，记部分。
+- 停止单个子 agent 没有专门方法。Orca 对子 thread 的 turn 发 `turn/interrupt`（`/home/operator/orca/src/main/codex/codex-subagent-interrupts.ts:1-3`）【读】。这是原生方法用在子 thread 上，记部分。
 - Paseo 发 `provider_subagent` 事件（P `providers/codex-app-server-agent.ts:5888`），工具行是 `sub_agent` detail（P `providers/codex/tool-call-mapper.ts:950`）。app 用子 agent 轨道和只读面板展示（PA `subagents/track.tsx`，`panels/provider-subagent-panel.tsx`）【读】。
 
 **Claude。**
@@ -156,7 +156,7 @@
 - 停止单个用 `stopTask(taskId)`（SDK:2703）【读】。
 - Paseo 的 `provider_subagent` 在 P `providers/claude/agent.ts:2130`，`sub_agent` detail 在 :5953。全仓 grep 没有 stopTask 或单个子 agent 的停止入口【读】。
 
-**Cursor。** CUR 写有 `cursor/task` 通知，说明是"subagent task updates"，类型有 explore、shell、browser_use 和自定义【读】。字段和粒度没写。停止方法没写。Paseo 的 `extNotification` 只解析扩展命令，其余丢弃（`/home/ops/paseo/packages/server/src/server/agent/providers/acp-agent.ts:2649-2665`）【读】。
+**Cursor。** CUR 写有 `cursor/task` 通知，说明是"subagent task updates"，类型有 explore、shell、browser_use 和自定义【读】。字段和粒度没写。停止方法没写。Paseo 的 `extNotification` 只解析扩展命令，其余丢弃（`/home/operator/paseo/packages/server/src/server/agent/providers/acp-agent.ts:2649-2665`）【读】。
 
 **Grok。** 有 `subagent_spawned`、`subagent_progress`、`subagent_finished`，子 agent id 就是子 session id（GD `grok-subagents.ts:2-3`，:15）。停止用 `_x.ai/subagent/cancel`（GD `grok-subagent-stop.ts:15-21`）【读】。录制 `s7-subagent-*.jsonl` 有完整样本【读】。Paseo 不处理。
 
@@ -196,7 +196,7 @@
 ### 19 到 20 压缩
 
 - **Codex。** 手动压缩用 `thread/compact/start`（CX `ClientRequest.ts:83`，VB:479）【读】。自动压缩完成后发 `thread/compacted{threadId, turnId}`，并生成 `contextCompaction` 项（CX `v2/ContextCompactedNotification.ts`，`v2/ThreadItem.ts:101`）【读】。阈值通过 thread config 设置（`model_auto_compact_token_limit`）【读】；s12 起 Vonvon 不再设它，自动压缩一直开。
-- **Claude。** 没有压缩方法。`/compact` 是 CLI 自己处理的斜杠命令，Paseo 原样作为提示发出【推】，所以记"是，原生命令"。压缩过程中 `status` 为 `compacting`，结束带 `compact_result`（SDK:4808-4820）【读】。随后发 `compact_boundary`，带 `trigger` manual 或 auto、`pre_tokens`、`post_tokens`（SDK:3187）【读】。Paseo 映射成 compaction 项（P `providers/claude/agent.ts:4428`，:4459）【读】。V6 把 `/compact` 当普通回合来模拟（见 JP-VPS 笔记 `/home/ops/vonvon/provider-redesign/vonvon-current.md`，不在仓库里，3.1），新设计应该直接发原生命令，并读 `compact_boundary`。
+- **Claude。** 没有压缩方法。`/compact` 是 CLI 自己处理的斜杠命令，Paseo 原样作为提示发出【推】，所以记"是，原生命令"。压缩过程中 `status` 为 `compacting`，结束带 `compact_result`（SDK:4808-4820）【读】。随后发 `compact_boundary`，带 `trigger` manual 或 auto、`pre_tokens`、`post_tokens`（SDK:3187）【读】。Paseo 映射成 compaction 项（P `providers/claude/agent.ts:4428`，:4459）【读】。V6 把 `/compact` 当普通回合来模拟（见 JP-VPS 笔记 `/home/operator/vonvon/provider-redesign/vonvon-current.md`，不在仓库里，3.1），新设计应该直接发原生命令，并读 `compact_boundary`。
 - **Pi。** 有 `compact`、`set_auto_compaction`（PIR:74，:78），以及 `compaction_start` 和 `compaction_end`，reason 为 manual、threshold、overflow（PIS:60，:72）【读】。
 - **Cursor、Grok。** 协议里没有压缩，命令清单拿不到（Grok 录制的 `availableCommands` 是空数组，Cursor 未知）。所以记未知。
 - **自定义 ACP。** 基础协议没有压缩。
@@ -206,7 +206,7 @@
 - **Codex。**
   - `thread/tokenUsage/updated` 带 `tokenUsage{total, last, modelContextWindow}`（CX `v2/ThreadTokenUsageUpdatedNotification.ts`，`v2/ThreadTokenUsage.ts`）【读】。
   - 账户限额用 `account/rateLimits/read`，变化时推 `account/rateLimits/updated`。`RateLimitSnapshot` 有 primary、secondary、credits、planType、rateLimitReachedType（CX `v2/RateLimitSnapshot.ts`）【读】。
-  - Vonvon main 的用量卡直接请求 ChatGPT `wham` 接口（见 `/home/ops/vonvon/provider-redesign/vonvon-current.md`（JP-VPS 上的调研笔记，不在仓库里） 第 4 节）【读】。原生 RPC 已经有了，可以改用。
+  - Vonvon main 的用量卡直接请求 ChatGPT `wham` 接口（见 `/home/operator/vonvon/provider-redesign/vonvon-current.md`（JP-VPS 上的调研笔记，不在仓库里） 第 4 节）【读】。原生 RPC 已经有了，可以改用。
 - **Claude。**
   - `getContextUsage()` 返回分类明细和 totalTokens、maxTokens（SDK:2571，:3391）【读】。
   - result 带 `usage`、`modelUsage`（含 contextWindow）、`total_cost_usd`（SDK:4643 起，:1289-1296）【读】。
@@ -214,7 +214,7 @@
 - **Grok。** 窗口大小在 models 的 `_meta.totalContextTokens`（GD `grok-dialect.ts:59-73`）【读】。每次模型响应在私有的 `response_completed.usage` 里报 token（:44）【读】。没有"当前已用"，记部分。录制里没有 ACP `usage_update`【读 GF grep】。
 - **Pi。** `get_session_stats` 返回 tokens、cost、`contextUsage{tokens, contextWindow, percent}`（PIR:97，PIS:185-202）【读】。Paseo 每 3 秒轮询一次（P `providers/pi/usage-poller.ts`）【读】。
 - **ACP。** `usage_update{size, used, cost}` 和 `PromptResponse.usage` 都是 UNSTABLE（ACP:3648，:2277-2285）【读】。
-- **账户用量的协议外来源。** Cursor 和 Grok 没有协议内的账户用量。Orca 通过厂商 HTTP 接口拿（`/home/ops/orca/src/main/rate-limits/cursor-fetcher.ts:16`，`grok-fetcher.ts:17`）【读】。这是厂商的原生账户接口，但不在 agent 协议里，也没有公开文档。要不要算原生，需要产品决定。本表按"协议内没有"记否。Paseo 的用量卡来自插件化的 usage source（P `../plugins/usage-sources/index.ts`），不走 provider 协议【读】，所以 Codex 和 Claude 记 P部分。
+- **账户用量的协议外来源。** Cursor 和 Grok 没有协议内的账户用量。Orca 通过厂商 HTTP 接口拿（`/home/operator/orca/src/main/rate-limits/cursor-fetcher.ts:16`，`grok-fetcher.ts:17`）【读】。这是厂商的原生账户接口，但不在 agent 协议里，也没有公开文档。要不要算原生，需要产品决定。本表按"协议内没有"记否。Paseo 的用量卡来自插件化的 usage source（P `../plugins/usage-sources/index.ts`），不走 provider 协议【读】，所以 Codex 和 Claude 记 P部分。
 
 ### 24 到 26 模型、强度、模式
 
@@ -236,11 +236,11 @@
   - Claude 用 `setPermissionMode()`（SDK:2432），模式有 default、acceptEdits、bypassPermissions、plan、dontAsk、auto（:2220）【读】。
   - Cursor 有 agent、plan、ask 三种模式（CUR）【读】。
   - Grok 有 enter_plan_mode、exit_plan_mode 工具，以及 `_x.ai/exit_plan_mode` 请求（GD `grok-requests.ts:122`）【读】。
-  - Pi 没有模式（见 `/home/ops/vonvon/provider-redesign/paseo-and-vonvon-permissions.md`（JP-VPS 上的调研笔记，不在仓库里））【读】。
+  - Pi 没有模式（见 `/home/operator/vonvon/provider-redesign/paseo-and-vonvon-permissions.md`（JP-VPS 上的调研笔记，不在仓库里））【读】。
 
 ### 27 会话标题
 
-- **Codex。** 读取用 `Thread.name`（CX `v2/Thread.ts:11`），设置用 `thread/name/set`，变化时推 `thread/name/updated`（CX `ServerNotification.ts:72`）【读】。Codex 会不会自己生成标题未知。Vonvon 现在另起一轮 utility 回合，用 `outputSchema` 生成标题（VB:645 附近；JP-VPS 笔记 `/home/ops/vonvon/provider-redesign/vonvon-current.md` 1.3，不在仓库里）【读】。按用户规则，这是 Vonvon 侧生成，不算原生。
+- **Codex。** 读取用 `Thread.name`（CX `v2/Thread.ts:11`），设置用 `thread/name/set`，变化时推 `thread/name/updated`（CX `ServerNotification.ts:72`）【读】。Codex 会不会自己生成标题未知。Vonvon 现在另起一轮 utility 回合，用 `outputSchema` 生成标题（VB:645 附近；JP-VPS 笔记 `/home/operator/vonvon/provider-redesign/vonvon-current.md` 1.3，不在仓库里）【读】。按用户规则，这是 Vonvon 侧生成，不算原生。
 - **Claude。** `SDKSessionInfo.summary` 是"custom title, auto-generated summary, or first prompt"，另有 `customTitle`（SDK:4736-4746）【读】。设置用 `renameSession()`（:2739）或新会话的 `Options.title`（:2159）。`title` 的注释说不设置时会从首条消息自动生成【读】。
 - **Grok。** `session_info_update.title` 和私有的 `session_summary_generated` 是 Grok 自动生成的标题（GF）【读】。设置方法未知。
 - **Pi。** 有 `set_session_name`（PIR:128）、`session_info_changed`（PIS:66）和启动参数 `--name`【读】。不会自动生成。
@@ -277,9 +277,9 @@
 
 ### 34 到 39 权限、审批、登录、指令
 
-- **读写和网络限制。** 详见 `/home/ops/vonvon/provider-redesign/paseo-and-vonvon-permissions.md`（JP-VPS 上的调研笔记，不在仓库里）。
+- **读写和网络限制。** 详见 `/home/operator/vonvon/provider-redesign/paseo-and-vonvon-permissions.md`（JP-VPS 上的调研笔记，不在仓库里）。
   - Codex 的权限 profile 在 macOS（Seatbelt）上能限制读取，Linux 的 Landlock 不限读，Windows 未验证【读】。`SandboxPolicy` 有 readOnly 和 networkAccess（CX `v2/SandboxPolicy.ts`）【读】。
-  - Claude 的 `sandbox.filesystem` 有 `denyRead`、`allowRead`、`allowManagedReadPathsOnly`、`denyWrite`，`network` 有 `allowedDomains`（SDK:2914-2936）【读】。沙箱只管 Bash。Read、Grep、Glob 要靠权限规则【读，见 `/home/ops/vonvon/provider-redesign/paseo-and-vonvon-permissions.md`】。
+  - Claude 的 `sandbox.filesystem` 有 `denyRead`、`allowRead`、`allowManagedReadPathsOnly`、`denyWrite`，`network` 有 `allowedDomains`（SDK:2914-2936）【读】。沙箱只管 Bash。Read、Grep、Glob 要靠权限规则【读，见 `/home/operator/vonvon/provider-redesign/paseo-and-vonvon-permissions.md`】。
   - ACP 和 Pi 没有沙箱。Cursor 的 ask、plan 和 Grok 的 plan 模式是 agent 自己遵守的只读约定，不是 OS 隔离【推】。
   - Pi 只能用 `--tools` 或 `--exclude-tools` 裁掉 edit、write，bash 仍然能写【读 `pi --help`】。
 - **审批。**
@@ -366,7 +366,7 @@
 
 这些不是 provider 原生给的。按用户规则，Vonvon 不照搬。
 
-1. **会话标题。** 新会话的临时标题从首条提示截出（P `create-agent-title.ts:22-45`）。工作区标题另起一轮结构化 agent 回答生成（`/home/ops/vonvon/references/paseo-0009/packages/server/src/server/workspace-auto-name.ts:135`）【读】。Claude 和 Grok 原生生成的标题，Paseo 都没用。
+1. **会话标题。** 新会话的临时标题从首条提示截出（P `create-agent-title.ts:22-45`）。工作区标题另起一轮结构化 agent 回答生成（`/home/operator/vonvon/references/paseo-0009/packages/server/src/server/workspace-auto-name.ts:135`）【读】。Claude 和 Grok 原生生成的标题，Paseo 都没用。
 2. **ACP 取消时的工具状态。** `synthesizeCanceledToolCalls()` 把还在运行的工具行改成 canceled（P `providers/acp-agent.ts:3259`）【读】。provider 没有发这些状态。
 3. **ACP 结束原因被并掉。** refusal、max_tokens、max_turn_requests 被并进 `turn_completed`，`turn_canceled.reason` 写死为 "Interrupted"（P `providers/acp-agent.ts:3256-3275`）【读】。这不是合成，但丢了原生信息。
 4. **Codex 的 `/goal` 和 `/compact` 回显。** 结果以 Paseo 写的 assistant 文字显示（P `providers/codex-app-server-agent.ts:5103-5130`）【读】。goal 的进度通知没有接。
@@ -397,7 +397,7 @@
 4. **Codex 的标题。** 新开 thread，跑一轮，不调 `thread/name/set`，看会不会收到 `thread/name/updated`。可以定下第 27 行 Codex 的"生成"。
 5. **Claude 的 goal 和 review。** 在流式模式下发 `/goal <条件>`，看原始流里有没有 `type:"active_goal"`。同时看 `supportedCommands()` 里有没有 goal、review、compact。可以定下第 18、31 行 Claude 格，也能确认第 19 行。
 6. **Codex 的后台进程。** 让 agent 起一个长时间的 unified exec 进程，看有没有原生停止办法。可以定下第 32 行 Codex 格。
-7. **Claude 的读限制。** 在 qa 档配置下，同时设 `sandbox.filesystem.denyRead`、`allowManagedReadPathsOnly`，以及 Read、Grep、Glob 的 deny 规则，在三个系统上测"读 `~/.ssh` 被拒"。这一项沿用 `/home/ops/vonvon/provider-redesign/paseo-and-vonvon-permissions.md` 的结论。可以定下第 34 行 Claude 格。
+7. **Claude 的读限制。** 在 qa 档配置下，同时设 `sandbox.filesystem.denyRead`、`allowManagedReadPathsOnly`，以及 Read、Grep、Glob 的 deny 规则，在三个系统上测"读 `~/.ssh` 被拒"。这一项沿用 `/home/operator/vonvon/provider-redesign/paseo-and-vonvon-permissions.md` 的结论。可以定下第 34 行 Claude 格。
 
 ## 各 provider 缺的能力（按原生判定）
 

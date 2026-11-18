@@ -18,7 +18,7 @@
 | 手动运行 main CI | 完整 Linux 与专用 Mac | 完整 Linux 与专用 Mac |
 | fork PR | Linux；自托管 Mac 跳过 | 未冻结时只运行 Linux 轻量检查；冻结且为 `full` 范围时只运行完整 Linux，自托管 Mac 跳过 |
 
-手动运行前确认 ref 受信任。两个平台检出的源提交都须与事件的 PR head SHA 或手动运行 SHA 一致。自托管 Mac 还要求 `ENABLE_SELF_HOSTED_MACOS_CI=true`，`github-ci` 保持图形登录且 runner 在线。云端 Linux 失败时，后续 Mac 不启动。Mac 离线时对应 job 排队等待，不能把它记为通过。
+手动运行前确认 ref 受信任。两个平台检出的源提交都须与事件的 PR head SHA 或手动运行 SHA 一致。自托管 Mac 还要求 `ENABLE_SELF_HOSTED_MACOS_CI=true`，`ci-user` 保持图形登录且 runner 在线。云端 Linux 失败时，后续 Mac 不启动。Mac 离线时对应 job 排队等待，不能把它记为通过。
 
 未冻结的 `full` PR 会完成轻量检查，但 Linux 必需检查随后失败，直到冻结 head 或手动运行产生完整证据。事件 JSON 无效、提交信息缺失或差异收集失败也使 Linux 检查失败，不会产生可用于合入的通过结果。
 

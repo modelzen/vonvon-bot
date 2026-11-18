@@ -1,6 +1,6 @@
 # comma 怎么安排 agent 自己的家目录和项目工作区（只读调研，2026-10-16）
 
-路径都相对 `/home/ops/vonvon/references/comma`（commit ba4f55d）。没有构建、没有运行。AGPL：只看思路，不抄代码。
+路径都相对 `/home/operator/vonvon/references/comma`（commit ba4f55d）。没有构建、没有运行。AGPL：只看思路，不抄代码。
 标签：**读源码确认** = 我看了代码；**来自文档** = 只在 docs/README 里看到；**未确认** = 推断或依赖 Claude/Codex CLI 自身行为，没在 comma 代码里验证。
 已有调研（`docs/research/2026-10-14-strategy/comma.md`、`persona-memory-skills.md` 第 1 节）里讲过的记忆路径、skill 四层，这里只补充和"家目录 vs 工作区"有关的事实。
 

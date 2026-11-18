@@ -25,7 +25,7 @@
 - 自动切 stable、按日期自动发布、灰度。
 - 构建签名（服务端包没有 Apple/Windows 代码签名；信任根是 HTTPS + Ed25519 清单）。
 - 官网内容（W1）；网站部署。
-- Linux arm64 / macOS 的真机冒烟（CI 只有 Linux x64 托管 runner；macOS 自托管 runner 不跑安装脚本——它会在 `github-ci` 账号的 HOME 下真装 LaunchAgent）。
+- Linux arm64 / macOS 的真机冒烟（CI 只有 Linux x64 托管 runner；macOS 自托管 runner 不跑安装脚本——它会在 `ci-user` 账号的 HOME 下真装 LaunchAgent）。
 
 ## 3. 现在的代码
 

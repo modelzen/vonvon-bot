@@ -106,7 +106,7 @@
 
 ### 2.1 本机情况
 
-- 位置 `/home/ops/.local/bin/lark-cli`，版本 1.0.97（有 1.0.98 可更新）。
+- 位置 `/home/operator/.local/bin/lark-cli`，版本 1.0.97（有 1.0.98 可更新）。
 - `lark-cli whoami`：应用 `cli_aac99…（已截断）`，当前身份 `user`，代表用户"<飞书用户名>"，`defaultAs: auto`，token 状态 `needs_refresh`。
 
 ### 2.2 只读的历史和搜索命令
@@ -187,7 +187,7 @@
 
 ### 3.2 comma（AGPL，只借思路）
 
-| 问题 | 做法 | 出处（相对 `/home/ops/vonvon/references/comma`） |
+| 问题 | 做法 | 出处（相对 `/home/operator/vonvon/references/comma`） |
 |---|---|---|
 | 一个会话是什么 | 每个工作区的 Router 只有一个长期会话。各渠道、各用户的消息都进这一个会话，但每条输入都带来源会话和消息的身份 | `docs/architecture/PRODUCT_MODEL.md:91-110` |
 | 任务 | Router 委派任务时，开一个独立的任务会话，Worker 用新会话 | `PRODUCT_MODEL.md:102、112` |

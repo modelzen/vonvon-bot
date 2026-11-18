@@ -6,7 +6,7 @@
 - 计算任务第 (2) 项问到"仓库公开后自托管 runner 的风险"。按 owner 的决定，这一项不展开，只在 2.2 节末尾留一行。
 - 仓库现在是私有的：`gh api repos/modelzen/vonvon-bot` 返回 `"private":true`。
 - 计算任务说 JP-VPS 没有 swap。这已经过时：`free -h` 显示有 4.0 GiB swap（`/swapfile`），见记忆 `vonvon-heavy-lock.md`。
-- 上下文里注入的 `vonvon-collaboration.md` 是旧版。磁盘上的版本已改成 Ultracode，并要求"另一个模型的子代理做独立审查"（`/home/ops/.claude/vonvon-collaboration.md:12,14`）。下文行号都按磁盘版本。
+- 上下文里注入的 `vonvon-collaboration.md` 是旧版。磁盘上的版本已改成 Ultracode，并要求"另一个模型的子代理做独立审查"（`/home/operator/.claude/vonvon-collaboration.md:12,14`）。下文行号都按磁盘版本。
 
 ## 结论
 
@@ -118,14 +118,14 @@
 |---|---|---|---|
 | **JP-VPS** | 2 CPU，3.8 GiB 内存，4 GiB swap（`nproc`、`free -h`）；空闲时已用 2.4 GiB。实测 npm ci 470 s、build 33 s、typecheck 46 s（峰值 1.1 GB）、lint 14 s、全量 test 257 s（记忆 `vonvon-two-host-setup.md`） | 构建、typecheck、lint、一两个定向测试；无头网页界面检查（每个页面约 300 MB） | 不跑 Electron，没有显示器。不装 codex。用户说过不要在这台机器上大范围跑测试（记忆 `vonvon-mac-real-lark-cli.md`） |
 | **GitHub 托管 Linux** | $0.006/分钟，每个 job 按分钟向上取整（`docs/ci-costs.md:29,33`）；linux job 中位数 4.5 分钟（`../2026-10-14-strategy/ci.md` 第 2 节），一次完整运行名义约 $0.03。Team 套餐每月 3000 免费分钟（`docs/ci-costs.md:52`；`gh api orgs/modelzen` 显示 `plan: team`） | 必需检查 `linux` 的完整链 | 去掉 Windows 后不再有"按两倍计"的分钟（`docs/ci-costs.md:51`）。每月 100 次完整运行约 500 分钟，在免费额度内（推断，按上面的数字算）。目前的账单状态**未知**，`docs/ci-costs.md:58` 记过 10-12 付款失败 |
-| **Mac mini 自托管 runner** | GitHub 不收费（`docs/ci-costs.md:31`）；macOS job 中位数 1.8 分钟（`../2026-10-14-strategy/ci.md` 第 2 节） | macOS 全量测试、桌面冒烟测试 | 一次只跑一个 job，和 notelet 共用（`docs/self-hosted-ci.md:24,42`）。Mac 睡眠、关机，或 `github-ci` 账户退出登录时，runner 离线，job 排队（`docs/self-hosted-ci.md:55`）。和 Codex、日常 bridge 在同一台机器上，会不会抢资源**未知**，Mac mini 的配置也没有记录（`../2026-10-14-strategy/resources.md` 表 1） |
+| **Mac mini 自托管 runner** | GitHub 不收费（`docs/ci-costs.md:31`）；macOS job 中位数 1.8 分钟（`../2026-10-14-strategy/ci.md` 第 2 节） | macOS 全量测试、桌面冒烟测试 | 一次只跑一个 job，和 notelet 共用（`docs/self-hosted-ci.md:24,42`）。Mac 睡眠、关机，或 `ci-user` 账户退出登录时，runner 离线，job 排队（`docs/self-hosted-ci.md:55`）。和 Codex、日常 bridge 在同一台机器上，会不会抢资源**未知**，Mac mini 的配置也没有记录（`../2026-10-14-strategy/resources.md` 表 1） |
 
 ### 2.2 自托管 runner 的注册现状（2026-10-14 用 `gh api` 只读核对）
 
 - runner 名为 `mac-mini-isolated`，状态 `online`，标签是 `self-hosted, macOS, ARM64, modelzen-macos, modelzen-macos-isolated`（`gh api orgs/modelzen/actions/runner-groups/3/runners`）。
 - runner 组 `private-ci`（id 3）`visibility: selected`，只放了 `modelzen/notelet` 和 `modelzen/vonvon-bot`，两个都是私有仓库，`allows_public_repositories: false`。
 - 仓库变量 `ENABLE_SELF_HOSTED_MACOS_CI=true`（`gh api repos/.../actions/variables`）。
-- 账户 `github-ci` 是标准用户，不是管理员。没有 Developer ID、公证凭据或 sudo（`docs/self-hosted-ci.md:21`）。对 日常用户的家目录 设了拒绝访问的 ACL（`:9`）。
+- 账户 `ci-user` 是标准用户，不是管理员。没有 Developer ID、公证凭据或 sudo（`docs/self-hosted-ci.md:21`）。对 日常用户的家目录 设了拒绝访问的 ACL（`:9`）。
 - 服务是 LaunchAgent，去掉了 `SessionCreate`，所以继承图形会话，能读屏幕、建 AppKit 窗口（`:9,25-28`），并用 `caffeinate -i` 防止闲置睡眠（`:55`）。
 - 工作流开头先检查账户名和管理员组（`ci.yml:129-140`），只接同仓库 PR 和手动触发，不接 fork（`ci.yml:122-125`）。
 - 关于公开仓库：按 owner 的决定不展开。只记一点，这个 runner 组本来就不接公开仓库。
@@ -186,10 +186,10 @@ jobs:
 |---|---|---|
 | 谁构建 | Mac mini 的 `clay` 账户里跑一个固定脚本（例如 `scripts/mac/preview.sh <sha>`）：fetch、开 worktree、npm ci、build、`npm run package:dir -w packages/desktop`，用 Developer ID 签名，再跑 `codesign --verify --deep --strict` 校验 | #257 里 Codex 已在 `clay` 做过 Developer ID 签名打包并校验通过（#257 评论 15:12、17:03） |
 | 谁触发 | 首选：Claude 经 Paseo 让 Codex 只跑这个脚本（短任务）。如果 owner 同意，也可以由 Claude 经 Paseo terminal 直接跑，完全不用 Codex 推理（推断，没试过） | 1.2 节 |
-| 备选 | 自托管 runner 在 `github-ci` 账户里构建，产物写到 `/Users/Shared/`，owner 自己拷到"应用程序"文件夹。这个账户没有签名凭据，所以只能是未签名或 ad-hoc 签名的应用（推断） | `docs/self-hosted-ci.md:21` |
+| 备选 | 自托管 runner 在 `ci-user` 账户里构建，产物写到 `/Users/Shared/`，owner 自己拷到"应用程序"文件夹。这个账户没有签名凭据，所以只能是未签名或 ad-hoc 签名的应用（推断） | `docs/self-hosted-ci.md:21` |
 | 应用放在哪 | `~/Applications/Vonvon Bot Preview.app`。bundle id、产品名和以后的正式版分开，两个可以同时存在 | 现在的 appId 是 `com.vonvon.bot.desktop`（`packages/desktop/electron-builder.yml:1`），预览版需要单独的 id（要写代码） |
 | 签名 | 用 Developer ID 签名 | 同上 |
-| 公证 | 本机构建、本机安装的预览版不需要公证（推断：浏览器下载的文件才带隔离标记 `com.apple.quarantine`，见 [eclecticlight 2024-05-09](https://eclecticlight.co/2024/05/09/how-does-sonoma-check-an-app-before-launch/)）。在 MacBook Air 上用或给外部用户时：要么公证，要么在"系统设置 → 隐私与安全性"里点"仍要打开"（[Apple 102445](https://support.apple.com/en-us/102445)）。公证要 Apple 开发者账号的凭据，`github-ci` 里没有 | `docs/self-hosted-ci.md:21`；#257 评论 17:03："本地包未公证" |
+| 公证 | 本机构建、本机安装的预览版不需要公证（推断：浏览器下载的文件才带隔离标记 `com.apple.quarantine`，见 [eclecticlight 2024-05-09](https://eclecticlight.co/2024/05/09/how-does-sonoma-check-an-app-before-launch/)）。在 MacBook Air 上用或给外部用户时：要么公证，要么在"系统设置 → 隐私与安全性"里点"仍要打开"（[Apple 102445](https://support.apple.com/en-us/102445)）。公证要 Apple 开发者账号的凭据，`ci-user` 里没有 | `docs/self-hosted-ci.md:21`；#257 评论 17:03："本地包未公证" |
 | 数据 | 预览版用单独的数据根（例如 `~/.vonvon-bot-preview`）和单独的 userData，CLI 不注册，或者注册成另一个名字 | 双击打开的应用拿不到 `VONVON_HOME` 环境变量。现在的默认数据根是 `~/.vonvon-bot`（`packages/daemon/src/config/data-root.ts:24`），打包版启动时会注册 CLI（`main.ts:162`），userData 跟着产品名走（`main.ts:148`）。所以要在构建时区分出预览渠道（要写代码，推断） |
 | 飞书 | 用测试飞书应用，App ID 必须和日常 bridge 的不同 | "Two processes on the same Bot split its events"，"The test bot's App ID must differ from the daily bridge's App ID"（`docs/native-acceptance-hosts.md:406`） |
 | 迁移测试 | 从 bridge 迁移只在 bridge 数据的副本上测，日常 bridge 照常运行。等迁移这条路径通过 owner 验收后，owner 再决定哪天把日常使用切到 vonvon-bot | 计算任务里 owner 要求老用户迁移时保留大部分体验 |
@@ -285,7 +285,7 @@ jobs:
 | :37 | 用户已授权连续执行后续版本。……不在版本边界等用户确认。…… | v1 按冻结的范围连续开发。每完成一个里程碑，Claude 在 Mac 上装好预览版并通知 owner 验收。等验收期间可以继续下一个切片，但不改已验收的行为。需要 owner 决策、补信息或操作时，按 `vonvon-collaboration.md` 的格式通知。 |
 | 新增 | — | Claude 合入产品 PR 的条件：两个 CI 任务在准确 head 通过、独立审查结论已贴进 PR、评审线程都已解决、PR 描述各节齐全。 |
 
-### 6.2 `/home/ops/.claude/vonvon-collaboration.md`（按磁盘版本的行号）
+### 6.2 `/home/operator/.claude/vonvon-collaboration.md`（按磁盘版本的行号）
 
 | 位置 | 旧规则 | 新规则 |
 |---|---|---|
@@ -359,7 +359,7 @@ jobs:
 ## 主要来源
 
 - 仓库：`AGENTS.md`、`.github/workflows/ci.yml`、`.github/scripts/ci-scope.mjs`、`scripts/handoff.mjs`、`docs/self-hosted-ci.md`、`docs/ci-costs.md`、`docs/plan.md`、`docs/native-acceptance-hosts.md`、`packages/desktop/src/main.ts`、`packages/desktop/electron-builder.yml`、`packages/daemon/src/config/data-root.ts`、`.agents/skills/verify/SKILL.md`
-- 本机配置：`/home/ops/.claude/vonvon-collaboration.md`、`/home/ops/.claude/pstack-models.md`、`~/.paseo/push-tokens.json`、`~/.local/share/paseo-runtime/0.11.1/node_modules/@getpaseo/{protocol,server}/dist/...`
+- 本机配置：`/home/operator/.claude/vonvon-collaboration.md`、`/home/operator/.claude/pstack-models.md`、`~/.paseo/push-tokens.json`、`~/.local/share/paseo-runtime/0.11.1/node_modules/@getpaseo/{protocol,server}/dist/...`
 - 早先的报告：`../2026-10-14-strategy/` 下的 ci、process、methods、codex-desktop、resources，本目录的 owner-updates 和 v2-fit，#281、#285 的 PR 评论
 - 记忆：`codex-cua-via-paseo.md`、`vonvon-vps-browser.md`、`vonvon-2026-10-14-pause.md`、`vonvon-heavy-lock.md`、`vonvon-docs-self-merge.md`、`vonvon-paseo-handoff.md`、`no-feishu-dev-channel.md`、`vonvon-mac-real-lark-cli.md`
 - GitHub（只读）：`repos/modelzen/vonvon-bot`、`rulesets/24838891`、`pulls/281`、`pulls/285`、`actions/variables`、`orgs/modelzen/actions/runner-groups/3/{runners,repositories}`、`issues/257/comments`、`getpaseo/paseo/issues/3346`

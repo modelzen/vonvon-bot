@@ -4,7 +4,7 @@
 
 **依据的版本**
 - vonvon-bot：main `be17859`。
-- Codex 源码：`/home/ops/vonvon/references/openai-codex`，`git log -1` = `97771b1d78cf6366bc3946fe9e4bbca4ebee31d1`（2026-10-14，shallow clone，只有 `rust-v0.162.1` 一个 tag）。
+- Codex 源码：`/home/operator/vonvon/references/openai-codex`，`git log -1` = `97771b1d78cf6366bc3946fe9e4bbca4ebee31d1`（2026-10-14，shallow clone，只有 `rust-v0.162.1` 一个 tag）。
   - 关键字段又对照了 Mac 上跑的 0.162.1（scratchpad `codex-src-0162`，`Cargo.toml:163` 写的是 0.162.1）。
   - 也对照了 vonvon 锁定的 0.156.1（从 GitHub raw 拉了 `rust-v0.156.1` 的 `thread.rs`、`host_roots.rs`、`common.rs`）。
 - Claude Agent SDK：仓库里装的是 0.3.296（`packages/daemon/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts`）。`package.json:48` 写的是 `^0.3.178`，`docs/providers.md:483` 计划锁到 0.3.246（Paseo 自带的就是 0.3.246）。

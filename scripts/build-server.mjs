@@ -27,7 +27,7 @@ const repository = fileURLToPath(new URL('../', import.meta.url));
 export { PUBLISHED_TARGETS, archiveName };
 /** TypeScript sources, declarations and source maps. */
 const SOURCE_FILE = /\.(?:[mc]?ts|map)$/;
-const APP_TOP = new Set(['package.json', 'bin', 'dist', 'ui', 'node_modules', 'NOTICE', 'LICENSE.bridge', 'LICENSE.paseo', 'PROVENANCE.md', 'import-core.json', 'server-update.json']);
+const APP_TOP = new Set(['package.json', 'bin', 'dist', 'ui', 'node_modules', 'LICENSE', 'NOTICE', 'LICENSE.bridge', 'LICENSE.paseo', 'PROVENANCE.md', 'import-core.json', 'server-update.json']);
 /** Where Node and its npm sit inside an official Linux Node archive, and so inside the release's node/. */
 const NODE = 'bin/node';
 const NPM = 'lib/node_modules/npm';
@@ -103,7 +103,7 @@ export async function checkServerTree(release, target) {
   const files = await listFiles(release); // refuses symbolic links and special files
   const problems = [];
   const required = ['standalone.json', 'app/package.json', 'app/bin/vonvon.mjs', 'app/dist/cli.js', 'app/ui/dist/index.html', 'app/server-update.json',
-    'app/NOTICE', 'app/LICENSE.paseo', 'app/LICENSE.bridge', 'node/LICENSE', `node/${NODE}`, `node/${NPM}/bin/npm-cli.js`];
+    'app/LICENSE', 'app/NOTICE', 'app/LICENSE.paseo', 'app/LICENSE.bridge', 'node/LICENSE', `node/${NODE}`, `node/${NPM}/bin/npm-cli.js`];
   for (const file of required) if (!files.includes(file)) problems.push(`missing ${file}`);
   for (const file of files) {
     if (SOURCE_FILE.test(file)) problems.push(`source, declaration or source map: ${file}`);

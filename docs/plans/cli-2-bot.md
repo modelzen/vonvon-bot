@@ -162,7 +162,7 @@ expect(leaves.filter(path => !sampled(path) && !STARTS_A_DAEMON.includes(path)))
 
 **Linux（JP-VPS，Claude 自测）**：protocol、daemon、ui 的 typecheck、lint、build（ui 只因为那一行 re-export）；上面的测试文件，加上会 import `D/cli/` 的 `T/cli-admin.test.ts`、`T/daemon-cli.test.ts`、`T/cli-secrets.test.ts`、`T/cli-memory-preaction.test.ts`（租约改法的回归）。临时 HOME 和数据目录里手跑 `bot enable/remove x/callback status --json`（没 daemon，退 3，各一行 JSON）。不碰在跑的 daemon。
 
-**集成分支验收时，主会话在验收 daemon（`accept-home2`，Bot 6）上做**（先 `mkdir /tmp/vonvon-accept.d` 拿目录锁、写 owner，核对 `git -C <accept worktree> rev-parse HEAD` 是集成分支的 sha，用完放锁）：
+**集成分支验收时，主会话在验收 daemon（`accept-home2`，Bot 6）上做**（先 `mkdir /tmp/accept-user.d` 拿目录锁、写 owner，核对 `git -C <accept worktree> rev-parse HEAD` 是集成分支的 sha，用完放锁）：
 1. `vonvon bot disable <Bot 6> --json` → `bot list --json` 里它 `enabled:false`；`bot enable` 回来，`bot list` 里 `running:true`、`connection` 回到已连接（devices.md C2 验收一行）。
 2. `vonvon bot callback status <Bot 6>` 和网页"连接与权限"里卡片回调那一步一致。
 3. `vonvon bot rescan <Bot 6>` 出二维码后 Ctrl-C：退出 130，`bot list --json` 的快照里没有在跑的注册任务（devices.md C2 验收一行"Ctrl-C 后任务已取消"）；不扫码。

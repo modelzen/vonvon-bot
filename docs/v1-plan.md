@@ -813,7 +813,7 @@ owner 2026-10-20 的 s65 本地包决定作为当时范围保留。2026-10-26 �
 - s20a 留下的：
   - 给 s36：bot 默认档（私聊用）有了以后，清单里 Codex 那一步加上它。
   - `qrcode-terminal` 还给 `daemon run` 前台、没有 bot 时的老向导用，那个向导删掉时一起删这个依赖。
-  - 真的开 linger、真的扫码建 bot，JP-VPS 上都没走到：ops 已经是 `Linger=yes`，扫码没有人扫。前者靠单测；后者和网页同一条 RPC，网页这条 M1 已经验过，记成待 owner 验收（可选），M4 验收第 4 步有 Linux 机器的话可以试一次。
+  - 真的开 linger、真的扫码建 bot，JP-VPS 上都没走到：operator 已经是 `Linger=yes`，扫码没有人扫。前者靠单测；后者和网页同一条 RPC，网页这条 M1 已经验过，记成待 owner 验收（可选），M4 验收第 4 步有 Linux 机器的话可以试一次。
   - `service` 命令里 s07 的英文行没改，s20a 新加的是中文，`classifyServiceFailure` 和测试都钉着那些英文行。
   - 顺带看到的：s17b 要给 `service status` 加 launchd 的 `last exit code`，和这片改的 `runServiceStatus`、`adapter.status()` 是同一段，谁后合谁 merge main；诊断页"这台电脑"一节没跟着改名（搜索索引用它做锚点），要不要在那里也显示 Claude 的沙箱，留给 UX 那一轮。
 - s20b：被拉进的已有群默认只读，在 Linux 上用 Codex 时起不来：bot 回一句说明，等主人改（product.md 第 11 节第 24 条）。开工时核对过，绑定从来不抛错（`assertBackendUsable` 只按 `supportedModes` 过滤，Codex 没声明），原来写的"绑定之前就抛错"不对：错是在回合开始时由 `sandboxParams` 抛的，群里看到的是一段提到 Windows 的"❌ 启动失败"，诊断页记成"出错了"。所以绑定照旧，改的是回合开始时的回复、设置和删 windows-job。`windows-job.ts` 被 `owned-process.ts` 和 `environment/service.ts` 引用，属于子进程的代码。
@@ -1520,13 +1520,13 @@ s46 做法：真实 A/B/K、四轮和 Bot 6 证据归属任务 125 的源码 `0e
 - s61a1 做法（#471）：按任务 149 将 s61 技术拆为 s61a1 → s61a2 → s61b，具体依赖、测试归属见计划第 9 节；本片只有可独立调用的数据基础，没有 daemon/host/CLI/RPC 或用户可见入口。安全读取完整旧数据后交真实 s60，来源凭据仅描述符/引用密文；不执行 provider、不解密。journal 为后续唯一事务保留版本、意图和所有权，搬文件按实际两边字节判断幂等。
 - s61a1 作者检查：缓存安装516包、全工作区 build/typecheck/lint 首过；定向5文件178项首轮176过/2个 fixture EISDIR，空目录删除改rmdir后只重跑快照/journal两文件48项全过，其余130项保留首过。无生产修复或删断言，首轮证据保留。真实文件测试覆盖状态表/双向EXDEV/真实发布中断重跑；任务149当时未知半截保留拒绝的行为留作历史反证，任务152在同一journal补持久归属后修复自有复制中断恢复，未知外来项仍拒绝。rename仍要求独占，未承诺同UID并发OS隔离。
 - s61a1 任务152：修复149自有EXDEV半截永久conflict；旧head双向SIGKILL及4次独立重试反证保留。同journal先落动作/父身份/nonce预留，再落实际inode，持久化后才FD复制，恢复只清可核归属；未知/被换/链接保留拒绝。新增双向3崩溃点共6真子进程用例；本轮daemonTC、4文件88项首过，自审补身份复核/4负例后TC与受影响2文件43项通过，另49项保留，最终92项覆盖；没重复build/全TC/原178/真机，待总管增量复审。
-- s61a1 验收边界：任务 148 全片预算和 `vonvontest` 不存在的事实保留；本片不重复探针、不借 owner 环境。e08、s61、s62 保持未勾，s63 原门槛不变；本片函数级真实文件验证不能冒称完整 31 项、launchd 停锁/恢复或真实导入通过。自测由作者做，独立审查待总管。
+- s61a1 验收边界：任务 148 全片预算和 `test-user` 不存在的事实保留；本片不重复探针、不借 owner 环境。e08、s61、s62 保持未勾，s63 原门槛不变；本片函数级真实文件验证不能冒称完整 31 项、launchd 停锁/恢复或真实导入通过。自测由作者做，独立审查待总管。
 - s61：按 e07：bridge 的锁每个 bot 一把，在 `~/.feishu-codex-bridge/bots/<appId>/processes.json`，`appId` 要和目录名完全一致，调 v2 的 `acquireSingleInstanceLock` 时显式传这个路径。持有者是同一用户下、活过整个事务的进程，由它自己写锁，不复用旧记录、不自己拼 `startedAt`。`stop` 以后 bridge 还在优雅退出，要轮询重试到抢到为止并设上限；抢不到时持有者已不是预检看到的那个 bridge，就按失败回滚。回滚时先放锁再 `start` bridge，不然被拉起的 `run` 会被自己的锁拒掉。抢锁本身是原子的，不用另加互斥。
 - s61、s62：锁挡得住 `run`，挡不住 `start`（e07，读代码）：`start` 不看锁，照样写 plist、bootstrap，被拉起的 `run` 反复被拒，第 3 步去掉的自启就装回来了。写迁移标记前再查一次 bridge 的 plist 和 launchd 任务，还在就再 `stop` 一次。多 bot 模式下 supervisor 的子进程被拒后按 1 到 30 秒退避一直重启，一放锁最多 30 秒就连上，所以 s62 的"之后每次启动都占 bridge 的锁"要保留。product.md 第 5 节第 4 步先按本文 4.2 改。
 - s62：长期占锁时，0.6.14 的报错会叫用户 `kill <pid>`，那个 pid 是 vonvon 的 daemon。用户照做后 bridge 抢到锁，vonvon 再起来时抢锁抛 `BridgeAlreadyRunningError`：这时这个 bot 不启动，告诉主人 bridge 正在跑它。一次给多个 bot 占锁时共用一个 exit 回调，免得 11 把以上时 Node 打 `MaxListenersExceededWarning`（e07）。
 - s62：卸 hook 的代码和认 bridge hook 的规则从 #226 分支的 hook 改写代码移植，和 s02c 删不删 `D/cli-bridge/` 无关。合入后在 #226 里补上这部分，再关闭它。
 - s61、s62：Mac 检查放在测试用户账号里，因为那个账号有自己的 launchd 域，停 bridge 时不会碰到 owner 账号里同名的任务。
-- s61、s62：测试用户叫 `vonvontest`，由 owner 建好、用快速切换登录着，再加一条只允许切到这个用户的 sudoers 规则（Claude 2026-10-20 已请 owner 做）。Codex 的准备、检查和恢复见 `docs/plans/s61.md` 6.2；没准备好时写"卡住了"，代码照常审查合入（导入在 s63 之前用户碰不到），这两行不勾。e08 在同一个账号里先做。
+- s61、s62：测试用户叫 `test-user`，由 owner 建好、用快速切换登录着，再加一条只允许切到这个用户的 sudoers 规则（Claude 2026-10-20 已请 owner 做）。Codex 的准备、检查和恢复见 `docs/plans/s61.md` 6.2；没准备好时写"卡住了"，代码照常审查合入（导入在 s63 之前用户碰不到），这两行不勾。e08 在同一个账号里先做。
 - s64：PR 在 feishu-codex-bridge 仓库，不占本仓库的在飞名额。下载地址等 M11 定下来再填，什么时候发布由 owner 定。先看迁移标记再拿锁，换掉 0.6.14 那句叫人 `kill` 的提示（e07）。
 
 ### M11 公开发布准备
@@ -1924,7 +1924,7 @@ D8 的三个待定项（product.md 第 11 节），u01 这样定：
 - Claude 的只读、读写档在 Linux 上要 Claude Code 的沙箱，就是 `bubblewrap` 和 `socat`；没装时回合失败，报"Sandbox required but unavailable"。
 - Ubuntu 24.04 上光装好还不够：`kernel.apparmor_restrict_unprivileged_userns = 1` 挡住了非特权的用户命名空间，bwrap 报"setting up uid map: Permission denied"或"loopback: Failed RTM_NEWADDR: Operation not permitted"，Claude 的 Bash 在只读、读写档下都失败。JP-VPS 上的办法：加一份 AppArmor profile，只给 `/usr/bin/bwrap` 开 `userns` 权限（和 Ubuntu 自己给浏览器的 profile 一个样子），用 `apparmor_parser -r` 加载；不全局关掉这个 sysctl。
 - 2026-10-15 owner 经 SSH 加载了 bwrap 的 AppArmor profile（`/etc/apparmor.d/bwrap`）。`bwrap` 和 `socat` 已经装好；`kernel.apparmor_restrict_unprivileged_userns` 仍是 1，没有全局关掉。加载以后，在 JP-VPS 上跑 `bwrap --ro-bind / / --unshare-net true` 和 `bwrap --ro-bind / / --dev /dev --unshare-all --die-with-parent true`，都以 0 退出。所以 JP-VPS 上能验 Claude 的只读、读写档了，M6、M7 里这些步骤不再退回 owner 在 Mac 上验。还没用真 bot 的回合从头到尾再验一遍：第一次用到时，先在测试群里各跑一轮只读档和读写档；跑不通就退回 owner，并在通知里写明。
-- 验收 daemon 的 Claude 会话读 ops 用户的 `~/.claude`（回合一直读 user 和 project 两层设置，`D/agent/claude-agent/backend.ts` 的 `BRIDGE_SETTING_SOURCES`）：开发用的 CLAUDE.md 和 lark 技能都在里面。所以 JP-VPS 上的 Claude bot 有时像开发 agent 一样做事。2026-10-15 实测到三种：
+- 验收 daemon 的 Claude 会话读 operator 用户的 `~/.claude`（回合一直读 user 和 project 两层设置，`D/agent/claude-agent/backend.ts` 的 `BRIDGE_SETTING_SOURCES`）：开发用的 CLAUDE.md 和 lark 技能都在里面。所以 JP-VPS 上的 Claude bot 有时像开发 agent 一样做事。2026-10-15 实测到三种：
   - 用 lark-cli 查飞书；
   - 翻验收 daemon 的日志和数据目录（没读出凭据）；
   - 说"这一项不能算验收通过"。
@@ -1971,7 +1971,7 @@ D8 的三个待定项（product.md 第 11 节），u01 这样定：
 只写 `AGENTS.md` 里没有的，或者容易忘的：
 - 审查前先用 code-simplifier 把 diff 过一遍，再交给审查的子代理。
 - 写网页和桌面端界面时用 frontend-design，以及仓库 `.claude/skills/` 里的界面和动效 skill（#400，来源见其中的许可证文件）。
-- 网页界面在 JP-VPS 上用 playwright 无头打开，截各种状态看。2026-10-18 在 ops 用户的 `~/.local/share/fonts/noto-cjk` 装了 Noto Sans SC（Regular、Bold），之前截图里的中文是方块：从 github.com/notofonts/noto-cjk 的 `Sans/SubsetOTF/SC/` 下载这两个 otf（SIL OFL 许可），放进这个目录后跑 `fc-cache -f ~/.local/share/fonts`，不用 sudo。截图脚本不要带 `HOME=<临时目录>`，不然 fontconfig 和 playwright 都找不到 ops 用户目录下的字体和浏览器。
+- 网页界面在 JP-VPS 上用 playwright 无头打开，截各种状态看。2026-10-18 在 operator 用户的 `~/.local/share/fonts/noto-cjk` 装了 Noto Sans SC（Regular、Bold），之前截图里的中文是方块：从 github.com/notofonts/noto-cjk 的 `Sans/SubsetOTF/SC/` 下载这两个 otf（SIL OFL 许可），放进这个目录后跑 `fc-cache -f ~/.local/share/fonts`，不用 sudo。截图脚本不要带 `HOME=<临时目录>`，不然 fontconfig 和 playwright 都找不到 operator 用户目录下的字体和浏览器。
 - 新 worktree 跑 typecheck 前，先 build `@vonvon/protocol` 和 `@vonvon/client`，不然找不到它们的 dist。
 - JP-VPS 上的 npm 11.19 默认不跑依赖的安装脚本，`npm ci` 后 electron 的二进制不在。要在 JP-VPS 上打 Linux 目录包（`electron-builder --dir --linux`）验证打包结果时，先跑 `node node_modules/electron/install.js`。Mac 上打包也缺过这个二进制，原因没查，见第 7 节。
 - 行数可能超过 1500 的片（s06、s51a 到 s51c、s59），开工后先用 `git diff --stat` 量。

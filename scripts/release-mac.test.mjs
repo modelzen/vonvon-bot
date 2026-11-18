@@ -100,8 +100,8 @@ async function releaseFixture(settings = {}) {
   const populateApp = async app => {
     if (!settings.realTools) return;
     const core = join(app, 'Contents/Resources/daemon');
-    await write(join(core, 'package.json'), JSON.stringify({ version: '0.7.0', license: 'UNLICENSED' }));
-    for (const name of ['LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md']) await write(join(core, name), name);
+    await write(join(core, 'package.json'), JSON.stringify({ version: '0.7.0', license: 'Apache-2.0' }));
+    for (const name of ['LICENSE', 'LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md']) await write(join(core, name), name);
     for (const path of ['Contents/MacOS/Vonvon Bot', 'Contents/Frameworks/Electron Framework.framework/Electron Framework']) await write(join(app, path), Buffer.from('cafebabe00000000', 'hex'));
   };
   const realTools = settings.realTools ? await import('./desktop-release-tools.mjs') : undefined;

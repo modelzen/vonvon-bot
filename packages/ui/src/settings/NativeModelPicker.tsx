@@ -20,7 +20,7 @@ const itemId = (backend: string, model?: string) => JSON.stringify([backend, mod
 const effortLabel = (effort: string) => effort === 'none' ? '关闭思考' : effort;
 const catalogUsable = (catalog?: ModelCatalog) => catalog?.state === 'ready' || catalog?.state === 'fallback';
 function ProviderIcon({backend}: {backend: string}) {
-  const src = backend === 'codex-appserver' ? './agent-icons/codex-light.png' : backend === 'claude-agent' ? './agent-icons/claude-code.svg' : undefined;
+  const src = backend === 'codex-appserver' ? './agent-icons/terminal.png' : backend === 'claude-agent' ? './agent-icons/code.png' : undefined;
   return src ? <img className={`decision-picker-icon${backend === 'codex-appserver' ? ' decision-picker-icon--codex' : ''}`} src={src} alt=""/> : null;
 }
 

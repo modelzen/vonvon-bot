@@ -1,6 +1,6 @@
 # v2 main（be17859）里 v1 能留什么、要改什么
 
-调研日期 2026-10-14。只读：没有改任何仓库，没有跑构建和测试，gh 只做了查询。路径默认相对 `/home/ops/vonvon/vonvon-bot`，`daemon/src/...` 指 `packages/daemon/src/...`。标 `推断` 的是我的判断，标 `未知` 的是查不到或要实测的。人设、记忆、技能怎么接进 Codex 和 Claude，见同目录的 `persona-memory-skills.md` 和 `agent-mechanics.md`，这里不重复。
+调研日期 2026-10-14。只读：没有改任何仓库，没有跑构建和测试，gh 只做了查询。路径默认相对 `/home/operator/vonvon/vonvon-bot`，`daemon/src/...` 指 `packages/daemon/src/...`。标 `推断` 的是我的判断，标 `未知` 的是查不到或要实测的。人设、记忆、技能怎么接进 Codex 和 Claude，见同目录的 `persona-memory-skills.md` 和 `agent-mechanics.md`，这里不重复。
 
 本版在同名旧稿上逐条复核过引用，并补了这些内容：群回复模式、后台服务按钮的 bug、bridge 老用户现有的 launchd 自启、桌面端对服务代码的依赖、#226 里能复用的部分。
 

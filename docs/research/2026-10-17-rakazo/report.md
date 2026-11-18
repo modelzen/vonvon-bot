@@ -12,7 +12,7 @@
 
 | 对象 | 固定版本与用途 |
 |---|---|
-| Rakazo | [`e55263f5fdfee9b2c48680a78e4487d37b4c04a8`](https://github.com/elie222/rakazo/tree/e55263f5fdfee9b2c48680a78e4487d37b4c04a8)，本地 `/home/ops/vonvon/references/rakazo`，只读研究 checkout |
+| Rakazo | [`e55263f5fdfee9b2c48680a78e4487d37b4c04a8`](https://github.com/elie222/rakazo/tree/e55263f5fdfee9b2c48680a78e4487d37b4c04a8)，本地 `/home/operator/vonvon/references/rakazo`，只读研究 checkout |
 | Vonvon | `bbb329b9a9eef0dd809ee9468e0b6d1b9bf4a769`，已合入 s36c2a，比较依据为此版本的 [product.md](../../product.md) 和 [v1-plan.md](../../v1-plan.md) |
 | Astra 产品分析 | [product-ux.md](product-ux.md)，聊天体验、记忆、设置、交接、首次使用和范围调整 |
 | Astra 运行时分析 | [runtime-state.md](runtime-state.md)，消息、执行、取消、恢复、记忆、子 agent 与隔离 |

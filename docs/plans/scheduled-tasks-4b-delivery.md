@@ -54,7 +54,7 @@ main 必败：`capabilityPackages` 在基线是 `false` 且 `resolveSessionProfi
 
 JP-VPS，真 Claude 和真 Codex 各一遍，用验收 daemon（Bot 6；环境见 #422 正文第 4 节）。用哪家是群绑定时定的（`vonvon group bind --tool claude|codex`），不是 bot 的设置：从 `test-chats.json` 的登记和 `projects.json` 的当前绑定里挑 Bot 6 绑在 Claude 上的测试群和绑在 Codex 上的测试群，单会话和多会话各要一个（chat id 不打印）；缺哪种就按 #422 正文第 4 节新建测试群、用 `--tool` 绑好并补登记。锁、删除规矩和 lark-cli 用法照 T2 第 6 节抄：
 
-- 先拿目录锁：`mkdir /tmp/vonvon-accept.d`，失败就等；拿到后 `echo "<任务号> $(date -u +%FT%TZ)" > /tmp/vonvon-accept.d/owner`；用完 `rm -f /tmp/vonvon-accept.d/owner && rmdir /tmp/vonvon-accept.d`。
+- 先拿目录锁：`mkdir /tmp/accept-user.d`，失败就等；拿到后 `echo "<任务号> $(date -u +%FT%TZ)" > /tmp/accept-user.d/owner`；用完 `rm -f /tmp/accept-user.d/owner && rmdir /tmp/accept-user.d`。
 - 临时目录只用 `T=$(mktemp -d)` 建，只用 `rm -rf -- "${T:?}"` 删，或者删刚在 `/tmp/` 下建的字面路径。
 - 不对 `$HOME`、`~`、`$PWD`、`$VONVON_HOME` 或任何可能为空、未设置、指向真实 home 的变量拼出来的路径用 `rm`、`find -delete`、`find -exec rm` 或 `xargs rm`。
 - 不在 shell 里给 `HOME`、`VONVON_HOME` 赋值或 export，只写在单条命令前面，例如 `HOME=$T/home VONVON_HOME=$T/vh npx vitest run`。

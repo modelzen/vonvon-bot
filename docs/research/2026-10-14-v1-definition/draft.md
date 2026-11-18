@@ -368,7 +368,7 @@ Mac 锁屏时 Computer Use 会失败（getpaseo/paseo#3346，Paseo 锁屏时 App
 - 进度看 v1 计划清单和 PR；#122（程序图看板 issue）和 `docs/program-graph.json` 停止更新。
 - v1 范围以冻结后的 `docs/product.md` 为准；新想法写进"v1 之后"一节，发布前不实现。
 - Mac 检查用 Paseo 发起的规则：`auto` 模式、隔离数据根、锁屏即停。
-- `/home/ops/.claude/vonvon-collaboration.md` 同步改：Ultracode、审查模型、通知格式、不换 owner 标签。
+- `/home/operator/.claude/vonvon-collaboration.md` 同步改：Ultracode、审查模型、通知格式、不换 owner 标签。
 
 完整的旧→新对照在 `process-ci.md` 第 6 节。
 

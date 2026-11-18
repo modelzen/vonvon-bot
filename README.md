@@ -1,12 +1,6 @@
-# vonvon-bot
+# Vonvon Bot
 
-V1 contains the `@vonvon/protocol` package. It extracts the pinned desktop request families and adds machine handshake, correlated RPC envelopes, and snapshot events. The bridge project store has a separate reader-compatible schema; it is not the client project view.
-
-Development requires Node.js 22.12 or later in the 22.x series, 24.x, or 26 and later.
-
-Run `npm ci`, `npm run typecheck`, `npm test`, `npm run lint`, and `npm run build` from the repository root. `npm run verify:built -w packages/protocol` checks all command variants and times 1000 full settings parses. Import runtime schemas from `@vonvon/protocol` after the build. `PROTOCOL_VERSION` is 1; a positive newer version parses so a caller can negotiate it.
-
-The port is based on `modelzen/vonvon-bot` commit `fab5237`. `packages/protocol/test/fixtures/agent-settings.json` comes from that commit. The generated project-store fixture follows `scripts/native-fixtures.mjs` there and the reader in `modelzen/feishu-codex-bridge` commit `446b2a4`.
+Vonvon Bot 把运行在你电脑上的 Codex、Claude Code 等编程助手接入飞书。你可以在飞书群里发起任务、查看进度和继续会话，在桌面端管理 Bot、群和工作目录。
 
 ## 安装
 
@@ -15,6 +9,24 @@ The port is based on `modelzen/vonvon-bot` commit `fab5237`. `packages/protocol/
 
   装到 `~/.local/share/vonvon-bot/server`，数据在 `~/.vonvon-bot`。卸载用 `sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/uninstall.sh)"`，数据目录留着。这条命令只给 Linux，在 Mac 上运行只提示去下载安装包。
 
-## 发布
+## 从源码构建
 
-三平台发布可使用[发布编排说明](docs/release-orchestration.md)：固定版本与 main SHA，同步调度 Windows 和串行 Mac 候选，再打 Linux 服务端的两个包，查询状态、恢复中断并收集官网交接回执。正常发版默认使用该流程，Mac/Windows/服务端上传由发布编排器并行处理；最终 stable 确认绑定展示过的候选，无需手抄 SHA。
+需要 Node.js 22.12+（22.x）、24.x 或 26+。在仓库根目录运行：
+
+```sh
+npm ci
+npm run build
+npm run typecheck
+npm test
+npm run lint
+```
+
+仓库包含桌面端、管理界面、运行 Bot 的 daemon，以及协议和客户端库。构建后可用 `node packages/daemon/bin/vonvon.mjs --help` 查看命令行入口。
+
+## 参与开发
+
+功能建议和一般问题可以通过 GitHub Issues 提交。改动代码前请看 [贡献指南](CONTRIBUTING.md)。安全问题请通过 [私下报告渠道](SECURITY.md) 提交。
+
+## 许可证
+
+Vonvon Bot 自有代码使用 [Apache-2.0](LICENSE)。第三方代码及素材适用各自的许可，见 [NOTICE](NOTICE) 和 [daemon NOTICE](packages/daemon/NOTICE)。

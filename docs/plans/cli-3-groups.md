@@ -138,7 +138,7 @@ export function runningBot(agents: readonly Agent[], wanted?: string): Agent {
 
 **Linux（JP-VPS）**：protocol、daemon 的 typecheck、lint、build；上面的测试文件和 `T/cli-admin.test.ts`、`T/daemon-cli.test.ts`。临时 HOME 和数据目录里手跑每条新命令的 `--json`（没 daemon，退 3）。
 
-**集成分支验收时，主会话在验收 daemon 上做**（拿 `/tmp/vonvon-accept.d` 目录锁、核对 sha、用完放锁；只用 Bot 6 和它已绑好的测试群）：
+**集成分支验收时，主会话在验收 daemon 上做**（拿 `/tmp/accept-user.d` 目录锁、核对 sha、用完放锁；只用 Bot 6 和它已绑好的测试群）：
 1. `vonvon group create C3验收 --conversation single --bot <Bot 6>`：飞书里出现新群、Bot 在里面；`group show`、网页群列表一致；输出有完全访问那句（devices.md C3 验收一行）。
 2. `vonvon group set C3验收 --disable`，网页显示已停用；`--enable` 回来。
 3. `vonvon group unbind C3验收 --yes`：Bot 退出这个新群（只对本步新建的群做，不碰已绑好的测试群）。

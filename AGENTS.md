@@ -10,7 +10,7 @@ owner 2026-10-30 定。本节是开发、合入和 CI 的现行规则；与下�
 2. 完成必要检查、审查及本次需要的验收后，才能合入 `dev`。owner 说“OK”“验收通过”“可以合入”，默认指把本次验收过的提交合入 `dev`；符合 2026-10-21 本地验收规则时，当前 Codex 可直接执行，不再要求额外人工或模型审查。认可不覆盖后续产品行为变化。
 3. `dev` 用于集成、内部试用和集中验收，应保持可运行。单项功能通过不等于整批发布通过。合入后发现阻塞问题，先修复或通过新 PR revert，不通过挑选提交绕过问题。
 4. owner 决定何时集中把 `dev` 提升到 `main`，可以每天一次，也可以隔几天；不存在每天自动合入或发版的授权。准备发布时，记录本批功能、验收结果和准确源码 SHA，再开 `dev → main` PR；若要在 `dev` 继续开发时固定本批候选，可从选定的 `dev` SHA 建 `codex/promote-<主题>` 分支。候选必须包含选定 SHA 的全部历史，不随意 cherry-pick。
-5. `main` 是正式版本的源码基线。面向 `main` 的产品或流程 PR，重新执行本批最终提交的全量包检查，并完成集成验证：Linux 和自托管 macOS 必须运行，Windows 仅在本批包含 Windows 相关改动或明确要求时运行；普通纯文档仍可走轻量检查。向 `main` 合入使用 merge commit，保留长期分支的共同历史，不 squash、不 rebase。不要删除长期 `dev` 分支。
+5. `main` 是正式版本的源码基线。面向 `main` 的产品或流程 PR，重新执行本批最终提交的全量包检查，并完成集成验证：Linux 和 macOS 必须运行，Windows 仅在本批包含 Windows 相关改动或明确要求时运行；普通纯文档仍可走轻量检查。向 `main` 合入使用 merge commit，保留长期分支的共同历史，不 squash、不 rebase。不要删除长期 `dev` 分支。
 6. 在 `main` 上产生的版本号、紧急修复等实际修改，要及时通过 PR 同步回 `dev`；仅有 merge commit、文件内容相同，不要求两个分支 SHA 相同。只有 owner 明确要求紧急修复时，才允许从 `main` 开修复分支直接进入 `main`，随后回同步 `dev`。
 7. “合入 dev”“合入 main”“发布版本”是三个不同结果，汇报时分别说明。合入 `main` 不自动打版本 Tag、签名、公证、上传或切 stable；公开发布仍遵守下文发布任务的明确授权及证据要求。正式版本从确定的 `main` 提交构建，Git Tag（如 `v0.7.9`）只标识发布版本，不选择 CI。macOS 和 Windows 使用相同产品版本。
 
@@ -19,13 +19,13 @@ owner 2026-10-30 定。本节是开发、合入和 CI 的现行规则；与下�
 - 每个面向 `dev` 或 `main` 的 PR 都先执行轻量任务：验证分流/执行/合入门槛脚本，收集整个 PR 相对共同祖先的累积差异，检查空白错误，再输出选择的包、平台和原因。不只看最后一个 commit；删除、重命名前后的路径也算变更。
 - 普通说明文档（根 `README.md`、`docs/` 下的小写 `.md`）默认只跑轻量检查，不安装产品依赖。`AGENTS.md`、`CLAUDE.md`、skills、CI、脚本和构建规则会影响执行行为，不按普通文档免检。
 - `dev` PR 按影响范围选择包：UI 改动检查 UI 和桌面集成，daemon 改动检查 daemon 和桌面集成，桌面改动检查桌面；公共 protocol/client、依赖、包配置、公共构建脚本、规则文件及未知路径执行全量。当前为保证包间构建依赖，代码任务先构建所有包，再对选中的包执行类型检查、测试和 lint，同时运行仓库脚本测试。
-- Linux 是所有代码改动的基础平台。普通 UI 只需要 Linux；明确的 macOS 专属文件或目录增加 macOS，Windows 专属文件或目录增加 Windows；公共 daemon/桌面运行逻辑、protocol/client、依赖和公共构建/CI 配置会影响 Windows，检查三个平台。混合改动取平台并集。单独修改开发规则不因此运行 Windows；`main` 集成批次检查全部包和 Linux、自托管 macOS，只有累积差异确实影响 Windows 时才增加 Windows，不因“发布前全量”无条件消费 Windows runner。Windows CI 使用 x64 runner；ARM64 安装包与真实系统行为仍在发布验收中检查。
+- Linux 是所有代码改动的基础平台。普通 UI 只需要 Linux；明确的 macOS 专属文件或目录增加 macOS，Windows 专属文件或目录增加 Windows；公共 daemon/桌面运行逻辑、protocol/client、依赖和公共构建/CI 配置会影响 Windows，检查三个平台。混合改动取平台并集。单独修改开发规则不因此运行 Windows；`main` 集成批次检查全部包和 Linux、macOS，只有累积差异确实影响 Windows 时才增加 Windows，不因“发布前全量”无条件消费 Windows runner。Windows CI 使用 x64 runner；ARM64 安装包与真实系统行为仍在发布验收中检查。
 - 各平台执行适合该平台的检查：Linux/macOS 对选中的包运行完整自动化测试；Windows 保留全部包的构建、相应类型检查和 lint，protocol/client/UI 按选择运行包测试，daemon、桌面及仓库脚本复用 `scripts/build-windows.ps1` 已验证的 Windows 专项回归清单，覆盖 Windows 启动/进程/数据兼容/注册、桌面更新/托盘/依赖以及打包运行时工具。CI 不运行该发布脚本本身，不执行安装或发布；专项清单与发布脚本的一致性由回归测试检查。
 - 平台由 `.github/scripts/ci-scope.mjs` 自动选择。PR 标签可扩大范围，不能缩小自动判定的必要检查：`ci:macos` 追加 macOS，`ci:windows` 追加 Windows，`ci:all` 强制全部包和三个平台。Linux 始终是代码检查的基础平台；多个标签取并集。没有平台标签时按自动结果执行。
 - `frozen` 是 PR 的 Label，不是 Git Tag，只表示“本次已准备合入，允许运行较重检查”。开发中更新 PR 先跑轻量分析；非文档 PR 在加 `frozen` 前，最终合入检查保持失败，不能靠跳过产品测试合入。加 `frozen` 后运行选中的平台。若还要改代码，先去掉 `frozen`，push、完成必要审查/验收后再加回来；新提交必须取得自己的检查结果。普通文档不要求 `frozen`。不添加与工作无关的标签。
 - CI 监听平台标签及 `frozen` 的添加和移除、代码更新、目标分支和 draft 状态变化。同一 PR 的旧运行自动取消。手动 `workflow_dispatch` 总是全量三平台，供排查和补充验证；手动运行不能替代 PR 自己的合入证据。
 - `dev` 和 `main` 都要求 PR、与目标分支同步、解决评审线程，并通过固定名称的 **`CI gate`**。该任务始终执行，逐一确认所有选中的平台成功；未选平台可以跳过，选中平台失败、取消或跳过都不能合入。分流出错、变更列表不完整、runner 不可用、旧 SHA 或过期标签均不能当作通过。手动运行使用不同名称 `Manual CI result`，不提供必需的 PR 合入检查。自动平台选择不取代必要的真实系统和产品验收。
-- 成本约定：Linux 可使用 GitHub 托管 runner；macOS 必须使用组织级自托管 runner（标签 `self-hosted, macOS, ARM64, modelzen-macos, modelzen-macos-isolated`），不得擅自改为收费托管 macOS；Windows 使用托管 runner，但只在相关改动或明确要求时运行。macOS runner 使用无管理员权限的独立 `github-ci` 账号；外部 fork 不直接在它上面执行未受信任代码，需先审查并转为仓库内分支。CI 仅执行构建、类型检查、自动化测试和 lint，不运行签名、公证、安装或发布工作流。
+- 成本约定：公开仓库的 macOS CI 使用 GitHub 的标准 ARM64 runner，与 Linux、Windows 一样在托管环境中运行。私有仓库阶段的 macOS CI 使用专门的组织级自托管 runner，由无管理员权限的独立账户运行，禁止执行外部 fork 的代码。Windows 仅在相关改动或明确要求时运行。CI 仅执行构建、类型检查、自动化测试和 lint。签名、公证、安装或发布使用独立环境。
 
 ### 常用 CLI
 
@@ -84,7 +84,7 @@ owner 2026-10-21 定。本节优先于下文关于独立审查、合入入口和
 
 2026-10-17 到 10-18，Claude 额度用完期间，owner 把开发临时交给 JP-VPS 上的 Codex（#367）。这期间的 PR（#364 到 #385）由 Codex 推进和合入，其中 #364、#365 的主体是 Claude 之前写的；独立审查主要由 gpt-6-astra 做，实现也是 Codex。2026-10-18 owner 停下 Codex、交还职责，下文的分工照旧生效。
 
-2026-10-14 起生效，取代 2026-10-13 的版本，适用于 v1 开发。2026-10-16 起，Mac 上的 Codex 由 Claude 经 Paseo 直接开会话，一个任务一个会话，结果贴回 GitHub；Paseo 用不了时（连不上、开不了会话，或者 #322 上还有活着的队列会话），才把任务贴进队列 issue #322 请 owner 转发，见"工具和同步"。2026-10-19 起又以 #322 为主：owner 在 Codex App 里开队列会话，Claude 往 #322 贴任务，经 Paseo 开 Mac 会话只在 owner 要求时用（见"2026-10-19 起"）。两台机器读同一份规则。本文的 owner 指用户本人；旧的 `owner:` 标签不再使用。Claude 的非平凡任务用 Ultracode 工作流编排。Claude 侧的会话、模型和通知格式另见 JP-VPS 上的 `/home/ops/.claude/vonvon-collaboration.md`，这个文件不在仓库里，Mac 上没有。
+2026-10-14 起生效，取代 2026-10-13 的版本，适用于 v1 开发。2026-10-16 起，Mac 上的 Codex 由 Claude 经 Paseo 直接开会话，一个任务一个会话，结果贴回 GitHub；Paseo 用不了时（连不上、开不了会话，或者 #322 上还有活着的队列会话），才把任务贴进队列 issue #322 请 owner 转发，见"工具和同步"。2026-10-19 起又以 #322 为主：owner 在 Codex App 里开队列会话，Claude 往 #322 贴任务，经 Paseo 开 Mac 会话只在 owner 要求时用（见"2026-10-19 起"）。两台机器读同一份规则。本文的 owner 指用户本人；旧的 `owner:` 标签不再使用。Claude 的非平凡任务用 Ultracode 工作流编排。Claude 侧的会话、模型和通知格式另见 JP-VPS 上的 `/home/operator/.claude/vonvon-collaboration.md`，这个文件不在仓库里，Mac 上没有。
 
 ## 2026-10-19 晚起：Codex 审查、合入和派活
 
@@ -127,21 +127,21 @@ owner 2026-10-19 定（Claude 的周额度用到一半）：从 s27a 起，新�
   - Mac 上 Codex 的额度充足（owner 2026-10-19），尽量并行：一个任务里开子代理分头写代码、写测试、开 PR 前照验收要点自审；队列里有几个开发任务时一起做。测试环境、Computer Use、打包装 app 同一时间只给一个任务用。规矩见 #322 正文"并行"。
 - **Codex（JP-VPS 上的 Codex CLI，Claude 开会话）：**
   - owner 2026-10-19 让 Claude 也用 JP-VPS 上已登录的 Codex。
-  - Claude 经 Paseo 在 JP-VPS 上开会话：provider codex，模式 auto-review，一片一个会话。任务和规矩在 #422。命令：`paseo --host 100.121.117.46:6767 run -d --provider codex/gpt-6.1-sol --mode auto-review --cwd /home/ops/vonvon/vonvon-bot --title "开发 <片> 任务 <号>" "按 <评论链接> 做，任务号 <号>"`。
+  - Claude 经 Paseo 在 JP-VPS 上开会话：provider codex，模式 auto-review，一片一个会话。任务和规矩在 #422。命令：`paseo --host 10.0.0.10:6767 run -d --provider codex/gpt-6.1-sol --mode auto-review --cwd /home/operator/vonvon/vonvon-bot --title "开发 <片> 任务 <号>" "按 <评论链接> 做，任务号 <号>"`。
   - 经 Paseo 是为了会话不随 Claude 的会话结束，owner 在 Paseo 里看得到、接得上，Claude 能 wait、logs、stop。
-  - 任务号和 #322 共用一套，用同一个取号脚本：任务号存在 JP-VPS 的 `/home/ops/vonvon/local-tools/mac-task-seq`，Claude 用同目录的 `next-mac-task.sh` 在 `flock /tmp/vonvon-mac-task.lock` 里取下一个。标记见 #422：开始 `codex-vps-start`，结果 `codex-vps-result`，取消 `claude-vps-cancel`。
+  - 任务号和 #322 共用一套，用同一个取号脚本：任务号存在 JP-VPS 的 `/home/operator/vonvon/local-tools/mac-task-seq`，Claude 用同目录的 `next-mac-task.sh` 在 `flock /tmp/vonvon-mac-task.lock` 里取下一个。标记见 #422：开始 `codex-vps-start`，结果 `codex-vps-result`，取消 `claude-vps-cancel`。
   - 它做要用 JP-VPS 测试环境自测的片：Bot 6、7、8，`accept-home2` 的验收 daemon，已经绑好的测试群，Jev 的 key。Mac 上的 Codex 做要 Mac 和桌面验收的片。
   - 做法和 Mac 上的开发任务一样：照计划，分支 `codex/<片>`，开 PR，改 PR 的任务。
   - 它在 JP-VPS 上建的 worktree 留到 PR 合入，Claude 看到 MERGED 后用 `git worktree remove` 删（#422）。
   - 用 auto-review 而不用 full access，是因为 Claude 这边拦 `rm` 的钩子管不到 Codex。2026-10-16 的误删就发生在这台机器上，删除文件的硬规矩照样适用。
 - **验收 daemon（JP-VPS 的 `accept-home2`）：**
   - 共用它的是 JP-VPS 上的 Claude 和 JP-VPS 上的 Codex。Mac 上的 Codex 用自己的测试环境，不碰它。
-  - 用之前拿目录锁：`mkdir /tmp/vonvon-accept.d`。失败就是有人在用，过几分钟再来；超过一小时还拿不到，在结果里写"卡住了：验收 daemon 被占"。
-  - 拿到后写上是谁：`echo "<任务号或 claude> $(date -u +%FT%TZ)" > /tmp/vonvon-accept.d/owner`。
-  - 用完放锁：`rm -f /tmp/vonvon-accept.d/owner && rmdir /tmp/vonvon-accept.d`。
+  - 用之前拿目录锁：`mkdir /tmp/accept-user.d`。失败就是有人在用，过几分钟再来；超过一小时还拿不到，在结果里写"卡住了：验收 daemon 被占"。
+  - 拿到后写上是谁：`echo "<任务号或 claude> $(date -u +%FT%TZ)" > /tmp/accept-user.d/owner`。
+  - 用完放锁：`rm -f /tmp/accept-user.d/owner && rmdir /tmp/accept-user.d`。
   - 锁里记的任务已经没有会话在跑时（Claude 用 `paseo ls`、`paseo inspect` 确认），Claude 可以替它放锁；Codex 不放别人的锁。
   - 不用 `flock`：Codex 每次调用工具都是新 shell，`exec 8>…; flock 8` 在命令结束时就放了锁。
-  - Codex 自测完、换回 `main` 之前，验收 daemon 跑的是没审查的代码。Claude 用它做别的验收前，先用 `git -C /home/ops/vonvon/worktrees/accept rev-parse HEAD` 确认它跑的是哪个 sha。
+  - Codex 自测完、换回 `main` 之前，验收 daemon 跑的是没审查的代码。Claude 用它做别的验收前，先用 `git -C /home/operator/vonvon/worktrees/accept rev-parse HEAD` 确认它跑的是哪个 sha。
 - **删除文件：** 两台机器的 Codex 都守删除文件的硬规矩，原文在 #322 和 #422 正文，改一边要改另一边。
 - **owner：** 在 Mac 的 Codex App 里开会话、转发那一句（Claude 会在通知里写明要发什么）；扫码、注销再登录这类只有人能做的事。
 - **Mac 的测试环境：**
@@ -241,14 +241,14 @@ Codex 写的片按"2026-10-19 起"一节走，下面第 1 步对它不适用。
 
 ## 工具和同步
 
-- 两台机器的 Paseo daemon 通过 Tailscale 互通。JP-VPS 为 `100.121.117.46:6767`，provider `claude`，项目 `/home/ops/vonvon/vonvon-bot`。Mac 为 `100.127.134.58:6767`，provider `codex`。owner 自己的会话照旧经它们跑。不通过 SSH 执行 `claude -p`。
+- 两台机器的 Paseo daemon 通过 Tailscale 互通。JP-VPS 为 `10.0.0.10:6767`，provider `claude`，项目 `/home/operator/vonvon/vonvon-bot`。Mac 为 `10.0.0.11:6767`，provider `codex`。owner 自己的会话照旧经它们跑。不通过 SSH 执行 `claude -p`。
 - 2026-10-19 起 Mac 上的事以 #322 为主（见"2026-10-19 起"），下面"经 Paseo 开会话"几条只在 owner 要求时用。
 - 2026-10-16 起，Mac 上的事由 Claude 经 Paseo 在 Mac mini 上直接开 Codex 会话，不再请 owner 转发（owner 2026-10-16 让 Claude 定）。issue #322 的队列留作备用：Paseo 连不上时（Mac 睡着、Tailscale 断了、daemon 没开）、`paseo run` 失败时，或者 #322 上还有活着的队列会话时才用，规则见下面"经 #322"的几条。Claude 和 Codex 之间不交接 PR。
 - 经 Paseo 开会话：
   1. 这一节的 `paseo` 命令都由 Claude 在 JP-VPS 上执行，Codex 不用管。
-  2. 取号：任务号存在 JP-VPS 的 `/home/ops/vonvon/local-tools/mac-task-seq`，Claude 在 `flock /tmp/vonvon-mac-task.lock` 里取下一个，两个 Claude 会话不会取到同一个号。文件不在了，以 GitHub 上出现过的最大任务号为起点重建。
+  2. 取号：任务号存在 JP-VPS 的 `/home/operator/vonvon/local-tools/mac-task-seq`，Claude 在 `flock /tmp/vonvon-mac-task.lock` 里取下一个，两个 Claude 会话不会取到同一个号。文件不在了，以 GitHub 上出现过的最大任务号为起点重建。
   3. 开之前查，查和开放在同一个 `flock /tmp/vonvon-mac-task.lock` 里：`paseo ls` 里 Mac 上有 Claude 开的、没归档的任务会话还在跑，就放开锁，过几分钟再来，不在锁里等；#322 有活着的队列会话（见下面"经 #322 时"第 2 条），就只往 #322 贴任务，不开 Paseo 会话。追问用的 `paseo send` 也一样放在锁里先查。同一时间 Mac 上只有一个任务会话，免得两个任务同时构建、装 app 或用 Computer Use。
-  4. Claude 先把提示词贴进 PR（预览版任务没有 PR，贴在 #322），格式见下面三种任务，再开会话：`paseo --host 100.127.134.58:6767 run -d --provider codex/gpt-6.1-sol --thinking medium --mode full-access --cwd <Mac 上的仓库> --title "<任务种类> PR #<号> 任务 <号>" "<一句话>"`。一句话只写"按 <提示词评论的链接> 做，任务号 <号>"。Mac 上仓库的路径记在 `vonvon-collaboration.md`。提示词的第 0 步查开始和结果标记，有就不重做，两条路都一样。
+  4. Claude 先把提示词贴进 PR（预览版任务没有 PR，贴在 #322），格式见下面三种任务，再开会话：`paseo --host 10.0.0.11:6767 run -d --provider codex/gpt-6.1-sol --thinking medium --mode full-access --cwd <Mac 上的仓库> --title "<任务种类> PR #<号> 任务 <号>" "<一句话>"`。一句话只写"按 <提示词评论的链接> 做，任务号 <号>"。Mac 上仓库的路径记在 `vonvon-collaboration.md`。提示词的第 0 步查开始和结果标记，有就不重做，两条路都一样。
   5. cwd 用 Mac 上仓库的 checkout，不用临时 worktree：会话删掉自己的 cwd 以后就起不了子进程。cwd 只是会话的起点，任务照旧在 checkout 外的临时 worktree 里做；Codex 不在这个 checkout 里切分支、改文件或删东西。
   6. `paseo run` 报错或超时：先 `paseo ls` 看会话是不是其实已经建好了，建好了就照常等；`ls` 也连不上，按"硬限制"第一条连不上 daemon 的办法做，不改走 #322；`ls` 确认没有，才改走 #322，用同一个任务号，标记才能互相挡住。
   7. Claude 在后台用 `paseo wait` 等会话空闲，再读 GitHub 上的结果评论；没有结果评论时看 `paseo logs`。超过一小时还在跑，看 `paseo logs` 有没有进展。卡在"model at capacity"、Computer Use 失败或没有进展时，Claude 用 `paseo stop` 停下它，通知 owner 时写明是 Claude 停的、为什么，不反复重开。

@@ -64,7 +64,7 @@ export function chosenDecisionModel(model: DecisionPickerModel): DecisionPickerV
 
 function ProviderIcon({provider}: {provider: string}) {
   if (isDecisionApiProvider(provider)) return <span className="decision-picker-jev-icon" aria-hidden="true">J</span>;
-  const path = provider === 'codex-appserver' ? './agent-icons/codex-light.png' : provider === 'claude-agent' ? './agent-icons/claude-code.svg' : undefined;
+  const path = provider === 'codex-appserver' ? './agent-icons/terminal.png' : provider === 'claude-agent' ? './agent-icons/code.png' : undefined;
   return path ? <img className={`decision-picker-icon${provider === 'codex-appserver' ? ' decision-picker-icon--codex' : ''}`} src={path} alt=""/> : null;
 }
 

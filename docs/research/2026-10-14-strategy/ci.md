@@ -222,7 +222,7 @@ Net effect on the strategy: the case for making Windows CI lighter or non-blocki
 - **说过头了**：macOS CI's 5 failures since 10-13 were all timeouts in tests the PRs did not touch.
   - 依据：Logs of macOS jobs 115302198017, 115445532861, 115489307579, 115502883816 and 115520216964; `gh api compare/be17859...232da20e` shows data-access.test.ts untouched at that head; `gh api pulls/268/commits`.
 - **有误**：It is unknown whether the self-hosted Mac CI runner is the same machine Codex works on.
-  - 依据：`docs/self-hosted-ci.md` (current state section): 'Mac job 由本机 github-ci 标准账户下的 mac-mini-isolated 接单', an ACL set on ~, and 'switching back to clay with fast user switching'. `docs/plan.md:216`: 'One Mac runner runs one job at a time.' Codex commits come from <Mac 账号>@<Mac mini 主机名> (e.g. e056168b), and the #276 evidence is under ~/vonvon-review/.
+  - 依据：`docs/self-hosted-ci.md` (current state section): 'Mac job 由本机 ci-user 标准账户下的 mac-mini-isolated 接单', an ACL set on ~, and 'switching back to clay with fast user switching'. `docs/plan.md:216`: 'One Mac runner runs one job at a time.' Codex commits come from <Mac 账号>@<Mac mini 主机名> (e.g. e056168b), and the #276 evidence is under ~/vonvon-review/.
 
 ### 正文遗漏的事实
 

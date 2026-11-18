@@ -2,7 +2,7 @@
 
 范围：owner 的新想法——每个 bot 有自己的目录（人设、记忆、配置、skill），会话从这个目录起；bot 再关联一个或多个工作区（项目目录）；工作区的 skill 和 MCP 尽量继承。本文只列事实，不写建议。结论和 owner 的决定见 `docs/product.md` 3.3、3.6：会话照旧从工作区起，bot 自己的东西只在 `bots/<appId>/` 下，由 vonvon 交给会话（owner 2026-10-16 定）。
 
-- 仓库：`/home/ops/vonvon/vonvon-bot`，`main` 的 `6e28d23`。`D/` = `packages/daemon/src/`。只读，没改仓库。
+- 仓库：`/home/operator/vonvon/vonvon-bot`，`main` 的 `6e28d23`。`D/` = `packages/daemon/src/`。只读，没改仓库。
 - 标注：**跑过验证** = 本次在隔离目录里实际运行；**读源码** = 读了代码或类型定义；**来自文档** = CLI 帮助、SDK 注释或仓库调研文档；**未验证** = 推断。
 - 本次实测的方法（B 节引用）：用 `mktemp -d` 建隔离目录，`HOME`、`CODEX_HOME` 只写在单条命令前；一个本机假 API（记录每次请求的完整 body）代替 Anthropic 和 OpenAI，不登录、不花额度、不碰真实的 `~/.claude`、`~/.codex`。两个目录 `ws`（工作区）和 `bot`（bot 家）里各放带暗号的 `CLAUDE.md`、`AGENTS.md`、`.claude/rules/`、`.claude/skills/`、`.agents/skills/`、`.codex/skills/`、`.mcp.json`、`.claude/settings.json`、`.codex/config.toml`，看哪些暗号进了发给模型的第一条请求，以及 Claude 的 `system/init` 消息。版本：Claude Code **2.1.296**（vonvon 锁定的 Agent SDK 0.3.296 的 `manifest.json` 写的就是这一版，本机 `~/.local/share/claude/versions/2.1.296`）；Codex **0.163.0**（本机全局装的，比 vonvon 验证过的 0.156.1 新）。Codex 跑时向 chatgpt.com 发过一次插件列表请求，返回 401，没带凭据。跑完已删除临时目录。
 
@@ -175,7 +175,7 @@
 
 ## C. comma 怎么做
 
-完整笔记（带全部 `path:line`）在同目录的 [comma-home.md](comma-home.md)。路径相对 `/home/ops/vonvon/references/comma`（commit ba4f55d）。AGPL，只看思路。以下都是读源码，另标的除外。
+完整笔记（带全部 `path:line`）在同目录的 [comma-home.md](comma-home.md)。路径相对 `/home/operator/vonvon/references/comma`（commit ba4f55d）。AGPL，只看思路。以下都是读源码，另标的除外。
 
 ### C1. agent 的家和用户项目分开，而且 agent 的"家"不在设备磁盘上
 - agent 自己的东西在服务器上：每个 Agent 一份虚拟文件系统（VFS，存 S3），放 `/memory/...`（`systems/apps/salix_agent/lib/salix_agent/agent_workspace.ex:1-8`、`:36-40`）。

@@ -1,6 +1,6 @@
 # AFK-SURF/comma: reference report (read-only review, 2026-10-14)
 
-Paths are relative to `/home/ops/vonvon/references/comma` unless written as absolute. I did not run or build any of its code.
+Paths are relative to `/home/operator/vonvon/references/comma` unless written as absolute. I did not run or build any of its code.
 
 ## Summary
 
@@ -8,7 +8,7 @@ Paths are relative to `/home/ops/vonvon/references/comma` unless written as abso
 - The personal Comma product does not open Feishu: "Feishu is not open for installation in Comma yet" (systems/apps/comma_core/lib/comma/plugins.ex:115-116). Its chat channels are Telegram, private WeChat (through ClawBot), private iMessage, Signal and Slack.
 - The same monorepo has a team product, **Bridge For Teams (BFT)**, which does connect a Feishu group bot to an "External Codex" agent running on a team Mac. That is the closest overlap with Vonvon. BFT is invite-only with SSO, and the self-host compose file does not include it (compose.yaml:10).
 - It is very large and mature, but the public history is shallow. The public repo has 5 commits from 2026-09-30 to 10-02, all mirror syncs of a private repo. The code is roughly 0.6M lines of Elixir, 0.6M lines of Elixir tests, 107k Go, 79k Lean, about 670k TypeScript and 52k Swift.
-- AGPL-3.0-only means Vonvon cannot copy its code into the MIT daemon (`/home/ops/vonvon/vonvon-bot/packages/daemon/package.json:63`). Ideas can be reused by writing your own code. `spinfoam` is a separate MIT repo and is safe to use.
+- AGPL-3.0-only means Vonvon cannot copy its code into the MIT daemon (`/home/operator/vonvon/vonvon-bot/packages/daemon/package.json:63`). Ideas can be reused by writing your own code. `spinfoam` is a separate MIT repo and is safe to use.
 
 ---
 
@@ -16,7 +16,7 @@ Paths are relative to `/home/ops/vonvon/references/comma` unless written as abso
 
 **Core idea.** "Conversations are just interfaces. Tasks are the persistent execution state" (README.md:31-34). Quick questions get answered in chat, and bigger requests become Tasks. Each Task runs a plan, execute, review and verify loop until it is done (README.md:36-39, 56-58).
 
-- **Sessionless in concrete terms:** each configured Router has exactly one long-running session. Every chat, Task notification and platform message for that workspace goes into it (PRODUCT_MODEL.md:96-118). Messages that arrive from Slack, Feishu, Telegram, WeChat or Signal go straight into that one Router session (PRODUCT_MODEL.md:129). This is the opposite of Vonvon's "one topic = one session" (`/home/ops/vonvon/vonvon-bot/docs/architecture.md:7`).
+- **Sessionless in concrete terms:** each configured Router has exactly one long-running session. Every chat, Task notification and platform message for that workspace goes into it (PRODUCT_MODEL.md:96-118). Messages that arrive from Slack, Feishu, Telegram, WeChat or Signal go straight into that one Router session (PRODUCT_MODEL.md:129). This is the opposite of Vonvon's "one topic = one session" (`/home/operator/vonvon/vonvon-bot/docs/architecture.md:7`).
 - **Board:** Tasks move through Backlog, In progress, Needs Review and Done (README.md:61-62). Automated success stops at `ready_for_review`. A Task only becomes `completed` after a person accepts the exact version they reviewed (PRODUCT_MODEL.md:27-28). Each Task has one responsible Worker. The Router owns the status, and Workers post the result messages (docs/salix/tasks-background-execution.md:17-25).
 - **Loops:** small integer-only C programs that the agent writes itself. They are compiled with an embedded TinyCC-to-eBPF compiler and run inside the `spinfoam` VM. A Loop watches timers, webhooks or Composio triggers and wakes the agent only through `agent.notify` (tasks-background-execution.md:39-49, 77-90). "A quiet hour uses no large-model tokens" (README.md:65-67). Wake-ups are capped at 6 per 10 minutes per Loop, and quotas are 20 Loops per Agent and 100 per Group (tasks-background-execution.md:65, 102).
 - **Routines:** scheduled briefings built from GitHub, Slack, Notion, Gmail, Calendar and Linear. Each run has a 480-second budget and an output cap of six cards (docs/product-features.md:80-185). Comma also "writes first", meaning it can message you proactively (README.md:63-64).
@@ -102,7 +102,7 @@ BFT is AFK's B2B team product, hosted at teams.bridge.surf. Login is SSO by orga
 **AGPL implications** (not legal advice):
 
 - Copying any Comma code means the whole combined work must be licensed under AGPL (LICENSE:210-216). If you serve a modified version over a network, you must also offer its source to those users (LICENSE:540-551; README.md:239-241).
-- That conflicts with Vonvon's MIT daemon and the MIT feishu-codex-bridge (`/home/ops/vonvon/feishu-codex-bridge/package.json:60`), and it rules out any closed edition. The docs are in the same repo, so paraphrase them rather than pasting.
+- That conflicts with Vonvon's MIT daemon and the MIT feishu-codex-bridge (`/home/operator/vonvon/feishu-codex-bridge/package.json:60`), and it rules out any closed edition. The docs are in the same repo, so paraphrase them rather than pasting.
 - Safe routes:
   - Reimplement the ideas yourself.
   - Use `AFK-surf/spinfoam`, which is MIT and a separate repo (GitHub API).
@@ -116,7 +116,7 @@ BFT is AFK's B2B team product, hosted at teams.bridge.surf. Login is SSO by orga
   - Invite-only, organization-level SSO.
   - One Feishu bot per organization, attached to one Agent Swarm, instead of one group = one project folder (manual_zh.tex:199).
   - Each message goes through a Router LLM, which then creates a Task for a Worker (design.md:16-18).
-  - Feishu events arrive by HTTP webhook (router.ex:3432), while the bridge uses the Feishu long connection (WSClient), which works on a laptop behind NAT (`/home/ops/vonvon/feishu-codex-bridge/src/card/dispatcher.ts:26`).
+  - Feishu events arrive by HTTP webhook (router.ex:3432), while the bridge uses the Feishu long connection (WSClient), which works on a laptop behind NAT (`/home/operator/vonvon/feishu-codex-bridge/src/card/dispatcher.ts:26`).
   - Runners are Macs running launchd and the Agent VMM.
   - Codex runs with `danger-full-access` and no approvals (main.go:5974-5976).
 - **Self-hosting:** BFT is not in the compose file, Feishu needs public HTTPS, and the server needs four datastores with unmeasured memory. The Agent VMM is not included. None of this can be handed to the bridge's roughly 100 weekly npm users.
@@ -196,11 +196,11 @@ Two more points matter for the owner:
 ### 逐条复查
 
 - **属实**：The personal Comma product does not offer Feishu: "Feishu is not open for installation in Comma yet" (plugins.ex:115-116).
-  - 依据：/home/ops/vonvon/references/comma/systems/apps/comma_core/lib/comma/plugins.ex:115 has that comment, and line 116 `defp product_plugin?(%{"plugin_id" => "feishu"}), do: false` hides it. docs/architecture/PRODUCT_MODEL.md:129 lists Feishu only as a Router-bound inbound path. Only Slack has a Worker-bound Task path.
+  - 依据：/home/operator/vonvon/references/comma/systems/apps/comma_core/lib/comma/plugins.ex:115 has that comment, and line 116 `defp product_plugin?(%{"plugin_id" => "feishu"}), do: false` hides it. docs/architecture/PRODUCT_MODEL.md:129 lists Feishu only as a Router-bound inbound path. Only Slack has a Worker-bound Task path.
 - **属实**：Self-host compose runs only `salix,comma_product`, so BFT is not self-hostable from it (compose.yaml:10).
   - 依据：compose.yaml:10 `COMMA_SUBSYSTEMS: salix,comma_product`.
 - **说过头了**：The public repo has 5 commits from 2026-09-30 to 10-02, all mirror syncs of a private repo.
-  - 依据：`git log` in /home/ops/vonvon/references/comma: ba4f55d, f811124, 4461132, f2e37fc, 03c868c.
+  - 依据：`git log` in /home/operator/vonvon/references/comma: ba4f55d, f811124, 4461132, f2e37fc, 03c868c.
 - **属实**：Repo created 2026-09-30, last push 2026-10-03, 256 stars, 17 forks, 12 issues/PRs, 2 open.
   - 依据：GitHub API, fetched 2026-10-14: created_at 2026-09-30T08:39:30Z, pushed_at 2026-10-03T06:32:04Z, 257 stars (one more than the report), 17 forks, 12 items (#1-#12), 2 open. The open ones are #10 "Support client-side Remote SSH for private/VPN-only Linux hosts" and #12 "Add streaming of computer screen to chat" (https://api.github.com/repos/AFK-SURF/comma/issues?state=all).
 - **说过头了**：About 19 co-authors, so Vonvon would compete with a roughly 19-person, AI-assisted team.
@@ -212,7 +212,7 @@ Two more points matter for the owner:
 - **属实**：BFT allows only one Feishu app per organization with group-bot use, and that bot connects to one Agent Swarm. The manual is v1.5 dated 2026-07-19. BFT is invite-only with SSO.
   - 依据：docs/user_manual/bridge_for_teams/manual_zh.tex:199 (the one-app/one-Swarm sentence), :38 and :48 (date and version 1.5), :99-109 (invite code is single-use). One nuance: the invite code is only needed to create a new organization, and members sign in by org-slug SSO (https://teams.bridge.surf, fetched 2026-10-14).
 - **属实**：BFT Feishu events arrive by HTTP webhook (router.ex:3432), while the bridge uses the Feishu long connection (dispatcher.ts:26).
-  - 依据：systems/apps/salix_web/lib/salix_web/router.ex:3432 `post "/v1/im/feishu/events"`. For the bridge, the better citation is /home/ops/vonvon/feishu-codex-bridge/src/bot/bridge.ts:44-47 and src/cli/commands/run.ts:16 ("foreground long-connection bot"). dispatcher.ts:25-26 is a comment about card callbacks, and it also says a lark-cli transport exists that does not deliver them.
+  - 依据：systems/apps/salix_web/lib/salix_web/router.ex:3432 `post "/v1/im/feishu/events"`. For the bridge, the better citation is /home/operator/vonvon/feishu-codex-bridge/src/bot/bridge.ts:44-47 and src/cli/commands/run.ts:16 ("foreground long-connection bot"). dispatcher.ts:25-26 is a comment about card callbacks, and it also says a lark-cli transport exists that does not deliver them.
 - **属实**：WeChat (ClawBot) and iMessage are private chats only.
   - 依据：docs/messaging-voice.md:33 ("Only the scanned account's private messages enter its Workspace, never groups") and :8 (iMessage: "private text and images, not groups").
 - **属实**：Pricing: Value $0 with unlimited chat and BYOK. Pro $80/month billed yearly, ~300-600 agentic tasks a month. The cloud computer uses ~74,000 credits/hour, and 1M credits = $1.
@@ -224,15 +224,15 @@ Two more points matter for the owner:
 - **属实**：`agent.create_worker` requires a purpose and a creation_reason, archive needs explicit user confirmation, and only the Router can use these tools.
   - 依据：systems/apps/salix_agent/lib/salix_agent/tools/agent_management.ex:4 (archive prompt), :12-13 (create_worker), :53-55 (`roles: ["router"]`).
 - **说过头了**：Comma is AGPL-3.0-only and Vonvon's daemon and the bridge are MIT. spinfoam is MIT. The CLA lets AFK relicense, so a commercial license can be requested.
-  - 依据：README.md:239. LICENSE:210-216 and 540-551 (§5c, §13). /home/ops/vonvon/vonvon-bot/packages/daemon/package.json:63 and /home/ops/vonvon/feishu-codex-bridge/package.json:60 are "MIT". GitHub API gives spinfoam license "mit" (created 2026-09-16). CLA.md:10.
+  - 依据：README.md:239. LICENSE:210-216 and 540-551 (§5c, §13). /home/operator/vonvon/vonvon-bot/packages/daemon/package.json:63 and /home/operator/vonvon/feishu-codex-bridge/package.json:60 are "MIT". GitHub API gives spinfoam license "mit" (created 2026-09-16). CLA.md:10.
 - **说过头了**：Code size: about 616k lines of Elixir, 1,121 test files, 107k Go, 79k Lean, ~670k TS, 52k Swift, 3.7k TLA+. salix-connect is about 69k lines of Go.
-  - 依据：find/wc in /home/ops/vonvon/references/comma.
+  - 依据：find/wc in /home/operator/vonvon/references/comma.
 - **属实**：Comma has no bot marketplace today.
   - 依据：`grep -ril marketplace` over .md/.ex/.ts/.tsx finds only resources/salix-system-files/skills/ui-designer files, which are unrelated.
 - **说过头了**：Unknown whether BFT routes Feishu topics to separate Tasks. Thread continuation is documented only for Slack.
   - 依据：systems/apps/salix_im/lib/salix_im/provider/feishu.ex:66-70, 119, 136; feishu/message.ex:12-20.
 - **属实**：(Context) feishu-codex-bridge's last release was 0.6.14 on 2026-09-24, at about 100 downloads a week. Vonvon's design is one group = one folder, one topic = one session.
-  - 依据：npm registry time 2026-09-24T14:12:37Z for 0.6.14, and git tag v0.6.14 at 2026-09-24 22:10 +0800. https://api.npmjs.org/downloads/point/last-week/@modelzen/feishu-codex-bridge gives 108 for 2026-10-06..10-12. /home/ops/vonvon/vonvon-bot/docs/architecture.md:7.
+  - 依据：npm registry time 2026-09-24T14:12:37Z for 0.6.14, and git tag v0.6.14 at 2026-09-24 22:10 +0800. https://api.npmjs.org/downloads/point/last-week/@modelzen/feishu-codex-bridge gives 108 for 2026-10-06..10-12. /home/operator/vonvon/vonvon-bot/docs/architecture.md:7.
 
 ### 正文遗漏的事实
 
@@ -240,7 +240,7 @@ Two more points matter for the owner:
 - Muse is Meta's personal agent, announced 2026-09-08 and updated 2026-09-30 (https://about.fb.com/news/2026/09/introducing-muse). It is proactive, runs on a "Muse Secure VM", and works in the Muse app, WhatsApp and muse.ai. It is US-only for now, with a free tier and paid plans. The $20/$100 prices come only from secondary search results and are not confirmed on Meta's page.
 - Today AI is a Chinese "Personal AI" built by Teambition founder 齐俊元. Its domestic version went live on 9月24日 and it already connects to 飞书、钉钉、腾讯文档 and email (Huxiu, 2026-10-08, https://m.huxiu.com/article/4895918.html, a secondary hands-on review; the official site was not found). That makes it a direct Feishu-surface competitor, which Comma is not.
 - Grok Bot is xAI's product (beta 2026-08-11, https://x.ai/news/introducing-grok-bot): always-on bots on their own cloud computer, and "You can also place Bots in a group chat where they can coordinate on their own." Team Bots (2026-09-28, https://x.ai/news/team-bots) are shared bots with their own handle in Slack channels. A Grok Bot Marketplace (https://x.ai/bot/marketplace) lists bots with an "Add" button. Its Templates guide says "Templates share a bot as a recipe, not a clone" and covers publishing and installing (https://x.ai/bot/guides). No xAI page found mentions Feishu/Lark, a CLI for Grok Bot, or creating a bot by chatting with a bot. These are unconfirmed.
-- Naming risk: Vonvon's plan already has "ACP engine with Cursor, Grok, and custom ACP (V7a)" (/home/ops/vonvon/vonvon-bot/docs/plan.md:1589). That Grok is a coding-agent engine, a different thing from xAI's Grok Bot product with a marketplace. The owner's "Grok Bot" idea should not be read as the V7a engine.
+- Naming risk: Vonvon's plan already has "ACP engine with Cursor, Grok, and custom ACP (V7a)" (/home/operator/vonvon/vonvon-bot/docs/plan.md:1589). That Grok is a coding-agent engine, a different thing from xAI's Grok Bot product with a marketplace. The owner's "Grok Bot" idea should not be read as the V7a engine.
 - Comma's device story is effectively Mac-only. The BFT runner installer accepts only darwin-arm64 (systems/connector/README.md:169), and open issue #10 asks for Linux remote-SSH hosts. The report says Mac only for the app but does not say this blocks Linux and Windows users for the device bridge.
 - PRODUCT_MODEL.md:129 says Router-bound Feishu inbound skips Conversation Messages and goes straight into the single Router session. Only Slack has Worker-bound Task sessions. This is stronger evidence than the report gives that Feishu in BFT is Router-first and not topic = session.
 - The Huxiu article reports that Muse leaked about 190k user conversation records. This is unverified and secondary, but relevant to a local-first privacy pitch if it can be confirmed from a primary source.

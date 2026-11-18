@@ -94,11 +94,11 @@ main 必败：
 
 JP-VPS，用验收 daemon（Bot 6）。用哪家是群绑定时定的（`vonvon group bind --tool claude|codex`），不是 bot 的设置：从 `test-chats.json` 的登记和 `projects.json` 的当前绑定里挑 Bot 6 绑在 Claude 上的测试群和绑在 Codex 上的测试群，单会话和多会话各要一个（chat id 不打印）；缺哪种就按 #422 正文第 4 节新建测试群、用 `--tool` 绑好并补登记。【T3】在绑 Claude 的群里做第 1 到 6 步和第 8 步；【T3b】在绑 Codex 的群里重做第 1 到 5 步，再做第 7、8 步。锁、临时目录、删除规矩和 lark-cli 的用法同 T2 第 6 节，原文照抄：
 
-- 先拿目录锁：`mkdir /tmp/vonvon-accept.d`，失败就等；拿到后 `echo "<任务号> $(date -u +%FT%TZ)" > /tmp/vonvon-accept.d/owner`；用完 `rm -f /tmp/vonvon-accept.d/owner && rmdir /tmp/vonvon-accept.d`。
+- 先拿目录锁：`mkdir /tmp/accept-user.d`，失败就等；拿到后 `echo "<任务号> $(date -u +%FT%TZ)" > /tmp/accept-user.d/owner`；用完 `rm -f /tmp/accept-user.d/owner && rmdir /tmp/accept-user.d`。
 - 临时目录只用 `T=$(mktemp -d)` 建，只用 `rm -rf -- "${T:?}"` 删，或者删刚在 `/tmp/` 下建的字面路径。
 - 不对 `$HOME`、`~`、`$PWD`、`$VONVON_HOME` 或任何可能为空、未设置、指向真实 home 的变量拼出来的路径用 `rm`、`find -delete`、`find -exec rm` 或 `xargs rm`。
 - 不在 shell 里给 `HOME`、`VONVON_HOME` 赋值或 export，只写在单条命令前面，例如 `HOME=$T/home VONVON_HOME=$T/vh npx vitest run`。
-- 发消息用 `say.py`（jojo，`--as user`），读用 `lark-cli im +messages-list --as user --chat-id <登记的 chatId>`；看任务用 `VONVON_HOME=/home/ops/vonvon/accept-home2 vonvon schedule list --bot … --group … --json`。
+- 发消息用 `say.py`（jojo，`--as user`），读用 `lark-cli im +messages-list --as user --chat-id <登记的 chatId>`；看任务用 `VONVON_HOME=/home/operator/vonvon/accept-home2 vonvon schedule list --bot … --group … --json`。
 - 步骤：
   1. 主人在单会话群说"@Bot 6 每天早上 9 点发一份日报，内容是今天群里聊了什么"：bot 调 `schedule_create`，回复里有名字、"每天 09:00"、下一次时间和时区；`schedule list --json` 看到它，`placement.kind` 是 `follow`。
   2. 成员（第二个测试账号；没有就让 owner 的另一个 bot 账号发，不行记"待 owner 验收"）说"把日报删了"：bot 调 `schedule_delete` 被拒 `not-task-owner`，回复里有第 16 节那句。

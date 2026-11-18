@@ -3,8 +3,8 @@
 调研日期 2026-10-14。全程只读：没有改仓库，没有跑构建和测试，gh 只做了查询。
 
 **缩写**
-- `FCB` 指 /home/ops/vonvon/feishu-codex-bridge，版本 0.6.14，提交 `6698118`。
-- `BOT` 指 /home/ops/vonvon/vonvon-bot，提交 `be17859`。`D/` 指 `BOT/packages/daemon/src/`。
+- `FCB` 指 /home/operator/vonvon/feishu-codex-bridge，版本 0.6.14，提交 `6698118`。
+- `BOT` 指 /home/operator/vonvon/vonvon-bot，提交 `be17859`。`D/` 指 `BOT/packages/daemon/src/`。
 - `PS` 指 `FCB/docs/design/project-status-2026-07-01.md`。这份文档按 0.6.4 写成，之后加的功能另查 `git log`。
 - `群#N` 是交流群"Vonvon 灵感研究所"里第 N 条消息，数据是之前 bridge.report.md 那次运行拉下来的 `scratchpad/chat/msgs.json`。sender 尾号 `36db70` 的是维护者，发的多是版本公告，所以我只把其他人的消息算作用户证据。
 - `issue #N`、`PR #N` 指 GitHub 上的 modelzen/feishu-codex-bridge。`v2 PR #N` 指 vonvon-bot。

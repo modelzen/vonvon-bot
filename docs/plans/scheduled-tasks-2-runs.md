@@ -114,12 +114,12 @@ main 必败：`runScheduled`、钩子、头部、标签、`presence`、`schedule
 
 JP-VPS，用验收 daemon（`accept-home2`，Bot 6，已绑的测试群；环境和登记见 #422 正文第 4 节，群从 `test-chats.json` 的登记里取一个单会话群和一个多会话群，chat id 不打印）。
 
-- 先拿目录锁：`mkdir /tmp/vonvon-accept.d`，失败就等；拿到后 `echo "<任务号> $(date -u +%FT%TZ)" > /tmp/vonvon-accept.d/owner`；用完 `rm -f /tmp/vonvon-accept.d/owner && rmdir /tmp/vonvon-accept.d`。
+- 先拿目录锁：`mkdir /tmp/accept-user.d`，失败就等；拿到后 `echo "<任务号> $(date -u +%FT%TZ)" > /tmp/accept-user.d/owner`；用完 `rm -f /tmp/accept-user.d/owner && rmdir /tmp/accept-user.d`。
 - 临时目录只用 `T=$(mktemp -d)` 建，只用 `rm -rf -- "${T:?}"` 删，或者删刚在 `/tmp/` 下建的字面路径。
 - 不对 `$HOME`、`~`、`$PWD`、`$VONVON_HOME` 或任何可能为空、未设置、指向真实 home 的变量拼出来的路径用 `rm`、`find -delete`、`find -exec rm` 或 `xargs rm`。
 - 不在 shell 里给 `HOME`、`VONVON_HOME` 赋值或 export，只写在单条命令前面，例如 `HOME=$T/home VONVON_HOME=$T/vh npx vitest run`。
 - 重命令加 `flock /tmp/vonvon-heavy.lock`。
-- lark-cli：profile jojo、`--as user`，发消息照 `/home/ops/vonvon/claude-work/s25c-selftest/say.py` 的写法（第一个参数 chat id，第二个要 @ 的 bot 名）；读群里的消息用 `lark-cli im +messages-list --as user --chat-id <登记的 chatId> --page-size 20`（参数名以 `lark-cli im --help` 为准，不会的就记"没验到"），只看 Bot 6 发的卡和文字。终端命令都带 `--bot <Bot 6 的 app id 前 9 位> --group <登记的群名>`，前面写 `VONVON_HOME=/home/ops/vonvon/accept-home2`。
+- lark-cli：profile jojo、`--as user`，发消息照 `/home/operator/vonvon/claude-work/s25c-selftest/say.py` 的写法（第一个参数 chat id，第二个要 @ 的 bot 名）；读群里的消息用 `lark-cli im +messages-list --as user --chat-id <登记的 chatId> --page-size 20`（参数名以 `lark-cli im --help` 为准，不会的就记"没验到"），只看 Bot 6 发的卡和文字。终端命令都带 `--bot <Bot 6 的 app id 前 9 位> --group <登记的群名>`，前面写 `VONVON_HOME=/home/operator/vonvon/accept-home2`。
 - 步骤：
   1. 验收 worktree 切到本分支，构建，重启验收 daemon。
   2. 单会话群：`vonvon schedule add --bot … --group … --name 报时 --every 1m "说一句现在几点"`，等两分半，`+messages-list`：两张卡，标签行 `⏰ 定时任务「报时」`，没有引用、没有话题，没有根消息文字。
