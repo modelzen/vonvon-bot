@@ -93,8 +93,8 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
   const run = context?.threadId === selected ? context.run : null;
 
   return <div id={settingAnchor('会话管理')}>
-    {current && <SettingsGroup label="当前会话" footer="清空和压缩只作用于选中的会话。正在运行的任务不能安全切换时，Bridge 会拒绝操作。">
-      <SettingsRow title="会话" trailing={<select aria-label="选择会话" value={selected} onChange={(event) => setSelected(event.target.value)}>{history?.sessions.filter((item) => !item.detached).map((item) => <option key={item.threadId} value={item.threadId}>{item.summary || item.threadId}</option>)}</select>} />
+    {current && <SettingsGroup label="当前会话" footer="清空和压缩只作用于当前会话。">
+      <SettingsRow title="会话" value={current.summary || current.threadId} />
       <SettingsRow title="上下文" value={context?.usage ? `${context.usage.used.toLocaleString()} / ${context.usage.window?.toLocaleString() ?? "未知窗口"}` : "暂无可用统计"} trailing={<Button size="sm" onClick={() => void request({ action: "context", ...target, threadId: selected }).then((reply) => { if (reply.kind === "context") setContext(reply); else if (reply.kind === "refused") setError(reply.message); })}>刷新</Button>} />
       <SettingsRow title="会话操作" description={conversation === "threads" ? "话题模式可压缩当前会话；清空仅适用于整群共享会话。" : undefined} trailing={<div className="settings-inline-actions"><Button size="sm" disabled={busy || conversation === "threads"} onClick={() => void execute({ action: "clear", ...target, threadId: selected }, "已开始新会话。")}>清空会话</Button><Button size="sm" disabled={busy} onClick={() => void execute({ action: "compact", ...target, threadId: selected }, "上下文已压缩。")}>压缩上下文</Button></div>} />
       <SettingsRow title="自主任务目标" trailing={<div className="settings-inline-actions"><input aria-label="自主任务目标" className="settings-field" value={objective} maxLength={4000} onChange={(event) => setObjective(event.target.value)} placeholder="输入目标" /><Button size="sm" disabled={busy || !objective.trim()} onClick={() => void execute({ action: "startGoal", ...target, threadId: selected, objective: objective.trim() }, "目标任务已开始。")}>开始</Button></div>} />
