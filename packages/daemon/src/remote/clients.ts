@@ -8,8 +8,8 @@ import { devicesPath, prepareDevicesDirectory, refuseNewer } from './files';
 import { PairingError } from './pairing';
 
 /** `<dataRoot>/devices/clients.json` (devices 4.3): every write adds 1 to `generation`; a revoked client stays, with `revokedAt`.
- * Each entry is the protocol's `clientRecordSchema` (zod 3, so parsed apart from this zod 4 frame). Fields a newer version
- * added, outside or in an entry, are kept and written back; the RPC replies carry only the known ones. */
+ * Each entry is parsed with the protocol's `clientRecordSchema`. Unknown fields in the file and its entries are
+ * preserved on disk, while RPC replies carry only the known fields. */
 const clientsFileSchema = z.looseObject({ v: z.literal(1), generation: z.number().int().nonnegative(), clients: z.array(z.unknown()) });
 const storedRecordSchema = clientRecordSchema.passthrough();
 const wireRecordSchema = clientRecordSchema.strip();

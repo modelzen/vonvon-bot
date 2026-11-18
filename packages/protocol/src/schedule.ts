@@ -13,8 +13,8 @@ export const scheduleRefusalSchema = z.enum([
 export const hhmmSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 export const scheduleSpecSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('once'), at: z.number().int() }).strict(),                               // epoch ms
-  // anchor：请求里可省略；命令核在创建和改 spec 时填为当时向上取整到整分的 epoch ms；存储里一定有。slot = anchor + k × minutes，k ≥ 1
-  z.object({ kind: z.literal('every'), minutes: z.number().int().min(1).max(10080), anchor: z.number().int().optional() }).strict(),
+  // anchor：兼容旧请求里省略或传任意有限整数；创建和改 spec 时按服务端时间向上取整到整分。slot = anchor + k × minutes，k ≥ 1
+  z.object({ kind: z.literal('every'), minutes: z.number().int().min(1).max(10080), anchor: z.number().refine(Number.isInteger).optional() }).strict(),
   z.object({ kind: z.literal('daily'), time: hhmmSchema }).strict(),
   z.object({ kind: z.literal('weekly'), days: z.array(z.number().int().min(0).max(6)).min(1).max(7), time: hhmmSchema }).strict(), // 0=周日
   z.object({ kind: z.literal('cron'), expr: z.string().trim().min(9).max(100) }).strict(),               // 标准 5 段

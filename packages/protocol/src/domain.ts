@@ -3,10 +3,8 @@ import {groupDecisionSchema} from "./group-decision.js";
 import { botDiagnosticsSchema } from "./diagnostics.js";
 import { applicationCrashesSchema, crashPauseSchema, lockHeldSchema } from "./crash.js";
 
-export const agentIdSchema = z
-  .string()
-  .regex(/^cli_[A-Za-z0-9_-]{1,200}$/)
-  .brand<"AgentId">();
+export const agentIdStringSchema = z.string().regex(/^cli_[A-Za-z0-9_-]{1,200}$/);
+export const agentIdSchema = agentIdStringSchema.brand<"AgentId">();
 export const groupIdSchema = z
   .string()
   .regex(/^oc_[A-Za-z0-9_-]{1,200}$/)
@@ -28,7 +26,7 @@ export const jobIdSchema = z
   .max(180)
   .regex(/^[A-Za-z0-9_-]+$/)
   .brand<"JobId">();
-export const folderTokenSchema = z.string().uuid().brand<"FolderToken">();
+export const folderTokenSchema = z.guid().brand<"FolderToken">();
 export const folderSelectionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("default") }).strict(),
   z.object({ kind: z.literal("existing"), folderToken: folderTokenSchema }).strict(),
@@ -299,12 +297,15 @@ export const commandResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("folderChosen"), folder: folderChoiceSchema }),
   z.object({ kind: z.literal("members"), members: z.array(z.object({ openId: z.string().min(1), name: z.string() })), nextCursor: z.string().optional() }),
   z.object({ kind: z.literal("groups"), groups: z.array(z.object({ id: groupIdSchema, name: z.string(), bound: z.boolean(), hasOtherBots: z.boolean().optional() })), nextCursor: z.string().optional() }),
-  z.object({ kind: z.literal("feishuRead"), result: z.unknown() }),
+  z.object({ kind: z.literal("feishuRead"), result: z.unknown().optional() }),
   z.object({ kind: z.literal("cancelled") }),
   z.object({ kind: z.literal("activationPending"), message: z.string() }),
   z.object({ kind: z.literal("refused"), code: z.string(), message: z.string() }),
   z.object({ kind: z.literal("outcomeUnknown"), message: z.string() }),
 ]);
 export type CommandResult = z.infer<typeof commandResultSchema>;
-export const commandReplySchema = z.object({ command: z.custom<Command["type"]>(value => typeof value === "string" && commandSchema.optionsMap.has(value)), result: commandResultSchema });
+export const commandReplySchema = z.object({
+  command: z.custom<Command["type"]>(value => commandSchema.options.some(option => option.shape.type.value === value)),
+  result: commandResultSchema,
+});
 export type CommandReply = z.infer<typeof commandReplySchema>;

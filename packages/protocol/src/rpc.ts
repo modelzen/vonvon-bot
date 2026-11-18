@@ -31,6 +31,11 @@ export const requestSchema = z.discriminatedUnion("method", [
   z.object({type:z.literal("request"),id,method:z.literal("device"),payload:deviceRequestSchema}).strict(),
 ]);
 export type Request = z.infer<typeof requestSchema>;
+type RequestVariantSchema = (typeof requestSchema.options)[number];
+const requestVariants = new Map<string, RequestVariantSchema>(requestSchema.options.map(option => [option.shape.method.value, option]));
+export function requestSchemaForMethod(method: string): RequestVariantSchema | undefined {
+  return requestVariants.get(method);
+}
 // One const per method so the declaration emit names each part; the inline union grew past what tsc will serialize (TS7056).
 const snapshotResponse = z.object({type:z.literal("response"),id,method:z.literal("snapshot"),payload:desktopSnapshotSchema}).strict();
 const commandResponse = z.object({type:z.literal("response"),id,method:z.literal("command"),payload:commandResultSchema}).strict();
@@ -45,7 +50,7 @@ const memoryResponse = z.object({type:z.literal("response"),id,method:z.literal(
 const contextPreviewResponse = z.object({type:z.literal("response"),id,method:z.literal("contextPreview"),payload:contextPreviewReplySchema}).strict();
 const scheduleResponse = z.object({type:z.literal("response"),id,method:z.literal("schedule"),payload:scheduleReplySchema}).strict();
 const deviceResponse = z.object({type:z.literal("response"),id,method:z.literal("device"),payload:deviceReplySchema}).strict();
-export const responseSchema: z.ZodDiscriminatedUnion<"method", [typeof snapshotResponse, typeof commandResponse, typeof settingsResponse, typeof collaborationResponse, typeof environmentResponse, typeof machineResponse, typeof adminResponse, typeof directoryResponse, typeof libraryResponse, typeof memoryResponse, typeof contextPreviewResponse, typeof scheduleResponse, typeof deviceResponse]> = z.discriminatedUnion("method", [
+export const responseSchema: z.ZodDiscriminatedUnion<[typeof snapshotResponse, typeof commandResponse, typeof settingsResponse, typeof collaborationResponse, typeof environmentResponse, typeof machineResponse, typeof adminResponse, typeof directoryResponse, typeof libraryResponse, typeof memoryResponse, typeof contextPreviewResponse, typeof scheduleResponse, typeof deviceResponse], "method"> = z.discriminatedUnion("method", [
   snapshotResponse, commandResponse, settingsResponse, collaborationResponse, environmentResponse, machineResponse, adminResponse, directoryResponse, libraryResponse, memoryResponse, contextPreviewResponse, scheduleResponse, deviceResponse,
 ]);
 export type Response = z.infer<typeof responseSchema>;
@@ -54,5 +59,5 @@ export const errorEnvelopeSchema = z.object({
   type:z.literal("error"),id,code:z.string().min(1),message:z.string(),details:z.record(z.string(),z.unknown()).optional(),
 }).strict();
 export type ErrorEnvelope = z.infer<typeof errorEnvelopeSchema>;
-export const replyEnvelopeSchema: z.ZodUnion<[typeof responseSchema, typeof errorEnvelopeSchema]> = z.union([responseSchema,errorEnvelopeSchema]);
+export const replyEnvelopeSchema: z.ZodUnion<readonly [typeof responseSchema, typeof errorEnvelopeSchema]> = z.union([responseSchema,errorEnvelopeSchema]);
 export type ReplyEnvelope = z.infer<typeof replyEnvelopeSchema>;

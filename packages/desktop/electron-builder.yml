@@ -1,6 +1,6 @@
 appId: com.vonvon.bot.desktop
 productName: Vonvon Bot
-electronVersion: 44.4.5
+electronVersion: 44.11.4
 electronDist: ../../node_modules/electron/dist
 # Non-macOS Electron distributions use hyphenated .pak locale names.
 electronLanguages:

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ServerInfo, VonvonClient } from '@vonvon/client/browser';
 import {
-  agentIdSchema, viewIdSchema, type BackendInstallEventPayload, type CommandResult, type DesktopSnapshot, type DesktopUpdate, type DeviceEventPayload,
+  agentIdStringSchema, viewIdSchema, type BackendInstallEventPayload, type CommandResult, type DesktopSnapshot, type DesktopUpdate, type DeviceEventPayload,
   type DevicesState, type LogEventPayload, type MachineReply, type ViewId,
 } from '@vonvon/protocol';
 import type { ShellCapabilities } from '../../ui/src/client-context.js';
@@ -61,7 +61,7 @@ export type ViewArgument = z.infer<typeof viewArgumentSchema>;
 /** The machine-page actions the shell does itself, not the daemon (devices 8.4): their shapes live here, so the protocol
  * no longer declares `repairCli` and the desktop update requests for the shell's sake. */
 export const desktopShellRequestSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('startHost'), bot: agentIdSchema.unwrap().optional() }),
+  z.object({ type: z.literal('startHost'), bot: agentIdStringSchema.optional() }),
   z.object({ type: z.literal('service'), action: z.enum(['install', 'start', 'stop', 'uninstall']) }),
   z.object({ type: z.literal('repairCli') }),
   z.object({ type: z.literal('checkDesktopUpdate') }),
