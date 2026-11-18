@@ -5,7 +5,7 @@ import {homedir} from 'node:os';
 import {dirname, join, isAbsolute} from 'node:path';
 
 const exec = promisify(execFile);
-const names = ['vonvon-bridge', 'feishu-codex-bridge'] as const;
+const names = ['vonvon-bot', 'vonvon-bridge', 'feishu-codex-bridge'] as const;
 const marker = 'Vonvon Bridge managed CLI v1';
 const begin = '# >>> Vonvon Bridge CLI >>>';
 const end = '# <<< Vonvon Bridge CLI <<<';
@@ -136,7 +136,7 @@ export async function registerCli(options:CliRegistrationOptions):Promise<Regist
       const next=`${bin}${other?`;${other}`:''}`;
       if(next!==current.value)await pathStore.write(next,current.type);
     }
-    return {kind:'ready',bin,message:'命令行工具已安装。请打开新的终端使用 vonvon-bridge。'};
+    return {kind:'ready',bin,message:'命令行工具已安装。请打开新的终端使用 vonvon-bot。'};
   } catch(error) {return {kind:'error',message:error instanceof Error?error.message:String(error)};}
 }
 

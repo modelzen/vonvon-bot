@@ -45,7 +45,7 @@ else {
   app.on('activate',()=>window?.show());
   app.on('window-all-closed',()=>undefined);
   app.on('before-quit',event=>{if(!allowQuit){event.preventDefault();requestQuit();}});
-  void app.whenReady().then(start).catch(error=>{dialog.showErrorBox('Vonvon Bridge 启动失败',messageOf(error));allowQuit=true;app.quit();});
+  void app.whenReady().then(start).catch(error=>{dialog.showErrorBox('Vonvon Bot 启动失败',messageOf(error));allowQuit=true;app.quit();});
 }
 function requestQuit(): void {
   if (window && !window.isDestroyed() && !window.webContents.isDestroyed() && !window.webContents.isCrashed() && !window.webContents.isLoadingMainFrame()) {
@@ -65,7 +65,7 @@ function validateSender(event:Electron.IpcMainInvokeEvent):void {
   if(!valid)throw new Error('Untrusted IPC sender.');
 }
 async function start():Promise<void> {
-  window=new BrowserWindow({width:1060,height:780,minWidth:720,minHeight:560,title:'Vonvon Bridge',backgroundColor:'#f7f7f8',titleBarStyle:process.platform==='darwin'?'hiddenInset':'default',webPreferences:{preload:join(__dirname,'preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true}});
+  window=new BrowserWindow({width:1060,height:780,minWidth:720,minHeight:560,title:'Vonvon Bot',backgroundColor:'#f7f7f8',titleBarStyle:process.platform==='darwin'?'hiddenInset':'default',webPreferences:{preload:join(__dirname,'preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true}});
   const currentWindow=window;
   currentWindow.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   currentWindow.webContents.on('will-navigate',event=>event.preventDefault());
@@ -182,10 +182,10 @@ async function start():Promise<void> {
   const icon=nativeImage.createFromPath(join(__dirname,'renderer','vonvon-logo.png')).resize({width:18,height:18});
   icon.setTemplateImage(process.platform==='darwin');
   tray=new Tray(icon);
-  tray.setToolTip('Vonvon Bridge');
-  tray.setContextMenu(Menu.buildFromTemplate([{label:'显示 Vonvon Bridge',click:()=>currentWindow.show()},{type:'separator'},{label:'退出 Vonvon Bridge',click:()=>requestQuit()}]));
+  tray.setToolTip('Vonvon Bot');
+  tray.setContextMenu(Menu.buildFromTemplate([{label:'显示 Vonvon Bot',click:()=>currentWindow.show()},{type:'separator'},{label:'退出 Vonvon Bot',click:()=>requestQuit()}]));
   tray.on('click',()=>currentWindow.show());
-  Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'Vonvon Bridge',submenu:[{label:'显示窗口',click:()=>currentWindow.show()},{label:'隐藏窗口',accelerator:'CmdOrCtrl+W',click:()=>currentWindow.hide()},{type:'separator'},{label:'退出',accelerator:'CmdOrCtrl+Q',click:()=>requestQuit()}]},{label:'编辑',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'}]},{label:'窗口',submenu:[{role:'minimize'},{role:'zoom'}]}]));
+  Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'Vonvon Bot',submenu:[{label:'显示窗口',click:()=>currentWindow.show()},{label:'隐藏窗口',accelerator:'CmdOrCtrl+W',click:()=>currentWindow.hide()},{type:'separator'},{label:'退出',accelerator:'CmdOrCtrl+Q',click:()=>requestQuit()}]},{label:'编辑',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'}]},{label:'窗口',submenu:[{role:'minimize'},{role:'zoom'}]}]));
   const target=process.platform==='darwin'?'mac-arm64':'win-x64';
   const runtime=app.isPackaged?join(process.resourcesPath,'runtime'):join(__dirname,'..','build','runtime',target);
   const nodePath=join(runtime,'node',process.platform==='win32'?'node.exe':'bin/node');
@@ -261,7 +261,7 @@ async function start():Promise<void> {
       const state = activeController.current().host;
       if (state.kind !== 'connected') throw new Error(state.kind === 'starting' ? 'Bridge 尚未完成启动。' : state.message);
     },
-    openReleases: () => shell.openExternal('https://github.com/modelzen/vonvon-bridge/releases'),
+    openReleases: () => shell.openExternal('https://github.com/modelzen/vonvon-bot/releases'),
     updater: new DesktopUpdater({current: app.getVersion(), ...updateConfiguration, driver: autoUpdater,
       statePath: join(app.getPath('userData'), 'desktop-update-expected-version'),
       beforeInstall: async () => {machine?.beginClosing();await environment?.close();await activeController.quit(); allowQuit = true;},

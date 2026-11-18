@@ -40,8 +40,8 @@ export function MachinePanel({request, agents, reveal}: {request: MachineRequest
         : !status.service.installed);
 
   return <>
-    <SettingsGroup id={settingAnchor('命令行工具')} label="命令行工具" footer="安装后请打开新的终端，输入 vonvon-bridge。兼容命令 feishu-codex-bridge 也可用。">
-      <SettingsRow title="vonvon-bridge" description={status?.cli.kind==='error'?status.cli.message:status?.cli.bin??'正在检查…'}
+    <SettingsGroup id={settingAnchor('命令行工具')} label="命令行工具" footer="安装后请打开新的终端，输入 vonvon-bot。兼容命令 vonvon-bridge 和 feishu-codex-bridge 也可用。">
+      <SettingsRow title="vonvon-bot" description={status?.cli.kind==='error'?status.cli.message:status?.cli.bin??'正在检查…'}
         value={status?.cli.kind==='ready'?'已安装':'需要修复'}
         trailing={<Button size="sm" disabled={busy} onClick={() => void run({type:'repairCli'})}>修复命令行工具</Button>} />
     </SettingsGroup>

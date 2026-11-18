@@ -29,7 +29,7 @@ export function SearchDialog({open, entries, onClose, onSelect}: {
     resultList.current?.querySelector<HTMLElement>(`[data-result-index="${selected}"]`)?.scrollIntoView({block: 'nearest'});
   }, [open, selected, query]);
   const choose = () => {if (selected >= 0 && results[selected]) onSelect(results[selected]);};
-  return <Dialog open={open} title="搜索 Vonvon Bridge" variant="search" onClose={onClose} initialFocusRef={input}>
+  return <Dialog open={open} title="搜索 Vonvon Bot" variant="search" onClose={onClose} initialFocusRef={input}>
     <div className="desktop-search-heading">
       <Search size={20} strokeWidth={2} aria-hidden="true" />
       <input

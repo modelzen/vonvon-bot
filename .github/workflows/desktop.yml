@@ -30,7 +30,7 @@ jobs:
       - run: npm run test:native
       - run: npm run package:${{ matrix.package }}
       - if: runner.os == 'macOS'
-        run: tar -czf "release/Vonvon-Bridge-macOS-arm64.tar.gz" -C release/mac-arm64 "Vonvon Bridge.app"
+        run: tar -czf "release/vonvon-bot-macOS-arm64.tar.gz" -C release/mac-arm64 "Vonvon Bot.app"
       - name: Upload optional preview download
         uses: actions/upload-artifact@v4
         continue-on-error: true

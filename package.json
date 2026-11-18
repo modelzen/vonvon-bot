@@ -1,5 +1,5 @@
 {
-  "name": "vonvon-bridge-desktop",
+  "name": "vonvon-bot",
   "version": "0.7.0",
   "private": true,
   "type": "module",
@@ -44,7 +44,7 @@
   },
   "build": {
     "appId": "com.vonvon.bridge",
-    "productName": "Vonvon Bridge",
+    "productName": "Vonvon Bot",
     "asar": true,
     "directories": {
       "output": "release"
@@ -64,7 +64,7 @@
       }
     ],
     "mac": {
-      "artifactName": "Vonvon-Bridge-${version}-mac-arm64.${ext}",
+      "artifactName": "vonvon-bot-${version}-mac-arm64.${ext}",
       "category": "public.app-category.developer-tools",
       "identity": null,
       "target": [
@@ -90,7 +90,7 @@
       "mustClose": ["com.vonvon.bridge"]
     },
     "win": {
-      "artifactName": "Vonvon-Bridge-${version}-win-x64.${ext}",
+      "artifactName": "vonvon-bot-${version}-win-x64.${ext}",
       "target": [
         {
           "target": "nsis",

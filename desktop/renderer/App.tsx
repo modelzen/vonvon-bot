@@ -270,7 +270,7 @@ function DesktopApp() {
   if (!snapshot)
     return (
       <div className="desktop-loading" role="status">
-        正在打开 Vonvon Bridge…
+        正在打开 Vonvon Bot…
       </div>
     );
   const member =
@@ -913,7 +913,7 @@ function DesktopApp() {
                   }
                 />
                 <SettingsRow
-                  title="退出 Vonvon Bridge"
+                  title="退出 Vonvon Bot"
                   trailing={
                     <Button
                       size="sm"
