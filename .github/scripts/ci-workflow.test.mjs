@@ -45,13 +45,15 @@ test('every platform requires scope readiness and its own selection', () => {
   }
 });
 
-test('macOS uses the isolated local runner and a same-repository trust guard', () => {
+test('public macOS jobs use the standard cloud runner, private jobs retain the isolated runner guard', () => {
   const body = jobs.macos;
-  assert.match(body, /runs-on:\s*\[self-hosted, macOS, ARM64, modelzen-macos, modelzen-macos-isolated\]/);
+  assert.match(body, /toJSON\(github\.event\.repository\.private\)\s*==\s*'false'\s*\|\|\s*github\.event_name/);
+  assert.match(body, /toJSON\(github\.event\.repository\.private\)\s*==\s*'false'\s*&&\s*'\["macos-15"\]'\s*\|\|\s*'\["self-hosted", "macOS", "ARM64", "modelzen-macos", "modelzen-macos-isolated"\]'/);
   assert.match(body, /github\.event_name\s*==\s*'workflow_dispatch'/);
   assert.match(body, /github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository/);
+  assert.match(body, /- name: Require dedicated isolated CI account\s+if: toJSON\(github\.event\.repository\.private\) != 'false'/);
+  assert.match(body, /EXPECTED_MACOS_CI_USER:\s*\$\{\{\s*secrets\.EXPECTED_MACOS_CI_USER\s*\}\}/);
   assert.match(body, /id -un/);
-  assert.match(body, /ci-user/);
   assert.match(body, /id -Gn/);
   assert.match(body, /admin/);
 });

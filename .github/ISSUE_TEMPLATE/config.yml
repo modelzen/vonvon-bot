@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 安装与连接排错
+    url: https://vonvon.cc/docs/troubleshooting/
+    about: 查找安装、模型账号、飞书连接和运行状态的常见问题。
+  - name: 私下报告安全漏洞
+    url: https://github.com/modelzen/vonvon-bot/security/advisories/new
+    about: 通过私下表单联系维护者。请避免在公开 Issue 里分享漏洞细节。

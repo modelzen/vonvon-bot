@@ -93,14 +93,19 @@ jobs:
     needs: scope
     if: >-
       needs.scope.outputs.ready == 'true' && contains(fromJSON(needs.scope.outputs.platforms), 'macos') &&
-      (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, macOS, ARM64, modelzen-macos, modelzen-macos-isolated]
+      (toJSON(github.event.repository.private) == 'false' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: >-
+      ${{ fromJSON(toJSON(github.event.repository.private) == 'false' && '["macos-15"]' ||
+      '["self-hosted", "macOS", "ARM64", "modelzen-macos", "modelzen-macos-isolated"]') }}
     timeout-minutes: 35
     steps:
       - name: Require dedicated isolated CI account
+        if: toJSON(github.event.repository.private) != 'false'
+        env:
+          EXPECTED_MACOS_CI_USER: ${{ secrets.EXPECTED_MACOS_CI_USER }}
         run: |
-          if [ "$(id -un)" != ci-user ]; then
-            echo '::error::The macOS runner must use the dedicated ci-user account.'
+          if [ -z "$EXPECTED_MACOS_CI_USER" ] || [ "$(id -un)" != "$EXPECTED_MACOS_CI_USER" ]; then
+            echo '::error::The macOS runner must use the dedicated private CI account.'
             exit 1
           fi
           case " $(id -Gn) " in

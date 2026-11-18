@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { extractRawCardText, extractSendCardText, isDegradedCardContent, isSendCard, isStreamingCard, parseRawCardWrapper } from '../src/bot/card-content';
 
-// The real `json_card` returned by
-//   GET /open-apis/im/v1/messages/:id?card_msg_content_type=raw_card_content
-// for a 多维表格「发送消息卡片」automation card (captured live, slimmed).
-const REAL_JSON_CARD = {
+// Synthetic Base automation card using the raw_card_content json_card shape.
+const RAW_BASE_CARD = {
   body: {
     id: '_1',
     property: {
@@ -13,13 +11,13 @@ const REAL_JSON_CARD = {
           id: '_2',
           property: {
             elements: [
-              { id: '_2_0', property: { userID: 'ou_00000000000000000000000000000000' }, tag: 'at' },
+              { id: '_2_0', property: { userID: 'ou_example_user' }, tag: 'at' },
               { id: '_2_1', property: { content: ' 请处理这条记录 ', textAlign: 'left' }, tag: 'plain_text' },
               {
                 id: '_2_2',
                 property: {
-                  content: '查看杭州天气',
-                  url: { url: 'https://my.feishu.cn/base/000000000000000000000000000?table=tbl0000000000000&record=rec00000000000' },
+                  content: '查看示例记录',
+                  url: { url: 'https://base.example.test/base/ExampleBase?table=tblExampleTable&record=recExampleRecord' },
                 },
                 tag: 'link',
               },
@@ -39,7 +37,7 @@ const REAL_JSON_CARD = {
                     {
                       id: '_5',
                       property: {
-                        actions: [{ action: { url: 'https://my.feishu.cn/base/000000000000000000000000000?ccm_open_type=im_card_automation_button' }, type: 'open_url' }],
+                        actions: [{ action: { url: 'https://base.example.test/base/ExampleBase?ccm_open_type=im_card_automation_button' }, type: 'open_url' }],
                         text: {
                           id: '_6',
                           property: { elements: [{ id: '_6_0', property: { content: '查看详情' }, tag: 'plain_text' }] },
@@ -64,11 +62,11 @@ const REAL_JSON_CARD = {
             i18nElements: {
               en_us: [
                 { id: '_8_en_us_0', property: { content: 'From ' }, tag: 'plain_text' },
-                { id: '_8_en_us_1', property: { content: 'Untitled base', url: { url: 'https://my.feishu.cn/base/000000000000000000000000000?ccm_open_type=im_card_automation_link' } }, tag: 'link' },
+                { id: '_8_en_us_1', property: { content: 'Untitled base', url: { url: 'https://base.example.test/base/ExampleBase?ccm_open_type=im_card_automation_link' } }, tag: 'link' },
               ],
               zh_cn: [
                 { id: '_8_zh_cn_0', property: { content: '来自 ' }, tag: 'plain_text' },
-                { id: '_8_zh_cn_1', property: { content: '未命名多维表格', url: { url: 'https://my.feishu.cn/base/000000000000000000000000000?ccm_open_type=im_card_automation_link' } }, tag: 'link' },
+                { id: '_8_zh_cn_1', property: { content: '未命名多维表格', url: { url: 'https://base.example.test/base/ExampleBase?ccm_open_type=im_card_automation_link' } }, tag: 'link' },
               ],
             },
           },
@@ -108,7 +106,7 @@ describe('parseRawCardWrapper', () => {
 });
 
 describe('extractRawCardText', () => {
-  const text = extractRawCardText(REAL_JSON_CARD);
+  const text = extractRawCardText(RAW_BASE_CARD);
 
   it('leads with the card title', () => {
     expect(text.split('\n')[0]).toBe('请关注记录');
@@ -116,12 +114,12 @@ describe('extractRawCardText', () => {
 
   it('keeps the body text and the Base record link', () => {
     expect(text).toContain('请处理这条记录');
-    expect(text).toContain('[查看杭州天气](https://my.feishu.cn/base/000000000000000000000000000?table=tbl0000000000000&record=rec00000000000)');
+    expect(text).toContain('[查看示例记录](https://base.example.test/base/ExampleBase?table=tblExampleTable&record=recExampleRecord)');
   });
 
   it('keeps the button label and the footer source link', () => {
     expect(text).toContain('查看详情');
-    expect(text).toContain('[未命名多维表格](https://my.feishu.cn/base/000000000000000000000000000?ccm_open_type=im_card_automation_link)');
+    expect(text).toContain('[未命名多维表格](https://base.example.test/base/ExampleBase?ccm_open_type=im_card_automation_link)');
   });
 
   it('renders the footer in one locale only (no ×5 i18n duplication)', () => {
@@ -131,7 +129,7 @@ describe('extractRawCardText', () => {
   });
 
   it('drops the @ placeholder and empties (no bare open_id, no blank lines)', () => {
-    expect(text).not.toContain('ou_00000000000000000000000000000000');
+    expect(text).not.toContain('ou_example_user');
     expect(text.split('\n').every((l) => l.trim().length > 0)).toBe(true);
   });
 
@@ -182,13 +180,12 @@ describe('extractSendCardText', () => {
   });
 
   it('keeps only the answer of a Vonvon run card as user_card_content returns it (no sizes or colours)', () => {
-    // The shape of a real pull on JP-VPS, 2026-10-15.
     const card = { schema: '2.0', config: { streaming_mode: false, summary: { content: '已完成' } }, body: { elements: [
       { element_id: '_3', tag: 'div', text: { content: '上下文 15% · 61k/400k', tag: 'lark_md' }, width: 'fill' },
       { content: "<font color='grey'>用时 5秒</font>", element_id: '_2', tag: 'markdown' },
-      { content: '我上次回答之后，你在群里又发了一条：\n1. 17:36 周报改到周四交\n', element_id: '_1', tag: 'markdown' },
+      { content: '这里是第一行示例回答。\n1. 这里是第二行示例回答。\n', element_id: '_1', tag: 'markdown' },
     ] } };
-    expect(extractSendCardText(card)).toBe('我上次回答之后，你在群里又发了一条：\n1. 17:36 周报改到周四交');
+    expect(extractSendCardText(card)).toBe('这里是第一行示例回答。\n1. 这里是第二行示例回答。');
     const meters = ['🟡 上下文 72% · 288k/400k', '上下文 已用 12k', '上下文 —'];
     for (const content of meters) {
       expect(extractSendCardText({ body: { elements: [{ tag: 'div', text: { tag: 'lark_md', content } }, { tag: 'markdown', content: '好' }] } })).toBe('好');

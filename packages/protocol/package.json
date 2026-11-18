@@ -17,5 +17,5 @@
     "verify:built": "node scripts/verify-built.mjs"
   },
   "dependencies": { "zod": "3.25.76" },
-  "license": "UNLICENSED"
+  "license": "Apache-2.0"
 }

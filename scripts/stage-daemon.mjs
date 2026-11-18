@@ -221,6 +221,7 @@ export async function stageDaemon(destination, metadata, options = {}) {
   }
   await cp(join(source, 'bin'), join(destination, 'bin'), { recursive: true });
   await writeFile(join(destination, 'package.json'), JSON.stringify(runtimeMetadata, null, 2) + '\n');
+  await cp(new URL('../LICENSE', import.meta.url), join(destination, 'LICENSE'));
   for (const file of assets) await cp(join(source, file), join(destination, file));
   await stageDependencies(source, destination, { ...options, metadata: runtimeMetadata });
   return { external: [...external].sort(), bundled: [...bundled].sort() };

@@ -351,8 +351,7 @@ function ToolRow({ tool, auth, hostBackend, backendActions, profiles, busy, runn
     <div className="environment-tool-summary">
       <button type="button" className="environment-disclosure" aria-controls={detailsId} aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
         <picture className="environment-brand">
-          {tool.tool === "codex" && <source media="(prefers-color-scheme: dark)" srcSet="./agent-icons/codex-dark.png" />}
-          <img src={tool.tool === "codex" ? "./agent-icons/codex-light.png" : tool.tool === "claude" ? "./agent-icons/claude-code.svg" : "./agent-icons/feishu.png"} alt="" />
+          <img src={tool.tool === "codex" ? "./agent-icons/terminal.png" : tool.tool === "claude" ? "./agent-icons/code.png" : "./agent-icons/chat.png"} alt="" />
         </picture>
         <span className="environment-tool-copy"><strong>{toolNames[tool.tool]}</strong><small>{tool.compatibility?.status === 'tooOld' ? presentation.summary : `${tool.tool === 'lark-cli' ? '' : '命令行 · '}${tool.version ? `v${tool.version}` : tool.installation === 'missing' ? '未安装' : '版本未知'}`}</small>{hostWarning && <small className="environment-host-warning">后端：{backendStateLabel(hostBackend.depState)}{hostBackend.hint ? ` · ${hostBackend.hint}` : ""}</small>}</span>
         <StatusBadge tone={presentation.tone}>{presentation.status}</StatusBadge><ChevronDown className={expanded ? "environment-chevron environment-chevron-open" : "environment-chevron"} size={15} />
