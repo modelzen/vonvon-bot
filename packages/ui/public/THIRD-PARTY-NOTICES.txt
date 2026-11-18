@@ -22,11 +22,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-TypeSafe AI logo (agent-icons/typesafe.png)
-https://typesafe.ai
-
-The TypeSafe AI mark, resized to 64 px from the favicon the official website
-publishes (https://framerusercontent.com/images/aNFzSFxM4fjICmnibw7npfZjcQ.png).
-It identifies the TypeSafe AI decision service (Jev) and remains the property
-of its owner; see agent-icons/README.md.

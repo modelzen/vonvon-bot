@@ -10,7 +10,7 @@ owner 2026-10-30 定。本节是开发、合入和 CI 的现行规则；与下�
 2. 完成必要检查、审查及本次需要的验收后，才能合入 `dev`。owner 说“OK”“验收通过”“可以合入”，默认指把本次验收过的提交合入 `dev`；符合 2026-10-21 本地验收规则时，当前 Codex 可直接执行，不再要求额外人工或模型审查。认可不覆盖后续产品行为变化。
 3. `dev` 用于集成、内部试用和集中验收，应保持可运行。单项功能通过不等于整批发布通过。合入后发现阻塞问题，先修复或通过新 PR revert，不通过挑选提交绕过问题。
 4. owner 决定何时集中把 `dev` 提升到 `main`，可以每天一次，也可以隔几天；不存在每天自动合入或发版的授权。准备发布时，记录本批功能、验收结果和准确源码 SHA，再开 `dev → main` PR；若要在 `dev` 继续开发时固定本批候选，可从选定的 `dev` SHA 建 `codex/promote-<主题>` 分支。候选必须包含选定 SHA 的全部历史，不随意 cherry-pick。
-5. `main` 是正式版本的源码基线。面向 `main` 的产品或流程 PR，重新执行本批最终提交的全量包检查，并完成集成验证：Linux 和自托管 macOS 必须运行，Windows 仅在本批包含 Windows 相关改动或明确要求时运行；普通纯文档仍可走轻量检查。向 `main` 合入使用 merge commit，保留长期分支的共同历史，不 squash、不 rebase。不要删除长期 `dev` 分支。
+5. `main` 是正式版本的源码基线。面向 `main` 的产品或流程 PR，重新执行本批最终提交的全量包检查，并完成集成验证：Linux 和 macOS 必须运行，Windows 仅在本批包含 Windows 相关改动或明确要求时运行；普通纯文档仍可走轻量检查。向 `main` 合入使用 merge commit，保留长期分支的共同历史，不 squash、不 rebase。不要删除长期 `dev` 分支。
 6. 在 `main` 上产生的版本号、紧急修复等实际修改，要及时通过 PR 同步回 `dev`；仅有 merge commit、文件内容相同，不要求两个分支 SHA 相同。只有 owner 明确要求紧急修复时，才允许从 `main` 开修复分支直接进入 `main`，随后回同步 `dev`。
 7. “合入 dev”“合入 main”“发布版本”是三个不同结果，汇报时分别说明。合入 `main` 不自动打版本 Tag、签名、公证、上传或切 stable；公开发布仍遵守下文发布任务的明确授权及证据要求。正式版本从确定的 `main` 提交构建，Git Tag（如 `v0.7.9`）只标识发布版本，不选择 CI。macOS 和 Windows 使用相同产品版本。
 
@@ -19,13 +19,13 @@ owner 2026-10-30 定。本节是开发、合入和 CI 的现行规则；与下�
 - 每个面向 `dev` 或 `main` 的 PR 都先执行轻量任务：验证分流/执行/合入门槛脚本，收集整个 PR 相对共同祖先的累积差异，检查空白错误，再输出选择的包、平台和原因。不只看最后一个 commit；删除、重命名前后的路径也算变更。
 - 普通说明文档（根 `README.md`、`docs/` 下的小写 `.md`）默认只跑轻量检查，不安装产品依赖。`AGENTS.md`、`CLAUDE.md`、skills、CI、脚本和构建规则会影响执行行为，不按普通文档免检。
 - `dev` PR 按影响范围选择包：UI 改动检查 UI 和桌面集成，daemon 改动检查 daemon 和桌面集成，桌面改动检查桌面；公共 protocol/client、依赖、包配置、公共构建脚本、规则文件及未知路径执行全量。当前为保证包间构建依赖，代码任务先构建所有包，再对选中的包执行类型检查、测试和 lint，同时运行仓库脚本测试。
-- Linux 是所有代码改动的基础平台。普通 UI 只需要 Linux；明确的 macOS 专属文件或目录增加 macOS，Windows 专属文件或目录增加 Windows；公共 daemon/桌面运行逻辑、protocol/client、依赖和公共构建/CI 配置会影响 Windows，检查三个平台。混合改动取平台并集。单独修改开发规则不因此运行 Windows；`main` 集成批次检查全部包和 Linux、自托管 macOS，只有累积差异确实影响 Windows 时才增加 Windows，不因“发布前全量”无条件消费 Windows runner。Windows CI 使用 x64 runner；ARM64 安装包与真实系统行为仍在发布验收中检查。
+- Linux 是所有代码改动的基础平台。普通 UI 只需要 Linux；明确的 macOS 专属文件或目录增加 macOS，Windows 专属文件或目录增加 Windows；公共 daemon/桌面运行逻辑、protocol/client、依赖和公共构建/CI 配置会影响 Windows，检查三个平台。混合改动取平台并集。单独修改开发规则不因此运行 Windows；`main` 集成批次检查全部包和 Linux、macOS，只有累积差异确实影响 Windows 时才增加 Windows，不因“发布前全量”无条件消费 Windows runner。Windows CI 使用 x64 runner；ARM64 安装包与真实系统行为仍在发布验收中检查。
 - 各平台执行适合该平台的检查：Linux/macOS 对选中的包运行完整自动化测试；Windows 保留全部包的构建、相应类型检查和 lint，protocol/client/UI 按选择运行包测试，daemon、桌面及仓库脚本复用 `scripts/build-windows.ps1` 已验证的 Windows 专项回归清单，覆盖 Windows 启动/进程/数据兼容/注册、桌面更新/托盘/依赖以及打包运行时工具。CI 不运行该发布脚本本身，不执行安装或发布；专项清单与发布脚本的一致性由回归测试检查。
 - 平台由 `.github/scripts/ci-scope.mjs` 自动选择。PR 标签可扩大范围，不能缩小自动判定的必要检查：`ci:macos` 追加 macOS，`ci:windows` 追加 Windows，`ci:all` 强制全部包和三个平台。Linux 始终是代码检查的基础平台；多个标签取并集。没有平台标签时按自动结果执行。
 - `frozen` 是 PR 的 Label，不是 Git Tag，只表示“本次已准备合入，允许运行较重检查”。开发中更新 PR 先跑轻量分析；非文档 PR 在加 `frozen` 前，最终合入检查保持失败，不能靠跳过产品测试合入。加 `frozen` 后运行选中的平台。若还要改代码，先去掉 `frozen`，push、完成必要审查/验收后再加回来；新提交必须取得自己的检查结果。普通文档不要求 `frozen`。不添加与工作无关的标签。
 - CI 监听平台标签及 `frozen` 的添加和移除、代码更新、目标分支和 draft 状态变化。同一 PR 的旧运行自动取消。手动 `workflow_dispatch` 总是全量三平台，供排查和补充验证；手动运行不能替代 PR 自己的合入证据。
 - `dev` 和 `main` 都要求 PR、与目标分支同步、解决评审线程，并通过固定名称的 **`CI gate`**。该任务始终执行，逐一确认所有选中的平台成功；未选平台可以跳过，选中平台失败、取消或跳过都不能合入。分流出错、变更列表不完整、runner 不可用、旧 SHA 或过期标签均不能当作通过。手动运行使用不同名称 `Manual CI result`，不提供必需的 PR 合入检查。自动平台选择不取代必要的真实系统和产品验收。
-- 成本约定：Linux 可使用 GitHub 托管 runner；macOS 必须使用组织级自托管 runner（标签 `self-hosted, macOS, ARM64, modelzen-macos, modelzen-macos-isolated`），不得擅自改为收费托管 macOS；Windows 使用托管 runner，但只在相关改动或明确要求时运行。macOS runner 使用无管理员权限的独立 `ci-user` 账号；外部 fork 不直接在它上面执行未受信任代码，需先审查并转为仓库内分支。CI 仅执行构建、类型检查、自动化测试和 lint，不运行签名、公证、安装或发布工作流。
+- 成本约定：公开仓库的 macOS CI 使用 GitHub 的标准 ARM64 runner，与 Linux、Windows 一样在托管环境中运行。私有仓库阶段的 macOS CI 使用专门的组织级自托管 runner，由无管理员权限的独立账户运行，禁止执行外部 fork 的代码。Windows 仅在相关改动或明确要求时运行。CI 仅执行构建、类型检查、自动化测试和 lint。签名、公证、安装或发布使用独立环境。
 
 ### 常用 CLI
 

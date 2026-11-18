@@ -63,7 +63,7 @@ function providerChoices(providers: Provider[], current: string) {
   return [...providers.map(provider => ({value: provider.id, label: provider.displayName, disabled: false})), ...(!providers.some(provider => provider.id === current) && current ? [{value: current, label: `${backendLabel(current)}（当前不可用）`, disabled: true}] : [])];
 }
 function providerIcon(backend: string) {
-  const path = backend === 'codex-appserver' ? './agent-icons/codex-light.png' : backend === 'claude-agent' ? './agent-icons/claude-code.svg' : undefined;
+  const path = backend === 'codex-appserver' ? './agent-icons/terminal.png' : backend === 'claude-agent' ? './agent-icons/code.png' : undefined;
   return path ? <img src={path} className={backend === 'codex-appserver' ? 'gd-provider-icon--codex' : undefined} alt="" width={16} height={16}/> : <Blocks size={16} aria-hidden="true"/>;
 }
 export function GroupDesignSettings(props: Props) {

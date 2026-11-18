@@ -33,5 +33,5 @@
   "overrides": {
     "esbuild": "^0.28.1"
   },
-  "license": "UNLICENSED"
+  "license": "Apache-2.0"
 }
