@@ -6,6 +6,7 @@ const path = require('node:path');
 const home = mkdtempSync(path.join(tmpdir(), 'vonvon-management-ui-'));
 app.setPath('userData', path.join(home, 'electron'));
 const agentId = 'cli_management', groupId = 'oc_management';
+const distPath = path.resolve(process.env.MANAGEMENT_DIST || 'dist');
 const calls = [], results = [];
 let project = {name:'Management Project', chatId:groupId, cwd:path.join(home,'project'), kind:'single', enabled:true, backend:'codex-appserver', revision:'r1'};
 let currentRun = {id:'run-fixture',goal:true,canStop:true,canEndGoal:true,canRemind:true,reminderRequested:false};
@@ -30,8 +31,8 @@ ipcMain.handle('bridge:collaboration',(_event,request)=>{
   if(request.groupId)assert.equal(request.groupId,groupId);
   switch(request.action){
     case 'project':return {kind:'project',project};
-    case 'history':return {kind:'history',backend:'codex-appserver',sessions:[{threadId:'thread_current',sessionId:'session_current',chatId:groupId,summary:'Current session',backend:'codex-appserver',updatedAt:Date.now()},{threadId:'thread_archived',sessionId:'session_archived',chatId:groupId,summary:'Archived session',backend:'codex-appserver',detached:true,updatedAt:Date.now()}],threads:[{sessionId:'session_archived',name:'Recover archived',preview:'old work',updatedAt:Date.now()/1000}]};
-    case 'context':return {kind:'context',threadId:request.threadId,usage:{used:1200,window:10000},run:currentRun};
+    case 'history':return {kind:'history',backend:'codex-appserver',sessions:[{threadId:'thread_current',sessionId:'session_current',chatId:groupId,summary:'Current session',backend:'codex-appserver',updatedAt:Date.now()},{threadId:'thread_other',sessionId:'session_other',chatId:groupId,summary:'Other bound session',backend:'codex-appserver',updatedAt:Date.now()},{threadId:'thread_archived',sessionId:'session_archived',chatId:groupId,summary:'Archived session',backend:'codex-appserver',detached:true,updatedAt:Date.now()}],threads:[{sessionId:'session_archived',name:'Recover archived',preview:'old work',updatedAt:Date.now()/1000}]};
+    case 'context':return {kind:'context',threadId:request.threadId,usage:{used:request.threadId==='thread_other'?2400:1200,window:10000},run:currentRun};
     case 'usage':return {kind:'usage',data:{profile:{displayName:'Fixture account',lifetimeTokens:123456,topInvocations:[],dailyBuckets:[{date:new Date().toISOString().slice(0,10),tokens:3000}]},usage:{planType:'fixture',main:{primary:{usedPercent:12}},extras:[],fetchedAt:Date.now()}}};
     case 'createProject':return {kind:'applied',project:{...project,name:request.name},message:'项目群已创建。'};
     case 'editProject':
@@ -46,14 +47,16 @@ ipcMain.handle('bridge:collaboration',(_event,request)=>{
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const deadline=setTimeout(()=>{process.stderr.write('Management UI timeout\n');app.exit(1);},60000);
 void app.whenReady().then(async()=>{
-  window=new BrowserWindow({show:false,width:1060,height:780,webPreferences:{preload:path.resolve('dist/preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});
+  window=new BrowserWindow({show:false,width:1060,height:780,webPreferences:{preload:path.join(distPath,'preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});
   const evaluate=code=>window.webContents.executeJavaScript(code);
   const wait=async code=>{for(let i=0;i<120;i++){if(await evaluate(code))return;await pause(40);}throw new Error(`Missing UI condition: ${code}`);};
   const button=label=>`[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(label)})`;
   const click=async label=>{await wait(`Boolean(${button(label)})`);assert.equal(await evaluate(`(()=>{const b=${button(label)};if(b.disabled)return false;b.click();return true})()`),true,label);await pause(70);};
   const value=async(label,value,select=false)=>{const query=`document.querySelector('[aria-label="${label}"]')`;await wait(`Boolean(${query})`);await evaluate(`Object.getOwnPropertyDescriptor(${select?'HTMLSelectElement':'HTMLInputElement'}.prototype,'value').set.call(${query},${JSON.stringify(value)});${query}.dispatchEvent(new Event('${select?'change':'input'}',{bubbles:true}));`);await pause(50);};
+  const sessionRow=title=>`[...document.querySelectorAll('.ss-row')].find(row=>row.querySelector('.ss-row__title')?.textContent.trim()===${JSON.stringify(title)})`;
+  const manage=title=>`[...${sessionRow(title)}.querySelectorAll('button')].filter(b=>b.textContent.trim()==='管理')`;
   const pass=name=>{results.push(name);process.stdout.write(`PASS ${name}\n`);};
-  await window.loadFile(path.resolve('dist/renderer/index.html'));
+  await window.loadFile(path.join(distPath,'renderer/index.html'));
   await wait("Array.from(document.querySelectorAll('.settings-entity-row__copy strong')).some(name => name.textContent.trim() === 'Management Agent')");
   await evaluate("Array.from(document.querySelectorAll('.settings-entity-row')).find(row => row.querySelector('.settings-entity-row__copy strong')?.textContent.trim() === 'Management Agent').click()");
   await click('加入飞书群');await value('飞书群名称','Created from desktop');await value('会话方式','shared',true);await value('执行工具','claude',true);
@@ -63,16 +66,39 @@ void app.whenReady().then(async()=>{
   pass('create project carries selected folder, backend and conversation');
   await evaluate("[...document.querySelectorAll('.settings-entity-row')].find(b=>b.innerText.includes('Management Project')).click()");
   await wait("document.body.innerText.includes('Current session') && document.body.innerText.includes('1,200 / 10,000')");
-  assert.equal(await evaluate("[...document.querySelectorAll('button')].filter(b=>b.textContent.trim()==='管理').length"),1);
+  assert.equal(calls.filter(c=>c.action==='context').at(-1).threadId,'thread_current');
+  if(await evaluate(`${manage('Current session')}.length`)){
+    const before=calls.length;
+    await evaluate(`${manage('Current session')}[0].click()`);await pause(100);
+    assert.equal(calls.length,before,'selected-row management click makes no request');
+    process.stdout.write('REPRO selected-row 管理 click leaves context unchanged and makes 0 requests\n');
+  }
+  assert.equal(await evaluate(`${manage('Current session')}.length`),0,'selected session must not offer a no-op 管理 button');
+  assert.equal(await evaluate(`${manage('Other bound session')}.length`),1,'another bound session remains selectable');
+  assert.equal(await evaluate(`${manage('Archived session')}.length`),0,'archived session has no management button');
+  pass('selected history row omits no-op management while other bound rows remain selectable');
   await value('筛选历史会话','resumable',true);await wait("document.body.innerText.includes('Recover archived')");await click('恢复');
   assert.equal(calls.find(c=>c.action==='resume').sessionId,'session_archived');
   await value('筛选历史会话','all',true);await value('搜索历史会话','no match');await wait("document.body.innerText.includes('没有匹配的会话')");await value('搜索历史会话','');
   pass('history filtering keeps archived session recoverable and out of live management');
+  await click('压缩上下文');
+  assert.equal(calls.filter(c=>c.action==='compact').at(-1).threadId,'thread_current');
+  const selectionStart=calls.length;
+  await evaluate(`${manage('Other bound session')}[0].click()`);
+  await wait("document.body.innerText.includes('2,400 / 10,000')");
+  assert.equal(await evaluate(`${sessionRow('会话')}.querySelector('.ss-row__value').textContent.trim()`),'Other bound session');
+  assert.equal(await evaluate(`${manage('Other bound session')}.length`),0);
+  assert.equal(await evaluate(`${manage('Current session')}.length`),1);
+  assert.deepEqual(calls.slice(selectionStart).filter(c=>c.action==='context').map(c=>c.threadId),['thread_other']);
   await click('压缩上下文');await click('清空会话');await value('自主任务目标','Complete fixture goal');await click('开始');
   await click('开启提醒');await wait("document.body.innerText.includes('关闭提醒')");await click('关闭提醒');await click('停止');await click('结束目标');await click('选择内容');await wait("Boolean(document.querySelector('[aria-label=\"选择分享内容\"]'))");await evaluate("[...document.querySelectorAll('.usage-sections__item')].find(label=>label.textContent.includes('核心统计')).querySelector('input').click()");await click('生成分享卡');assert.deepEqual(calls.find(c=>c.action==='shareUsage').sections,['stats']);
   await evaluate("document.querySelector('button[aria-label=\"关闭\"]').click()");await wait("!document.querySelector('[aria-label=\"选择分享内容\"]')");
   for(const action of ['compact','clear','startGoal','reminder','stop','endGoal','shareUsage'])assert.ok(calls.some(c=>c.action===action),action);
-  assert.ok(calls.filter(c=>['compact','clear','startGoal','stop','endGoal'].includes(c.action)).every(c=>c.threadId==='thread_current'));
+  const selectedCalls=calls.slice(selectionStart).filter(c=>['context','compact','clear','startGoal','reminder','stop','endGoal'].includes(c.action));
+  assert.ok(selectedCalls.length>0);
+  assert.ok(selectedCalls.every(c=>c.threadId==='thread_other'),JSON.stringify(selectedCalls));
+  assert.equal(await evaluate(`${manage('Other bound session')}.length`),0,'history refresh preserves selected session');
+  pass('switching management updates context and all subsequent scoped requests use exactly thread_other');
   pass('conversation and usage controls target the selected group, thread and live run');
   await click('群内设置');await value('项目会话方式','threads',true);await value('项目状态','disabled',true);await click('更换目录');
   rejectProject=true;await click('群聊');await click('保存并离开');await wait("document.body.innerText.includes('未能保存')");await click('继续编辑');
