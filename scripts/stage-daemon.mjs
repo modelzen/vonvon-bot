@@ -155,8 +155,8 @@ async function workspaceSource(specifier, root) {
 /**
  * Decides, during bundling, what dist/cli.js imports at run time. The daemon's own bare imports stay external; our
  * workspace packages are bundled from source. A bare import inside bundled code stays external only when it is a
- * runtime dependency that resolves to the same directory the daemon ships; otherwise it is bundled too, so protocol's
- * zod 3 is never replaced by the daemon's zod 4.
+ * runtime dependency that resolves to the same directory the daemon ships; otherwise it is bundled too to preserve
+ * the dependency version used by its workspace.
  */
 function runtimePlugin(runtime, decisions) {
   return {

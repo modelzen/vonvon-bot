@@ -17,12 +17,11 @@
     "@vonvon/protocol": "0.1.0",
     "electron-updater": "6.8.11",
     "ws": "8.22.0",
-    "zod": "3.25.76"
+    "zod": "4.6.6"
   },
   "main": "dist/main.cjs",
   "devDependencies": {
-    "@types/ws": "8.18.2",
-    "npm": "11.20.0"
+    "@types/ws": "8.18.2"
   },
   "license": "Apache-2.0"
 }

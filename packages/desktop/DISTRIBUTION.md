@@ -14,7 +14,7 @@ VONVON_DESKTOP_SIGNING_TEAM=<已有Developer-ID的10位TeamIdentifier> npm run p
 
 Electron 语言资源只保留英文（美式、英式）、简体中文和繁体中文，由 `electronLanguages` 在打包时过滤；单机预览和 universal 包共用这份配置。macOS 的 `.lproj` 使用 `en`、`en_GB`、`zh_CN`、`zh_TW`，其他平台的 `.pak` 使用 `en-US`、`en-GB`、`zh-CN`、`zh-TW`，因此分别配置。这个过滤不改变应用自身的中文文案或网页字体。
 
-它从官方 Electron 44.4.5 分别取得 x64/arm64，使用 electron-builder 26.15.3 的 universal 合并与合并后签名。只用当前钥匙串已有 Developer ID，不配置公证、不发布、不安装 app。失败会中止，不以 ad-hoc 代替。仅 locale.pak 这类本地化数据不单独签名，仍由 framework 的资源封印覆盖；每个实际 Mach-O 单独验签，按目标分别核对双架构或单架构，app 另做 deep/strict 验证。产物在 `dist/package/`：三种架构各自的 dmg 和更新 zip，以及 `release-<版本>/` 下的签名/架构/哈希 inventory 和发布元数据。发布时 manifest/feed 与 zip 必须放在配置的同一 URL 目录，不能直接照本地子目录布局上传。
+它按 `electron-builder.yml` 固定的版本分别下载官方 Electron x64 和 arm64，使用 electron-builder 26.15.3 的 universal 合并与合并后签名。只用当前钥匙串已有 Developer ID，不配置公证、不发布、不安装 app。失败会中止，不以 ad-hoc 代替。仅 locale.pak 这类本地化数据不单独签名，仍由 framework 的资源封印覆盖；每个实际 Mach-O 单独验签，按目标分别核对双架构或单架构，app 另做 deep/strict 验证。产物在 `dist/package/`：三种架构各自的 dmg 和更新 zip，以及 `release-<版本>/` 下的签名/架构/哈希 inventory 和发布元数据。发布时 manifest/feed 与 zip 必须放在配置的同一 URL 目录，不能直接照本地子目录布局上传。
 
 公开地址尚未决定时保留 `desktop-update.json` 为 `{}`。签名通过仍不会启用更新；inventory 标记 `awaiting-release-urls`。发布前用外部配置文件（不提交真实身份/地址），包含现有构建支持的 `manifestURL` 和 `teamIdentifier` 两项，通过 `VONVON_DESKTOP_UPDATE_CONFIG=<配置文件绝对路径>` 同时执行 build 与 package。manifestURL 用 HTTPS JSON 文件地址、无凭据/查询/fragment；脚本在相同 URL 目录生成版本 feed 与 zip 下载地址。
 

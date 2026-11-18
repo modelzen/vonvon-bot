@@ -1,4 +1,5 @@
 import { badArgs, CommandError } from '../command-error';
+import type { z } from 'zod';
 import { settingsGet, settingsSet, settingsAccess } from '../../admin/structured-commands';
 import {
   agentSectionSchemas, decisionApiProviderLabel, hostSectionSchemas, isKnownJudgeSelection, openIdSchema, projectEditableSchemas, sessionSectionSchemas, sessionThreadIdSchema,
@@ -13,13 +14,7 @@ import { keyMissingText } from '../../judge/decision';
 import { dmChatId } from '../../project/registry';
 import { readStdin } from '../../core/stdin';
 
-// Structural views of the protocol's zod objects: the daemon's own zod is v4, protocol's is v3 (see daemon-client).
-type Issue = {
-  code: string; path: readonly (string | number)[]; message: string; keys?: readonly string[]; options?: readonly unknown[]; expected?: unknown; received?: unknown;
-  type?: string; minimum?: unknown; maximum?: unknown;
-};
-type Check = { safeParse(value: unknown): { success: true } | { success: false; error: { issues: readonly Issue[] } } };
-type SectionSchema = { shape: Record<string, unknown>; partial(): { strict(): Check } };
+type SectionSchema = { shape: Record<string, unknown>; partial(): { strict(): Pick<z.ZodType, 'safeParse'> } };
 type SectionView = { stored: unknown; effective: unknown; revision: string; access: { kind: 'writable' } | { kind: 'readonly'; message: string } };
 export type Kind = 'agent' | 'project' | 'session' | 'host';
 /** `host`: the machine's own settings (the web page's 本机), which need no bot (cli-6-settings 4.2). */
@@ -57,30 +52,35 @@ function parseValue(text: string): unknown {
   try { return JSON.parse(text); } catch { return text; }
 }
 
-function explain(section: string, schema: SectionSchema, issue: Issue): string {
-  const where = [section, ...issue.path].join('.');
+function explain(section: string, schema: SectionSchema, issue: z.core.$ZodIssue): string {
+  const path = issue.path.map(String);
+  const where = [section, ...path].join('.');
   switch (issue.code) {
     case 'unrecognized_keys':
-      return issue.path.length ? `${where} 没有 ${(issue.keys ?? []).join('、')} 这一项。` : `${section} 没有 ${(issue.keys ?? []).join('、')} 这一项。可以改的有：${Object.keys(schema.shape).join('、')}`;
-    case 'invalid_enum_value': return `${where} 只能是 ${(issue.options ?? []).join('、')}`;
-    case 'invalid_union_discriminator': return `${[section, ...issue.path.slice(0, -1)].join('.')} 的 ${String(issue.path.at(-1))} 只能是 ${(issue.options ?? []).join(' 或 ')}`;
+      return path.length ? `${where} 没有 ${issue.keys.join('、')} 这一项。` : `${section} 没有 ${issue.keys.join('、')} 这一项。可以改的有：${Object.keys(schema.shape).join('、')}`;
+    case 'invalid_value':
+      return `${where} 只能是 ${issue.values.map(String).join('、')}`;
+    case 'invalid_union':
+      if (issue.discriminator && 'options' in issue && issue.options) {
+        return `${[section, ...path.slice(0, -1)].join('.')} 的 ${issue.discriminator} 只能是 ${issue.options.map(String).join(' 或 ')}`;
+      }
+      return `${where}：${issue.message}`;
     case 'invalid_type': {
-      if (issue.received === 'undefined') return `${where} 没填`;
-      const expected = String(issue.expected);
-      // A non-string for an enum reports the options as the expected type: 'off' | 'running' | 'always'.
-      return `${where} ${TYPES[expected] ?? `只能是 ${expected.split(' | ').map(option => option.replace(/^'(.*)'$/, '$1')).join('、')}`}`;
+      if (issue.input === undefined) return `${where} 没填`;
+      const expected = TYPES[issue.expected];
+      return expected ? `${where} ${expected}` : `${where}：${issue.message}`;
     }
     // Lengths of text (after trimming) and lists; numbers carry no bounds in the settings schemas.
     case 'too_small': {
       const least = Number(issue.minimum);
-      if (issue.type === 'string') return least <= 1 ? `${where} 不能为空` : `${where} 至少要 ${least} 个字`;
-      if (issue.type === 'array') return `${where} 至少要 ${least} 项`;
+      if (issue.origin === 'string') return least <= 1 ? `${where} 不能为空` : `${where} 至少要 ${least} 个字`;
+      if (issue.origin === 'array') return `${where} 至少要 ${least} 项`;
       return `${where}：${issue.message}`;
     }
     case 'too_big': {
       const most = Number(issue.maximum);
-      if (issue.type === 'string') return `${where} 最多 ${most} 个字`;
-      if (issue.type === 'array') return `${where} 最多 ${most} 项`;
+      if (issue.origin === 'string') return `${where} 最多 ${most} 个字`;
+      if (issue.origin === 'array') return `${where} 最多 ${most} 项`;
       return `${where}：${issue.message}`;
     }
     default: return `${where}：${issue.message}`;
@@ -125,7 +125,7 @@ export function parseAssignments(kind: Kind, assignments: readonly string[]): { 
     const asText = check.safeParse(Object.fromEntries([[field, texts.get(field)]]));
     if (asText.success || !asText.error.issues.some(issue => issue.code === 'invalid_type' && issue.path.length === 1)) patch[field] = texts.get(field);
   }
-  const checked = check.safeParse(patch);
+  const checked = check.safeParse(patch, { reportInput: true });
   if (!checked.success) throw badArgs(checked.error.issues.map(issue => explain(section, schema, issue)).join('\n'));
   return { section, patch };
 }

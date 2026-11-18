@@ -19,7 +19,7 @@
     "qrcode": "1.5.4",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "zod": "3.25.76",
+    "zod": "4.6.6",
     "thinking-orbs": "0.3.2",
     "border-beam": "1.4.1",
     "liquid-gooey": "0.2.2"

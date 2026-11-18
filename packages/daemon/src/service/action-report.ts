@@ -22,7 +22,6 @@ function readJson(path: string): unknown {
 
 /** Missing or unreadable reads as no report, so the step shows only the manager's state. */
 export function readServiceActionRecord(root: string): ServiceActionRecord | null {
-  // The report half is the protocol's (zod 3) schema, the rest is the daemon's own.
   const value = readJson(serviceActionPath(root));
   const report = serviceActionReportSchema.safeParse(value);
   const record = recordSchema.safeParse(value);
