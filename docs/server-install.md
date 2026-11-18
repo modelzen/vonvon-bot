@@ -1,6 +1,6 @@
 # Linux 服务端安装
 
-Mac、Windows 从 [官网下载页](https://vonvon.cc/get/) 下载安装包。Linux 只装服务端，支持 glibc 的 x64、arm64；安装目录是 `~/.local/share/vonvon-bot/server`，数据目录是 `~/.vonvon-bot`。
+Mac、Windows 从 [官网下载页](https://vonvon.bot/get/) 下载安装包。Linux 只装服务端，支持 glibc 的 x64、arm64；安装目录是 `~/.local/share/vonvon-bot/server`，数据目录是 `~/.vonvon-bot`。
 
 ## 安装命令与发布边界
 
