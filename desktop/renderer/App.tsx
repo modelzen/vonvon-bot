@@ -42,7 +42,7 @@ import {
 import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel,membershipSettingsTarget} from "./settings/SettingsPanel";
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
-import {membershipCategories, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
+import {searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
 import {initialRoute, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, type MembershipPane} from './collaboration-navigation';
 import {SearchDialog} from './SearchDialog';
 import {flushSync} from 'react-dom';
@@ -148,7 +148,7 @@ function DesktopApp() {
         }
         return false;
       }
-      if (searchTarget.selection?.kind === 'agent' && searchTarget.detail?.kind === 'agent-settings') {
+      if ((searchTarget.selection?.kind === 'agent' && searchTarget.detail?.kind === 'agent-settings') || searchTarget.detail?.kind === 'membership-settings') {
         let ancestor: HTMLElement | null = section;
         while (ancestor) {
           if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
@@ -782,6 +782,7 @@ function DesktopApp() {
               )}
               {member && agent && group && (
                 <>
+                  <div className={detail.kind === 'membership-settings' ? 'membership-settings-sheet' : 'membership-activity-sheet'}>
                   <header className="collaboration-profile">
                     <GroupAvatar group={group} large />
                     <div>
@@ -796,7 +797,7 @@ function DesktopApp() {
                     <button type="button" onClick={() => changeRoute(() => ({kind: 'agent', id: agent.id, pane: {kind: 'settings'}}))}>Agent 设置</button>
                     <button type="button" onClick={() => changeRoute(() => ({kind: 'group', id: group.id}))}>查看飞书群</button>
                   </div>
-                  <DetailTabs first="会话与状态" second="群内设置" selected={detail.kind === 'membership-settings' ? 'settings' : 'overview'} onSelect={next => membershipPane(next === 'overview' ? {kind: 'activity'} : {kind: 'settings', category: 'binding'})}/>
+                  <DetailTabs first="会话与状态" second="群内设置" selected={detail.kind === 'membership-settings' ? 'settings' : 'overview'} onSelect={next => membershipPane(next === 'overview' ? {kind: 'activity'} : {kind: 'settings'})}/>
                   {detail.kind !== 'membership-settings' ? <>
                   <SettingsGroup label="群内协作">
                     <SettingsRow title="工作目录" value={<code>{member.directory}</code>}/>
@@ -813,17 +814,12 @@ function DesktopApp() {
                   <div className="desktop-actions"><Button disabled={member.stale} onClick={() => setModal({kind: 'collaboration', membership: member})}>开始一次协作</Button></div>
                   </> : <>
                   <p className="collaboration-scope-note">这里只配置 {agent.name} 在 {group.name} 中的工作目录、响应方式和权限。</p>
-                  <nav className="collaboration-category-nav" aria-label="群内设置分类">{membershipCategories.map(item => <button key={item.id} type="button" aria-current={detail.category === item.id ? 'page' : undefined} className={detail.category === item.id ? 'is-selected' : ''} onClick={() => membershipPane({kind: 'settings', category: item.id})}>{item.id === 'access' ? '群内权限' : item.label}</button>)}</nav>
-                  <p className="collaboration-category-description">{membershipCategories.find(item => item.id === detail.category)?.description}</p>
-                  {detail.category === 'binding' && <ProjectPanel key={`manage-${member.id}`} scope={{kind: 'project', agentId: agent.id, groupId: group.id, projectName: member.name}} request={window.bridge.collaboration} onChanged={async () => {await run({type: 'refresh'});}} />}
-                  {detail.category !== 'binding' &&
-                  <SettingsPanel
-                    key={`project-${member.id}`}
-                    scope="project"
-                    target={membershipSettingsTarget(member)}
-                    category={detail.category}
-                  />}
+                  <ProjectPanel key={`manage-${member.id}`} scope={{kind: 'project', agentId: agent.id, groupId: group.id, projectName: member.name}} request={window.bridge.collaboration} onChanged={async () => {await run({type: 'refresh'});}}>
+                    <SettingsGroup id={settingAnchor('历史会话')} label="历史会话"><SettingsRow title="会话与状态" trailing={<Button size="sm" onClick={() => membershipPane({kind: 'activity'})}>查看历史会话</Button>} /></SettingsGroup>
+                    <SettingsPanel key={`project-${member.id}`} scope="project" target={membershipSettingsTarget(member)} />
+                  </ProjectPanel>
                   </>}
+                  </div>
                 </>
               )}
               {((route.kind === 'agent' && !agent) || (route.kind === 'group' && !group) || (route.kind === 'membership' && (!member || !agent || !group))) && (

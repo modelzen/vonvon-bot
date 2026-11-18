@@ -40,7 +40,7 @@ test("settings search opens the owning detail pane", () => {
   const permission = entries.find(item => item.id === `${snapshot.memberships[0]?.id}-工作目录权限`);
   assert.deepEqual(card?.destination.detail, {kind: "agent-settings"});
   assert.ok(card?.aliases.includes('飞书任务卡片'));
-  assert.deepEqual(permission?.destination.detail, {kind: "membership-settings", category: "access"});
+  assert.deepEqual(permission?.destination.detail, {kind: "membership-settings"});
   assert.equal(entries.find(item => item.id === "usage")?.destination.page, "usage");
 });
 

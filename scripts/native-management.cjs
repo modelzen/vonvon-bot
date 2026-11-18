@@ -69,11 +69,12 @@ void app.whenReady().then(async()=>{
   await value('筛选历史会话','all',true);await value('搜索历史会话','no match');await wait("document.body.innerText.includes('没有匹配的会话')");await value('搜索历史会话','');
   pass('history filtering keeps archived session recoverable and out of live management');
   await click('压缩上下文');await click('清空会话');await value('自主任务目标','Complete fixture goal');await click('开始');
-  await click('开启提醒');await wait("document.body.innerText.includes('关闭提醒')");await click('关闭提醒');await click('停止');await click('结束目标');await wait("document.querySelectorAll('.usage-cell').length >= 84");await evaluate("[...document.querySelectorAll('.usage-sections__item')].find(label=>label.textContent.includes('核心统计')).querySelector('input').click()");await click('生成分享卡');assert.deepEqual(calls.find(c=>c.action==='shareUsage').sections,['stats']);
+  await click('开启提醒');await wait("document.body.innerText.includes('关闭提醒')");await click('关闭提醒');await click('停止');await click('结束目标');await click('选择内容');await wait("Boolean(document.querySelector('[aria-label=\"选择分享内容\"]'))");await evaluate("[...document.querySelectorAll('.usage-sections__item')].find(label=>label.textContent.includes('核心统计')).querySelector('input').click()");await click('生成分享卡');assert.deepEqual(calls.find(c=>c.action==='shareUsage').sections,['stats']);
+  await evaluate("document.querySelector('button[aria-label=\"关闭\"]').click()");await wait("!document.querySelector('[aria-label=\"选择分享内容\"]')");
   for(const action of ['compact','clear','startGoal','reminder','stop','endGoal','shareUsage'])assert.ok(calls.some(c=>c.action===action),action);
   assert.ok(calls.filter(c=>['compact','clear','startGoal','stop','endGoal'].includes(c.action)).every(c=>c.threadId==='thread_current'));
   pass('conversation and usage controls target the selected group, thread and live run');
-  await value('项目会话方式','threads',true);await value('项目状态','disabled',true);await click('更换目录');
+  await click('群内设置');await value('项目会话方式','threads',true);await value('项目状态','disabled',true);await click('更换目录');
   rejectProject=true;await click('群聊');await click('保存并离开');await wait("document.body.innerText.includes('未能保存')");await click('继续编辑');
   assert.equal(await evaluate("document.querySelector('[aria-label=\"项目状态\"]').value"),'disabled');
   rejectProject=false;await click('保存项目');await wait("document.body.innerText.includes('项目已更新。')");assert.equal(project.kind,'multi');assert.equal(project.enabled,false);assert.equal(project.cwd,path.join(home,'chosen'));

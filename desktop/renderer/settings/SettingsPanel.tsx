@@ -25,13 +25,13 @@ import {
 import "./settings.css";
 import {useDraft, useDraftGuard} from './DraftGuard';
 import {settingAnchor} from '../search';
-import type {MembershipCategory, SearchReveal} from '../search';
+import type {SearchReveal} from '../search';
 
 type AgentScope = { kind: "agent"; botId: AgentId };
 type ProjectScope = { kind: "project"; botId: AgentId; projectName: string };
 type PanelProps =
   | {scope: 'agent'; target: AgentScope; reveal?: SearchReveal}
-  | {scope: 'project'; target: ProjectScope; category: MembershipCategory}
+  | {scope: 'project'; target: ProjectScope}
   | {scope: 'host'; target: {kind: 'host'}; category: 'coffee' | 'execution'; reveal?: SearchReveal};
 const isAgentView = (view: SettingsView): view is AgentSettingsView =>
   view.scope.kind === "agent" && "cliRuntime" in view;
@@ -1565,11 +1565,9 @@ function AgentPanel({
 function ProjectPanel({
   view,
   refresh,
-  category,
 }: {
   view: ProjectSettingsView;
   refresh: () => Promise<void>;
-  category: MembershipCategory;
 }) {
   const [memberId, setMemberId] = useState("");
   const [notice, setNotice] = useState<string>();
@@ -1619,28 +1617,29 @@ function ProjectPanel({
     model = view.sections.model;
   return (
     <>
-      {category === "behavior" && <>
-      <Editor
-        title="群内响应"
-        section={response}
-        save={(draft, revision) => save("response", draft, revision)}
-        render={(draft, set, disabled, commit) => (
-          <SettingsRow
-            title="不 @ 也能发起任务"
-            description="按话题独立会话时，已有话题和群内支持的命令免 @。整群连续会话时，群内普通消息也会响应。"
-            trailing={
-              <Switch
-                label="不 @ 也能发起任务"
-                value={draft.noMention}
+      <h2 className="membership-settings-heading">Agent 与执行</h2>
+      <Catalog
+        botId={view.scope.botId}
+        backend={view.identity.backend}
+        purpose="project"
+      >
+        {(catalog) => (
+          <Editor
+            title="新会话默认模型"
+            section={model}
+            save={(draft, revision) => save("model", draft, revision)}
+            render={(draft, set, disabled) => (
+              <ModelChoice
+                value={draft.selection}
+                onChange={(selection) => set({ selection })}
+                catalog={catalog}
                 disabled={disabled}
-                onChange={(noMention) => void commit({ noMention })}
               />
-            }
+            )}
           />
         )}
-      />
-      </>}
-      {category === "access" && <>
+      </Catalog>
+      <SettingsGroup label="执行后端"><SettingsRow title="执行工具" value={view.identity.backend === "codex-appserver" ? "Codex" : view.identity.backend === "claude-agent" ? "Claude" : view.identity.backend} /></SettingsGroup>
       <Editor
         title="工作目录权限"
         section={permission}
@@ -1693,8 +1692,6 @@ function ProjectPanel({
           </>
         )}
       />
-      </>}
-      {category === "behavior" && <>
       <Editor
         title="会话压缩"
         section={compact}
@@ -1713,29 +1710,7 @@ function ProjectPanel({
           />
         )}
       />
-      <Catalog
-        botId={view.scope.botId}
-        backend={view.identity.backend}
-        purpose="project"
-      >
-        {(catalog) => (
-          <Editor
-            title="新会话默认模型"
-            section={model}
-            save={(draft, revision) => save("model", draft, revision)}
-            render={(draft, set, disabled) => (
-              <ModelChoice
-                value={draft.selection}
-                onChange={(selection) => set({ selection })}
-                catalog={catalog}
-                disabled={disabled}
-              />
-            )}
-          />
-        )}
-      </Catalog>
-      </>}
-      {category === "access" && <>
+      <h2 className="membership-settings-heading">成员与群消息</h2>
       <SettingsGroup
         label="响应成员"
         id={settingAnchor("响应成员")}
@@ -1809,8 +1784,26 @@ function ProjectPanel({
           />
         )}
       </SettingsGroup>
-      </>}
-      {category === "behavior" && <SessionPicker view={view} />}
+      <Editor
+        title="群内响应"
+        section={response}
+        save={(draft, revision) => save("response", draft, revision)}
+        render={(draft, set, disabled, commit) => (
+          <SettingsRow
+            title="不 @ 也能发起任务"
+            description="按话题独立会话时，已有话题和群内支持的命令免 @。整群连续会话时，群内普通消息也会响应。"
+            trailing={
+              <Switch
+                label="不 @ 也能发起任务"
+                value={draft.noMention}
+                disabled={disabled}
+                onChange={(noMention) => void commit({ noMention })}
+              />
+            }
+          />
+        )}
+      />
+      <details className="membership-settings-details"><summary>话题模型</summary><SessionPicker view={view} /></details>
       <ActionNotice message={notice} />
     </>
   );
@@ -2305,7 +2298,7 @@ function ScopedSettingsPanel(props: PanelProps) {
   const content = isAgentView(view) && props.scope === 'agent' ? (
     <AgentPanel view={view} refresh={refresh} mode="settings" reveal={props.reveal} />
   ) : isProjectView(view) && props.scope === 'project' ? (
-    <ProjectPanel view={view} refresh={refresh} category={props.category} />
+    <ProjectPanel view={view} refresh={refresh} />
   ) : isHostView(view) ? (
     props.scope === 'host' && props.category === 'coffee'
       ? <CoffeeHostPanel view={view} refresh={refresh} reveal={props.reveal}/>

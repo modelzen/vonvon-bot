@@ -1,9 +1,9 @@
 import type {AgentId, DesktopSnapshot, GroupId, MembershipId} from '../shared/bridge';
 import type {CollaborationView} from './collaboration-model';
-import type {Destination, DetailPane, MembershipCategory, Selection} from './search';
+import type {Destination, DetailPane, Selection} from './search';
 
 export type AgentPane = {kind: 'groups'} | {kind: 'settings'};
-export type MembershipPane = {kind: 'activity'} | {kind: 'settings'; category: MembershipCategory};
+export type MembershipPane = {kind: 'activity'} | {kind: 'settings'};
 export type CollaborationRoute =
   | {kind: 'list'; view: CollaborationView}
   | {kind: 'agent'; id: AgentId; pane: AgentPane}
@@ -29,7 +29,7 @@ export function routeSelection(route: CollaborationRoute): Selection {
 
 export function routeDetail(route: CollaborationRoute): DetailPane {
   if (route.kind === 'agent' && route.pane.kind === 'settings') return {kind: 'agent-settings'};
-  if (route.kind === 'membership' && route.pane.kind === 'settings') return {kind: 'membership-settings', category: route.pane.category};
+  if (route.kind === 'membership' && route.pane.kind === 'settings') return {kind: 'membership-settings'};
   return {kind: 'overview'};
 }
 
@@ -72,5 +72,5 @@ export function routeFromSearch(destination: Destination, snapshot: DesktopSnaps
     ? {kind: 'group' as const, id: member.groupId}
     : undefined;
   if (!parent) return {route: {kind: 'list', view: 'groups'}, missing: '这条群内协作的飞书群已不存在，已返回群聊列表。'};
-  return {route: {kind: 'membership', id: member.id, parent, pane: destination.detail?.kind === 'membership-settings' ? {kind: 'settings', category: destination.detail.category} : {kind: 'activity'}}};
+  return {route: {kind: 'membership', id: member.id, parent, pane: destination.detail?.kind === 'membership-settings' ? {kind: 'settings'} : {kind: 'activity'}}};
 }

@@ -54,16 +54,11 @@ html[data-desktop-platform="macos"] .collaboration-window .settings-sidebar {mar
 .collaboration-window .collaboration-detail-tabs {display:inline-flex;justify-self:start;gap:2px;padding:2px;background:#e9e9ed;border-radius:6px;}
 .collaboration-window .collaboration-detail-tabs button {min-width:88px;min-height:24px;padding:3px 12px;border:0;border-radius:4px;background:transparent;color:#55565c;font-family:inherit;font-size:12px;font-weight:500;line-height:1.3;transition:none;}
 .collaboration-window .collaboration-detail-tabs button.is-selected {background:#fff;color:#1c1c1e;box-shadow:0 1px 3px rgba(0,0,0,.1);}
-.collaboration-window .collaboration-category-nav {display:flex;flex-wrap:wrap;gap:4px;align-items:center;border-bottom:1px solid rgba(60,60,67,.12);}
-.collaboration-window .collaboration-category-nav button {position:relative;min-height:32px;padding:6px 13px 8px;border:0;background:none;color:#696970;font-family:inherit;font-size:12px;font-weight:500;line-height:1.2;transition:none;}
-.collaboration-window .collaboration-category-nav button.is-selected {color:#086bdc;}
-.collaboration-window .collaboration-category-nav button.is-selected::after {position:absolute;right:12px;bottom:-1px;left:12px;height:2px;border-radius:2px;background:#086bdc;content:"";}
-.collaboration-window .collaboration-category-description {margin:-9px 0 0;color:#777780;font-size:12px;}
 .collaboration-window .settings-scope-bar {display:flex;justify-content:space-between;align-items:center;gap:12px;margin:-5px 0 -4px;color:#777780;font-size:11px;}
 .collaboration-window .settings-scope-bar .ui-button {min-height:25px;}
-.collaboration-window .collaboration-detail-tabs button:focus-visible,.collaboration-window .collaboration-category-nav button:focus-visible {outline:2px solid #0878ef;outline-offset:2px;}
-.collaboration-window .collaboration-detail-tabs button:active,.collaboration-window .collaboration-category-nav button:active {transform:scale(.97);}
-@media(prefers-reduced-motion:reduce){.collaboration-window .collaboration-detail-tabs button:active,.collaboration-window .collaboration-category-nav button:active{transform:none;}}
+.collaboration-window .collaboration-detail-tabs button:focus-visible {outline:2px solid #0878ef;outline-offset:2px;}
+.collaboration-window .collaboration-detail-tabs button:active {transform:scale(.97);}
+@media(prefers-reduced-motion:reduce){.collaboration-window .collaboration-detail-tabs button:active{transform:none;}}
 .collaboration-window .collaboration-footnote {font-size:12px;}
 @media(max-width:800px){.collaboration-window .settings-content-page>.page-stack{padding-inline:18px;}}
 .collaboration-window .collaboration-breadcrumb{display:flex;align-items:center;gap:6px;min-width:0;margin:-4px 0 -6px;color:#777780;font-size:11px;line-height:1.4;}
@@ -79,3 +74,14 @@ html[data-desktop-platform="macos"] .collaboration-window .settings-sidebar {mar
 .collaboration-window .collaboration-scope-note{margin:-3px 0 -8px;color:#696970;font-size:12px;line-height:1.5;}
 .collaboration-window .collaboration-breadcrumb button:focus-visible,.collaboration-window .collaboration-member-context button:focus-visible{outline:2px solid #0878ef;outline-offset:2px;border-radius:3px;}
 @media(max-width:800px){.collaboration-window .collaboration-member-context{flex-wrap:wrap;}.collaboration-window .collaboration-member-context__copy{min-width:125px;}.collaboration-window .collaboration-member-context button{padding:4px 2px;}}
+.collaboration-window .membership-settings-sheet {width:min(100%,560px);display:grid;gap:14px;margin:0 auto;}
+.collaboration-window .membership-activity-sheet {display:grid;gap:18px;}
+.collaboration-window .membership-settings-sheet .collaboration-profile {margin:0;}
+.collaboration-window .membership-settings-sheet .collaboration-profile h2 {font-size:19px;}
+.collaboration-window .membership-settings-sheet .collaboration-member-context {min-height:28px;}
+.collaboration-window .membership-settings-sheet .collaboration-scope-note {margin:0;}
+.collaboration-window .membership-settings-sheet .membership-settings-heading {margin:12px 0 -5px;padding-left:12px;color:#57575e;font-size:12px;font-weight:650;}
+.collaboration-window .membership-settings-sheet .membership-settings-details {min-width:0;}
+.collaboration-window .membership-settings-sheet .membership-settings-details>summary {cursor:pointer;margin:8px 12px;color:#55565c;font-size:12px;font-weight:600;}
+.collaboration-window .membership-settings-sheet .membership-settings-details>summary:focus-visible {outline:2px solid #0878ef;outline-offset:3px;}
+.collaboration-window .membership-settings-sheet .membership-settings-danger {margin-top:16px;border-color:rgba(214,65,65,.3);}
