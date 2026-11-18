@@ -1,5 +1,7 @@
 # 管理自托管 Mac CI
 
+Vonvon Bot 公开仓库的 macOS CI 使用 GitHub 的标准 ARM64 runner。私有阶段使用专用自托管 runner，仓库的 Actions secret `EXPECTED_MACOS_CI_USER` 必须设为专用 CI 账户的短名称。文中的账户名和地址示例需按本机配置替换。
+
 > 2026-10-14 起，vonvon-bot 的 CI 不再有 Windows 任务。下文提到托管 Windows 的地方是历史记录。
 
 两个仓库当前 `main` 的 Linux 检查保留 GitHub 托管，macOS 检查使用本机自托管 runner。vonvon-bot 的 Windows 检查原先使用 GitHub 托管 `windows-2025`，2026-10-14 已移除。
