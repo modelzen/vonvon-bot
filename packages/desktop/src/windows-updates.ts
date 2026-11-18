@@ -124,7 +124,7 @@ export class WindowsDesktopUpdater {
     this.availableVersion=undefined;this.manifest=undefined;this.progress=undefined;
     const expected=await this.expected();
     const pending=():DesktopUpdate=>({...this.result('install-pending',`上次安装尚未生效，预期 ${expected}，当前 ${this.options.current}`),latest:expected});
-    if(!this.enabled)return expected?pending():this.result('unavailable','这个安装包没有配置可信更新源，请到官网下载新版本：https://vonvon.cc/get/');
+    if(!this.enabled)return expected?pending():this.result('unavailable','这个安装包没有配置可信更新源，请到官网下载新版本：https://vonvon.bot/get/');
     try {
       const found=await this.options.driver.checkForUpdates();if(!found)throw Error('No update response');
       const info=found.updateInfo;if(!version(info.version))throw Error('Invalid update version');

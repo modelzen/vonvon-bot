@@ -49,7 +49,7 @@ const localListen = /^127\.0\.0\.1:(\d{1,5})$/;
 
 /** devices 第 15 节"本机服务端协议不同": which side is older, and what to do about it. */
 export function protocolMismatchMessage(input: { server: number; client: number; registration: Registration }): string {
-  if (input.server > input.client) return '正在运行的服务端比这个桌面端新。到 https://vonvon.cc/get/ 下载最新的 Vonvon Bot。';
+  if (input.server > input.client) return '正在运行的服务端比这个桌面端新。到 https://vonvon.bot/get/ 下载最新的 Vonvon Bot。';
   if (input.registration.kind === 'ours' && input.registration.definition?.kind === 'npm') {
     return '这台电脑上另外装的 Vonvon Bot 服务端（npm 版）比桌面端旧。运行 `npm i -g vonvon-bot@latest` 再 `vonvon daemon restart`；或者 `vonvon service uninstall` 去掉它，让桌面端用自带的。';
   }
