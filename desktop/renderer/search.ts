@@ -3,19 +3,13 @@ import type {AgentId, DesktopSnapshot, GroupId, MembershipId} from '../shared/br
 import type {CollaborationView, Page} from './collaboration-model';
 
 export type Selection = {kind: 'overview'} | {kind: 'agent'; id: AgentId} | {kind: 'group'; id: GroupId} | {kind: 'membership'; id: MembershipId};
-export const agentCategories = [
-  {id: 'general', label: '常规', description: '身份、启用状态与默认目录'},
-  {id: 'interaction', label: '交互与通知', description: '任务卡片、提醒与飞书内容'},
-  {id: 'access', label: '权限', description: '管理员与允许的飞书群'},
-] as const;
 export const membershipCategories = [
   {id: 'binding', label: '绑定', description: '工作目录、会话方式与项目状态'},
   {id: 'behavior', label: '行为', description: '群内响应、模型与会话'},
   {id: 'access', label: '权限', description: '成员与工作目录权限'},
 ] as const;
-export type AgentCategory = typeof agentCategories[number]['id'];
 export type MembershipCategory = typeof membershipCategories[number]['id'];
-export type DetailPane = {kind: 'overview'} | {kind: 'agent-settings'; category: AgentCategory} | {kind: 'membership-settings'; category: MembershipCategory};
+export type DetailPane = {kind: 'overview'} | {kind: 'agent-settings'} | {kind: 'membership-settings'; category: MembershipCategory};
 export type SearchReveal = 'cli-advanced' | 'machine-advanced' | 'codex-tool' | 'claude-tool' | 'lark-tool' | 'profile-manager' | 'profile-add' | 'profile-create';
 export type Destination = {page: Page; view?: CollaborationView; selection?: Selection; detail?: DetailPane; section?: string; field?: string; reveal?: SearchReveal; guide?: string};
 export type SearchEntry = {id: string; title: string; context: string; aliases: readonly string[]; destination: Destination; kind: 'page' | 'setting' | 'action' | 'item'};
@@ -23,20 +17,22 @@ export const settingAnchor = (title: string) => `setting-${encodeURIComponent(ti
 
 type Target = {title: string; aliases?: readonly string[]; reveal?: SearchReveal; guide?: string; field?: string};
 type Group<Category extends string> = {title: string; category: Category; fields: readonly Target[]};
+type AgentGroup = {title: string; aliases?: readonly string[]; fields: readonly Target[]};
 const item = (title: string, aliases: readonly string[] = [], options: Omit<Target, 'title' | 'aliases'> = {}): Target => ({title, aliases, ...options});
-const agentGroups: readonly Group<AgentCategory>[] = [
-  {title: 'Agent 身份', category: 'general', fields: [item('应用 ID', ['App ID']), item('启用 Agent', ['停用 Agent']), item('刷新飞书凭据', ['重新授权']), item('飞书权限与连接', ['检查连接'])]},
-  {title: '任务卡片', category: 'interaction', fields: [item('显示工具调用'), item('显示模型')]},
-  {title: '运行策略', category: 'interaction', fields: [item('最大并发任务'), item('当前运行并发'), item('空闲超时（秒，0 为关闭）', ['空闲超时']), item('运行中收到新消息', ['待处理消息策略', 'steer', 'queue'])]},
-  {title: '任务结束提醒', category: 'interaction', fields: [item('提醒方式'), item('长任务阈值（分钟）', ['长任务阈值'], {guide: '先将提醒方式设为「长任务」，即可调整阈值。'})]},
-  {title: '语音转文字', category: 'interaction', fields: [item('启用语音', ['语音识别']), item('权限与测试'), item('重新检测'), item('测试语音', [], {field: '测试'})]},
-  {title: '云文档评论', category: 'interaction', fields: [item('执行工具'), item('模型'), item('推理强度', [], {guide: '先选择一个具体模型，再调整推理强度。'})]},
-  {title: '评论回复规则', category: 'interaction', fields: [item('评论规则文本', ['提示词', 'instructions'], {field: '评论回复规则'}), item('保存规则', ['保存评论规则']), item('恢复默认', ['恢复默认评论规则'])]},
-  {title: '新会话标题', category: 'interaction', fields: [item('执行工具', ['标题执行工具']), item('用模型生成标题'), item('自定义模型 ID', ['标题模型 ID'], {guide: '先打开「用模型生成标题」，即可设置模型 ID。'}), item('推理强度', ['标题推理强度'], {guide: '先打开「用模型生成标题」，即可设置推理强度。'})]},
-  {title: '管理员', category: 'access', fields: [item('所有者'), item('添加管理员 Open ID'), item('移除管理员', [], {field: '', guide: '在管理员列表中找到要移除的成员。'})]},
-  {title: '新项目默认目录', category: 'general', fields: [item('根目录', ['新项目根目录', '文件夹'])]},
-  {title: '允许的飞书群', category: 'access', fields: [item('群范围'), item('添加群 ID'), item('移除群 ID', [], {field: '', guide: '在允许的飞书群列表中找到要移除的群。'})]},
-  {title: '移除 Agent', category: 'access', fields: [item('删除本地 Agent 数据', ['删除机器人'])]},
+const agentGroups: readonly AgentGroup[] = [
+  {title: 'Agent 身份', fields: [item('启用 Agent', ['停用 Agent'])]},
+  {title: '连接与权限', fields: [item('应用 ID', ['App ID']), item('刷新飞书凭据', ['重新授权']), item('飞书权限与连接', ['检查连接'])]},
+  {title: '任务卡片', aliases: ['飞书任务卡片', '卡片显示'], fields: [item('显示工具调用'), item('显示模型')]},
+  {title: '运行策略', aliases: ['任务行为与提醒'], fields: [item('最大并发任务'), item('当前运行并发'), item('空闲超时（秒，0 为关闭）', ['空闲超时']), item('运行中收到新消息', ['待处理消息策略', 'steer', 'queue'])]},
+  {title: '任务结束提醒', fields: [item('提醒方式'), item('长任务阈值（分钟）', ['长任务阈值'], {guide: '先将提醒方式设为「长任务」，即可调整阈值。'})]},
+  {title: '语音转文字', fields: [item('启用语音', ['语音识别']), item('权限与测试'), item('重新检测'), item('测试语音', [], {field: '测试'})]},
+  {title: '云文档评论', fields: [item('执行工具'), item('模型'), item('推理强度', [], {guide: '先选择一个具体模型，再调整推理强度。'})]},
+  {title: '评论回复规则', fields: [item('评论规则文本', ['提示词', 'instructions'], {field: '评论回复规则'}), item('保存规则', ['保存评论规则']), item('恢复默认', ['恢复默认评论规则'])]},
+  {title: '新会话标题', aliases: ['会话标题'], fields: [item('执行工具', ['标题执行工具']), item('用模型生成标题'), item('自定义模型 ID', ['标题模型 ID'], {guide: '先打开「用模型生成标题」，即可设置模型 ID。'}), item('推理强度', ['标题推理强度'], {guide: '先打开「用模型生成标题」，即可设置推理强度。'})]},
+  {title: '管理员', fields: [item('所有者'), item('添加管理员 Open ID'), item('移除管理员', [], {field: '', guide: '在管理员列表中找到要移除的成员。'})]},
+  {title: '新项目默认目录', fields: [item('根目录', ['新项目根目录', '文件夹'])]},
+  {title: '允许的飞书群', fields: [item('群范围'), item('添加群 ID'), item('移除群 ID', [], {field: '', guide: '在允许的飞书群列表中找到要移除的群。'})]},
+  {title: '移除 Agent', fields: [item('删除本地 Agent 数据', ['删除机器人'])]},
 ];
 const membershipGroups: readonly Group<MembershipCategory>[] = [
   {title: '群绑定', category: 'binding', fields: [item('飞书群'), item('工作目录', ['更换目录']), item('会话方式'), item('项目状态')]},
@@ -94,8 +90,12 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
   for (const agent of snapshot.agents) {
     const base: Destination = {page: 'collaboration', view: 'agents', selection: {kind: 'agent', id: agent.id}};
     entries.push({id: agent.id, title: agent.name, context: 'Agent', aliases: [agent.id], destination: base, kind: 'item'});
-    entries.push(...agentCategories.map(category => ({id: `${agent.id}-category-${category.id}`, title: category.id === 'access' ? 'Agent 权限' : `Agent 设置 · ${category.label}`, context: `Agent 设置 · ${agent.name}`, aliases: [category.label], destination: {...base, detail: {kind: 'agent-settings' as const, category: category.id}}, kind: 'setting' as const})));
-    entries.push(...expand(agent.id, `Agent 设置 · ${agent.name}`, base, agentGroups, category => ({kind: 'agent-settings', category})));
+    entries.push({id: `${agent.id}-settings`, title: 'Agent 设置', context: agent.name, aliases: ['机器人设置', 'Agent 权限'], destination: {...base, detail: {kind: 'agent-settings'}}, kind: 'setting'});
+    for (const group of agentGroups) {
+      const destination: Destination = {...base, detail: {kind: 'agent-settings'}, section: group.title};
+      entries.push({id: `${agent.id}-${group.title}`, title: group.title, context: `Agent 设置 · ${agent.name}`, aliases: group.aliases ?? [], destination, kind: 'setting'});
+      group.fields.forEach((field, index) => entries.push({id: `${agent.id}-${group.title}-${index}`, title: field.title, context: `Agent 设置 · ${agent.name} · ${group.title}`, aliases: field.aliases ?? [], destination: {...destination, field: field.field ?? field.title, guide: field.guide}, kind: 'setting'}));
+    }
   }
   for (const group of snapshot.groups) entries.push({id: group.id, title: group.name, context: '飞书群', aliases: [group.id], destination: {page: 'collaboration', view: 'groups', selection: {kind: 'group', id: group.id}}, kind: 'item'});
   const agents = new Map(snapshot.agents.map(agent => [agent.id, agent]));

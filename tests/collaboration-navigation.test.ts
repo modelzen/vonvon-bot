@@ -40,6 +40,15 @@ test('group → each Agent collaboration → back restores the group', () => {
   assert.deepEqual(routeBack(second), group);
 });
 
+test('Agent settings use one pane and return to the Agent list', () => {
+  const destination = {page: 'collaboration' as const, selection: {kind: 'agent' as const, id: agentId}, detail: {kind: 'agent-settings' as const}};
+  const found = routeFromSearch(destination, snapshot);
+  assert.deepEqual(found?.route, {kind: 'agent', id: agentId, pane: {kind: 'settings'}});
+  if (!found) return assert.fail('expected Agent settings route');
+  assert.deepEqual(routeDetail(found.route), {kind: 'agent-settings'});
+  assert.deepEqual(routeBack(found.route), {kind: 'list', view: 'agents'});
+});
+
 test('search direct into group-local settings uses the group as its canonical parent', () => {
   const found = routeFromSearch({page: 'collaboration', selection: {kind: 'membership', id: memberId}, detail: {kind: 'membership-settings', category: 'access'}}, snapshot);
   assert.deepEqual(found?.route, {kind: 'membership', id: memberId, pane: {kind: 'settings', category: 'access'}, parent: {kind: 'group', id: groupId}});

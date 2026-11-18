@@ -25,7 +25,7 @@ ipcMain.handle('bridge:run', (_event, command) => {
 
 void app.whenReady().then(async () => {
   const interactive = process.argv.includes('--interactive');
-  for (const scenario of interactive ? ['mixed'] : ['mixed', 'failure', 'conflict', 'pending']) {
+  for (const scenario of interactive ? ['mixed'] : ['mixed', 'failure', 'conflict', 'pending', 'search-draft']) {
     const view = structuredClone(fixture);
     const saves = [];
     let rejectFirst = scenario === 'failure';
@@ -66,7 +66,10 @@ void app.whenReady().then(async () => {
     const window = new BrowserWindow({show:interactive,width:1080,height:780,webPreferences:{
       preload:path.resolve('dist/preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false,
     }});
-    const evalJs = expression => window.webContents.executeJavaScript(expression);
+    const evalJs = async expression => {
+      try { return await window.webContents.executeJavaScript(expression); }
+      catch (error) { throw new Error(`${scenario}: renderer expression failed: ${expression}`, {cause: error}); }
+    };
     const until = async expression => {
       for (let attempt = 0; attempt < 80; attempt++) {
         if (await evalJs(expression)) return;
@@ -88,6 +91,40 @@ void app.whenReady().then(async () => {
       }
       await until("Array.from(document.querySelectorAll('.settings-entity-row__copy strong')).some(name => name.textContent.trim() === 'Parity Agent')");
       await click('Parity Agent');
+      await click('Agent 设置');
+      if (scenario === 'search-draft') {
+        const search = async (query, result) => {
+          await evalJs("document.querySelector('button[aria-label=\"搜索设置、Agent 或项目\"]').click()");
+          await until("Boolean(document.querySelector('input[aria-label=\"搜索设置、Agent 或飞书群\"]'))");
+          await setInput('搜索设置、Agent 或飞书群', query);
+          await until(`Array.from(document.querySelectorAll('[role="option"] .desktop-search-result-copy strong')).some(item => item.textContent.trim() === ${JSON.stringify(result)})`);
+          await evalJs(`Array.from(document.querySelectorAll('[role="option"]')).find(item => item.querySelector('.desktop-search-result-copy strong')?.textContent.trim() === ${JSON.stringify(result)}).click()`);
+        };
+        const titleDetails = `document.getElementById('setting-' + encodeURIComponent('新会话标题'))?.closest('details')`;
+        await search('用模型生成标题', '用模型生成标题');
+        await until(`${titleDetails}?.open && Boolean(document.activeElement?.closest('[data-search-title="用模型生成标题"]'))`);
+        await evalJs(`${titleDetails}.querySelector('summary').click()`);
+        assert.equal(await evalJs(`${titleDetails}.open`), false);
+        await search('用模型生成标题', '用模型生成标题');
+        await until(`${titleDetails}?.open && Boolean(document.activeElement?.closest('[data-search-title="用模型生成标题"]'))`);
+        await search('评论规则文本', '评论规则文本');
+        await until("document.querySelector('textarea[aria-label=\"评论回复规则\"]')?.closest('details')?.open && document.activeElement === document.querySelector('textarea[aria-label=\"评论回复规则\"]')");
+        await evalJs("{const field=document.querySelector('textarea[aria-label=\"评论回复规则\"]'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,'保留这条未保存的草稿'); field.dispatchEvent(new Event('input',{bubbles:true}));}");
+        await until("document.querySelector('textarea[aria-label=\"评论回复规则\"]')?.value === '保留这条未保存的草稿'");
+        await evalJs("document.querySelector('textarea[aria-label=\"评论回复规则\"]').closest('details').querySelector('summary').click()");
+        assert.equal(await evalJs("document.querySelector('textarea[aria-label=\"评论回复规则\"]').closest('details').open"), false);
+        await evalJs("document.querySelector('textarea[aria-label=\"评论回复规则\"]').closest('details').querySelector('summary').click()");
+        assert.equal(await evalJs("document.querySelector('textarea[aria-label=\"评论回复规则\"]').value"), '保留这条未保存的草稿');
+        await evalJs("document.querySelector('button[aria-label=\"返回 Agent 列表\"]').click()");
+        await until("document.body.innerText.includes('有未保存的修改')");
+        await click('继续编辑');
+        assert.equal(await evalJs("document.querySelector('textarea[aria-label=\"评论回复规则\"]').value"), '保留这条未保存的草稿');
+        await evalJs("document.querySelector('button[aria-label=\"返回 Agent 列表\"]').click()");
+        await click('放弃并离开');
+        await until("!document.querySelector('textarea[aria-label=\"评论回复规则\"]')");
+        process.stdout.write('PASS editor search-draft\n');
+        continue;
+      }
       await until(`Boolean(${field('最大并发任务')})`);
       await until("document.querySelector('.collaboration-profile .collaboration-avatar-image')?.naturalWidth === 1");
       await setInput('最大并发任务', '6');
@@ -121,13 +158,13 @@ void app.whenReady().then(async () => {
         assert.deepEqual(saves[2].patch, {maxConcurrentRuns:6});
         assert.equal(saves[2].revision, 'rev-2');
         assert.equal(view.sections.run.stored.maxConcurrentRuns, 6);
-        await evalJs("document.querySelector('button[aria-label=\"返回列表\"]').click()");
+        await evalJs("document.querySelector('button[aria-label=\"返回 Agent 列表\"]').click()");
         await until("document.body.innerText.includes('有未保存的修改')");
         await click('保存并离开');
         await until("document.body.innerText.includes('Parity Agent') && !document.body.innerText.includes('最大并发任务')");
       } else if (scenario === 'pending') {
         await until("document.body.innerText.includes('正在保存')");
-        await evalJs("document.querySelector('button[aria-label=\"返回列表\"]').click()");
+        await evalJs("document.querySelector('button[aria-label=\"返回 Agent 列表\"]').click()");
         await until("document.body.innerText.includes('有未保存的修改')");
         await click('继续编辑');
         assert.equal(await evalJs(`${field('待处理消息策略')}.disabled`), true);

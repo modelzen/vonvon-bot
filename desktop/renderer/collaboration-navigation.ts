@@ -1,8 +1,8 @@
 import type {AgentId, DesktopSnapshot, GroupId, MembershipId} from '../shared/bridge';
 import type {CollaborationView} from './collaboration-model';
-import type {AgentCategory, Destination, DetailPane, MembershipCategory, Selection} from './search';
+import type {Destination, DetailPane, MembershipCategory, Selection} from './search';
 
-export type AgentPane = {kind: 'groups'} | {kind: 'settings'; category: AgentCategory};
+export type AgentPane = {kind: 'groups'} | {kind: 'settings'};
 export type MembershipPane = {kind: 'activity'} | {kind: 'settings'; category: MembershipCategory};
 export type CollaborationRoute =
   | {kind: 'list'; view: CollaborationView}
@@ -28,7 +28,7 @@ export function routeSelection(route: CollaborationRoute): Selection {
 }
 
 export function routeDetail(route: CollaborationRoute): DetailPane {
-  if (route.kind === 'agent' && route.pane.kind === 'settings') return {kind: 'agent-settings', category: route.pane.category};
+  if (route.kind === 'agent' && route.pane.kind === 'settings') return {kind: 'agent-settings'};
   if (route.kind === 'membership' && route.pane.kind === 'settings') return {kind: 'membership-settings', category: route.pane.category};
   return {kind: 'overview'};
 }
@@ -60,7 +60,7 @@ export function routeFromSearch(destination: Destination, snapshot: DesktopSnaps
   if (!selection || selection.kind === 'overview') return {route: {kind: 'list', view: destination.view ?? 'agents'}};
   if (selection.kind === 'agent') {
     if (!snapshot.agents.some(item => item.id === selection.id)) return {route: {kind: 'list', view: 'agents'}, missing: '这个 Agent 已不存在，已返回 Agent 列表。'};
-    return {route: {kind: 'agent', id: selection.id, pane: destination.detail?.kind === 'agent-settings' ? {kind: 'settings', category: destination.detail.category} : {kind: 'groups'}}};
+    return {route: {kind: 'agent', id: selection.id, pane: destination.detail?.kind === 'agent-settings' ? {kind: 'settings'} : {kind: 'groups'}}};
   }
   if (selection.kind === 'group') {
     if (!snapshot.groups.some(item => item.id === selection.id)) return {route: {kind: 'list', view: 'groups'}, missing: '这个飞书群已不存在，已返回群聊列表。'};

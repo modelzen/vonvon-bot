@@ -87,6 +87,7 @@ ipcMain.handle("bridge:watch", () => snapshot);
     try {
       await window.loadFile(path.resolve("dist/renderer/index.html"));
       await click("Parity Agent");
+      await click("Agent 设置");
       if (scenario === "initial-error") {
         await until("document.body.innerText.includes('FIXTURE CONNECTION LOST')");
         await click("重新读取");
@@ -110,9 +111,10 @@ ipcMain.handle("bridge:watch", () => snapshot);
             for (let index = 0; index < 30 && !release; index++) await delay(100);
             assert.ok(release, "Background read is pending before navigation");
           }
-          await evaluate("document.querySelector('button[aria-label=\"返回列表\"]').click()");
+          await evaluate("document.querySelector('button[aria-label=\"返回 Agent 列表\"]').click()");
           await click("放弃并离开");
           await click("Second Agent");
+          await click("Agent 设置");
           await until("document.body.innerText.includes('SECOND AGENT STATUS')");
           const count = reads;
           if (release) release(reply("STALE FIRST AGENT"));
