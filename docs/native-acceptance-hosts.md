@@ -4,10 +4,10 @@ This document defines how Codex prepares and uses the dedicated Linux acceptance
 
 ## Scope and authority
 
-- The user granted root SSH to the Tencent host `101.34.213.231` for independent use, and testing in `clay`. No further user permission is needed for anything in this document. The work waits only for the accepted design, its independent review, and the root's assignment.
+- The user granted root SSH to the Tencent host `203.0.113.10` for independent use, and testing in `clay`. No further user permission is needed for anything in this document. The work waits only for the accepted design, its independent review, and the root's assignment.
 - The protected services on the Tencent host are the bridge website, the notelet site and its automatic update path, the account service, and every other service that runs there. On `clay`, the protected service is the daily bridge.
 - The owned fallback VM F on the Mac mini, under *Fallback VM F*, carries V5's Linux half when the Tencent host is not eligible. It runs no production service. Its method has passed source review only, and its gates keep it ineligible until they close.
-- A real user action remains only where no agent can act: logging `manzana` into a macOS GUI session, and a provider credential that does not exist yet.
+- A real user action remains only where no agent can act: logging `test-user` into a macOS GUI session, and a provider credential that does not exist yet.
 
 ## Linux host facts and limits
 
@@ -15,7 +15,7 @@ Verified facts. Each comes from read-only evidence named in the corrected propos
 
 - OpenCloudOS 9.6, x86_64, 4 CPU, 3655 MiB RAM, 1024 MiB swap, one root filesystem `/dev/vda1` of 40 G with 32 G free, from one snapshot.
 - Production on the host includes nginx, `vonvon-account.service` on `127.0.0.1:8787`, `bt.service`, `site_total.service`, `postfix.service`, `crond.service`, and `sshd.service`.
-- A read-only platform refresh by the root on 2026-10-12 recorded the following. Kernel `6.6.119-49.23.oc9.x86_64`. systemd 255 (`v255-20.oc9.ap.3`, `default-hierarchy=unified`). `/sys/fs/cgroup` is `cgroup2fs`. The available controllers are `cpuset cpu io memory net_cls hugetlb pids rdma misc`. Root filesystem 32794760 KiB free. RAM 3655 MiB total, 2784 MiB available. Swap 1024 MiB, none used. `getent passwd vonvon-accept` printed nothing, so the test user does not exist yet.
+- A read-only platform refresh by the root on 2026-10-12 recorded the following. Kernel `6.6.119-49.23.oc9.x86_64`. systemd 255 (`v255-20.oc9.ap.3`, `default-hierarchy=unified`). `/sys/fs/cgroup` is `cgroup2fs`. The available controllers are `cpuset cpu io memory net_cls hugetlb pids rdma misc`. Root filesystem 32794760 KiB free. RAM 3655 MiB total, 2784 MiB available. Swap 1024 MiB, none used. `getent passwd accept-user` printed nothing, so the test user does not exist yet.
 - These facts make the host eligible for the procedure below. They do not prove that `set-property` works on the slice, that check V1 or V passes, or that the caps take effect. The preparation gates stay in place.
 - Still not recorded: user unit files in any home, cron and timer definitions, and the notelet update path. Record B0 covers them.
 
@@ -46,7 +46,7 @@ Monitored limits. Every record R checks them. The root agent also samples them e
 | --- | --- | --- |
 | `MemAvailable` | at least `MemoryMax` plus 512 MiB | not used as a stop rule |
 | Root filesystem free space | at least 20 GiB | below 14 GiB |
-| `du -sxb /home/vonvon-accept` | not used as a start rule | above 6 GiB |
+| `du -sxb /home/accept-user` | not used as a start rule | above 6 GiB |
 | `/proc/pressure/memory` `full avg10` | at most 1.00 | above 10.00 |
 | `/proc/pressure/io` `full avg10` | at most 5.00 | above 25.00 |
 
@@ -64,8 +64,8 @@ Record B contains R and also the following.
 - The sha256 of the `FragmentPath` file and of every drop-in of each unit that was running at B0.
 - The sha256 of every file under `/etc/nginx`.
 - Cron and timer coverage: `systemctl list-timers --all --no-legend`, and the sha256 of `/etc/crontab`, of each file under `/etc/cron.d`, `/etc/cron.hourly`, `/etc/cron.daily`, `/etc/cron.weekly`, `/etc/cron.monthly`, and `/var/spool/cron`, and of the BT panel's cron directory `/www/server/cron` when it exists.
-- User unit coverage: `ls /var/lib/systemd/linger`, and the path and sha256 of every file that `find / -xdev -path '*/systemd/user/*' -type f` lists outside `/usr`, `/etc`, and `/home/vonvon-accept`. Teardown T checks the test user's own units.
-- Account files AF, under *Account files*. On a host labelled `AF unavailable`, the sha256 of `/etc/passwd` and of `/etc/group`, computed without the `vonvon-accept` lines.
+- User unit coverage: `ls /var/lib/systemd/linger`, and the path and sha256 of every file that `find / -xdev -path '*/systemd/user/*' -type f` lists outside `/usr`, `/etc`, and `/home/accept-user`. Teardown T checks the test user's own units.
+- Account files AF, under *Account files*. On a host labelled `AF unavailable`, the sha256 of `/etc/passwd` and of `/etc/group`, computed without the `accept-user` lines.
 - `readlink -f` of `/var/www/vonvon-site/current`, `/var/www/notelet-site/current`, `/var/www/vonvon-account/current`, and `/opt/vonvon-account/current`.
 - `journalctl --disk-usage`.
 - Production port set Π, under *Run listeners*.
@@ -86,9 +86,9 @@ Owned additions. Preparation creates the following host state. It belongs to the
 | Owned addition | Created by | Where it appears in a record |
 | --- | --- | --- |
 | `user@<U>.service` and `user-runtime-dir@<U>.service` | step 4 | running unit set |
-| `/var/lib/systemd/linger/vonvon-accept` | step 4 | user unit coverage |
+| `/var/lib/systemd/linger/accept-user` | step 4 | user unit coverage |
 | `user-<U>.slice` and `/etc/systemd/system.control/user-<U>.slice.d/` | step 3 | not compared |
-| The `vonvon-accept` lines in `/etc/passwd`, `/etc/shadow`, `/etc/group`, and `/etc/gshadow`, the four `-` backups, `/etc/.pwd.lock` when absent before, and `/home/vonvon-accept` | step 2 | AF under *Account files*. The home is already excluded. |
+| The `accept-user` lines in `/etc/passwd`, `/etc/shadow`, `/etc/group`, and `/etc/gshadow`, the four `-` backups, `/etc/.pwd.lock` when absent before, and `/home/accept-user` | step 2 | AF under *Account files*. The home is already excluded. |
 
 Comparison rules.
 
@@ -139,7 +139,7 @@ The proof holds only when all of the following are true:
 - `b1 = b2`.
 - Both readlinks equal `socket:[<inode>]`, where the inode is the one `ss` reported.
 - The real and effective UID are `<U>`.
-- `exe` is `/home/vonvon-accept/.local/node/bin/node`.
+- `exe` is `/home/accept-user/.local/node/bin/node`.
 - `VONVON_HOME` in `environ` is the declared home.
 - The port is that home's port for the expected role.
 - The cmdline matches the listener's row above.
@@ -153,7 +153,7 @@ Root records `(pid, b1)` for every holder of the `H_run` host role.
 
 Inventory I is taken by root. Record `findmnt -rn -o TARGET,FSTYPE,SOURCE,OPTIONS` before and after it. Then run:
 
-    find / \( -path /proc -o -path /sys -o -path /home/vonvon-accept \) -prune -o \( -uid <U> -o -gid <G> \) -printf '%y %i %n %U %G %m %s %T@ %p\n'
+    find / \( -path /proc -o -path /sys -o -path /home/accept-user \) -prune -o \( -uid <U> -o -gid <G> \) -printf '%y %i %n %U %G %m %s %T@ %p\n'
 
 The command does not use `-xdev`. The inventory is valid only when both mount tables are identical, `find` exits 0, and its stderr is empty. Otherwise it is inconclusive, and the gate stops.
 
@@ -205,10 +205,10 @@ Owned lines. Each primary file is an ordered list of lines.
 
 | File | Owned lines from step 2 until retirement |
 | --- | --- |
-| `passwd` | exactly `vonvon-accept:x:<U>:<G>:vonvon native acceptance:/home/vonvon-accept:/bin/bash` |
-| `group` | exactly `vonvon-accept:x:<G>:` |
-| `shadow` | exactly one line whose first field is `vonvon-accept` and whose password field is `!` or `!*`. Every field is frozen at R2. Field 3 must be the UTC day of step 2. |
-| `gshadow` | exactly `vonvon-accept:!::` |
+| `passwd` | exactly `accept-user:x:<U>:<G>:vonvon native acceptance:/home/accept-user:/bin/bash` |
+| `group` | exactly `accept-user:x:<G>:` |
+| `shadow` | exactly one line whose first field is `accept-user` and whose password field is `!` or `!*`. Every field is frozen at R2. Field 3 must be the UTC day of step 2. |
+| `gshadow` | exactly `accept-user:!::` |
 | `subuid`, `subgid` | none |
 
 Transitions. `X` is one of `passwd`, `shadow`, `group`, and `gshadow`, and `X-` is its backup. "Meta" means type, link count, owner, group, and mode.
@@ -227,19 +227,19 @@ Source qualification. These predictions rest on source claims about shadow-utils
 
 The protective baseline B0 comes before every write to the host. All steps run strictly in this order. A failed gate stops the sequence at that step.
 
-1. B0. Take record B. Gates: `systemctl --version` reports systemd 255, `stat -fc %T /sys/fs/cgroup` prints `cgroup2fs`, `cgroup.subtree_control` contains `memory`, `cpu`, and `pids`, and every start condition in the monitor table holds. If the cgroup mode is not `cgroup2fs`, the host is not eligible, and the work moves to the fallback VM under *Fallback VM F*. Root also builds Π under *Run listeners*. If any source is `unresolved`, the host is not eligible for the run, and the work moves to the fallback VM. For a host that has no `vonvon-accept` user yet, root picks a numeric `<U>` and `<G>` that are absent from complete `getent passwd` and `getent group` enumerations, records them, and takes inventory I with them. That inventory must be valid and empty. Root also takes AF, which must pass the type gate under *Account files*, and records `dpkg-query -W -f='${Version}' passwd` and `useradd --help` for P-src.
+1. B0. Take record B. Gates: `systemctl --version` reports systemd 255, `stat -fc %T /sys/fs/cgroup` prints `cgroup2fs`, `cgroup.subtree_control` contains `memory`, `cpu`, and `pids`, and every start condition in the monitor table holds. If the cgroup mode is not `cgroup2fs`, the host is not eligible, and the work moves to the fallback VM under *Fallback VM F*. Root also builds Π under *Run listeners*. If any source is `unresolved`, the host is not eligible for the run, and the work moves to the fallback VM. For a host that has no `accept-user` user yet, root picks a numeric `<U>` and `<G>` that are absent from complete `getent passwd` and `getent group` enumerations, records them, and takes inventory I with them. That inventory must be valid and empty. Root also takes AF, which must pass the type gate under *Account files*, and records `dpkg-query -W -f='${Version}' passwd` and `useradd --help` for P-src.
 2. Create the user. `-l` keeps `useradd` from writing login records, and the two `-K` values keep it from allocating subordinate ID ranges, under the source claims in *Account files*. Then take R, which includes AF (R2).
 
    ```
-   groupadd -g <G> vonvon-accept
-   useradd -l -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 -u <U> -g <G> --create-home --shell /bin/bash --comment "vonvon native acceptance" vonvon-accept
-   id vonvon-accept                      # must print uid=<U> gid=<G>
+   groupadd -g <G> accept-user
+   useradd -l -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 -u <U> -g <G> --create-home --shell /bin/bash --comment "vonvon native acceptance" accept-user
+   id accept-user                      # must print uid=<U> gid=<G>
    ```
 
 3. Apply the caps before any process of the user exists. `systemctl set-property` applies the values to the running manager and stores them under `/etc/systemd/system.control/`. It needs no `daemon-reload`. Then check V1 and take R.
 
    ```
-   U=$(id -u vonvon-accept)
+   U=$(id -u accept-user)
    systemctl set-property user-$U.slice MemoryMax=1536M MemorySwapMax=0 CPUQuota=200% TasksMax=512
    systemctl show user-$U.slice -p LoadState -p MemoryMax -p MemorySwapMax -p CPUQuotaPerSecUSec -p TasksMax
    ```
@@ -249,7 +249,7 @@ The protective baseline B0 comes before every write to the host. All steps run s
 4. Enable linger. The R after this step includes AF. This starts `user@<U>.service`, the user's systemd manager, inside the capped slice. The kernel creates the slice's cgroup only when its first process starts, so the kernel files can be read only after this step. The manager is the only process of the user until step 5 passes. Then take R.
 
    ```
-   loginctl enable-linger vonvon-accept
+   loginctl enable-linger accept-user
    ```
 
 5. Read back the containment from the kernel. This is check V. It must pass before any login as the user, before any user workload, and before every run.
@@ -265,17 +265,17 @@ The protective baseline B0 comes before every write to the host. All steps run s
 6. Install the SSH key for the user. Then take R.
 
    ```
-   install -d -m 0700 -o vonvon-accept -g vonvon-accept /home/vonvon-accept/.ssh
-   install -m 0600 -o vonvon-accept -g vonvon-accept /dev/stdin /home/vonvon-accept/.ssh/authorized_keys <<'KEY'
+   install -d -m 0700 -o accept-user -g accept-user /home/accept-user/.ssh
+   install -m 0600 -o accept-user -g accept-user /dev/stdin /home/accept-user/.ssh/authorized_keys <<'KEY'
    <Codex Mac mini public key, one line>
    KEY
    ```
 
-7. Check W, as `vonvon-accept`. Each of these must fail: `test -w` on `/var/www`, `/var/www/vonvon-site/current`, `/var/www/notelet-site/current`, `/opt/vonvon-account`, `/etc/nginx`, `/etc/systemd/system`, and `/www/server` when it exists. Then take R. Then root takes inventory I0. It must be valid, and each entry must be classified under *Outside-home inventory*.
-8. User-level setup over SSH as `vonvon-accept`. Take R after each line that changes state: the Node install, the clone, `npm ci`, `npm run build`, the pack, and the global install.
+7. Check W, as `accept-user`. Each of these must fail: `test -w` on `/var/www`, `/var/www/vonvon-site/current`, `/var/www/notelet-site/current`, `/opt/vonvon-account`, `/etc/nginx`, `/etc/systemd/system`, and `/www/server` when it exists. Then take R. Then root takes inventory I0. It must be valid, and each entry must be classified under *Outside-home inventory*.
+8. User-level setup over SSH as `accept-user`. Take R after each line that changes state: the Node install, the clone, `npm ci`, `npm run build`, the pack, and the global install.
 9. The acceptance run, with R before and after each native step or lane.
    - Before the first step, the test user saves `systemctl --user show-environment` as E0, decoded into a sorted map. E0 states whether `TMPDIR` is absent, present and empty, or present with a value. If the command fails or its output cannot be decoded, the run has no valid E0. The run then stops before its first native action, and the next item does not run.
-   - With a valid E0, the test user runs `systemctl --user set-environment TMPDIR=/home/vonvon-accept/tmp`, then reads and decodes `show-environment` again. The new map must equal E0 except that `TMPDIR` is `/home/vonvon-accept/tmp`. Only then does the ledger record `setup=done`, and only `setup=done` permits native actions. If the command fails, the readback fails, or the map differs in any other way, the run stops and goes to T. Step 8 of T restores the environment whatever the command did.
+   - With a valid E0, the test user runs `systemctl --user set-environment TMPDIR=/home/accept-user/tmp`, then reads and decodes `show-environment` again. The new map must equal E0 except that `TMPDIR` is `/home/accept-user/tmp`. Only then does the ledger record `setup=done`, and only `setup=done` permits native actions. If the command fails, the readback fails, or the map differs in any other way, the run stops and goes to T. Step 8 of T restores the environment whatever the command did.
    - After each daemon start, the first R reads `/proc/<pid>/environ` of the daemon and of every process in a `vonvon-bot-update-*.scope`. Each one must contain that `TMPDIR`.
    - The service gets the manager's environment when it starts. A restart helper inherits the daemon's environment (`host/lifecycle.ts`), not the manager's.
 10. Owned teardown T.
@@ -287,7 +287,7 @@ Writes that preparation makes as root, and nothing else: the user and its home, 
 
 ## Running as the test user
 
-- All user work enters through `ssh vonvon-accept@101.34.213.231`, or on F through ordinary SSH on port 22 to F. The root agent never starts user work with `su`, `runuser`, `sudo -u`, `machinectl shell`, or `systemd-run` from root. Those commands can place processes outside `user-<U>.slice`.
+- All user work enters through `ssh accept-user@203.0.113.10`, or on F through ordinary SSH on port 22 to F. The root agent never starts user work with `su`, `runuser`, `sudo -u`, `machinectl shell`, or `systemd-run` from root. Those commands can place processes outside `user-<U>.slice`.
 - Each SSH session first prints `cat /proc/self/cgroup`. The path must begin with `0::/user.slice/user-<U>.slice/`.
 - Environment for every session:
 
@@ -303,12 +303,12 @@ Writes that preparation makes as root, and nothing else: the user and its home, 
 - Membership check M, as root:
 
   ```
-  for p in $(pgrep -u vonvon-accept); do printf '%s %s\n' "$p" "$(cut -d: -f3- /proc/$p/cgroup)"; done
+  for p in $(pgrep -u accept-user); do printf '%s %s\n' "$p" "$(cut -d: -f3- /proc/$p/cgroup)"; done
   ```
 
   Pass when every path begins with `/user.slice/user-<U>.slice/`. While a daemon, bridge, provider, build, or pack runs, its pid must be in the list.
 - The daemon listens only on `127.0.0.1:<P>` and, until the transition is removed, on the role ports that *Run listeners* allows. `P` lies outside Π and outside `20000-49999`.
-- The run writes only under `/home/vonvon-accept`. SSH sessions export `TMPDIR` under the home before any setup work. Manager-launched processes get it from Sequence step 9. A process that clears its environment can still write to `/tmp`. The check is therefore inventory I, and `TMPDIR` is not the check.
+- The run writes only under `/home/accept-user`. SSH sessions export `TMPDIR` under the home before any setup work. Manager-launched processes get it from Sequence step 9. A process that clears its environment can still write to `/tmp`. The check is therefore inventory I, and `TMPDIR` is not the check.
 - Node 22 is a user-local tarball from nodejs.org. It is pinned to the exact `22.x.y` that the Mac evidence manifest of the same head records, and its sha256 is checked against that release's `SHASUMS256.txt`. `/usr/bin/node` is never used or replaced.
 - No self-hosted GitHub runner is registered on the host. No workflow file references the host, and GitHub stores no credential for it.
 
@@ -340,7 +340,7 @@ The native box never uses a checkout build, `npm pack` of `@vonvon/daemon`, or a
 
 ## Owned teardown T
 
-Teardown runs after the last step of a run, and also after any stop. It is safe to run again, because each step either finds nothing or converges. It has two branches. The dedicated branch applies to `vonvon-accept` on Linux and to `manzana` on the Mac. The `clay` branch applies only to V5 runs in `clay` under the user's override. No V8 lane runs in `clay`.
+Teardown runs after the last step of a run, and also after any stop. It is safe to run again, because each step either finds nothing or converges. It has two branches. The dedicated branch applies to `accept-user` on Linux and to `test-user` on the Mac. The `clay` branch applies only to V5 runs in `clay` under the user's override. No V8 lane runs in `clay`.
 
 Common steps, in both branches:
 
@@ -351,10 +351,10 @@ Common steps, in both branches:
 
 Dedicated branch, after steps 1 to 4:
 
-5. If the run installed the test bridge and the bridge's unit file or plist still exists, run `feishu-codex-bridge stop` from the bridge clone. On Linux, `systemctl --user show -p LoadState` must print `not-found` for both `vonvon-bot.service` and `feishu-codex-bridge.service`. On the Mac as `manzana`, `launchctl print gui/$(id -u)/com.vonvon.bot.daemon` and `launchctl print gui/$(id -u)/ai.feishu-codex-bridge.bot` must both fail.
+5. If the run installed the test bridge and the bridge's unit file or plist still exists, run `feishu-codex-bridge stop` from the bridge clone. On Linux, `systemctl --user show -p LoadState` must print `not-found` for both `vonvon-bot.service` and `feishu-codex-bridge.service`. On the Mac as `test-user`, `launchctl print gui/$(id -u)/com.vonvon.bot.daemon` and `launchctl print gui/$(id -u)/ai.feishu-codex-bridge.bot` must both fail.
 6. No owned process remains.
    - Linux. Under `/sys/fs/cgroup/user.slice/user-<U>.slice/user@<U>.service`, every `cgroup.procs` file outside `init.scope` is empty. No session scope of the user other than the current SSH session has a process.
-   - Mac. `pgrep -U manzana -lf 'vonvon|feishu-codex-bridge|node|codex|claude'` prints nothing.
+   - Mac. `pgrep -U test-user -lf 'vonvon|feishu-codex-bridge|node|codex|claude'` prints nothing.
 7. Linux. No port of any declared home is in `ss -ltnupeH`. If one is present, record its proof under *Run listeners*, stop with `teardown-blocked`, and send no signal. Every `(pid, b1)` that held the `H_run` host role matches a daemon start named in the run transcript, and none of them still runs.
 8. Linux. Restore the manager environment. If the run has no valid E0, this step changes nothing and passes, because Sequence step 9 then never changed the environment. Otherwise the test user reads and decodes `systemctl --user show-environment`, and compares it with E0.
    - If the map equals E0, nothing is changed.
@@ -362,7 +362,7 @@ Dedicated branch, after steps 1 to 4:
    - If any other key differs, or a read, a decode, or the restore command fails, change nothing more and stop with `teardown-blocked`.
    - This step does not depend on `setup=done`. It acts only on a difference in `TMPDIR` from a valid E0, so running it again converges.
 9. Linux. Root takes inventory I. It must be valid, and every entry must be classified under *Outside-home inventory*.
-10. Only after steps 1 to 9 pass, delete the run's `VONVON_HOME`, the test user's `~/.feishu-codex-bridge`, the bridge clone, and the product clone. Before each deletion, the canonical path must begin with `/home/vonvon-accept/` or `/Users/manzana/`. On Linux, after the last run of a frozen head, also run `npm uninstall -g vonvon-bot` and delete `~/artifacts`.
+10. Only after steps 1 to 9 pass, delete the run's `VONVON_HOME`, the test user's `~/.feishu-codex-bridge`, the bridge clone, and the product clone. Before each deletion, the canonical path must begin with `/home/accept-user/` or `/Users/test-user/`. On Linux, after the last run of a frozen head, also run `npm uninstall -g vonvon-bot` and delete `~/artifacts`.
 
 `clay` branch, after steps 1 to 4:
 
@@ -401,7 +401,7 @@ The run that created Q failed. Its T stays open with the reason `quarantined res
 
 Removing Q needs a separately reviewed deletion protocol, and this document authorizes none.
 
-Retirement. When the program no longer needs the Linux host, the root runs teardown T, then `loginctl disable-linger vonvon-accept`, `systemctl revert user-<U>.slice`, and `userdel -r vonvon-accept`. It then takes record B and compares it with the B0 taken before preparation step 2. No owned addition is allowed except the named residues LP, BK, and PL where they apply, each compared under its frozen fields, *Account files*, and *Census on F*.
+Retirement. When the program no longer needs the Linux host, the root runs teardown T, then `loginctl disable-linger accept-user`, `systemctl revert user-<U>.slice`, and `userdel -r accept-user`. It then takes record B and compares it with the B0 taken before preparation step 2. No owned addition is allowed except the named residues LP, BK, and PL where they apply, each compared under its frozen fields, *Account files*, and *Census on F*.
 
 ## Exclusive test bot
 
@@ -516,7 +516,7 @@ Owned sets:
 
 The entries added at stage L and P:
 
-- The linger entry row `/var/lib/systemd/linger/vonvon-accept`, with its type and owner frozen at the first stage-L record.
+- The linger entry row `/var/lib/systemd/linger/accept-user`, with its type and owner frozen at the first stage-L record.
 - LP, the linger parent row, only when B0f had no linger parent. Its type must be `d`, and its type, owner, group, and mode are frozen at the first stage-L record.
 - The logind row for `<U>`.
 - Exactly one listing row for each unit, with these exact columns:
@@ -542,7 +542,7 @@ The retirement commands do not remove the linger parent, and nothing removes it.
 
 On F, this defines "every user manager" in Π's unit-file source.
 
-- Live contexts. Before step 4 only root's manager may run, and only from root's own SSH login. From step 4, `vonvon-accept`'s manager may also run. Any other live manager, or any linger entry other than `vonvon-accept`, makes F ineligible. Nobody stops, impersonates, or connects to it.
+- Live contexts. Before step 4 only root's manager may run, and only from root's own SSH login. From step 4, `accept-user`'s manager may also run. Any other live manager, or any linger entry other than `accept-user`, makes F ineligible. Nobody stops, impersonates, or connects to it.
 - Each live context is listed only by its own account, over that account's own SSH session:
   - `systemctl --user list-unit-files --full --no-legend --no-pager`;
   - `busctl --user --auto-start=no --allow-interactive-authorization=no call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.DBus.Properties Get ss org.freedesktop.systemd1.Manager UnitPath`;
@@ -604,7 +604,7 @@ The cron files and timer commands are still hashed in B. Any unmasked scheduler 
 - Assertion actions are actions whose result is under test. They run as recorded actions over SSH, and the collector never runs them. Each one names its exact expected exit codes and stderr rule.
 
   Check W on F:
-  - Each `test -w <path>` as `vonvon-accept` must exit exactly 1 with an empty stderr.
+  - Each `test -w <path>` as `accept-user` must exit exactly 1 with an empty stderr.
   - Before W, one Reader observation records which W paths exist: `find / -maxdepth 4 \( -path /proc -o -path /sys \) -prune -o \( -path /var/www -o -path /var/www/vonvon-site/current -o -path /var/www/notelet-site/current -o -path /opt/vonvon-account -o -path /etc/nginx -o -path /etc/systemd/system -o -path /www/server \) -printf '%y %U %G %m %p\n'`.
   - For a path that exists, exit 1 is recorded as `protected`. For an absent path, it is recorded as `absent, not applicable`, which is not evidence of protection.
   - The native negative actions keep the outcomes that the native assertions define.

@@ -58,7 +58,7 @@ describe('stderrReason', () => {
 });
 
 describe('sanitizeReason', () => {
-  const home = '/home/ops';
+  const home = '/home/operator';
   it.each([
     ['first line only, control characters removed', new Error('line one\tx\nline two'), 'Error: line onex'],
     ['a string', 'plain text', 'plain text'],

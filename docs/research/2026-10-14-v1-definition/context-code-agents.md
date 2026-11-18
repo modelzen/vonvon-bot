@@ -6,11 +6,11 @@
 
 | 缩写 | 位置 | 版本 |
 |---|---|---|
-| V2 | `/home/ops/vonvon/vonvon-bot/packages/daemon/src/` | main `be17859` |
-| BR | `/home/ops/vonvon/feishu-codex-bridge/src/` | 0.6.14，`6698118` |
+| V2 | `/home/operator/vonvon/vonvon-bot/packages/daemon/src/` | main `be17859` |
+| BR | `/home/operator/vonvon/feishu-codex-bridge/src/` | 0.6.14，`6698118` |
 | CXG | `V2/agent/codex-appserver/protocol/generated/`，v2 自带的 app-server 协议类型 | 托管安装钉在 0.156.1（`codex-install-lock.json`） |
-| CXR | `/home/ops/vonvon/references/openai-codex/codex-rs/` | main `97771b1d`，2026-10-14。比 0.156.1 新 |
-| SDK | `/home/ops/vonvon/vonvon-bot/packages/daemon/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` | 0.3.296（实装版本；`docs/providers.md:483` 写的是钉 0.3.246） |
+| CXR | `/home/operator/vonvon/references/openai-codex/codex-rs/` | main `97771b1d`，2026-10-14。比 0.156.1 新 |
+| SDK | `/home/operator/vonvon/vonvon-bot/packages/daemon/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` | 0.3.296（实装版本；`docs/providers.md:483` 写的是钉 0.3.246） |
 | CC | code.claude.com/docs，2026-10-14 抓取 | 文档未写版本 |
 | FS | 飞书开放平台文档，本地副本在 `scratchpad/fsdocs/` | 抓取日未记录 |
 
@@ -92,7 +92,7 @@ bridge 和 v2 在上下文这块是同一份代码。`context-weave.ts` 两边�
 
 ### 1.7 人名怎么进 prompt
 
-- 触发人：发信人块用 `msg.senderName`（`context-weave.ts:445-451`）。SDK 只在调用方传了 `resolveSenderName` 时才填这个名字（`/home/ops/vonvon/vonvon-bot/node_modules/@larksuiteoapi/node-sdk/lib/index.js:99137`）。v2 建通道时没传（`V2/bot/bridge.ts:59-81`）。所以名字恒为"某用户"，只有 open_id 是真的。
+- 触发人：发信人块用 `msg.senderName`（`context-weave.ts:445-451`）。SDK 只在调用方传了 `resolveSenderName` 时才填这个名字（`/home/operator/vonvon/vonvon-bot/node_modules/@larksuiteoapi/node-sdk/lib/index.js:99137`）。v2 建通道时没传（`V2/bot/bridge.ts:59-81`）。所以名字恒为"某用户"，只有 open_id 是真的。
 - 话题上文：飞书 `message.list` 的 `sender` 只有 id、id_type、sender_type、tenant_key，没有名字（FS `server-docs_im-v1_message_list.md:61-66`）。代码回退成 `用户<open_id 尾 4 位>`（`context-weave.ts:159-160`）。
 - 正文里的 @ 会被换成名字，因为 `mentions` 带名字（`context-weave.ts:355-363`）。
 - 结论：今天 agent 分得清"是不是同一个人"，但不知道是谁。
@@ -211,7 +211,7 @@ bridge 和 v2 在上下文这块是同一份代码。`context-weave.ts` 两边�
 ### Codex
 
 - 父线程用协作工具：`spawnAgent`、`sendInput`、`resumeAgent`、`wait`、`closeAgent`（CXG `v2/CollabAgentTool.ts`）。客户端收到的是父线程上的 `collabAgentToolCall` 项，带 `senderThreadId`、`receiverThreadIds`、`prompt`、`model`、`reasoningEffort`、`agentsStates`（CXG `v2/ThreadItem.ts:64-101`）。子 agent 状态有 pendingInit、running、interrupted、completed、errored、shutdown、notFound（CXG `v2/CollabAgentStatus.ts`）。
-- 每个子 agent 是一条独立线程，来源是 `thread_spawn{parent_thread_id, depth, agent_path, agent_nickname, agent_role}`（CXG `SubAgentSource.ts`）。子线程的 `item/*` 通知带自己的 `threadId`，Orca 和 Paseo 就是这样拿到子 agent 进度的（`/home/ops/vonvon/vonvon-bot/docs/native-capabilities.md:149-151`）。
+- 每个子 agent 是一条独立线程，来源是 `thread_spawn{parent_thread_id, depth, agent_path, agent_nickname, agent_role}`（CXG `SubAgentSource.ts`）。子线程的 `item/*` 通知带自己的 `threadId`，Orca 和 Paseo 就是这样拿到子 agent 进度的（`/home/operator/vonvon/vonvon-bot/docs/native-capabilities.md:149-151`）。
 - 停止：没有专门方法。对子线程的回合发 `turn/interrupt`，或由父线程 `closeAgent`（`native-capabilities.md:150`）。
 - 上下文：旧版工具 `spawn_agent` 的 `fork_context` 默认不分叉，子 agent 只拿到首条任务（CXR `core/src/tools/handlers/multi_agents_spec.rs:627-632`）。新版 `multi_agent_v2` 的 `fork_turns` 默认 `all`，继承父线程全部历史（`:665-669`）。CXR main 里 `multi_agent` 是稳定且默认开，`multi_agent_v2` 默认关（CXR `features/src/lib.rs:1471-1482`）。0.156.1 的默认未知。
 - 上限：默认最多 6 个线程，深度 1（CXR `core/src/config/mod.rs:255`、`:265`）。

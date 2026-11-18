@@ -1,6 +1,6 @@
 # 主人过去的产品思路，以及 v2 有没有继承
 
-路径缩写：`LEG`=/home/ops/vonvon/vonvon-bridge-legacy，`BOT`=/home/ops/vonvon/vonvon-bot，`FCB`=/home/ops/vonvon/feishu-codex-bridge。
+路径缩写：`LEG`=/home/operator/vonvon/vonvon-bridge-legacy，`BOT`=/home/operator/vonvon/vonvon-bot，`FCB`=/home/operator/vonvon/feishu-codex-bridge。
 文档缩写：PRD=`LEG/docs/product/vonvon-bridge-v1-prd.md`，FRD=`LEG/docs/product/first-run-main-flow-decisions.md`，REC=`LEG/docs/product/v1-prd-reconciliation.md`，V9=`LEG/docs/product/vonvon-bridge-commercialization-loopx-plan-v9.md`，DP=`…/vonvon-bridge-commercialization-decision-packet.md`，FOP=`…/vonvon-bridge-founder-operating-plan.md`，OR=`…/vonvon-bridge-paid-pilot-owner-review-v1.md`，ARCH=`BOT/docs/architecture.md`，RM=`BOT/docs/roadmap.md`，PLAN=`BOT/docs/plan.md`。
 
 ## 结论先说

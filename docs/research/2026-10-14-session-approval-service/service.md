@@ -112,7 +112,7 @@
 - launchd 和 systemd 的原生验收 12 步，含杀进程后 15 秒内重启、无限期排空、"停止优先"、登录时重新加载、中断后续做卸载。
 - 性能对比和 Shipping 审查。
 
-这套验收要求一个专用的 Linux 测试用户和一台腾讯云主机，并且不能用 `ops` 账号（`:1186`）。按 2026-10-14 的新流程，这一套不必照搬，见 6.7。
+这套验收要求一个专用的 Linux 测试用户和一台腾讯云主机，并且不能用 `operator` 账号（`:1186`）。按 2026-10-14 的新流程，这一套不必照搬，见 6.7。
 
 ## 3. 平台事实
 
@@ -318,7 +318,7 @@ v2-fit 写"如果自启改用 Electron 登录项，这条线整体暂停"（第 
 验收：
 - 不再照搬 plan.md V5 的 12 步原生验收和腾讯云测试用户。改成：
   - 一次 Mac 检查会话，跑第 8 节的项目；
-  - Linux 进 v1 的话，Claude 在 JP-VPS 上用隔离的 `VONVON_HOME` 跑一遍安装、`kill -9`、停止、卸载、重启机器后启动。JP-VPS 是 Paseo 在用的机器，用 `ops` 账号要 owner 同意，见问题 6。
+  - Linux 进 v1 的话，Claude 在 JP-VPS 上用隔离的 `VONVON_HOME` 跑一遍安装、`kill -9`、停止、卸载、重启机器后启动。JP-VPS 是 Paseo 在用的机器，用 `operator` 账号要 owner 同意，见问题 6。
 - 确定性测试已经覆盖 Gate M 和 Gate L 的交错情况，保留。
 
 ### 6.8 #285 和 #110 怎么办
@@ -367,10 +367,10 @@ v2-fit 写"如果自启改用 Electron 登录项，这条线整体暂停"（第 
 - 推荐 a。b 要带着已停用的 plan.md 和进度图改动走旧流程；c 浪费已经合入、带测试的事务代码。
 
 **问题 6：Linux 的真机验收在哪里跑？**（只在问题 1 选 b 或 c 时需要）
-- a. JP-VPS 的 `ops` 账号，用隔离的 `VONVON_HOME`，只装 `vonvon-bot.service`，不碰 Paseo。
+- a. JP-VPS 的 `operator` 账号，用隔离的 `VONVON_HOME`，只装 `vonvon-bot.service`，不碰 Paseo。
 - b. 在 JP-VPS 上建一个专用测试用户，需要 owner 输入 sudo 密码。
 - c. 另找一台 Linux 机器或虚拟机。
-- 推荐 a。`vonvon-bot.service` 在 `ops` 下还不存在，验完就卸载；旧计划禁用 `ops` 是因为当时那台机器上有生产 bridge，这台没有。
+- 推荐 a。`vonvon-bot.service` 在 `operator` 下还不存在，验完就卸载；旧计划禁用 `operator` 是因为当时那台机器上有生产 bridge，这台没有。
 
 ## 8. 要在 Mac 上实测的
 

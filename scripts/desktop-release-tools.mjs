@@ -67,11 +67,11 @@ export async function verifyUniversalApp({ app, version, teamIdentifier, archite
   const { stdout: bundleVersion } = await execute('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleShortVersionString', join(app, 'Contents/Info.plist')]);
   const { stdout: buildVersion } = await execute('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleVersion', join(app, 'Contents/Info.plist')]);
   const core = JSON.parse(await readFile(join(app, 'Contents/Resources/daemon/package.json'), 'utf8'));
-  if (bundleVersion.trim() !== version || buildVersion.trim() !== version || core.version !== version || core.license !== 'UNLICENSED') {
+  if (bundleVersion.trim() !== version || buildVersion.trim() !== version || core.version !== version || core.license !== 'Apache-2.0') {
     throw new Error('App/Core product version or first-party license mismatch');
   }
   await assertNoBundledClaude(join(app, 'Contents/Resources/daemon'));
-  for (const name of ['LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md']) {
+  for (const name of ['LICENSE', 'LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md']) {
     if (!(await readFile(join(app, 'Contents/Resources/daemon', name))).length) throw new Error(`Missing ${name}`);
   }
   const paths = await machoFiles(app);

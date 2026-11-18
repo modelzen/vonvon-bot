@@ -70,7 +70,7 @@
 - fake app-server：用 `MODE:` 控制行为，最后有一条兜底，什么方法都回 `reply(msg.id, {})`（`packages/daemon/test/codex-judge.test.ts:142,146`）；`codex-server-requests.test.ts:83` 也是每个请求都回 `{id, result:{}}`。草稿分支 `origin/claude/s23c-judge-settings` 上有 `test/helpers/fake-claude-cli.ts`：用真的 SDK 传输层驱动假 CLI，对照真 CLI 2.1.296 校过。
 - `packages/daemon/vitest.config.ts` 没有 setupFiles。数据目录取 `VONVON_HOME`，没设时用 `<home>/.vonvon-bot`（`src/config/data-root.ts:9-14`）。
 - 无头网页检查：`.agents/skills/verify/scripts/web.mjs` 能截 bot-list 和 no-cred 两页。fake bot 永远连不上，所以挂在 `requireRunningAgent` 后面的 RPC 都会被拒。机器上没有中文字体，中文显示成方框。lockfile 里有 Playwright 1.64.0（`package-lock.json:8026-8028`）。
-- CI：`.github/workflows/ci.yml` 有 linux 任务（`:18-83`），macOS 任务（`:85-122`）跑在自托管 runner 上，用户是标准用户 `github-ci`，执行 `npm test`。没有 Electron 冒烟测试。
+- CI：`.github/workflows/ci.yml` 有 linux 任务（`:18-83`），macOS 任务（`:85-122`）跑在自托管 runner 上，用户是标准用户 `ci-user`，执行 `npm test`。没有 Electron 冒烟测试。
 - 验收文字：M5 第 1 到 3 步（`docs/v1-plan.md:173-175`），M7 第 1 步和第 5 步（`:212,216`），"认识你的 bot"检查（`:219-237`），M9 第 3 步（`:260`），e12（`:1025`），判断默认用 gpt-6-luna（`:790,1059-1062`），§7 预览版（`:1131-1173`），§9 开发做法（`:1191-1199`）。发布标准里的"第一次对话走通"见 `docs/product.md:698`，清单各步见 `:47`。
 
 ## 6. 发现
@@ -177,7 +177,7 @@
 
 - Rakazo：`apps/desktop/e2e/smoke.spec.ts:11-60`（`_electron`：preload 只暴露白名单里的键，renderer 里没有 node 全局，检查窗口状态），`setup.spec.ts:81-221`。
 - 我们：`.agents/skills/verify/SKILL.md` 里 Electron 的做法还没写；CI 没有桌面测试；桌面行为全靠 Mac 检查。
-- 建议：用 Playwright 1.64 的 `_electron` 写一个冒烟测试：起应用，连上自己起的临时 daemon，断言 preload 的键和 renderer 里没有 node。Linux 用 xvfb 跑。macOS 先确认 `github-ci` 这个标准用户有没有 GUI 会话。
+- 建议：用 Playwright 1.64 的 `_electron` 写一个冒烟测试：起应用，连上自己起的临时 daemon，断言 preload 的键和 renderer 里没有 node。Linux 用 xvfb 跑。macOS 先确认 `ci-user` 这个标准用户有没有 GUI 会话。
 - 影响：约 80 行 spec，加一个 CI 步骤。能少用几次 Mac 检查。不改变产品承诺。置信度中偏低：xvfb 下我们的 Electron 能不能起来，要试过才知道。
 
 ### F13 无头网页检查（采纳思路，低优先级）；PR 截图评论不采纳
@@ -219,4 +219,4 @@
 - 飞书 applink 打开私聊的格式（F3），以及 `ANTHROPIC_BASE_URL` 加 SDK 自带 CLI 是否可行（F9），都没有查官方文档，也没有试。
 - 没看 Rakazo 的移动端引导、`setup.spec.ts` 的完整断言，以及 golden.spec 513 行里每一个检查点的细节。
 - 没统计我们的 fake app-server 兜底被多少测试依赖（F10）。
-- 没核对 `github-ci` 用户在 Mac mini 上有没有 GUI 会话（F12）。
+- 没核对 `ci-user` 用户在 Mac mini 上有没有 GUI 会话（F12）。

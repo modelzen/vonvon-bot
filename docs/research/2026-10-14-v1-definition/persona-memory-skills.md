@@ -317,12 +317,12 @@ comma 里的 "Group" 指工作区，不是聊天群（`references/comma/docs/bri
 
 ## 来源
 
-- comma：`/home/ops/vonvon/references/comma` 下的各个 `file:line`，见上文。
+- comma：`/home/operator/vonvon/references/comma` 下的各个 `file:line`，见上文。
 - OpenClaw：[agent-workspace](https://docs.openclaw.ai/concepts/agent-workspace)、[memory](https://docs.openclaw.ai/concepts/memory)、[memory-architecture](https://docs.openclaw.ai/concepts/memory-architecture)、[multi-agent](https://docs.openclaw.ai/concepts/multi-agent)、[groups](https://docs.openclaw.ai/channels/groups)、[personal-messaging](https://docs.openclaw.ai/gateway/config-channels/personal-messaging)、[feishu](https://docs.openclaw.ai/channels/feishu)、[feishu advanced](https://docs.openclaw.ai/channels/feishu/advanced-configuration)、[feishu access control](https://docs.openclaw.ai/channels/feishu/access-control)、[feishu dynamic agents](https://docs.openclaw.ai/channels/feishu/dynamic-agents)；GitHub `openclaw/openclaw` 的 `docs/reference/templates/*`（commit 33f7b38，2026-10-10）。
 - 飞书插件：npm `@larksuite/openclaw-lark@2026.7.16` 包内源码；npm `@openclaw/feishu`、`@larksuiteoapi/feishu-openclaw-plugin` 的元数据。
 - Grok：[bots](https://docs.x.ai/grok-bot/bots)、[team-bots](https://docs.x.ai/grok-bot/team-bots)。
 - Claude：[memory](https://code.claude.com/docs/en/memory)、[skills](https://code.claude.com/docs/en/skills)；`claude-agent-sdk@0.3.296` 的 `sdk.d.ts`。
-- Codex：`/home/ops/vonvon/references/openai-codex`（HEAD 97771b1d，2026-10-14）；本会话 scratchpad 里的 codex 0.162 源码。
+- Codex：`/home/operator/vonvon/references/openai-codex`（HEAD 97771b1d，2026-10-14）；本会话 scratchpad 里的 codex 0.162 源码。
 - Hermes：[memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory)。
 - Agent Skills：[specification](https://agentskills.io/specification)。
 - ClawHub：[eSecurity Planet](https://esecurityplanet.com/threats/hundreds-of-malicious-skills-found-in-openclaws-clawhub)。

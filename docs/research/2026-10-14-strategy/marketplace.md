@@ -183,15 +183,15 @@ bots/<slug>/
 - **属实**：竞品 Lark Coding Agent Bridge 的教程由飞书官网 2026-06-04 发布；lark-channel-bridge 周下载 902 次，@modelzen/feishu-codex-bridge 108 次，后者近 30 天 1,106 次；star 分别是 2,692 和 81
   - 依据：npm API downloads/point 2026-10-06:2026-10-12 和 last-month；gh api repos/zarazhangrui/lark-coding-agent-bridge；https://www.feishu.cn/content/article/7647408304896953549
 - **属实**：bridge 最后一个版本是 0.6.14，发布于 2026-09-24
-  - 依据：npm registry time['0.6.14']=2026-09-24T14:12:37Z。/home/ops/vonvon/feishu-codex-bridge 的 HEAD 6698118 就是 "chore(release): 0.6.14"，日期 2026-09-24，之后没有新提交。
+  - 依据：npm registry time['0.6.14']=2026-09-24T14:12:37Z。/home/operator/vonvon/feishu-codex-bridge 的 HEAD 6698118 就是 "chore(release): 0.6.14"，日期 2026-09-24，之后没有新提交。
 - **说过头了**：registerApp 扫码可以创建 PersonalAgent 应用，并预填名称、描述和头像（wizard.ts:12、:56-58）
-  - 依据：/home/ops/vonvon/vonvon-bot/packages/daemon/src/bot/wizard.ts:12,56-62；node_modules/@larksuiteoapi/node-sdk/types/index.d.ts:312588-312603
+  - 依据：/home/operator/vonvon/vonvon-bot/packages/daemon/src/bot/wizard.ts:12,56-62；node_modules/@larksuiteoapi/node-sdk/types/index.d.ts:312588-312603
 - **有误**：权限只能在开发者后台点一次授权，无法预填（scopes.ts:7-12）；所以聊天创建等于一段对话加两次人手点击
   - 依据：node_modules/@larksuiteoapi/node-sdk/types/index.d.ts:312604-312684（AppAddons，含 "Requires the platform gray-scale"）；node_modules/@larksuiteoapi/node-sdk/README.zh.md:746-785；vonvon-bot 代码里没有任何地方用到 addons（grep 结果为空）
 - **说过头了**：现有代码把指令同步写成目录里的 AGENTS.md 和 CLAUDE.md（comments.ts:306-315），bot 级提示词放在 comment-instructions.md（schema.ts:125）；导入的人设应该改走 provider 的 developer instructions 通道（推断）
-  - 依据：/home/ops/vonvon/vonvon-bot/packages/daemon/src/bot/comments.ts:305-317,355-371；packages/daemon/src/agent/bridge-instructions.ts:1-12；packages/daemon/src/agent/codex-appserver/protocol/generated/v2/ThreadStartParams.ts
+  - 依据：/home/operator/vonvon/vonvon-bot/packages/daemon/src/bot/comments.ts:305-317,355-371；packages/daemon/src/agent/bridge-instructions.ts:1-12；packages/daemon/src/agent/codex-appserver/protocol/generated/v2/ThreadStartParams.ts
 - **有误**：write 和 full 继续走已有的审批（schema.ts:483-485）
-  - 依据：/home/ops/vonvon/vonvon-bot/packages/daemon/src/config/schema.ts:394-400,483-486；packages/daemon/src/agent/codex-appserver/backend.ts:30-33
+  - 依据：/home/operator/vonvon/vonvon-bot/packages/daemon/src/config/schema.ts:394-400,483-486；packages/daemon/src/agent/codex-appserver/backend.ts:30-33
 - **属实**：Telegram Bot API 9.6（2026-04-03）加入 Managed Bots；Grok Build 插件市场 2026-06-11 上线，开放 PR，安装时校验钉住的 SHA，首发 6 个合作方；Team Bots 2026-09-28 推出，可以进 Slack
   - 依据：https://core.telegram.org/bots/api-changelog（9.6，2026-04-03，t.me/newbot 链接、getManagedBotToken、replaceManagedBotToken）；https://x.ai/news/grok-plugin-marketplace（2026-06-11，MongoDB/Vercel/Sentry/Chrome DevTools/Cloudflare/Superpowers）；https://releasebot.io/updates/xai（Team Bots 2026-09-28，公测，限 Teams/Enterprise 套餐，可进 Slack 频道。这是聚合站，不是一手来源）。另外，releasebot 上没有"2026-09-29 在 app 内移除精选 bot"这一条，2026-09-29 的条目是 Grok Build 1.0.45。所以 wiki 的这个说法仍然没有证据。
 - **说过头了**：Agent Plugins 1.0 的 TSC 来自 Amazon/Cursor/Microsoft/OpenAI/Vercel；AGENTS.md 有 6 万多个项目采用，由 AAIF 托管；SKILL.md 获 Claude Code、Codex、Cursor、OpenClaw、TRAE 支持；格式表里 Agent Plugins 的头像放在 assets/

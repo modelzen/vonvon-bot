@@ -2,7 +2,7 @@
 
 范围：主人在更新 1 里定的三档回复方式（仅 @ 时回复、全部回复、智能回复）。本报告只定三档的行为、默认值、权限和多 bot 规则。判断提示词、模型和阈值按主人的意思留到实现时定（`scratchpad/v1/owner-updates.md` 更新 1）。上下文怎么拼接见同目录 `context-code-agents.md` 第 3.4、3.5 节，这里不重复。
 
-代码路径都相对 `/home/ops/vonvon/vonvon-bot`（main `be17859`）。bridge 路径相对 `/home/ops/vonvon/feishu-codex-bridge`（`v0.6.14`）。
+代码路径都相对 `/home/operator/vonvon/vonvon-bot`（main `be17859`）。bridge 路径相对 `/home/operator/vonvon/feishu-codex-bridge`（`v0.6.14`）。
 
 ## 结论
 
@@ -360,7 +360,7 @@
 - 飞书：[接收消息事件](https://open.feishu.cn/document/server-docs/im-v1/message/events/receive.md)、[获取指定消息](https://open.feishu.cn/document/server-docs/im-v1/message/get.md)、[发送消息](https://open.feishu.cn/document/server-docs/im-v1/message/create.md)、[获取群信息](https://open.feishu.cn/document/server-docs/group/chat/get-2.md)、[权限介绍](https://open.feishu.cn/document/server-docs/application-scope/introduction.md)、[权限列表（动态页，未取到）](https://open.feishu.cn/document/server-docs/application-scope/scope-list.md)。
 - 其他产品：[docs.x.ai chat-and-collaboration](https://docs.x.ai/grok-bot/chat-and-collaboration.md)、[docs.x.ai team-bots](https://docs.x.ai/grok-bot/team-bots)、[docs.x.ai bots](https://docs.x.ai/grok-bot/bots)、[OpenClaw groups](https://docs.openclaw.ai/channels/groups)、[botmux multi-bot](https://deepcoldy.github.io/botmux/multi-bot)、[Agno](https://www.agno.com/articles/control-slack-bot-engagement-with-mention-only-replies-by-default.md)、[gsmarena ChatGPT 群聊](https://m.gsmarena.com/openai_chatgpt_group_chats-news-70295.php)、[OpenAI 群聊帮助（403，未打开）](https://help.openai.com/en/articles/12703475-group-chats-in-chatgpt)。
 - 飞书官方 OpenClaw 插件：`scratchpad/oclark/package`（npm `@larksuite/openclaw-lark@2026.7.16`，MIT）。
-- comma（AGPL，只借思路）：`/home/ops/vonvon/references/comma` 下上文所列文件。
+- comma（AGPL，只借思路）：`/home/operator/vonvon/references/comma` 下上文所列文件。
 - 模型：[gpt-oss-safeguard-20b 模型卡](https://huggingface.co/openai/gpt-oss-safeguard-20b)、[Help Net Security](https://www.helpnetsecurity.com/2025/10/29/openai-gpt-oss-safeguard-safety-models/)、[pricepertoken GPT-5.4-nano](https://pricepertoken.com/pricing-page/model/openai-gpt-5.4-nano)、[morphllm](https://morphllm.com/openai-api-pricing)、Codex 0.162 源码 `models.json`、claude-api 技能模型表、[Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview)。
 - 论文：[arXiv 2603.11409](https://arxiv.org/abs/2603.11409)、[arXiv 2506.05309](https://arxiv.org/abs/2506.05309)。
 - 本会话其他报告：`results/fit.report.md`、`results/agent-integrations.report.md`、`v1/v2-fit.md`、`v1/context-code-agents.md`、`v1/persona-memory-skills.md`、`v1/owner-updates.md`。

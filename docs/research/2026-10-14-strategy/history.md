@@ -88,7 +88,7 @@ Source: all issue comments on #21+, read with `gh api repos/.../issues/<n>/comme
 
 ## 4. The baseline the user already knows
 
-**feishu-codex-bridge.** Published on npm as `@modelzen/feishu-codex-bridge` 0.6.14 (modified 2026-09-24, from `npm view`). There is a local checkout at /home/ops/vonvon/feishu-codex-bridge at commit `6698118`. Per its README:
+**feishu-codex-bridge.** Published on npm as `@modelzen/feishu-codex-bridge` 0.6.14 (modified 2026-09-24, from `npm view`). There is a local checkout at /home/operator/vonvon/feishu-codex-bridge at commit `6698118`. Per its README:
 - A Feishu group is a project and a thread is a session.
 - Codex and Claude Code backends (README.md:71).
 - Streaming cards with stop, steer, `/goal`, images and files, local-file fetch, "咖啡一下" (handing local CLI approvals to Feishu, :77), doc-comment replies, and multiple bots (:80).
@@ -191,7 +191,7 @@ My working files are in （调研代理的本地临时目录，未归档） (prs
 - **属实**：44 of the 48 files in packages/ui/src have the same paths as the old app's desktop/renderer, so the V4 UI is the old UI ported.
   - 依据：Running comm -12 on the git ls-tree output for origin/main:packages/ui/src and origin/codex/device-handoff:desktop/renderer finds 44 shared paths. The content is even closer than the paths suggest: 24 of the 44 files are byte-identical, and the whole set differs by only 625 diff lines over 19,131 lines. The 4 new files are client-context.tsx, directory-picker.tsx, features.ts and url-actions.ts.
 - **属实**：The bridge already ships resident services on macOS, Windows and Linux, with login autostart and crash restart (bridge README.md:82). It is published as @modelzen/feishu-codex-bridge 0.6.14.
-  - 依据：/home/ops/vonvon/feishu-codex-bridge, commit 6698118. README.md:82 says '跨平台常驻：macOS / Windows / Linux·WSL 均可注册成后台服务、开机或登录自启、崩溃自动拉起'. :71 covers the two backends, :77 咖啡一下, :80 multiple bots and :81 the three sandbox tiers. `npm view` shows version 0.6.14, time.modified 2026-09-24T14:12:37Z.
+  - 依据：/home/operator/vonvon/feishu-codex-bridge, commit 6698118. README.md:82 says '跨平台常驻：macOS / Windows / Linux·WSL 均可注册成后台服务、开机或登录自启、崩溃自动拉起'. :71 covers the two backends, :77 咖啡一下, :80 multiple bots and :81 the three sandbox tiers. `npm view` shows version 0.6.14, time.modified 2026-09-24T14:12:37Z.
 - **unsupported**：The first change a bridge user would notice in Feishu arrives with V6b's 12th sub-PR.
   - 依据：docs/plan.md:1370 on origin/claude/v6b-process-cutover gives the order of pieces 10 to 14. roadmap.md:13, in the V3 row, says '旧网页管理路由改成 RPC，只读预览和旧网页页面退役，私聊菜单去掉旧控制台按钮'.
 

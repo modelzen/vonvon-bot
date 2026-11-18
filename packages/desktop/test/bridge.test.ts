@@ -254,7 +254,7 @@ describe('desktop IPC boundary', () => {
     ['credential-shaped values after an unquoted label', 'password: hunter22 and token: 0123456789abcdef', 'password: … and token: …'],
     ['ordinary words after bearer, basic or a secret label', 'Basic settings are invalid. Invalid token: expired; tokens: 1234 used',
       'Basic settings are invalid. Invalid token: expired; tokens: 1234 used'],
-    ['file paths, which the web UI shows too', 'ENOENT: no such file /home/ops/.vonvon/bots/cli_a/setup.json', 'ENOENT: no such file /home/ops/.vonvon/bots/cli_a/setup.json'],
+    ['file paths, which the web UI shows too', 'ENOENT: no such file /home/operator/.vonvon/bots/cli_a/setup.json', 'ENOENT: no such file /home/operator/.vonvon/bots/cli_a/setup.json'],
     ['secret-style values', 'unsupported secret form: {"app_secret":"s3cr3t","password":\'pw\', token = abc}', 'unsupported secret form: {"app_secret":"…","password":\'…\', token = …}'],
     ['quoted values with spaces, commas, the other quote or escapes', String.raw`{"app_secret":"abc def ghi"} {"secret":"a,b-c-d"} client_secret = "s e c" {"password":"it's a secret"} {"password":"ab\"cd ef"} secret:'a"b c' end`,
       String.raw`{"app_secret":"…"} {"secret":"…"} client_secret = "…" {"password":"…"} {"password":"…"} secret:'…' end`],

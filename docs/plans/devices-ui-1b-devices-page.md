@@ -442,7 +442,7 @@ export function OutsideWindow({ shell, children }: { shell?: ShellCapabilities; 
 前提：D2、D3 已合入集成分支；PR 已推上去。
 
 Claude 先在 JP-VPS 上准备（不进提示词正文的真实地址和数据目录只用占位）：
-1. 拿验收 daemon 的目录锁：`mkdir /tmp/vonvon-accept.d`，并写上 `claude <UTC 时间>`。
+1. 拿验收 daemon 的目录锁：`mkdir /tmp/accept-user.d`，并写上 `claude <UTC 时间>`。
 2. 记下验收 worktree 现在的 sha，把它切到 PR 的 sha（detach），构建 daemon，用它重启验收 daemon（Bot 6 那套数据）。
 3. 用前缀 `VONVON_HOME=<验收数据目录>` 运行 `vonvon remote enable "$(tailscale ip -4)"`（A1 去掉了 `--tailscale`），端口用默认 7767；被占就 `remote port 17767`，并在提示词里写明。
 4. 后台起验收助手 `packages/desktop/test/manual/devices-accept-helper.ts`。助手进 git，只在本 PR 里用。
@@ -499,7 +499,7 @@ Mac 上的步骤（Computer Use 操作开发版桌面端；`curl` 在 Mac 终端
 - 版本提示条和维护视图：三台装的是同一个版本，真机上出不来，靠第 5 节的单测和 6.1 第 3 步的截图。
 - 4.4 的"未保存修改先确认"：在已有的 DraftGuard 测试里覆盖。
 
-Claude 收尾：停助手；`remote disable`；撤销验收中配对的客户端；验收 worktree 切回原来的 sha，并重启验收 daemon；放锁 `rm -f /tmp/vonvon-accept.d/owner && rmdir /tmp/vonvon-accept.d`。
+Claude 收尾：停助手；`remote disable`；撤销验收中配对的客户端；验收 worktree 切回原来的 sha，并重启验收 daemon；放锁 `rm -f /tmp/accept-user.d/owner && rmdir /tmp/accept-user.d`。
 
 ## 7. 文档
 

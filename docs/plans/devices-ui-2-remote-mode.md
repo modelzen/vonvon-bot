@@ -466,7 +466,7 @@ D1 分支 `D/server/http.ts:65` 的 `capabilities()` 加：`distribution.kind ==
 
 1. 单测：`T=$(mktemp -d); HOME=$T/home VONVON_HOME=$T/vh flock /tmp/vonvon-heavy.lock npx vitest run <第 5 节列出的文件>`，然后在锁里跑 protocol、daemon、desktop、ui 的 `typecheck`、`lint`、`build`。最后 `rm -rf -- "${T:?}"`。
 2. 目录（验收 daemon）：
-   - 拿目录锁 `mkdir /tmp/vonvon-accept.d`，写上 `claude <UTC 时间>`；
+   - 拿目录锁 `mkdir /tmp/accept-user.d`，写上 `claude <UTC 时间>`；
    - 记下验收 worktree 的 sha，切到 PR 的 sha（detach），构建，重启验收 daemon；
    - `vonvon dir list /srv`、`vonvon dir list /`：列得出，不再是 `outside_home`；
    - 无头浏览器打开网页端 → 建群 → 选目录 → 输入 `/srv` → 能进。
@@ -475,7 +475,7 @@ D1 分支 `D/server/http.ts:65` 的 `capabilities()` 加：`distribution.kind ==
    - 用 lark-cli 以 owner 身份私聊 Bot 6："把<测试群>的权限改成完全访问" → bot 的回复里有这句；再私聊打开权限卡，完全访问选项旁有这句；
    - 最后把测试群改回原来的档。
 4. 旧任务面板删干净：`git grep -n "installCodex\|startCodexLogin\|loginCodex" -- packages scripts` 没有结果（测试快照除外）。
-5. 收尾：验收 worktree 切回原来的 sha，重启验收 daemon，放锁 `rm -f /tmp/vonvon-accept.d/owner && rmdir /tmp/vonvon-accept.d`。
+5. 收尾：验收 worktree 切回原来的 sha，重启验收 daemon，放锁 `rm -f /tmp/accept-user.d/owner && rmdir /tmp/accept-user.d`。
 
 ### 6.2 Mac 上的 Codex（#322）
 

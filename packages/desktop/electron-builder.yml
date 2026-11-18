@@ -22,6 +22,10 @@ files:
 asar: true
 afterPack: ../../scripts/desktop-backend-policy.mjs
 extraResources:
+  - from: ../../LICENSE
+    to: LICENSE
+  - from: ../../NOTICE
+    to: NOTICE
   - from: stage/daemon
     to: daemon
     filter:

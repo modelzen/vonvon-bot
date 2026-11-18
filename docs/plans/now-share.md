@@ -65,7 +65,7 @@ N1 小，和 N3 一起做（同一个 PR 也可以）。N2、N3、N4 并行。N5
 ### N2 Claude Code 本机统计
 
 - 新文件 `packages/daemon/src/agent/claude-agent/local-stats.ts`，`fetchClaudeUsageBundle` 返回时把结果放进 `profile.localStats`、`profile.dailyBuckets`（含 `messages`）、`lifetimeTokens`、`peakDailyTokens`、`currentStreakDays`、`longestStreakDays`。额度部分（`/api/oauth/usage`）照旧，两者互不阻塞：统计没好时额度照常返回。
-- 算法照抄本机安装的 Claude Code（JP-VPS 上 2.1.319，`/home/ops/.local/share/claude/versions/2.1.319`）的 `/usage` → Stats，实现前先读它的打包代码核对，和下面不一致时以它为准，写进 PR：
+- 算法照抄本机安装的 Claude Code（JP-VPS 上 2.1.319，`/home/operator/.local/share/claude/versions/2.1.319`）的 `/usage` → Stats，实现前先读它的打包代码核对，和下面不一致时以它为准，写进 PR：
   - 读 `<CLAUDE_CONFIG_DIR 或 ~/.claude>/projects/*/*.jsonl`，以及 `<项目>/<会话>/subagents/agent-*.jsonl`；主会话里 `isSidechain` 的行不算。配置目录的解析和 `usage.ts` 读认证用同一套。
   - 每条 assistant 消息的 Token = input + output + cache_read + cache_creation，按模型、按天累加；每天的消息数、会话数、工具调用数；按会话开始时间的本地小时计 24 格。
   - 天按 UTC 日期（`toISOString().slice(0,10)`），连续活跃从今天往回数。
@@ -103,7 +103,7 @@ owner 2026-11-08 同意的方向。
 
 **定稿（owner 2026-11-08 看了 A 到 D 四版后定，以本段为准，下面的几版只是过程）：**一股青色、一股黑色（B 的排法），不拧转。黑色那股印字，正面和背面合起来是「Vonvon More than a bot」（正面 `Vonvon`，背面 `More than a bot`，正面可以露一点后面的字再淡出）。工牌翻面时，每股挂绳在原地翻到另一面：随工牌的 530ms 曲线压扁成一条边再展开，青、黑两股换边，字换成另一面的；`prefers-reduced-motion` 下直接换。悬停时工牌还会左右摆：挂绳、夹子和工牌作为一个整体，绕两股挂绳在顶上汇合的点摆动，像挂在脖子上的工牌；任何一帧挂绳都和夹子连着；挂绳跟着工牌小幅的偏转和俯仰，但不跟着翻面转 180°；挂点变高、绳变宽以后，摆动的弹簧和幅度按"布挂绳"的感觉重新看一遍。没选的几版删掉。
 
-**owner 2026-11-08 给了参考图，颜色、正反面和字以这里为准，任务说明里的"浅蓝 / Vonvon / more than a bot"作废：**参考图是 `/home/ops/vonvon/claude-work/now-share-1108/ref/lanyard-ref.png`（只在本机看，不进仓库，图里有人像）。挂绳是缎面织带，一面青绿色（浅蓝绿，照片里亮处约 `#4fb3b3`，正常处约 `#2f9a9c`，背光处约 `#1f6e70`，带缎面的光泽），另一面黑色（约 `#16191b`），黑色那面印青绿色的斜体手写风格字。owner 原话："颜色你就参考这个颜色。也是这样双面的，上面有字的……一面有什么字、另一面有什么字，你可以自行考虑。把字放在什么地方能够展示出来，或者感觉太小、没必要展示，你也可以把字去掉。工牌绳的宽度和工牌宽度的比例，不一定要完全按照这个示意图来。你在产品中展示时，调到一个合适的宽度就好了。"
+**owner 2026-11-08 给了参考图，颜色、正反面和字以这里为准，任务说明里的"浅蓝 / Vonvon / more than a bot"作废：**参考图是 `/home/operator/vonvon/claude-work/now-share-1108/ref/lanyard-ref.png`（只在本机看，不进仓库，图里有人像）。挂绳是缎面织带，一面青绿色（浅蓝绿，照片里亮处约 `#4fb3b3`，正常处约 `#2f9a9c`，背光处约 `#1f6e70`，带缎面的光泽），另一面黑色（约 `#16191b`），黑色那面印青绿色的斜体手写风格字。owner 原话："颜色你就参考这个颜色。也是这样双面的，上面有字的……一面有什么字、另一面有什么字，你可以自行考虑。把字放在什么地方能够展示出来，或者感觉太小、没必要展示，你也可以把字去掉。工牌绳的宽度和工牌宽度的比例，不一定要完全按照这个示意图来。你在产品中展示时，调到一个合适的宽度就好了。"
 
 - 默认做法：青绿面不印字；黑面印青绿色斜体字，内容从 `Vonvon`、`more than a bot`、`Vonvon · more than a bot` 里挑在实际大小下最好看、最能看清的；1 倍屏上看不清就不印。字体不引入新的网络字体，用系统里有的斜体或者把字做成 SVG 路径。
 - `now-badges.css` 和 `NowBotBadge.tsx`：去掉 `.badge-cable`；`.badge-wire` 换成两股挂绳（SVG 或 CSS），从夹子往上渐渐淡出，随 `--swing` 一起摆。夹子保留。缎面光泽用顺着挂绳方向的细微明暗渐变，不要塑料感。
@@ -112,7 +112,7 @@ owner 2026-11-08 同意的方向。
   - B：像参考图那样两股各露一面：左边青绿，右边黑色带字；
   - C：同 B，但挂绳中段有一处翻折，露出另一面（参考图里织带扭转的样子），做不好看就不交这一版。
 - 宽度在产品里调到合适即可（大约每股 9 到 14px），不必照参考图的比例。
-- 用真实代码渲染：构建 UI 后用 `/home/ops/vonvon/claude-work/now-share-1108/capture.mjs` 的办法（假 client、910×808、DPR 2）截每一版的首屏和两张工牌的特写（DPR 3），A 版再录一段悬停翻面的短 GIF。图放 `claude-work/now-share-1108/out/lanyard/`，由 Claude 放进飞书文档给 owner 选；选定后删掉没选的几版。
+- 用真实代码渲染：构建 UI 后用 `/home/operator/vonvon/claude-work/now-share-1108/capture.mjs` 的办法（假 client、910×808、DPR 2）截每一版的首屏和两张工牌的特写（DPR 3），A 版再录一段悬停翻面的短 GIF。图放 `claude-work/now-share-1108/out/lanyard/`，由 Claude 放进飞书文档给 owner 选；选定后删掉没选的几版。
 - `prefers-reduced-motion` 下不转、不摆。
 
 ### N5 分享（2026-11-09 暂缓，代码已撤下）

@@ -1,3 +1,8 @@
+Vonvon Bot daemon
+Copyright 2026 modelzen
+
+Vonvon Bot is licensed under the Apache License, Version 2.0.
+
 Vonvon Bot daemon includes code adapted from getpaseo/paseo at commit 0009a7e717a9f7ec587f55ca2985cb91b1310bd8:
 
 - packages/server/src/server/pid-lock.ts became src/server/pid-lock.ts.
@@ -6,6 +11,8 @@ Vonvon Bot daemon includes code adapted from getpaseo/paseo at commit 0009a7e717
 Copyright (c) 2025-present Mohamed Boudra. Paseo is licensed under the Apache License, Version 2.0. The complete upstream license and copyright statement are included in LICENSE.paseo. These files were adapted for Vonvon Bot's daemon lifecycle and file handling.
 
 The daemon also includes code imported from modelzen/feishu-codex-bridge under the MIT License. Its complete license is included in LICENSE.bridge.
+
+The imported code includes protocol bindings generated with OpenAI Codex's `codex app-server generate-ts` command. The Codex source project is licensed under Apache-2.0 at https://github.com/openai/codex.
 
 The subagent icon is adapted from the Lucide Bot icon, distributed under the ISC License:
 

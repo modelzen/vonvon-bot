@@ -8,7 +8,7 @@ import { allowlist, fileEntries, validateInstalledManifest, validateManifest, va
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'vonvon-package-test-'));
   const metadata = { name: 'vonvon-bot', version: '0.7.0', type: 'module', engines: { node: '^22.12.0 || ^24.0.0 || >=26.0.0' }, license: 'MIT', author: 'modelzen', bin: { vonvon: 'bin/vonvon.mjs' }, dependencies: {}, bundleDependencies: [] };
-  for (const path of ['bin/vonvon.mjs', 'dist/cli.js', 'ui/dist/index.html', 'LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md', 'import-core.json']) {
+  for (const path of ['bin/vonvon.mjs', 'dist/cli.js', 'ui/dist/index.html', 'LICENSE', 'LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md', 'import-core.json']) {
     await mkdir(join(root, path, '..'), { recursive: true });
     await writeFile(join(root, path), path);
   }

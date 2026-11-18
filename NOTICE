@@ -1,4 +1,8 @@
-Vonvon Bot protocol extraction
+Vonvon Bot
+Copyright 2026 modelzen
+
+Vonvon Bot is licensed under the Apache License, Version 2.0.
+The following notices apply to third-party material included in this work.
 
 The V1 protocol contracts derive from feishu-codex-bridge and the pinned Vonvon Bot desktop source. feishu-codex-bridge is licensed under the MIT License. Copyright (c) 2026 modelzen. The MIT permission and warranty notice follows.
 
@@ -13,3 +17,7 @@ Paseo (getpaseo/paseo) is licensed under Apache-2.0 and informed the broader arc
 V3 adapts packages/server/src/server/pid-lock.ts and atomic-file.ts from Paseo commit 0009a7e717a9f7ec587f55ca2985cb91b1310bd8 into packages/daemon/src/server/. The adapted files carry Vonvon Bot changes for its daemon lifecycle and file handling.
 
 Copyright (c) 2025-present Mohamed Boudra. The complete upstream Apache License, Version 2.0, including Paseo's copyright statement, is in packages/daemon/LICENSE.paseo. The daemon package carries that license and its own NOTICE.
+
+The daemon includes protocol bindings generated with OpenAI Codex's `codex app-server generate-ts` command and imported via Feishu Codex Bridge. The Codex source project is licensed under Apache-2.0 at https://github.com/openai/codex.
+
+See packages/ui/public/THIRD-PARTY-NOTICES.txt for the UI's additional notices.

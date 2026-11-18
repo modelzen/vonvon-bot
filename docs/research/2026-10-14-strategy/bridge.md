@@ -254,7 +254,7 @@ The report is reliable on the hard numbers from GitHub and npm and on what the v
 **What this means for the decision:** The report proposes a 0.7.0 on bridge covering attachment delivery, external-trigger posting and install checks. That still matches the strongest recent signals: scheduled delivery came up again in a 10-09 thread, and Grok came up on 10-09 and 10-10. But bridge `main` is 49 commits behind v2's kernel base, and there are half-merged desktop and import branches. The choice between bridge and v2 has to account for both.
 
 **Sources:**
-- Local repos: /home/ops/vonvon/feishu-codex-bridge and /home/ops/vonvon/vonvon-bot/docs/{architecture,roadmap,providers,plan}.md.
+- Local repos: /home/operator/vonvon/feishu-codex-bridge and /home/operator/vonvon/vonvon-bot/docs/{architecture,roadmap,providers,plan}.md.
 - Read-only queries: `gh api`, api.npmjs.org, registry.npmjs.org, and `lark-cli` (read-only).
 - Message dumps from those `lark-cli` calls are under （调研代理的本地临时目录，未归档）
 

@@ -28,7 +28,7 @@ async function sources(root) {
   await put(app, 'bin/vonvon.mjs');
   await put(app, 'server-update.json', '{"publicKey":"","baseURL":"https://example.invalid/bot/server"}');
   await put(app, 'dist/cli.js', `var a=${'1+'.repeat(400)}1;`);
-  for (const file of ['ui/dist/index.html', 'NOTICE', 'LICENSE.paseo', 'LICENSE.bridge', 'node_modules/dep/package.json']) await put(app, file);
+  for (const file of ['ui/dist/index.html', 'LICENSE', 'NOTICE', 'LICENSE.paseo', 'LICENSE.bridge', 'node_modules/dep/package.json']) await put(app, file);
   await put(app, 'node_modules/dep/src/index.js', 'module.exports = 1;');
   const linux = join(root, 'node-v0-linux-x64');
   for (const file of ['bin/node', 'bin/npx', 'LICENSE', 'include/node/node.h', 'lib/node_modules/npm/bin/npm-cli.js', 'lib/node_modules/npm/index.d.cts']) await put(linux, file);
