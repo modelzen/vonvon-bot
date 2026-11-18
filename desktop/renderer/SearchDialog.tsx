@@ -33,7 +33,7 @@ export function SearchDialog({open, entries, onClose, onSelect}: {
     <div className="desktop-search-heading">
       <Search size={20} strokeWidth={2} aria-hidden="true" />
       <input
-        ref={input} role="combobox" aria-label="搜索设置、Agent 或飞书群" aria-autocomplete="list"
+        ref={input} role="combobox" aria-label="搜索设置、Bot 或飞书群" aria-autocomplete="list"
         aria-controls="desktop-search-options" aria-expanded={open} aria-activedescendant={selected >= 0 ? `desktop-search-option-${selected}` : undefined}
         autoComplete="off" spellCheck={false} value={query}
         onChange={event => {setQuery(event.target.value); setActive(0);}}
@@ -45,7 +45,7 @@ export function SearchDialog({open, entries, onClose, onSelect}: {
           if (event.key === 'End') {event.preventDefault(); setActive(Math.max(0, results.length - 1));}
           if (event.key === 'Enter') {event.preventDefault(); choose();}
         }}
-        placeholder="搜索设置、Agent 或飞书群…"
+        placeholder="搜索设置、Bot 或飞书群…"
       />
       {query && <button className="desktop-search-clear" type="button" aria-label="清除搜索" onClick={() => {setQuery(''); setActive(0); input.current?.focus();}}><X size={15}/></button>}
       <kbd className="desktop-search-escape">esc</kbd>
@@ -68,7 +68,7 @@ export function SearchDialog({open, entries, onClose, onSelect}: {
         {entry.destination.guide && <span className="desktop-search-result-guide" aria-label="有使用条件">需先设置</span>}
         {index === selected && <ArrowRight className="desktop-search-result-arrow" size={15} aria-hidden="true"/>}
       </button>)}
-      {query.trim() && results.length === 0 && <div className="desktop-search-empty"><Search size={22}/><strong>没有找到相关设置</strong><span>试试功能名称、Agent 名称或「飞书 Profile」。</span></div>}
+      {query.trim() && results.length === 0 && <div className="desktop-search-empty"><Search size={22}/><strong>没有找到相关设置</strong><span>试试功能名称、Bot 名称或「飞书 Profile」。</span></div>}
     </div>
     <div className="desktop-search-footer"><span><kbd>↑</kbd><kbd>↓</kbd> 选择 <kbd>↵</kbd> 打开</span><span><Command size={12}/> K 搜索</span></div>
   </Dialog>;

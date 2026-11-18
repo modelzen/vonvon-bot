@@ -1,0 +1,325 @@
+diff --git a/scripts/native-parity.cjs b/scripts/native-parity.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..b9d8c520f0c41bbdc64708a8898375b988d00556
+--- /dev/null
++++ b/scripts/native-parity.cjs
+@@ -0,0 +1,155 @@
++const { app, BrowserWindow } = require('electron');
++const assert = require('node:assert/strict');
++const fs = require('node:fs/promises');
++const path = require('node:path');
++const home = process.env.VONVON_DESKTOP_TEST_HOME;
++const mode = process.env.VONVON_PARITY_MODE;
++if (!home || process.env.HOME !== home || process.env.USERPROFILE !== home || !process.env.CODEX_HOME?.startsWith(home)) throw new Error('Isolated home required');
++if (!['migration', 'conflict', 'delete', 'active', 'restart'].includes(mode)) throw new Error('Unknown probe mode');
++app.on('browser-window-created', (_event, created) => { created.hide(); created.on('show', () => created.hide()); });
++require('../dist/main.cjs');
++let phase = 'startup';
++const deadline = setTimeout(() => { process.stderr.write(`Native parity timeout in ${phase}; home=${home}\n`); app.exit(1); }, 90000);
++const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
++const evaluate = expression => window.webContents.executeJavaScript(expression);
++let window;
++async function poll(operation, accept, label) {
++  for (let n = 0; n < 200; n++) {
++    const value = await operation();
++    if (accept(value)) return value;
++    await pause(100);
++  }
++  throw new Error(`Timed out waiting for ${label}`);
++}
++async function snapshot() {
++  return evaluate('new Promise(resolve=>{let stop;stop=window.bridge.watch(value=>{resolve(value);queueMicrotask(()=>stop?.());});})');
++}
++async function run(command) {
++  return evaluate(`window.bridge.run(${JSON.stringify(command)})`);
++}
++async function settings(request) {
++  return evaluate(`window.bridge.settings(${JSON.stringify(request)})`);
++}
++async function click(label) {
++  const expression = `Array.from(document.querySelectorAll('button')).find(button=>button.textContent.trim()===${JSON.stringify(label)})`;
++  try { await poll(() => evaluate(expression + ' ? true : false'), Boolean, `button ${label}`); } catch (error) { process.stderr.write(JSON.stringify(await evaluate(`({body:document.body.innerText,buttons:[...document.querySelectorAll('button')].map(b=>b.textContent.trim())})`))+'\n'); throw error; }
++  const clicked = await evaluate(`(()=>{const b=${expression};if(b.disabled)return false;b.click();return true})()`);
++  assert.equal(clicked, true, `button ${label} enabled`);
++}
++async function readOptional(file) {
++  try { return await fs.readFile(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
++}
++void app.whenReady().then(async () => {
++  window = await poll(() => BrowserWindow.getAllWindows()[0], Boolean, 'window');
++  await poll(() => window.webContents.isLoading(), value => !value, 'renderer load');
++  const expected = mode === 'conflict' ? 'blocked' : 'connected';
++  phase = `wait ${expected}`;
++  let state = await poll(snapshot, value => value?.host?.kind === expected && (expected === 'blocked' || (value.application.dataPath !== '尚未确认' && !value.stale)), `Host ${expected}`);
++  if (process.env.VONVON_PARITY_INJECT_FAILURE === 'after-host') {
++    const pid = JSON.parse(await fs.readFile(path.join(home, '.vonvon-bridge', 'web-console.json'), 'utf8')).pid;
++    await fs.writeFile(path.join(home, 'injected-failure.json'), JSON.stringify({ phase: 'after-host', pid }));
++    throw new Error('Deliberate probe failure after owned Host connection');
++  }
++  const result = { mode, initial: { host: state.host, agents: state.agents.map(agent => ({ id: agent.id, enabled: agent.enabled, connection: agent.connection })), dataPath: state.application.dataPath }, osServiceQueries: process.env.VONVON_OS_QUERIES };
++  if (mode === 'migration') {
++    phase = 'migrated store';
++    const oldPath = path.join(home, '.feishu-codex-bridge');
++    const newPath = path.join(home, '.vonvon-bridge');
++    assert.equal((await fs.lstat(oldPath)).isSymbolicLink(), true);
++    assert.equal(await fs.realpath(oldPath), await fs.realpath(newPath));
++    assert.equal(state.application.dataPath, newPath);
++    const response = await settings({ type: 'read', scope: { kind: 'host' } });
++    assert.equal(response.kind, 'view', JSON.stringify(response));
++    const saved = await settings({ type: 'save', edit: { scope: { kind: 'host' }, section: 'execution', revision: response.view.sections.execution.revision, patch: { codexBin: null } } });
++    assert.equal(saved.result.kind, 'saved', JSON.stringify(saved));
++    const oldSettings = await readOptional(path.join(oldPath, 'service-environment.json'));
++    const newSettings = await readOptional(path.join(newPath, 'service-environment.json'));
++    assert.ok(oldSettings, 'Desktop save created service-environment.json');
++    assert.equal(JSON.parse(oldSettings).codexBin, null);
++    assert.equal(oldSettings, newSettings);
++    result.alias = { oldPath, newPath, oldIsSymlink: true, sameRealpath: true, settingsBytesEqual: true, saved: saved.result.kind };
++    const agent = await settings({ type: 'read', scope: { kind: 'agent', botId: 'cli_fixture_engineering' } });
++    assert.equal(agent.kind, 'view', JSON.stringify(agent));
++    assert.equal(agent.view.sections.cards.access.kind, 'readonly');
++    const denied = await settings({ type: 'save', edit: { scope: { kind: 'agent', botId: 'cli_fixture_engineering' }, section: 'cards', revision: agent.view.sections.cards.revision, patch: { showToolCalls: true } } });
++    assert.equal(denied.result.kind, 'unavailable', JSON.stringify(denied));
++    await click('Agent');
++    await click('研发助手');
++    await poll(() => evaluate("document.body.innerText.includes('显示工具调用')"), Boolean, 'stopped Agent settings');
++    const ui = await evaluate(`({text:document.body.innerText, disabled:[...document.querySelectorAll('button')].filter(b=>b.textContent.includes('保存')).map(b=>b.disabled)})`);
++    assert.equal(ui.disabled.length > 0 && ui.disabled.every(Boolean), true, 'Visible save controls disabled');
++    result.stoppedSettings = { readonly: agent.view.sections.cards.access.kind, denied: denied.result.kind, previewVisible: ui.text.includes('显示工具调用'), saveControlsDisabled: ui.disabled.every(Boolean), saveControlCount: ui.disabled.length };
++  }
++  if (mode === 'conflict') {
++    phase = 'conflict recovery';
++    const oldPath = path.join(home, '.feishu-codex-bridge');
++    const newPath = path.join(home, '.vonvon-bridge');
++    const oldBefore = await readOptional(path.join(oldPath, 'fixture-conflict.txt'));
++    const newBefore = await readOptional(path.join(newPath, 'fixture-conflict.txt'));
++    assert.notEqual(oldBefore, newBefore);
++    const body = await evaluate('document.body.innerText');
++    result.blocked = { message: state.host.message, bothPathsNamed: state.host.message.includes(oldPath) && state.host.message.includes(newPath), uiShowsConflict: body.includes('Bridge 尚未就绪') && body.includes('.vonvon-bridge') && body.includes('.feishu-codex-bridge'), oldBefore, newBefore };
++    await fs.rename(newPath, `${newPath}.held-for-recovery`);
++    await click('状态与诊断');
++    await click('重新检查');
++    state = await poll(snapshot, value => value?.host?.kind === 'connected' && !value.stale, 'reconnected Host');
++    result.recovered = { host: state.host, dataPath: state.application.dataPath, oldAlias: (await fs.lstat(oldPath)).isSymbolicLink(), newStore: await readOptional(path.join(newPath, 'fixture-conflict.txt')), heldStore: await readOptional(`${newPath}.held-for-recovery/fixture-conflict.txt`) };
++  }
++  if (mode === 'delete') {
++    phase = 'stopped agent deletion';
++    const firstFile = path.join(home, '.vonvon-bridge', 'bots', 'cli_fixture_engineering', 'config.json');
++    const before = await fs.readFile(firstFile, 'utf8');
++    const secretsBefore = JSON.parse(await fs.readFile(path.join(home, '.vonvon-bridge', 'secrets.enc'), 'utf8'));
++    const reply = await run({ type: 'deleteAgent', agentId: 'cli_fixture_content' });
++    result.deleteReply = reply;
++    assert.equal(reply.kind, 'applied', JSON.stringify(reply));
++    state = await poll(snapshot, value => value.agents.length === 1, 'one remaining Agent');
++    const secretsAfter = JSON.parse(await fs.readFile(path.join(home, '.vonvon-bridge', 'secrets.enc'), 'utf8'));
++    result.preserved = { remainingIds: state.agents.map(agent => agent.id), firstConfigBytesEqual: before === await fs.readFile(firstFile, 'utf8'), deletedDirectoryAbsent: await fs.stat(path.join(home, '.vonvon-bridge', 'bots', 'cli_fixture_content')).then(() => false, error => error.code === 'ENOENT'), removedTargetSecret: !('app-cli_fixture_content' in secretsAfter.entries), otherSecretBytesEqual: JSON.stringify(secretsBefore.entries['app-cli_fixture_engineering']) === JSON.stringify(secretsAfter.entries['app-cli_fixture_engineering']) };
++  }
++  if (mode === 'active') {
++    phase = 'active deletion guard';
++    const registryPath = path.join(home, '.vonvon-bridge', 'bots.json');
++    const registry = JSON.parse(await fs.readFile(registryPath, 'utf8'));
++    registry.bots[0].active = true;
++    await fs.writeFile(registryPath, JSON.stringify(registry));
++    await run({ type: 'refresh' });
++    const target = path.join(home, '.vonvon-bridge', 'bots', 'cli_fixture_engineering');
++    const names = ['config.json', 'projects.json', 'sessions.json', 'comment-instructions.md'];
++    const before = await Promise.all(names.map(name => fs.readFile(path.join(target, name))));
++    const registryBefore = await fs.readFile(registryPath);
++    const secretsPath = path.join(home, '.vonvon-bridge', 'secrets.enc');
++    const secretsBefore = await fs.readFile(secretsPath);
++    const reply = await run({ type: 'deleteAgent', agentId: 'cli_fixture_engineering' });
++    result.activeReply = reply;
++    assert.equal(reply.kind, 'refused', JSON.stringify(reply));
++    assert.equal(reply.code, 'agent-active');
++    const targetFilesUnchanged = (await Promise.all(names.map(name => fs.readFile(path.join(target, name))))).every((value, index) => value.equals(before[index]));
++    const registryBytesEqual = (await fs.readFile(registryPath)).equals(registryBefore);
++    const secretBytesEqual = (await fs.readFile(secretsPath)).equals(secretsBefore);
++    assert.equal(targetFilesUnchanged && registryBytesEqual && secretBytesEqual, true);
++    result.preserved = { targetFilesUnchanged, registryBytesEqual, secretBytesEqual, targetListed: (await snapshot()).agents.some(agent => agent.id === 'cli_fixture_engineering') };
++  }
++  if (mode === 'restart') {
++    phase = 'owned restart';
++    const before = await snapshot();
++    const beforePid = JSON.parse(await fs.readFile(path.join(home, '.vonvon-bridge', 'web-console.json'), 'utf8')).pid;
++    const read = await settings({ type: 'read', scope: { kind: 'host' } });
++    const save = await settings({ type: 'save', edit: { scope: { kind: 'host' }, section: 'execution', revision: read.view.sections.execution.revision, patch: { codexBin: null } } });
++    assert.equal(save.result.kind, 'saved', JSON.stringify(save));
++    const reply = await run({ type: 'restartHost' });
++    assert.equal(reply.kind, 'applied', JSON.stringify(reply));
++    result.restartReply = reply;
++    state = await poll(snapshot, value => value.host.kind === 'connected' && !value.stale && value.revision > before.revision, 'Host restart');
++    const after = await settings({ type: 'read', scope: { kind: 'host' } });
++    const afterPid = JSON.parse(await fs.readFile(path.join(home, '.vonvon-bridge', 'web-console.json'), 'utf8')).pid;
++    assert.notEqual(afterPid, beforePid, 'Owned restart created a new Host process');
++    assert.equal(after.view.sections.execution.stored.codexBin, null);
++    assert.deepEqual(state.agents.map(agent => agent.id).sort(), before.agents.map(agent => agent.id).sort());
++    result.restart = { beforePid, afterPid, beforeOwnership: before.host.ownership, afterOwnership: state.host.ownership, afterVersion: state.host.version, preservedAgentIds: state.agents.map(agent => agent.id).sort(), savedSetting: after.view.sections.execution.stored.codexBin };
++  }
++  await fs.writeFile(path.join(home, 'parity-result.json'), JSON.stringify(result, null, 2));
++  process.stdout.write(`${mode} native probe complete; evidence=${home}\n`);
++  clearTimeout(deadline);
++  app.quit();
++}).catch(error => { process.stderr.write(`${phase}: ${error.stack}\n`); clearTimeout(deadline); app.exit(1); });
+diff --git a/scripts/test-parity-native.mjs b/scripts/test-parity-native.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..4c84664aa3277a88d5bc4c98f6c2f366a26b6572
+--- /dev/null
++++ b/scripts/test-parity-native.mjs
+@@ -0,0 +1,158 @@
++import assert from 'node:assert/strict';
++import { spawn, execFile } from 'node:child_process';
++import { createRequire } from 'node:module';
++import { randomBytes, pbkdf2Sync, createCipheriv } from 'node:crypto';
++import { hostname, userInfo } from 'node:os';
++import { mkdtemp, mkdir, readFile, writeFile, realpath } from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import { join, resolve } from 'node:path';
++import { pathToFileURL } from 'node:url';
++import { createNativeFixture } from './native-fixtures.mjs';
++
++if (process.platform !== 'darwin' || process.arch !== 'arm64' || process.env.CI) throw new Error('Local macOS arm64 test only');
++const args = process.argv.slice(2);
++const injectedFailure = args.includes('--inject-failure=after-host');
++if (args.length !== (injectedFailure ? 2 : 1) || !args.includes('--os-service-fixture=absent') || args.some(arg => !['--os-service-fixture=absent', '--inject-failure=after-host'].includes(arg))) throw new Error('Requires explicit absent OS service fixture; only after-host failure injection is supported');
++const require = createRequire(import.meta.url);
++const runtime = resolve('build/runtime/mac-arm64');
++const node = join(runtime, 'node/bin/node');
++const modes = injectedFailure ? ['migration'] : ['migration', 'conflict', 'delete', 'active', 'restart'];
++const summary = [];
++const audit = resolve('.audit/macos-round2');
++await mkdir(audit, { recursive: true });
++const pause = milliseconds => new Promise(resolveDelay => setTimeout(resolveDelay, milliseconds));
++const commandFor = pid => new Promise((accept, reject) => execFile('/bin/ps', ['-ww', '-p', String(pid), '-o', 'command='], { encoding: 'utf8' }, (error, stdout) => error ? reject(error) : accept(stdout.trim())));
++const isAlive = pid => { try { process.kill(pid, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; } };
++async function discoveryRecords(home) {
++  const records = new Map();
++  for (const name of ['.vonvon-bridge', '.feishu-codex-bridge']) {
++    let text;
++    try { text = await readFile(join(home, name, 'web-console.json'), 'utf8'); }
++    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
++    const record = JSON.parse(text);
++    if (!Number.isSafeInteger(record.pid) || record.pid < 1 || !Number.isInteger(record.port) || record.port < 1 || record.port > 65535 || typeof record.token !== 'string' || !record.token) throw new Error(`Invalid fixture discovery at ${home}`);
++    records.set(record.pid, record);
++  }
++  return [...records.values()];
++}
++async function cleanupFixtureHost(home, expectedPid) {
++  const temp = await realpath(tmpdir());
++  assert.ok(home.startsWith(join(temp, 'vonvon-parity-')), 'Cleanup is restricted to this run’s fixture home');
++  let records = await discoveryRecords(home);
++  const seen = [...new Set([...records.map(record => record.pid), ...(expectedPid ? [expectedPid] : [])])];
++  const signaled = [];
++  for (const record of records) {
++    if (!isAlive(record.pid)) continue;
++    const response = await fetch(`http://127.0.0.1:${record.port}/api/state`, { headers: { Authorization: `Bearer ${record.token}` }, signal: AbortSignal.timeout(2500) });
++    if (!response.ok) throw new Error(`Fixture Host authentication failed for PID ${record.pid}; refusing to signal`);
++    const state = await response.json();
++    if (typeof state.version !== 'string' || !Array.isArray(state.bots)) throw new Error(`Fixture Host identity failed for PID ${record.pid}`);
++    const command = await commandFor(record.pid);
++    if (!command.includes(node) || !command.includes(join(runtime, 'core/bin/feishu-codex-bridge.mjs')) || !command.includes('host --parent-control')) throw new Error(`PID ${record.pid} is not this fixture's bundled Host; refusing to signal`);
++    process.kill(record.pid, 'SIGTERM');
++    signaled.push(record.pid);
++  }
++  for (let attempt = 0; attempt < 120; attempt++) {
++    if (seen.every(pid => !isAlive(pid))) return { home, observedPids: seen, signaledPids: signaled, verifiedAbsent: true };
++    await pause(100);
++  }
++  records = await discoveryRecords(home);
++  throw new Error(`Fixture Host did not stop after cleanup; home=${home}; remaining=${records.map(record => record.pid).join(',')}`);
++}
++for (const mode of modes) {
++  const home = await realpath(await mkdtemp(join(tmpdir(), `vonvon-parity-${mode}-`)));
++  await mkdir(join(home, '.codex'));
++  await mkdir(join(home, 'fixture-workspace'));
++  const originals = await createNativeFixture(home, 'existing');
++  const oldPath = join(home, '.feishu-codex-bridge');
++  if (mode === 'delete' || mode === 'migration' || mode === 'active') {
++    const salt = randomBytes(32);
++    const key = pbkdf2Sync(`${hostname()}|${userInfo().username}`, salt, 100_000, 32, 'sha256');
++    const encrypt = value => { const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', key, iv); const data = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]); return { iv: iv.toString('base64'), data: data.toString('base64'), tag: cipher.getAuthTag().toString('base64') }; };
++    await writeFile(join(oldPath, '.keystore.salt'), salt);
++    if (mode === 'migration') originals.set(join(oldPath, '.keystore.salt'), salt);
++    const envelope = JSON.stringify({ version: 1, entries: { 'app-cli_fixture_engineering': encrypt('fixture-secret-A'), 'app-cli_fixture_content': encrypt('fixture-secret-B') } });
++    await writeFile(join(oldPath, 'secrets.enc'), envelope);
++    if (mode === 'migration') originals.set(join(oldPath, 'secrets.enc'), envelope);
++  }
++  const newPath = join(home, '.vonvon-bridge');
++  if (mode === 'conflict') {
++    await writeFile(join(oldPath, 'fixture-conflict.txt'), 'old store');
++    await mkdir(newPath);
++    await writeFile(join(newPath, 'fixture-conflict.txt'), 'new distinct store');
++  }
++  await mkdir(join(home, 'probe-bin'));
++  await writeFile(join(home, 'probe-bin', 'launchctl'), '#!/bin/sh\nif [ "$#" -eq 1 ] && [ "$1" = list ]; then exit 0; fi\nprintf "Fixture refused launchctl mutation\\n" >&2\nexit 99\n', { mode: 0o755 });
++  await writeFile(join(home, 'probe-bin', 'ps'), '#!/bin/sh\nif [ "$1" = -axo ]; then exit 0; fi\nexec /bin/ps "$@"\n', { mode: 0o755 });
++  const env = {
++    ...process.env,
++    HOME: home, USERPROFILE: home, CODEX_HOME: join(home, '.codex'),
++    XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache'), XDG_DATA_HOME: join(home, '.local/share'),
++    VONVON_DESKTOP_TEST_HOME: home, VONVON_PARITY_MODE: mode,
++    ...(injectedFailure ? { VONVON_PARITY_INJECT_FAILURE: 'after-host' } : {}),
++    VONVON_OS_QUERIES: 'explicit-development-fixture',
++    VONVON_NPM_CLI: join(runtime, 'node/lib/node_modules/npm/bin/npm-cli.js'),
++    PATH: `${join(runtime, 'node/bin')}:${join(home, 'probe-bin')}:/usr/bin:/bin:/usr/sbin:/sbin`,
++  };
++  for (const key of ['CODEX_BIN','CLAUDE_BIN','ELECTRON_RUN_AS_NODE','OPENAI_API_KEY','CODEX_API_KEY','CHATGPT_AUTH_TOKEN']) delete env[key];
++  const run = (file, args) => new Promise((accept, reject) => {
++    const child = spawn(file, args, { env, stdio: 'inherit' });
++    child.once('error', reject);
++    child.once('exit', code => code === 0 ? accept() : reject(new Error(`${mode} exited ${code}; evidence=${home}`)));
++  });
++  let injectedPid;
++  try {
++    if (injectedFailure) {
++      await assert.rejects(run(require('electron'), ['scripts/native-parity.cjs']), /migration exited 1/);
++      const marker = JSON.parse(await readFile(join(home, 'injected-failure.json'), 'utf8'));
++      assert.equal(marker.phase, 'after-host');
++      assert.ok(Number.isSafeInteger(marker.pid) && marker.pid > 0);
++      injectedPid = marker.pid;
++      continue;
++    }
++    await run(require('electron'), ['scripts/native-parity.cjs']);
++    const result = JSON.parse(await readFile(join(home, 'parity-result.json'), 'utf8'));
++    if (mode === 'migration') {
++      assert.equal(result.alias.oldIsSymlink && result.alias.sameRealpath && result.alias.settingsBytesEqual, true);
++      for (const [file, original] of originals) {
++        const actual = await readFile(file, typeof original === 'string' ? 'utf8' : undefined);
++        assert.deepEqual(actual, original, `Migration changed ${file}`);
++      }
++      assert.equal(result.stoppedSettings.readonly, 'readonly');
++      assert.equal(result.stoppedSettings.denied, 'unavailable');
++    }
++    if (mode === 'conflict') {
++      assert.equal(result.blocked.bothPathsNamed && result.blocked.uiShowsConflict, true);
++      assert.equal(result.recovered.oldAlias, true);
++      assert.equal(result.recovered.heldStore, 'new distinct store');
++      assert.equal(result.recovered.newStore, 'old store');
++    }
++    if (mode === 'delete') {
++      assert.equal(result.preserved.firstConfigBytesEqual && result.preserved.deletedDirectoryAbsent && result.preserved.removedTargetSecret && result.preserved.otherSecretBytesEqual, true);
++      assert.deepEqual(result.preserved.remainingIds, ['cli_fixture_engineering']);
++      let checked = 0;
++      for (const [file, original] of originals) {
++        if (!file.includes('/bots/cli_fixture_engineering/')) continue;
++        assert.equal(await readFile(file, 'utf8'), original, `Other Agent changed at ${file}`);
++        checked++;
++      }
++      assert.equal(checked, 4, 'Other Agent config, projects, session and comment files checked');
++    }
++    if (mode === 'active') assert.equal(result.preserved.targetFilesUnchanged && result.preserved.registryBytesEqual && result.preserved.secretBytesEqual && result.preserved.targetListed, true);
++    if (mode === 'restart') {
++      assert.equal(result.restartReply.kind, 'applied');
++      assert.equal(result.restart.afterOwnership, 'owned');
++      assert.equal(result.restart.savedSetting, null);
++      assert.deepEqual(result.restart.preservedAgentIds, ['cli_fixture_content', 'cli_fixture_engineering']);
++    }
++    const inspector = join(home, 'inspect.mjs');
++    await writeFile(inspector, `import {inspectHost} from ${JSON.stringify(pathToFileURL(join(runtime, 'core/dist/host.js')).href)}; const result=await inspectHost(${JSON.stringify(home)}); if(result.kind!=='absent')throw new Error(JSON.stringify(result)); process.stdout.write('Owned Host absent after quit.\\n');`);
++    await run(node, [inspector]);
++    summary.push({ mode, home, result });
++  } finally {
++    const cleanup = await cleanupFixtureHost(home, injectedPid);
++    await writeFile(join(audit, `${mode}-cleanup.json`), JSON.stringify(cleanup, null, 2));
++  }
++}
++await writeFile(join(audit, injectedFailure ? 'injected-failure-cleanup.json' : 'native-summary.json'), JSON.stringify(injectedFailure ? { cleaned: true, mode: 'migration', cleanup: JSON.parse(await readFile(join(audit, 'migration-cleanup.json'), 'utf8')) } : summary, null, 2));
++process.stdout.write(`macOS native parity scenarios complete: ${modes.join(', ')}\n`);

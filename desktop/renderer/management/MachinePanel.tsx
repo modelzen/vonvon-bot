@@ -47,14 +47,14 @@ export function MachinePanel({request, agents, reveal}: {request: MachineRequest
     </SettingsGroup>
     <SettingsGroup id={settingAnchor('Bridge 运行')} label="Bridge 运行" action={<Button size="sm" disabled={busy} onClick={() => void run({type: 'status'})}>刷新状态</Button>}>
       <SettingsRow title="运行方式"
-        description={status?.host?.ownership === 'attached' ? '当前由外部服务管理。' : 'Bridge 负责接收飞书消息并运行 Agent。'}
+        description={status?.host?.ownership === 'attached' ? '当前由外部服务管理。' : 'Bridge 负责接收飞书消息并运行 Bot。'}
         value={!status ? '正在读取…' : status.host ? (status.host.ownership === 'owned' ? '桌面管理' : '外部服务') : '已停止'} />
-      <SettingsRow title="Bridge 服务" description="停止服务可能中断正在进行的 Agent 任务。"
+      <SettingsRow title="Bridge 服务" description="停止服务可能中断正在进行的 Bot 任务。"
         trailing={<span className="settings-inline-actions">
           <Button size="sm" disabled={busy || !!status?.host} onClick={() => void run({type: 'startHost'})}>启动 Bridge</Button>
           <Button size="sm" disabled={busy || status?.host?.ownership !== 'owned'} onClick={() => setConfirm({type: 'stopHost'})}>停止 Bridge</Button>
         </span>} />
-      {status?.temporaryAgent && <SettingsRow title="临时运行 Agent" description="默认 Agent 选择未改变。" value={status.temporaryAgent} />}
+      {status?.temporaryAgent && <SettingsRow title="临时运行 Bot" description="默认 Bot 选择未改变。" value={status.temporaryAgent} />}
     </SettingsGroup>
 
     <SettingsGroup id={settingAnchor('后台服务')} label="后台服务" footer="后台服务在桌面退出后仍运行。桌面应用的登录启动是另一项设置。">
@@ -71,13 +71,13 @@ export function MachinePanel({request, agents, reveal}: {request: MachineRequest
         trailing={<Button size="sm" disabled={busy || serviceDisabled('uninstall')} onClick={() => setConfirm({type: 'service', action: 'uninstall'})}>卸载后台服务</Button>} />
       <details ref={advanced} className="settings-disclosure">
         <summary>高级</summary>
-        <SettingsRow title="仅运行指定 Agent" description="临时运行前需停止当前 Bridge。此操作不会修改默认启用列表。"
+        <SettingsRow title="仅运行指定 Bot" description="临时运行前需停止当前 Bridge。此操作不会修改默认启用列表。"
           trailing={<span className="settings-inline-actions">
-            <select aria-label="临时运行的 Agent" value={bot} onChange={event => setBot(event.target.value)} disabled={busy}>
-              <option value="">选择 Agent</option>
+            <select aria-label="临时运行的 Bot" value={bot} onChange={event => setBot(event.target.value)} disabled={busy}>
+              <option value="">选择 Bot</option>
               {agents.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
             </select>
-            <Button size="sm" disabled={busy || !bot || !!status?.host} onClick={() => void run({type: 'startHost', bot})}>仅运行此 Agent</Button>
+            <Button size="sm" disabled={busy || !bot || !!status?.host} onClick={() => void run({type: 'startHost', bot})}>仅运行此 Bot</Button>
           </span>} />
         <SettingsRow title="进程 PID" value={status?.host?.pid ?? service?.pid ?? '无'} />
         <SettingsRow title="上次退出码" value={service?.lastExit ?? '无记录'} />
@@ -89,7 +89,7 @@ export function MachinePanel({request, agents, reveal}: {request: MachineRequest
     <Dialog open={!!confirm} title="确认更改 Bridge 运行方式" onClose={() => setConfirm(undefined)} footer={<>
       <Button onClick={() => setConfirm(undefined)}>取消</Button>
       <Button variant="danger" onClick={() => { const operation = confirm; setConfirm(undefined); if (operation) void run(operation); }}>确认操作</Button>
-    </>}><p>此操作可能停止正在进行的所有 Agent 任务。安装或启动后台服务后，Bridge 会在桌面退出后继续运行。</p></Dialog>
+    </>}><p>此操作可能停止正在进行的所有 Bot 任务。安装或启动后台服务后，Bridge 会在桌面退出后继续运行。</p></Dialog>
     {message && <p className="settings-operation-message" role="status">{message}</p>}
   </>;
 }

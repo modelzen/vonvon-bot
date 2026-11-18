@@ -1,0 +1,73 @@
+{
+  "date": "2026-10-09",
+  "developmentBase": "codex/session-simplify-reference",
+  "snapshots": [
+    {
+      "name": "atomic-tool-updates",
+      "sourceBranch": "codex/atomic-tool-updates",
+      "baseCommit": "ed3e80980a9d9f2a8317a31766d41a909283d805",
+      "baseRef": "codex/archive-20261009/atomic-tool-updates",
+      "patch": "atomic-tool-updates.patch",
+      "sha256": "77a6a258b9ce3e2ba0965a145e39e1088aee174fb532f6ae39bfef8fc2590ba8",
+      "resultTree": "a4d2f8a15f955fde49ef56440857e995ae7277df",
+      "files": [
+        "desktop/main/environment.ts"
+      ],
+      "verification": "Patch replay against baseCommit reproduces the captured Git tree."
+    },
+    {
+      "name": "macos-parity-native",
+      "sourceBranch": "codex/macos-parity-native",
+      "baseCommit": "b332603df10b7ba50752fa3d83fb732f302d2711",
+      "baseRef": "codex/archive-20261009/macos-parity-native",
+      "patch": "macos-parity-native.patch",
+      "sha256": "4de0b7f31e70f760a8fc731a7fafa59e0acb678fb8939397b0d07e7a2532dd7b",
+      "resultTree": "7326efbc03cf3136e5db563859000c61b9b12e81",
+      "files": [
+        "scripts/native-parity.cjs",
+        "scripts/test-parity-native.mjs"
+      ],
+      "verification": "Patch replay against baseCommit reproduces the captured Git tree."
+    },
+    {
+      "name": "onboarding-controls",
+      "sourceBranch": "codex/desktop-onboarding-controls",
+      "baseCommit": "d80733f1413ef1c49ba37ae1bbc2d3bfceaa15c3",
+      "baseRef": "codex/archive-20261009/onboarding-controls",
+      "patch": "onboarding-controls.patch",
+      "sha256": "e980684cad15965b7d0a80780b836b21b1ce9a5dd5bee3471ebb7059c92ecf07",
+      "resultTree": "adf523d95c2844f7106272baf50d2ba9b428709d",
+      "files": [
+        "desktop/main/capabilities.ts",
+        "desktop/main/controller.ts",
+        "desktop/main/index.ts",
+        "desktop/renderer/App.tsx",
+        "desktop/shared/bridge.ts",
+        "tests/desktop.test.ts"
+      ],
+      "verification": "Patch replay against baseCommit reproduces the captured Git tree."
+    },
+    {
+      "name": "settings-parity-desktop",
+      "sourceBranch": "codex/settings-parity-desktop",
+      "baseCommit": "d719c134a04480ebccf7735e73325c07846cc865",
+      "baseRef": "codex/archive-20261009/settings-parity-desktop",
+      "patch": "settings-parity-desktop.patch",
+      "sha256": "cc20ba1abe3789ff4445e9607ed0da26b3a7833d4bf69c34c571acea22d946ee",
+      "resultTree": "18d4b675a77d0391b4365bf65c564f8782f2d793",
+      "files": [
+        "desktop/main/capabilities.ts",
+        "desktop/main/controller.ts",
+        "desktop/main/index.ts",
+        "desktop/preload.ts",
+        "desktop/renderer/App.tsx",
+        "desktop/renderer/settings/SettingsPanel.tsx",
+        "desktop/renderer/settings/settings.css",
+        "desktop/shared/bridge.ts",
+        "desktop/shared/settings.ts",
+        "tests/desktop.test.ts"
+      ],
+      "verification": "Patch replay against baseCommit reproduces the captured Git tree."
+    }
+  ]
+}

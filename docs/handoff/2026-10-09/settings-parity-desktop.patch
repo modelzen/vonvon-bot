@@ -1,0 +1,3886 @@
+diff --git a/desktop/main/capabilities.ts b/desktop/main/capabilities.ts
+index 6d4dea9f49223bd0e48e0f68c23fe9f926734530..5a073f1dddbf4cedbf75f4a40a2078eef7581dfa 100644
+--- a/desktop/main/capabilities.ts
++++ b/desktop/main/capabilities.ts
+@@ -21,6 +21,39 @@ export class FolderCapabilities {
+   }
+   clear():void {this.choices.clear();}
+ }
++export class ExecutableCapabilities {
++  private readonly choices = new Map<
++    FolderToken,
++    { path: string; expires: number; windowId: number }
++  >();
++  async grant(path: string, windowId: number): Promise<FolderChoice> {
++    const canonical = await realpath(path);
++    if (!(await stat(canonical)).isFile())
++      throw new CoreError("invalid-executable", "请选择现有可执行文件。");
++    const token = folderTokenSchema.parse(randomUUID());
++    if (this.choices.size >= 16) this.choices.clear();
++    this.choices.set(token, {
++      path: canonical,
++      expires: Date.now() + 30 * 60_000,
++      windowId,
++    });
++    return { token, displayPath: canonical };
++  }
++  async resolve(token: FolderToken, windowId: number): Promise<string> {
++    const choice = this.choices.get(token);
++    if (!choice || choice.windowId !== windowId || choice.expires < Date.now())
++      throw new CoreError("file-expired", "文件选择已失效，请重新选择。");
++    if (
++      (await realpath(choice.path)) !== choice.path ||
++      !(await stat(choice.path)).isFile()
++    )
++      throw new CoreError("file-changed", "文件已移动或不可用，请重新选择。");
++    return choice.path;
++  }
++  clear(): void {
++    this.choices.clear();
++  }
++}
+ export function authorizationUrl(value:string):string {
+   const url=new URL(value);
+   if(url.protocol!=='https:'||url.hostname!=='auth.openai.com'||url.username||url.password||url.port) throw new CoreError('untrusted-url','授权地址不是受支持的官方地址。');
+diff --git a/desktop/main/controller.ts b/desktop/main/controller.ts
+index 9d8ab31141a08f68309c4f85e1d33ec435ae02f0..84a57397562f78b19577c64e2377d24675fa7bd0 100644
+--- a/desktop/main/controller.ts
++++ b/desktop/main/controller.ts
+@@ -28,6 +28,12 @@ import {
+   stateSchema,
+ } from "./projection";
+ import { authorizationUrl, registrationUrl } from "./capabilities";
++import {
++  agentViewSchema, projectViewSchema, sessionViewSchema, hostViewSchema,
++  modelCatalogSchema, settingsReplySchema,
++  settingsRequestSchema,
++  type ParsedSettingsRequest, type SettingsReply, type SettingsScope,
++} from "../shared/settings";
+ 
+ const setupSchema = z.object({
+   installation: z.enum(["missing", "installed", "unknown"]),
+@@ -198,6 +204,235 @@ export class DesktopController {
+       }),
+     );
+   }
++  private settingsPath(scope: SettingsScope): string {
++    switch (scope.kind) {
++      case "host":
++        return "/api/settings/host";
++      case "agent":
++        return `/api/bots/${encodeURIComponent(scope.botId)}/settings`;
++      case "project":
++        return `/api/project/${encodeURIComponent(scope.projectName)}/settings?bot=${encodeURIComponent(scope.botId)}`;
++      case "session":
++        return `/api/bots/${encodeURIComponent(scope.botId)}/sessions/${encodeURIComponent(scope.threadId)}/settings`;
++    }
++  }
++  private async settingsJson(
++    path: string,
++    init: RequestInit = {},
++  ): Promise<unknown> {
++    const response = await this.connected().request(path, {
++      ...init,
++      signal: init.signal ?? AbortSignal.timeout(20_000),
++    });
++    const body = await response.text();
++    if (body.length > 4_000_000)
++      throw new CoreError("invalid-response", "设置响应过大。");
++    let data: unknown;
++    try {
++      data = JSON.parse(body);
++    } catch {
++      throw new CoreError("invalid-response", "设置响应无法解析。");
++    }
++    if (response.status === 404 || response.status === 501) {
++      const missing = z
++        .object({
++          kind: z.literal("rejected"),
++          fields: z.array(z.object({ message: z.string() })),
++        })
++        .safeParse(data);
++      if (missing.success)
++        throw new CoreError(
++          "missing-settings",
++          missing.data.fields.map((field) => field.message).join("；"),
++        );
++      throw new CoreError(
++        "unsupported-host",
++        "当前 Bridge 版本不支持桌面设置，请更新后重试。",
++      );
++    }
++    if (response.status >= 500 && response.status !== 503)
++      throw new CoreError(
++        "host-error",
++        "Bridge 暂时无法处理设置，请稍后重试。",
++      );
++    return data;
++  }
++  async settings(request: ParsedSettingsRequest): Promise<SettingsReply> {
++    if (
++      request.type === "save" &&
++      request.edit.scope.kind === "host" &&
++      request.edit.section === "execution" &&
++      z.object({ codexBin: z.string() }).safeParse(request.edit.patch).success
++    )
++      return {
++        kind: "refused",
++        code: "file-picker-required",
++        message: "请使用本机文件选择器指定 Codex 可执行文件。",
++      };
++    return this.settingsInternal(request);
++  }
++  async saveExecutable(path: string, revision: string): Promise<SettingsReply> {
++    const request = settingsRequestSchema.parse({
++      type: "save",
++      edit: {
++        scope: { kind: "host" },
++        section: "execution",
++        revision,
++        patch: { codexBin: path },
++      },
++    });
++    return this.settingsInternal(request);
++  }
++  private async settingsInternal(
++    request: ParsedSettingsRequest,
++  ): Promise<SettingsReply> {
++    try {
++      if (this.lifecycle !== "open")
++        throw new CoreError("closing", "应用正在退出。");
++      if (request.type === "read") {
++        const raw = await this.settingsJson(this.settingsPath(request.scope));
++        const unavailable = z
++          .object({
++            kind: z.literal("unavailable"),
++            reason: z.object({
++              kind: z.literal("readonly"),
++              message: z.string(),
++            }),
++          })
++          .safeParse(raw);
++        if (unavailable.success)
++          throw new CoreError(
++            "settings-unavailable",
++            unavailable.data.reason.message,
++          );
++        const view =
++          request.scope.kind === "agent"
++            ? agentViewSchema.parse(raw)
++            : request.scope.kind === "project"
++              ? projectViewSchema.parse(raw)
++              : request.scope.kind === "session"
++                ? sessionViewSchema.parse(raw)
++                : hostViewSchema.parse(raw);
++        if (JSON.stringify(view.scope) !== JSON.stringify(request.scope))
++          throw new CoreError("scope-mismatch", "设置响应与当前选择不匹配。");
++        return { kind: "view", view };
++      }
++      if (request.type === "models") {
++        const { botId, backend, purpose } = request.query;
++        const query = new URLSearchParams({ backend, purpose });
++        const catalog = modelCatalogSchema.parse(
++          await this.settingsJson(
++            `/api/bots/${encodeURIComponent(botId)}/models?${query}`,
++          ),
++        );
++        if (catalog.backend !== backend)
++          throw new CoreError(
++            "scope-mismatch",
++            "模型列表与当前执行工具不匹配。",
++          );
++        return { kind: "models", catalog };
++      }
++      if (request.type === "sessions") {
++        const path = `/api/project/${encodeURIComponent(request.projectName)}/sessions?bot=${encodeURIComponent(request.botId)}`;
++        const raw = await this.settingsJson(path);
++        return settingsReplySchema.parse({
++          kind: "sessions",
++          ...z.object({ sessions: z.unknown() }).parse(raw),
++        });
++      }
++      if (
++        request.type === "chooseExecutable" ||
++        request.type === "saveExecutable"
++      )
++        throw new CoreError("native-command", "请选择应用窗口提供的文件。");
++      return await this.enqueue(async () => {
++        const path =
++          request.type === "save"
++            ? this.settingsPath(request.edit.scope)
++            : `/api/bots/${encodeURIComponent(request.action.botId)}/settings/actions`;
++        const body =
++          request.type === "save"
++            ? request.edit.scope.kind === "agent"
++              ? { revision: request.edit.revision, patch: request.edit.patch }
++              : {
++                  section: request.edit.section,
++                  revision: request.edit.revision,
++                  patch: request.edit.patch,
++                }
++            : request.action;
++        const raw = await this.settingsJson(
++          request.type === "save" && request.edit.scope.kind === "agent"
++            ? `${path}/${encodeURIComponent(request.edit.section)}`
++            : path,
++          {
++            method: request.type === "save" ? "PATCH" : "POST",
++            headers: { "Content-Type": "application/json" },
++            body: JSON.stringify(body),
++          },
++        );
++        const reply = settingsReplySchema.parse(
++          request.type === "save"
++            ? { kind: "saved", result: raw }
++            : { kind: "acted", result: raw },
++        );
++        if (request.type === "save" && reply.kind === "saved") {
++          const result = reply.result;
++          const section =
++            result.kind === "saved"
++              ? result.section
++              : result.kind === "conflict"
++                ? result.current
++                : undefined;
++          if (
++            section &&
++            (section.section !== request.edit.section ||
++              JSON.stringify(section.scope) !==
++                JSON.stringify(request.edit.scope))
++          )
++            throw new CoreError(
++              "scope-mismatch",
++              "保存结果与当前设置范围不匹配。",
++            );
++        }
++        if (request.type === "act" && reply.kind === "acted") {
++          const result = reply.result;
++          const view =
++            result.kind === "saved" ||
++            result.kind === "conflict" ||
++            result.kind === "diverged"
++              ? result.view
++              : undefined;
++          if (
++            view &&
++            (view.scope.botId !== request.action.botId ||
++              ("projectName" in request.action
++                ? view.scope.kind !== "project" ||
++                  view.scope.projectName !== request.action.projectName
++                : view.scope.kind !== "agent"))
++          )
++            throw new CoreError(
++              "scope-mismatch",
++              "操作结果与当前 Agent 或群不匹配。",
++            );
++        }
++        return reply;
++      });
++    } catch (error) {
++      return {
++        kind: "refused",
++        code:
++          error instanceof CoreError
++            ? error.code
++            : error instanceof z.ZodError
++              ? "invalid-response"
++              : "settings-failed",
++        message:
++          error instanceof z.ZodError
++            ? "Bridge 设置响应与支持的协议不一致。"
++            : messageOf(error),
++      };
++    }
++  }
+   async refresh(duringClose = false): Promise<void> {
+     if (this.lifecycle !== "open" && !duringClose) return;
+     const generation = this.generation;
+@@ -438,6 +673,33 @@ export class DesktopController {
+               "PATCH",
+             );
+             return await this.activate(command.agentId);
++          case "deleteAgent": {
++            const state = stateSchema.parse(await this.json("/api/state"));
++            const target = state.bots.find(
++              (bot) => bot.appId === command.agentId,
++            );
++            if (!target)
++              throw new CoreError(
++                "missing-agent",
++                "Agent 已不存在，请刷新列表。",
++              );
++            if (target.active || target.running)
++              throw new CoreError(
++                "agent-active",
++                "请先停用 Agent 并让它停止运行，再删除本地数据。",
++              );
++            this.generation++;
++            try {
++              await this.json(
++                `/api/bots/${encodeURIComponent(command.agentId)}`,
++                { method: "DELETE" },
++              );
++            } finally {
++              this.generation++;
++            }
++            await this.refresh();
++            return { kind: "applied", revision: this.snapshot.revision };
++          }
+           case "registerAgent":
+             return await this.register();
+           case "installCodex":
+diff --git a/desktop/main/index.ts b/desktop/main/index.ts
+index 2f6c2f930ce48fa54e38ad5b8cce1e29c87ab929..2c911742b5d1c4ce79ad19af0922022c2ac3d146 100644
+--- a/desktop/main/index.ts
++++ b/desktop/main/index.ts
+@@ -5,7 +5,8 @@ import {pathToFileURL} from 'node:url';
+ import {stat} from 'node:fs/promises';
+ import {z} from 'zod';
+ import {commandSchema,type CommandReply,type CommandResult} from '../shared/bridge';
+-import {FolderCapabilities,trustedSender} from './capabilities';
++import {settingsRequestSchema,type SettingsReply} from '../shared/settings';
++import {ExecutableCapabilities,FolderCapabilities,trustedSender} from './capabilities';
+ import {DesktopController} from './controller';
+ import {messageOf} from './projection';
+ import type {HostModule} from './host';
+@@ -21,6 +22,7 @@ let controller:DesktopController|undefined;
+ let allowQuit=false;
+ let quitPending=false;
+ const folders=new FolderCapabilities();
++const executables=new ExecutableCapabilities();
+ const documentPath=join(__dirname,'renderer','index.html');
+ const documentUrl=pathToFileURL(documentPath).href;
+ const lock=app.requestSingleInstanceLock();
+@@ -52,7 +54,7 @@ async function start():Promise<void> {
+   currentWindow.webContents.session.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
+   currentWindow.webContents.session.setPermissionCheckHandler(()=>false);
+   currentWindow.on('close',event=>{if(!allowQuit){event.preventDefault();currentWindow.hide();}});
+-  currentWindow.webContents.on('render-process-gone',()=>{folders.clear();void Promise.all(controller?.current().jobs.filter(job=>job.type!=='installCodex').map(job=>controller?.cancel(job.id))??[]);});
++  currentWindow.webContents.on('render-process-gone',()=>{folders.clear();executables.clear();void Promise.all(controller?.current().jobs.filter(job=>job.type!=='installCodex').map(job=>controller?.cancel(job.id))??[]);});
+   ipcMain.handle('bridge:watch',event=>{validateSender(event);return controller?.current();});
+   ipcMain.handle('bridge:run',async(event,value:unknown):Promise<CommandReply>=>{
+     validateSender(event);
+@@ -80,6 +82,63 @@ async function start():Promise<void> {
+     } catch(error){result={kind:'refused',code:'operation-failed',message:messageOf(error)};}
+     return {command:command.type,result};
+   });
++  ipcMain.handle(
++    "bridge:settings",
++    async (event, value: unknown): Promise<SettingsReply> => {
++      validateSender(event);
++      if (JSON.stringify(value).length > 256_000)
++        return {
++          kind: "refused",
++          code: "request-too-large",
++          message: "设置内容超过支持的大小。",
++        };
++      const parsed = settingsRequestSchema.safeParse(value);
++      if (!parsed.success)
++        return {
++          kind: "refused",
++          code: "invalid-request",
++          message: "设置请求无效，请检查输入。",
++        };
++      if (!controller)
++        return {
++          kind: "refused",
++          code: "not-ready",
++          message: "Bridge 正在启动。",
++        };
++      try {
++        if (parsed.data.type === "chooseExecutable") {
++          const chosen = await dialog.showOpenDialog(currentWindow, {
++            title: "选择 Codex 可执行文件",
++            properties: ["openFile"],
++          });
++          const path = chosen.filePaths[0];
++          return chosen.canceled || !path
++            ? { kind: "cancelled" }
++            : {
++                kind: "fileChosen",
++                file: await executables.grant(
++                  path,
++                  currentWindow.webContents.id,
++                ),
++              };
++        }
++        if (parsed.data.type === "saveExecutable") {
++          const path = await executables.resolve(
++            parsed.data.token,
++            currentWindow.webContents.id,
++          );
++          return controller.saveExecutable(path, parsed.data.revision);
++        }
++        return controller.settings(parsed.data);
++      } catch (error) {
++        return {
++          kind: "refused",
++          code: "settings-failed",
++          message: messageOf(error),
++        };
++      }
++    },
++  );
+   const icon=nativeImage.createFromPath(join(__dirname,'renderer','vonvon-logo.png')).resize({width:18,height:18});
+   icon.setTemplateImage(process.platform==='darwin');
+   tray=new Tray(icon);
+diff --git a/desktop/preload.ts b/desktop/preload.ts
+index 85bbf956bd7a76944eea4a27cb48ab0b764ed997..2a027b3913c8330c6100a898eb8e57a68ef7fcec 100644
+--- a/desktop/preload.ts
++++ b/desktop/preload.ts
+@@ -1,5 +1,6 @@
+ import {contextBridge,ipcRenderer} from 'electron';
+ import type {Command,CommandReply,DesktopBridge,DesktopSnapshot} from './shared/bridge';
++import type {SettingsReply,SettingsRequest} from './shared/settings';
+ import {watchSnapshots} from './shared/watch';
+ 
+ const bridge:DesktopBridge={
+@@ -15,5 +16,9 @@ const bridge:DesktopBridge={
+     if(reply.command!==command.type) return {kind:'refused',code:'mismatched-command',message:'应用返回了不匹配的操作结果。'};
+     return reply.result;
+   },
++  async settings(request:SettingsRequest) {
++    const reply:SettingsReply=await ipcRenderer.invoke('bridge:settings',request);
++    return reply;
++  },
+ };
+ contextBridge.exposeInMainWorld('bridge',bridge);
+diff --git a/desktop/renderer/App.tsx b/desktop/renderer/App.tsx
+index ca2bca033073afc4e5d7dbecabfe85a227c246bf..b67779fd40953179daf22ca4b3ab76e1040932e3 100644
+--- a/desktop/renderer/App.tsx
++++ b/desktop/renderer/App.tsx
+@@ -23,9 +23,8 @@ import {
+   StatusBadge,
+   Toggle,
+ } from "./reference/components/ui";
+-import { Dialog } from "./reference/components/ui/Dialog";
++import { ConfirmDialog,Dialog } from "./reference/components/ui/Dialog";
+ import {
+-  permissionSchema,
+   toolSchema,
+   conversationSchema,
+   type AgentId,
+@@ -37,9 +36,9 @@ import {
+   type Job,
+   type JobId,
+   type Membership,
+-  type Permission,
+ } from "../shared/bridge";
+ import type { CollaborationView, Page } from "./collaboration-model";
++import {SettingsPanel,membershipSettingsTarget} from "./settings/SettingsPanel";
+ 
+ type Selection =
+   | { kind: "overview" }
+@@ -50,6 +49,7 @@ type Modal =
+   | { kind: "register"; jobId: JobId }
+   | { kind: "join"; agentId: AgentId }
+   | { kind: "collaboration"; membership: Membership }
++  | { kind: "deleteAgent"; agentId: AgentId; name: string }
+   | null;
+ type GroupsResult = Extract<CommandResult, { kind: "groups" }>;
+ const backendName = (backend: string) =>
+@@ -584,6 +584,10 @@ export function App() {
+                       }
+                     />
+                   </SettingsGroup>
++                  <SettingsPanel
++                    key={`agent-${agent.id}`}
++                    target={{ kind: "agent", botId: agent.id }}
++                  />
+                   <SettingsGroup
+                     label="已绑定的飞书群"
+                     action={
+@@ -608,6 +612,40 @@ export function App() {
+                       ) && <SettingsRow title="尚未绑定飞书群" />}
+                     </div>
+                   </SettingsGroup>
++                  <SettingsGroup
++                    label="移除 Agent"
++                    footer="删除本地注册信息、凭据、群绑定、会话记录与设置。飞书开发者平台中的应用仍保留。"
++                  >
++                    <SettingsRow
++                      title="删除本地 Agent 数据"
++                      description={
++                        agent.enabled || agent.connection !== "disconnected"
++                          ? "请先停用 Agent，并等待它停止运行。"
++                          : "此操作无法撤销。"
++                      }
++                      trailing={
++                        <Button
++                          size="sm"
++                          disabled={
++                            busy ||
++                            host.kind !== "connected" ||
++                            agent.enabled ||
++                            agent.connection !== "disconnected" ||
++                            agent.activation !== "active"
++                          }
++                          onClick={() =>
++                            setModal({
++                              kind: "deleteAgent",
++                              agentId: agent.id,
++                              name: agent.name,
++                            })
++                          }
++                        >
++                          移除 Agent
++                        </Button>
++                      }
++                    />
++                  </SettingsGroup>
+                 </>
+               )}
+               {selection.kind === "group" && group && (
+@@ -686,35 +724,10 @@ export function App() {
+                           : "整群连续会话"
+                       }
+                     />
+-                    <SettingsRow
+-                      title="响应方式"
+-                      trailing={
+-                        <select
+-                          aria-label="响应方式"
+-                          disabled={busy || member.stale}
+-                          value={member.response}
+-                          onChange={(event) =>
+-                            void run({
+-                              type: "setResponse",
+-                              membershipId: member.id,
+-                              response:
+-                                event.target.value === "all"
+-                                  ? "all"
+-                                  : "mention",
+-                            })
+-                          }
+-                        >
+-                          <option value="mention">仅在 @ 时响应</option>
+-                          <option value="all">允许不 @ 发起任务</option>
+-                        </select>
+-                      }
+-                    />
+                   </SettingsGroup>
+-                  <PermissionSettings
+-                    key={`${member.id}-${JSON.stringify(member.permission)}`}
+-                    member={member}
+-                    busy={busy}
+-                    onSave={run}
++                  <SettingsPanel
++                    key={`project-${member.id}`}
++                    target={membershipSettingsTarget(member)}
+                   />
+                   <div className="desktop-actions">
+                     <Button
+@@ -878,6 +891,7 @@ export function App() {
+                   }
+                 />
+               </SettingsGroup>
++              <SettingsPanel target={{ kind: "host" }} />
+               <SettingsGroup
+                 label="窗口与退出"
+                 footer="关闭窗口会留在菜单栏或托盘继续运行。退出只停止本应用启动的 Bridge。"
+@@ -956,7 +970,7 @@ export function App() {
+         </div>
+       </AppShell>
+       <Dialog
+-        open={modal !== null}
++        open={modal !== null && modal.kind !== "deleteAgent"}
+         onClose={() => void closeModal()}
+         title={
+           modal?.kind === "register"
+@@ -1115,96 +1129,32 @@ export function App() {
+           )}
+         </div>
+       </Dialog>
+-    </>
+-  );
+-}
+-function PermissionSettings({
+-  member,
+-  busy,
+-  onSave,
+-}: {
+-  member: Membership;
+-  busy: boolean;
+-  onSave: (command: Command) => Promise<CommandResult>;
+-}) {
+-  const [administrator, setAdministrator] = useState<Permission>(
+-    member.permission.administrator,
+-  );
+-  const [ordinary, setOrdinary] = useState<Permission>(
+-    member.permission.member,
+-  );
+-  const [network, setNetwork] = useState(member.permission.network);
+-  const options = (
+-    <>
+-      <option value="qa">只读问答</option>
+-      <option value="write">允许写入</option>
+-      <option value="full">完全访问</option>
+-    </>
+-  );
+-  return (
+-    <SettingsGroup
+-      label="工作目录权限"
+-      footer="保存后由内核应用权限，失败会保留原有设置。"
+-    >
+-      <SettingsRow
+-        title="管理员"
+-        trailing={
+-          <select
+-            aria-label="管理员权限"
+-            value={administrator}
+-            onChange={(event) =>
+-              setAdministrator(permissionSchema.parse(event.target.value))
+-            }
+-          >
+-            {options}
+-          </select>
++      <ConfirmDialog
++        open={modal?.kind === "deleteAgent"}
++        title="移除本地 Agent"
++        description={
++          modal?.kind === "deleteAgent"
++            ? `将移除「${modal.name}」的本地注册信息、凭据、群绑定、设置和会话记录。飞书开发者平台中的应用不会删除。请确认这个 Agent 已停用并停止运行。`
++            : ""
+         }
+-      />
+-      <SettingsRow
+-        title="普通成员"
+-        trailing={
+-          <select
+-            aria-label="普通成员权限"
+-            value={ordinary}
+-            onChange={(event) =>
+-              setOrdinary(permissionSchema.parse(event.target.value))
+-            }
+-          >
+-            {options}
+-          </select>
+-        }
+-      />
+-      <SettingsRow
+-        title="允许网络访问"
+-        trailing={
+-          <Toggle
+-            label="允许网络访问"
+-            checked={network}
+-            onChange={(event) => setNetwork(event.target.checked)}
+-          />
+-        }
+-      />
+-      <SettingsRow
+-        title="保存权限设置"
+-        trailing={
+-          <Button
+-            size="sm"
+-            disabled={busy || member.stale}
+-            onClick={() =>
+-              void onSave({
+-                type: "setPermission",
+-                membershipId: member.id,
+-                administrator,
+-                member: ordinary,
+-                network,
+-              })
++        tone="danger"
++        confirmLabel="删除本地数据"
++        pending={busy}
++        error={notice?.error ? notice.message : undefined}
++        onCancel={() => void closeModal()}
++        onConfirm={() => {
++          if (modal?.kind !== "deleteAgent") return;
++          const id = modal.agentId;
++          void run({ type: "deleteAgent", agentId: id }).then((result) => {
++            if (result.kind === "applied") {
++              setModal(null);
++              select({ kind: "overview" });
++              setNotice({ message: "本地 Agent 数据已删除。", error: false });
+             }
+-          >
+-            保存
+-          </Button>
+-        }
++          });
++        }}
+       />
+-    </SettingsGroup>
++    </>
+   );
+ }
+ function JobPanel({
+@@ -1249,7 +1199,7 @@ function JobPanel({
+                   请用飞书扫码，或打开注册链接。有效期至{" "}
+                   {new Date(job.expiresAt).toLocaleTimeString()}。
+                 </p>
+-                <FormField label="完整注册链接">
++                <FormField className="desktop-registration-url" label="完整注册链接">
+                   <input aria-label="完整注册链接" readOnly value={job.url} />
+                 </FormField>
+                 <div className="desktop-actions">
+diff --git a/desktop/renderer/settings/SettingsPanel.tsx b/desktop/renderer/settings/SettingsPanel.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..74d7549a707aa9b89c46fb140604cee0b21ae97e
+--- /dev/null
++++ b/desktop/renderer/settings/SettingsPanel.tsx
+@@ -0,0 +1,2072 @@
++import { useEffect, useState, type ReactNode } from "react";
++import { Button, InlineNotice, Toggle } from "../reference/components/ui";
++import {
++  SettingsGroup,
++  SettingsRow,
++} from "../reference/components/system-settings";
++import {
++  groupIdSchema,
++  type AgentId,
++  type Membership,
++} from "../../shared/bridge";
++import {
++  openIdSchema,
++  type AgentSettingsView,
++  type HostSettingsView,
++  type ModelCatalog,
++  type ModelSelection,
++  type ProjectSettingsView,
++  type SessionSettingsView,
++  type SettingsReply,
++  type SettingsScope,
++  type SettingsView,
++  type TitlePolicy,
++} from "../../shared/settings";
++import "./settings.css";
++
++type AgentScope = { kind: "agent"; botId: AgentId };
++type ProjectScope = { kind: "project"; botId: AgentId; projectName: string };
++type Target = AgentScope | ProjectScope | { kind: "host" };
++const isAgentView = (view: SettingsView): view is AgentSettingsView =>
++  view.scope.kind === "agent" && "cliRuntime" in view;
++const isProjectView = (view: SettingsView): view is ProjectSettingsView =>
++  view.scope.kind === "project" && "members" in view;
++const isSessionView = (view: SettingsView): view is SessionSettingsView =>
++  view.scope.kind === "session" && "identity" in view && !("members" in view);
++const isHostView = (view: SettingsView): view is HostSettingsView =>
++  view.scope.kind === "host" && "runtime" in view;
++type Section<T> = {
++  stored: T;
++  effective: T;
++  revision: string;
++  access:
++    | { kind: "writable" }
++    | { kind: "readonly"; reason: string; message: string };
++  apply: { detail: string }[];
++};
++const effortOptions = [
++  "none",
++  "minimal",
++  "low",
++  "medium",
++  "high",
++  "xhigh",
++  "max",
++  "ultra",
++] as const;
++const effectText = (section: Section<unknown>) =>
++  section.apply.map((item) => item.detail).join(" ");
++const errorText = (reply: SettingsReply): string | undefined => {
++  if (reply.kind === "refused") return reply.message;
++  if (reply.kind === "saved") {
++    if (reply.result.kind === "rejected")
++      return reply.result.fields
++        .map((item) => `${item.field}：${item.message}`)
++        .join("；");
++    if (reply.result.kind === "unavailable")
++      return reply.result.reason.kind === "readonly"
++        ? reply.result.reason.message
++        : "当前不可编辑。";
++    if (reply.result.kind === "conflict")
++      return "这项设置已在别处更改。草稿已保留，请重新读取后确认。";
++  }
++  if (reply.kind === "acted") {
++    if (reply.result.kind === "rejected")
++      return reply.result.fields
++        .map((item) => `${item.field}：${item.message}`)
++        .join("；");
++    if (reply.result.kind === "unavailable")
++      return reply.result.reason.kind === "readonly"
++        ? reply.result.reason.message
++        : "当前不可编辑。";
++    if (reply.result.kind === "conflict")
++      return "这项设置已在别处更改。请重新读取后确认。";
++    if (reply.result.kind === "diverged") return reply.result.message;
++  }
++};
++function Editor<T>({
++  title,
++  section,
++  render,
++  save,
++}: {
++  title: string;
++  section: Section<T>;
++  render: (
++    draft: T,
++    change: (value: T) => void,
++    disabled: boolean,
++  ) => ReactNode;
++  save: (draft: T) => Promise<SettingsReply>;
++}) {
++  const [draft, setDraft] = useState(section.stored);
++  const [base, setBase] = useState(section.stored);
++  const [baseRevision, setBaseRevision] = useState(section.revision);
++  const [pending, setPending] = useState(false);
++  const [error, setError] = useState<string>();
++  const [notice, setNotice] = useState<string>();
++  useEffect(() => {
++    if (section.revision === baseRevision) return;
++    setDraft((current) =>
++      JSON.stringify(current) === JSON.stringify(base)
++        ? section.stored
++        : current,
++    );
++    setBase(section.stored);
++    setBaseRevision(section.revision);
++  }, [section.revision, section.stored, baseRevision, base]);
++  const dirty = JSON.stringify(draft) !== JSON.stringify(base);
++  const disabled = pending || section.access.kind === "readonly";
++  async function submit() {
++    setPending(true);
++    setError(undefined);
++    setNotice(undefined);
++    try {
++      const result = await save(draft);
++      const failure = errorText(result);
++      if (failure) setError(failure);
++      else if (result.kind === "saved" && result.result.kind === "saved")
++        setNotice(
++          result.result.effects.map((item) => item.detail).join(" ") ||
++            "已保存。",
++        );
++    } catch (error) {
++      setError(error instanceof Error ? error.message : "保存失败。");
++    } finally {
++      setPending(false);
++    }
++  }
++  return (
++    <SettingsGroup
++      label={title}
++      footer={
++        section.access.kind === "readonly"
++          ? section.access.message
++          : effectText(section)
++      }
++    >
++      {render(draft, setDraft, disabled)}
++      <div className="settings-edit-actions">
++        <Button
++          size="sm"
++          disabled={!dirty || disabled}
++          onClick={() => {
++            setDraft(section.stored);
++            setBase(section.stored);
++            setBaseRevision(section.revision);
++            setError(undefined);
++          }}
++        >
++          放弃修改
++        </Button>
++        <Button
++          size="sm"
++          disabled={!dirty || disabled}
++          onClick={() => void submit()}
++        >
++          保存
++        </Button>
++      </div>
++      {error && (
++        <InlineNotice title="保存未完成" tone="danger">
++          {error}
++        </InlineNotice>
++      )}
++      {notice && <InlineNotice title="设置已保存">{notice}</InlineNotice>}
++    </SettingsGroup>
++  );
++}
++function Text({
++  label,
++  value,
++  onChange,
++  disabled,
++  placeholder,
++}: {
++  label: string;
++  value: string;
++  onChange: (value: string) => void;
++  disabled: boolean;
++  placeholder?: string;
++}) {
++  return (
++    <input
++      aria-label={label}
++      className="settings-field"
++      value={value}
++      placeholder={placeholder}
++      disabled={disabled}
++      onChange={(event) => onChange(event.target.value)}
++    />
++  );
++}
++function NumberField({
++  label,
++  value,
++  onChange,
++  disabled,
++  min,
++  max,
++}: {
++  label: string;
++  value: number;
++  onChange: (value: number) => void;
++  disabled: boolean;
++  min: number;
++  max: number;
++}) {
++  return (
++    <input
++      aria-label={label}
++      className="settings-number"
++      type="number"
++      value={value}
++      min={min}
++      max={max}
++      disabled={disabled}
++      onChange={(event) => onChange(event.target.valueAsNumber)}
++    />
++  );
++}
++function Select<T extends string>({
++  label,
++  value,
++  choices,
++  onChange,
++  disabled,
++}: {
++  label: string;
++  value: T;
++  choices: readonly { value: T; label: string }[];
++  onChange: (value: T) => void;
++  disabled: boolean;
++}) {
++  return (
++    <select
++      aria-label={label}
++      value={value}
++      disabled={disabled}
++      onChange={(event) => {
++        const choice = choices.find(
++          (item) => item.value === event.target.value,
++        );
++        if (choice) onChange(choice.value);
++      }}
++    >
++      {choices.map((item) => (
++        <option key={item.value} value={item.value}>
++          {item.label}
++        </option>
++      ))}
++    </select>
++  );
++}
++function Switch({
++  label,
++  value,
++  onChange,
++  disabled,
++}: {
++  label: string;
++  value: boolean;
++  onChange: (value: boolean) => void;
++  disabled: boolean;
++}) {
++  return (
++    <Toggle
++      label={label}
++      checked={value}
++      disabled={disabled}
++      onChange={(event) => onChange(event.target.checked)}
++    />
++  );
++}
++function Catalog({
++  botId,
++  backend,
++  purpose,
++  children,
++}: {
++  botId: AgentId;
++  backend: string;
++  purpose: "project" | "session" | "comments" | "titles";
++  children: (catalog: ModelCatalog | undefined) => ReactNode;
++}) {
++  const [catalog, setCatalog] = useState<ModelCatalog>();
++  const [error, setError] = useState<string>();
++  useEffect(() => {
++    let active = true;
++    setCatalog(undefined);
++    setError(undefined);
++    void window.bridge
++      .settings({ type: "models", query: { botId, backend, purpose } })
++      .then((reply) => {
++        if (!active) return;
++        if (reply.kind === "models") setCatalog(reply.catalog);
++        else
++          setError(
++            reply.kind === "refused" ? reply.message : "模型目录暂不可用。",
++          );
++      })
++      .catch((failure: unknown) => {
++        if (active)
++          setError(
++            failure instanceof Error ? failure.message : "模型目录暂不可用。",
++          );
++      });
++    return () => {
++      active = false;
++    };
++  }, [botId, backend, purpose]);
++  return (
++    <>
++      {error && (
++        <InlineNotice title="模型目录暂不可用" tone="warning">
++          {error}
++        </InlineNotice>
++      )}
++      {children(catalog)}
++    </>
++  );
++}
++function ModelChoice({
++  value,
++  onChange,
++  catalog,
++  disabled,
++  custom,
++}: {
++  value: ModelSelection;
++  onChange: (value: ModelSelection) => void;
++  catalog: ModelCatalog | undefined;
++  disabled: boolean;
++  custom?: boolean;
++}) {
++  const model = value.kind === "explicit" ? value.model : "";
++  const listed = catalog?.models.filter((item) => !item.hidden) ?? [];
++  const selected = listed.find((item) => item.id === model);
++  const efforts =
++    selected?.supportedEfforts ??
++    (value.kind === "explicit" ? [value.effort] : []);
++  return (
++    <>
++      <SettingsRow
++        title="模型"
++        description={
++          catalog?.state === "unavailable"
++            ? (catalog.error ?? "模型目录暂不可用；其他设置仍可保存。")
++            : catalog?.state === "fallback"
++              ? "当前为后端提供的回退目录，请确认选中的模型可用。"
++              : undefined
++        }
++        trailing={
++          custom ? (
++            <Text
++              label="自定义模型 ID"
++              value={model}
++              disabled={disabled}
++              onChange={(next) =>
++                onChange(
++                  next
++                    ? {
++                        kind: "explicit",
++                        model: next,
++                        effort:
++                          value.kind === "explicit" ? value.effort : "medium",
++                      }
++                    : { kind: "default" },
++                )
++              }
++            />
++          ) : (
++            <select
++              aria-label="模型"
++              value={model}
++              disabled={
++                disabled ||
++                (catalog?.state === "unavailable" && value.kind === "default")
++              }
++              onChange={(event) => {
++                const next = listed.find(
++                  (item) => item.id === event.target.value,
++                );
++                onChange(
++                  next
++                    ? {
++                        kind: "explicit",
++                        model: next.id,
++                        effort: next.defaultEffort,
++                      }
++                    : { kind: "default" },
++                );
++              }}
++            >
++              <option value="">使用默认模型</option>
++              {model && !selected && (
++                <option value={model}>{model}（已保存，当前目录不可用）</option>
++              )}
++              {listed.map((item) => (
++                <option key={item.id} value={item.id}>
++                  {item.displayName} · {item.id}
++                </option>
++              ))}
++            </select>
++          )
++        }
++      />
++      {value.kind === "explicit" && (
++        <SettingsRow
++          title="推理强度"
++          trailing={
++            <select
++              aria-label="推理强度"
++              value={value.effort}
++              disabled={disabled}
++              onChange={(event) => {
++                const next = effortOptions.find(
++                  (item) => item === event.target.value,
++                );
++                if (next) onChange({ ...value, effort: next });
++              }}
++            >
++              {efforts.map((item) => (
++                <option key={item} value={item}>
++                  {item}
++                </option>
++              ))}
++            </select>
++          }
++        />
++      )}
++    </>
++  );
++}
++function ActionNotice({ message }: { message: string | undefined }) {
++  return message ? (
++    <InlineNotice title="操作结果">{message}</InlineNotice>
++  ) : null;
++}
++function AgentPanel({
++  view,
++  refresh,
++}: {
++  view: AgentSettingsView;
++  refresh: () => Promise<void>;
++}) {
++  const [actionMessage, setActionMessage] = useState<string>();
++  const [adminId, setAdminId] = useState("");
++  const [chatId, setChatId] = useState("");
++  const [instructions, setInstructions] = useState(
++    view.commentInstructions.content.text,
++  );
++  const [instructionBase, setInstructionBase] = useState(
++    view.commentInstructions.content.text,
++  );
++  useEffect(() => {
++    const saved = view.commentInstructions.content.text;
++    if (saved === instructionBase) return;
++    setInstructions((current) =>
++      current === instructionBase ? saved : current,
++    );
++    setInstructionBase(saved);
++  }, [
++    view.commentInstructions.revision,
++    view.commentInstructions.content.text,
++    instructionBase,
++  ]);
++  const [advanced, setAdvanced] = useState(false);
++  const [titleBackend, setTitleBackend] = useState("codex-appserver");
++  const [commentBackend, setCommentBackend] = useState(
++    view.sections.comments.stored.backend,
++  );
++  async function save(
++    section: keyof AgentSettingsView["sections"],
++    patch: object,
++    revision: string,
++  ) {
++    const result = await window.bridge.settings({
++      type: "save",
++      edit: { scope: view.scope, section, revision, patch },
++    });
++    if (result.kind === "saved" && result.result.kind === "saved")
++      await refresh();
++    return result;
++  }
++  async function act(
++    action: Parameters<typeof window.bridge.settings>[0] & { type: "act" },
++  ) {
++    const result = await window.bridge.settings(action);
++    const failure = errorText(result);
++    setActionMessage(
++      failure ??
++        (result.kind === "acted" && result.result.kind === "saved"
++          ? [
++              ...result.result.effects.map((item) => item.detail),
++              ...result.result.warnings,
++            ].join(" ") || "已保存。"
++          : "操作已完成。"),
++    );
++    if (result.kind === "acted" && result.result.kind === "saved") {
++      if (
++        isAgentView(result.result.view) &&
++        result.result.view.commentInstructions.revision !==
++          view.commentInstructions.revision
++      )
++        setInstructions(result.result.view.commentInstructions.content.text);
++      await refresh();
++    }
++  }
++  const cards = view.sections.cards,
++    run = view.sections.run,
++    completion = view.sections.completion,
++    voice = view.voice,
++    cli = view.sections.cliBridge,
++    comments = view.sections.comments,
++    titles = view.sections.titles,
++    paths = view.sections.paths,
++    access = view.sections.access;
++  return (
++    <>
++      <Editor
++        title="任务卡片"
++        section={cards}
++        save={(draft) => save("cards", draft, cards.revision)}
++        render={(draft, set, disabled) => (
++          <>
++            <SettingsRow
++              title="显示工具调用"
++              trailing={
++                <Switch
++                  label="显示工具调用"
++                  value={draft.showToolCalls}
++                  disabled={disabled}
++                  onChange={(value) => set({ ...draft, showToolCalls: value })}
++                />
++              }
++            />
++            <SettingsRow
++              title="显示模型"
++              trailing={
++                <Select
++                  label="显示模型"
++                  value={draft.showModel}
++                  disabled={disabled}
++                  choices={[
++                    { value: "off", label: "不显示" },
++                    { value: "running", label: "运行时" },
++                    { value: "always", label: "始终" },
++                  ]}
++                  onChange={(value) => set({ ...draft, showModel: value })}
++                />
++              }
++            />
++          </>
++        )}
++      />
++      <Editor
++        title="运行策略"
++        section={run}
++        save={(draft) => save("run", draft, run.revision)}
++        render={(draft, set, disabled) => (
++          <>
++            <SettingsRow
++              title="最大并发任务"
++              trailing={
++                <NumberField
++                  label="最大并发任务"
++                  value={draft.maxConcurrentRuns}
++                  min={1}
++                  max={50}
++                  disabled={disabled}
++                  onChange={(value) =>
++                    set({ ...draft, maxConcurrentRuns: value })
++                  }
++                />
++              }
++            />
++            {run.effective.maxConcurrentRuns !==
++              run.stored.maxConcurrentRuns && (
++              <SettingsRow
++                title="当前运行并发"
++                description="已保存的上限等待 Host 重启。"
++                value={String(run.effective.maxConcurrentRuns)}
++              />
++            )}
++            <SettingsRow
++              title="空闲超时（秒，0 为关闭）"
++              trailing={
++                <NumberField
++                  label="空闲超时"
++                  value={draft.runIdleTimeoutSeconds}
++                  min={0}
++                  max={3600}
++                  disabled={disabled}
++                  onChange={(value) =>
++                    set({ ...draft, runIdleTimeoutSeconds: value })
++                  }
++                />
++              }
++            />
++            <SettingsRow
++              title="运行中收到新消息"
++              trailing={
++                <Select
++                  label="待处理消息策略"
++                  value={draft.pendingPolicy}
++                  disabled={disabled}
++                  choices={[
++                    { value: "steer", label: "引导当前任务" },
++                    { value: "queue", label: "排队" },
++                  ]}
++                  onChange={(value) => set({ ...draft, pendingPolicy: value })}
++                />
++              }
++            />
++          </>
++        )}
++      />
++      <Editor
++        title="任务结束提醒"
++        section={completion}
++        save={(draft) => save("completion", draft, completion.revision)}
++        render={(draft, set, disabled) => (
++          <>
++            <SettingsRow
++              title="提醒方式"
++              trailing={
++                <Select
++                  label="提醒方式"
++                  value={draft.mode}
++                  disabled={disabled}
++                  choices={[
++                    { value: "manual", label: "手动" },
++                    { value: "long", label: "长任务" },
++                    { value: "failures", label: "失败时" },
++                    { value: "always", label: "每次" },
++                  ]}
++                  onChange={(value) => set({ ...draft, mode: value })}
++                />
++              }
++            />
++            <SettingsRow
++              title="长任务阈值（分钟）"
++              trailing={
++                <NumberField
++                  label="长任务阈值"
++                  value={draft.longTaskMinutes}
++                  min={1}
++                  max={1440}
++                  disabled={disabled}
++                  onChange={(value) =>
++                    set({ ...draft, longTaskMinutes: value })
++                  }
++                />
++              }
++            />
++          </>
++        )}
++      />
++      <SettingsGroup
++        label="语音转文字"
++        footer={
++          cards.access.kind === "readonly"
++            ? cards.access.message
++            : "开启后检查飞书权限；下一条语音消息使用新状态。"
++        }
++      >
++        <SettingsRow
++          title="启用语音"
++          description={voice.feishu.message}
++          trailing={
++            <Switch
++              label="启用语音"
++              value={voice.enabled}
++              disabled={cards.access.kind === "readonly"}
++              onChange={(enabled) =>
++                void act({
++                  type: "act",
++                  action: {
++                    kind: "voice",
++                    botId: view.scope.botId,
++                    action: { action: enabled ? "enable" : "disable" },
++                  },
++                })
++              }
++            />
++          }
++        />
++        <SettingsRow
++          title="权限与测试"
++          trailing={
++            <div className="settings-inline-actions">
++              <Button
++                size="sm"
++                disabled={cards.access.kind === "readonly"}
++                onClick={() =>
++                  void act({
++                    type: "act",
++                    action: {
++                      kind: "voice",
++                      botId: view.scope.botId,
++                      action: { action: "refreshPermission" },
++                    },
++                  })
++                }
++              >
++                重新检测
++              </Button>
++              <Button
++                size="sm"
++                disabled={cards.access.kind === "readonly"}
++                onClick={() =>
++                  void act({
++                    type: "act",
++                    action: {
++                      kind: "voice",
++                      botId: view.scope.botId,
++                      action: { action: "test" },
++                    },
++                  })
++                }
++              >
++                测试
++              </Button>
++            </div>
++          }
++        />
++      </SettingsGroup>
++      <SettingsGroup
++        label="CLI 协作"
++        footer={
++          cards.access.kind === "readonly"
++            ? cards.access.message
++            : "后台 CLI 服务与桌面登录自启分别管理。保存普通选项后，下次对应 Hook 事件使用新值。"
++        }
++      >
++        <SettingsRow
++          title="转发本机 CLI 活动"
++          description={
++            !view.ownerOpenId
++              ? "需要先确认 Agent 所有者。"
++              : view.cliRuntime.running
++                ? "服务运行中"
++                : "服务未运行"
++          }
++          trailing={
++            <Switch
++              label="转发本机 CLI 活动"
++              value={view.cliRuntime.enabled}
++              disabled={cards.access.kind === "readonly" || !view.ownerOpenId}
++              onChange={(enabled) =>
++                void act({
++                  type: "act",
++                  action: {
++                    kind: "setCliBridgeEnabled",
++                    botId: view.scope.botId,
++                    enabled,
++                    revision: view.cliRuntime.revision,
++                  },
++                })
++              }
++            />
++          }
++        />
++        <SettingsRow
++          title="Claude Hook"
++          value={view.cliRuntime.hooks.claude.status}
++        />
++        <SettingsRow
++          title="Codex Hook"
++          value={view.cliRuntime.hooks.codex.status}
++        />
++        <SettingsRow
++          title="修复 Hook"
++          trailing={
++            <Button
++              size="sm"
++              disabled={cards.access.kind === "readonly"}
++              onClick={() =>
++                void act({
++                  type: "act",
++                  action: { kind: "repairCliHooks", botId: view.scope.botId },
++                })
++              }
++            >
++              检查并修复
++            </Button>
++          }
++        />
++      </SettingsGroup>
++      <Editor
++        title="CLI 通知设置"
++        section={cli}
++        save={(draft) => save("cliBridge", draft, cli.revision)}
++        render={(draft, set, disabled) => (
++          <>
++            <SettingsRow
++              title="通知范围"
++              trailing={
++                <Select
++                  label="通知范围"
++                  value={draft.notifyScope}
++                  disabled={disabled}
++                  choices={[
++                    { value: "all", label: "全部会话" },
++                    { value: "bound_projects", label: "已绑定项目" },
++                    { value: "none", label: "不通知" },
++                  ]}
++                  onChange={(value) => set({ ...draft, notifyScope: value })}
++                />
++              }
++            />
++            <SettingsRow
++              title="转发 Claude"
++              trailing={
++                <Switch
++                  label="转发 Claude"
++                  value={draft.agents.claude}
++                  disabled={disabled}
++                  onChange={(value) =>
++                    set({
++                      ...draft,
++                      agents: { ...draft.agents, claude: value },
++                    })
++                  }
++                />
++              }
++            />
++            <SettingsRow
++              title="转发 Codex"
++              trailing={
++                <Switch
++                  label="转发 Codex"
++                  value={draft.agents.codex}
++                  disabled={disabled}
++                  onChange={(value) =>
++                    set({ ...draft, agents: { ...draft.agents, codex: value } })
++                  }
++                />
++              }
++            />
++            <SettingsRow
++              title="离开时保活"
++              description={
++                view.cliRuntime.keepAwakeSupported
++                  ? undefined
++                  : "此系统不支持保活。"
++              }
++              trailing={
++                <Switch
++                  label="离开时保活"
++                  value={draft.keepAwake.enabled}
++                  disabled={disabled || !view.cliRuntime.keepAwakeSupported}
++                  onChange={(value) =>
++                    set({ ...draft, keepAwake: { enabled: value } })
++                  }
++                />
++              }
++            />
++            <button
++              className="settings-advanced-toggle"
++              type="button"
++              onClick={() => setAdvanced(!advanced)}
++            >
++              {advanced ? "收起高级选项" : "显示高级选项"}
++            </button>
++            {advanced && (
++              <>
++                <SettingsRow
++                  title="转发权限审批"
++                  trailing={
++                    <Switch
++                      label="转发权限审批"
++                      value={draft.approval.enabled}
++                      disabled={disabled}
++                      onChange={(value) =>
++                        set({
++                          ...draft,
++                          approval: { ...draft.approval, enabled: value },
++                        })
++                      }
++                    />
++                  }
++                />
++                <SettingsRow
++                  title="审批超时（秒）"
++                  trailing={
++                    <NumberField
++                      label="审批超时"
++                      value={draft.approval.timeoutSeconds}
++                      min={1}
++                      max={86400}
++                      disabled={disabled}
++                      onChange={(value) =>
++                        set({
++                          ...draft,
++                          approval: {
++                            ...draft.approval,
++                            timeoutSeconds: value,
++                          },
++                        })
++                      }
++                    />
++                  }
++                />
++                <SettingsRow
++                  title="发送任务完成卡"
++                  trailing={
++                    <Switch
++                      label="发送任务完成卡"
++                      value={draft.taskCompletion.enabled}
++                      disabled={disabled}
++                      onChange={(value) =>
++                        set({
++                          ...draft,
++                          taskCompletion: {
++                            ...draft.taskCompletion,
++                            enabled: value,
++                          },
++                        })
++                      }
++                    />
++                  }
++                />
++                <SettingsRow
++                  title="允许从完成卡续聊"
++                  trailing={
++                    <Switch
++                      label="允许从完成卡续聊"
++                      value={draft.taskCompletion.replyEnabled}
++                      disabled={disabled}
++                      onChange={(value) =>
++                        set({
++                          ...draft,
++                          taskCompletion: {
++                            ...draft.taskCompletion,
++                            replyEnabled: value,
++                          },
++                        })
++                      }
++                    />
++                  }
++                />
++                <SettingsRow
++                  title="续聊等待（秒）"
++                  trailing={
++                    <NumberField
++                      label="续聊等待"
++                      value={draft.taskCompletion.replyTimeoutSeconds}
++                      min={1}
++                      max={86400}
++                      disabled={disabled}
++                      onChange={(value) =>
++                        set({
++                          ...draft,
++                          taskCompletion: {
++                            ...draft.taskCompletion,
++                            replyTimeoutSeconds: value,
++                          },
++                        })
++                      }
++                    />
++                  }
++                />
++                <SettingsRow
++                  title="本会话放行缓存"
++                  trailing={
++                    <Switch
++                      label="本会话放行缓存"
++                      value={draft.allowCache.enabled}
++                      disabled={disabled}
++                      onChange={(value) =>
++                        set({
++                          ...draft,
++                          allowCache: { ...draft.allowCache, enabled: value },
++                        })
++                      }
++                    />
++                  }
++                />
++                <SettingsRow
++                  title="在场检测"
++                  trailing={
++                    <Switch
++                      label="在场检测"
++                      value={draft.presence.enabled}
++                      disabled={disabled}
++                      onChange={(value) =>
++                        set({
++                          ...draft,
++                          presence: { ...draft.presence, enabled: value },
++                        })
++                      }
++                    />
++                  }
++                />
++                <SettingsRow
++                  title="在场检测平台"
++                  trailing={
++                    <Select
++                      label="在场检测平台"
++                      value={draft.presence.platform}
++                      disabled={disabled}
++                      choices={[
++                        { value: "auto", label: "自动" },
++                        { value: "macos", label: "macOS" },
++                      ]}
++                      onChange={(value) =>
++                        set({
++                          ...draft,
++                          presence: { ...draft.presence, platform: value },
++                        })
++                      }
++                    />
++                  }
++                />
++                <SettingsRow
++                  title="离开判定（秒）"
++                  trailing={
++                    <NumberField
++                      label="离开判定"
++                      value={draft.presence.idleThresholdSeconds}
++                      min={10}
++                      max={3600}
++                      disabled={disabled}
++                      onChange={(value) =>
++                        set({
++                          ...draft,
++                          presence: {
++                            ...draft.presence,
++                            idleThresholdSeconds: value,
++                          },
++                        })
++                      }
++                    />
++                  }
++                />
++              </>
++            )}
++          </>
++        )}
++      />
++      <Catalog
++        botId={view.scope.botId}
++        backend={commentBackend}
++        purpose="comments"
++      >
++        {(catalog) => (
++          <Editor
++            title="云文档评论"
++            section={comments}
++            save={(draft) => save("comments", draft, comments.revision)}
++            render={(draft, set, disabled) => (
++              <>
++                <SettingsRow
++                  title="执行工具"
++                  trailing={
++                    <Select
++                      label="评论执行工具"
++                      value={draft.backend}
++                      disabled={disabled}
++                      choices={[
++                        { value: "codex-appserver", label: "Codex" },
++                        { value: "claude-agent", label: "Claude" },
++                      ]}
++                      onChange={(value) => {
++                        setCommentBackend(value);
++                        set({
++                          ...draft,
++                          backend: value,
++                          selection: { kind: "default" },
++                        });
++                      }}
++                    />
++                  }
++                />
++                <ModelChoice
++                  value={draft.selection}
++                  onChange={(selection) => set({ ...draft, selection })}
++                  catalog={catalog}
++                  disabled={disabled}
++                />
++              </>
++            )}
++          />
++        )}
++      </Catalog>
++      <SettingsGroup
++        label="评论回复规则"
++        footer={
++          cards.access.kind === "readonly"
++            ? cards.access.message
++            : "最多编辑 30000 字。保存后同步已有评论目录；下条新评论使用新规则。"
++        }
++      >
++        <textarea
++          aria-label="评论回复规则"
++          className="settings-instructions"
++          value={instructions}
++          maxLength={30000}
++          disabled={cards.access.kind === "readonly"}
++          onChange={(event) => setInstructions(event.target.value)}
++        />
++        <div className="settings-edit-actions">
++          <Button
++            size="sm"
++            disabled={instructions === view.commentInstructions.content.text}
++            onClick={() =>
++              setInstructions(view.commentInstructions.content.text)
++            }
++          >
++            放弃修改
++          </Button>
++          <Button
++            size="sm"
++            disabled={
++              cards.access.kind === "readonly" ||
++              !instructions.trim() ||
++              instructions === view.commentInstructions.content.text
++            }
++            onClick={() =>
++              void act({
++                type: "act",
++                action: {
++                  kind: "commentInstructions",
++                  botId: view.scope.botId,
++                  revision: view.commentInstructions.revision,
++                  content: { kind: "custom", text: instructions },
++                },
++              })
++            }
++          >
++            保存规则
++          </Button>
++          <Button
++            size="sm"
++            disabled={
++              cards.access.kind === "readonly" ||
++              view.commentInstructions.content.kind === "default"
++            }
++            onClick={() =>
++              void act({
++                type: "act",
++                action: {
++                  kind: "commentInstructions",
++                  botId: view.scope.botId,
++                  revision: view.commentInstructions.revision,
++                  content: { kind: "default" },
++                },
++              })
++            }
++          >
++            恢复默认
++          </Button>
++        </div>
++      </SettingsGroup>
++      <Catalog botId={view.scope.botId} backend={titleBackend} purpose="titles">
++        {(catalog) => (
++          <Editor
++            title="新会话标题"
++            section={titles}
++            save={(draft) =>
++              save(
++                "titles",
++                {
++                  byBackend: {
++                    [titleBackend]: draft.byBackend[titleBackend] ?? {
++                      enabled: false,
++                    },
++                  },
++                },
++                titles.revision,
++              )
++            }
++            render={(draft, set, disabled) => {
++              const policy: TitlePolicy = draft.byBackend[titleBackend] ?? {
++                enabled: false,
++              };
++              const setPolicy = (next: TitlePolicy) =>
++                set({
++                  byBackend: { ...draft.byBackend, [titleBackend]: next },
++                });
++              return (
++                <>
++                  <SettingsRow
++                    title="执行工具"
++                    trailing={
++                      <Select
++                        label="标题执行工具"
++                        value={titleBackend}
++                        disabled={disabled}
++                        choices={[
++                          { value: "codex-appserver", label: "Codex" },
++                          { value: "claude-agent", label: "Claude" },
++                        ]}
++                        onChange={setTitleBackend}
++                      />
++                    }
++                  />
++                  <SettingsRow
++                    title="用模型生成标题"
++                    trailing={
++                      <Switch
++                        label="用模型生成标题"
++                        value={policy.enabled}
++                        disabled={disabled}
++                        onChange={(enabled) =>
++                          setPolicy(
++                            enabled
++                              ? {
++                                  enabled: true,
++                                  model: policy.enabled ? policy.model : "",
++                                  effort: policy.enabled
++                                    ? policy.effort
++                                    : "medium",
++                                }
++                              : { enabled: false },
++                          )
++                        }
++                      />
++                    }
++                  />
++                  {policy.enabled && (
++                    <>
++                      <SettingsRow
++                        title="自定义模型 ID"
++                        description="标题允许输入未列入当前模型目录的 ID。"
++                        trailing={
++                          <Text
++                            label="标题模型 ID"
++                            value={policy.model}
++                            disabled={disabled}
++                            onChange={(model) =>
++                              setPolicy({ ...policy, model })
++                            }
++                          />
++                        }
++                      />
++                      <SettingsRow
++                        title="推理强度"
++                        trailing={
++                          <Select
++                            label="标题推理强度"
++                            value={policy.effort}
++                            disabled={disabled}
++                            choices={(
++                              catalog?.titleEfforts ?? effortOptions
++                            ).map((value) => ({ value, label: value }))}
++                            onChange={(effort) =>
++                              setPolicy({ ...policy, effort })
++                            }
++                          />
++                        }
++                      />
++                    </>
++                  )}
++                </>
++              );
++            }}
++          />
++        )}
++      </Catalog>
++      <SettingsGroup
++        label="管理员"
++        footer={
++          cards.access.kind === "readonly"
++            ? cards.access.message
++            : "注册 Agent 的所有者始终拥有管理员权限，不能在这里移除。"
++        }
++      >
++        <SettingsRow title="所有者" value={view.ownerOpenId ?? "尚未确认"} />
++        {view.administrators.openIds.map((id) => (
++          <SettingsRow
++            key={id}
++            title={id}
++            trailing={
++              <Button
++                size="sm"
++                disabled={
++                  id === view.ownerOpenId || cards.access.kind === "readonly"
++                }
++                onClick={() =>
++                  void act({
++                    type: "act",
++                    action: {
++                      kind: "adminMember",
++                      botId: view.scope.botId,
++                      openId: id,
++                      membership: "absent",
++                      revision: view.administrators.revision,
++                    },
++                  })
++                }
++              >
++                移除
++              </Button>
++            }
++          />
++        ))}
++        <SettingsRow
++          title="添加管理员 Open ID"
++          trailing={
++            <div className="settings-inline-actions">
++              <Text
++                label="管理员 Open ID"
++                value={adminId}
++                disabled={cards.access.kind === "readonly"}
++                onChange={setAdminId}
++              />
++              <Button
++                size="sm"
++                disabled={!openIdSchema.safeParse(adminId.trim()).success}
++                onClick={() =>
++                  void act({
++                    type: "act",
++                    action: {
++                      kind: "adminMember",
++                      botId: view.scope.botId,
++                      openId: adminId.trim(),
++                      membership: "present",
++                      revision: view.administrators.revision,
++                    },
++                  })
++                }
++              >
++                添加
++              </Button>
++            </div>
++          }
++        />
++      </SettingsGroup>
++      <Editor
++        title="新项目默认目录"
++        section={paths}
++        save={(draft) => save("paths", draft, paths.revision)}
++        render={(draft, set, disabled) => (
++          <SettingsRow
++            title="根目录"
++            description="只用于之后创建的空白项目。"
++            trailing={
++              <Text
++                label="新项目根目录"
++                value={draft.projectsRootDir ?? ""}
++                disabled={disabled}
++                placeholder="使用默认目录"
++                onChange={(value) => set({ projectsRootDir: value || null })}
++              />
++            }
++          />
++        )}
++      />
++      <Editor
++        title="允许的飞书群"
++        section={access}
++        save={(draft) => save("access", draft, access.revision)}
++        render={(draft, set, disabled) => (
++          <>
++            <SettingsRow
++              title="群范围"
++              description={
++                draft.allowedChats.length
++                  ? "仅响应列出的群"
++                  : "空列表表示所有群"
++              }
++              value={`${draft.allowedChats.length} 个群`}
++            />
++            {draft.allowedChats.map((id) => (
++              <SettingsRow
++                key={id}
++                title={id}
++                trailing={
++                  <Button
++                    size="sm"
++                    disabled={disabled}
++                    onClick={() =>
++                      set({
++                        allowedChats: draft.allowedChats.filter(
++                          (item) => item !== id,
++                        ),
++                      })
++                    }
++                  >
++                    移除
++                  </Button>
++                }
++              />
++            ))}
++            <SettingsRow
++              title="添加群 ID"
++              trailing={
++                <div className="settings-inline-actions">
++                  <Text
++                    label="添加群 ID"
++                    value={chatId}
++                    disabled={disabled}
++                    onChange={setChatId}
++                  />
++                  <Button
++                    size="sm"
++                    disabled={
++                      disabled ||
++                      !groupIdSchema.safeParse(chatId.trim()).success
++                    }
++                    onClick={() => {
++                      const parsed = groupIdSchema.safeParse(chatId.trim());
++                      if (parsed.success) {
++                        set({
++                          allowedChats: [...draft.allowedChats, parsed.data],
++                        });
++                        setChatId("");
++                      }
++                    }}
++                  >
++                    添加
++                  </Button>
++                </div>
++              }
++            />
++          </>
++        )}
++      />
++      <ActionNotice message={actionMessage} />
++    </>
++  );
++}
++function ProjectPanel({
++  view,
++  refresh,
++}: {
++  view: ProjectSettingsView;
++  refresh: () => Promise<void>;
++}) {
++  const [memberId, setMemberId] = useState("");
++  const [notice, setNotice] = useState<string>();
++  async function save(
++    section: keyof ProjectSettingsView["sections"],
++    patch: object,
++    revision: string,
++  ) {
++    const result = await window.bridge.settings({
++      type: "save",
++      edit: { scope: view.scope, section, revision, patch },
++    });
++    if (result.kind === "saved" && result.result.kind === "saved")
++      await refresh();
++    return result;
++  }
++  async function memberAction(
++    openId: string,
++    membership: "present" | "absent",
++  ) {
++    const result = await window.bridge.settings({
++      type: "act",
++      action: {
++        kind: "projectMember",
++        botId: view.scope.botId,
++        projectName: view.scope.projectName,
++        openId,
++        membership,
++        revision: view.members.revision,
++      },
++    });
++    setNotice(errorText(result) ?? "成员范围已保存。");
++    if (result.kind === "acted" && result.result.kind === "saved")
++      await refresh();
++  }
++  const permission = view.sections.permission,
++    response = view.sections.response,
++    compact = view.sections.compact,
++    model = view.sections.model;
++  return (
++    <>
++      <Editor
++        title="群内响应"
++        section={response}
++        save={(draft) => save("response", draft, response.revision)}
++        render={(draft, set, disabled) => (
++          <SettingsRow
++            title="不 @ 也能发起任务"
++            trailing={
++              <Switch
++                label="不 @ 也能发起任务"
++                value={draft.noMention}
++                disabled={disabled}
++                onChange={(noMention) => set({ noMention })}
++              />
++            }
++          />
++        )}
++      />
++      <Editor
++        title="工作目录权限"
++        section={permission}
++        save={(draft) => save("permission", draft, permission.revision)}
++        render={(draft, set, disabled) => (
++          <>
++            <SettingsRow
++              title="管理员权限"
++              trailing={
++                <Select
++                  label="管理员权限"
++                  value={draft.mode}
++                  disabled={disabled}
++                  choices={[
++                    { value: "qa", label: "只读问答" },
++                    { value: "write", label: "允许写入" },
++                    { value: "full", label: "完全访问" },
++                  ]}
++                  onChange={(mode) => set({ ...draft, mode })}
++                />
++              }
++            />
++            <SettingsRow
++              title="普通成员权限"
++              trailing={
++                <Select
++                  label="普通成员权限"
++                  value={draft.guestMode}
++                  disabled={disabled}
++                  choices={[
++                    { value: "qa", label: "只读问答" },
++                    { value: "write", label: "允许写入" },
++                    { value: "full", label: "完全访问" },
++                  ]}
++                  onChange={(guestMode) => set({ ...draft, guestMode })}
++                />
++              }
++            />
++            <SettingsRow
++              title="允许网络访问"
++              trailing={
++                <Switch
++                  label="允许网络访问"
++                  value={draft.network}
++                  disabled={disabled}
++                  onChange={(network) => set({ ...draft, network })}
++                />
++              }
++            />
++          </>
++        )}
++      />
++      <Editor
++        title="会话压缩"
++        section={compact}
++        save={(draft) => save("compact", draft, compact.revision)}
++        render={(draft, set, disabled) => (
++          <SettingsRow
++            title="自动压缩上下文"
++            trailing={
++              <Switch
++                label="自动压缩上下文"
++                value={draft.autoCompact}
++                disabled={disabled}
++                onChange={(autoCompact) => set({ autoCompact })}
++              />
++            }
++          />
++        )}
++      />
++      <Catalog
++        botId={view.scope.botId}
++        backend={view.identity.backend}
++        purpose="project"
++      >
++        {(catalog) => (
++          <Editor
++            title="新会话默认模型"
++            section={model}
++            save={(draft) => save("model", draft, model.revision)}
++            render={(draft, set, disabled) => (
++              <ModelChoice
++                value={draft.selection}
++                onChange={(selection) => set({ selection })}
++                catalog={catalog}
++                disabled={disabled}
++              />
++            )}
++          />
++        )}
++      </Catalog>
++      <SettingsGroup
++        label="响应成员"
++        footer={
++          permission.access.kind === "readonly"
++            ? permission.access.message
++            : "空列表表示所有群成员；Agent 管理员与所有者始终可以使用。"
++        }
++      >
++        {view.members.openIds.map((id) => (
++          <SettingsRow
++            key={id}
++            title={id}
++            trailing={
++              <Button
++                size="sm"
++                disabled={permission.access.kind === "readonly"}
++                onClick={() => void memberAction(id, "absent")}
++              >
++                移除
++              </Button>
++            }
++          />
++        ))}
++        <SettingsRow
++          title="添加成员 Open ID"
++          trailing={
++            <div className="settings-inline-actions">
++              <Text
++                label="成员 Open ID"
++                value={memberId}
++                disabled={permission.access.kind === "readonly"}
++                onChange={setMemberId}
++              />
++              <Button
++                size="sm"
++                disabled={!openIdSchema.safeParse(memberId.trim()).success}
++                onClick={() => void memberAction(memberId.trim(), "present")}
++              >
++                添加
++              </Button>
++            </div>
++          }
++        />
++        {view.members.openIds.length > 0 && (
++          <SettingsRow
++            title="允许所有成员"
++            trailing={
++              <Button
++                size="sm"
++                disabled={permission.access.kind === "readonly"}
++                onClick={async () => {
++                  const reply = await window.bridge.settings({
++                    type: "act",
++                    action: {
++                      kind: "projectAudience",
++                      botId: view.scope.botId,
++                      projectName: view.scope.projectName,
++                      audience: "all",
++                      revision: view.members.revision,
++                    },
++                  });
++                  setNotice(errorText(reply) ?? "已允许所有成员。");
++                  if (reply.kind === "acted" && reply.result.kind === "saved")
++                    await refresh();
++                }}
++              >
++                清空白名单
++              </Button>
++            }
++          />
++        )}
++      </SettingsGroup>
++      <SessionPicker view={view} />
++      <ActionNotice message={notice} />
++    </>
++  );
++}
++function SessionPicker({ view }: { view: ProjectSettingsView }) {
++  const [sessions, setSessions] = useState<
++    Extract<SettingsReply, { kind: "sessions" }>["sessions"]
++  >([]);
++  const [threadId, setThreadId] = useState("");
++  const [error, setError] = useState<string>();
++  useEffect(() => {
++    let active = true;
++    setError(undefined);
++    void window.bridge
++      .settings({
++        type: "sessions",
++        botId: view.scope.botId,
++        projectName: view.scope.projectName,
++      })
++      .then((reply) => {
++        if (!active) return;
++        if (reply.kind === "sessions")
++          setSessions(
++            reply.sessions.filter(
++              (item) => item.chatId === view.identity.chatId,
++            ),
++          );
++        else
++          setError(
++            reply.kind === "refused" ? reply.message : "话题列表暂不可用。",
++          );
++      })
++      .catch((failure: unknown) => {
++        if (active)
++          setError(
++            failure instanceof Error ? failure.message : "话题列表暂不可用。",
++          );
++      });
++    return () => {
++      active = false;
++    };
++  }, [view.scope.botId, view.scope.projectName, view.identity.chatId]);
++  const selected = sessions.find((item) => item.threadId === threadId);
++  return (
++    <SettingsGroup
++      label="话题模型"
++      footer="选择已有话题，下一轮任务使用该话题保存的模型覆盖。"
++    >
++      {error && (
++        <InlineNotice title="话题列表暂不可用" tone="warning">
++          {error}
++        </InlineNotice>
++      )}
++      <SettingsRow
++        title="选择话题"
++        trailing={
++          <select
++            aria-label="选择话题"
++            value={threadId}
++            onChange={(event) => setThreadId(event.target.value)}
++          >
++            <option value="">请选择</option>
++            {sessions.map((item) => (
++              <option key={item.threadId} value={item.threadId}>
++                {item.summary || item.threadId}
++              </option>
++            ))}
++          </select>
++        }
++      />
++      {selected && (
++        <SessionPanel
++          key={selected.threadId}
++          scope={{
++            kind: "session",
++            botId: view.scope.botId,
++            threadId: selected.threadId,
++          }}
++          expectedChatId={view.identity.chatId}
++        />
++      )}
++    </SettingsGroup>
++  );
++}
++function SessionPanel({
++  scope,
++  expectedChatId,
++}: {
++  scope: Extract<SettingsScope, { kind: "session" }>;
++  expectedChatId: string;
++}) {
++  const [view, setView] = useState<SessionSettingsView>();
++  const [error, setError] = useState<string>();
++  async function refresh() {
++    try {
++      const reply = await window.bridge.settings({ type: "read", scope });
++      if (
++        reply.kind === "view" &&
++        isSessionView(reply.view) &&
++        reply.view.identity.chatId === expectedChatId
++      ) {
++        setView(reply.view);
++        setError(undefined);
++      } else
++        setError(
++          reply.kind === "refused"
++            ? reply.message
++            : "话题身份已更改，请重新选择。",
++        );
++    } catch (failure) {
++      setError(
++        failure instanceof Error ? failure.message : "话题设置暂不可用。",
++      );
++    }
++  }
++  useEffect(() => {
++    let active = true;
++    void window.bridge
++      .settings({ type: "read", scope })
++      .then((reply) => {
++        if (!active) return;
++        if (
++          reply.kind === "view" &&
++          isSessionView(reply.view) &&
++          reply.view.identity.chatId === expectedChatId
++        )
++          setView(reply.view);
++        else
++          setError(
++            reply.kind === "refused"
++              ? reply.message
++              : "话题身份已更改，请重新选择。",
++          );
++      })
++      .catch((failure: unknown) => {
++        if (active)
++          setError(
++            failure instanceof Error ? failure.message : "话题设置暂不可用。",
++          );
++      });
++    return () => {
++      active = false;
++    };
++  }, [scope.botId, scope.threadId, expectedChatId]);
++  if (error)
++    return (
++      <InlineNotice title="话题不可编辑" tone="danger">
++        {error}
++      </InlineNotice>
++    );
++  if (!view) return <p>正在读取话题设置…</p>;
++  const model = view.sections.model;
++  return (
++    <>
++      <SettingsRow
++        title="话题身份"
++        value={`${view.identity.backend} · ${view.identity.sessionId}`}
++      />
++      <Catalog
++        botId={scope.botId}
++        backend={view.identity.backend}
++        purpose="session"
++      >
++        {(catalog) => (
++          <Editor
++            title="本话题模型"
++            section={model}
++            save={async (draft) => {
++              const reply = await window.bridge.settings({
++                type: "save",
++                edit: {
++                  scope,
++                  section: "model",
++                  revision: model.revision,
++                  patch: draft,
++                },
++              });
++              if (reply.kind === "saved" && reply.result.kind === "saved")
++                await refresh();
++              return reply;
++            }}
++            render={(draft, set, disabled) => (
++              <ModelChoice
++                value={draft.selection}
++                onChange={(selection) => set({ selection })}
++                catalog={catalog}
++                disabled={disabled}
++              />
++            )}
++          />
++        )}
++      </Catalog>
++    </>
++  );
++}
++function HostPanel({
++  view,
++  refresh,
++}: {
++  view: HostSettingsView;
++  refresh: () => Promise<void>;
++}) {
++  const [choice, setChoice] = useState<{
++    token: string;
++    displayPath: string;
++  }>();
++  const [notice, setNotice] = useState<string>();
++  const execution = view.sections.execution;
++  async function pick() {
++    const reply = await window.bridge.settings({ type: "chooseExecutable" });
++    if (reply.kind === "fileChosen") setChoice(reply.file);
++    else if (reply.kind === "refused") setNotice(reply.message);
++  }
++  async function save() {
++    if (!choice) return;
++    const reply = await window.bridge.settings({
++      type: "saveExecutable",
++      token: choice.token,
++      revision: execution.revision,
++    });
++    setNotice(
++      errorText(reply) ?? "Codex 路径已保存，将在下次 Host 启动时使用。",
++    );
++    if (reply.kind === "saved" && reply.result.kind === "saved") {
++      setChoice(undefined);
++      await refresh();
++    }
++  }
++  async function reset() {
++    const reply = await window.bridge.settings({
++      type: "save",
++      edit: {
++        scope: view.scope,
++        section: "execution",
++        revision: execution.revision,
++        patch: { codexBin: null },
++      },
++    });
++    setNotice(errorText(reply) ?? "Codex 路径已恢复自动检测。");
++    if (reply.kind === "saved" && reply.result.kind === "saved")
++      await refresh();
++  }
++  return (
++    <SettingsGroup
++      label="Codex 可执行文件"
++      footer={
++        execution.access.kind === "readonly"
++          ? execution.access.message
++          : effectText(execution)
++      }
++    >
++      <SettingsRow
++        title="已保存路径"
++        value={execution.stored.codexBin ?? "自动检测"}
++      />
++      <SettingsRow
++        title="当前运行路径"
++        value={view.runtime.codexBin ?? "未知"}
++      />
++      <SettingsRow
++        title="本次所选"
++        value={choice?.displayPath ?? "尚未选择"}
++        trailing={
++          <Button
++            size="sm"
++            disabled={execution.access.kind === "readonly"}
++            onClick={() => void pick()}
++          >
++            选择文件
++          </Button>
++        }
++      />
++      <div className="settings-edit-actions">
++        <Button
++          size="sm"
++          disabled={!choice || execution.access.kind === "readonly"}
++          onClick={() => void save()}
++        >
++          保存路径
++        </Button>
++        <Button
++          size="sm"
++          disabled={
++            execution.stored.codexBin === null ||
++            execution.access.kind === "readonly"
++          }
++          onClick={() => void reset()}
++        >
++          恢复自动检测
++        </Button>
++      </div>
++      <SettingsRow
++        title="未绑定工作目录时的运行后备"
++        value={view.runtime.fallbackCwd}
++      />
++      <ActionNotice message={notice} />
++    </SettingsGroup>
++  );
++}
++export function SettingsPanel({ target }: { target: Target }) {
++  const [view, setView] = useState<SettingsView>();
++  const [error, setError] = useState<string>();
++  async function refresh() {
++    try {
++      const reply = await window.bridge.settings({
++        type: "read",
++        scope: target,
++      });
++      if (
++        reply.kind === "view" &&
++        JSON.stringify(reply.view.scope) === JSON.stringify(target)
++      ) {
++        setView(reply.view);
++        setError(undefined);
++      } else
++        setError(
++          reply.kind === "refused"
++            ? reply.message
++            : "设置身份与当前选择不一致。",
++        );
++    } catch (failure) {
++      setError(
++        failure instanceof Error
++          ? failure.message
++          : "设置暂不可用，请重新读取。",
++      );
++    }
++  }
++  useEffect(() => {
++    let active = true;
++    setView(undefined);
++    setError(undefined);
++    void window.bridge
++      .settings({ type: "read", scope: target })
++      .then((reply) => {
++        if (!active) return;
++        if (
++          reply.kind === "view" &&
++          JSON.stringify(reply.view.scope) === JSON.stringify(target)
++        )
++          setView(reply.view);
++        else
++          setError(
++            reply.kind === "refused"
++              ? reply.message
++              : "设置身份与当前选择不一致。",
++          );
++      })
++      .catch((failure: unknown) => {
++        if (active)
++          setError(
++            failure instanceof Error
++              ? failure.message
++              : "设置暂不可用，请重新读取。",
++          );
++      });
++    return () => {
++      active = false;
++    };
++  }, [JSON.stringify(target)]);
++  if (error)
++    return (
++      <InlineNotice title="设置暂不可用" tone="danger">
++        {error}
++      </InlineNotice>
++    );
++  if (!view)
++    return (
++      <SettingsGroup label="设置">
++        <SettingsRow title="正在读取当前设置…" />
++      </SettingsGroup>
++    );
++  const content = isAgentView(view) ? (
++    <AgentPanel view={view} refresh={refresh} />
++  ) : isProjectView(view) ? (
++    <ProjectPanel view={view} refresh={refresh} />
++  ) : isHostView(view) ? (
++    <HostPanel view={view} refresh={refresh} />
++  ) : null;
++  return (
++    <>
++      <SettingsGroup
++        label="当前设置"
++        action={
++          <Button size="sm" onClick={() => void refresh()}>
++            重新读取
++          </Button>
++        }
++      >
++        <SettingsRow
++          title="配置范围"
++          value={
++            view.scope.kind === "agent"
++              ? "当前 Agent"
++              : view.scope.kind === "project"
++                ? "当前 Agent 在此群"
++                : view.scope.kind === "host"
++                  ? "这台设备"
++                  : "当前话题"
++          }
++        />
++      </SettingsGroup>
++      {content}
++    </>
++  );
++}
++export function membershipSettingsTarget(member: Membership): ProjectScope {
++  return { kind: "project", botId: member.agentId, projectName: member.name };
++}
+diff --git a/desktop/renderer/settings/settings.css b/desktop/renderer/settings/settings.css
+new file mode 100644
+index 0000000000000000000000000000000000000000..4effaf3a01e8eaf66d86e8f4bb0068106e464bb2
+--- /dev/null
++++ b/desktop/renderer/settings/settings.css
+@@ -0,0 +1,60 @@
++.settings-edit-actions,
++.settings-inline-actions {
++  display: flex;
++  gap: 8px;
++  align-items: center;
++  justify-content: flex-end;
++  flex-wrap: wrap;
++  padding: 10px 14px;
++}
++.settings-inline-actions {
++  padding: 0;
++}
++.settings-field {
++  width: min(280px, 100%);
++  box-sizing: border-box;
++}
++.settings-number {
++  width: 86px;
++  box-sizing: border-box;
++}
++.settings-instructions {
++  box-sizing: border-box;
++  display: block;
++  width: calc(100% - 28px);
++  min-height: 180px;
++  margin: 14px;
++  resize: vertical;
++  font: inherit;
++  line-height: 1.5;
++}
++.settings-advanced-toggle {
++  display: block;
++  width: 100%;
++  padding: 12px 14px;
++  text-align: left;
++  border: 0;
++  background: transparent;
++  color: var(--color-text-secondary);
++  font: inherit;
++}
++.settings-advanced-toggle:hover {
++  text-decoration: underline;
++}
++.desktop-job {
++  width: 100%;
++  box-sizing: border-box;
++}
++.desktop-job .desktop-registration-url {
++  box-sizing: border-box;
++  width: 100%;
++  max-width: 100%;
++  align-self: stretch;
++}
++.desktop-job .desktop-registration-url input {
++  box-sizing: border-box;
++  display: block;
++  width: 100%;
++  min-width: 0;
++  user-select: text;
++}
+diff --git a/desktop/shared/bridge.ts b/desktop/shared/bridge.ts
+index ad5cef298e93bb47a9c2710497706700d1ef0e96..e9257115ea18da7d532f94c0d2fead32659902df 100644
+--- a/desktop/shared/bridge.ts
++++ b/desktop/shared/bridge.ts
+@@ -1,12 +1,13 @@
+ import { z } from "zod";
++import type { SettingsReply, SettingsRequest } from "./settings";
+ 
+ export const agentIdSchema = z
+   .string()
+-  .regex(/^cli_[A-Za-z0-9_-]{1,160}$/)
++  .regex(/^cli_[A-Za-z0-9_-]{1,200}$/)
+   .brand<"AgentId">();
+ export const groupIdSchema = z
+   .string()
+-  .regex(/^oc_[A-Za-z0-9_-]{1,160}$/)
++  .regex(/^oc_[A-Za-z0-9_-]{1,200}$/)
+   .brand<"GroupId">();
+ export const membershipIdSchema = z
+   .string()
+@@ -89,6 +90,7 @@ export const commandSchema = z.discriminatedUnion("type", [
+       enabled: z.boolean(),
+     })
+     .strict(),
++  z.object({type:z.literal("deleteAgent"),agentId:agentIdSchema}).strict(),
+   z.object({ type: z.literal("cancelJob"), jobId: jobIdSchema }).strict(),
+   z
+     .object({ type: z.literal("openJobAuthorization"), jobId: jobIdSchema })
+@@ -191,6 +193,7 @@ export type CommandReply = { command: Command["type"]; result: CommandResult };
+ export interface DesktopBridge {
+   watch(listener: (snapshot: DesktopSnapshot) => void): () => void;
+   run(command: Command): Promise<CommandResult>;
++  settings(request: SettingsRequest): Promise<SettingsReply>;
+ }
+ declare global {
+   interface Window {
+diff --git a/desktop/shared/settings.ts b/desktop/shared/settings.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ff11440eda86b699f833d23404187614ae51c998
+--- /dev/null
++++ b/desktop/shared/settings.ts
+@@ -0,0 +1,523 @@
++import { z } from "zod";
++import { agentIdSchema, folderTokenSchema, groupIdSchema } from "./bridge";
++
++const effort = z.enum([
++  "none",
++  "minimal",
++  "low",
++  "medium",
++  "high",
++  "xhigh",
++  "max",
++  "ultra",
++]);
++export const openIdSchema = z.string().regex(/^ou_[A-Za-z0-9_-]{1,200}$/);
++const selection = z.discriminatedUnion("kind", [
++  z.object({ kind: z.literal("default") }).strict(),
++  z
++    .object({
++      kind: z.literal("explicit"),
++      model: z.string().trim().min(1).max(1000),
++      effort,
++    })
++    .strict(),
++]);
++const title = z.discriminatedUnion("enabled", [
++  z.object({ enabled: z.literal(false) }).strict(),
++  z
++    .object({
++      enabled: z.literal(true),
++      model: z.string().trim().min(1).max(1000),
++      effort,
++    })
++    .strict(),
++]);
++const cli = z.object({
++  agents: z.object({ claude: z.boolean(), codex: z.boolean() }),
++  notifyScope: z.enum(["all", "bound_projects", "none"]),
++  keepAwake: z.object({ enabled: z.boolean() }),
++  approval: z.object({ enabled: z.boolean(), timeoutSeconds: z.number() }),
++  taskCompletion: z.object({
++    enabled: z.boolean(),
++    replyEnabled: z.boolean(),
++    replyTimeoutSeconds: z.number(),
++  }),
++  allowCache: z.object({ enabled: z.boolean(), scope: z.literal("session") }),
++  presence: z.object({
++    enabled: z.boolean(),
++    platform: z.enum(["auto", "macos"]),
++    idleThresholdSeconds: z.number(),
++  }),
++});
++export const agentSectionSchemas = {
++  cards: z.object({
++    showToolCalls: z.boolean(),
++    showModel: z.enum(["off", "running", "always"]),
++  }),
++  run: z.object({
++    maxConcurrentRuns: z.number(),
++    runIdleTimeoutSeconds: z.number(),
++    pendingPolicy: z.enum(["steer", "queue"]),
++  }),
++  completion: z.object({
++    mode: z.enum(["manual", "long", "failures", "always"]),
++    longTaskMinutes: z.number(),
++  }),
++  cliBridge: cli,
++  comments: z.object({ backend: z.string(), selection }),
++  titles: z.object({ byBackend: z.record(title) }),
++  paths: z.object({ projectsRootDir: z.string().nullable() }),
++  access: z.object({ allowedChats: z.array(groupIdSchema).max(1000) }),
++};
++export const projectSectionSchemas = {
++  permission: z.object({
++    mode: z.enum(["qa", "write", "full"]),
++    guestMode: z.enum(["qa", "write", "full"]),
++    network: z.boolean(),
++  }),
++  response: z.object({ noMention: z.boolean() }),
++  compact: z.object({ autoCompact: z.boolean() }),
++  model: z.object({ selection }),
++};
++export const sessionSectionSchemas = { model: z.object({ selection }) };
++export const hostSectionSchemas = {
++  execution: z.object({ codexBin: z.string().nullable() }),
++};
++
++const scope = z.discriminatedUnion("kind", [
++  z.object({ kind: z.literal("host") }).strict(),
++  z.object({ kind: z.literal("agent"), botId: agentIdSchema }).strict(),
++  z
++    .object({
++      kind: z.literal("project"),
++      botId: agentIdSchema,
++      projectName: z.string().trim().min(1).max(1000),
++    })
++    .strict(),
++  z
++    .object({
++      kind: z.literal("session"),
++      botId: agentIdSchema,
++      threadId: z.string().trim().min(1).max(1000),
++    })
++    .strict(),
++]);
++export type SettingsScope = z.infer<typeof scope>;
++const access = z.discriminatedUnion("kind", [
++  z.object({ kind: z.literal("writable") }),
++  z.object({
++    kind: z.literal("readonly"),
++    reason: z.enum(["preview", "owner-offline", "unsupported-host", "stale"]),
++    message: z.string(),
++  }),
++]);
++const effect = z.object({
++  fields: z.array(z.string()),
++  when: z.enum([
++    "next-message",
++    "next-turn",
++    "task-completion",
++    "new-session",
++    "new-comment",
++    "new-project",
++    "next-hook",
++    "next-presence-check",
++    "restart",
++    "session-rebind",
++    "immediate",
++  ]),
++  detail: z.string(),
++});
++const section = <T extends z.ZodTypeAny>(value: T) =>
++  z.object({
++    stored: value,
++    effective: value,
++    revision: z.string(),
++    access,
++    apply: z.array(effect),
++  });
++const sections = <T extends Record<string, z.ZodTypeAny>>(items: T) =>
++  z.object(
++    Object.fromEntries(
++      Object.entries(items).map(([key, value]) => [key, section(value)]),
++    ) as { [K in keyof T]: ReturnType<typeof section<T[K]>> },
++  );
++const voice = z.object({
++  enabled: z.boolean(),
++  feishu: z.object({
++    state: z.string(),
++    message: z.string(),
++    checkedAt: z.number().optional(),
++    retryAt: z.number().optional(),
++    issue: z.string().optional(),
++    code: z.string().optional(),
++    detail: z.string().optional(),
++  }),
++  result: z.string(),
++  grantUrl: z.string(),
++});
++const hook = z.object({
++  agent: z.enum(["claude", "codex"]),
++  status: z.enum([
++    "installed",
++    "not_installed",
++    "needs_repair",
++    "conflict_agent2lark",
++  ]),
++  details: z.array(z.string()),
++});
++export const agentViewSchema = z.object({
++  scope: z.object({ kind: z.literal("agent"), botId: agentIdSchema }),
++  sections: sections(agentSectionSchemas),
++  ownerOpenId: z.string().nullable(),
++  administrators: z.object({
++    openIds: z.array(z.string()),
++    revision: z.string(),
++  }),
++  voice,
++  cliRuntime: z.object({
++    enabled: z.boolean(),
++    running: z.boolean(),
++    revision: z.string(),
++    hooks: z.object({ claude: hook, codex: hook }),
++    keepAwakeSupported: z.boolean(),
++  }),
++  commentInstructions: z.object({
++    content: z.discriminatedUnion("kind", [
++      z.object({ kind: z.literal("default"), text: z.string() }),
++      z.object({ kind: z.literal("custom"), text: z.string() }),
++    ]),
++    revision: z.string(),
++    maxEditLength: z.number(),
++  }),
++});
++export const projectViewSchema = z.object({
++  scope: z.object({
++    kind: z.literal("project"),
++    botId: agentIdSchema,
++    projectName: z.string(),
++  }),
++  sections: sections(projectSectionSchemas),
++  identity: z.object({
++    chatId: z.string(),
++    backend: z.string(),
++    cwd: z.string(),
++    kind: z.string(),
++  }),
++  members: z.object({ openIds: z.array(z.string()), revision: z.string() }),
++});
++export const sessionViewSchema = z.object({
++  scope: z.object({
++    kind: z.literal("session"),
++    botId: agentIdSchema,
++    threadId: z.string(),
++  }),
++  sections: sections(sessionSectionSchemas),
++  identity: z.object({
++    backend: z.string(),
++    sessionId: z.string(),
++    chatId: z.string(),
++    projectName: z.string().nullable(),
++  }),
++});
++export const hostViewSchema = z.object({
++  scope: z.object({ kind: z.literal("host") }),
++  sections: sections(hostSectionSchemas),
++  runtime: z.object({
++    codexBin: z.string().nullable(),
++    fallbackCwd: z.string(),
++    platform: z.string(),
++  }),
++});
++export const settingsViewSchema = z.union([
++  agentViewSchema,
++  projectViewSchema,
++  sessionViewSchema,
++  hostViewSchema,
++]);
++export type AgentSettingsView = z.infer<typeof agentViewSchema>;
++export type ProjectSettingsView = z.infer<typeof projectViewSchema>;
++export type SessionSettingsView = z.infer<typeof sessionViewSchema>;
++export type HostSettingsView = z.infer<typeof hostViewSchema>;
++export type SettingsView =
++  | AgentSettingsView
++  | ProjectSettingsView
++  | SessionSettingsView
++  | HostSettingsView;
++export type ModelSelection = z.infer<typeof selection>;
++export type TitlePolicy = z.infer<typeof title>;
++
++const editablePatches: Record<
++  SettingsScope["kind"],
++  Record<string, z.ZodTypeAny>
++> = {
++  agent: Object.fromEntries(
++    Object.entries(agentSectionSchemas).map(([key, value]) => [
++      key,
++      value.partial().strict(),
++    ]),
++  ),
++  project: Object.fromEntries(
++    Object.entries(projectSectionSchemas).map(([key, value]) => [
++      key,
++      value.partial().strict(),
++    ]),
++  ),
++  session: { model: sessionSectionSchemas.model.partial().strict() },
++  host: { execution: hostSectionSchemas.execution.partial().strict() },
++};
++export const editSchema = z
++  .object({
++    scope,
++    section: z.string(),
++    revision: z.string().min(1),
++    patch: z.unknown(),
++  })
++  .strict()
++  .superRefine((edit, ctx) => {
++    const patch = editablePatches[edit.scope.kind][edit.section];
++    if (!patch || !patch.safeParse(edit.patch).success)
++      ctx.addIssue({
++        code: z.ZodIssueCode.custom,
++        message: "Unsupported settings patch",
++      });
++  });
++export type SettingsEdit =
++  | {
++      [K in keyof typeof agentSectionSchemas]: {
++        scope: Extract<SettingsScope, { kind: "agent" }>;
++        section: K;
++        revision: string;
++        patch: Partial<z.infer<(typeof agentSectionSchemas)[K]>>;
++      };
++    }[keyof typeof agentSectionSchemas]
++  | {
++      [K in keyof typeof projectSectionSchemas]: {
++        scope: Extract<SettingsScope, { kind: "project" }>;
++        section: K;
++        revision: string;
++        patch: Partial<z.infer<(typeof projectSectionSchemas)[K]>>;
++      };
++    }[keyof typeof projectSectionSchemas]
++  | {
++      scope: Extract<SettingsScope, { kind: "session" }>;
++      section: "model";
++      revision: string;
++      patch: Partial<z.infer<typeof sessionSectionSchemas.model>>;
++    }
++  | {
++      scope: Extract<SettingsScope, { kind: "host" }>;
++      section: "execution";
++      revision: string;
++      patch: Partial<z.infer<typeof hostSectionSchemas.execution>>;
++    };
++export const actionSchema = z.discriminatedUnion("kind", [
++  z
++    .object({
++      kind: z.literal("setCliBridgeEnabled"),
++      botId: agentIdSchema,
++      enabled: z.boolean(),
++      revision: z.string(),
++    })
++    .strict(),
++  z
++    .object({ kind: z.literal("repairCliHooks"), botId: agentIdSchema })
++    .strict(),
++  z
++    .object({
++      kind: z.literal("voice"),
++      botId: agentIdSchema,
++      action: z
++        .object({
++          action: z.enum(["enable", "test", "disable", "refreshPermission"]),
++        })
++        .strict(),
++    })
++    .strict(),
++  z
++    .object({
++      kind: z.literal("adminMember"),
++      botId: agentIdSchema,
++      openId: openIdSchema,
++      membership: z.enum(["present", "absent"]),
++      revision: z.string(),
++    })
++    .strict(),
++  z
++    .object({
++      kind: z.literal("projectMember"),
++      botId: agentIdSchema,
++      projectName: z.string().trim().min(1).max(1000),
++      openId: openIdSchema,
++      membership: z.enum(["present", "absent"]),
++      revision: z.string(),
++    })
++    .strict(),
++  z
++    .object({
++      kind: z.literal("projectAudience"),
++      botId: agentIdSchema,
++      projectName: z.string().trim().min(1).max(1000),
++      audience: z.literal("all"),
++      revision: z.string(),
++    })
++    .strict(),
++  z
++    .object({
++      kind: z.literal("commentInstructions"),
++      botId: agentIdSchema,
++      revision: z.string(),
++      content: z.discriminatedUnion("kind", [
++        z.object({ kind: z.literal("default") }).strict(),
++        z
++          .object({
++            kind: z.literal("custom"),
++            text: z.string().min(1).max(30000),
++          })
++          .strict(),
++      ]),
++    })
++    .strict(),
++]);
++export type SettingsAction = z.infer<typeof actionSchema>;
++export const modelQuerySchema = z
++  .object({
++    botId: agentIdSchema,
++    backend: z.string().trim().min(1).max(1000),
++    purpose: z.enum(["project", "session", "comments", "titles"]),
++  })
++  .strict();
++export type ModelQuery = z.infer<typeof modelQuerySchema>;
++export const modelCatalogSchema = z.object({
++  backend: z.string(),
++  state: z.enum(["ready", "fallback", "unavailable"]),
++  source: z.literal("backend-provided"),
++  observedAt: z.string(),
++  error: z.string().optional(),
++  titleEfforts: z.array(effort),
++  models: z.array(
++    z.object({
++      id: z.string(),
++      displayName: z.string(),
++      description: z.string(),
++      supportedEfforts: z.array(effort),
++      defaultEffort: effort,
++      isDefault: z.boolean(),
++      hidden: z.boolean(),
++    }),
++  ),
++});
++export type ModelCatalog = z.infer<typeof modelCatalogSchema>;
++export const settingsRequestSchema = z.discriminatedUnion("type", [
++  z.object({ type: z.literal("read"), scope }).strict(),
++  z.object({ type: z.literal("save"), edit: editSchema }).strict(),
++  z.object({ type: z.literal("act"), action: actionSchema }).strict(),
++  z.object({ type: z.literal("models"), query: modelQuerySchema }).strict(),
++  z
++    .object({
++      type: z.literal("sessions"),
++      botId: agentIdSchema,
++      projectName: z.string().trim().min(1).max(1000),
++    })
++    .strict(),
++  z.object({ type: z.literal("chooseExecutable") }).strict(),
++  z
++    .object({
++      type: z.literal("saveExecutable"),
++      token: folderTokenSchema,
++      revision: z.string().min(1),
++    })
++    .strict(),
++]);
++export type ParsedSettingsRequest = z.infer<typeof settingsRequestSchema>;
++export type SettingsRequest =
++  | { type: "read"; scope: SettingsScope }
++  | { type: "save"; edit: z.infer<typeof editSchema> }
++  | { type: "act"; action: SettingsAction }
++  | { type: "models"; query: ModelQuery }
++  | {
++      type: "sessions";
++      botId: z.infer<typeof agentIdSchema>;
++      projectName: string;
++    }
++  | { type: "chooseExecutable" }
++  | { type: "saveExecutable"; token: string; revision: string };
++const sectionView = z.object({
++  scope,
++  section: z.string(),
++  value: section(z.unknown()),
++});
++const saveSchema = z.discriminatedUnion("kind", [
++  z.object({
++    kind: z.literal("saved"),
++    section: sectionView,
++    effects: z.array(effect),
++  }),
++  z.object({ kind: z.literal("conflict"), current: sectionView }),
++  z.object({
++    kind: z.literal("rejected"),
++    fields: z.array(z.object({ field: z.string(), message: z.string() })),
++  }),
++  z.object({ kind: z.literal("unavailable"), reason: access }),
++]);
++const actionResultSchema = z.discriminatedUnion("kind", [
++  z.object({
++    kind: z.literal("saved"),
++    view: z.union([agentViewSchema, projectViewSchema]),
++    effects: z.array(effect),
++    warnings: z.array(z.string()),
++  }),
++  z.object({
++    kind: z.literal("conflict"),
++    view: z.union([agentViewSchema, projectViewSchema]),
++  }),
++  z.object({
++    kind: z.literal("rejected"),
++    fields: z.array(z.object({ field: z.string(), message: z.string() })),
++  }),
++  z.object({ kind: z.literal("unavailable"), reason: access }),
++  z.object({
++    kind: z.literal("diverged"),
++    view: agentViewSchema,
++    message: z.string(),
++  }),
++]);
++export const settingsReplySchema = z.discriminatedUnion("kind", [
++  z.object({
++    kind: z.literal("view"),
++    view: z.union([
++      agentViewSchema,
++      projectViewSchema,
++      sessionViewSchema,
++      hostViewSchema,
++    ]),
++  }),
++  z.object({ kind: z.literal("saved"), result: saveSchema }),
++  z.object({ kind: z.literal("acted"), result: actionResultSchema }),
++  z.object({ kind: z.literal("models"), catalog: modelCatalogSchema }),
++  z.object({
++    kind: z.literal("sessions"),
++    sessions: z.array(
++      z.object({
++        threadId: z.string(),
++        chatId: z.string(),
++        summary: z.string(),
++        backend: z.string(),
++        model: z.string().optional(),
++        createdAt: z.number(),
++        updatedAt: z.number(),
++      }),
++    ),
++  }),
++  z.object({
++    kind: z.literal("fileChosen"),
++    file: z.object({ token: z.string().uuid(), displayPath: z.string() }),
++  }),
++  z.object({ kind: z.literal("cancelled") }),
++  z.object({
++    kind: z.literal("refused"),
++    code: z.string(),
++    message: z.string(),
++  }),
++]);
++export type SettingsReply = z.infer<typeof settingsReplySchema>;
+diff --git a/tests/desktop.test.ts b/tests/desktop.test.ts
+index f2c0fd70f14c7d54fddf93d706519f722875ee6e..59ebe6d4f9b0cbd37436f44c1aee1ba98bb52a70 100644
+--- a/tests/desktop.test.ts
++++ b/tests/desktop.test.ts
+@@ -1,6 +1,6 @@
+ import { test } from "node:test";
+ import assert from "node:assert/strict";
+-import { mkdtemp, rm, mkdir, realpath } from "node:fs/promises";
++import { mkdtemp, rm, mkdir, realpath, writeFile } from "node:fs/promises";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import QRCode from "qrcode";
+@@ -12,6 +12,7 @@ import {
+ } from "../desktop/shared/bridge";
+ import {
+   FolderCapabilities,
++  ExecutableCapabilities,
+   authorizationUrl,
+   registrationUrl,
+   trustedSender,
+@@ -23,6 +24,7 @@ import {
+ } from "../desktop/main/host";
+ import { DesktopController } from "../desktop/main/controller";
+ import { projectState, stateSchema } from "../desktop/main/projection";
++import {settingsRequestSchema} from "../desktop/shared/settings";
+ 
+ const agentId = agentIdSchema.parse("cli_test");
+ const registrationSession = "12345678-1234-4234-8234-123456789012";
+@@ -182,6 +184,430 @@ test("IPC denies foreign documents, subframes, arbitrary capabilities and malfor
+   ])
+     assert.equal(commandSchema.safeParse(command).success, false);
+ });
++test("settings IPC rejects raw config access and oversized or malformed section edits", () => {
++  const scope = { kind: "agent", botId: agentId };
++  for (const request of [
++    { type: "read", scope: { kind: "agent", botId: "../../config.json" } },
++    {
++      type: "save",
++      edit: {
++        scope,
++        section: "config",
++        revision: "r1",
++        patch: { secret: "x" },
++      },
++    },
++    {
++      type: "save",
++      edit: {
++        scope,
++        section: "run",
++        revision: "r1",
++        patch: { maxConcurrentRuns: "50" },
++      },
++    },
++    {
++      type: "save",
++      edit: {
++        scope,
++        section: "cards",
++        revision: "r1",
++        patch: { showModel: "running", secret: "x" },
++      },
++    },
++    {
++      type: "act",
++      action: {
++        kind: "commentInstructions",
++        botId: agentId,
++        revision: "r1",
++        content: { kind: "custom", text: "x".repeat(30001) },
++      },
++    },
++    { type: "saveExecutable", token: "/usr/bin/codex", revision: "r1" },
++  ])
++    assert.equal(settingsRequestSchema.safeParse(request).success, false);
++  assert.equal(
++    settingsRequestSchema.safeParse({
++      type: "act",
++      action: {
++        kind: "commentInstructions",
++        botId: agentId,
++        revision: "r1",
++        content: { kind: "custom", text: "x".repeat(30000) },
++      },
++    }).success,
++    true,
++  );
++  assert.equal(agentIdSchema.safeParse(`cli_${"a".repeat(200)}`).success, true);
++  assert.equal(
++    agentIdSchema.safeParse(`cli_${"a".repeat(201)}`).success,
++    false,
++  );
++});
++test("settings reads stay scoped and section saves carry core revisions", async () => {
++  const f = fixture();
++  const hostView = {
++    scope: { kind: "host" },
++    sections: {
++      execution: {
++        stored: { codexBin: null },
++        effective: { codexBin: null },
++        revision: "host-r1",
++        access: { kind: "writable" },
++        apply: [],
++      },
++    },
++    runtime: { codexBin: null, fallbackCwd: "/tmp", platform: "darwin" },
++  };
++  f.setIntercept((path, init) => {
++    if (path === "/api/settings/host" && init?.method === "PATCH")
++      return Promise.resolve(
++        Response.json({
++          kind: "saved",
++          section: {
++            scope: { kind: "host" },
++            section: "execution",
++            value: {
++              ...hostView.sections.execution,
++              revision: "host-r2",
++              stored: { codexBin: null },
++            },
++          },
++          effects: [
++            { fields: ["codexBin"], when: "restart", detail: "下次启动生效" },
++          ],
++        }),
++      );
++    if (path === "/api/settings/host")
++      return Promise.resolve(Response.json(hostView));
++    if (
++      path ===
++      "/api/bots/cli_test/models?backend=codex-appserver&purpose=project"
++    )
++      return Promise.resolve(
++        Response.json({
++          backend: "codex-appserver",
++          models: [],
++          state: "unavailable",
++          source: "backend-provided",
++          observedAt: "2026-09-25T00:00:00Z",
++          error: "backend offline",
++          titleEfforts: [],
++        }),
++      );
++    return undefined;
++  });
++  await f.controller.start();
++  try {
++    const read = await f.controller.settings(
++      settingsRequestSchema.parse({ type: "read", scope: { kind: "host" } }),
++    );
++    assert.equal(read.kind, "view");
++    const models = await f.controller.settings(
++      settingsRequestSchema.parse({
++        type: "models",
++        query: {
++          botId: agentId,
++          backend: "codex-appserver",
++          purpose: "project",
++        },
++      }),
++    );
++    assert.equal(models.kind, "models");
++    const saved = await f.controller.settings(
++      settingsRequestSchema.parse({
++        type: "save",
++        edit: {
++          scope: { kind: "host" },
++          section: "execution",
++          revision: "host-r1",
++          patch: { codexBin: null },
++        },
++      }),
++    );
++    assert.equal(saved.kind, "saved");
++    const write = f.requests.find(
++      (item) =>
++        item.path === "/api/settings/host" && item.init?.method === "PATCH",
++    );
++    assert.deepEqual(JSON.parse(String(write?.init?.body)), {
++      section: "execution",
++      revision: "host-r1",
++      patch: { codexBin: null },
++    });
++  } finally {
++    await f.controller.quit();
++  }
++});
++test("old Host returns an explicit unsupported result", async () => {
++  const f = fixture();
++  f.setIntercept((path) =>
++    path === "/api/bots/cli_test/settings"
++      ? Promise.resolve(Response.json({ message: "missing" }, { status: 404 }))
++      : undefined,
++  );
++  await f.controller.start();
++  try {
++    const result = await f.controller.settings(
++      settingsRequestSchema.parse({
++        type: "read",
++        scope: { kind: "agent", botId: agentId },
++      }),
++    );
++    assert.deepEqual(result, {
++      kind: "refused",
++      code: "unsupported-host",
++      message: "当前 Bridge 版本不支持桌面设置，请更新后重试。",
++    });
++  } finally {
++    await f.controller.quit();
++  }
++});
++test("settings save rejects mismatched returned scope", async () => {
++  const f = fixture();
++  f.setIntercept((path, init) =>
++    path === "/api/settings/host" && init?.method === "PATCH"
++      ? Promise.resolve(
++          Response.json({
++            kind: "saved",
++            section: {
++              scope: { kind: "agent", botId: agentId },
++              section: "execution",
++              value: {
++                stored: { codexBin: null },
++                effective: { codexBin: null },
++                revision: "r2",
++                access: { kind: "writable" },
++                apply: [],
++              },
++            },
++            effects: [],
++          }),
++        )
++      : undefined,
++  );
++  await f.controller.start();
++  try {
++    const result = await f.controller.settings(
++      settingsRequestSchema.parse({
++        type: "save",
++        edit: {
++          scope: { kind: "host" },
++          section: "execution",
++          revision: "r1",
++          patch: { codexBin: null },
++        },
++      }),
++    );
++    assert.equal(result.kind, "refused");
++    if (result.kind === "refused") assert.equal(result.code, "scope-mismatch");
++  } finally {
++    await f.controller.quit();
++  }
++});
++test("section conflict preserves the authoritative current revision", async () => {
++  const f = fixture();
++  f.setIntercept((path, init) =>
++    path === "/api/settings/host" && init?.method === "PATCH"
++      ? Promise.resolve(
++          Response.json(
++            {
++              kind: "conflict",
++              current: {
++                scope: { kind: "host" },
++                section: "execution",
++                value: {
++                  stored: { codexBin: "/new/codex" },
++                  effective: { codexBin: "/old/codex" },
++                  revision: "new-r2",
++                  access: { kind: "writable" },
++                  apply: [],
++                },
++              },
++            },
++            { status: 409 },
++          ),
++        )
++      : undefined,
++  );
++  await f.controller.start();
++  try {
++    const result = await f.controller.settings(
++      settingsRequestSchema.parse({
++        type: "save",
++        edit: {
++          scope: { kind: "host" },
++          section: "execution",
++          revision: "old-r1",
++          patch: { codexBin: null },
++        },
++      }),
++    );
++    assert.equal(result.kind, "saved");
++    if (result.kind === "saved") {
++      assert.equal(result.result.kind, "conflict");
++      if (result.result.kind === "conflict")
++        assert.equal(result.result.current.value.revision, "new-r2");
++    }
++  } finally {
++    await f.controller.quit();
++  }
++});
++test("Codex executable file tokens stay within the requesting window", async () => {
++  const home = await mkdtemp(join(tmpdir(), "vonvon-executable-"));
++  const path = join(home, "codex");
++  await writeFile(path, "binary");
++  try {
++    const caps = new ExecutableCapabilities();
++    const choice = await caps.grant(path, 10);
++    assert.equal(await caps.resolve(choice.token, 10), await realpath(path));
++    await assert.rejects(caps.resolve(choice.token, 11));
++    caps.clear();
++    await assert.rejects(caps.resolve(choice.token, 10));
++  } finally {
++    await rm(home, { recursive: true, force: true });
++  }
++});
++test("generic IPC cannot save a Codex path while a granted file can", async () => {
++  const home = await mkdtemp(join(tmpdir(), "vonvon-codex-picker-"));
++  const path = join(home, "codex");
++  await writeFile(path, "binary");
++  const f = fixture();
++  f.setIntercept((route, init) =>
++    route === "/api/settings/host" && init?.method === "PATCH"
++      ? Promise.resolve(
++          Response.json({
++            kind: "saved",
++            section: {
++              scope: { kind: "host" },
++              section: "execution",
++              value: {
++                stored: { codexBin: path },
++                effective: { codexBin: null },
++                revision: "r2",
++                access: { kind: "writable" },
++                apply: [],
++              },
++            },
++            effects: [],
++          }),
++        )
++      : undefined,
++  );
++  await f.controller.start();
++  try {
++    const direct = await f.controller.settings(
++      settingsRequestSchema.parse({
++        type: "save",
++        edit: {
++          scope: { kind: "host" },
++          section: "execution",
++          revision: "r1",
++          patch: { codexBin: path },
++        },
++      }),
++    );
++    assert.equal(direct.kind, "refused");
++    if (direct.kind === "refused")
++      assert.equal(direct.code, "file-picker-required");
++    assert.equal(
++      f.requests.some(
++        (item) =>
++          item.path === "/api/settings/host" && item.init?.method === "PATCH",
++      ),
++      false,
++    );
++    const caps = new ExecutableCapabilities();
++    const chosen = await caps.grant(path, 12);
++    const resolved = await caps.resolve(chosen.token, 12);
++    const saved = await f.controller.saveExecutable(resolved, "r1");
++    assert.equal(saved.kind, "saved");
++    const write = f.requests.find(
++      (item) =>
++        item.path === "/api/settings/host" && item.init?.method === "PATCH",
++    );
++    assert.deepEqual(JSON.parse(String(write?.init?.body)), {
++      section: "execution",
++      revision: "r1",
++      patch: { codexBin: await realpath(path) },
++    });
++  } finally {
++    await f.controller.quit();
++    await rm(home, { recursive: true, force: true });
++  }
++});
++test("Agent removal rechecks stopped state before using the delete route", async () => {
++  const f = fixture();
++  await f.controller.start();
++  try {
++    const blocked = await f.controller.run(
++      { type: "deleteAgent", agentId },
++      async () => "/tmp",
++    );
++    assert.equal(blocked.kind, "refused");
++    assert.equal(
++      f.requests.some((item) => item.init?.method === "DELETE"),
++      false,
++    );
++    f.setState({
++      ...coreState(),
++      bots: coreState().bots.map((bot) => ({
++        ...bot,
++        active: false,
++        running: false,
++        connection: "disconnected",
++      })),
++    });
++    const removed = await f.controller.run(
++      { type: "deleteAgent", agentId },
++      async () => "/tmp",
++    );
++    assert.equal(removed.kind, "applied");
++    assert.equal(
++      f.requests.some(
++        (item) =>
++          item.path === "/api/bots/cli_test" && item.init?.method === "DELETE",
++      ),
++      true,
++    );
++  } finally {
++    await f.controller.quit();
++  }
++});
++test("Agent removal preserves its list entry when core rejects deletion", async () => {
++  const f = fixture();
++  f.setState({
++    ...coreState(),
++    bots: coreState().bots.map((bot) => ({
++      ...bot,
++      active: false,
++      running: false,
++      connection: "disconnected",
++    })),
++  });
++  f.setIntercept((path, init) =>
++    path === "/api/bots/cli_test" && init?.method === "DELETE"
++      ? Promise.resolve(
++          Response.json({ message: "Agent 仍有运行中会话" }, { status: 409 }),
++        )
++      : undefined,
++  );
++  await f.controller.start();
++  try {
++    const result = await f.controller.run(
++      { type: "deleteAgent", agentId },
++      async () => "/tmp",
++    );
++    assert.equal(result.kind, "refused");
++    assert.equal(
++      f.controller.current().agents.some((agent) => agent.id === agentId),
++      true,
++    );
++  } finally {
++    await f.controller.quit();
++  }
++});
+ test("authorization browser capability only permits exact official HTTPS host", () => {
+   assert.equal(
+     authorizationUrl("https://auth.openai.com/codex/device"),

@@ -59,7 +59,7 @@ export function routeFromSearch(destination: Destination, snapshot: DesktopSnaps
   const selection = destination.selection;
   if (!selection || selection.kind === 'overview') return {route: {kind: 'list', view: destination.view ?? 'agents'}};
   if (selection.kind === 'agent') {
-    if (!snapshot.agents.some(item => item.id === selection.id)) return {route: {kind: 'list', view: 'agents'}, missing: '这个 Agent 已不存在，已返回 Agent 列表。'};
+    if (!snapshot.agents.some(item => item.id === selection.id)) return {route: {kind: 'list', view: 'agents'}, missing: '这个 Bot 已不存在，已返回 Bot 列表。'};
     return {route: {kind: 'agent', id: selection.id, pane: destination.detail?.kind === 'agent-settings' ? {kind: 'settings'} : {kind: 'groups'}}};
   }
   if (selection.kind === 'group') {

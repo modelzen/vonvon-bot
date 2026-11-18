@@ -788,7 +788,7 @@ function AgentPanel({
           <>
             <SettingsRow
               title="提醒方式"
-              description="控制 Agent 任务结束后何时发送提醒。"
+              description="控制 Bot 任务结束后何时发送提醒。"
               trailing={
                 <Select
                   label="提醒方式"
@@ -903,7 +903,7 @@ function AgentPanel({
           title="启用咖啡一下"
           description={
             !view.ownerOpenId
-              ? "需要先确认 Agent 所有者。"
+              ? "需要先确认 Bot 所有者。"
               : view.cliRuntime.running
                 ? "服务运行中"
                 : "服务未运行"
@@ -1401,14 +1401,14 @@ function AgentPanel({
       </SettingsGroup>
       </details>
       <details className="agent-settings-disclosure">
-        <summary><span>管理员<small>管理可操作 Agent 的人</small></span></summary>
+        <summary><span>管理员<small>管理可操作 Bot 的人</small></span></summary>
       <SettingsGroup
         label="管理员"
         id={settingAnchor("管理员")}
         footer={
           cards.access.kind === "readonly"
             ? cards.access.message
-            : "注册 Agent 的所有者始终拥有管理员权限，不能在这里移除。"
+            : "注册 Bot 的所有者始终拥有管理员权限，不能在这里移除。"
         }
       >
         <SettingsRow title="所有者" value={view.ownerOpenId ?? "尚未确认"} />
@@ -1617,7 +1617,7 @@ function ProjectPanel({
     model = view.sections.model;
   return (
     <>
-      <h2 className="membership-settings-heading">Agent 与执行</h2>
+      <h2 className="membership-settings-heading">Bot 与执行</h2>
       <Catalog
         botId={view.scope.botId}
         backend={view.identity.backend}
@@ -1717,7 +1717,7 @@ function ProjectPanel({
         footer={
           permission.access.kind === "readonly"
             ? permission.access.message
-            : "空列表表示所有群成员；Agent 管理员与所有者始终可以使用。"
+            : "空列表表示所有群成员；Bot 管理员与所有者始终可以使用。"
         }
       >
         {view.members.openIds.map((id) => (
@@ -2022,7 +2022,7 @@ function CoffeeHostPanel({view, refresh, reveal}: {view: HostSettingsView; refre
       setRecipient(reply.view);
       return;
     }
-    setNotice(reply.kind === 'refused' ? reply.message : '通知 Agent 的设置暂不可用。');
+    setNotice(reply.kind === 'refused' ? reply.message : '通知 Bot 的设置暂不可用。');
   }, [editorBotId, coffee?.revision, view]);
   useEffect(() => { void refreshRecipient(); return () => { recipientRequest.current += 1; }; }, [refreshRecipient]);
   async function saveRoute(next: AgentId | '') {
@@ -2062,8 +2062,8 @@ function CoffeeHostPanel({view, refresh, reveal}: {view: HostSettingsView; refre
   const targetIds = [...new Set([...coffee.targets.codex, ...coffee.targets.claude])];
   const split = targetIds.length > 1;
   const controls = <SettingsGroup label="通知设置" id={settingAnchor('咖啡一下')}>
-    <SettingsRow title="通知 Agent" description="通过这个 Agent 的飞书私聊接收通知。"
-      trailing={<Select label="通知 Agent" value={!coffee.targetsReadable && coffee.route === 'legacy' ? '__unknown__' : split ? '__split__' : selected?.botId ?? coffee.botId ?? ''} choices={[...(!coffee.targetsReadable && coffee.route === 'legacy' ? [{value: '__unknown__' as const, label: '无法读取通知目标'}] : []), ...(missingTarget ? [{value: coffee.botId ?? '' as const, label: '通知 Agent 已不可用'}] : []), ...(split ? [{value: '__split__' as const, label: '按工具分别设置'}] : []), {value: '' as const, label: '停止发送到飞书'}, ...coffee.agents.map(agent => ({value: agent.botId, label: agent.name}))]} onChange={next => {if (next !== '__split__' && next !== '__unknown__') guard.navigate(() => { if (coffee.route === 'none' && next) setInspectedBotId(next); else void saveRoute(next); });}} disabled={busy !== null}/>}/>
+    <SettingsRow title="通知 Bot" description="通过这个 Bot 的飞书私聊接收通知。"
+      trailing={<Select label="通知 Bot" value={!coffee.targetsReadable && coffee.route === 'legacy' ? '__unknown__' : split ? '__split__' : selected?.botId ?? coffee.botId ?? ''} choices={[...(!coffee.targetsReadable && coffee.route === 'legacy' ? [{value: '__unknown__' as const, label: '无法读取通知目标'}] : []), ...(missingTarget ? [{value: coffee.botId ?? '' as const, label: '通知 Bot 已不可用'}] : []), ...(split ? [{value: '__split__' as const, label: '按工具分别设置'}] : []), {value: '' as const, label: '停止发送到飞书'}, ...coffee.agents.map(agent => ({value: agent.botId, label: agent.name}))]} onChange={next => {if (next !== '__split__' && next !== '__unknown__') guard.navigate(() => { if (coffee.route === 'none' && next) setInspectedBotId(next); else void saveRoute(next); });}} disabled={busy !== null}/>}/>
     {split && <SettingsRow title="查看通知规则" trailing={<Select label="查看通知规则" disabled={busy !== null} value={selected?.botId ?? ''} choices={coffee.agents.filter(agent => targetIds.includes(agent.botId)).map(agent => ({value: agent.botId, label: agent.name}))} onChange={next => guard.navigate(() => setInspectedBotId(next || undefined))}/>}/>}
     {coffee.route === 'none' && <SettingsRow title="通知状态" value="已关闭" description="可继续修改设置，开启后开始发送通知。"/>}
     {!coffee.targetsReadable && <SettingsRow title="Hook 配置" value="无法读取通知目标" description="请检查配置文件权限后重新读取。"/>}
@@ -2085,11 +2085,11 @@ function CoffeeHostPanel({view, refresh, reveal}: {view: HostSettingsView; refre
         } catch (error) { setNotice(error instanceof Error ? error.message : '无法更新咖啡一下设置。'); }
         finally { pending.current = false; setBusy(null); }
       }}/>
-      : <><SettingsGroup label="咖啡一下"><SettingsRow title="启用咖啡一下" value={coffee.route === 'none' ? '已关闭' : !coffee.targetsReadable ? '无法读取 Hook 配置' : missingTarget ? '通知 Agent 已不可用，请选择其他 Agent' : selected ? '正在读取设置' : '请先添加 Agent'}/></SettingsGroup>{controls}</>}
-    <SettingsGroup label="本机 Hook" id={settingAnchor('本机 Hook')} footer="Hook 安装在这台设备上，由所有 Agent 共用。">
+      : <><SettingsGroup label="咖啡一下"><SettingsRow title="启用咖啡一下" value={coffee.route === 'none' ? '已关闭' : !coffee.targetsReadable ? '无法读取 Hook 配置' : missingTarget ? '通知 Bot 已不可用，请选择其他 Bot' : selected ? '正在读取设置' : '请先添加 Bot'}/></SettingsGroup>{controls}</>}
+    <SettingsGroup label="本机 Hook" id={settingAnchor('本机 Hook')} footer="Hook 安装在这台设备上，由所有 Bot 共用。">
       {(['codex', 'claude'] as const).map(agent => <SettingsRow key={agent} title={agent === 'codex' ? 'Codex Hook' : 'Claude Hook'}
         value={statusLabel[coffee.hooks[agent].status]}
-        description={split ? `通知 Agent：${coffee.targets[agent].map(id => coffee.agents.find(item => item.botId === id)?.name ?? id).join('、') || '未设置'}` : coffee.hooks[agent].status === 'conflict_agent2lark' ? '修复会替换 agent2lark 的 Hook。' : undefined}
+        description={split ? `通知 Bot：${coffee.targets[agent].map(id => coffee.agents.find(item => item.botId === id)?.name ?? id).join('、') || '未设置'}` : coffee.hooks[agent].status === 'conflict_agent2lark' ? '修复会替换 agent2lark 的 Hook。' : undefined}
         trailing={<Button size="sm" loading={busy === agent} disabled={busy !== null} onClick={() => void repair(agent)}>检查并修复</Button>}/>)}
     </SettingsGroup>
     {notice && <InlineNotice title="操作结果">{notice}</InlineNotice>}
@@ -2306,7 +2306,7 @@ function ScopedSettingsPanel(props: PanelProps) {
   ) : null;
   return (
     <>
-      <div className="settings-scope-bar"><span>{view.scope.kind === 'agent' ? '当前 Agent' : view.scope.kind === 'project' ? '当前 Agent 在此群' : view.scope.kind === 'host' ? '这台设备' : '当前话题'}</span><Button size="sm" onClick={() => void refresh()}>重新读取</Button></div>
+      <div className="settings-scope-bar"><span>{view.scope.kind === 'agent' ? '当前 Bot' : view.scope.kind === 'project' ? '当前 Bot 在此群' : view.scope.kind === 'host' ? '这台设备' : '当前话题'}</span><Button size="sm" onClick={() => void refresh()}>重新读取</Button></div>
       {status}
       {content}
     </>

@@ -1,0 +1,584 @@
+diff --git a/desktop/main/capabilities.ts b/desktop/main/capabilities.ts
+index 925b7fe21af3c8476f3e4d1eddffb37c07f92a89..6d4dea9f49223bd0e48e0f68c23fe9f926734530 100644
+--- a/desktop/main/capabilities.ts
++++ b/desktop/main/capabilities.ts
+@@ -26,6 +26,26 @@ export function authorizationUrl(value:string):string {
+   if(url.protocol!=='https:'||url.hostname!=='auth.openai.com'||url.username||url.password||url.port) throw new CoreError('untrusted-url','授权地址不是受支持的官方地址。');
+   return url.href;
+ }
++export function registrationUrl(value: string): string {
++  const url = new URL(value);
++  const hosts = new Set([
++    'accounts.feishu.cn',
++    'accounts.larksuite.com',
++    'open.feishu.cn',
++    'open.larksuite.com',
++  ]);
++  const authority = /^https:\/\/([^/?#]+)/i.exec(value)?.[1];
++  if (
++    url.protocol !== 'https:' ||
++    !hosts.has(url.hostname) ||
++    url.username ||
++    url.password ||
++    url.port ||
++    authority?.toLowerCase() !== url.hostname
++  )
++    throw new CoreError('untrusted-url', '注册链接不是受支持的飞书或 Lark HTTPS 地址。');
++  return url.href;
++}
+ export function trustedSender(sender:{id:number;url:string;isMainFrame:boolean},expected:{id:number;url:string}):boolean {
+   return sender.id===expected.id&&sender.isMainFrame&&sender.url===expected.url;
+ }
+diff --git a/desktop/main/controller.ts b/desktop/main/controller.ts
+index 706da1db3df5a2bda68a1234abd688e452767159..9d8ab31141a08f68309c4f85e1d33ec435ae02f0 100644
+--- a/desktop/main/controller.ts
++++ b/desktop/main/controller.ts
+@@ -27,7 +27,7 @@ import {
+   readJson,
+   stateSchema,
+ } from "./projection";
+-import { authorizationUrl } from "./capabilities";
++import { authorizationUrl, registrationUrl } from "./capabilities";
+ 
+ const setupSchema = z.object({
+   installation: z.enum(["missing", "installed", "unknown"]),
+@@ -283,6 +283,11 @@ export class DesktopController {
+     }
+   }
+   private job(job: Job): void {
++    if (
++      !(job.type === "loginCodex" && job.phase === "authorizing") &&
++      !(job.type === "registerAgent" && job.phase === "qr")
++    )
++      this.authorizations.delete(job.id);
+     const jobs = this.snapshot.jobs.filter((current) => current.id !== job.id);
+     jobs.push(job);
+     while (jobs.length > 24) {
+@@ -444,6 +449,7 @@ export class DesktopController {
+             return { kind: "applied", revision: this.snapshot.revision };
+           case "chooseFolder":
+           case "openJobAuthorization":
++          case "copyJobAuthorization":
+           case "setLoginItem":
+           case "quit":
+           case "hideWindow":
+@@ -523,6 +529,8 @@ export class DesktopController {
+         const value = await this.readToolJob(id, type, signal);
+         if (signal.aborted) return;
+         if (value.state === "authorizing") {
++          if (type !== "loginCodex")
++            throw new CoreError("job-mismatch", "安装操作不能请求账号授权。");
+           this.authorizations.set(id, authorizationUrl(value.verificationUrl));
+           this.job({
+             id,
+@@ -607,6 +615,7 @@ export class DesktopController {
+     };
+     const confirmEnd = (cancelRequested = false): Promise<void> => {
+       cancellationRequested ||= cancelRequested;
++      this.authorizations.delete(id);
+       if (committed.size || requestRejected) return Promise.resolve();
+       if (confirmedEnd) return confirmedEnd;
+       confirmedEnd = (async () => {
+@@ -737,13 +746,22 @@ export class DesktopController {
+       abort.signal,
+       committed,
+       recordSession,
++      () => cancellationRequested,
+     )
+       .catch((error) => {
+         failure = error;
+         requestRejected =
+           error instanceof CoreError && error.code === "registration-refused";
+       })
+-      .finally(() => resolveSession(undefined))
++      .finally(() => {
++        resolveSession(undefined);
++        this.job({
++          id,
++          type: "registerAgent",
++          phase: "running",
++          message: "注册连接已结束，正在确认结果。",
++        });
++      })
+       .then(async () => {
+         await confirmEnd();
+         await reconcile();
+@@ -773,6 +791,7 @@ export class DesktopController {
+     signal: AbortSignal,
+     committed: Set<AgentId>,
+     recordSession: (value: string) => void,
++    isCancelling: () => boolean,
+   ): Promise<void> {
+     const response = await this.connected().request(
+       "/api/bots/register-qr/stream",
+@@ -834,20 +853,22 @@ export class DesktopController {
+               })
+               .parse(payload);
+             recordSession(qr.sessionId);
+-            if (new URL(qr.qrUrl).protocol !== "https:")
+-              throw new CoreError("invalid-qr", "飞书返回了不受支持的二维码。");
+-            const image = await QRCode.toDataURL(qr.qrUrl, {
++            const url = registrationUrl(qr.qrUrl);
++            const image = await QRCode.toDataURL(url, {
+               width: 256,
+               margin: 2,
+             });
+-            if (!signal.aborted)
++            if (!signal.aborted && !isCancelling()) {
++              this.authorizations.set(id, url);
+               this.job({
+                 id,
+                 type: "registerAgent",
+                 phase: "qr",
+                 image,
++                url,
+                 expiresAt: Date.now() + qr.expireIn * 1000,
+               });
++            }
+           } else if (!signal.aborted && name === "error") {
+             throw new CoreError(
+               "registration-failed",
+@@ -887,8 +908,15 @@ export class DesktopController {
+           });
+         } else await operation.finished;
+       } else {
+-        if (job.phase !== "activating" && !terminal(job))
++        if (job.phase !== "activating" && !terminal(job)) {
++          this.job({
++            id,
++            type: "registerAgent",
++            phase: "running",
++            message: "正在结束本次注册并确认结果。",
++          });
+           await operation.confirmEnd(true);
++        }
+         await operation.finished;
+         if (
+           this.snapshot.jobs.some(
+@@ -924,10 +952,25 @@ export class DesktopController {
+     }
+   }
+   authorization(id: JobId): string {
++    const job = this.snapshot.jobs.find((job) => job.id === id);
++    if (
++      job?.type === "registerAgent" &&
++      job.phase === "qr" &&
++      job.expiresAt <= Date.now()
++    ) {
++      this.authorizations.delete(id);
++      throw new CoreError(
++        "authorization-expired",
++        "二维码和注册链接已过期，请取消本次操作后重新注册。",
++      );
++    }
+     const url = this.authorizations.get(id);
+-    if (!url)
+-      throw new CoreError("no-authorization", "这个操作没有等待浏览器授权。");
+-    return authorizationUrl(url);
++    if (url && job?.type === "registerAgent" && job.phase === "qr")
++      return registrationUrl(url);
++    if (url && job?.type === "loginCodex" && job.phase === "authorizing")
++      return authorizationUrl(url);
++    this.authorizations.delete(id);
++    throw new CoreError("no-authorization", "这个操作没有等待浏览器授权。");
+   }
+   setLoginItem(enabled: boolean): void {
+     this.publish({
+diff --git a/desktop/main/index.ts b/desktop/main/index.ts
+index 384b4fbdef0c1abecc60871fc5e51dff205d301b..2f6c2f930ce48fa54e38ad5b8cce1e29c87ab929 100644
+--- a/desktop/main/index.ts
++++ b/desktop/main/index.ts
+@@ -1,4 +1,4 @@
+-import {app,BrowserWindow,dialog,ipcMain,Menu,nativeImage,shell,Tray} from 'electron';
++import {app,BrowserWindow,clipboard,dialog,ipcMain,Menu,nativeImage,shell,Tray} from 'electron';
+ import {homedir} from 'node:os';
+ import {join,dirname,delimiter} from 'node:path';
+ import {pathToFileURL} from 'node:url';
+@@ -69,6 +69,7 @@ async function start():Promise<void> {
+           break;
+         }
+         case 'openJobAuthorization':await shell.openExternal(controller.authorization(command.jobId));result={kind:'applied',revision:controller.current().revision};break;
++        case 'copyJobAuthorization':clipboard.writeText(controller.authorization(command.jobId));result={kind:'applied',revision:controller.current().revision};break;
+         case 'setLoginItem':
+           if(process.env.VONVON_DESKTOP_TEST_HOME)throw new Error('隔离验证模式不修改登录启动项。');
+           app.setLoginItemSettings({openAtLogin:command.enabled});controller.setLoginItem(app.getLoginItemSettings().openAtLogin);result={kind:'applied',revision:controller.current().revision};break;
+diff --git a/desktop/renderer/App.tsx b/desktop/renderer/App.tsx
+index cff8404f24efe6d750c2dc5a5843d5692d58b193..ca2bca033073afc4e5d7dbecabfe85a227c246bf 100644
+--- a/desktop/renderer/App.tsx
++++ b/desktop/renderer/App.tsx
+@@ -772,37 +772,34 @@ export function App() {
+                     trailing={
+                       t.tool === "codex" ? (
+                         <div className="desktop-actions">
+-                          <Button
+-                            size="sm"
+-                            disabled={
+-                              busy ||
+-                              !ready ||
+-                              snapshot.jobs.some(
+-                                (job) =>
+-                                  isActive(job) && job.type === "installCodex",
+-                              )
+-                            }
+-                            onClick={() => void run({ type: "installCodex" })}
+-                          >
+-                            安装 Codex
+-                          </Button>
+-                          <Button
+-                            size="sm"
+-                            disabled={
+-                              busy ||
+-                              !ready ||
+-                              t.installation !== "installed" ||
+-                              snapshot.jobs.some(
+-                                (job) =>
+-                                  isActive(job) && job.type === "loginCodex",
+-                              )
+-                            }
+-                            onClick={() =>
+-                              void run({ type: "startCodexLogin" })
+-                            }
+-                          >
+-                            登录 Codex
+-                          </Button>
++                          {t.installation === "missing" &&
++                            !snapshot.jobs.some(
++                              (job) =>
++                                isActive(job) && job.type === "installCodex",
++                            ) && (
++                              <Button
++                                size="sm"
++                                disabled={busy || !ready}
++                                onClick={() => void run({ type: "installCodex" })}
++                              >
++                                安装 Codex
++                              </Button>
++                            )}
++                          {t.installation === "installed" &&
++                            t.authentication === "signedOut" &&
++                            !snapshot.jobs.some(
++                              (job) => isActive(job) && job.type === "loginCodex",
++                            ) && (
++                              <Button
++                                size="sm"
++                                disabled={busy || !ready}
++                                onClick={() =>
++                                  void run({ type: "startCodexLogin" })
++                                }
++                              >
++                                登录 Codex
++                              </Button>
++                            )}
+                         </div>
+                       ) : undefined
+                     }
+@@ -1219,6 +1216,15 @@ function JobPanel({
+   run: (command: Command) => Promise<CommandResult>;
+   busy: boolean;
+ }) {
++  const [now, setNow] = useState(Date.now);
++  const expiresAt = job.phase === "qr" ? job.expiresAt : null;
++  useEffect(() => {
++    if (expiresAt === null) return;
++    setNow(Date.now());
++    const timer = setInterval(() => setNow(Date.now()), 1000);
++    return () => clearInterval(timer);
++  }, [expiresAt]);
++  const expired = expiresAt !== null && expiresAt <= now;
+   return (
+     <SettingsGroup
+       label={
+@@ -1232,11 +1238,40 @@ function JobPanel({
+       <div className="desktop-job" role="status">
+         {job.phase === "qr" ? (
+           <>
+-            <img className="desktop-qr" src={job.image} alt="飞书注册二维码" />
+-            <p>
+-              请用飞书扫码。二维码有效期至{" "}
+-              {new Date(job.expiresAt).toLocaleTimeString()}。
+-            </p>
++            {expired ? (
++              <p>
++                二维码和注册链接已过期。请取消本次操作，关闭此对话框后重新注册 Agent。
++              </p>
++            ) : (
++              <>
++                <img className="desktop-qr" src={job.image} alt="飞书注册二维码" />
++                <p>
++                  请用飞书扫码，或打开注册链接。有效期至{" "}
++                  {new Date(job.expiresAt).toLocaleTimeString()}。
++                </p>
++                <FormField label="完整注册链接">
++                  <input aria-label="完整注册链接" readOnly value={job.url} />
++                </FormField>
++                <div className="desktop-actions">
++                  <Button
++                    disabled={busy}
++                    onClick={() =>
++                      void run({ type: "openJobAuthorization", jobId: job.id })
++                    }
++                  >
++                    打开链接
++                  </Button>
++                  <Button
++                    disabled={busy}
++                    onClick={() =>
++                      void run({ type: "copyJobAuthorization", jobId: job.id })
++                    }
++                  >
++                    复制链接
++                  </Button>
++                </div>
++              </>
++            )}
+           </>
+         ) : job.phase === "authorizing" ? (
+           <>
+diff --git a/desktop/shared/bridge.ts b/desktop/shared/bridge.ts
+index 649ae82345a75be898ebb62dad67206ef0f7d867..ad5cef298e93bb47a9c2710497706700d1ef0e96 100644
+--- a/desktop/shared/bridge.ts
++++ b/desktop/shared/bridge.ts
+@@ -93,6 +93,9 @@ export const commandSchema = z.discriminatedUnion("type", [
+   z
+     .object({ type: z.literal("openJobAuthorization"), jobId: jobIdSchema })
+     .strict(),
++  z
++    .object({ type: z.literal("copyJobAuthorization"), jobId: jobIdSchema })
++    .strict(),
+   z
+     .object({ type: z.literal("inspectAgent"), agentId: agentIdSchema })
+     .strict(),
+@@ -142,7 +145,7 @@ type JobBase = {
+ export type Job = JobBase &
+   (
+     | { phase: "running" | "unresolved"; message: string }
+-    | { phase: "qr"; image: string; expiresAt: number }
++    | { phase: "qr"; image: string; url: string; expiresAt: number }
+     | { phase: "authorizing"; userCode: string }
+     | { phase: "activating"; message: string }
+     | { phase: "succeeded" | "failed" | "cancelled"; message: string }
+diff --git a/tests/desktop.test.ts b/tests/desktop.test.ts
+index dadc3ad81130b966bb94071bbab89ade1f5ed17b..f2c0fd70f14c7d54fddf93d706519f722875ee6e 100644
+--- a/tests/desktop.test.ts
++++ b/tests/desktop.test.ts
+@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
+ import { mkdtemp, rm, mkdir, realpath } from "node:fs/promises";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
++import QRCode from "qrcode";
+ import {
+   commandSchema,
+   agentIdSchema,
+@@ -12,6 +13,7 @@ import {
+ import {
+   FolderCapabilities,
+   authorizationUrl,
++  registrationUrl,
+   trustedSender,
+ } from "../desktop/main/capabilities";
+ import {
+@@ -174,6 +176,9 @@ test("IPC denies foreign documents, subframes, arbitrary capabilities and malfor
+       network: true,
+     },
+     { type: "openJobAuthorization", jobId: "../../path" },
++    { type: "copyJobAuthorization", jobId: "../../path" },
++    { type: "copyJobAuthorization", jobId: "job_valid", url: "https://accounts.feishu.cn/register" },
++    { type: "openJobAuthorization", jobId: "job_valid", url: "https://auth.openai.com/codex/device" },
+   ])
+     assert.equal(commandSchema.safeParse(command).success, false);
+ });
+@@ -187,9 +192,31 @@ test("authorization browser capability only permits exact official HTTPS host",
+     "https://auth.openai.com.evil.test",
+     "https://user:pass@auth.openai.com",
+     "https://auth.openai.com:444",
++    "https://accounts.feishu.cn/register",
++    "https://open.larksuite.com/register",
+   ])
+     assert.throws(() => authorizationUrl(url));
+ });
++test("registration URLs allow exact Feishu and Lark hosts without credentials or ports", () => {
++  for (const host of ["accounts.feishu.cn", "accounts.larksuite.com", "open.feishu.cn", "open.larksuite.com"])
++    assert.equal(registrationUrl(`https://${host}/register?token=sample%2Fvalue`), `https://${host}/register?token=sample%2Fvalue`);
++  for (const url of [
++    "http://accounts.feishu.cn/register",
++    "https://accounts.feishu.cn.evil.test/register",
++    "https://evil.test/accounts.feishu.cn/register",
++    "https://sub.accounts.feishu.cn/register",
++    "https://accounts.feishu.cn@evil.test/register",
++    "https://user:pass@accounts.feishu.cn/register",
++    "https://accounts.feishu.cn:444/register",
++    "https://accounts.feishu.cn:443/register",
++    " https://accounts.feishu.cn:443/register",
++    "https://accounts.feishu.cn./register",
++    "https://auth.openai.com/codex/device",
++    "file:///accounts.feishu.cn/register",
++    "javascript:alert(1)",
++  ]) assert.throws(() => registrationUrl(url), url);
++  assert.equal(commandSchema.safeParse({type: "copyJobAuthorization", jobId: "job_valid"}).success, true);
++});
+ test("folder tokens are scoped, canonical and rechecked at commit", async () => {
+   const home = await mkdtemp(join(tmpdir(), "vonvon-folder-"));
+   const directory = join(home, "workspace");
+@@ -870,7 +897,7 @@ test("QR cancellation waits for exact session persistence before reconciliation"
+               stream = controller;
+               controller.enqueue(
+                 new TextEncoder().encode(
+-                  'event: qr\ndata: {"qrUrl":"https://example.test/register","expireIn":120,"sessionId":"12345678-1234-4234-8234-123456789012"}\n\n',
++                  'event: qr\ndata: {"qrUrl":"https://accounts.feishu.cn/register","expireIn":120,"sessionId":"12345678-1234-4234-8234-123456789012"}\n\n',
+                 ),
+               );
+               init?.signal?.addEventListener(
+@@ -1042,3 +1069,153 @@ test("failed exact QR cancellation acknowledgment remains unresolved and retryab
+   assert.equal(f.counts().closes, 1);
+   assert.equal(f.controller.current().jobs[0]?.phase, "cancelled");
+ });
++
++async function waitingRegistration(qrUrl: string, expireIn = 120) {
++  const f = fixture();
++  let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
++  const emit = (name: string, payload: unknown) => stream?.enqueue(
++    new TextEncoder().encode(`event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`),
++  );
++  f.setIntercept((path, init) => {
++    if (path.includes('register-qr/stream')) return Promise.resolve(registrationStream(new ReadableStream({
++      start(controller) {
++        stream = controller;
++        emit('qr', {qrUrl, expireIn, sessionId: registrationSession});
++        init?.signal?.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), {once: true});
++      },
++    })));
++    return undefined;
++  });
++  await f.controller.start();
++  const started = await f.controller.run({type: 'registerAgent'}, async () => '/tmp/work');
++  if (started.kind !== 'started') throw new Error('Registration did not start');
++  return {...f, id: started.jobId, emit, end: () => stream?.close()};
++}
++
++test('registration exposes the exact QR URL through its job capability and invalidates it on cancel', async () => {
++  const url = 'https://accounts.feishu.cn/register?token=sample%2Fvalue&next=%2Fconsole';
++  const f = await waitingRegistration(url);
++  try {
++    await until(() => f.controller.current().jobs[0]?.phase === 'qr');
++    assert.equal(f.controller.authorization(f.id), url);
++    const job = f.controller.current().jobs[0];
++    if (job?.phase !== 'qr') throw new Error('Missing QR');
++    assert.equal(job.url, url);
++    assert.equal(job.image, await QRCode.toDataURL(job.url, {width: 256, margin: 2}));
++    assert.throws(() => f.controller.authorization(jobIdSchema.parse('other_job')));
++    await f.controller.cancel(f.id);
++    assert.throws(() => f.controller.authorization(f.id));
++    assert.equal(f.controller.current().jobs[0]?.phase, 'cancelled');
++  } finally { await f.controller.quit(); }
++});
++
++test('registration authorization expires at its deadline', async (t) => {
++  const f = await waitingRegistration('https://open.feishu.cn/register');
++  try {
++    await until(() => f.controller.current().jobs[0]?.phase === 'qr');
++    const job = f.controller.current().jobs[0];
++    if (job?.phase !== 'qr') throw new Error('Missing QR');
++    assert.equal(f.controller.authorization(f.id), 'https://open.feishu.cn/register');
++    t.mock.method(Date, 'now', () => job.expiresAt);
++    assert.throws(() => f.controller.authorization(f.id), /已过期/);
++  } finally { t.mock.restoreAll(); await f.controller.quit(); }
++});
++
++test('ended or failed registration streams invalidate their authorization', async () => {
++  for (const event of ['end', 'error', 'done']) {
++    const f = await waitingRegistration('https://accounts.larksuite.com/register');
++    try {
++      await until(() => f.controller.current().jobs[0]?.phase === 'qr');
++      assert.equal(f.controller.authorization(f.id), 'https://accounts.larksuite.com/register');
++      if (event === 'end') f.end();
++      else f.emit(event, event === 'done' ? {appId: 'cli_new'} : {message: 'Rejected'});
++      await until(() => ['failed', 'succeeded'].includes(f.controller.current().jobs[0]?.phase ?? ''));
++      assert.throws(() => f.controller.authorization(f.id));
++    } finally { await f.controller.quit(); }
++  }
++});
++
++test('registration rejects hostile QR URLs before exposing an image or authorization', async () => {
++  for (const url of ['https://accounts.feishu.cn.evil.test/register', 'https://auth.openai.com/codex/device', 'https://user:pass@open.feishu.cn/register']) {
++    const f = await waitingRegistration(url);
++    try {
++      await until(() => f.controller.current().jobs[0]?.phase === 'failed');
++      assert.throws(() => f.controller.authorization(f.id));
++      assert.equal(f.controller.current().jobs.some(job => job.phase === 'qr'), false);
++    } finally { await f.controller.quit(); }
++  }
++});
++
++test('cancelling registration invalidates the link before acknowledgment and rejects late QR frames', async () => {
++  const f = await waitingRegistration('https://open.larksuite.com/register');
++  let release: ((response: Response) => void) | undefined;
++  try {
++    await until(() => f.controller.current().jobs[0]?.phase === 'qr');
++    f.setIntercept((path, init) => path.includes('register-qr?sessionId=') && init?.method === 'DELETE'
++      ? new Promise(resolve => { release = resolve; }) : undefined);
++    const cancelling = f.controller.cancel(f.id);
++    await until(() => release !== undefined);
++    assert.throws(() => f.controller.authorization(f.id));
++    f.emit('qr', {qrUrl: 'https://accounts.feishu.cn/new', expireIn: 120, sessionId: registrationSession});
++    await new Promise(resolve => setTimeout(resolve, 30));
++    assert.notEqual(f.controller.current().jobs[0]?.phase, 'qr');
++    assert.throws(() => f.controller.authorization(f.id));
++    release?.(Response.json({error: 'Try again'}, {status: 503}));
++    assert.equal((await cancelling).kind, 'refused');
++    assert.equal(f.controller.current().jobs[0]?.phase, 'unresolved');
++    assert.throws(() => f.controller.authorization(f.id));
++  } finally {
++    release?.(new Response(null, {status: 204}));
++    f.setIntercept(undefined);
++    await f.controller.quit();
++  }
++});
++
++test('ended registration invalidates the link while exact-session closure remains pending', async () => {
++  const f = await waitingRegistration('https://open.feishu.cn/register');
++  let release: ((response: Response) => void) | undefined;
++  try {
++    await until(() => f.controller.current().jobs[0]?.phase === 'qr');
++    f.setIntercept((path, init) => path.includes('register-qr?sessionId=') && init?.method === 'DELETE'
++      ? new Promise(resolve => { release = resolve; }) : undefined);
++    f.end();
++    await until(() => release !== undefined);
++    assert.throws(() => f.controller.authorization(f.id));
++    assert.equal(f.controller.current().jobs[0]?.phase, 'running');
++    release?.(new Response(null, {status: 204}));
++    await until(() => f.controller.current().jobs[0]?.phase === 'failed');
++  } finally {
++    release?.(new Response(null, {status: 204}));
++    f.setIntercept(undefined);
++    await f.controller.quit();
++  }
++});
++
++test('only a current Codex login authorizing phase exposes an OpenAI URL', async () => {
++  for (const scenario of [
++    {type: 'login', url: 'https://auth.openai.com/codex/device', allowed: true},
++    {type: 'login', url: 'https://accounts.feishu.cn/register', allowed: false},
++    {type: 'install', url: 'https://auth.openai.com/codex/device', allowed: false},
++  ] as const) {
++    const f = fixture();
++    let cancelled = false;
++    const id = jobIdSchema.parse('job_auth');
++    f.setIntercept((path, init) => {
++      if (path === `/api/tools/codex/${scenario.type}`) return Promise.resolve(Response.json({id}));
++      if (path === `/api/tools/codex/jobs/${id}`) {
++        if (init?.method === 'DELETE') cancelled = true;
++        return Promise.resolve(Response.json({id, type: scenario.type, state: cancelled ? 'cancelled' : 'authorizing', userCode: 'SAMPLE', verificationUrl: scenario.url}));
++      }
++      return undefined;
++    });
++    await f.controller.start();
++    try {
++      await f.controller.run({type: scenario.type === 'login' ? 'startCodexLogin' : 'installCodex'}, async () => '/tmp/work');
++      await until(() => f.controller.current().jobs[0]?.phase === (scenario.allowed ? 'authorizing' : 'unresolved'));
++      if (scenario.allowed) assert.equal(f.controller.authorization(id), scenario.url);
++      else assert.throws(() => f.controller.authorization(id));
++      await f.controller.cancel(id);
++      assert.throws(() => f.controller.authorization(id));
++    } finally { await f.controller.quit(); }
++  }
++});

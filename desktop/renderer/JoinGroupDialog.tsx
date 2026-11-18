@@ -64,15 +64,15 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
     } catch (failure) {setError(failure instanceof Error ? failure.message : '无法读取飞书群。');}
     finally {setBusy(false);}
   }
-  return <Dialog open title="让 Agent 加入飞书群" onClose={busy ? undefined : close}>
+  return <Dialog open title="让 Bot 加入飞书群" onClose={busy ? undefined : close}>
     <div className="page-stack join-group-flow">
-      <p className="join-group-flow__agent">Agent · {agent.name}</p>
+      <p className="join-group-flow__agent">Bot · {agent.name}</p>
       {mode.kind !== 'bind' && <div className="join-group-flow__modes" role="group" aria-label="加入方式">
         <Button aria-pressed={mode.kind === 'create'} disabled={busy} onClick={() => switchMode({kind: 'create'})}>创建新飞书群</Button>
         <Button aria-pressed={mode.kind === 'existing'} disabled={busy} onClick={() => switchMode({kind: 'existing'})}>加入现有飞书群</Button>
       </div>}
       {mode.kind === 'existing' ? <>
-        <p>在飞书客户端打开目标群，进入「设置 → 群机器人 → 添加机器人」，搜索并添加「{agent.name}」。请使用这个 Agent 的管理员身份操作。</p>
+        <p>在飞书客户端打开目标群，进入「设置 → 群机器人 → 添加机器人」，搜索并添加「{agent.name}」。请使用这个 Bot 的管理员身份操作。</p>
         <p role="status">添加后，Vonvon 会显示绑定通知。点击「继续绑定」选择工作目录。</p>
         {pending?.problem && <InlineNotice title={pending.problem.kind === 'unsupported' ? '当前后台不支持绑定通知' : '绑定通知读取失败'} tone="warning">{pending.problem.message} {pending.problem.kind === 'unsupported' && '请更新 Bridge 后台，或使用下方的群查找入口。'}</InlineNotice>}
         {pending?.groups.map(group => <InlineNotice key={group.chatId} title={`${agent.name} 已加入 ${group.name}`} actions={<Button disabled={busy} onClick={() => switchMode({kind: 'bind', group})}>继续绑定</Button>}>选择工作目录后即可开始协作。</InlineNotice>)}
@@ -80,11 +80,11 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
         <small>用于离线期间、升级前加入的群，或未收到通知的情况。</small>
         {manual && <><FormField label="已经加入的飞书群"><select aria-label="选择飞书群" value="" disabled={busy} onChange={event => {const group = manual.groups.find(item => item.id === event.target.value); if (group) switchMode({kind: 'bind', group: {chatId: group.id, name: group.name, addedAt: 0}});}}><option value="">请选择已加入的群</option>{manual.groups.map(group => <option key={group.id} value={group.id} disabled={group.bound}>{group.name}{group.bound ? '（已绑定）' : ''}</option>)}</select></FormField>{!manual.groups.length && <p>没有可显示的群。请确认机器人已加入目标群。</p>}{manual.nextCursor && <Button disabled={busy} onClick={() => void findGroups(manual.nextCursor)}>加载更多</Button>}</>}
       </> : <>
-        {mode.kind === 'bind' && <InlineNotice title={`绑定 ${mode.group.name}`}>Agent · {agent.name}</InlineNotice>}
+        {mode.kind === 'bind' && <InlineNotice title={`绑定 ${mode.group.name}`}>Bot · {agent.name}</InlineNotice>}
         <FormField label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'}><input aria-label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} maxLength={100} disabled={busy} value={name} onChange={event => setName(event.target.value)} /></FormField>
         <SettingsGroup>
           {mode.kind === 'create' && <SettingsRow title="工作目录来源" trailing={<select aria-label="目录来源" disabled={busy} value={existingDirectory ? 'existing' : 'default'} onChange={event => {setExistingDirectory(event.target.value === 'existing'); setFolder(undefined);}}><option value="default">新建空白目录</option><option value="existing">使用现有目录</option></select>} />}
-          <SettingsRow title="工作目录" value={mode.kind === 'create' && !existingDirectory ? '在 Agent 的默认项目目录中创建空白目录' : folder?.displayPath ?? '未选择'} trailing={(mode.kind === 'bind' || existingDirectory) && <Button disabled={busy} onClick={() => void chooseFolder()}>选择文件夹</Button>} />
+          <SettingsRow title="工作目录" value={mode.kind === 'create' && !existingDirectory ? '在 Bot 的默认项目目录中创建空白目录' : folder?.displayPath ?? '未选择'} trailing={(mode.kind === 'bind' || existingDirectory) && <Button disabled={busy} onClick={() => void chooseFolder()}>选择文件夹</Button>} />
           <SettingsRow title="执行工具" trailing={<select aria-label="执行工具" disabled={busy} value={tool} onChange={event => setTool(toolSchema.parse(event.target.value))}><option value="codex">Codex</option><option value="claude">Claude</option></select>} />
           <SettingsRow title="会话方式" trailing={<select aria-label="会话方式" disabled={busy} value={conversation} onChange={event => setConversation(conversationSchema.parse(event.target.value))}><option value="threads">按话题独立会话</option><option value="shared">整群连续会话</option></select>} />
         </SettingsGroup>

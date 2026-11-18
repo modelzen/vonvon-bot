@@ -126,11 +126,11 @@ export class MachineService {
         return {type:'done',message:'后台服务操作已完成'};
       }
       case 'startHost':
-        if (this.hooks.host()) throw new Error('请先停止当前 Bridge，再选择临时运行的 Agent。');
+        if (this.hooks.host()) throw new Error('请先停止当前 Bridge，再选择临时运行的 Bot。');
         await this.hooks.startHost(request.bot);
         this.connected();
         this.temporaryAgent = request.bot;
-        return {type:'done',message:request.bot?'临时 Agent 已启动，默认选择保持不变':'Bridge 已启动'};
+        return {type:'done',message:request.bot?'临时 Bot 已启动，默认选择保持不变':'Bridge 已启动'};
       case 'stopHost':
         if (this.hooks.host()?.ownership === 'attached') throw new Error('此进程由外部服务管理，请使用停止后台服务。');
         await this.hooks.stopHost();

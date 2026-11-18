@@ -73,7 +73,7 @@ void app.whenReady().then(async () => {
     assert.equal(agent.view.sections.cards.access.kind, 'readonly');
     const denied = await settings({ type: 'save', edit: { scope: { kind: 'agent', botId: 'cli_fixture_engineering' }, section: 'cards', revision: agent.view.sections.cards.revision, patch: { showToolCalls: true } } });
     assert.equal(denied.result.kind, 'unavailable', JSON.stringify(denied));
-    await click('Agent');
+    await click('Bot');
     await click('研发助手');
     await poll(() => evaluate("document.body.innerText.includes('显示工具调用')"), Boolean, 'stopped Agent settings');
     const ui = await evaluate(`({text:document.body.innerText, disabled:[...document.querySelectorAll('button')].filter(b=>b.textContent.includes('保存')).map(b=>b.disabled)})`);
@@ -158,8 +158,8 @@ void app.whenReady().then(async () => {
     await click('应用与启动');
     await click('停止 Bridge');await click('确认操作');
     await poll(snapshot, value => value.host.kind === 'disconnected', 'stopped Host');
-    await evaluate(`Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(document.querySelector('[aria-label="临时运行的 Agent"]'),'cli_fixture_content');document.querySelector('[aria-label="临时运行的 Agent"]').dispatchEvent(new Event('change',{bubbles:true}));`);
-    await click('仅运行此 Agent');
+    await evaluate(`Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(document.querySelector('[aria-label="临时运行的 Bot"]'),'cli_fixture_content');document.querySelector('[aria-label="临时运行的 Bot"]').dispatchEvent(new Event('change',{bubbles:true}));`);
+    await click('仅运行此 Bot');
     state = await poll(snapshot, value => value.host.kind === 'blocked', 'invalid-credential refusal');
     const actual = await evaluate(`window.bridge.machine({type:'status'})`);
     assert.equal(actual.host, null);

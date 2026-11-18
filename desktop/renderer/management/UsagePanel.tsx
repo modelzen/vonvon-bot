@@ -107,7 +107,7 @@ export function UsagePanel({ request, onOpenEnvironment, onOpenShare }: Props) {
   const primaryLabel = windowLabel(data?.usage.main.primary?.windowSeconds, "主要限额");
   const secondaryLabel = windowLabel(data?.usage.main.secondary?.windowSeconds, "额外限额");
   return <div className="usage-panel">
-    <header className="usage-intro"><div><h2>Codex 用量</h2><p>本机登录的 Codex 账号。所有 Agent 共享同一份用量。</p></div><Button size="sm" loading={busy} onClick={() => void refresh()}>刷新用量</Button></header>
+    <header className="usage-intro"><div><h2>Codex 用量</h2><p>本机登录的 Codex 账号。所有 Bot 共享同一份用量。</p></div><Button size="sm" loading={busy} onClick={() => void refresh()}>刷新用量</Button></header>
     {data?.usage.main.primary && <div className="usage-summary" aria-label="Codex 当前用量">
       <div><span>{primaryLabel}</span><strong>{Math.round(data.usage.main.primary.usedPercent)}<small>% 已用</small></strong><div className="usage-progress" role="progressbar" aria-label={`${primaryLabel}已用`} aria-valuenow={data.usage.main.primary.usedPercent} aria-valuemin={0} aria-valuemax={100}><span style={{width: `${Math.max(0, Math.min(100, data.usage.main.primary.usedPercent))}%`}}/></div></div>
       <div><span>{secondaryLabel}</span><strong>{data.usage.main.secondary ? Math.round(data.usage.main.secondary.usedPercent) : '—'}<small>{data.usage.main.secondary ? '% 已用' : '暂不可用'}</small></strong><div className="usage-progress" role="progressbar" aria-label={`${secondaryLabel}已用`} aria-valuenow={data.usage.main.secondary?.usedPercent ?? 0} aria-valuemin={0} aria-valuemax={100}><span style={{width: `${Math.max(0, Math.min(100, data.usage.main.secondary?.usedPercent ?? 0))}%`}}/></div></div>
@@ -175,8 +175,8 @@ export function ShareUsagePanel({memberships, agents, groups, request}: {members
         {memberships.map(member => {
           const agent = agents.find(item => item.id === member.agentId);
           const groupName = groups.find(item => item.id === member.groupId)?.name ?? member.name;
-          const reason = member.stale ? '绑定状态已过期' : !agent ? 'Agent 已移除' : agent.readError ? 'Agent 暂不可用' : '';
-          return <option key={member.id} value={member.id} disabled={Boolean(reason)}>{groupName} · {agent?.name ?? '未知 Agent'}{member.name !== groupName ? ` · 绑定名称：${member.name}` : ''}{reason ? `（${reason}）` : ''}</option>;
+          const reason = member.stale ? '绑定状态已过期' : !agent ? 'Bot 已移除' : agent.readError ? 'Bot 暂不可用' : '';
+          return <option key={member.id} value={member.id} disabled={Boolean(reason)}>{groupName} · {agent?.name ?? '未知 Bot'}{member.name !== groupName ? ` · 绑定名称：${member.name}` : ''}{reason ? `（${reason}）` : ''}</option>;
         })}
         {selectedId && !selected && <option value={selectedId} disabled>原绑定已移除</option>}
       </select>} />

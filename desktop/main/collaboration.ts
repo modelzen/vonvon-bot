@@ -75,7 +75,7 @@ export function createCollaborationService(deps: Dependencies) {
         return collaborationReplySchema.parse({kind: "usage", ...z.object({data: z.unknown()}).parse(await readJson(response))});
       }
       if (!snapshot.agents.some((agent) => agent.id === request.agentId && !agent.readError))
-        throw new CoreError("agent-unavailable", "Agent 已变更，请刷新列表后重试。");
+        throw new CoreError("agent-unavailable", "Bot 已变更，请刷新列表后重试。");
       if ("projectName" in request) {
         const current = snapshot.memberships.find((item) =>
           item.agentId === request.agentId && item.name === request.projectName &&

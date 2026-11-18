@@ -62,7 +62,7 @@ void app.whenReady().then(async () => {
   };
   try {
     await window.loadFile(path.resolve('dist/renderer/index.html'));
-    await until("document.querySelectorAll('section[aria-label=\"Agent 列表\"] .collaboration-agent-list-row').length === 4");
+    await until("document.querySelectorAll('section[aria-label=\"Bot 列表\"] .collaboration-agent-list-row').length === 4");
     if (interactive) {
       process.stdout.write('Agent list fixture ready. Close the window to finish.\n');
       await new Promise(resolve => window.once('closed', resolve));
@@ -80,8 +80,8 @@ void app.whenReady().then(async () => {
       {name: 'Disabled Agent', subtitle: '飞书 · 0 个群聊', status: '已停用', disabled: false},
       {name: 'Error Agent', subtitle: '群配置读取失败', status: '读取失败', disabled: false},
     ]);
-    assert.equal(await evaluate("document.querySelectorAll('section[aria-label=\"Agent 列表\"] .settings-add-row').length"), 1);
-    assert.equal(await evaluate("document.querySelectorAll('section[aria-label=\"Agent 列表\"] .settings-entity-row').length"), 4);
+    assert.equal(await evaluate("document.querySelectorAll('section[aria-label=\"Bot 列表\"] .settings-add-row').length"), 1);
+    assert.equal(await evaluate("document.querySelectorAll('section[aria-label=\"Bot 列表\"] .settings-entity-row').length"), 4);
     await until("document.querySelector('.collaboration-avatar.agent img')?.dataset.loaded === 'true'");
     process.stdout.write('PASS compact list, unique groups and status precedence\n');
     await evaluate("Array.from(document.querySelectorAll('.collaboration-agent-list-row')).find(row => row.querySelector('strong').textContent === 'Error Agent').click()");
@@ -103,12 +103,12 @@ void app.whenReady().then(async () => {
     await until("document.querySelector('.collaboration-profile .collaboration-avatar.group.large img[data-loaded=true]') !== null");
     assert.equal(await evaluate("document.querySelector('.collaboration-profile .collaboration-avatar.group img').naturalWidth"), 1);
     await evaluate("document.querySelector('button[aria-label=\"返回列表\"]').click()");
-    await evaluate("Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === 'Agent').click()");
+    await evaluate("Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === 'Bot').click()");
     await evaluate("document.querySelector('.collaboration-agent-list-row').click()");
     await until("document.querySelector('.settings-toolbar h1')?.textContent === 'Connected Agent'");
     process.stdout.write('PASS actual group portraits on bound rows, list and detail with failed-image fallback\n');
     await evaluate("Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === '加入飞书群').click()");
-    await until("document.body.innerText.includes('让 Agent 加入飞书群')");
+    await until("document.body.innerText.includes('让 Bot 加入飞书群')");
     await until("Boolean(document.querySelector('[aria-label=\"飞书群名称\"]'))");
     assert.equal(commands.some(command => command.type === 'listJoinedGroups'), false);
     assert.equal(await evaluate("document.body.innerText.includes('操作未完成')"), false);
@@ -123,10 +123,10 @@ void app.whenReady().then(async () => {
     try {
       await emptyWindow.loadFile(path.resolve('dist/renderer/index.html'));
       const empty = code => emptyWindow.webContents.executeJavaScript(code);
-      for (let index = 0; index < 100 && !(await empty("document.body.innerText.includes('添加你的第一个 Agent')")); index++) await pause(50);
-      assert.equal(await empty("document.body.innerText.includes('添加你的第一个 Agent')"), true);
-      assert.equal(await empty("Array.from(document.querySelectorAll('button')).filter(button => button.textContent.trim() === '添加 Agent').length"), 1);
-      await empty("Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === '添加 Agent').click()");
+      for (let index = 0; index < 100 && !(await empty("document.body.innerText.includes('邀请你的第一个 Bot')")); index++) await pause(50);
+      assert.equal(await empty("document.body.innerText.includes('邀请你的第一个 Bot')"), true);
+      assert.equal(await empty("Array.from(document.querySelectorAll('button')).filter(button => button.textContent.trim() === '添加 Bot').length"), 1);
+      await empty("Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === '添加 Bot').click()");
       assert.equal(commands.at(-1).type, 'registerAgent');
       process.stdout.write('PASS first Agent empty state retains registration entry\n');
     } finally {emptyWindow.destroy();}
