@@ -1,32 +1,46 @@
-# Vonvon Bot
+<p align="center">
+  <img src="packages/desktop/assets/macos-icon.png" width="88" height="88" alt="Vonvon Bot 的猫咪图标">
+</p>
 
-Vonvon Bot 把运行在你电脑上的 Codex、Claude Code 等编程助手接入飞书。你可以在飞书群里发起任务、查看进度和继续会话，在桌面端管理 Bot、群和工作目录。
+<h1 align="center">Vonvon Bot</h1>
 
-## 安装
+<p align="center">在飞书里交代任务，用自己设备上的 Codex 或 Claude Code 来做。</p>
 
-- Mac、Windows：从 https://vonvon.cc/get/ 下载桌面端安装包，里面带着服务端。
-- Linux（glibc，x64 或 arm64）只装服务端，0.9.0 起可用：从 [官网下载页](https://vonvon.cc/get/) 复制完整安装命令。双源安装方式和发布状态边界见 [Linux 服务端安装](docs/server-install.md)。
+<p align="center">
+  <a href="https://vonvon.cc/get/">下载</a> ·
+  <a href="https://vonvon.cc/docs/quickstart/">快速开始</a> ·
+  <a href="https://vonvon.cc/docs/">使用文档</a> ·
+  <a href="https://vonvon.cc/changelog/">更新日志</a>
+</p>
 
-  装到 `~/.local/share/vonvon-bot/server`，数据在 `~/.vonvon-bot`。卸载用 `sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/uninstall.sh)"`，数据目录留着。这条命令只给 Linux，在 Mac 上运行只提示去下载安装包。
+Vonvon Bot 把飞书机器人连到你配置好的编程助手。比如在群里说「查一下这次构建失败的原因」，Bot 会在这个群配置的工作目录里查文件、跑命令，再把进度和结果发回飞书。群成员可以直接在飞书里使用，Bot 运行所在的设备需要开着并联网。
 
-## 从源码构建
+## 能做什么
 
-需要 Node.js 22.12+（22.x）、24.x 或 26+。在仓库根目录运行：
+- **在飞书里跟进任务。** 看运行进度、回答 Bot 的追问、停止任务，或接着之前的会话继续做。
+- **按群分配工作。** 为不同的群选择工作目录、模型和执行权限。可以让 Bot 只读文件，也可以允许它修改工作区。
+- **在另一台设备运行。** 可以把 Bot 部署在 Linux 服务器上，再从 Mac 或 Windows 桌面端连接和管理。
 
-```sh
-npm ci
-npm run build
-npm run typecheck
-npm test
-npm run lint
-```
+## 让第一位 Bot 进群
 
-仓库包含桌面端、管理界面、运行 Bot 的 daemon，以及协议和客户端库。构建后可用 `node packages/daemon/bin/vonvon.mjs --help` 查看命令行入口。
+1. 在运行 Bot 的设备上安装 Vonvon Bot，并完成 Codex 或 Claude Code 的登录或 API 配置。
+2. 打开 Vonvon Bot，按引导用飞书扫码注册机器人，开通所需权限并发布。已有机器人可按应用提示接入。
+3. 将 Bot 加入一个飞书群，为群选好工作目录。第一次可以选只读权限，然后在群里 @ Bot，说「读一下这个项目的 README，告诉我怎么启动」。
 
-## 参与开发
+| 平台 | 安装方式 |
+| --- | --- |
+| macOS | 下载桌面端，按 Apple 芯片或 Intel 选择安装包。 |
+| Windows | 下载桌面端，按 x64 或 ARM64 选择安装包。 |
+| Linux | 支持 glibc 2.28+ 的 x64 和 arm64。按下载页的命令安装服务端，用命令行或其他设备上的桌面端管理。 |
 
-功能建议和一般问题可以通过 GitHub Issues 提交。改动代码前请看 [贡献指南](CONTRIBUTING.md)。安全问题请通过 [私下报告渠道](SECURITY.md) 提交。
+安装前可查看 [下载与系统要求](https://vonvon.cc/get/)。连接服务器见 [远程连接指南](https://vonvon.cc/docs/remote/)，旧 Bridge 用户可查看 [迁移指南](https://vonvon.cc/docs/bridge-import/)。
+
+## 反馈和贡献
+
+遇到安装、登录或连接问题，可以先查 [常见问题与排错](https://vonvon.cc/docs/troubleshooting/)。欢迎报告 Bug、提出功能建议，或帮忙改进中文文档。[新建 Issue](https://github.com/modelzen/vonvon-bot/issues/new/choose)
+
+如果想从源码构建或提交代码，可以从 [贡献指南](CONTRIBUTING.md) 开始。参与讨论时请遵守 [社区行为准则](CODE_OF_CONDUCT.md)。发现安全漏洞时，请走 [私下报告渠道](SECURITY.md)。
 
 ## 许可证
 
-Vonvon Bot 自有代码使用 [Apache-2.0](LICENSE)。第三方代码及素材适用各自的许可，见 [NOTICE](NOTICE) 和 [daemon NOTICE](packages/daemon/NOTICE)。
+Vonvon Bot 自有代码采用 [Apache-2.0](LICENSE)。第三方代码和素材适用各自的许可，见 [项目声明](NOTICE)、[daemon 声明](packages/daemon/NOTICE) 和 [UI 第三方声明](packages/ui/public/THIRD-PARTY-NOTICES.txt)。

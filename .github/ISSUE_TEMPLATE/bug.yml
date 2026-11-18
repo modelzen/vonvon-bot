@@ -1,0 +1,41 @@
+name: 报告 Bug
+description: Vonvon Bot 的某项功能没有按预期工作。
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先搜索已有 Issue。上传前请删去密钥、飞书用户数据和私有资源链接。安全漏洞请使用私下报告入口。
+  - type: input
+    id: version
+    attributes:
+      label: Vonvon Bot 版本
+      placeholder: 例如 0.10.1
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 运行环境
+      description: 写明系统、架构和使用的模型工具。远程使用时，也写明运行 Bot 的那台设备。
+      placeholder: 例如 Windows 11 x64，使用 Codex CLI
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 怎么复现
+      description: 写出从哪里开始、按什么步骤操作。
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 预期和实际结果
+      description: 分别说说你预期发生什么，以及实际看到了什么。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 日志或截图
+      description: 可贴相关报错、脱敏日志或截图。
