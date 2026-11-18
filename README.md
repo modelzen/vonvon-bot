@@ -39,7 +39,7 @@ Vonvon Bot 把飞书机器人连到你配置好的编程助手。比如在群里
 
 遇到安装、登录或连接问题，可以先查 [常见问题与排错](https://vonvon.cc/docs/troubleshooting/)。欢迎报告 Bug、提出功能建议，或帮忙改进中文文档。[新建 Issue](https://github.com/modelzen/vonvon-bot/issues/new/choose)
 
-如果想从源码构建或提交代码，可以从 [贡献指南](CONTRIBUTING.md) 开始。参与讨论时请遵守 [社区行为准则](CODE_OF_CONDUCT.md)。发现安全漏洞时，请走 [私下报告渠道](SECURITY.md)。
+欢迎用 Codex、Claude Code 或其他模型一起改进项目。如何开始、验证改动和提交 PR，见 [贡献指南](CONTRIBUTING.md)。参与讨论时请遵守 [社区行为准则](CODE_OF_CONDUCT.md)。发现安全漏洞时，请走 [私下报告渠道](SECURITY.md)。
 
 ## 许可证
 
