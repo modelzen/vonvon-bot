@@ -6,7 +6,7 @@ import { deviceEventSchema } from "./device.js";
 export const logEventPayloadSchema = z.object({lines:z.string()});
 export type LogEventPayload = z.infer<typeof logEventPayloadSchema>;
 export const backendInstallEventPayloadSchema = z.object({
-  operationId:z.string().uuid(), id:z.string(), update:z.boolean(), item:backendInstallItemSchema,
+  operationId:z.guid(), id:z.string(), update:z.boolean(), item:backendInstallItemSchema,
 });
 export type BackendInstallEventPayload = z.infer<typeof backendInstallEventPayloadSchema>;
 /** U4: the daemon asks the desktop shell on its own computer to check for, or run, the app's update; sent to that shell's

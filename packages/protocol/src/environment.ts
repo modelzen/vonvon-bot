@@ -4,13 +4,13 @@ import { codexCompatibilitySchema } from "./domain.js";
 export const environmentToolSchema = z.enum(["codex", "claude", "lark-cli"]);
 export type EnvironmentTool = z.infer<typeof environmentToolSchema>;
 const name = z.string().trim().min(1).max(128).regex(/^[^\x00-\x1f]+$/);
-const operationId = z.string().uuid();
+const operationId = z.guid();
 /**
  * Optional on the requests that start a tool or component install (cli-7-environment): the caller's own id for this one
  * request, kept on the operation it starts and shown in that operation's state, so a caller can tell its own operation
  * from another caller's. A daemon from before it refuses the field (strict schema); one that has it echoes it.
  */
-const requestId = z.string().uuid().optional();
+const requestId = z.guid().optional();
 // These messages travel in the existing install output and survive status replay.
 export const backendInstallProgress = {
   installing: '\n正在下载并安装组件…\n',

@@ -66,6 +66,8 @@ const replySchemas = {
 } satisfies Record<z.infer<typeof requestSchema>["method"], z.ZodTypeAny>;
 type Method = keyof typeof replySchemas;
 type Payload<M extends Method> = Extract<z.input<typeof requestSchema>, { method: M }>["payload"];
+type Reply<M extends Method> = z.output<(typeof replySchemas)[M]>;
+const replyParsers: { [M in Method]: { parse(value: unknown): Reply<M> } } = replySchemas;
 type Pending = { method: Method; resolve: (value: unknown) => void; reject: (error: Error) => void };
 
 export interface ClientConnection {
@@ -165,12 +167,12 @@ export function createClient(socket: ClientConnection, capabilities: readonly st
   socket.onClose(() => failAll(new Error("Daemon connection closed")));
   socket.onError(error => failAll(error));
 
-  function send<M extends Method>(method: M, payload: Payload<M>): Promise<z.output<(typeof replySchemas)[M]>> {
+  function send<M extends Method>(method: M, payload: Payload<M>): Promise<Reply<M>> {
     if (closed || !socket.isOpen()) return Promise.reject(new Error("Daemon connection closed"));
     const id = globalThis.crypto.randomUUID();
     const frame = requestSchema.parse({type:"request",id,method,payload});
-    return new Promise<z.output<(typeof replySchemas)[M]>>((resolve, reject) => {
-      pending.set(id, {method, resolve: value => resolve(replySchemas[method].parse(value)), reject});
+    return new Promise<Reply<M>>((resolve, reject) => {
+      pending.set(id, {method, resolve: value => resolve(replyParsers[method].parse(value)), reject});
       socket.send(JSON.stringify(frame), error => {
         if (error && pending.delete(id)) reject(error);
       });

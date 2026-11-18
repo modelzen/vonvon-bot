@@ -6,7 +6,7 @@ import { serverInfoSchema } from "./handshake.js";
  * (like `desktopUpdateSchema`), so the page parses it without importing the desktop package. */
 export const LOCAL_VIEW = "local" as const;
 /** 'local', or a remote device's id (its machineId). */
-export const viewIdSchema = z.union([z.literal(LOCAL_VIEW), z.string().uuid()]);
+export const viewIdSchema = z.union([z.literal(LOCAL_VIEW), z.guid()]);
 export type ViewId = z.infer<typeof viewIdSchema>;
 /** The name this computer gives a device: 1 to 40 characters, no control characters. */
 export const deviceAliasSchema = z.string().trim().min(1).max(40).refine(value => !/[\u0000-\u001f\u007f]/.test(value));
@@ -69,7 +69,7 @@ export const linkPreviewCodeSchema = z.enum(["invalid_link", "link_expired", "ow
 export type LinkPreviewCode = z.infer<typeof linkPreviewCodeSchema>;
 export const linkPreviewSchema = z.discriminatedUnion("ok", [
   z.object({
-    ok: z.literal(true), deviceId: z.string().uuid(), name: z.string(), routes: z.array(deviceRouteSchema).min(1),
+    ok: z.literal(true), deviceId: z.guid(), name: z.string(), routes: z.array(deviceRouteSchema).min(1),
     expiresAt: z.number().int(), repair: z.boolean(),
   }).strict(),
   z.object({

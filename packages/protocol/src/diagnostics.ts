@@ -41,7 +41,7 @@ export const groupAttentionSchema = z.object({
 export type GroupAttention = z.infer<typeof groupAttentionSchema>;
 /** Safe live activity only: never reasoning, message text, command lines, paths or tool arguments. */
 export const botActivitySchema = z.object({
-  id: z.string().uuid(), groupId: z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/),
+  id: z.guid(), groupId: z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/),
   phase: z.enum(["processing", "thinking", "tool", "responding", "compacting", "waiting", "retrying"]),
   startedAt: z.number().finite().nonnegative(), updatedAt: z.number().finite().nonnegative(),
   /** Host receipt of the last heartbeat; updatedAt remains the last phase change. */
@@ -52,7 +52,7 @@ export const botActivitySchema = z.object({
 export type BotActivity = z.infer<typeof botActivitySchema>;
 /** A successful model judgement's intent, not a receipt that a reply/topic was delivered. */
 export const botDecisionSchema = z.object({
-  id: z.string().uuid(), groupId: z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/), place: z.enum(["main", "topic"]),
+  id: z.guid(), groupId: z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/), place: z.enum(["main", "topic"]),
   decision: z.enum(["skip", "main", "reply", "topic"]),
   trigger: z.enum(["mention", "quote", "name", "focus", "glance", "bot-mention"]),
   decidedAt: z.number().finite().nonnegative(), messageAt: z.number().finite().nonnegative(),
@@ -61,7 +61,7 @@ export const botDecisionSchema = z.object({
 export type BotDecision = z.infer<typeof botDecisionSchema>;
 export const BOT_ACTIVITY_STALE_MS = 60_000;
 export const botLatestActionSchema = z.object({
-  id: z.string().uuid(), groupId: z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/),
+  id: z.guid(), groupId: z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/),
   kind: z.enum(["replied", "memory-saved"]), at: z.number().finite().nonnegative(),
 }).strict();
 export type BotLatestAction = z.infer<typeof botLatestActionSchema>;
@@ -71,7 +71,7 @@ export const CUSTOM_PROMPT_NOTICE = "新版默认智能提示词新增：先看�
  * several messages (s18c: a group's dropped queue); child and host are always the same version. */
 export const diagnosticsEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("activity"), activity: botActivitySchema }).strict(),
-  z.object({ kind: z.literal("activityEnded"), id: z.string().uuid() }).strict(),
+  z.object({ kind: z.literal("activityEnded"), id: z.guid() }).strict(),
   z.object({ kind: z.literal("decision"), decision: botDecisionSchema }).strict(),
   z.object({ kind: z.literal("latestAction"), action: botLatestActionSchema }).strict(),
   z.object({ kind: z.literal("attention"), groups: z.array(groupAttentionSchema).max(200) }).strict(),

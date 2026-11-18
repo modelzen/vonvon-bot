@@ -1,4 +1,4 @@
-import { requestSchema, type Request } from '@vonvon/protocol';
+import { requestSchema, requestSchemaForMethod, type Request } from '@vonvon/protocol';
 import { drainingError, errorEnvelope } from './errors';
 import type { PeerHub } from './peer-hub';
 import type { Peer } from './ws';
@@ -36,7 +36,7 @@ export function handleMessage(hub: PeerHub, peer: Peer, text: string | undefined
   }
   if (!raw || typeof raw !== 'object' || !('id' in raw) || typeof raw.id !== 'string' || !raw.id) { peer.close(1007, 'invalid_message'); return; }
   const id = raw.id;
-  if ('type' in raw && raw.type === 'request' && 'method' in raw && typeof raw.method === 'string' && !requestSchema.optionsMap.has(raw.method)) {
+  if ('type' in raw && raw.type === 'request' && 'method' in raw && typeof raw.method === 'string' && !requestSchemaForMethod(raw.method)) {
     peer.send({ type: 'error', id, code: 'unknown_method', message: '未知 RPC 方法。' });
     return;
   }

@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {agentIdSchema, distributionSchema, lingerStateSchema, serviceStateSchema} from './domain.js';
+import {agentIdStringSchema, distributionSchema, lingerStateSchema, serviceStateSchema} from './domain.js';
 import {mcpRequestSchema, mcpReplySchema} from './mcp.js';
 import {bridgeImportReplySchema} from './bridge-import.js';
 
@@ -18,7 +18,7 @@ export const machineRequestSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('service'), action:z.enum(['install','start','stop','uninstall'])}),
   /** Remembers that the user chose a detached daemon over the login-time service, so the checklist stops asking. */
   z.object({type:z.literal('setServiceSkipped'), skipped:z.boolean()}),
-  z.object({type:z.literal('startHost'), bot:agentIdSchema.unwrap().optional()}),
+  z.object({type:z.literal('startHost'), bot:agentIdStringSchema.optional()}),
   /** `reason: 'update'`: a desktop update stops the server (owner 2026-11-02), and the cards of the cut-short turns say so. */
   z.object({type:z.literal('stopHost'), reason:z.literal('update').optional()}),
   z.object({type:z.literal('logs')}),

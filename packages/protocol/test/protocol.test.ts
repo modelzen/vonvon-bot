@@ -141,6 +141,8 @@ describe("pinned contract extraction", () => {
   });
   it("validates machine UUIDs and historical bridge project rows without dropping extensions", () => {
     expect(machineIdSchema.parse(randomUUID())).toBeTruthy();
+    const legacyMachineId = "00000000-0000-0000-0000-000000000001";
+    expect(machineIdSchema.parse(legacyMachineId)).toBe(legacyMachineId);
     expect(machineIdSchema.safeParse("").success).toBe(false);
     const parsed = bridgeProjectsStoreSchema.parse(fixture("projects.json"));
     expect(parsed.extensionAtRoot).toEqual({keep:true});
@@ -148,6 +150,21 @@ describe("pinned contract extraction", () => {
     expect(bridgeProjectsStoreSchema.parse({projects:[{name:"old",cwd:"/tmp"}]}).projects).toHaveLength(1);
     const old = {version:"legacy",projects:[{name:"old",cwd:"/tmp",chatId:42,enabled:"legacy"}]};
     expect(bridgeProjectsStoreSchema.parse(old)).toEqual(old);
+  });
+  it("accepts a settings save reply with omitted section values", () => {
+    const reply = {
+      kind: "saved",
+      result: {
+        kind: "saved",
+        section: {
+          scope: { kind: "host" },
+          section: "execution",
+          value: { revision: "1", access: { kind: "writable" }, apply: [] },
+        },
+        effects: [],
+      },
+    };
+    expect(settingsReplySchema.parse(reply)).toEqual(reply);
   });
   it("round-trips settings views for all four scopes", () => {
     const section = (value: unknown) => ({stored:value,effective:value,revision:"r1",access:{kind:"writable"},apply:[]});

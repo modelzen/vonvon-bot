@@ -39,9 +39,22 @@ test('every platform requires scope readiness and its own selection', () => {
     assert.match(body, /needs\.scope\.outputs\.ready/);
     assert.match(body, /needs\.scope\.outputs\.platforms/);
     assert.match(body, new RegExp(`['\"]${platform}['\"]`));
-    assert.match(body, /ref:\s*\$\{\{\s*needs\.scope\.outputs\.source_sha\s*\}\}/);
     assert.match(body, /node \.github\/scripts\/ci-run\.mjs/);
     assert.doesNotMatch(body, /vars\./);
+  }
+});
+
+test('all jobs check out the event commit and platform checks verify it before installation', () => {
+  for (const job of ['scope', 'linux', 'macos', 'windows', 'gate']) {
+    const body = jobs[job];
+    assert.match(body, /ref:\s*\$\{\{\s*github\.event\.pull_request\.head\.sha\s*\|\|\s*github\.sha\s*\}\}/);
+    assert.doesNotMatch(body, /needs\.scope\.outputs\.source_sha/);
+  }
+  for (const platform of ['linux', 'macos', 'windows']) {
+    const body = jobs[platform];
+    const verification = body.indexOf('test "$(git rev-parse HEAD)" = "$SOURCE_SHA"');
+    assert.match(body, /SOURCE_SHA:\s*\$\{\{\s*github\.event\.pull_request\.head\.sha\s*\|\|\s*github\.sha\s*\}\}/);
+    assert.ok(verification >= 0 && verification < body.indexOf('run: npm ci'), `${platform} must verify the event commit before npm ci`);
   }
 });
 

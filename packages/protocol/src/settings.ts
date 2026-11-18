@@ -303,6 +303,7 @@ export const agentViewSchema = z.object({
   /** per backend, what this bot's groups on it judge with: the bot has no backend of its own */
   judgeByBackend: z
     .record(
+      z.string(),
       z.object({
         model: z.string(),
         effort: effort.optional(),
@@ -317,7 +318,7 @@ export const agentViewSchema = z.object({
   administrators: z.object({
     openIds: z.array(z.string()),
     /** The name Feishu gave each person on the list; one it would not name has no entry. Absent from an older daemon. */
-    names: z.record(z.string()).optional(),
+    names: z.record(z.string(), z.string()).optional(),
     /** Who may be picked to join the list, the people on it left out. Absent from an older daemon. */
     candidates: z.array(adminCandidateSchema).optional(),
     revision: z.string(),
@@ -447,14 +448,14 @@ const editablePatches: Record<
 // the global policy. Views expose only the single policy used by new clients.
 editablePatches.agent.titles = z.union([
   agentSectionSchemas.titles.partial().strict(),
-  z.object({byBackend: z.record(title).refine(value => Object.keys(value).length === 1 && Object.keys(value).every(key => !['__proto__', 'constructor', 'prototype'].includes(key)))}).strict(),
+  z.object({byBackend: z.record(z.string(), title).refine(value => Object.keys(value).length === 1 && Object.keys(value).every(key => !['__proto__', 'constructor', 'prototype'].includes(key)))}).strict(),
 ]);
 export const editSchema = z
   .object({
     scope,
     section: z.string(),
     revision: z.string().min(1),
-    patch: z.unknown(),
+    patch: z.unknown().optional(),
   })
   .strict()
   .superRefine((edit, ctx) => {
@@ -618,7 +619,7 @@ export type SettingsRequest =
 const sectionView = z.object({
   scope,
   section: z.string(),
-  value: section(z.unknown()),
+  value: section(z.unknown().optional()),
 });
 const saveSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -681,7 +682,7 @@ export const settingsReplySchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("fileChosen"),
-    file: z.object({ token: z.string().uuid(), displayPath: z.string() }),
+    file: z.object({ token: z.guid(), displayPath: z.string() }),
   }),
   z.object({ kind: z.literal("cancelled") }),
   z.object({

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { requestSchema, type Request } from "./rpc.js";
+import { requestSchema, requestSchemaForMethod, type Request } from "./rpc.js";
 
 /**
  * One name for each thing a client can ask the daemon: `method.type`, like `command.bindGroup`. The requests in
@@ -21,33 +21,34 @@ const NESTED: Record<string, readonly string[]> = {
   "machine.bridgeImport": ["action"],
 };
 
-function unwrap(schema: z.ZodTypeAny): z.ZodTypeAny {
-  if (schema instanceof z.ZodEffects) return unwrap(schema.innerType());
+type RpcSchema = z.core.$ZodType;
+
+function unwrap(schema: RpcSchema): RpcSchema {
   if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable) return unwrap(schema.unwrap());
   return schema;
 }
 
-function field(schema: z.ZodTypeAny, name: string): z.ZodTypeAny {
+function field(schema: RpcSchema, name: string): RpcSchema {
   const object = unwrap(schema);
-  const inner = object instanceof z.ZodObject ? (object.shape as Record<string, z.ZodTypeAny>)[name] : undefined;
-  if (!inner) throw new Error(`rpcKinds: no field ${name}`);
+  const inner = object instanceof z.ZodObject ? object.shape[name] : undefined;
+  if (!(inner instanceof z.ZodType)) throw new Error(`rpcKinds: no field ${name}`);
   return inner;
 }
 
-function literal(schema: z.ZodTypeAny): string {
+function literal(schema: RpcSchema): string {
   const value = unwrap(schema);
   if (value instanceof z.ZodLiteral && typeof value.value === "string") return value.value;
   throw new Error("rpcKinds: a discriminator that is not a text literal");
 }
 
 /** Each variant's name, with its schema when it has one (an enum's values have none). */
-function variants(schema: z.ZodTypeAny): Array<[string, z.ZodTypeAny | undefined]> {
+function variants(schema: RpcSchema): Array<[string, RpcSchema | undefined]> {
   const inner = unwrap(schema);
   if (inner instanceof z.ZodDiscriminatedUnion) {
-    const options = inner.options as z.ZodObject<z.ZodRawShape>[];
-    return options.map(option => [literal(field(option, inner.discriminator)), option]);
+    const key = inner.def.discriminator;
+    return inner.options.map(option => [literal(field(option, key)), option]);
   }
-  if (inner instanceof z.ZodEnum) return (inner.options as string[]).map(value => [value, undefined]);
+  if (inner instanceof z.ZodEnum) return inner.options.map(value => [String(value), undefined]);
   // A payload of one shape, like snapshot's and contextPreview's `{ type: "get" }`.
   if (inner instanceof z.ZodObject) return [[literal(field(inner, "type")), inner]];
   throw new Error("rpcKinds: a payload that is neither a union, an enum nor an object with a type");
@@ -57,7 +58,7 @@ export function rpcKinds(): RpcKind[] {
   const kinds: RpcKind[] = [];
   for (const option of requestSchema.options) {
     const method = literal(option.shape.method);
-    const payload = (METHOD_FIELD[method] ?? []).reduce<z.ZodTypeAny>(field, option.shape.payload);
+    const payload = (METHOD_FIELD[method] ?? []).reduce<RpcSchema>(field, option.shape.payload);
     for (const [type, schema] of variants(payload)) {
       const base = `${method}.${type}`;
       const path = NESTED[base];
@@ -70,24 +71,26 @@ export function rpcKinds(): RpcKind[] {
 }
 
 /** The variant `value` is of `schema`: its discriminator's value, or the value itself for an enum. */
-function variantOf(schema: z.ZodTypeAny, value: unknown): [string, z.ZodTypeAny | undefined] {
+function variantName(schema: RpcSchema, value: unknown): string {
   const inner = unwrap(schema);
-  if (inner instanceof z.ZodEnum) return [String(value), undefined];
-  const key = inner instanceof z.ZodDiscriminatedUnion ? inner.discriminator as string : "type";
-  const name = String((value as Record<string, unknown>)[key]);
-  return [name, inner instanceof z.ZodDiscriminatedUnion ? inner.optionsMap.get(name) : inner];
+  if (inner instanceof z.ZodEnum) return String(value);
+  const key = inner instanceof z.ZodDiscriminatedUnion ? inner.def.discriminator : "type";
+  return String(fieldValue(value, key));
 }
 const fieldValue = (value: unknown, name: string): unknown => (value as Record<string, unknown>)[name];
 
 /** The `rpcKinds()` name of a parsed request, like `settings.act.voice` (devices 5.2: the permission table's key). */
 export function rpcKindOf(request: Request): string {
-  const option = requestSchema.optionsMap.get(request.method);
+  const option = requestSchemaForMethod(request.method);
   if (!option) throw new Error(`rpcKindOf: no method ${request.method}`);
   const path = METHOD_FIELD[request.method] ?? [];
-  const [type, schema] = variantOf(path.reduce<z.ZodTypeAny>(field, option.shape.payload as z.ZodTypeAny), path.reduce(fieldValue, request.payload));
+  const payload = path.reduce<RpcSchema>(field, option.shape.payload);
+  const value = path.reduce(fieldValue, request.payload);
+  const type = variantName(payload, value);
   const base = `${request.method}.${type}`;
   const nested = NESTED[base];
-  if (!nested || !schema) return base;
-  const value = path.reduce(fieldValue, request.payload);
-  return `${base}.${variantOf(nested.reduce(field, schema), nested.reduce(fieldValue, value))[0]}`;
+  if (!nested) return base;
+  const schema = variants(payload).find(([name]) => name === type)?.[1];
+  if (!schema) return base;
+  return `${base}.${variantName(nested.reduce(field, schema), nested.reduce(fieldValue, value))}`;
 }

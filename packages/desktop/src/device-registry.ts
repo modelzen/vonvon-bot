@@ -22,7 +22,7 @@ const lastKnownSchema = z.object({
   version: z.string(), protocolVersion: z.number().int(), platform: z.string().optional(), deviceName: z.string().optional(), at: z.number().int(),
 }).strict();
 const storedDeviceSchema = z.object({
-  deviceId: z.string().uuid(),
+  deviceId: z.guid(),
   /** The name this computer gave it. */
   name: z.string().min(1).max(40),
   /** The link's `device.pk`. */

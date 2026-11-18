@@ -83,8 +83,9 @@ await writeFile(join(stage, 'package.json'), JSON.stringify({
 }, null, 2) + '\n');
 
 // The daemon runs Resources/npm/bin/npm-cli.js with Electron in Node mode, so a Mac without Node can still install.
-const pinnedNpm = desktopMetadata.devDependencies.npm;
-const npmSource = dirname(createRequire(join(root, 'package.json')).resolve('npm/package.json'));
+const monorepoManifest = join(root, '../../package.json');
+const pinnedNpm = JSON.parse(await readFile(monorepoManifest, 'utf8')).devDependencies.npm;
+const npmSource = dirname(createRequire(monorepoManifest).resolve('npm/package.json'));
 const npmVersion = JSON.parse(await readFile(join(npmSource, 'package.json'), 'utf8')).version;
 if (npmVersion !== pinnedNpm) throw new Error(`Installed npm ${npmVersion} is not the pinned ${pinnedNpm}. Run npm ci.`);
 await cp(npmSource, join(stage, 'npm'), { recursive: true, dereference: true });

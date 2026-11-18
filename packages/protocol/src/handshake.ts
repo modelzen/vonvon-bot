@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /** devices 4.5: 2 since the device slices; the hello is the same, the server info has a v1 and a v2 shape. */
 export const PROTOCOL_VERSION = 2;
-export const machineIdSchema = z.string().uuid().brand<"MachineId">();
+export const machineIdSchema = z.guid().brand<"MachineId">();
 export type MachineId = z.infer<typeof machineIdSchema>;
 const protocolVersionSchema = z.number().int().positive();
 export const helloSchema = z.object({

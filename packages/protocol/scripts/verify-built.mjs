@@ -17,6 +17,7 @@ const samples = [
   {type:"restartHost"},
   {type:"listJoinedGroups",agentId},
   {type:"listGroupMembers",agentId,groupId},
+  {type:"feishuRead",agentId,tool:"search",args:{}},
   {type:"bindGroup",agentId,groupId,projectName:"fixture",folder:{kind:"existing",folderToken},tool:"codex",conversation:"threads"},
   {type:"setResponse",membershipId,response:"mention"},
   {type:"setPermission",membershipId,administrator:"full",network:false},
@@ -25,7 +26,7 @@ const samples = [
   {type:"deleteAgent",agentId},
   {type:"cancelJob",jobId},
 ];
-assert.deepEqual(new Set(samples.map(sample => sample.type)), new Set(commandSchema.optionsMap.keys()));
+assert.deepEqual(new Set(samples.map(sample => sample.type)), new Set(commandSchema.options.map(option => option.shape.type.value)));
 for (const sample of samples) commandSchema.parse(sample);
 commandSchema.parse({type:"bindGroup",agentId,groupId,projectName:"fixture",folder:{kind:"default"},tool:"codex",conversation:"threads"});
 for (const type of ["quit","hideWindow","setLoginItem","chooseFolder"]) {

@@ -46,7 +46,6 @@ function parseTask(value: unknown): StoredTask {
 }
 
 function describeInvalid(error: unknown): string {
-  // Matched by shape: the protocol schemas throw zod 3 errors and the runtime schema zod 4 ones, two ZodError classes.
   if (error instanceof Error && 'issues' in error && Array.isArray(error.issues)) {
     return (error.issues as { path?: unknown[]; message?: string }[])
       .map(issue => `${issue.path?.map(String).join('.') || '(root)'}: ${issue.message}`).join('; ');
