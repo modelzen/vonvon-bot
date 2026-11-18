@@ -74,7 +74,7 @@ describe('__standalone-setup', () => {
     await expect(lstat(join(f.root, 'current'))).rejects.toMatchObject({ code: 'ENOENT' });
     // owner 2026-11-01: Mac and Windows install the desktop app, which carries the server
     for (const platform of ['win32', 'darwin'] as const) {
-      expect(await failure(f.root, '1.0.0', { ...f.deps, platform })).toMatchObject({ exitCode: 1, error: { reason: 'unsupported_platform', message: expect.stringContaining('https://vonvon.cc/get/') } });
+      expect(await failure(f.root, '1.0.0', { ...f.deps, platform })).toMatchObject({ exitCode: 1, error: { reason: 'unsupported_platform', message: expect.stringContaining('https://vonvon.bot/get/') } });
     }
     await expect(lstat(join(f.root, 'current'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(lstat(join(f.root, 'bin'))).rejects.toMatchObject({ code: 'ENOENT' });

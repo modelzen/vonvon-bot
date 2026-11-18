@@ -96,7 +96,7 @@ it('says the desktop app there must be open, and still offers the button', async
 });
 
 it('shows what the desktop app there answered, as that device\'s', async () => {
-  const view = await opened(async () => ({...core('bundled', false), latest: null, desktopShell: true, message: '这个安装包没有可用的签名更新源，请到官网下载新版本：https://vonvon.cc/get/'}), viaDesktop);
+  const view = await opened(async () => ({...core('bundled', false), latest: null, desktopShell: true, message: '这个安装包没有可用的签名更新源，请到官网下载新版本：https://vonvon.bot/get/'}), viaDesktop);
   const tree = view.render();
   expect(words(tree)).toContain('没有可用的签名更新源');
   expect(bundledButton(tree)).toBeUndefined();

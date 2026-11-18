@@ -11,8 +11,8 @@ const verificationHosts = new Set([
 export type ExternalUrlKind = "registration" | "authorization" | "verification" | "event-settings" | "app-console" | "group" | "bot-chat" | "releases" | "download" | "tailscale";
 
 /** 官网的更新日志和下载页；安装包在这里下载，应用内更新没生效时也指到这里。 */
-export const changelogUrl = "https://vonvon.cc/changelog/";
-export const downloadPageUrl = "https://vonvon.cc/get/";
+export const changelogUrl = "https://vonvon.bot/changelog/";
+export const downloadPageUrl = "https://vonvon.bot/get/";
 
 export function allowedExternalUrl(value: string, kind: ExternalUrlKind): string | null {
   try {
@@ -41,10 +41,10 @@ export function allowedExternalUrl(value: string, kind: ExternalUrlKind): string
         if (!new Set(["applink.feishu.cn", "applink.larksuite.com"]).has(url.hostname) || url.pathname !== "/client/bot/open" || !/^cli_[A-Za-z0-9_-]+$/.test(url.searchParams.get('appId') ?? '') || [...url.searchParams.keys()].some(key => key !== 'appId') || url.hash) return null;
         break;
       case "releases":
-        if (url.hostname !== "vonvon.cc" || url.pathname !== "/changelog/") return null;
+        if (url.hostname !== "vonvon.bot" || url.pathname !== "/changelog/") return null;
         break;
       case "download":
-        if (url.hostname !== "vonvon.cc" || url.pathname !== "/get/") return null;
+        if (url.hostname !== "vonvon.bot" || url.pathname !== "/get/") return null;
         break;
       case "tailscale":
         // devices-ui-1b 4.9: only Tailscale's download page, exactly.
