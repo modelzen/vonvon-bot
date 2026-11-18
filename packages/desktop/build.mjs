@@ -11,6 +11,7 @@ import { buildWindowsCli } from '../../scripts/build-windows-cli.mjs';
 
 const version = await checkedProductVersion();
 const root = dirname(fileURLToPath(import.meta.url));
+const desktopMetadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const dist = join(root, 'dist');
 const stage = join(root, 'stage');
 const ui = join(root, '../ui/dist');
@@ -74,7 +75,7 @@ await cp(join(root, 'assets/windows-icon.ico'), join(stage, 'assets/windows-icon
 await writeFile(join(stage, 'package.json'), JSON.stringify({
   name: 'vonvon-bot-desktop',
   version,
-  license: 'UNLICENSED',
+  license: desktopMetadata.license,
   private: true,
   main: 'desktop/main.cjs',
   description: 'Vonvon Bot desktop',
@@ -82,7 +83,7 @@ await writeFile(join(stage, 'package.json'), JSON.stringify({
 }, null, 2) + '\n');
 
 // The daemon runs Resources/npm/bin/npm-cli.js with Electron in Node mode, so a Mac without Node can still install.
-const pinnedNpm = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).devDependencies.npm;
+const pinnedNpm = desktopMetadata.devDependencies.npm;
 const npmSource = dirname(createRequire(join(root, 'package.json')).resolve('npm/package.json'));
 const npmVersion = JSON.parse(await readFile(join(npmSource, 'package.json'), 'utf8')).version;
 if (npmVersion !== pinnedNpm) throw new Error(`Installed npm ${npmVersion} is not the pinned ${pinnedNpm}. Run npm ci.`);

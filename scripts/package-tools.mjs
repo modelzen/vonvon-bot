@@ -3,7 +3,7 @@ import { lstat, readFile, readdir, readlink } from 'node:fs/promises';
 import { join, posix, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const requiredFiles = ['package.json', 'bin/vonvon.mjs', 'dist/cli.js', 'ui/dist/index.html', 'LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md', 'import-core.json'];
+export const requiredFiles = ['package.json', 'bin/vonvon.mjs', 'dist/cli.js', 'ui/dist/index.html', 'LICENSE', 'LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md', 'import-core.json'];
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 export const allowlist = JSON.parse(await readFile(fileURLToPath(new URL('./vonvon-bot-install-scripts.json', import.meta.url)), 'utf8'));
 

@@ -65,10 +65,11 @@ async function fixture(t) {
   await save(cos, { bucket: 'fixture-123', region: 'ap-shanghai', prefix: 'bot/mac/stable/', publicManifestURL: 'https://dl.vonvon.cc/bot/mac/stable/manifest.json', ledgerFile: join(root, 'ledger.json'), secretIdEnv: 'READ_ID', secretKeyEnv: 'READ_KEY' });
   await writeFile(notes, 'Release notes');
   const options = { repo, out, sha, version, 'update-config': config, 'cos-config': cos, 'notes-file': notes };
-  const calls = [], remote = { run: undefined, dispatches: 0 }, helpers = [];
+  const calls = [], remote = { run: undefined, dispatches: 0, private: true }, helpers = [];
   const state = async () => JSON.parse(await readFile(join(out, 'release-orchestration.json'), 'utf8'));
   const api = async path => {
     calls.push(['api', path]);
+    if (path === 'repos/modelzen/vonvon-bot') return { private: remote.private };
     if (path.includes('/check-runs')) return { check_runs: [{ name: 'linux', status: 'in_progress', conclusion: null }] };
     if (path.includes('/jobs?')) return { jobs: [{ name: 'package', status: 'in_progress', created_at: '2026-10-28T00:00:00Z', started_at: '2026-10-28T00:01:00Z', steps: [{ name: 'Build and check source', status: 'completed', started_at: '2026-10-28T00:01:00Z', completed_at: '2026-10-28T00:06:00Z' }, { name: 'Package unsigned NSIS installer and ZIP', status: 'in_progress' }] }] };
     if (path.includes('/actions/workflows/')) return { workflow_runs: remote.run ? [remote.run] : [] };
@@ -79,7 +80,7 @@ async function fixture(t) {
   const execute = async (command, args, opts = {}) => {
     calls.push([command, args, opts]);
     if (command === 'git' && args[0] === 'show') {
-      if (args[1].endsWith('ci.yml')) return { stdout: ' runs-on: [self-hosted, macOS, ARM64, modelzen-macos, modelzen-macos-isolated]' };
+      if (args[1].endsWith('ci.yml')) return { stdout: await readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8') };
       if (args[1].endsWith('windows-release.yml')) return { stdout: 'source_sha:\nrelease_id:\n runs-on: windows-2025\n' };
       return { stdout: JSON.stringify({ version }) };
     }
@@ -152,8 +153,18 @@ test('prepare fixes immutable inputs, checks both runner scopes, and never build
   assert.equal(saved.windows.dispatch, 'not-requested');
   assert.equal(h.remote.dispatches, 0); assert.equal(h.helpers.length, 0);
   assert.ok(h.calls.some(call => call[1]?.includes?.('orgs/modelzen/actions/runners?per_page=100')));
+  assert.equal(saved.ciRunners[0]?.kind, 'self-hosted');
+  assert.equal(saved.ciRunners[0]?.ready, true);
   assert.equal(h.calls.filter(call => call[0] === 'xcrun').length, 1);
   await assert.rejects(prepareRelease(h.options, h.dependencies), /must be empty/);
+});
+
+test('public release preparation skips the private macOS runner inventory', async t => {
+  const h = await fixture(t);
+  h.remote.private = false;
+  const saved = await prepareRelease(h.options, h.dependencies);
+  assert.deepEqual(saved.ciRunners, []);
+  assert.equal(saved.runners.kind, 'github-hosted');
 });
 
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };

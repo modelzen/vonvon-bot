@@ -89,8 +89,8 @@ async function appFixture(t) {
   const h = await fixture(t);
   const app = join(h.root, 'Vonvon Bot.app');
   const core = 'Vonvon Bot.app/Contents/Resources/daemon/';
-  await h.put(`${core}package.json`, JSON.stringify({ version, license: 'UNLICENSED' }));
-  for (const name of ['LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md']) await h.put(core + name, `third-party ${name}`);
+  await h.put(`${core}package.json`, JSON.stringify({ version, license: 'Apache-2.0' }));
+  for (const name of ['LICENSE', 'LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md']) await h.put(core + name, `third-party ${name}`);
   for (const path of ['Contents/MacOS/Vonvon Bot', 'Contents/Frameworks/Electron Framework.framework/Electron Framework',
     'Contents/Frameworks/Vonvon Helper.app/Contents/MacOS/Vonvon Helper']) {
     await h.put(`Vonvon Bot.app/${path}`, Buffer.from('cafebabe00000000', 'hex'));
@@ -118,7 +118,7 @@ test('verification reads actual Core metadata, third-party declarations and ever
 for (const variant of ['Core version', 'first-party license', 'third-party declaration', 'bundled Claude', 'single arch', 'unsigned', 'wrong team', 'broad entitlements', 'false JIT', 'unknown entitlement']) {
   test(`verification refuses ${variant}`, async t => {
     const h = await appFixture(t);
-    if (variant === 'Core version') await h.put(`${h.core}package.json`, JSON.stringify({ version: '0.1.0', license: 'UNLICENSED' }));
+    if (variant === 'Core version') await h.put(`${h.core}package.json`, JSON.stringify({ version: '0.1.0', license: 'Apache-2.0' }));
     if (variant === 'first-party license') await h.put(`${h.core}package.json`, JSON.stringify({ version, license: 'MIT' }));
     if (variant === 'third-party declaration') await rm(join(h.root, h.core, 'NOTICE'));
     if (variant === 'bundled Claude') await h.put(`${h.core}node_modules/@anthropic-ai/claude-agent-sdk/package.json`, JSON.stringify({ name: '@anthropic-ai/claude-agent-sdk' }));
@@ -139,7 +139,7 @@ for (const variant of ['Core version', 'first-party license', 'third-party decla
 test('version sync updates actual desktop and lock metadata while preserving independent API versions', async t => {
   const h = await fixture(t);
   await h.put('packages/daemon/package.json', JSON.stringify({ version: '2.3.4' }));
-  await h.put('packages/desktop/package.json', JSON.stringify({ version: '0.1.0', license: 'UNLICENSED' }));
+  await h.put('packages/desktop/package.json', JSON.stringify({ version: '0.1.0', license: 'Apache-2.0' }));
   await h.put('packages/protocol/package.json', JSON.stringify({ version: '0.1.0' }));
   await h.put('package-lock.json', JSON.stringify({ packages: { 'packages/desktop': { version: '0.1.0' }, 'packages/protocol': { version: '0.1.0' } } }));
   await assert.rejects(checkedProductVersion(h.root), /version mismatch/);

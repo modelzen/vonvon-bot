@@ -144,8 +144,13 @@ export async function prepareRelease(options, dependencies = {}) {
     const runners = await inspectRunners(workflowLabels(workflowText), r.api);
     if (!runners.ready) throw new Error(`No eligible idle Windows runner with labels ${runners.labels.join(', ')}; repository and inherited organization access were checked (${runners.groupAccess})`);
     const ciText = (await r.execute('git', ['show', 'origin/main:.github/workflows/ci.yml'], gitOptions)).stdout;
-    const ciLabels = [...ciText.matchAll(/^\s+runs-on:\s*(\[[^\n]+\])\s*$/gm)].map(match => workflowLabels(` runs-on: ${match[1]}`)).filter(labels => labels.includes('self-hosted'));
-    const ciRunners = await Promise.all(ciLabels.map(labels => inspectRunners(labels, r.api)));
+    const ciLabels = [
+      ...[...ciText.matchAll(/^\s+runs-on:\s*(\[[^\n]+\])\s*$/gm)].map(match => workflowLabels(` runs-on: ${match[1]}`)),
+      ...[...ciText.matchAll(/'(\["self-hosted",[^\n\]]+\])'/g)].map(match => JSON.parse(match[1])),
+    ].filter(labels => labels.includes('self-hosted'));
+    const ciRunners = ciLabels.length > 0 && (await r.api(`repos/${repository}`)).private
+      ? await Promise.all(ciLabels.map(labels => inspectRunners(labels, r.api)))
+      : [];
     const profile = options['keychain-profile'] ?? 'notelet-notary';
     try { await r.execute('xcrun', ['notarytool', 'history', '--keychain-profile', profile, '--output-format', 'json'], { env: childEnv }); }
     catch { throw new Error('Notary credentials unavailable for the configured profile; inspect the account privately'); }
