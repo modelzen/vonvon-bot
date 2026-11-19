@@ -13,6 +13,10 @@ on:
       release_id:
         description: Unique orchestration request UUID, used for safe run discovery
         type: string
+      upgrade_acceptance_only:
+        description: Run isolated native A-to-B-to-C fixtures instead of release packaging
+        type: boolean
+        default: false
   push:
     branches: [codex/windows-release-automation, codex/fix-windows-install]
 
@@ -25,6 +29,7 @@ concurrency:
 
 jobs:
   collect:
+    if: ${{ !inputs.upgrade_acceptance_only }}
     runs-on: windows-2025
     needs: package
     steps:
@@ -112,10 +117,34 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
           "artifact=windows-unsigned-$version-$($sha.Substring(0, 12))" >> $env:GITHUB_OUTPUT
       - name: Build and accept the actual installer
+        if: ${{ !inputs.upgrade_acceptance_only }}
         run: |
           ./scripts/build-windows.ps1 -Architecture '${{ matrix.architecture }}' -Out "$env:RUNNER_TEMP/vonvon-${{ matrix.architecture }}" -SourceSha '${{ steps.source.outputs.sha }}' -InstallDependencies
           if (-not $?) { throw 'Windows build and acceptance failed' }
+      - name: Accept isolated native consecutive upgrades
+        if: ${{ inputs.upgrade_acceptance_only }}
+        run: |
+          $homePath = "$env:RUNNER_TEMP/upgrade-build-home"
+          New-Item -ItemType Directory -Path $homePath | Out-Null
+          $envFile = "$env:RUNNER_TEMP/upgrade-build-env.json"
+          @{ home = $homePath } | ConvertTo-Json | Set-Content -LiteralPath $envFile -Encoding utf8NoBOM
+          node scripts/windows-build-tools.mjs npm $envFile ci
+          if ($LASTEXITCODE -ne 0) { throw 'Upgrade acceptance dependencies failed' }
+          node --test scripts/windows-installer-compile.test.mjs scripts/windows-upgrade-acceptance.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Upgrade acceptance regression tests failed' }
+          node scripts/windows-upgrade-acceptance.mjs --architecture '${{ matrix.architecture }}' --out "$env:RUNNER_TEMP/upgrade-${{ matrix.architecture }}" --source-sha '${{ steps.source.outputs.sha }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Native consecutive upgrades failed' }
       - uses: actions/upload-artifact@v4
+        if: ${{ always() && inputs.upgrade_acceptance_only }}
+        with:
+          name: windows-upgrade-evidence-${{ matrix.architecture }}
+          path: |
+            ${{ runner.temp }}/upgrade-${{ matrix.architecture }}/*.json
+            ${{ runner.temp }}/upgrade-${{ matrix.architecture }}/*.ndjson
+          if-no-files-found: warn
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.upgrade_acceptance_only }}
         with:
           name: windows-payload-${{ matrix.architecture }}
           path: |
