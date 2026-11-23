@@ -165,11 +165,17 @@ function itemFields(content:RecipeRichContent,summary:boolean):Field[]{
   if(content.finalLogo)throw new Error('Logo 需要图片核对');
   return fields;
 }
-export function contentReviewFields(content:RecipeRichContent,summary:boolean,inheritedVersionId?:string){
-  const publicFields=inheritedVersionId?[field('继承来源版本',inheritedVersionId),field('配方名称',content.public.name.value),
-    field('已继承发布文案','简介 '+Buffer.byteLength(content.public.summary.value)+' 字节 · 概览 '+Buffer.byteLength(content.public.overview.value)+' 字节。完整发布信息在 App 核对。')]:
+export function contentReviewFields(content:RecipeRichContent,summary:boolean,inheritedVersionId?:string,newFields:readonly string[]=[]){
+  const unchanged=(key:keyof RecipeRichContent['public'])=>!newFields.includes(content.public[key].itemId);
+  const inheritedText=(['summary','overview'] as const).filter(unchanged).map(key=>
+    fieldLabels[key]+' '+Buffer.byteLength(content.public[key].value)+' 字节').join(' · ');
+  const publicFields=inheritedVersionId?[field('继承来源版本',inheritedVersionId),
+    ...(unchanged('name')?[field('配方名称',content.public.name.value)]:[]),
+    ...(inheritedText?[field('已继承发布文案',inheritedText+'。完整发布信息在 App 核对。')]:[])]:
     Object.entries(content.public).filter(([,v])=>!summary||v.value!=='').map(([key,v])=>field(fieldLabels[key as keyof typeof fieldLabels],v.value));
-  return [...publicFields,...itemFields(content,summary)];
+  const changed=inheritedVersionId?Object.entries(content.public).filter(([,item])=>newFields.includes(item.itemId))
+    .map(([key,item])=>field(fieldLabels[key as keyof typeof fieldLabels],item.value)):[];
+  return [...publicFields,...changed,...itemFields(content,summary)];
 }
 function selectedItemReview(content:RecipeRichContent,itemId:string,kind:ItemKind,positions:Positions):Field[]{
   const subset:RecipeRichContent={...content,role:undefined,skills:[],files:[],settings:[],rules:[],tasks:[],memories:[],setup:[],finalLogo:undefined};

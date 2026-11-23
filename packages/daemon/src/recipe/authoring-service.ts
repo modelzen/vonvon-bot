@@ -840,6 +840,7 @@ export class AuthoringService {
             if(!row.rich||!row.contextOpen||(row.contextUntil??0)<=this.now()||row.carrier.ref!==ref||row.view.state!=='waiting')refusal();
             row.rich.request=request;
             if(result.newFields)row.rich.newFields=result.newFields;
+            if(result.sourcePublicValues)row.rich.sourcePublicValues=result.sourcePublicValues;
             if('content' in request)row.rich.members=row.rich.members?.filter(m=>m.kind==='finalLogo'||request.content.files.some(f=>f.itemId===m.itemId));
             delete row.rich.boundRequest;row.proposalDigest=richReviewDigest(row.rich);row.view.payloadDigest=row.proposalDigest;row.view.state='candidate';setCard(row,'confirm');
           });

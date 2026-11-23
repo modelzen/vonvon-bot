@@ -28,6 +28,7 @@ export interface RichLocalDraft {
   inheritedVersionId?:string;
   sourceCaptureDigest?:string;
   newFields?:string[];
+  sourcePublicValues?:Partial<Record<PublicField,string>>;
   sourceRef?:string;
   source?:{groupId:string;options:InventoryOptions;token:string;selected:string[]};
   base?:{canonical:string;selected:string[];origins?:Record<string,RichOrigin>};
@@ -245,9 +246,21 @@ export function richCardReview(op:{rich?:RichLocalDraft;view:Pick<LocalOperation
   if(!rich?.request)return;
   try{
     const request=richFreezeInputSchema.parse(rich.request),payloadDigest=richReviewDigest(rich);
-    const sourceCapture=!!rich.privateSelection&&!!rich.source&&rich.newFields?.length===0&&rich.sourceCaptureDigest===payloadDigest&&'content'in request;
-    if(!sourceCapture&&rich.members?.some(m=>m.kind==='finalLogo'))return;
-    const fields='content'in request?contentReviewFields(request.content,sourceCapture,sourceCapture?rich.inheritedVersionId:undefined):(()=>{
+    const captured=structuredClone(rich);
+    if(captured.request&&'content'in captured.request)for(const [key,value] of Object.entries(rich.sourcePublicValues??{})){
+      if(!['name','summary','overview','version'].includes(key)||typeof value!=='string')return;
+      const item=captured.request.content.public[key as PublicField];
+      if(!rich.newFields?.includes(item.itemId))return;
+      item.value=value;
+    }
+    const sourceCapture=!!rich.privateSelection&&!!rich.source&&Array.isArray(rich.newFields)&&
+      rich.sourceCaptureDigest===richReviewDigest(captured)&&'content'in request;
+    if(sourceCapture&&rich.newFields!.some(id=>!Object.entries(request.content.public).some(([key,item])=>
+      item.itemId===id&&Object.hasOwn(rich.sourcePublicValues??{},key))))return;
+    if(!sourceCapture&&(rich.sourcePublicValues||rich.members?.some(m=>m.kind==='finalLogo')))return;
+    if(sourceCapture&&rich.members?.some(m=>m.kind==='finalLogo'&&
+      createHash('sha256').update(Buffer.from(m.bytes,'base64url')).digest('hex')!==m.sha256))return;
+    const fields='content'in request?contentReviewFields(request.content,sourceCapture,sourceCapture?rich.inheritedVersionId:undefined,sourceCapture?rich.newFields:undefined):(()=>{
       const base=decodeRichRecipeContent(Buffer.from(request.baseCanonical,'base64url')).content;
       const resolve=(ref:{sourceIntentId:string;candidateId:string})=>{
         const donor=request.candidates?.find(src=>src.sourceIntentId===ref.sourceIntentId);
@@ -352,17 +365,19 @@ export async function chatRichProposal(op:LocalOperation,instruction:string,sign
       setting.value.blocks=setting.value.blocks.filter(b=>!omitted.has(b.itemId));
     const kept=new Set(itemsOf(request.content).map(i=>i.itemId));
     request.origins=request.origins.filter(o=>kept.has(o.itemId));
+    const sourcePublicValues={...rich.sourcePublicValues};
     for(const change of parsed.changes){
       if(change.op!=='setPublicText'||request.content.public[change.field].itemId!==change.itemId)throw new Error('创建时仅能填写公开介绍。');
       if(!instruction.includes(change.value))throw new Error('请提供要公开的实际文案。');
+      sourcePublicValues[change.field]??=request.content.public[change.field].value;
       request.content.public[change.field].value=change.value;
     }
     canonicalizeRichRecipeContent(request.content);
     const newFields=[...new Set([...(rich.newFields??[]),...parsed.changes.flatMap(c=>'itemId' in c&&c.itemId?[c.itemId]:[])])];
-    return {kind:'proposal',request,newFields} as const;
+    return {kind:'proposal',request,newFields,...(rich.privateSelection&&rich.source&&rich.sourceCaptureDigest&&{sourcePublicValues})} as const;
   }
   if(!op.view.draftId||!op.view.baseRevision||!base)throw new Error('缺少当前草稿修订。');
   const request:RichFreezeInput={format:'rich-v2',baseCanonical:base.canonical,payload:{format:'rich-v2',purpose:'editDraft',draftId:op.view.draftId,
     baseRevision:op.view.baseRevision,requestId:randomUUID(),schemaVersion:2,changes:parsed.changes}};
-  return {kind:'proposal',request} as const;
+  return {kind:'proposal',request,newFields:undefined,sourcePublicValues:undefined} as const;
 }

@@ -5,10 +5,11 @@ const state=vi.hoisted(()=>({inventory:undefined as unknown}));
 vi.mock('../src/recipe/authoring-source',()=>({groupSourceIdentity:async()=> 'identity'}));
 vi.mock('../src/recipe/authoring-rich-flow',async load=>({...await load<object>(),readRichSource:async()=>state.inventory}));
 import {PrivateHandoffs} from '../src/recipe/authoring-handoff';
-import {bindRichMembers,richCardReview,type RichLocalDraft} from '../src/recipe/authoring-rich-flow';
+import {bindRichMembers,chatRichProposal,richCardReview,type RichLocalDraft} from '../src/recipe/authoring-rich-flow';
 import type {AuthoringJournal,Link} from '../src/recipe/authoring-journal';
 import type {PrivateHandoff} from '../src/recipe/authoring-handoff-menu';
-import type {AuthoringIm} from '../src/recipe/authoring-im';
+import {candidateConfirmation,type AuthoringIm} from '../src/recipe/authoring-im';
+import type {LocalOperation} from '../src/recipe/authoring-journal';
 function fixture(inherit=true){
  const account=randomUUID(),versionId=randomUUID(),retryId=randomUUID(),groupId=groupIdSchema.parse('oc_inherit');
  const field=(value:string)=>({itemId:randomUUID(),originId:randomUUID(),value});
@@ -98,4 +99,58 @@ it('keeps large repeated snapshots outside the journal and verifies recovery blo
  const expired=new RealJournal(root,()=>row.expiresAt+7*86400000+1);
  await expired.run(db=>{expect(Object.keys(db.handoffs!)).toHaveLength(0);});
  expect((await readdir(join(root,'recipe-authoring'))).filter(name=>name.startsWith('rich-'))).toEqual([]);
+});
+
+it.each([[true,false],[false,true],[true,true]])('keeps inherited Logo %s and long overview %s saveable after version chat edits',async(logo,long)=>{
+ const f=fixture();if(!logo)delete f.inherited.logo;if(long)f.inherited.public.overview='甲'.repeat(10500);
+ await f.handoffs.begin(f.p,f.link,f.req);
+ const row=f.db.handoffs[f.retryId]!;
+ const request={retryId:f.retryId,ref:row.ref,generation:row.generation,lease:'a'.repeat(64),versions:[]};row.phase={state:'awaitingAttestations',request};
+ let rich:RichLocalDraft|undefined;
+ await f.handoffs.answer(f.p,f.link,{type:'answerHandoff',botId:f.req.botId,session:f.p.session,request,attestations:[]},async target=>{
+  rich=target.rich;return {kind:'operation',operation:{operationId:randomUUID(),purpose:'prepareDraft',targetPublicKey:'a'.repeat(43),nonceCommitment:'a'.repeat(43),state:'waiting',deliveryUnknown:false,createdAt:1000}};
+ });
+ const op={view:{operationId:randomUUID()},rich} as LocalOperation;
+ const apply=async(instruction:string)=>{
+  const result=await chatRichProposal(op,instruction,new AbortController().signal);
+  if(result.kind!=='proposal'||!('newFields'in result))throw Error('missing proposal');
+  Object.assign(op.rich!,result);
+ };
+ await apply('/recipe version 2.0');
+ const details=richCardReview(op),card=candidateConfirmation('ref',details);
+ expect(card).toBeDefined();expect(JSON.stringify(card)).toContain('保存到草稿');expect(JSON.stringify(card)).toContain('2.0');
+ expect(details?.sourceCapture).toBe(true);expect(Buffer.byteLength(JSON.stringify(card))).toBeLessThan(10000);
+ expect(rich?.request&&'content'in rich.request&&rich.request.content.public.overview.value).toBe(f.inherited.public.overview);
+ for(const key of ['privateSelection','source','newFields','sourceCaptureDigest'] as const){
+  const missing=structuredClone(op.rich!);delete missing[key];
+  expect(richCardReview({...op,rich:missing})).toBeUndefined();
+ }
+ const unknown=structuredClone(op.rich!);
+ if(!unknown.request||!('content'in unknown.request))throw Error('missing content');
+ Object.assign(unknown.request.content.public.version,{unknown:true});
+ expect(richCardReview({...op,rich:unknown})).toBeUndefined();
+ const extraLogo=structuredClone(op.rich!);
+ extraLogo.members=[...(extraLogo.members??[]),{itemId:randomUUID(),kind:'finalLogo',bytes:f.logo,sha256:createHash('sha256').update(Buffer.from(f.logo,'base64url')).digest('hex')}];
+ expect(richCardReview({...op,rich:extraLogo})).toBeUndefined();
+ const digest=details?.payloadDigest;
+ await apply('/recipe version 3.0');expect(richCardReview(op)?.payloadDigest).not.toBe(digest);
+ expect(candidateConfirmation('ref',richCardReview(op))).toBeDefined();
+ await apply('/recipe overview 这里是本次完整的新概览');
+ expect(JSON.stringify(candidateConfirmation('ref',richCardReview(op)))).toContain('这里是本次完整的新概览');
+ const edited=structuredClone(rich!);
+ if(!rich?.request||!('content'in rich.request))throw Error('missing content');
+ rich.request.content.role={itemId:randomUUID(),originId:randomUUID(),text:{kind:'inline',value:'HIDDEN'}};
+ expect(richCardReview(op)).toBeUndefined();
+ if(logo){
+  op.rich=structuredClone(edited);op.rich.members![0]!.bytes=Buffer.from('replacement').toString('base64url');
+  expect(richCardReview(op)).toBeUndefined();
+ }
+ op.rich=structuredClone(edited);op.rich.newFields=[];expect(richCardReview(op)).toBeUndefined();
+ op.rich=structuredClone(edited);
+ op.rich.request&&'content'in op.rich.request&&(op.rich.request.sourceVersionId=randomUUID());
+ expect(richCardReview(op)).toBeUndefined();
+ op.rich=structuredClone(edited);
+ if(!op.rich.request||!('content'in op.rich.request))throw Error('missing content');
+ op.rich.request.content.public.overview.value='甲'.repeat(10500);
+ expect(candidateConfirmation('ref',richCardReview(op))).toBeUndefined();
 });
